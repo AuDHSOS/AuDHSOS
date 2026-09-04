@@ -64,8 +64,8 @@ AuDHSOS/
 | `audhsos-elf` | 0 | all | no | yes, fuzz | - |
 | `audhsos-uefi` | 0 | all | no | yes (layouts) | - |
 | `audhsos-sync` | 0 | all | allowlisted | Miri | - |
-| `kernel-types` | 1 | all | no | yes | - |
-| `kernel-hal-api` | 1 | all | no | doubles are tested | `kernel-types` |
+| `kernel-types` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
+| `kernel-hal-api` | 1 | all | no | doubles are tested | `kernel-types`; features `test-doubles`, `port-io` |
 | `driver-uart16550` | 1 | all | no | yes | - |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api` |
 | `kernel-objects` | 2 | all | no | yes | `kernel-types`, `audhsos-abi` |
@@ -82,7 +82,7 @@ AuDHSOS/
 | `user-proto` | u1 | `x86_64-unknown-none` | no | yes | `audhsos-abi` |
 | `user-loader` | u2 | `x86_64-unknown-none` | no | yes, fuzz | `user-rt`, `user-proto`, `audhsos-elf` |
 | servers and apps | u3 | `x86_64-unknown-none` | no | logic on host, e2e in QEMU | `user-rt`, `user-proto`, `user-loader`, `driver-uart16550` |
-| `test-support` | dev | host | no | yes | layers 0-2 (dev-dependency only) |
+| `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
 | `fuzz-support` | dev | host | allowlisted | Miri | - |
 | `xtask` | host | host | no | yes | - |
 
@@ -94,7 +94,9 @@ AuDHSOS/
    `kernel-core`, `kernel-hal-x86_64`, and `user-sys-x86_64` depend on
    `audhsos-sync`.
 3. `kernel-hal-api` depends on `kernel-types` and nothing else. Its test
-   doubles live behind the feature `test-doubles`.
+   doubles live behind the feature `test-doubles`. Generators for property
+   tests live in the crate that owns the types, behind the feature
+   `test-strategies`; `test-support` itself depends on no workspace crate.
 4. The crates shared between loader, kernel, and userland are exactly
    `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `audhsos-sync`,
    `kernel-types`, `kernel-hal-api`, `kernel-mm`, and `driver-uart16550`.
@@ -120,10 +122,11 @@ AuDHSOS/
   or the adapter header, and the crate documentation.
 - Bare-metal targets abort on panic by definition; host test crates keep
   unwinding for `should_panic` tests.
-- Cargo features are limited to four: `debug-uart` and `test-exit` on the
-  kernel binary and adapter, `test-doubles` on `kernel-hal-api`, `std` on
-  logic crates for host tests. No feature changes behavior in release
-  builds.
+- Cargo features are limited to five: `debug-uart` and `test-exit` on the
+  kernel binary and adapter, `test-doubles` and `port-io` on
+  `kernel-hal-api`, `test-strategies` on crates that own types used in
+  property tests. Host tests use `#![cfg_attr(not(test), no_std)]` and need
+  no feature. No feature changes behavior in release builds.
 
 ## 5.5 Conventions
 
@@ -152,7 +155,14 @@ header.
 - Tests: `<subject>_<condition>_<expected>`, for example
   `frame_allocator_exhausted_returns_out_of_frames`.
 
-### 5.5.3 Errors
+### 5.5.3 Test files
+
+Unit tests live in `src/tests/<module>.rs`, declared by `#[cfg(test)]
+mod tests;` in the crate root and by `src/tests/mod.rs`. Product source
+files contain no test code, so that coverage measures product code only.
+Tests reach private items through `pub(crate)` visibility where needed.
+
+### 5.5.4 Errors
 
 - Each logic crate defines one exhaustive `enum Error` with `Display`. No
   string errors, no boxed errors, no error codes as integers outside `abi`.
@@ -161,7 +171,7 @@ header.
 - Functions that can fail return `Result`. A function that cannot fail does
   not return `Result`.
 
-### 5.5.4 Lint set
+### 5.5.5 Lint set
 
 Configured once in the workspace. Level `deny` unless stated.
 
@@ -176,7 +186,7 @@ Configured once in the workspace. Level `deny` unless stated.
   `multiple_unsafe_ops_per_block`.
 - Exceptions use `#[expect(lint, reason = "...")]`.
 
-### 5.5.5 Documentation
+### 5.5.6 Documentation
 
 - Every public item has a doc comment. Module docs start with the
   invariants the module maintains.
@@ -186,7 +196,7 @@ Configured once in the workspace. Level `deny` unless stated.
 - Each crate has a `README.md` that `lib.rs` includes as crate
   documentation.
 
-### 5.5.6 Logging
+### 5.5.7 Logging
 
 Project-defined logging macros: `klog!` in `kernel-core` writes through the
 `DebugConsole` trait when the feature is on and compiles to nothing
@@ -229,12 +239,16 @@ the standard library and the toolchain binaries (`cargo`, `rustc`,
 | `check-deps` | verify that `Cargo.lock` and all manifests reference workspace members only |
 | `unsafe-budget` | count `unsafe` blocks and `asm!` sites per adapter crate against the policy table |
 | `fuzz [--target <name>] [--time <s>]` | build fuzz targets with `-Zsanitizer=fuzzer` and run them |
-| `coverage` | build host tests with `-C instrument-coverage`, merge profiles with `llvm-profdata`, report with `llvm-cov`, enforce thresholds |
+| `coverage` | build host tests with `-C instrument-coverage`, merge profiles with `llvm-profdata`, export LCOV with `llvm-cov`, enforce thresholds |
+| `miri` | run the tests of the host-executable adapter crates under Miri |
 | `doc` | build documentation with warnings as errors |
 | `check` | everything CI runs, in CI order |
 
-The xtask verifies at start that `rustc -vV` reports the pinned toolchain
-and stops with instructions otherwise.
+The xtask verifies at start that `RUSTUP_TOOLCHAIN`, which rustup's proxies
+set for child processes, names the pinned channel, and stops with
+instructions otherwise. Every Cargo it starts receives `RUSTC` and
+`RUSTDOC` pointing into the same toolchain, so a foreign `rustc` earlier
+on the `PATH` is never used.
 
 ## 5.8 Version control
 

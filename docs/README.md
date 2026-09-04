@@ -5,9 +5,9 @@ in Rust, without external code. This directory holds the planning documents.
 They describe the target design, the rules the code must follow, and the
 order in which the system is built.
 
-Status: **draft for review**. No code exists yet. Implementation starts with
-Phase 0 of the roadmap once the open decisions listed in
-[08-roadmap.md](08-roadmap.md#813-open-decisions) are confirmed.
+Status: every entry of the decision register is decided. Phase 0 of the
+roadmap is implemented; Phase 1 is next. The remaining items in
+[08-roadmap.md](08-roadmap.md#813-open-decisions) use their defaults.
 
 ## Reading order
 

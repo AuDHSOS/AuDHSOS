@@ -65,8 +65,8 @@ Recorded on 2026-09-04. These influence Phase 0.
 |---------|-------------|
 | Apple Silicon (`arm64`) | `x86_64` guests run under TCG without acceleration. An `aarch64` port runs under HVF. |
 | rustup with `stable-aarch64-apple-darwin` 1.97.0; no nightly installed | Phase 0 installs the pinned nightly through `rust-toolchain.toml` on first use. |
-| `/opt/local/bin/rustc` (MacPorts) precedes `~/.cargo/bin` on the `PATH` | A bare `rustc` is not rustup-managed. Only rustup's proxies honor the toolchain pin. |
-| `cargo` is a shell alias for a locally built Cargo 1.95 outside rustup | That Cargo ignores the toolchain pin. Project commands use rustup's proxy: `~/.cargo/bin/cargo xtask ...` or `rustup run <pinned> cargo ...`. The xtask verifies at start that `rustc -vV` reports the pinned nightly and stops with this instruction otherwise. |
+| `/opt/local/bin/rustc` (MacPorts) precedes `~/.cargo/bin` on the `PATH` | A bare `rustc` is not rustup-managed, and rustup's Cargo would pick it up. The xtask therefore sets `RUSTC` and `RUSTDOC` for every Cargo it starts. |
+| `cargo` is a shell alias for a locally built Cargo 1.95 outside rustup | That Cargo ignores the toolchain pin. Project commands use rustup's proxy: `~/.cargo/bin/cargo xtask ...` or `rustup run <pinned> cargo ...`. The xtask verifies at start that `RUSTUP_TOOLCHAIN` names the pinned nightly and stops with this instruction otherwise. |
 | QEMU 11.1.1 from MacPorts with the EDK2 firmware files; no Homebrew | Reference configuration in 3.1.1 works unchanged. |
 | Git repository initialized on `main` with no commits | Phase 0 makes the first commit. |
 | Container software must not be used on this machine | CI and local runs are native. |

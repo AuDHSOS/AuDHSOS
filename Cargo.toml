@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/abi",
+    "crates/sync",
+    "crates/kernel/types",
+    "crates/kernel/hal-api",
+    "crates/support/testing",
+    "crates/tools/xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+authors = ["Manuel Baesler and contributors"]
+rust-version = "1.100"
+
+[workspace.dependencies]
+audhsos-abi = { path = "crates/abi" }
+audhsos-sync = { path = "crates/sync" }
+kernel-types = { path = "crates/kernel/types" }
+kernel-hal-api = { path = "crates/kernel/hal-api" }
+test-support = { path = "crates/support/testing" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "deny"
+unreachable_pub = "deny"
+unused_crate_dependencies = "deny"
+rust_2024_compatibility = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "allow", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# Individually enabled nursery lints.
+missing_const_for_fn = "warn"
+redundant_clone = "warn"
+needless_pass_by_ref_mut = "warn"
+# Allowed: the workspace is not published, and `assert_eq!(x, [] as [T; 0])` is no clearer than `assert!(x.is_empty())`.
+cargo_common_metadata = "allow"
+assert_is_empty = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+as_conversions = "deny"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"

@@ -28,6 +28,9 @@ is project code on top of the Rust toolchain.
   `FakeInterruptController` (records mask, unmask, and end-of-interrupt
   calls), `ScriptedPlatform` (memory maps from builders), `RecordingPorts`
   (port I/O double for the UART logic).
+- Generators for the types of a crate live in that crate behind the
+  feature `test-strategies` (for example `kernel_types::strategies`), so
+  that the tested crate and the generator see the same types.
 - The `test-support` crate holds:
   - the property-test engine: a deterministic pseudo-random generator seeded
     per test, generator combinators (`integers in range`, `one of`,
@@ -68,11 +71,13 @@ is project code on top of the Rust toolchain.
 ## 6.4 Coverage
 
 - Host coverage: `cargo xtask coverage` builds host tests with
-  `-C instrument-coverage`, merges the profiles with `llvm-profdata`, and
-  reports with `llvm-cov`, both from the `llvm-tools-preview` component.
-  Thresholds: 90 percent of lines and 85 percent of branches per logic
-  crate. CI fails below the thresholds. Uncovered lines must be justified in
-  review.
+  `-C instrument-coverage -Z coverage-options=branch`, merges the profiles
+  with `llvm-profdata`, and exports LCOV with `llvm-cov`, both from the
+  `llvm-tools-preview` component. Files under `src/tests/` are excluded, so
+  the thresholds apply to product code only. Thresholds: 90 percent of
+  lines and 85 percent of branches per gated crate (every crate except
+  `xtask`, which is reported only). CI fails below the thresholds.
+  Uncovered lines must be justified in review.
 - QEMU coverage is not measured. Each adapter crate keeps a table that maps
   every public function to at least one QEMU test. `cargo xtask
   check-layering` verifies that every function and every test named in the

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "audhsos-abi"
+description = "Shared definitions of the AuDHSOS system call interface: errors, rights, object types, handles, layout constants"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+test-support.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "kernel-hal-api"
+description = "Architecture-neutral hardware abstraction traits of the AuDHSOS kernel and their test doubles"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[features]
+test-doubles = []
+port-io = []
+
+[dependencies]
+kernel-types.workspace = true
+
+[lints]
+workspace = true

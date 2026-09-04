@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[toolchain]
+channel = "nightly-2026-08-25"
+components = ["rustfmt", "clippy", "rust-src", "llvm-tools-preview", "miri"]
+targets = ["x86_64-unknown-none", "x86_64-unknown-uefi"]
+profile = "minimal"

@@ -24,6 +24,8 @@ documents reflect the code, the changelog is updated.
 
 ## 8.2 Phase 0: Project foundation
 
+Status: implemented.
+
 Deliverables:
 
 - `LICENSE` with the AGPL-3.0 text verbatim; SPDX headers everywhere;
@@ -35,8 +37,8 @@ Deliverables:
   first builders), `xtask`.
 - `rust-toolchain.toml`, `.cargo/config.toml`, `rustfmt.toml`.
 - xtask subcommands: `lint`, `check-layering`, `check-deps`,
-  `unsafe-budget`, `test --host`, `coverage`, `doc`, `check`; the policy
-  tables; the toolchain verification at start.
+  `unsafe-budget`, `test --host`, `coverage`, `miri`, `doc`, `check`; the
+  policy tables; the toolchain verification at start.
 - CI workflow with the host-only jobs.
 
 Tests: catalog 6.6.1, 6.6.6 (rights items), 6.6.18, 6.6.19, and the xtask
