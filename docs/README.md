@@ -22,6 +22,7 @@ roadmap is implemented; Phase 1 is next. The remaining items in
 | 7 | [Toolchain and environment](07-toolchain-and-environment.md) | Toolchain pin, targets, QEMU on macOS, findings about the development machine |
 | 8 | [Roadmap](08-roadmap.md) | Phases, deliverables, acceptance criteria, risks, open decisions |
 | 9 | [Decision register](09-decisions.md) | Every binding decision as a statement |
+| 10 | [Implementation plan](10-implementation-plan.md) | Exactly what to build in each remaining phase: crates, types, algorithms, tests, acceptance |
 
 ## Conventions for these documents
 

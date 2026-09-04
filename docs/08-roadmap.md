@@ -20,7 +20,9 @@ XL) and describe effort, not calendar time.
 
 Every phase has the same definition of done: all catalog items for the
 components in the phase have tests, `cargo xtask check` is green, the design
-documents reflect the code, the changelog is updated.
+documents reflect the code, the changelog is updated. The
+[implementation plan](10-implementation-plan.md) specifies the work of
+each phase down to crates, types, algorithms, and tests.
 
 ## 8.2 Phase 0: Project foundation
 
