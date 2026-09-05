@@ -965,12 +965,16 @@ system_table: *const SystemTable) -> Status`. Modules:
   implementing `FrameSource` over one contiguous firmware allocation (so
   that `page_tables_phys_start` and `page_tables_phys_len` describe one
   range), `NoTlb` implementing `TlbControl` as a no-op, and `pool_frames`,
-  which sizes that allocation from the highest physical address the memory
-  map reports. Build the tables with `kernel_mm::Mapper`: (1) the physical
-  window: every byte of every region the memory map reports, mapped at
-  `PHYS_WINDOW_BASE + phys`, read/write, no-execute, global; (2) an
-  identity mapping of the same memory at `phys` (so that the loader keeps
-  running after the `CR3` switch), read/write/execute; (3) the kernel
+  which sizes that allocation from the amount of memory the map reports.
+  Build the tables with `kernel_mm::Mapper`: (1) the physical window: `0`
+  up to the first byte above the highest region the memory map reports as
+  memory (`Usable`, `AcpiReclaimable`, `AcpiNvs`), mapped at
+  `PHYS_WINDOW_BASE + phys`, read/write, no-execute, global. Device
+  apertures are left out: the map of the reference machine reaches to a
+  terabyte, and the window covers memory, not the address space, so that
+  the kernel finds every frame it may own behind one constant offset.
+  (2) an identity mapping of the same memory at `phys` (so that the loader
+  keeps running after the `CR3` switch), read/write/execute; (3) the kernel
   segments at their `vaddr` with their permissions, global; (4) the boot
   stack (`BOOT_STACK_PAGES` pages plus one unmapped guard page below) with
   its top at `BOOT_STACK_TOP` (`KERNEL_BASE - 0x100_0000`, a constant in
@@ -989,8 +993,8 @@ system_table: *const SystemTable) -> Status`. Modules:
   reported as absent for the same reason.
 - `loader.rs`: the order of the work. Everything the firmware has to
   supply is asked for before the boot services end: the two files, the
-  configuration table, the first memory map (for the extent of the
-  window), the kernel image frames, the boot stack, the boot information
+  configuration table, the first memory map (for the extent of the window
+  and the size of the table pool), the kernel image frames, the boot stack, the boot information
   page, the table pool, the tables themselves, and the graphics mode. Then
   the memory map is read once more and `ExitBootServices` is called with
   its key, retried up to three times with a fresh key. A failure after
@@ -1003,7 +1007,9 @@ system_table: *const SystemTable) -> Status`. Modules:
   entry point on `x86_64-unknown-none` takes its argument in `RDI`.
 - `exit.rs`: on any error, `output_string` a diagnostic built in a
   fixed-size `fmt::Write` buffer and `outl(0xF4, 0x12)` (one `asm!`), then
-  spin forever.
+  spin forever. The same buffer writes the one progress line the loader
+  emits before it builds the tables: the amount of memory and the kernel
+  entry point.
 
 The loader does not use the physical memory window or any kernel address
 before the jump; it runs on firmware-provided identity mappings and its own

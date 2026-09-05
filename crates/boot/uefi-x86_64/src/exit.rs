@@ -63,6 +63,15 @@ pub(crate) fn fail(firmware: &Firmware<'_>, message: &str) -> ! {
     die()
 }
 
+/// Reports a formatted diagnostic.
+pub(crate) fn report(firmware: &Firmware<'_>, arguments: fmt::Arguments<'_>) {
+    let mut message = Message::new();
+    let _ = message.write_fmt(arguments);
+    firmware.output_string("[loader] ");
+    firmware.output_string(message.as_str());
+    firmware.output_string("\r\n");
+}
+
 /// Reports a formatted diagnostic and ends the machine.
 pub(crate) fn fail_with(firmware: &Firmware<'_>, arguments: fmt::Arguments<'_>) -> ! {
     let mut message = Message::new();

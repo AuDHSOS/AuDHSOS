@@ -13,9 +13,9 @@ use core::convert::Infallible;
 use core::fmt;
 
 use audhsos_abi::boot_image::BOOT_IMAGE_HEADER_LEN;
-use audhsos_abi::boot_info::{BOOT_INFO_PAGE_LEN, Framebuffer};
+use audhsos_abi::boot_info::{BOOT_INFO_PAGE_LEN, BootRegionKind, Framebuffer};
 use audhsos_abi::layout::{
-    BOOT_INFO_VADDR, BOOT_STACK_PAGES, BOOT_STACK_TOP, KERNEL_SPACE_START, PAGE_SIZE,
+    BOOT_INFO_VADDR, BOOT_STACK_PAGES, BOOT_STACK_TOP, KERNEL_SPACE_START, PAGE_SHIFT, PAGE_SIZE,
     PHYS_WINDOW_BASE,
 };
 use audhsos_elf::{Constraints, ElfError};
@@ -136,14 +136,22 @@ fn load(firmware: &Firmware<'_>) -> Result<Infallible, Failure> {
     let image = audhsos_elf::parse(kernel_bytes, KERNEL_BOUNDS).map_err(Failure::Elf)?;
 
     let (map_frames, first_map) = map_buffer(firmware)?;
-    let highest = highest_address(map_frames, first_map)?;
+    let ram_end = ram_end(map_frames, first_map)?;
 
     let placement = placement::place(firmware, &image).map_err(Failure::Place)?;
     let stack = allocate(firmware, "the boot stack", BOOT_STACK_PAGES)?;
     let info_page = allocate(firmware, "the boot information page", 1)?;
-    let pool = allocate(firmware, "the page tables", pool_frames(highest))?;
+    let pool = allocate(firmware, "the page tables", pool_frames(ram_end))?;
+    exit::report(
+        firmware,
+        format_args!(
+            "{} KiB of memory, kernel at {:#x}",
+            ram_end >> 10,
+            placement.entry
+        ),
+    );
 
-    let root = build_tables(map_frames, first_map, &placement, stack, info_page, pool)?;
+    let root = build_tables(ram_end, &placement, stack, info_page, pool)?;
     let framebuffer = graphics::framebuffer(firmware);
 
     let final_map = leave_boot_services(firmware, map_frames)?;
@@ -249,27 +257,39 @@ fn with_descriptors<T>(
     Some(body(&mut iterator))
 }
 
-/// The first byte above the highest region the memory map reports.
-fn highest_address(frames: PhysFrameRange, map: MemoryMapInfo) -> Result<u64, Failure> {
-    let highest = with_descriptors(frames, map, |entries| {
-        entries.fold(0u64, |highest, descriptor| {
-            highest.max(descriptor.end().unwrap_or(0))
-        })
+/// The first byte above the highest region of memory the firmware
+/// reports. Device apertures are left out: on this machine the memory map
+/// reaches to a terabyte, and the window has to cover memory, not the
+/// address space.
+fn ram_end(frames: PhysFrameRange, map: MemoryMapInfo) -> Result<u64, Failure> {
+    let end = with_descriptors(frames, map, |entries| {
+        entries
+            .filter(|descriptor| is_memory(*descriptor))
+            .fold(0u64, |highest, descriptor| {
+                highest.max(descriptor.end().unwrap_or(0))
+            })
     })
     .unwrap_or(0);
-    if highest == 0 {
+    if end == 0 {
         return Err(Failure::Firmware(
             "the memory map",
             Status::INVALID_PARAMETER,
         ));
     }
-    Ok(highest)
+    Ok(end)
+}
+
+/// `true` if the descriptor describes memory rather than a device.
+const fn is_memory(descriptor: MemoryDescriptor) -> bool {
+    matches!(
+        descriptor.region_kind(),
+        BootRegionKind::Usable | BootRegionKind::AcpiReclaimable | BootRegionKind::AcpiNvs
+    )
 }
 
 /// Builds the address space the kernel starts in and returns its root.
 fn build_tables(
-    map_frames: PhysFrameRange,
-    map: MemoryMapInfo,
+    ram_end: u64,
     placement: &Placement,
     stack: PhysFrameRange,
     info_page: PhysFrameRange,
@@ -287,30 +307,9 @@ fn build_tables(
     *table = PageTable::default();
     let mut mapper = Mapper::new(root, &mut access, &mut tlb, &mut frames);
 
-    let outcome = with_descriptors(map_frames, map, |entries| {
-        for descriptor in entries {
-            if descriptor.pages == 0 {
-                continue;
-            }
-            map_physical(
-                &mut mapper,
-                descriptor.physical_start,
-                descriptor.pages,
-                PHYS_WINDOW_BASE,
-                WINDOW_PERMISSIONS,
-            )?;
-            map_physical(
-                &mut mapper,
-                descriptor.physical_start,
-                descriptor.pages,
-                0,
-                IDENTITY_PERMISSIONS,
-            )?;
-        }
-        Ok(())
-    })
-    .unwrap_or(Err(Failure::Address("the memory map")));
-    outcome?;
+    let pages = ram_end >> PAGE_SHIFT;
+    map_physical(&mut mapper, 0, pages, PHYS_WINDOW_BASE, WINDOW_PERMISSIONS)?;
+    map_physical(&mut mapper, 0, pages, 0, IDENTITY_PERMISSIONS)?;
 
     for segment in placement.segments() {
         mapper.map_range(
