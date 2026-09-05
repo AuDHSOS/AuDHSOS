@@ -14,9 +14,12 @@
 use audhsos_der::Timestamp;
 use audhsos_x509::builder::{Params, TestKey, build};
 use audhsos_x509::{Certificate, TrustAnchor, TrustAnchors};
-use crypto_ec::{ed25519, x25519};
+use crypto_ec::x25519;
 use crypto_rng::doubles::ScriptedRng;
+use test_support::generators::bytes;
+use test_support::property::check;
 
+use crate::alert::Alert;
 use crate::client::{Buffers, Connection, Event, MIN_HANDSHAKE, MIN_INCOMING, MIN_OUTGOING};
 use crate::codec::{Reader, Writer};
 use crate::config::ClientConfig;
@@ -38,6 +41,46 @@ const LEAF_SECRET: [u8; 32] = [0x22; 32];
 const SERVER_EPHEMERAL: [u8; 32] = [0x33; 32];
 /// The suite the server chooses.
 const SUITE: CipherSuite = CipherSuite::Aes128GcmSha256;
+
+/// What the server's chain and its `CertificateVerify` are signed with.
+///
+/// Most of this file uses Ed25519, because it is the shorter of the two
+/// and the connection does not care. One test uses the other, so that the
+/// path through `p256` is walked by a whole handshake and not only by the
+/// unit tests underneath it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Authority {
+    /// Ed25519 throughout, signature scheme `0x0807`.
+    Ed25519,
+    /// P-256 with SHA-256 throughout, signature scheme `0x0403`.
+    EcdsaP256,
+}
+
+impl Authority {
+    /// The root's key.
+    fn root_key(self) -> TestKey {
+        match self {
+            Authority::Ed25519 => TestKey::Ed25519(ROOT_SECRET),
+            Authority::EcdsaP256 => TestKey::EcdsaSha256(ROOT_SECRET),
+        }
+    }
+
+    /// The server's key.
+    fn leaf_key(self) -> TestKey {
+        match self {
+            Authority::Ed25519 => TestKey::Ed25519(LEAF_SECRET),
+            Authority::EcdsaP256 => TestKey::EcdsaSha256(LEAF_SECRET),
+        }
+    }
+
+    /// The code point the `CertificateVerify` names.
+    fn scheme(self) -> u16 {
+        match self {
+            Authority::Ed25519 => 0x0807,
+            Authority::EcdsaP256 => 0x0403,
+        }
+    }
+}
 
 /// The moment every window in this file contains.
 fn now() -> Timestamp {
@@ -95,24 +138,34 @@ fn certificate(params: &Params<'_>, subject: TestKey, issuer: TestKey) -> Built 
     Built { bytes, length }
 }
 
-/// The root the test trusts.
-fn root() -> Built {
+/// The root the test trusts, signing with `kind`.
+fn root_of(kind: Authority) -> Built {
     let (from, until) = window();
     certificate(
         &Params::authority("Root", "Root", None, from, until),
-        TestKey::Ed25519(ROOT_SECRET),
-        TestKey::Ed25519(ROOT_SECRET),
+        kind.root_key(),
+        kind.root_key(),
     )
 }
 
-/// The server's certificate, under that root.
+/// The root of the tests that do not care which key it is.
+fn root() -> Built {
+    root_of(Authority::Ed25519)
+}
+
+/// The server's certificate under that root.
 fn leaf() -> Built {
+    leaf_of(Authority::Ed25519)
+}
+
+/// The server's certificate, under that root.
+fn leaf_of(kind: Authority) -> Built {
     let (from, until) = window();
     let names = [NAME];
     certificate(
         &Params::leaf("Root", NAME, &names, from, until),
-        TestKey::Ed25519(LEAF_SECRET),
-        TestKey::Ed25519(ROOT_SECRET),
+        kind.leaf_key(),
+        kind.root_key(),
     )
 }
 
@@ -138,11 +191,16 @@ struct Server {
 
 impl Server {
     /// Answers a `ClientHello` record with the whole server flight.
+    fn answer(hello_record: &[u8], flight: &mut Vec<u8>) -> Server {
+        Server::answer_as(Authority::Ed25519, hello_record, flight)
+    }
+
+    /// The same, with the chain and the signature of one `Authority`.
     #[expect(
         clippy::too_many_lines,
         reason = "one server flight, written in the order it goes on the wire"
     )]
-    fn answer(hello_record: &[u8], flight: &mut Vec<u8>) -> Server {
+    fn answer_as(authority: Authority, hello_record: &[u8], flight: &mut Vec<u8>) -> Server {
         let (header, body, _) = record::read(hello_record)
             .expect("the client's record is well formed")
             .expect("it is complete");
@@ -246,18 +304,22 @@ impl Server {
             expected_transcript: Vec::new(),
         };
 
-        // The `ServerHello` goes out unprotected.
+        // The `ServerHello` goes out unprotected, and behind it the
+        // compatibility record a server in this mode sends. Every
+        // handshake in this file carries it, so every one of them checks
+        // that the client passes over it.
         push_plain(flight, ContentType::Handshake, &server_hello);
+        push_plain(flight, ContentType::ChangeCipherSpec, &[0x01]);
 
         // The flight the client must decrypt.
-        let leaf = leaf();
+        let leaf = leaf_of(authority);
         let mut messages = Vec::new();
         messages.extend_from_slice(&encrypted_extensions());
         messages.extend_from_slice(&certificate_message(leaf.as_slice()));
         server.transcript.update(&messages);
 
         let signature_transcript = server.transcript.hash(SUITE);
-        let verify = certificate_verify(signature_transcript.as_bytes());
+        let verify = certificate_verify(authority, signature_transcript.as_bytes());
         messages.extend_from_slice(&verify);
         server.transcript.update(&verify);
 
@@ -395,13 +457,18 @@ fn certificate_message(certificate: &[u8]) -> Vec<u8> {
 }
 
 /// A `CertificateVerify` over the transcript, signed with the leaf key.
-fn certificate_verify(transcript: &[u8]) -> Vec<u8> {
+fn certificate_verify(kind: Authority, transcript: &[u8]) -> Vec<u8> {
     let mut content = Vec::new();
     content.extend(core::iter::repeat_n(0x20u8, 64));
     content.extend_from_slice(b"TLS 1.3, server CertificateVerify");
     content.push(0x00);
     content.extend_from_slice(transcript);
-    let signature = ed25519::sign(&LEAF_SECRET, &content);
+    let mut signature = [0u8; 128];
+    let length = kind
+        .leaf_key()
+        .sign(&content, &mut signature)
+        .expect("the key signs and the signature fits");
+    let signature = signature.get(..length).unwrap_or(&[]).to_vec();
 
     let mut buffer = [0u8; 256];
     let mut writer = Writer::new(&mut buffer);
@@ -410,7 +477,7 @@ fn certificate_verify(transcript: &[u8]) -> Vec<u8> {
         .expect("room");
     writer
         .vector24(|body| {
-            body.u16(0x0807)?;
+            body.u16(kind.scheme())?;
             body.vector16(|value| value.bytes(&signature))
         })
         .expect("room");
@@ -520,6 +587,60 @@ fn a_connection_is_made_data_passes_both_ways_and_it_closes() {
     let (kind, plaintext) = server.receive(wire.get(..written).unwrap_or(&[]));
     assert_eq!(kind, ContentType::Alert);
     assert_eq!(plaintext, &[1, 0], "a warning that says close notify");
+}
+
+/// The same connection with the other signature algorithm, so that a
+/// whole handshake walks the `p256` path and not only its unit tests.
+#[test]
+fn a_connection_is_made_when_the_server_signs_with_p256() {
+    let root = root_of(Authority::EcdsaP256);
+    let parsed = Certificate::parse(root.as_slice()).expect("a well formed root");
+    let anchors = [TrustAnchor {
+        subject: parsed.subject,
+        spki: parsed.spki_bytes,
+    }];
+    let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
+
+    let mut fixture = Fixture::new();
+    let mut rng = ScriptedRng::new(&fixture.script);
+    let mut client = Connection::new(
+        &config,
+        &mut rng,
+        Buffers {
+            incoming: &mut fixture.incoming,
+            outgoing: &mut fixture.outgoing,
+            handshake: &mut fixture.handshake,
+        },
+    )
+    .expect("the buffers are big enough");
+
+    let mut wire = vec![0u8; 4096];
+    let written = client.write_tls(&mut wire).expect("room");
+    let first = wire.get(..written).unwrap_or(&[]).to_vec();
+    let (_, _, hello_len) = record::read(&first)
+        .expect("well formed")
+        .expect("complete");
+
+    let mut flight = Vec::new();
+    let mut server = Server::answer_as(
+        Authority::EcdsaP256,
+        first.get(..hello_len).unwrap_or(&[]),
+        &mut flight,
+    );
+
+    let taken = client.read_tls(&flight).expect("room");
+    assert_eq!(taken, flight.len());
+    assert_eq!(client.poll(), Ok(Event::WantsWrite));
+    assert!(client.is_handshaked(), "the handshake is done");
+
+    let written = client.write_tls(&mut wire).expect("room");
+    server.take_client_finished(wire.get(..written).unwrap_or(&[]));
+
+    let answer = server.send(b"an answer");
+    client.read_tls(&answer).expect("room");
+    let mut out = vec![0u8; 16_384];
+    let length = client.recv(&mut out).expect("the record opens");
+    assert_eq!(out.get(..length), Some(&b"an answer"[..]));
 }
 
 #[test]
@@ -911,6 +1032,18 @@ fn a_record_that_does_not_open_ends_the_connection() {
         Err(TlsError::BadRecord),
         "and it stays"
     );
+
+    // The alert that says why goes out under the keys of the epoch the
+    // connection had reached, so the server can read it.
+    let mut wire = vec![0u8; 4096];
+    let written = client.write_tls(&mut wire).expect("room");
+    let (kind, body) = server.receive(wire.get(..written).unwrap_or(&[]));
+    assert_eq!(kind, ContentType::Alert);
+    assert_eq!(
+        body,
+        &[2, Alert::BadRecordMac.code()],
+        "a fatal alert that names the record"
+    );
 }
 
 #[test]
@@ -1057,8 +1190,27 @@ fn more_bytes_than_the_buffer_holds_are_taken_in_pieces() {
     assert_eq!(client.read_tls(&flood), Ok(0), "and then nothing does");
 }
 
+/// The window for the compatibility record closes with the server's
+/// `Finished`, so one that arrives after it is an unexpected record.
 #[test]
-fn a_late_compatibility_record_and_a_stray_message_are_told_apart() {
+fn a_compatibility_record_after_the_handshake_is_refused() {
+    let root = root();
+    let anchors = trusted(&root);
+    let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
+    let mut fixture = Fixture::new();
+    let script: Vec<u8> = (0u8..=255).collect();
+    let Connected { mut client, .. } = connected(&config, &mut fixture, &script);
+
+    let mut late = Vec::new();
+    push_plain(&mut late, ContentType::ChangeCipherSpec, &[0x01]);
+    client.read_tls(&late).expect("room");
+    let mut out = vec![0u8; 16_384];
+    assert_eq!(client.recv(&mut out), Err(TlsError::UnexpectedMessage));
+}
+
+/// And so is a message that belongs to the handshake that is over.
+#[test]
+fn a_handshake_message_after_the_handshake_is_refused() {
     let root = root();
     let anchors = trusted(&root);
     let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
@@ -1069,14 +1221,6 @@ fn a_late_compatibility_record_and_a_stray_message_are_told_apart() {
         mut server,
     } = connected(&config, &mut fixture, &script);
 
-    // A change of cipher spec after the handshake says nothing.
-    let mut late = Vec::new();
-    push_plain(&mut late, ContentType::ChangeCipherSpec, &[0x01]);
-    client.read_tls(&late).expect("room");
-    let mut out = vec![0u8; 16_384];
-    assert_eq!(client.recv(&mut out), Ok(0));
-
-    // A message that belongs to the handshake does not.
     let stray = certificate_message(leaf().as_slice());
     let mut record = vec![0u8; 2048];
     let sealed = server
@@ -1088,5 +1232,96 @@ fn a_late_compatibility_record_and_a_stray_message_are_told_apart() {
     client
         .read_tls(record.get(..sealed).unwrap_or(&[]))
         .expect("room");
+    let mut out = vec![0u8; 16_384];
     assert_eq!(client.recv(&mut out), Err(TlsError::UnexpectedMessage));
+}
+
+/// The compatibility record carries one byte, and that byte is one.
+#[test]
+fn a_compatibility_record_that_says_anything_else_is_refused() {
+    let root = root();
+    let anchors = trusted(&root);
+    let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
+
+    for body in [&[0x02u8][..], &[][..], &[0x01, 0x01][..]] {
+        let mut fixture = Fixture::new();
+        let script: Vec<u8> = (0u8..=255).collect();
+        let mut rng = ScriptedRng::new(&script);
+        let mut client = Connection::new(
+            &config,
+            &mut rng,
+            Buffers {
+                incoming: &mut fixture.incoming,
+                outgoing: &mut fixture.outgoing,
+                handshake: &mut fixture.handshake,
+            },
+        )
+        .expect("the buffers are big enough");
+
+        let mut wire = vec![0u8; 4096];
+        client.write_tls(&mut wire).expect("the hello goes out");
+
+        let mut record = Vec::new();
+        push_plain(&mut record, ContentType::ChangeCipherSpec, body);
+        client.read_tls(&record).expect("room");
+        assert_eq!(
+            client.poll(),
+            Err(TlsError::UnexpectedMessage),
+            "a compatibility record of {body:?}"
+        );
+    }
+}
+
+/// Whatever arrives from the transport, the connection either makes sense
+/// of it or ends; it never panics, and once it has ended it stays ended.
+#[test]
+fn property_any_bytes_from_the_transport_end_in_an_error_or_a_state() {
+    check("tls_read_any_bytes", &bytes(0..=512), |input| {
+        let root = root();
+        let parsed = Certificate::parse(root.as_slice()).expect("a well formed root");
+        let anchors = [TrustAnchor {
+            subject: parsed.subject,
+            spki: parsed.spki_bytes,
+        }];
+        let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
+
+        let mut fixture = Fixture::new();
+        let mut rng = ScriptedRng::new(&fixture.script);
+        let mut client = Connection::new(
+            &config,
+            &mut rng,
+            Buffers {
+                incoming: &mut fixture.incoming,
+                outgoing: &mut fixture.outgoing,
+                handshake: &mut fixture.handshake,
+            },
+        )
+        .expect("the buffers are big enough");
+
+        let mut wire = vec![0u8; 4096];
+        client.write_tls(&mut wire).expect("the hello goes out");
+
+        let taken = client.read_tls(input).map_err(|error| error.to_string())?;
+        if taken != input.len() {
+            return Err("the buffer holds a whole record and more".to_owned());
+        }
+
+        let first = client.poll();
+        let again = client.poll();
+        match first {
+            // An error poisons the connection: the next call says the same.
+            Err(error) => {
+                if again != Err(error) {
+                    return Err("a poisoned connection changed its mind".to_owned());
+                }
+            }
+            // Nothing usable arrived, so nothing may have happened.
+            Ok(event) => {
+                if event != Event::WantsRead || again != Ok(Event::WantsRead) {
+                    return Err("random bytes completed a handshake".to_owned());
+                }
+            }
+        }
+        Ok(())
+    });
 }

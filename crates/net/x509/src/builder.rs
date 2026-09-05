@@ -133,6 +133,9 @@ pub struct Params<'a> {
     /// An extension identifier this crate does not know, marked critical,
     /// for the test that such a certificate is refused.
     pub unknown_critical: bool,
+    /// The same identifier, not marked critical, for the test that such a
+    /// certificate is read and the extension passed over.
+    pub unknown_harmless: bool,
     /// Whether to write the basic constraints twice, for the test that a
     /// repeated extension is refused.
     pub duplicate_extension: bool,
@@ -159,6 +162,7 @@ impl<'a> Params<'a> {
             key_usage: Some(0x8000),
             extended_key_usage: Some(true),
             unknown_critical: false,
+            unknown_harmless: false,
             duplicate_extension: false,
         }
     }
@@ -183,6 +187,7 @@ impl<'a> Params<'a> {
             key_usage: Some(0x0400),
             extended_key_usage: None,
             unknown_critical: false,
+            unknown_harmless: false,
             duplicate_extension: false,
         }
     }
@@ -352,10 +357,15 @@ fn write_extensions(writer: &mut Writer<'_>, params: &Params<'_>) -> Result<(), 
     write_key_usage(&mut extensions, params)?;
     write_purposes(&mut extensions, params)?;
     write_names(&mut extensions, params)?;
-    if params.unknown_critical {
+    if params.unknown_critical || params.unknown_harmless {
         // A policy identifier, which this crate does not read.
         let unknown: &[u8] = &[0x55, 0x1D, 0x20];
-        write_extension(&mut extensions, unknown, true, &[0x30, 0x00])?;
+        write_extension(
+            &mut extensions,
+            unknown,
+            params.unknown_critical,
+            &[0x30, 0x00],
+        )?;
     }
 
     if extensions.len() == 0 {

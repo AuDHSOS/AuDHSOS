@@ -20,6 +20,7 @@ use crate::error::TlsError;
 use crate::keys::TrafficKeys;
 use crate::record::{ContentType, HEADER_LEN, MAX_CIPHERTEXT, write_header};
 use crate::suite::CipherSuite;
+use crate::suite::IV_LEN;
 
 /// The cipher a suite names.
 enum Cipher {
@@ -82,6 +83,8 @@ pub struct RecordProtection {
     cipher: Cipher,
     /// How many records this epoch has carried.
     sequence: u64,
+    /// Whether the last number of the epoch has been spent.
+    exhausted: bool,
 }
 
 impl RecordProtection {
@@ -97,6 +100,7 @@ impl RecordProtection {
             keys,
             cipher,
             sequence: 0,
+            exhausted: false,
         })
     }
 
@@ -140,7 +144,7 @@ impl RecordProtection {
             *slot = inner.to_byte();
         }
 
-        let nonce = self.keys.nonce(self.sequence);
+        let nonce = self.take_nonce()?;
         let tag = self.cipher.seal(&nonce, header, body)?;
         let room = rest
             .get_mut(inner_len..fragment)
@@ -149,7 +153,6 @@ impl RecordProtection {
             *slot = byte;
         }
 
-        self.advance()?;
         Ok(total)
     }
 
@@ -170,9 +173,8 @@ impl RecordProtection {
         let (content, tail) = body.split_at_mut(split);
         let tag: &[u8; TAG_LEN] = tail.first_chunk::<TAG_LEN>().ok_or(TlsError::BadRecord)?;
 
-        let nonce = self.keys.nonce(self.sequence);
+        let nonce = self.take_nonce()?;
         self.cipher.open(&nonce, header, content, tag)?;
-        self.advance()?;
 
         // The type is the last byte that is not padding.
         let mut end = content.len();
@@ -186,12 +188,28 @@ impl RecordProtection {
         Ok((inner, plaintext))
     }
 
-    /// Counts one record, refusing to wrap.
-    fn advance(&mut self) -> Result<(), TlsError> {
-        self.sequence = self
-            .sequence
-            .checked_add(1)
-            .ok_or(TlsError::SequenceExhausted)?;
-        Ok(())
+    /// The nonce of the next record, which no later record may have.
+    ///
+    /// The number is spent before the cipher is asked to do anything with
+    /// it, so that no path through this file can hand the same nonce out
+    /// twice: the last record of an epoch is written, and every call after
+    /// it is refused rather than served the number again.
+    fn take_nonce(&mut self) -> Result<[u8; IV_LEN], TlsError> {
+        if self.exhausted {
+            return Err(TlsError::SequenceExhausted);
+        }
+        let nonce = self.keys.nonce(self.sequence);
+        match self.sequence.checked_add(1) {
+            Some(next) => self.sequence = next,
+            None => self.exhausted = true,
+        }
+        Ok(nonce)
+    }
+
+    /// Puts the epoch at `sequence`, so that a test can reach its end.
+    #[cfg(test)]
+    pub(crate) const fn seek(&mut self, sequence: u64) {
+        self.sequence = sequence;
+        self.exhausted = false;
     }
 }

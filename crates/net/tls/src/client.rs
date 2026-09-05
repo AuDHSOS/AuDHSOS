@@ -418,13 +418,24 @@ impl<'a> Connection<'a> {
     }
 
     /// Remembers the error and tells the peer about it.
+    ///
+    /// The alert goes out under the keys of the epoch the connection has
+    /// reached: the application keys once they exist, the handshake keys
+    /// before that, and in the clear only while there are no keys at all,
+    /// which is the window between the first flight and the server's
+    /// answer. An alert the peer cannot open is no alert.
     fn fail(&mut self, error: TlsError) {
         if self.machine.poison.is_none() {
             self.machine.poison = Some(error);
             let alert = Alert::for_error(error);
             let body = [alert.level(), alert.code()];
+            let keys = if self.machine.client_application.is_some() {
+                self.machine.client_application.as_mut()
+            } else {
+                self.machine.client_handshake.as_mut()
+            };
             let sent = write_protected(
-                self.machine.client_handshake.as_mut(),
+                keys,
                 ContentType::Alert,
                 &body,
                 self.outgoing,
@@ -497,7 +508,15 @@ impl Connection<'_> {
             }
 
             let (kind, plaintext) = match (header.content_type, machine.server_handshake.as_mut()) {
-                (ContentType::ChangeCipherSpec, _) => (ContentType::ChangeCipherSpec, &[][..]),
+                (ContentType::ChangeCipherSpec, _) => {
+                    // RFC 8446 section 5: the compatibility record carries
+                    // the single byte one, and anything else it carries is
+                    // an unexpected message.
+                    if body.len() != 1 || body.first() != Some(&0x01) {
+                        return Err(TlsError::UnexpectedMessage);
+                    }
+                    (ContentType::ChangeCipherSpec, &[][..])
+                }
                 (ContentType::ApplicationData, Some(keys)) => keys.open(&header_copy, body)?,
                 (ContentType::ApplicationData, None) => {
                     return Err(TlsError::UnexpectedMessage);
@@ -560,9 +579,13 @@ impl Connection<'_> {
                     *slot = *byte;
                 }
 
+                // RFC 8446 section 5: the window for the compatibility
+                // record closes with the peer's `Finished`, and one that
+                // arrives after it is an unexpected record.
                 if header.content_type == ContentType::ChangeCipherSpec {
-                    // A late compatibility record, which says nothing.
-                } else {
+                    return Err(TlsError::UnexpectedMessage);
+                }
+                {
                     let keys = machine
                         .server_application
                         .as_mut()

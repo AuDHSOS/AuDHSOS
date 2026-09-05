@@ -196,6 +196,28 @@ fn an_unknown_critical_extension_is_refused() {
     );
 }
 
+/// An extension nobody has to understand is passed over, and the
+/// certificate around it is read as if it were not there.
+#[test]
+fn an_unknown_extension_that_is_not_critical_is_passed_over() {
+    let mut params = Params::leaf("Test Authority", "example.test", &NAMES, early(), late());
+    params.unknown_harmless = true;
+    let built = build_certificate(
+        &params,
+        TestKey::Ed25519(LEAF_SECRET),
+        TestKey::Ed25519(AUTHORITY_SECRET),
+    )
+    .expect("the parameters fit the buffer");
+
+    let certificate = Certificate::parse(built.as_slice()).expect("the extension is skipped");
+    assert!(
+        certificate
+            .dns_names()
+            .any(|name| name == Ok(&b"example.test"[..])),
+        "the names around it are still read"
+    );
+}
+
 #[test]
 fn a_repeated_extension_is_refused() {
     let mut params =

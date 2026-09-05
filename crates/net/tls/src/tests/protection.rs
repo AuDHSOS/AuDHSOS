@@ -216,3 +216,35 @@ fn property_a_message_of_any_length_survives_the_round_trip() {
         Ok(())
     });
 }
+
+/// The last number of an epoch is used once, and then the epoch is over.
+#[test]
+fn the_last_number_of_an_epoch_is_spent_once_and_never_again() {
+    let mut sender = protection(CipherSuite::Aes128GcmSha256);
+    let mut receiver = protection(CipherSuite::Aes128GcmSha256);
+    sender.seek(u64::MAX);
+    receiver.seek(u64::MAX);
+
+    // The last record still goes out, and still opens.
+    let mut record = [0u8; 128];
+    let length = sender
+        .seal(ContentType::ApplicationData, b"the last one", &mut record)
+        .expect("the last number is a usable one");
+    let head = record.get(..HEADER_LEN).unwrap_or(&[]).to_vec();
+    let mut body = record.get(HEADER_LEN..length).unwrap_or(&[]).to_vec();
+    let (inner, plaintext) = receiver.open(&head, &mut body).expect("the record opens");
+    assert_eq!(inner, ContentType::ApplicationData);
+    assert_eq!(plaintext, b"the last one");
+
+    // And after it there is nothing left: no second record under the same
+    // number, in either direction.
+    assert_eq!(
+        sender.seal(ContentType::ApplicationData, b"one more", &mut record),
+        Err(TlsError::SequenceExhausted)
+    );
+    let mut again = record.get(HEADER_LEN..length).unwrap_or(&[]).to_vec();
+    assert_eq!(
+        receiver.open(&head, &mut again),
+        Err(TlsError::SequenceExhausted)
+    );
+}
