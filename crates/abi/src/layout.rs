@@ -58,8 +58,10 @@ pub const KERNEL_STACK_PAGES: u64 = 4;
 /// Number of pages one kernel stack slot occupies, guard page included.
 pub const KERNEL_STACK_SLOT_PAGES: u64 = KERNEL_STACK_PAGES + 1;
 
-/// Number of kernel stack slots the area holds.
-pub const KERNEL_STACK_SLOTS: u64 = 1024;
+/// Number of kernel stack slots the area holds. One slot per thread the
+/// machine can hold, which is what `kernel-core::config::THREADS` says
+/// (D-57).
+pub const KERNEL_STACK_SLOTS: u64 = 256;
 
 /// Largest amount of physical memory the window can map before it would
 /// reach the kernel stack area.

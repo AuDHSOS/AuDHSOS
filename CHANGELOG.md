@@ -39,13 +39,8 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   page faults.
 - Catalog 6.6.21 gains the kernel stack items and the boot information
   address item.
-- Plan 10.5.0: what the kernel reserve has to carry. The reference machine
-  grows to 512 MiB, because 1024 kernel stacks need 4107 frames and the
-  default reserve of a 256 MiB machine is 4048. Three questions of Phase 5
-  are stated with their arithmetic: whether the object pools live in the
-  reserve or in the `.bss` of the kernel image, that `Process` cannot hold
-  a handle table of `1 << 16` entries inline, and that the reserve is
-  capped at 64 MiB whatever the machine has.
+- Plan 10.5.0: what the kernel reserve carries and what the kernel image
+  carries, with the arithmetic behind D-57.
 - Planning documents and the decision register under `docs/`.
 - `docs/11-cryptography-and-tls.md`: the design and implementation plan
   for the TLS 1.3 client track (constant-time primitives, hashes and
@@ -190,6 +185,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The object pools live in the `.bss` of the kernel image, not in the
+  kernel reserve (D-57): a `Pool<T, N>` is a typed array, and putting one
+  into raw frames would need `unsafe` in a logic crate. Document 2.4.1 said
+  the reserve holds them and is corrected. The reserve holds page tables,
+  kernel stacks, and the IPC buffers of threads.
+- `THREADS` and `KERNEL_STACKS` are 256 and `KERNEL_STACK_SLOTS` follows
+  them, because every thread costs five frames of the reserve and 1024 of
+  them would need 5120 against the 4048 the reference machine has.
+  `PROCESSES` is 64 and `HANDLES_PER_PROCESS` is 1024, because the handle
+  table lives in the `Process` object and 256 tables of `1 << 16` entries
+  would be 512 MiB of `.bss`. The reference machine keeps its 256 MiB.
 - `kernel-hal-x86_64::WindowAccess` becomes `PhysicalWindow` in a module
   of its own and gains the byte access the IPC buffers and the boot image
   header need; `paging` keeps the lookaside buffer and the page-table

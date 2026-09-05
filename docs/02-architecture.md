@@ -139,9 +139,12 @@ badge.
    usable set, and aligns every region to frame boundaries.
 2. The kernel takes the kernel reserve from the normalized map: a size
    computed from total RAM (default: 1/16 of RAM, at least 4 MiB, at most
-   64 MiB, overridable in the boot image header). The reserve holds the
-   object pools, page tables, and kernel stacks. A bitmap frame allocator
-   manages the reserve.
+   64 MiB, overridable in the boot image header). The reserve holds what the
+   count of is not known before boot: page tables, kernel stacks, and the
+   IPC buffers of threads. The object pools are `static` cells and live in
+   the `.bss` of the kernel image (D-57). A bitmap frame allocator manages
+   the reserve, over at most 16384 frames, so the reserve never exceeds
+   64 MiB whatever the machine has.
 3. Every remaining usable region becomes one `Ram` memory object owned by the
    root task. From then on the kernel allocates user memory never again.
 
@@ -192,9 +195,10 @@ The kernel address space (upper half) is managed by the same code. Layout:
 is the memory the window covers before it would reach the stack area; a
 machine with more memory is refused at boot.
 
-The frames of the reserve hold the page tables and the kernel stacks. The
-object pools of Phase 5 are sized by the constants in
-`kernel-core::config`.
+The frames of the reserve hold the page tables, the kernel stacks, and the
+IPC buffers of threads. The object pools of Phase 5 are `static` cells in
+the `.bss` of the kernel image, sized by the constants in
+`kernel-core::config` (D-57).
 
 ### 2.4.4 Memory management in safe Rust
 

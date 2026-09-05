@@ -1291,69 +1291,70 @@ interrupt items.
 
 ## 10.5 Phase 5: Objects, threads, user mode, system calls
 
-### 10.5.0 What the kernel reserve has to carry
+### 10.5.0 What the kernel reserve carries, and what the image carries
 
 Phase 3 built the reserve and the kernel stack pool and measured what they
-cost. Four numbers of this phase do not fit together yet; they are settled
-before the object pools are written, not after.
+cost. The numbers that follow were settled before the object pools were
+written, in D-57.
 
-**The reference machine grows from 256 MiB to 512 MiB** in
-[3.1.1](03-target-platform.md#311-reference-machine-configuration) and in
-the `xtask` command line. The default reserve is a sixteenth of the usable
-memory, so the machine decides how much kernel memory there is:
+**The object pools live in the `.bss` of the kernel image**, not in the
+reserve. A `Pool<T, N>` is `[Slot<T>; N]`, a typed array; putting one into
+raw frames means a pointer cast to `&mut Pool<T, N>`, which is `unsafe` in
+`kernel-objects`, a logic crate with `#![forbid(unsafe_code)]`. The loader
+maps the image from its ELF and zero-fills what the file does not carry, so
+a large `.bss` needs nothing new. `KERNEL_IMAGE_MAX_PAGES` (32 MiB) is the
+ceiling: `kernel_core::memory::adopt` looks that far above `KERNEL_BASE`
+for mapped pages of the image and registers no run beyond it.
+
+**The reserve holds what the count of is not known before boot**: page
+tables, kernel stacks, and the IPC buffer of every thread. The default
+reserve is a sixteenth of the usable memory, and `BitmapFrameAllocator`
+manages at most `MAX_MANAGED_FRAMES = 16384` frames, so the reserve never
+exceeds 64 MiB whatever the machine has:
 
 | Machine | Default reserve | Frames |
 |---------|-----------------|--------|
-| 256 MiB | 15.8 MiB | 4048 |
+| 256 MiB (the reference machine) | 15.8 MiB | 4048 |
 | 512 MiB | 31.8 MiB | 8144 |
 | 1 GiB and above | 64 MiB (the cap) | 16384 |
 
-`KERNEL_STACKS = 1024` stacks of `KERNEL_STACK_PAGES = 4` pages need 4096
-frames, plus 11 for the tables of the stack area: 4107 frames. On a 256 MiB
-machine the whole reserve is 4048 frames, so the last stack cannot be
-mapped even if nothing else uses the reserve. A 512 MiB machine leaves
-4037 frames beside the stacks.
+**Every thread costs five frames of the reserve**: four for its kernel
+stack and one for its IPC buffer. `THREADS` and `KERNEL_STACKS` are
+therefore 256, not 1024, and `KERNEL_STACK_SLOTS` in `audhsos-abi` follows
+them. At 1024 the demand would be 5120 frames against the 4048 the
+reference machine has; at 256 it is 1280, which leaves 2768 frames for the
+page tables of the address spaces. Raising the machine to 512 MiB would
+have made 1024 fit, but it treats the symptom: the number was never derived
+from what the system runs, and the larger machine costs the test suite
+seven seconds per image that brings the memory up.
 
-**The cap is 64 MiB whatever the machine has.** `BitmapFrameAllocator`
-manages `MAX_MANAGED_FRAMES = 16384` frames, and `MAX_RESERVE_BYTES` says
-the same. Every kernel table has to fit in that; more memory in the machine
-does not help beyond a gibibyte.
+**`Process` holds its handle table inline**, so `PROCESSES` multiplied by
+`HANDLES_PER_PROCESS` multiplied by the size of an entry is memory the
+image carries whether it is used or not. An entry is `AnyObjectId` plus
+`Rights` (a `u32`) plus a `u64` badge, so 32 bytes with the padding:
 
-**Where do the object pools live?**
-[2.4.1](02-architecture.md#241-physical-memory) says the reserve holds
-them; [10.5.2](#1052-kernel-objects-additions) makes them `static`
-`Global<Pool<..>>` cells, which puts them in the `.bss` of the kernel
-image, which the loader allocates and maps. Both cannot be true. Decide it
-and correct the document that is wrong; the arithmetic of the reserve
-depends on the answer.
+| `PROCESSES` × `HANDLES_PER_PROCESS` | `.bss` |
+|-------------------------------------|--------|
+| 256 × 65536 (the first plan) | 512 MiB |
+| 64 × 65536 | 128 MiB |
+| 64 × 1024 (chosen) | 2 MiB |
 
-**`Process` cannot hold its handle table inline.** As
-[10.5.2](#1052-kernel-objects-additions) plans it, `Process` holds a
-`HandleTable` and `HANDLES_PER_PROCESS` is `1 << 16`, so
-`Pool<Process, PROCESSES>` is 256 tables of 65536 entries:
+`Handle` carries 32 index bits, so `1 << 16` was policy and not an ABI
+constraint. The largest demand this system has is the root task with one
+memory object per boot region (`MAX_BOOT_REGIONS` is 128), its servers, and
+their endpoints, which 1024 holds eightfold. A handle table that grows out
+of the reserve frame by frame, with `HANDLES_PER_PROCESS` as the quota
+ceiling, stays the answer if a process ever needs more; it needs a
+`FrameAccess`-shaped path into `kernel-objects` and is not built now.
 
-| Bytes per entry | Per process | `Pool<Process, 256>` |
-|-----------------|-------------|----------------------|
-| 8 | 0.5 MiB | 128 MiB |
-| 16 | 1 MiB | 256 MiB |
-| 32 (`AnyObjectId` + `Rights` + `badge` + slot) | 2 MiB | 512 MiB |
-
-That is impossible as a `static` and impossible in a reserve of at most
-64 MiB. `Handle` carries 32 index bits, so `1 << 16` is a policy number and
-not an ABI constraint. Either the handle table grows out of the reserve
-frame by frame with `HANDLES_PER_PROCESS` as the quota ceiling the kernel
-enforces, or the number drops to the low hundreds and stays inline. The
-same question applies to `Thread::context` and to the region table of an
-address space, which are small enough to stay inline.
-
-**What the larger machine costs in QEMU**, measured on the reference
-machine with the `memory` image: the run grows from 5.6 to 12.9 seconds, of
-which the firmware accounts for 2.2 and 2.6. The bring-up itself goes from
-3.4 to 10.2 seconds because `adopt` walks the window page by page and
+**What the bring-up costs in QEMU**, measured with the `memory` image on
+the reference machine: 5.6 seconds, of which the firmware accounts for 2.2.
+On a 512 MiB machine it would be 12.9 against 2.6, because
+`kernel_core::memory::adopt` walks the window page by page and
 `drop_identity` unmaps twice as many pages. Both are bounded by the memory
-of the machine and stay far below the time limit of a run. If the suite
-becomes slow, `adopt` is the lever: the window is one contiguous run by
-construction, so it does not have to be walked page by page.
+of the machine and stay far below the time limit of a run. If a later phase
+does raise the machine, `adopt` is the lever: the window is one contiguous
+run by construction and does not have to be walked page by page.
 
 ### 10.5.1 `audhsos-abi` additions
 
