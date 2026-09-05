@@ -76,6 +76,22 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "crypto-ct",
+        path: "crates/crypto/ct",
+        kind: Kind::Logic,
+        deps: &["test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "crypto-hash",
+        path: "crates/crypto/hash",
+        kind: Kind::Logic,
+        deps: &["crypto-ct", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-sync",
         path: "crates/sync",
         kind: Kind::Adapter {

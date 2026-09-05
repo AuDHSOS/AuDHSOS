@@ -13,6 +13,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   HKDF, AEADs, elliptic curves, random generator, DER, X.509, the sans-I/O
   protocol crate), its test catalog entries 6.6.30 to 6.6.38, its roadmap
   track 8.17, and decisions D-36 to D-44.
+- `crypto-ct`: `Choice`, constant-time comparison, selection, exchange and
+  copy, `Secret<N>` with a best-effort erase on drop.
+- `crypto-hash`: SHA-256, SHA-384, SHA-512, HMAC, and HKDF, against the
+  vectors of FIPS 180-4, RFC 4231, and RFC 5869.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.
 - `audhsos-abi`: error codes, rights, object types, handles, layout

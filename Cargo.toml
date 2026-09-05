@@ -5,6 +5,8 @@
 resolver = "3"
 members = [
     "crates/abi",
+    "crates/crypto/ct",
+    "crates/crypto/hash",
     "crates/boot/uefi-x86_64",
     "crates/elf",
     "crates/uefi",
@@ -32,6 +34,8 @@ rust-version = "1.100"
 
 [workspace.dependencies]
 audhsos-abi = { path = "crates/abi" }
+crypto-ct = { path = "crates/crypto/ct" }
+crypto-hash = { path = "crates/crypto/hash" }
 boot-uefi-x86_64 = { path = "crates/boot/uefi-x86_64" }
 audhsos-elf = { path = "crates/elf" }
 audhsos-uefi = { path = "crates/uefi" }

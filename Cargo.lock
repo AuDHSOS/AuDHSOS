@@ -50,6 +50,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto-ct"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
+name = "crypto-hash"
+version = "0.1.0"
+dependencies = [
+ "crypto-ct",
+ "test-support",
+]
+
+[[package]]
 name = "driver-uart16550"
 version = "0.1.0"
 dependencies = [
