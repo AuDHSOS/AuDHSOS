@@ -25,10 +25,13 @@ pub enum WireError {
     /// A prefix length no IPv4 network has. IPv4 addresses are 32 bits, so
     /// 32 is the last one that names a network.
     PrefixLength(u8),
-    /// A length that has to fit in the sixteen bits of a header field and
-    /// does not. It reaches the checksum of a transport segment, whose
-    /// pseudo-header carries the segment length.
+    /// A length that has to fit in a header field and does not: sixteen
+    /// bits for an IPv4 pseudo-header, thirty-two for an IPv6 one.
     Length(usize),
+    /// One address of each family where both had to be of one. There is no
+    /// IPv4-mapped form here, so a v4 source with a v6 destination is an
+    /// error and never a conversion (D-69).
+    MixedFamilies,
 }
 
 impl fmt::Display for WireError {
@@ -42,8 +45,9 @@ impl fmt::Display for WireError {
                 write!(f, "an IPv4 prefix is at most 32 bits, not {length}")
             }
             WireError::Length(length) => {
-                write!(f, "{length} bytes do not fit in a sixteen-bit length")
+                write!(f, "{length} bytes do not fit in the length field")
             }
+            WireError::MixedFamilies => f.write_str("the two addresses are of different families"),
         }
     }
 }

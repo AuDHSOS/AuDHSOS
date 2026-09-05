@@ -12,8 +12,8 @@
 use test_support::generators::bytes;
 use test_support::property::check;
 
-use crate::addr::Ipv4Addr;
-use crate::checksum::{Checksum, checksum, is_valid, transport_v4};
+use crate::addr::{IpAddr, Ipv4Addr, Ipv6Addr};
+use crate::checksum::{Checksum, checksum, is_valid, transport, transport_v4, transport_v6};
 use crate::error::WireError;
 use crate::protocol::Protocol;
 
@@ -236,4 +236,102 @@ fn splitting_the_data_anywhere_gives_the_same_sum() {
         }
         Ok(())
     });
+}
+
+#[test]
+fn the_ipv6_pseudo_header_carries_a_thirty_two_bit_length() {
+    // From 2001:db8::1 port 53 to 2001:db8::2 port 49152, ten bytes of
+    // datagram carrying `hi`. The pseudo-header of RFC 8200, section 8.1
+    // is the two addresses, the length 0000000a, three zero bytes, and the
+    // next header 17.
+    let source = Ipv6Addr::new([0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1]);
+    let destination = Ipv6Addr::new([0x2001, 0x0DB8, 0, 0, 0, 0, 0, 2]);
+    let mut datagram = [0x00, 0x35, 0xC0, 0x00, 0x00, 0x0A, 0x00, 0x00, b'h', b'i'];
+    let computed = transport_v6(source, destination, Protocol::UDP, &datagram)
+        .expect("ten bytes fit in a length");
+    assert_eq!(computed, 0x7BC6);
+
+    datagram[6..8].copy_from_slice(&computed.to_be_bytes());
+    assert_eq!(
+        transport_v6(source, destination, Protocol::UDP, &datagram),
+        Ok(0x0000)
+    );
+}
+
+#[test]
+fn an_icmpv6_message_is_summed_over_a_pseudo_header_where_icmpv4_is_not() {
+    // An echo request: type 128, code 0, checksum zero, identifier 0x1234,
+    // sequence 1.
+    let source = Ipv6Addr::new([0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1]);
+    let destination = Ipv6Addr::new([0x2001, 0x0DB8, 0, 0, 0, 0, 0, 2]);
+    let message = [128, 0, 0x00, 0x00, 0x12, 0x34, 0x00, 0x01];
+    assert_eq!(
+        transport_v6(source, destination, Protocol::ICMPV6, &message),
+        Ok(0x1213)
+    );
+    // The same bytes without a pseudo-header, which is what ICMPv4 takes,
+    // are a different sum entirely.
+    assert_ne!(checksum(&message), 0x1213);
+}
+
+#[test]
+fn the_family_agnostic_form_dispatches_and_refuses_a_mixed_pair() {
+    let four = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1));
+    let four_other = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 2));
+    let six = IpAddr::V6(Ipv6Addr::new([0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1]));
+    let six_other = IpAddr::V6(Ipv6Addr::new([0x2001, 0x0DB8, 0, 0, 0, 0, 0, 2]));
+    let datagram = [0x00, 0x35, 0xC0, 0x00, 0x00, 0x0A, 0x00, 0x00, b'h', b'i'];
+
+    assert_eq!(
+        transport(four, four_other, Protocol::UDP, &datagram),
+        Ok(0xC338)
+    );
+    assert_eq!(
+        transport(six, six_other, Protocol::UDP, &datagram),
+        Ok(0x7BC6)
+    );
+    assert_eq!(
+        transport(four, six_other, Protocol::UDP, &datagram),
+        Err(WireError::MixedFamilies)
+    );
+    assert_eq!(
+        transport(six, four_other, Protocol::UDP, &datagram),
+        Err(WireError::MixedFamilies)
+    );
+}
+
+#[test]
+fn a_segment_longer_than_the_ipv6_length_field_would_be_refused() {
+    // The field is thirty-two bits, so nothing this system can hold
+    // exceeds it; the guard is here because a length is not a slice
+    // length on every machine, and the v4 form next to it fails at 65536.
+    let segment = vec![0u8; 65536];
+    let source = Ipv6Addr::LOCALHOST;
+    assert_eq!(
+        transport_v6(source, source, Protocol::UDP, &segment).map(|_| ()),
+        Ok(())
+    );
+    assert_eq!(
+        transport_v4(
+            Ipv4Addr::LOCALHOST,
+            Ipv4Addr::LOCALHOST,
+            Protocol::UDP,
+            &segment,
+        ),
+        Err(WireError::Length(65536))
+    );
+}
+
+#[test]
+fn the_ipv6_pseudo_header_can_be_added_on_its_own() {
+    let mut piecewise = Checksum::new();
+    piecewise.add_pseudo_header_v6(
+        Ipv6Addr::new([0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1]),
+        Ipv6Addr::new([0x2001, 0x0DB8, 0, 0, 0, 0, 0, 2]),
+        Protocol::UDP,
+        10,
+    );
+    piecewise.add_bytes(&[0x00, 0x35, 0xC0, 0x00, 0x00, 0x0A, 0x00, 0x00]);
+    piecewise.add_bytes(b"hi");
+    assert_eq!(piecewise.finish(), 0x7BC6);
 }

@@ -16,7 +16,7 @@
 
 use core::fmt;
 
-use crate::addr::{Ipv4Addr, MacAddr, Port};
+use crate::addr::{IpAddr, Ipv4Addr, Ipv6Addr, MacAddr, Port};
 use crate::error::WireError;
 
 /// A reader over a frame or over one header inside it.
@@ -142,6 +142,15 @@ impl<'a> Reader<'a> {
     /// [`WireError::OutOfBounds`] when fewer than four bytes are left.
     pub fn read_ipv4(&mut self) -> Result<Ipv4Addr, WireError> {
         Ok(Ipv4Addr::from_octets(self.read_array::<4>()?))
+    }
+
+    /// The next sixteen bytes as an IPv6 address.
+    ///
+    /// # Errors
+    ///
+    /// [`WireError::OutOfBounds`] when fewer than sixteen bytes are left.
+    pub fn read_ipv6(&mut self) -> Result<Ipv6Addr, WireError> {
+        Ok(Ipv6Addr::from_octets(self.read_array::<16>()?))
     }
 
     /// The next two bytes as a port.
@@ -285,6 +294,29 @@ impl<'a> Writer<'a> {
     /// [`WireError::OutOfBounds`] when fewer than four bytes are free.
     pub fn write_ipv4(&mut self, address: Ipv4Addr) -> Result<(), WireError> {
         self.write_bytes(&address.octets())
+    }
+
+    /// Writes an IPv6 address.
+    ///
+    /// # Errors
+    ///
+    /// [`WireError::OutOfBounds`] when fewer than sixteen bytes are free.
+    pub fn write_ipv6(&mut self, address: Ipv6Addr) -> Result<(), WireError> {
+        self.write_bytes(&address.octets())
+    }
+
+    /// Writes an address of either family, in the width of that family.
+    /// Nothing in the bytes says which it was, so the header format around
+    /// it is what tells a reader which of the two to read back.
+    ///
+    /// # Errors
+    ///
+    /// [`WireError::OutOfBounds`] when the address does not fit.
+    pub fn write_ip(&mut self, address: IpAddr) -> Result<(), WireError> {
+        match address {
+            IpAddr::V4(address) => self.write_ipv4(address),
+            IpAddr::V6(address) => self.write_ipv6(address),
+        }
     }
 
     /// Writes a port.

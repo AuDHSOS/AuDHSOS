@@ -1076,6 +1076,23 @@ done until every applicable item has a test. Items are added, never removed.
   canonical forms; the broadcast, unspecified, loopback, and multicast
   predicates; an `Ipv4Cidr` with prefix length 0, 32, and 33, the last
   rejected; `contains` at both ends of a range.
+- `Ipv6Addr`: the canonical text of RFC 5952, section 4 in both
+  directions, against the examples the recommendation itself gives; every
+  rule of section 4 refused in turn — a leading zero, a `::` that could
+  have been longer, a `::` over a single zero group, a run written out
+  where a `::` belongs, the rightmost of two equal runs, two `::`, and the
+  dotted form of an IPv4-mapped address; upper case read and never
+  written; the unspecified, loopback, multicast, link-local, and
+  unique-local predicates at both ends of each prefix; the solicited-node
+  address against the example of RFC 4291, section 2.7.1, and two
+  addresses that differ above the low 24 bits sharing one; an `Ipv6Cidr`
+  with prefix length 0, 128, and 129, the last rejected.
+- `IpAddr` and `IpCidr`: a text with a colon is read as the second family
+  and every other as the first; the predicates answer through the enum for
+  both; a route of one family never contains a destination of the other.
+- No text either parser accepts has a second spelling: the uncompressed
+  form of a generated address is accepted exactly when it is the canonical
+  one (property).
 - Cursor: reading a `u8`, `u16`, and `u32` in big-endian order; a read
   past the end returns an error and leaves the position unchanged; a
   write into a buffer one byte too small fails and writes nothing;
@@ -1086,6 +1103,11 @@ done until every applicable item has a test. Items are added, never removed.
   checksum is zero (property).
 - Pseudo-header checksums for UDP and TCP against hand-computed values,
   including a zero-length payload.
+- The IPv6 pseudo-header of RFC 8200, section 8.1 against hand-computed
+  values: a UDP datagram, and an `ICMPv6` echo request, whose checksum
+  covers a pseudo-header where `ICMPv4`'s does not. The family-agnostic
+  form dispatches on the addresses and answers `MixedFamilies` for a pair
+  that is not one family, in both directions.
 - Checksum further: the same eight bytes of the RFC 1071 example split
   into a group of three and a group of five, and then one byte at a time,
   give the sum the memo's last table prints, which is what holds the
@@ -1095,12 +1117,15 @@ done until every applicable item has a test. Items are added, never removed.
   changes the sum (property).
 - The tables: an `EtherType` and a `Protocol` this system reads report
   themselves registered and the others do not; a type field below 0x0600
-  is a length and not a type; only TCP and UDP carry a pseudo-header; and
+  is a length and not a type; TCP, UDP, and `ICMPv6` carry a
+  pseudo-header and `ICMPv4` does not; the four IPv6 extension header
+  numbers report themselves as such and no upper-layer protocol does; and
   each writes its name or, for a value this crate does not name, its
   number.
-- Cursor further: a length that would overflow the position is out of
-  bounds rather than a wrap; `patch_u16` reaches only what has been
-  written; a reader driven through every width until it runs out never
+- Cursor further: an address of either family reads and writes in the
+  width of that family and one that does not fit writes nothing; a length
+  that would overflow the position is out of bounds rather than a wrap;
+  `patch_u16` reaches only what has been written; a reader driven through every width until it runs out never
   passes the end of its buffer and never moves on a failure (property).
 - Every error variant renders a sentence of its own.
 
@@ -1340,6 +1365,39 @@ done until every applicable item has a test. Items are added, never removed.
   order, and a number too short to be one is left alone; a resolved
   address reads as one line; a report over a file that is not there says
   nothing and fails nothing.
+
+### 6.6.54 IPv6 and Neighbor Discovery (`net-ipv6`)
+
+The number follows the catalog rather than the layer, because items are
+added and never renumbered; the crate belongs beside 6.6.44 (D-69).
+
+- Header: a packet of the minimum length, one byte short, a payload
+  length that disagrees with the buffer, and a hop limit of zero, each
+  handled as specified. There is no header checksum to verify, which the
+  tests state so that its absence is not read as an omission.
+- The extension header chain: none, one of each kind, all four in the
+  order RFC 8200 recommends, one that repeats, a chain longer than the
+  bound, a header whose length field runs past the packet, and a chain
+  that points at itself — the last three are drops and not loops.
+- `ICMPv6`: an echo request answered, a packet-too-big delivered to the
+  upper layer, and a checksum that covers the pseudo-header, which is
+  where it differs from `ICMPv4`.
+- Neighbor Discovery: a solicitation addressed to the solicited-node
+  group of the target; an advertisement moving an entry to `Reachable`;
+  the state machine through `Stale`, `Delay`, and `Probe` against a
+  reference model with time as an argument; duplicate address detection
+  refusing an address another node answers for.
+- Router advertisements: a prefix and a router learned, an address formed
+  by SLAAC, the lifetimes expiring, and the recursive DNS servers of
+  RFC 8106 read out. An advertisement with a prefix length that is not 64
+  forms no address.
+- Path MTU discovery: a packet-too-big lowers the path MTU, the value is
+  clamped below at the IPv6 minimum of 1280, and it is not raised by a
+  message that claims more.
+- Fragmentation: a datagram fragmented on send, reassembled by the
+  machinery of `net-ip`, with overlapping fragments discarding the whole
+  datagram.
+- Fuzz target `ipv6`, whose corpus is seeded with the chains above.
 
 ## 6.7 CI pipeline
 

@@ -302,18 +302,25 @@ their bytes are later work (8.14).
 
 | Step | Crates | Size | Ends with |
 |------|--------|------|-----------|
-| D1 | `net-wire` | S | implemented: `MacAddr`, `Ipv4Addr`, `Ipv4Cidr`, and `Port` with one canonical text each, the `EtherType` and `Protocol` tables, a `Reader` and `Writer` that never leave their buffer, and the internet checksum of RFC 1071 with the pseudo-header form |
-| D2 | `net-eth` | M | Ethernet II frames and an ARP cache with aging and retransmission |
-| D3 | `net-ip` | M | IPv4 with reassembly, fragmentation, ICMP, and longest-prefix routing |
-| D4 | `net-udp` | S | sockets, ephemeral ports, checksums |
-| D5 | `net-tcp` | XL | the RFC 9293 state machine, RFC 6298 timers, and Reno congestion control, verified by two instances over a lossy network double |
-| D6 | `net-dns`, `net-dhcp` | M | name resolution and address configuration as state machines |
-| D7 | `net-http` | S | an HTTP/1.1 client that rejects the smuggling forms |
-| D8 | `net-stack` | M | one interface, one `poll`, one `poll_at` |
-| D9 | integration | - | not scheduled: virtio-net driver, network server, socket protocol, entropy system call, TLS transport (jointly with T8 of 8.17) |
+| D1 | `net-wire` | S | implemented: the addresses of both families with one canonical text each, `IpAddr` and `IpCidr`, the `EtherType` and `Protocol` tables, a `Reader` and `Writer` that never leave their buffer, and the internet checksum of RFC 1071 with both pseudo-header forms |
+| D2 | `net-eth` | M | Ethernet II frames and one neighbor cache for both families, with aging and retransmission |
+| D3 | `net-ip` | M | IPv4 with reassembly, fragmentation, `ICMPv4`, and a longest-prefix routing table over both families |
+| D4 | `net-ipv6` | L | the header and its extension chain, `ICMPv6`, Neighbor Discovery, router advertisements with SLAAC, and path MTU discovery |
+| D5 | `net-udp` | S | sockets, ephemeral ports, the checksum of either family |
+| D6 | `net-tcp` | XL | the RFC 9293 state machine, RFC 6298 timers, and Reno congestion control, verified by two instances over a lossy network double |
+| D7 | `net-dns`, `net-dhcp` | M | name resolution over `A` and `AAAA`, and IPv4 address configuration as a state machine |
+| D8 | `net-http` | S | an HTTP/1.1 client that rejects the smuggling forms |
+| D9 | `net-stack` | M | one interface, one `poll`, one `poll_at`, and the address selection of RFC 6724 |
+| D10 | integration | - | not scheduled: virtio-net driver, network server, socket protocol, entropy system call, TLS transport (jointly with T8 of 8.17) |
 
-Tests: catalog 6.6.42 to 6.6.50. Fuzz targets `ipv4`, `tcp_segment`,
-`dns_message`, `http_response`.
+The stack carries IPv4 and IPv6 together (D-69), which supersedes the
+first clause of D-50. An address is an `IpAddr` above `net-wire`, so the
+transports, the resolver, and the facade are written once; what the second
+family costs is the header format of D4 and its own address
+configuration, not a second copy of everything above it.
+
+Tests: catalog 6.6.42 to 6.6.50 and 6.6.54. Fuzz targets `ipv4`, `ipv6`,
+`tcp_segment`, `dns_message`, `http_response`.
 
 ## 8.19 Track E: shared foundations
 
@@ -363,7 +370,7 @@ Tests: catalog 6.6.53.
   time (D-45).
 - A side track is worked on between phases, never instead of one.
 - Order: track E, then the cryptography track to T7, then track D, with
-  step D5 not started beside an XL phase; track F when a driver becomes
+  step D6 not started beside an XL phase; track F when a driver becomes
   foreseeable; G2 before Phase 3.
 - Phase work whose logic passes the admission test may be pulled
   forward without changing its phase, its catalog items, or its

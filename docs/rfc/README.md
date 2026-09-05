@@ -15,16 +15,19 @@ arrangement.
 | File | Document | Retrieved | Bytes | SHA-256 |
 |------|----------|-----------|-------|---------|
 | `rfc1071.txt` | RFC 1071, *Computing the Internet Checksum*, R. Braden, D. Borman, C. Partridge, September 1988 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1071.txt` | 53524 | `e10dfd6816447843d47a7f1b990eba756a791a6308fd5b698a6276075a8e4f9b` |
+| `rfc4291.txt` | RFC 4291, *IP Version 6 Addressing Architecture*, R. Hinden, S. Deering, February 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4291.txt` | 52897 | `4d58dff6b432d5d524bf3a3b7f0337a4177fa65f92ed72f2a92e97b471de48b2` |
 | `rfc5480.txt` | RFC 5480, *Elliptic Curve Cryptography Subject Public Key Information*, S. Turner, D. Brown, K. Yiu, R. Housley, T. Polk, March 2009 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5480.txt` | 36209 | `593bf29fd0da2ff8b903c3ebf1c9d189a770039159e2ba46a0c3b91355037f26` |
 | `rfc5758.txt` | RFC 5758, *Internet X.509 Public Key Infrastructure: Additional Algorithms and Identifiers for DSA and ECDSA*, Q. Dang, S. Santesson, K. Moriarty, D. Brown, T. Polk, January 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5758.txt` | 15834 | `4d02628ff0875a1960d34be584a68f88528b96242bdc5a05a40a29ef01cf1532` |
 | `rfc5903.txt` | RFC 5903, *Elliptic Curve Groups modulo a Prime (ECP Groups) for IKE and IKEv2*, D. Fu, J. Solinas, June 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5903.txt` | 29175 | `939fab548a6e6bb49a5b3c4dd24a3c5df54a46645447b2d6f4df4fd88ff2d69f` |
+| `rfc5952.txt` | RFC 5952, *A Recommendation for IPv6 Address Text Representation*, S. Kawamura, M. Kawashima, August 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5952.txt` | 26570 | `c75e82c5f53bcec8148820fadf0d65935336ee2031fa6ce10504797ed4c1979d` |
 | `rfc6979.txt` | RFC 6979, *Deterministic Usage of the Digital Signature Algorithm (DSA) and Elliptic Curve Digital Signature Algorithm (ECDSA)*, T. Pornin, August 2013 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc6979.txt` | 140386 | `456e8f17558fdbd206f968b96fc6f1b4a71ea331ab30ad17f711ab3adaa7d701` |
+| `rfc8200.txt` | RFC 8200, *Internet Protocol, Version 6 (IPv6) Specification*, S. Deering, R. Hinden, July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8200.txt` | 93162 | `371ae3f133d562db5d6385e6def4ca9914c4f831be228ea7779fd28799c2f490` |
 | `rfc8448.txt` | RFC 8448, *Example Handshake Traces for TLS 1.3*, M. Thomson, January 2019 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8448.txt` | 159343 | `6564d1376d1ec744fc7a9993da15ebc1b9be361908b166091f47ef605c537fba` |
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
-including the page breaks: 1417, 1123, 451, 899, 4427, and 3811 lines
-respectively. Every one was fetched twice and the two fetches agreed.
+including the page breaks: 1417, 1403, 1123, 451, 899, 787, 4427, 2355,
+and 3811 lines respectively, in the order of the table. Every one was fetched twice and the two fetches agreed.
 
 ## Terms
 
@@ -34,10 +37,13 @@ carries a notice of the form
 > Copyright (c) YEAR IETF Trust and the persons identified as the
 > document authors. All rights reserved.
 
-with the year 2009 for RFC 5480, 2010 for RFC 5758 and RFC 5903, 2013 for
-RFC 6979, and 2019 for RFC 8448. RFC 1071 predates the IETF Trust and
-carries no such notice; it is distributed under the unlimited-distribution
-statement of its own Status of This Memo section. They are subject to BCP 78 and the IETF
+with the year 2009 for RFC 5480, 2010 for RFC 5758, RFC 5903, and
+RFC 5952, 2013 for RFC 6979, 2017 for RFC 8200, and 2019 for RFC 8448.
+RFC 4291 predates the IETF Trust and carries the Internet Society's notice
+of 2006 with the full copyright statement of BCP 78, which permits
+reproduction in full. RFC 1071 is older still and carries no notice at
+all; it is distributed under the unlimited-distribution statement of its
+own Status of This Memo section. They are subject to BCP 78 and the IETF
 Trust's Legal Provisions relating to IETF Documents, which permit
 reproduction in full. Code components extracted from an RFC carry the
 Simplified BSD Licence; this project extracts test vectors, which it
@@ -63,6 +69,36 @@ that comes from the protocol specifications. This document is kept for its
 numbers and for section 2, which states why the sum may be computed in
 either byte order and in any grouping — the property the incremental
 accumulator rests on.
+
+## The three documents of IPv6 addressing
+
+These arrived with D-69, which put IPv6 into the first network version
+beside IPv4. They are what `net-wire` implements; the protocol itself is
+later work, and RFC 8200 is here already because its section 8.1 is part
+of this step.
+
+**RFC 4291** is the address architecture: the 128-bit address, the text
+forms of section 2.2, the prefixes that make an address unspecified,
+loopback, link-local, unique-local, or multicast, and — section 2.7.1 —
+the solicited-node multicast address, which is the low 24 bits of a
+unicast address appended to `ff02::1:ff00:0/104`. Neighbor Discovery is
+addressed to that group rather than to a broadcast, which is the reason
+`Ipv6Addr::solicited_node` exists before there is a neighbor to discover.
+
+**RFC 5952** is the canonical text form, and the reason the address type
+has one spelling per value. Section 4 is four rules: leading zeros
+suppressed, `::` used to its maximum, `::` never used for a single zero
+field, and on a tie the leftmost run shortened; section 4.3 requires
+lower case. RFC 4291 permits several texts per address; this document
+picks one of them, and the parser here refuses the others (D-69).
+
+**RFC 8200, section 8.1** is the pseudo-header UDP, TCP, and ICMPv6
+compute their checksums over: the two 128-bit addresses, a 32-bit
+upper-layer length, three zero bytes, and the next-header value of the
+upper-layer protocol — which is not the next-header field of the packet
+when extension headers stand between them. The rest of the document is
+the header format and the extension header chain, which the IPv6 step
+will read.
 
 ## Why RFC 8448 in particular
 

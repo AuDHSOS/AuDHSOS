@@ -7,4 +7,5 @@ mod addr;
 mod checksum;
 mod cursor;
 mod error;
+mod ipv6;
 mod protocol;

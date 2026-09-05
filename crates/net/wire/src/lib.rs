@@ -11,8 +11,8 @@ pub mod cursor;
 pub mod error;
 pub mod protocol;
 
-pub use addr::{Ipv4Addr, Ipv4Cidr, MacAddr, Port};
-pub use checksum::{Checksum, checksum, is_valid, transport_v4};
+pub use addr::{IpAddr, IpCidr, IpVersion, Ipv4Addr, Ipv4Cidr, Ipv6Addr, Ipv6Cidr, MacAddr, Port};
+pub use checksum::{Checksum, checksum, is_valid, transport, transport_v4, transport_v6};
 pub use cursor::{Reader, Writer};
 pub use error::WireError;
 pub use protocol::{EtherType, Protocol};

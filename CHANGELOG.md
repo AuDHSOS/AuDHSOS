@@ -7,6 +7,39 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- IPv6 is in the first network version beside IPv4 (D-69), which supersedes
+  the first clause of D-50. The decision was taken now rather than after D8
+  because the layers above the wire would otherwise bake `Ipv4Addr` into
+  eight crates and their tests: they carry `IpAddr` and `IpCidr` instead,
+  and the transports, the resolver, and the facade are written once. Two
+  consequences are recorded with it — the neighbor cache of `net-eth` is one
+  cache for both families, keyed by `IpAddr` and holding the states of
+  RFC 4861, because Neighbor Discovery is `ICMPv6` and drives it from above
+  where ARP drives it from beside; and IPv6 configures itself from a router
+  advertisement with SLAAC and RFC 8106, so there is no DHCPv6. Track D
+  gains `net-ipv6` as step D4 with catalog item 6.6.54, and the steps after
+  it move up by one.
+- `net-wire` carries both families accordingly. `Ipv6Addr` reads and writes
+  the canonical text of RFC 5952, section 4 — leading zeros suppressed, `::`
+  used to its maximum and never for a single zero group, the leftmost of two
+  equal runs, lower case — and refuses every other spelling RFC 4291
+  permits, the dotted form of an IPv4-mapped address included, since
+  `::ffff:1.2.3.4` and `::ffff:102:304` would otherwise be two texts for one
+  address. `Ipv6Addr::solicited_node` derives the multicast group of
+  RFC 4291, section 2.7.1. `IpAddr`, `IpCidr`, and `IpVersion` are the
+  family-agnostic types; there is no mapped form, and a pair of addresses
+  that is not one family is `MixedFamilies` rather than a conversion.
+- The checksum gained the IPv6 pseudo-header of RFC 8200, section 8.1: two
+  128-bit addresses, a 32-bit upper-layer length, and the upper-layer
+  protocol, which is not the packet's next-header field when an extension
+  header stands between them. `transport` dispatches on the family.
+  `Protocol` gained `ICMPV6` and the four extension header numbers, and
+  `has_pseudo_header` knows that `ICMPv6` sums over one where `ICMPv4` does
+  not — RFC 4443, section 2.3 changed that, and it is the difference that
+  would otherwise be found by a wrong checksum on the wire.
+- RFC 4291, RFC 5952, and RFC 8200 join the reference documents under
+  `docs/rfc/`, each fetched twice and recorded with its checksum.
+
 - `net-wire`, the first step of track D and the layer every network crate
   above it rests on. `MacAddr`, `Ipv4Addr`, `Ipv4Cidr`, and `Port` have one
   canonical text each in both directions, so `010.0.0.1` is refused rather

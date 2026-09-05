@@ -6,7 +6,7 @@
 use test_support::generators::bytes;
 use test_support::property::check;
 
-use crate::addr::{Ipv4Addr, MacAddr, Port};
+use crate::addr::{IpAddr, Ipv4Addr, Ipv6Addr, MacAddr, Port};
 use crate::cursor::{Reader, Writer};
 use crate::error::WireError;
 
@@ -315,4 +315,52 @@ fn no_sequence_of_reads_takes_the_cursor_out_of_its_buffer() {
             Err(format!("the position left {} bytes", data.len()))
         }
     });
+}
+
+#[test]
+fn an_ipv6_address_reads_and_writes_its_sixteen_bytes() {
+    let address = Ipv6Addr::new([0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1]);
+    let mut buffer = [0u8; 16];
+    let mut writer = Writer::new(&mut buffer);
+    assert_eq!(writer.write_ipv6(address), Ok(()));
+    assert_eq!(writer.finish(), &address.octets());
+
+    let mut reader = Reader::new(&buffer);
+    assert_eq!(reader.read_ipv6(), Ok(address));
+    assert!(reader.is_empty());
+    assert_eq!(
+        reader.read_ipv6(),
+        Err(WireError::OutOfBounds {
+            needed: 16,
+            available: 0
+        })
+    );
+}
+
+#[test]
+fn an_address_of_either_family_is_written_in_the_width_of_that_family() {
+    let mut buffer = [0u8; 20];
+    let mut writer = Writer::new(&mut buffer);
+    assert_eq!(writer.write_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)), Ok(()));
+    assert_eq!(writer.position(), 4);
+    assert_eq!(writer.write_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)), Ok(()));
+    assert_eq!(writer.position(), 20);
+
+    let mut reader = Reader::new(&buffer);
+    assert_eq!(reader.read_ipv4(), Ok(Ipv4Addr::LOCALHOST));
+    assert_eq!(reader.read_ipv6(), Ok(Ipv6Addr::LOCALHOST));
+}
+
+#[test]
+fn an_address_that_does_not_fit_writes_nothing() {
+    let mut buffer = [0u8; 8];
+    let mut writer = Writer::new(&mut buffer);
+    assert_eq!(
+        writer.write_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)),
+        Err(WireError::OutOfBounds {
+            needed: 16,
+            available: 8
+        })
+    );
+    assert_eq!(writer.position(), 0);
 }

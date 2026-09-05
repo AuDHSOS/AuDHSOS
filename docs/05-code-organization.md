@@ -74,9 +74,10 @@ AuDHSOS/
 │   │   ├── der/               audhsos-der: strict zero-copy DER reader
 │   │   ├── x509/              audhsos-x509: certificates, path validation, name matching
 │   │   ├── tls/               audhsos-tls: TLS 1.3 client, sans-I/O
-│   │   ├── wire/              net-wire: addresses, cursor, internet checksum
-│   │   ├── eth/               net-eth: Ethernet II frames, ARP cache
-│   │   ├── ip/                net-ip: IPv4, reassembly, ICMP, routes
+│   │   ├── wire/              net-wire: addresses of both families, cursor, internet checksum
+│   │   ├── eth/               net-eth: Ethernet II frames, ARP, the neighbor cache
+│   │   ├── ip/                net-ip: IPv4, reassembly, ICMPv4, routes over both families
+│   │   ├── ipv6/              net-ipv6: IPv6, extension headers, ICMPv6, Neighbor Discovery, SLAAC
 │   │   ├── udp/               net-udp: sockets and datagrams
 │   │   ├── tcp/               net-tcp: the RFC 9293 state machine, timers, congestion control
 │   │   ├── dns/               net-dns: message format and resolver state machine
@@ -138,6 +139,7 @@ AuDHSOS/
 | `net-wire` | n0 | all | no | yes | `test-support` as a dev-dependency |
 | `net-eth` | n1 | all | no | yes | `net-wire`, `audhsos-time`, `audhsos-collections` |
 | `net-ip` | n2 | all | no | yes, fuzz | `net-eth` and below |
+| `net-ipv6` | n2 | all | no | yes, fuzz | `net-ip` and below |
 | `net-udp` | n3 | all | no | yes | `net-ip` and below, `crypto-rng` |
 | `net-tcp` | n3 | all | no | yes, fuzz | `net-ip` and below, `crypto-rng` |
 | `net-dns` | n4 | all | no | yes, fuzz | `net-udp` and below, `crypto-rng` |

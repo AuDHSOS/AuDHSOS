@@ -21,9 +21,7 @@ impl EtherType {
     pub const IPV4: EtherType = EtherType(0x0800);
     /// ARP.
     pub const ARP: EtherType = EtherType(0x0806);
-    /// IPv6, which this system does not carry (D-50) and which is named
-    /// here so that a frame of it is dropped as a known type rather than
-    /// puzzled over.
+    /// IPv6.
     pub const IPV6: EtherType = EtherType(0x86DD);
 
     /// The smallest value that is a type. Below it, the field is the
@@ -45,7 +43,7 @@ impl EtherType {
     /// Whether a layer of this system reads frames of this type.
     #[must_use]
     pub const fn is_registered(self) -> bool {
-        matches!(self, EtherType::IPV4 | EtherType::ARP)
+        matches!(self, EtherType::IPV4 | EtherType::IPV6 | EtherType::ARP)
     }
 
     /// Whether the field is a type at all rather than a length.
@@ -76,17 +74,37 @@ impl fmt::Display for EtherType {
     }
 }
 
-/// The protocol field of an IPv4 header.
+/// The protocol field of an IPv4 header, which is the next-header field of
+/// an IPv6 header: one table, as IANA keeps it. The values that name an
+/// IPv6 extension header rather than an upper-layer protocol are the ones
+/// [`is_extension_header`](Protocol::is_extension_header) reports.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Protocol(u8);
 
 impl Protocol {
+    /// The IPv6 hop-by-hop options header, which is an extension header
+    /// and, being the value zero, the one that cannot be confused with an
+    /// absent field.
+    pub const HOP_BY_HOP: Protocol = Protocol(0);
     /// ICMP for IPv4.
     pub const ICMP: Protocol = Protocol(1);
     /// TCP.
     pub const TCP: Protocol = Protocol(6);
     /// UDP.
     pub const UDP: Protocol = Protocol(17);
+    /// The IPv6 routing header, an extension header. This system sends
+    /// none and reads one only to step over it.
+    pub const ROUTING: Protocol = Protocol(43);
+    /// The IPv6 fragment header, an extension header.
+    pub const FRAGMENT: Protocol = Protocol(44);
+    /// ICMP for IPv6, which carries Neighbor Discovery and the router
+    /// advertisements a host configures itself from.
+    pub const ICMPV6: Protocol = Protocol(58);
+    /// No next header: the packet ends here, and nothing follows the
+    /// header that says so.
+    pub const NO_NEXT_HEADER: Protocol = Protocol(59);
+    /// The IPv6 destination options header, an extension header.
+    pub const DESTINATION_OPTIONS: Protocol = Protocol(60);
 
     /// The protocol of this number.
     #[must_use]
@@ -103,15 +121,34 @@ impl Protocol {
     /// Whether a layer of this system reads datagrams of this protocol.
     #[must_use]
     pub const fn is_registered(self) -> bool {
-        matches!(self, Protocol::ICMP | Protocol::TCP | Protocol::UDP)
+        matches!(
+            self,
+            Protocol::ICMP | Protocol::ICMPV6 | Protocol::TCP | Protocol::UDP
+        )
+    }
+
+    /// Whether the value names an IPv6 extension header rather than an
+    /// upper-layer protocol. A parser walks the chain while this holds and
+    /// hands what follows to the layer above when it stops.
+    #[must_use]
+    pub const fn is_extension_header(self) -> bool {
+        matches!(
+            self,
+            Protocol::HOP_BY_HOP
+                | Protocol::ROUTING
+                | Protocol::FRAGMENT
+                | Protocol::DESTINATION_OPTIONS
+        )
     }
 
     /// Whether the protocol's checksum covers the pseudo-header of the two
-    /// addresses. ICMP's does not, which is the one difference that
-    /// matters when a checksum is computed for it.
+    /// addresses. `ICMPv4`'s does not and `ICMPv6`'s does — RFC 4443,
+    /// section 2.3 changed that, and it is the one difference a checksum
+    /// routine has to know before it sums an ICMP message of either
+    /// family.
     #[must_use]
     pub const fn has_pseudo_header(self) -> bool {
-        matches!(self, Protocol::TCP | Protocol::UDP)
+        matches!(self, Protocol::TCP | Protocol::UDP | Protocol::ICMPV6)
     }
 
     /// The name of the protocol, for a diagnostic, or `None` for one this
@@ -119,9 +156,15 @@ impl Protocol {
     #[must_use]
     pub const fn name(self) -> Option<&'static str> {
         match self {
+            Protocol::HOP_BY_HOP => Some("hop-by-hop options"),
             Protocol::ICMP => Some("ICMP"),
             Protocol::TCP => Some("TCP"),
             Protocol::UDP => Some("UDP"),
+            Protocol::ROUTING => Some("routing header"),
+            Protocol::FRAGMENT => Some("fragment header"),
+            Protocol::ICMPV6 => Some("ICMPv6"),
+            Protocol::NO_NEXT_HEADER => Some("no next header"),
+            Protocol::DESTINATION_OPTIONS => Some("destination options"),
             _ => None,
         }
     }

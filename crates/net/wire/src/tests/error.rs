@@ -25,7 +25,11 @@ fn every_variant_writes_a_sentence_of_its_own() {
         ),
         (
             WireError::Length(70000),
-            "70000 bytes do not fit in a sixteen-bit length",
+            "70000 bytes do not fit in the length field",
+        ),
+        (
+            WireError::MixedFamilies,
+            "the two addresses are of different families",
         ),
     ];
     for (error, expected) in messages {

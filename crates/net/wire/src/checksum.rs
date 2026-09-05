@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! The internet checksum of RFC 1071, which IPv4, ICMP, UDP, and TCP all
-//! use.
+//! The internet checksum of RFC 1071, which IPv4, ICMP, `ICMPv6`, UDP, and
+//! TCP all use.
 //!
 //! The sum is the sixteen-bit one's complement of the one's complement sum
 //! of the data taken as sixteen-bit words, most significant byte first. An
@@ -18,6 +18,13 @@
 //! independent of the byte order of the machine, so nothing here has a
 //! target in it.
 //!
+//! The two pseudo-headers differ in more than the width of an address.
+//! The IPv6 one of RFC 8200, section 8.1 carries a thirty-two bit length
+//! and names the upper-layer protocol rather than the next-header field of
+//! the packet, which is a different value whenever an extension header
+//! stands between them; and `ICMPv6` is summed over a pseudo-header where
+//! `ICMPv4` is not.
+//!
 //! Where this departs from the memo: RFC 1071 section 2 recommends
 //! deferring the end-around carries into the high half of a wider
 //! accumulator, which saves an instruction per word. [`Checksum`] carries
@@ -28,7 +35,7 @@
 //! optimization for assembly; this is Rust, and the bound is worth more
 //! than the instruction.
 
-use crate::addr::Ipv4Addr;
+use crate::addr::{IpAddr, Ipv4Addr, Ipv6Addr};
 use crate::error::WireError;
 use crate::protocol::Protocol;
 
@@ -109,6 +116,29 @@ impl Checksum {
         self.add_word(length);
     }
 
+    /// Adds the IPv6 pseudo-header of RFC 8200, section 8.1: the two
+    /// addresses, the upper-layer length in thirty-two bits, three zero
+    /// bytes, and the next-header value.
+    ///
+    /// Two things differ from the IPv4 form beyond the address width. The
+    /// length is thirty-two bits, because a jumbogram has no sixteen-bit
+    /// length; and `next_header` is the upper-layer protocol, not the
+    /// next-header field of the packet, which names the first extension
+    /// header whenever there is one.
+    pub fn add_pseudo_header_v6(
+        &mut self,
+        source: Ipv6Addr,
+        destination: Ipv6Addr,
+        next_header: Protocol,
+        length: u32,
+    ) {
+        self.add_bytes(&source.octets());
+        self.add_bytes(&destination.octets());
+        self.add_bytes(&length.to_be_bytes());
+        self.add_word(0);
+        self.add_word(u16::from(next_header.get()));
+    }
+
     /// The checksum: the sum completed, then complemented.
     ///
     /// A byte held back pairs with a zero here, as RFC 1071 case \[2\]
@@ -172,4 +202,59 @@ pub fn transport_v4(
     sum.add_pseudo_header_v4(source, destination, protocol, length);
     sum.add_bytes(segment);
     Ok(sum.finish())
+}
+
+/// The checksum of a UDP, TCP, or `ICMPv6` segment over IPv6: the
+/// pseudo-header of RFC 8200, section 8.1, followed by the segment.
+///
+/// `segment` is the upper-layer header and its payload with the checksum
+/// field zeroed, and its length is what goes into the pseudo-header.
+/// `next_header` is the upper-layer protocol, not the next-header field of
+/// the packet.
+///
+/// # Errors
+///
+/// [`WireError::Length`] when the segment is longer than the thirty-two
+/// bit length the pseudo-header carries. No buffer this system builds
+/// comes near four gibibytes, so the check stands for the type of a
+/// `usize` rather than for a case that occurs.
+pub fn transport_v6(
+    source: Ipv6Addr,
+    destination: Ipv6Addr,
+    next_header: Protocol,
+    segment: &[u8],
+) -> Result<u16, WireError> {
+    let length = u32::try_from(segment.len()).map_err(|_| WireError::Length(segment.len()))?;
+    let mut sum = Checksum::new();
+    sum.add_pseudo_header_v6(source, destination, next_header, length);
+    sum.add_bytes(segment);
+    Ok(sum.finish())
+}
+
+/// The checksum of a transport segment over whichever family the two
+/// addresses belong to.
+///
+/// This is what a layer above the wire calls, so that a socket writes its
+/// checksum once rather than once per family.
+///
+/// # Errors
+///
+/// [`WireError::MixedFamilies`] when the two addresses are not of one
+/// family, and [`WireError::Length`] as the two family-specific functions
+/// return it.
+pub fn transport(
+    source: IpAddr,
+    destination: IpAddr,
+    protocol: Protocol,
+    segment: &[u8],
+) -> Result<u16, WireError> {
+    match (source, destination) {
+        (IpAddr::V4(source), IpAddr::V4(destination)) => {
+            transport_v4(source, destination, protocol, segment)
+        }
+        (IpAddr::V6(source), IpAddr::V6(destination)) => {
+            transport_v6(source, destination, protocol, segment)
+        }
+        _ => Err(WireError::MixedFamilies),
+    }
 }

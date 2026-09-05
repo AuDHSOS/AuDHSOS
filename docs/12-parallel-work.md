@@ -220,6 +220,13 @@ output is a function of state, input, and `now`, and the stack answers
 `poll_at()` with the instant at which it next has work, so a server
 never polls in a loop and a test never sleeps.
 
+The stack carries both families (D-69). An address is an `IpAddr`
+everywhere above `net-wire`, a route is an `IpCidr`, and a neighbor is one
+cache entry whichever protocol resolved it; the two internet layers are
+separate crates because their headers, their errors, and their address
+configuration have almost nothing in common, and everything above them is
+written once.
+
 What is *not* in this track: `driver-virtio-net`, `server-net`, the
 socket protocol in `user-proto`, and the entropy system call. They are
 integration, they need the kernel, and section 8.14 keeps them
@@ -232,12 +239,19 @@ unscheduled.
 | `net-wire` | `crates/net/wire` | n0 | - |
 | `net-eth` | `crates/net/eth` | n1 | `net-wire`, `audhsos-time`, `audhsos-collections` |
 | `net-ip` | `crates/net/ip` | n2 | `net-eth` and below |
+| `net-ipv6` | `crates/net/ipv6` | n2 | `net-ip` and below |
 | `net-udp` | `crates/net/udp` | n3 | `net-ip` and below, `crypto-rng` |
 | `net-tcp` | `crates/net/tcp` | n3 | `net-ip` and below, `crypto-rng` |
 | `net-dns` | `crates/net/dns` | n4 | `net-udp` and below, `crypto-rng` |
 | `net-dhcp` | `crates/net/dhcp` | n4 | `net-udp` and below, `crypto-rng` |
 | `net-http` | `crates/net/http` | n4 | `net-wire` |
 | `net-stack` | `crates/net/stack` | n5 | all of the above |
+
+`net-ip` holds what the two families share — the routing table over
+`IpCidr`, the reassembly machinery, and the interface the transports send
+through — and the IPv4 half; `net-ipv6` holds the IPv6 half and
+implements that interface. The transports therefore depend on `net-ip`
+alone and know no family, which is what makes a socket one piece of code.
 
 `crypto-rng` is the only edge into track C, and it exists because
 initial sequence numbers, ephemeral ports, and transaction ids must not
@@ -285,6 +299,20 @@ so nothing above it copies a frame to read one.
   it holds the odd byte a call ended on, so a pseudo-header, a header,
   and a payload may arrive in three calls (D-68).
 
+Both families are here from the start (D-69). `Ipv6Addr` reads and writes
+the canonical text of RFC 5952, section 4 and refuses every other spelling
+RFC 4291 permits, including the dotted form of an IPv4-mapped address,
+which this system does not carry as a value at all; `Ipv6Addr::solicited_node`
+derives the multicast group of RFC 4291, section 2.7.1, which is where
+Neighbor Discovery asks. `IpAddr`, `IpCidr`, and `IpVersion` are the types
+every layer above carries. The checksum has the pseudo-header of RFC 8200,
+section 8.1 beside the IPv4 one — thirty-two bits of length, and the
+upper-layer protocol rather than the packet's next-header field — and
+`transport` dispatches on the family and answers `MixedFamilies` for a
+pair that is not one. `Protocol` gained `ICMPV6` and the four extension
+header numbers, and `has_pseudo_header` knows that `ICMPv6` sums over one
+where `ICMPv4` does not.
+
 The crate has no `test-strategies` feature. Generators for addresses have
 no consumer until `net-eth` needs them, and the crate's own property
 tests generate their bytes with `test-support` directly.
@@ -299,12 +327,20 @@ Ethernet II frames: the 14-byte header, an MTU of 1500, no VLAN tags in
 the first version. Frames shorter than the header, and frames whose
 ether type is not registered, are dropped rather than rejected loudly.
 
-ARP: request and reply encoding; a cache of fixed capacity with per
-entry age, state (`Incomplete`, `Reachable`, `Stale`), and at most one
-pending packet per destination; the retransmission schedule as a
-function of `Instant`; gratuitous ARP accepted for refresh but never
-allowed to replace a reachable entry with a different address, which is
-the cheap half of ARP-spoofing resistance and costs one comparison.
+The neighbor cache: one cache of fixed capacity for both families, keyed
+by `IpAddr`, with per entry age, at most one pending packet per
+destination, and the states of RFC 4861 — `Incomplete`, `Reachable`,
+`Stale`, `Delay`, `Probe` — of which ARP uses the three it needs. The
+retransmission schedule is a function of `Instant`.
+
+ARP fills the IPv4 half from here: request and reply encoding, with
+gratuitous ARP accepted for refresh but never allowed to replace a
+reachable entry with a different address, which is the cheap half of
+ARP-spoofing resistance and costs one comparison. The IPv6 half is filled
+by Neighbor Discovery, which is `ICMPv6` and therefore lives in
+`net-ipv6`; it writes into this cache rather than keeping a second one
+(D-69). The cache is thus driven from above in both cases, and `net-eth`
+owns the storage and the timers and neither of the two protocols.
 
 ### 12.6.5 `net-ip`
 
@@ -320,20 +356,60 @@ the cheap half of ARP-spoofing resistance and costs one comparison.
   exceeded are parsed and delivered to the upper layer, so that a TCP
   connection to a closed port fails fast instead of timing out; generated
   errors are rate-limited by a token bucket.
-- Routing: a table of fixed capacity with longest-prefix match, a
-  default route, and on-link detection.
+- Routing: a table of fixed capacity over `IpCidr` with longest-prefix
+  match, a default route per family, and on-link detection. The table
+  holds both families and a route of one never matches a destination of
+  the other.
+- The interface the transports send through, which takes an `IpAddr` pair
+  and a protocol and knows nothing about which family will carry it.
 
-IPv6 is not in the first version. It is a boundary, not an oversight
-(D-50).
+The reassembly machinery is here and not in `net-ipv6`, because the two
+differ in where the fragment fields sit and in nothing else that a
+reassembly buffer cares about.
 
-### 12.6.6 `net-udp`
+### 12.6.6 `net-ipv6`
+
+- Header parsing and writing, and the extension header chain: hop-by-hop
+  options, routing, fragment, and destination options are stepped over to
+  reach the upper-layer header. The walk is bounded in the number of
+  headers and in the bytes it may consume, and a chain that does not end
+  is a drop — an unbounded chain is this format's version of the
+  compression pointer loop of 12.6.9.
+- No header checksum, because IPv6 has none, and therefore no
+  verification on receipt: a corrupted header is caught by the
+  upper-layer checksum, which is why RFC 8200 makes that one mandatory
+  where IPv4 left it optional for UDP.
+- Fragmentation on send through the fragment header, and reassembly
+  through the machinery of `net-ip`. A router never fragments an IPv6
+  packet, so the source does it or it does not happen.
+- `ICMPv6` per RFC 4443: echo request and reply; destination unreachable,
+  packet too big, and time exceeded parsed and delivered upward. Its
+  checksum covers the pseudo-header, which `ICMPv4`'s does not.
+- Neighbor Discovery per RFC 4861: solicitation and advertisement,
+  addressed to the solicited-node multicast group rather than broadcast,
+  writing into the neighbor cache of `net-eth`; duplicate address
+  detection before an address is used.
+- Router advertisements and SLAAC: a prefix and a router learned from an
+  advertisement, an address formed from the prefix, the lifetimes that go
+  with them, and the recursive DNS server option of RFC 8106. There is no
+  DHCPv6 (D-69).
+- Path MTU discovery, driven by the packet-too-big message. It is not
+  optional here: no router will fragment for this host.
+
+### 12.6.7 `net-udp`
 
 A fixed number of sockets, each bound to an explicit port or to an
 ephemeral port drawn from `Rng` within a documented range; a receive
-ring over caller-supplied memory; checksum verified when non-zero and
-always written on send; broadcast permitted, because DHCP needs it.
+ring over caller-supplied memory; broadcast permitted, because DHCP
+needs it. A socket carries an `IpAddr` and no family of its own.
 
-### 12.6.7 `net-tcp`
+The checksum differs by family and the difference is not cosmetic: over
+IPv4 it is verified when non-zero and may be omitted on send, over IPv6
+it is mandatory in both directions, because there is no header checksum
+underneath it to catch a corrupted address (RFC 8200, section 8.1). A
+datagram whose sum comes out zero is sent as all ones in both.
+
+### 12.6.8 `net-tcp`
 
 The largest single piece of the track, and the reason it is XL.
 
@@ -369,26 +445,31 @@ The largest single piece of the track, and the reason it is XL.
   incoming resets and SYNs, and a challenge acknowledgment rather than a
   blind teardown.
 
-### 12.6.8 `net-dns`
+### 12.6.9 `net-dns`
 
 Message encoding and decoding with name compression on read — bounded
 jumps and loop detection, because a compression pointer loop is the
 classic denial of service of this format — and without compression on
-write. `A` records and `CNAME` chains up to depth eight; other types are
-parsed as opaque and ignored. The resolver is a state machine over UDP
+write. `A` and `AAAA` records and `CNAME` chains up to depth eight; other
+types are parsed as opaque and ignored. A name is asked for in both types
+and the answers of both are returned, because which family a host reaches
+a name over is the caller's question and not the resolver's. The resolver is a state machine over UDP
 with retry, server rotation, and a deadline; the transaction id and the
 source port come from `Rng`, and a response is accepted only when id,
 question section, source address, and port all match.
 
-### 12.6.9 `net-dhcp`
+### 12.6.10 `net-dhcp`
 
-The four-message exchange, the options the stack needs (subnet mask,
-router, DNS servers, lease time, server identifier, message type), and
-the lease state machine with T1 renewal, T2 rebinding, and expiry. The
+IPv4 only. The four-message exchange, the options the stack needs (subnet
+mask, router, DNS servers, lease time, server identifier, message type),
+and the lease state machine with T1 renewal, T2 rebinding, and expiry. The
 transaction id comes from `Rng`; retransmission backs off exponentially
 with jitter, as RFC 2131 requires.
 
-### 12.6.10 `net-http`
+IPv6 configures itself from a router advertisement instead, which is
+`ICMPv6` and therefore in `net-ipv6`. There is no DHCPv6 (D-69).
+
+### 12.6.11 `net-http`
 
 An HTTP/1.1 client: request line and headers encoded into a
 caller-supplied buffer; the response parsed strictly — a bounded status
@@ -398,16 +479,23 @@ outright, which is the rule that closes request smuggling. Chunked
 transfer decoding is supported. Redirects are reported to the caller,
 never followed. No content encodings in the first version.
 
-### 12.6.11 `net-stack`
+### 12.6.12 `net-stack`
 
-The facade: an `Interface` with its MAC address, its addresses, its
-routes, and its MTU; `poll(now, rx, tx)` which demultiplexes an incoming
-frame down the layers and drains the outgoing work; socket handles as
-generation-checked indices, in the form of the kernel's handles; and
-`poll_at(now)`. The whole stack has one entry point, so a server process
-is a loop around it and nothing else.
+The facade: an `Interface` with its MAC address, its addresses of both
+families, its routes, and its MTU; `poll(now, rx, tx)` which
+demultiplexes an incoming frame down the layers and drains the outgoing
+work; socket handles as generation-checked indices, in the form of the
+kernel's handles; and `poll_at(now)`. The whole stack has one entry
+point, so a server process is a loop around it and nothing else.
 
-### 12.6.12 Testing
+Source and destination address selection follows RFC 6724, which is what
+decides which of a host's addresses a packet leaves with and which of a
+name's addresses it goes to. Connecting to a name that resolves to both
+families tries them in that order and does not race them: Happy Eyeballs
+(RFC 8305) is a policy above the stack and not in it, and its absence
+costs a timeout on a broken path rather than a wrong answer.
+
+### 12.6.13 Testing
 
 - Vector tests for every header format, taken from the RFCs. Frames used
   in tests are constructed by project code; no capture from a foreign
@@ -419,28 +507,39 @@ is a loop around it and nothing else.
   every byte handed to one side arrives once, in order, at the other, and
   that both sides reach `CLOSED`. The same runner drives the ARP cache
   and the reassembly buffers against reference models.
-- Fuzz targets `ipv4`, `tcp_segment`, `dns_message`, and
-  `http_response`.
+- The address types of both families round-trip through their canonical
+  text, and no text this parser accepts has a second spelling (property).
+- Fuzz targets `ipv4`, `ipv6`, `tcp_segment`, `dns_message`, and
+  `http_response`. The IPv6 target exists for the extension header chain,
+  which is the one part of that format a byte stream can drive in
+  circles.
 - No test sleeps. Time is an argument, so a sixty-second retransmission
   backoff is exercised in microseconds of wall clock.
 
-Tests: catalog 6.6.42 to 6.6.50.
+Tests: catalog 6.6.42 to 6.6.50 and 6.6.54.
 
-### 12.6.13 Order of work
+### 12.6.14 Order of work
 
 | Step | Content | Size |
 |------|---------|------|
 | D1 | `net-wire`: addresses, cursor, checksums — implemented | S |
 | D2 | `net-eth`: frames and the ARP cache | M |
-| D3 | `net-ip`: header, reassembly, fragmentation, ICMP, routes | M |
-| D4 | `net-udp` | S |
-| D5 | `net-tcp`: sequence arithmetic, state machine, timers, congestion control | XL |
-| D6 | `net-dns` and `net-dhcp` | M |
-| D7 | `net-http` | S |
-| D8 | `net-stack`: the facade | M |
-| D9 | integration, jointly with T8 of document 11: `driver-virtio-net`, `server-net`, the socket protocol, the entropy system call, the TLS transport | not scheduled |
+| D3 | `net-ip`: IPv4 header, reassembly, fragmentation, `ICMPv4`, the routing table over both families | M |
+| D4 | `net-ipv6`: header and extension chain, `ICMPv6`, Neighbor Discovery, router advertisements and SLAAC, path MTU discovery | L |
+| D5 | `net-udp` | S |
+| D6 | `net-tcp`: sequence arithmetic, state machine, timers, congestion control | XL |
+| D7 | `net-dns` and `net-dhcp` | M |
+| D8 | `net-http` | S |
+| D9 | `net-stack`: the facade, with the address selection of RFC 6724 | M |
+| D10 | integration, jointly with T8 of document 11: `driver-virtio-net`, `server-net`, the socket protocol, the entropy system call, the TLS transport | not scheduled |
 
-D5 is the one step that must not be started beside an XL phase.
+D6 is the one step that must not be started beside an XL phase.
+
+D4 is what D-69 added, and D2 and D3 grew with it: the neighbor cache is
+one cache for two protocols, and the routing table is one table for two
+families. It is written before the transports rather than after them,
+because a socket that has learned one family is a socket that has to be
+widened.
 
 ## 12.7 Track F: device logic without devices
 
@@ -589,8 +688,9 @@ compression or encryption of the boot image.
 | Risk | Effect | Mitigation |
 |------|--------|------------|
 | Parallel work displaces the phases | the release slips while the workspace grows | at most one side track beside track C; a track is never worked on instead of a phase (D-45) |
-| TCP is underestimated | D5 stalls the track | the state machine, the timers, and the congestion control are separate modules with separate catalog items; the back-to-back model test exists before the first timer is tuned |
+| TCP is underestimated | D6 stalls the track | the state machine, the timers, and the congestion control are separate modules with separate catalog items; the back-to-back model test exists before the first timer is tuned |
 | A stack written without a device meets a real device badly | rework when the driver arrives | every layer is a borrowed view over bytes with no assumption about who produced them; the virtqueue logic of track F is written before the driver, not with it |
+| The dual stack doubles the internet layer | track D runs long and the phases wait | the two families share the neighbor cache, the routing table, the reassembly buffers, and every crate above `net-ipv6`, so what is written twice is the header format and the address configuration and nothing else; `net-ipv6` is its own step (D4) and its own catalog item, so it can be cut back to a boundary rather than half-finished (D-69) |
 | Foundations arrive after their consumers | the containers and the time arithmetic get written twice | track E is scheduled first and is small |
 | The FAT32 move breaks the image writer | phase 2 tooling regresses | the move is a refactoring with the existing catalog 6.6.15 tests kept green, followed by the new tests of 6.6.52 |
 | Options omitted from TCP are read as defects later | avoidable confusion | the omissions are decisions (D-50) and appear in the crate documentation |
