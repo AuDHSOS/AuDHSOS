@@ -284,6 +284,14 @@ window of RFC 5280; the calendar arithmetic itself lives in
 `audhsos-time`, so certificate validity and network timers share one
 type.
 
+Until `audhsos-time` exists, the reader checks the syntax of a time and
+stops there: the form the profile allows, the digits, the `Z` suffix, the
+field ranges, and the two-digit year window, yielding the six fields as a
+`Timestamp` rather than an instant. The day is checked against
+thirty-one, not against the true length of its month. Section 11.14
+carries this as an open seam, and a test states the current behaviour so
+that the gap is visible rather than assumed away.
+
 `audhsos-x509` parses a certificate into borrowed slices:
 
 ```rust
@@ -420,7 +428,7 @@ checklist in 4.9.
 | T2 | `crypto-aead`: ChaCha20-Poly1305, then bitsliced AES-GCM | L | implemented |
 | T3 | `crypto-ec`: `fe25519` and X25519, then Ed25519, then P-256 | L | implemented |
 | T4 | `crypto-rng` | S | implemented |
-| T5 | `audhsos-der` | M | |
+| T5 | `audhsos-der` | M | implemented but for the time conversion (11.14) |
 | T6 | `audhsos-x509` with the test certificate builder | L | |
 | T7 | `audhsos-tls` | XL | |
 | T8 | Integration, jointly with step D9 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M | |
@@ -441,3 +449,21 @@ kernel and is not scheduled.
 | No revocation checking | a revoked certificate is accepted | stated as a known limit; short-lived anchors and operator-chosen trust stores are the only mitigation in this version |
 | The track grows past its estimate | kernel phases slip | the track is independent; work on it happens between phases, never instead of one |
 | Zeroization is best effort without `unsafe` | key material may remain in freed memory | keys live in `Secret<N>` with the shortest possible lifetime; the limit is documented rather than hidden |
+
+## 11.14 What this track is waiting on
+
+Everything in this section is specified elsewhere and not yet built. It is
+listed here because a seam that lives only in a commit message is a seam
+nobody finds again.
+
+| What is missing | Where it is felt | Who owns it |
+|-----------------|------------------|-------------|
+| The conversion of a certificate time to an instant, and the check of a day against the true length of its month | `audhsos-der` yields a `Timestamp` of fields; `audhsos-x509` cannot compare a validity window against a clock | `audhsos-time`, D-46, [document 12](12-parallel-work.md) |
+| A PEM decoder | the trust-anchor conversion of D-42, which the xtask performs at build time | `audhsos-encoding`, D-47, [document 12](12-parallel-work.md) |
+| The fuzz harness and the `fuzz/` tree | the targets `der`, `x509`, `tls_record`, and `tls_handshake` that catalog 6.6.35 to 6.6.38 require | `fuzz-support`, D-54, [document 12](12-parallel-work.md) |
+| A source of entropy | `crypto-rng` ships the generator and the `Entropy` trait; no product code can construct a generator without a source | `RDSEED` in the HAL behind a `random_bytes` system call, D-43 |
+| A transport | step T8: the client is sans-I/O and needs bytes moved for it | `net-tcp`, D-49, [document 12](12-parallel-work.md) |
+
+None of these blocks the steps that remain. T6 and T7 can be built against
+the `Timestamp` of fields and gain the conversion when it arrives; the fuzz
+targets are written when there is a harness to run them in.

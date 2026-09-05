@@ -267,7 +267,7 @@ phase order and is built between phases.
 | T2 | `crypto-aead` | L | implemented: ChaCha20-Poly1305 and AES-GCM, both constant-time and table-free |
 | T3 | `crypto-ec` | L | implemented: X25519, Ed25519 verification, P-256 ECDSA verification |
 | T4 | `crypto-rng` | S | implemented: the ChaCha20 generator and the `Entropy` trait |
-| T5 | `audhsos-der` | M | a strict DER reader with its fuzz target |
+| T5 | `audhsos-der` | M | implemented: a strict DER reader; its fuzz target and its time conversion wait on document 12 (11.14) |
 | T6 | `audhsos-x509` | L | certificate parsing, path validation, name matching, the test certificate builder |
 | T7 | `audhsos-tls` | XL | the TLS 1.3 client reproduces the RFC 8448 trace byte for byte and completes a handshake against project-generated chains |
 | T8 | integration | M | not scheduled: transport, the `random_bytes` system call, an HTTP client |

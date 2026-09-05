@@ -124,7 +124,7 @@ AuDHSOS/
 | `user-loader` | u2 | `x86_64-unknown-none` | no | yes, fuzz | `user-rt`, `user-proto`, `audhsos-elf` |
 | servers and apps | u3 | `x86_64-unknown-none` | no | logic on host, e2e in QEMU | `user-rt`, `user-proto`, `user-loader`, `driver-uart16550`, `driver-i8042`, `gfx` |
 | `crypto-ct` | c0 | all | no | yes | - |
-| `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` behind the feature `test-strategies` |
+| `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time` when it exists (11.14); `test-support` as a dev-dependency |
 | `crypto-hash` | c1 | all | no | yes | `crypto-ct` |
 | `crypto-aead` | c1 | all | no | yes | `crypto-ct` |
 | `crypto-ec` | c2 | all | no | yes | `crypto-ct`, `crypto-hash`; feature `test-signing` |

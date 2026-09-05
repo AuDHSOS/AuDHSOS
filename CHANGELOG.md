@@ -83,6 +83,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - `crypto-rng`: the `Entropy` and `Rng` traits, a `ChaCha20` generator that
   rekeys after every request and mixes fresh material into its key when it
   reseeds, and the doubles the protocol tests will need.
+- `audhsos-der`: a strict, zero-copy reader for the distinguished encoding
+  rules, with bounded nesting and one encoding per value. Its time
+  conversion waits on `audhsos-time` (D-46); section 11.14 of document 11
+  lists that seam and the others.
 - Decision D-56: the key exchange of the TLS client is `x25519` alone.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.

@@ -781,13 +781,19 @@ done until every applicable item has a test. Items are added, never removed.
   unsigned is expected, and the empty integer are rejected.
 - Bit strings with a non-zero unused-bit count where zero is required;
   octet strings of length zero; object identifiers compared as bytes.
-- Times: `UTCTime` and `GeneralizedTime` in the forms RFC 5280 allows,
-  and rejection of the forms it forbids; leap years, the two-digit year
-  window, the day-of-month bounds per month, and out-of-range fields.
-- Nesting deeper than `MAX_DEPTH` is rejected without recursion beyond the
-  limit; trailing bytes after the outermost value are rejected.
-- Property: no input causes a panic and every accepted value re-encodes to
-  the input bytes. Fuzz target `der`.
+- Times: `UTCTime` and `GeneralizedTime` in the forms RFC 5280 allows, and
+  rejection of the forms it forbids — no seconds, no zone, a lower-case
+  zone, an offset, fractional seconds, a letter among the digits; the
+  two-digit year window at both sides of its boundary; every field out of
+  range. A day beyond the true length of its month is still accepted, and
+  a test says so: that check needs a calendar, which decision D-46 puts in
+  `audhsos-time`, and section 11.14 of document 11 carries the seam.
+- Nesting deeper than `MAX_DEPTH` is rejected, and nesting exactly to it is
+  read; trailing bytes after the outermost value are rejected; a tag that
+  was not expected leaves the reader where it was.
+- Property: no input makes the reader panic. A value is a slice of the
+  input, so it re-encodes to what it came from by construction rather than
+  by a test. The fuzz target `der` waits on the harness of D-54.
 
 ### 6.6.36 Certificates and path validation (`audhsos-x509`)
 
