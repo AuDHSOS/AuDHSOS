@@ -54,12 +54,19 @@ fn swap_exchanges_only_on_yes() {
 }
 
 #[test]
-fn swap_stops_at_the_shorter_buffer() {
-    let mut a = [1u8, 2, 3];
-    let mut b = [9u8];
+fn swap_and_copy_work_at_every_length() {
+    let mut a = [1u8; 1];
+    let mut b = [2u8; 1];
     ct_swap(Choice::YES, &mut a, &mut b);
-    assert_eq!(a, [9, 2, 3]);
-    assert_eq!(b, [1]);
+    assert_eq!((a, b), ([2u8; 1], [1u8; 1]));
+
+    let mut wide = [0u8; 64];
+    ct_copy(Choice::YES, &mut wide, &[7u8; 64]);
+    assert_eq!(wide, [7u8; 64]);
+
+    let mut empty: [u8; 0] = [];
+    ct_swap(Choice::YES, &mut empty, &mut []);
+    ct_copy(Choice::YES, &mut empty, &[]);
 }
 
 #[test]
@@ -69,13 +76,6 @@ fn copy_writes_only_on_yes() {
     assert_eq!(destination, [0, 0, 0, 0]);
     ct_copy(Choice::YES, &mut destination, &[1, 2, 3, 4]);
     assert_eq!(destination, [1, 2, 3, 4]);
-}
-
-#[test]
-fn copy_stops_at_the_shorter_buffer() {
-    let mut destination = [0u8; 4];
-    ct_copy(Choice::YES, &mut destination, &[1, 2]);
-    assert_eq!(destination, [1, 2, 0, 0]);
 }
 
 #[test]

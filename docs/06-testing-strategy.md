@@ -662,17 +662,20 @@ done until every applicable item has a test. Items are added, never removed.
 - `ct_select_*` returns the first argument for `Choice(1)` and the second
   for `Choice(0)`, for both extreme and random values (property).
 - `ct_swap` exchanges the buffers for `Choice(1)` and leaves them
-  untouched for `Choice(0)`; buffers of differing length are rejected.
+  untouched for `Choice(0)`; `ct_copy` writes for `Choice(1)` and not for
+  `Choice(0)`. Both take arrays of one length, so a mismatch is a compile
+  error and there is no runtime case to test.
 - `Secret<N>`: `Debug` prints the length and no byte of the content;
-  equality goes through `ct_eq`; a dropped secret leaves zeros in the
-  buffer the test still owns.
+  equality goes through `ct_eq`; `clear` leaves zeros. `Drop` delegates to
+  `clear` in one line, which safe Rust cannot observe from outside, so the
+  erase is checked on `clear`.
 
 ### 6.6.31 Hashes, HMAC, and HKDF (`crypto-hash`)
 
-- SHA-256, SHA-384, and SHA-512 against the FIPS 180-4 and RFC 6234
-  vectors, including the empty message, exactly one block, one block minus
-  one byte, one block plus one byte, and the multi-megabyte repetition
-  case behind a slow test.
+- SHA-256, SHA-384, and SHA-512 against the FIPS 180-4 vectors, including
+  the empty message, exactly one block, one block minus one byte, one
+  block plus one byte, and the million-character message, which runs with
+  the rest because it costs a second.
 - Incremental hashing: any splitting of a message into chunks produces the
   digest of the one-shot call (property).
 - Padding boundaries: a message whose length leaves 55, 56, or 57 bytes in
@@ -680,27 +683,40 @@ done until every applicable item has a test. Items are added, never removed.
 - HMAC against the RFC 4231 vectors, including keys shorter than, equal
   to, and longer than the block length, and the empty key.
 - HKDF against the RFC 5869 vectors; an empty salt behaves as a zero salt;
-  an output longer than `255 * OUTPUT_LEN` is `OutputTooLong`; a
-  zero-length output is accepted.
+  an output longer than `255 * OUTPUT_LEN` is `OutputTooLong` and leaves
+  the buffer untouched; a zero-length output is accepted; the expansion is
+  the documented chain of codes.
+- The provided `digest` of the trait agrees with the inherent one, and a
+  cloned state continues the message it was cloned from.
 
 ### 6.6.32 Authenticated encryption (`crypto-aead`)
 
 - ChaCha20 block function and keystream against RFC 8439 §2.3.2 and
   §2.4.2; a counter that would wrap is an error.
-- Poly1305 against RFC 8439 §2.5.2 and the edge cases of its appendix:
-  the accumulator at the reduction boundary, an all-ones message, a
-  message of exactly one block, and the empty message.
-- ChaCha20-Poly1305 against RFC 8439 §2.8.2 and appendix A.5, with and
-  without associated data.
-- AES-128 and AES-256 block encryption against FIPS 197 appendix B and C;
-  the bitsliced batch of eight blocks equals eight single-block
-  encryptions (property).
-- GHASH and AES-GCM against the NIST CAVP vectors transcribed into the
-  test file, covering empty plaintext, empty associated data, both empty,
-  and lengths that are not a multiple of the block size.
+- Poly1305 against RFC 8439 §2.5.2, a message of exactly one block, a
+  message one byte past a block, and the empty message. The edge cases of
+  the reduction are derived rather than transcribed: with a multiplier of
+  one and an addend of zero the tag is the accumulator itself, so an
+  all-ones message and the four sums that land at the modulus and just
+  above it have expected values that follow from the definition. That is
+  the case a final reduction which subtracts once too often or too seldom
+  gets wrong.
+- ChaCha20-Poly1305 against RFC 8439 §2.8.2, with associated data, without
+  it, and with neither message nor data.
+- AES-128 and AES-256 block encryption against FIPS 197 appendices B and
+  C; the substitution box against the published table for all 256 inputs;
+  the bitsliced batch of four blocks equals four single-block encryptions.
+- GHASH on its own against the value the second published case of the mode
+  implies, and AES-GCM against cases one to four and thirteen to sixteen
+  of the test set that SP 800-38D adopted, covering empty plaintext, empty
+  associated data, both empty, and lengths that are not a multiple of the
+  block size; thirteen further lengths around the four-block group that
+  the lanes are encrypted in.
 - Seal then open returns the plaintext for arbitrary inputs (property);
-  flipping any single bit of ciphertext, tag, nonce, or associated data
-  makes `open` fail; a failed `open` leaves no plaintext in the buffer.
+  flipping a bit in any byte of the ciphertext or of the tag, and any
+  change to the nonce, the associated data, or the key, makes `open` fail;
+  a failed `open` leaves no plaintext in the buffer. A key or a nonce of
+  the wrong length is refused before anything is written.
 
 ### 6.6.33 Elliptic curves (`crypto-ec`)
 

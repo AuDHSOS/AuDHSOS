@@ -72,14 +72,27 @@ everything an observer of the wire already knows. Secret values are keys,
 traffic secrets, shared secrets, and plaintext.
 
 ```rust
-pub struct Choice(u8);                       // 0 or 1, no Ord, no bool conversion
+pub struct Choice(u8);                       // 0 or 1, no Ord, no Deref
 pub fn ct_eq(a: &[u8], b: &[u8]) -> Choice;  // length is public, contents are not
 pub fn ct_select_u8(c: Choice, a: u8, b: u8) -> u8;
 pub fn ct_select_u32(c: Choice, a: u32, b: u32) -> u32;
 pub fn ct_select_u64(c: Choice, a: u64, b: u64) -> u64;
-pub fn ct_swap(c: Choice, a: &mut [u8], b: &mut [u8]);
+pub fn ct_swap<const N: usize>(c: Choice, a: &mut [u8; N], b: &mut [u8; N]);
+pub fn ct_copy<const N: usize>(c: Choice, destination: &mut [u8; N], source: &[u8; N]);
+pub fn wipe(bytes: &mut [u8]);
 pub struct Secret<const N: usize>([u8; N]);  // Debug prints the length only
 ```
+
+`Choice` has exactly one way out, `is_true`, and its documentation says
+where that exit is allowed: at the point where the program acts on the
+comparison, such as accepting or rejecting a record whose tag failed to
+verify, which an observer learns anyway. A type with no conversion at all
+would only push the same decision somewhere less visible.
+
+`ct_swap` and `ct_copy` take arrays rather than slices, so a length
+mismatch is a compile error instead of a silent operation on the common
+prefix. `wipe` is the erase of `Secret<N>` for buffers whose length the
+type system does not carry, such as the padded key inside HMAC.
 
 `Secret<N>` has no `PartialEq`; comparison is `ct_eq`. Its `Drop`
 overwrites the bytes and passes the buffer through
@@ -89,17 +102,27 @@ says so. Keys therefore live as short as possible and never leave the
 connection state.
 
 Where a lint conflicts with the discipline, the discipline wins:
-`indexing_slicing` forces every access through `get` and `chunks_exact`,
+`indexing_slicing` forces every access through `get` and `as_chunks`,
 which is exactly what is wanted, and `arithmetic_side_effects` forces
 `wrapping_add` and friends, which is what the primitives specify anyway.
 
 ## 11.5 `crypto-hash`
 
 ```rust
-pub trait Hash: Sized { const BLOCK_LEN: usize; const OUTPUT_LEN: usize;
-    type Output: AsRef<[u8]> + Copy + Default;
-    fn new() -> Self; fn update(&mut self, bytes: &[u8]); fn finish(self) -> Self::Output; }
+pub trait Hash: Clone + Sized {
+    const BLOCK_LEN: usize; const OUTPUT_LEN: usize; const ZERO_BLOCK: Self::Block;
+    type Output: AsRef<[u8]> + Copy;
+    type Block: AsRef<[u8]> + AsMut<[u8]> + Copy;
+    fn new() -> Self; fn update(&mut self, bytes: &[u8]); fn finish(self) -> Self::Output;
+    fn digest(bytes: &[u8]) -> Self::Output;                     // provided
+}
 ```
+
+Two members of the trait exist for HMAC. A padded key is exactly one
+block, and no generic function can name `[u8; H::BLOCK_LEN]`, so the
+block is an associated type and the trait carries a zero block to start
+from. `Output` cannot require `Default`, because arrays longer than
+thirty-two bytes do not implement it and SHA-384 and SHA-512 are longer.
 
 - `sha256.rs`: FIPS 180-4 SHA-256 over 64-byte blocks, 64-bit byte
   counter, one-shot `digest`.
@@ -114,27 +137,54 @@ Tests: catalog 6.6.31.
 ## 11.6 `crypto-aead`
 
 ```rust
-pub trait Aead { const KEY_LEN: usize; const NONCE_LEN: usize; const TAG_LEN: usize;
-    fn seal(&self, nonce: &[u8], aad: &[u8], in_out: &mut [u8]) -> Result<Tag, Error>;
-    fn open(&self, nonce: &[u8], aad: &[u8], in_out: &mut [u8], tag: &Tag) -> Result<usize, Error>; }
+pub const TAG_LEN: usize = 16;
+pub type Tag = [u8; TAG_LEN];
+
+pub trait Aead: Sized { const KEY_LEN: usize; const NONCE_LEN: usize;
+    fn new(key: &[u8]) -> Result<Self, AeadError>;
+    fn seal(&self, nonce: &[u8], aad: &[u8], in_out: &mut [u8]) -> Result<Tag, AeadError>;
+    fn open(&self, nonce: &[u8], aad: &[u8], in_out: &mut [u8], tag: &Tag)
+        -> Result<(), AeadError>; }
 ```
 
-`open` compares the tag with `ct_eq` and, on failure, overwrites the
-buffer before returning `Error::BadTag`, so that unauthenticated
-plaintext never reaches a caller that ignores the result.
+The tag length is a constant of the crate rather than of the trait: all
+three suites of TLS 1.3 authenticate with sixteen bytes, and a `Tag` that
+is one type makes the record layer simpler than a `Tag` that is one type
+per suite. `open` returns nothing on success, because the plaintext is as
+long as the buffer it decrypted in place.
+
+`open` computes the tag over the received ciphertext and compares it with
+`ct_eq` before it decrypts anything, so unauthenticated plaintext never
+exists; when the comparison fails it clears the buffer and returns
+`AeadError::BadTag`, so a caller that ignores the result finds nothing
+usable there.
 
 - `chacha20.rs`: RFC 8439 block function and keystream; a 32-bit counter
   overflow is an error, not a wrap.
-- `poly1305.rs`: the 130-bit accumulator in five 26-bit limbs over `u32`,
-  no reduction branch on data.
+- `poly1305.rs`: the 130-bit accumulator in three limbs of 44, 44, and 42
+  bits over `u64`, so that a limb product fits in 128 bits; the final
+  reduction picks between the accumulator and the accumulator minus the
+  modulus with a mask, not a branch. The key is clamped on its bytes,
+  where RFC 8439 writes the rule down, rather than through masks folded
+  into the limb split where nobody can check it.
 - `chachapoly.rs`: the RFC 8439 AEAD construction.
-- `aes.rs`: AES-128 and AES-256, bitsliced over `u64` words, eight blocks
-  per batch, the S-box as a boolean circuit rather than a table. The key
-  schedule is bitsliced too. There is no lookup table anywhere in the
-  file, so there is no data-dependent memory access.
+- `aes.rs`: AES-128 and AES-256, bitsliced over `u64` words as eight bit
+  planes of four blocks. The substitution box is the multiplicative
+  inverse in GF(2^8), computed as the 254th power with three
+  multiplications and seven squarings, followed by the affine
+  transformation of FIPS 197; a published boolean circuit would be
+  faster, but this form follows from the definition and can be checked
+  against it. The key schedule runs on bytes and borrows the same sliced
+  substitution for its four-byte words. Only encryption exists: GCM never
+  decrypts a block, so there is no inverse substitution box and no
+  inverse mixing step. There is no lookup table anywhere in the file, so
+  no memory access depends on a key or on plaintext.
 - `ghash.rs`: multiplication in GF(2^128) as 128 masked shift-and-xor
   steps, no tables.
-- `aesgcm.rs`: counter mode plus GHASH, `Aes128Gcm` and `Aes256Gcm`.
+- `aesgcm.rs`: counter mode plus GHASH, `Aes128Gcm` and `Aes256Gcm`. The
+  nonce is twelve bytes and nothing else: any other length would need
+  GHASH to derive the first counter block, TLS never uses one, and a path
+  nothing exercises is a path nobody checks.
 
 ChaCha20-Poly1305 is implemented first and is the suite the tests use
 throughout; AES-GCM follows. Tests: catalog 6.6.32.
@@ -332,16 +382,16 @@ checklist in 4.9.
 
 ## 11.12 Order of work
 
-| Step | Content | Size |
-|------|---------|------|
-| T1 | `crypto-ct`, `crypto-hash` | S |
-| T2 | `crypto-aead`: ChaCha20-Poly1305, then bitsliced AES-GCM | L |
-| T3 | `crypto-ec`: `fe25519` and X25519, then Ed25519, then P-256 | L |
-| T4 | `crypto-rng` | S |
-| T5 | `audhsos-der` | M |
-| T6 | `audhsos-x509` with the test certificate builder | L |
-| T7 | `audhsos-tls` | XL |
-| T8 | Integration, jointly with step D9 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M |
+| Step | Content | Size | Status |
+|------|---------|------|--------|
+| T1 | `crypto-ct`, `crypto-hash` | S | implemented |
+| T2 | `crypto-aead`: ChaCha20-Poly1305, then bitsliced AES-GCM | L | implemented |
+| T3 | `crypto-ec`: `fe25519` and X25519, then Ed25519, then P-256 | L | |
+| T4 | `crypto-rng` | S | |
+| T5 | `audhsos-der` | M | |
+| T6 | `audhsos-x509` with the test certificate builder | L | |
+| T7 | `audhsos-tls` | XL | |
+| T8 | Integration, jointly with step D9 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M | |
 
 T1 to T7 touch nothing outside their own crates and the policy table, so
 they can be built between kernel phases without disturbing them. T5 and

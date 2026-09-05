@@ -48,10 +48,11 @@ pub const fn ct_select_u64(choice: Choice, a: u64, b: u64) -> u64 {
 /// Exchanges the contents of `a` and `b` when `choice` is true, and leaves
 /// them untouched otherwise.
 ///
-/// Both buffers are written in either case. Bytes beyond the shorter of the
-/// two are left alone; callers pass buffers of equal length, and the
-/// Montgomery ladder that needs this function passes fixed-size ones.
-pub fn ct_swap(choice: Choice, a: &mut [u8], b: &mut [u8]) {
+/// Both buffers are written in either case. They are arrays of one length,
+/// so a mismatch is a compile error rather than a silent exchange of the
+/// common prefix; the Montgomery ladder that needs this function works on
+/// fixed-size values anyway.
+pub fn ct_swap<const N: usize>(choice: Choice, a: &mut [u8; N], b: &mut [u8; N]) {
     let mask = choice.mask_u8();
     for (left, right) in a.iter_mut().zip(b.iter_mut()) {
         let difference = mask & (*left ^ *right);
@@ -61,9 +62,9 @@ pub fn ct_swap(choice: Choice, a: &mut [u8], b: &mut [u8]) {
 }
 
 /// Copies `source` over `destination` when `choice` is true, and leaves
-/// `destination` unchanged otherwise. Bytes beyond the shorter buffer are
-/// not touched.
-pub fn ct_copy(choice: Choice, destination: &mut [u8], source: &[u8]) {
+/// `destination` unchanged otherwise. Both are arrays of one length, for
+/// the reason given at [`ct_swap`].
+pub fn ct_copy<const N: usize>(choice: Choice, destination: &mut [u8; N], source: &[u8; N]) {
     let mask = choice.mask_u8();
     for (target, byte) in destination.iter_mut().zip(source.iter()) {
         *target ^= mask & (*target ^ *byte);

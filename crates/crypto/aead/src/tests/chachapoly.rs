@@ -114,14 +114,17 @@ fn a_change_to_the_ciphertext_the_data_or_the_nonce_is_caught() {
         .seal(&nonce(), &aad(), &mut buffer)
         .expect("the vector is well formed");
 
-    let mut damaged = buffer.clone();
-    if let Some(byte) = damaged.first_mut() {
-        *byte ^= 0x80;
+    for position in 0..buffer.len() {
+        let mut damaged = buffer.clone();
+        if let Some(byte) = damaged.get_mut(position) {
+            *byte ^= 0x80;
+        }
+        assert_eq!(
+            cipher.open(&nonce(), &aad(), &mut damaged, &tag),
+            Err(AeadError::BadTag),
+            "flipped ciphertext byte {position}"
+        );
     }
-    assert_eq!(
-        cipher.open(&nonce(), &aad(), &mut damaged, &tag),
-        Err(AeadError::BadTag)
-    );
 
     let mut other_data = buffer.clone();
     let mut changed = aad();

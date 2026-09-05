@@ -110,3 +110,66 @@ fn property_byte_at_a_time_matches_the_one_shot_tag() {
         }
     });
 }
+
+/// The key that makes the accumulator readable: a multiplier of one and an
+/// addend of zero, so that the tag is the sum of the block values modulo
+/// `2^130 - 5`, taken modulo `2^128`. Clamping leaves a multiplier of one
+/// alone, so the key is exactly what it looks like.
+fn plain_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    key[0] = 1;
+    key
+}
+
+#[test]
+fn an_all_ones_message_stays_below_the_modulus() {
+    // One block of ones is `2^128 - 1`, and the bit above the block makes
+    // the value `2^129 - 1`, which is below `2^130 - 5`. The tag is that
+    // value modulo `2^128`, which is ones again.
+    assert_eq!(
+        hex(&Poly1305::tag_of(&plain_key(), &[0xFF; 16])),
+        "ffffffffffffffffffffffffffffffff"
+    );
+
+    // Two such blocks sum to `2^130 - 2`, which is three above the
+    // modulus, so the accumulator reduces to three.
+    assert_eq!(
+        hex(&Poly1305::tag_of(&plain_key(), &[0xFF; 32])),
+        "03000000000000000000000000000000"
+    );
+}
+
+#[test]
+fn the_accumulator_reduces_at_the_boundary_and_just_above_it() {
+    // The first block contributes `2^129 - 1`; the second is chosen so
+    // that the sum is the modulus itself, and then one, two, and three
+    // above it. The tag is the excess: this is the case that a final
+    // reduction which subtracts once too often or too seldom gets wrong.
+    let cases = [
+        (
+            "fcffffffffffffffffffffffffffffff",
+            "00000000000000000000000000000000",
+        ),
+        (
+            "fdffffffffffffffffffffffffffffff",
+            "01000000000000000000000000000000",
+        ),
+        (
+            "feffffffffffffffffffffffffffffff",
+            "02000000000000000000000000000000",
+        ),
+        (
+            "ffffffffffffffffffffffffffffffff",
+            "03000000000000000000000000000000",
+        ),
+    ];
+    for (second, expected) in cases {
+        let mut message = vec![0xFFu8; 16];
+        message.extend_from_slice(&unhex(second));
+        assert_eq!(
+            hex(&Poly1305::tag_of(&plain_key(), &message)),
+            expected,
+            "second block {second}"
+        );
+    }
+}
