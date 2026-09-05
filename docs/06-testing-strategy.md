@@ -298,6 +298,13 @@ done until every applicable item has a test. Items are added, never removed.
 - Fault message: has the reserved label range, carries fault kind, address,
   instruction pointer, and error code; the reply resumes the thread; the
   handler killing the process ends the wait cleanly.
+- A message whose label lies in the range the kernel reserves for its own
+  messages is refused before anything is copied.
+- A thread suspended while it waits leaves the queue it waited in, finds
+  `Cancelled` in its status word, and is in no queue when it resumes.
+- The last handle to an endpoint closes while threads wait on both queues:
+  the endpoint is destroyed and everyone wakes with `ObjectDestroyed`
+  (D-75).
 
 ### 6.6.9 System call decoding and dispatch (`kernel-syscall`)
 
@@ -315,6 +322,12 @@ done until every applicable item has a test. Items are added, never removed.
   `WrongObjectType`.
 - Round-trip encode/decode of every request and result layout, including
   maximum values of every field.
+- A result that does not fit into two return words is written as message
+  words of the caller's buffer with label zero and handle count zero, and
+  the first return word says how many: `thread_info` reports the kind,
+  address, instruction pointer, and error code of a thread that faulted and
+  a word count of zero for one that did not, and `system_info` reports the
+  capacity and the live count of every pool.
 
 ### 6.6.10 Boot image header and boot information (`audhsos-abi`, `kernel-core`)
 

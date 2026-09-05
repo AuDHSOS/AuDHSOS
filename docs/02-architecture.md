@@ -113,8 +113,9 @@ generation. Pools are plain arrays in safe Rust and are tested on the host.
 ### 2.3.4 Lifetime
 
 - An object is destroyed when its reference count reaches zero. References
-  come from handles, from mappings, from bindings, and from threads blocked
-  on the object.
+  come from handles, from mappings, and from bindings. A thread blocked on
+  an object holds no reference to it, so closing the last handle to an
+  endpoint destroys it while threads still wait on it (D-75).
 - Destroying an endpoint or notification wakes every blocked thread with
   `ObjectDestroyed`.
 - Destroying a process kills its threads, drops its mappings, and closes its
