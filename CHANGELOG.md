@@ -88,6 +88,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   the certificates the tests use.
 - `audhsos-tls`: the record layer, the record protection, the key schedule
   of RFC 8446 section 7.1, and the handshake transcript.
+- `docs/rfc/`: the standards this system implements, verbatim, with their
+  source and checksum recorded. The first is RFC 8448, whose trace is the
+  test the TLS client must reproduce (D-59).
 - Decision D-56: the key exchange of the TLS client is `x25519` alone.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.

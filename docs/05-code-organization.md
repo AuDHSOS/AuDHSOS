@@ -14,6 +14,7 @@ AuDHSOS/
 ├── CHANGELOG.md
 ├── rustfmt.toml
 ├── docs/                      this document set and the decision register
+│   └── rfc/                   the standards, verbatim, with their checksums (D-59)
 ├── crates/
 │   ├── abi/                   audhsos-abi: syscall table, errors, rights, message layout, boot image header, boot information, address constants
 │   ├── elf/                   audhsos-elf: ELF64 parser producing validated load segments
