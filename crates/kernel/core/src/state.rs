@@ -23,6 +23,11 @@ impl KernelState {
     pub const fn new() -> Self {
         KernelState { traps: 0 }
     }
+
+    /// Counts one reported trap.
+    pub const fn record_trap(&mut self) {
+        self.traps = self.traps.saturating_add(1);
+    }
 }
 
 /// The one cell holding the kernel state.

@@ -10,7 +10,7 @@ use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::exit::{ExitStatus, TestExit};
 
 use crate::println;
-use crate::state::{KERNEL, KernelState};
+use crate::state::KernelState;
 
 /// Number of processor-defined exception vectors.
 pub const EXCEPTION_VECTORS: u8 = 32;
@@ -67,13 +67,15 @@ impl Exception {
     }
 }
 
-/// Reports `exception` and ends the machine with a failure.
+/// Reports `exception`, counts it in `state`, and ends the machine with a
+/// failure.
 pub fn on_exception(
     exception: Exception,
+    state: &mut KernelState,
     console: &mut impl DebugConsole,
     exit: &mut impl TestExit,
 ) {
-    count();
+    state.record_trap();
     println!(
         console,
         "[trap] {} (vector {}) at ip {:#x} sp {:#x}",
@@ -89,13 +91,4 @@ pub fn on_exception(
         println!(console, "[trap] faulting address {:#x}", exception.cr2);
     }
     exit.exit(ExitStatus::Failure);
-}
-
-/// Counts the trap in the kernel state, if the state is reachable.
-fn count() {
-    if let Ok(mut state) = KERNEL.borrow(&audhsos_sync::UncontendedToken) {
-        state.traps = state.traps.saturating_add(1);
-    } else {
-        let _ = KERNEL.init(KernelState { traps: 1 });
-    }
 }

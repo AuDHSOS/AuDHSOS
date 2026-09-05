@@ -59,6 +59,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - `kernel-hal-api`: a mutable reference to a debug console or an exit
   device is one, so that the kernel can hand one out without giving it
   away.
+- `kernel-hal-x86_64`: the first adapter crate. Privileged instruction
+  wrappers, the descriptor tables, the trap handlers, the boot information
+  as a `Platform`, the serial debug console, the exit device, and page
+  table memory through the physical window.
 - Planning for graphics output and input devices: roadmap Phases 9 to 11,
   decisions D-29 to D-33, catalog sections 6.6.24 to 6.6.29, and the
   framebuffer fields of the boot information structure in the documents.

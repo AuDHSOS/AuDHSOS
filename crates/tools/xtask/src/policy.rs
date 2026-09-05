@@ -171,6 +171,25 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "kernel-hal-x86_64",
+        path: "crates/kernel/hal-x86_64",
+        kind: Kind::Adapter {
+            unsafe_budget: 51,
+            asm_budget: 15,
+        },
+        deps: &[
+            "kernel-hal-api",
+            "kernel-types",
+            "audhsos-abi",
+            "audhsos-sync",
+            "driver-uart16550",
+            "kernel-x86-tables",
+            "kernel-mm",
+        ],
+        coverage_gate: false,
+        target: Target::X86_64None,
+    },
+    Crate {
         name: "kernel-test-harness",
         path: "crates/kernel/test-harness",
         kind: Kind::Logic,

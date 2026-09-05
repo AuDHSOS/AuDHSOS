@@ -67,9 +67,10 @@ The xtask policy table holds the machine-readable form.
 | `kernel-hal-x86_64` | flush one page | `invlpg` |
 | `kernel-hal-x86_64` | descriptor table loading | `lgdt`, `lidt`, `ltr` |
 | `kernel-hal-x86_64` | segment register reload after `lgdt` | `mov` to data segment registers, far return for `CS` |
-| `kernel-hal-x86_64` | model-specific registers | `rdmsr`, `wrmsr` |
-| `kernel-hal-x86_64` | port I/O, three widths in each direction | `in`, `out` |
-| `kernel-hal-x86_64` | context switch (naked function) | save callee-saved registers, swap stack pointer, restore, return |
+| `kernel-hal-x86_64` | flags register | `pushfq`, `pop` |
+| `kernel-hal-x86_64` | model-specific registers (Phase 4) | `rdmsr`, `wrmsr` |
+| `kernel-hal-x86_64` | port I/O, byte and double word so far | `in`, `out` |
+| `kernel-hal-x86_64` | context switch (naked function, Phase 5) | save callee-saved registers, swap stack pointer, restore, return |
 | `boot-uefi-x86_64` | kernel entry (naked function) | write `CR3`, load stack pointer, jump |
 | `boot-uefi-x86_64` | exit device on loader failure | `out` |
 | `user-sys-x86_64` | system call trap | `int 0x80` |

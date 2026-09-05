@@ -6,13 +6,16 @@
 use kernel_hal_api::doubles::{RecordingConsole, RecordingExit};
 use kernel_hal_api::exit::ExitStatus;
 
+use crate::state::KernelState;
 use crate::trap::{EXCEPTION_VECTORS, Exception, on_exception};
 
 fn report(exception: Exception) -> String {
     let mut console = RecordingConsole::new();
     let mut exit = RecordingExit::new();
-    on_exception(exception, &mut console, &mut exit);
+    let mut state = KernelState::new();
+    on_exception(exception, &mut state, &mut console, &mut exit);
     assert_eq!(exit.status(), Some(ExitStatus::Failure));
+    assert_eq!(state.traps, 1);
     console.text()
 }
 
@@ -106,16 +109,23 @@ fn a_general_protection_reports_the_error_code_but_no_address() {
 }
 
 #[test]
-fn reporting_a_trap_counts_it_in_the_kernel_state() {
-    let before = crate::state::KERNEL
-        .borrow(&audhsos_sync::UncontendedToken)
-        .map_or(0, |state| state.traps);
-    report(Exception {
-        vector: 3,
-        ..Exception::default()
-    });
-    let after = crate::state::KERNEL
-        .borrow(&audhsos_sync::UncontendedToken)
-        .map_or(0, |state| state.traps);
-    assert!(after > before, "the trap was counted");
+fn every_reported_trap_is_counted() {
+    let mut console = RecordingConsole::new();
+    let mut exit = RecordingExit::new();
+    let mut state = KernelState::new();
+    for vector in [3u8, 6, 13] {
+        on_exception(
+            Exception {
+                vector,
+                ..Exception::default()
+            },
+            &mut state,
+            &mut console,
+            &mut exit,
+        );
+    }
+    assert_eq!(state.traps, 3);
+    assert_eq!(exit.status(), Some(ExitStatus::Failure));
+    assert_eq!(KernelState::new().traps, 0);
+    assert_eq!(KernelState::default(), KernelState::new());
 }

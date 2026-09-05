@@ -13,6 +13,7 @@ members = [
     "crates/kernel/hal-api",
     "crates/kernel/objects",
     "crates/kernel/core",
+    "crates/kernel/hal-x86_64",
     "crates/kernel/test-harness",
     "crates/kernel/x86-tables",
     "crates/kernel/mm",
@@ -37,6 +38,7 @@ kernel-types = { path = "crates/kernel/types" }
 kernel-hal-api = { path = "crates/kernel/hal-api" }
 kernel-objects = { path = "crates/kernel/objects" }
 kernel-core = { path = "crates/kernel/core" }
+kernel-hal-x86_64 = { path = "crates/kernel/hal-x86_64" }
 kernel-test-harness = { path = "crates/kernel/test-harness" }
 kernel-x86-tables = { path = "crates/kernel/x86-tables" }
 kernel-mm = { path = "crates/kernel/mm" }

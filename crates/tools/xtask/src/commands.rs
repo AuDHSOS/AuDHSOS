@@ -134,19 +134,41 @@ pub(crate) fn miri(root: &Path) -> Result<(), Error> {
     cmd.run()
 }
 
-/// Documentation with warnings as errors.
+/// Documentation with warnings as errors, per target group.
 pub(crate) fn doc(root: &Path) -> Result<(), Error> {
-    Cmd::cargo()
-        .cwd(root)
-        .args([
+    let host = Cmd::cargo().cwd(root).args([
+        "doc",
+        "--workspace",
+        "--all-features",
+        "--no-deps",
+        "--document-private-items",
+    ]);
+    exclude_cross(host)
+        .env("RUSTDOCFLAGS", "-D warnings")
+        .run()?;
+    for target in Target::CROSS {
+        let crates = crates_for(target);
+        let Some(triple) = target.triple() else {
+            continue;
+        };
+        if crates.is_empty() {
+            continue;
+        }
+        let mut cmd = Cmd::cargo().cwd(root).args([
             "doc",
-            "--workspace",
             "--all-features",
             "--no-deps",
             "--document-private-items",
-        ])
-        .env("RUSTDOCFLAGS", "-D warnings")
-        .run()
+        ]);
+        for krate in crates {
+            cmd = cmd.arg("-p").arg(krate);
+        }
+        cmd.arg("--target")
+            .arg(triple)
+            .env("RUSTDOCFLAGS", "-D warnings")
+            .run()?;
+    }
+    Ok(())
 }
 
 /// Fuzz targets.

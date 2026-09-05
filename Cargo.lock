@@ -54,6 +54,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-hal-x86_64"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-sync",
+ "driver-uart16550",
+ "kernel-hal-api",
+ "kernel-types",
+ "kernel-x86-tables",
+]
+
+[[package]]
 name = "kernel-mm"
 version = "0.1.0"
 dependencies = [

@@ -81,7 +81,7 @@ AuDHSOS/
 | `kernel-ipc` | 3 | all | no | yes | `kernel-objects`, `kernel-sched`, `audhsos-abi` |
 | `kernel-syscall` | 3 | all | no | yes | layers 0-2, `kernel-ipc` |
 | `kernel-core` | 4 | all | no | yes, with doubles | layers 0-3, `audhsos-sync` |
-| `kernel-hal-x86_64` | 5 | `x86_64-unknown-none` | allowlisted | pure sub-modules | `kernel-hal-api`, `kernel-types`, `audhsos-abi`, `driver-uart16550`, `audhsos-sync` |
+| `kernel-hal-x86_64` | 5 | `x86_64-unknown-none` | allowlisted | the pure parts live in `kernel-x86-tables` | `kernel-hal-api`, `kernel-types`, `audhsos-abi`, `driver-uart16550`, `audhsos-sync`, `kernel-x86-tables`, `kernel-mm` |
 | `kernel-test-harness` | 5 | all | no | yes | `kernel-hal-api` |
 | `audhsos-kernel` | 6 | `x86_64-unknown-none` | no | QEMU | `kernel-core`, `kernel-hal-x86_64`, `kernel-test-harness` |
 | `boot-uefi-x86_64` | b | `x86_64-unknown-uefi` | allowlisted | pure sub-modules | `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `kernel-types`, `kernel-mm`, `kernel-hal-api` |
