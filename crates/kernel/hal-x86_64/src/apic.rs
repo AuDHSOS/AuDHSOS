@@ -268,6 +268,19 @@ impl IoApic {
     }
 }
 
+/// What an I/O APIC says about one line, read back from the hardware.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LineState {
+    /// The vector the line is routed to, or zero if it is not routed.
+    pub vector: u8,
+    /// Whether delivery is stopped.
+    pub masked: bool,
+    /// How the line is asserted.
+    pub polarity: Polarity,
+    /// When the line is taken.
+    pub trigger: Trigger,
+}
+
 /// The interrupt hardware of the machine: one local APIC and the I/O APICs
 /// the firmware named, with the table that says how the ISA lines reach
 /// them.
@@ -385,6 +398,29 @@ impl Apics {
     #[must_use]
     pub fn gsi_of(&self, line: InterruptLine) -> u32 {
         self.madt.route_isa(line.number()).gsi
+    }
+
+    /// What the I/O APIC that serves `line` says about it. The values come
+    /// out of the redirection entry, not out of what the kernel meant to
+    /// write, so this is what the hardware took.
+    pub fn line_state(&mut self, line: InterruptLine) -> Option<LineState> {
+        let gsi = self.gsi_of(line);
+        let (apic, index) = self.locate(gsi)?;
+        let entry = apic.entry(index);
+        Some(LineState {
+            vector: ioapic::entry_vector(entry),
+            masked: ioapic::entry_masked(entry),
+            polarity: if ioapic::entry_active_low(entry) {
+                Polarity::ActiveLow
+            } else {
+                Polarity::ActiveHigh
+            },
+            trigger: if ioapic::entry_level(entry) {
+                Trigger::Level
+            } else {
+                Trigger::Edge
+            },
+        })
     }
 }
 

@@ -1329,10 +1329,15 @@ from the draft of this section named where they are.
   and the unit is on; a second tick arrives after the end-of-interrupt; the
   tick counter grows while the kernel does nothing; a masked timer delivers
   nothing and unmasking starts it again; a vector raised from software
-  reaches the handler of that vector, for `0x30`, `0x40`, and `0xFF`; an
-  ISA line is routed once and refuses a second routing. None of them ends
-  the machine, so one image holds all six; each one begins by making sure
-  the bring-up has happened, because the order of the tests is not fixed.
+  reaches the handler of that vector, for `0x30`, `0x40`, and `0xFF`; a
+  routed line carries the vector and the wiring the table names, comes up
+  masked, follows `mask` and `unmask`, and refuses a second routing. The
+  last one reads the redirection entry back out of the I/O APIC rather
+  than trusting what the kernel meant to write, which is what makes it the
+  test of the line half of catalog item 6.6.21; the timer test is the
+  delivery half. None of them ends the machine, so one image holds all
+  six; each one begins by making sure the bring-up has happened, because
+  the order of the tests is not fixed.
 
   Raising a vector from software needs the vector as an immediate, which an
   inline constant supplies:

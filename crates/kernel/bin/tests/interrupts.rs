@@ -53,6 +53,10 @@ const SPIN_LIMIT: u64 = 200_000_000;
 /// How long the image watches a masked timer before it believes it.
 const QUIET_SPINS: u64 = 20_000_000;
 
+/// The ISA line the routing test uses. Nothing on this machine drives it:
+/// the runner gives QEMU one serial port, which is line four.
+const PROBE_LINE: u8 = 3;
+
 /// Records the vector and acknowledges it, unless the image raised it
 /// itself: an end-of-interrupt for an interrupt that was never delivered
 /// would acknowledge whatever is actually in service.
@@ -271,25 +275,55 @@ fn a_vector_raised_from_software_reaches_the_handler_of_that_vector() {
     );
 }
 
-/// The controller routes an ISA line to a vector, masks it, and refuses to
-/// route it twice.
+/// A routed line carries the vector and the wiring the table names, comes
+/// up masked, follows `mask` and `unmask` at the hardware, and refuses a
+/// second routing.
 #[test_case]
-fn an_isa_line_is_routed_once_and_stays_masked() {
+fn a_routed_line_carries_its_wiring_and_follows_the_mask() {
     ensure_ready();
-    let line = InterruptLine::new(4);
-    let outcome = interrupts::with_controller(|apics| {
-        let gsi = apics.gsi_of(line);
-        let vector = vectors::for_gsi(gsi).and_then(|number| Vector::new(number).ok())?;
-        let first = apics.route(line, vector);
-        let second = apics.route(line, vector);
-        Some((first, second))
+    let line = InterruptLine::new(PROBE_LINE);
+    let observed = interrupts::with_controller(|apics| {
+        let routing = apics.madt().route_isa(line.number());
+        let vector = vectors::for_gsi(routing.gsi).and_then(|number| Vector::new(number).ok())?;
+        apics.route(line, vector).ok()?;
+        let routed = apics.line_state(line)?;
+        let twice = apics.route(line, vector);
+        apics.unmask(line);
+        let unmasked = apics.line_state(line)?;
+        apics.mask(line);
+        let masked = apics.line_state(line)?;
+        Some((routing, vector, routed, twice.is_err(), unmasked, masked))
     });
-    match outcome {
-        Some(Some((Ok(()), Err(_)))) => {}
-        Some(Some((first, second))) => testing::fail(format_args!(
-            "routing the line gave {first:?} and then {second:?}"
-        )),
-        Some(None) => testing::fail(format_args!("the line has no vector in the plan")),
-        None => testing::fail(format_args!("the controller is not reachable")),
+    let Some(Some((routing, vector, routed, refused, unmasked, masked))) = observed else {
+        testing::fail(format_args!(
+            "the line has no vector in the plan, or the controller is not reachable"
+        ));
+    };
+    if routed.vector != vector.number() {
+        testing::fail(format_args!(
+            "the line carries vector {:#x}, not {:#x}",
+            routed.vector,
+            vector.number()
+        ));
     }
+    if routed.polarity != routing.polarity || routed.trigger != routing.trigger {
+        testing::fail(format_args!(
+            "the line is wired {:?}/{:?}, not {:?}/{:?} as the table says",
+            routed.polarity, routed.trigger, routing.polarity, routing.trigger
+        ));
+    }
+    if !routed.masked {
+        testing::fail(format_args!("a freshly routed line is not masked"));
+    }
+    if !refused {
+        testing::fail(format_args!("the line accepted a second routing"));
+    }
+    if unmasked.masked {
+        testing::fail(format_args!("the line stayed masked after unmasking"));
+    }
+    if !masked.masked {
+        testing::fail(format_args!("the line stayed unmasked after masking"));
+    }
+    assert_eq!(unmasked.vector, routed.vector);
+    assert_eq!(masked.vector, routed.vector);
 }

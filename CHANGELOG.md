@@ -49,7 +49,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   windows, one volatile access per `unsafe` block, and `Apics`, which
   implements both `InterruptController` and `Timer`. A line is routed
   masked, and the routing resolves ISA lines through the overrides of the
-  table.
+  table. `Apics::line_state` reads a redirection entry back out of the
+  hardware, so a test can assert what the I/O APIC took rather than what
+  the kernel meant to write.
 - `kernel-hal-x86_64::timer`: the local APIC timer measured once against
   channel two of the interval timer, ten milliseconds with a bounded poll,
   then programmed periodic at `TICKS_PER_SECOND`. Every poll is bounded, so
@@ -89,9 +91,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   is on; a second tick arrives after the end-of-interrupt; the tick counter
   grows while the kernel does nothing; a masked timer delivers nothing and
   unmasking starts it again; a vector raised from software reaches the
-  handler of that vector, for `0x30`, `0x40`, and `0xFF`; an ISA line is
-  routed once and refuses a second routing. Catalog 6.6.11, the APIC items
-  of 6.6.16, and the interrupt items of 6.6.21.
+  handler of that vector, for `0x30`, `0x40`, and `0xFF`; a routed line
+  carries the vector and the wiring the table names, comes up masked,
+  follows `mask` and `unmask`, and refuses a second routing. Catalog
+  6.6.11, the APIC items of 6.6.16, and the interrupt items of 6.6.21.
 - Fuzz target `madt` over the ACPI parsers, with fifteen seeds. The target
   reads the bytes twice: as they are, so that signature, length, and
   checksum are exercised, and once with those three repaired, so that the

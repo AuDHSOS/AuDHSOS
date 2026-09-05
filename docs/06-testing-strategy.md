@@ -322,7 +322,10 @@ done until every applicable item has a test. Items are added, never removed.
   not truncation); more overrides than the fixed capacity; interrupt source
   overrides for IRQ 0 and IRQ 4; flags that say `conforms` and flags the
   specification reserves; a line without an override; an address that does
-  not fit the physical address width.
+  not fit the physical address width. `Missing RSDP` is tested where the
+  absence is decided, which is the boot information parser of 6.6.10
+  (`ACPI pointer zero`): this crate is handed bytes and never sees the
+  absence of a pointer.
 - Fuzz target over the raw bytes.
 
 ### 6.6.12 Userland allocator (`user-rt`)
