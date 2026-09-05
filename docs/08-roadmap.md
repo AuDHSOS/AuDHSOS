@@ -305,18 +305,17 @@ Tests: catalog 6.6.42 to 6.6.50. Fuzz targets `ipv4`, `tcp_segment`,
 
 ## 8.19 Track E: shared foundations
 
-Status: E1 and E2 implemented, E3 specified in
-[document 12](12-parallel-work.md) and not started.
+Status: implemented.
 
 | Step | Crate | Size | Ends with |
 |------|-------|------|-----------|
 | E1 | `audhsos-time` | S | implemented: `UnixTime`, `CivilTime`, `Instant`, `Duration`, and the integer calendar of the proleptic Gregorian rule over the years 0 to 9999 |
 | E2 | `audhsos-encoding` | S | implemented: strict Base64, hex, and PEM without allocation, with the fuzz target `pem` |
-| E3 | `audhsos-collections` | M | `ArrayVec`, `RingBuffer`, `BitSet`, `IndexList`, `IndexMap`, each model-tested |
+| E3 | `audhsos-collections` | M | implemented: `ArrayVec`, `RingBuffer`, `BitSet`, `IndexList` with `Link`, and `IndexMap`, each against a reference model |
 
-Track E is scheduled first among the side tracks: step T5 of 8.17 needs
-`UnixTime`, T6 needs PEM, track D needs all three, and phases 5 and 6
-need `IndexList`.
+Track E was scheduled first among the side tracks: step T5 of 8.17 needed
+`UnixTime`, T6 needed PEM, track D needs all three, and phases 5 and 6
+need `IndexList`. Track D is therefore unblocked from D1.
 
 Tests: catalog 6.6.39 to 6.6.41. Fuzz target `pem`.
 

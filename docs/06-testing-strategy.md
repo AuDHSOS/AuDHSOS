@@ -1014,9 +1014,25 @@ done until every applicable item has a test. Items are added, never removed.
 - `IndexMap`: insert, look up, and remove in order; a duplicate key
   replaces the value and does not grow the map; capacity exhaustion is
   `Full`; iteration is sorted by key.
+- `IndexList` further: a node outside the caller's slice is an index
+  error; a node already in a list is refused by that list and by every
+  other, and unlinking it from another one is refused as well, which is
+  the shape of one run queue per priority over one array of threads; a
+  list identified by `NONE` is refused at construction; a walk over links
+  a caller has corrupted into a cycle still ends, because it takes as many
+  steps as the list says it is long.
+- `BitSet` further: a set of no words holds no bit and refuses every
+  index; a first word that is full sends `first_clear` into the second;
+  `count` and `is_empty` agree with the bits that are set.
+- Every owning container holds a value that is neither `Copy` nor
+  `Default` and moves it in and out, because the storage is what makes
+  that possible and a test that only ever held a `u32` would not say so.
 - Model tests: every container against `Vec`, `VecDeque`, and `BTreeMap`
-  under generated operation sequences; no operation panics for any
-  sequence.
+  under generated operation sequences, and the bit set against a
+  `BTreeSet` of the indices that are set; no operation panics for any
+  sequence. The generators produce indices, node numbers, and keys that
+  reach beyond the container as well as inside it, so the error paths are
+  part of the sequence rather than a separate test.
 
 ### 6.6.42 Wire primitives (`net-wire`)
 

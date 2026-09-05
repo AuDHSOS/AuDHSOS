@@ -54,7 +54,7 @@ integration around it stays in its phase.
 |-------|---------|------|----------------------|
 | C | cryptography and TLS ([document 11](11-cryptography-and-tls.md)) | XL | in progress; its step T8 waits for track D |
 | D | the network stack, sans-I/O (12.6) | XL | unblocks C's transport; unblocks HTTP |
-| E | shared foundations: time, encodings, collections (12.5) | M | `audhsos-time` and `audhsos-encoding` implemented; needed by C at T5 and T6, by D throughout, by phases 5 and 6 |
+| E | shared foundations: time, encodings, collections (12.5) | M | implemented; needed by C at T5 and T6, by D throughout, by phases 5 and 6 |
 | F | device logic without devices: virtqueues, FAT32 (12.7) | M | prepares the network and storage drivers that are later work |
 | G | tooling: fuzz support, symbolization (12.8) | M | serves every track and every phase |
 
@@ -160,11 +160,14 @@ Tests: catalog 6.6.40. Fuzz target `pem`.
 
 ### 12.5.3 `audhsos-collections`
 
+Implemented.
+
 ```rust
 pub struct ArrayVec<T, const N: usize>;
 pub struct RingBuffer<T, const N: usize>;
-pub struct BitSet<const BITS: usize>;
+pub struct BitSet<const WORDS: usize>;       // WORDS * 64 bits
 pub struct IndexList;                        // intrusive list over caller-owned nodes
+pub struct Link;                             // the two links and the owner of one node
 pub struct IndexMap<K: Ord, V, const N: usize>;
 ```
 
@@ -175,9 +178,33 @@ slice the caller owns, which is exactly the shape the run queues of
 phase 5 and the endpoint wait queues of phase 6 need, and which would
 otherwise be written again in every crate that needs it (D-48).
 
+Two shapes differ from the sketch above, and both are decisions rather
+than accidents.
+
+`BitSet` is parameterised by its number of 64-bit words and not by its
+number of bits, because `[u64; BITS.div_ceil(64)]` is an expression over
+a const parameter and stable Rust cannot size an array with one. The
+alternative was an incomplete language feature in the crate every other
+crate rests on, which is the worse trade. `BitSet::BITS` reports the size
+and every operation is checked against it, so a caller reads the size
+from the type rather than computing it.
+
+`IndexList` carries an identifier and a [`Link`] records which list its
+node is in. Several lists over one slice is the shape of one run queue
+per priority, and without the identifier a node handed to the wrong list
+would be quietly stolen from the right one; with it, that is
+`NotLinked`. `NONE` is the index that names no node and therefore cannot
+name a list, which is why `IndexList::new` is fallible.
+
+The owning containers store `Option<T>`. That costs one discriminant per
+slot and buys the right to hold a `T` with no default without a line of
+`unsafe`; the price is that there is no `as_slice`, because handing out a
+`&[T]` over storage the type system believes may be empty is exactly what
+`unsafe` exists for. `iter` is the way through.
+
 Each container is tested against a reference model — `Vec`, `VecDeque`,
-`BTreeMap` — with the model-test runner, which is what makes writing
-them cheap.
+`BTreeMap`, and a `BTreeSet` of indices for the bits — with the
+model-test runner, which is what makes writing them cheap.
 
 Tests: catalog 6.6.41.
 
@@ -504,7 +531,8 @@ the integration.
 - Recommended order: track E first, because it is small and blocks track
   C at T5 and T6; then track C to T7; then track D from D1; track F when
   a driver becomes foreseeable; `audhsos-symbols` from track G before
-  phase 3, because that is where kernel panics start.
+  phase 3, because that is where kernel panics start. Tracks E and G are
+  done and track C stands at T7, so the next side track is D.
 - The pulled-forward work of 12.9 fills short gaps, because it needs no
   new design.
 

@@ -7,6 +7,7 @@ members = [
     "crates/abi",
     "crates/time",
     "crates/encoding",
+    "crates/collections",
     "crates/crypto/ct",
     "crates/crypto/hash",
     "crates/crypto/aead",
@@ -49,6 +50,7 @@ exclude = ["fuzz"]
 audhsos-abi = { path = "crates/abi" }
 audhsos-time = { path = "crates/time" }
 audhsos-encoding = { path = "crates/encoding" }
+audhsos-collections = { path = "crates/collections" }
 crypto-ct = { path = "crates/crypto/ct" }
 crypto-hash = { path = "crates/crypto/hash" }
 crypto-aead = { path = "crates/crypto/aead" }

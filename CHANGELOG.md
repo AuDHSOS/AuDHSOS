@@ -101,6 +101,36 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   fuzzer reaches the walk over the entries without having to guess a
   checksum.
 
+- `audhsos-collections` (track E3): `ArrayVec`, `RingBuffer`, `BitSet`,
+  `IndexList` with its `Link`, and `IndexMap`. Fixed capacity, no
+  allocation, no `unsafe`, and no panic: a `push` that does not fit
+  returns `Err(Full)` and every accessor returns an `Option`, so nothing
+  here can abort a system call or a packet. Track E is complete, and track
+  D is unblocked from D1.
+- `audhsos-collections`: `IndexList` holds no values. It holds a head, a
+  tail, a length, and an identifier, while the links live in a slice of
+  `Link` the caller keeps beside its own array — which is what a run queue
+  over a fixed array of threads is, and what an endpoint wait queue over
+  the same array is (D-48). Several lists may run over one slice, one per
+  priority, and a `Link` records which list its node is in, so a node
+  handed to the wrong list is refused instead of being stolen from the
+  right one.
+- `audhsos-collections`: `BitSet` is parameterised by its number of 64-bit
+  words rather than by its number of bits, because `[u64; BITS.div_ceil(64)]`
+  is an expression over a const parameter and stable Rust cannot size an
+  array with one. The alternative was an incomplete language feature in
+  the crate every other crate rests on. `BitSet::BITS` reports the size and
+  every operation is checked against it.
+- `audhsos-collections`: the owning containers store `Option<T>`, which
+  costs one discriminant per slot and buys the right to hold a `T` with no
+  default without a line of `unsafe`. The price is that there is no
+  `as_slice`, and it is stated in the crate documentation rather than left
+  to be discovered.
+- Catalog 6.6.41 gains the further items of `IndexList` and `BitSet`, the
+  requirement that every owning container carry a value that is neither
+  `Copy` nor `Default`, and the note that the model generators reach
+  beyond the container as well as inside it.
+
 - `audhsos-encoding` (track E2): strict Base64 of RFC 4648, hex, and PEM of
   RFC 7468, each writing into a buffer the caller owns and answering how
   many bytes it wrote. Nothing allocates and nothing panics. Strict means
