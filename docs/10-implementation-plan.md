@@ -594,8 +594,17 @@ pub enum ElfError { TooShort, BadMagic, NotClass64, NotLittleEndian, NotExecutab
     SegmentAlignment, SegmentOutsideBounds, SegmentsOverlap, WritableAndExecutable, EntryNotExecutable, Overflow }
 ```
 
-Decode with `u16::from_le_bytes`/`u32`/`u64` from slices obtained with
-`get(..)`. Checks: magic `7F 45 4C 46`, `EI_CLASS == 2`, `EI_DATA == 1`,
+Modules: `error.rs` (the error enum with `Display`), `image.rs` (the
+constants `EHDR_LEN` and `PHDR_LEN`, `Segment` with `end`, `contains`, and
+`overlaps`, `Constraints::allows`, `Image` with `segments`,
+`segment_count`, `segment_bytes`, and `highest_address`, and `parse`), and
+`strategies.rs`. The errors that name one segment carry its index in the
+program header table.
+
+Decode the header as sixteen little-endian `u32` words and each program
+header entry as fourteen, joining the halves of the `u64` fields; every
+field of both structures is `u32`-aligned inside its structure, so no
+byte-wise reader is needed. Checks: magic `7F 45 4C 46`, `EI_CLASS == 2`, `EI_DATA == 1`,
 `e_type == 2`, `e_machine == 0x3E`, `e_ehsize >= 64`, `e_phentsize >= 56`,
 `e_phoff + e_phnum * e_phentsize <= len` (checked arithmetic), at least one
 `PT_LOAD` (`p_type == 1`), `p_filesz <= p_memsz`, `p_offset + p_filesz <=
@@ -604,9 +613,13 @@ p_align` when non-zero, segment inside the constraints, no two load
 segments overlap in memory, never both `PF_W` (2) and `PF_X` (1), entry
 inside an executable segment. Segments are returned sorted by `vaddr`.
 
-Tests: catalog 6.6.13 ELF items with an `ElfBuilder` in the tests that
-assembles headers byte by byte; a generator `any_elf_bytes()` behind
-`test-strategies` that mutates valid images.
+Tests: catalog 6.6.13 ELF items. `strategies.rs`, behind
+`test-strategies`, holds `ProgramHeader` and `ElfBuilder`, which assemble
+an image byte by byte with every field open to a test, `any_elf_image()`
+for well-formed images, and `any_elf_bytes()`, which replaces up to eight
+bytes of one and sometimes truncates it. The builder lives there rather
+than in the tests so that the unit tests, the property tests, and the fuzz
+corpus of Phase 7 share one description of a well-formed file.
 
 ### 10.2.2 Crate `audhsos-uefi` (`crates/uefi`)
 
@@ -661,7 +674,19 @@ impl<R: Registers> Uart16550<R> {
 pub const POLL_LIMIT: u32 = 100_000;
 ```
 
-Include `RecordingRegisters` behind `#[cfg(any(test, feature = "test-doubles"))]`.
+`Uart16550::new` takes the register block over without touching it, for a
+controller the firmware already programmed; `into_registers` gives it back.
+`enable_interrupts(receive, transmit)` and `disable_interrupts` cover the
+sources the enable register carries, and `Register::{ALL, offset, index}`
+lets a double index a register file. Every bit the crate writes or tests
+has a named constant, so that no test repeats a magic number the product
+code computes.
+
+`doubles.rs`, behind `#[cfg(any(test, feature = "test-doubles"))]`, holds
+`RecordingRegisters`: a register file that answers a read from a script
+first, then from the last written value, and records every access, so that
+a test can make the transmitter ready after a given number of polls.
+
 Tests: catalog 6.6.17.
 
 ### 10.2.4 Crate `kernel-hal-x86_64` (`crates/kernel/hal-x86_64`)
@@ -679,12 +704,17 @@ Modules and their `unsafe`/`asm!` content:
   (`pushfq; pop`). Each is a safe-looking `pub fn` only where the operation
   is harmless (`read_rflags`, `hlt`); the rest are `pub unsafe fn` with
   `# Safety` docs.
-- `descriptors.rs` (pure, host-testable through `cfg(not(target_os =
-  "none"))`? No: keep it `no_std` and test it in QEMU plus a duplicate-free
-  host test by making the module a separate logic crate
-  `kernel-x86-tables` (`crates/kernel/x86-tables`, layer 1, deps none): GDT
-  entry encoding, IDT entry encoding, TSS layout. Then the adapter depends
-  on it.) Encodings: GDT `0x00AF9A000000FFFF` kernel code,
+- The descriptor encodings are not in the adapter at all: they are the
+  logic crate `kernel-x86-tables` (`crates/kernel/x86-tables`, layer 1,
+  deps none), so that they are tested on the host instead of only in QEMU.
+  Modules `gdt.rs` (the four segment descriptors, `Selector` with index and
+  requested privilege level, the five named selectors, `tss_descriptor`
+  with its two decoders, and `build_gdt`), `idt.rs` (`gate` with the four
+  decoders `gate_handler`, `gate_selector`, `gate_ist`, and
+  `gate_attributes`, plus `gate_present` and `gate_privilege`), and
+  `tss.rs` (`TaskStateSegment` with `with_kernel_stack`,
+  `with_interrupt_stack`, and `to_bytes`). The adapter depends on the
+  crate and only loads what it returns. Encodings: GDT `0x00AF9A000000FFFF` kernel code,
   `0x00CF92000000FFFF` kernel data, `0x00CFF2000000FFFF` user data,
   `0x00AFFA000000FFFF` user code, 16-byte system descriptor type `0x9` for
   the TSS with base split into bits 16..39, 56..63, and the high 32 bits in

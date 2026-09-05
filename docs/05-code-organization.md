@@ -61,12 +61,13 @@ AuDHSOS/
 | Crate | Layer | Target | `unsafe` | Host tests | May depend on |
 |-------|-------|--------|----------|------------|---------------|
 | `audhsos-abi` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
-| `audhsos-elf` | 0 | all | no | yes, fuzz | - |
+| `audhsos-elf` | 0 | all | no | yes, fuzz | `test-support` behind the feature `test-strategies` |
 | `audhsos-uefi` | 0 | all | no | yes (layouts) | - |
 | `audhsos-sync` | 0 | all | allowlisted | Miri | - |
 | `kernel-types` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
+| `kernel-x86-tables` | 1 | all | no | yes | - |
 | `kernel-hal-api` | 1 | all | no | doubles are tested | `kernel-types`; features `test-doubles`, `port-io` |
-| `driver-uart16550` | 1 | all | no | yes | - |
+| `driver-uart16550` | 1 | all | no | yes | - (feature `test-doubles`) |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-objects` | 2 | all | no | yes | `kernel-types`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-sched` | 2 | all | no | yes | `kernel-objects` |

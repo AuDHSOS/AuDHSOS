@@ -35,3 +35,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - `kernel-hal-api`: `MemoryFrameAccess::with_lazy_tables`, which
   materializes a page table on the first modifying access to a frame of a
   declared memory range.
+- `audhsos-elf`: validating ELF64 parser with an image builder behind the
+  feature `test-strategies`.
+- `driver-uart16550`: register logic of the 16550 serial controller with a
+  recording register double behind the feature `test-doubles`.
+- `kernel-x86-tables`: encoding and decoding of the global descriptor
+  table, the interrupt descriptor table, and the task state segment.

@@ -56,6 +56,27 @@ pub(crate) const CRATES: &[Crate] = &[
         coverage_gate: true,
     },
     Crate {
+        name: "audhsos-elf",
+        path: "crates/elf",
+        kind: Kind::Logic,
+        deps: &["test-support"],
+        coverage_gate: true,
+    },
+    Crate {
+        name: "driver-uart16550",
+        path: "crates/drivers/uart16550",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+    },
+    Crate {
+        name: "kernel-x86-tables",
+        path: "crates/kernel/x86-tables",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+    },
+    Crate {
         name: "kernel-types",
         path: "crates/kernel/types",
         kind: Kind::Logic,

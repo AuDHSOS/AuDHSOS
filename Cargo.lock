@@ -10,8 +10,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "audhsos-elf"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
 name = "audhsos-sync"
 version = "0.1.0"
+
+[[package]]
+name = "driver-uart16550"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
 
 [[package]]
 name = "kernel-hal-api"
@@ -43,6 +57,13 @@ name = "kernel-types"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "test-support",
+]
+
+[[package]]
+name = "kernel-x86-tables"
+version = "0.1.0"
+dependencies = [
  "test-support",
 ]
 
