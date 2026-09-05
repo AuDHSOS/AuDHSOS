@@ -1,0 +1,86 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+
+//! What is cleared away after a thread has ended.
+//!
+//! Invariant: the kernel stack of a thread is given back only when nothing
+//! stands on it. A thread that ends itself — `thread_exit`, or a
+//! `process_kill` of its own process — is still running on its kernel
+//! stack while the kernel writes its answer, so the stack, the IPC buffer,
+//! and the pool slot stay until the kernel has switched away from it. The
+//! state `Exited` is the whole record of what is left to do; there is no
+//! second list to keep in step with it.
+
+use audhsos_abi::ThreadState;
+use kernel_objects::object::ThreadId;
+
+use crate::dispatch::Machine;
+use crate::environment::Environment;
+
+/// Gives back what every thread that has ended held, except the one the
+/// processor is still on, and returns how many it cleared away.
+///
+/// The kernel calls this after a switch, and after a system call that
+/// asked for none.
+pub fn reap<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+) -> u32 {
+    let mut cleared: u32 = 0;
+    // One at a time and looked up again each round: the kernel keeps no
+    // second list of what has ended, so there is none to hold across a
+    // change to the pool.
+    while let Some(id) = next_ended(machine) {
+        cleared = cleared.saturating_add(clear(machine, id));
+    }
+    cleared
+}
+
+/// The next thread that has ended and is not the one on the processor.
+fn next_ended<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &Machine<'_, E, NP, NT, NM, NH>,
+) -> Option<ThreadId> {
+    let current = machine.scheduler.current();
+    machine
+        .objects
+        .threads
+        .iter()
+        .find(|(id, thread)| thread.state == ThreadState::Exited && Some(*id) != current)
+        .map(|(id, _)| id)
+}
+
+/// Gives back what the thread `id` held.
+fn clear<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    id: ThreadId,
+) -> u32 {
+    let Ok(thread) = machine.objects.threads.get(id) else {
+        return 0;
+    };
+    let stack = thread.kernel_stack;
+    let buffer = thread.ipc_buffer;
+    machine.environment.release_kernel_stack(stack);
+    machine.environment.release_frame(buffer);
+    let _ = machine.objects.threads.release(id);
+    1
+}
+
+/// `true` if a thread of the machine has ended and is waiting to be
+/// cleared away.
+#[must_use]
+pub fn has_work<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &Machine<'_, E, NP, NT, NM, NH>,
+) -> bool {
+    next_ended(machine).is_some()
+}

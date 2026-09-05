@@ -241,6 +241,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-syscall"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "kernel-mm",
+ "kernel-objects",
+ "kernel-sched",
+ "kernel-types",
+]
+
+[[package]]
 name = "kernel-test-harness"
 version = "0.1.0"
 dependencies = [
@@ -268,6 +279,17 @@ version = "0.1.0"
 dependencies = [
  "audhsos-collections",
  "audhsos-time",
+ "net-wire",
+ "test-support",
+]
+
+[[package]]
+name = "net-ip"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "audhsos-time",
+ "net-eth",
  "net-wire",
  "test-support",
 ]

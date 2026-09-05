@@ -275,6 +275,10 @@ pub struct Thread {
     pub kernel_stack: u32,
     /// The frame holding the thread's IPC buffer.
     pub ipc_buffer: PhysFrame,
+    /// Where the thread starts, in its own address space.
+    pub entry: VirtAddr,
+    /// The stack pointer the thread starts with, in its own address space.
+    pub user_stack: VirtAddr,
     /// The kernel stack pointer of the thread while it is not running.
     /// One word is the whole saved context (D-67); everything else the
     /// switch has to keep lies on the stack this points at.
@@ -312,9 +316,21 @@ impl Thread {
             time_slice: 0,
             kernel_stack,
             ipc_buffer,
+            entry: VirtAddr::ZERO,
+            user_stack: VirtAddr::ZERO,
             context: VirtAddr::ZERO,
             links: Links::UNLINKED,
         })
+    }
+
+    /// The same thread, starting at `entry` on `user_stack`.
+    #[must_use]
+    pub const fn starting_at(self, entry: VirtAddr, user_stack: VirtAddr) -> Self {
+        Thread {
+            entry,
+            user_stack,
+            ..self
+        }
     }
 
     /// `true` if the scheduler may pick the thread.

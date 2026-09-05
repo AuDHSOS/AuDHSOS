@@ -117,7 +117,7 @@ AuDHSOS/
 | `kernel-objects` | 2 | all | no | yes | `kernel-types`, `kernel-mm`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-sched` | 2 | all | no | yes | `kernel-objects`, `audhsos-abi` |
 | `kernel-ipc` | 3 | all | no | yes | `kernel-objects`, `kernel-sched`, `audhsos-abi` |
-| `kernel-syscall` | 3 | all | no | yes | layers 0-2, `kernel-ipc` |
+| `kernel-syscall` | 3 | all | no | yes, against a recording `Environment` | layers 0-2, `kernel-sched`; `kernel-ipc` from Phase 6 |
 | `kernel-core` | 4 | all | no | yes, with doubles | layers 0-3, `audhsos-sync` |
 | `kernel-hal-x86_64` | 5 | `x86_64-unknown-none` | allowlisted | the pure parts live in `kernel-x86-tables` and `kernel-acpi` | `kernel-acpi`, `kernel-hal-api`, `kernel-types`, `audhsos-abi`, `driver-uart16550`, `audhsos-sync`, `kernel-x86-tables`, `kernel-mm`, `kernel-test-harness` |
 | `kernel-test-harness` | 5 | all | no | yes | `kernel-hal-api` |

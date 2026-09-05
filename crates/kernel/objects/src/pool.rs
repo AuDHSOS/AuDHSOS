@@ -325,6 +325,20 @@ impl<T, const N: usize> Pool<T, N> {
         Ok(value)
     }
 
+    /// Every live object with its id, in slot order.
+    pub fn iter(&self) -> impl Iterator<Item = (ObjectId<T>, &T)> {
+        self.slots.iter().enumerate().filter_map(|(index, slot)| {
+            let occupant = slot.occupant.as_ref()?;
+            let index = u32::try_from(index).ok()?;
+            Some((ObjectId::new(index, slot.generation), &occupant.value))
+        })
+    }
+
+    /// The id of every live object, in slot order.
+    pub fn ids(&self) -> impl Iterator<Item = ObjectId<T>> + '_ {
+        self.iter().map(|(id, _)| id)
+    }
+
     /// Appends the slot `index` behind the slot `tail` of the free list.
     /// A `tail` outside the pool leaves the list unchanged.
     pub(crate) fn link_free(&mut self, tail: u32, index: u32) {

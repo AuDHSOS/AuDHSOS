@@ -1624,12 +1624,32 @@ zero.
 
 ### 10.5.5 `kernel-syscall` (`crates/kernel/syscall`)
 
-Layer 3. `dispatch(objects: &mut Objects, state: &mut KernelState, caller:
-ThreadId, buffer: &mut [u8; 4096]) -> ()` implementing the validation order of
+Layer 3. `dispatch(machine: &mut Machine<'_, E, ..>, caller: ThreadId,
+buffer: &mut [u8; 4096]) -> Outcome` implementing the validation order of
 [02-architecture.md 2.8](02-architecture.md#28-system-call-interface):
-number → argument count → handle → type → rights → arguments → quota;
-then one function per system call in `calls/*.rs`; every error path
-tested on the host with `KernelState` built from doubles.
+number → argument count → handle → type → rights → arguments → quota. The
+`Machine` is the objects, the scheduler, and an `Environment`; the return
+value says whether the caller should switch threads before it returns to
+user mode. Then one function per system call in `calls/*.rs`; every error
+path tested on the host.
+
+`KernelState` does not reach this layer, which is in `kernel-core` above
+it. What the calls need beyond the objects is the trait `Environment`:
+address spaces, mappings, kernel stacks, frames, and the debug console.
+The kernel implements it over its memory bring-up, a test with a recording
+double, and that is what makes every error path reachable on the host.
+
+The argument count is checked without a count in the buffer: the words
+above what the call reads must be zero, which is what a caller built
+against another version of the table looks like. The argument words of
+every call are a table in the module documentation of `calls`.
+
+`reaper::reap` gives back what a thread that has ended held. A thread that
+ends itself — `thread_exit`, or a `process_kill` of its own process — is
+still standing on its kernel stack while the kernel writes its answer, so
+the stack, the IPC buffer, and the pool slot stay until the kernel has
+switched away from it; the state `Exited` is the whole record of what is
+left to do. The kernel calls `reap` after a switch.
 
 Phase 5 implements twenty of the forty-one calls: `process_create`,
 `process_install_handle`, `process_kill`, the nine thread calls

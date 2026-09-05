@@ -324,6 +324,20 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "kernel-syscall",
+        path: "crates/kernel/syscall",
+        kind: Kind::Logic,
+        deps: &[
+            "kernel-objects",
+            "kernel-sched",
+            "kernel-mm",
+            "kernel-types",
+            "audhsos-abi",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "kernel-mm",
         path: "crates/kernel/mm",
         kind: Kind::Logic,

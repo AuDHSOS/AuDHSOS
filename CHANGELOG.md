@@ -7,6 +7,31 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `kernel-syscall`: the entry point of the system call interface and the
+  twenty calls of this phase. The checks run in the order 2.8 documents —
+  number, argument count, handle, object type, rights, arguments, quota —
+  and a test for each pair holds that the first failing check is the one
+  reported. The argument count is checked without a count in the buffer:
+  the words above what the call reads must be zero, which is what a caller
+  built against another version of the table looks like.
+
+- `Environment`, the one trait the calls reach everything through that is
+  not an object: address spaces, mappings, kernel stacks, frames, and the
+  debug console. The kernel implements it over its memory bring-up; the
+  tests implement it with a recorder, which is what makes every error path
+  of every call reachable on the host. Ninety-four tests do that, and each
+  one that expects a refusal also holds that no frame and no kernel stack
+  was left behind.
+
+- `reaper::reap` gives back what a thread that has ended held. The tests
+  found that `process_kill` and `thread_exit` returned the kernel stack of
+  the very thread that was standing on it while the kernel wrote its
+  answer: the stack would have gone back into the reserve and been handed
+  out again under a running handler. A thread that ends now keeps its
+  stack, its IPC buffer, and its slot until the kernel has switched away
+  from it, and the state `Exited` is the whole record of what is left to
+  clear away.
+
 - `net-ip`, step D3 of track D: the IPv4 header of RFC 791, fragmentation
   and reassembly, `ICMPv4` of RFC 792 under the restrictions of RFC 1122,
   the routing table both families share, and the send path that joins them
@@ -660,6 +685,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   framebuffer fields of the boot information structure in the documents.
 
 ### Changed
+
+- The range operations of the memory calls walk the iterators of
+  `PageRange` and `PhysFrameRange` instead of adding to a page number per
+  step, which removes six branches that could not be taken, and `frame_at`
+  no longer checks an alignment its caller has already checked.
+- `Thread` carries the entry point and the user stack it starts on, because
+  the frame the first switch returns through is synthesized when the thread
+  starts and not when it is created. `Pool` gained `iter` and `ids`.
 
 - The object counts moved from `kernel-core::config` to
   `kernel-objects::config`, so that the structure holding the pools can name
