@@ -1168,6 +1168,15 @@ Goal: the kernel owns its memory after boot.
   `RegionTable`; unmap the identity range (every page below
   `USER_SPACE_END` that is present) with `unmap_range` in `MAX_PAGES_PER_CALL`
   steps and free nothing (the frames belong to the window).
+- `kernel-hal-x86_64::bootinfo`: `X86Platform::from_page` hands the address
+  of the page it read to `PhysAddr::new` and appends the result as the
+  `MemoryRegionKind::BootInfo` region. That address is `BOOT_INFO_VADDR`, a
+  virtual one, so the constructor rejects it and the region is silently
+  dropped: no boot report has ever shown a `boot-info` line. The physical
+  address is in no field of the boot information, and it does not need to
+  be, because `translate(BOOT_INFO_VADDR)` on the loader's tables gives it.
+  Phase 3 removes that push from `from_page` and registers the region where
+  the other three fixed ranges are registered, from the walk above.
 - Kernel stacks: `StackPool` in `kernel-mm`: `allocate() ->
   Result<KernelStack { pages: PageRange }, _>` mapping 4 frames from the
   reserve below a guard page at `KERNEL_STACKS_BASE` (constant) + index ×
@@ -1176,7 +1185,8 @@ Goal: the kernel owns its memory after boot.
   map a frame at a user page, write through the window, read through the
   mapping, unmap, and verify that a read faults (handler hook records the
   address); the identity mapping is gone (`translate` of page 0x1000 is
-  `None`).
+  `None`); the region table holds one `BootInfo` region whose start is the
+  frame `translate(BOOT_INFO_VADDR)` names.
 
 Acceptance: `check` green; catalog 6.6.21 memory items covered.
 
