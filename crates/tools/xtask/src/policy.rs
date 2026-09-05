@@ -84,6 +84,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "audhsos-encoding",
+        path: "crates/encoding",
+        kind: Kind::Logic,
+        deps: &["test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "crypto-ct",
         path: "crates/crypto/ct",
         kind: Kind::Logic,
@@ -425,6 +433,7 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "der" },
     FuzzTarget { name: "elf" },
     FuzzTarget { name: "madt" },
+    FuzzTarget { name: "pem" },
     FuzzTarget {
         name: "tls_handshake",
     },

@@ -18,6 +18,10 @@ name = "audhsos-elf"
 version = "0.1.0"
 
 [[package]]
+name = "audhsos-encoding"
+version = "0.1.0"
+
+[[package]]
 name = "audhsos-time"
 version = "0.1.0"
 
@@ -135,6 +139,14 @@ version = "0.1.0"
 dependencies = [
  "fuzz-support",
  "kernel-acpi",
+]
+
+[[package]]
+name = "pem"
+version = "0.1.0"
+dependencies = [
+ "audhsos-encoding",
+ "fuzz-support",
 ]
 
 [[package]]

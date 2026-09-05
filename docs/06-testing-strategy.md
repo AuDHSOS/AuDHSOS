@@ -962,21 +962,37 @@ done until every applicable item has a test. Items are added, never removed.
 
 - Base64 against the RFC 4648 §10 vectors for lengths zero to six;
   encoding into a buffer one byte too small is an error and writes
-  nothing.
+  nothing; round trip for arbitrary input (property).
 - Base64 decoding rejects a missing pad, an excess pad, a pad in the
   middle, a character outside the alphabet, whitespace, and non-zero
-  trailing bits in the final quantum.
+  trailing bits in the final quantum. The two texts that differ from a
+  canonical one only in those bits, `Zh==` for `Zg==` and `Zm9=` for
+  `Zm8=`, are named as such.
+- A length that is not a multiple of four is refused before any character
+  is read, so whitespace inside a quantum is a length error and
+  whitespace that keeps the length is a character error; both are tested.
 - Hex: round trip for arbitrary input (property); an odd length, an
   upper-case and a lower-case digit pair, and a non-hex character are
-  handled as specified.
+  handled as specified; a character error names its offset.
 - PEM against RFC 7468: a minimal certificate block; a label mismatch
   between the begin and end line, a missing end line, a line longer than
   64 characters other than the last, data after the end line, and an
   empty payload are rejected; a block preceded by explanatory text is
   accepted, as the RFC's lax parsing permits, and the text is not
   returned.
+- PEM further: a text with no end line reports the missing line and not
+  the length of a body line, because the rule for the last body line
+  applies only to a block that has one; a pad before the last body line
+  is refused; `CRLF` is accepted as a terminator; a label with a leading
+  or trailing space, two spaces, a hyphen, or a character outside the
+  printable range is refused; line terminators after the end line are not
+  data.
 - Property: no input causes a panic, and every accepted block re-encodes
-  to a canonical form that decodes to the same bytes. Fuzz target `pem`.
+  to a canonical form that decodes to the same bytes. The generator of
+  near-valid blocks is itself checked to reach both an accepted and a
+  refused text, so that the property does not silently test one rule.
+  Fuzz target `pem`, which also asserts that a text the Base64 decoder
+  accepts re-encodes to exactly itself.
 
 ### 6.6.41 Fixed-capacity collections (`audhsos-collections`)
 

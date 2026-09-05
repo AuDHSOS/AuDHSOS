@@ -25,6 +25,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "audhsos-encoding"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
 name = "audhsos-kernel"
 version = "0.1.0"
 dependencies = [

@@ -305,13 +305,13 @@ Tests: catalog 6.6.42 to 6.6.50. Fuzz targets `ipv4`, `tcp_segment`,
 
 ## 8.19 Track E: shared foundations
 
-Status: E1 implemented, E2 and E3 specified in
+Status: E1 and E2 implemented, E3 specified in
 [document 12](12-parallel-work.md) and not started.
 
 | Step | Crate | Size | Ends with |
 |------|-------|------|-----------|
 | E1 | `audhsos-time` | S | implemented: `UnixTime`, `CivilTime`, `Instant`, `Duration`, and the integer calendar of the proleptic Gregorian rule over the years 0 to 9999 |
-| E2 | `audhsos-encoding` | S | strict Base64, hex, and PEM without allocation |
+| E2 | `audhsos-encoding` | S | implemented: strict Base64, hex, and PEM without allocation, with the fuzz target `pem` |
 | E3 | `audhsos-collections` | M | `ArrayVec`, `RingBuffer`, `BitSet`, `IndexList`, `IndexMap`, each model-tested |
 
 Track E is scheduled first among the side tracks: step T5 of 8.17 needs

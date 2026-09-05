@@ -13,6 +13,7 @@ members = [
     "der",
     "elf",
     "madt",
+    "pem",
     "tls_handshake",
     "tls_record",
     "x509",
@@ -28,6 +29,7 @@ rust-version = "1.100"
 [workspace.dependencies]
 audhsos-abi = { path = "../crates/abi" }
 audhsos-der = { path = "../crates/net/der" }
+audhsos-encoding = { path = "../crates/encoding" }
 audhsos-elf = { path = "../crates/elf" }
 audhsos-time = { path = "../crates/time" }
 audhsos-tls = { path = "../crates/net/tls" }

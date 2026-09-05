@@ -54,7 +54,7 @@ integration around it stays in its phase.
 |-------|---------|------|----------------------|
 | C | cryptography and TLS ([document 11](11-cryptography-and-tls.md)) | XL | in progress; its step T8 waits for track D |
 | D | the network stack, sans-I/O (12.6) | XL | unblocks C's transport; unblocks HTTP |
-| E | shared foundations: time, encodings, collections (12.5) | M | `audhsos-time` implemented; needed by C at T5 and T6, by D throughout, by phases 5 and 6 |
+| E | shared foundations: time, encodings, collections (12.5) | M | `audhsos-time` and `audhsos-encoding` implemented; needed by C at T5 and T6, by D throughout, by phases 5 and 6 |
 | F | device logic without devices: virtqueues, FAT32 (12.7) | M | prepares the network and storage drivers that are later work |
 | G | tooling: fuzz support, symbolization (12.8) | M | serves every track and every phase |
 
@@ -122,21 +122,39 @@ Tests: catalog 6.6.39.
 
 ### 12.5.2 `audhsos-encoding`
 
+Implemented.
+
 - `base64.rs`: RFC 4648 alphabet, strict decoding — correct padding,
-  no whitespace, and non-canonical trailing bits rejected.
+  no whitespace, and non-canonical trailing bits rejected. Strictness is
+  the property that one sequence of bytes has one text: a decoder that
+  skipped whitespace or ignored the unused bits of the last quantum would
+  let a certificate be written two ways and compared once.
 - `hex.rs`: lower-case encoding, case-insensitive decoding, odd length
-  rejected.
+  rejected. The asymmetry is deliberate — a hex dump is written by a
+  program and read by a person, so the output is canonical while the
+  input is not made to shout.
 - `pem.rs`: RFC 7468 strict form — the label must match between the
-  begin and end lines, lines are 64 characters except the last, and
-  trailing data after the end line is rejected. Decoding yields the
-  label and the DER bytes as borrowed slices into a caller-supplied
-  buffer.
+  begin and end lines, lines are 64 characters except the last, a pad may
+  stand only in the last of them, and trailing data after the end line is
+  rejected. Explanatory text *before* the begin line is skipped, which the
+  RFC permits and a certificate file with a preamble needs; text after it
+  is not the same thing, because appending to a file is how a reader is
+  made to see what the writer did not sign. Decoding yields the label and
+  the DER bytes as borrowed slices, the first into the input and the
+  second into a caller-supplied buffer.
+
+A text with no end line reports the missing line rather than the length
+of a body line: the body is located before it is read, so that the rule
+for the last line is applied only to a block that has one.
 
 Every function writes into a buffer the caller owns and returns the
 number of bytes written; nothing allocates. The trust-anchor conversion
 of D-42 uses this crate instead of an ad-hoc decoder in the xtask
 (D-47), and the certificate builder of document 11 uses it to emit test
-data in a form a human can read.
+data in a form a human can read. Neither consumer exists yet, so neither
+the xtask nor `audhsos-x509` depends on this crate today; when they do,
+there is nothing ad hoc for them to replace, which is the point of
+writing it first.
 
 Tests: catalog 6.6.40. Fuzz target `pem`.
 

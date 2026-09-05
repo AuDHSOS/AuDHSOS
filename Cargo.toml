@@ -6,6 +6,7 @@ resolver = "3"
 members = [
     "crates/abi",
     "crates/time",
+    "crates/encoding",
     "crates/crypto/ct",
     "crates/crypto/hash",
     "crates/crypto/aead",
@@ -47,6 +48,7 @@ exclude = ["fuzz"]
 [workspace.dependencies]
 audhsos-abi = { path = "crates/abi" }
 audhsos-time = { path = "crates/time" }
+audhsos-encoding = { path = "crates/encoding" }
 crypto-ct = { path = "crates/crypto/ct" }
 crypto-hash = { path = "crates/crypto/hash" }
 crypto-aead = { path = "crates/crypto/aead" }

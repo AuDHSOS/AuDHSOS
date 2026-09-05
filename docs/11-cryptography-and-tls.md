@@ -525,7 +525,7 @@ nobody finds again.
 | What is missing | Where it is felt | Who owns it |
 |-----------------|------------------|-------------|
 | A clock | `audhsos-time` arrived, so `audhsos-der` yields a `CivilTime` that the calendar validated and `verify_chain` compares one as its `now`. What no crate of this project has is a source for that value, because none of them reads a clock | the platform timer of Phase 4 and the system call that carries it out |
-| A PEM decoder | the trust-anchor conversion of D-42, which the xtask performs at build time | `audhsos-encoding`, D-47, [document 12](12-parallel-work.md) |
+| ~~A PEM decoder~~ | `audhsos-encoding` arrived with strict Base64, hex, and PEM. The trust-anchor conversion of D-42 has its decoder; what is still unwritten is the conversion itself, which is xtask work and not this track's | D-47, [document 12](12-parallel-work.md) |
 | A source of entropy | `crypto-rng` ships the generator and the `Entropy` trait; no product code can construct a generator without a source | `RDSEED` in the HAL behind a `random_bytes` system call, D-43 |
 | A transport | step T8: the client is sans-I/O and needs bytes moved for it | `net-tcp`, D-49, [document 12](12-parallel-work.md) |
 

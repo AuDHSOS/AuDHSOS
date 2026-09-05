@@ -98,6 +98,32 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   fuzzer reaches the walk over the entries without having to guess a
   checksum.
 
+- `audhsos-encoding` (track E2): strict Base64 of RFC 4648, hex, and PEM of
+  RFC 7468, each writing into a buffer the caller owns and answering how
+  many bytes it wrote. Nothing allocates and nothing panics. Strict means
+  one sequence of bytes has one text: Base64 refuses whitespace, a missing
+  or excessive pad, a pad anywhere but at the end, and a final quantum
+  whose unused bits are not zero.
+- `audhsos-encoding`: PEM in the strict form. The end line must name the
+  label of the begin line, every body line but the last is exactly 64
+  characters, only the last may carry a pad, and nothing but line
+  terminators may follow the end line. Explanatory text before the begin
+  line is skipped, which RFC 7468 permits and a certificate file with a
+  preamble needs. A block decodes into two borrows: the label into the
+  input, the bytes into the caller's buffer.
+- `audhsos-encoding`: a text with no end line reports the missing line and
+  not the length of a body line. The body is located before it is read, so
+  the rule for the last body line is applied only to a block that has one.
+- `fuzz/pem`: the target track E owed, with a corpus of twelve texts — a
+  block, a preamble, `CRLF` terminators, and the eight shapes that are
+  refused. It asserts what strictness means: an accepted block re-encodes
+  to a text that decodes to the same bytes, and a Base64 text the decoder
+  accepts re-encodes to exactly itself.
+- Catalog 6.6.40 gains the two non-canonical quanta by name, the split
+  between a length error and a character error, the PEM rules that were
+  not in the first list, and the check that the generator of near-valid
+  blocks reaches both an accepted and a refused text.
+
 - `audhsos-time` (track E1): `CivilTime`, `UnixTime`, `Instant`, and
   `Duration`, and the integer calendar that joins the first two. The rule
   is the proleptic Gregorian one over the years 0 to 9999, which is the
