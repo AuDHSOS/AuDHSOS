@@ -1,3 +1,21 @@
 target/
 *.profraw
 *.profdata
+
+# libFuzzer writes what it discovers into the same directories the
+# regression corpus lives in, naming every input by the SHA-1 of its
+# content. Those forty characters are the mark: the regression corpus of
+# D-54 is named in words, one file per case a test cites, and is tracked;
+# what a run finds is reproducible by another run and is not.
+fuzz/corpus/*/????????????????????????????????????????
+
+# macOS leaves these beside anything a Finder window has opened.
+.DS_Store
+
+# The coding agent's directory. `.claude/settings.json` is the project's
+# own configuration and is tracked; what a session writes is not.
+# `.claude/worktrees/` holds whole further checkouts of this repository,
+# one per worktree session, and `settings.local.json` holds the
+# permissions one machine granted.
+.claude/worktrees/
+.claude/settings.local.json
