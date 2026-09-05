@@ -86,7 +86,7 @@ fn stack_bottom() -> u64 {
 }
 
 /// The machine the loader would have left behind.
-fn platform() -> ScriptedPlatform {
+pub(super) fn platform() -> ScriptedPlatform {
     ScriptedPlatform::new(VirtAddr::new(PHYS_WINDOW_BASE).unwrap())
         .region(address(0), RAM_BYTES, MemoryRegionKind::Usable)
         .region(address(KERNEL_PHYS), KERNEL_LEN, MemoryRegionKind::Kernel)
@@ -105,10 +105,10 @@ fn platform() -> ScriptedPlatform {
 }
 
 /// The tables the loader would have built, and the doubles that reach them.
-struct Machine {
-    access: Access,
+pub(super) struct Machine {
+    pub(super) access: Access,
     tlb: RecordingTlb,
-    root: PhysFrame,
+    pub(super) root: PhysFrame,
 }
 
 impl Machine {
@@ -144,7 +144,7 @@ impl Machine {
         Machine { access, tlb, root }
     }
 
-    fn full() -> Self {
+    pub(super) fn full() -> Self {
         Self::new(RAM_PAGES)
     }
 

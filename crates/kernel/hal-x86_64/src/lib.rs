@@ -12,6 +12,7 @@ pub mod apic;
 pub mod bootinfo;
 #[cfg(feature = "debug-uart")]
 pub mod console;
+pub mod context;
 pub mod descriptors;
 pub mod entry;
 #[cfg(feature = "test-exit")]

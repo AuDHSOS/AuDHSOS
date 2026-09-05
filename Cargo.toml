@@ -25,6 +25,8 @@ members = [
     "crates/uefi",
     "crates/sync",
     "crates/drivers/uart16550",
+    "crates/user/sys-x86_64",
+    "crates/user/test-programs",
     "crates/kernel/types",
     "crates/kernel/acpi",
     "crates/kernel/hal-api",
@@ -73,6 +75,8 @@ audhsos-symbols = { path = "crates/symbols" }
 audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
 driver-uart16550 = { path = "crates/drivers/uart16550" }
+user-sys-x86_64 = { path = "crates/user/sys-x86_64" }
+user-test-programs = { path = "crates/user/test-programs" }
 kernel-types = { path = "crates/kernel/types" }
 kernel-acpi = { path = "crates/kernel/acpi" }
 kernel-hal-api = { path = "crates/kernel/hal-api" }

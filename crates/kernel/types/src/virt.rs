@@ -16,7 +16,12 @@ use audhsos_abi::layout::{
 use crate::{Alignment, Error};
 
 /// A canonical virtual address.
+///
+/// The representation is the word itself, because the saved context of a
+/// thread is a virtual address that the context switch writes through a
+/// pointer (D-67).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
 pub struct VirtAddr(u64);
 
 const fn is_canonical(raw: u64) -> bool {

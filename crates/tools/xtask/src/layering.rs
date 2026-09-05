@@ -6,7 +6,7 @@
 //! assembly files.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::Error;
 use crate::fs;
@@ -214,24 +214,47 @@ fn check_crate_roots(root: &Path) -> Result<Vec<String>, Error> {
     let mut violations = Vec::new();
     for krate in CRATES {
         let src = root.join(krate.path).join("src");
-        let crate_root = if src.join("lib.rs").is_file() {
-            src.join("lib.rs")
-        } else {
-            src.join("main.rs")
-        };
-        let text = fs::read(&crate_root)?;
         let wanted = match krate.kind {
             Kind::Logic | Kind::Host => "#![forbid(unsafe_code)]",
             Kind::Adapter { .. } => "#![allow(unsafe_code)]",
         };
-        if !text.lines().any(|line| line.trim() == wanted) {
-            violations.push(format!(
-                "`{}` lacks `{wanted}` in its crate root",
-                krate.name
-            ));
+        for crate_root in crate_roots(&src)? {
+            let text = fs::read(&crate_root)?;
+            if !text.lines().any(|line| line.trim() == wanted) {
+                let name = fs::file_name(&crate_root);
+                violations.push(format!(
+                    "`{}` lacks `{wanted}` in its crate root {name}",
+                    krate.name
+                ));
+            }
         }
     }
     Ok(violations)
+}
+
+/// Every crate root of a package: its library or its binary, and every
+/// binary of a package that is nothing but binaries, as the user test
+/// programs are.
+fn crate_roots(src: &Path) -> Result<Vec<PathBuf>, Error> {
+    if src.join("lib.rs").is_file() {
+        return Ok(vec![src.join("lib.rs")]);
+    }
+    if src.join("main.rs").is_file() {
+        return Ok(vec![src.join("main.rs")]);
+    }
+    let bins = src.join("bin");
+    let mut roots: Vec<PathBuf> = fs::walk_files(&bins)?
+        .into_iter()
+        .filter(|path| fs::extension(path) == "rs")
+        .collect();
+    roots.sort();
+    if roots.is_empty() {
+        return Err(Error::Parse(format!(
+            "{} holds no crate root",
+            src.display()
+        )));
+    }
+    Ok(roots)
 }
 
 /// No assembly files and no `global_asm!` anywhere.

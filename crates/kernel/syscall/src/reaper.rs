@@ -10,6 +10,12 @@
 //! and the pool slot stay until the kernel has switched away from it. The
 //! state `Exited` is the whole record of what is left to do; there is no
 //! second list to keep in step with it.
+//!
+//! Which thread that is, the caller says: the scheduler has already
+//! forgotten it, because a thread that ends leaves the processor in the
+//! same breath. Reading `current` instead was enough to make the kernel
+//! unmap the stack it was standing on, which the machine answered with a
+//! double fault.
 
 use audhsos_abi::ThreadState;
 use kernel_objects::object::ThreadId;
@@ -24,12 +30,13 @@ use crate::environment::Environment;
 /// asked for none.
 pub fn reap<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    running: Option<ThreadId>,
 ) -> u32 {
     let mut cleared: u32 = 0;
     // One at a time and looked up again each round: the kernel keeps no
     // second list of what has ended, so there is none to hold across a
     // change to the pool.
-    while let Some(id) = next_ended(machine) {
+    while let Some(id) = next_ended(machine, running) {
         cleared = cleared.saturating_add(clear(machine, id));
     }
     cleared
@@ -44,13 +51,16 @@ fn next_ended<
     const NH: usize,
 >(
     machine: &Machine<'_, E, NP, NT, NM, NH>,
+    running: Option<ThreadId>,
 ) -> Option<ThreadId> {
-    let current = machine.scheduler.current();
+    // The thread on the processor is the one the kernel is standing on,
+    // whether the scheduler still calls it current or not.
+    let spared = running.or_else(|| machine.scheduler.current());
     machine
         .objects
         .threads
         .iter()
-        .find(|(id, thread)| thread.state == ThreadState::Exited && Some(*id) != current)
+        .find(|(id, thread)| thread.state == ThreadState::Exited && Some(*id) != spared)
         .map(|(id, _)| id)
 }
 
@@ -64,6 +74,15 @@ fn clear<E: Environment, const NP: usize, const NT: usize, const NM: usize, cons
     };
     let stack = thread.kernel_stack;
     let buffer = thread.ipc_buffer;
+    let address = thread.ipc_address;
+    let process = thread.process;
+    // The page the buffer was mapped at goes with it, so that the slot of
+    // the next thread starts with nothing of the one before it.
+    if let Ok(root) = machine.objects.processes.get(process).map(|p| p.root)
+        && let Ok(page) = kernel_types::Page::from_start(address)
+    {
+        let _ = machine.environment.unmap(root, page);
+    }
     machine.environment.release_kernel_stack(stack);
     machine.environment.release_frame(buffer);
     let _ = machine.objects.threads.release(id);
@@ -81,6 +100,7 @@ pub fn has_work<
     const NH: usize,
 >(
     machine: &Machine<'_, E, NP, NT, NM, NH>,
+    running: Option<ThreadId>,
 ) -> bool {
-    next_ended(machine).is_some()
+    next_ended(machine, running).is_some()
 }

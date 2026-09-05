@@ -135,3 +135,47 @@ fn the_machine_starts_empty_and_counts_what_it_holds() {
     assert!(objects.holds_thread(thread));
     assert_eq!(objects.counts(), [1, 1, 0, 0]);
 }
+
+#[test]
+fn reaching_an_object_that_is_there_and_one_that_is_not() {
+    let mut objects = Small::new();
+    let process = objects
+        .processes
+        .allocate(Process::new(
+            frame(0x1000),
+            HandleList::with_capacity(4),
+            Quota::new(8),
+            Quota::new(8),
+        ))
+        .unwrap();
+    let thread = objects
+        .threads
+        .allocate(Thread::new(process, 0, 0, 0, frame(0x2000)).unwrap())
+        .unwrap();
+
+    assert!(objects.with_process(process, |holder| {
+        holder.kernel_object_quota.charge(1).unwrap();
+    }));
+    assert_eq!(
+        objects
+            .processes
+            .get(process)
+            .unwrap()
+            .kernel_object_quota
+            .used(),
+        1
+    );
+    assert!(objects.with_thread(thread, |entry| {
+        entry.priority = 3;
+    }));
+    assert_eq!(objects.threads.get(thread).unwrap().priority, 3);
+
+    // An id the machine does not hold reaches nothing, and the body is
+    // not run: the counter it would raise stays where it is.
+    let mut touched = 0_u32;
+    let ghost_process = ObjectId::new(3, 9);
+    let ghost_thread = ObjectId::new(7, 9);
+    assert!(!objects.with_process(ghost_process, |_| touched += 1));
+    assert!(!objects.with_thread(ghost_thread, |_| touched += 1));
+    assert_eq!(touched, 0);
+}

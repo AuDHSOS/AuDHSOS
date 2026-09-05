@@ -73,3 +73,50 @@ pub unsafe fn activate(root: PhysFrame) {
         crate::instructions::write_page_table_root(root.start().as_u64());
     }
 }
+
+/// The page-table root of this processor, as the kernel changes it.
+///
+/// The kernel holds one of these and hands it to `kernel_core::schedule`,
+/// which loads a root only when the thread that takes the processor
+/// belongs to another process (D-65).
+#[derive(Clone, Copy, Debug)]
+pub struct AddressSpaces {
+    active: PhysFrame,
+}
+
+impl AddressSpaces {
+    /// The control, starting from the root the processor translates
+    /// through now.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] when `CR3` does not name an addressable frame.
+    pub fn current() -> Result<Self, Error> {
+        Ok(AddressSpaces {
+            active: active_root()?,
+        })
+    }
+
+    /// The control over `root`, for a caller that knows what is loaded.
+    #[must_use]
+    pub const fn starting_at(root: PhysFrame) -> Self {
+        AddressSpaces { active: root }
+    }
+}
+
+impl kernel_hal_api::paging::AddressSpaceControl for AddressSpaces {
+    fn activate(&mut self, root: PhysFrame) {
+        self.active = root;
+        // SAFETY: the kernel half of every address space of this system
+        // carries the kernel image, the physical window, and the kernel
+        // stacks, so the code and the stack the processor is on stay
+        // mapped across the write (D-65).
+        unsafe {
+            activate(root);
+        }
+    }
+
+    fn active(&self) -> PhysFrame {
+        self.active
+    }
+}

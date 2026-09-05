@@ -7,11 +7,12 @@
 //! is; a `thread_create` that fails leaves no kernel stack, no IPC buffer,
 //! and no pool slot behind.
 
-use audhsos_abi::layout::{PRIORITY_COUNT, USER_SPACE_START};
+use audhsos_abi::layout::{PRIORITY_COUNT, USER_SPACE_START, ipc_buffer_address};
 use audhsos_abi::{Error, Rights, ThreadState};
+use kernel_mm::page_table::Permissions;
 use kernel_objects::handle_table::Entry;
 use kernel_objects::object::{AnyObjectId, Process, ProcessId, Thread, ThreadId};
-use kernel_types::VirtAddr;
+use kernel_types::{CachePolicy, Page, PhysFrame, VirtAddr};
 
 use crate::dispatch::{Machine, Reply, Request};
 use crate::environment::Environment;
@@ -108,8 +109,7 @@ pub fn create<
             return Err(error);
         }
     };
-    let thread = Thread::new(target, priority, max_priority, stack_area.slot, ipc_buffer)?
-        .starting_at(entry, stack);
+    let thread = Thread::new(target, priority, max_priority, stack_area.slot, ipc_buffer)?;
     let id = match machine.objects.threads.allocate(thread) {
         Ok(id) => id,
         Err(error) => {
@@ -125,26 +125,123 @@ pub fn create<
         .get_mut(target)
         .map_err(Error::from)
         .and_then(|holder| holder.add_thread(id));
-    if let Err(error) = recorded {
-        let _ = machine.objects.threads.release(id);
-        machine.environment.release_frame(ipc_buffer);
-        machine.environment.release_kernel_stack(stack_area.slot);
-        refund_object(machine, target);
-        return Err(error);
-    }
+    let slot = match recorded {
+        Ok(slot) => slot,
+        Err(error) => {
+            let _ = machine.objects.threads.release(id);
+            machine.environment.release_frame(ipc_buffer);
+            machine.environment.release_kernel_stack(stack_area.slot);
+            refund_object(machine, target);
+            return Err(error);
+        }
+    };
+
+    // The buffer is the one page of the address space the thread does not
+    // ask for: the kernel maps it and hands the thread its address.
+    let placed = map_buffer(machine, target, slot, ipc_buffer);
+    let ipc_address = match placed {
+        Ok(address) => address,
+        Err(error) => {
+            forget_thread(machine, target, id);
+            machine.environment.release_frame(ipc_buffer);
+            machine.environment.release_kernel_stack(stack_area.slot);
+            refund_object(machine, target);
+            return Err(error);
+        }
+    };
+    machine.objects.with_thread(id, |created| {
+        *created = created.starting_at(entry, stack, ipc_address);
+    });
+
     match install(machine, process, id) {
         Ok(handle) => Ok(Reply::value(handle)),
         Err(error) => {
-            if let Ok(holder) = machine.objects.processes.get_mut(target) {
-                holder.remove_thread(id);
-            }
-            let _ = machine.objects.threads.release(id);
+            unmap_buffer(machine, target, ipc_address);
+            forget_thread(machine, target, id);
             machine.environment.release_frame(ipc_buffer);
             machine.environment.release_kernel_stack(stack_area.slot);
             refund_object(machine, target);
             Err(error)
         }
     }
+}
+
+/// Maps the IPC buffer of the thread in `slot` into the address space of
+/// `process` and returns where it landed.
+fn map_buffer<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    process: ProcessId,
+    slot: usize,
+    frame: PhysFrame,
+) -> Result<VirtAddr, Error> {
+    let page = ipc_page(slot).ok_or(Error::QuotaExceeded)?;
+    let address = page.start();
+    let root = machine.objects.processes.get(process)?.root;
+    machine.environment.map(
+        root,
+        page,
+        frame,
+        Permissions::READ_WRITE.for_user(),
+        CachePolicy::WriteBack,
+    )?;
+    Ok(address)
+}
+
+/// The page the IPC buffer of the thread in `slot` is mapped at, or `None`
+/// for a slot no process has. The address is a page of the user half by
+/// construction, so the three steps have one answer between them.
+pub(crate) fn ipc_page(slot: usize) -> Option<Page> {
+    let raw = ipc_buffer_address(slot)?;
+    let address = VirtAddr::new(raw).ok()?;
+    Page::from_start(address).ok()
+}
+
+/// Takes the IPC buffer of a thread out of the address space again.
+fn unmap_buffer<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    process: ProcessId,
+    address: VirtAddr,
+) {
+    let mapped = machine
+        .objects
+        .processes
+        .get(process)
+        .ok()
+        .map(|holder| holder.root)
+        .zip(Page::from_start(address).ok());
+    if let Some((root, page)) = mapped {
+        let _ = machine.environment.unmap(root, page);
+    }
+}
+
+/// Takes a thread out of its process and out of the pool.
+fn forget_thread<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    process: ProcessId,
+    id: ThreadId,
+) {
+    machine.objects.with_process(process, |holder| {
+        holder.remove_thread(id);
+    });
+    let _ = machine.objects.threads.release(id);
 }
 
 /// An address a user thread may run at or stand on.
@@ -183,9 +280,9 @@ fn refund_object<
     machine: &mut Machine<'_, E, NP, NT, NM, NH>,
     process: ProcessId,
 ) {
-    if let Ok(holder) = machine.objects.processes.get_mut(process) {
+    machine.objects.with_process(process, |holder| {
         holder.kernel_object_quota.refund(1);
-    }
+    });
 }
 
 /// Installs a handle to `thread` in `process` and returns its raw value.
@@ -305,10 +402,10 @@ fn end<E: Environment, const NP: usize, const NT: usize, const NM: usize, const 
 ) -> Result<kernel_sched::Outcome, Error> {
     let outcome = machine.scheduler.exit(&mut machine.objects.threads, id)?;
     let process = machine.objects.threads.get(id)?.process;
-    if let Ok(holder) = machine.objects.processes.get_mut(process) {
+    machine.objects.with_process(process, |holder| {
         holder.remove_thread(id);
         holder.kernel_object_quota.refund(1);
-    }
+    });
     Ok(outcome)
 }
 

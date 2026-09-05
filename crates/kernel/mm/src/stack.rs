@@ -204,6 +204,19 @@ impl<const N: usize> StackPool<N> {
         (0..capacity).find(|index| !self.is_used(*index))
     }
 
+    /// The stack that occupies `index`, whether it is taken or not. This
+    /// is what a caller that kept only the slot number gives back.
+    ///
+    /// # Errors
+    ///
+    /// [`StackError::NotAllocated`] for an index the area has no slot for;
+    /// [`StackError::Address`] when the pages of that slot are not
+    /// addressable.
+    pub fn stack_of(&self, index: u32) -> Result<KernelStack, StackError> {
+        let pages = slot_pages(index, self.capacity())?;
+        Ok(KernelStack { pages, index })
+    }
+
     /// Takes a slot, maps [`KERNEL_STACK_PAGES`] frames into it, and
     /// returns the stack. Nothing is left mapped and no frame is left
     /// taken if the call fails.

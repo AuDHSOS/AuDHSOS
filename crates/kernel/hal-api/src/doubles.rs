@@ -12,7 +12,7 @@ use kernel_types::{Page, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
 use crate::console::DebugConsole;
 use crate::exit::{ExitStatus, TestExit};
 use crate::interrupt::{InterruptController, InterruptError, InterruptLine, Vector};
-use crate::paging::{FrameAccess, FrameSource, TlbControl};
+use crate::paging::{AddressSpaceControl, FrameAccess, FrameSource, TlbControl};
 use crate::platform::{MemoryRegion, MemoryRegionKind, Platform};
 use crate::timer::{Timer, TimerError};
 
@@ -546,5 +546,47 @@ impl Platform for ScriptedPlatform {
 
     fn acpi_rsdp(&self) -> Option<PhysAddr> {
         self.rsdp
+    }
+}
+
+/// An address space control that records every root it was given.
+#[derive(Clone, Debug)]
+pub struct RecordingAddressSpaces {
+    active: PhysFrame,
+    loaded: Vec<PhysFrame>,
+}
+
+impl RecordingAddressSpaces {
+    /// A control that starts on `root`.
+    #[must_use]
+    pub const fn new(root: PhysFrame) -> Self {
+        RecordingAddressSpaces {
+            active: root,
+            loaded: Vec::new(),
+        }
+    }
+
+    /// Every root it was given, in order. A switch between threads of one
+    /// process adds nothing here.
+    #[must_use]
+    pub fn loaded(&self) -> &[PhysFrame] {
+        &self.loaded
+    }
+
+    /// How often a root was loaded.
+    #[must_use]
+    pub const fn switches(&self) -> usize {
+        self.loaded.len()
+    }
+}
+
+impl AddressSpaceControl for RecordingAddressSpaces {
+    fn activate(&mut self, root: PhysFrame) {
+        self.active = root;
+        self.loaded.push(root);
+    }
+
+    fn active(&self) -> PhysFrame {
+        self.active
     }
 }

@@ -14,6 +14,10 @@
 #![reexport_test_harness_main = "test_main"]
 
 // The memory test image uses this crate; the other test images do not.
+// The user test image uses these; this one does not.
+use kernel_objects as _;
+use kernel_syscall as _;
+
 use kernel_mm as _;
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};

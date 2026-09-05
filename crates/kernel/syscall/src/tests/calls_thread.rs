@@ -327,7 +327,7 @@ fn killing_a_thread_ends_it_and_gives_back_what_it_held() {
         1,
         "what it held stays until the kernel clears it away"
     );
-    assert_eq!(crate::reaper::reap(&mut fixture.machine()), 1);
+    assert_eq!(crate::reaper::reap(&mut fixture.machine(), None), 1);
     assert_eq!(fixture.environment.stacks_out(), 0);
     assert_eq!(fixture.environment.frames_out(), 0);
     assert_eq!(
@@ -420,5 +420,48 @@ fn a_thread_create_without_a_handle_slot_leaves_nothing_behind() {
             .thread_count(),
         1,
         "the process does not hold a thread that has no handle"
+    );
+}
+
+#[test]
+fn every_slot_of_a_process_has_a_page_for_its_buffer_and_nothing_beyond() {
+    use audhsos_abi::layout::{PAGE_SIZE, THREADS_PER_PROCESS};
+
+    let first = crate::calls::thread::ipc_page(0).expect("a page");
+    let last = crate::calls::thread::ipc_page(THREADS_PER_PROCESS - 1).expect("a page");
+    assert!(first.start().is_user());
+    assert!(last.start().is_user());
+    assert_eq!(
+        first.start().as_u64() - last.start().as_u64(),
+        u64::try_from(THREADS_PER_PROCESS - 1).unwrap() * PAGE_SIZE,
+        "the buffers of one process are pages below one another"
+    );
+    assert_eq!(
+        crate::calls::thread::ipc_page(THREADS_PER_PROCESS),
+        None,
+        "a slot no process has"
+    );
+}
+
+#[test]
+fn a_thread_create_whose_buffer_cannot_be_mapped_leaves_nothing_behind() {
+    let mut fixture = Fixture::new();
+    let creation = request(Syscall::ThreadCreate, &creation(&fixture));
+    fixture.environment.no_mapping = true;
+    assert_eq!(
+        error_of(&mut fixture, creation),
+        Some(Error::OutOfKernelMemory)
+    );
+    assert_eq!(fixture.environment.stacks_out(), 0);
+    assert_eq!(fixture.environment.frames_out(), 0);
+    assert_eq!(fixture.objects.threads.live(), 1);
+    assert_eq!(
+        fixture
+            .objects
+            .processes
+            .get(fixture.process)
+            .unwrap()
+            .thread_count(),
+        1
     );
 }

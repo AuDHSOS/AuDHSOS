@@ -13,6 +13,10 @@
 #![reexport_test_harness_main = "test_main"]
 
 // The kernel image uses these crates; a test image does not.
+// The user test image uses these; this one does not.
+use kernel_objects as _;
+use kernel_syscall as _;
+
 use audhsos_abi as _;
 use kernel_core as _;
 // The memory test image uses these crates; the other test images do not.

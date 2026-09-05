@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+pub mod context;
 pub mod gdt;
 pub mod idt;
 pub mod ioapic;
@@ -13,6 +14,7 @@ pub mod pic;
 pub mod tss;
 pub mod vectors;
 
+pub use context::{FRAME_WORDS, Frame, prepare_user};
 pub use gdt::{GDT_ENTRIES, Selector, build_gdt};
 pub use idt::{IDT_ENTRIES, gate};
 pub use tss::{TSS_LEN, TaskStateSegment};

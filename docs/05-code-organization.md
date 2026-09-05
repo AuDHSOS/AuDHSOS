@@ -123,7 +123,8 @@ AuDHSOS/
 | `kernel-test-harness` | 5 | all | no | yes | `kernel-hal-api` |
 | `audhsos-kernel` | 6 | `x86_64-unknown-none` | allowlisted (the entry point, the memory and interrupt bring-up, and the test images) | QEMU | `kernel-core`, `kernel-hal-api`, `kernel-hal-x86_64`, `kernel-types`, `audhsos-abi`; `kernel-mm` for the test images |
 | `boot-uefi-x86_64` | b | `x86_64-unknown-uefi` | allowlisted | pure sub-modules | `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `kernel-types`, `kernel-mm`, `kernel-hal-api` |
-| `user-sys-x86_64` | u0 | `x86_64-unknown-none` | allowlisted | Miri | `audhsos-abi`, `audhsos-sync` |
+| `user-sys-x86_64` | u0 | `x86_64-unknown-none` | allowlisted | through the programs of `user-test-programs` in QEMU | `audhsos-abi` |
+| `user-test-programs` | u0 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-sys-x86_64` |
 | `user-rt` | u1 | `x86_64-unknown-none` | no | yes | `audhsos-abi`, `user-sys-x86_64` |
 | `user-proto` | u1 | `x86_64-unknown-none` | no | yes | `audhsos-abi` |
 | `user-loader` | u2 | `x86_64-unknown-none` | no | yes, fuzz | `user-rt`, `user-proto`, `audhsos-elf` |

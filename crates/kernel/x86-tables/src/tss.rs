@@ -91,8 +91,9 @@ impl TaskStateSegment {
 }
 
 /// Writes `value` at `offset`; a write that would leave `bytes` changes
-/// nothing.
-pub(crate) fn write_at(bytes: &mut [u8], offset: usize, value: &[u8]) {
+/// nothing. The kernel uses it to put the stack pointer of the thread that
+/// is about to run into the segment it already loaded.
+pub fn write_at(bytes: &mut [u8], offset: usize, value: &[u8]) {
     if let Some(slot) = offset
         .checked_add(value.len())
         .and_then(|end| bytes.get_mut(offset..end))

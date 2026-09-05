@@ -10,7 +10,10 @@
 use audhsos_sync::{Global, UncontendedToken};
 
 use kernel_x86_tables::gdt::KERNEL_CODE_SELECTOR;
-use kernel_x86_tables::idt::{DOUBLE_FAULT_IST, GATE_INTERRUPT_DPL0, IDT_ENTRIES, MISSING, gate};
+use kernel_x86_tables::idt::{
+    DOUBLE_FAULT_IST, GATE_INTERRUPT_DPL0, GATE_INTERRUPT_DPL3, IDT_ENTRIES, MISSING,
+    SYSCALL_VECTOR, gate,
+};
 
 use crate::instructions::read_fault_address;
 
@@ -70,6 +73,42 @@ pub fn set_handler(handler: TrapHandler) {
 /// ignored, because the kernel registers once during boot.
 pub fn set_interrupt_handler(handler: InterruptHandler) {
     let _ = DEVICE_HANDLER.init(handler);
+}
+
+/// What a system call runs: the kernel reads the IPC buffer of the thread
+/// that made it, answers, and switches if the answer asks for it.
+pub type SyscallHandler = fn();
+
+/// The function vector `0x80` calls. The kernel registers one during boot.
+static SYSCALL_HANDLER: Global<SyscallHandler> = Global::new();
+
+/// Registers the function vector `0x80` calls. A second call is ignored,
+/// because the kernel registers once during boot.
+pub fn set_syscall_handler(handler: SyscallHandler) {
+    let _ = SYSCALL_HANDLER.init(handler);
+}
+
+/// Hands a system call to the kernel. The borrow ends before the handler
+/// runs, so that the kernel may take an interrupt of its own without
+/// finding the cell busy.
+///
+/// A system call made before the kernel has registered a handler returns
+/// without an answer, which is what a thread that runs before the kernel
+/// is ready would see; no such thread exists.
+fn call_kernel() {
+    let handler = SYSCALL_HANDLER
+        .borrow(&UncontendedToken)
+        .ok()
+        .map(|handler| *handler);
+    if let Some(handler) = handler {
+        handler();
+    }
+}
+
+/// Vector `0x80`, the one gate of this table the processor may enter from
+/// ring three.
+extern "x86-interrupt" fn syscall_entry(_frame: InterruptFrame) {
+    call_kernel();
 }
 
 /// Hands `report` to the registered handler. A trap the kernel cannot
@@ -169,8 +208,8 @@ macro_rules! device_handlers {
 // The vectors of the plan in `kernel_x86_tables::vectors` that a device can
 // raise: the range the two legacy controllers were moved to, the timer, one
 // per global system interrupt, and the spurious vector of the local APIC.
-// The system call vector arrives with Phase 5, which needs a gate the
-// processor may enter from ring three.
+// The system call vector is not among them: it has its own handler and the
+// one gate of this table the processor may enter from ring three.
 device_handlers! {
     device_20 = 0x20, device_21 = 0x21, device_22 = 0x22, device_23 = 0x23, device_24 = 0x24, device_25 = 0x25,
     device_26 = 0x26, device_27 = 0x27, device_28 = 0x28, device_29 = 0x29, device_2a = 0x2A, device_2b = 0x2B,
@@ -260,6 +299,15 @@ pub fn fill(table: &mut [[u64; 2]; IDT_ENTRIES]) {
             gate(address, selector, 0, GATE_INTERRUPT_DPL0),
         );
     }
+    // The one gate a user thread may enter through. Everything else in
+    // this table is ring zero, so a user thread that raises any other
+    // vector takes a general protection fault instead.
+    let address = handler_address((syscall_entry as *const ()) as usize);
+    put(
+        table,
+        SYSCALL_VECTOR,
+        gate(address, selector, 0, GATE_INTERRUPT_DPL3),
+    );
 }
 
 /// The address of a handler, as a gate carries it.

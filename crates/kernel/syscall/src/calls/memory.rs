@@ -383,9 +383,9 @@ fn refund_object<
     machine: &mut Machine<'_, E, NP, NT, NM, NH>,
     process: ProcessId,
 ) {
-    if let Ok(holder) = machine.objects.processes.get_mut(process) {
+    machine.objects.with_process(process, |holder| {
         holder.kernel_object_quota.refund(1);
-    }
+    });
 }
 
 /// Installs a handle to `object` in `process`.

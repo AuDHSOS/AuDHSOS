@@ -360,6 +360,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "kernel-mm",
             "kernel-objects",
             "kernel-sched",
+            "kernel-syscall",
             "audhsos-abi",
             "audhsos-sync",
         ],
@@ -370,8 +371,8 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "kernel-hal-x86_64",
         path: "crates/kernel/hal-x86_64",
         kind: Kind::Adapter {
-            unsafe_budget: 122,
-            asm_budget: 22,
+            unsafe_budget: 129,
+            asm_budget: 24,
         },
         deps: &[
             "kernel-acpi",
@@ -391,7 +392,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-kernel",
         path: "crates/kernel/bin",
         kind: Kind::Adapter {
-            unsafe_budget: 19,
+            unsafe_budget: 22,
             asm_budget: 0,
         },
         deps: &[
@@ -399,9 +400,33 @@ pub(crate) const CRATES: &[Crate] = &[
             "kernel-hal-api",
             "kernel-hal-x86_64",
             "kernel-mm",
+            "kernel-objects",
+            "kernel-syscall",
             "kernel-types",
             "audhsos-abi",
         ],
+        coverage_gate: false,
+        target: Target::X86_64None,
+    },
+    Crate {
+        name: "user-sys-x86_64",
+        path: "crates/user/sys-x86_64",
+        kind: Kind::Adapter {
+            unsafe_budget: 11,
+            asm_budget: 1,
+        },
+        deps: &["audhsos-abi"],
+        coverage_gate: false,
+        target: Target::X86_64None,
+    },
+    Crate {
+        name: "user-test-programs",
+        path: "crates/user/test-programs",
+        kind: Kind::Adapter {
+            unsafe_budget: 8,
+            asm_budget: 1,
+        },
+        deps: &["audhsos-abi", "user-sys-x86_64"],
         coverage_gate: false,
         target: Target::X86_64None,
     },

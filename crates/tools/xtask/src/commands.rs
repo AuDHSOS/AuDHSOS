@@ -129,6 +129,7 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
 /// loader report a failure.
 fn test_qemu(root: &Path) -> Result<(), Error> {
     build(root, &[])?;
+    build_user_tests(root)?;
     let runner = runner_command()?;
     Cmd::cargo()
         .cwd(root)
@@ -141,6 +142,10 @@ fn test_qemu(root: &Path) -> Result<(), Error> {
         ])
         .env(RUNNER_VARIABLE, runner)
         .env(ROOT_VARIABLE, root.display().to_string())
+        .env(
+            USER_TESTS_VARIABLE,
+            root.join(USER_TESTS_DIR).display().to_string(),
+        )
         .run()?;
     loader_images(root)
 }
@@ -676,6 +681,102 @@ fn report(what: &str, violations: &[String]) {
 /// # Errors
 ///
 /// [`Error::Usage`] for an unknown option; the errors of the build.
+/// The directory the flat user programs are written to, below the target
+/// directory.
+pub(crate) const USER_TESTS_DIR: &str = "target/user-tests";
+
+/// The variable that tells a test kernel where the flat user programs are.
+pub(crate) const USER_TESTS_VARIABLE: &str = "AUDHSOS_USER_TESTS_DIR";
+
+/// The address the user programs are linked at, which their linker script
+/// repeats and this checks.
+pub(crate) const USER_TEST_BASE: u64 = 0x40_0000;
+
+/// The linker script of the user programs.
+const USER_SCRIPT: &str = "crates/user/test-programs/user.ld";
+
+/// Builds the user test programs and turns each into a flat binary in
+/// [`USER_TESTS_DIR`].
+///
+/// A test kernel embeds those bytes: it maps them at [`USER_TEST_BASE`]
+/// into a process it creates, so what runs in user mode is exactly what
+/// the program is, with no loader in between.
+///
+/// # Errors
+///
+/// The errors of the build, of `llvm-objcopy`, and of writing the files;
+/// [`Error::Violations`] when the linker script and this disagree on the
+/// base address.
+pub(crate) fn build_user_tests(root: &Path) -> Result<(), Error> {
+    let script = fs::read(&root.join(USER_SCRIPT))?;
+    let violations = match linker::constant(&script, "USER_BASE") {
+        Some(base) if base == USER_TEST_BASE => Vec::new(),
+        Some(base) => vec![format!(
+            "{USER_SCRIPT}: USER_BASE is {base:#x}, the xtask says {USER_TEST_BASE:#x}"
+        )],
+        None => vec![format!("{USER_SCRIPT}: USER_BASE is missing")],
+    };
+    report("user program base", &violations);
+    Error::from_violations(violations)?;
+
+    Cmd::cargo()
+        .cwd(root)
+        .args([
+            "build",
+            "-p",
+            "user-test-programs",
+            "--target",
+            "x86_64-unknown-none",
+        ])
+        .run()?;
+
+    let objcopy = coverage::llvm_tools_dir()?.join("llvm-objcopy");
+    // `llvm-objcopy` writes into a directory that has to be there.
+    fs::write_bytes(&root.join(USER_TESTS_DIR).join(".keep"), b"")?;
+    let out = root.join(USER_TESTS_DIR);
+    let built = root.join("target/x86_64-unknown-none/debug");
+    for program in user_programs(root)? {
+        let elf = built.join(&program);
+        let flat = out.join(format!("{program}.bin"));
+        Cmd::new(&objcopy)
+            .cwd(root)
+            .args(["-O", "binary"])
+            .arg(elf.display().to_string())
+            .arg(flat.display().to_string())
+            .run()?;
+        note!(
+            "user program {program}: {} bytes",
+            fs::read_bytes(&flat)?.len()
+        );
+    }
+    Ok(())
+}
+
+/// The names of the user test programs, read from their manifest so that
+/// the list lives in one place.
+fn user_programs(root: &Path) -> Result<Vec<String>, Error> {
+    let manifest = fs::read(&root.join("crates/user/test-programs/Cargo.toml"))?;
+    let mut names = Vec::new();
+    let mut in_bin = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line == "[[bin]]" {
+            in_bin = true;
+            continue;
+        }
+        if in_bin && let Some(rest) = line.strip_prefix("name = ") {
+            names.push(rest.trim_matches('"').to_owned());
+            in_bin = false;
+        }
+    }
+    if names.is_empty() {
+        return Err(Error::Parse(
+            "the manifest of the user test programs names no binary".to_owned(),
+        ));
+    }
+    Ok(names)
+}
+
 pub(crate) fn build(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut release = false;
     for option in options {

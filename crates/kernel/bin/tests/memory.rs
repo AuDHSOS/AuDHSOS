@@ -17,6 +17,10 @@
 #![test_runner(kernel_hal_x86_64::testing::run_tests)]
 #![reexport_test_harness_main = "test_main"]
 
+// The user test image uses these; this one does not.
+use kernel_objects as _;
+use kernel_syscall as _;
+
 use audhsos_abi::layout::{BOOT_INFO_VADDR, ROOT_TASK_BASE};
 use kernel_core::memory;
 use kernel_hal_api::paging::FrameSource;

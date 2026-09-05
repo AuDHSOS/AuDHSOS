@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "user-test-programs"
+description = "The user-mode programs the kernel test images run: one binary per scenario"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "thread_exit"
+path = "src/bin/thread_exit.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "hlt_in_user"
+path = "src/bin/hlt_in_user.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "read_kernel_memory"
+path = "src/bin/read_kernel_memory.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "count_and_exit"
+path = "src/bin/count_and_exit.rs"
+test = false
+bench = false
+
+[dependencies]
+audhsos-abi.workspace = true
+user-sys-x86_64.workspace = true
+
+[lints]
+workspace = true

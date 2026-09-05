@@ -351,7 +351,7 @@ fn killing_a_process_ends_its_threads_and_takes_its_address_space_apart() {
         fixture.environment.count(&Call::DestroyAddressSpace(root)),
         1
     );
-    assert_eq!(crate::reaper::reap(&mut fixture.machine()), 1);
+    assert_eq!(crate::reaper::reap(&mut fixture.machine(), None), 1);
     assert_eq!(fixture.environment.stacks_out(), 0, "its thread's stack");
     assert_eq!(fixture.environment.frames_out(), 0, "and its buffer");
     assert!(

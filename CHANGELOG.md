@@ -7,6 +7,32 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The first user thread of this system runs. `tests/user.rs` builds a
+  process by hand — an address space carrying the kernel half, a flat
+  program mapped read and execute at `0x40_0000`, a stack, an IPC buffer —
+  writes the frame onto the kernel stack of a thread, and switches into
+  ring three. The thread writes a mark into its own buffer, gives up the
+  processor with `thread_yield`, gets it back, and ends itself with
+  `thread_exit`; the kernel clears away what it held. Two tests watch it.
+
+- `user-sys-x86_64` and `user-test-programs`: what a user program needs
+  from the machine, and one binary per scenario. `sh tools/xtask.sh
+  build-user-tests` turns each into a flat binary under `target/user-tests`
+  and checks the base address of the linker script against its own; the
+  QEMU tests build them first and tell the kernels where they are.
+
+- The address of its IPC buffer is what the kernel hands a thread in its
+  first argument register: the buffer cannot be asked for, because asking
+  needs it. The buffers of a process are the top pages of its address
+  space (`ipc_buffer_address`), the kernel maps one when a thread is
+  created, and the frame the trampoline returns through carries the
+  address in a word of its own.
+
+- `Scheduler::adopt`, which is how the kernel tells the scheduler that the
+  processor is already running a thread — the idle thread of the bring-up
+  is the kernel itself, and the first switch needs somewhere to write its
+  context.
+
 - `kernel-syscall`: the entry point of the system call interface and the
   twenty calls of this phase. The checks run in the order 2.8 documents —
   number, argument count, handle, object type, rights, arguments, quota —
@@ -788,6 +814,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   value still enters from outside.
 
 ### Fixed
+
+- `reap` no longer asks the scheduler which thread is running. A thread
+  that ends leaves the processor in the same breath, so `current` is
+  already empty when `thread_exit` returns — and the sweep then gave back
+  the kernel stack the system call was standing on and took its pages out
+  of the tables. The machine answered with a double fault in
+  `Mapper::walk`. The caller now says which thread it is standing on: the
+  caller of a system call, or the thread the kernel has just switched to.
 
 - A subcommand that takes no option no longer ignores one. `lint`,
   `check-layering`, `check-deps`, `unsafe-budget`, `coverage`, `miri`,

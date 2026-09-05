@@ -16,8 +16,8 @@ fn creation(fixture: &Fixture) -> [u64; 6] {
 #[test]
 fn a_machine_where_nothing_ended_has_nothing_to_clear_away() {
     let mut fixture = Fixture::new();
-    assert!(!has_work(&fixture.machine()));
-    assert_eq!(reap(&mut fixture.machine()), 0);
+    assert!(!has_work(&fixture.machine(), None));
+    assert_eq!(reap(&mut fixture.machine(), None), 0);
 }
 
 #[test]
@@ -27,13 +27,17 @@ fn what_an_ended_thread_held_goes_back_when_it_is_cleared_away() {
     let raw = value_of(&mut fixture, creation);
     assert!(error_of(&mut fixture, request(Syscall::ThreadKill, &[raw])).is_none());
 
-    assert!(has_work(&fixture.machine()));
+    assert!(has_work(&fixture.machine(), None));
     assert_eq!(fixture.environment.stacks_out(), 1);
-    assert_eq!(reap(&mut fixture.machine()), 1);
+    assert_eq!(reap(&mut fixture.machine(), None), 1);
     assert_eq!(fixture.environment.stacks_out(), 0);
     assert_eq!(fixture.environment.frames_out(), 0);
-    assert!(!has_work(&fixture.machine()));
-    assert_eq!(reap(&mut fixture.machine()), 0, "a second sweep finds none");
+    assert!(!has_work(&fixture.machine(), None));
+    assert_eq!(
+        reap(&mut fixture.machine(), None),
+        0,
+        "a second sweep finds none"
+    );
     assert_eq!(fixture.objects.threads.live(), 1, "the slot came back");
 }
 
@@ -53,8 +57,8 @@ fn the_thread_on_the_processor_keeps_its_stack_until_the_kernel_leaves_it() {
     // `thread_exit` left the processor, so the scheduler holds nobody and
     // the sweep may take the thread now.
     assert_eq!(fixture.scheduler.current(), None);
-    assert!(has_work(&fixture.machine()));
-    assert_eq!(reap(&mut fixture.machine()), 1);
+    assert!(has_work(&fixture.machine(), None));
+    assert_eq!(reap(&mut fixture.machine(), None), 1);
     assert!(fixture.objects.threads.get(fixture.thread).is_err());
 }
 
@@ -66,8 +70,8 @@ fn a_thread_that_ended_while_it_still_holds_the_processor_is_left_alone() {
     // the moment between the end of a thread and the switch away from it.
     fixture.objects.threads.get_mut(id).unwrap().state = ThreadState::Exited;
     assert_eq!(fixture.scheduler.current(), Some(id));
-    assert!(!has_work(&fixture.machine()));
-    assert_eq!(reap(&mut fixture.machine()), 0);
+    assert!(!has_work(&fixture.machine(), None));
+    assert_eq!(reap(&mut fixture.machine(), None), 0);
     assert!(
         fixture.objects.threads.get(id).is_ok(),
         "the thread on the processor keeps everything"
@@ -93,8 +97,44 @@ fn every_thread_of_a_killed_process_is_cleared_away_at_once() {
     }
     assert_eq!(fixture.environment.stacks_out(), 3);
     assert!(error_of(&mut fixture, request(Syscall::ProcessKill, &[child])).is_none());
-    assert_eq!(reap(&mut fixture.machine()), 3);
+    assert_eq!(reap(&mut fixture.machine(), None), 3);
     assert_eq!(fixture.environment.stacks_out(), 0);
     assert_eq!(fixture.environment.frames_out(), 0);
     assert_eq!(fixture.objects.threads.live(), 1, "only the caller is left");
+}
+
+#[test]
+fn the_caller_says_which_stack_the_kernel_is_standing_on() {
+    let mut fixture = Fixture::new();
+    let creation = request(Syscall::ThreadCreate, &creation(&fixture));
+    let raw = value_of(&mut fixture, creation);
+    let running = fixture.thread;
+    let other = fixture
+        .objects
+        .entry(fixture.process, audhsos_abi::Handle::from_raw(raw).unwrap())
+        .unwrap()
+        .object
+        .typed::<kernel_objects::object::Thread>()
+        .unwrap();
+
+    // Both threads end, and the scheduler forgets the one that was on the
+    // processor, which is what `thread_exit` does.
+    fixture.objects.threads.get_mut(other).unwrap().state = ThreadState::Exited;
+    fixture
+        .scheduler
+        .exit(&mut fixture.objects.threads, running)
+        .unwrap();
+    assert_eq!(fixture.scheduler.current(), None);
+
+    // Named as the one running, the caller's thread is spared even though
+    // the scheduler has forgotten it; the other one goes.
+    assert!(has_work(&fixture.machine(), Some(running)));
+    assert_eq!(reap(&mut fixture.machine(), Some(running)), 1);
+    assert!(fixture.objects.threads.get(running).is_ok());
+    assert!(fixture.objects.threads.get(other).is_err());
+
+    // Once the kernel has left that stack, it goes too.
+    assert!(has_work(&fixture.machine(), None));
+    assert_eq!(reap(&mut fixture.machine(), None), 1);
+    assert!(fixture.objects.threads.get(running).is_err());
 }

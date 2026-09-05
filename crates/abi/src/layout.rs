@@ -6,6 +6,11 @@
 //! Invariants: every constant here is part of the ABI; a change is an ABI
 //! version change.
 
+#![expect(
+    clippy::as_conversions,
+    reason = "the one conversion here widens a slot index that the bound above it keeps small, in a const fn"
+)]
+
 /// Size of a page and of a frame in bytes.
 pub const PAGE_SIZE: u64 = 4096;
 
@@ -73,6 +78,23 @@ pub const MAX_BOOT_REGIONS: usize = 128;
 /// Size of the IPC buffer of a thread in bytes.
 pub const IPC_BUFFER_SIZE: u64 = PAGE_SIZE;
 
+/// The page the IPC buffer of the first thread of a process is mapped at.
+/// The buffer of the thread in slot `n` lies `n` pages below it, so the
+/// buffers of one process are the top of its address space and nothing
+/// else is ever mapped there.
+pub const IPC_BUFFER_TOP: u64 = USER_SPACE_END - PAGE_SIZE;
+
+/// The address the IPC buffer of the thread in slot `index` is mapped at,
+/// or `None` for a slot the address space has no room for.
+#[must_use]
+pub const fn ipc_buffer_address(index: usize) -> Option<u64> {
+    if index >= THREADS_PER_PROCESS {
+        return None;
+    }
+    let offset = (index as u64).wrapping_mul(PAGE_SIZE);
+    IPC_BUFFER_TOP.checked_sub(offset)
+}
+
 /// Maximum number of argument words a system call reads from the IPC
 /// buffer.
 pub const MAX_SYSCALL_ARGUMENTS: usize = 6;
@@ -135,3 +157,14 @@ const _: () = assert!(
     KERNEL_STACKS_BASE + KERNEL_STACK_SLOTS * KERNEL_STACK_SLOT_PAGES * PAGE_SIZE
         <= BOOT_INFO_VADDR
 );
+
+// The buffers of a process lie inside its own address space, below the
+// end of the user half and above everything a program is linked at.
+const _: () = assert!(IPC_BUFFER_TOP + PAGE_SIZE == USER_SPACE_END);
+const _: () = {
+    match ipc_buffer_address(THREADS_PER_PROCESS - 1) {
+        Some(lowest) => assert!(lowest > ROOT_TASK_BASE),
+        None => panic!("every slot of a process has a buffer"),
+    }
+};
+const _: () = assert!(ipc_buffer_address(THREADS_PER_PROCESS).is_none());

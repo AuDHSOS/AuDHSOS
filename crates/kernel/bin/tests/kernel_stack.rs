@@ -19,6 +19,10 @@
 #![reexport_test_harness_main = "test_main"]
 
 // The memory test image uses this crate; this one does not.
+// The user test image uses these; this one does not.
+use kernel_objects as _;
+use kernel_syscall as _;
+
 use kernel_hal_api as _;
 
 use audhsos_abi::layout::{KERNEL_STACK_PAGES, KERNEL_STACKS_BASE, PAGE_SIZE};

@@ -191,20 +191,22 @@ impl Process {
         }
     }
 
-    /// Records `thread` as a thread of this process.
+    /// Records `thread` as a thread of this process and returns the slot
+    /// it took, which is what says where its IPC buffer is mapped.
     ///
     /// # Errors
     ///
     /// [`Error::QuotaExceeded`] when the process already holds
     /// [`THREADS_PER_PROCESS`] threads.
-    pub fn add_thread(&mut self, thread: ThreadId) -> Result<(), Error> {
-        let slot = self
+    pub fn add_thread(&mut self, thread: ThreadId) -> Result<usize, Error> {
+        let (index, slot) = self
             .threads
             .iter_mut()
-            .find(|slot| slot.is_none())
+            .enumerate()
+            .find(|(_, slot)| slot.is_none())
             .ok_or(Error::QuotaExceeded)?;
         *slot = Some(thread);
-        Ok(())
+        Ok(index)
     }
 
     /// Forgets `thread`. Returns `false` when the process does not hold it.
@@ -275,6 +277,10 @@ pub struct Thread {
     pub kernel_stack: u32,
     /// The frame holding the thread's IPC buffer.
     pub ipc_buffer: PhysFrame,
+    /// Where that frame is mapped in the address space of the process,
+    /// which is where the thread finds it and what the kernel hands it in
+    /// its first register.
+    pub ipc_address: VirtAddr,
     /// Where the thread starts, in its own address space.
     pub entry: VirtAddr,
     /// The stack pointer the thread starts with, in its own address space.
@@ -316,6 +322,7 @@ impl Thread {
             time_slice: 0,
             kernel_stack,
             ipc_buffer,
+            ipc_address: VirtAddr::ZERO,
             entry: VirtAddr::ZERO,
             user_stack: VirtAddr::ZERO,
             context: VirtAddr::ZERO,
@@ -323,10 +330,17 @@ impl Thread {
         })
     }
 
-    /// The same thread, starting at `entry` on `user_stack`.
+    /// The same thread, starting at `entry` on `user_stack` with its IPC
+    /// buffer at `ipc_address`.
     #[must_use]
-    pub const fn starting_at(self, entry: VirtAddr, user_stack: VirtAddr) -> Self {
+    pub const fn starting_at(
+        self,
+        entry: VirtAddr,
+        user_stack: VirtAddr,
+        ipc_address: VirtAddr,
+    ) -> Self {
         Thread {
+            ipc_address,
             entry,
             user_stack,
             ..self

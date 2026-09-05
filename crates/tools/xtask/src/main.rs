@@ -45,6 +45,8 @@ subcommands:
                    run fuzz targets
   build [--release]
                    build the loader and the kernel for their targets
+  build-user-tests build the user programs of the test images and turn
+                   each into a flat binary under target/user-tests/
   image [--release]
                    write the boot image and the disk image into target/
   qemu-runner <elf>
@@ -98,6 +100,9 @@ fn run() -> Result<(), Error> {
         "doc" => none(subcommand, options).and_then(|()| commands::doc(&root)),
         "fuzz" => commands::fuzz(&root, options),
         "build" => commands::build(&root, options),
+        "build-user-tests" => {
+            none(subcommand, options).and_then(|()| commands::build_user_tests(&root))
+        }
         "image" => commands::image(&root, options),
         "qemu-runner" => commands::qemu_runner(&root, options),
         "run" => commands::run(&root, options),

@@ -1592,13 +1592,19 @@ zero.
 
 ### 10.5.4 HAL additions (`kernel-hal-api` trait, `kernel-hal-x86_64` adapter)
 
-- `trait Context { fn prepare_user(stack: &mut [u64], entry: VirtAddr, user_stack: VirtAddr) -> VirtAddr; fn switch(from: &mut VirtAddr, to: VirtAddr); }`.
-  The saved context is one word (D-67), so the trait has no associated type;
-  `prepare_user` receives the kernel stack of the new thread as the slice
-  the caller reaches through the physical window, writes the frame into its
-  upper end, and returns the stack pointer the first `switch` loads.
-  Writing the frame is arithmetic over `u64` values and is host-tested
-  against the layout the adapter's `switch` expects.
+- The frame a new thread starts through is `kernel_x86_tables::context`,
+  not a HAL trait: writing it is arithmetic over `u64` values, so it lives
+  with the other pure tables and is host-tested there, at full coverage.
+  `prepare_user` writes thirteen words into the top of a kernel stack and
+  returns the index the first switch loads. The thirteenth is the one a
+  thread cannot ask for: the address of its own IPC buffer, which the
+  trampoline pops into the first argument register before `iretq`. The
+  kernel maps that buffer at `ipc_buffer_address(slot)`, the top pages of
+  the address space of the process.
+- The adapter holds the two naked functions, `switch` and
+  `enter_user_trampoline`, and `switch_to`, which is `switch` with the two
+  words named as what they are; a `VirtAddr` is `repr(transparent)` so
+  that the pointer the switch writes through names exactly that word.
 - `trait AddressSpaceControl { fn activate(&mut self, root: PhysFrame); fn active(&self) -> PhysFrame; }`
   with a recording double, replacing the free `unsafe fn activate` the
   adapter carries today (D-65). `kernel-core` calls it before a switch only
@@ -1664,18 +1670,27 @@ paragraph.
 
 ### 10.5.6 User-mode test programs
 
-`crates/user/sys-x86_64` (adapter, target `X86_64None`): `_start`
-(`extern "C"`, no runtime, calls `main`), `syscall()` with one
-`asm!("int 0x80")`, and nothing else in this phase. `crates/user/test-programs`
-with one binary per scenario (`thread_exit`, `two_threads`, `preempt`,
-`read_kernel_memory`, `hlt_in_user`, `every_syscall_error`), linked at
-`0x40_0000` with a linker script, converted to flat binaries by the xtask
-(`build-user-tests`, using `llvm-objcopy -O binary`) into
+`crates/user/sys-x86_64` (adapter, target `X86_64None`): the `entry!`
+macro, which puts `_start` into `.text.entry` so that it is the first byte
+of a flat binary, `syscall()` with one `asm!("int 0x80")`, `buffer()` over
+the address the kernel handed the thread, and `call()`, which fills the
+buffer, makes the call, and reads the answer back.
+
+`crates/user/test-programs` with one binary per scenario, linked at
+`0x40_0000` with a linker script whose base the xtask checks, converted to
+flat binaries by `build-user-tests` (using `llvm-objcopy -O binary`) into
 `target/user-tests/<name>.bin`. Test kernels embed them with
 `include_bytes!(concat!(env!("AUDHSOS_USER_TESTS_DIR"), "/<name>.bin"))`;
-the xtask sets the variable when it builds test kernels. A test kernel
-creates a process, maps the flat binary, a stack, and an IPC buffer, starts
-the thread, and observes the outcome through the kernel state.
+the xtask sets the variable when it builds test kernels.
+
+`tests/user.rs` builds a process the way the root task will be built in
+Phase 7 — an address space that carries the kernel half, the program
+mapped read and execute, a stack, an IPC buffer, a thread whose kernel
+stack carries the frame — switches into it, and watches what comes back.
+The programs are `thread_exit` and `count_and_exit` today;
+`read_kernel_memory` and `hlt_in_user` are written and wait for the
+isolation tests, and `two_threads`, `preempt`, and `every_syscall_error`
+are still to come.
 
 Acceptance: `check` green; catalog 6.6.6 handle and pool items, 6.6.7,
 6.6.9 for the calls this phase implements, the frame item of 6.6.16, the

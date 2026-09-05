@@ -47,6 +47,8 @@ dependencies = [
  "kernel-hal-api",
  "kernel-hal-x86_64",
  "kernel-mm",
+ "kernel-objects",
+ "kernel-syscall",
  "kernel-types",
 ]
 
@@ -185,6 +187,7 @@ dependencies = [
  "kernel-mm",
  "kernel-objects",
  "kernel-sched",
+ "kernel-syscall",
  "kernel-types",
  "test-support",
 ]
@@ -304,6 +307,21 @@ dependencies = [
 [[package]]
 name = "test-support"
 version = "0.1.0"
+
+[[package]]
+name = "user-sys-x86_64"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+]
+
+[[package]]
+name = "user-test-programs"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "user-sys-x86_64",
+]
 
 [[package]]
 name = "xtask"

@@ -32,10 +32,11 @@ device register are operations the Rust language can only express as
 | Crate | Content that needs `unsafe` | Assembly |
 |-------|-----------------------------|----------|
 | `kernel-hal-x86_64` | privileged registers, descriptor table loading, physical memory through the window as page tables and as bytes, MMIO for the APICs, port I/O, boot information validation from a raw pointer, context switch, the entry point and the exception triggers of a kernel test image | privileged instruction wrappers, one naked function, the exceptions a test image raises |
-| `audhsos-kernel` | the entry the loader jumps to, the panic handler, the reads of physical memory through the window during the memory bring-up, the interrupt bring-up and the instructions that turn interrupts on, and the same in the test images the crate carries (D-55) | none |
+| `audhsos-kernel` | the entry the loader jumps to, the panic handler, the reads of physical memory through the window during the memory bring-up, the interrupt bring-up and the instructions that turn interrupts on, the switch into a user thread and the pointer to its saved context, and the same in the test images the crate carries (D-55) | none |
 | `boot-uefi-x86_64` | firmware calls through function pointers, memory map buffer from a raw pointer, page-table memory through the identity mapping, `CR3` write, kernel entry | `CR3` write, port write for the exit device, one naked function |
 | `audhsos-sync` | `Global<T>` and `Preset<T>`: two `Sync` cells with a runtime borrow flag for kernel and userland global state, the first initialized once at run time, the second `const`-initialized so that a large value reaches the `.bss` without travelling over a stack (D-66) | none |
-| `user-sys-x86_64` | the system call trap instruction, `_start`, the `GlobalAlloc` adapter | one `asm!` statement: `int 0x80` |
+| `user-sys-x86_64` | the system call trap instruction, `_start`, the IPC buffer of the thread as a reference, the `GlobalAlloc` adapter from Phase 7 | one `asm!` statement: `int 0x80` |
+| `user-test-programs` | what each program does on purpose: a privileged instruction, a read of a kernel address, and the calls of `user-sys-x86_64` | one `asm!` statement: `hlt`, in the program whose point it is |
 | `fuzz-support` (host only) | the fuzzing engine's boundary to the coverage instrumentation: the callbacks the compiler emits calls to, and the blocks that turn the counter ranges the linker placed into slices (D-63) | none |
 
 No other crate may contain `unsafe`. Adding a crate to this list requires a
@@ -71,11 +72,13 @@ The xtask policy table holds the machine-readable form.
 | `kernel-hal-x86_64` | flags register | `pushfq`, `pop` |
 | `kernel-hal-x86_64` | model-specific registers | `rdmsr`, `wrmsr` |
 | `kernel-hal-x86_64` | port I/O, byte and double word so far | `in`, `out` |
-| `kernel-hal-x86_64` | context switch (naked function, Phase 5) | save callee-saved registers, swap stack pointer, restore, return |
+| `kernel-hal-x86_64` | context switch (naked function) | save callee-saved registers, swap stack pointer, restore, return |
+| `kernel-hal-x86_64` | entry into user mode (naked function) | `iretq` through the frame the kernel wrote onto a fresh kernel stack |
 | `kernel-hal-x86_64` | the exceptions a test image raises and the vectors it raises from software (`testing`, features `debug-uart` and `test-exit`) | `int3`, `ud2`, `div` by zero, `mov` of a selector beyond the table into a segment register, `int` with the vector as an inline constant |
 | `boot-uefi-x86_64` | kernel entry (naked function) | disable interrupts, write `CR3`, load stack pointer, jump |
 | `boot-uefi-x86_64` | exit device on loader failure | `out` |
 | `user-sys-x86_64` | system call trap | `int 0x80` |
+| `user-test-programs` | the privileged instruction a user thread may not run (`hlt_in_user`) | `hlt` |
 
 Interrupt and exception entry use the `x86-interrupt` ABI, which the
 compiler implements. System call entry is an interrupt vector and uses the

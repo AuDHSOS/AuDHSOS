@@ -128,7 +128,7 @@ pub(crate) fn executables_of(stderr: &str) -> Vec<PathBuf> {
 }
 
 /// The directory holding `llvm-profdata` and `llvm-cov` of the toolchain.
-fn llvm_tools_dir() -> Result<PathBuf, Error> {
+pub(crate) fn llvm_tools_dir() -> Result<PathBuf, Error> {
     let rustc = Cmd::toolchain_binary("rustc");
     let sysroot = rustc
         .clone()

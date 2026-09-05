@@ -132,11 +132,11 @@ fn give_back<E: Environment, const NP: usize, const NT: usize, const NM: usize, 
     frames: u32,
     objects: u32,
 ) {
-    if let Ok(holder) = machine.objects.processes.get_mut(parent) {
+    machine.objects.with_process(parent, |holder| {
         holder.quota.refund(frames);
         holder.kernel_object_quota.refund(objects);
         holder.kernel_object_quota.refund(1);
-    }
+    });
 }
 
 /// `process_install_handle`: copies a handle of the caller into another
@@ -211,12 +211,12 @@ pub fn kill<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
     let mut list = holder.handles;
     machine.objects.handles.close_all(&mut list);
     machine.environment.destroy_address_space(holder.root);
-    if let Ok(entry) = machine.objects.processes.get_mut(target) {
+    machine.objects.with_process(target, |entry| {
         entry.handles = list;
         for id in holder.threads() {
             entry.remove_thread(id);
         }
-    }
+    });
     let _ = machine.objects.processes.release(target);
     let reply = Reply::DONE;
     Ok(if reschedule {

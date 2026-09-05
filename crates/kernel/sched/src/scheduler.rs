@@ -106,6 +106,14 @@ impl Scheduler {
         self.current
     }
 
+    /// Says that the processor is already running `thread`, which is what
+    /// the kernel tells the scheduler about itself during the bring-up:
+    /// the code that will switch away is the idle thread, and the first
+    /// switch needs somewhere to write its context.
+    pub const fn adopt(&mut self, thread: ThreadId) {
+        self.current = Some(thread);
+    }
+
     /// The priorities that hold a ready thread, as a bit per priority.
     #[must_use]
     pub const fn ready_bitmap(&self) -> u32 {

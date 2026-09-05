@@ -28,6 +28,20 @@ pub trait TlbControl {
     fn flush_all(&mut self);
 }
 
+/// Loads the page-table root of an address space.
+///
+/// The kernel changes address spaces only between processes, because
+/// loading the root costs the translation lookaside buffer (D-65); the
+/// threads of one process switch without touching it.
+pub trait AddressSpaceControl {
+    /// Makes the address space rooted at `root` the one the processor
+    /// translates through.
+    fn activate(&mut self, root: PhysFrame);
+
+    /// The root the processor translates through now.
+    fn active(&self) -> PhysFrame;
+}
+
 /// Supplies frames for page tables.
 pub trait FrameSource {
     /// A frame that is not in use, or `None` if none is left.

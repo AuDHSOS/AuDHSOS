@@ -127,6 +127,34 @@ impl<const NP: usize, const NT: usize, const NM: usize, const NH: usize> Objects
         self.threads.get(id).is_ok()
     }
 
+    /// Does something to the process `id` names, if the machine holds it,
+    /// and says whether it did.
+    ///
+    /// Every caller that changes a process it has already looked up goes
+    /// through this: the lookup cannot fail there, and writing that out at
+    /// each of them would be a branch per caller that nothing can reach.
+    pub fn with_process(&mut self, id: ProcessId, body: impl FnOnce(&mut Process)) -> bool {
+        match self.processes.get_mut(id) {
+            Ok(process) => {
+                body(process);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Does something to the thread `id` names, if the machine holds it,
+    /// and says whether it did.
+    pub fn with_thread(&mut self, id: ThreadId, body: impl FnOnce(&mut Thread)) -> bool {
+        match self.threads.get_mut(id) {
+            Ok(thread) => {
+                body(thread);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// How many objects of every kind the machine holds, in the order
     /// processes, threads, memory objects, handles.
     #[must_use]

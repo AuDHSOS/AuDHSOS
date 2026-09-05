@@ -7,6 +7,7 @@
 
 pub mod address_space;
 pub mod frame_allocator;
+pub mod kernel_half;
 pub mod mapper;
 pub mod memory_map;
 pub mod page_table;
@@ -17,6 +18,7 @@ pub mod strategies;
 
 pub use address_space::{Region, RegionError, RegionTable, Removed};
 pub use frame_allocator::{BitmapFrameAllocator, FrameError, NoFrames};
+pub use kernel_half::{ShareError, free_user_half, share as share_kernel_half};
 pub use mapper::{MapError, Mapper, Progress};
 pub use memory_map::{MapError as MemoryMapError, NormalizedMap, normalize};
 pub use page_table::{CachePolicy, EntryError, EntryFormat, PageTable, Permissions, X86Entry};

@@ -91,8 +91,8 @@ fn a_process_holds_its_threads_and_forgets_them_again() {
     let mut process = process(4);
     let first = thread_id(1);
     let second = thread_id(2);
-    assert_eq!(process.add_thread(first), Ok(()));
-    assert_eq!(process.add_thread(second), Ok(()));
+    assert_eq!(process.add_thread(first), Ok(0));
+    assert_eq!(process.add_thread(second), Ok(1));
     assert_eq!(process.thread_count(), 2);
     assert_eq!(process.threads().collect::<Vec<_>>(), vec![first, second]);
 
@@ -110,7 +110,7 @@ fn a_process_takes_no_more_threads_than_it_may_hold() {
     let mut process = process(4);
     for index in 0..THREADS_PER_PROCESS {
         let id = thread_id(u32::try_from(index).unwrap());
-        assert_eq!(process.add_thread(id), Ok(()), "thread {index}");
+        assert_eq!(process.add_thread(id), Ok(index), "thread {index}");
     }
     assert_eq!(process.thread_count(), THREADS_PER_PROCESS);
     assert_eq!(
@@ -119,16 +119,20 @@ fn a_process_takes_no_more_threads_than_it_may_hold() {
     );
     // A slot that comes free takes the next thread.
     assert!(process.remove_thread(thread_id(0)));
-    assert_eq!(process.add_thread(thread_id(999)), Ok(()));
+    assert_eq!(
+        process.add_thread(thread_id(999)),
+        Ok(0),
+        "the slot that came free"
+    );
 }
 
 #[test]
 fn a_freed_thread_slot_is_used_again_before_the_process_is_full() {
     let mut process = process(4);
-    assert_eq!(process.add_thread(thread_id(1)), Ok(()));
-    assert_eq!(process.add_thread(thread_id(2)), Ok(()));
+    assert_eq!(process.add_thread(thread_id(1)), Ok(0));
+    assert_eq!(process.add_thread(thread_id(2)), Ok(1));
     assert!(process.remove_thread(thread_id(1)));
-    assert_eq!(process.add_thread(thread_id(3)), Ok(()));
+    assert_eq!(process.add_thread(thread_id(3)), Ok(0));
     let held: Vec<ThreadId> = process.threads().collect();
     assert_eq!(held, vec![thread_id(3), thread_id(2)]);
 }

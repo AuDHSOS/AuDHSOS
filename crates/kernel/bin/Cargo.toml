@@ -32,6 +32,9 @@ name = "kernel_stack"
 name = "interrupts"
 
 [[test]]
+name = "user"
+
+[[test]]
 name = "console"
 
 [[test]]
@@ -67,6 +70,8 @@ kernel-types.workspace = true
 
 [dev-dependencies]
 kernel-mm.workspace = true
+kernel-objects.workspace = true
+kernel-syscall.workspace = true
 
 [lints]
 workspace = true

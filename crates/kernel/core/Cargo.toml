@@ -17,6 +17,7 @@ kernel-hal-api.workspace = true
 kernel-mm.workspace = true
 kernel-objects.workspace = true
 kernel-sched.workspace = true
+kernel-syscall.workspace = true
 kernel-types.workspace = true
 
 [dev-dependencies]

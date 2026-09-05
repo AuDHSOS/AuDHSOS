@@ -6,6 +6,7 @@
 
 mod address_space;
 mod frame_allocator;
+mod kernel_half;
 mod mapper;
 mod memory_map;
 mod page_table;

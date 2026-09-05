@@ -14,7 +14,7 @@ use kernel_x86_tables::gdt::{
     GDT_ENTRIES, KERNEL_CODE_SELECTOR, KERNEL_DATA_SELECTOR, TSS_SELECTOR, build_gdt,
 };
 use kernel_x86_tables::idt::{DOUBLE_FAULT_IST, IDT_ENTRIES, MISSING};
-use kernel_x86_tables::tss::{TSS_LEN, TaskStateSegment};
+use kernel_x86_tables::tss::{RSP0_OFFSET, TSS_LEN, TaskStateSegment, write_at};
 
 use crate::instructions::{
     DescriptorTablePointer, load_global_descriptor_table, load_interrupt_descriptor_table,
@@ -127,6 +127,42 @@ pub unsafe fn install(kernel_stack_top: u64) -> Result<(), InstallError> {
         load_interrupt_descriptor_table(&idt_pointer);
     }
     Ok(())
+}
+
+/// Writes the stack pointer the processor takes on a trap from user mode
+/// into the task state segment.
+///
+/// The kernel calls this on every switch to a thread, because that stack
+/// is the one of the thread that is about to run.
+///
+/// # Errors
+///
+/// [`InstallError::AlreadyInstalled`] while something else holds the
+/// segment, and before [`install`] has put one in place.
+pub fn set_kernel_stack(top: u64) -> Result<(), InstallError> {
+    let mut image = TSS_IMAGE
+        .borrow(&UncontendedToken)
+        .map_err(|_| InstallError::AlreadyInstalled)?;
+    write_at(&mut image[..], RSP0_OFFSET, &top.to_le_bytes());
+    Ok(())
+}
+
+/// The stack pointer the task state segment names, for the test that reads
+/// it back.
+///
+/// # Errors
+///
+/// [`InstallError::AlreadyInstalled`] while something else holds the
+/// segment.
+pub fn kernel_stack() -> Result<u64, InstallError> {
+    let image = TSS_IMAGE
+        .borrow(&UncontendedToken)
+        .map_err(|_| InstallError::AlreadyInstalled)?;
+    let bytes = image
+        .get(RSP0_OFFSET..RSP0_OFFSET.saturating_add(8))
+        .and_then(|slice| <[u8; 8]>::try_from(slice).ok())
+        .unwrap_or([0; 8]);
+    Ok(u64::from_le_bytes(bytes))
 }
 
 /// The operand of `lgdt` and `lidt` for a table of `len` bytes at `base`.
