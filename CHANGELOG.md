@@ -319,8 +319,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   from the trace of RFC 8448 and from certificates the builder writes.
 
 - `docs/rfc/`: the standards this system implements, verbatim, with their
-  source and checksum recorded. The first is RFC 8448, whose trace is the
-  test the TLS client must reproduce (D-59).
+  source and checksum recorded (D-59). RFC 8448, whose trace is the test
+  the TLS client must reproduce; and the four documents P-384 takes — RFC
+  5903 for the curve parameters, RFC 5480 for the `secp384r1` identifier
+  and the uncompressed point encoding, RFC 5758 for `ecdsa-with-SHA384`,
+  and RFC 6979 appendix A.2.6 for the signature vectors, which is the
+  table one curve up from the A.2.5 the P-256 tests already read. The
+  index says what each document contributes, and which ones were read and
+  left out.
 - Decision D-56: the key exchange of the TLS client is `x25519` alone.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.
