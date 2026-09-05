@@ -42,6 +42,9 @@ members = [
     "crates/kernel/mm",
     "crates/support/fuzz",
     "crates/support/testing",
+    "crates/tools/markdown",
+    "crates/tools/pdf",
+    "crates/tools/docpdf",
     "crates/tools/xtask",
 ]
 
@@ -93,6 +96,8 @@ kernel-x86-tables = { path = "crates/kernel/x86-tables" }
 kernel-mm = { path = "crates/kernel/mm" }
 fuzz-support = { path = "crates/support/fuzz" }
 test-support = { path = "crates/support/testing" }
+doc-markdown = { path = "crates/tools/markdown" }
+doc-pdf = { path = "crates/tools/pdf" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

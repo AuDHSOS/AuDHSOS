@@ -387,6 +387,23 @@ pub(crate) fn run(root: &Path, options: &[String]) -> Result<(), Error> {
     }
 }
 
+/// The documentation as PDF, written under `target/pdf/`.
+///
+/// The xtask only starts the tool; the tool itself decides what to
+/// convert and where it goes, and every option after `pdf` is passed
+/// through to it.
+pub(crate) fn pdf(root: &Path, options: &[String]) -> Result<(), Error> {
+    let mut cmd = Cmd::cargo()
+        .cwd(root)
+        .args(["run", "--release", "-p", "docpdf", "--"]);
+    // `xtask pdf -- --list` and `xtask pdf --list` mean the same thing:
+    // the separator belongs to Cargo, and the xtask has already passed it.
+    for option in options.iter().skip_while(|option| *option == "--") {
+        cmd = cmd.arg(option);
+    }
+    cmd.run()
+}
+
 /// Host coverage against the thresholds.
 pub(crate) fn coverage(root: &Path) -> Result<(), Error> {
     let totals = coverage::measure(root)?;

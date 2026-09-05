@@ -160,6 +160,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "doc-markdown"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
+name = "doc-pdf"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
+name = "docpdf"
+version = "0.1.0"
+dependencies = [
+ "doc-markdown",
+ "doc-pdf",
+ "test-support",
+]
+
+[[package]]
 name = "driver-uart16550"
 version = "0.1.0"
 dependencies = [

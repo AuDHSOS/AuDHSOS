@@ -37,6 +37,9 @@ subcommands:
   unsafe-budget    unsafe blocks and asm! sites per adapter crate
   test [--host] [--qemu] [--e2e]
                    run the selected test levels (default: all available)
+  pdf [options]    every Markdown document and every RFC as PDF, under
+                   target/pdf/; options are passed to the tool, which
+                   explains them with --help
   coverage         host coverage with thresholds
   miri             run the host-executable adapter crates under Miri
   doc              build documentation with warnings as errors
@@ -95,6 +98,7 @@ fn run() -> Result<(), Error> {
         "check-deps" => none(subcommand, options).and_then(|()| commands::check_deps(&root)),
         "unsafe-budget" => none(subcommand, options).and_then(|()| commands::unsafe_budget(&root)),
         "test" => commands::test(&root, options),
+        "pdf" => commands::pdf(&root, options),
         "coverage" => none(subcommand, options).and_then(|()| commands::coverage(&root)),
         "miri" => none(subcommand, options).and_then(|()| commands::miri(&root)),
         "doc" => none(subcommand, options).and_then(|()| commands::doc(&root)),

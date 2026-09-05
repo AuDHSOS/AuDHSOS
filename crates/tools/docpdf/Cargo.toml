@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "docpdf"
+description = "Turns every Markdown document and every RFC of this repository into a PDF, several at a time"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+doc-markdown.workspace = true
+doc-pdf.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true
+
+[lints]
+workspace = true
