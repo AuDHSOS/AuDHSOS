@@ -20,7 +20,7 @@ AuDHSOS/
 │   ├── elf/                   audhsos-elf: ELF64 parser producing validated load segments
 │   ├── uefi/                  audhsos-uefi: UEFI structure layouts, GUIDs, constants (no calls)
 │   ├── gfx/                   gfx: framebuffer logic, bitmap font, damage tracking (Phase 9)
-│   ├── sync/                  audhsos-sync: Global<T> cell (unsafe allowed)
+│   ├── sync/                  audhsos-sync: Global<T> and Preset<T> cells (unsafe allowed)
 │   ├── time/                  audhsos-time: UnixTime, CivilTime, Instant, Duration (document 12)
 │   ├── encoding/              audhsos-encoding: Base64, hex, PEM (document 12)
 │   ├── collections/           audhsos-collections: fixed-capacity containers over indices (document 12)
@@ -114,7 +114,7 @@ AuDHSOS/
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
 | `fs-fat` | 1 | all | no | yes | `audhsos-time`, `audhsos-collections`; feature `test-doubles` |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
-| `kernel-objects` | 2 | all | no | yes | `kernel-types`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
+| `kernel-objects` | 2 | all | no | yes | `kernel-types`, `kernel-mm`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-sched` | 2 | all | no | yes | `kernel-objects`, `audhsos-abi` |
 | `kernel-ipc` | 3 | all | no | yes | `kernel-objects`, `kernel-sched`, `audhsos-abi` |
 | `kernel-syscall` | 3 | all | no | yes | layers 0-2, `kernel-ipc` |

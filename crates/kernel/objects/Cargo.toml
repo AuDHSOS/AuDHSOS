@@ -3,7 +3,7 @@
 
 [package]
 name = "kernel-objects"
-description = "Generation-checked object pools and quotas for the kernel objects of AuDHSOS"
+description = "The kernel objects of AuDHSOS: generation-checked pools, the handle arena, quotas, processes, threads, and memory objects"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,13 +11,17 @@ authors.workspace = true
 rust-version.workspace = true
 
 [features]
-test-strategies = ["dep:test-support"]
+test-strategies = ["dep:test-support", "kernel-mm/test-strategies", "kernel-types/test-strategies"]
 
 [dependencies]
 audhsos-abi.workspace = true
+kernel-mm.workspace = true
+kernel-types.workspace = true
 test-support = { workspace = true, optional = true }
 
 [dev-dependencies]
+kernel-mm = { workspace = true, features = ["test-strategies"] }
+kernel-types = { workspace = true, features = ["test-strategies"] }
 test-support.workspace = true
 
 [lints]

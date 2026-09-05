@@ -64,15 +64,10 @@ impl Permissions {
     }
 }
 
-/// How the processor may cache a mapping.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum CachePolicy {
-    /// Normal memory.
-    #[default]
-    WriteBack,
-    /// Device memory.
-    Uncached,
-}
+// The policy belongs to the memory and not to the table that maps it, so
+// it lives in `kernel-types`, where a memory object reaches it too. The
+// re-export keeps the path this module has always had.
+pub use kernel_types::CachePolicy;
 
 /// Why an entry read from memory was rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

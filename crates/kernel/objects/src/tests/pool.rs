@@ -88,20 +88,78 @@ fn an_id_of_a_free_slot_or_an_index_out_of_range_is_rejected() {
 #[test]
 fn the_generation_wraps_and_never_becomes_zero() {
     let mut pool: Pool<u32, 1> = Pool::new();
-    assert!(pool.set_generation(0, u32::MAX));
+    assert!(pool.set_generation(0, u32::MAX - 1));
     assert!(!pool.set_generation(9, 5), "an unknown slot is not changed");
     let last = pool.allocate(1).unwrap();
     assert_eq!(last.generation(), u32::MAX);
     assert_eq!(pool.release(last), Ok(Some(1)));
-    assert_eq!(pool.generation_of(0), Some(1), "zero is skipped");
+    assert_eq!(
+        pool.generation_of(0),
+        Some(u32::MAX),
+        "a released slot keeps its generation until it is handed out again"
+    );
     let wrapped = pool.allocate(2).unwrap();
-    assert_eq!(wrapped.generation(), 1);
+    assert_eq!(wrapped.generation(), 1, "zero is skipped");
     assert_eq!(pool.get(wrapped), Ok(&2));
     assert_eq!(
         pool.get(last),
         Err(PoolError::StaleId),
         "the id from before the wrap stays stale"
     );
+}
+
+#[test]
+fn an_empty_pool_is_a_constant() {
+    // The pools of the kernel are `static` cells of this type, and they
+    // reach the `.bss` only because the empty pool is a constant (D-66).
+    const POOL: Pool<u32, 4> = Pool::new();
+    let pool = POOL;
+    assert_eq!(pool.live(), 0);
+    assert!(pool.is_empty());
+    assert_eq!(pool.capacity(), 4);
+}
+
+#[test]
+fn a_fresh_pool_hands_out_its_slots_in_index_order() {
+    let mut pool: Pool<u32, 3> = Pool::new();
+    let first = pool.allocate(1).unwrap();
+    let second = pool.allocate(2).unwrap();
+    let third = pool.allocate(3).unwrap();
+    assert_eq!(
+        [first.index(), second.index(), third.index()],
+        [0, 1, 2],
+        "the high-water mark walks the pool once"
+    );
+    assert_eq!(pool.allocate(4), Err(PoolError::Exhausted));
+}
+
+#[test]
+fn the_first_generation_of_every_slot_is_one() {
+    let mut pool: Pool<u32, 3> = Pool::new();
+    for value in 0..3 {
+        let id = pool.allocate(value).unwrap();
+        assert_eq!(id.generation(), 1, "slot {}", id.index());
+    }
+}
+
+#[test]
+fn a_released_slot_is_handed_out_before_one_that_was_never_used() {
+    let mut pool: Pool<u32, 3> = Pool::new();
+    let first = pool.allocate(1).unwrap();
+    assert_eq!(pool.release(first), Ok(Some(1)));
+    let next = pool.allocate(2).unwrap();
+    assert_eq!(next.index(), first.index(), "the released slot comes first");
+    assert_eq!(next.generation(), 2, "and with the next generation");
+    let fresh = pool.allocate(3).unwrap();
+    assert_eq!(fresh.index(), 1, "then the high-water mark moves on");
+}
+
+#[test]
+fn an_id_of_a_slot_that_was_never_used_names_nothing() {
+    let pool: Pool<u32, 4> = Pool::new();
+    assert_eq!(pool.get(ObjectId::new(0, 0)), Err(PoolError::StaleId));
+    assert_eq!(pool.get(ObjectId::new(0, 1)), Err(PoolError::StaleId));
+    assert_eq!(pool.get(ObjectId::new(3, 1)), Err(PoolError::StaleId));
 }
 
 #[test]

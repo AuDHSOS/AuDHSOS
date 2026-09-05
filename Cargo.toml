@@ -17,6 +17,7 @@ members = [
     "crates/net/x509",
     "crates/net/tls",
     "crates/net/wire",
+    "crates/net/eth",
     "crates/boot/uefi-x86_64",
     "crates/elf",
     "crates/symbols",
@@ -27,6 +28,7 @@ members = [
     "crates/kernel/acpi",
     "crates/kernel/hal-api",
     "crates/kernel/objects",
+    "crates/kernel/sched",
     "crates/kernel/bin",
     "crates/kernel/core",
     "crates/kernel/hal-x86_64",
@@ -61,6 +63,7 @@ audhsos-der = { path = "crates/net/der" }
 audhsos-x509 = { path = "crates/net/x509" }
 audhsos-tls = { path = "crates/net/tls" }
 net-wire = { path = "crates/net/wire" }
+net-eth = { path = "crates/net/eth" }
 boot-uefi-x86_64 = { path = "crates/boot/uefi-x86_64" }
 audhsos-elf = { path = "crates/elf" }
 audhsos-symbols = { path = "crates/symbols" }
@@ -71,6 +74,7 @@ kernel-types = { path = "crates/kernel/types" }
 kernel-acpi = { path = "crates/kernel/acpi" }
 kernel-hal-api = { path = "crates/kernel/hal-api" }
 kernel-objects = { path = "crates/kernel/objects" }
+kernel-sched = { path = "crates/kernel/sched" }
 audhsos-kernel = { path = "crates/kernel/bin" }
 kernel-core = { path = "crates/kernel/core" }
 kernel-hal-x86_64 = { path = "crates/kernel/hal-x86_64" }

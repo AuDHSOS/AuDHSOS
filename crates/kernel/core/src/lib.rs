@@ -7,12 +7,14 @@
 
 pub mod boot;
 pub mod config;
+pub mod machine;
 pub mod memory;
 pub mod print;
 pub mod state;
 pub mod tick;
 pub mod trap;
 
+pub use machine::{MACHINE, Machine, with_machine};
 pub use memory::{KernelMemory, MEMORY, MemoryError, with_memory};
 pub use state::{KERNEL, KernelState, with_state};
 pub use tick::on_tick;

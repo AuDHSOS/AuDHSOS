@@ -204,11 +204,13 @@ impl<B: Copy, const M: usize> Removed<B, M> {
 }
 
 /// The regions of one address space, at most `N` of them.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RegionTable<B: Copy, const N: usize> {
     regions: [Option<Region<B>>; N],
     len: usize,
-    user: bool,
+    // `false` for a user table, so that an empty user table is all zeros
+    // and an array of them reaches the `.bss` (D-66).
+    kernel: bool,
 }
 
 impl<B: Copy, const N: usize> Default for RegionTable<B, N> {
@@ -224,7 +226,7 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
         RegionTable {
             regions: [None; N],
             len: 0,
-            user: true,
+            kernel: false,
         }
     }
 
@@ -235,7 +237,7 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
         RegionTable {
             regions: [None; N],
             len: 0,
-            user: false,
+            kernel: true,
         }
     }
 
@@ -347,7 +349,7 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
         if pages.is_empty() {
             return Err(RegionError::Empty);
         }
-        if !self.user {
+        if self.kernel {
             return Ok(());
         }
         if !pages.is_user() || pages.start().start().as_u64() < USER_SPACE_START {
@@ -494,7 +496,7 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
             if region.pages.is_empty() {
                 return false;
             }
-            if self.user
+            if !self.kernel
                 && (!region.pages.is_user()
                     || region.pages.start().start().as_u64() < USER_SPACE_START)
             {

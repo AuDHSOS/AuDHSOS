@@ -4,9 +4,5 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
-mod handle_table;
-mod object;
-mod pool;
-mod quota;
-mod store;
-mod strategies;
+mod scheduler;
+mod transition;

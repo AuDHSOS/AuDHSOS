@@ -73,11 +73,25 @@ pub const MAX_BOOT_REGIONS: usize = 128;
 /// Size of the IPC buffer of a thread in bytes.
 pub const IPC_BUFFER_SIZE: u64 = PAGE_SIZE;
 
+/// Maximum number of argument words a system call reads from the IPC
+/// buffer.
+pub const MAX_SYSCALL_ARGUMENTS: usize = 6;
+
+/// Maximum number of return words a system call writes into the IPC
+/// buffer, the status word excluded.
+pub const MAX_SYSCALL_RETURN_WORDS: usize = 2;
+
 /// Maximum number of payload words in a message.
 pub const MAX_MESSAGE_WORDS: usize = 480;
 
 /// Maximum number of handles in a message.
 pub const MAX_MESSAGE_HANDLES: usize = 4;
+
+/// Number of threads one process may hold.
+pub const THREADS_PER_PROCESS: usize = 64;
+
+/// Number of regions one process may map.
+pub const REGIONS_PER_PROCESS: usize = 64;
 
 /// Number of scheduling priorities; the highest priority is
 /// `PRIORITY_COUNT - 1`.

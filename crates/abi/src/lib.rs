@@ -9,11 +9,14 @@ pub mod boot_image;
 pub mod boot_info;
 pub mod error;
 pub mod handle;
+pub mod ipc_buffer;
 pub mod layout;
 pub mod object;
 pub mod rights;
 #[cfg(any(test, feature = "test-strategies"))]
 pub mod strategies;
+pub mod syscall;
+pub mod thread;
 
 pub use boot_image::{BootImageError, BootImageHeader};
 pub use boot_info::{
@@ -22,8 +25,11 @@ pub use boot_info::{
 };
 pub use error::Error;
 pub use handle::Handle;
+pub use ipc_buffer::{Buffer, BufferMut, Message, MessageError, Status};
 pub use object::ObjectType;
 pub use rights::Rights;
+pub use syscall::{FirstArgument, Syscall};
+pub use thread::{Fault, FaultKind, ThreadState};
 
 #[cfg(test)]
 mod tests;

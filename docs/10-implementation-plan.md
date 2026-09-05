@@ -1473,10 +1473,18 @@ syscalls! {
 ```
 
   The macro generates `enum Syscall`, `Syscall::from_number`,
-  `Syscall::argument_count`, `Syscall::object_type() -> Option<ObjectType>`
-  (`Any` means a handle of any type), and a `dispatch!` helper the kernel
-  uses to build its `match`. The userland wrappers in Phase 7 consume the
-  same table.
+  `Syscall::name`, `Syscall::argument_count`, and
+  `Syscall::first_argument() -> FirstArgument`, which is `Nothing`, `Any`,
+  or an object type; `Syscall::object_type()` and `takes_handle()` read it.
+  There is no `dispatch!` helper: a `match` over an exhaustive enum is
+  already checked for completeness by the compiler, and a macro around it
+  would only make the errors worse. The userland wrappers in Phase 7
+  consume the same table.
+- The status word (`ipc_buffer::Status`) carries the error code in its low
+  half, where zero is success, and the partial flag in bit 32. Partial
+  progress is a success and cannot be an error code, and a caller reads one
+  word; a word that claims both, or names an error the table does not have,
+  is refused when it is decoded.
 - `ipc_buffer.rs`: the fixed layout of the 4096-byte buffer as offsets:
   `SYSCALL_NUMBER = 0`, `ARGS = 8` (six words), `STATUS = 56`, `RETURN =
   64` (two words), `MESSAGE = 128`: `LABEL = 128`, `WORD_COUNT = 136`,
@@ -1545,12 +1553,30 @@ Every pool and the handle arena are `const`-constructible and all zeros
 when empty (D-66): the generation of a slot counts up in `allocate` instead
 of starting at one, and the free list is implicit through a high-water mark
 while released slots keep the FIFO chain that 6.6.6 requires. `RegionTable`
-carries `kernel: bool` instead of `user: bool` for the same reason. They
-live in one `Objects` structure in a `const`-initialized cell of
-`audhsos-sync` — the second cell type beside `Global`, without the `Option`,
-because `Some(value)` in a `static` carries a non-zero discriminant and
-would move the whole structure out of the `.bss` into the image file.
-`KernelState` keeps its counters and does not hold the pools.
+carries `kernel: bool` instead of `user: bool` for the same reason.
+
+They live in one `Objects` structure, which is parameterized by its four
+sizes rather than reading them from `config` directly: the kernel uses the
+alias `MachineObjects`, and a test holds an `Objects<2, 4, 4, 8>` it can
+keep on its stack. The structure measures 1 224 280 bytes with the numbers
+of `config`, so a test that built one would overflow its stack — which is
+what happened when one did, and is the same failure D-66 predicts for the
+boot stack one level down. The counts themselves moved from
+`kernel-core::config` to `kernel-objects::config`, where the structure can
+name them; `kernel-core::config` re-exports them and keeps the numbers of
+the memory bring-up.
+
+`kernel_core::machine::Machine` holds the objects and the scheduler, and
+`MACHINE` is the `Preset` cell holding it: the second cell type of
+`audhsos-sync`, `const`-initialized and without the `Option`, because
+`Some(value)` in a `static` carries a non-zero discriminant and would move
+the whole structure out of the `.bss` into the image file. `KernelState`
+keeps its counters and does not hold the pools.
+
+`kernel-objects` depends on `kernel-mm`, because `Process` holds the real
+`RegionTable` and not a count of one, and `CachePolicy` moved from
+`kernel_mm::page_table` to `kernel-types`, where a memory object reaches it
+without depending on the page tables; the old path stays as a re-export.
 
 ### 10.5.3 `kernel-sched` (`crates/kernel/sched`)
 

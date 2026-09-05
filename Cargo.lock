@@ -183,6 +183,8 @@ dependencies = [
  "audhsos-sync",
  "kernel-hal-api",
  "kernel-mm",
+ "kernel-objects",
+ "kernel-sched",
  "kernel-types",
  "test-support",
 ]
@@ -224,7 +226,18 @@ name = "kernel-objects"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "kernel-mm",
+ "kernel-types",
  "test-support",
+]
+
+[[package]]
+name = "kernel-sched"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "kernel-objects",
+ "kernel-types",
 ]
 
 [[package]]
@@ -246,6 +259,16 @@ dependencies = [
 name = "kernel-x86-tables"
 version = "0.1.0"
 dependencies = [
+ "test-support",
+]
+
+[[package]]
+name = "net-eth"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "audhsos-time",
+ "net-wire",
  "test-support",
 ]
 

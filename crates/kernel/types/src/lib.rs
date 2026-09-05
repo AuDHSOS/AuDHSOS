@@ -6,6 +6,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod align;
+pub mod cache;
 pub mod error;
 pub mod phys;
 #[cfg(any(test, feature = "test-strategies"))]
@@ -13,6 +14,7 @@ pub mod strategies;
 pub mod virt;
 
 pub use align::Alignment;
+pub use cache::CachePolicy;
 pub use error::Error;
 pub use phys::{PhysAddr, PhysFrame, PhysFrameRange};
 pub use virt::{Page, PageRange, VirtAddr};

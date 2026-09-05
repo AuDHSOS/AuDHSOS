@@ -34,7 +34,7 @@ device register are operations the Rust language can only express as
 | `kernel-hal-x86_64` | privileged registers, descriptor table loading, physical memory through the window as page tables and as bytes, MMIO for the APICs, port I/O, boot information validation from a raw pointer, context switch, the entry point and the exception triggers of a kernel test image | privileged instruction wrappers, one naked function, the exceptions a test image raises |
 | `audhsos-kernel` | the entry the loader jumps to, the panic handler, the reads of physical memory through the window during the memory bring-up, the interrupt bring-up and the instructions that turn interrupts on, and the same in the test images the crate carries (D-55) | none |
 | `boot-uefi-x86_64` | firmware calls through function pointers, memory map buffer from a raw pointer, page-table memory through the identity mapping, `CR3` write, kernel entry | `CR3` write, port write for the exit device, one naked function |
-| `audhsos-sync` | `Global<T>`: a `Sync` cell with a runtime borrow flag for kernel and userland global state | none |
+| `audhsos-sync` | `Global<T>` and `Preset<T>`: two `Sync` cells with a runtime borrow flag for kernel and userland global state, the first initialized once at run time, the second `const`-initialized so that a large value reaches the `.bss` without travelling over a stack (D-66) | none |
 | `user-sys-x86_64` | the system call trap instruction, `_start`, the `GlobalAlloc` adapter | one `asm!` statement: `int 0x80` |
 | `fuzz-support` (host only) | the fuzzing engine's boundary to the coverage instrumentation: the callbacks the compiler emits calls to, and the blocks that turn the counter ranges the linker placed into slices (D-63) | none |
 

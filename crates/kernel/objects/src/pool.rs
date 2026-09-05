@@ -3,11 +3,20 @@
 
 //! A fixed-capacity pool of kernel objects with generation-checked ids.
 //!
-//! Invariants: every slot is either free and linked into the free list
-//! exactly once, or occupied with at least one reference; the generation of
-//! a slot is never zero and grows by one on every release, so that an id of
-//! a released object is rejected once the slot is reused; free slots are
-//! handed out in the order in which they were released.
+//! Invariants: every slot is either free, and then either linked into the
+//! free list exactly once or above the high-water mark, or occupied with at
+//! least one reference; a generation that was handed out is never zero and
+//! grows by one on every allocation, so that an id of a released object is
+//! rejected once the slot is reused; released slots are handed out again in
+//! the order in which they were released, before slots that were never
+//! used.
+//!
+//! An empty pool is all zeros and its constructor is `const` (D-66). That
+//! is why the generation counts up in [`Pool::allocate`] rather than
+//! starting at one, and why the free list starts empty with a high-water
+//! mark rather than linked through every slot: a pool that is all zeros
+//! reaches the `.bss` of the kernel image without being built on a stack
+//! first, and the kernel's pools are far larger than the boot stack.
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -114,12 +123,24 @@ struct Occupant<T> {
 
 /// One slot of a pool. A slot is free exactly when it has no occupant;
 /// `next_free` links the free slots in the order in which they were
-/// released.
+/// released. [`Slot::FREE`] is all zeros, which is what puts a fresh pool
+/// into the `.bss`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Slot<T> {
     generation: u32,
     next_free: Option<u32>,
     occupant: Option<Occupant<T>>,
+}
+
+impl<T> Slot<T> {
+    /// A slot that was never used: no occupant, no link, and a generation
+    /// of zero, which [`Pool::allocate`] raises before it hands one out.
+    /// Every field is zero, so an array of these is `.bss`.
+    const FREE: Slot<T> = Slot {
+        generation: 0,
+        next_free: None,
+        occupant: None,
+    };
 }
 
 /// `N` slots for values of type `T`.
@@ -128,6 +149,7 @@ pub struct Pool<T, const N: usize> {
     slots: [Slot<T>; N],
     free_head: Option<u32>,
     free_tail: Option<u32>,
+    high_water: u32,
     live: u32,
 }
 
@@ -138,22 +160,17 @@ impl<T, const N: usize> Default for Pool<T, N> {
 }
 
 impl<T, const N: usize> Pool<T, N> {
-    /// A pool whose slots are all free, linked in index order.
+    /// An empty pool. Every slot is free: none has been used, so the free
+    /// list is empty and the high-water mark stands at zero. The value is
+    /// all zeros and the constructor is `const`, so a `static` pool costs
+    /// the image nothing but `.bss` (D-66).
     #[must_use]
-    pub fn new() -> Self {
-        let last = N.saturating_sub(1);
+    pub const fn new() -> Self {
         Pool {
-            slots: core::array::from_fn(|index| Slot {
-                generation: 1,
-                next_free: if index < last {
-                    u32::try_from(index.saturating_add(1)).ok()
-                } else {
-                    None
-                },
-                occupant: None,
-            }),
-            free_head: if N == 0 { None } else { Some(0) },
-            free_tail: u32::try_from(last).ok().filter(|_| N != 0),
+            slots: [const { Slot::FREE }; N],
+            free_head: None,
+            free_tail: None,
+            high_water: 0,
             live: 0,
         }
     }
@@ -208,18 +225,39 @@ impl<T, const N: usize> Pool<T, N> {
     ///
     /// [`PoolError::Exhausted`] if every slot is occupied.
     pub fn allocate(&mut self, value: T) -> Result<ObjectId<T>, PoolError> {
-        let index = self.free_head.ok_or(PoolError::Exhausted)?;
+        let index = self.take_free_slot()?;
         let slot = self.slot_mut(index).ok_or(PoolError::Exhausted)?;
-        let generation = slot.generation;
-        let next_free = slot.next_free;
+        // A generation of zero is never handed out, so that an id built
+        // from a slot that was never used names nothing.
+        let generation = match slot.generation.wrapping_add(1) {
+            0 => 1,
+            generation => generation,
+        };
+        slot.generation = generation;
         slot.next_free = None;
         slot.occupant = Some(Occupant { refs: 1, value });
-        self.free_head = next_free;
-        if next_free.is_none() {
-            self.free_tail = None;
-        }
         self.live = self.live.saturating_add(1);
         Ok(ObjectId::new(index, generation))
+    }
+
+    /// The index of a slot to occupy: the head of the free list, which
+    /// holds the slots that were released, or the next slot that was never
+    /// used.
+    fn take_free_slot(&mut self) -> Result<u32, PoolError> {
+        if let Some(index) = self.free_head {
+            let next_free = self.slot(index).and_then(|slot| slot.next_free);
+            self.free_head = next_free;
+            if next_free.is_none() {
+                self.free_tail = None;
+            }
+            return Ok(index);
+        }
+        if usize::try_from(self.high_water).is_ok_and(|used| used < N) {
+            let index = self.high_water;
+            self.high_water = self.high_water.saturating_add(1);
+            return Ok(index);
+        }
+        Err(PoolError::Exhausted)
     }
 
     /// The value `id` names.
@@ -262,8 +300,9 @@ impl<T, const N: usize> Pool<T, N> {
     }
 
     /// Drops one reference to the object `id` names and returns the value
-    /// when the last reference is gone. The slot is then free again with a
-    /// new generation and goes to the end of the free list.
+    /// when the last reference is gone. The slot is then free again and
+    /// goes to the end of the free list; its generation rises when it is
+    /// handed out next, which is what makes the old id stale.
     ///
     /// # Errors
     ///
@@ -276,10 +315,6 @@ impl<T, const N: usize> Pool<T, N> {
         }
         let slot = self.slot_mut(id.index).ok_or(PoolError::StaleId)?;
         let value = slot.occupant.take().map(|occupant| occupant.value);
-        slot.generation = match slot.generation.wrapping_add(1) {
-            0 => 1,
-            generation => generation,
-        };
         slot.next_free = None;
         self.live = self.live.saturating_sub(1);
         match self.free_tail {

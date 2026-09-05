@@ -77,6 +77,8 @@ error_codes! {
     Unsupported = 20 => "the operation is not supported on this platform",
     UnknownSyscall = 21 => "the system call number is not in the table",
     ArgumentCount = 22 => "the number of arguments does not match the system call",
+    InvalidState = 23 => "the object is not in a state the operation allows",
+    NotRunnable = 24 => "the thread cannot run: it has no entry point, no stack, or it has exited",
 }
 
 impl TryFrom<u32> for Error {

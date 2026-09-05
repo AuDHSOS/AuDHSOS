@@ -4,4 +4,5 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
+mod preset;
 mod root;

@@ -7,6 +7,59 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The system call table of `audhsos-abi`: one `syscalls!` macro over the
+  forty-one calls that derives the enum, the number lookup, the name, the
+  argument count, and what the first argument names — nothing, a handle of
+  any type, or a handle of one object type. The kernel dispatcher and the
+  userland wrappers of Phase 7 are built from this table and from nothing
+  else. There is no `dispatch!` helper the plan named: a `match` over an
+  exhaustive enum is already checked for completeness, and a macro around
+  it would only make the errors worse.
+
+- The IPC buffer of `audhsos-abi`: the fixed offsets of the page a thread
+  and the kernel exchange everything through, with `Buffer` and `BufferMut`
+  over `[u8; 4096]`. Every accessor stays inside the page, so a buffer
+  whose fields hold arbitrary bytes is readable without a panic; an index
+  past an area reads `None` and writes nothing. The status word carries the
+  error code in its low half, where zero is success, and partial progress
+  in bit 32, because partial progress is a success and cannot be an error
+  code while a caller still reads one word.
+
+- `ThreadState`, `FaultKind`, and `Fault` in `audhsos-abi`, and the error
+  codes `InvalidState` and `NotRunnable`. Every code is non-zero, so a
+  return word that was never written names no state and no fault.
+
+- `Preset<T>` in `audhsos-sync`: a cell whose value is there from the
+  start, without an initialization step, without the `Option` of
+  `Global<T>`, and with a `const` constructor (D-66). A `static` whose
+  value is all zeros reaches the `.bss` and never travels over a stack,
+  which is what the object pools of the kernel need: `Global::init` takes
+  its value by move, and the pools are larger than the boot stack.
+
+- The kernel objects in `kernel-objects`: the handle arena of the whole
+  machine with the owner check a shared arena needs (D-58), `Process` with
+  its page-table root and region table (D-65), `Thread` with the kernel
+  stack pointer as its whole saved context (D-67), and `MemoryObject`. The
+  pools and the arena are `const`-constructible and all zeros when empty
+  (D-66): a generation counts up when a slot is handed out rather than
+  starting at one, and the free list is implicit through a high-water mark,
+  while released slots keep the first-in first-out order the catalog asks
+  for.
+
+- `Objects` holds every pool and the arena, parameterized by its four sizes
+  so that a test can keep a machine of a handful of slots on its stack; the
+  kernel uses the alias `MachineObjects`, which measures 1 224 280 bytes.
+  A test that built one with `Box::new` overflowed its two-mebibyte stack,
+  which is the failure D-66 predicts for the boot stack one level down.
+  `kernel_core::machine::MACHINE` is the `Preset` cell that holds it beside
+  the scheduler.
+
+- `kernel-sched`: thirty-two priority queues threaded through the thread
+  entries, a bitmap of the priorities that hold someone, time slices, and
+  the state transition table. Every legal transition is one row, and every
+  one of the hundred and thirty pairs of state and event the table does not
+  name is an error rather than a panic.
+
 - IPv6 is in the first network version beside IPv4 (D-69), which supersedes
   the first clause of D-50. The decision was taken now rather than after D8
   because the layers above the wire would otherwise bake `Ipv4Addr` into
@@ -556,6 +609,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   framebuffer fields of the boot information structure in the documents.
 
 ### Changed
+
+- The object counts moved from `kernel-core::config` to
+  `kernel-objects::config`, so that the structure holding the pools can name
+  its own sizes; `kernel-core::config` re-exports them and keeps the numbers
+  of the memory bring-up. `THREADS_PER_PROCESS` and `REGIONS_PER_PROCESS`
+  are in `audhsos-abi`, because a process sees both when an operation is
+  refused.
+- `CachePolicy` moved from `kernel_mm::page_table` to `kernel-types`: the
+  policy belongs to the memory and not to the table that maps it, and a
+  memory object reaches it there without depending on the page tables. The
+  old path stays as a re-export. `kernel-objects` in turn depends on
+  `kernel-mm`, because `Process` holds the real region table.
 
 - The address space of a process lives in the `Process` object as a
   page-table root and a region table; there is no address-space object, no
