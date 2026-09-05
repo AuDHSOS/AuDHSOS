@@ -7,6 +7,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `net-eth`, step D2 of track D: Ethernet II frames over RFC 894, ARP over
+  RFC 826, and the neighbor cache both families share. Reception is a filter
+  and not a parse — a frame that is short, oversized, addressed elsewhere,
+  or of a type no layer here reads is dropped and not reported, because a
+  link carries other stations' traffic and a stack that reported each piece
+  of it would report nothing worth reading. The destination filter takes any
+  multicast group rather than the ones this station joined: the groups
+  follow from the addresses an IPv6 host holds, which this layer does not
+  know, so membership is checked one layer up.
+- The neighbor cache is one cache for IPv4 and IPv6, keyed by `IpAddr`, with
+  the five states and the schedule of RFC 4861 (D-69). It says *ask again
+  for this address, now, here or on the link* and the caller writes whichever
+  packet that family takes, so ARP is a user of the cache and not its owner.
+  One packet waits per neighbor and a second replaces it rather than
+  queueing, since the first is what a retransmission produces again. Two
+  boundaries are stated where they are done: the reachable time is not drawn
+  at random as RFC 4861, section 6.3.2 asks, because the crate takes no
+  randomness; and `Reachable` is the only state an unsolicited claim cannot
+  change, which is the whole of the resistance to a stolen mapping that a
+  link layer can offer.
+- RFC 826, RFC 894, and RFC 4861 join the reference documents under
+  `docs/rfc/`, each fetched twice and recorded with its checksum.
+
 - The system call table of `audhsos-abi`: one `syscalls!` macro over the
   forty-one calls that derives the enum, the number lookup, the name, the
   argument count, and what the first argument names — nothing, a handle of

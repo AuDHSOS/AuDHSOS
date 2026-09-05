@@ -1132,20 +1132,43 @@ done until every applicable item has a test. Items are added, never removed.
 ### 6.6.43 Ethernet and ARP (`net-eth`)
 
 - Frames: a minimum-length frame, a maximum-length frame, one byte too
-  short, and an unregistered ether type; the destination filter accepts
-  the interface address and the broadcast address and drops others.
-- ARP encoding against the RFC 826 field layout; a request for the
-  interface address produces exactly one reply; a request for another
-  address produces none.
+  short, one byte past the MTU, and an unregistered ether type; the
+  destination filter accepts the interface address, the broadcast
+  address, and any multicast group, and drops everything else; the three
+  registered types pass it. A frame that does not fit the buffer writes
+  nothing, and a payload past the MTU is refused before the buffer is
+  measured. Round trip and totality as properties: what is written reads
+  back, and no byte stream makes either entry point do anything but
+  answer.
+- ARP encoding against the RFC 826 field layout, as a transcribed
+  28-byte vector read and written both ways; a request for the interface
+  address produces exactly one reply; a request for another address
+  produces none; a reply is never answered; each of the four fields that
+  name the address spaces is wrong in turn and refused; an operation that
+  is neither a request nor a reply is refused; every prefix shorter than
+  the packet is refused; a packet that does not fit writes nothing.
 - Cache: an entry moves `Incomplete` to `Reachable` on a reply and
-  `Reachable` to `Stale` at the age boundary; an entry evicted at
-  capacity is the least recently used; a second packet for a destination
-  with a pending request replaces the first rather than queueing two.
-- Retransmission: probes are emitted at the scheduled instants and stop
-  after the configured count, after which the pending packet is dropped
-  and the caller sees an unreachable result.
+  `Reachable` to `Stale` at the age boundary, one microsecond before
+  which nothing happens; a packet to a `Stale` neighbor goes out and
+  moves the entry to `Delay`, which becomes `Probe` at
+  `DELAY_FIRST_PROBE_TIME` and `Reachable` again on an answer; an entry
+  evicted at capacity is the least recently used; a second packet for a
+  destination with a pending request replaces the first rather than
+  queueing two; a packet longer than the entry holds is dropped and
+  leaves nothing behind; one cache holds neighbors of both families and a
+  solicitation names the address, from which the caller reads the family.
+- Retransmission: solicitations are emitted at the scheduled instants and
+  stop after the configured count, after which the entry and the packet
+  behind it are gone and the caller sees an unreachable result. Both
+  counts are exercised, the multicast one from `Incomplete` and the
+  unicast one from `Probe`. A schedule of the caller's own is used as
+  given, and one instant falling due for two neighbors yields two events.
 - Gratuitous ARP refreshes a reachable entry with the same address and
-  does not replace one with a different address.
+  does not replace one with a different address; an observation fills an
+  entry nobody has answered for, which releases the packet waiting behind
+  it; an entry that is not reachable is taken over by whoever claims it
+  last, which the test states so that the limit of the protection is on
+  the record.
 
 ### 6.6.44 IPv4 and ICMP (`net-ip`)
 

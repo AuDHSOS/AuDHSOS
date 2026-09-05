@@ -14,8 +14,11 @@ arrangement.
 
 | File | Document | Retrieved | Bytes | SHA-256 |
 |------|----------|-----------|-------|---------|
+| `rfc826.txt` | RFC 826, *An Ethernet Address Resolution Protocol*, D. C. Plummer, November 1982 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc826.txt` | 21556 | `01bc62fe6a37e90f1246ac43e8e145f1322b4ed1474836145c3da93d2bd3c8a6` |
+| `rfc894.txt` | RFC 894, *A Standard for the Transmission of IP Datagrams over Ethernet Networks*, C. Hornig, April 1984 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc894.txt` | 5697 | `be88b9301e53f986aca3a0e55e488d1d79bae3f88fe3f257640397bc089e7035` |
 | `rfc1071.txt` | RFC 1071, *Computing the Internet Checksum*, R. Braden, D. Borman, C. Partridge, September 1988 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1071.txt` | 53524 | `e10dfd6816447843d47a7f1b990eba756a791a6308fd5b698a6276075a8e4f9b` |
 | `rfc4291.txt` | RFC 4291, *IP Version 6 Addressing Architecture*, R. Hinden, S. Deering, February 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4291.txt` | 52897 | `4d58dff6b432d5d524bf3a3b7f0337a4177fa65f92ed72f2a92e97b471de48b2` |
+| `rfc4861.txt` | RFC 4861, *Neighbor Discovery for IP version 6 (IPv6)*, T. Narten, E. Nordmark, W. Simpson, H. Soliman, September 2007 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4861.txt` | 235106 | `1a4309c117d765a7c0edfcb2297fc90c3c09f0fcae255f15e53b20748bcc09fb` |
 | `rfc5480.txt` | RFC 5480, *Elliptic Curve Cryptography Subject Public Key Information*, S. Turner, D. Brown, K. Yiu, R. Housley, T. Polk, March 2009 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5480.txt` | 36209 | `593bf29fd0da2ff8b903c3ebf1c9d189a770039159e2ba46a0c3b91355037f26` |
 | `rfc5758.txt` | RFC 5758, *Internet X.509 Public Key Infrastructure: Additional Algorithms and Identifiers for DSA and ECDSA*, Q. Dang, S. Santesson, K. Moriarty, D. Brown, T. Polk, January 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5758.txt` | 15834 | `4d02628ff0875a1960d34be584a68f88528b96242bdc5a05a40a29ef01cf1532` |
 | `rfc5903.txt` | RFC 5903, *Elliptic Curve Groups modulo a Prime (ECP Groups) for IKE and IKEv2*, D. Fu, J. Solinas, June 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5903.txt` | 29175 | `939fab548a6e6bb49a5b3c4dd24a3c5df54a46645447b2d6f4df4fd88ff2d69f` |
@@ -26,8 +29,9 @@ arrangement.
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
-including the page breaks: 1417, 1403, 1123, 451, 899, 787, 4427, 2355,
-and 3811 lines respectively, in the order of the table. Every one was fetched twice and the two fetches agreed.
+including the page breaks: 470, 171, 1417, 1403, 5435, 1123, 451, 899,
+787, 4427, 2355, and 3811 lines respectively, in the order of the table.
+Every one was fetched twice and the two fetches agreed.
 
 ## Terms
 
@@ -39,16 +43,21 @@ carries a notice of the form
 
 with the year 2009 for RFC 5480, 2010 for RFC 5758, RFC 5903, and
 RFC 5952, 2013 for RFC 6979, 2017 for RFC 8200, and 2019 for RFC 8448.
-RFC 4291 predates the IETF Trust and carries the Internet Society's notice
-of 2006 with the full copyright statement of BCP 78, which permits
-reproduction in full. RFC 1071 is older still and carries no notice at
-all; it is distributed under the unlimited-distribution statement of its
-own Status of This Memo section. They are subject to BCP 78 and the IETF
-Trust's Legal Provisions relating to IETF Documents, which permit
-reproduction in full. Code components extracted from an RFC carry the
-Simplified BSD Licence; this project extracts test vectors, which it
-transcribes into Rust source with the document and section named at each
-table, as decision D-40 requires.
+Those eight are subject to BCP 78 and the IETF Trust's Legal Provisions
+relating to IETF Documents, which permit reproduction in full.
+
+The four older ones carry the notice of their time. RFC 4861 has the IETF
+Trust's of 2007 and RFC 4291 the Internet Society's of 2006, both in a
+full copyright statement at the end that permits reproduction in full
+under the same BCP 78. RFC 1071, RFC 894, and RFC 826 carry no notice at
+all: RFC 1071 states unlimited distribution in its own Status of This
+Memo section, and the two from the early eighties predate even that form,
+under the practice the RFC Editor states for the series as a whole.
+
+Code components extracted from an RFC carry the Simplified BSD Licence;
+this project extracts test vectors, which it transcribes into Rust source
+with the document and section named at each table, as decision D-40
+requires.
 
 ## Why RFC 1071
 
@@ -69,6 +78,34 @@ that comes from the protocol specifications. This document is kept for its
 numbers and for section 2, which states why the sum may be computed in
 either byte order and in any grouping — the property the incremental
 accumulator rests on.
+
+## The three documents of the link layer
+
+These are what `net-eth` implements.
+
+**RFC 894** is three pages and settles the frame: an IP datagram on an
+Ethernet is carried in an Ethernet II frame with type `0x0800`, ARP with
+`0x0806`, and the payload is at most 1500 bytes. It is where the MTU
+comes from, and it says the trailing checksum belongs to the hardware,
+which is why nothing in this crate computes one.
+
+**RFC 826** is the address resolution protocol: the 28-byte packet for
+Ethernet and IPv4 with its six fields, the rule that a reply is sent only
+by the station that owns the target address, and the observation — the
+one this implementation follows most closely — that a station may learn a
+mapping from any packet it sees rather than only from a reply it asked
+for. What the memo does not say is what to do when a second station
+claims an address a first one already answered for, which is where the
+project's own rule comes in: a reachable entry is never overwritten with
+a different hardware address.
+
+**RFC 4861, section 7.3** is the neighbor cache: the five states
+`INCOMPLETE`, `REACHABLE`, `STALE`, `DELAY`, and `PROBE`, what moves an
+entry between them, and the constants of section 10 — `REACHABLE_TIME`
+30 seconds, `RETRANS_TIMER` 1 second, `DELAY_FIRST_PROBE_TIME` 5 seconds,
+and three solicitations of either kind. The cache here is one cache for
+both families (D-69), so ARP fills it with the three states it needs and
+Neighbor Discovery, which arrives in D4, uses all five.
 
 ## The three documents of IPv6 addressing
 

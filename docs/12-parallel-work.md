@@ -323,6 +323,8 @@ are transcribed from.
 
 ### 12.6.4 `net-eth`
 
+Implemented.
+
 Ethernet II frames: the 14-byte header, an MTU of 1500, no VLAN tags in
 the first version. Frames shorter than the header, and frames whose
 ether type is not registered, are dropped rather than rejected loudly.
@@ -341,6 +343,39 @@ by Neighbor Discovery, which is `ICMPv6` and therefore lives in
 `net-ipv6`; it writes into this cache rather than keeping a second one
 (D-69). The cache is thus driven from above in both cases, and `net-eth`
 owns the storage and the timers and neither of the two protocols.
+
+Three things came out of writing it.
+
+Reception is a filter and not a parse: `receive` answers `Option` and
+drops a frame that is short, oversized, addressed elsewhere, or of a type
+no layer here reads. `Frame::parse` keeps the `Result` for the two
+structural failures, so a caller that wants to know why can ask; the
+receive path does not, because a link carries other stations' traffic and
+a stack that reported each piece of it would report nothing worth
+reading.
+
+The destination filter takes any multicast group and not the ones this
+station joined. The groups an IPv6 host belongs to follow from the
+addresses it holds, which this layer does not know, so membership is
+checked one layer up where it is. What that costs is parsing a multicast
+frame that is then dropped; what it buys is that this layer keeps no list
+in step with another.
+
+The cache carries the reachable time as it is given. RFC 4861,
+section 6.3.2 draws it afresh from a factor between one half and one and
+a half so that hosts which learned a neighbor together do not re-probe
+together, and this crate takes no randomness — it would need `crypto-rng`
+in the layer furthest from needing one. The cost is synchronised probes
+among hosts that booted together, and it is written in the crate rather
+than left to be discovered.
+
+The protection against a stolen mapping is one comparison and no more:
+`Reachable` is the only state an unsolicited claim cannot change, since
+that station answered a solicitation of this host's and an unsolicited
+claim is no evidence at all. An entry in any other state goes to whoever
+claims it last. Knowing which station is entitled to an address is not
+something a link layer can know, and the crate says so rather than
+implying more.
 
 ### 12.6.5 `net-ip`
 
@@ -453,10 +488,11 @@ classic denial of service of this format — and without compression on
 write. `A` and `AAAA` records and `CNAME` chains up to depth eight; other
 types are parsed as opaque and ignored. A name is asked for in both types
 and the answers of both are returned, because which family a host reaches
-a name over is the caller's question and not the resolver's. The resolver is a state machine over UDP
-with retry, server rotation, and a deadline; the transaction id and the
-source port come from `Rng`, and a response is accepted only when id,
-question section, source address, and port all match.
+a name over is the caller's question and not the resolver's. The resolver
+is a state machine over UDP with retry, server rotation, and a deadline;
+the transaction id and the source port come from `Rng`, and a response is
+accepted only when id, question section, source address, and port all
+match.
 
 ### 12.6.10 `net-dhcp`
 
@@ -523,7 +559,7 @@ Tests: catalog 6.6.42 to 6.6.50 and 6.6.54.
 | Step | Content | Size |
 |------|---------|------|
 | D1 | `net-wire`: addresses, cursor, checksums — implemented | S |
-| D2 | `net-eth`: frames and the ARP cache | M |
+| D2 | `net-eth`: frames, ARP, and the neighbor cache — implemented | M |
 | D3 | `net-ip`: IPv4 header, reassembly, fragmentation, `ICMPv4`, the routing table over both families | M |
 | D4 | `net-ipv6`: header and extension chain, `ICMPv6`, Neighbor Discovery, router advertisements and SLAAC, path MTU discovery | L |
 | D5 | `net-udp` | S |

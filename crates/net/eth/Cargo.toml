@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "net-eth"
+description = "Ethernet II frames, ARP, and one neighbor cache for both address families"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+audhsos-collections.workspace = true
+audhsos-time.workspace = true
+net-wire.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true
+
+[lints]
+workspace = true
