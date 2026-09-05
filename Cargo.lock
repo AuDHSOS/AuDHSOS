@@ -48,6 +48,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "audhsos-x509"
+version = "0.1.0"
+dependencies = [
+ "audhsos-der",
+ "crypto-ec",
+ "crypto-hash",
+ "test-support",
+]
+
+[[package]]
 name = "boot-uefi-x86_64"
 version = "0.1.0"
 dependencies = [

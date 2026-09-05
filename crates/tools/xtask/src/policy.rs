@@ -124,6 +124,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "audhsos-x509",
+        path: "crates/net/x509",
+        kind: Kind::Logic,
+        deps: &["audhsos-der", "crypto-ec", "crypto-hash", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-sync",
         path: "crates/sync",
         kind: Kind::Adapter {
