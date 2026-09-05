@@ -17,6 +17,7 @@ mod policy;
 mod process;
 mod qemu;
 mod spdx;
+mod symbolize;
 mod toolchain;
 mod unsafe_budget;
 
@@ -47,6 +48,8 @@ subcommands:
   qemu-runner <elf>
                    Cargo's runner for the kernel target: wrap a test kernel
                    into a disk image, run it, and read the serial protocol
+  symbolize <elf> <address>...
+                   the function, file, and line of every address
   run [--release] [--display]
                    boot the system in QEMU with the console on the terminal
   check            everything CI runs, in CI order
@@ -92,6 +95,7 @@ fn run() -> Result<(), Error> {
         "image" => commands::image(&root, options),
         "qemu-runner" => commands::qemu_runner(&root, options),
         "run" => commands::run(&root, options),
+        "symbolize" => symbolize::command(options),
         "check" => commands::check(&root, &channel),
         other => Err(Error::Usage(format!("unknown subcommand `{other}`"))),
     }

@@ -15,5 +15,6 @@ mod policy;
 mod process;
 mod qemu;
 mod spdx;
+mod symbolize;
 mod toolchain;
 mod unsafe_budget;

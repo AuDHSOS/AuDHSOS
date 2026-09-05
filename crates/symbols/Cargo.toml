@@ -2,8 +2,8 @@
 # Copyright (C) 2026 Manuel Baesler and contributors
 
 [package]
-name = "xtask"
-description = "Build automation of AuDHSOS: builds, checks, tests, coverage, and the policy tables"
+name = "audhsos-symbols"
+description = "Address to function, file, and line from the symbol table and the DWARF line program of an ELF file"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,9 +11,10 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-audhsos-abi.workspace = true
-audhsos-symbols.workspace = true
-kernel-test-harness.workspace = true
+audhsos-elf.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true
 
 [lints]
 workspace = true

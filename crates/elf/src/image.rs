@@ -182,7 +182,7 @@ const fn join(low: u32, high: u32) -> u64 {
 }
 
 /// The `u32` words of `bytes`, as many as fit into `N`.
-fn words<const N: usize>(bytes: &[u8]) -> [u32; N] {
+pub(crate) fn words<const N: usize>(bytes: &[u8]) -> [u32; N] {
     let mut result = [0u32; N];
     let (chunks, _rest) = bytes.as_chunks::<4>();
     for (slot, chunk) in result.iter_mut().zip(chunks) {

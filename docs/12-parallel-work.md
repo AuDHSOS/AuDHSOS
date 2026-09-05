@@ -402,14 +402,34 @@ the parser's crate and its input a file under `fuzz/corpus/<target>/`.
 
 ### 12.8.2 `audhsos-symbols`
 
-A reader for the symbol table and the DWARF line program of an ELF file,
-built on `audhsos-elf`: address to function, file, and line. The xtask
-uses it to resolve the addresses that a kernel panic prints over serial.
-From phase 3 on, every failing QEMU test pays for it.
+Implemented. A reader for the symbol table and the DWARF line program of
+an ELF file, built on `audhsos-elf`: address to function, file, and line.
 
-DWARF line programs of version 4 and 5, no inline frames, no call-frame
-information and therefore no stack unwinding, in the first version
-(D-54).
+`audhsos-elf` grew the section header table for it, which the loader does
+not read and a symbolizer cannot do without; `sections()` validates the
+magic, the class, and the byte order and nothing about segments, so a file
+without a loadable segment still yields its sections.
+
+The line program runs its state machine once per lookup and keeps only the
+row it needs, so the crate allocates nothing and borrows everything from
+the bytes it was handed. A row counts for an address only inside the
+sequence that ends above it. Version 4 and version 5 are read, the latter
+with the forms a file table uses: `string`, `strp`, `line_strp`, `udata`,
+the four fixed widths, `data16`, and `block`; an unknown form is an error
+rather than a guess. No inline frames, no call-frame information and
+therefore no stack unwinding (D-54).
+
+The directory and the file come back separately, because joining them
+would mean allocating; the xtask joins them. The name is the one the
+symbol table carries, which for Rust is the mangled one: demangling is not
+part of this version.
+
+The xtask uses it two ways. `cargo xtask symbolize <elf> <address>...`
+answers by hand, and a QEMU run that fails resolves every address of the
+kernel half in its serial output against the image it ran, after it prints
+that output. A file that cannot be read or carries no symbols produces
+nothing: the report is a comment on a run that already failed and must not
+fail it a second time.
 
 Tests: catalog 6.6.53.
 

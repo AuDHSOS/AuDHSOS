@@ -1160,14 +1160,27 @@ done until every applicable item has a test. Items are added, never removed.
   unchanged, including the empty slice; the regression list replays every
   stored corpus file; Miri covers the glue.
 - Symbol table: an address inside a function, at its first byte, at its
-  last byte, and one past it; an address in no function; a file with no
-  symbol table.
+  last byte, and one past it; an address in no function; a symbol that is
+  not a function; the narrowest of two functions that enclose each other;
+  a function of no size; a file with no symbol table.
+- Section header table: a section by name and by index; a section without
+  content; a name in no section; a file with no section table; an entry
+  shorter than the structure; a table that reaches beyond the file.
 - Line program: a DWARF version 4 and a version 5 program; the standard
   opcodes, a special opcode sequence, and an end-of-sequence marker; an
-  address before the first row and after the last; a truncated program is
-  rejected without panic.
+  unknown standard opcode skipped by its declared length and an unknown
+  extended one by its length; the sixty-four bit form of a unit; the forms
+  a version 5 file table uses, an unknown one rejected, and more formats
+  than the fixed capacity rejected; a directory or a file index no entry
+  matches; an address before the first row and after the last; a version
+  the crate does not read and a line range of zero are rejected; a
+  truncated program is rejected without panic.
 - Property: no input file causes a panic and every lookup either yields a
   location inside the file's ranges or reports none.
+- The xtask: the addresses of a trap report are found once each and in
+  order, and a number too short to be one is left alone; a resolved
+  address reads as one line; a report over a file that is not there says
+  nothing and fails nothing.
 
 ## 6.7 CI pipeline
 

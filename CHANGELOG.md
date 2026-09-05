@@ -7,6 +7,24 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `audhsos-symbols` (track G2): an address to a function, a file, and a
+  line. The symbol table gives the function, the DWARF line program of
+  version 4 or 5 gives the file and the line. The state machine runs once
+  per lookup and keeps only the row it needs, so the crate allocates
+  nothing and borrows everything from the bytes it was handed. No inline
+  frames and no call-frame information, and therefore no stack unwinding.
+- `audhsos-elf`: the section header table, which the loader does not read
+  and a symbolizer cannot do without. `sections()` needs the magic, the
+  class, and the byte order and nothing about segments, so a file without
+  a loadable segment still yields its sections.
+- `xtask`: `symbolize <elf> <address>...` answers by hand, and a QEMU run
+  that fails now resolves every address of the kernel half in its serial
+  output against the image it ran. A file that cannot be read or carries
+  no symbols produces nothing, because the report is a comment on a run
+  that already failed.
+- Catalog 6.6.53 gains the section header table items, the forms and the
+  odd opcodes of a line program, and the items of the xtask.
+
 - `fuzz-support` (track G1): the `LLVMFuzzerTestOneInput` entry glue, the
   `fuzz_target!` macro that writes it once, and the corpus replay. The one
   `unsafe` of the project's fuzzing turns the fuzzer's pointer and length

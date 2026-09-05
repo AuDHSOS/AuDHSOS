@@ -5,4 +5,5 @@
 //! product code only.
 
 mod image;
+mod sections;
 mod strategies;

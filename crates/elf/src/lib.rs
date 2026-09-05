@@ -7,11 +7,13 @@
 
 pub mod error;
 pub mod image;
+pub mod sections;
 #[cfg(any(test, feature = "test-strategies"))]
 pub mod strategies;
 
 pub use error::ElfError;
 pub use image::{Constraints, Image, MAX_SEGMENTS, Segment, parse};
+pub use sections::{SHDR_LEN, Section, Sections, sections};
 
 #[cfg(test)]
 mod tests;

@@ -28,6 +28,10 @@ pub enum ElfError {
     ProgramHeaderSize,
     /// The program header table reaches beyond the file.
     ProgramHeaderTable,
+    /// A section header entry is shorter than the structure.
+    SectionHeaderSize,
+    /// The section header table reaches beyond the file.
+    SectionHeaderTable,
     /// The file holds no loadable segment.
     NoSegments,
     /// The file holds more loadable segments than the fixed capacity.
@@ -79,6 +83,10 @@ impl fmt::Display for ElfError {
             ElfError::ProgramHeaderSize => f.write_str("a program header entry is too short"),
             ElfError::ProgramHeaderTable => {
                 f.write_str("the program header table reaches beyond the file")
+            }
+            ElfError::SectionHeaderSize => f.write_str("a section header entry is too short"),
+            ElfError::SectionHeaderTable => {
+                f.write_str("the section header table reaches beyond the file")
             }
             ElfError::NoSegments => f.write_str("the file holds no loadable segment"),
             ElfError::TooManySegments => f.write_str("the file holds too many loadable segments"),

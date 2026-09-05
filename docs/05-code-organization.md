@@ -106,7 +106,7 @@ AuDHSOS/
 | `driver-uart16550` | 1 | all | no | yes | - (feature `test-doubles`) |
 | `driver-i8042` | 1 | all | no | yes, fuzz | - (feature `test-doubles`) |
 | `gfx` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
-| `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf` |
+| `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf`; `test-support` as a dev-dependency |
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
 | `fs-fat` | 1 | all | no | yes | `audhsos-time`, `audhsos-collections`; feature `test-doubles` |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |

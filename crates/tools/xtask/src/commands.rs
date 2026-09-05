@@ -10,6 +10,7 @@ use crate::image::{boot_image, disk};
 use crate::policy::{FUZZ_TARGETS, MIRI_CRATES, Target, crates_for};
 use crate::process::Cmd;
 use crate::qemu::{self, Machine, Run};
+use crate::symbolize;
 use crate::{coverage, deps, fs, layering, linker, spdx, unsafe_budget};
 
 /// `rustfmt --check`, `clippy -D warnings` per target group, SPDX headers.
@@ -184,7 +185,7 @@ pub(crate) fn qemu_runner(root: &Path, options: &[String]) -> Result<(), Error> 
     let path = write_run_image(root, &name, &image)?;
     let machine = Machine::locate()?;
     let run = machine.run_captured(&path)?;
-    report_tests(&name, &run, &machine)
+    report_tests(&name, &run, &machine, Some(kernel))
 }
 
 /// What a test image has to write on the serial port beyond the
@@ -307,7 +308,12 @@ fn write_run_image(root: &Path, name: &str, image: &[u8]) -> Result<PathBuf, Err
 }
 
 /// Reports what one test kernel did and fails if it did not pass.
-fn report_tests(name: &str, run: &Run, machine: &Machine) -> Result<(), Error> {
+fn report_tests(
+    name: &str,
+    run: &Run,
+    machine: &Machine,
+    image: Option<&Path>,
+) -> Result<(), Error> {
     let report = qemu::parse(&run.output);
     let outcome = run.outcome();
     eprintln!(
@@ -334,6 +340,9 @@ fn report_tests(name: &str, run: &Run, machine: &Machine) -> Result<(), Error> {
             eprintln!("--- serial output of {name} ---");
             eprint!("{}", run.output);
             eprintln!("--- end of {name} ---");
+            if let Some(image) = image {
+                symbolize::report(image, &run.output);
+            }
             Err(error)
         }
     }
