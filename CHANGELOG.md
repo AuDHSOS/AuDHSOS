@@ -25,6 +25,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   6979 vectors pass over the shared code. An element carries the width of
   its encoding as a parameter, and a width that does not match its limbs
   fails to compile.
+- `audhsos-x509` reads and verifies P-384 keys: `oid::SECP384R1`,
+  `SubjectPublicKey::EcdsaP384`, and the pairings of that key with
+  `ecdsa-with-SHA256` and `ecdsa-with-SHA384`. The curve named in the
+  algorithm and the width of the point must agree, so a P-384 identifier
+  over a P-256 point is a bad key rather than either curve. The test
+  certificate builder gains `TestKey::EcdsaP384Sha384`, so a whole chain
+  of that curve is one the test suites build rather than vendor; the TLS
+  client is driven through a handshake over such a chain.
 - `tools/tls-probe`: a host program that drives the sans-I/O client over a
   real socket, so that the stack is answered by a server instead of by a
   recording. It opens TCP, runs the handshake, and speaks enough HTTP/1.1

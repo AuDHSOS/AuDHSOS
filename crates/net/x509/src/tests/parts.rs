@@ -59,9 +59,34 @@ fn a_public_key_must_match_its_algorithm() {
         Ok(SubjectPublicKey::EcdsaP256(_))
     ));
 
-    // Another curve.
+    let point384 = [0x04u8; 97];
     let mut algorithm = encode(0x06, crate::oid::EC_PUBLIC_KEY);
-    algorithm.extend_from_slice(&encode(0x06, &[0x2B, 0x81, 0x04, 0x00, 0x22]));
+    algorithm.extend_from_slice(&encode(0x06, crate::oid::SECP384R1));
+    let mut bits384 = vec![0x00];
+    bits384.extend_from_slice(&point384);
+    let mut info = encode(0x30, &algorithm);
+    info.extend_from_slice(&encode(0x03, &bits384));
+    let encoded = encode(0x30, &info);
+    assert!(matches!(
+        SubjectPublicKey::parse(&mut Reader::new(&encoded)),
+        Ok(SubjectPublicKey::EcdsaP384(_))
+    ));
+
+    // The curve and the width of the point must agree: a P-384 identifier
+    // over a P-256 point is not a key of either curve.
+    let mut algorithm = encode(0x06, crate::oid::EC_PUBLIC_KEY);
+    algorithm.extend_from_slice(&encode(0x06, crate::oid::SECP384R1));
+    let mut info = encode(0x30, &algorithm);
+    info.extend_from_slice(&encode(0x03, &bits));
+    let encoded = encode(0x30, &info);
+    assert_eq!(
+        SubjectPublicKey::parse(&mut Reader::new(&encoded)).err(),
+        Some(X509Error::BadPublicKey)
+    );
+
+    // A curve neither of them is: secp521r1, 1.3.132.0.35.
+    let mut algorithm = encode(0x06, crate::oid::EC_PUBLIC_KEY);
+    algorithm.extend_from_slice(&encode(0x06, &[0x2B, 0x81, 0x04, 0x00, 0x23]));
     let mut info = encode(0x30, &algorithm);
     info.extend_from_slice(&encode(0x03, &bits));
     let encoded = encode(0x30, &info);
@@ -116,6 +141,12 @@ fn a_key_does_not_verify_under_the_wrong_algorithm() {
     );
 
     let point = SubjectPublicKey::EcdsaP256(&[0x04u8; 65]);
+    assert_eq!(
+        point.verify(SignatureAlgorithm::Ed25519, b"body", &[0u8; 64]),
+        Err(X509Error::UnsupportedAlgorithm)
+    );
+
+    let point = SubjectPublicKey::EcdsaP384(&[0x04u8; 97]);
     assert_eq!(
         point.verify(SignatureAlgorithm::Ed25519, b"body", &[0u8; 64]),
         Err(X509Error::UnsupportedAlgorithm)

@@ -17,6 +17,10 @@ pub const ED25519: &[u8] = &[0x2B, 0x65, 0x70];
 pub const EC_PUBLIC_KEY: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01];
 /// `prime256v1`, 1.2.840.10045.3.1.7, the curve of P-256.
 pub const PRIME256V1: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07];
+/// `secp384r1`, 1.3.132.0.34, the curve of P-384. RFC 5480, section
+/// 2.1.1.1 assigns it; the arc is SECG's, not ANSI's, which is why it does
+/// not sit beside `prime256v1`.
+pub const SECP384R1: &[u8] = &[0x2B, 0x81, 0x04, 0x00, 0x22];
 /// `id-at-commonName`, 2.5.4.3.
 pub const COMMON_NAME: &[u8] = &[0x55, 0x04, 0x03];
 /// `id-ce-basicConstraints`, 2.5.29.19.

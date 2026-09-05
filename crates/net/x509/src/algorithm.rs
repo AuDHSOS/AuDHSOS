@@ -5,7 +5,8 @@
 
 use audhsos_der::{Reader, Tag};
 use crypto_ec::ed25519;
-use crypto_ec::p256::PublicKey as EcdsaKey;
+use crypto_ec::p256::PublicKey as P256Key;
+use crypto_ec::p384::PublicKey as P384Key;
 use crypto_hash::{Sha256, Sha384};
 
 use crate::error::X509Error;
@@ -50,6 +51,8 @@ impl SignatureAlgorithm {
 pub enum SubjectPublicKey<'a> {
     /// A point of P-256, in the uncompressed encoding.
     EcdsaP256(&'a [u8]),
+    /// A point of P-384, in the uncompressed encoding.
+    EcdsaP384(&'a [u8]),
     /// An Ed25519 key.
     Ed25519(&'a [u8]),
 }
@@ -70,16 +73,26 @@ impl<'a> SubjectPublicKey<'a> {
 
         let key = match identifier.as_bytes() {
             oid::EC_PUBLIC_KEY => {
+                // RFC 5480, section 2.2: the point is the uncompressed
+                // encoding, one byte of form and two coordinates, so its
+                // width says which curve it is as surely as the identifier
+                // does. Both are checked, and they must agree.
                 let curve = algorithm.read_object_identifier()?;
-                if curve.as_bytes() != oid::PRIME256V1 {
-                    return Err(X509Error::UnsupportedAlgorithm);
-                }
+                let width = match curve.as_bytes() {
+                    oid::PRIME256V1 => 65,
+                    oid::SECP384R1 => 97,
+                    _ => return Err(X509Error::UnsupportedAlgorithm),
+                };
                 algorithm.finish()?;
                 let bits = info.read_bit_string()?.whole_bytes()?;
-                if bits.len() != 65 {
+                if bits.len() != width {
                     return Err(X509Error::BadPublicKey);
                 }
-                SubjectPublicKey::EcdsaP256(bits)
+                if width == 65 {
+                    SubjectPublicKey::EcdsaP256(bits)
+                } else {
+                    SubjectPublicKey::EcdsaP384(bits)
+                }
             }
             oid::ED25519 => {
                 // RFC 8410: the parameters field is absent, not null.
@@ -126,6 +139,14 @@ impl<'a> SubjectPublicKey<'a> {
                 let digest = Sha384::digest(body);
                 verify_ecdsa(key, digest.as_ref(), signature)
             }
+            (SubjectPublicKey::EcdsaP384(key), SignatureAlgorithm::EcdsaSha256) => {
+                let digest = Sha256::digest(body);
+                verify_ecdsa_p384(key, digest.as_ref(), signature)
+            }
+            (SubjectPublicKey::EcdsaP384(key), SignatureAlgorithm::EcdsaSha384) => {
+                let digest = Sha384::digest(body);
+                verify_ecdsa_p384(key, digest.as_ref(), signature)
+            }
             _ => Err(X509Error::UnsupportedAlgorithm),
         }
     }
@@ -134,27 +155,37 @@ impl<'a> SubjectPublicKey<'a> {
 /// Verifies an ECDSA signature, whose two integers arrive wrapped in a
 /// sequence of their own.
 fn verify_ecdsa(key: &[u8], digest: &[u8], signature: &[u8]) -> Result<(), X509Error> {
-    let key = EcdsaKey::from_sec1(key).map_err(|_| X509Error::BadPublicKey)?;
+    let key = P256Key::from_sec1(key).map_err(|_| X509Error::BadPublicKey)?;
+    let (r, s) = signature_pair(signature)?;
+    key.verify(digest, &right_aligned(r)?, &right_aligned(s)?)
+        .map_err(|_| X509Error::SignatureFailed)
+}
 
+/// The same over P-384.
+fn verify_ecdsa_p384(key: &[u8], digest: &[u8], signature: &[u8]) -> Result<(), X509Error> {
+    let key = P384Key::from_sec1(key).map_err(|_| X509Error::BadPublicKey)?;
+    let (r, s) = signature_pair(signature)?;
+    key.verify(digest, &right_aligned(r)?, &right_aligned(s)?)
+        .map_err(|_| X509Error::SignatureFailed)
+}
+
+/// The two integers of a DER `ECDSA-Sig-Value`, as RFC 5480 defines it.
+fn signature_pair(signature: &[u8]) -> Result<(&[u8], &[u8]), X509Error> {
     let mut outer = Reader::new(signature);
     let mut pair = outer.read_sequence().map_err(|_| X509Error::BadSignature)?;
     let r = pair.read_integer().map_err(|_| X509Error::BadSignature)?;
     let s = pair.read_integer().map_err(|_| X509Error::BadSignature)?;
     pair.finish().map_err(|_| X509Error::BadSignature)?;
     outer.finish().map_err(|_| X509Error::BadSignature)?;
-
-    let r = right_aligned(r)?;
-    let s = right_aligned(s)?;
-    key.verify(digest, &r, &s)
-        .map_err(|_| X509Error::SignatureFailed)
+    Ok((r, s))
 }
 
-/// A signature component as thirty-two bytes, aligned to the right.
-fn right_aligned(value: &[u8]) -> Result<[u8; 32], X509Error> {
-    let start = 32usize
-        .checked_sub(value.len())
-        .ok_or(X509Error::BadSignature)?;
-    let mut bytes = [0u8; 32];
+/// A signature component as `N` bytes, aligned to the right. DER drops
+/// the leading zeros of an integer, and the curve decides how many go
+/// back on.
+fn right_aligned<const N: usize>(value: &[u8]) -> Result<[u8; N], X509Error> {
+    let start = N.checked_sub(value.len()).ok_or(X509Error::BadSignature)?;
+    let mut bytes = [0u8; N];
     for (slot, byte) in bytes.iter_mut().skip(start).zip(value) {
         *slot = *byte;
     }

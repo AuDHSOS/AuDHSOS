@@ -14,7 +14,7 @@
 //! not fit.
 
 use audhsos_time::CivilTime;
-use crypto_ec::{ed25519, p256};
+use crypto_ec::{ed25519, p256, p384};
 use crypto_hash::{Sha256, Sha384};
 
 use crate::algorithm::SignatureAlgorithm;
@@ -35,8 +35,12 @@ pub enum TestKey {
     Ed25519([u8; 32]),
     /// A P-256 key signing with SHA-256.
     EcdsaSha256([u8; 32]),
-    /// A P-256 key signing with SHA-384.
+    /// A P-256 key signing with SHA-384. X.509 allows the pair; a TLS
+    /// signature scheme does not, which is what makes this key useful to
+    /// the test that checks the difference.
     EcdsaSha384([u8; 32]),
+    /// A P-384 key signing with SHA-384.
+    EcdsaP384Sha384([u8; 48]),
 }
 
 impl TestKey {
@@ -46,7 +50,9 @@ impl TestKey {
         match self {
             TestKey::Ed25519(_) => SignatureAlgorithm::Ed25519,
             TestKey::EcdsaSha256(_) => SignatureAlgorithm::EcdsaSha256,
-            TestKey::EcdsaSha384(_) => SignatureAlgorithm::EcdsaSha384,
+            TestKey::EcdsaSha384(_) | TestKey::EcdsaP384Sha384(_) => {
+                SignatureAlgorithm::EcdsaSha384
+            }
         }
     }
 
@@ -56,8 +62,8 @@ impl TestKey {
     ///
     /// [`X509Error::BadPublicKey`] when the secret is out of range, which
     /// only a hand-written test key can be.
-    pub fn public_key(self) -> Result<([u8; 65], usize), X509Error> {
-        let mut bytes = [0u8; 65];
+    pub fn public_key(self) -> Result<([u8; 97], usize), X509Error> {
+        let mut bytes = [0u8; 97];
         match self {
             TestKey::Ed25519(secret) => {
                 let public = ed25519::public_key(&secret);
@@ -72,6 +78,13 @@ impl TestKey {
                     *slot = byte;
                 }
                 Ok((bytes, 65))
+            }
+            TestKey::EcdsaP384Sha384(secret) => {
+                let public = p384::public_key(&secret).map_err(|_| X509Error::BadPublicKey)?;
+                for (slot, byte) in bytes.iter_mut().zip(public) {
+                    *slot = byte;
+                }
+                Ok((bytes, 97))
             }
         }
     }
@@ -102,6 +115,13 @@ impl TestKey {
                     *slot = *byte;
                 }
                 sign_ecdsa(&secret, &leftmost, out)
+            }
+            TestKey::EcdsaP384Sha384(secret) => {
+                // SHA-384 is exactly as wide as the order, so the digest is
+                // the scalar and nothing is truncated or padded.
+                let digest = Sha384::digest(body);
+                let (r, s) = p384::sign(&secret, &digest).map_err(|_| X509Error::BadSignature)?;
+                write_signature(&r, &s, out)
             }
         }
     }
@@ -333,9 +353,13 @@ fn write_public_key(writer: &mut Writer<'_>, key: TestKey) -> Result<(), X509Err
             fields.value(0x06, oid::EC_PUBLIC_KEY)?;
             fields.value(0x06, oid::PRIME256V1)?;
         }
+        TestKey::EcdsaP384Sha384(_) => {
+            fields.value(0x06, oid::EC_PUBLIC_KEY)?;
+            fields.value(0x06, oid::SECP384R1)?;
+        }
     }
 
-    let mut bits = [0u8; 96];
+    let mut bits = [0u8; 128];
     let mut string = Writer::new(&mut bits);
     string.push(0x00)?;
     string.extend(public.get(..length).unwrap_or(&[]))?;
@@ -496,11 +520,15 @@ fn write_extension(
 fn sign_ecdsa(secret: &[u8; 32], digest: &[u8], out: &mut [u8]) -> Result<usize, X509Error> {
     let digest: &[u8; 32] = digest.try_into().map_err(|_| X509Error::BadSignature)?;
     let (r, s) = p256::sign(secret, digest).map_err(|_| X509Error::BadSignature)?;
+    write_signature(&r, &s, out)
+}
 
-    let mut buffer = [0u8; 80];
+/// Writes the two integers of an `ECDSA-Sig-Value` as a sequence.
+fn write_signature(r: &[u8], s: &[u8], out: &mut [u8]) -> Result<usize, X509Error> {
+    let mut buffer = [0u8; 112];
     let mut fields = Writer::new(&mut buffer);
-    write_integer(&mut fields, &r)?;
-    write_integer(&mut fields, &s)?;
+    write_integer(&mut fields, r)?;
+    write_integer(&mut fields, s)?;
 
     let mut writer = Writer::new(out);
     writer.value(0x30, fields.written())?;
@@ -510,7 +538,7 @@ fn sign_ecdsa(secret: &[u8; 32], digest: &[u8], out: &mut [u8]) -> Result<usize,
 /// Writes an unsigned integer in the shortest form.
 fn write_integer(writer: &mut Writer<'_>, value: &[u8]) -> Result<(), X509Error> {
     let trimmed = trim_leading_zeros(value);
-    let mut buffer = [0u8; 33];
+    let mut buffer = [0u8; 49];
     let mut bytes = Writer::new(&mut buffer);
     match trimmed.first() {
         None => bytes.push(0x00)?,
