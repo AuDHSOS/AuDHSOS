@@ -21,7 +21,7 @@
 
 use audhsos_collections::ArrayVec;
 use audhsos_time::{Duration, Instant};
-use net_wire::{Ipv4Addr, Protocol, Writer};
+use net_wire::{IpAddr, Protocol, Writer};
 
 use crate::error::IpError;
 use crate::header::{Datagram, FRAGMENT_UNIT, Header, MIN_HEADER_LEN};
@@ -47,18 +47,29 @@ pub struct Fragments {
 }
 
 impl Fragments {
-    /// How a payload of `payload_len` bytes is cut for `mtu`.
+    /// How a payload of `payload_len` bytes is cut for `mtu`, behind a
+    /// header of `header_len` bytes.
+    ///
+    /// The header length is an argument because the two families put a
+    /// different number of bytes in front of a piece: twenty for IPv4,
+    /// and forty plus the eight of the fragment header for IPv6. The
+    /// arithmetic behind them is the same, which is why it is written
+    /// once and here (D-69).
     ///
     /// # Errors
     ///
-    /// [`IpError::WouldFragment`] when the MTU has no room for a header
+    /// [`IpError::WouldFragment`] when the MTU has no room for the header
     /// and at least eight bytes behind it.
-    pub const fn new(payload_len: usize, mtu: usize) -> Result<Fragments, IpError> {
+    pub const fn with_header(
+        payload_len: usize,
+        mtu: usize,
+        header_len: usize,
+    ) -> Result<Fragments, IpError> {
         let too_small = Err(IpError::WouldFragment {
             length: payload_len,
             mtu,
         });
-        let Some(room) = mtu.checked_sub(MIN_HEADER_LEN) else {
+        let Some(room) = mtu.checked_sub(header_len) else {
             return too_small;
         };
         // Round down to the eight-byte unit the offset field counts in.
@@ -71,6 +82,16 @@ impl Fragments {
             payload_len,
             offset: 0,
         })
+    }
+
+    /// The same behind the twenty bytes of an IPv4 header without
+    /// options, which is the only header this crate writes.
+    ///
+    /// # Errors
+    ///
+    /// As [`with_header`](Self::with_header).
+    pub const fn new(payload_len: usize, mtu: usize) -> Result<Fragments, IpError> {
+        Fragments::with_header(payload_len, mtu, MIN_HEADER_LEN)
     }
 
     /// How many pieces there will be.
@@ -165,10 +186,65 @@ where
     Ok(written)
 }
 
+/// One piece of a datagram, as either family presents it.
+///
+/// It is what the reassembler works in, so that the buffers, the overlap
+/// rule, and the deadlines are written once and both internet layers use
+/// them (D-69). What the two families disagree about — where the fields
+/// sit and how wide the identification is — is read by the layer that
+/// owns the header and handed over in this shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Piece<'a> {
+    /// Where the datagram came from.
+    pub source: IpAddr,
+    /// Where it goes.
+    pub destination: IpAddr,
+    /// What names it apart from the addresses. RFC 791, section 3.2 puts
+    /// the protocol in the key and RFC 8200, section 4.5 does not, so the
+    /// IPv6 side passes one constant here and the key is the triple that
+    /// document names.
+    pub protocol: Protocol,
+    /// Which datagram of that pair it is. Sixteen bits on the wire for
+    /// IPv4 and thirty-two for IPv6, so the wider of the two is carried.
+    pub identification: u32,
+    /// Where this piece begins in the datagram, in bytes.
+    pub offset: usize,
+    /// Whether another piece follows.
+    pub more: bool,
+    /// The bytes this piece carries.
+    pub payload: &'a [u8],
+}
+
+impl<'a> Piece<'a> {
+    /// The piece an IPv4 datagram is.
+    #[must_use]
+    pub fn of(datagram: Datagram<'a>) -> Piece<'a> {
+        Piece {
+            source: IpAddr::V4(datagram.source()),
+            destination: IpAddr::V4(datagram.destination()),
+            protocol: datagram.protocol(),
+            identification: u32::from(datagram.identification()),
+            offset: datagram.fragment_offset(),
+            more: datagram.more_fragments(),
+            payload: datagram.payload(),
+        }
+    }
+
+    /// What names the datagram this piece belongs to.
+    const fn key(&self) -> Key {
+        Key {
+            source: self.source,
+            destination: self.destination,
+            protocol: self.protocol,
+            identification: self.identification,
+        }
+    }
+}
+
 /// One datagram being put back together.
 #[derive(Debug)]
 struct Buffer<const BYTES: usize> {
-    /// Which datagram this is: the four fields RFC 791 says identify one.
+    /// Which datagram this is.
     key: Key,
     /// When it is given up on.
     deadline: Instant,
@@ -181,24 +257,20 @@ struct Buffer<const BYTES: usize> {
     filled: ArrayVec<(usize, usize), 64>,
     /// How long the whole datagram is, once the last piece has arrived.
     total: Option<usize>,
-    /// The header of the first piece, which is the one the reassembled
-    /// datagram keeps.
-    header: [u8; MIN_HEADER_LEN],
-    /// Whether that header has arrived.
-    have_header: bool,
 }
 
-/// What names one datagram, per RFC 791, section 3.2.
+/// What names one datagram: the fields of RFC 791, section 3.2, widened
+/// to hold either family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Key {
     /// Where it came from.
-    source: Ipv4Addr,
+    source: IpAddr,
     /// Where it goes.
-    destination: Ipv4Addr,
+    destination: IpAddr,
     /// What it carries.
     protocol: Protocol,
     /// Which datagram of that pair it is.
-    identification: u16,
+    identification: u32,
 }
 
 /// The reassembly buffers.
@@ -285,10 +357,7 @@ impl<const SLOTS: usize, const BYTES: usize> Reassembler<SLOTS, BYTES> {
     ///
     /// # Errors
     ///
-    /// [`IpError::OverlappingFragment`] when two pieces claim the same
-    /// bytes and disagree, [`IpError::TooLarge`] when the datagram would
-    /// not fit `BYTES`, and [`IpError::NoRoute`] when there is no slot and
-    /// nothing to evict, which is a reassembler of no slots at all.
+    /// As [`accept_piece`](Self::accept_piece).
     pub fn accept<'a>(
         &'a mut self,
         datagram: Datagram<'a>,
@@ -297,39 +366,62 @@ impl<const SLOTS: usize, const BYTES: usize> Reassembler<SLOTS, BYTES> {
         if !datagram.is_fragment() {
             return Ok(Some(Assembled::Whole(datagram)));
         }
-        let key = Key {
-            source: datagram.source(),
-            destination: datagram.destination(),
-            protocol: datagram.protocol(),
-            identification: datagram.identification(),
-        };
-        let at = datagram.fragment_offset();
-        let end = at.saturating_add(datagram.payload().len());
+        let data = self.accept_piece(Piece::of(datagram), now)?;
+        Ok(data.map(|data| Assembled::Reassembled { data }))
+    }
+
+    /// Takes one piece of either family in, and answers the whole
+    /// datagram's payload when this piece completed it.
+    ///
+    /// This is what `net-ipv6` calls: the fragment header of RFC 8200,
+    /// section 4.5 puts the same three numbers in a different place, and
+    /// everything behind them — the buffers, the overlap rule, the
+    /// deadline — is this one machine.
+    ///
+    /// The reassembled datagram has no header here, and it needs none:
+    /// the caller holds the piece that completed it, and the fields
+    /// reassembly is about — the two addresses and the identification —
+    /// are the same in every piece by definition. The ones that are not
+    /// are the time to live, the traffic class, and IPv4's options, and
+    /// no layer above reads them off a reassembled datagram.
+    ///
+    /// # Errors
+    ///
+    /// [`IpError::OverlappingFragment`] when two pieces claim the same
+    /// bytes and disagree, [`IpError::TooLarge`] when the datagram would
+    /// not fit `BYTES`, and [`IpError::NoRoute`] when there is no slot and
+    /// nothing to evict, which is a reassembler of no slots at all.
+    pub fn accept_piece(
+        &mut self,
+        piece: Piece<'_>,
+        now: Instant,
+    ) -> Result<Option<&[u8]>, IpError> {
+        let at = piece.offset;
+        let end = at.saturating_add(piece.payload.len());
         if end > BYTES {
             return Err(IpError::TooLarge(end));
         }
         let deadline = now.saturating_add(self.timeout);
-        let index = self.slot_for(key, deadline)?;
+        let index = self.slot_for(piece.key(), deadline)?;
         let buffer = self.buffers.get_mut(index).ok_or(IpError::NoRoute)?;
-        buffer.insert(datagram, at, end)?;
+        buffer.insert(piece, at, end)?;
         if !buffer.is_complete() {
             return Ok(None);
         }
         let total = buffer.total.unwrap_or(0);
-        let header = buffer.header;
         let data = buffer.data.get(..total).ok_or(IpError::TooLarge(total))?;
-        Ok(Some(Assembled::Reassembled { header, data }))
+        Ok(Some(data))
     }
 
     /// Forgets the datagram this fragment belongs to, which a caller does
     /// once it has read a reassembled one out.
     pub fn release(&mut self, datagram: Datagram<'_>) {
-        let key = Key {
-            source: datagram.source(),
-            destination: datagram.destination(),
-            protocol: datagram.protocol(),
-            identification: datagram.identification(),
-        };
+        self.release_piece(Piece::of(datagram));
+    }
+
+    /// The same for a piece of either family.
+    pub fn release_piece(&mut self, piece: Piece<'_>) {
+        let key = piece.key();
         if let Some((index, _)) = self
             .buffers
             .iter()
@@ -365,8 +457,6 @@ impl<const SLOTS: usize, const BYTES: usize> Reassembler<SLOTS, BYTES> {
             data: [0; BYTES],
             filled: ArrayVec::new(),
             total: None,
-            header: [0; MIN_HEADER_LEN],
-            have_header: false,
         };
         self.buffers.push(buffer).map_err(|_| IpError::NoRoute)?;
         Ok(self.buffers.len().saturating_sub(1))
@@ -380,8 +470,6 @@ pub enum Assembled<'a> {
     Whole(Datagram<'a>),
     /// The datagram was put back together in the reassembler's buffer.
     Reassembled {
-        /// The header of the first piece, twenty bytes without options.
-        header: [u8; MIN_HEADER_LEN],
         /// The payload, whole.
         data: &'a [u8],
     },
@@ -393,22 +481,21 @@ impl<'a> Assembled<'a> {
     pub const fn payload(&self) -> &'a [u8] {
         match self {
             Assembled::Whole(datagram) => datagram.payload(),
-            Assembled::Reassembled { data, .. } => data,
+            Assembled::Reassembled { data } => data,
         }
     }
 }
 
 impl<const BYTES: usize> Buffer<BYTES> {
     /// Puts one fragment's bytes in.
-    fn insert(&mut self, datagram: Datagram<'_>, at: usize, end: usize) -> Result<(), IpError> {
+    fn insert(&mut self, piece: Piece<'_>, at: usize, end: usize) -> Result<(), IpError> {
         for (start, stop) in self.filled.iter().copied() {
             if at < stop && start < end {
                 // They touch. Identical bytes are a duplicate and are
                 // dropped; anything else is an overlap and the datagram
                 // goes.
-                let same = at == start
-                    && end == stop
-                    && self.data.get(at..end) == Some(datagram.payload());
+                let same =
+                    at == start && end == stop && self.data.get(at..end) == Some(piece.payload);
                 if same {
                     return Ok(());
                 }
@@ -416,32 +503,25 @@ impl<const BYTES: usize> Buffer<BYTES> {
             }
         }
         let room = self.data.get_mut(at..end).ok_or(IpError::TooLarge(end))?;
-        room.copy_from_slice(datagram.payload());
+        room.copy_from_slice(piece.payload);
         self.filled
             .push((at, end))
             .map_err(|_| IpError::TooLarge(end))?;
-        if !datagram.more_fragments() {
+        if !piece.more {
             self.total = Some(end);
-        }
-        if datagram.is_initial_fragment() && !self.have_header {
-            let header = datagram
-                .header()
-                .get(..MIN_HEADER_LEN)
-                .ok_or(IpError::TooLarge(end))?;
-            self.header.copy_from_slice(header);
-            self.have_header = true;
         }
         Ok(())
     }
 
     /// Whether every byte from zero to the total length has arrived.
+    ///
+    /// Reaching the total from zero is what says the first piece arrived:
+    /// a run of ranges that covers the length has to begin at zero, so
+    /// there is nothing else to check.
     fn is_complete(&self) -> bool {
         let Some(total) = self.total else {
             return false;
         };
-        if !self.have_header {
-            return false;
-        }
         let mut reached = 0usize;
         let mut progressed = true;
         while progressed {

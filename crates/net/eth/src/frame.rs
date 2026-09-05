@@ -12,7 +12,7 @@
 //! A frame is a borrowed view. Nothing here copies a payload; the layer
 //! above reads it where it landed.
 
-use net_wire::{EtherType, MacAddr, Reader, Writer};
+use net_wire::{EtherType, Ipv6Addr, MacAddr, Reader, Writer};
 
 use crate::error::EthError;
 
@@ -143,6 +143,39 @@ impl<'a> Frame<'a> {
         writer.write_bytes(payload)?;
         Ok(())
     }
+}
+
+/// The Ethernet address an IPv6 multicast group is reached at.
+///
+/// RFC 2464, section 7: the two bytes `33:33` and the last four bytes of
+/// the group. It is a function and not a table, so a host sends to a
+/// group without having joined anything — which is what Neighbor
+/// Discovery does, since the solicited-node group of a neighbor is
+/// derived from that neighbor's address and never from this station's.
+///
+/// ARP has no counterpart: it broadcasts, and a broadcast reaches every
+/// station on the link whether it cares or not.
+#[must_use]
+pub const fn multicast_hardware(group: Ipv6Addr) -> MacAddr {
+    let [
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        _,
+        first,
+        second,
+        third,
+        fourth,
+    ] = group.octets();
+    MacAddr::new([0x33, 0x33, first, second, third, fourth])
 }
 
 /// The frame in `bytes`, if a station with the address `interface` has

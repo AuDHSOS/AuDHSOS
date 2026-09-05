@@ -12,7 +12,7 @@ pub mod neighbor;
 
 pub use arp::{Operation, Packet};
 pub use error::EthError;
-pub use frame::{Frame, HEADER_LEN, MAX_FRAME_LEN, MTU, receive};
+pub use frame::{Frame, HEADER_LEN, MAX_FRAME_LEN, MTU, multicast_hardware, receive};
 pub use neighbor::{Event, NeighborCache, NeighborState, Resolution, Timers};
 
 #[cfg(test)]

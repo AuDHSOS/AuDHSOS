@@ -9,12 +9,12 @@
     reason = "a test computes a length or an instant in the open"
 )]
 
-use net_wire::{EtherType, MacAddr, Reader, WireError, Writer};
+use net_wire::{EtherType, Ipv6Addr, MacAddr, Reader, WireError, Writer};
 use test_support::generators::bytes;
 use test_support::property::check;
 
 use crate::error::EthError;
-use crate::frame::{Frame, HEADER_LEN, MAX_FRAME_LEN, MTU, receive};
+use crate::frame::{Frame, HEADER_LEN, MAX_FRAME_LEN, MTU, multicast_hardware, receive};
 
 /// The address of the station under test.
 const INTERFACE: MacAddr = MacAddr::new([0x02, 0x00, 0x5E, 0x00, 0x00, 0x01]);
@@ -198,4 +198,38 @@ fn no_sequence_of_bytes_makes_the_parser_do_anything_but_answer() {
         }
         Ok(())
     });
+}
+
+#[test]
+fn an_ipv6_group_is_reached_at_the_address_rfc_2464_derives() {
+    // RFC 2464, section 7: the bytes `33:33` and the last four of the
+    // group. This is what lets Neighbor Discovery address a station whose
+    // hardware address nobody knows yet, where ARP has to broadcast.
+    let all_nodes = multicast_hardware(Ipv6Addr::ALL_NODES);
+    assert_eq!(
+        all_nodes,
+        MacAddr::new([0x33, 0x33, 0x00, 0x00, 0x00, 0x01])
+    );
+    assert!(all_nodes.is_multicast());
+    assert!(!all_nodes.is_broadcast());
+
+    let host = Ipv6Addr::from_octets([
+        0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0x02, 0x1b, 0x44, 0xff, 0xfe, 0x11, 0x3a, 0xb7,
+    ]);
+    let group = host.solicited_node();
+    assert_eq!(
+        multicast_hardware(group),
+        MacAddr::new([0x33, 0x33, 0xFF, 0x11, 0x3A, 0xB7]),
+        "the low twenty-four bits of the address, and the byte above them"
+    );
+    // Two hosts whose addresses differ above the low twenty-four bits
+    // share the group, and therefore the frame; the layer above sorts
+    // them out by the target field of the solicitation.
+    let other = Ipv6Addr::from_octets([
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xfe, 0x11, 0x3a, 0xb7,
+    ]);
+    assert_eq!(
+        multicast_hardware(other.solicited_node()),
+        multicast_hardware(group)
+    );
 }

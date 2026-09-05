@@ -20,21 +20,26 @@ arrangement.
 | `rfc894.txt` | RFC 894, *A Standard for the Transmission of IP Datagrams over Ethernet Networks*, C. Hornig, April 1984 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc894.txt` | 5697 | `be88b9301e53f986aca3a0e55e488d1d79bae3f88fe3f257640397bc089e7035` |
 | `rfc1071.txt` | RFC 1071, *Computing the Internet Checksum*, R. Braden, D. Borman, C. Partridge, September 1988 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1071.txt` | 53524 | `e10dfd6816447843d47a7f1b990eba756a791a6308fd5b698a6276075a8e4f9b` |
 | `rfc1122.txt` | RFC 1122, *Requirements for Internet Hosts — Communication Layers*, R. Braden (ed.), October 1989 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1122.txt` | 289148 | `9f526e6bebc868324fedb90aebbcf6e5b15c53fd373ca5d5ce1c2cdcd264e04f` |
+| `rfc2464.txt` | RFC 2464, *Transmission of IPv6 Packets over Ethernet Networks*, M. Crawford, December 1998 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc2464.txt` | 12725 | `f9554329ef1f4e093513e5b6f7af00bb5d206710e0c61d08bd578fa5f00aee9a` |
 | `rfc4291.txt` | RFC 4291, *IP Version 6 Addressing Architecture*, R. Hinden, S. Deering, February 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4291.txt` | 52897 | `4d58dff6b432d5d524bf3a3b7f0337a4177fa65f92ed72f2a92e97b471de48b2` |
+| `rfc4443.txt` | RFC 4443, *Internet Control Message Protocol (ICMPv6) for the Internet Protocol Version 6 (IPv6) Specification*, A. Conta, S. Deering, M. Gupta (ed.), March 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4443.txt` | 48969 | `f20d1de8878e1142000bfeaa3ad1b0540fab7653a395cf7b07e81d2da2f650bf` |
 | `rfc4861.txt` | RFC 4861, *Neighbor Discovery for IP version 6 (IPv6)*, T. Narten, E. Nordmark, W. Simpson, H. Soliman, September 2007 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4861.txt` | 235106 | `1a4309c117d765a7c0edfcb2297fc90c3c09f0fcae255f15e53b20748bcc09fb` |
+| `rfc4862.txt` | RFC 4862, *IPv6 Stateless Address Autoconfiguration*, S. Thomson, T. Narten, T. Jinmei, September 2007 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4862.txt` | 72482 | `6d3d2af5d2f6c9109b4ebd038ff7a6cec56771bbb0b5d8bd520357e03f097aa2` |
 | `rfc5480.txt` | RFC 5480, *Elliptic Curve Cryptography Subject Public Key Information*, S. Turner, D. Brown, K. Yiu, R. Housley, T. Polk, March 2009 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5480.txt` | 36209 | `593bf29fd0da2ff8b903c3ebf1c9d189a770039159e2ba46a0c3b91355037f26` |
 | `rfc5758.txt` | RFC 5758, *Internet X.509 Public Key Infrastructure: Additional Algorithms and Identifiers for DSA and ECDSA*, Q. Dang, S. Santesson, K. Moriarty, D. Brown, T. Polk, January 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5758.txt` | 15834 | `4d02628ff0875a1960d34be584a68f88528b96242bdc5a05a40a29ef01cf1532` |
 | `rfc5903.txt` | RFC 5903, *Elliptic Curve Groups modulo a Prime (ECP Groups) for IKE and IKEv2*, D. Fu, J. Solinas, June 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5903.txt` | 29175 | `939fab548a6e6bb49a5b3c4dd24a3c5df54a46645447b2d6f4df4fd88ff2d69f` |
 | `rfc5952.txt` | RFC 5952, *A Recommendation for IPv6 Address Text Representation*, S. Kawamura, M. Kawashima, August 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5952.txt` | 26570 | `c75e82c5f53bcec8148820fadf0d65935336ee2031fa6ce10504797ed4c1979d` |
 | `rfc6979.txt` | RFC 6979, *Deterministic Usage of the Digital Signature Algorithm (DSA) and Elliptic Curve Digital Signature Algorithm (ECDSA)*, T. Pornin, August 2013 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc6979.txt` | 140386 | `456e8f17558fdbd206f968b96fc6f1b4a71ea331ab30ad17f711ab3adaa7d701` |
+| `rfc8106.txt` | RFC 8106, *IPv6 Router Advertisement Options for DNS Configuration*, J. Jeong, S. Park, L. Beloeil, S. Madanapalli, March 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8106.txt` | 43092 | `9a44a5e06d36506da358fa0d62d02f484dd76b4e6ca75920ebda2cfed315ef2f` |
 | `rfc8200.txt` | RFC 8200, *Internet Protocol, Version 6 (IPv6) Specification*, S. Deering, R. Hinden, July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8200.txt` | 93162 | `371ae3f133d562db5d6385e6def4ca9914c4f831be228ea7779fd28799c2f490` |
+| `rfc8201.txt` | RFC 8201, *Path MTU Discovery for IP version 6*, J. McCann, S. Deering, J. Mogul, R. Hinden (ed.), July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8201.txt` | 42751 | `96c2ea7ac1bf5810f6b817d4ac372a35f68231d2bd0e2675740f1268eb9ac752` |
 | `rfc8448.txt` | RFC 8448, *Example Handshake Traces for TLS 1.3*, M. Thomson, January 2019 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8448.txt` | 159343 | `6564d1376d1ec744fc7a9993da15ebc1b9be361908b166091f47ef605c537fba` |
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
-including the page breaks: 2887, 1218, 470, 171, 1417, 6844, 1403, 5435,
-1123, 451, 899, 787, 4427, 2355, and 3811 lines respectively, in the
-order of the table.
+including the page breaks: 2887, 1218, 470, 171, 1417, 6844, 395, 1403,
+1347, 5435, 1683, 1123, 451, 899, 787, 4427, 1067, 2355, 1067, and 3811
+lines respectively, in the order of the table.
 Every one was fetched twice and the two fetches agreed.
 
 ## Terms
@@ -46,18 +51,21 @@ carries a notice of the form
 > document authors. All rights reserved.
 
 with the year 2009 for RFC 5480, 2010 for RFC 5758, RFC 5903, and
-RFC 5952, 2013 for RFC 6979, 2017 for RFC 8200, and 2019 for RFC 8448.
-Those eight are subject to BCP 78 and the IETF Trust's Legal Provisions
-relating to IETF Documents, which permit reproduction in full.
+RFC 5952, 2013 for RFC 6979, 2017 for RFC 8106, RFC 8200, and RFC 8201,
+and 2019 for RFC 8448. Those nine are subject to BCP 78 and the IETF
+Trust's Legal Provisions relating to IETF Documents, which permit
+reproduction in full.
 
-The seven older ones carry the notice of their time. RFC 4861 has the IETF
-Trust's of 2007 and RFC 4291 the Internet Society's of 2006, both in a
-full copyright statement at the end that permits reproduction in full
-under the same BCP 78, and RFC 1122 carries that statement in the form of
-1989. RFC 1071, RFC 894, RFC 826, RFC 792, and RFC 791 carry no notice at
-all: RFC 1071 states unlimited distribution in its own Status of This
-Memo section, and the four from the early eighties predate even that
-form, under the practice the RFC Editor states for the series as a whole.
+The eleven older ones carry the notice of their time, each in a full
+copyright statement at the end that permits reproduction in whole
+provided the notice travels with it. RFC 4862 and RFC 4861 have the IETF
+Trust's of 2007; RFC 4443 and RFC 4291 the Internet Society's of 2006;
+RFC 2464 the Internet Society's of 1998; and RFC 1122 carries that
+statement in the form of 1989. RFC 1071, RFC 894, RFC 826, RFC 792, and
+RFC 791 carry no notice at all: RFC 1071 states unlimited distribution in
+its own Status of This Memo section, and the four from the early eighties
+predate even that form, under the practice the RFC Editor states for the
+series as a whole.
 
 Code components extracted from an RFC carry the Simplified BSD Licence;
 this project extracts test vectors, which it transcribes into Rust source
@@ -107,7 +115,7 @@ restrictions take precedence over every other requirement to send an
 error, and it explains why — a broadcast to a closed port would otherwise
 draw an answer from every host on the link at once.
 
-## The three documents of the link layer
+## The four documents of the link layer
 
 These are what `net-eth` implements.
 
@@ -133,14 +141,24 @@ entry between them, and the constants of section 10 — `REACHABLE_TIME`
 30 seconds, `RETRANS_TIMER` 1 second, `DELAY_FIRST_PROBE_TIME` 5 seconds,
 and three solicitations of either kind. The cache here is one cache for
 both families (D-69), so ARP fills it with the three states it needs and
-Neighbor Discovery, which arrives in D4, uses all five.
+Neighbor Discovery, in `net-ipv6`, uses all five.
+
+**RFC 2464** carries IPv6 over an Ethernet, and it is three paragraphs of
+this crate. Section 7 maps a multicast group onto a hardware address by
+arithmetic — `33:33` and the last four bytes of the group — which is what
+lets a solicitation reach a station nobody has an address for, where ARP
+has to broadcast to the whole link. Section 4 forms the interface
+identifier SLAAC puts behind a prefix: the OUI, `FF FE`, the rest of the
+address, with the universal/local bit complemented, and it works the
+example this project transcribes. And it fixes the prefix length that
+autoconfiguration works at, at 64 bits, which is the number `net-ipv6`
+refuses to form an address under any other.
 
 ## The three documents of IPv6 addressing
 
 These arrived with D-69, which put IPv6 into the first network version
-beside IPv4. They are what `net-wire` implements; the protocol itself is
-later work, and RFC 8200 is here already because its section 8.1 is part
-of this step.
+beside IPv4. They are what `net-wire` implements, and RFC 8200 came with
+them because its section 8.1 is what a checksum over IPv6 is summed with.
 
 **RFC 4291** is the address architecture: the 128-bit address, the text
 forms of section 2.2, the prefixes that make an address unspecified,
@@ -164,6 +182,49 @@ upper-layer protocol — which is not the next-header field of the packet
 when extension headers stand between them. The rest of the document is
 the header format and the extension header chain, which the IPv6 step
 will read.
+
+## The four documents of IPv6 itself
+
+These are what `net-ipv6` implements, beside RFC 8200 above. Every one of
+them is a protocol IPv4 either has no counterpart for or solves somewhere
+else, which is why the family needed four documents where the addressing
+took three.
+
+**RFC 4443** is `ICMPv6`: echo request and reply, destination unreachable
+with its seven codes, time exceeded, and — the one with no counterpart at
+all — packet too big, which carries the MTU of the link a packet did not
+fit. Two rules of it are not cosmetic. Section 2.3 sums the checksum over
+the pseudo-header of both addresses, where `ICMPv4`'s covers the message
+alone; a corrupted address is caught there because the IPv6 header has no
+checksum to catch it. And section 2.4 (e) forbids answering an error, a
+multicast destination, a link-layer multicast, or a source that names no
+single node with an error of one's own, in the way RFC 1122, section 3.2.2
+does for IPv4, and for the same reason.
+
+**RFC 4862** is stateless address autoconfiguration: how a prefix out of
+a router advertisement and an interface identifier become an address, the
+valid and preferred lifetimes that address holds for, and — sections 5.4
+to 5.4.5 — duplicate address detection, which is the check that has to
+pass before the address is used at all. It is also where the rule lives
+that an address is formed only when the prefix length and the identifier
+make 128 bits together (section 5.5.3 (d)), which for an Ethernet is a
+prefix of 64 and nothing else.
+
+**RFC 8106** is one option, and it is what makes DHCPv6 unnecessary here
+(D-69). Section 5.1 puts recursive DNS servers into a router
+advertisement: a type, a length in eight-byte units, a lifetime, and one
+or more addresses, with the count read back out of the length. Without
+it a host that configured itself from an advertisement would still have
+to speak a second protocol to learn where to resolve names.
+
+**RFC 8201** is path MTU discovery, and section 4 is the whole of what
+this system implements: the estimate is lowered by a packet-too-big
+message, never raised by one, never taken below the minimum link MTU of
+1280, and tried again no sooner than five minutes later — ten being the
+recommended setting, and the one used. It is not optional for IPv6 the
+way it is for IPv4: RFC 8200, section 4.5 forbids a router to fragment,
+so a packet that does not fit is not cut up on the way, it is returned as
+this message or it is lost.
 
 ## Why RFC 8448 in particular
 

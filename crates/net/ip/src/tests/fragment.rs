@@ -11,10 +11,10 @@
 )]
 
 use audhsos_time::{Duration, Instant};
-use net_wire::{Ipv4Addr, Protocol, Writer};
+use net_wire::{IpAddr, Ipv4Addr, Protocol, Writer};
 
 use crate::error::IpError;
-use crate::fragment::{Assembled, Fragments, REASSEMBLY_TIMEOUT, Reassembler, fragment};
+use crate::fragment::{Assembled, Fragments, Piece, REASSEMBLY_TIMEOUT, Reassembler, fragment};
 use crate::header::{Datagram, Header, MIN_HEADER_LEN};
 
 /// The MTU of an Ethernet, which is what the interface below this one
@@ -348,4 +348,51 @@ fn a_timeout_of_the_callers_own_is_used_as_given() {
     assert_eq!(buffers.poll(Instant::ZERO.saturating_add(timeout)), 1);
     assert!(buffers.is_empty());
     assert_eq!(Reassembler::<2, 2048>::default().len(), 0);
+}
+
+#[test]
+fn the_header_length_a_piece_sits_behind_is_an_argument() {
+    // IPv4 puts twenty bytes in front of a piece and IPv6 forty-eight,
+    // and the arithmetic behind them is the same one (D-69).
+    let ipv4 = Fragments::new(1000, 1500).expect("it cuts");
+    let same = Fragments::with_header(1000, 1500, MIN_HEADER_LEN).expect("it cuts");
+    assert_eq!(ipv4, same);
+
+    let ipv6 = Fragments::with_header(1000, 1500, 48).expect("it cuts");
+    assert!(ipv6.is_whole(), "a kilobyte fits behind forty-eight bytes");
+    let cut = Fragments::with_header(2000, 1500, 48).expect("it cuts");
+    assert_eq!(cut.count(), 2);
+
+    // A header that leaves no room for eight bytes behind it cuts
+    // nothing.
+    assert_eq!(
+        Fragments::with_header(100, 50, 48),
+        Err(IpError::WouldFragment {
+            length: 100,
+            mtu: 50
+        })
+    );
+}
+
+#[test]
+fn a_datagram_is_the_piece_its_fields_describe() {
+    let payload = payload_of(PER_FRAGMENT + 8);
+    let out = pieces(&header(payload.len()), &payload, MTU).expect("two pieces");
+    let first = Datagram::parse(&out[0]).expect("a well-formed piece");
+    assert_eq!(
+        Piece::of(first),
+        Piece {
+            source: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 7)),
+            destination: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            protocol: Protocol::UDP,
+            identification: 0x1C46,
+            offset: 0,
+            more: true,
+            payload: first.payload(),
+        }
+    );
+    let second = Datagram::parse(&out[1]).expect("a well-formed piece");
+    let piece = Piece::of(second);
+    assert_eq!(piece.offset, PER_FRAGMENT);
+    assert!(!piece.more);
 }

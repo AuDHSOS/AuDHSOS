@@ -93,7 +93,8 @@ impl<const ROUTES: usize, const ENTRIES: usize, const PENDING: usize>
     /// # Errors
     ///
     /// [`IpError::NoRoute`] when nothing reaches the destination or the
-    /// pair is IPv6, [`IpError::WouldFragment`] when the datagram is too
+    /// pair is IPv6, which `net-ipv6` sends instead,
+    /// [`IpError::WouldFragment`] when the datagram is too
     /// long for the MTU and may not be cut, and whatever `emit` returns.
     pub fn send<E>(
         &mut self,
@@ -108,9 +109,10 @@ impl<const ROUTES: usize, const ENTRIES: usize, const PENDING: usize>
     {
         let (IpAddr::V4(source), IpAddr::V4(destination)) = (outgoing.source, outgoing.destination)
         else {
-            // IPv6 leaves through `net-ipv6`, which writes its own header
-            // and then asks this same neighbor cache. Until that crate
-            // exists, this one carries the family it has a header for.
+            // IPv6 leaves through `net_ipv6::Sender`, which writes its own
+            // header and then asks this same routing table and the same
+            // neighbor cache. This one carries the family it has a header
+            // for, and the facade of 12.6.12 picks between the two.
             return Err(IpError::NoRoute);
         };
         let next_hop = self.routes.lookup(outgoing.destination)?;

@@ -140,7 +140,7 @@ AuDHSOS/
 | `net-wire` | n0 | all | no | yes | `test-support` as a dev-dependency |
 | `net-eth` | n1 | all | no | yes | `net-wire`, `audhsos-time`, `audhsos-collections`; `test-support` as a dev-dependency |
 | `net-ip` | n2 | all | no | yes, fuzz | `net-eth`, `net-wire`, `audhsos-time`, `audhsos-collections`; `test-support` as a dev-dependency |
-| `net-ipv6` | n2 | all | no | yes, fuzz | `net-ip` and below |
+| `net-ipv6` | n2 | all | no | yes, fuzz | `net-ip`, `net-eth`, `net-wire`, `audhsos-time`, `audhsos-collections`; `test-support` as a dev-dependency |
 | `net-udp` | n3 | all | no | yes | `net-ip` and below, `crypto-rng` |
 | `net-tcp` | n3 | all | no | yes, fuzz | `net-ip` and below, `crypto-rng` |
 | `net-dns` | n4 | all | no | yes, fuzz | `net-udp` and below, `crypto-rng` |

@@ -1468,6 +1468,26 @@ added and never renumbered; the crate belongs beside 6.6.44 (D-69).
   datagram.
 - Fuzz target `ipv6`, whose corpus is seeded with the chains above.
 
+Four items were added while writing them, each because the code had a
+boundary the list above does not name.
+
+- A message that did not arrive with a hop limit of 255 is not read as
+  Neighbor Discovery, and neither is one whose code is not zero or whose
+  checksum does not verify. RFC 4861, section 7.1 makes all three
+  conditions of reading the message at all, and the first is what keeps
+  the protocol link-local.
+- An option of length zero, one that runs past the message, and a
+  trailing byte that cannot begin one are each a drop of the whole
+  message; an option this crate does not read, and one whose body is not
+  the length its type requires, are stepped over. RFC 4861, section 4.6
+  draws the line there and it is not obvious from either side.
+- The multicast mapping of RFC 2464, section 7, in `net-eth` beside the
+  frames: the all-nodes group, a solicited-node group, and two addresses
+  that share one because they differ above the low twenty-four bits.
+- The clamp of RFC 8201 is tested where it acts, which is on the arriving
+  message: a report below 1280 is discarded, and a link narrower than
+  1280 is answered as it stands so that the send path refuses it.
+
 ## 6.7 CI pipeline
 
 Jobs run in this order; a failure stops the pipeline.

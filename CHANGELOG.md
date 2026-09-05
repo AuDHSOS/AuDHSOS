@@ -7,6 +7,52 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `net-ipv6`, the IPv6 half of the network stack (D4, 12.6.6). The header
+  of RFC 8200 and its extension header chain, walked to the upper layer
+  over hop-by-hop options, routing, fragment, and destination options and
+  bounded twice — eight headers and 512 bytes — because a chain is a
+  linked list an attacker writes. `ICMPv6` of RFC 4443 with the echo pair
+  and the three errors, summed over the pseudo-header of both addresses,
+  which is the one difference from `ICMPv4` a checksum routine has to
+  know. Neighbor Discovery of RFC 4861 to the solicited-node group,
+  writing into the neighbor cache of `net-eth` rather than keeping a
+  second one, with the hop limit of 255 checked before anything else.
+  Stateless address configuration of RFC 4862 from a router
+  advertisement, with the prefix, the router, the lifetimes, the link
+  MTU, and the recursive DNS servers of RFC 8106, and duplicate address
+  detection before an address is used. Path MTU discovery of RFC 8201 in
+  the send path and not beside it: the sender asks the estimate table for
+  every packet, so a packet larger than the path is one this crate cannot
+  write. And the send path itself, which cuts a datagram through the
+  fragment header, addresses a multicast group by the arithmetic of
+  RFC 2464, and asks the same routing table and the same neighbor cache
+  `net-ip` does.
+
+- The fuzz target `ipv6`, which drives four parsers: the packet with its
+  chain walk, the `ICMPv6` message, the Neighbor Discovery message with
+  its option walk, and the reassembler. It exists for the chain, which is
+  the one part of this format a byte stream can drive in circles. Its
+  seeds are named in words, one per shape a test cites.
+
+- `net_eth::multicast_hardware`, the mapping of RFC 2464, section 7 from
+  an IPv6 multicast group to the Ethernet address it is reached at. It is
+  arithmetic and not a table, so a solicitation reaches a station this
+  host has never heard of without any membership list to keep in step.
+
+- `net_ip::Piece` and `Fragments::with_header`, which are what made the
+  reassembly buffers and the fragmentation arithmetic serve both families
+  instead of one (D-69). A piece is what either header describes once the
+  family-specific part has been read; the header length in front of it is
+  an argument, twenty bytes for IPv4 and forty-eight for IPv6.
+
+- RFC 2464, RFC 4443, RFC 4862, RFC 8106, and RFC 8201 under `docs/rfc/`,
+  each fetched twice with the two fetches compared, with their bytes,
+  their SHA-256, their line count, and what each is kept for (D-59).
+
+- D-72: what the IPv6 half leaves out and why — no redirects, no
+  temporary addresses of RFC 4941, no jumbograms, and a flow label
+  written as zero.
+
 - Two threads of equal priority take turns, and a thread of higher
   priority takes the processor. `tests/concurrency.rs` runs two threads of
   one process over a page they share: they take alternate tickets from a
@@ -22,7 +68,24 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   timer, the turn log, and the tick hook the shared test kernel needed for
   them.
 
+### Changed
+
+- The reassembly buffers of `net-ip` are keyed by an `IpAddr` pair and a
+  thirty-two bit identification, so that `net-ipv6` uses them rather than
+  keeping a second set. `Assembled::Reassembled` no longer carries a copy
+  of the first fragment's header: the caller holds the piece that
+  completed the datagram, the fields reassembly is keyed on are equal in
+  every piece by definition, and the ones that are not are read by no
+  layer above. That removed a twenty-byte copy per buffer and the flag
+  that said whether it had happened.
+
 ### Fixed
+
+- The `ipv4` fuzz target is built with the coverage instrumentation the
+  engine steers by. Every other target had its entry in the release
+  profile of `fuzz/Cargo.toml` and this one did not, so the fuzzer was
+  steering by the coverage of the crates under test alone and not by the
+  target's own branches.
 
 - A page table is emptied where it lies (D-70). `PageTable::clear` writes
   the empty entry into every slot in place; assigning `PageTable::default()`

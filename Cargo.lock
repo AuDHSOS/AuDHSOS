@@ -299,6 +299,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "net-ipv6"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "audhsos-time",
+ "net-eth",
+ "net-ip",
+ "net-wire",
+ "test-support",
+]
+
+[[package]]
 name = "net-wire"
 version = "0.1.0"
 dependencies = [

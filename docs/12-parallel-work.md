@@ -344,6 +344,15 @@ by Neighbor Discovery, which is `ICMPv6` and therefore lives in
 (D-69). The cache is thus driven from above in both cases, and `net-eth`
 owns the storage and the timers and neither of the two protocols.
 
+`multicast_hardware` came with D4 and is the one addition this crate took
+for it: the mapping of RFC 2464, section 7 from an IPv6 multicast group
+onto the Ethernet address it is reached at. It belongs here and not in
+`net-ipv6`, because it is a fact about an Ethernet and not about IPv6 —
+the same layer that knows a frame is fourteen bytes and carries 1500.
+Being arithmetic and not a table, it needs no membership list: a
+solicitation goes to the solicited-node group of a station this host has
+never heard of, which is exactly the case ARP has to broadcast for.
+
 Three things came out of writing it.
 
 Reception is a filter and not a parse: `receive` answers `Option` and
@@ -402,7 +411,20 @@ Implemented.
 
 The reassembly machinery is here and not in `net-ipv6`, because the two
 differ in where the fragment fields sit and in nothing else that a
-reassembly buffer cares about.
+reassembly buffer cares about. D4 made that concrete and changed three
+things here, all of them narrowing rather than widening. `Reassembler`
+works in a `Piece`, which is what either family's header describes once
+the family-specific part has been read: the two addresses as `IpAddr`,
+the identification widened to the thirty-two bits IPv6 uses, the offset,
+and the more bit. `Fragments::with_header` takes the header length as an
+argument, because IPv4 puts twenty bytes in front of a piece and IPv6
+forty-eight, and everything behind that number is one piece of
+arithmetic. And the reassembled datagram no longer carries a copy of the
+first fragment's header: the caller holds the piece that completed it,
+the fields reassembly is keyed on are equal in every piece by definition,
+and the ones that are not — the time to live, the traffic class, IPv4's
+options — are read by no layer above. What that removed was a twenty-byte
+copy per buffer and the flag that said whether it had happened.
 
 Four things came out of writing it.
 
@@ -438,6 +460,8 @@ families will use, so nothing above it changes when D4 lands.
 
 ### 12.6.6 `net-ipv6`
 
+Implemented.
+
 - Header parsing and writing, and the extension header chain: hop-by-hop
   options, routing, fragment, and destination options are stepped over to
   reach the upper-layer header. The walk is bounded in the number of
@@ -465,6 +489,56 @@ families will use, so nothing above it changes when D4 lands.
 - Path MTU discovery, driven by the packet-too-big message. It is not
   optional here: no router will fragment for this host.
 
+Six things came out of writing it, and D-72 records the boundaries three
+of them draw.
+
+The chain walk is bounded twice and neither bound is the packet. Eight
+headers and 512 bytes end it, and running out of packet ends it too;
+every extension header is at least eight bytes, so the walk provably
+shrinks its input and cannot spin. The two bounds are what stop it before
+it has read a kilobyte of headers to reach a transport header that is not
+there, which is the cheap denial of service this format offers. What they
+cost is a chain longer than any correct sender writes: RFC 8200
+recommends at most one of each kind, and there are six kinds.
+
+Path MTU discovery is in the send path and not beside it. `Sender` holds
+the estimate table and asks it for every packet, so a packet larger than
+what the path is known to carry is one this crate cannot write. The
+alternative — a caller that lowers `Interface.mtu` when it remembers to —
+is one forgotten call away from frames that vanish, and there is no
+router downstream to turn them into an error.
+
+The estimate has its floor where the message arrives. RFC 8201 says the
+estimate is never taken below 1280, and this is implemented by discarding
+a packet-too-big message that reports less, not by clamping the answer:
+so a link whose own MTU is below 1280 is reported as it stands and the
+send path refuses it. Such a link cannot carry IPv6 at all, and answering
+1280 for it would turn a clear error into frames a driver silently
+cannot send.
+
+`ICMPv6` is parsed twice over. `Message::parse` reads the structure and
+`Message::parse_checked` verifies the checksum first, and both are
+public. The split is not a convenience: the checksum needs the two
+addresses, so a caller holding a message without the packet it arrived
+in — the fuzz target, a test, a quoted message inside an error — cannot
+verify one, and giving it only the checked entry point would mean either
+inventing addresses or not testing the parser at all.
+
+Neighbor Discovery checks the hop limit before anything else. RFC 4861,
+section 7.1 requires 255, and it is the whole of what makes the protocol
+link-local: a message carries no other proof of where it came from, and
+every router on the way decrements the field. A host that skips the check
+accepts neighbor advertisements, and therefore hardware addresses for its
+neighbors, from the whole internet. The check is in `receive`, which is
+the only door into this module from a packet.
+
+The link-layer address option is read at exactly six bytes and no other
+length. RFC 4861 gives it one unit for a link whose addresses are six
+bytes, and reading the first six of a longer body would be reading an
+option for a link this system has no frames for. A body of the wrong
+length reads as an unrecognized option, which the document has a receiver
+ignore, rather than as a reason to drop the message: the length field was
+right, so the option walk is not lost.
 ### 12.6.7 `net-udp`
 
 A fixed number of sockets, each bound to an explicit port or to an
@@ -583,9 +657,15 @@ costs a timeout on a broken path rather than a wrong answer.
   `http_response`. `ipv4` exists and drives four parsers, because a byte
   stream reaches each by a different door: the datagram, the quoted header
   an error carries, the `ICMPv4` message behind the payload, and the
-  reassembler, which is the one with state. The IPv6 target follows in D4
-  for the extension header chain, which is the one part of that format a
-  byte stream can drive in circles.
+  reassembler, which is the one with state. `ipv6` exists and drives four
+  as well — the packet with its chain walk, the `ICMPv6` message, the
+  Neighbor Discovery message with its option walk, and the reassembler —
+  and it exists for the extension header chain, which is the one part of
+  that format a byte stream can drive in circles. Its seeds are named in
+  words, one per shape a test cites: the four headers in order, a chain
+  without an end, a header that reaches past the packet, the two halves
+  of a fragmented datagram, and one message of each `ICMPv6` and Neighbor
+  Discovery kind.
 - No test sleeps. Time is an argument, so a sixty-second retransmission
   backoff is exercised in microseconds of wall clock.
 
@@ -598,7 +678,7 @@ Tests: catalog 6.6.42 to 6.6.50 and 6.6.54.
 | D1 | `net-wire`: addresses, cursor, checksums — implemented | S |
 | D2 | `net-eth`: frames, ARP, and the neighbor cache — implemented | M |
 | D3 | `net-ip`: IPv4 header, reassembly, fragmentation, `ICMPv4`, the routing table over both families, the send path — implemented | M |
-| D4 | `net-ipv6`: header and extension chain, `ICMPv6`, Neighbor Discovery, router advertisements and SLAAC, path MTU discovery | L |
+| D4 | `net-ipv6`: header and extension chain, `ICMPv6`, Neighbor Discovery, router advertisements and SLAAC, path MTU discovery — implemented | L |
 | D5 | `net-udp` | S |
 | D6 | `net-tcp`: sequence arithmetic, state machine, timers, congestion control | XL |
 | D7 | `net-dns` and `net-dhcp` | M |

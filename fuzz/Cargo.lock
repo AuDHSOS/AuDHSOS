@@ -134,6 +134,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipv6"
+version = "0.1.0"
+dependencies = [
+ "audhsos-time",
+ "fuzz-support",
+ "net-ip",
+ "net-ipv6",
+ "net-wire",
+]
+
+[[package]]
 name = "kernel-acpi"
 version = "0.1.0"
 dependencies = [
@@ -171,6 +182,17 @@ dependencies = [
  "audhsos-collections",
  "audhsos-time",
  "net-eth",
+ "net-wire",
+]
+
+[[package]]
+name = "net-ipv6"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "audhsos-time",
+ "net-eth",
+ "net-ip",
  "net-wire",
 ]
 
