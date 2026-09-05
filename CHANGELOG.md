@@ -39,6 +39,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   page faults.
 - Catalog 6.6.21 gains the kernel stack items and the boot information
   address item.
+- Plan 10.5.0: what the kernel reserve has to carry. The reference machine
+  grows to 512 MiB, because 1024 kernel stacks need 4107 frames and the
+  default reserve of a 256 MiB machine is 4048. Three questions of Phase 5
+  are stated with their arithmetic: whether the object pools live in the
+  reserve or in the `.bss` of the kernel image, that `Process` cannot hold
+  a handle table of `1 << 16` entries inline, and that the reserve is
+  capped at 64 MiB whatever the machine has.
 - Planning documents and the decision register under `docs/`.
 - `docs/11-cryptography-and-tls.md`: the design and implementation plan
   for the TLS 1.3 client track (constant-time primitives, hashes and

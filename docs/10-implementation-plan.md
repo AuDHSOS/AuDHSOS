@@ -1291,6 +1291,70 @@ interrupt items.
 
 ## 10.5 Phase 5: Objects, threads, user mode, system calls
 
+### 10.5.0 What the kernel reserve has to carry
+
+Phase 3 built the reserve and the kernel stack pool and measured what they
+cost. Four numbers of this phase do not fit together yet; they are settled
+before the object pools are written, not after.
+
+**The reference machine grows from 256 MiB to 512 MiB** in
+[3.1.1](03-target-platform.md#311-reference-machine-configuration) and in
+the `xtask` command line. The default reserve is a sixteenth of the usable
+memory, so the machine decides how much kernel memory there is:
+
+| Machine | Default reserve | Frames |
+|---------|-----------------|--------|
+| 256 MiB | 15.8 MiB | 4048 |
+| 512 MiB | 31.8 MiB | 8144 |
+| 1 GiB and above | 64 MiB (the cap) | 16384 |
+
+`KERNEL_STACKS = 1024` stacks of `KERNEL_STACK_PAGES = 4` pages need 4096
+frames, plus 11 for the tables of the stack area: 4107 frames. On a 256 MiB
+machine the whole reserve is 4048 frames, so the last stack cannot be
+mapped even if nothing else uses the reserve. A 512 MiB machine leaves
+4037 frames beside the stacks.
+
+**The cap is 64 MiB whatever the machine has.** `BitmapFrameAllocator`
+manages `MAX_MANAGED_FRAMES = 16384` frames, and `MAX_RESERVE_BYTES` says
+the same. Every kernel table has to fit in that; more memory in the machine
+does not help beyond a gibibyte.
+
+**Where do the object pools live?**
+[2.4.1](02-architecture.md#241-physical-memory) says the reserve holds
+them; [10.5.2](#1052-kernel-objects-additions) makes them `static`
+`Global<Pool<..>>` cells, which puts them in the `.bss` of the kernel
+image, which the loader allocates and maps. Both cannot be true. Decide it
+and correct the document that is wrong; the arithmetic of the reserve
+depends on the answer.
+
+**`Process` cannot hold its handle table inline.** As
+[10.5.2](#1052-kernel-objects-additions) plans it, `Process` holds a
+`HandleTable` and `HANDLES_PER_PROCESS` is `1 << 16`, so
+`Pool<Process, PROCESSES>` is 256 tables of 65536 entries:
+
+| Bytes per entry | Per process | `Pool<Process, 256>` |
+|-----------------|-------------|----------------------|
+| 8 | 0.5 MiB | 128 MiB |
+| 16 | 1 MiB | 256 MiB |
+| 32 (`AnyObjectId` + `Rights` + `badge` + slot) | 2 MiB | 512 MiB |
+
+That is impossible as a `static` and impossible in a reserve of at most
+64 MiB. `Handle` carries 32 index bits, so `1 << 16` is a policy number and
+not an ABI constraint. Either the handle table grows out of the reserve
+frame by frame with `HANDLES_PER_PROCESS` as the quota ceiling the kernel
+enforces, or the number drops to the low hundreds and stays inline. The
+same question applies to `Thread::context` and to the region table of an
+address space, which are small enough to stay inline.
+
+**What the larger machine costs in QEMU**, measured on the reference
+machine with the `memory` image: the run grows from 5.6 to 12.9 seconds, of
+which the firmware accounts for 2.2 and 2.6. The bring-up itself goes from
+3.4 to 10.2 seconds because `adopt` walks the window page by page and
+`drop_identity` unmaps twice as many pages. Both are bounded by the memory
+of the machine and stay far below the time limit of a run. If the suite
+becomes slow, `adopt` is the lever: the window is one contiguous run by
+construction, so it does not have to be walked page by page.
+
 ### 10.5.1 `audhsos-abi` additions
 
 - `syscall.rs`: the table macro. Every entry: number, name, argument
