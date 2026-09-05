@@ -13,9 +13,12 @@
     reason = "a test builds a message at known offsets"
 )]
 
-use net_eth::{Event, NeighborCache, NeighborState, Resolution, multicast_hardware};
+use audhsos_time::{Duration, Instant};
+use net_eth::{Event, NeighborCache, NeighborState, Resolution, Timers, multicast_hardware};
 use net_wire::{IpAddr, Ipv6Addr, MacAddr, Protocol, Writer};
-use test_support::generators::bytes;
+use test_support::generators::{BoxGen, Generator, bool, bytes, pair, range};
+use test_support::model::{ModelFailure, ModelTest, run_model_test, run_model_test_with};
+use test_support::property::Config;
 use test_support::property::check;
 
 use super::{HARDWARE, HOST, PEER, PEER_HARDWARE, at, checksummed, packet, secs};
@@ -269,6 +272,573 @@ fn the_wrong_kind_of_message_changes_nothing() {
     let message = read(&packet_bytes).expect("an advertisement");
     assert!(!on_solicitation(&mut cache, PEER, &message, at(1)));
     assert!(!answers(&message, HOST));
+}
+
+/// One thing that can happen to a neighbor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NdpOp {
+    /// A packet is handed to the cache for the neighbor.
+    Send,
+    /// The packet that was waiting has gone out.
+    Taken,
+    /// A neighbor advertisement arrives.
+    Advertise {
+        /// Whether it answers a solicitation of this host's.
+        solicited: bool,
+        /// Whether it may replace a cached address.
+        overriding: bool,
+        /// Whether it names a different hardware address than the one
+        /// that was cached.
+        moved: bool,
+    },
+    /// A neighbor solicitation from the neighbor arrives.
+    Solicit {
+        /// The same.
+        moved: bool,
+    },
+    /// Time moves on by this many seconds.
+    Wait(u32),
+    /// The cache is asked what it wants done.
+    Poll,
+}
+
+/// Every operation, weighted so that a sequence reaches the far states.
+///
+/// Waiting and polling are drawn more often than the rest, because
+/// `Probe` is four operations deep: a packet, an answer, a wait past the
+/// reachable time, a second packet, a wait past the delay, and a poll.
+fn any_ndp_op() -> BoxGen<NdpOp> {
+    pair(
+        range(0u8..=15),
+        pair(range(1u32..=40), pair(bool(), pair(bool(), bool()))),
+    )
+    .map(
+        |(choice, (seconds, (solicited, (overriding, moved))))| match choice {
+            0 | 1 => NdpOp::Send,
+            2 => NdpOp::Taken,
+            3 | 4 => NdpOp::Advertise {
+                solicited,
+                overriding,
+                moved,
+            },
+            5 => NdpOp::Solicit { moved },
+            6..=10 => NdpOp::Wait(seconds),
+            _ => NdpOp::Poll,
+        },
+    )
+    .boxed()
+}
+
+/// The packet that waits behind an unresolved neighbor.
+const HELD: &[u8] = b"a packet";
+
+/// The hardware address a moved neighbor claims.
+const IMPOSTOR: MacAddr = MacAddr::new([0x00, 0x1B, 0x44, 0x11, 0x3A, 0xFF]);
+
+/// The cache under test, with the clock the operations move.
+struct Station {
+    /// What is being tested.
+    cache: Cache,
+    /// What time it is.
+    now: Instant,
+}
+
+/// One entry of the reference model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Believed {
+    /// How sure this station is.
+    state: NeighborState,
+    /// The address, meaningless while `Incomplete`.
+    hardware: MacAddr,
+    /// When the current state runs out; `Instant::MAX` for never.
+    deadline: Instant,
+    /// How many solicitations have gone out in this state.
+    solicits: u8,
+    /// Whether a packet is waiting.
+    waiting: bool,
+}
+
+/// The reference model: one neighbor, the five states of RFC 4861,
+/// section 7.3.2, and the schedule of its section 10, written from the
+/// document rather than from the cache.
+struct Reference {
+    /// What is believed about the neighbor, when anything is.
+    entry: Option<Believed>,
+    /// What time it is here.
+    now: Instant,
+    /// Which states and events this sequence went through. It is state of
+    /// the model and of nothing else, and the runner reads it once the
+    /// sequence has run.
+    reached: u32,
+}
+
+/// What both sides are compared on after every operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Seen {
+    /// How many neighbors are known.
+    len: usize,
+    /// How sure this station is of the one under test.
+    state: Option<NeighborState>,
+    /// The address it would send to.
+    hardware: Option<MacAddr>,
+    /// The packet that is waiting, with the address it would go to.
+    pending: Option<(MacAddr, Vec<u8>)>,
+    /// When there is next work.
+    poll_at: Option<Instant>,
+}
+
+/// What the cache shows.
+fn seen(station: &Station) -> Seen {
+    let peer = IpAddr::V6(PEER);
+    Seen {
+        len: station.cache.len(),
+        state: station.cache.state(peer),
+        hardware: station.cache.hardware(peer),
+        pending: station
+            .cache
+            .pending(peer)
+            .map(|(hardware, packet)| (hardware, packet.to_vec())),
+        poll_at: station.cache.poll_at(),
+    }
+}
+
+/// What the model says the cache should show.
+fn believed(reference: &Reference) -> Seen {
+    let Some(entry) = reference.entry else {
+        return Seen {
+            len: 0,
+            state: None,
+            hardware: None,
+            pending: None,
+            poll_at: None,
+        };
+    };
+    let usable = entry.state.is_usable();
+    Seen {
+        len: 1,
+        state: Some(entry.state),
+        hardware: usable.then_some(entry.hardware),
+        pending: (usable && entry.waiting).then(|| (entry.hardware, HELD.to_vec())),
+        poll_at: (entry.deadline != Instant::MAX).then_some(entry.deadline),
+    }
+}
+
+/// What the model says an advertisement or a solicitation that carries
+/// `hardware` does, and whether it changes anything.
+///
+/// This is `on_observed` as RFC 4861, section 7.2.5 II has it, with the
+/// one departure the crate documents: a `Reachable` entry is never moved
+/// to a different address by a claim this host did not ask for, whatever
+/// the override bit says.
+fn observe(reference: &mut Reference, hardware: MacAddr) -> bool {
+    let reachable = reference.now.saturating_add(Timers::DEFAULT.reachable);
+    match reference.entry.as_mut() {
+        Some(entry) if entry.state == NeighborState::Reachable => {
+            if entry.hardware != hardware {
+                return false;
+            }
+            entry.deadline = reachable;
+            true
+        }
+        Some(entry) => {
+            entry.hardware = hardware;
+            entry.state = NeighborState::Stale;
+            entry.deadline = Instant::MAX;
+            entry.solicits = 0;
+            reference.reached |= reached::STALE;
+            true
+        }
+        None => {
+            reference.entry = Some(Believed {
+                state: NeighborState::Stale,
+                hardware,
+                deadline: Instant::MAX,
+                solicits: 0,
+                waiting: false,
+            });
+            reference.reached |= reached::STALE;
+            true
+        }
+    }
+}
+
+/// What a sequence reached.
+///
+/// A model test that stopped reaching `Probe` would go on passing and
+/// say nothing, so the model records what it touched and the runner
+/// refuses a run that missed one of these. The bits are set from the
+/// model, which is the side that is written from the document.
+mod reached {
+    /// An entry was created with nothing known about it.
+    pub(super) const INCOMPLETE: u32 = 1 << 0;
+    /// A neighbor answered a solicitation of this host's.
+    pub(super) const REACHABLE: u32 = 1 << 1;
+    /// A confirmation ran out, or an unsolicited claim arrived.
+    pub(super) const STALE: u32 = 1 << 2;
+    /// A packet went to a stale neighbor.
+    pub(super) const DELAY: u32 = 1 << 3;
+    /// Nothing confirmed it within the delay.
+    pub(super) const PROBE: u32 = 1 << 4;
+    /// A solicitation went to the link, nothing being known.
+    pub(super) const SOLICIT_GROUP: u32 = 1 << 5;
+    /// A probe went to the address that answered last.
+    pub(super) const SOLICIT_UNICAST: u32 = 1 << 6;
+    /// Resolution gave up.
+    pub(super) const UNREACHABLE: u32 = 1 << 7;
+    /// A packet was handed an address to go to.
+    pub(super) const DELIVERED: u32 = 1 << 8;
+    /// A claim that disagreed took a reachable entry to stale.
+    pub(super) const DEMOTED: u32 = 1 << 9;
+    /// A packet waited behind an unresolved neighbor.
+    pub(super) const HELD: u32 = 1 << 10;
+
+    /// What every state and event is called, for the report.
+    pub(super) const NAMES: [(u32, &str); 11] = [
+        (INCOMPLETE, "Incomplete"),
+        (REACHABLE, "Reachable"),
+        (STALE, "Stale"),
+        (DELAY, "Delay"),
+        (PROBE, "Probe"),
+        (SOLICIT_GROUP, "a solicitation to the group"),
+        (SOLICIT_UNICAST, "a probe to the cached address"),
+        (UNREACHABLE, "giving up"),
+        (DELIVERED, "a packet delivered"),
+        (DEMOTED, "a demotion by a claim that disagreed"),
+        (HELD, "a packet held"),
+    ];
+
+    /// Everything the run has to reach.
+    pub(super) fn required() -> &'static [&'static str] {
+        &[
+            "Incomplete",
+            "Reachable",
+            "Stale",
+            "Delay",
+            "Probe",
+            "a solicitation to the group",
+            "a probe to the cached address",
+            "giving up",
+            "a packet delivered",
+            "a demotion by a claim that disagreed",
+            "a packet held",
+        ]
+    }
+}
+
+/// A packet is handed to the cache for the neighbor.
+fn apply_send(
+    model: &DiscoveryModel,
+    station: &mut Station,
+    reference: &mut Reference,
+) -> Result<(), String> {
+    let timers = Timers::DEFAULT;
+    let answered = station.cache.resolve(IpAddr::V6(PEER), HELD, station.now);
+    let expected = match reference.entry.as_mut() {
+        None => {
+            reference.entry = Some(Believed {
+                state: NeighborState::Incomplete,
+                hardware: MacAddr::UNSPECIFIED,
+                // Due at once, so the first solicitation comes out of the
+                // caller's next poll.
+                deadline: reference.now,
+                solicits: 0,
+                waiting: true,
+            });
+            reference.reached |= reached::INCOMPLETE | reached::HELD;
+            Resolution::Waiting
+        }
+        Some(entry) => {
+            if entry.state == NeighborState::Stale && !model.faulty {
+                // RFC 4861, section 7.3.3: the first packet to a stale
+                // neighbor starts the check.
+                entry.state = NeighborState::Delay;
+                entry.deadline = reference.now.saturating_add(timers.delay_first_probe);
+                reference.reached |= reached::DELAY;
+            }
+            if entry.state.is_usable() {
+                reference.reached |= reached::DELIVERED;
+                Resolution::Deliver(entry.hardware)
+            } else {
+                entry.waiting = true;
+                reference.reached |= reached::HELD;
+                Resolution::Waiting
+            }
+        }
+    };
+    if answered == expected {
+        return Ok(());
+    }
+    Err(format!("resolve answered {answered:?}, not {expected:?}"))
+}
+
+/// A neighbor advertisement arrives.
+fn apply_advertisement(
+    station: &mut Station,
+    reference: &mut Reference,
+    solicited: bool,
+    overriding: bool,
+    moved: bool,
+) -> Result<(), String> {
+    let timers = Timers::DEFAULT;
+    let hardware = if moved { IMPOSTOR } else { PEER_HARDWARE };
+    let bytes = advertisement(PEER, HOST, PEER, Some(hardware), solicited, overriding);
+    let packet_bytes = discovery_packet(PEER, HOST, &bytes);
+    let message = read(&packet_bytes).map_err(|error| error.to_string())?;
+    let changed = on_advertisement(&mut station.cache, &message, station.now);
+    let known = believed(reference).hardware;
+    let expected = if !overriding && known.is_some_and(|known| known != hardware) {
+        // RFC 4861, section 7.2.5 I: the address is not taken, and a
+        // reachable entry is demoted all the same.
+        match reference.entry.as_mut() {
+            Some(entry) if entry.state == NeighborState::Reachable => {
+                entry.state = NeighborState::Stale;
+                entry.deadline = Instant::MAX;
+                reference.reached |= reached::DEMOTED | reached::STALE;
+                true
+            }
+            _ => false,
+        }
+    } else if solicited {
+        let deadline = reference.now.saturating_add(timers.reachable);
+        match reference.entry.as_mut() {
+            Some(entry) => {
+                entry.hardware = hardware;
+                entry.state = NeighborState::Reachable;
+                entry.deadline = deadline;
+                entry.solicits = 0;
+            }
+            None => {
+                reference.entry = Some(Believed {
+                    state: NeighborState::Reachable,
+                    hardware,
+                    deadline,
+                    solicits: 0,
+                    waiting: false,
+                });
+            }
+        }
+        reference.reached |= reached::REACHABLE;
+        true
+    } else {
+        observe(reference, hardware)
+    };
+    if changed == expected {
+        return Ok(());
+    }
+    Err(format!(
+        "an advertisement reported {changed} and the model {expected}"
+    ))
+}
+
+/// A neighbor solicitation from the neighbor arrives.
+fn apply_solicitation(
+    station: &mut Station,
+    reference: &mut Reference,
+    moved: bool,
+) -> Result<(), String> {
+    let hardware = if moved { IMPOSTOR } else { PEER_HARDWARE };
+    let group = HOST.solicited_node();
+    let bytes = solicitation(PEER, group, HOST, Some(hardware));
+    let packet_bytes = discovery_packet(PEER, group, &bytes);
+    let message = read(&packet_bytes).map_err(|error| error.to_string())?;
+    let changed = on_solicitation(&mut station.cache, PEER, &message, station.now);
+    let expected = observe(reference, hardware);
+    if changed == expected {
+        return Ok(());
+    }
+    Err(format!(
+        "a solicitation reported {changed} and the model {expected}"
+    ))
+}
+
+/// The cache is asked what it wants done.
+fn apply_poll(station: &mut Station, reference: &mut Reference) -> Result<(), String> {
+    let peer = IpAddr::V6(PEER);
+    let timers = Timers::DEFAULT;
+    let event = station.cache.poll(station.now);
+    let now = reference.now;
+    let expected = match reference.entry.as_mut() {
+        Some(entry) if entry.deadline <= now => match entry.state {
+            NeighborState::Reachable | NeighborState::Stale => {
+                // A confirmation that ran out makes the entry stale, and a
+                // stale entry then waits for traffic and not for a clock.
+                entry.state = NeighborState::Stale;
+                entry.deadline = Instant::MAX;
+                reference.reached |= reached::STALE;
+                None
+            }
+            NeighborState::Delay => {
+                entry.state = NeighborState::Probe;
+                entry.solicits = 1;
+                entry.deadline = now.saturating_add(timers.retransmit);
+                reference.reached |= reached::PROBE | reached::SOLICIT_UNICAST;
+                Some(Event::Solicit {
+                    address: peer,
+                    hardware: Some(entry.hardware),
+                })
+            }
+            NeighborState::Incomplete => {
+                if entry.solicits >= timers.max_multicast_solicit {
+                    reference.entry = None;
+                    reference.reached |= reached::UNREACHABLE;
+                    Some(Event::Unreachable { address: peer })
+                } else {
+                    entry.solicits = entry.solicits.saturating_add(1);
+                    entry.deadline = now.saturating_add(timers.retransmit);
+                    reference.reached |= reached::SOLICIT_GROUP;
+                    Some(Event::Solicit {
+                        address: peer,
+                        hardware: None,
+                    })
+                }
+            }
+            NeighborState::Probe => {
+                if entry.solicits >= timers.max_unicast_solicit {
+                    reference.entry = None;
+                    reference.reached |= reached::UNREACHABLE;
+                    Some(Event::Unreachable { address: peer })
+                } else {
+                    entry.solicits = entry.solicits.saturating_add(1);
+                    entry.deadline = now.saturating_add(timers.retransmit);
+                    Some(Event::Solicit {
+                        address: peer,
+                        hardware: Some(entry.hardware),
+                    })
+                }
+            }
+        },
+        Some(_) | None => None,
+    };
+    if event == expected {
+        return Ok(());
+    }
+    Err(format!("poll answered {event:?}, not {expected:?}"))
+}
+
+/// The neighbor cache driven by Neighbor Discovery, against a model of
+/// RFC 4861 written beside it.
+struct DiscoveryModel {
+    /// Whether the model is deliberately wrong, which is how the test
+    /// below shows that a disagreement is found at all.
+    faulty: bool,
+}
+
+impl ModelTest for DiscoveryModel {
+    type Op = NdpOp;
+    type Sut = Station;
+    type Model = Reference;
+
+    fn generator(&self) -> BoxGen<NdpOp> {
+        any_ndp_op()
+    }
+
+    fn required(&self) -> &'static [&'static str] {
+        reached::required()
+    }
+
+    fn reached(&self, model: &Reference) -> Vec<&'static str> {
+        reached::NAMES
+            .iter()
+            .filter(|(bit, _)| model.reached & bit != 0)
+            .map(|(_, name)| *name)
+            .collect()
+    }
+
+    fn new_sut(&self) -> Station {
+        Station {
+            cache: Cache::new(),
+            now: Instant::ZERO,
+        }
+    }
+
+    fn new_model(&self) -> Reference {
+        Reference {
+            entry: None,
+            now: Instant::ZERO,
+            reached: 0,
+        }
+    }
+
+    fn step(
+        &self,
+        station: &mut Station,
+        reference: &mut Reference,
+        op: &NdpOp,
+    ) -> Result<(), String> {
+        match *op {
+            NdpOp::Send => apply_send(self, station, reference)?,
+            NdpOp::Taken => {
+                station.cache.clear_pending(IpAddr::V6(PEER));
+                if let Some(entry) = reference.entry.as_mut() {
+                    entry.waiting = false;
+                }
+            }
+            NdpOp::Advertise {
+                solicited,
+                overriding,
+                moved,
+            } => apply_advertisement(station, reference, solicited, overriding, moved)?,
+            NdpOp::Solicit { moved } => apply_solicitation(station, reference, moved)?,
+            NdpOp::Wait(seconds) => {
+                let step = Duration::from_secs(u64::from(seconds));
+                station.now = station.now.saturating_add(step);
+                reference.now = reference.now.saturating_add(step);
+            }
+            NdpOp::Poll => apply_poll(station, reference)?,
+        }
+        if station.now != reference.now {
+            return Err("the two clocks parted".to_owned());
+        }
+        let (left, right) = (seen(station), believed(reference));
+        if left != right {
+            return Err(format!("the cache shows {left:?} and the model {right:?}"));
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn the_cache_matches_a_model_of_rfc_4861_under_discovery() {
+    // One neighbor, because the cache holds its entries "in no particular
+    // order" and therefore does not say which of several due neighbors
+    // `poll` picks; a model that fixed that would be testing an accident.
+    // Capacity, eviction, and several entries falling due at once are
+    // `net-eth`'s own tests.
+    // The runner refuses a run that never reached one of the states
+    // `DiscoveryModel::required` names, so a test that stopped reaching
+    // `Probe` fails rather than passing and saying nothing.
+    run_model_test("ndp_neighbor_cache", &DiscoveryModel { faulty: false }, 48);
+}
+
+#[test]
+fn a_model_that_disagrees_is_found_and_shrunk_to_a_short_sequence() {
+    // The same run against a model with one transition missing: the
+    // packet to a stale neighbor that starts the check of RFC 4861,
+    // section 7.3.3. It stands for any regression in that transition, and
+    // it is what says the test above would notice one.
+    let failure = run_model_test_with(
+        &Config::default(),
+        "ndp_neighbor_cache_faulty",
+        &DiscoveryModel { faulty: true },
+        24,
+    )
+    .expect_err("a model with a missing transition disagrees");
+    let ModelFailure::Disagreed(failure) = failure else {
+        panic!("a disagreement is reported as one");
+    };
+    // Reaching `Stale` and then sending to it takes a handful of
+    // operations, and the shrunk sequence is not much more than that.
+    let operations = failure.shrunk.split(',').count();
+    assert!(
+        operations <= 8,
+        "shrunk to {operations} operations: {}",
+        failure.shrunk
+    );
+    assert!(
+        failure.message.contains("resolve answered") || failure.message.contains("the cache shows"),
+        "{}",
+        failure.message
+    );
 }
 
 #[test]

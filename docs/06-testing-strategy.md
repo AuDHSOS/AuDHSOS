@@ -50,7 +50,13 @@ Locally every one of these levels is started through the wrapper scripts of
     `any_handle`, `any_message`, `any_elf_header`);
   - the model-test runner: applies a generated operation sequence to the
     component under test and to a reference model and compares observable
-    results after every step, shrinking the sequence on failure.
+    results after every step, shrinking the sequence on failure. A test
+    may name the states its sequences have to arrive at (`required`) and
+    have the model record what it arrived at (`reached`); a run that
+    misses one fails although nothing disagreed. That is the one way a
+    model test rots — the generator drifts, or the component grows a
+    state the operations no longer reach — and reaching nothing looks
+    exactly like reaching everything and finding no fault.
 
 ## 6.3 In-QEMU testing
 
@@ -1456,6 +1462,18 @@ added and never renumbered; the crate belongs beside 6.6.44 (D-69).
   the state machine through `Stale`, `Delay`, and `Probe` against a
   reference model with time as an argument; duplicate address detection
   refusing an address another node answers for.
+  The reference model is the model-test runner's: one neighbor, the five
+  states of RFC 4861, section 7.3.2 and the schedule of its section 10
+  written beside the cache rather than out of it, driven by generated
+  sequences of packets, advertisements, solicitations, waits, and polls.
+  It names all eleven states and events it has to arrive at, so a
+  generator that stopped reaching `Probe` or the giving-up fails instead
+  of passing; and a second run against a model with one transition
+  removed shows that a regression in that transition is found and shrunk.
+  One neighbor and not several, because the cache holds its entries "in
+  no particular order" and therefore does not say which of several due
+  neighbors `poll` picks — a model that fixed that would be testing an
+  accident. Capacity and eviction stay with `net-eth`.
 - Router advertisements: a prefix and a router learned, an address formed
   by SLAAC, the lifetimes expiring, and the recursive DNS servers of
   RFC 8106 read out. An advertisement with a prefix length that is not 64
@@ -1503,6 +1521,11 @@ boundary the list above does not name.
   cache: an advertisement without the override bit whose address
   disagrees takes a `Reachable` entry to `Stale` without touching the
   address, and moves an entry in any other state not at all.
+- The model-test runner itself, for the requirement it grew: a run that
+  reaches what it requires passes, one that reaches nothing fails though
+  nothing disagreed, a requirement that is reached is not reported beside
+  one that is not, and a disagreement is reported before a missed
+  requirement.
 
 ## 6.7 CI pipeline
 

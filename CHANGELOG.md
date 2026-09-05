@@ -7,6 +7,25 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The model-test runner refuses a run that reached nothing.
+  `ModelTest::required` names the states a run's sequences have to arrive
+  at and `ModelTest::reached` reads back what the model arrived at; a run
+  in which every sequence passed and one of those names was never reached
+  fails as `ModelFailure::Vacuous`. That is the one way a model test
+  rots — the generator drifts, or the component grows a state the
+  operations no longer reach — and until now reaching nothing looked
+  exactly like reaching everything and finding no fault. Both hooks
+  default to nothing, so the seven existing model tests are unchanged.
+
+- A model test of the neighbor cache under Neighbor Discovery
+  (catalog 6.6.54): one neighbor, the five states of RFC 4861,
+  section 7.3.2 and the schedule of its section 10 written beside the
+  cache rather than out of it, driven by generated sequences of packets,
+  advertisements, solicitations, waits, and polls. It names all eleven
+  states and events it must arrive at, and a second run against a model
+  with the stale-to-delay transition removed shows that a regression
+  there is found and shrunk to a handful of operations.
+
 - Every system call of this kernel, made from ring three.
   `tests/syscalls.rs` runs `every_syscall`, a program that walks the whole
   table and writes down a pair per call — the number and the status word —
