@@ -103,100 +103,203 @@ header and boot information in `audhsos-abi`. No hardware, no QEMU.
 
 ### 10.1.1 `audhsos-abi` additions
 
+`audhsos-abi` gains the feature `test-strategies` with the optional
+`test-support` dependency, as `kernel-types` has it.
+
 `src/boot_image.rs`:
 
 ```rust
 pub const BOOT_IMAGE_MAGIC: [u8; 8] = *b"AUDHSOS\0";
+pub const BOOT_IMAGE_VERSION: u32 = 1;
 pub const BOOT_IMAGE_HEADER_LEN: usize = 64;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BootImageHeader { pub root_task_offset: u64, pub root_task_len: u64,
     pub archive_offset: u64, pub archive_len: u64, pub kernel_reserve_size: u64 }
 impl BootImageHeader {
     /// Parses and validates the header against `image_len` (the length of
     /// the whole image) and `ram_bytes` (total usable RAM).
     pub fn parse(bytes: &[u8], image_len: u64, ram_bytes: u64) -> Result<Self, BootImageError>;
-    /// Serializes into 64 bytes, little-endian, for the xtask image writer.
+    /// Serializes into 64 bytes, little-endian, for the xtask image writer,
+    /// always with the current version, the current header length, and zero
+    /// flags.
     pub fn to_bytes(&self) -> [u8; BOOT_IMAGE_HEADER_LEN];
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BootImageError { TooShort, BadMagic, UnsupportedVersion(u32), HeaderLength(u32),
     RootTaskOffset, RootTaskLength, ArchiveOffset, ArchiveLength, Overlap, Flags(u64),
     ReserveSize(u64) }
 ```
 
 Validation exactly as the table in
-[03-target-platform.md 3.1.6](03-target-platform.md#316-boot-image-format);
-every check uses `checked_add`. Field order and offsets as in that table.
+[03-target-platform.md 3.1.6](03-target-platform.md#316-boot-image-format).
+`parse` reads the 64 bytes as sixteen little-endian `u32` words, joins the
+halves of the `u64` fields, and checks the fields in the order in which they
+appear in the image: magic, version, header length, root task offset, root
+task length, archive offset, archive length, reserve size, flags. The one
+cross-field check, the overlap of the archive with the root task, comes
+last. Every offset sum uses `checked_add`. An archive of length zero never
+overlaps.
 
 `src/boot_info.rs`:
 
 ```rust
 pub const BOOT_INFO_MAGIC: [u8; 8] = *b"AUDHBOOT";
 pub const BOOT_INFO_VERSION: u32 = 1;
+pub const BOOT_INFO_HEADER_LEN: usize = 104;
+pub const BOOT_REGION_LEN: usize = 24;
+pub const BOOT_INFO_PAGE_LEN: usize = 4096;
+
 #[repr(u32)] pub enum BootRegionKind { Usable = 1, Reserved = 2, AcpiReclaimable = 3, AcpiNvs = 4, MmioReserved = 5 }
-#[repr(C)] #[derive(Clone, Copy)] pub struct BootRegion { pub start: u64, pub len: u64, pub kind: u32, pub reserved: u32 }
-#[repr(C)] pub struct BootInfoHeader { pub magic: [u8; 8], pub version: u32, pub size: u32,
+impl BootRegionKind { pub const ALL: &'static [BootRegionKind];
+    pub const fn code(self) -> u32; pub const fn from_code(code: u32) -> Option<Self>; }
+
+#[repr(C)] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BootRegion { pub start: u64, pub len: u64, pub kind: u32, pub reserved: u32 }
+impl BootRegion { pub const fn new(start: u64, len: u64, kind: BootRegionKind) -> Self;
+    pub const fn end(self) -> Option<u64>;
+    pub const fn contains_range(self, start: u64, len: u64) -> bool; }
+
+#[repr(C)] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct BootInfoHeader { pub magic: [u8; 8], pub version: u32, pub size: u32,
     pub phys_window_base: u64, pub kernel_phys_start: u64, pub kernel_phys_len: u64,
     pub boot_image_phys_start: u64, pub boot_image_phys_len: u64,
     pub page_tables_phys_start: u64, pub page_tables_phys_len: u64,
     pub boot_stack_phys_start: u64, pub boot_stack_phys_len: u64,
     pub acpi_rsdp: u64, pub region_count: u32, pub reserved: u32 }
+
+pub enum FixedRange { Kernel, BootImage, PageTables, BootStack }
+impl FixedRange { pub const ALL: &'static [FixedRange]; pub const fn name(self) -> &'static str; }
+
+pub enum BootInfoError { TooShort, BadMagic, UnsupportedVersion(u32), Size(u32),
+    RegionCount(u32), RegionKind { index: usize, kind: u32 }, RegionLength(usize),
+    RegionOverflow(usize), RangeEmpty(FixedRange), RangeOverflow(FixedRange),
+    RangeOverlap(FixedRange, FixedRange), RangeOutsideRegions(FixedRange), AcpiPointer(u64) }
+
+pub struct BootInfoView<'a> { header: BootInfoHeader, regions: &'a [u8] }
+impl<'a> BootInfoView<'a> {
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, BootInfoError>;
+    pub const fn header(&self) -> BootInfoHeader;
+    pub const fn fixed_range(&self, range: FixedRange) -> (u64, u64);
+    pub const fn region_count(&self) -> usize;
+    pub fn regions(&self) -> impl Iterator<Item = BootRegion> + '_;
+    pub const fn phys_window_base(&self) -> u64;
+    pub const fn acpi_rsdp(&self) -> Option<u64>;   // None for the address zero
+}
+
+pub struct BootInfoWriter;
+impl BootInfoWriter {
+    pub fn write(page: &mut [u8; BOOT_INFO_PAGE_LEN], header: &BootInfoHeader,
+        regions: &[BootRegion]) -> Result<u32, BootInfoError>;
+}
 ```
 
-Provide a safe, allocation-free view: `BootInfoView<'a> { header:
-BootInfoHeader, regions: &'a [BootRegion] }` built by
-`BootInfoView::parse(bytes: &[u8]) -> Result<BootInfoView<'_>, BootInfoError>`
-that decodes the header field by field with `u64::from_le_bytes` and
-validates: magic, version, `size == header size + region_count * 16`,
-`size <= PAGE_SIZE`, `region_count <= MAX_BOOT_REGIONS`, every region kind
-known and `len != 0`, the four fixed ranges pairwise disjoint and each
-inside some region. Also a writer `BootInfoWriter` that fills a
-`&mut [u8; 4096]` from a header and a region slice (used by the loader).
-The kernel adapter (Phase 2) turns a raw pointer into the byte slice; the
-parsing stays here, safe and fuzzable.
+`BootInfoHeader` is 104 bytes, `BootRegion` is 24 bytes, and the whole
+structure is `BOOT_INFO_HEADER_LEN + region_count * BOOT_REGION_LEN` bytes.
+The `repr(C)` attributes record the ABI layout; no code reinterprets bytes
+as these types.
+
+`BootInfoView` keeps the region array as bytes and decodes one entry at a
+time in `regions()`, because turning bytes into a `&[BootRegion]` would
+need `unsafe`, which this crate does not have. `parse` decodes the fixed
+part word by word with `u32::from_le_bytes` and validates, in this order:
+magic; version; `BOOT_INFO_HEADER_LEN <= size <= BOOT_INFO_PAGE_LEN`;
+`region_count <= MAX_BOOT_REGIONS`;
+`size == BOOT_INFO_HEADER_LEN + region_count * BOOT_REGION_LEN`; then every
+region, whose kind must be known, whose length must not be zero, and whose
+end must be representable; then the four fixed ranges, each of which must
+be non-empty, representable, inside one region, and disjoint from the other
+three; and finally the ACPI pointer, which is either zero (absent) or
+inside one region. `FixedRange` names the four ranges in the errors.
+
+`BootInfoWriter::write` clears the page, then writes the magic, the
+version, the size, and the region count from `regions`, not from `header`,
+so that the writer always produces what the parser accepts; it returns the
+number of bytes written. The kernel adapter (Phase 2) turns a raw pointer
+into the byte slice; the parsing stays here, safe and fuzzable.
+
+Every error type of both modules implements `Display`.
 
 Tests: catalog 6.6.10 in full, one test per item, in
-`src/tests/boot_image.rs` and `src/tests/boot_info.rs`. Add a generator
-`any_boot_image_header()` behind `test-strategies` (add the feature and the
-optional `test-support` dependency to `audhsos-abi` as in `kernel-types`).
+`src/tests/boot_image.rs` and `src/tests/boot_info.rs`; each test file
+builds the raw bytes field by field, so that it can produce values the
+serializer never writes. `src/strategies.rs` behind `test-strategies`
+offers `any_boot_image_header()`, `image_len_for()`,
+`any_boot_image_bytes()` (a serialized header with up to four bytes
+replaced and sometimes truncated), `any_boot_info_bytes()`,
+`any_region_kind_code()`, and `any_boot_region()`.
 
 ### 10.1.2 Crate `kernel-objects` (`crates/kernel/objects`)
 
-Layer 2, `no_std`, `forbid(unsafe_code)`, deps: `kernel-types`,
-`audhsos-abi`, optional `test-support` (feature `test-strategies`).
+Layer 2, `no_std`, `forbid(unsafe_code)`. The policy allows `kernel-types`,
+`audhsos-abi`, and `test-support`; the manifest declares only what the code
+uses, because `unused_crate_dependencies` is denied: `audhsos-abi` and the
+optional `test-support` (feature `test-strategies`).
 
 `src/pool.rs`:
 
 ```rust
 pub struct ObjectId<T> { index: u32, generation: u32, _marker: PhantomData<fn() -> T> }
+impl<T> ObjectId<T> {
+    pub const fn new(index: u32, generation: u32) -> Self;
+    pub const fn index(self) -> u32; pub const fn generation(self) -> u32;
+}   // Clone, Copy, PartialEq, Eq, Hash, and Debug by hand, so that they do not need `T: Clone` and the like
+
 pub struct Pool<T, const N: usize> { slots: [Slot<T>; N], free_head: Option<u32>, free_tail: Option<u32>, live: u32 }
-enum Slot<T> { Free { generation: u32, next_free: Option<u32> }, Occupied { generation: u32, refs: u32, value: T } }
+struct Slot<T> { generation: u32, next_free: Option<u32>, occupant: Option<Occupant<T>> }
+struct Occupant<T> { refs: u32, value: T }
 pub enum PoolError { Exhausted, StaleId, RefOverflow }
 impl<T, const N: usize> Pool<T, N> {
     pub fn new() -> Self;                                  // every slot free, generation 1, FIFO list 0..N
+    pub fn capacity(&self) -> u32; pub const fn live(&self) -> u32; pub const fn is_empty(&self) -> bool;
     pub fn allocate(&mut self, value: T) -> Result<ObjectId<T>, PoolError>;   // refs = 1
     pub fn get(&self, id: ObjectId<T>) -> Result<&T, PoolError>;
     pub fn get_mut(&mut self, id: ObjectId<T>) -> Result<&mut T, PoolError>;
+    pub fn references(&self, id: ObjectId<T>) -> Result<u32, PoolError>;
     pub fn retain(&mut self, id: ObjectId<T>) -> Result<(), PoolError>;       // refs += 1, checked
     pub fn release(&mut self, id: ObjectId<T>) -> Result<Option<T>, PoolError>; // refs -= 1; Some(value) when it reached 0: slot freed, generation += 1 (skipping 0), appended to the FIFO tail
-    pub fn live(&self) -> u32; pub const fn capacity(&self) -> u32;
 }
+impl From<PoolError> for audhsos_abi::Error { /* Exhausted -> PoolExhausted, StaleId -> InvalidHandle, RefOverflow -> QuotaExceeded */ }
 ```
 
-`[Slot<T>; N]` needs `T: Sized`; build the array with
-`core::array::from_fn`. `N` is a const generic so that pool sizes come from
-boot-time constants in `kernel-core`; sizes are not decided here.
+A slot is free exactly when it has no occupant; the generation and the
+free-list link live outside the occupant, so that no code path has to
+distinguish a case that cannot occur. `[Slot<T>; N]` needs `T: Sized`;
+build the array with `core::array::from_fn`. `N` is a const generic so that
+pool sizes come from boot-time constants in `kernel-core`; sizes are not
+decided here. `capacity` is not a `const fn` because `u32::try_from` is not
+const on the pinned toolchain.
 
-`src/quota.rs`: `Quota { limit: u32, used: u32 }` with
-`charge(n) -> Result<(), QuotaExceeded>`, `refund(n)` (saturating),
-`remaining()`.
+`src/quota.rs`:
+
+```rust
+pub struct QuotaExceeded { pub limit: u32, pub used: u32, pub requested: u32 }
+pub struct Quota { limit: u32, used: u32 }   // Default is the quota with the limit zero
+impl Quota {
+    pub const fn new(limit: u32) -> Self;
+    pub const fn limit(self) -> u32; pub const fn used(self) -> u32;
+    pub const fn remaining(self) -> u32; pub const fn is_empty(self) -> bool;
+    pub const fn charge(&mut self, amount: u32) -> Result<(), QuotaExceeded>;  // unchanged when it fails
+    pub const fn refund(&mut self, amount: u32);                               // saturating
+}
+impl From<QuotaExceeded> for audhsos_abi::Error { /* QuotaExceeded */ }
+```
+
+`src/strategies.rs` (feature `test-strategies`): `PoolOp` with
+`Allocate`, `Retain`, `Release`, `Get`, and `GetStale`, `any_pool_op()`,
+and `any_quota_op()`.
 
 Tests: catalog 6.6.6 pool and quota items (handle items come in Phase 5):
 full pool, stale generation after free and reuse, generation wrap
-(`u32::MAX` reuses; test with a pool of one slot by setting the generation
-through a `#[cfg(test)]`-only constructor), retain/release counts, FIFO
-reuse order, quota exactly at limit and one above, refund restores.
-Model-based test: random `allocate`/`retain`/`release`/`get` against a
-`HashMap<u32, (generation, refs)>`.
+(`u32::MAX` reuses, reached by setting the generation of a free slot
+through the `#[cfg(test)]`-only helpers `set_generation`, `set_references`,
+and `generation_of`), retain/release counts, reference overflow, FIFO reuse
+order, quota exactly at limit and one above, refund restores. The step
+that appends a released slot to the free list is the `pub(crate)` helper
+`link_free`, so that the tests can call it with a tail outside the pool and
+cover the branch that rejects it. Model-based test: random
+`allocate`/`retain`/`release`/`get` against a
+`HashMap<(index, generation), (value, refs)>` and the list of every id
+handed out so far.
 
 ### 10.1.3 Crate `kernel-mm` (`crates/kernel/mm`)
 
@@ -210,85 +313,151 @@ Modules:
 **`memory_map.rs`.** Input: `&[MemoryRegion]` from `Platform`. Output:
 
 ```rust
-pub struct NormalizedMap { usable: [PhysFrameRange; MAX_BOOT_REGIONS], count: usize }
-pub fn normalize(regions: &[MemoryRegion]) -> Result<NormalizedMap, MapError>;
 pub enum MapError { TooManyRegions, NoUsableMemory, ReserveDoesNotFit, Address(kernel_types::Error) }
+pub struct NormalizedMap { spans: SpanList }
+pub fn normalize(regions: &[MemoryRegion]) -> Result<NormalizedMap, MapError>;
+impl NormalizedMap {
+    pub const fn len(&self) -> usize; pub const fn is_empty(&self) -> bool;
+    pub fn iter(&self) -> impl Iterator<Item = PhysFrameRange> + '_;
+    pub fn total_frames(&self) -> u64; pub fn total_bytes(&self) -> u64;
+    pub fn is_sorted_and_disjoint(&self) -> bool;
+    pub(crate) fn without(&self, range: PhysFrameRange) -> Result<NormalizedMap, MapError>;
+}
 ```
 
+The map is held as a `SpanList`, a fixed array of `MAX_BOOT_REGIONS`
+half-open frame-number spans plus a length. Frame numbers, not
+`PhysFrameRange`, are the working representation, because a span of frame
+numbers has a `Default` and needs no validated constructor while the list
+is being edited; `iter()` converts on the way out.
+
 Algorithm: (1) split input into usable (`MemoryRegionKind::Usable`) and
-excluded (every other kind); (2) usable regions shrink to frame boundaries
-(start rounded up, end rounded down; drop empty), excluded regions grow to
-frame boundaries (start down, end up); (3) sort usable by start, merge
+excluded (every other kind), skipping regions of length zero; (2) usable
+regions shrink to frame boundaries (start rounded up, end rounded down and
+clamped to the last representable frame; drop empty), excluded regions grow
+to frame boundaries (start down, end up); (3) sort usable by start, merge
 overlapping and touching; (4) subtract every excluded range from the usable
 list (a range inside a usable region splits it into two); (5) sort and
 merge again; fail with `TooManyRegions` if the count exceeds
-`MAX_BOOT_REGIONS` at any point; fail with `NoUsableMemory` if nothing
-remains. `NormalizedMap` offers `iter()`, `total_frames()`, `is_sorted_and_disjoint()`
-(used by tests and `debug_assert!`).
+`MAX_BOOT_REGIONS` at any point, so that a split that no longer fits is an
+error and not a truncation; fail with `NoUsableMemory` if nothing remains;
+fail with `Address(Overflow)` if a region reaches beyond the address space.
+`is_sorted_and_disjoint()` is what the tests check after every operation.
 
-**`reserve.rs`.** `select_reserve(map: &NormalizedMap, override_bytes: u64)
--> Result<(PhysFrameRange, NormalizedMap), MapError>`: size = `override_bytes`
-if non-zero (must be frame-aligned and below total RAM, else
-`Address`), otherwise `clamp(total_ram / 16, 4 MiB, 64 MiB)` rounded up to
-a frame; take the first usable region with at least that many frames,
-carve the reserve from its start, return the reserve and the map without
-those frames; `ReserveDoesNotFit` if no region is large enough.
+**`reserve.rs`.**
+
+```rust
+pub const MIN_RESERVE_BYTES: u64 = 4 * 1024 * 1024;
+pub const MAX_RESERVE_BYTES: u64 = 64 * 1024 * 1024;
+pub const RESERVE_DIVISOR: u64 = 16;
+pub const fn default_reserve_bytes(total_bytes: u64) -> u64;
+pub fn select_reserve(map: &NormalizedMap, override_bytes: u64)
+    -> Result<(PhysFrameRange, NormalizedMap), MapError>;
+```
+
+Size = `override_bytes` if non-zero (must be frame-aligned, else
+`Address(Unaligned)`, and below the usable memory, else
+`Address(Overflow)`), otherwise `default_reserve_bytes`, which clamps
+`total_bytes / RESERVE_DIVISOR` to `MIN_RESERVE_BYTES` and
+`MAX_RESERVE_BYTES` and rounds up to a frame. Take the first usable range
+with at least that many frames, carve the reserve from its start, return
+the reserve and the map without those frames; `ReserveDoesNotFit` if no
+single range is large enough, which is also what happens when the machine
+has less memory than the smallest reserve.
 
 **`frame_allocator.rs`.**
 
 ```rust
-pub struct BitmapFrameAllocator { base: PhysFrame, count: u64, bits: [u64; RESERVE_WORDS], free: u64 }
+pub const BITS_PER_WORD: u64 = 64;
 pub const RESERVE_WORDS: usize = (64 * 1024 * 1024 / 4096) / 64;   // words for the largest reserve
+pub const MAX_MANAGED_FRAMES: u64 = 64 * 1024 * 1024 / 4096;
+pub struct BitmapFrameAllocator { base: PhysFrame, count: u64, bits: [u64; RESERVE_WORDS], free: u64 }
 pub enum FrameError { OutOfFrames, NotManaged, NotAllocated, AlreadyAllocated, InvalidCount }
 impl BitmapFrameAllocator {
     pub fn new(range: PhysFrameRange) -> Result<Self, FrameError>;     // InvalidCount if larger than the bitmap
+    pub const fn capacity(&self) -> u64; pub const fn base(&self) -> PhysFrame;
+    pub const fn free_count(&self) -> u64;
+    pub fn range(&self) -> PhysFrameRange; pub fn manages(&self, frame: PhysFrame) -> bool;
     pub fn allocate(&mut self) -> Result<PhysFrame, FrameError>;        // first zero bit
+    pub fn allocate_at(&mut self, frame: PhysFrame) -> Result<(), FrameError>;  // AlreadyAllocated when taken
     pub fn allocate_contiguous(&mut self, count: u64, alignment: Alignment) -> Result<PhysFrameRange, FrameError>; // first fit
     pub fn free(&mut self, frame: PhysFrame) -> Result<(), FrameError>;
     pub fn free_contiguous(&mut self, range: PhysFrameRange) -> Result<(), FrameError>;
-    pub fn free_count(&self) -> u64; pub fn capacity(&self) -> u64;
 }
 impl FrameSource for BitmapFrameAllocator { /* allocate_frame = allocate().ok(), release_frame = free ignored on error */ }
+impl From<FrameError> for audhsos_abi::Error { /* OutOfFrames -> OutOfKernelMemory, AlreadyAllocated -> AlreadyExists, the rest -> InvalidArgument */ }
 ```
+
+A set bit means the frame is handed out. Every bit above `count` is set at
+construction, so no frame outside the reserve is ever handed out and
+`allocate` is a scan for the first clear bit. `allocate_at` claims one
+named frame; the loader needs it to reserve frames it already used.
+`free_contiguous` checks the whole range before it changes anything, so a
+range that is only partly allocated leaves the bitmap untouched; an empty
+range succeeds and frees nothing.
 
 **`page_table.rs`.** Architecture-neutral interface plus the `x86_64`
 format:
 
 ```rust
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Permissions { pub write: bool, pub execute: bool, pub user: bool }
-#[derive(Clone, Copy, PartialEq, Eq, Debug)] pub enum CachePolicy { WriteBack, Uncached }
+impl Permissions {
+    pub const READ_ONLY: Permissions; pub const READ_WRITE: Permissions; pub const READ_EXECUTE: Permissions;
+    pub const fn is_write_execute(self) -> bool; pub const fn for_user(self) -> Permissions;
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CachePolicy { #[default] WriteBack, Uncached }
+pub enum EntryError { ReservedBits(u64), HugePage }
 pub trait EntryFormat: Copy + Default + 'static {
-    const LEVELS: usize; const INDEX_BITS: u32; const ENTRIES: usize;
+    const LEVELS: usize; const INDEX_BITS: u32; const ENTRIES: usize; const EMPTY: Self;
     fn index(level: usize, page: Page) -> usize;             // 9-bit slices of the page number
     fn is_present(self) -> bool;
-    fn frame(self) -> Option<PhysFrame>;
+    fn frame(self) -> Option<PhysFrame>;                      // None when the entry is not present
     fn table(frame: PhysFrame) -> Self;                       // present | writable | user, pointing at a table
     fn leaf(frame: PhysFrame, perms: Permissions, cache: CachePolicy, global: bool) -> Self;
     fn permissions(self) -> Permissions;
     fn with_permissions(self, perms: Permissions) -> Self;
     fn validate(self) -> Result<(), EntryError>;              // reserved bits
-    const EMPTY: Self;
 }
 #[repr(C, align(4096))] pub struct PageTable<F: EntryFormat> { pub entries: [F; 512] }
-#[derive(Clone, Copy, Default, PartialEq, Eq)] pub struct X86Entry(u64);
+impl<F: EntryFormat> PageTable<F> {
+    pub fn new() -> Self;                                     // Default is the same
+    pub fn entry(&self, index: usize) -> F;                   // F::EMPTY outside the table
+    pub fn set_entry(&mut self, index: usize, entry: F) -> bool;  // false outside the table
+    pub fn is_unused(&self) -> bool;
+}
+pub const X86_PRESENT: u64; pub const X86_WRITABLE: u64; pub const X86_USER: u64;
+pub const X86_WRITE_THROUGH: u64; pub const X86_NO_CACHE: u64; pub const X86_ACCESSED: u64;
+pub const X86_DIRTY: u64; pub const X86_HUGE: u64; pub const X86_GLOBAL: u64;
+pub const X86_NO_EXECUTE: u64; pub const X86_ADDRESS_MASK: u64; pub const X86_RESERVED_MASK: u64;
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash)] pub struct X86Entry(u64);
+impl X86Entry { pub const fn from_raw(raw: u64) -> Self; pub const fn as_u64(self) -> u64;
+    pub const fn has(self, flag: u64) -> bool; }
 ```
 
 `X86Entry` bits: PRESENT 0, WRITABLE 1, USER 2, WRITE_THROUGH 3, NO_CACHE 4,
 ACCESSED 5, DIRTY 6, HUGE 7, GLOBAL 8, address bits 12..=51, NO_EXECUTE 63;
-`validate` rejects bits 52..=62 set on a present entry and rejects HUGE (not
-supported in the first release). `Permissions { write: false, execute: false }`
-still maps readable; a read-only entry has WRITABLE clear and NO_EXECUTE set
-unless `execute`.
+`validate` accepts every entry that is not present and otherwise rejects
+bits 52..=62 and HUGE (large pages are not supported in the first release).
+`Permissions { write: false, execute: false }` still maps readable; a
+read-only entry has WRITABLE clear and NO_EXECUTE set unless `execute`.
+`CachePolicy::Uncached` sets NO_CACHE and WRITE_THROUGH together.
+`PageTable::entry` and `PageTable::set_entry` define what an index outside
+the table does instead of failing, because `EntryFormat::index` never
+produces one; the tests call both with such an index, so that the behavior
+is covered rather than assumed.
 
 **`mapper.rs`.**
 
 ```rust
 pub struct Mapper<'a, F: EntryFormat, A: FrameAccess<PageTable<F>>, T: TlbControl, S: FrameSource> {
-    root: PhysFrame, access: &'a mut A, tlb: &'a mut T, frames: &'a mut S }
+    root: PhysFrame, access: &'a mut A, tlb: &'a mut T, frames: &'a mut S, _format: PhantomData<fn() -> F> }
 pub enum MapError { AlreadyMapped, NotMapped, OutOfKernelMemory, UnreachableFrame, Entry(EntryError) }
 pub enum Progress { Done, Partial(u64) }
 impl Mapper {
+    pub fn new(root: PhysFrame, access: &'a mut A, tlb: &'a mut T, frames: &'a mut S) -> Self;
+    pub const fn root(&self) -> PhysFrame;
     pub fn map(&mut self, page: Page, frame: PhysFrame, perms: Permissions, cache: CachePolicy) -> Result<(), MapError>;
     pub fn unmap(&mut self, page: Page) -> Result<PhysFrame, MapError>;
     pub fn protect(&mut self, page: Page, perms: Permissions) -> Result<(), MapError>;
@@ -296,44 +465,77 @@ impl Mapper {
     pub fn map_range(&mut self, pages: PageRange, first_frame: PhysFrame, perms: Permissions, cache: CachePolicy, budget: u64) -> Result<Progress, MapError>;
     pub fn unmap_range(&mut self, pages: PageRange, budget: u64) -> Result<Progress, MapError>;
 }
+impl From<MapError> for audhsos_abi::Error { /* AlreadyMapped, NotMapped, OutOfKernelMemory; UnreachableFrame and Entry -> InvalidArgument */ }
 ```
 
-`map` walks levels 3..0: for a missing table, allocate a frame from
-`frames`, write `PageTable::default()` through `access.table_mut(frame)`
+`map` walks the levels `LEVELS - 1` down to 1 and then writes the leaf at
+level 0: for a missing table, allocate a frame from `frames`, write
+`PageTable::default()` through `access.table_mut(frame)`
 (`UnreachableFrame` if `None`), install `F::table(frame)`. Keep the frames
-allocated in this call in a fixed array; on any failure free them in
-reverse and clear the entries they were installed in (rollback), then
-return the error. Installing the leaf into an occupied entry is
-`AlreadyMapped`. After a successful change call `tlb.flush_page(page)`
-exactly once. `unmap` clears the leaf, then frees each intermediate table
-whose 512 entries are all empty, from the lowest level upward. Range
+allocated in this call in a fixed array of three entries, one per level
+below the root; on any failure free them in reverse and clear the entries
+they were installed in (rollback), then return the error. Installing the leaf into an occupied
+entry is `AlreadyMapped`. After a successful change call
+`tlb.flush_page(page)` exactly once; a call that fails flushes nothing.
+`unmap` clears the leaf, then frees each intermediate table whose 512
+entries are all empty, from the lowest level upward, never the root. Range
 operations stop after `budget` pages and return `Partial(done)`; `budget`
-is `MAX_PAGES_PER_CALL` in the kernel. The kernel-half `global` bit is set
-when the page is a kernel page.
+is `MAX_PAGES_PER_CALL` in the kernel, and the pages a range operation
+processed before an error stay processed. The `global` bit is set when the
+page is a kernel page.
 
 **`address_space.rs`.**
 
 ```rust
+pub enum RegionError { Empty, Unaligned, Overflow, OutsideUserSpace, AddressInUse, NotMapped, QuotaExceeded }
+pub fn user_range(start: u64, len: u64) -> Result<PageRange, RegionError>;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Region<B: Copy> { pub pages: PageRange, pub backing: B, pub offset: u64, pub perms: Permissions }
-pub struct RegionTable<B: Copy, const N: usize> { regions: [Option<Region<B>>; N], len: usize }
-pub enum RegionError { AddressInUse, NotMapped, QuotaExceeded, OutsideUserSpace, Unaligned, Overflow }
+pub struct Removed<B: Copy, const M: usize> { items: [Option<Region<B>>; M], len: usize, remaining: Option<PageRange> }
+impl<B: Copy, const M: usize> Removed<B, M> {
+    pub fn iter(&self) -> impl Iterator<Item = &Region<B>>;
+    pub const fn len(&self) -> usize; pub const fn is_empty(&self) -> bool;
+    pub const fn remaining(&self) -> Option<PageRange>;
+}
+pub struct RegionTable<B: Copy, const N: usize> { regions: [Option<Region<B>>; N], len: usize, user: bool }
 impl RegionTable {
-    pub fn insert(&mut self, region: Region<B>) -> Result<(), RegionError>;         // sorted insert, overlap check against neighbors
-    pub fn remove(&mut self, pages: PageRange) -> Result<Removed<B, 3>, RegionError>; // may split one region into two; needs one free slot
+    pub const fn new() -> Self;                                                     // user address space
+    pub const fn kernel() -> Self;                                                  // the half check relaxed
+    pub const fn len(&self) -> usize; pub const fn is_empty(&self) -> bool;
+    pub const fn free_slots(&self) -> usize;
+    pub fn insert(&mut self, region: Region<B>) -> Result<(), RegionError>;         // sorted insert, overlap check
+    pub fn remove<const M: usize>(&mut self, pages: PageRange) -> Result<Removed<B, M>, RegionError>; // may split one region into two; needs one free slot
     pub fn protect(&mut self, pages: PageRange, perms: Permissions) -> Result<(), RegionError>; // may split into three; needs two free slots
     pub fn find(&self, page: Page) -> Option<&Region<B>>;
     pub fn iter(&self) -> impl Iterator<Item = &Region<B>>;
     pub fn check_invariants(&self) -> bool;
 }
+impl From<RegionError> for audhsos_abi::Error { /* Unaligned, AddressInUse, NotMapped, QuotaExceeded; the rest -> InvalidArgument */ }
 ```
 
 Every range must satisfy: user half, start at or above
 `USER_SPACE_START`, non-empty. The kernel address space uses the same type
-with the check relaxed through a constructor flag `RegionTable::kernel()`.
+with the check relaxed through the constructor `RegionTable::kernel()`.
+`user_range` turns a raw address and a length from a system call into a
+`PageRange` and is the place where `Empty`, `Unaligned`, `Overflow`, and
+`OutsideUserSpace` are told apart.
 
-**`strategies.rs`** (feature `test-strategies`): `any_memory_regions()`
-(lists of 0..=64 regions with random kinds and lengths, including
-overlapping and unaligned ones), `any_permissions()`, `any_region_table_op()`.
+`remove` is bounded like the mapper's range operations: it removes at most
+`M` pieces per call and reports the untouched rest of the request in
+`Removed::remaining()`, so that a caller with a long range loops instead of
+running unbounded inside the kernel. A request that overlaps no region at
+all is `NotMapped`. `protect` works on the region that holds the first page
+of the request and reports `NotMapped` when the request reaches beyond that
+region. A split that would need a slot the table does not have is
+`QuotaExceeded` and changes nothing. Splitting moves the offset into the
+backing object with the pages.
+
+**`strategies.rs`** (feature `test-strategies`): `any_memory_region()` and
+`any_memory_regions()` (lists of 0..=64 regions with random kinds and
+lengths, including overlapping and unaligned ones),
+`any_populated_memory_regions()` (the same with one usable region added, so
+that normalization can succeed), `any_permissions()`,
+`any_user_page_range()`, `RegionOp`, and `any_region_table_op()`.
 
 Tests: catalog 6.6.2, 6.6.3, 6.6.4 (including the model-based test with
 `MemoryFrameAccess<PageTable<X86Entry>>`, `RecordingTlb`, and
@@ -341,14 +543,29 @@ Tests: catalog 6.6.2, 6.6.3, 6.6.4 (including the model-based test with
 model test of the mapper, extend `MemoryFrameAccess` with
 `fn with_lazy_tables(ram: PhysFrameRange) -> Self` that materializes a
 default table on first `table_mut` for any frame inside `ram`, so that
-freshly allocated frames are reachable like in the kernel.
+freshly allocated frames are reachable like in the kernel. The private
+helpers that index the fixed arrays (`SpanList`, `RegionTable`, the
+bitmap, `Region::clipped`, `remaining_from`) are `pub(crate)`, so that the
+crate's own tests reach the branches that reject an index outside the array
+or a range that does not overlap; without them those branches would be
+unreachable and the branch coverage would report a gap that no test can
+close.
 
 ### 10.1.4 Policy and documents
 
 - `policy::CRATES`: add `kernel-objects` (deps `kernel-types`,
   `audhsos-abi`, `test-support`) and `kernel-mm` (deps `kernel-types`,
-  `kernel-hal-api`, `audhsos-abi`, `test-support`).
+  `kernel-hal-api`, `audhsos-abi`, `test-support`); `audhsos-abi` gains
+  `test-support` for its `test-strategies` feature. The policy lists what a
+  crate may depend on; a manifest declares only what its code uses.
+- The layering test of the xtask uses `kernel-hal-api` as the example of a
+  crate that may reach `test-support` only as a dev-dependency, because
+  `audhsos-abi` may now reach it as a normal one.
 - Catalog rows in 05 for both crates; changelog entries.
+- `kernel-types` gains `PhysFrame::ZERO` and `PhysFrameRange::EMPTY`, the
+  fillers the fixed-size arrays of `kernel-mm` need.
+- `MemoryFrameAccess::with_lazy_tables` bounds the `FrameAccess`
+  implementation of that double to `T: Default`; 06 records the behavior.
 
 ### 10.1.5 Acceptance
 

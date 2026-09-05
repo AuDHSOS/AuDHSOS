@@ -4,10 +4,10 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
-mod boot_image;
-mod boot_info;
-mod error;
-mod handle;
-mod object;
-mod rights;
+mod address_space;
+mod frame_allocator;
+mod mapper;
+mod memory_map;
+mod page_table;
+mod reserve;
 mod strategies;

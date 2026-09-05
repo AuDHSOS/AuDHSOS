@@ -2,8 +2,8 @@
 # Copyright (C) 2026 Manuel Baesler and contributors
 
 [package]
-name = "audhsos-abi"
-description = "Shared definitions of the AuDHSOS system call interface: errors, rights, object types, handles, layout constants"
+name = "kernel-objects"
+description = "Generation-checked object pools and quotas for the kernel objects of AuDHSOS"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,7 @@ rust-version.workspace = true
 test-strategies = ["dep:test-support"]
 
 [dependencies]
+audhsos-abi.workspace = true
 test-support = { workspace = true, optional = true }
 
 [dev-dependencies]

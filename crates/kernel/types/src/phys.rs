@@ -122,6 +122,9 @@ impl fmt::Display for PhysAddr {
 pub struct PhysFrame(PhysAddr);
 
 impl PhysFrame {
+    /// The frame at physical address zero.
+    pub const ZERO: PhysFrame = PhysFrame(PhysAddr::ZERO);
+
     /// The frame starting at `start`; fails if `start` is not page-aligned.
     ///
     /// # Errors
@@ -210,6 +213,12 @@ pub struct PhysFrameRange {
 }
 
 impl PhysFrameRange {
+    /// The empty range at frame zero, usable as a filler in fixed arrays.
+    pub const EMPTY: PhysFrameRange = PhysFrameRange {
+        start: PhysFrame::ZERO,
+        count: 0,
+    };
+
     /// `count` frames starting at `start`; fails if the range would extend
     /// beyond the last representable frame.
     ///

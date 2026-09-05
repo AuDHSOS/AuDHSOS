@@ -5,12 +5,18 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+pub mod boot_image;
+pub mod boot_info;
 pub mod error;
 pub mod handle;
 pub mod layout;
 pub mod object;
 pub mod rights;
+#[cfg(any(test, feature = "test-strategies"))]
+pub mod strategies;
 
+pub use boot_image::{BootImageError, BootImageHeader};
+pub use boot_info::{BootInfoError, BootInfoView, BootInfoWriter, BootRegion, BootRegionKind};
 pub use error::Error;
 pub use handle::Handle;
 pub use object::ObjectType;

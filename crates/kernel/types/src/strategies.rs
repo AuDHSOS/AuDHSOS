@@ -37,18 +37,9 @@ pub fn any_phys_frame_range() -> BoxGen<PhysFrameRange> {
                     .wrapping_add(1)
                     .saturating_sub(start.number()),
             );
-            PhysFrameRange::new(start, count).unwrap_or_else(|_| empty_frame_range())
+            PhysFrameRange::new(start, count).unwrap_or(PhysFrameRange::EMPTY)
         })
         .boxed()
-}
-
-fn empty_frame_range() -> PhysFrameRange {
-    PhysFrameRange::new(PhysAddr::ZERO.frame(), 0).unwrap_or_else(|_| unreachable_range())
-}
-
-#[expect(clippy::panic, reason = "an empty range at frame zero is always valid")]
-fn unreachable_range<T>() -> T {
-    panic!("an empty range at frame zero must be valid")
 }
 
 /// Any user-half virtual address, shrinking toward zero.
@@ -95,13 +86,20 @@ pub fn any_page_range() -> BoxGen<PageRange> {
                 1 << (64 - PAGE_SHIFT)
             };
             let count = count.min(limit.saturating_sub(start.number()));
-            PageRange::new(start, count).unwrap_or_else(|_| empty_page_range(start))
+            PageRange::new(start, count).unwrap_or_else(|_| {
+                PageRange::new(start, 0).unwrap_or_else(|_| unreachable_page_range())
+            })
         })
         .boxed()
 }
 
-fn empty_page_range(start: Page) -> PageRange {
-    PageRange::new(start, 0).unwrap_or_else(|_| unreachable_range())
+/// Never called: an empty range at any page is always valid.
+#[expect(
+    clippy::panic,
+    reason = "unreachable by construction; a count of zero always fits"
+)]
+fn unreachable_page_range<T>() -> T {
+    panic!("an empty page range must be valid")
 }
 
 /// Any alignment from one byte to one gibibyte, shrinking toward one byte.

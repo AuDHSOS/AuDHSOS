@@ -3,9 +3,11 @@
 
 //! In-memory implementations of the HAL traits that record every call.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+#[cfg(feature = "port-io")]
+use std::collections::VecDeque;
 
-use kernel_types::{Page, PhysAddr, PhysFrame, VirtAddr};
+use kernel_types::{Page, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
 
 use crate::console::DebugConsole;
 use crate::exit::{ExitStatus, TestExit};
@@ -14,16 +16,21 @@ use crate::paging::{FrameAccess, FrameSource, TlbControl};
 use crate::platform::{MemoryRegion, MemoryRegionKind, Platform};
 use crate::timer::{Timer, TimerError};
 
-/// Page tables stored in a map from frame to table.
+/// Page tables stored in a map from frame to table. A range of frames can
+/// be declared as memory, so that a table appears there on the first
+/// modifying access, the way a freshly allocated frame in the kernel is
+/// already reachable through the physical window.
 #[derive(Debug)]
 pub struct MemoryFrameAccess<T> {
     tables: HashMap<PhysFrame, Box<T>>,
+    memory: Option<PhysFrameRange>,
 }
 
 impl<T> Default for MemoryFrameAccess<T> {
     fn default() -> Self {
         MemoryFrameAccess {
             tables: HashMap::new(),
+            memory: None,
         }
     }
 }
@@ -33,6 +40,22 @@ impl<T> MemoryFrameAccess<T> {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An access over which every frame of `ram` becomes reachable with a
+    /// default table as soon as it is modified.
+    #[must_use]
+    pub fn with_lazy_tables(ram: PhysFrameRange) -> Self {
+        MemoryFrameAccess {
+            tables: HashMap::new(),
+            memory: Some(ram),
+        }
+    }
+
+    /// The range that materializes tables on demand, if there is one.
+    #[must_use]
+    pub const fn lazy_range(&self) -> Option<PhysFrameRange> {
+        self.memory
     }
 
     /// Makes `frame` reachable with `table` as its content.
@@ -64,12 +87,15 @@ impl<T> MemoryFrameAccess<T> {
     }
 }
 
-impl<T> FrameAccess<T> for MemoryFrameAccess<T> {
+impl<T: Default> FrameAccess<T> for MemoryFrameAccess<T> {
     fn table(&self, frame: PhysFrame) -> Option<&T> {
         self.tables.get(&frame).map(AsRef::as_ref)
     }
 
     fn table_mut(&mut self, frame: PhysFrame) -> Option<&mut T> {
+        if !self.tables.contains_key(&frame) && self.memory.is_some_and(|ram| ram.contains(frame)) {
+            self.tables.insert(frame, Box::new(T::default()));
+        }
         self.tables.get_mut(&frame).map(AsMut::as_mut)
     }
 }

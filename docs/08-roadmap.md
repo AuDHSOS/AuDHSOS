@@ -52,6 +52,8 @@ on `main`.
 
 ## 8.3 Phase 1: Memory management logic
 
+Status: implemented.
+
 Deliverables: memory map normalization, reserve selection, bitmap frame
 allocator with contiguous allocation, `PageTableEntry`, `Mapper` over
 `FrameAccess`, `TlbControl`, and `FrameSource`, address spaces with region

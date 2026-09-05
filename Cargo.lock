@@ -21,6 +21,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-mm"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "kernel-hal-api",
+ "kernel-types",
+ "test-support",
+]
+
+[[package]]
+name = "kernel-objects"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "test-support",
+]
+
+[[package]]
 name = "kernel-types"
 version = "0.1.0"
 dependencies = [

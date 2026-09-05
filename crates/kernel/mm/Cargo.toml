@@ -2,8 +2,8 @@
 # Copyright (C) 2026 Manuel Baesler and contributors
 
 [package]
-name = "audhsos-abi"
-description = "Shared definitions of the AuDHSOS system call interface: errors, rights, object types, handles, layout constants"
+name = "kernel-mm"
+description = "Memory map normalization, frame allocation, page tables, and address space regions of the AuDHSOS kernel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,9 +14,14 @@ rust-version.workspace = true
 test-strategies = ["dep:test-support"]
 
 [dependencies]
+audhsos-abi.workspace = true
+kernel-hal-api.workspace = true
+kernel-types.workspace = true
 test-support = { workspace = true, optional = true }
 
 [dev-dependencies]
+kernel-hal-api = { workspace = true, features = ["test-doubles"] }
+kernel-types = { workspace = true, features = ["test-strategies"] }
 test-support.workspace = true
 
 [lints]

@@ -46,7 +46,7 @@ fn edges_are_checked_against_the_policy() {
     assert!(check_edges(&external, false)[0].contains("outside the workspace"));
     let unknown = BTreeSet::from([edge("mystery", "audhsos-abi")]);
     assert!(check_edges(&unknown, false)[0].contains("not in the policy"));
-    let dev = BTreeSet::from([edge("audhsos-abi", "test-support")]);
+    let dev = BTreeSet::from([edge("kernel-hal-api", "test-support")]);
     assert!(check_edges(&dev, true).is_empty());
     assert_eq!(check_edges(&dev, false).len(), 1);
 }
