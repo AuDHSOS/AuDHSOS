@@ -43,11 +43,18 @@ These are out of scope until the roadmap says otherwise. The design must not
 prevent them, but no effort is spent on them now.
 
 - POSIX or Linux binary compatibility.
-- Graphics, input devices, sound.
+- Sound.
+- Graphics output and input devices in the first release; they follow in
+  Phases 9 to 11 of the roadmap.
 - Booting on physical hardware.
 - Legacy BIOS boot.
 - Symmetric multiprocessing (SMP) in the first release.
-- Networking and persistent storage in the first release.
+- Networking and persistent storage in the first release. The TLS 1.3
+  client library of [document 11](11-cryptography-and-tls.md) and the
+  network stack, FAT32, and virtqueue logic of
+  [document 12](12-parallel-work.md) are built before them, because they
+  are pure logic and need neither. The drivers and servers that would
+  make them a feature of the running system are not.
 - Performance tuning beyond what correctness requires.
 - Formal verification or security certification.
 

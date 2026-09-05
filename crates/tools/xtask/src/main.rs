@@ -10,9 +10,12 @@ mod coverage;
 mod deps;
 mod error;
 mod fs;
+mod image;
 mod layering;
+mod linker;
 mod policy;
 mod process;
+mod qemu;
 mod spdx;
 mod toolchain;
 mod unsafe_budget;
@@ -37,6 +40,15 @@ subcommands:
   doc              build documentation with warnings as errors
   fuzz [--target <name>] [--time <seconds>]
                    run fuzz targets
+  build [--release]
+                   build the loader and the kernel for their targets
+  image [--release]
+                   write the boot image and the disk image into target/
+  qemu-runner <elf>
+                   Cargo's runner for the kernel target: wrap a test kernel
+                   into a disk image, run it, and read the serial protocol
+  run [--release] [--display]
+                   boot the system in QEMU with the console on the terminal
   check            everything CI runs, in CI order
 ";
 
@@ -76,6 +88,10 @@ fn run() -> Result<(), Error> {
         "miri" => commands::miri(&root),
         "doc" => commands::doc(&root),
         "fuzz" => commands::fuzz(&root, options),
+        "build" => commands::build(&root, options),
+        "image" => commands::image(&root, options),
+        "qemu-runner" => commands::qemu_runner(&root, options),
+        "run" => commands::run(&root, options),
         "check" => commands::check(&root, &channel),
         other => Err(Error::Usage(format!("unknown subcommand `{other}`"))),
     }
@@ -83,6 +99,9 @@ fn run() -> Result<(), Error> {
 
 /// The workspace root: the directory Cargo ran the xtask from.
 fn workspace_root() -> Result<PathBuf, Error> {
+    if let Some(root) = std::env::var_os(commands::ROOT_VARIABLE) {
+        return Ok(PathBuf::from(root));
+    }
     if let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") {
         let xtask_dir = PathBuf::from(manifest_dir);
         if let Some(root) = xtask_dir.ancestors().nth(3) {

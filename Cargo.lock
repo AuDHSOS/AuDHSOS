@@ -10,14 +10,104 @@ dependencies = [
 ]
 
 [[package]]
+name = "audhsos-elf"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
+name = "audhsos-kernel"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "kernel-core",
+ "kernel-hal-x86_64",
+]
+
+[[package]]
 name = "audhsos-sync"
 version = "0.1.0"
+
+[[package]]
+name = "audhsos-uefi"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "test-support",
+]
+
+[[package]]
+name = "boot-uefi-x86_64"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-elf",
+ "audhsos-uefi",
+ "kernel-hal-api",
+ "kernel-mm",
+ "kernel-types",
+]
+
+[[package]]
+name = "crypto-aead"
+version = "0.1.0"
+dependencies = [
+ "crypto-ct",
+ "test-support",
+]
+
+[[package]]
+name = "crypto-ct"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
+name = "crypto-hash"
+version = "0.1.0"
+dependencies = [
+ "crypto-ct",
+ "test-support",
+]
+
+[[package]]
+name = "driver-uart16550"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
+name = "kernel-core"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-sync",
+ "kernel-hal-api",
+ "kernel-types",
+ "test-support",
+]
 
 [[package]]
 name = "kernel-hal-api"
 version = "0.1.0"
 dependencies = [
  "kernel-types",
+]
+
+[[package]]
+name = "kernel-hal-x86_64"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-sync",
+ "driver-uart16550",
+ "kernel-hal-api",
+ "kernel-test-harness",
+ "kernel-types",
+ "kernel-x86-tables",
 ]
 
 [[package]]
@@ -39,10 +129,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-test-harness"
+version = "0.1.0"
+dependencies = [
+ "kernel-hal-api",
+]
+
+[[package]]
 name = "kernel-types"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "test-support",
+]
+
+[[package]]
+name = "kernel-x86-tables"
+version = "0.1.0"
+dependencies = [
  "test-support",
 ]
 
@@ -53,3 +157,7 @@ version = "0.1.0"
 [[package]]
 name = "xtask"
 version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "kernel-test-harness",
+]

@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "audhsos-kernel"
+description = "The kernel image: the entry the loader jumps to, the panic handler, and the wiring of the machine to the kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "audhsos-kernel"
+path = "src/main.rs"
+test = false
+bench = false
+
+[[test]]
+name = "boot"
+
+[[test]]
+name = "console"
+
+[[test]]
+name = "descriptors"
+
+[[test]]
+name = "breakpoint"
+
+[[test]]
+name = "divide_error"
+
+[[test]]
+name = "invalid_opcode"
+
+[[test]]
+name = "general_protection"
+
+[[test]]
+name = "page_fault"
+
+[[test]]
+name = "double_fault"
+
+[[test]]
+name = "panic"
+
+[dependencies]
+audhsos-abi.workspace = true
+kernel-core.workspace = true
+kernel-hal-x86_64.workspace = true
+
+[lints]
+workspace = true

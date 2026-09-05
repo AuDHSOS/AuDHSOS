@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "boot-uefi-x86_64"
+description = "The UEFI loader: reads the kernel and the boot image, builds the page tables, and enters the kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "boot-uefi-x86_64"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+audhsos-abi.workspace = true
+audhsos-elf.workspace = true
+audhsos-uefi.workspace = true
+kernel-hal-api.workspace = true
+kernel-mm.workspace = true
+kernel-types.workspace = true
+
+[lints]
+workspace = true

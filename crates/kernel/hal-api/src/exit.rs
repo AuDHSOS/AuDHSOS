@@ -18,3 +18,11 @@ pub trait TestExit {
     /// Requests the exit.
     fn exit(&mut self, status: ExitStatus);
 }
+
+/// A mutable reference to an exit device is an exit device, so that the
+/// kernel can hand one out without giving it away.
+impl<T: TestExit + ?Sized> TestExit for &mut T {
+    fn exit(&mut self, status: ExitStatus) {
+        (**self).exit(status);
+    }
+}

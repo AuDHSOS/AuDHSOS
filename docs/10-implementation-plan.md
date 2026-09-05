@@ -1,4 +1,4 @@
-# 10. Implementation Plan for Phases 1 to 8
+# 10. Implementation Plan for Phases 1 to 11
 
 This document tells an implementer, human or agent, exactly what to build in
 each remaining phase of the [roadmap](08-roadmap.md): crates, modules,
@@ -578,6 +578,25 @@ crates above the thresholds; every item of 6.6.2 to 6.6.6 (pool items) and
 Goal: `~/.cargo/bin/cargo xtask test --qemu` boots test kernels through the
 project's own UEFI loader and reports over the serial line.
 
+### 10.2.0 `audhsos-abi` additions
+
+Extend `BootInfoHeader` with the framebuffer fields of
+[03-target-platform.md 3.1.5](03-target-platform.md#315-boot-information-structure):
+`framebuffer_phys_start: u64`, `framebuffer_len: u64`,
+`framebuffer_width: u32`, `framebuffer_height: u32`,
+`framebuffer_stride: u32`, `framebuffer_format: u32`, placed after
+`acpi_rsdp` and before `region_count`; `BOOT_INFO_HEADER_LEN` becomes
+136. Add `enum FramebufferFormat { Rgbx8888 = 1, Bgrx8888 = 2 }` with
+`code` and `from_code`, and `struct Framebuffer { phys_start, len, width,
+height, stride, format }` returned by `BootInfo::framebuffer() ->
+Option<Framebuffer>`. The parser applies the framebuffer rules of 3.1.5,
+including the overlap check against `Usable` regions and the enclosing
+`MmioReserved` region; the writer takes `Option<Framebuffer>`; the
+generators produce present and absent framebuffers. The version stays
+`1` (D-32).
+
+Tests: catalog 6.6.24 boot information items.
+
 ### 10.2.1 Crate `audhsos-elf` (`crates/elf`)
 
 Layer 0, `no_std`, `forbid(unsafe_code)`, no deps except optional
@@ -594,8 +613,17 @@ pub enum ElfError { TooShort, BadMagic, NotClass64, NotLittleEndian, NotExecutab
     SegmentAlignment, SegmentOutsideBounds, SegmentsOverlap, WritableAndExecutable, EntryNotExecutable, Overflow }
 ```
 
-Decode with `u16::from_le_bytes`/`u32`/`u64` from slices obtained with
-`get(..)`. Checks: magic `7F 45 4C 46`, `EI_CLASS == 2`, `EI_DATA == 1`,
+Modules: `error.rs` (the error enum with `Display`), `image.rs` (the
+constants `EHDR_LEN` and `PHDR_LEN`, `Segment` with `end`, `contains`, and
+`overlaps`, `Constraints::allows`, `Image` with `segments`,
+`segment_count`, `segment_bytes`, and `highest_address`, and `parse`), and
+`strategies.rs`. The errors that name one segment carry its index in the
+program header table.
+
+Decode the header as sixteen little-endian `u32` words and each program
+header entry as fourteen, joining the halves of the `u64` fields; every
+field of both structures is `u32`-aligned inside its structure, so no
+byte-wise reader is needed. Checks: magic `7F 45 4C 46`, `EI_CLASS == 2`, `EI_DATA == 1`,
 `e_type == 2`, `e_machine == 0x3E`, `e_ehsize >= 64`, `e_phentsize >= 56`,
 `e_phoff + e_phnum * e_phentsize <= len` (checked arithmetic), at least one
 `PT_LOAD` (`p_type == 1`), `p_filesz <= p_memsz`, `p_offset + p_filesz <=
@@ -604,9 +632,13 @@ p_align` when non-zero, segment inside the constraints, no two load
 segments overlap in memory, never both `PF_W` (2) and `PF_X` (1), entry
 inside an executable segment. Segments are returned sorted by `vaddr`.
 
-Tests: catalog 6.6.13 ELF items with an `ElfBuilder` in the tests that
-assembles headers byte by byte; a generator `any_elf_bytes()` behind
-`test-strategies` that mutates valid images.
+Tests: catalog 6.6.13 ELF items. `strategies.rs`, behind
+`test-strategies`, holds `ProgramHeader` and `ElfBuilder`, which assemble
+an image byte by byte with every field open to a test, `any_elf_image()`
+for well-formed images, and `any_elf_bytes()`, which replaces up to eight
+bytes of one and sometimes truncates it. The builder lives there rather
+than in the tests so that the unit tests, the property tests, and the fuzz
+corpus of Phase 7 share one description of a well-formed file.
 
 ### 10.2.2 Crate `audhsos-uefi` (`crates/uefi`)
 
@@ -619,14 +651,24 @@ specification for every offset and write a layout test for each structure):
 (`*mut c_void`), `Guid { data1: u32, data2: u16, data3: u16, data4: [u8; 8] }`,
 `TableHeader` (24 bytes), `SystemTable`, `BootServices` (all 44 function
 slots in specification order, typed as `unsafe extern "efiapi" fn`
-pointers with the exact signatures for the ten services the loader calls
-and as `usize` for the rest), `ConfigurationTable`, `MemoryDescriptor`
+pointers with the exact signatures for the eleven services the loader
+calls, `LocateProtocol` included, and as `usize` for the rest),
+`ConfigurationTable`, `MemoryDescriptor`
 (40 bytes: `type_: u32`, `physical_start: u64`, `virtual_start: u64`,
 `pages: u64`, `attribute: u64`), `MemoryType` (`from_u32` with the 16
 standard values), `AllocateType`, `LoadedImageProtocol`,
 `SimpleFileSystemProtocol`, `FileProtocol`, `FileInfo`,
-`SimpleTextOutputProtocol`, and the GUIDs `ACPI_20_TABLE`,
-`LOADED_IMAGE_PROTOCOL`, `SIMPLE_FILE_SYSTEM_PROTOCOL`, `FILE_INFO`.
+`SimpleTextOutputProtocol`, `GraphicsOutputProtocol` (`query_mode`,
+`set_mode`, `blt` as `usize`; `mode: *const GraphicsOutputProtocolMode`),
+`GraphicsOutputProtocolMode { max_mode: u32, mode: u32, info: *const
+GraphicsOutputModeInformation, size_of_info: usize, frame_buffer_base:
+u64, frame_buffer_size: usize }`, `GraphicsOutputModeInformation {
+version: u32, horizontal_resolution: u32, vertical_resolution: u32,
+pixel_format: u32, pixel_information: [u32; 4], pixels_per_scan_line:
+u32 }`, `GraphicsPixelFormat::from_u32` with the four specification
+values, and the GUIDs `ACPI_20_TABLE`, `LOADED_IMAGE_PROTOCOL`,
+`SIMPLE_FILE_SYSTEM_PROTOCOL`, `FILE_INFO`, `GRAPHICS_OUTPUT_PROTOCOL`
+(`9042A9DE-23DC-4A38-96FB-7ADED080516A`).
 
 Pure helpers: `memory_map::descriptors(buffer: &[u8], descriptor_size:
 usize) -> impl Iterator<Item = MemoryDescriptor>` (honors the stride),
@@ -638,8 +680,31 @@ usize) -> impl Iterator<Item = MemoryDescriptor>` (honors the stride),
 everything else → `Reserved`; merge adjacent regions of equal kind; error
 if more than `MAX_BOOT_REGIONS` remain. `utf16::encode(ascii: &str, out:
 &mut [u16]) -> Result<&[u16], _>` for file names.
+`graphics::to_framebuffer(base: u64, size: usize, info:
+&GraphicsOutputModeInformation) -> Option<Framebuffer>`: pixel formats
+`0` and `1` map to `Rgbx8888` and `Bgrx8888`; the other formats, a zero
+base, a zero resolution, or a `size` too small for `height * stride * 4`
+yield `None`; the length is `size` rounded up to a frame multiple.
 
-Tests: catalog 6.6.14 structure and conversion items.
+Modules: `status.rs`, `types.rs`, `tables.rs`, `protocols.rs`,
+`memory_map.rs`, `graphics.rs`, `utf16.rs`. `Status` is
+`repr(transparent)` over `usize` with the named codes the loader meets and
+`ok(value)`, which turns a status into a `Result`. The services and
+protocol entry points the loader calls are typed `unsafe extern "efiapi"
+fn` pointers; every other slot is a `usize`, so that the tables keep their
+size and every offset stays right. An `unsafe` function pointer type is
+not an unsafe site: it says that calling the pointer is unsafe, and the
+loader pays for that. `memory_map::descriptors` yields nothing when the
+reported stride is below the structure, because such a buffer cannot hold
+descriptors at all; `MemoryDescriptor::decode` reads one descriptor out of
+bytes, since turning bytes into a `&[MemoryDescriptor]` would need
+`unsafe`. In `to_boot_regions` the limit applies before merging, so that
+the array never overflows, and regions of different kinds may touch: only
+shared bytes are `ConversionError::Overlap`. `graphics::framebuffer_format`
+is the pixel-format mapping on its own, so that a test names it directly.
+
+Tests: catalog 6.6.14 structure and conversion items, 6.6.24 layout and
+conversion items.
 
 ### 10.2.3 Crate `driver-uart16550` (`crates/drivers/uart16550`)
 
@@ -661,7 +726,19 @@ impl<R: Registers> Uart16550<R> {
 pub const POLL_LIMIT: u32 = 100_000;
 ```
 
-Include `RecordingRegisters` behind `#[cfg(any(test, feature = "test-doubles"))]`.
+`Uart16550::new` takes the register block over without touching it, for a
+controller the firmware already programmed; `into_registers` gives it back.
+`enable_interrupts(receive, transmit)` and `disable_interrupts` cover the
+sources the enable register carries, and `Register::{ALL, offset, index}`
+lets a double index a register file. Every bit the crate writes or tests
+has a named constant, so that no test repeats a magic number the product
+code computes.
+
+`doubles.rs`, behind `#[cfg(any(test, feature = "test-doubles"))]`, holds
+`RecordingRegisters`: a register file that answers a read from a script
+first, then from the last written value, and records every access, so that
+a test can make the transmitter ready after a given number of polls.
+
 Tests: catalog 6.6.17.
 
 ### 10.2.4 Crate `kernel-hal-x86_64` (`crates/kernel/hal-x86_64`)
@@ -679,12 +756,17 @@ Modules and their `unsafe`/`asm!` content:
   (`pushfq; pop`). Each is a safe-looking `pub fn` only where the operation
   is harmless (`read_rflags`, `hlt`); the rest are `pub unsafe fn` with
   `# Safety` docs.
-- `descriptors.rs` (pure, host-testable through `cfg(not(target_os =
-  "none"))`? No: keep it `no_std` and test it in QEMU plus a duplicate-free
-  host test by making the module a separate logic crate
-  `kernel-x86-tables` (`crates/kernel/x86-tables`, layer 1, deps none): GDT
-  entry encoding, IDT entry encoding, TSS layout. Then the adapter depends
-  on it.) Encodings: GDT `0x00AF9A000000FFFF` kernel code,
+- The descriptor encodings are not in the adapter at all: they are the
+  logic crate `kernel-x86-tables` (`crates/kernel/x86-tables`, layer 1,
+  deps none), so that they are tested on the host instead of only in QEMU.
+  Modules `gdt.rs` (the four segment descriptors, `Selector` with index and
+  requested privilege level, the five named selectors, `tss_descriptor`
+  with its two decoders, and `build_gdt`), `idt.rs` (`gate` with the four
+  decoders `gate_handler`, `gate_selector`, `gate_ist`, and
+  `gate_attributes`, plus `gate_present` and `gate_privilege`), and
+  `tss.rs` (`TaskStateSegment` with `with_kernel_stack`,
+  `with_interrupt_stack`, and `to_bytes`). The adapter depends on the
+  crate and only loads what it returns. Encodings: GDT `0x00AF9A000000FFFF` kernel code,
   `0x00CF92000000FFFF` kernel data, `0x00CFF2000000FFFF` user data,
   `0x00AFFA000000FFFF` user code, 16-byte system descriptor type `0x9` for
   the TSS with base split into bits 16..39, 56..63, and the high 32 bits in
@@ -733,9 +815,28 @@ Target crate, `no_std`, `forbid(unsafe_code)`, deps `kernel-hal-api`.
 ```rust
 pub trait Testable { fn run(&self); fn name(&self) -> &'static str; }
 impl<F: Fn()> Testable for F { /* name = core::any::type_name::<F>() */ }
-pub struct Harness<C: DebugConsole, E: TestExit> { console: C, exit: E, should_panic: bool }
-impl Harness { pub fn run(&mut self, tests: &[&dyn Testable]) -> !; pub fn on_panic(&mut self, info: &PanicInfo) -> !; }
+pub struct Harness<C: DebugConsole, E: TestExit> { console: C, exit: E, should_panic: bool, passed: u32, running: bool }
+impl Harness {
+    pub const fn new(console: C, exit: E) -> Self;
+    pub const fn expecting_panic(console: C, exit: E) -> Self;
+    pub fn run(&mut self, tests: &[&dyn Testable]);
+    pub fn begin(&mut self, name: &str); pub fn end(&mut self);
+    pub fn fail(&mut self, message: fmt::Arguments<'_>);
+    pub fn fail_at(&mut self, message: fmt::Arguments<'_>, location: Option<&Location<'_>>);
+    pub fn on_panic(&mut self, info: &PanicInfo<'_>);
+}
 ```
+
+The runner returns instead of diverging, and the image halts after it; a
+`-> !` would need a loop that no host test could leave, and the whole point
+of the crate is that the protocol is checked on the host. For the same
+reason the crate is built and tested for the host, not only for
+`x86_64-unknown-none`: it holds no hardware access. `begin` and `end` open
+and close a line for an image that runs its tests itself; `fail_at` is what
+`on_panic` calls, so that the reporting path is testable without a
+`PanicInfo`, which a test cannot build. The `x86_64` implementations of
+`DebugConsole` and `TestExit` are what makes the difference between a host
+run and a QEMU run.
 
 Output lines exactly as in
 [03-target-platform.md 3.1.7](03-target-platform.md#317-test-exit-protocol):
@@ -749,12 +850,25 @@ prints `ok` and the summary and exits with success; reaching the end of a
 ### 10.2.6 Crate `kernel-core` (`crates/kernel/core`)
 
 Layer 4, `no_std`, `forbid(unsafe_code)`. Phase 2 content:
-`boot::run<P: Platform, C: DebugConsole, E: TestExit>(platform: &P,
-console: &mut C, exit: &mut E) -> !`: prints the banner and the memory
-regions, then halts (in test builds the test kernel calls the harness
-instead). `trap::Exception` and `trap::on_exception` printing the
-exception and calling `exit(Failure)`. The `Global<KernelState>` cell is
-declared here (empty state in Phase 2).
+
+- `print`: a `core::fmt::Write` over a `DebugConsole` and the `println!`
+  macro the kernel writes with. A formatting error is dropped: a console
+  that cannot take the bytes must not stop the kernel.
+- `boot::run(platform, console) -> Result<(), BootError>`: prints the
+  banner, the physical window, the ACPI pointer, and every memory region,
+  then checks what the kernel cannot run without. A window somewhere else
+  than `PHYS_WINDOW_BASE` and a machine without usable memory are errors;
+  `boot::abort` reports one and exits with a failure, `boot::finish`
+  reports the end of the boot and exits with a success. `run` returns
+  rather than diverging, so that the whole sequence runs in a host test
+  against the recording doubles.
+- `trap::Exception { vector, error_code, ip, sp, cr2 }` with `name` and
+  `has_error_code`, and `trap::on_exception`, which reports the exception,
+  counts it in the kernel state, and exits with a failure. The error code
+  is reported only for the vectors that push one, the faulting address
+  only for a page fault.
+- `state::KERNEL`, the `Global<KernelState>` cell. Phase 2 keeps the number
+  of reported traps and nothing else.
 
 ### 10.2.7 Crate `audhsos-kernel` (`crates/kernel/bin`)
 
@@ -776,75 +890,153 @@ linker script: `ENTRY(kernel_entry)`, `. = KERNEL_BASE` (write the constant
 `audhsos_abi::layout::KERNEL_BASE`), sections `.text` (R X), `.rodata`
 (R), `.data` and `.bss` (RW), each starting on a 4 KiB boundary
 (`ALIGN(4096)`), `.eh_frame` discarded. `.cargo/config.toml` gets
-`[target.x86_64-unknown-none] rustflags = ["-C", "relocation-model=static"]`
-and `runner = "cargo xtask qemu-runner"`.
+`[target.x86_64-unknown-none] rustflags = ["-C",
+"relocation-model=static"]`; the runner is not written there but passed
+through the environment by `test --qemu` (see 10.2.9).
 
 Test kernels under `crates/kernel/bin/tests/`: each file uses
-`#![feature(custom_test_frameworks)]`, `#![test_runner(run_tests)]`,
-`#![reexport_test_harness_main = "test_main"]`, its own `kernel_entry`
-wiring (through a shared `kernel_test_harness::entry!` macro so that the
-wiring is written once), and `#[test_case]` functions. Phase 2 kernels:
-`boot.rs` (banner, exit success), `console.rs` (writes a marker string the
-runner asserts), `exceptions.rs` (breakpoint returns; page fault at
-`0xdead_beef` reports that address through a handler hook; divide error;
-invalid opcode; general protection), `double_fault.rs` (`should_panic`:
-infinite recursion overflows the kernel stack; the double-fault handler
-runs on IST 1 and panics), `bad_kernel/` and `missing_image/` loader
-images built by the xtask from a corrupt ELF and an empty volume.
+`#![feature(custom_test_frameworks)]`,
+`#![test_runner(kernel_hal_x86_64::testing::run_tests)]`,
+`#![reexport_test_harness_main = "test_main"]`, the wiring macro
+`kernel_hal_x86_64::test_kernel!()`, and `#[test_case]` functions. Each
+file needs a `[[test]]` entry in the manifest and `use audhsos_abi as _;
+use kernel_core as _;`, because a test image uses neither crate while the
+kernel image uses both. `build.rs` emits `cargo:rustc-link-arg-tests` next
+to `cargo:rustc-link-arg-bins`, so that the test images get the same
+linker script.
+
+The wiring lives in `kernel-hal-x86_64::testing`, not in
+`kernel-test-harness`: the entry point needs `#[unsafe(no_mangle)]`, which
+a logic crate with `#![forbid(unsafe_code)]` may not carry. That module
+holds the harness over the debug console and the exit device, the trap
+hook a test image registers, and the instructions that raise the
+exceptions the trap tests expect (`int3`, `ud2`, `div` by zero, a segment
+selector beyond the descriptor table, a read from an unmapped address).
+The line of a test is written when the test is over, so that a test may
+write on the console without breaking the protocol; the name of the
+running test is kept in a cell and is what a panic or a trap reports.
+
+Phase 2 kernels: `boot.rs` (reaches the harness, the loader reported
+memory), `console.rs` (writes a marker string the runner asserts),
+`descriptors.rs` (a second load of the tables is refused),
+`breakpoint.rs` (the handler sees vector 3 and the test goes on),
+`divide_error.rs`, `invalid_opcode.rs`, `general_protection.rs`,
+`page_fault.rs` (the fault at `0xdead_beef` reports that address through
+the trap hook, which then ends the machine, because a fault cannot be
+resumed), `double_fault.rs` (infinite recursion overflows the kernel
+stack; the handler runs on IST 1 and reports vector eight, which it could
+not do without its own stack), and `panic.rs` (`should_panic`: a panic
+reaches the panic handler, which names the running test). The three loader
+failure images are built by the xtask, not checked in.
+
+`BOOT_STACK_PAGES` is 64, not 16: the unoptimized build of a test image
+needs well over 64 KiB of stack before it reaches the harness, and the
+sixteen-page stack ran into its guard page inside `descriptors::install`.
 
 ### 10.2.8 Crate `boot-uefi-x86_64` (`crates/boot/uefi-x86_64`)
 
 Adapter crate, target `x86_64-unknown-uefi`, `#![no_std]`, `#![no_main]`,
-`#![allow(unsafe_code)]`, `panic = "abort"`, no `alloc`. Deps:
-`audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `kernel-types`, `kernel-mm`,
-`kernel-hal-api`.
+`#![allow(unsafe_code)]`, `panic = "abort"` (the target's own strategy), no
+`alloc`. Deps: `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`,
+`kernel-types`, `kernel-mm`, `kernel-hal-api`.
 
 Entry: `#[unsafe(no_mangle)] pub extern "efiapi" fn efi_main(image: Handle,
 system_table: *const SystemTable) -> Status`. Modules:
 
-- `firmware.rs`: `Firmware<'a> { image: Handle, table: &'a SystemTable }`
-  with one method per service, each containing exactly one `unsafe` block
-  that calls the function pointer: `allocate_pages(count) ->
+- `firmware.rs`: `Firmware<'a> { image: Handle, table: &'a SystemTable,
+  boot: &'a BootServices, console: Option<&'a SimpleTextOutputProtocol> }`,
+  built by an `unsafe fn new` that checks both table signatures, with one
+  method per service, each containing exactly one `unsafe` block that
+  calls the function pointer: `allocate_pages(count) ->
   Result<PhysFrameRange, Status>`, `free_pages`, `memory_map(buffer: &mut
-  [u8]) -> Result<MemoryMapInfo { size, key, descriptor_size }, Status>`
-  (retry with a larger buffer on `BUFFER_TOO_SMALL`; the buffer is one
-  firmware-allocated region of 16 pages), `handle_protocol<T>(handle,
-  guid) -> Result<&T, Status>`, `exit_boot_services(key)`,
-  `output_string(&[u16])`, `configuration_table(guid) -> Option<PhysAddr>`.
+  [u8]) -> Result<MemoryMapInfo { size, key, descriptor_size }, Status>`,
+  `handle_protocol<T>(handle, guid) -> Result<&T, Status>`,
+  `locate_protocol<T>(guid) -> Result<&T, Status>`,
+  `exit_boot_services(key)`, `output_string(&str)` (encoded through
+  `audhsos_uefi::utf16`), `configuration_table(guid) -> Option<u64>`. The
+  memory map buffer starts at 16 firmware-allocated pages and is doubled
+  up to 256 pages while the firmware reports `BUFFER_TOO_SMALL`.
+- `memory.rs`: the one conversion of a physical range into a byte slice,
+  `unsafe fn bytes_mut(range, len) -> Option<&mut [u8]>` with a single
+  `unsafe` block; precondition: the range is a firmware allocation, nobody
+  else borrows it, and the identity mapping is active. Files, the kernel
+  image, the memory map buffer, and the boot information page go through
+  it, so that no other module builds a pointer from an address.
+- `graphics.rs`: `locate_protocol::<GraphicsOutputProtocol>` with
+  `GRAPHICS_OUTPUT_PROTOCOL`; two `unsafe` blocks turn the `mode` and
+  `info` pointers into references (precondition: the firmware owns both
+  while boot services run, and the loader reads them before
+  `exit_boot_services`); the result goes through
+  `audhsos_uefi::graphics::to_framebuffer`. A missing protocol or an
+  unsupported format yields `None` and the loader continues. The loader
+  never writes to the framebuffer.
 - `files.rs`: open the loaded image's device (`LoadedImageProtocol::device_handle`
   → `SimpleFileSystemProtocol::open_volume`), `read_file(name: &str) ->
-  Result<&'static [u8], LoadError>`: `open` with mode read, `get_info`
-  with the `FILE_INFO` GUID to learn the size, allocate pages, `read`
-  until the size is reached, `close`. Buffers become slices through one
-  `unsafe` block each.
+  Result<LoadedFile { frames, len }, LoadError>`: `open` with mode read,
+  `get_info` with the `FILE_INFO` GUID into a stack buffer to learn the
+  size, allocate pages, `read` until the size is reached, `close`. A
+  protocol pointer is derived from the reference the firmware reported
+  (`ptr::from_ref(..).cast_mut()`), so that each call is one `unsafe`
+  block and no module keeps a raw pointer.
 - `placement.rs` (pure where possible): from the parsed kernel ELF compute
-  for each segment the frame count, allocate frames, copy `file_size`
-  bytes, zero the rest (`slice::fill`), record `(PageRange, PhysFrameRange,
-  Permissions)` per segment.
+  the page-aligned span of all segments, allocate that span as **one**
+  frame range (the boot information reports the kernel image as a single
+  physical range), zero it, copy `file_size` bytes of each segment to its
+  offset in the span, and record `(PageRange, PhysFrameRange,
+  Permissions)` per segment. A segment whose `vaddr` is not page aligned
+  is rejected, because two segments would then share a page.
 - `paging.rs`: `IdentityAccess` implementing `FrameAccess<PageTable<X86Entry>>`
-  by casting the frame address to `&mut PageTable` (one `unsafe` block;
-  precondition: the firmware identity-maps all memory while boot services
-  run), `FirmwareFrames` implementing `FrameSource` over `allocate_pages(1)`,
-  `NoTlb` implementing `TlbControl` as a no-op. Build the tables with
-  `kernel_mm::Mapper`: (1) the physical window: every byte of every region
-  in the memory map from `0` to the highest region end, mapped at
-  `PHYS_WINDOW_BASE + phys`, read/write, no-execute, global; (2) the kernel
-  segments at their `vaddr` with their permissions, global; (3) the boot
-  stack (16 pages plus one unmapped guard page below) at
-  `KERNEL_BASE - 0x100_0000` (a fixed constant `BOOT_STACK_TOP` in
-  `audhsos-abi`), read/write, no-execute; (4) the boot information page at
-  `BOOT_INFO_VADDR` (constant in `audhsos-abi`), read-only; (5) an identity
-  mapping of the same memory as (1) at `phys` (so that the loader keeps
-  running after the `CR3` switch), read/write/execute.
+  by casting the frame address to `&mut PageTable` (one `unsafe` block per
+  direction; precondition: the firmware identity-maps all memory while
+  boot services run and the loader keeps that mapping), `PoolFrames`
+  implementing `FrameSource` over one contiguous firmware allocation (so
+  that `page_tables_phys_start` and `page_tables_phys_len` describe one
+  range), `NoTlb` implementing `TlbControl` as a no-op, and `pool_frames`,
+  which sizes that allocation from the amount of memory the map reports.
+  Build the tables with `kernel_mm::Mapper`: (1) the physical window: `0`
+  up to the first byte above the highest region the memory map reports as
+  memory (`Usable`, `AcpiReclaimable`, `AcpiNvs`), mapped at
+  `PHYS_WINDOW_BASE + phys`, read/write, no-execute, global. Device
+  apertures are left out: the map of the reference machine reaches to a
+  terabyte, and the window covers memory, not the address space, so that
+  the kernel finds every frame it may own behind one constant offset.
+  (2) an identity mapping of the same memory at `phys` (so that the loader
+  keeps running after the `CR3` switch), read/write/execute; (3) the kernel
+  segments at their `vaddr` with their permissions, global; (4) the boot
+  stack (`BOOT_STACK_PAGES` pages plus one unmapped guard page below) with
+  its top at `BOOT_STACK_TOP` (`KERNEL_BASE - 0x100_0000`, a constant in
+  `audhsos-abi`), read/write, no-execute; (5) the boot information page at
+  `BOOT_INFO_VADDR` (constant in `audhsos-abi`), read-only.
 - `bootinfo.rs`: fill a page with `BootInfoWriter` after
   `exit_boot_services`; the memory map used is the final one obtained
   immediately before the call; loader code and data are reported as
-  `Usable`.
+  `Usable`; the framebuffer, if present, is written into the header and
+  its range is inserted, sorted by start address, as one `MmioReserved`
+  region unless the final memory map already covers it with an
+  `MmioReserved` region. A framebuffer that overlaps a `Usable` region, or
+  that no longer fits into the region array, is dropped instead of being
+  reported, so that the loader never writes a structure the kernel's own
+  parser rejects. An ACPI root pointer that lies outside every region is
+  reported as absent for the same reason.
+- `loader.rs`: the order of the work. Everything the firmware has to
+  supply is asked for before the boot services end: the two files, the
+  configuration table, the first memory map (for the extent of the window
+  and the size of the table pool), the kernel image frames, the boot stack, the boot information
+  page, the table pool, the tables themselves, and the graphics mode. Then
+  the memory map is read once more and `ExitBootServices` is called with
+  its key, retried up to three times with a fresh key. A failure after
+  that call can only end the machine, because nothing is left to report
+  through.
 - `entry.rs`: one naked function `enter_kernel(cr3: u64, stack_top: u64,
-  boot_info: u64, entry: u64) -> !`: `mov cr3, rdi; mov rsp, rsi; mov rdi,
-  rdx; jmp rcx`.
-- `exit.rs`: on any error, `output_string` a diagnostic and `outl(0xF4,
-  0x12)` (one `asm!`), then loop on `hlt`.
+  boot_info: u64, entry: u64) -> !`: `cli; mov cr3, rdi; mov rsp, rsi; mov
+  rdi, rdx; jmp rcx`. The function is `extern "sysv64"`, not `extern "C"`:
+  on the UEFI target `extern "C"` is the Microsoft ABI, and the kernel
+  entry point on `x86_64-unknown-none` takes its argument in `RDI`.
+- `exit.rs`: on any error, `output_string` a diagnostic built in a
+  fixed-size `fmt::Write` buffer and `outl(0xF4, 0x12)` (one `asm!`), then
+  spin forever. The same buffer writes the one progress line the loader
+  emits before it builds the tables: the amount of memory and the kernel
+  entry point.
 
 The loader does not use the physical memory window or any kernel address
 before the jump; it runs on firmware-provided identity mappings and its own
@@ -873,14 +1065,22 @@ identity mapping afterwards.
   of 128 bytes, entry-array CRC; the array at LBA 2..=33; one entry: type
   GUID `C12A7328-F81F-11D2-BA4B-00A0C93EC93B`, fixed unique GUID, first LBA
   2048, last LBA `last - 34`, attributes 0, name `AUDHSOS ESP` in UTF-16LE;
-  backup array at `last - 33 ..= last - 1`, backup header at `last` with
-  swapped current/backup LBAs), `fat32.rs` (512-byte sectors, 1 sector per
+  backup array at `last - 32 ..= last - 1`, backup header at `last` with
+  swapped current and backup LBAs, so that the last usable sector is
+  `last - 33`), `fat32.rs` (512-byte sectors, 1 sector per
   cluster, 32 reserved sectors, 2 FATs, FSInfo at sector 1, backup boot
   sector at 6, root directory cluster 2, media `0xF8`, end-of-chain
   `0x0FFF_FFFF`, cluster count at least 65525, deterministic timestamps
   `2026-01-01 00:00:00`, 8.3 names uppercase, directories `EFI`, `EFI/BOOT`,
   `AUDHSOS` with `.` and `..` entries), plus a reader used only by the
-  tests. Default image size 64 MiB, sparse file.
+  tests, behind `#[cfg(test)]`, so that the product only writes. Default
+  image size 64 MiB, grown in whole mebibytes when the files need more.
+  `xtask` gains `audhsos-abi` and `kernel-test-harness` as its two
+  dependencies, so that the boot image header, the layout constants, and
+  the serial protocol grammar are written down once; the policy table
+  records both.
+- `image [--release]`: writes `target/boot.img` and `target/audhsos.img`
+  from the built loader and kernel.
 - `qemu.rs`: locate `qemu-system-x86_64` (`AUDHSOS_QEMU` or `PATH`) and the
   firmware (`AUDHSOS_OVMF` or `<qemu dir>/../share/qemu/edk2-x86_64-code.fd`);
   the command line of
@@ -889,31 +1089,51 @@ identity mapping afterwards.
   (`AUDHSOS_QEMU_TIMEOUT`) implemented with a thread that kills the child;
   capture stdout; parse the protocol; map exit status 33/35/37; print the
   captured output on failure.
-- `qemu-runner <elf>`: build the loader if needed, write a disk image with
-  the given kernel ELF and the boot image, run QEMU, exit 0 on success.
-- `test --qemu`: `cargo test -p audhsos-kernel --target x86_64-unknown-none`
-  (Cargo invokes the runner for every test kernel) plus the loader failure
-  images.
-- `run`: `build`, `image`, then QEMU without timeout and with the serial
-  console attached to the terminal.
+- `qemu-runner <elf>`: write a disk image with the given kernel ELF, the
+  loader `build` left in `target/`, and the boot image, run QEMU, and exit
+  0 on success. The runner starts no Cargo of its own: it runs inside
+  `cargo test`, which holds the lock on the build directory.
+- `test --qemu`: `build`, then `cargo test -p audhsos-kernel --target
+  x86_64-unknown-none` (Cargo invokes the runner for every test kernel),
+  then the three loader failure images. The runner is passed through the
+  environment variable `CARGO_TARGET_X86_64_UNKNOWN_NONE_RUNNER`, set to
+  the path of the running xtask binary, and the workspace root through
+  `AUDHSOS_ROOT`; `.cargo/config.toml` carries no `runner`, because a
+  runner that started `cargo run -p xtask` would wait for the build
+  directory lock the enclosing `cargo test` holds. The three loader images
+  are a kernel file whose ELF magic is broken, a volume without
+  `AUDHSOS/KERNEL.ELF`, and a volume without `AUDHSOS/BOOT.IMG`; each has
+  to end with the loader failure status and a `[loader] ` diagnostic. A
+  table in `commands.rs` names the marker a test image has to write beyond
+  the protocol, so that the console image proves the debug UART carries
+  more than the protocol lines.
+- `run [--release] [--display]`: `build`, `image`, then QEMU without a
+  time limit and with the streams attached to the terminal; `--display`
+  replaces `-display none` with the platform's backend.
 - Tests: catalog 6.6.15 and the runner items of 6.6.20.
 
 ### 10.2.10 Policy and documents
 
-`policy::CRATES` entries: `audhsos-elf` (Logic, deps none),
+`policy::CRATES` entries: `audhsos-elf` (Logic, deps `test-support` behind `test-strategies`),
 `audhsos-uefi` (Logic, deps `audhsos-abi`), `kernel-x86-tables` (Logic,
 deps none), `driver-uart16550` (Logic, deps none), `kernel-core` (Logic,
 deps `kernel-types`, `kernel-hal-api`, `kernel-mm`, `kernel-objects`,
 `audhsos-abi`, `audhsos-sync`), `kernel-hal-x86_64` (Adapter,
 `X86_64None`, deps `kernel-hal-api`, `kernel-types`, `audhsos-abi`,
 `driver-uart16550`, `audhsos-sync`, `kernel-x86-tables`, `kernel-mm`),
-`kernel-test-harness` (Logic, `X86_64None`, deps `kernel-hal-api`),
-`audhsos-kernel` (Logic, `X86_64None`, deps `kernel-core`,
-`kernel-hal-x86_64`, `kernel-test-harness`, `audhsos-abi`),
-`boot-uefi-x86_64` (Adapter, `X86_64Uefi`, deps as in 10.2.8). Update the
-catalog in 05, the allowlist and inventory in 04, `rust-toolchain.toml`
-already lists both targets. Record `BOOT_STACK_TOP` and `BOOT_INFO_VADDR`
-in 02 and 03.
+`kernel-test-harness` (Logic, `Host`, deps `kernel-hal-api`: the runner is
+pure and is tested on the host, so the kernel images link it but the
+coverage gate still applies), `audhsos-kernel` (Adapter, `X86_64None`,
+deps `kernel-core`, `kernel-hal-x86_64`, `audhsos-abi`; the budget of
+three counts the `#[unsafe(no_mangle)]` attribute of the entry point, the
+call into the adapter, and the one call a test image makes),
+`boot-uefi-x86_64` (Adapter, `X86_64Uefi`, deps as in 10.2.8; the budget
+counts the three graphics blocks of `firmware.rs` and `graphics.rs`).
+`xtask` (Host, deps `audhsos-abi`, `kernel-test-harness`).
+Update the catalog in 05, the allowlist and inventory in 04,
+`rust-toolchain.toml` already lists both targets. Record `BOOT_STACK_TOP`,
+`BOOT_STACK_PAGES`, and `BOOT_INFO_VADDR` in the kernel address space
+table of 02 and in 03.
 
 ### 10.2.11 Acceptance
 
@@ -948,6 +1168,15 @@ Goal: the kernel owns its memory after boot.
   `RegionTable`; unmap the identity range (every page below
   `USER_SPACE_END` that is present) with `unmap_range` in `MAX_PAGES_PER_CALL`
   steps and free nothing (the frames belong to the window).
+- `kernel-hal-x86_64::bootinfo`: `X86Platform::from_page` hands the address
+  of the page it read to `PhysAddr::new` and appends the result as the
+  `MemoryRegionKind::BootInfo` region. That address is `BOOT_INFO_VADDR`, a
+  virtual one, so the constructor rejects it and the region is silently
+  dropped: no boot report has ever shown a `boot-info` line. The physical
+  address is in no field of the boot information, and it does not need to
+  be, because `translate(BOOT_INFO_VADDR)` on the loader's tables gives it.
+  Phase 3 removes that push from `from_page` and registers the region where
+  the other three fixed ranges are registered, from the walk above.
 - Kernel stacks: `StackPool` in `kernel-mm`: `allocate() ->
   Result<KernelStack { pages: PageRange }, _>` mapping 4 frames from the
   reserve below a guard page at `KERNEL_STACKS_BASE` (constant) + index ×
@@ -956,7 +1185,8 @@ Goal: the kernel owns its memory after boot.
   map a frame at a user page, write through the window, read through the
   mapping, unmap, and verify that a read faults (handler hook records the
   address); the identity mapping is gone (`translate` of page 0x1000 is
-  `None`).
+  `None`); the region table holds one `BootInfo` region whose start is the
+  frame `translate(BOOT_INFO_VADDR)` names.
 
 Acceptance: `check` green; catalog 6.6.21 memory items covered.
 
@@ -1272,3 +1502,185 @@ reporting through the console driver; catalog 6.6.12, 6.6.13 tar items,
 4. Documents: read every document against the code and fix every
    difference.
 5. `CHANGELOG.md` section `[0.1.0]`, tag `v0.1.0`.
+
+## 10.9 Phase 9: Framebuffer output
+
+### 10.9.1 Crate `gfx` (`crates/gfx`)
+
+Layer 1 logic crate, `no_std`, `forbid(unsafe_code)`, deps `audhsos-abi`
+(`FramebufferFormat`), `test-support` behind `test-strategies`. Modules:
+
+- `format.rs`: `PixelFormat` from `FramebufferFormat`; `Color { r, g, b }`
+  with `encode(format) -> [u8; 4]` and `decode(format, [u8; 4])`.
+- `rect.rs`: `Rect { x, y, w, h }` in `u32` with `intersect`, `union`,
+  `is_empty`; `Damage`: a fixed array of 16 rectangles that collapses to
+  the bounding rectangle when full.
+- `surface.rs`: `Surface<'a> { bytes: &'a mut [u8], width, height, stride,
+  format }`; `new` validates `bytes.len() >= height * stride * 4`;
+  `fill(rect, color)`, `blit(&Surface, src: Rect, dst_x, dst_y)`, both
+  clipping to the surface and recording damage; every byte access goes
+  through `get`/`get_mut` with checked arithmetic.
+- `font.rs`: `const GLYPHS: [[u8; 16]; 95]` for `' '..='~'`, 8 by 16
+  pixels, one bit per pixel, authored in this repository; `glyph(c: char)
+  -> &'static [u8; 16]` with the replacement glyph for other characters;
+  `draw_text(surface, x, y, text, fg, bg)`.
+- `present.rs`: `present(back: &Surface, target: &mut impl PixelSink,
+  damage: &Damage)` copies the damaged rectangles; `PixelSink` is
+  implemented by `Surface` (the framebuffer mapping) and by a recording
+  double in the tests.
+
+Tests: catalog 6.6.26; the glyph test renders every glyph and compares it
+against a checksum table in the test file.
+
+### 10.9.2 Display protocol (`user-proto`)
+
+Label range `DISPLAY`. Messages: `Info -> { width, height, format }`;
+`CreateSurface { width, height } -> { surface id, memory handle }` (the
+display server allocates the backing store from the memory server and
+transfers a handle with `READ | WRITE | MAP`); `Present { surface id,
+damage: up to 16 rects }`; `DestroySurface { surface id }`; `SetCursor {
+x, y, visible }`. One full-screen surface per client in this phase; the
+client with the most recent `Present` owns the screen. Errors: `NotFound`
+when no framebuffer exists, `InvalidArgument` for a surface larger than
+the screen, `PermissionDenied` for a surface of another badge.
+
+### 10.9.3 `server-display` (`crates/user/servers/display`)
+
+Startup message: the framebuffer `Device` memory handle and its
+description, the memory server endpoint, the name server endpoint. Maps
+the framebuffer read/write, no-execute, `Uncached`. Keeps one `Surface`
+per client keyed by badge; `present` goes through `gfx::present`; the
+cursor sprite (16 by 16 pixels, project data) is drawn after each present
+and the background restored before the next. Registers as `display`. The
+logic lives in `state.rs` and is tested on the host with the recording
+double; the process loop in `main.rs` only moves messages.
+
+### 10.9.4 Root task and kernel
+
+`system_info` returns the framebuffer description as six result words
+(`0` throughout when absent). `server-init` calls
+`memory_create_device(start, len, Uncached)` for it and hands the handle
+to the display server; without a framebuffer the display server starts
+and answers `NotFound`. The kernel accepts a device range that overlaps
+no `Usable` region and lies inside an `MmioReserved` region of the boot
+information.
+
+### 10.9.5 `xtask` additions
+
+- `qmp.rs`: `Qmp::connect(socket path, timeout)` reads the greeting and
+  negotiates `qmp_capabilities`; `execute(command, arguments) ->
+  Result<Value, QmpError>`; `screendump(path) -> Result<Image, QmpError>`.
+- `json.rs`: `Value` with a parser and a writer for the subset of catalog
+  6.6.28. `ppm.rs`: `Image { width, height, rgb: Vec<u8> }`, `pixel(x, y)`,
+  `checksum(rect)`.
+- The QEMU command line for `test --e2e` gets `-qmp unix:<scratch
+  dir>/qmp.sock,server,nowait`; `run --display` replaces `-display none`
+  with `-display cocoa` on macOS and `-display gtk` elsewhere.
+- Loader test image `no_vga`: run with `-vga none`; expected: the kernel
+  reaches the harness and prints `[info] framebuffer=absent`.
+- `policy::CRATES` entries `gfx` (Logic, deps `audhsos-abi`) and
+  `server-display` (Logic, `X86_64None`, deps `user-rt`, `user-proto`,
+  `gfx`); loader budget updated; catalog rows in 05.
+
+### 10.9.6 Acceptance
+
+`check` green; catalog 6.6.24, 6.6.26, 6.6.27 display items, 6.6.28,
+6.6.29 output items; the e2e test `display_fill_and_text` passes.
+
+## 10.10 Phase 10: PS/2 input
+
+### 10.10.1 Crate `driver-i8042` (`crates/drivers/i8042`)
+
+Layer 1 logic crate, `no_std`, `forbid(unsafe_code)`, no workspace
+dependencies, following the pattern of `driver-uart16550`: a trait
+`Ports { read_data, read_status, write_data, write_command }` that the
+input server implements over `ioport_read` and `ioport_write`, and a
+scripted double `ScriptedPorts` behind the feature `test-doubles` that
+replays status and data bytes and records writes. Modules:
+
+- `controller.rs`: constants (data port `0x60`; status and command port
+  `0x64`; status bits `OUTPUT_FULL = 0x01`, `INPUT_FULL = 0x02`, `AUX =
+  0x20`; commands `READ_CONFIG = 0x20`, `WRITE_CONFIG = 0x60`,
+  `DISABLE_AUX = 0xA7`, `ENABLE_AUX = 0xA8`, `TEST_AUX = 0xA9`, `SELF_TEST
+  = 0xAA`, `TEST_KBD = 0xAB`, `DISABLE_KBD = 0xAD`, `ENABLE_KBD = 0xAE`,
+  `WRITE_AUX = 0xD4`); `Controller<P: Ports>::init(&mut self) ->
+  Result<Devices, Error>` runs: disable both ports, flush the output
+  buffer, read the configuration byte, clear the interrupt and translation
+  bits, self-test expecting `0x55`, port tests expecting `0x00`, enable the
+  ports, reset the devices, set the interrupt bits. Every wait is bounded
+  by `MAX_POLLS` iterations and yields `Error::Timeout`.
+- `keyboard.rs`: `Decoder` for scancode set 2 with the states `Idle`,
+  `Extended`, `Release`, `ExtendedRelease`, `Pause(n)`; `feed(byte) ->
+  Option<KeyEvent>`; the table from set 2 codes to `KeyCode`.
+- `mouse.rs`: `Decoder` with the packet length from the device id;
+  `feed(byte) -> Option<PointerEvent>`; sync check, resynchronization,
+  sign extension, overflow clamping.
+- `device.rs`: command sequences with ACK handling: keyboard reset (`0xFF`
+  answered by `0xFA`, `0xAA`), scancode set 2 (`0xF0 0x02`), enable
+  scanning (`0xF4`); mouse reset, the sample rate sequence `200, 100, 80`,
+  `GET_ID` (`0xF2`) selecting the 4-byte packet on id `3`, enable data
+  reporting (`0xF4`).
+
+Tests: catalog 6.6.25 with `ScriptedPorts`; fuzz targets `scancode` and
+`mouse_packet` registered in `policy::FUZZ_TARGETS`.
+
+### 10.10.2 Input protocol (`user-proto`)
+
+`KeyCode`: an exhaustive enum of the keys of a 105-key layout with stable
+numeric codes; `KeyEvent { code, pressed: bool }`; `PointerEvent { dx:
+i16, dy: i16, wheel: i8, buttons: u8 }`; `Event` as a 16-byte record with
+a kind byte; `Ring` header `{ write_seq: u64, read_seq: u64, overflow:
+u32, capacity: u32 }` followed by the records in a shared memory object
+of one page (254 records); `Subscribe { ring memory handle, notification
+handle }` registers a client; `Unsubscribe`. `Keyboard` (client side):
+tracks modifiers, maps `(KeyCode, modifiers)` through the layout tables
+`us` and `de` to a `char`.
+
+### 10.10.3 `server-input` (`crates/user/servers/input`)
+
+Startup message: the `IoPortRange` for `0x60..=0x64`, the `Interrupt`
+objects for lines 1 and 12, one notification with bits 0 and 1 bound to
+them, the name server endpoint. Loop: wait on the notification; while the
+status register shows a full output buffer, read a byte and route it by
+the `AUX` bit; feed the decoders; append events to every subscriber's
+ring and signal its notification; acknowledge both interrupts. Registers
+as `input`. `server-init` creates the capabilities with `ioport_create`,
+`interrupt_create`, and `interrupt_bind`. The logic lives in `state.rs`
+and is tested on the host with the ring in a `Vec` and a recording
+signal double.
+
+### 10.10.4 `xtask` additions
+
+`Qmp::send_key(qcode, pressed)`, `Qmp::move_pointer(dx, dy)`,
+`Qmp::button(index, pressed)` over `input-send-event`. A user test program
+`input_echo` prints `[input] key <code> <pressed>` and `[input] pointer
+<dx> <dy> <wheel> <buttons>` lines through the console driver; the e2e
+tests inject a sequence and compare the lines. `policy::CRATES` entries
+`driver-i8042` (Logic, deps none) and `server-input` (Logic,
+`X86_64None`, deps `user-rt`, `user-proto`, `driver-i8042`).
+
+### 10.10.5 Acceptance
+
+`check` green; catalog 6.6.25, 6.6.27 input items, 6.6.29 input items;
+both fuzz targets run for 60 seconds without findings.
+
+## 10.11 Phase 11: Graphical demonstration
+
+- `app-canvas` (`crates/user/apps/canvas`): subscribes to `input`,
+  creates a full-screen surface on `display`, keeps a cursor position
+  clamped to the screen, draws a line segment for every pointer event
+  while button 0 is held, renders typed characters from the `us` layout at
+  a text cursor with the bitmap font, clears the screen on `Escape`, and
+  presents with damage rectangles. It sends `SetCursor` on every pointer
+  event. The drawing state is a host-tested module over `gfx::Surface`.
+- e2e tests: `canvas_cursor` (a pointer path moves the cursor sprite;
+  screendump before and after), `canvas_stroke` (press, move, release;
+  the pixels along the path carry the pen color), `canvas_text` (a typed
+  string appears at the text cursor pixel for pixel).
+- `cargo xtask run --display` starts the canvas; the root task starts it
+  after the servers when the boot image contains it.
+- `policy::CRATES` entry `app-canvas` (Logic, `X86_64None`, deps
+  `user-rt`, `user-proto`, `gfx`).
+
+Acceptance: `check` green; catalog 6.6.29 combined items; the three e2e
+tests pass in CI without a display window.

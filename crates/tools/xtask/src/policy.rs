@@ -21,6 +21,33 @@ pub(crate) enum Kind {
     Host,
 }
 
+/// What a crate is built and tested for. A `Host` crate runs its tests on
+/// the host; being `no_std`, it still compiles for every target. The other
+/// crates are built only for their target and tested in QEMU.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Target {
+    /// Built and tested on the host.
+    Host,
+    /// Built for `x86_64-unknown-none`.
+    X86_64None,
+    /// Built for `x86_64-unknown-uefi`.
+    X86_64Uefi,
+}
+
+impl Target {
+    /// Every target that is not the host, in a fixed order.
+    pub(crate) const CROSS: [Target; 2] = [Target::X86_64None, Target::X86_64Uefi];
+
+    /// The target triple, or `None` for the host.
+    pub(crate) const fn triple(self) -> Option<&'static str> {
+        match self {
+            Target::Host => None,
+            Target::X86_64None => Some("x86_64-unknown-none"),
+            Target::X86_64Uefi => Some("x86_64-unknown-uefi"),
+        }
+    }
+}
+
 /// One workspace crate.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Crate {
@@ -34,6 +61,8 @@ pub(crate) struct Crate {
     pub(crate) deps: &'static [&'static str],
     /// Whether the coverage thresholds apply.
     pub(crate) coverage_gate: bool,
+    /// What the crate is built and tested for.
+    pub(crate) target: Target,
 }
 
 /// Every workspace crate, in layer order.
@@ -44,6 +73,31 @@ pub(crate) const CRATES: &[Crate] = &[
         kind: Kind::Logic,
         deps: &["test-support"],
         coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "crypto-ct",
+        path: "crates/crypto/ct",
+        kind: Kind::Logic,
+        deps: &["test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "crypto-hash",
+        path: "crates/crypto/hash",
+        kind: Kind::Logic,
+        deps: &["crypto-ct", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "crypto-aead",
+        path: "crates/crypto/aead",
+        kind: Kind::Logic,
+        deps: &["crypto-ct", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
     },
     Crate {
         name: "audhsos-sync",
@@ -54,6 +108,57 @@ pub(crate) const CRATES: &[Crate] = &[
         },
         deps: &[],
         coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-elf",
+        path: "crates/elf",
+        kind: Kind::Logic,
+        deps: &["test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-uefi",
+        path: "crates/uefi",
+        kind: Kind::Logic,
+        deps: &["audhsos-abi"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "boot-uefi-x86_64",
+        path: "crates/boot/uefi-x86_64",
+        kind: Kind::Adapter {
+            unsafe_budget: 39,
+            asm_budget: 2,
+        },
+        deps: &[
+            "audhsos-abi",
+            "audhsos-elf",
+            "audhsos-uefi",
+            "kernel-hal-api",
+            "kernel-mm",
+            "kernel-types",
+        ],
+        coverage_gate: false,
+        target: Target::X86_64Uefi,
+    },
+    Crate {
+        name: "driver-uart16550",
+        path: "crates/drivers/uart16550",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "kernel-x86-tables",
+        path: "crates/kernel/x86-tables",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
     },
     Crate {
         name: "kernel-types",
@@ -61,6 +166,7 @@ pub(crate) const CRATES: &[Crate] = &[
         kind: Kind::Logic,
         deps: &["audhsos-abi", "test-support"],
         coverage_gate: true,
+        target: Target::Host,
     },
     Crate {
         name: "kernel-hal-api",
@@ -68,6 +174,7 @@ pub(crate) const CRATES: &[Crate] = &[
         kind: Kind::Logic,
         deps: &["kernel-types"],
         coverage_gate: true,
+        target: Target::Host,
     },
     Crate {
         name: "kernel-objects",
@@ -75,6 +182,7 @@ pub(crate) const CRATES: &[Crate] = &[
         kind: Kind::Logic,
         deps: &["kernel-types", "audhsos-abi", "test-support"],
         coverage_gate: true,
+        target: Target::Host,
     },
     Crate {
         name: "kernel-mm",
@@ -87,6 +195,61 @@ pub(crate) const CRATES: &[Crate] = &[
             "test-support",
         ],
         coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "kernel-core",
+        path: "crates/kernel/core",
+        kind: Kind::Logic,
+        deps: &[
+            "kernel-types",
+            "kernel-hal-api",
+            "kernel-mm",
+            "kernel-objects",
+            "audhsos-abi",
+            "audhsos-sync",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "kernel-hal-x86_64",
+        path: "crates/kernel/hal-x86_64",
+        kind: Kind::Adapter {
+            unsafe_budget: 62,
+            asm_budget: 19,
+        },
+        deps: &[
+            "kernel-hal-api",
+            "kernel-types",
+            "audhsos-abi",
+            "audhsos-sync",
+            "driver-uart16550",
+            "kernel-x86-tables",
+            "kernel-mm",
+            "kernel-test-harness",
+        ],
+        coverage_gate: false,
+        target: Target::X86_64None,
+    },
+    Crate {
+        name: "audhsos-kernel",
+        path: "crates/kernel/bin",
+        kind: Kind::Adapter {
+            unsafe_budget: 3,
+            asm_budget: 0,
+        },
+        deps: &["kernel-core", "kernel-hal-x86_64", "audhsos-abi"],
+        coverage_gate: false,
+        target: Target::X86_64None,
+    },
+    Crate {
+        name: "kernel-test-harness",
+        path: "crates/kernel/test-harness",
+        kind: Kind::Logic,
+        deps: &["kernel-hal-api"],
+        coverage_gate: true,
+        target: Target::Host,
     },
     Crate {
         name: "test-support",
@@ -94,13 +257,15 @@ pub(crate) const CRATES: &[Crate] = &[
         kind: Kind::Host,
         deps: &[],
         coverage_gate: true,
+        target: Target::Host,
     },
     Crate {
         name: "xtask",
         path: "crates/tools/xtask",
         kind: Kind::Host,
-        deps: &[],
+        deps: &["audhsos-abi", "kernel-test-harness"],
         coverage_gate: false,
+        target: Target::Host,
     },
 ];
 
@@ -156,6 +321,15 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[];
 
 /// Extensions of assembly files, which must not exist.
 pub(crate) const ASSEMBLY_EXTENSIONS: &[&str] = &["S", "s", "asm"];
+
+/// Every crate that is built for `target`.
+pub(crate) fn crates_for(target: Target) -> Vec<&'static str> {
+    CRATES
+        .iter()
+        .filter(|krate| krate.target == target)
+        .map(|krate| krate.name)
+        .collect()
+}
 
 /// The crate with the given name.
 pub(crate) fn find(name: &str) -> Option<&'static Crate> {

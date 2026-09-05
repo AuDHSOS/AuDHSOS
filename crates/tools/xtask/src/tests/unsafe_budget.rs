@@ -4,6 +4,7 @@
 //! Tests of `crate::unsafe_budget`.
 
 use crate::policy::Kind;
+use crate::unsafe_budget::is_function_pointer_type;
 use crate::unsafe_budget::{Counts, count, strip_comments_and_strings, violations_for};
 
 #[test]
@@ -90,4 +91,29 @@ fn budgets_are_enforced_exactly() {
         1
     );
     assert!(violations_for("h", Kind::Host, Counts::default()).is_empty());
+}
+
+#[test]
+fn unsafe_function_pointer_types_are_not_sites_but_definitions_are() {
+    let types = concat!(
+        "pub type A = unsafe extern \"efiapi\" fn(x: u32) -> u32;\n",
+        "pub type B = unsafe fn() -> ();\n",
+        "pub struct S { pub f: unsafe extern \"C\" fn(*mut u8) }\n",
+    );
+    assert_eq!(count(types).unsafe_keywords, 0);
+
+    let definitions = concat!(
+        "pub unsafe fn one() {}\n",
+        "pub unsafe extern \"C\" fn two() {}\n",
+        "unsafe impl Send for S {}\n",
+        "unsafe extern { fn three(); }\n",
+    );
+    assert_eq!(count(definitions).unsafe_keywords, 4);
+
+    assert!(is_function_pointer_type(" extern      fn(u8)"));
+    assert!(is_function_pointer_type(" fn()"));
+    assert!(!is_function_pointer_type(" fn name()"));
+    assert!(!is_function_pointer_type(" impl Send for S"));
+    assert!(!is_function_pointer_type(" { let x = 1; }"));
+    assert!(!is_function_pointer_type(" fnord()"));
 }

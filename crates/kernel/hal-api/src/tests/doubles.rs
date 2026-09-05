@@ -181,3 +181,24 @@ fn ports_replay_scripted_reads_and_record_writes() {
         }
     );
 }
+
+/// Takes a console by value, so that only the blanket implementation lets
+/// a reference through.
+fn write_through(mut console: impl DebugConsole, bytes: &[u8]) {
+    console.write_bytes(bytes);
+}
+
+/// The same for an exit device.
+fn exit_through(mut exit: impl TestExit, status: ExitStatus) {
+    exit.exit(status);
+}
+
+#[test]
+fn a_mutable_reference_to_a_console_or_an_exit_is_one() {
+    let mut console = RecordingConsole::new();
+    let mut exit = RecordingExit::new();
+    write_through(&mut console, b"through the reference");
+    exit_through(&mut exit, ExitStatus::Failure);
+    assert_eq!(console.text(), "through the reference");
+    assert_eq!(exit.status(), Some(ExitStatus::Failure));
+}

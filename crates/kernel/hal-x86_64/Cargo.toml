@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "kernel-hal-x86_64"
+description = "The x86_64 adapter of the kernel: privileged instructions, descriptor tables, traps, boot information, console, and exit device"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["debug-uart", "test-exit"]
+debug-uart = []
+test-exit = []
+
+[dependencies]
+audhsos-abi.workspace = true
+audhsos-sync.workspace = true
+driver-uart16550.workspace = true
+kernel-hal-api.workspace = true
+kernel-test-harness.workspace = true
+kernel-types.workspace = true
+kernel-x86-tables.workspace = true
+
+[lints]
+workspace = true

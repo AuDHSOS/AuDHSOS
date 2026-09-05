@@ -5,10 +5,22 @@
 resolver = "3"
 members = [
     "crates/abi",
+    "crates/crypto/ct",
+    "crates/crypto/hash",
+    "crates/crypto/aead",
+    "crates/boot/uefi-x86_64",
+    "crates/elf",
+    "crates/uefi",
     "crates/sync",
+    "crates/drivers/uart16550",
     "crates/kernel/types",
     "crates/kernel/hal-api",
     "crates/kernel/objects",
+    "crates/kernel/bin",
+    "crates/kernel/core",
+    "crates/kernel/hal-x86_64",
+    "crates/kernel/test-harness",
+    "crates/kernel/x86-tables",
     "crates/kernel/mm",
     "crates/support/testing",
     "crates/tools/xtask",
@@ -23,10 +35,22 @@ rust-version = "1.100"
 
 [workspace.dependencies]
 audhsos-abi = { path = "crates/abi" }
+crypto-ct = { path = "crates/crypto/ct" }
+crypto-hash = { path = "crates/crypto/hash" }
+crypto-aead = { path = "crates/crypto/aead" }
+boot-uefi-x86_64 = { path = "crates/boot/uefi-x86_64" }
+audhsos-elf = { path = "crates/elf" }
+audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
+driver-uart16550 = { path = "crates/drivers/uart16550" }
 kernel-types = { path = "crates/kernel/types" }
 kernel-hal-api = { path = "crates/kernel/hal-api" }
 kernel-objects = { path = "crates/kernel/objects" }
+audhsos-kernel = { path = "crates/kernel/bin" }
+kernel-core = { path = "crates/kernel/core" }
+kernel-hal-x86_64 = { path = "crates/kernel/hal-x86_64" }
+kernel-test-harness = { path = "crates/kernel/test-harness" }
+kernel-x86-tables = { path = "crates/kernel/x86-tables" }
 kernel-mm = { path = "crates/kernel/mm" }
 test-support = { path = "crates/support/testing" }
 

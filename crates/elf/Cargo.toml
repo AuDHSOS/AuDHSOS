@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "audhsos-elf"
+description = "Validating parser for the ELF64 executables the loader and the userland program loader read"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[features]
+test-strategies = ["dep:test-support"]
+
+[dependencies]
+test-support = { workspace = true, optional = true }
+
+[dev-dependencies]
+test-support.workspace = true
+
+[lints]
+workspace = true

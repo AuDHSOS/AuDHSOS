@@ -61,12 +61,15 @@ pub(crate) fn measure(root: &Path) -> Result<BTreeMap<String, Totals>, Error> {
     std::fs::create_dir_all(&profile_dir)
         .map_err(|source| Error::io("creating the coverage directory", source))?;
     let rustflags = "-C instrument-coverage -Z coverage-options=branch";
-    let build = Cmd::cargo()
-        .cwd(root)
-        .args(["test", "--workspace", "--all-features", "--no-run"])
-        .env("RUSTFLAGS", rustflags)
-        .env("CARGO_TARGET_DIR", target_dir.display().to_string())
-        .capture_stderr()?;
+    let build = crate::commands::exclude_cross(Cmd::cargo().cwd(root).args([
+        "test",
+        "--workspace",
+        "--all-features",
+        "--no-run",
+    ]))
+    .env("RUSTFLAGS", rustflags)
+    .env("CARGO_TARGET_DIR", target_dir.display().to_string())
+    .capture_stderr()?;
     let executables = executables_of(&build);
     if executables.is_empty() {
         return Err(Error::Parse(

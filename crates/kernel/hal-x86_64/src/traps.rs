@@ -1,0 +1,201 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+
+//! The trap handlers and the table that names them.
+//!
+//! Invariants: every processor vector has a handler; a handler reads only
+//! the frame the processor pushed and hands it to the function the kernel
+//! registered; the double fault handler runs on its own stack.
+
+use audhsos_sync::{Global, UncontendedToken};
+
+use kernel_x86_tables::gdt::KERNEL_CODE_SELECTOR;
+use kernel_x86_tables::idt::{DOUBLE_FAULT_IST, GATE_INTERRUPT_DPL0, IDT_ENTRIES, MISSING, gate};
+
+use crate::instructions::read_fault_address;
+
+/// What the processor pushes before a handler runs.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct InterruptFrame {
+    /// The instruction that was about to run.
+    pub ip: u64,
+    /// The code segment it ran in.
+    pub code_segment: u64,
+    /// The flags register at the trap.
+    pub flags: u64,
+    /// The stack pointer at the trap.
+    pub sp: u64,
+    /// The stack segment at the trap.
+    pub stack_segment: u64,
+}
+
+/// What a handler reports to the kernel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrapReport {
+    /// The vector the processor entered.
+    pub vector: u8,
+    /// The error code, or zero.
+    pub error_code: u64,
+    /// The instruction pointer at the trap.
+    pub ip: u64,
+    /// The stack pointer at the trap.
+    pub sp: u64,
+    /// The address a page fault named.
+    pub fault_address: u64,
+}
+
+/// What the kernel registers to receive a trap.
+pub type TrapHandler = fn(TrapReport);
+
+/// The registered handler; empty before the kernel registers one.
+static HANDLER: Global<TrapHandler> = Global::new();
+
+/// Registers the function every handler calls. A second call is ignored,
+/// because the kernel registers once during boot.
+pub fn set_handler(handler: TrapHandler) {
+    let _ = HANDLER.init(handler);
+}
+
+/// Hands `report` to the registered handler. A trap the kernel cannot
+/// report, because none is registered or one is already being reported,
+/// is not survivable: the machine halts.
+fn dispatch(report: TrapReport) {
+    let Ok(handler) = HANDLER.borrow(&UncontendedToken) else {
+        crate::instructions::halt_forever();
+    };
+    (*handler)(report);
+}
+
+/// Declares one handler per vector and the table that names them.
+macro_rules! handlers {
+    ($($name:ident = $vector:literal),+ $(,)?) => {
+        $(
+            extern "x86-interrupt" fn $name(frame: InterruptFrame) {
+                dispatch(TrapReport {
+                    vector: $vector,
+                    error_code: 0,
+                    ip: frame.ip,
+                    sp: frame.sp,
+                    fault_address: 0,
+                });
+            }
+        )+
+    };
+}
+
+/// The same for the vectors the processor pushes an error code for.
+macro_rules! handlers_with_code {
+    ($($name:ident = $vector:literal),+ $(,)?) => {
+        $(
+            extern "x86-interrupt" fn $name(frame: InterruptFrame, error_code: u64) {
+                dispatch(TrapReport {
+                    vector: $vector,
+                    error_code,
+                    ip: frame.ip,
+                    sp: frame.sp,
+                    fault_address: if $vector == 14u8 { read_fault_address() } else { 0 },
+                });
+            }
+        )+
+    };
+}
+
+handlers! {
+    divide_error = 0,
+    debug = 1,
+    non_maskable = 2,
+    breakpoint = 3,
+    overflow = 4,
+    bound_range = 5,
+    invalid_opcode = 6,
+    device_not_available = 7,
+    coprocessor_segment = 9,
+    floating_point = 16,
+    machine_check = 18,
+    simd = 19,
+    virtualization = 20,
+}
+
+handlers_with_code! {
+    double_fault = 8,
+    invalid_tss = 10,
+    segment_not_present = 11,
+    stack_segment = 12,
+    general_protection = 13,
+    page_fault = 14,
+    alignment_check = 17,
+    control_protection = 21,
+    hypervisor_injection = 28,
+    vmm_communication = 29,
+    security = 30,
+}
+
+/// Fills `table` with a gate for every vector the processor defines.
+#[expect(
+    clippy::as_conversions,
+    clippy::fn_to_numeric_cast_any,
+    reason = "a gate carries the address of its handler, and `as` is the only way to read a function pointer as a number"
+)]
+pub fn fill(table: &mut [[u64; 2]; IDT_ENTRIES]) {
+    let selector = KERNEL_CODE_SELECTOR.as_u16();
+    let simple: [(u8, extern "x86-interrupt" fn(InterruptFrame)); 13] = [
+        (0, divide_error),
+        (1, debug),
+        (2, non_maskable),
+        (3, breakpoint),
+        (4, overflow),
+        (5, bound_range),
+        (6, invalid_opcode),
+        (7, device_not_available),
+        (9, coprocessor_segment),
+        (16, floating_point),
+        (18, machine_check),
+        (19, simd),
+        (20, virtualization),
+    ];
+    let with_code: [(u8, extern "x86-interrupt" fn(InterruptFrame, u64)); 11] = [
+        (8, double_fault),
+        (10, invalid_tss),
+        (11, segment_not_present),
+        (12, stack_segment),
+        (13, general_protection),
+        (14, page_fault),
+        (17, alignment_check),
+        (21, control_protection),
+        (28, hypervisor_injection),
+        (29, vmm_communication),
+        (30, security),
+    ];
+    for entry in table.iter_mut() {
+        *entry = MISSING;
+    }
+    for (vector, handler) in simple {
+        let address = handler_address(handler as usize);
+        put(
+            table,
+            vector,
+            gate(address, selector, 0, GATE_INTERRUPT_DPL0),
+        );
+    }
+    for (vector, handler) in with_code {
+        let address = handler_address(handler as usize);
+        let stack = if vector == 8 { DOUBLE_FAULT_IST } else { 0 };
+        put(
+            table,
+            vector,
+            gate(address, selector, stack, GATE_INTERRUPT_DPL0),
+        );
+    }
+}
+
+/// The address of a handler, as a gate carries it.
+fn handler_address(address: usize) -> u64 {
+    u64::try_from(address).unwrap_or(0)
+}
+
+fn put(table: &mut [[u64; 2]; IDT_ENTRIES], vector: u8, entry: [u64; 2]) {
+    if let Some(slot) = table.get_mut(usize::from(vector)) {
+        *slot = entry;
+    }
+}

@@ -54,6 +54,7 @@ Three properties define the design:
 | Physical memory | kernel reserve and object pools at boot; hands every other frame to the root task as memory objects | allocation policy, zeroing, accounting (memory server) |
 | Debug UART | build-time feature for kernel diagnostics; absent in release builds | - |
 | Console and every other device | provides port, device memory, and interrupt capabilities | drivers |
+| Graphics and input (Phases 9 to 11) | hands out the framebuffer as a `Device` memory object and the i8042 ports and interrupt lines as capabilities | display server, input driver, applications |
 | Program loading | validates the eight fields of the boot image header; maps the root task | tar reader, ELF loader, process creation |
 | Naming | - | name server |
 | Faults | converts a fault into a message to the fault handler endpoint | fault handler decides: repair, resume, kill |
@@ -179,11 +180,14 @@ The kernel address space (upper half) is managed by the same code. Layout:
 |-----------------|---------|
 | Physical memory window | All of RAM mapped read/write, no-execute, at `PHYS_WINDOW_BASE` |
 | Kernel image | Text read-only/execute, rodata read-only, data read/write, at `KERNEL_BASE` |
+| Boot information page | The structure the loader wrote, read-only, at `BOOT_INFO_VADDR` |
+| Boot stack | `BOOT_STACK_PAGES` pages read/write, no-execute, ending at `BOOT_STACK_TOP`, with one unmapped guard page below |
 | Kernel reserve | Pools, page tables, kernel stacks; each kernel stack is followed by an unmapped guard page |
 | Per-CPU area | Current thread pointer, scratch space (one CPU in the first release) |
 
-`PHYS_WINDOW_BASE` and `KERNEL_BASE` are constants in `audhsos-abi` shared
-by the loader and the kernel.
+`PHYS_WINDOW_BASE`, `KERNEL_BASE`, `BOOT_STACK_TOP`, `BOOT_STACK_PAGES`,
+and `BOOT_INFO_VADDR` are constants in `audhsos-abi` shared by the loader
+and the kernel.
 
 ### 2.4.4 Memory management in safe Rust
 
@@ -392,7 +396,7 @@ through shared memory objects.
 | `interrupt_create`, `interrupt_bind`, `interrupt_ack` | SystemControl / Interrupt | interrupt forwarding |
 | `ioport_create`, `ioport_read`, `ioport_write` | SystemControl / IoPortRange | x86 port I/O |
 | `memory_create_device` | SystemControl | device memory object |
-| `system_info` | SystemControl | pool capacities and usage, tick frequency, boot information |
+| `system_info` | SystemControl | pool capacities and usage, tick frequency, boot information including the framebuffer description |
 | `debug_log` | none | writes the message region to the debug UART; exists only in builds with the `debug-uart` feature |
 
 ## 2.9 Boot sequence
@@ -410,7 +414,8 @@ through shared memory objects.
    kernel segments at `KERNEL_BASE` with their ELF permissions, the boot
    stack, the boot information page, and an identity mapping of the
    loader's own image and current stack.
-5. The loader reads the ACPI root pointer from the UEFI configuration table,
+5. The loader reads the ACPI root pointer from the UEFI configuration table
+   and the framebuffer description from the Graphics Output Protocol,
    retrieves the final memory map, and calls `ExitBootServices`.
 6. The loader converts the UEFI memory map into the boot information
    structure (see [3.1.5](03-target-platform.md#315-boot-information-structure)).
@@ -458,6 +463,11 @@ through shared memory objects.
 | `server-console` | 16550 UART driver: `driver-uart16550` register logic over `IoPortRange` system calls plus an `Interrupt`; `write(bytes)`, `read(max)` | no |
 | `server-memory` | allocation policy over memory objects: `allocate(len, alignment)`, `release`; zeroes every object before hand-out and immediately after return | no |
 | `app-hello` | end-to-end demonstration and test client | no |
+| `gfx` (Phase 9) | framebuffer logic: pixel formats, filling, blitting, clipping, damage rectangles, the project's bitmap font, text rendering | no |
+| `server-display` (Phase 9) | owns the framebuffer `Device` memory object; surfaces backed by shared memory objects, `present` with damage rectangles, cursor | no |
+| `driver-i8042` (Phase 10) | i8042 controller and PS/2 device logic over the port access trait: controller initialization, scancode set 2 decoding, mouse packet parsing | no |
+| `server-input` (Phase 10) | owns the i8042 port range and the interrupts for lines 1 and 12; delivers key and pointer events to subscribers through a ring buffer in a shared memory object plus a notification | no |
+| `app-canvas` (Phase 11) | graphical demonstration and end-to-end test client: cursor, drawing, typed text | no |
 
 Process creation from userland: `process_create` → for each ELF segment,
 allocate memory from the memory server, map it into the loader's own address
