@@ -923,10 +923,11 @@ memory), `console.rs` (writes a marker string the runner asserts),
 `divide_error.rs`, `invalid_opcode.rs`, `general_protection.rs`,
 `page_fault.rs` (the fault at `0xdead_beef` reports that address through
 the trap hook, which then ends the machine, because a fault cannot be
-resumed), and `double_fault.rs` (`should_panic`: infinite recursion
-overflows the kernel stack; the double fault handler runs on IST 1 and
-reports). The three loader failure images are built by the xtask, not
-checked in.
+resumed), `double_fault.rs` (infinite recursion overflows the kernel
+stack; the handler runs on IST 1 and reports vector eight, which it could
+not do without its own stack), and `panic.rs` (`should_panic`: a panic
+reaches the panic handler, which names the running test). The three loader
+failure images are built by the xtask, not checked in.
 
 `BOOT_STACK_PAGES` is 64, not 16: the unoptimized build of a test image
 needs well over 64 KiB of stack before it reaches the harness, and the

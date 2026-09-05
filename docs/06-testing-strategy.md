@@ -481,9 +481,11 @@ done until every applicable item has a test. Items are added, never removed.
 - Debug UART: writes a known string that the runner finds.
 - Exceptions: breakpoint returns to the next instruction; page fault at a
   known address reports that address; divide error; invalid opcode; double
-  fault on kernel stack overflow lands on the IST stack and reports
-  (`should_panic` kernel); general protection on a privileged instruction in
-  user mode.
+  fault on kernel stack overflow lands on the IST stack and reports vector
+  eight; general protection on a selector beyond the descriptor table, and
+  from Phase 5 on a privileged instruction in user mode.
+- Panic: a panic in a test image reaches the panic handler, which names the
+  running test (`should_panic` kernel).
 - Interrupts: timer ticks increase a counter; the local APIC end-of-interrupt
   path lets a second tick arrive; masking a line stops its delivery; spurious
   vector is handled.

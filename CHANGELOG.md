@@ -94,9 +94,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   macro that writes the entry point and the panic handler once, the trap
   hook a test image registers, and the instructions that raise the
   exceptions the trap tests expect.
-- `audhsos-kernel`: nine test kernels under `tests/`: boot, console,
+- `audhsos-kernel`: ten test kernels under `tests/`: boot, console,
   descriptors, breakpoint, divide error, invalid opcode, general
-  protection, page fault, and the double fault of a kernel stack overflow.
+  protection, page fault, the double fault of a kernel stack overflow, and
+  a panic in an image that expects one.
 - `audhsos-abi`: the boot stack is 64 pages, not 16. An unoptimized test
   image needs more than 64 KiB before it reaches the harness.
 - CI installs QEMU and the UEFI firmware and names the firmware the
