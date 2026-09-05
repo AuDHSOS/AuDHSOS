@@ -4,7 +4,8 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
+mod graphics;
 mod layout;
-mod memory;
+mod memory_map;
 mod status;
 mod utf16;

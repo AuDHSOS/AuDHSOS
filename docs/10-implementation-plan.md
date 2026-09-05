@@ -686,6 +686,23 @@ if more than `MAX_BOOT_REGIONS` remain. `utf16::encode(ascii: &str, out:
 base, a zero resolution, or a `size` too small for `height * stride * 4`
 yield `None`; the length is `size` rounded up to a frame multiple.
 
+Modules: `status.rs`, `types.rs`, `tables.rs`, `protocols.rs`,
+`memory_map.rs`, `graphics.rs`, `utf16.rs`. `Status` is
+`repr(transparent)` over `usize` with the named codes the loader meets and
+`ok(value)`, which turns a status into a `Result`. The services and
+protocol entry points the loader calls are typed `unsafe extern "efiapi"
+fn` pointers; every other slot is a `usize`, so that the tables keep their
+size and every offset stays right. An `unsafe` function pointer type is
+not an unsafe site: it says that calling the pointer is unsafe, and the
+loader pays for that. `memory_map::descriptors` yields nothing when the
+reported stride is below the structure, because such a buffer cannot hold
+descriptors at all; `MemoryDescriptor::decode` reads one descriptor out of
+bytes, since turning bytes into a `&[MemoryDescriptor]` would need
+`unsafe`. In `to_boot_regions` the limit applies before merging, so that
+the array never overflows, and regions of different kinds may touch: only
+shared bytes are `ConversionError::Overlap`. `graphics::framebuffer_format`
+is the pixel-format mapping on its own, so that a test names it directly.
+
 Tests: catalog 6.6.14 structure and conversion items, 6.6.24 layout and
 conversion items.
 

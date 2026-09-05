@@ -9,7 +9,7 @@
 
 use core::ffi::c_void;
 
-use crate::memory::{AllocateType, MemoryType};
+use crate::memory_map::{AllocateType, MemoryType};
 use crate::protocols::SimpleTextOutputProtocol;
 use crate::status::Status;
 use crate::types::{ConfigurationTable, Guid, Handle, TableHeader};
@@ -49,6 +49,13 @@ pub type HandleProtocol = unsafe extern "efiapi" fn(
 
 /// Ends the boot services phase.
 pub type ExitBootServices = unsafe extern "efiapi" fn(image: Handle, map_key: usize) -> Status;
+
+/// Returns the first interface of a protocol in the system.
+pub type LocateProtocol = unsafe extern "efiapi" fn(
+    protocol: *const Guid,
+    registration: *mut c_void,
+    interface: *mut *mut c_void,
+) -> Status;
 
 /// The boot services table. Every slot the loader does not call is a
 /// `usize`, so that the table keeps its size and every offset stays right.
@@ -131,7 +138,7 @@ pub struct BootServices {
     /// `LocateHandleBuffer`.
     pub locate_handle_buffer: usize,
     /// `LocateProtocol`.
-    pub locate_protocol: usize,
+    pub locate_protocol: LocateProtocol,
     /// `InstallMultipleProtocolInterfaces`.
     pub install_multiple_protocol_interfaces: usize,
     /// `UninstallMultipleProtocolInterfaces`.

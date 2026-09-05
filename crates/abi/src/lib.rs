@@ -16,7 +16,10 @@ pub mod rights;
 pub mod strategies;
 
 pub use boot_image::{BootImageError, BootImageHeader};
-pub use boot_info::{BootInfoError, BootInfoView, BootInfoWriter, BootRegion, BootRegionKind};
+pub use boot_info::{
+    BootInfoError, BootInfoView, BootInfoWriter, BootRegion, BootRegionKind, Framebuffer,
+    FramebufferFormat,
+};
 pub use error::Error;
 pub use handle::Handle;
 pub use object::ObjectType;

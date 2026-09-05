@@ -5,7 +5,8 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
-pub mod memory;
+pub mod graphics;
+pub mod memory_map;
 pub mod protocols;
 pub mod status;
 pub mod tables;

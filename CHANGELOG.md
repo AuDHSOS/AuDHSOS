@@ -44,7 +44,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - `audhsos-uefi`: layouts, status codes, and identifiers of the UEFI
   interfaces the loader uses, the memory map reader that honors the
   firmware's stride, the conversion into boot regions, and UTF-16
-  encoding.
+  encoding; the Graphics Output Protocol structures, `LocateProtocol`, and
+  the conversion of a graphics mode into a framebuffer description.
+- `audhsos-abi`: the boot information carries the framebuffer the firmware
+  set up. The fixed part grows to 136 bytes; the version stays 1.
 - Planning for graphics output and input devices: roadmap Phases 9 to 11,
   decisions D-29 to D-33, catalog sections 6.6.24 to 6.6.29, and the
   framebuffer fields of the boot information structure in the documents.

@@ -33,6 +33,14 @@ pub const SIMPLE_FILE_SYSTEM_PROTOCOL: Guid = Guid::new(
     [0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B],
 );
 
+/// `EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID`.
+pub const GRAPHICS_OUTPUT_PROTOCOL: Guid = Guid::new(
+    0x9042_A9DE,
+    0x23DC,
+    0x4A38,
+    [0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6A],
+);
+
 /// `EFI_FILE_INFO_ID`.
 pub const FILE_INFO: Guid = Guid::new(
     0x0957_6E92,
@@ -232,4 +240,99 @@ pub struct SimpleTextOutputProtocol {
     pub enable_cursor: usize,
     /// The current mode.
     pub mode: *mut c_void,
+}
+
+/// How the firmware lays the bytes of a pixel out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u32)]
+pub enum GraphicsPixelFormat {
+    /// Red, green, blue, reserved, one byte each.
+    RedGreenBlueReserved8 = 0,
+    /// Blue, green, red, reserved, one byte each.
+    BlueGreenRedReserved8 = 1,
+    /// The channels are described by the bit masks of the mode.
+    BitMask = 2,
+    /// The framebuffer is not addressable; only the blit service draws.
+    BltOnly = 3,
+}
+
+impl GraphicsPixelFormat {
+    /// Every format the specification defines, in numeric order.
+    pub const ALL: [GraphicsPixelFormat; 4] = [
+        GraphicsPixelFormat::RedGreenBlueReserved8,
+        GraphicsPixelFormat::BlueGreenRedReserved8,
+        GraphicsPixelFormat::BitMask,
+        GraphicsPixelFormat::BltOnly,
+    ];
+
+    /// The numeric code.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        match self {
+            GraphicsPixelFormat::RedGreenBlueReserved8 => 0,
+            GraphicsPixelFormat::BlueGreenRedReserved8 => 1,
+            GraphicsPixelFormat::BitMask => 2,
+            GraphicsPixelFormat::BltOnly => 3,
+        }
+    }
+
+    /// The format with the given code, if the specification defines it.
+    #[must_use]
+    pub const fn from_u32(code: u32) -> Option<GraphicsPixelFormat> {
+        match code {
+            0 => Some(GraphicsPixelFormat::RedGreenBlueReserved8),
+            1 => Some(GraphicsPixelFormat::BlueGreenRedReserved8),
+            2 => Some(GraphicsPixelFormat::BitMask),
+            3 => Some(GraphicsPixelFormat::BltOnly),
+            _ => None,
+        }
+    }
+}
+
+/// `EFI_GRAPHICS_OUTPUT_MODE_INFORMATION`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[repr(C)]
+pub struct GraphicsOutputModeInformation {
+    /// Version of the structure.
+    pub version: u32,
+    /// Visible pixels per row.
+    pub horizontal_resolution: u32,
+    /// Visible rows.
+    pub vertical_resolution: u32,
+    /// The code of a [`GraphicsPixelFormat`].
+    pub pixel_format: u32,
+    /// The channel masks, used only with [`GraphicsPixelFormat::BitMask`].
+    pub pixel_information: [u32; 4],
+    /// Pixels per scan line, at least `horizontal_resolution`.
+    pub pixels_per_scan_line: u32,
+}
+
+/// `EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE`.
+#[repr(C)]
+pub struct GraphicsOutputProtocolMode {
+    /// Number of modes the device supports.
+    pub max_mode: u32,
+    /// The mode that is set.
+    pub mode: u32,
+    /// Description of the mode that is set.
+    pub info: *const GraphicsOutputModeInformation,
+    /// Size of the description in bytes.
+    pub size_of_info: usize,
+    /// Physical base of the linear framebuffer.
+    pub frame_buffer_base: u64,
+    /// Size of the linear framebuffer in bytes.
+    pub frame_buffer_size: usize,
+}
+
+/// `EFI_GRAPHICS_OUTPUT_PROTOCOL`.
+#[repr(C)]
+pub struct GraphicsOutputProtocol {
+    /// `QueryMode`.
+    pub query_mode: usize,
+    /// `SetMode`.
+    pub set_mode: usize,
+    /// `Blt`.
+    pub blt: usize,
+    /// The mode that is set.
+    pub mode: *const GraphicsOutputProtocolMode,
 }

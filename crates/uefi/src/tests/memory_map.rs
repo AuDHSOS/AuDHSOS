@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! Tests of `crate::memory`, covering the memory map items of the catalog
+//! Tests of `crate::memory_map`, covering the memory map items of the catalog
 //! 6.6.14.
 
 #![allow(clippy::arithmetic_side_effects)]
@@ -11,7 +11,7 @@ use audhsos_abi::layout::{MAX_BOOT_REGIONS, PAGE_SIZE};
 use test_support::generators::{range, vec};
 use test_support::property::check;
 
-use crate::memory::{
+use crate::memory_map::{
     ConversionError, DESCRIPTOR_LEN, MemoryDescriptor, MemoryType, descriptors, to_boot_regions,
 };
 

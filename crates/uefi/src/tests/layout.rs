@@ -9,7 +9,7 @@
 
 use core::mem::{align_of, offset_of, size_of};
 
-use crate::memory::{DESCRIPTOR_LEN, MemoryDescriptor};
+use crate::memory_map::{DESCRIPTOR_LEN, MemoryDescriptor};
 use crate::protocols::{
     FILE_INFO_HEADER_LEN, FileInfo, FileProtocol, LoadedImageProtocol, SimpleFileSystemProtocol,
     SimpleTextOutputProtocol, Time,
@@ -197,4 +197,71 @@ fn the_identifiers_carry_the_values_the_specification_names() {
     assert_ne!(LOADED_IMAGE_PROTOCOL, SIMPLE_FILE_SYSTEM_PROTOCOL);
     assert_eq!(FILE_MODE_READ, 1);
     assert_eq!(FILE_MODE_WRITE, 2);
+}
+
+#[test]
+fn the_graphics_output_structures_have_the_specified_offsets_and_sizes() {
+    use crate::protocols::{
+        GraphicsOutputModeInformation, GraphicsOutputProtocol, GraphicsOutputProtocolMode,
+    };
+
+    assert_eq!(size_of::<GraphicsOutputModeInformation>(), 36);
+    assert_eq!(offset_of!(GraphicsOutputModeInformation, version), 0);
+    assert_eq!(
+        offset_of!(GraphicsOutputModeInformation, horizontal_resolution),
+        4
+    );
+    assert_eq!(
+        offset_of!(GraphicsOutputModeInformation, vertical_resolution),
+        8
+    );
+    assert_eq!(offset_of!(GraphicsOutputModeInformation, pixel_format), 12);
+    assert_eq!(
+        offset_of!(GraphicsOutputModeInformation, pixel_information),
+        16
+    );
+    assert_eq!(
+        offset_of!(GraphicsOutputModeInformation, pixels_per_scan_line),
+        32
+    );
+
+    assert_eq!(size_of::<GraphicsOutputProtocolMode>(), 40);
+    assert_eq!(offset_of!(GraphicsOutputProtocolMode, max_mode), 0);
+    assert_eq!(offset_of!(GraphicsOutputProtocolMode, mode), 4);
+    assert_eq!(offset_of!(GraphicsOutputProtocolMode, info), 8);
+    assert_eq!(offset_of!(GraphicsOutputProtocolMode, size_of_info), 16);
+    assert_eq!(
+        offset_of!(GraphicsOutputProtocolMode, frame_buffer_base),
+        24
+    );
+    assert_eq!(
+        offset_of!(GraphicsOutputProtocolMode, frame_buffer_size),
+        32
+    );
+
+    assert_eq!(size_of::<GraphicsOutputProtocol>(), 32);
+    assert_eq!(offset_of!(GraphicsOutputProtocol, query_mode), 0);
+    assert_eq!(offset_of!(GraphicsOutputProtocol, set_mode), 8);
+    assert_eq!(offset_of!(GraphicsOutputProtocol, blt), 16);
+    assert_eq!(offset_of!(GraphicsOutputProtocol, mode), 24);
+}
+
+#[test]
+fn the_graphics_identifier_and_the_locate_service_are_in_place() {
+    use crate::protocols::GRAPHICS_OUTPUT_PROTOCOL;
+
+    assert_eq!(
+        GRAPHICS_OUTPUT_PROTOCOL,
+        Guid::new(
+            0x9042_A9DE,
+            0x23DC,
+            0x4A38,
+            [0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6A]
+        )
+    );
+    assert_eq!(
+        offset_of!(BootServices, locate_protocol),
+        320,
+        "the loader calls it, so it is typed and its offset must be right"
+    );
 }

@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use test_support::generators::{BoxGen, Generator, bool, bytes, one_of, pair, range, vec};
 
 use crate::boot_image::{BOOT_IMAGE_HEADER_LEN, BootImageHeader};
-use crate::boot_info::{BootRegion, BootRegionKind};
+use crate::boot_info::{BootRegion, BootRegionKind, Framebuffer, FramebufferFormat};
 use crate::layout::PAGE_SIZE;
 
 /// A boot image header whose root task and archive are page-aligned, start
@@ -95,4 +95,40 @@ pub fn any_boot_region() -> BoxGen<BootRegion> {
         )
     })
     .boxed()
+}
+
+/// The physical address the generated framebuffers start at, far above the
+/// memory the other generators use.
+pub const FRAMEBUFFER_BASE: u64 = 0xC000_0000;
+
+/// A framebuffer that satisfies the rules of the boot information, or
+/// `None` for a machine without one. Shrinks toward absent.
+#[must_use]
+pub fn any_framebuffer() -> BoxGen<Option<Framebuffer>> {
+    let dimensions = pair(range(1u32..=1920), range(1u32..=1080));
+    let shape = pair(dimensions, pair(range(0u32..=64), bool()));
+    shape
+        .map(|((width, height), (padding, present))| {
+            if !present {
+                return None;
+            }
+            let stride = width.saturating_add(padding);
+            let visible = u64::from(height)
+                .saturating_mul(u64::from(stride))
+                .saturating_mul(4);
+            let len = visible.div_ceil(PAGE_SIZE).saturating_mul(PAGE_SIZE);
+            Some(Framebuffer {
+                phys_start: FRAMEBUFFER_BASE,
+                len,
+                width,
+                height,
+                stride,
+                format: if padding.is_multiple_of(2) {
+                    FramebufferFormat::Rgbx8888
+                } else {
+                    FramebufferFormat::Bgrx8888
+                },
+            })
+        })
+        .boxed()
 }

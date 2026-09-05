@@ -24,7 +24,7 @@ pub const BOOT_INFO_MAGIC: [u8; 8] = *b"AUDHBOOT";
 pub const BOOT_INFO_VERSION: u32 = 1;
 
 /// Length of the fixed part in bytes.
-pub const BOOT_INFO_HEADER_LEN: usize = 104;
+pub const BOOT_INFO_HEADER_LEN: usize = 136;
 
 /// Length of one region entry in bytes.
 pub const BOOT_REGION_LEN: usize = 24;
@@ -38,7 +38,7 @@ const _: () =
     assert!(BOOT_INFO_HEADER_LEN + MAX_BOOT_REGIONS * BOOT_REGION_LEN <= BOOT_INFO_PAGE_LEN);
 
 /// [`BOOT_INFO_HEADER_LEN`] as a `u32`, for the size arithmetic.
-const HEADER_LEN_FIELD: u32 = 104;
+const HEADER_LEN_FIELD: u32 = 136;
 
 /// [`BOOT_REGION_LEN`] as a `u32`, for the size arithmetic.
 const REGION_LEN_FIELD: u32 = 24;
@@ -184,10 +184,100 @@ pub struct BootInfoHeader {
     pub boot_stack_phys_len: u64,
     /// Physical address of the ACPI root pointer; `0` if absent.
     pub acpi_rsdp: u64,
+    /// Physical base of the linear framebuffer; `0` if absent.
+    pub framebuffer_phys_start: u64,
+    /// Length of the framebuffer in bytes; `0` if absent.
+    pub framebuffer_len: u64,
+    /// Visible pixels per row.
+    pub framebuffer_width: u32,
+    /// Visible rows.
+    pub framebuffer_height: u32,
+    /// Pixels per scan line.
+    pub framebuffer_stride: u32,
+    /// The code of a [`FramebufferFormat`]; `0` if absent.
+    pub framebuffer_format: u32,
     /// Number of entries in the region array.
     pub region_count: u32,
     /// Zero in version 1.
     pub reserved: u32,
+}
+
+/// How the bytes of a framebuffer pixel are ordered. Both formats carry
+/// four bytes per pixel with an unused fourth byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u32)]
+pub enum FramebufferFormat {
+    /// Red in the lowest byte.
+    Rgbx8888 = 1,
+    /// Blue in the lowest byte.
+    Bgrx8888 = 2,
+}
+
+impl FramebufferFormat {
+    /// Every format, in numeric order.
+    pub const ALL: &'static [FramebufferFormat] =
+        &[FramebufferFormat::Rgbx8888, FramebufferFormat::Bgrx8888];
+
+    /// The stable numeric code; `0` means that no framebuffer is present.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        match self {
+            FramebufferFormat::Rgbx8888 => 1,
+            FramebufferFormat::Bgrx8888 => 2,
+        }
+    }
+
+    /// The format with the given code, if it is known.
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            1 => Some(FramebufferFormat::Rgbx8888),
+            2 => Some(FramebufferFormat::Bgrx8888),
+            _ => None,
+        }
+    }
+}
+
+/// Number of bytes one pixel occupies in every format.
+pub const BYTES_PER_PIXEL: u64 = 4;
+
+/// The linear framebuffer the firmware set up, as the loader found it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Framebuffer {
+    /// Physical base of the framebuffer, frame-aligned.
+    pub phys_start: u64,
+    /// Length in bytes, a multiple of the frame size.
+    pub len: u64,
+    /// Visible pixels per row.
+    pub width: u32,
+    /// Visible rows.
+    pub height: u32,
+    /// Pixels per scan line, at least `width`.
+    pub stride: u32,
+    /// The pixel format.
+    pub format: FramebufferFormat,
+}
+
+impl Framebuffer {
+    /// The number of bytes the visible pixels occupy, if it is
+    /// representable.
+    #[must_use]
+    #[expect(
+        clippy::as_conversions,
+        reason = "widening two u32 dimensions into a u64, in a const fn"
+    )]
+    pub const fn visible_bytes(self) -> Option<u64> {
+        match (self.height as u64).checked_mul(self.stride as u64) {
+            Some(pixels) => pixels.checked_mul(BYTES_PER_PIXEL),
+            None => None,
+        }
+    }
+
+    /// The first byte above the framebuffer, if it is representable.
+    #[must_use]
+    pub const fn end(self) -> Option<u64> {
+        self.phys_start.checked_add(self.len)
+    }
 }
 
 /// One of the four ranges the loader reports separately.
@@ -258,6 +348,23 @@ pub enum BootInfoError {
     RangeOutsideRegions(FixedRange),
     /// The ACPI root pointer lies outside every reported region.
     AcpiPointer(u64),
+    /// The framebuffer format code is not one this version knows.
+    FramebufferFormat(u32),
+    /// A framebuffer field is set although no framebuffer is reported.
+    FramebufferAbsentFieldSet,
+    /// The framebuffer base is zero or not frame-aligned.
+    FramebufferBase(u64),
+    /// A framebuffer dimension is zero, or the stride is below the width.
+    FramebufferResolution,
+    /// The framebuffer is shorter than its visible pixels, or its length
+    /// is not a multiple of the frame size.
+    FramebufferLength(u64),
+    /// The size of the framebuffer is not representable.
+    FramebufferOverflow,
+    /// The framebuffer shares memory with a usable region.
+    FramebufferOverlapsUsable,
+    /// No reported device region encloses the framebuffer.
+    FramebufferNotReserved,
 }
 
 impl fmt::Display for BootInfoError {
@@ -298,6 +405,30 @@ impl fmt::Display for BootInfoError {
                 f,
                 "the ACPI root pointer {address:#x} lies outside every reported region"
             ),
+            BootInfoError::FramebufferFormat(code) => {
+                write!(f, "framebuffer format {code} is not supported")
+            }
+            BootInfoError::FramebufferAbsentFieldSet => {
+                f.write_str("a framebuffer field is set although no framebuffer is reported")
+            }
+            BootInfoError::FramebufferBase(base) => {
+                write!(f, "the framebuffer base {base:#x} is not usable")
+            }
+            BootInfoError::FramebufferResolution => {
+                f.write_str("the framebuffer resolution is not usable")
+            }
+            BootInfoError::FramebufferLength(len) => {
+                write!(f, "the framebuffer length {len} is not usable")
+            }
+            BootInfoError::FramebufferOverflow => {
+                f.write_str("the size of the framebuffer is not representable")
+            }
+            BootInfoError::FramebufferOverlapsUsable => {
+                f.write_str("the framebuffer shares memory with usable memory")
+            }
+            BootInfoError::FramebufferNotReserved => {
+                f.write_str("no reported device region encloses the framebuffer")
+            }
         }
     }
 }
@@ -363,6 +494,14 @@ impl<'a> BootInfoView<'a> {
             stack_len_high,
             rsdp_low,
             rsdp_high,
+            framebuffer_start_low,
+            framebuffer_start_high,
+            framebuffer_len_low,
+            framebuffer_len_high,
+            framebuffer_width,
+            framebuffer_height,
+            framebuffer_stride,
+            framebuffer_format,
             region_count,
             reserved,
         ] = words::<HEADER_WORDS>(fixed);
@@ -403,6 +542,12 @@ impl<'a> BootInfoView<'a> {
             boot_stack_phys_start: join(stack_start_low, stack_start_high),
             boot_stack_phys_len: join(stack_len_low, stack_len_high),
             acpi_rsdp: join(rsdp_low, rsdp_high),
+            framebuffer_phys_start: join(framebuffer_start_low, framebuffer_start_high),
+            framebuffer_len: join(framebuffer_len_low, framebuffer_len_high),
+            framebuffer_width,
+            framebuffer_height,
+            framebuffer_stride,
+            framebuffer_format,
             region_count,
             reserved,
         };
@@ -410,6 +555,7 @@ impl<'a> BootInfoView<'a> {
         view.check_regions()?;
         view.check_fixed_ranges()?;
         view.check_acpi_pointer()?;
+        view.check_framebuffer()?;
         Ok(view)
     }
 
@@ -465,6 +611,75 @@ impl<'a> BootInfoView<'a> {
             return Ok(());
         }
         Err(BootInfoError::AcpiPointer(rsdp))
+    }
+
+    /// The framebuffer the loader found, or `None` when the machine has
+    /// none. Only a structure that came through [`BootInfoView::parse`]
+    /// reports one, so every field of it has been checked.
+    #[must_use]
+    pub const fn framebuffer(&self) -> Option<Framebuffer> {
+        match FramebufferFormat::from_code(self.header.framebuffer_format) {
+            Some(format) => Some(Framebuffer {
+                phys_start: self.header.framebuffer_phys_start,
+                len: self.header.framebuffer_len,
+                width: self.header.framebuffer_width,
+                height: self.header.framebuffer_height,
+                stride: self.header.framebuffer_stride,
+                format,
+            }),
+            None => None,
+        }
+    }
+
+    /// Rejects a framebuffer description the loader should never write.
+    fn check_framebuffer(&self) -> Result<(), BootInfoError> {
+        let header = &self.header;
+        if header.framebuffer_format == 0 {
+            let absent = header.framebuffer_phys_start == 0
+                && header.framebuffer_len == 0
+                && header.framebuffer_width == 0
+                && header.framebuffer_height == 0
+                && header.framebuffer_stride == 0;
+            return if absent {
+                Ok(())
+            } else {
+                Err(BootInfoError::FramebufferAbsentFieldSet)
+            };
+        }
+        let Some(framebuffer) = self.framebuffer() else {
+            return Err(BootInfoError::FramebufferFormat(header.framebuffer_format));
+        };
+        if framebuffer.phys_start == 0 || !framebuffer.phys_start.is_multiple_of(PAGE_SIZE) {
+            return Err(BootInfoError::FramebufferBase(framebuffer.phys_start));
+        }
+        if framebuffer.width == 0
+            || framebuffer.height == 0
+            || framebuffer.stride < framebuffer.width
+        {
+            return Err(BootInfoError::FramebufferResolution);
+        }
+        let visible = framebuffer
+            .visible_bytes()
+            .ok_or(BootInfoError::FramebufferOverflow)?;
+        if framebuffer.len < visible || !framebuffer.len.is_multiple_of(PAGE_SIZE) {
+            return Err(BootInfoError::FramebufferLength(framebuffer.len));
+        }
+        framebuffer
+            .end()
+            .ok_or(BootInfoError::FramebufferOverflow)?;
+        if self.regions().any(|region| {
+            region.kind == BootRegionKind::Usable.code()
+                && overlaps(region, framebuffer.phys_start, framebuffer.len)
+        }) {
+            return Err(BootInfoError::FramebufferOverlapsUsable);
+        }
+        if !self.regions().any(|region| {
+            region.kind == BootRegionKind::MmioReserved.code()
+                && region.contains_range(framebuffer.phys_start, framebuffer.len)
+        }) {
+            return Err(BootInfoError::FramebufferNotReserved);
+        }
+        Ok(())
     }
 
     /// The start and the length of one of the four fixed ranges.
@@ -538,9 +753,11 @@ impl<'a> BootInfoView<'a> {
 pub struct BootInfoWriter;
 
 impl BootInfoWriter {
-    /// Fills `page` from `header` and `regions` and returns the number of
-    /// bytes written. The magic, the version, the size, and the region
-    /// count are taken from `regions`, not from `header`.
+    /// Fills `page` from `header`, `framebuffer`, and `regions` and returns
+    /// the number of bytes written. The magic, the version, the size, and
+    /// the region count come from `regions`, and the framebuffer fields
+    /// from `framebuffer`, not from `header`; a writer and a parser that
+    /// disagree would be a defect the tests could not see.
     ///
     /// # Errors
     ///
@@ -549,6 +766,7 @@ impl BootInfoWriter {
     pub fn write(
         page: &mut [u8; BOOT_INFO_PAGE_LEN],
         header: &BootInfoHeader,
+        framebuffer: Option<Framebuffer>,
         regions: &[BootRegion],
     ) -> Result<u32, BootInfoError> {
         let count = u32::try_from(regions.len()).unwrap_or(u32::MAX);
@@ -581,6 +799,14 @@ impl BootInfoWriter {
             high(header.boot_stack_phys_len),
             low(header.acpi_rsdp),
             high(header.acpi_rsdp),
+            low(framebuffer.map_or(0, |buffer| buffer.phys_start)),
+            high(framebuffer.map_or(0, |buffer| buffer.phys_start)),
+            low(framebuffer.map_or(0, |buffer| buffer.len)),
+            high(framebuffer.map_or(0, |buffer| buffer.len)),
+            framebuffer.map_or(0, |buffer| buffer.width),
+            framebuffer.map_or(0, |buffer| buffer.height),
+            framebuffer.map_or(0, |buffer| buffer.stride),
+            framebuffer.map_or(0, |buffer| buffer.format.code()),
             count,
             0,
         ];
@@ -600,6 +826,16 @@ impl BootInfoWriter {
             *slot = value.to_le_bytes();
         }
         Ok(size)
+    }
+}
+
+/// `true` if `start .. start + len` shares a byte with `region`.
+const fn overlaps(region: BootRegion, start: u64, len: u64) -> bool {
+    match (region.end(), start.checked_add(len)) {
+        (Some(region_end), Some(end)) => {
+            len != 0 && region.len != 0 && start < region_end && region.start < end
+        }
+        _ => false,
     }
 }
 

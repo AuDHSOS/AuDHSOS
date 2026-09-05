@@ -9,10 +9,10 @@
 use crate::boot_info::{
     BOOT_INFO_HEADER_LEN, BOOT_INFO_MAGIC, BOOT_INFO_PAGE_LEN, BOOT_INFO_VERSION, BOOT_REGION_LEN,
     BootInfoError, BootInfoHeader, BootInfoView, BootInfoWriter, BootRegion, BootRegionKind,
-    FixedRange,
+    FixedRange, Framebuffer, FramebufferFormat,
 };
 use crate::layout::{MAX_BOOT_REGIONS, PAGE_SIZE};
-use crate::strategies::{any_boot_info_bytes, any_boot_region};
+use crate::strategies::{any_boot_info_bytes, any_boot_region, any_framebuffer};
 use test_support::generators::vec;
 use test_support::property::check;
 
@@ -30,6 +30,38 @@ struct Raw {
     regions: Vec<BootRegion>,
 }
 
+/// The framebuffer every framebuffer test starts from, and the device
+/// region that must enclose it.
+const FRAMEBUFFER: Framebuffer = Framebuffer {
+    phys_start: 0xC000_0000,
+    len: 0x30_0000,
+    width: 1024,
+    height: 768,
+    stride: 1024,
+    format: FramebufferFormat::Rgbx8888,
+};
+
+fn with_framebuffer(framebuffer: Framebuffer) -> Raw {
+    let mut header = valid_header();
+    header.framebuffer_phys_start = framebuffer.phys_start;
+    header.framebuffer_len = framebuffer.len;
+    header.framebuffer_width = framebuffer.width;
+    header.framebuffer_height = framebuffer.height;
+    header.framebuffer_stride = framebuffer.stride;
+    header.framebuffer_format = framebuffer.format.code();
+    let mut regions = vec![BootRegion::new(0, 64 * MIB, BootRegionKind::Usable)];
+    regions.push(BootRegion::new(
+        FRAMEBUFFER.phys_start,
+        FRAMEBUFFER.len,
+        BootRegionKind::MmioReserved,
+    ));
+    Raw {
+        header,
+        regions,
+        ..Raw::default()
+    }
+}
+
 fn valid_header() -> BootInfoHeader {
     BootInfoHeader {
         magic: BOOT_INFO_MAGIC,
@@ -45,6 +77,12 @@ fn valid_header() -> BootInfoHeader {
         boot_stack_phys_start: 4 * MIB,
         boot_stack_phys_len: 16 * PAGE_SIZE,
         acpi_rsdp: 0,
+        framebuffer_phys_start: 0,
+        framebuffer_len: 0,
+        framebuffer_width: 0,
+        framebuffer_height: 0,
+        framebuffer_stride: 0,
+        framebuffer_format: 0,
         region_count: 0,
         reserved: 0,
     }
@@ -87,11 +125,21 @@ impl Raw {
             (72, header.boot_stack_phys_start),
             (80, header.boot_stack_phys_len),
             (88, header.acpi_rsdp),
+            (96, header.framebuffer_phys_start),
+            (104, header.framebuffer_len),
         ] {
             bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
         }
-        bytes[96..100].copy_from_slice(&count.to_le_bytes());
-        bytes[100..104].copy_from_slice(&header.reserved.to_le_bytes());
+        for (offset, value) in [
+            (112, header.framebuffer_width),
+            (116, header.framebuffer_height),
+            (120, header.framebuffer_stride),
+            (124, header.framebuffer_format),
+            (128, count),
+            (132, header.reserved),
+        ] {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
         for (index, region) in self.regions.iter().enumerate() {
             let base = BOOT_INFO_HEADER_LEN + index * BOOT_REGION_LEN;
             bytes[base..base + 8].copy_from_slice(&region.start.to_le_bytes());
@@ -170,7 +218,7 @@ fn wrong_version_is_rejected() {
 
 #[test]
 fn size_below_the_fixed_part_above_a_page_or_not_matching_the_count_is_rejected() {
-    for size in [0, 103] {
+    for size in [0, 135] {
         let raw = Raw {
             size: Some(size),
             ..Raw::default()
@@ -183,10 +231,10 @@ fn size_below_the_fixed_part_above_a_page_or_not_matching_the_count_is_rejected(
     };
     assert_eq!(too_large.parse(), Err(BootInfoError::Size(4097)));
     let mismatch = Raw {
-        size: Some(104),
+        size: Some(136),
         ..Raw::default()
     };
-    assert_eq!(mismatch.parse(), Err(BootInfoError::Size(104)));
+    assert_eq!(mismatch.parse(), Err(BootInfoError::Size(136)));
 }
 
 #[test]
@@ -385,7 +433,7 @@ fn an_acpi_pointer_of_zero_is_absent_and_one_outside_every_region_is_rejected() 
 fn the_writer_produces_what_the_parser_accepts() {
     let raw = Raw::default();
     let mut page = [0u8; BOOT_INFO_PAGE_LEN];
-    let size = BootInfoWriter::write(&mut page, &raw.header, &raw.regions).unwrap();
+    let size = BootInfoWriter::write(&mut page, &raw.header, None, &raw.regions).unwrap();
     assert_eq!(
         usize::try_from(size).unwrap(),
         BOOT_INFO_HEADER_LEN + BOOT_REGION_LEN
@@ -407,7 +455,7 @@ fn the_writer_rejects_more_regions_than_the_limit() {
         vec![BootRegion::new(PAGE_SIZE, PAGE_SIZE, BootRegionKind::Usable); MAX_BOOT_REGIONS + 1];
     let mut page = [0u8; BOOT_INFO_PAGE_LEN];
     assert_eq!(
-        BootInfoWriter::write(&mut page, &valid_header(), &regions),
+        BootInfoWriter::write(&mut page, &valid_header(), None, &regions),
         Err(BootInfoError::RegionCount(
             u32::try_from(MAX_BOOT_REGIONS).unwrap() + 1
         ))
@@ -418,7 +466,7 @@ fn the_writer_rejects_more_regions_than_the_limit() {
 fn the_writer_clears_the_rest_of_the_page() {
     let raw = Raw::default();
     let mut page = [0xFFu8; BOOT_INFO_PAGE_LEN];
-    let size = BootInfoWriter::write(&mut page, &raw.header, &raw.regions).unwrap();
+    let size = BootInfoWriter::write(&mut page, &raw.header, None, &raw.regions).unwrap();
     let tail = &page[usize::try_from(size).unwrap()..];
     assert!(tail.iter().all(|byte| *byte == 0));
 }
@@ -500,4 +548,268 @@ fn errors_and_range_names_render_a_message() {
     for range in FixedRange::ALL {
         assert!(!range.name().is_empty());
     }
+}
+
+#[test]
+fn a_structure_without_a_framebuffer_reports_none() {
+    let raw = Raw::default();
+    let bytes = raw.bytes();
+    let view = BootInfoView::parse(&bytes).unwrap();
+    assert_eq!(view.framebuffer(), None);
+    assert_eq!(view.header().framebuffer_format, 0);
+}
+
+#[test]
+fn a_structure_with_a_framebuffer_reports_every_field() {
+    let raw = with_framebuffer(FRAMEBUFFER);
+    let bytes = raw.bytes();
+    let view = BootInfoView::parse(&bytes).unwrap();
+    assert_eq!(view.framebuffer(), Some(FRAMEBUFFER));
+    assert_eq!(FRAMEBUFFER.visible_bytes(), Some(768 * 1024 * 4));
+    assert_eq!(FRAMEBUFFER.end(), Some(0xC030_0000));
+}
+
+#[test]
+fn a_framebuffer_field_set_without_a_format_is_rejected() {
+    for change in [
+        |header: &mut BootInfoHeader| header.framebuffer_phys_start = 0xC000_0000,
+        |header: &mut BootInfoHeader| header.framebuffer_len = PAGE_SIZE,
+        |header: &mut BootInfoHeader| header.framebuffer_width = 640,
+        |header: &mut BootInfoHeader| header.framebuffer_height = 480,
+        |header: &mut BootInfoHeader| header.framebuffer_stride = 640,
+    ] {
+        let mut header = valid_header();
+        change(&mut header);
+        let raw = Raw {
+            header,
+            ..Raw::default()
+        };
+        assert_eq!(
+            raw.parse(),
+            Err(BootInfoError::FramebufferAbsentFieldSet),
+            "an absent framebuffer has every field zero"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_framebuffer_format_is_rejected() {
+    for code in [3u32, 255, u32::MAX] {
+        let mut raw = with_framebuffer(FRAMEBUFFER);
+        raw.header.framebuffer_format = code;
+        assert_eq!(raw.parse(), Err(BootInfoError::FramebufferFormat(code)));
+    }
+    for format in FramebufferFormat::ALL {
+        assert_eq!(FramebufferFormat::from_code(format.code()), Some(*format));
+        let mut raw = with_framebuffer(FRAMEBUFFER);
+        raw.header.framebuffer_format = format.code();
+        assert_eq!(raw.parse(), Ok(()));
+    }
+    assert_eq!(FramebufferFormat::from_code(0), None);
+}
+
+#[test]
+fn a_framebuffer_base_that_is_zero_or_unaligned_is_rejected() {
+    for base in [0u64, 0xC000_0001, 0xC000_0800] {
+        let mut raw = with_framebuffer(FRAMEBUFFER);
+        raw.header.framebuffer_phys_start = base;
+        assert_eq!(raw.parse(), Err(BootInfoError::FramebufferBase(base)));
+    }
+}
+
+#[test]
+fn a_framebuffer_resolution_of_zero_or_a_short_stride_is_rejected() {
+    for change in [
+        |header: &mut BootInfoHeader| header.framebuffer_width = 0,
+        |header: &mut BootInfoHeader| header.framebuffer_height = 0,
+        |header: &mut BootInfoHeader| header.framebuffer_stride = 1023,
+    ] {
+        let mut raw = with_framebuffer(FRAMEBUFFER);
+        change(&mut raw.header);
+        assert_eq!(raw.parse(), Err(BootInfoError::FramebufferResolution));
+    }
+    let mut wider = with_framebuffer(FRAMEBUFFER);
+    wider.header.framebuffer_width = 1000;
+    assert_eq!(
+        wider.parse(),
+        Ok(()),
+        "a stride above the width is padding, not an error"
+    );
+}
+
+#[test]
+fn a_framebuffer_length_that_is_short_or_unaligned_is_rejected() {
+    let mut short = with_framebuffer(FRAMEBUFFER);
+    short.header.framebuffer_len = FRAMEBUFFER.len - PAGE_SIZE;
+    assert_eq!(
+        short.parse(),
+        Err(BootInfoError::FramebufferLength(
+            FRAMEBUFFER.len - PAGE_SIZE
+        ))
+    );
+    let mut unaligned = with_framebuffer(FRAMEBUFFER);
+    unaligned.header.framebuffer_len = FRAMEBUFFER.len + 8;
+    assert_eq!(
+        unaligned.parse(),
+        Err(BootInfoError::FramebufferLength(FRAMEBUFFER.len + 8))
+    );
+    let mut padded = with_framebuffer(FRAMEBUFFER);
+    padded.header.framebuffer_len = FRAMEBUFFER.len + PAGE_SIZE;
+    padded.regions = vec![
+        BootRegion::new(0, 64 * MIB, BootRegionKind::Usable),
+        BootRegion::new(
+            FRAMEBUFFER.phys_start,
+            FRAMEBUFFER.len + PAGE_SIZE,
+            BootRegionKind::MmioReserved,
+        ),
+    ];
+    assert_eq!(padded.parse(), Ok(()), "a longer framebuffer is allowed");
+}
+
+#[test]
+fn a_framebuffer_whose_size_is_not_representable_is_rejected() {
+    let mut overflowing = with_framebuffer(FRAMEBUFFER);
+    overflowing.header.framebuffer_width = u32::MAX;
+    overflowing.header.framebuffer_height = u32::MAX;
+    overflowing.header.framebuffer_stride = u32::MAX;
+    assert_eq!(overflowing.parse(), Err(BootInfoError::FramebufferOverflow));
+    let huge = Framebuffer {
+        height: u32::MAX,
+        stride: u32::MAX,
+        ..FRAMEBUFFER
+    };
+    assert_eq!(huge.visible_bytes(), None);
+
+    let mut large = with_framebuffer(FRAMEBUFFER);
+    large.header.framebuffer_width = 0x1_0000;
+    large.header.framebuffer_height = 0x1_0000;
+    large.header.framebuffer_stride = 0x1_0000;
+    assert_eq!(
+        large.parse(),
+        Err(BootInfoError::FramebufferLength(FRAMEBUFFER.len)),
+        "the visible size fits into u64, the length does not cover it"
+    );
+    let representable = Framebuffer {
+        width: 0x1_0000,
+        height: 0x1_0000,
+        stride: 0x1_0000,
+        ..FRAMEBUFFER
+    };
+    assert_eq!(representable.visible_bytes(), Some(0x4_0000_0000));
+
+    let at_the_top = Framebuffer {
+        phys_start: u64::MAX - PAGE_SIZE + 1,
+        len: PAGE_SIZE,
+        ..FRAMEBUFFER
+    };
+    assert_eq!(at_the_top.end(), None);
+}
+
+#[test]
+fn a_framebuffer_overlapping_usable_memory_is_rejected() {
+    let mut raw = with_framebuffer(FRAMEBUFFER);
+    raw.regions = vec![
+        BootRegion::new(0, 0xC010_0000, BootRegionKind::Usable),
+        BootRegion::new(
+            FRAMEBUFFER.phys_start,
+            FRAMEBUFFER.len,
+            BootRegionKind::MmioReserved,
+        ),
+    ];
+    assert_eq!(raw.parse(), Err(BootInfoError::FramebufferOverlapsUsable));
+}
+
+#[test]
+fn a_framebuffer_without_an_enclosing_device_region_is_rejected() {
+    let mut missing = with_framebuffer(FRAMEBUFFER);
+    missing.regions = vec![BootRegion::new(0, 64 * MIB, BootRegionKind::Usable)];
+    assert_eq!(missing.parse(), Err(BootInfoError::FramebufferNotReserved));
+
+    let mut too_small = with_framebuffer(FRAMEBUFFER);
+    too_small.regions = vec![
+        BootRegion::new(0, 64 * MIB, BootRegionKind::Usable),
+        BootRegion::new(
+            FRAMEBUFFER.phys_start,
+            FRAMEBUFFER.len - PAGE_SIZE,
+            BootRegionKind::MmioReserved,
+        ),
+    ];
+    assert_eq!(
+        too_small.parse(),
+        Err(BootInfoError::FramebufferNotReserved)
+    );
+
+    let mut wrong_kind = with_framebuffer(FRAMEBUFFER);
+    wrong_kind.regions = vec![
+        BootRegion::new(0, 64 * MIB, BootRegionKind::Usable),
+        BootRegion::new(
+            FRAMEBUFFER.phys_start,
+            FRAMEBUFFER.len,
+            BootRegionKind::Reserved,
+        ),
+    ];
+    assert_eq!(
+        wrong_kind.parse(),
+        Err(BootInfoError::FramebufferNotReserved),
+        "the loader reports the framebuffer as device memory"
+    );
+}
+
+#[test]
+fn the_writer_takes_the_framebuffer_the_parser_reports() {
+    let raw = with_framebuffer(FRAMEBUFFER);
+    let mut page = [0u8; BOOT_INFO_PAGE_LEN];
+    let size =
+        BootInfoWriter::write(&mut page, &valid_header(), Some(FRAMEBUFFER), &raw.regions).unwrap();
+    let view = BootInfoView::parse(&page).unwrap();
+    assert_eq!(view.framebuffer(), Some(FRAMEBUFFER));
+    assert_eq!(view.header().size, size);
+    assert_eq!(
+        usize::try_from(size).unwrap(),
+        BOOT_INFO_HEADER_LEN + 2 * BOOT_REGION_LEN
+    );
+
+    let mut absent = [0u8; BOOT_INFO_PAGE_LEN];
+    BootInfoWriter::write(&mut absent, &valid_header(), None, &raw.regions).unwrap();
+    let view = BootInfoView::parse(&absent).unwrap();
+    assert_eq!(
+        view.framebuffer(),
+        None,
+        "the writer takes the framebuffer from its argument, not from the header"
+    );
+}
+
+#[test]
+fn the_fixed_part_is_one_hundred_and_thirty_six_bytes() {
+    assert_eq!(BOOT_INFO_HEADER_LEN, 136);
+    assert_eq!(
+        BOOT_INFO_HEADER_LEN + MAX_BOOT_REGIONS * BOOT_REGION_LEN,
+        3208
+    );
+    const { assert!(BOOT_INFO_HEADER_LEN + MAX_BOOT_REGIONS * BOOT_REGION_LEN <= BOOT_INFO_PAGE_LEN) };
+}
+
+#[test]
+fn property_the_writer_produces_what_the_parser_accepts() {
+    check("boot_info_round_trip", &any_framebuffer(), |framebuffer| {
+        let mut regions = vec![BootRegion::new(0, 64 * MIB, BootRegionKind::Usable)];
+        if let Some(buffer) = framebuffer {
+            regions.push(BootRegion::new(
+                buffer.phys_start,
+                buffer.len,
+                BootRegionKind::MmioReserved,
+            ));
+        }
+        let mut page = [0u8; BOOT_INFO_PAGE_LEN];
+        BootInfoWriter::write(&mut page, &valid_header(), *framebuffer, &regions)
+            .map_err(|error| format!("the writer refused: {error}"))?;
+        let view = BootInfoView::parse(&page).map_err(|error| format!("rejected: {error}"))?;
+        if view.framebuffer() != *framebuffer {
+            return Err(format!("{:?} did not round-trip", view.framebuffer()));
+        }
+        if view.regions().count() != regions.len() {
+            return Err("the regions did not round-trip".to_owned());
+        }
+        Ok(())
+    });
 }
