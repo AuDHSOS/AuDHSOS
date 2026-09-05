@@ -43,7 +43,7 @@ fn a_thread_that_faulted_keeps_everything_it_holds() {
     assert_eq!(
         fixture.environment.stacks_out(),
         1,
-        "the stack of the faulted thread is not the one given back"
+        "a fault gives no kernel stack back"
     );
     assert!(
         !has_work(&fixture.machine(), None),
@@ -108,6 +108,58 @@ fn a_thread_that_has_ended_cannot_fault() {
 }
 
 #[test]
+fn a_ready_thread_that_is_faulted_stays_ready_and_stays_in_its_queue() {
+    let mut fixture = Fixture::new();
+    let creation = request(
+        Syscall::ThreadCreate,
+        &[fixture.own_process.raw(), 0x40_0000, 0x50_0000, 2, 4, 0],
+    );
+    let raw = value_of(&mut fixture, creation);
+    let other = thread_of(&fixture, raw);
+    assert!(error_of(&mut fixture, request(Syscall::ThreadStart, &[raw])).is_none());
+    let queued = fixture.scheduler.ready_bitmap();
+    assert_ne!(queued, 0, "the started thread waits in a queue");
+
+    let outcome = stop(&mut fixture.machine(), other);
+
+    assert!(!outcome.reschedule);
+    assert_eq!(
+        fixture.objects.threads.get(other).unwrap().state,
+        ThreadState::Ready,
+        "only a running thread may fault"
+    );
+    assert_eq!(
+        fixture.scheduler.ready_bitmap(),
+        queued,
+        "and a fault it cannot take must not take it out of its queue"
+    );
+    // Reachable, not merely ready: once the caller is off the processor
+    // the scheduler finds it, which a thread stranded outside every queue
+    // would not be.
+    let caller = fixture.thread;
+    fixture
+        .scheduler
+        .exit(&mut fixture.objects.threads, caller)
+        .unwrap();
+    assert_eq!(
+        fixture.scheduler.pick_next(&mut fixture.objects.threads),
+        Ok(other),
+        "the thread the fault could not take is still the one that runs next"
+    );
+}
+
+/// The thread `raw` names, for a handle the fixture handed out.
+fn thread_of(fixture: &Fixture, raw: u64) -> kernel_objects::object::ThreadId {
+    fixture
+        .objects
+        .entry(fixture.process, audhsos_abi::Handle::from_raw(raw).unwrap())
+        .unwrap()
+        .object
+        .typed::<kernel_objects::object::Thread>()
+        .unwrap()
+}
+
+#[test]
 fn a_fault_of_a_thread_that_is_not_running_asks_for_no_switch() {
     let mut fixture = Fixture::new();
     let creation = request(
@@ -115,14 +167,7 @@ fn a_fault_of_a_thread_that_is_not_running_asks_for_no_switch() {
         &[fixture.own_process.raw(), 0x40_0000, 0x50_0000, 2, 4, 0],
     );
     let raw = value_of(&mut fixture, creation);
-    let handle = audhsos_abi::Handle::from_raw(raw).unwrap();
-    let other = fixture
-        .objects
-        .entry(fixture.process, handle)
-        .unwrap()
-        .object
-        .typed::<kernel_objects::object::Thread>()
-        .unwrap();
+    let other = thread_of(&fixture, raw);
     // A thread that was never started is `Inactive`, which the table
     // gives no fault transition: nothing happens to it and the thread on
     // the processor keeps running.

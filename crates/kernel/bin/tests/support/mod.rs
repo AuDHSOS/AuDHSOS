@@ -321,36 +321,45 @@ pub(crate) fn add_thread(process: &mut UserProcess, priority: u8) -> Spawned {
 /// Starts `thread` and says whether it should take the processor from
 /// whoever holds it: a thread of higher priority does.
 pub(crate) fn start(thread: ThreadId) -> bool {
-    try_start(thread)
-        .unwrap_or_else(|| testing::fail(format_args!("the thread could not be started")))
+    with_machine(|machine| {
+        machine
+            .scheduler
+            .start(&mut machine.objects.threads, thread)
+            .unwrap_or_else(|error| {
+                testing::fail(format_args!("the thread does not start: {error}"))
+            })
+            .reschedule
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")))
 }
 
 /// The same, for a caller that cannot fail an image: a tick hook runs
 /// inside an interrupt, and an interrupt that arrives while the kernel
-/// holds the machine finds it busy. `None` says so; the caller tries
-/// again on the next tick.
+/// holds the machine finds it busy.
+///
+/// `None` says that and nothing else, so that a caller may try again on
+/// the next tick without ever trying forever: a thread the scheduler
+/// refuses — one that has already started, or that the pool no longer
+/// holds — is `Some(false)`, which is an answer and not a reason to come
+/// back.
 pub(crate) fn try_start(thread: ThreadId) -> Option<bool> {
     with_machine(|machine| {
         machine
             .scheduler
             .start(&mut machine.objects.threads, thread)
-            .ok()
-            .map(|outcome| outcome.reschedule)
+            .is_ok_and(|outcome| outcome.reschedule)
     })
-    .flatten()
 }
 
 /// Ends `thread` wherever it is, for a caller that cannot fail an image.
-/// `None` says the machine was busy; the caller tries again.
+/// `None` says the machine was busy, as in [`try_start`].
 pub(crate) fn try_kill(thread: ThreadId) -> Option<bool> {
     with_machine(|machine| {
         machine
             .scheduler
             .exit(&mut machine.objects.threads, thread)
-            .ok()
-            .map(|outcome| outcome.reschedule)
+            .is_ok_and(|outcome| outcome.reschedule)
     })
-    .flatten()
 }
 
 /// A thread id as one word, so that a tick hook can keep one in a `static`
@@ -998,10 +1007,34 @@ fn enable_interrupts() {
     }
 }
 
+/// Turns interrupts off for as long as the kernel is deciding who runs.
+///
+/// Every other caller of [`run_threads`] is already inside an interrupt
+/// gate and has them off; the idle thread is the one that does not. A tick
+/// between the decision and the switch would find a thread the scheduler
+/// already calls current standing nowhere, and the switch it made from
+/// here would write the context of the idle thread into that thread's
+/// entry. The window is a handful of instructions against a tick a
+/// millisecond wide, which is exactly the kind of race that passes a
+/// hundred runs and fails the hundred and first.
+fn disable_interrupts() {
+    if TIMER.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    // SAFETY: nothing between here and the switch needs an interrupt, and
+    // the thread that takes the processor turns them back on itself: a
+    // user thread through the flags of its interrupt return, the idle
+    // thread through `enable_interrupts` below.
+    unsafe {
+        instructions::disable_interrupts();
+    }
+}
+
 /// Runs whatever is runnable and comes back when nothing is, with the
 /// timer still reaching this thread. This is the loop of the idle thread
 /// in an image that has a timer.
 pub(crate) fn run_until_idle() {
+    disable_interrupts();
     run_threads(None);
     enable_interrupts();
 }
@@ -1023,7 +1056,7 @@ pub(crate) fn idle_until(done: impl Fn() -> bool) {
         spins = spins.saturating_add(1);
         instructions::halt();
     }
-    run_threads(None);
+    run_until_idle();
 }
 
 /// How long the idle thread waits before it believes the run will never

@@ -407,7 +407,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-kernel",
         path: "crates/kernel/bin",
         kind: Kind::Adapter {
-            unsafe_budget: 25,
+            unsafe_budget: 26,
             asm_budget: 0,
         },
         deps: &[

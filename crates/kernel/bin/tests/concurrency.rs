@@ -22,7 +22,6 @@
 #![test_runner(kernel_hal_x86_64::testing::run_tests)]
 #![reexport_test_harness_main = "test_main"]
 
-use audhsos_abi::ThreadState;
 use kernel_hal_x86_64::testing;
 use kernel_types::PhysFrame;
 
@@ -186,8 +185,14 @@ fn a_thread_of_higher_priority_takes_every_turn_first() {
     if support::state_of(low.thread).is_some() || support::state_of(high.thread).is_some() {
         testing::fail(format_args!("a thread of the run did not end"));
     }
+    let counter = support::page_word(shared, 0);
+    let wanted = u64::try_from(ROUNDS.saturating_mul(2)).unwrap_or(0);
+    if counter != wanted {
+        testing::fail(format_args!(
+            "the counter stands at {counter}, not {wanted}"
+        ));
+    }
     say!("the high thread took {taken_high:?}, then the low one took {taken_low:?}");
-    let _ = shared;
 }
 
 /// A thread that yields when it is the only one runnable gets the
@@ -211,9 +216,17 @@ fn a_lone_thread_that_yields_runs_on() {
             ));
         }
     }
-    if support::state_of(alone.thread) == Some(ThreadState::Ready) {
-        testing::fail(format_args!("the lone thread is still waiting for a turn"));
+    if let Some(state) = support::state_of(alone.thread) {
+        testing::fail(format_args!(
+            "the lone thread is {state:?}: it never reached the end of its rounds"
+        ));
+    }
+    let counter = support::page_word(shared, 0);
+    let wanted = u64::try_from(ROUNDS).unwrap_or(0);
+    if counter != wanted {
+        testing::fail(format_args!(
+            "the counter stands at {counter} after one thread took {wanted} tickets"
+        ));
     }
     say!("a thread alone in its queue took every ticket in a row: {taken:?}");
-    let _ = shared;
 }

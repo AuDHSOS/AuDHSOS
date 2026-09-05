@@ -342,6 +342,14 @@ impl ModelTest for PoolModel {
                 if let Some(key) = model.pick(position) {
                     let id = ObjectId::new(key.0, key.1);
                     let entry = model.live.get(&key).copied();
+                    // What the slot holds is read before it goes, because
+                    // `release` no longer hands the value back (D-73) and
+                    // this is the last moment anything can ask for it.
+                    if let Some((payload, _)) = entry
+                        && sut.get(id) != Ok(&payload)
+                    {
+                        return Err(format!("release: the slot did not hold {payload}"));
+                    }
                     match (sut.release(id), entry) {
                         (Ok(false), Some((payload, refs))) if refs > 1 => {
                             model.live.insert(key, (payload, refs - 1));

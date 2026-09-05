@@ -287,8 +287,116 @@ fn every_call_this_phase_implements_succeeds_from_user_mode() {
     });
 }
 
-/// Every call this phase implements answered an error at least once, for
-/// arguments that do not check out.
+/// The one failure case of every call this phase implements, and the error
+/// it has to answer with. `every_syscall.rs` makes exactly one of these
+/// per call; what each of them is wrong about is in the second column.
+const REFUSALS: &[(Syscall, Error, &str)] = &[
+    (
+        Syscall::DebugLog,
+        Error::ArgumentCount,
+        "an argument word above the count of a call that takes none",
+    ),
+    (
+        Syscall::ThreadYield,
+        Error::ArgumentCount,
+        "an argument word above the count of a call that takes none",
+    ),
+    (
+        Syscall::ThreadExit,
+        Error::ArgumentCount,
+        "an argument word above the count of a call that takes none",
+    ),
+    (
+        Syscall::ThreadInfo,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
+    (
+        Syscall::ProcessCreate,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
+    (
+        Syscall::ProcessInstallHandle,
+        Error::InvalidHandle,
+        "a handle that names nothing to install",
+    ),
+    (
+        Syscall::ProcessKill,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
+    (
+        Syscall::ThreadCreate,
+        Error::InvalidArgument,
+        "a priority above the maximum the creator granted",
+    ),
+    (
+        Syscall::ThreadStart,
+        Error::InvalidState,
+        "a thread that has already started",
+    ),
+    (
+        Syscall::ThreadSuspend,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
+    (
+        Syscall::ThreadResume,
+        Error::InvalidState,
+        "a thread that is ready and was never suspended",
+    ),
+    (
+        Syscall::ThreadSetPriority,
+        Error::InvalidArgument,
+        "a priority outside the priorities of this system",
+    ),
+    (
+        Syscall::ThreadKill,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
+    (
+        Syscall::MemoryInfo,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
+    (
+        Syscall::MemoryMap,
+        Error::AddressInUse,
+        "an address something is already mapped at",
+    ),
+    (
+        Syscall::MemoryProtect,
+        Error::NotMapped,
+        "an address nothing is mapped at",
+    ),
+    (
+        Syscall::MemoryUnmap,
+        Error::NotMapped,
+        "an address nothing is mapped at",
+    ),
+    (
+        Syscall::MemorySplit,
+        Error::Unaligned,
+        "an offset that is no page",
+    ),
+    (
+        Syscall::HandleDuplicate,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
+    (
+        Syscall::HandleClose,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
+];
+
+/// Every call this phase implements answered exactly one error, and it is
+/// the one its failure case asks for. A table of twenty, against the
+/// twenty of the phase: nothing is refused for the wrong reason, and
+/// nothing is missing.
 #[test_case]
 fn every_call_this_phase_implements_fails_from_user_mode() {
     with_log(|log| {
@@ -296,20 +404,38 @@ fn every_call_this_phase_implements_fails_from_user_mode() {
             if is_of_a_later_phase(*call) {
                 continue;
             }
-            let Some(error) = log.errors(*call).next() else {
+            let Some((_, wanted, what)) = REFUSALS.iter().find(|(named, _, _)| named == call)
+            else {
+                testing::fail(format_args!(
+                    "{} has no failure case in the table of this image",
+                    call.name()
+                ));
+            };
+            let mut errors = log.errors(*call);
+            let Some(error) = errors.next() else {
                 testing::fail(format_args!(
                     "{} never failed from user mode; nothing of it was refused",
                     call.name()
                 ));
             };
-            if error == Error::Unsupported {
+            if error != *wanted {
                 testing::fail(format_args!(
-                    "{} answered Unsupported, which is what a call of a later phase answers",
+                    "{} answered {error:?} to {what}, not {wanted:?}",
+                    call.name()
+                ));
+            }
+            if let Some(second) = errors.next() {
+                testing::fail(format_args!(
+                    "{} failed twice, the second time with {second:?}; \
+                     one failure case per call is what the table holds",
                     call.name()
                 ));
             }
         }
-        say!("every call of this phase refused arguments that do not check out");
+        say!(
+            "all {} calls of this phase refused their one case, each with its own error",
+            REFUSALS.len()
+        );
     });
 }
 
