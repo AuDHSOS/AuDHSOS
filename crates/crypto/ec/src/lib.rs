@@ -5,12 +5,16 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+pub mod ed25519;
 pub mod error;
 pub mod fe25519;
+pub mod scalar;
 pub mod x25519;
 
+pub use ed25519::Point;
 pub use error::EcError;
 pub use fe25519::Fe;
+pub use scalar::Scalar;
 pub use x25519::{PUBLIC_LEN, SCALAR_LEN, base_point, x25519};
 
 #[cfg(test)]

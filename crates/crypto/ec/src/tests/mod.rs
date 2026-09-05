@@ -4,6 +4,7 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
+mod ed25519;
 mod fe25519;
 mod reference;
 mod x25519;

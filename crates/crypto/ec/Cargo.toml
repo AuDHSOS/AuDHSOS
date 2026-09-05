@@ -15,6 +15,7 @@ test-signing = []
 
 [dependencies]
 crypto-ct.workspace = true
+crypto-hash.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true

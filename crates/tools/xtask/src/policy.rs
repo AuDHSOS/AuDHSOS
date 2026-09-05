@@ -103,7 +103,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "crypto-ec",
         path: "crates/crypto/ec",
         kind: Kind::Logic,
-        deps: &["crypto-ct", "test-support"],
+        deps: &["crypto-ct", "crypto-hash", "test-support"],
         coverage_gate: true,
         target: Target::Host,
     },

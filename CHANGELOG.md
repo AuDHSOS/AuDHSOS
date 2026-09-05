@@ -35,6 +35,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   the published test cases of the mode.
 - `crypto-ec`: the field of `2^255 - 19` and X25519 with a constant-time
   Montgomery ladder, against the vectors of RFC 7748.
+- `crypto-ec`: Ed25519 verification and deterministic signing behind
+  `test-signing`, with strict canonicality and small-order checks, against
+  the vectors of RFC 8032.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.
 - `audhsos-abi`: error codes, rights, object types, handles, layout
