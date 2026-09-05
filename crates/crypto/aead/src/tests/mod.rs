@@ -4,8 +4,11 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
+mod aes;
+mod aesgcm;
 mod chacha20;
 mod chachapoly;
+mod ghash;
 mod poly1305;
 
 /// Renders bytes as lower-case hexadecimal, so that a failing vector prints

@@ -14,7 +14,7 @@
 
 use crypto_ct::{ct_eq, wipe};
 
-use crate::aead::{Aead, Tag};
+use crate::aead::{Aead, Tag, padding};
 use crate::chacha20::{self, ChaCha20};
 use crate::error::AeadError;
 use crate::poly1305::{self, Poly1305};
@@ -23,9 +23,6 @@ use crate::poly1305::{self, Poly1305};
 pub const KEY_LEN: usize = chacha20::KEY_LEN;
 /// Bytes of nonce.
 pub const NONCE_LEN: usize = chacha20::NONCE_LEN;
-
-/// The zeros the padding of the authenticated data is taken from.
-const ZEROS: [u8; 16] = [0u8; 16];
 
 /// The authenticated cipher of RFC 8439.
 #[derive(Clone)]
@@ -108,13 +105,4 @@ impl Aead for ChaCha20Poly1305 {
         }
         self.cipher.apply_keystream(nonce, 1, in_out)
     }
-}
-
-/// The zeros that pad an authenticated part to a multiple of sixteen.
-const fn padding(len: usize) -> &'static [u8] {
-    // `len & 15` is below sixteen, so the needed count is below sixteen and
-    // the split is inside the array.
-    let needed = 16usize.wrapping_sub(len & 15) & 15;
-    let (zeros, _) = ZEROS.split_at(needed);
-    zeros
 }

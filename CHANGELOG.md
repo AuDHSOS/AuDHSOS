@@ -20,6 +20,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - `crypto-aead`: `ChaCha20`, `Poly1305`, and the `ChaCha20-Poly1305`
   authenticated cipher of RFC 8439, sealing and opening in place, with
   verification before decryption.
+- `crypto-aead`: AES-128 and AES-256 bitsliced over four blocks without a
+  lookup table, table-free GHASH, and AES-128-GCM and AES-256-GCM, against
+  the published test cases of the mode.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.
 - `audhsos-abi`: error codes, rights, object types, handles, layout

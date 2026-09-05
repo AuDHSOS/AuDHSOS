@@ -55,3 +55,16 @@ pub trait Aead: Sized {
     fn open(&self, nonce: &[u8], aad: &[u8], in_out: &mut [u8], tag: &Tag)
     -> Result<(), AeadError>;
 }
+
+/// The zeros that pad an authenticated part to a multiple of sixteen.
+const ZEROS: [u8; 16] = [0u8; 16];
+
+/// The zeros that pad an authenticated part of `len` bytes to a multiple of
+/// sixteen.
+pub(crate) const fn padding(len: usize) -> &'static [u8] {
+    // `len & 15` is below sixteen, so the needed count is below sixteen and
+    // the split is inside the array.
+    let needed = 16usize.wrapping_sub(len & 15) & 15;
+    let (zeros, _) = ZEROS.split_at(needed);
+    zeros
+}

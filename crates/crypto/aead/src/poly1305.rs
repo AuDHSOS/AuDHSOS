@@ -278,10 +278,16 @@ impl Drop for Poly1305 {
 
 /// The two little-endian words of a block.
 fn words(block: &[u8; BLOCK_LEN]) -> (u64, u64) {
-    let (chunks, _) = block.as_chunks::<8>();
-    let low = chunks.first().map_or(0, |chunk| u64::from_le_bytes(*chunk));
-    let high = chunks.get(1).map_or(0, |chunk| u64::from_le_bytes(*chunk));
-    (low, high)
+    let (first, second) = block.split_at(8);
+    let mut low = [0u8; 8];
+    let mut high = [0u8; 8];
+    for (slot, byte) in low.iter_mut().zip(first) {
+        *slot = *byte;
+    }
+    for (slot, byte) in high.iter_mut().zip(second) {
+        *slot = *byte;
+    }
+    (u64::from_le_bytes(low), u64::from_le_bytes(high))
 }
 
 /// The product of two limbs, which needs more than sixty-four bits.
