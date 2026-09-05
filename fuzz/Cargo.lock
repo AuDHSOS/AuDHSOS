@@ -7,8 +7,34 @@ name = "audhsos-abi"
 version = "0.1.0"
 
 [[package]]
+name = "audhsos-der"
+version = "0.1.0"
+
+[[package]]
 name = "audhsos-elf"
 version = "0.1.0"
+
+[[package]]
+name = "audhsos-tls"
+version = "0.1.0"
+dependencies = [
+ "audhsos-der",
+ "audhsos-x509",
+ "crypto-aead",
+ "crypto-ct",
+ "crypto-ec",
+ "crypto-hash",
+ "crypto-rng",
+]
+
+[[package]]
+name = "audhsos-x509"
+version = "0.1.0"
+dependencies = [
+ "audhsos-der",
+ "crypto-ec",
+ "crypto-hash",
+]
 
 [[package]]
 name = "boot_image_header"
@@ -27,6 +53,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto-aead"
+version = "0.1.0"
+dependencies = [
+ "crypto-ct",
+]
+
+[[package]]
+name = "crypto-ct"
+version = "0.1.0"
+
+[[package]]
+name = "crypto-ec"
+version = "0.1.0"
+dependencies = [
+ "crypto-ct",
+ "crypto-hash",
+]
+
+[[package]]
+name = "crypto-hash"
+version = "0.1.0"
+dependencies = [
+ "crypto-ct",
+]
+
+[[package]]
+name = "crypto-rng"
+version = "0.1.0"
+dependencies = [
+ "crypto-aead",
+ "crypto-ct",
+]
+
+[[package]]
+name = "der"
+version = "0.1.0"
+dependencies = [
+ "audhsos-der",
+ "fuzz-support",
+]
+
+[[package]]
 name = "elf"
 version = "0.1.0"
 dependencies = [
@@ -37,3 +105,28 @@ dependencies = [
 [[package]]
 name = "fuzz-support"
 version = "0.1.0"
+
+[[package]]
+name = "tls_handshake"
+version = "0.1.0"
+dependencies = [
+ "audhsos-tls",
+ "fuzz-support",
+]
+
+[[package]]
+name = "tls_record"
+version = "0.1.0"
+dependencies = [
+ "audhsos-tls",
+ "fuzz-support",
+]
+
+[[package]]
+name = "x509"
+version = "0.1.0"
+dependencies = [
+ "audhsos-der",
+ "audhsos-x509",
+ "fuzz-support",
+]

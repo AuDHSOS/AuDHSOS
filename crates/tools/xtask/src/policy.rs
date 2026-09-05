@@ -398,7 +398,13 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
         name: "boot_image_header",
     },
     FuzzTarget { name: "boot_info" },
+    FuzzTarget { name: "der" },
     FuzzTarget { name: "elf" },
+    FuzzTarget {
+        name: "tls_handshake",
+    },
+    FuzzTarget { name: "tls_record" },
+    FuzzTarget { name: "x509" },
 ];
 
 /// Extensions of assembly files, which must not exist.

@@ -139,6 +139,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - `audhsos-tls`: the client state machine, the alerts, and the sans-I/O
   interface. The handshake of RFC 8448 is reproduced, and a whole
   connection runs against a server built in the tests.
+- Fuzz targets `der`, `x509`, `tls_record`, and `tls_handshake`, the four
+  that catalog 6.6.35 to 6.6.38 requires of track C. Beyond "no input may
+  panic" each one carries an invariant: a DER value is shorter than what
+  it was read from, a parsed certificate is a view of its input and
+  verifies against no empty trust store, a record's length is its header
+  and its body and what this crate seals it opens again, and no handshake
+  reader hands back more than the message it was given. The corpora start
+  from the trace of RFC 8448 and from certificates the builder writes.
+
 - `docs/rfc/`: the standards this system implements, verbatim, with their
   source and checksum recorded. The first is RFC 8448, whose trace is the
   test the TLS client must reproduce (D-59).

@@ -7,7 +7,15 @@
 
 [workspace]
 resolver = "3"
-members = ["boot_image_header", "boot_info", "elf"]
+members = [
+    "boot_image_header",
+    "boot_info",
+    "der",
+    "elf",
+    "tls_handshake",
+    "tls_record",
+    "x509",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,7 +26,10 @@ rust-version = "1.100"
 
 [workspace.dependencies]
 audhsos-abi = { path = "../crates/abi" }
+audhsos-der = { path = "../crates/net/der" }
 audhsos-elf = { path = "../crates/elf" }
+audhsos-tls = { path = "../crates/net/tls" }
+audhsos-x509 = { path = "../crates/net/x509" }
 fuzz-support = { path = "../crates/support/fuzz" }
 
 [workspace.lints.rust]

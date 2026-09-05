@@ -270,7 +270,7 @@ phase order and is built between phases.
 | T2 | `crypto-aead` | L | implemented: ChaCha20-Poly1305 and AES-GCM, both constant-time and table-free |
 | T3 | `crypto-ec` | L | implemented: X25519, Ed25519 verification, P-256 ECDSA verification |
 | T4 | `crypto-rng` | S | implemented: the ChaCha20 generator and the `Entropy` trait |
-| T5 | `audhsos-der` | M | implemented: a strict DER reader; its fuzz target and its time conversion wait on document 12 (11.14) |
+| T5 | `audhsos-der` | M | implemented: a strict DER reader with its fuzz target; its time conversion waits on document 12 (11.14) |
 | T6 | `audhsos-x509` | L | implemented: certificate parsing, path validation, name matching, the test certificate builder |
 | T7 | `audhsos-tls` | XL | implemented: the client reproduces the RFC 8448 trace and completes a handshake against project-generated chains |
 | T8 | integration | M | not scheduled: transport, the `random_bytes` system call, an HTTP client |
@@ -336,7 +336,7 @@ Status: implemented.
 
 | Step | Crate | Size | Ends with |
 |------|-------|------|-----------|
-| G1 | `fuzz-support` | S | implemented: the entry glue, the `fuzz_target!` macro, the corpus replay, the `elf`, `boot_image_header`, and `boot_info` targets, and `fuzz --regression` as a step of `check` |
+| G1 | `fuzz-support` | S | implemented: the entry glue, the `fuzz_target!` macro, the corpus replay, the `elf`, `boot_image_header`, and `boot_info` targets, and `fuzz --regression` as a step of `check`. Track C added `der`, `x509`, `tls_record`, and `tls_handshake` on top of it |
 | G2 | `audhsos-symbols` | M | implemented: the symbol table, the DWARF 4 and 5 line programs, `xtask symbolize`, and the automatic report on a failing QEMU run |
 
 G2 was worth having before Phase 3, because that is where kernel panics

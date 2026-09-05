@@ -795,7 +795,12 @@ done until every applicable item has a test. Items are added, never removed.
   was not expected leaves the reader where it was.
 - Property: no input makes the reader panic. A value is a slice of the
   input, so it re-encodes to what it came from by construction rather than
-  by a test. The fuzz target `der` waits on the harness of D-54.
+  by a test. The fuzz target `der` walks the structure of arbitrary bytes,
+  descending into every constructed value to `MAX_DEPTH`, and asserts that
+  a value read is shorter than what it was read from and that the reader
+  moved past it. It hands the whole input to the two time forms as well,
+  because a walk reaches them only for an input that carries their tag,
+  and checks the fields of a time it accepts against their ranges.
 
 ### 6.6.36 Certificates and path validation (`audhsos-x509`)
 
@@ -827,8 +832,13 @@ done until every applicable item has a test. Items are added, never removed.
   an `iPAddress` entry, and a `dNSName` that spells an address does not.
 - Property: mutating any byte of a valid certificate, in either of two
   ways, makes parsing or verification fail; mutating any byte of an
-  intermediate makes the chain fail. The fuzz target `x509` waits on the
-  harness of D-54.
+  intermediate makes the chain fail. The fuzz target `x509` parses
+  arbitrary bytes and, for a certificate that parses, reads everything a
+  caller reads off one — the names, the matching, the signature — and
+  asserts two things: every field is a view of the input, and nothing
+  verifies against an empty trust store, neither on its own nor as its own
+  issuer. The corpus holds the certificate of RFC 8448 and three the
+  builder writes.
 
 ### 6.6.37 TLS record layer and key schedule (`audhsos-tls`)
 
@@ -900,8 +910,16 @@ done until every applicable item has a test. Items are added, never removed.
   and after the handshake.
 - Property: arbitrary byte streams fed to `read_tls` never panic; the
   connection either makes no progress or ends, and once it has ended it
-  gives the same answer to every later call. The fuzz targets `tls_record`
-  and `tls_handshake` wait on the harness of D-54.
+  gives the same answer to every later call. The fuzz target `tls_record`
+  frames arbitrary bytes, asserts that a record's length is its header and
+  its body, tries to open it under keys the input does not know, and seals
+  the input and opens it again, which must return the bytes that went in.
+  The fuzz target `tls_handshake` reads the input as the stream of
+  messages a server sends and then hands the whole input to every reader,
+  because a body that never frames would otherwise never be parsed; a
+  message that frames must say how long it is, and nothing a reader hands
+  back may be longer than the message it came from. Both corpora start
+  from the trace of RFC 8448.
 
 ### 6.6.39 Time and calendar (`audhsos-time`)
 

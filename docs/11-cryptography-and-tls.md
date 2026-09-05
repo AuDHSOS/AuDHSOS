@@ -479,7 +479,8 @@ would close this seam.
 Beyond that: the vector tests of each primitive, property tests for
 round trips and for parsers that must not panic, model tests for path
 validation, negative tests for every rejection rule in 11.9 and 11.10,
-and four fuzz targets. Coverage thresholds apply to all eight crates.
+and the four fuzz targets `der`, `x509`, `tls_record`, and
+`tls_handshake`. Coverage thresholds apply to all eight crates.
 
 Every crate whose code touches secrets carries a constant-time review
 section in its crate documentation: which functions see secret input, and
@@ -527,10 +528,15 @@ nobody finds again.
 |-----------------|------------------|-------------|
 | The conversion of a certificate time to an instant, and the check of a day against the true length of its month | `audhsos-der` yields a `Timestamp` of fields, and `verify_chain` takes one as its `now`. That comparison is correct, so nothing is blocked; what is missing is the step from a clock to that value | `audhsos-time`, D-46, [document 12](12-parallel-work.md) |
 | A PEM decoder | the trust-anchor conversion of D-42, which the xtask performs at build time | `audhsos-encoding`, D-47, [document 12](12-parallel-work.md) |
-| The fuzz harness and the `fuzz/` tree | the targets `der`, `x509`, `tls_record`, and `tls_handshake` that catalog 6.6.35 to 6.6.38 require | `fuzz-support`, D-54, [document 12](12-parallel-work.md) |
 | A source of entropy | `crypto-rng` ships the generator and the `Entropy` trait; no product code can construct a generator without a source | `RDSEED` in the HAL behind a `random_bytes` system call, D-43 |
 | A transport | step T8: the client is sans-I/O and needs bytes moved for it | `net-tcp`, D-49, [document 12](12-parallel-work.md) |
 
-None of these blocks the steps that remain. T6 and T7 can be built against
-the `Timestamp` of fields and gain the conversion when it arrives; the fuzz
-targets are written when there is a harness to run them in.
+None of these blocks the steps that remain. T6 and T7 were built against
+the `Timestamp` of fields and gain the conversion when it arrives.
+
+The fuzz harness of D-54 arrived, and with it the four targets this track
+owes: `der`, `x509`, `tls_record`, and `tls_handshake` live under `fuzz/`
+with a corpus each, and `cargo xtask fuzz --regression` replays them as a
+step of `check`. Fuzzing proper needs a clang that carries the libFuzzer
+runtime; on a machine without one the same sources still build the replay
+program, which is what the regression step uses.

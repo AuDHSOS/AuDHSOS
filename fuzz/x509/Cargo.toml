@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "x509"
+description = "Fuzz target: x509"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "x509"
+path = "src/main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+audhsos-der.workspace = true
+audhsos-x509.workspace = true
+fuzz-support.workspace = true
+
+[lints]
+workspace = true
