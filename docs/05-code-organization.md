@@ -135,7 +135,7 @@ AuDHSOS/
 | `crypto-rng` | c2 | all | no | yes | `crypto-ct`, `crypto-aead`; feature `test-doubles` |
 | `audhsos-x509` | c3 | all | no | yes, fuzz | `audhsos-der`, `audhsos-time`, `crypto-hash`, `crypto-ec`; feature `test-certificates` |
 | `audhsos-tls` | c4 | all | no | yes, fuzz | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-time`, `audhsos-x509` |
-| `net-wire` | n0 | all | no | yes | - |
+| `net-wire` | n0 | all | no | yes | `test-support` as a dev-dependency |
 | `net-eth` | n1 | all | no | yes | `net-wire`, `audhsos-time`, `audhsos-collections` |
 | `net-ip` | n2 | all | no | yes, fuzz | `net-eth` and below |
 | `net-udp` | n3 | all | no | yes | `net-ip` and below, `crypto-rng` |

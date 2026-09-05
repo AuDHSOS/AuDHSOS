@@ -14,6 +14,7 @@ arrangement.
 
 | File | Document | Retrieved | Bytes | SHA-256 |
 |------|----------|-----------|-------|---------|
+| `rfc1071.txt` | RFC 1071, *Computing the Internet Checksum*, R. Braden, D. Borman, C. Partridge, September 1988 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1071.txt` | 53524 | `e10dfd6816447843d47a7f1b990eba756a791a6308fd5b698a6276075a8e4f9b` |
 | `rfc5480.txt` | RFC 5480, *Elliptic Curve Cryptography Subject Public Key Information*, S. Turner, D. Brown, K. Yiu, R. Housley, T. Polk, March 2009 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5480.txt` | 36209 | `593bf29fd0da2ff8b903c3ebf1c9d189a770039159e2ba46a0c3b91355037f26` |
 | `rfc5758.txt` | RFC 5758, *Internet X.509 Public Key Infrastructure: Additional Algorithms and Identifiers for DSA and ECDSA*, Q. Dang, S. Santesson, K. Moriarty, D. Brown, T. Polk, January 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5758.txt` | 15834 | `4d02628ff0875a1960d34be584a68f88528b96242bdc5a05a40a29ef01cf1532` |
 | `rfc5903.txt` | RFC 5903, *Elliptic Curve Groups modulo a Prime (ECP Groups) for IKE and IKEv2*, D. Fu, J. Solinas, June 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5903.txt` | 29175 | `939fab548a6e6bb49a5b3c4dd24a3c5df54a46645447b2d6f4df4fd88ff2d69f` |
@@ -22,7 +23,7 @@ arrangement.
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
-including the page breaks: 1123, 451, 899, 4427, and 3811 lines
+including the page breaks: 1417, 1123, 451, 899, 4427, and 3811 lines
 respectively. Every one was fetched twice and the two fetches agreed.
 
 ## Terms
@@ -34,12 +35,34 @@ carries a notice of the form
 > document authors. All rights reserved.
 
 with the year 2009 for RFC 5480, 2010 for RFC 5758 and RFC 5903, 2013 for
-RFC 6979, and 2019 for RFC 8448. They are subject to BCP 78 and the IETF
+RFC 6979, and 2019 for RFC 8448. RFC 1071 predates the IETF Trust and
+carries no such notice; it is distributed under the unlimited-distribution
+statement of its own Status of This Memo section. They are subject to BCP 78 and the IETF
 Trust's Legal Provisions relating to IETF Documents, which permit
 reproduction in full. Code components extracted from an RFC carry the
 Simplified BSD Licence; this project extracts test vectors, which it
 transcribes into Rust source with the document and section named at each
 table, as decision D-40 requires.
+
+## Why RFC 1071
+
+The internet checksum is one algorithm used by IP, ICMP, UDP, and TCP, and
+`net-wire` computes it for all four. Section 3 of the memo is a worked
+example with every intermediate value written out — the same eight bytes
+summed byte by byte, as 16-bit words in both byte orders, and as 32-bit
+words in three orders, followed by the same sum split into two groups
+across an odd boundary. That last table is the one that checks an
+accumulator which carries a pending byte from one chunk to the next, and
+it is not in RFC 791, RFC 768, or RFC 9293, which state the checksum and
+give no numbers for it. The vectors of catalog 6.6.42 are transcribed from
+it.
+
+The memo is not a standard; it says so itself. What is normative is that
+the sum is the 16-bit one's complement of the one's complement sum, and
+that comes from the protocol specifications. This document is kept for its
+numbers and for section 2, which states why the sum may be computed in
+either byte order and in any grouping — the property the incremental
+accumulator rests on.
 
 ## Why RFC 8448 in particular
 

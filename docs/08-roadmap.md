@@ -292,7 +292,8 @@ changelog is updated.
 
 ## 8.18 Track D: the network stack
 
-Status: specified in [document 12](12-parallel-work.md), not started.
+Status: D1 implemented, the rest specified in
+[document 12](12-parallel-work.md).
 
 Sans-I/O logic crates that consume and produce frames, take time and
 randomness as parameters, allocate nothing, and depend on no kernel,
@@ -301,7 +302,7 @@ their bytes are later work (8.14).
 
 | Step | Crates | Size | Ends with |
 |------|--------|------|-----------|
-| D1 | `net-wire` | S | addresses, a bounds-checked cursor, and the internet checksum |
+| D1 | `net-wire` | S | implemented: `MacAddr`, `Ipv4Addr`, `Ipv4Cidr`, and `Port` with one canonical text each, the `EtherType` and `Protocol` tables, a `Reader` and `Writer` that never leave their buffer, and the internet checksum of RFC 1071 with the pseudo-header form |
 | D2 | `net-eth` | M | Ethernet II frames and an ARP cache with aging and retransmission |
 | D3 | `net-ip` | M | IPv4 with reassembly, fragmentation, ICMP, and longest-prefix routing |
 | D4 | `net-udp` | S | sockets, ephemeral ports, checksums |

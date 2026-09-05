@@ -16,6 +16,7 @@ members = [
     "crates/net/der",
     "crates/net/x509",
     "crates/net/tls",
+    "crates/net/wire",
     "crates/boot/uefi-x86_64",
     "crates/elf",
     "crates/symbols",
@@ -59,6 +60,7 @@ crypto-rng = { path = "crates/crypto/rng" }
 audhsos-der = { path = "crates/net/der" }
 audhsos-x509 = { path = "crates/net/x509" }
 audhsos-tls = { path = "crates/net/tls" }
+net-wire = { path = "crates/net/wire" }
 boot-uefi-x86_64 = { path = "crates/boot/uefi-x86_64" }
 audhsos-elf = { path = "crates/elf" }
 audhsos-symbols = { path = "crates/symbols" }

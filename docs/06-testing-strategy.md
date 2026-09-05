@@ -1086,6 +1086,23 @@ done until every applicable item has a test. Items are added, never removed.
   checksum is zero (property).
 - Pseudo-header checksums for UDP and TCP against hand-computed values,
   including a zero-length payload.
+- Checksum further: the same eight bytes of the RFC 1071 example split
+  into a group of three and a group of five, and then one byte at a time,
+  give the sum the memo's last table prints, which is what holds the
+  pending byte to its job; an empty call between two odd ones keeps that
+  byte; a segment longer than a sixteen-bit length is refused rather than
+  summed against a wrapped one; and no split of any generated block
+  changes the sum (property).
+- The tables: an `EtherType` and a `Protocol` this system reads report
+  themselves registered and the others do not; a type field below 0x0600
+  is a length and not a type; only TCP and UDP carry a pseudo-header; and
+  each writes its name or, for a value this crate does not name, its
+  number.
+- Cursor further: a length that would overflow the position is out of
+  bounds rather than a wrap; `patch_u16` reaches only what has been
+  written; a reader driven through every width until it runs out never
+  passes the end of its buffer and never moves on a failure (property).
+- Every error variant renders a sentence of its own.
 
 ### 6.6.43 Ethernet and ARP (`net-eth`)
 

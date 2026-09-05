@@ -7,6 +7,31 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `net-wire`, the first step of track D and the layer every network crate
+  above it rests on. `MacAddr`, `Ipv4Addr`, `Ipv4Cidr`, and `Port` have one
+  canonical text each in both directions, so `010.0.0.1` is refused rather
+  than read two ways and a prefix length above 32 is an error rather than a
+  mask of all ones (D-68). `EtherType` and `Protocol` are wrappers over the
+  number on the wire and not enumerations, which is what lets `net-eth` drop
+  an unregistered frame quietly instead of failing to parse it. `Reader` and
+  `Writer` either take exactly what was asked for or take nothing and leave
+  the position where it was, so a truncated frame stops a parser instead of
+  unwinding it, and `Writer::patch_u16` puts a checksum back into the field
+  it was computed around.
+- The internet checksum of RFC 1071, with the pseudo-header form UDP and TCP
+  need. The accumulator carries the end-around carry at every word instead
+  of deferring it as the memo recommends, so it provably stays inside
+  sixteen bits and every addition is a checked one; and it holds the odd
+  byte a call ended on, so a pseudo-header, a header, and a payload may
+  arrive in three calls without an odd length shifting the words of the next
+  (D-68). The vectors are the worked example of RFC 1071, section 3 —
+  including its last table, which splits the same eight bytes across an odd
+  boundary and is what checks the held byte.
+- RFC 1071 joins the reference documents under `docs/rfc/` on the
+  arrangement of D-59, fetched twice and recorded with its checksum. RFC 791,
+  RFC 768, and RFC 9293 each state this checksum and give no numbers for it;
+  the memo is where the worked example is.
+
 - `xtask check --quiet`, and with it a quiet mode of the whole xtask. A run
   keeps one line per step, `lint: ok` to `fuzz --regression: ok`, and the
   output of a step reaches the terminal only when that step fails, where it

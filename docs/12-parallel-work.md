@@ -247,6 +247,8 @@ unscheduled.
 
 ### 12.6.3 `net-wire`
 
+Implemented.
+
 Address and header primitives shared by every layer above:
 `MacAddr`, `Ipv4Addr`, `Ipv4Cidr`, `Port`, and the `EtherType` and
 `Protocol` tables; a bounds-checked big-endian reader and writer that
@@ -255,7 +257,41 @@ RFC 1071 including the pseudo-header form that UDP and TCP need.
 
 Every header type in the track is a borrowed view over a byte slice
 (`Ipv4Packet<'a>`, `TcpSegment<'a>`), never a copy, in the form
-`audhsos-x509` uses for certificates.
+`audhsos-x509` uses for certificates. `Reader` hands out those borrows,
+so nothing above it copies a frame to read one.
+
+- `addr.rs`: the four address types. The text form is canonical in both
+  directions — what `Display` writes is what `parse` reads, and a leading
+  zero, a fifth group, a missing group, or a prefix length above 32 is an
+  error (D-68). `Ipv4Cidr` keeps the address it was given rather than the
+  network, because `192.168.1.7/24` is an interface address and
+  `network()` is the separate question; its mask arithmetic goes through
+  `checked_shr`, so a prefix of 32 does not shift by the whole width.
+- `cursor.rs`: `Reader` and `Writer`. Every operation either takes
+  exactly what it asked for or takes nothing and leaves the position
+  where it was, so a parser that runs out of bytes reports and stops
+  instead of unwinding. `Writer::patch_u16` is the one backwards write,
+  and it exists because a checksum covers the header it sits in: the
+  field is written as zero, the header is finished, the sum is taken over
+  `written()`, and the answer goes back.
+- `protocol.rs`: `EtherType` and `Protocol` as wrappers over the number
+  on the wire rather than enumerations, so a value this system has no
+  layer for is a value and not a parse error — which is what lets
+  `net-eth` drop an unregistered frame quietly, as 12.6.4 requires,
+  instead of failing to read it.
+- `checksum.rs`: the accumulator carries the end-around carry at every
+  word instead of deferring it as RFC 1071 section 2 recommends, so it
+  provably stays inside sixteen bits and every addition is checked; and
+  it holds the odd byte a call ended on, so a pseudo-header, a header,
+  and a payload may arrive in three calls (D-68).
+
+The crate has no `test-strategies` feature. Generators for addresses have
+no consumer until `net-eth` needs them, and the crate's own property
+tests generate their bytes with `test-support` directly.
+
+RFC 1071 is kept under `docs/rfc/` with the other reference documents, on
+the arrangement of D-59; its section 3 is the worked example the vectors
+are transcribed from.
 
 ### 12.6.4 `net-eth`
 
@@ -394,7 +430,7 @@ Tests: catalog 6.6.42 to 6.6.50.
 
 | Step | Content | Size |
 |------|---------|------|
-| D1 | `net-wire`: addresses, cursor, checksums | S |
+| D1 | `net-wire`: addresses, cursor, checksums — implemented | S |
 | D2 | `net-eth`: frames and the ARP cache | M |
 | D3 | `net-ip`: header, reassembly, fragmentation, ICMP, routes | M |
 | D4 | `net-udp` | S |
@@ -533,7 +569,8 @@ the integration.
   C at T5 and T6; then track C to T7; then track D from D1; track F when
   a driver becomes foreseeable; `audhsos-symbols` from track G before
   phase 3, because that is where kernel panics start. Tracks E and G are
-  done and track C stands at T7, so the next side track is D.
+  done, track C stands at T7, and track D has D1 behind it, so the next
+  step of the side work is D2.
 - The pulled-forward work of 12.9 fills short gaps, because it needs no
   new design.
 
