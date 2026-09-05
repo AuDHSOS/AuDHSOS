@@ -540,6 +540,119 @@ done until every applicable item has a test. Items are added, never removed.
   and from the free set; every range handed out was zeroed after its last
   release.
 
+### 6.6.24 Graphics Output Protocol and framebuffer boot information (`audhsos-uefi`, `audhsos-abi`, `boot-uefi-x86_64`)
+
+- Layout tests for the protocol, mode, and mode information structures.
+- Pixel format conversion: `RedGreenBlueReserved8BitPerColor` becomes
+  `Rgbx8888`, `BlueGreenRedReserved8BitPerColor` becomes `Bgrx8888`,
+  `BitMask` and `BltOnly` report an absent framebuffer; a zero base or a
+  zero resolution reports an absent framebuffer.
+- Boot information: an absent framebuffer has every framebuffer field
+  zero; a non-zero framebuffer field with format `0` is rejected; a base
+  that is not frame-aligned is rejected; a length shorter than
+  `height * stride * 4` is rejected; a length that is not a multiple of
+  the frame size is rejected; `stride < width` is rejected; zero width or
+  height with a present framebuffer is rejected; a framebuffer overlapping
+  a `Usable` region is rejected; a framebuffer without an enclosing
+  `MmioReserved` region is rejected; an unknown format code is rejected;
+  the writer produces what the parser accepts, with and without a
+  framebuffer (property).
+- Loader in QEMU: booting with `-vga none` reports an absent framebuffer
+  and the kernel reaches the harness.
+
+### 6.6.25 i8042 controller and PS/2 decoding (`driver-i8042`)
+
+- Controller: a failed self-test returns an error; an output buffer that
+  never fills or an input buffer that never empties hits the poll limit
+  and returns an error instead of spinning; a missing keyboard or a
+  missing mouse is reported and the other device still works; translation
+  is off in the configuration byte; both interrupts are enabled only after
+  both devices are initialized; the output buffer is flushed before the
+  self-test.
+- Demultiplexing: status bit 5 routes a byte to the mouse decoder,
+  otherwise to the keyboard decoder; a read with the output buffer empty
+  returns nothing and feeds no decoder.
+- Keyboard: make and break codes of set 2; the `E0` prefix; the `F0`
+  release marker; the `E1` pause sequence; an unknown code is dropped
+  without losing the decoder state; a prefix at the end of the stream
+  waits for the next byte; the ACK and resend bytes of commands are
+  consumed by the command state, not by the decoder.
+- Mouse: the sync bit (bit 3 of the first byte) is checked; an
+  out-of-sync byte is dropped until a valid first byte arrives; 3-byte and
+  4-byte packets; sign extension of the deltas; the overflow bits clamp
+  the deltas; the wheel byte of the 4-byte packet; the IntelliMouse
+  detection sequence is issued and the reported id selects the packet
+  length.
+- Property: any byte stream produces events without panicking and with
+  bounded decoder state. Fuzz targets `scancode` and `mouse_packet`.
+
+### 6.6.26 Framebuffer logic (`gfx`)
+
+- Rectangle fill and blit: fully inside, partially outside, fully outside,
+  zero width or height; a `stride` larger than `width` leaves the padding
+  untouched; the last row and the last column are written.
+- Pixel formats: `Rgbx8888` and `Bgrx8888` byte order; a color decodes
+  back to the same value; a surface whose byte slice is too short for
+  `height * stride * 4` is rejected.
+- Damage rectangles: union of two rectangles, merge of overlapping ones,
+  empty rectangles are dropped, the set never exceeds its capacity and
+  collapses to one bounding rectangle when full.
+- Present: exactly the damaged pixels are copied, checked with a
+  recording target.
+- Font: exactly 95 glyphs for the printable ASCII range; every glyph
+  matches its checksum; a character outside the range renders the
+  replacement glyph; a string longer than the row is clipped at the
+  surface edge.
+- Property: for any rectangle no byte outside the surface is written.
+
+### 6.6.27 Display and input servers (`server-display`, `server-input`, host-tested logic with doubles)
+
+- Event ring: a full ring drops the newest event and sets the overflow
+  flag; the reader clears the flag; sequence numbers are contiguous
+  otherwise; a subscriber whose notification cannot be signalled is
+  removed.
+- Input: the modifier state follows press and release; a release without
+  a press is delivered as a release; pointer button state is tracked
+  across packets; a wheel delta is delivered as its own event; both
+  interrupts are acknowledged after the output buffer is drained.
+- Display: `present` with damage rectangles copies exactly those pixels
+  from the surface to the framebuffer (recording double); the cursor
+  sprite saves and restores the background; the cursor is clamped to the
+  screen; a surface larger than the screen is rejected; a client
+  presenting a surface it does not own is rejected by badge; a client
+  that goes away releases its surface.
+
+### 6.6.28 QMP client and screendump reader (`xtask`)
+
+- The greeting is parsed and `qmp_capabilities` is negotiated before the
+  first command; an error response becomes an error value, not a panic;
+  asynchronous event lines interleaved with responses are skipped.
+- JSON subset: objects, arrays, strings with escapes, integers, booleans,
+  `null`; nesting depth is bounded; malformed input is an error; the
+  writer output parses back to the same value (property).
+- `input-send-event` for a key press and release by `qcode`, for relative
+  pointer motion, and for a button press and release.
+- `screendump`: the PPM file is parsed (`P6`, comments, `maxval` 255); a
+  truncated file is an error; a pixel and a rectangle checksum are read at
+  given coordinates; coordinates outside the image are an error.
+- A socket that never answers hits the timeout.
+
+### 6.6.29 Graphical end-to-end tests in QEMU
+
+- Output: a filled rectangle appears in the screendump with the expected
+  color at its corners and the untouched color outside; a rendered string
+  matches the glyph table pixel for pixel; the resolution used by the test
+  is read from the boot information, never assumed.
+- Input: a key sequence injected through QMP is echoed as `[input]` lines
+  through the console driver; a pointer path produces motion events whose
+  sum equals the injected path; a button press and release arrive in
+  order.
+- Combined: the cursor pixels move with the pointer; a stroke drawn while
+  the button is held changes the pixels along the path; typed text appears
+  at the text cursor.
+- Absent hardware: with `-vga none` the input tests still pass and the
+  display server reports `NotFound` to its clients.
+
 ## 6.7 CI pipeline
 
 Jobs run in this order; a failure stops the pipeline.

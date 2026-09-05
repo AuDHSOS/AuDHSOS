@@ -43,7 +43,9 @@ These are out of scope until the roadmap says otherwise. The design must not
 prevent them, but no effort is spent on them now.
 
 - POSIX or Linux binary compatibility.
-- Graphics, input devices, sound.
+- Sound.
+- Graphics output and input devices in the first release; they follow in
+  Phases 9 to 11 of the roadmap.
 - Booting on physical hardware.
 - Legacy BIOS boot.
 - Symmetric multiprocessing (SMP) in the first release.

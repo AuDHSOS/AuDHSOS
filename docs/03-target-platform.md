@@ -26,6 +26,13 @@ qemu-system-x86_64 \
 Accelerator: TCG. `-no-reboot` turns a triple fault into a QEMU exit, which
 the test runner reports as a crash.
 
+The default VGA device of the `q35` machine stays on the command line by
+omission; the firmware exposes it through the Graphics Output Protocol.
+From Phase 9 on the test runner adds `-qmp unix:<socket path>,server,nowait`
+and injects input events and reads the screen through that socket.
+`cargo xtask run --display` replaces `-display none` with `-display cocoa`
+on macOS and `-display gtk` on Linux.
+
 ### 3.1.2 Devices
 
 | Device | Access path | Used by | Phase |
@@ -40,7 +47,8 @@ the test runner reports as a crash.
 | `isa-debug-exit` (I/O port `0xF4`) | port I/O | test exit codes from loader and kernel | 2 |
 | PCI configuration space via ECAM (`MCFG`) | MMIO via `Device` memory objects | userland virtio drivers | later |
 | virtio-blk, virtio-net over PCI | MMIO, interrupts | userland drivers | later |
-| VGA/framebuffer | not used | - | - |
+| Standard VGA device (`q35` default) with a linear framebuffer exposed by the UEFI Graphics Output Protocol | loader: mode query through `EFI_GRAPHICS_OUTPUT_PROTOCOL`; userland: MMIO via a `Device` memory object | boot information; userland display server | 2, 9 |
+| i8042 PS/2 controller (I/O ports `0x60` and `0x64`, IRQ 1 keyboard, IRQ 12 mouse) | port I/O via `IoPortRange`, `Interrupt` | userland input driver | 10 |
 
 ### 3.1.3 Loader
 
@@ -52,13 +60,18 @@ The loader is the crate `boot-uefi-x86_64`, built for the target
   `repr(C)` structures and constants only, no calls): system table, boot
   services table, `EFI_LOADED_IMAGE_PROTOCOL`,
   `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL`, `EFI_FILE_PROTOCOL`,
-  `EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL`, memory descriptor, memory types,
-  configuration table entries, the ACPI 2.0 table GUID. Structure layouts
-  are tested for size and field offsets on the host.
+  `EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL`, `EFI_GRAPHICS_OUTPUT_PROTOCOL` with
+  its mode and mode information structures, memory descriptor, memory
+  types, configuration table entries, the ACPI 2.0 table GUID. Structure
+  layouts are tested for size and field offsets on the host.
 - The loader calls exactly these services: `HandleProtocol`,
-  `AllocatePages`, `FreePages`, `GetMemoryMap`, `ExitBootServices`, the
-  file protocol's `Open`, `GetInfo`, `Read`, `Close`, and the text output
-  protocol's `OutputString` for diagnostics.
+  `LocateProtocol`, `AllocatePages`, `FreePages`, `GetMemoryMap`,
+  `ExitBootServices`, the file protocol's `Open`, `GetInfo`, `Read`,
+  `Close`, and the text output protocol's `OutputString` for diagnostics.
+- The loader reads the framebuffer description from the mode the firmware
+  has set through the Graphics Output Protocol. It does not change the
+  mode. If the protocol is absent or the pixel format is not one of the two
+  32-bit formats, the loader reports no framebuffer and continues.
 - Files read from the boot volume: `AUDHSOS/KERNEL.ELF` and
   `AUDHSOS/BOOT.IMG`. File names are 8.3 names.
 - The kernel ELF is parsed by `audhsos-elf`. The page tables are built by
@@ -108,11 +121,24 @@ in the entry call.
 | `page_tables_phys_start`, `page_tables_phys_len` | `u64` | frames holding the initial page tables |
 | `boot_stack_phys_start`, `boot_stack_phys_len` | `u64` | boot stack frames, guard page excluded |
 | `acpi_rsdp` | `u64` | physical address of the RSDP, `0` if absent |
+| `framebuffer_phys_start` | `u64` | physical base of the linear framebuffer, `0` if absent |
+| `framebuffer_len` | `u64` | length of the framebuffer in bytes, a multiple of the frame size, `0` if absent |
+| `framebuffer_width`, `framebuffer_height` | `u32` | visible pixels per row, and rows |
+| `framebuffer_stride` | `u32` | pixels per scan line, at least `framebuffer_width` |
+| `framebuffer_format` | `u32` | `0` absent, `1` `Rgbx8888` (red in the lowest byte), `2` `Bgrx8888` (blue in the lowest byte); four bytes per pixel in both |
 | `region_count` | `u32` | number of entries in the region array, at most `MAX_BOOT_REGIONS` |
 | `regions` | `[BootRegion; region_count]` | `{ start: u64, len: u64, kind: u32, reserved: u32 }` |
 
 Region kinds: `Usable`, `Reserved`, `AcpiReclaimable`, `AcpiNvs`,
 `MmioReserved`. Loader code and data are reported as `Usable`.
+
+Framebuffer rules: with `framebuffer_format == 0` every framebuffer field
+is `0`. Otherwise `framebuffer_phys_start` is frame-aligned and non-zero,
+`framebuffer_len` covers `framebuffer_height * framebuffer_stride * 4`
+bytes, `framebuffer_width` and `framebuffer_height` are non-zero, the range
+overlaps no `Usable` region, and the loader reports it as one
+`MmioReserved` region. The kernel exposes the description through
+`system_info`; the root task creates the `Device` memory object for it.
 
 ### 3.1.6 Boot image format
 

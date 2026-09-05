@@ -18,9 +18,11 @@ AuDHSOS/
 │   ├── abi/                   audhsos-abi: syscall table, errors, rights, message layout, boot image header, boot information, address constants
 │   ├── elf/                   audhsos-elf: ELF64 parser producing validated load segments
 │   ├── uefi/                  audhsos-uefi: UEFI structure layouts, GUIDs, constants (no calls)
+│   ├── gfx/                   gfx: framebuffer logic, bitmap font, damage tracking (Phase 9)
 │   ├── sync/                  audhsos-sync: Global<T> cell (unsafe allowed)
 │   ├── drivers/
-│   │   └── uart16550/         driver-uart16550: register logic over a port access trait
+│   │   ├── uart16550/         driver-uart16550: register logic over a port access trait
+│   │   └── i8042/             driver-i8042: PS/2 controller and decoder logic over a port access trait (Phase 10)
 │   ├── support/
 │   │   ├── testing/           test-support: property-test engine, builders, strategies, model-test runner
 │   │   └── fuzz/              fuzz-support: fuzzer entry glue (unsafe allowed, host only)
@@ -47,9 +49,12 @@ AuDHSOS/
 │   │   │   ├── init/          server-init: the root task
 │   │   │   ├── name/          server-name
 │   │   │   ├── console/       server-console
-│   │   │   └── memory/        server-memory
+│   │   │   ├── memory/        server-memory
+│   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor (Phase 9)
+│   │   │   └── input/         server-input: i8042 driver process, event rings (Phase 10)
 │   │   └── apps/
-│   │       └── hello/         app-hello: end-to-end client
+│   │       ├── hello/         app-hello: end-to-end client
+│   │       └── canvas/        app-canvas: graphical demonstration and e2e client (Phase 11)
 │   └── tools/
 │       └── xtask/             build, image (GPT + FAT32 writer, CRC32), run, test, lint, check-layering, check-deps, unsafe-budget, fuzz, coverage; policy tables
 ├── fuzz/                      fuzz target crates and corpora
@@ -68,6 +73,8 @@ AuDHSOS/
 | `kernel-x86-tables` | 1 | all | no | yes | - |
 | `kernel-hal-api` | 1 | all | no | doubles are tested | `kernel-types`; features `test-doubles`, `port-io` |
 | `driver-uart16550` | 1 | all | no | yes | - (feature `test-doubles`) |
+| `driver-i8042` | 1 | all | no | yes, fuzz | - (feature `test-doubles`) |
+| `gfx` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-objects` | 2 | all | no | yes | `kernel-types`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-sched` | 2 | all | no | yes | `kernel-objects` |
@@ -82,7 +89,7 @@ AuDHSOS/
 | `user-rt` | u1 | `x86_64-unknown-none` | no | yes | `audhsos-abi`, `user-sys-x86_64` |
 | `user-proto` | u1 | `x86_64-unknown-none` | no | yes | `audhsos-abi` |
 | `user-loader` | u2 | `x86_64-unknown-none` | no | yes, fuzz | `user-rt`, `user-proto`, `audhsos-elf` |
-| servers and apps | u3 | `x86_64-unknown-none` | no | logic on host, e2e in QEMU | `user-rt`, `user-proto`, `user-loader`, `driver-uart16550` |
+| servers and apps | u3 | `x86_64-unknown-none` | no | logic on host, e2e in QEMU | `user-rt`, `user-proto`, `user-loader`, `driver-uart16550`, `driver-i8042`, `gfx` |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
 | `fuzz-support` | dev | host | allowlisted | Miri | - |
 | `xtask` | host | host | no | yes | - |
@@ -211,6 +218,8 @@ message.
 | The same algorithm runs in the loader, the kernel, and under test | one generic implementation over HAL traits; adapters and doubles differ, the algorithm does not (mapper, memory map normalization) |
 | ELF parsing in the loader and in userland | `audhsos-elf`, one parser |
 | UART register handling in the kernel debug console and in the userland console driver | `driver-uart16550` over a port access trait; two adapters (direct port I/O, `IoPortRange` system calls) |
+| i8042 register handling and PS/2 decoding | `driver-i8042` over its own port access trait, following the UART pattern; one adapter over `IoPortRange` system calls |
+| Pixel operations in the display server and in applications | `gfx`: one surface type, one font, one damage tracker; the display server and applications draw with the same code |
 | System call numbers, names, argument counts, kernel dispatch, userland wrappers | one declarative table in `audhsos-abi` (a `syscalls!` macro) consumed by the kernel dispatcher and by `user-rt` |
 | Object types, their rights masks, and `TryFrom<u32>` conversions | one declarative table in `audhsos-abi` |
 | Error mapping | one `From` implementation per crate pair, tested by a table |
@@ -232,7 +241,7 @@ the standard library and the toolchain binaries (`cargo`, `rustc`,
 |------------|---------|
 | `build [--release]` | build the loader, the kernel, the userland binaries, and the boot image |
 | `image` | assemble the boot image (root task flat binary plus tar archive) and the disk image (GPT, FAT32 file system, loader, kernel, boot image) |
-| `run` | boot the system in QEMU with the serial console on the terminal |
+| `run [--display]` | boot the system in QEMU with the serial console on the terminal; `--display` opens QEMU's display window instead of `-display none` |
 | `qemu-runner <elf>` | the Cargo runner for the kernel target: wraps a test kernel into a disk image, runs QEMU with a timeout, parses the serial protocol, maps the exit status |
 | `test [--host] [--qemu] [--e2e]` | run the selected test levels; default runs all |
 | `lint` | `rustfmt --check`, `clippy` with the workspace lint set, SPDX header check |

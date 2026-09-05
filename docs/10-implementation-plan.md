@@ -1,4 +1,4 @@
-# 10. Implementation Plan for Phases 1 to 8
+# 10. Implementation Plan for Phases 1 to 11
 
 This document tells an implementer, human or agent, exactly what to build in
 each remaining phase of the [roadmap](08-roadmap.md): crates, modules,
@@ -578,6 +578,25 @@ crates above the thresholds; every item of 6.6.2 to 6.6.6 (pool items) and
 Goal: `~/.cargo/bin/cargo xtask test --qemu` boots test kernels through the
 project's own UEFI loader and reports over the serial line.
 
+### 10.2.0 `audhsos-abi` additions
+
+Extend `BootInfoHeader` with the framebuffer fields of
+[03-target-platform.md 3.1.5](03-target-platform.md#315-boot-information-structure):
+`framebuffer_phys_start: u64`, `framebuffer_len: u64`,
+`framebuffer_width: u32`, `framebuffer_height: u32`,
+`framebuffer_stride: u32`, `framebuffer_format: u32`, placed after
+`acpi_rsdp` and before `region_count`; `BOOT_INFO_HEADER_LEN` becomes
+136. Add `enum FramebufferFormat { Rgbx8888 = 1, Bgrx8888 = 2 }` with
+`code` and `from_code`, and `struct Framebuffer { phys_start, len, width,
+height, stride, format }` returned by `BootInfo::framebuffer() ->
+Option<Framebuffer>`. The parser applies the framebuffer rules of 3.1.5,
+including the overlap check against `Usable` regions and the enclosing
+`MmioReserved` region; the writer takes `Option<Framebuffer>`; the
+generators produce present and absent framebuffers. The version stays
+`1` (D-32).
+
+Tests: catalog 6.6.24 boot information items.
+
 ### 10.2.1 Crate `audhsos-elf` (`crates/elf`)
 
 Layer 0, `no_std`, `forbid(unsafe_code)`, no deps except optional
@@ -632,14 +651,24 @@ specification for every offset and write a layout test for each structure):
 (`*mut c_void`), `Guid { data1: u32, data2: u16, data3: u16, data4: [u8; 8] }`,
 `TableHeader` (24 bytes), `SystemTable`, `BootServices` (all 44 function
 slots in specification order, typed as `unsafe extern "efiapi" fn`
-pointers with the exact signatures for the ten services the loader calls
-and as `usize` for the rest), `ConfigurationTable`, `MemoryDescriptor`
+pointers with the exact signatures for the eleven services the loader
+calls, `LocateProtocol` included, and as `usize` for the rest),
+`ConfigurationTable`, `MemoryDescriptor`
 (40 bytes: `type_: u32`, `physical_start: u64`, `virtual_start: u64`,
 `pages: u64`, `attribute: u64`), `MemoryType` (`from_u32` with the 16
 standard values), `AllocateType`, `LoadedImageProtocol`,
 `SimpleFileSystemProtocol`, `FileProtocol`, `FileInfo`,
-`SimpleTextOutputProtocol`, and the GUIDs `ACPI_20_TABLE`,
-`LOADED_IMAGE_PROTOCOL`, `SIMPLE_FILE_SYSTEM_PROTOCOL`, `FILE_INFO`.
+`SimpleTextOutputProtocol`, `GraphicsOutputProtocol` (`query_mode`,
+`set_mode`, `blt` as `usize`; `mode: *const GraphicsOutputProtocolMode`),
+`GraphicsOutputProtocolMode { max_mode: u32, mode: u32, info: *const
+GraphicsOutputModeInformation, size_of_info: usize, frame_buffer_base:
+u64, frame_buffer_size: usize }`, `GraphicsOutputModeInformation {
+version: u32, horizontal_resolution: u32, vertical_resolution: u32,
+pixel_format: u32, pixel_information: [u32; 4], pixels_per_scan_line:
+u32 }`, `GraphicsPixelFormat::from_u32` with the four specification
+values, and the GUIDs `ACPI_20_TABLE`, `LOADED_IMAGE_PROTOCOL`,
+`SIMPLE_FILE_SYSTEM_PROTOCOL`, `FILE_INFO`, `GRAPHICS_OUTPUT_PROTOCOL`
+(`9042A9DE-23DC-4A38-96FB-7ADED080516A`).
 
 Pure helpers: `memory_map::descriptors(buffer: &[u8], descriptor_size:
 usize) -> impl Iterator<Item = MemoryDescriptor>` (honors the stride),
@@ -651,8 +680,14 @@ usize) -> impl Iterator<Item = MemoryDescriptor>` (honors the stride),
 everything else → `Reserved`; merge adjacent regions of equal kind; error
 if more than `MAX_BOOT_REGIONS` remain. `utf16::encode(ascii: &str, out:
 &mut [u16]) -> Result<&[u16], _>` for file names.
+`graphics::to_framebuffer(base: u64, size: usize, info:
+&GraphicsOutputModeInformation) -> Option<Framebuffer>`: pixel formats
+`0` and `1` map to `Rgbx8888` and `Bgrx8888`; the other formats, a zero
+base, a zero resolution, or a `size` too small for `height * stride * 4`
+yield `None`; the length is `size` rounded up to a frame multiple.
 
-Tests: catalog 6.6.14 structure and conversion items.
+Tests: catalog 6.6.14 structure and conversion items, 6.6.24 layout and
+conversion items.
 
 ### 10.2.3 Crate `driver-uart16550` (`crates/drivers/uart16550`)
 
@@ -839,8 +874,17 @@ system_table: *const SystemTable) -> Status`. Modules:
   [u8]) -> Result<MemoryMapInfo { size, key, descriptor_size }, Status>`
   (retry with a larger buffer on `BUFFER_TOO_SMALL`; the buffer is one
   firmware-allocated region of 16 pages), `handle_protocol<T>(handle,
-  guid) -> Result<&T, Status>`, `exit_boot_services(key)`,
+  guid) -> Result<&T, Status>`, `locate_protocol<T>(guid) ->
+  Result<&T, Status>`, `exit_boot_services(key)`,
   `output_string(&[u16])`, `configuration_table(guid) -> Option<PhysAddr>`.
+- `graphics.rs`: `locate_protocol::<GraphicsOutputProtocol>` with
+  `GRAPHICS_OUTPUT_PROTOCOL`; two `unsafe` blocks turn the `mode` and
+  `info` pointers into references (precondition: the firmware owns both
+  while boot services run, and the loader reads them before
+  `exit_boot_services`); the result goes through
+  `audhsos_uefi::graphics::to_framebuffer`. A missing protocol or an
+  unsupported format yields `None` and the loader continues. The loader
+  never writes to the framebuffer.
 - `files.rs`: open the loaded image's device (`LoadedImageProtocol::device_handle`
   → `SimpleFileSystemProtocol::open_volume`), `read_file(name: &str) ->
   Result<&'static [u8], LoadError>`: `open` with mode read, `get_info`
@@ -869,7 +913,9 @@ system_table: *const SystemTable) -> Status`. Modules:
 - `bootinfo.rs`: fill a page with `BootInfoWriter` after
   `exit_boot_services`; the memory map used is the final one obtained
   immediately before the call; loader code and data are reported as
-  `Usable`.
+  `Usable`; the framebuffer, if present, is written into the header and
+  its range is appended as one `MmioReserved` region unless the final
+  memory map already covers it with an `MmioReserved` region.
 - `entry.rs`: one naked function `enter_kernel(cr3: u64, stack_top: u64,
   boot_info: u64, entry: u64) -> !`: `mov cr3, rdi; mov rsp, rsi; mov rdi,
   rdx; jmp rcx`.
@@ -940,10 +986,11 @@ deps `kernel-types`, `kernel-hal-api`, `kernel-mm`, `kernel-objects`,
 `kernel-test-harness` (Logic, `X86_64None`, deps `kernel-hal-api`),
 `audhsos-kernel` (Logic, `X86_64None`, deps `kernel-core`,
 `kernel-hal-x86_64`, `kernel-test-harness`, `audhsos-abi`),
-`boot-uefi-x86_64` (Adapter, `X86_64Uefi`, deps as in 10.2.8). Update the
-catalog in 05, the allowlist and inventory in 04, `rust-toolchain.toml`
-already lists both targets. Record `BOOT_STACK_TOP` and `BOOT_INFO_VADDR`
-in 02 and 03.
+`boot-uefi-x86_64` (Adapter, `X86_64Uefi`, deps as in 10.2.8; the budget
+counts the three graphics blocks of `firmware.rs` and `graphics.rs`).
+Update the catalog in 05, the allowlist and inventory in 04,
+`rust-toolchain.toml` already lists both targets. Record `BOOT_STACK_TOP`
+and `BOOT_INFO_VADDR` in 02 and 03.
 
 ### 10.2.11 Acceptance
 
@@ -1302,3 +1349,185 @@ reporting through the console driver; catalog 6.6.12, 6.6.13 tar items,
 4. Documents: read every document against the code and fix every
    difference.
 5. `CHANGELOG.md` section `[0.1.0]`, tag `v0.1.0`.
+
+## 10.9 Phase 9: Framebuffer output
+
+### 10.9.1 Crate `gfx` (`crates/gfx`)
+
+Layer 1 logic crate, `no_std`, `forbid(unsafe_code)`, deps `audhsos-abi`
+(`FramebufferFormat`), `test-support` behind `test-strategies`. Modules:
+
+- `format.rs`: `PixelFormat` from `FramebufferFormat`; `Color { r, g, b }`
+  with `encode(format) -> [u8; 4]` and `decode(format, [u8; 4])`.
+- `rect.rs`: `Rect { x, y, w, h }` in `u32` with `intersect`, `union`,
+  `is_empty`; `Damage`: a fixed array of 16 rectangles that collapses to
+  the bounding rectangle when full.
+- `surface.rs`: `Surface<'a> { bytes: &'a mut [u8], width, height, stride,
+  format }`; `new` validates `bytes.len() >= height * stride * 4`;
+  `fill(rect, color)`, `blit(&Surface, src: Rect, dst_x, dst_y)`, both
+  clipping to the surface and recording damage; every byte access goes
+  through `get`/`get_mut` with checked arithmetic.
+- `font.rs`: `const GLYPHS: [[u8; 16]; 95]` for `' '..='~'`, 8 by 16
+  pixels, one bit per pixel, authored in this repository; `glyph(c: char)
+  -> &'static [u8; 16]` with the replacement glyph for other characters;
+  `draw_text(surface, x, y, text, fg, bg)`.
+- `present.rs`: `present(back: &Surface, target: &mut impl PixelSink,
+  damage: &Damage)` copies the damaged rectangles; `PixelSink` is
+  implemented by `Surface` (the framebuffer mapping) and by a recording
+  double in the tests.
+
+Tests: catalog 6.6.26; the glyph test renders every glyph and compares it
+against a checksum table in the test file.
+
+### 10.9.2 Display protocol (`user-proto`)
+
+Label range `DISPLAY`. Messages: `Info -> { width, height, format }`;
+`CreateSurface { width, height } -> { surface id, memory handle }` (the
+display server allocates the backing store from the memory server and
+transfers a handle with `READ | WRITE | MAP`); `Present { surface id,
+damage: up to 16 rects }`; `DestroySurface { surface id }`; `SetCursor {
+x, y, visible }`. One full-screen surface per client in this phase; the
+client with the most recent `Present` owns the screen. Errors: `NotFound`
+when no framebuffer exists, `InvalidArgument` for a surface larger than
+the screen, `PermissionDenied` for a surface of another badge.
+
+### 10.9.3 `server-display` (`crates/user/servers/display`)
+
+Startup message: the framebuffer `Device` memory handle and its
+description, the memory server endpoint, the name server endpoint. Maps
+the framebuffer read/write, no-execute, `Uncached`. Keeps one `Surface`
+per client keyed by badge; `present` goes through `gfx::present`; the
+cursor sprite (16 by 16 pixels, project data) is drawn after each present
+and the background restored before the next. Registers as `display`. The
+logic lives in `state.rs` and is tested on the host with the recording
+double; the process loop in `main.rs` only moves messages.
+
+### 10.9.4 Root task and kernel
+
+`system_info` returns the framebuffer description as six result words
+(`0` throughout when absent). `server-init` calls
+`memory_create_device(start, len, Uncached)` for it and hands the handle
+to the display server; without a framebuffer the display server starts
+and answers `NotFound`. The kernel accepts a device range that overlaps
+no `Usable` region and lies inside an `MmioReserved` region of the boot
+information.
+
+### 10.9.5 `xtask` additions
+
+- `qmp.rs`: `Qmp::connect(socket path, timeout)` reads the greeting and
+  negotiates `qmp_capabilities`; `execute(command, arguments) ->
+  Result<Value, QmpError>`; `screendump(path) -> Result<Image, QmpError>`.
+- `json.rs`: `Value` with a parser and a writer for the subset of catalog
+  6.6.28. `ppm.rs`: `Image { width, height, rgb: Vec<u8> }`, `pixel(x, y)`,
+  `checksum(rect)`.
+- The QEMU command line for `test --e2e` gets `-qmp unix:<scratch
+  dir>/qmp.sock,server,nowait`; `run --display` replaces `-display none`
+  with `-display cocoa` on macOS and `-display gtk` elsewhere.
+- Loader test image `no_vga`: run with `-vga none`; expected: the kernel
+  reaches the harness and prints `[info] framebuffer=absent`.
+- `policy::CRATES` entries `gfx` (Logic, deps `audhsos-abi`) and
+  `server-display` (Logic, `X86_64None`, deps `user-rt`, `user-proto`,
+  `gfx`); loader budget updated; catalog rows in 05.
+
+### 10.9.6 Acceptance
+
+`check` green; catalog 6.6.24, 6.6.26, 6.6.27 display items, 6.6.28,
+6.6.29 output items; the e2e test `display_fill_and_text` passes.
+
+## 10.10 Phase 10: PS/2 input
+
+### 10.10.1 Crate `driver-i8042` (`crates/drivers/i8042`)
+
+Layer 1 logic crate, `no_std`, `forbid(unsafe_code)`, no workspace
+dependencies, following the pattern of `driver-uart16550`: a trait
+`Ports { read_data, read_status, write_data, write_command }` that the
+input server implements over `ioport_read` and `ioport_write`, and a
+scripted double `ScriptedPorts` behind the feature `test-doubles` that
+replays status and data bytes and records writes. Modules:
+
+- `controller.rs`: constants (data port `0x60`; status and command port
+  `0x64`; status bits `OUTPUT_FULL = 0x01`, `INPUT_FULL = 0x02`, `AUX =
+  0x20`; commands `READ_CONFIG = 0x20`, `WRITE_CONFIG = 0x60`,
+  `DISABLE_AUX = 0xA7`, `ENABLE_AUX = 0xA8`, `TEST_AUX = 0xA9`, `SELF_TEST
+  = 0xAA`, `TEST_KBD = 0xAB`, `DISABLE_KBD = 0xAD`, `ENABLE_KBD = 0xAE`,
+  `WRITE_AUX = 0xD4`); `Controller<P: Ports>::init(&mut self) ->
+  Result<Devices, Error>` runs: disable both ports, flush the output
+  buffer, read the configuration byte, clear the interrupt and translation
+  bits, self-test expecting `0x55`, port tests expecting `0x00`, enable the
+  ports, reset the devices, set the interrupt bits. Every wait is bounded
+  by `MAX_POLLS` iterations and yields `Error::Timeout`.
+- `keyboard.rs`: `Decoder` for scancode set 2 with the states `Idle`,
+  `Extended`, `Release`, `ExtendedRelease`, `Pause(n)`; `feed(byte) ->
+  Option<KeyEvent>`; the table from set 2 codes to `KeyCode`.
+- `mouse.rs`: `Decoder` with the packet length from the device id;
+  `feed(byte) -> Option<PointerEvent>`; sync check, resynchronization,
+  sign extension, overflow clamping.
+- `device.rs`: command sequences with ACK handling: keyboard reset (`0xFF`
+  answered by `0xFA`, `0xAA`), scancode set 2 (`0xF0 0x02`), enable
+  scanning (`0xF4`); mouse reset, the sample rate sequence `200, 100, 80`,
+  `GET_ID` (`0xF2`) selecting the 4-byte packet on id `3`, enable data
+  reporting (`0xF4`).
+
+Tests: catalog 6.6.25 with `ScriptedPorts`; fuzz targets `scancode` and
+`mouse_packet` registered in `policy::FUZZ_TARGETS`.
+
+### 10.10.2 Input protocol (`user-proto`)
+
+`KeyCode`: an exhaustive enum of the keys of a 105-key layout with stable
+numeric codes; `KeyEvent { code, pressed: bool }`; `PointerEvent { dx:
+i16, dy: i16, wheel: i8, buttons: u8 }`; `Event` as a 16-byte record with
+a kind byte; `Ring` header `{ write_seq: u64, read_seq: u64, overflow:
+u32, capacity: u32 }` followed by the records in a shared memory object
+of one page (254 records); `Subscribe { ring memory handle, notification
+handle }` registers a client; `Unsubscribe`. `Keyboard` (client side):
+tracks modifiers, maps `(KeyCode, modifiers)` through the layout tables
+`us` and `de` to a `char`.
+
+### 10.10.3 `server-input` (`crates/user/servers/input`)
+
+Startup message: the `IoPortRange` for `0x60..=0x64`, the `Interrupt`
+objects for lines 1 and 12, one notification with bits 0 and 1 bound to
+them, the name server endpoint. Loop: wait on the notification; while the
+status register shows a full output buffer, read a byte and route it by
+the `AUX` bit; feed the decoders; append events to every subscriber's
+ring and signal its notification; acknowledge both interrupts. Registers
+as `input`. `server-init` creates the capabilities with `ioport_create`,
+`interrupt_create`, and `interrupt_bind`. The logic lives in `state.rs`
+and is tested on the host with the ring in a `Vec` and a recording
+signal double.
+
+### 10.10.4 `xtask` additions
+
+`Qmp::send_key(qcode, pressed)`, `Qmp::move_pointer(dx, dy)`,
+`Qmp::button(index, pressed)` over `input-send-event`. A user test program
+`input_echo` prints `[input] key <code> <pressed>` and `[input] pointer
+<dx> <dy> <wheel> <buttons>` lines through the console driver; the e2e
+tests inject a sequence and compare the lines. `policy::CRATES` entries
+`driver-i8042` (Logic, deps none) and `server-input` (Logic,
+`X86_64None`, deps `user-rt`, `user-proto`, `driver-i8042`).
+
+### 10.10.5 Acceptance
+
+`check` green; catalog 6.6.25, 6.6.27 input items, 6.6.29 input items;
+both fuzz targets run for 60 seconds without findings.
+
+## 10.11 Phase 11: Graphical demonstration
+
+- `app-canvas` (`crates/user/apps/canvas`): subscribes to `input`,
+  creates a full-screen surface on `display`, keeps a cursor position
+  clamped to the screen, draws a line segment for every pointer event
+  while button 0 is held, renders typed characters from the `us` layout at
+  a text cursor with the bitmap font, clears the screen on `Escape`, and
+  presents with damage rectangles. It sends `SetCursor` on every pointer
+  event. The drawing state is a host-tested module over `gfx::Surface`.
+- e2e tests: `canvas_cursor` (a pointer path moves the cursor sprite;
+  screendump before and after), `canvas_stroke` (press, move, release;
+  the pixels along the path carry the pen color), `canvas_text` (a typed
+  string appears at the text cursor pixel for pixel).
+- `cargo xtask run --display` starts the canvas; the root task starts it
+  after the servers when the boot image contains it.
+- `policy::CRATES` entry `app-canvas` (Logic, `X86_64None`, deps
+  `user-rt`, `user-proto`, `gfx`).
+
+Acceptance: `check` green; catalog 6.6.29 combined items; the three e2e
+tests pass in CI without a display window.

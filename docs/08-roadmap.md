@@ -17,6 +17,9 @@ XL) and describe effort, not calendar time.
 | 6 | IPC and interrupt forwarding | L | endpoints, notifications, fault handlers, device capabilities |
 | 7 | Userland foundation | XL | root task, name server, console driver, memory server, hello application |
 | 8 | Consolidation and release 0.1.0 | M | budget review, measurements, documentation refresh, tag |
+| 9 | Framebuffer output | L | the userland display server draws through the framebuffer; the runner verifies pixels through QMP |
+| 10 | PS/2 input | L | keyboard and pointer events reach a userland client; the runner injects them through QMP |
+| 11 | Graphical demonstration | M | cursor, drawing, and typed text in `app-canvas`, verified end to end |
 
 Every phase has the same definition of done: all catalog items for the
 components in the phase have tests, `cargo xtask check` is green, the design
@@ -147,32 +150,83 @@ Measure the system call round trip and the IPC round trip; decide the
 Refresh every design document against the code. Write the 0.1.0 changelog
 entry and tag.
 
-## 8.11 Later work, not scheduled
+## 8.11 Phase 9: Framebuffer output
+
+Deliverables: `gfx` with pixel formats, fill, blit, clipping, damage
+rectangles, double buffering, the project's bitmap font, and text
+rendering; the display protocol in `user-proto` (info, surface creation
+over shared memory objects, present with damage rectangles, cursor);
+`server-display`; `server-init` creates the framebuffer `Device` memory
+object from `system_info` and starts the display server; the xtask QMP
+client with `screendump` and a PPM reader; `run --display`; the loader
+test image without a VGA device.
+
+Tests: catalog 6.6.24, 6.6.26, 6.6.27 (display items), 6.6.28, 6.6.29
+(output items).
+
+Acceptance: `cargo xtask test --e2e` verifies a filled rectangle and a
+rendered string in a screendump; the test kernels boot with `-vga none`
+and report an absent framebuffer.
+
+## 8.12 Phase 10: PS/2 input
+
+Deliverables: `driver-i8042` over the port access trait; the input
+protocol in `user-proto` (key codes, key and pointer events, layout
+tables `us` and `de`, subscription with a ring buffer and a
+notification); `server-input` with the `IoPortRange` for ports `0x60`
+to `0x64` and the `Interrupt` objects for lines 1 and 12; `server-init`
+grants them; the xtask QMP client sends key and pointer events; fuzz
+targets `scancode` and `mouse_packet`.
+
+Tests: catalog 6.6.25, 6.6.27 (input items), 6.6.29 (input items).
+
+Acceptance: a key sequence and a pointer path injected through QMP arrive
+as events in a userland client and are echoed as `[input]` lines through
+the console driver.
+
+## 8.13 Phase 11: Graphical demonstration
+
+Deliverables: `app-canvas` with a full-screen surface, a cursor that
+follows the pointer, drawing while a button is held, and typed text
+rendered with the bitmap font; the display server draws the cursor;
+modifier handling and layout mapping in the input client library;
+end-to-end tests that combine injected input with screendumps.
+
+Tests: catalog 6.6.29 (combined items).
+
+Acceptance: `cargo xtask run --display` shows the canvas; `cargo xtask
+test --e2e` verifies cursor movement, a drawn stroke, and typed text in
+screendumps.
+
+## 8.14 Later work, not scheduled
 
 virtio-blk driver and a file system server; virtio-net and a network
-stack; the `aarch64` port under HVF without a loader; SMP with per-CPU run
-queues; hardware port permission bitmaps; kernel-object memory donation;
-an interface definition language for protocols; recursive capability
-revocation; a tickless timer; long file names in the disk image writer.
+stack; virtio-gpu; virtio-input or `usb-tablet` for absolute pointer
+coordinates; a compositor with several windows; the `aarch64` port under
+HVF without a loader; SMP with per-CPU run queues; hardware port
+permission bitmaps; kernel-object memory donation; an interface
+definition language for protocols; recursive capability revocation; a
+tickless timer; long file names in the disk image writer.
 
-## 8.12 Risks
+## 8.15 Risks
 
 | Risk | Effect | Mitigation |
 |------|--------|------------|
 | A pinned nightly breaks a feature | build failures on update | update in an isolated commit; keep the previous pin until green; features limited to three |
-| The loader's firmware interaction differs between QEMU's firmware builds | boot failures in CI but not locally, or the reverse | the loader uses six boot services and four protocols only; the firmware version is recorded in the test log |
+| The loader's firmware interaction differs between QEMU's firmware builds | boot failures in CI but not locally, or the reverse | the loader uses seven boot services and five protocols only; the firmware version is recorded in the test log |
 | The disk image writer and the property-test engine are tooling written before the kernel | Phase 0 and 2 grow | both are bounded by the catalog; no features beyond what the pipeline needs |
 | `x86_64` details cost more than planned (APIC calibration, descriptor tables) | Phase 2 and 4 grow | scope is fixed to QEMU's default machine |
 | Test time under TCG on Apple Silicon | slow feedback | many test cases per kernel, few kernels; host tests carry the bulk |
 | `unsafe` creeps into logic crates | goal G4 fails | `forbid` at crate level plus the layering check; budget in CI |
 | Pool sizing at boot is wrong for real workloads | spurious `PoolExhausted` | sizes are overridable in the boot image header; `system_info` exposes usage |
 | Scope creep toward drivers and file systems before the userland foundation exists | first release slips | the roadmap order is binding; later work is listed, not scheduled |
+| Full-screen copies under TCG are slow | a sluggish graphical demonstration | the display protocol requires damage rectangles; tests check correctness, not speed |
+| The bitmap font is project-authored data | glyph errors, effort | 95 printable ASCII glyphs only; one checksum test per glyph |
+| A relative PS/2 pointer needs a mouse grab in the QEMU window | awkward interactive use | absolute pointing through virtio-input or `usb-tablet` is listed as later work |
+| The firmware's default mode and the framebuffer address vary between firmware builds | pixel tests fail on a different resolution | tests read the resolution from the boot information and never assume one; the loader reports the framebuffer as an `MmioReserved` region |
 
-## 8.13 Open decisions
+## 8.16 Resolved decisions
 
-These need confirmation before Phase 0 starts.
-
-| # | Decision needed | Default if not answered |
-|---|-----------------|-------------------------|
-| 1 | Project name and crate prefix | `AuDHSOS`, `audhsos` |
-| 2 | Build entry point on the development machine: `~/.cargo/bin/cargo xtask ...` instead of the shell alias | the xtask refuses to run under the aliased Cargo |
+The two questions that were open before Phase 0 are decided in the
+decision register: the project name and crate prefix (D-34) and the build
+entry point on the development machine (D-35). No open decisions remain.

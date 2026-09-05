@@ -57,6 +57,12 @@ next to the QEMU binary (`../share/qemu/`) or through `AUDHSOS_OVMF`.
 Firmware for later targets is present in the same directory:
 `edk2-aarch64-code.fd` and `edk2-riscv-code.fd`.
 
+Graphical test runs (Phase 9 and later) use the same QEMU. The runner adds
+a QMP socket in the scratch directory and drives it with the xtask's own
+QMP client; `screendump` writes a PPM file that the runner reads. For
+interactive use `cargo xtask run --display` opens QEMU's `cocoa` display on
+macOS and `gtk` on Linux. CI never opens a display.
+
 ## 7.5 Findings about the development machine
 
 Recorded on 2026-09-04. These influence Phase 0.
