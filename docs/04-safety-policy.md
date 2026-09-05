@@ -72,7 +72,7 @@ The xtask policy table holds the machine-readable form.
 | `kernel-hal-x86_64` | model-specific registers (Phase 4) | `rdmsr`, `wrmsr` |
 | `kernel-hal-x86_64` | port I/O, byte and double word so far | `in`, `out` |
 | `kernel-hal-x86_64` | context switch (naked function, Phase 5) | save callee-saved registers, swap stack pointer, restore, return |
-| `kernel-hal-x86_64` | the exceptions a test image raises (`testing`, features `debug-uart` and `test-exit`) | `int3`, `ud2`, `div` by zero, `mov` of a selector beyond the table into a segment register |
+| `kernel-hal-x86_64` | the exceptions a test image raises, and from Phase 4 the vectors it raises from software (`testing`, features `debug-uart` and `test-exit`) | `int3`, `ud2`, `div` by zero, `mov` of a selector beyond the table into a segment register, `int` with the vector as an inline constant |
 | `boot-uefi-x86_64` | kernel entry (naked function) | disable interrupts, write `CR3`, load stack pointer, jump |
 | `boot-uefi-x86_64` | exit device on loader failure | `out` |
 | `user-sys-x86_64` | system call trap | `int 0x80` |

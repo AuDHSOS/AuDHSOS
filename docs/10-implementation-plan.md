@@ -1279,10 +1279,31 @@ Acceptance: `check` green; catalog 6.6.21 memory items covered.
 - `kernel-core::tick`: increments the tick counter and calls the scheduler
   hook (empty until Phase 5).
 - QEMU tests (`interrupts.rs`): the timer tick counter increases; a second
-  tick arrives after EOI; masking the timer stops it; the spurious vector
-  handler runs when triggered by software (`int 0xFF`... not possible
-  without asm: instead assert that the spurious handler is installed and
-  that a software-triggered `int 0x30` reaches the timer handler).
+  tick arrives after EOI; masking the timer stops it; a software interrupt
+  reaches the handler of its vector, for the timer vector `0x30` and for
+  the spurious vector `0xFF`.
+
+  An earlier draft of this section said that raising a vector from
+  software was "not possible without asm" and settled for asserting that
+  the spurious handler is installed. That was written before
+  `kernel-hal-x86_64::testing` existed. It now holds four `asm!` sites of
+  its own, one per exception a trap test raises, and the crate is
+  allowlisted for exactly that. The instruction needs the vector as an
+  immediate, which an inline constant supplies:
+
+  ```rust
+  pub fn raise_interrupt<const VECTOR: u8>() {
+      unsafe {
+          asm!("int {vector}", vector = const VECTOR, options(nomem, nostack));
+      }
+  }
+  ```
+
+  This compiles on the pinned toolchain; it was tried before the sentence
+  was written. The test therefore asserts what it means to assert, and the
+  `asm!` site goes into the inventory of
+  [04-safety-policy.md 4.5](04-safety-policy.md#45-inline-assembly-inventory)
+  beside the exceptions.
 - Fuzz target `madt` under `fuzz/` with `fuzz-support` (see 10.7.6 for
   the fuzz crate layout; create it in this phase).
 

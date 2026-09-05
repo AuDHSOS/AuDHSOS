@@ -228,6 +228,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- Plan 10.4 said that raising an interrupt vector from software was "not
+  possible without asm" and settled for a weaker assertion about the
+  spurious vector. That was written before `kernel-hal-x86_64::testing`
+  existed, which now holds four `asm!` sites of its own and is allowlisted
+  for them. The section says what the test is to assert, carries the
+  `int` with the vector as an inline constant that the pinned toolchain
+  accepts, and 4.5 lists the site.
+
 - `kernel-hal-x86_64`: the boot information page was reported as a memory
   region with its virtual address, which `PhysAddr::new` rejects, so the
   region was silently dropped and no boot report ever showed a
