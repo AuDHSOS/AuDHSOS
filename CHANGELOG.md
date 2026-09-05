@@ -7,11 +7,39 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
-- Fuzz target `madt` over the ACPI parsers, with fifteen seeds. The target
-  reads the bytes twice: as they are, so that signature, length, and
-  checksum are exercised, and once with those three repaired, so that the
-  fuzzer reaches the walk over the entries without having to guess a
-  checksum.
+- `tools/tls-probe`: a host program that drives the sans-I/O client over a
+  real socket, so that the stack is answered by a server instead of by a
+  recording. It opens TCP, runs the handshake, and speaks enough HTTP/1.1
+  to show a status line and a body. Everything above the socket is this
+  repository's code; the host supplies the socket, the wall clock, and
+  `/dev/urandom` under `crypto-rng`. It is a workspace of its own, like
+  `fuzz/`, because it is the only crate in the tree that links `std`. Its
+  anchor is a pinned intermediate rather than a root: a chain to a P-384
+  root cannot be walked to the end until `crypto-ec` has that curve, which
+  the README of the probe writes down as the one thing the run does not
+  prove.
+- `kernel-acpi` (Phase 4): the ACPI tables the kernel needs to find its
+  interrupt controllers, parsed in safe Rust. `parse_rsdp` reads the root
+  pointer of revision zero or two with both of its checksums;
+  `SdtHeader::parse` reads and checks the header every table starts with;
+  `RootTable` walks the RSDT or the XSDT, four-byte entries or eight-byte
+  ones as the signature says; `madt::parse` reads the multiple APIC
+  description table into fixed capacities of four I/O APICs and sixteen
+  interrupt source overrides. An entry of length zero is an error, because
+  a walk that accepted one would never end; an entry that leaves the table
+  is an error; more I/O APICs than the kernel holds are an error and not a
+  truncation; an entry of a type the parser does not read is skipped by
+  its length.
+- `kernel-acpi`: `Madt::route_isa` answers where an ISA line goes and how
+  it is taken, which is the one piece of interrupt routing that is logic
+  rather than register writes, and is therefore tested on the host.
+- `kernel-x86-tables` gains the register blocks of the two APICs and the
+  encoding of a redirection entry, the write sequence that moves the two
+  legacy controllers out of the way and masks them, and the vector plan:
+  exceptions `0..=31`, legacy controllers `0x20..=0x2F`, timer `0x30`,
+  I/O APIC lines `0x40 + gsi`, system call `0x80`, spurious `0xFF`.
+  `kernel-hal-x86_64::vectors` is that module, so that the plan is one
+  table with host tests behind it.
 - `kernel-hal-x86_64::acpi` finds the tables of the machine through the
   physical window and hands their bytes to the parsers. No range is read
   before it has been checked against the memory the firmware reported, so
@@ -64,28 +92,32 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   handler of that vector, for `0x30`, `0x40`, and `0xFF`; an ISA line is
   routed once and refuses a second routing. Catalog 6.6.11, the APIC items
   of 6.6.16, and the interrupt items of 6.6.21.
-- `kernel-acpi` (Phase 4): the ACPI tables the kernel needs to find its
-  interrupt controllers, parsed in safe Rust. `parse_rsdp` reads the root
-  pointer of revision zero or two with both of its checksums;
-  `SdtHeader::parse` reads and checks the header every table starts with;
-  `RootTable` walks the RSDT or the XSDT, four-byte entries or eight-byte
-  ones as the signature says; `madt::parse` reads the multiple APIC
-  description table into fixed capacities of four I/O APICs and sixteen
-  interrupt source overrides. An entry of length zero is an error, because
-  a walk that accepted one would never end; an entry that leaves the table
-  is an error; more I/O APICs than the kernel holds are an error and not a
-  truncation; an entry of a type the parser does not read is skipped by
-  its length.
-- `kernel-acpi`: `Madt::route_isa` answers where an ISA line goes and how
-  it is taken, which is the one piece of interrupt routing that is logic
-  rather than register writes, and is therefore tested on the host.
-- `kernel-x86-tables` gains the register blocks of the two APICs and the
-  encoding of a redirection entry, the write sequence that moves the two
-  legacy controllers out of the way and masks them, and the vector plan:
-  exceptions `0..=31`, legacy controllers `0x20..=0x2F`, timer `0x30`,
-  I/O APIC lines `0x40 + gsi`, system call `0x80`, spurious `0xFF`.
-  `kernel-hal-x86_64::vectors` is that module, so that the plan is one
-  table with host tests behind it.
+- Fuzz target `madt` over the ACPI parsers, with fifteen seeds. The target
+  reads the bytes twice: as they are, so that signature, length, and
+  checksum are exercised, and once with those three repaired, so that the
+  fuzzer reaches the walk over the entries without having to guess a
+  checksum.
+
+- `audhsos-time` (track E1): `CivilTime`, `UnixTime`, `Instant`, and
+  `Duration`, and the integer calendar that joins the first two. The rule
+  is the proleptic Gregorian one over the years 0 to 9999, which is the
+  range a `GeneralizedTime` can write down; the arithmetic is March-based,
+  so a year ends with its leap day and the day of the year needs no month
+  table. Every intermediate value is bounded by the year range the module
+  validates before it computes, and a result outside the range is an error
+  rather than a wrap.
+- `audhsos-time`: the crate reads no clock. Time enters every interface as
+  a parameter, which is what lets a sixty-second backoff be exercised in
+  microseconds of wall clock. An `Instant` counts microseconds from an
+  origin the caller chooses, and its `Add` saturates, because a timer that
+  saturates fires late while one that wraps fires immediately and forever.
+- `audhsos-time`: generators of all four types behind the feature
+  `test-strategies`, for track D and `fs-fat`.
+- Catalog 6.6.39 gains the day-by-day walk of the calendar, the ends of the
+  range, the resolution of a `UnixTime`, and the items of the generators.
+  Every day from 1601-01-01 to 9999-12-31 round-trips and is the successor
+  of the day before it.
+
 - `audhsos-symbols` (track G2): an address to a function, a file, and a
   line. The symbol table gives the function, the DWARF line program of
   version 4 or 5 gives the file and the line. The state machine runs once
@@ -322,6 +354,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `audhsos-tls`: a `Certificate` message was refused whole when any entry
+  in it failed to parse. RFC 8446 section 4.4.2 makes the entries behind
+  the leaf an aid to path building and allows ones that belong to no path,
+  and a server that sends its own root sends a certificate this client
+  cannot read: Google Trust Services puts a P-384 root above a P-256
+  chain, and `crypto-ec` has P-256 and Ed25519. Every such server was
+  unreachable. An entry that does not parse is now passed over. The leaf
+  still has to parse, and the path still has to reach an anchor through
+  signatures that verify, so nothing a path check decided has changed.
 - `audhsos-tls`: the alert that ends a connection went out under the
   handshake keys, and those are dropped the moment the application keys
   exist, so after the handshake it was written in the clear and the server

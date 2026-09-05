@@ -54,7 +54,7 @@ integration around it stays in its phase.
 |-------|---------|------|----------------------|
 | C | cryptography and TLS ([document 11](11-cryptography-and-tls.md)) | XL | in progress; its step T8 waits for track D |
 | D | the network stack, sans-I/O (12.6) | XL | unblocks C's transport; unblocks HTTP |
-| E | shared foundations: time, encodings, collections (12.5) | M | needed by C at T5 and T6, by D throughout, by phases 5 and 6 |
+| E | shared foundations: time, encodings, collections (12.5) | M | `audhsos-time` implemented; needed by C at T5 and T6, by D throughout, by phases 5 and 6 |
 | F | device logic without devices: virtqueues, FAT32 (12.7) | M | prepares the network and storage drivers that are later work |
 | G | tooling: fuzz support, symbolization (12.8) | M | serves every track and every phase |
 
@@ -68,6 +68,8 @@ either missing or about to be written twice.
 
 ### 12.5.1 `audhsos-time`
 
+Implemented.
+
 ```rust
 pub struct UnixTime(i64);   // seconds since 1970-01-01T00:00:00Z, POSIX scale
 pub struct CivilTime { pub year: i32, pub month: u8, pub day: u8,
@@ -78,13 +80,31 @@ pub struct Duration(u64);   // microseconds
 
 - `civil.rs`: `days_from_civil` and `civil_from_days` as integer
   arithmetic without floating point, the proleptic Gregorian leap-year
-  rule, month lengths, and range validation of every field.
+  rule, month lengths, and range validation of every field. The years run
+  from 0 to 9999, which is what a `GeneralizedTime` can write down and
+  therefore the widest range a certificate can name; a date outside them
+  is an error and not a wrap.
 - `unix.rs`: conversion in both directions, ordering, and `checked_add`
   and `checked_sub` of a `Duration`. Out-of-range results are errors,
-  never wraps.
+  never wraps. A `UnixTime` resolves seconds, so the part of a `Duration`
+  below one second does not move it, which the method documentation
+  states rather than leaves to be discovered.
 - `instant.rs`: monotonic time for timers. `Instant + Duration`,
   `saturating_duration_since`, and comparison. The crate reads no clock;
-  the caller supplies the value.
+  the caller supplies the value. The `Add` implementation saturates,
+  because a timer that saturates fires late while one that wraps fires
+  immediately and forever; `checked_add` is there for a caller that wants
+  to see the end instead.
+
+The March-based arithmetic is what makes the calendar one expression
+rather than a table: a year that begins in March ends with its leap day,
+so the day of the year needs no month lengths. Every intermediate value
+is bounded by the year range the module validates before it computes,
+which is why its wrapping operators never wrap.
+
+The generators of `CivilTime`, `UnixTime`, `Instant`, and `Duration` live
+in the crate behind the feature `test-strategies`, where track D and
+`fs-fat` will find them.
 
 Leap seconds do not exist on the POSIX scale and time zones are not
 modeled. Both are stated in the crate documentation as limits rather

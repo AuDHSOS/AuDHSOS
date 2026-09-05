@@ -931,17 +931,32 @@ done until every applicable item has a test. Items are added, never removed.
 - `civil_from_days` and `days_from_civil` round-trip for every day from
   1601-01-01 to 9999-12-31 (property) and agree with hand-computed values
   at the epoch, at 2000-02-29, at 1900-03-01, and at 2100-03-01.
+- The same range walked day by day: every day is the successor of the one
+  before it, which a month length that were wrong by a day would fail even
+  though a round trip through the same wrong length would still close.
 - Leap years: 1900 and 2100 are common, 2000 and 2400 are leap; February
   has 28 or 29 days accordingly; day 0 and day 32 of any month are
   rejected.
 - Field ranges: month 0 and 13, hour 24, minute 60, second 60, and a
   negative year are rejected; second 59 and hour 23 are accepted.
+  `validate` reports the first field that is wrong, in the order year,
+  month, day, hour, minute, second.
+- The ends of the calendar: 0000-01-01 and 9999-12-31T23:59:59Z convert in
+  both directions; one day beyond either end is `Year`, and a day number so
+  large that the shift onto the era overflows is `OutOfRange`.
 - `UnixTime`: the epoch is zero; negative values represent times before
   1970 and convert back; `checked_add` and `checked_sub` at the extremes
-  of `i64` return `None` rather than wrapping.
+  of `i64` return `None` rather than wrapping; the part of a `Duration`
+  below one second does not move a point, because the type resolves
+  seconds.
 - `Instant` and `Duration`: addition saturates at the maximum;
   `saturating_duration_since` of an earlier instant is zero; ordering is
-  total.
+  total; `checked_add`, `checked_sub`, and `checked_mul` report the ends
+  instead of saturating.
+- The generators behind `test-strategies` produce only values the crate
+  accepts: a day inside the calendar, a `CivilTime` that validates, a
+  `UnixTime` that converts, and an `Instant` that leaves room for the
+  longest generated `Duration`.
 
 ### 6.6.40 Encodings (`audhsos-encoding`)
 

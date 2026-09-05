@@ -48,6 +48,13 @@ name = "audhsos-sync"
 version = "0.1.0"
 
 [[package]]
+name = "audhsos-time"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
 name = "audhsos-tls"
 version = "0.1.0"
 dependencies = [
