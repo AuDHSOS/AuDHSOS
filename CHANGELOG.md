@@ -22,3 +22,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   only.
 - `xtask`: `lint`, `check-layering`, `check-deps`, `unsafe-budget`,
   `test`, `coverage`, `miri`, `doc`, `check`.
+- `audhsos-abi`: boot image header and boot information structure with
+  validating parsers and writers, and generators behind the feature
+  `test-strategies`.
+- `kernel-objects`: fixed-capacity object pool with generation-checked ids,
+  reference counts, and first-in-first-out slot reuse; quotas.
+- `kernel-mm`: memory map normalization, kernel reserve selection, bitmap
+  frame allocator, `x86_64` page-table entries behind an
+  architecture-neutral trait, the mapper over the HAL traits with bounded
+  range operations, and the region table of an address space.
+- `kernel-types`: `PhysFrame::ZERO` and `PhysFrameRange::EMPTY`.
+- `kernel-hal-api`: `MemoryFrameAccess::with_lazy_tables`, which
+  materializes a page table on the first modifying access to a frame of a
+  declared memory range.

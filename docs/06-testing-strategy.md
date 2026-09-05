@@ -23,7 +23,9 @@ is project code on top of the Rust toolchain.
 - Every logic crate uses `#![cfg_attr(not(test), no_std)]`. Tests use `std`
   freely.
 - Test doubles live in `kernel-hal-api` behind the `test-doubles` feature:
-  `MemoryFrameAccess` (a `HashMap<PhysFrame, Box<PageTable>>`),
+  `MemoryFrameAccess` (a `HashMap<PhysFrame, Box<PageTable>>`, optionally
+  with a frame range that materializes a default table on the first
+  modifying access),
   `RecordingTlb`, `CountingFrameSource`, `FakeTimer`,
   `FakeInterruptController` (records mask, unmask, and end-of-interrupt
   calls), `ScriptedPlatform` (memory maps from builders), `RecordingPorts`

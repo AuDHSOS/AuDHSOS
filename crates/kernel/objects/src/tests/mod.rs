@@ -4,10 +4,6 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
-mod boot_image;
-mod boot_info;
-mod error;
-mod handle;
-mod object;
-mod rights;
+mod pool;
+mod quota;
 mod strategies;

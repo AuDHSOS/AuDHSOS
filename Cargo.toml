@@ -8,6 +8,8 @@ members = [
     "crates/sync",
     "crates/kernel/types",
     "crates/kernel/hal-api",
+    "crates/kernel/objects",
+    "crates/kernel/mm",
     "crates/support/testing",
     "crates/tools/xtask",
 ]
@@ -24,6 +26,8 @@ audhsos-abi = { path = "crates/abi" }
 audhsos-sync = { path = "crates/sync" }
 kernel-types = { path = "crates/kernel/types" }
 kernel-hal-api = { path = "crates/kernel/hal-api" }
+kernel-objects = { path = "crates/kernel/objects" }
+kernel-mm = { path = "crates/kernel/mm" }
 test-support = { path = "crates/support/testing" }
 
 [workspace.lints.rust]

@@ -42,7 +42,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-abi",
         path: "crates/abi",
         kind: Kind::Logic,
-        deps: &[],
+        deps: &["test-support"],
         coverage_gate: true,
     },
     Crate {
@@ -67,6 +67,25 @@ pub(crate) const CRATES: &[Crate] = &[
         path: "crates/kernel/hal-api",
         kind: Kind::Logic,
         deps: &["kernel-types"],
+        coverage_gate: true,
+    },
+    Crate {
+        name: "kernel-objects",
+        path: "crates/kernel/objects",
+        kind: Kind::Logic,
+        deps: &["kernel-types", "audhsos-abi", "test-support"],
+        coverage_gate: true,
+    },
+    Crate {
+        name: "kernel-mm",
+        path: "crates/kernel/mm",
+        kind: Kind::Logic,
+        deps: &[
+            "kernel-types",
+            "kernel-hal-api",
+            "audhsos-abi",
+            "test-support",
+        ],
         coverage_gate: true,
     },
     Crate {
