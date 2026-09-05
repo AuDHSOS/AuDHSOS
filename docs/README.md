@@ -7,7 +7,8 @@ order in which the system is built.
 
 Status: every entry of the decision register is decided; no open
 decisions remain. Phases 0 to 2 of the roadmap are implemented; Phase 3
-is next. The cryptography and TLS track of document 11 is
+is next. The cryptography and TLS track of document 11 is specified and
+implemented through step T2. The parallel tracks of document 12 are
 specified and not yet started.
 
 ## Reading order
@@ -25,6 +26,7 @@ specified and not yet started.
 | 9 | [Decision register](09-decisions.md) | Every binding decision as a statement |
 | 10 | [Implementation plan](10-implementation-plan.md) | Exactly what to build in each remaining phase: crates, types, algorithms, tests, acceptance |
 | 11 | [Cryptography and TLS](11-cryptography-and-tls.md) | The TLS 1.3 client track: primitives, certificates, protocol, tests, order of work |
+| 12 | [Work parallel to the kernel phases](12-parallel-work.md) | The admission test for parallel work; the network stack, the shared foundations, the device logic, the tooling; what may be pulled forward |
 
 ## Conventions for these documents
 

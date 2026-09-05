@@ -52,7 +52,7 @@ optional for a working HTTPS request.
 | `crypto-aead` | `crates/crypto/aead` | c1 | `crypto-ct` |
 | `crypto-ec` | `crates/crypto/ec` | c2 | `crypto-ct`, `crypto-hash` |
 | `crypto-rng` | `crates/crypto/rng` | c2 | `crypto-ct`, `crypto-aead` |
-| `audhsos-der` | `crates/net/der` | c0 | - |
+| `audhsos-der` | `crates/net/der` | c0 | `audhsos-time` (D-46) |
 | `audhsos-x509` | `crates/net/x509` | c3 | `audhsos-der`, `crypto-hash`, `crypto-ec` |
 | `audhsos-tls` | `crates/net/tls` | c4 | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-x509` |
 
@@ -60,7 +60,9 @@ All eight are logic crates: `no_std`, `#![forbid(unsafe_code)]`, no
 allocation, `Target::Host` in the policy table, coverage gate on. Each
 takes `test-support` behind the feature `test-strategies` where it owns
 types used in property tests. No crate of this track is depended on by
-the kernel; the dependency edges run from userland only.
+the kernel; the dependency edges run from userland only, and from the
+network track of [document 12](12-parallel-work.md), which uses
+`crypto-rng` for initial sequence numbers and transaction ids (D-51).
 
 ## 11.4 `crypto-ct`: constant-time discipline
 
@@ -193,9 +195,12 @@ Tests: catalog 6.6.34.
 minimal length encoding, minimal integer encoding, no indefinite forms,
 nesting depth bounded by `MAX_DEPTH = 16`, trailing bytes rejected by
 `finish`. Object identifiers are compared as byte constants, never parsed
-into arcs. `UTCTime` and `GeneralizedTime` become `UnixTime` with full
+into arcs. `UTCTime` and `GeneralizedTime` become the `UnixTime` of
+`audhsos-time` ([document 12](12-parallel-work.md), D-46) with full
 range validation, including the leap-year rules and the two-digit year
-window of RFC 5280.
+window of RFC 5280; the calendar arithmetic itself lives in
+`audhsos-time`, so certificate validity and network timers share one
+type.
 
 `audhsos-x509` parses a certificate into borrowed slices:
 
@@ -224,7 +229,9 @@ is a documented gap, not an oversight.
 Trust anchors are `TrustAnchor { subject: &[u8], spki: &[u8] }` supplied
 by the caller. The repository contains none. Which roots a system trusts
 is an operator decision; the xtask converts a PEM bundle the operator
-supplies into a DER table that goes into the boot image.
+supplies into a DER table that goes into the boot image, using the PEM
+decoder of `audhsos-encoding` ([document 12](12-parallel-work.md),
+D-47).
 
 Certificates for tests are built by `x509::builder` behind the feature
 `test-certificates`, which writes DER and signs with the `test-signing`
@@ -334,11 +341,13 @@ checklist in 4.9.
 | T5 | `audhsos-der` | M |
 | T6 | `audhsos-x509` with the test certificate builder | L |
 | T7 | `audhsos-tls` | XL |
-| T8 | Integration when the network stack is scheduled: transport, entropy system call, HTTP client | M |
+| T8 | Integration, jointly with step D9 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M |
 
 T1 to T7 touch nothing outside their own crates and the policy table, so
-they can be built between kernel phases without disturbing them. T8
-depends on the network stack and is not scheduled.
+they can be built between kernel phases without disturbing them. T5 and
+T6 additionally need steps E1 and E2 of document 12, which are small and
+are scheduled before them. T8 depends on the network stack and on the
+kernel and is not scheduled.
 
 ## 11.13 Risks
 

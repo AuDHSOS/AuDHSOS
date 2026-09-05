@@ -827,6 +827,295 @@ done until every applicable item has a test. Items are added, never removed.
   always end in an error or a consistent state. Fuzz targets `tls_record`
   and `tls_handshake`.
 
+### 6.6.39 Time and calendar (`audhsos-time`)
+
+- `civil_from_days` and `days_from_civil` round-trip for every day from
+  1601-01-01 to 9999-12-31 (property) and agree with hand-computed values
+  at the epoch, at 2000-02-29, at 1900-03-01, and at 2100-03-01.
+- Leap years: 1900 and 2100 are common, 2000 and 2400 are leap; February
+  has 28 or 29 days accordingly; day 0 and day 32 of any month are
+  rejected.
+- Field ranges: month 0 and 13, hour 24, minute 60, second 60, and a
+  negative year are rejected; second 59 and hour 23 are accepted.
+- `UnixTime`: the epoch is zero; negative values represent times before
+  1970 and convert back; `checked_add` and `checked_sub` at the extremes
+  of `i64` return `None` rather than wrapping.
+- `Instant` and `Duration`: addition saturates at the maximum;
+  `saturating_duration_since` of an earlier instant is zero; ordering is
+  total.
+
+### 6.6.40 Encodings (`audhsos-encoding`)
+
+- Base64 against the RFC 4648 §10 vectors for lengths zero to six;
+  encoding into a buffer one byte too small is an error and writes
+  nothing.
+- Base64 decoding rejects a missing pad, an excess pad, a pad in the
+  middle, a character outside the alphabet, whitespace, and non-zero
+  trailing bits in the final quantum.
+- Hex: round trip for arbitrary input (property); an odd length, an
+  upper-case and a lower-case digit pair, and a non-hex character are
+  handled as specified.
+- PEM against RFC 7468: a minimal certificate block; a label mismatch
+  between the begin and end line, a missing end line, a line longer than
+  64 characters other than the last, data after the end line, and an
+  empty payload are rejected; a block preceded by explanatory text is
+  accepted, as the RFC's lax parsing permits, and the text is not
+  returned.
+- Property: no input causes a panic, and every accepted block re-encodes
+  to a canonical form that decodes to the same bytes. Fuzz target `pem`.
+
+### 6.6.41 Fixed-capacity collections (`audhsos-collections`)
+
+- `ArrayVec`: push to capacity succeeds and one more is `Full`; pop from
+  empty is `None`; `insert` and `remove` at the ends and in the middle
+  keep the order; clearing leaves length zero.
+- `RingBuffer`: write and read across the wrap boundary; a full buffer
+  rejects the write rather than overwriting; the free space reported
+  equals the number of writes that then succeed.
+- `BitSet`: set, clear, and test at bit zero, at a word boundary, and at
+  the last bit; `first_set` and `first_clear` on an empty, a full, and a
+  mixed set; an index at or beyond the size is an error.
+- `IndexList`: push front and back, unlink from the middle, from the
+  head, and from the tail; a list of one; iteration order matches the
+  insertion order; unlinking a node that is not in the list is rejected.
+- `IndexMap`: insert, look up, and remove in order; a duplicate key
+  replaces the value and does not grow the map; capacity exhaustion is
+  `Full`; iteration is sorted by key.
+- Model tests: every container against `Vec`, `VecDeque`, and `BTreeMap`
+  under generated operation sequences; no operation panics for any
+  sequence.
+
+### 6.6.42 Wire primitives (`net-wire`)
+
+- Addresses: `MacAddr` and `Ipv4Addr` parse from and format to their
+  canonical forms; the broadcast, unspecified, loopback, and multicast
+  predicates; an `Ipv4Cidr` with prefix length 0, 32, and 33, the last
+  rejected; `contains` at both ends of a range.
+- Cursor: reading a `u8`, `u16`, and `u32` in big-endian order; a read
+  past the end returns an error and leaves the position unchanged; a
+  write into a buffer one byte too small fails and writes nothing;
+  skipping beyond the end is an error.
+- Internet checksum against the RFC 1071 worked example, over an odd
+  number of bytes, over an empty slice, and over data whose sum carries
+  repeatedly; the checksum of a buffer that already contains its own
+  checksum is zero (property).
+- Pseudo-header checksums for UDP and TCP against hand-computed values,
+  including a zero-length payload.
+
+### 6.6.43 Ethernet and ARP (`net-eth`)
+
+- Frames: a minimum-length frame, a maximum-length frame, one byte too
+  short, and an unregistered ether type; the destination filter accepts
+  the interface address and the broadcast address and drops others.
+- ARP encoding against the RFC 826 field layout; a request for the
+  interface address produces exactly one reply; a request for another
+  address produces none.
+- Cache: an entry moves `Incomplete` to `Reachable` on a reply and
+  `Reachable` to `Stale` at the age boundary; an entry evicted at
+  capacity is the least recently used; a second packet for a destination
+  with a pending request replaces the first rather than queueing two.
+- Retransmission: probes are emitted at the scheduled instants and stop
+  after the configured count, after which the pending packet is dropped
+  and the caller sees an unreachable result.
+- Gratuitous ARP refreshes a reachable entry with the same address and
+  does not replace one with a different address.
+
+### 6.6.44 IPv4 and ICMP (`net-ip`)
+
+- Header: a minimum header, a header with options that are skipped, a
+  wrong version, a header length below five words, a total length beyond
+  the frame, and a bad checksum are each handled as specified.
+- Fragmentation: a datagram exactly at the MTU is not fragmented, one
+  byte more produces two fragments whose reassembly equals the original;
+  the don't-fragment bit turns an oversized datagram into an error.
+- Reassembly: fragments in order, in reverse order, and with a duplicate;
+  an overlapping fragment discards the datagram; a missing fragment
+  expires at the deadline and frees its buffer; more concurrent datagrams
+  than buffers evicts the oldest.
+- ICMP: an echo request produces a reply with the payload copied; a
+  destination-unreachable message is delivered to the upper layer with
+  the embedded header parsed; generated errors stop at the token-bucket
+  limit and resume after it refills; no error is generated for an
+  incoming error, for a broadcast, or for a non-initial fragment.
+- Routing: longest-prefix match with a host route, a subnet route, and
+  the default route; a destination with no route is an error; an on-link
+  destination resolves through ARP, an off-link one through the gateway.
+
+### 6.6.45 UDP (`net-udp`)
+
+- Datagrams: an empty payload, a maximum payload, a length field shorter
+  and longer than the data, a zero checksum accepted on receipt, and a
+  bad non-zero checksum rejected; the checksum written on send verifies.
+- Sockets: binding a port twice is rejected; an ephemeral port is inside
+  the documented range and is not one already bound; a datagram for an
+  unbound port produces an ICMP port-unreachable request to the layer
+  below.
+- Receive ring: a full ring drops the newest datagram and counts it; the
+  count is observable; a datagram larger than the ring is rejected at
+  entry.
+
+### 6.6.46 TCP (`net-tcp`)
+
+- Sequence arithmetic: the window comparisons at the wrap boundary, a
+  window that spans the boundary, equality, and the empty window
+  (table-driven over the RFC 9293 conditions).
+- Connection setup: the three-way handshake for active and passive open;
+  simultaneous open; a SYN with an unacceptable acknowledgment produces a
+  reset; a retransmitted SYN in `SYN-RECEIVED` is absorbed.
+- Teardown: active close through `FIN-WAIT-1`, `FIN-WAIT-2`,
+  `TIME-WAIT`; passive close through `CLOSE-WAIT` and `LAST-ACK`;
+  simultaneous close through `CLOSING`; `TIME-WAIT` ends at twice the
+  maximum segment lifetime and not before.
+- Data transfer: a segment at the window edge, one byte beyond it, a
+  duplicate, an out-of-order segment that is queued and then completed,
+  and a segment covering data already acknowledged.
+- Windows: a zero window stops transmission and starts the persist
+  timer; the probe is emitted at the scheduled instants; a reopened
+  window resumes; the advertised window never shrinks.
+- Retransmission: the RTO after the first sample, after a smoothed
+  series, at the one-second floor, and at the sixty-second ceiling;
+  Karn's rule ignores a retransmitted segment's sample; backoff doubles
+  per attempt and the connection aborts after the configured count.
+- Congestion control: slow start doubles per round trip; the transition
+  to congestion avoidance at the threshold; three duplicate
+  acknowledgments trigger fast retransmit and halve the window; a
+  timeout resets to one segment.
+- Delayed acknowledgments: an acknowledgment is sent at the second
+  full-sized segment or at 500 milliseconds, whichever comes first; a
+  segment that fills a previously zero window is acknowledged at once.
+- Resets: a reset inside the window tears the connection down; one
+  outside it is ignored and answered with a challenge acknowledgment; a
+  reset is generated for a segment to a closed port.
+- Options: the maximum segment size is honored and clamped to the
+  interface MTU; an unknown option is skipped; a malformed option list
+  is rejected.
+- Model test: two instances over a network double that delays,
+  duplicates, reorders, and drops; for every generated schedule both
+  sides transfer their byte streams intact, in order, and reach
+  `CLOSED`; `poll_at` never reports an instant at which the stack has no
+  work. Fuzz target `tcp_segment`.
+
+### 6.6.47 DNS (`net-dns`)
+
+- Encoding: a question, an answer with an `A` record, a `CNAME` chain of
+  depth two, and a response with no answers.
+- Names: a label of 63 characters, one of 64 rejected, a name of 255
+  bytes, one of 256 rejected, an empty name, and a name with a
+  compression pointer to an earlier label.
+- Compression: a pointer loop, a forward pointer, and a pointer chain
+  longer than the jump limit are rejected without unbounded work.
+- Resolver: a matching response is accepted; responses with a wrong
+  transaction id, a wrong question section, a wrong source address, or a
+  wrong source port are ignored; the query is retried at the scheduled
+  instants and rotates servers; exhaustion is an error.
+- `CNAME` chains longer than eight and a chain that loops are rejected.
+  Fuzz target `dns_message`.
+
+### 6.6.48 DHCP (`net-dhcp`)
+
+- The four-message exchange produces a bound lease with address, mask,
+  router, and DNS servers taken from the options.
+- Options: an unknown option is skipped; a truncated option is rejected;
+  the end marker is required; padding is accepted; a missing message
+  type is rejected.
+- An offer with a foreign transaction id is ignored; a NAK returns the
+  machine to the start; two offers select the first and ignore the
+  second.
+- Lease timers: renewal at T1 through unicast, rebinding at T2 through
+  broadcast, and expiry that clears the address; a renewal answered late
+  keeps the lease; backoff grows exponentially and stays inside the
+  jitter bounds.
+
+### 6.6.49 HTTP/1.1 client (`net-http`)
+
+- Requests: the request line and headers for a minimal `GET`, with a
+  host header always present; a header value with a control character is
+  rejected at encoding time.
+- Responses: a minimal response, a response with a body of declared
+  length, a chunked body in one and in several reads, a chunk with an
+  extension, the terminating zero chunk with and without trailers.
+- Rejections: a status line that is too long, more headers than the
+  limit, a header longer than the limit, obsolete line folding, both
+  `Content-Length` and `Transfer-Encoding` present, two `Content-Length`
+  headers that disagree, and a non-numeric length.
+- Framing: a response split across arbitrary read boundaries produces the
+  same result as one read (property); a body larger than the caller's
+  buffer is delivered in parts without loss.
+- A redirect status is reported with its location and is not followed.
+  Fuzz target `http_response`.
+
+### 6.6.50 Interface and demultiplexing (`net-stack`)
+
+- Demultiplexing: an ARP frame, an IPv4 frame for a bound UDP socket,
+  one for a TCP connection, one for an unbound port, and one for a
+  foreign address each reach the right layer or are dropped.
+- Sockets: handles are generation-checked, a handle from a closed socket
+  is rejected, and the table reports exhaustion rather than reusing a
+  live slot.
+- `poll_at` returns the earliest deadline of every layer; after `poll`
+  at that instant the deadline has advanced; an idle stack reports no
+  deadline.
+- `poll` drains the outgoing work into a transmit buffer that is too
+  small across several calls without losing or reordering a frame.
+- An interface without an address answers no ARP request and produces no
+  IP traffic; configuring an address through DHCP makes both work.
+
+### 6.6.51 Virtqueue logic (`virtio-queue`)
+
+- Descriptors: a single-descriptor request, a chain of three, a chain
+  that exhausts the free list, and a chain whose length exceeds the queue
+  size are handled as specified.
+- Rings: the available index wraps at 2^16 while the queue size is not a
+  power-of-two divisor of it; a used element that names an unknown
+  descriptor is rejected; the used index moving backwards is rejected.
+- Notification suppression: with the no-notify flag set the driver emits
+  no notification; clearing it resumes them.
+- Initialization: the status sequence reset, acknowledge, driver,
+  features-ok, driver-ok; a device that clears features-ok leaves the
+  machine in failure; an operation on a queue before driver-ok is
+  rejected; a device that sets `DEVICE_NEEDS_RESET` refuses every further
+  operation.
+- Model test: descriptors are allocated and freed against a reference
+  free-list model over generated sequences; no sequence leaks a
+  descriptor or hands out one twice.
+
+### 6.6.52 FAT32 logic (`fs-fat`)
+
+- Boot parameter block: a valid FAT32 block; a sector size other than
+  512, a cluster size that is not a power of two, zero FATs, a FAT12 or
+  FAT16 block, and a bad signature are rejected.
+- Chains: a one-cluster file, a multi-cluster file, a chain with a loop,
+  a chain that reaches a free cluster, and a chain that leaves the FAT
+  are rejected or terminated as specified.
+- Allocation: allocating in a full FAT is an error; a freed chain returns
+  every cluster; the free count stays consistent across allocation and
+  release (property).
+- Directories: an 8.3 name with and without an extension, a name needing
+  padding, a lower-case name rejected, a deleted entry skipped, the
+  volume label skipped, an entry crossing a cluster boundary, and a full
+  directory.
+- Files: read at an offset, across a cluster boundary, and at the end;
+  write that extends the file, that overwrites, and that fills the last
+  cluster exactly; timestamps written through `audhsos-time` round-trip.
+- The image the xtask writes is read back by the same crate and every
+  file compares equal (this replaces the ad-hoc check of 6.6.15 without
+  removing that item's other cases).
+
+### 6.6.53 Fuzz support and symbolization (`fuzz-support`, `audhsos-symbols`)
+
+- `fuzz-support`: the entry glue passes the input slice through
+  unchanged, including the empty slice; the regression list replays every
+  stored corpus file; Miri covers the glue.
+- Symbol table: an address inside a function, at its first byte, at its
+  last byte, and one past it; an address in no function; a file with no
+  symbol table.
+- Line program: a DWARF version 4 and a version 5 program; the standard
+  opcodes, a special opcode sequence, and an end-of-sequence marker; an
+  address before the first row and after the last; a truncated program is
+  rejected without panic.
+- Property: no input file causes a panic and every lookup either yields a
+  location inside the file's ranges or reports none.
+
 ## 6.7 CI pipeline
 
 Jobs run in this order; a failure stops the pipeline.

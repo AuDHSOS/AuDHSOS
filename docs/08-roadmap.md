@@ -27,9 +27,12 @@ documents reflect the code, the changelog is updated. The
 [implementation plan](10-implementation-plan.md) specifies the work of
 each phase down to crates, types, algorithms, and tests.
 
-Beside the phases runs one track that depends on none of them: the
+Beside the phases run tracks that depend on none of them: the
 cryptography and TLS crates of section 8.17, specified in
-[document 11](11-cryptography-and-tls.md).
+[document 11](11-cryptography-and-tls.md), and the tracks of sections
+8.18 to 8.21, specified in [document 12](12-parallel-work.md). Section
+8.22 states how many of them may be active at once and which phase work
+may be pulled forward.
 
 ## 8.2 Phase 0: Project foundation
 
@@ -206,8 +209,9 @@ screendumps.
 
 ## 8.14 Later work, not scheduled
 
-virtio-blk driver and a file system server; virtio-net and a network
-stack, which is what the TLS track of 8.17 is waiting for; RSA signature
+virtio-blk driver and a file system server on top of the FAT32 logic of
+8.20; virtio-net and a network server on top of the stack of 8.18, which
+is what the TLS track of 8.17 is waiting for; RSA signature
 verification with the bignum crate it needs, and certificate revocation
 checking; virtio-gpu; virtio-input or `usb-tablet` for absolute pointer
 coordinates; a compositor with several windows; the `aarch64` port under
@@ -234,6 +238,8 @@ tickless timer; long file names in the disk image writer.
 | The firmware's default mode and the framebuffer address vary between firmware builds | pixel tests fail on a different resolution | tests read the resolution from the boot information and never assume one; the loader reports the framebuffer as an `MmioReserved` region |
 | Cryptography written from scratch has flaws that tests do not find | a connection that appears encrypted but is not | standards vectors, the RFC 8448 trace, negative tests for every rejection rule, fuzzing, a constant-time review section per crate, a verification-only asymmetric surface |
 | The TLS track competes with the kernel phases for attention | phases slip | the track touches no kernel crate and has no phase dependency; it is worked on between phases, never instead of one |
+| More than one side track is active at once | phases slip and no track finishes | at most one side track beside the cryptography track (D-45); document 12 fixes the order |
+| The shared foundations of 8.19 arrive after their consumers | the same containers and time arithmetic are written twice | track E is scheduled before the tracks and phases that need it, and is small |
 
 ## 8.16 Resolved decisions
 
@@ -243,8 +249,8 @@ entry point on the development machine (D-35). No open decisions remain.
 
 ## 8.17 Track C: cryptography and TLS
 
-Status: specified in [document 11](11-cryptography-and-tls.md), not
-started.
+Status: specified in [document 11](11-cryptography-and-tls.md); steps T1
+and T2 are implemented, T3 is next.
 
 The track prepares HTTPS for the day a network stack exists. Every crate
 in it is pure logic without I/O or allocation, host-tested, and depends on
@@ -265,3 +271,82 @@ phase order and is built between phases.
 Definition of done per step, as for every phase: the catalog items of
 6.6.30 to 6.6.38 that belong to the step have tests, `cargo xtask check`
 is green, the documents reflect the code, the changelog is updated.
+
+## 8.18 Track D: the network stack
+
+Status: specified in [document 12](12-parallel-work.md), not started.
+
+Sans-I/O logic crates that consume and produce frames, take time and
+randomness as parameters, allocate nothing, and depend on no kernel,
+loader, or userland crate. The driver and the server that will carry
+their bytes are later work (8.14).
+
+| Step | Crates | Size | Ends with |
+|------|--------|------|-----------|
+| D1 | `net-wire` | S | addresses, a bounds-checked cursor, and the internet checksum |
+| D2 | `net-eth` | M | Ethernet II frames and an ARP cache with aging and retransmission |
+| D3 | `net-ip` | M | IPv4 with reassembly, fragmentation, ICMP, and longest-prefix routing |
+| D4 | `net-udp` | S | sockets, ephemeral ports, checksums |
+| D5 | `net-tcp` | XL | the RFC 9293 state machine, RFC 6298 timers, and Reno congestion control, verified by two instances over a lossy network double |
+| D6 | `net-dns`, `net-dhcp` | M | name resolution and address configuration as state machines |
+| D7 | `net-http` | S | an HTTP/1.1 client that rejects the smuggling forms |
+| D8 | `net-stack` | M | one interface, one `poll`, one `poll_at` |
+| D9 | integration | - | not scheduled: virtio-net driver, network server, socket protocol, entropy system call, TLS transport (jointly with T8 of 8.17) |
+
+Tests: catalog 6.6.42 to 6.6.50. Fuzz targets `ipv4`, `tcp_segment`,
+`dns_message`, `http_response`.
+
+## 8.19 Track E: shared foundations
+
+Status: specified in [document 12](12-parallel-work.md), not started.
+
+| Step | Crate | Size | Ends with |
+|------|-------|------|-----------|
+| E1 | `audhsos-time` | S | `UnixTime`, `CivilTime`, `Instant`, `Duration`, integer calendar arithmetic |
+| E2 | `audhsos-encoding` | S | strict Base64, hex, and PEM without allocation |
+| E3 | `audhsos-collections` | M | `ArrayVec`, `RingBuffer`, `BitSet`, `IndexList`, `IndexMap`, each model-tested |
+
+Track E is scheduled first among the side tracks: step T5 of 8.17 needs
+`UnixTime`, T6 needs PEM, track D needs all three, and phases 5 and 6
+need `IndexList`.
+
+Tests: catalog 6.6.39 to 6.6.41. Fuzz target `pem`.
+
+## 8.20 Track F: device logic without devices
+
+Status: specified in [document 12](12-parallel-work.md), not started.
+
+| Step | Crate | Size | Ends with |
+|------|-------|------|-----------|
+| F1 | `virtio-queue` | M | split virtqueue and initialization state machine over a memory access trait |
+| F2 | `fs-fat` | M | FAT32 read and write over a block device trait; the xtask image writer uses it |
+
+Tests: catalog 6.6.51 and 6.6.52.
+
+## 8.21 Track G: tooling
+
+Status: specified in [document 12](12-parallel-work.md), not started.
+
+| Step | Crate | Size | Ends with |
+|------|-------|------|-----------|
+| G1 | `fuzz-support` | S | the fuzz targets of the catalog run and their corpora replay in CI |
+| G2 | `audhsos-symbols` | M | the xtask resolves a panic address to function, file, and line |
+
+G2 is worth having before Phase 3, because that is where kernel panics
+begin to cost time.
+
+Tests: catalog 6.6.53.
+
+## 8.22 Capacity for parallel work
+
+- At most one side track besides the cryptography track is active at a
+  time (D-45).
+- A side track is worked on between phases, never instead of one.
+- Order: track E, then the cryptography track to T7, then track D, with
+  step D5 not started beside an XL phase; track F when a driver becomes
+  foreseeable; G2 before Phase 3.
+- Phase work whose logic passes the admission test may be pulled
+  forward without changing its phase, its catalog items, or its
+  acceptance criteria: `gfx` (Phase 9), `driver-i8042` (Phase 10), the
+  QMP client and PPM reader (Phase 9), the allocator logic of `user-rt`
+  and the encodings of `user-proto` (Phase 7). Section 12.9 lists them.

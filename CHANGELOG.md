@@ -13,6 +13,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   HKDF, AEADs, elliptic curves, random generator, DER, X.509, the sans-I/O
   protocol crate), its test catalog entries 6.6.30 to 6.6.38, its roadmap
   track 8.17, and decisions D-36 to D-44.
+- `docs/12-parallel-work.md`: the design and implementation plan for the
+  work that runs beside the kernel phases — the admission test for
+  parallel work, the sans-I/O network stack (`net-wire`, `net-eth`,
+  `net-ip`, `net-udp`, `net-tcp`, `net-dns`, `net-dhcp`, `net-http`,
+  `net-stack`), the shared foundations (`audhsos-time`,
+  `audhsos-encoding`, `audhsos-collections`), the device logic without
+  devices (`virtio-queue`, `fs-fat`), the tooling (`fuzz-support`,
+  `audhsos-symbols`), the phase work that may be pulled forward, and the
+  capacity rule; its test catalog entries 6.6.39 to 6.6.53, its roadmap
+  tracks 8.18 to 8.22, and decisions D-45 to D-54.
 - `crypto-ct`: `Choice`, constant-time comparison, selection, exchange and
   copy, `Secret<N>` with a best-effort erase on drop.
 - `crypto-hash`: SHA-256, SHA-384, SHA-512, HMAC, and HKDF, against the
@@ -111,3 +121,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - Planning for graphics output and input devices: roadmap Phases 9 to 11,
   decisions D-29 to D-33, catalog sections 6.6.24 to 6.6.29, and the
   framebuffer fields of the boot information structure in the documents.
+
+### Changed
+
+- `UnixTime` moves out of `audhsos-der` into the new `audhsos-time`
+  crate, and the trust-anchor PEM decoding into `audhsos-encoding`
+  (D-46, D-47); document 11 is amended accordingly.
+- The crate catalog, the repository layout, the layering rules, and the
+  duplication table of document 5 list the crates of document 12; the
+  shared-crate list of layering rule 4 gains the three foundations.
+- The roadmap and the document index state the status of track C as
+  implemented through step T2, which the crates already were.
