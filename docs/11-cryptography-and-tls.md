@@ -246,12 +246,22 @@ pub trait Rng { fn fill(&mut self, out: &mut [u8]) -> Result<(), RngError>; }
 pub struct ChaChaRng { /* 32-byte key, 64-bit counter, byte budget */ }
 ```
 
-`ChaChaRng` is a ChaCha20-based deterministic random bit generator. It
-rekeys itself from its own output after every request, so a captured
-state does not reveal earlier output, and it reseeds from its `Entropy`
-source after a fixed byte budget or on demand. `ScriptedRng` behind
-`test-strategies` replays a byte string; the RFC 8448 transcript test
-needs it.
+`ChaChaRng` is a `ChaCha20`-based deterministic random bit generator. The
+nonce is the sequence number of the request, the output is the stream from
+block one onwards, and block zero of the same stream becomes the next key,
+so a state captured after a request says nothing about the bytes that
+request produced. A reseed mixes the fresh material into the key with an
+exclusive-or rather than replacing it, so a source that turns out to be
+predictable cannot take the state over, and it happens after a fixed byte
+budget or on demand. A request that would cross the budget when the source
+fails produces nothing at all.
+
+Behind `test-doubles` — the name the workspace already uses for doubles —
+the crate ships `ScriptedRng`, which replays a byte string and reports
+exhaustion instead of repeating, and the two entropy sources the tests of
+the reseed path need. The RFC 8448 transcript test of the protocol depends
+on the scripted generator: it is what makes the client's private key and
+its random the ones the document wrote down.
 
 The platform entropy source does not exist yet. It arrives with the
 network stack as `RDSEED` in `kernel-hal-x86_64` behind a `random_bytes`
@@ -409,7 +419,7 @@ checklist in 4.9.
 | T1 | `crypto-ct`, `crypto-hash` | S | implemented |
 | T2 | `crypto-aead`: ChaCha20-Poly1305, then bitsliced AES-GCM | L | implemented |
 | T3 | `crypto-ec`: `fe25519` and X25519, then Ed25519, then P-256 | L | implemented |
-| T4 | `crypto-rng` | S | |
+| T4 | `crypto-rng` | S | implemented |
 | T5 | `audhsos-der` | M | |
 | T6 | `audhsos-x509` with the test certificate builder | L | |
 | T7 | `audhsos-tls` | XL | |

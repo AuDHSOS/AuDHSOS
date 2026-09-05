@@ -128,7 +128,7 @@ AuDHSOS/
 | `crypto-hash` | c1 | all | no | yes | `crypto-ct` |
 | `crypto-aead` | c1 | all | no | yes | `crypto-ct` |
 | `crypto-ec` | c2 | all | no | yes | `crypto-ct`, `crypto-hash`; feature `test-signing` |
-| `crypto-rng` | c2 | all | no | yes | `crypto-ct`, `crypto-aead` |
+| `crypto-rng` | c2 | all | no | yes | `crypto-ct`, `crypto-aead`; feature `test-doubles` |
 | `audhsos-x509` | c3 | all | no | yes, fuzz | `audhsos-der`, `crypto-hash`, `crypto-ec`; feature `test-certificates` |
 | `audhsos-tls` | c4 | all | no | yes, fuzz | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-x509` |
 | `net-wire` | n0 | all | no | yes | - |
@@ -198,8 +198,8 @@ AuDHSOS/
   userland: `debug-uart` and `test-exit` on the kernel binary and adapter,
   `test-doubles` and `port-io` on `kernel-hal-api`, `test-strategies` on
   crates that own types used in property tests. The cryptography track
-  adds two: `test-signing` on `crypto-ec` and `test-certificates` on
-  `audhsos-x509`. Both exist to generate test data, both are off in every
+  adds `test-signing` on `crypto-ec` and `test-certificates` on
+  `audhsos-x509`, and reuses `test-doubles` on `crypto-rng`. Both exist to generate test data, both are off in every
   product build, and `cargo xtask check-layering` fails if a crate other
   than a test target or the xtask enables them. Host tests use `#![cfg_attr(not(test), no_std)]` and need
   no feature. No feature changes behavior in release builds.

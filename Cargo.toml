@@ -9,6 +9,7 @@ members = [
     "crates/crypto/hash",
     "crates/crypto/aead",
     "crates/crypto/ec",
+    "crates/crypto/rng",
     "crates/boot/uefi-x86_64",
     "crates/elf",
     "crates/uefi",
@@ -40,6 +41,7 @@ crypto-ct = { path = "crates/crypto/ct" }
 crypto-hash = { path = "crates/crypto/hash" }
 crypto-aead = { path = "crates/crypto/aead" }
 crypto-ec = { path = "crates/crypto/ec" }
+crypto-rng = { path = "crates/crypto/rng" }
 boot-uefi-x86_64 = { path = "crates/boot/uefi-x86_64" }
 audhsos-elf = { path = "crates/elf" }
 audhsos-uefi = { path = "crates/uefi" }

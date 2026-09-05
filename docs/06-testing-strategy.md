@@ -755,13 +755,21 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.34 Random generator (`crypto-rng`)
 
-- `ChaChaRng` produces the expected stream for a fixed seed; requests of
-  zero, one, block-sized, and block-crossing lengths are contiguous.
-- The generator rekeys after each request: the state after a request never
-  reproduces the bytes just returned.
-- The reseed budget triggers exactly one `Entropy` call at the boundary; a
-  failing entropy source surfaces as an error and never yields bytes.
-- `ScriptedRng` returns the scripted bytes and reports exhaustion instead
+- `ChaChaRng` produces the documented stream for a fixed seed, for
+  requests of one byte, of a block, and of a length that crosses a block;
+  a request of nothing produces nothing and leaves the state alone. The
+  seed decides the stream and the entropy source does not, whatever the
+  pattern of request lengths (property).
+- The generator rekeys after each request: one request of sixty-four bytes
+  and two of thirty-two agree on their first half and differ on their
+  second.
+- The reseed budget triggers exactly one `Entropy` call at the boundary and
+  none before it; a failing source surfaces as an error and leaves the
+  caller's buffer untouched; a reseed on demand changes the stream; a
+  seeded generator differs from one that took the same bytes as a seed,
+  because seeding mixes rather than replaces.
+- `ScriptedRng` returns the scripted bytes, refuses a request longer than
+  what is left without consuming any of it, and reports exhaustion instead
   of repeating.
 
 ### 6.6.35 DER reader (`audhsos-der`)

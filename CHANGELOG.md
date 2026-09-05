@@ -73,6 +73,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - `crypto-ec`: P-256 with Montgomery arithmetic for both moduli, Jacobian
   point arithmetic, ECDSA verification, and deterministic signing per
   RFC 6979 behind `test-signing`.
+- `crypto-rng`: the `Entropy` and `Rng` traits, a `ChaCha20` generator that
+  rekeys after every request and mixes fresh material into its key when it
+  reseeds, and the doubles the protocol tests will need.
 - Decision D-56: the key exchange of the TLS client is `x25519` alone.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.

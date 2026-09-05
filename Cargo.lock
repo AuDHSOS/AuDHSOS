@@ -85,6 +85,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto-rng"
+version = "0.1.0"
+dependencies = [
+ "crypto-aead",
+ "crypto-ct",
+ "test-support",
+]
+
+[[package]]
 name = "driver-uart16550"
 version = "0.1.0"
 dependencies = [
