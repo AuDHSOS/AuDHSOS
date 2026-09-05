@@ -446,22 +446,23 @@ Tests: catalog 6.6.52.
 
 ### 12.8.1 `fuzz-support`
 
-Implemented. The `LLVMFuzzerTestOneInput` entry glue, which is the
-allowlisted `unsafe` of this crate, a `fuzz_target!` macro, corpus
+Implemented. The fuzzing engine (D-63), a `fuzz_target!` macro, corpus
 handling, and the regression replay that `cargo xtask fuzz --regression`
 runs as the last step of `check`.
 
-The one `unsafe` is `input(data, len)`, which turns the fuzzer's pointer
-and length into a slice and answers the empty slice for a length of zero
-or a null pointer, the two cases `from_raw_parts` does not allow. Miri
-covers it.
+The `unsafe` of this crate is the boundary to the coverage
+instrumentation and nothing else: `sancov` holds the callbacks the
+compiler emits calls to, and `counters` turns the ranges the linker placed
+into slices. The mutator, the corpus, the loop, the macro, and every fuzz
+target above them are safe code. Miri covers what it can of it and skips
+the tests that stand in for ranges the linker placed, which it has no way
+to produce.
 
-A target is one source built two ways. With the coverage instrumentation
-and `--cfg fuzzing` it is a libFuzzer binary whose `main` comes from the
-runtime; without them it is an ordinary program that replays the files
-named on its command line, which is how a corpus is checked on a machine
-that has no fuzzer runtime. `fuzz/` is a workspace of its own, excluded
-from the root one, because those flags are not the flags of the checks.
+A target is one source built two ways. With `--cfg fuzzing` its `main` is
+the engine's loop; without it, an ordinary program that replays the files
+named on its command line, which is how a corpus is checked. `fuzz/` is a
+workspace of its own, excluded from the root one, because the
+instrumentation it is built with is not what the checks use.
 
 The targets that exist are the parsers that exist: `elf`,
 `boot_image_header`, and `boot_info`. `madt` follows in Phase 4, `tar` and

@@ -434,21 +434,14 @@ pub(crate) fn doc(root: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// The flags that turn a fuzz target into a libFuzzer binary: the coverage
-/// instrumentation the fuzzer steers by, `--cfg fuzzing` so that the target
-/// leaves its `main` to the runtime, and the link flag that pulls that
-/// runtime in. The runtime comes from the platform's clang, not from the
-/// workspace, which has no dependency outside itself; a machine whose clang
-/// carries no libFuzzer fails at the link step with an undefined `main`.
-/// Without these flags the same source builds an ordinary program that
-/// replays a corpus, which is what `--regression` uses.
-const FUZZING_FLAGS: &str = "-Cpasses=sancov-module \
- -Cllvm-args=-sanitizer-coverage-level=4 \
- -Cllvm-args=-sanitizer-coverage-inline-8bit-counters \
- -Cllvm-args=-sanitizer-coverage-pc-table \
- -Cllvm-args=-sanitizer-coverage-trace-compares \
- --cfg fuzzing \
- -Clink-arg=-fsanitize=fuzzer";
+/// What makes a fuzz target's `main` the engine's loop instead of the
+/// corpus replay. The coverage instrumentation is not here: it is set per
+/// package in `fuzz/Cargo.toml`, so that it lands on the code under test
+/// and not on the engine, and `fuzz/.cargo/config.toml` turns on the Cargo
+/// feature that allows it. Nothing is linked in from outside the
+/// workspace; the engine is `fuzz-support`, so no platform runtime has to
+/// carry one.
+const FUZZING_FLAGS: &str = "--cfg fuzzing";
 
 /// Fuzz targets. Without `--regression` this fuzzes; with it, every stored
 /// corpus file is replayed once, which needs no fuzzer runtime and is what
@@ -456,12 +449,24 @@ const FUZZING_FLAGS: &str = "-Cpasses=sancov-module \
 pub(crate) fn fuzz(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut selected: Option<String> = None;
     let mut seconds = 60u64;
-    let mut regression = false;
+    let mut mode = Job::Fuzz;
     let mut iter = options.iter();
     while let Some(option) = iter.next() {
         match option.as_str() {
             "--target" => selected = iter.next().cloned(),
-            "--regression" => regression = true,
+            "--regression" => mode = Job::Regression,
+            "--merge" => {
+                let from = iter.next().cloned().ok_or_else(|| {
+                    Error::Usage("--merge needs a directory to fold in".to_owned())
+                })?;
+                mode = Job::Merge(from);
+            }
+            "--minimize" => {
+                let file = iter.next().cloned().ok_or_else(|| {
+                    Error::Usage("--minimize needs the file to shrink".to_owned())
+                })?;
+                mode = Job::Minimize(file);
+            }
             "--time" => {
                 seconds = iter
                     .next()
@@ -470,6 +475,13 @@ pub(crate) fn fuzz(root: &Path, options: &[String]) -> Result<(), Error> {
             }
             other => return Err(Error::Usage(format!("unknown option `{other}` for fuzz"))),
         }
+    }
+    if let Job::Minimize(_) = mode
+        && selected.is_none()
+    {
+        return Err(Error::Usage(
+            "--minimize needs --target, because a crash belongs to one target".to_owned(),
+        ));
     }
     let targets: Vec<_> = FUZZ_TARGETS
         .iter()
@@ -480,13 +492,78 @@ pub(crate) fn fuzz(root: &Path, options: &[String]) -> Result<(), Error> {
         return Ok(());
     }
     for target in targets {
-        if regression {
-            replay_corpus(root, target.name)?;
-        } else {
-            run_fuzzer(root, target.name, seconds)?;
+        match &mode {
+            Job::Fuzz => run_fuzzer(root, target.name, seconds)?,
+            Job::Regression => replay_corpus(root, target.name)?,
+            Job::Merge(from) => merge_corpus(root, target.name, from)?,
+            Job::Minimize(file) => minimize_crash(root, target.name, file, seconds)?,
         }
     }
     Ok(())
+}
+
+/// What `fuzz` was asked to do.
+enum Job {
+    /// Mutate and run.
+    Fuzz,
+    /// Replay the stored corpus, which needs no instrumentation.
+    Regression,
+    /// Fold a directory into the stored corpus, keeping what adds
+    /// coverage.
+    Merge(String),
+    /// Shrink one crashing input.
+    Minimize(String),
+}
+
+/// A path the caller gave, as one the fuzz workspace can use. The fuzzer
+/// runs with `fuzz/` as its directory, so a path relative to where the
+/// xtask was started has to be made absolute before it is handed over.
+fn from_here(root: &Path, path: &str) -> PathBuf {
+    let given = Path::new(path);
+    if given.is_absolute() {
+        given.to_path_buf()
+    } else {
+        root.join(given)
+    }
+}
+
+/// Folds `from` into the stored corpus of one target, keeping the files
+/// that reach something the corpus does not.
+fn merge_corpus(root: &Path, name: &str, from: &str) -> Result<(), Error> {
+    eprintln!("merging {from} into the corpus of `{name}`");
+    Cmd::cargo()
+        .cwd(&root.join("fuzz"))
+        .args([
+            "run",
+            "--release",
+            "--bin",
+            name,
+            "--",
+            "-merge=1",
+            &corpus_of(root, name).display().to_string(),
+            &from_here(root, from).display().to_string(),
+        ])
+        .env("RUSTFLAGS", FUZZING_FLAGS)
+        .run()
+}
+
+/// Shrinks one crashing input of a target, for at most `seconds`.
+fn minimize_crash(root: &Path, name: &str, file: &str, seconds: u64) -> Result<(), Error> {
+    eprintln!("shrinking {file} against `{name}` for {seconds} seconds");
+    Cmd::cargo()
+        .cwd(&root.join("fuzz"))
+        .args([
+            "run",
+            "--release",
+            "--bin",
+            name,
+            "--",
+            "-minimize_crash=1",
+            &from_here(root, file).display().to_string(),
+            &format!("-max_total_time={seconds}"),
+        ])
+        .env("RUSTFLAGS", FUZZING_FLAGS)
+        .run()
 }
 
 /// Runs the fuzzer of one target for `seconds` seconds.

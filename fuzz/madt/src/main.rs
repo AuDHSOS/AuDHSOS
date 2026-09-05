@@ -11,7 +11,6 @@
 //! so that the fuzzer reaches the walk over the entries without having to
 //! guess a checksum.
 
-#![cfg_attr(fuzzing, no_main)]
 
 use kernel_acpi::madt::{ISA_BUS, MADT_HEADER_LEN, MADT_SIGNATURE, Madt, parse};
 use kernel_acpi::rsdp::{RSDP_LEN, parse_rsdp};

@@ -10,7 +10,6 @@
 //! parsed anyway. Without the second pass the fuzzer would have to guess
 //! four bytes of header before it reached a parser at all.
 
-#![cfg_attr(fuzzing, no_main)]
 
 use audhsos_tls::handshake::{
     CertificateChain, CertificateVerify, EncryptedExtensions, HandshakeType, ServerHello,

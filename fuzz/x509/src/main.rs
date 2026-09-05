@@ -10,7 +10,6 @@
 //! without an anchor behind it is the whole failure this crate exists to
 //! prevent.
 
-#![cfg_attr(fuzzing, no_main)]
 
 use audhsos_time::CivilTime;
 use audhsos_x509::{Certificate, ServerName, TrustAnchors, matches, verify_chain};

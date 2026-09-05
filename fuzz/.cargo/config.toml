@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+# The coverage instrumentation is set per package in `Cargo.toml`, not in
+# `RUSTFLAGS`, so that it lands on the code under test and not on the
+# engine that measures it. That needs one unstable Cargo feature, which the
+# pinned nightly of `rust-toolchain.toml` has.
+[unstable]
+profile-rustflags = true

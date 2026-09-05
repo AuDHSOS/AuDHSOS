@@ -355,11 +355,19 @@ pub(crate) const CRATES: &[Crate] = &[
         coverage_gate: true,
         target: Target::Host,
     },
+    // The fuzzing engine. Its `unsafe` is the boundary to the coverage
+    // instrumentation and nothing else: the twelve callbacks the compiler
+    // emits calls to, each of which is an unsafe attribute and some of
+    // which are unsafe functions, and the handful of blocks that turn the
+    // ranges the linker placed into slices. Everything above that, the
+    // mutator, the corpus, and the loop, is safe code, and so is every
+    // fuzz target. The budget counts the tests as well, which is most of
+    // it: they call the callbacks the way a compiled target would.
     Crate {
         name: "fuzz-support",
         path: "crates/support/fuzz",
         kind: Kind::Adapter {
-            unsafe_budget: 9,
+            unsafe_budget: 41,
             asm_budget: 0,
         },
         deps: &[],
@@ -395,6 +403,35 @@ pub(crate) const MIRI_CRATES: &[&str] = &["audhsos-sync", "fuzz-support"];
 pub(crate) const SPDX_HEADER: [&str; 2] = [
     "SPDX-License-Identifier: AGPL-3.0-only",
     "Copyright (C) 2026 Manuel Baesler and contributors",
+];
+
+/// The header of a file that is in part a port of foreign source.
+///
+/// The project is `AGPL-3.0-only`, and one-way compatible with the licence
+/// of what is ported here: LLVM's libFuzzer, which is Apache-2.0 with the
+/// LLVM exception. A port is a derived work, so the files that carry one
+/// name both licences and both sets of authors, and `NOTICE` at the root
+/// carries the full text of the notice they refer to.
+pub(crate) const PORTED_HEADER: [&str; 4] = [
+    "SPDX-License-Identifier: AGPL-3.0-only AND Apache-2.0 WITH LLVM-exception",
+    "Copyright (C) 2026 Manuel Baesler and contributors",
+    "Copyright (C) the LLVM Project contributors, under Apache-2.0 WITH LLVM-exception",
+    "Ported from LLVM's libFuzzer; see NOTICE at the root of this repository.",
+];
+
+/// The files that carry [`PORTED_HEADER`] instead of [`SPDX_HEADER`],
+/// relative to the root and with `/` as the separator. Every one of them
+/// is part of the fuzzing engine, which follows libFuzzer closely enough
+/// that calling it anything but a port would be wrong.
+pub(crate) const PORTED_FILES: &[&str] = &[
+    "crates/support/fuzz/src/counters.rs",
+    "crates/support/fuzz/src/dictionary.rs",
+    "crates/support/fuzz/src/engine.rs",
+    "crates/support/fuzz/src/feature.rs",
+    "crates/support/fuzz/src/mutate.rs",
+    "crates/support/fuzz/src/options.rs",
+    "crates/support/fuzz/src/pool.rs",
+    "crates/support/fuzz/src/sancov.rs",
 ];
 
 /// File extensions that carry the header, with their comment prefix.

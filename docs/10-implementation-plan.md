@@ -1689,27 +1689,34 @@ startup message; start.
 
 ### 10.7.6 Fuzzing
 
-`crates/support/fuzz` (`fuzz-support`, adapter, host): defines
-`#[unsafe(no_mangle)] pub extern "C" fn LLVMFuzzerTestOneInput(data: *const u8,
-len: usize) -> i32` once through a macro `fuzz_target!(|bytes: &[u8]| { ...
-})` that builds the slice in one `unsafe` block. `fuzz/` is a workspace of
-its own and holds one binary crate per target (`elf`, `tar`, `madt`,
-`boot_image_header`, `boot_info`, `message`); the root workspace excludes
-it, because it is built with flags the checks do not use.
+`crates/support/fuzz` (`fuzz-support`, adapter, host) is the fuzzing
+engine and the macro `fuzz_target!(|bytes: &[u8]| { ... })` that writes a
+target's two entry points. `fuzz/` is a workspace of its own and holds one
+binary crate per target; the root workspace excludes it, because it is
+built with flags the checks do not use.
 
-`xtask fuzz` builds it `--release` with the coverage instrumentation
-(`-Cpasses=sancov-module` and the `-sanitizer-coverage-*` LLVM arguments),
-`--cfg fuzzing`, and `-Clink-arg=-fsanitize=fuzzer`. There is no
-`-Zsanitizer=fuzzer`: `fuzzer` is not one of the values rustc accepts
-there, and the libFuzzer runtime comes from the platform's clang and not
-from a package, because the workspace has no dependency outside itself. A
-machine whose clang carries no libFuzzer fails at the link step with an
-undefined `main`.
+The engine is this project's own, ported from libFuzzer (D-63). `sancov`
+holds the callbacks the compiler emits calls to and `counters` holds the
+ranges it registers; above them are the mutator, the table of values the
+target was seen comparing against, the corpus and its features, and the
+loop. Nothing is linked in from outside the workspace, so nothing depends
+on the platform's clang carrying a fuzzer runtime, which Apple's does not.
+
+`xtask fuzz` builds `--release` with `--cfg fuzzing`, which is what makes
+a target's `main` the loop instead of the replay. The coverage
+instrumentation (`-Cpasses=sancov-module` and the `-sanitizer-coverage-*`
+LLVM arguments) is not in `RUSTFLAGS` but per package in
+`fuzz/Cargo.toml`, with `fuzz/.cargo/config.toml` turning on the Cargo
+feature that allows it: it goes on the code under test and the targets,
+and not on the engine. Instrumenting the engine costs about three runs in
+four, because its counters are the greater part of a target's and never
+say anything about the input. There is no `-Zsanitizer=fuzzer`: `fuzzer`
+is not one of the values rustc accepts there.
 
 `xtask fuzz --regression` builds the same sources without those flags,
 which makes every target an ordinary program that replays the files of its
 corpus, and runs it over `fuzz/corpus/<target>/`. That is the step `check`
-runs, and it needs no runtime. Every crash becomes a regression test in the
+runs, and it is uninstrumented and therefore quick. Every crash becomes a regression test in the
 parser's crate and its input a file in the corpus. Register the targets in
 `policy::FUZZ_TARGETS`.
 

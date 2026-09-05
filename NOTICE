@@ -1,0 +1,43 @@
+AuDHSOS
+Copyright (C) 2026 Manuel Baesler and contributors
+
+This program is free software under the GNU Affero General Public License,
+version 3 only. See LICENSE for the full text.
+
+
+Portions of this project are ports of foreign source
+====================================================
+
+crates/support/fuzz
+-------------------
+
+The fuzzing engine of this project is a port of libFuzzer, part of the
+LLVM Project. The following files carry algorithms, data structures, and
+constants taken from it, rewritten in Rust:
+
+    crates/support/fuzz/src/counters.rs
+    crates/support/fuzz/src/dictionary.rs
+    crates/support/fuzz/src/engine.rs
+    crates/support/fuzz/src/feature.rs
+    crates/support/fuzz/src/mutate.rs
+    crates/support/fuzz/src/options.rs
+    crates/support/fuzz/src/pool.rs
+    crates/support/fuzz/src/sancov.rs
+
+Each of them names both licences in its header. The original is:
+
+    Part of the LLVM Project, under the Apache License v2.0 with LLVM
+    Exceptions. See https://llvm.org/LICENSE.txt for license information.
+    SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+    Copyright (C) the LLVM Project contributors.
+
+The source ported from is compiler-rt/lib/fuzzer of LLVM 22.1.6. The
+counter bucketing in feature.rs reached libFuzzer from AFL, by Michal
+Zalewski, and is described in AFL's technical notes.
+
+The Apache License, version 2.0, is one-way compatible with version 3 of
+the GNU General Public License and its Affero variant: the combined work
+is distributed under AGPL-3.0-only, and the notice above is kept as that
+licence requires. A copy of the Apache License, version 2.0, with the LLVM
+Exception, is available at https://llvm.org/LICENSE.txt.

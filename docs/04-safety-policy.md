@@ -36,7 +36,7 @@ device register are operations the Rust language can only express as
 | `boot-uefi-x86_64` | firmware calls through function pointers, memory map buffer from a raw pointer, page-table memory through the identity mapping, `CR3` write, kernel entry | `CR3` write, port write for the exit device, one naked function |
 | `audhsos-sync` | `Global<T>`: a `Sync` cell with a runtime borrow flag for kernel and userland global state | none |
 | `user-sys-x86_64` | the system call trap instruction, `_start`, the `GlobalAlloc` adapter | one `asm!` statement: `int 0x80` |
-| `fuzz-support` (host only) | the `LLVMFuzzerTestOneInput` entry that turns the fuzzer's pointer and length into a byte slice | none |
+| `fuzz-support` (host only) | the fuzzing engine's boundary to the coverage instrumentation: the callbacks the compiler emits calls to, and the blocks that turn the counter ranges the linker placed into slices (D-63) | none |
 
 No other crate may contain `unsafe`. Adding a crate to this list requires a
 new entry in the decision register.

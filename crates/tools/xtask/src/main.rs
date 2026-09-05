@@ -39,7 +39,8 @@ subcommands:
   coverage         host coverage with thresholds
   miri             run the host-executable adapter crates under Miri
   doc              build documentation with warnings as errors
-  fuzz [--target <name>] [--time <seconds>]
+  fuzz [--target <name>] [--time <seconds>] [--regression]
+       [--merge <directory>] [--minimize <file>]
                    run fuzz targets
   build [--release]
                    build the loader and the kernel for their targets

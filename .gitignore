@@ -2,11 +2,14 @@ target/
 *.profraw
 *.profdata
 
-# libFuzzer writes what it discovers into the same directories the
-# regression corpus lives in, naming every input by the SHA-1 of its
-# content. Those forty characters are the mark: the regression corpus of
-# D-54 is named in words, one file per case a test cites, and is tracked;
-# what a run finds is reproducible by another run and is not.
+# The fuzzer writes what it discovers into the same directories the
+# regression corpus lives in, naming every input by a hash of its content.
+# Those hexadecimal names are the mark: the regression corpus of D-54 is
+# named in words, one file per case a test cites, and is tracked; what a
+# run finds is reproducible by another run and is not. Thirty-two
+# characters is this project's own engine, forty is libFuzzer, which wrote
+# into these directories before the engine took its place.
+fuzz/corpus/*/????????????????????????????????
 fuzz/corpus/*/????????????????????????????????????????
 
 # macOS leaves these beside anything a Finder window has opened.

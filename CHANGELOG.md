@@ -7,6 +7,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The fuzzing engine of this project, in `fuzz-support`, ported from
+  libFuzzer (D-63). Apple's clang carries no libFuzzer runtime, so
+  `-Clink-arg=-fsanitize=fuzzer` failed at the link step and no target
+  could be fuzzed on the machine this system is written on; what a runtime
+  would have supplied is now Rust in this workspace. `sancov` holds the
+  callbacks the compiler emits calls to and `counters` the ranges it
+  registers; above them are the thirteen mutations and how one is drawn,
+  the table of the values the target was last seen comparing against, the
+  bucketing of counters into features, a corpus in which a feature belongs
+  to the smallest input that reaches it, the value profile, the loop, the
+  merge, and the shrink. The command line is libFuzzer's, so what is
+  written down about running a target still holds, and a flag this engine
+  has not is refused by name rather than ignored. On the `der` target it
+  runs 1.25 million inputs a second, which is what libFuzzer reached on
+  the same target on the same machine.
+- The port is a derived work of Apache-2.0 code, so the eight files that
+  carry one name both licences in their header, `NOTICE` at the root
+  records what was ported and from where, and the SPDX check knows the
+  second header form and which files may use it (`policy::PORTED_FILES`).
+- The `unsafe` of a fuzz target is gone. The engine is called from Rust,
+  so nothing above `sancov` and `counters` sees a pointer and a length,
+  and the macro that writes a target's entry points is safe code.
+
 - The repository is ready for the worktree sessions of a coding agent: a
   session branches from the local `HEAD`, which `.claude/settings.json`
   states because nothing here is pushed, and writes a whole further
@@ -465,6 +488,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   framebuffer fields of the boot information structure in the documents.
 
 ### Changed
+
+- `xtask fuzz` no longer links a runtime from the platform's clang, and
+  the coverage instrumentation moved out of `RUSTFLAGS` into per-package
+  settings in `fuzz/Cargo.toml`, with `fuzz/.cargo/config.toml` turning on
+  the Cargo feature that allows them. The instrumentation now goes on the
+  code under test and the targets and not on the engine that measures it,
+  which is worth about three runs in four: on the `der` target the engine
+  was the greater part of the counters that were cleared and read for
+  every input, and none of them ever said anything about the input.
 
 - `audhsos-der` no longer defines a time type. `Timestamp` is gone;
   `read_time`, `from_utc_time`, and `from_generalized_time` yield the

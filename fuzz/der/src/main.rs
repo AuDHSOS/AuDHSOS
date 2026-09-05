@@ -10,7 +10,6 @@
 //! reader stops there too and a deeper walk would only exhaust this
 //! program's own stack.
 
-#![cfg_attr(fuzzing, no_main)]
 
 use audhsos_der::{MAX_DEPTH, Reader, from_generalized_time, from_utc_time};
 

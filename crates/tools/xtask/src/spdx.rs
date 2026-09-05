@@ -7,7 +7,9 @@ use std::path::Path;
 
 use crate::error::Error;
 use crate::fs;
-use crate::policy::{HEADER_EXEMPT_FILES, HEADER_FILE_TYPES, SPDX_HEADER};
+use crate::policy::{
+    HEADER_EXEMPT_FILES, HEADER_FILE_TYPES, PORTED_FILES, PORTED_HEADER, SPDX_HEADER,
+};
 
 /// Checks every file with a known extension below `root` and returns the
 /// violations.
@@ -18,8 +20,8 @@ pub(crate) fn check(root: &Path) -> Result<Vec<String>, Error> {
             continue;
         };
         let content = fs::read(&path)?;
-        if let Some(problem) = header_problem(&content, prefix) {
-            let relative = path.strip_prefix(root).unwrap_or(&path);
+        let relative = path.strip_prefix(root).unwrap_or(&path);
+        if let Some(problem) = header_problem(&content, prefix, expected_header(relative)) {
             violations.push(format!("{}: {problem}", relative.display()));
         }
     }
@@ -39,10 +41,25 @@ pub(crate) fn comment_prefix(path: &Path) -> Option<&'static str> {
         .map(|(_, prefix)| *prefix)
 }
 
+/// The header `relative` must carry: the one that names both licences for
+/// a file that is in part a port, and the project's own for every other.
+pub(crate) fn expected_header(relative: &Path) -> &'static [&'static str] {
+    let path = relative.to_string_lossy().replace('\\', "/");
+    if PORTED_FILES.contains(&path.as_str()) {
+        &PORTED_HEADER
+    } else {
+        &SPDX_HEADER
+    }
+}
+
 /// What is wrong with the header of `content`, if anything.
-pub(crate) fn header_problem(content: &str, prefix: &str) -> Option<String> {
+pub(crate) fn header_problem(
+    content: &str,
+    prefix: &str,
+    expected_lines: &[&str],
+) -> Option<String> {
     let mut lines = content.lines();
-    for (index, expected) in SPDX_HEADER.iter().enumerate() {
+    for (index, expected) in expected_lines.iter().enumerate() {
         let wanted = format!("{prefix} {expected}");
         match lines.next() {
             Some(line) if line == wanted => {}

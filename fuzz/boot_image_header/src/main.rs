@@ -5,7 +5,6 @@
 //! memory of the machine come out of the input too, so that the
 //! cross-field checks are reached with values the fuzzer chooses.
 
-#![cfg_attr(fuzzing, no_main)]
 
 use audhsos_abi::boot_image::BootImageHeader;
 

@@ -4,7 +4,6 @@
 //! The ELF parser against arbitrary bytes: no input may panic, and every
 //! image the parser accepts must describe segments inside the file.
 
-#![cfg_attr(fuzzing, no_main)]
 
 use audhsos_elf::image::{Constraints, parse};
 

@@ -9,7 +9,6 @@
 //! other way: what this crate seals, this crate opens again, and the bytes
 //! that come back are the bytes that went in.
 
-#![cfg_attr(fuzzing, no_main)]
 
 use audhsos_tls::keys::traffic_keys;
 use audhsos_tls::record::{self, HEADER_LEN, MAX_PLAINTEXT};

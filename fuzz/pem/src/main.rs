@@ -9,7 +9,6 @@
 //! two texts for one block would let a certificate be written twice and
 //! compared once.
 
-#![cfg_attr(fuzzing, no_main)]
 
 use audhsos_encoding::base64;
 use audhsos_encoding::pem::{self, LINE};
