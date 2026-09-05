@@ -5,6 +5,28 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- The scheduler asks the transition table before it takes a thread out of
+  its run queue. It did it the other way round in the four operations that
+  take a thread off the processor, and for two of them that was wrong: the
+  table has a row out of `Ready` for `Suspend` and for `Exit`, but none for
+  `Fault` and none for the four block events, because only a running thread
+  can fault or block. A ready thread handed to `fault` was therefore taken
+  out of its queue and then refused — left `Ready` and in no queue, which
+  is the one thing the scheduler says can never be true of a thread, and
+  which `pick_next` can never find again. The caller saw an error and had
+  every reason to believe nothing had happened.
+
+  The four bodies were identical and are now one, `leaves_the_processor`,
+  which applies the event first and dequeues afterwards. Nothing can be
+  left half done that way: `dequeue` fails only for a thread the pool does
+  not hold, and the apply has just held it. An operation the table refuses
+  now changes nothing at all — not the state, not a queue, not the time
+  slice. `kernel_syscall::fault::stop` no longer has to check the state
+  itself.
+
+
 ### Added
 
 - The model-test runner refuses a run that reached nothing.

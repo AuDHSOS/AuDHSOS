@@ -27,45 +27,18 @@ use crate::environment::Environment;
 /// user mode.
 ///
 /// A thread that was running always asks for a switch: it cannot be
-/// returned to, and the processor stands on its kernel stack. Any other
-/// thread is left exactly where it is and asks for nothing.
-///
-/// The state is checked here and not left to the scheduler, which takes a
-/// thread out of its run queue before it asks the transition table whether
-/// the event is allowed. Only a running thread may fault, so a ready one
-/// would come back from a refused fault ready and in no queue, which is
-/// the one thing the scheduler says can never be true of a thread. Nothing
-/// of this kernel reaches that — the trap handler faults the thread the
-/// processor was on — but the check is one line and the invariant is not.
+/// returned to, and the processor stands on its kernel stack. Only a
+/// running thread can fault, and the scheduler refuses every other one
+/// without moving it, so anything else is left exactly where it was and
+/// asks for nothing.
 pub fn stop<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     machine: &mut Machine<'_, E, NP, NT, NM, NH>,
     thread: ThreadId,
 ) -> Outcome {
-    if !is_running(machine, thread) {
-        return Outcome::NOTHING;
-    }
     machine
         .scheduler
         .fault(&mut machine.objects.threads, thread)
         .unwrap_or(Outcome::NOTHING)
-}
-
-/// `true` when `thread` is the one on the processor.
-fn is_running<
-    E: Environment,
-    const NP: usize,
-    const NT: usize,
-    const NM: usize,
-    const NH: usize,
->(
-    machine: &Machine<'_, E, NP, NT, NM, NH>,
-    thread: ThreadId,
-) -> bool {
-    machine
-        .objects
-        .threads
-        .get(thread)
-        .is_ok_and(|entry| entry.state == ThreadState::Running)
 }
 
 /// `true` when `thread` has been stopped by a fault.

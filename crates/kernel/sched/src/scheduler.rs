@@ -8,6 +8,11 @@
 //! priority exactly when that priority's queue holds someone; the running
 //! thread is in no queue; the idle thread is never in a queue and is picked
 //! only when every queue is empty.
+//!
+//! The first of those is why every operation that takes a thread off the
+//! processor goes through [`Scheduler::leaves_the_processor`], which asks
+//! the transition table before it touches a queue. An operation the table
+//! refuses changes nothing at all.
 
 use audhsos_abi::layout::{DEFAULT_TIME_SLICE_TICKS, PRIORITY_COUNT};
 use audhsos_abi::{Error, ThreadState};
@@ -359,13 +364,46 @@ impl Scheduler {
         Ok(self.preempts_current(threads, id))
     }
 
+    /// Takes `id` off the processor on `event`: the table first, the queue
+    /// afterwards.
+    ///
+    /// That order is the whole of it. A thread is in a run queue exactly
+    /// while its state is [`ThreadState::Ready`], so a thread that leaves
+    /// its queue must be one whose state is about to stop being `Ready` —
+    /// and only the table knows whether it may. Taking it out first and
+    /// asking afterwards leaves a thread that the table refused ready and
+    /// in no queue, which is a thread [`Scheduler::pick_next`] can never
+    /// find again and nobody is told about: the caller has an error in its
+    /// hand and every reason to believe that nothing happened.
+    ///
+    /// The other way round nothing can be left half done. `dequeue` fails
+    /// only for a thread the pool does not hold, and [`Scheduler::apply`]
+    /// has just held it; the state it wrote does not reach anything
+    /// `dequeue` reads.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidHandle`] when the pool does not hold the thread;
+    /// [`Error::InvalidState`] when the transition table does not allow the
+    /// event in the thread's state. The thread is untouched either way.
+    fn leaves_the_processor<const N: usize>(
+        &mut self,
+        threads: &mut Pool<Thread, N>,
+        id: ThreadId,
+        event: Event,
+    ) -> Result<Outcome, Error> {
+        Self::apply(threads, id, event)?;
+        self.dequeue(threads, id)?;
+        Self::spend_slice(threads, id);
+        Ok(self.left_the_processor(id))
+    }
+
     /// Blocks the running thread on what `event` names.
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidArgument`] when `event` blocks nothing;
-    /// [`Error::InvalidHandle`] when the pool does not hold the thread;
-    /// [`Error::InvalidState`] when the thread is not running.
+    /// [`Error::InvalidArgument`] when `event` blocks nothing; otherwise as
+    /// [`Scheduler::leaves_the_processor`].
     pub fn on_block<const N: usize>(
         &mut self,
         threads: &mut Pool<Thread, N>,
@@ -375,28 +413,20 @@ impl Scheduler {
         if event.blocked_state().is_none() {
             return Err(Error::InvalidArgument);
         }
-        self.dequeue(threads, id)?;
-        Self::apply(threads, id, event)?;
-        Self::spend_slice(threads, id);
-        Ok(self.left_the_processor(id))
+        self.leaves_the_processor(threads, id, event)
     }
 
     /// Suspends `id`, wherever it was.
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidHandle`] when the pool does not hold the thread;
-    /// [`Error::InvalidState`] when the transition table does not allow the
-    /// event in the thread's state.
+    /// As [`Scheduler::leaves_the_processor`].
     pub fn suspend<const N: usize>(
         &mut self,
         threads: &mut Pool<Thread, N>,
         id: ThreadId,
     ) -> Result<Outcome, Error> {
-        self.dequeue(threads, id)?;
-        Self::apply(threads, id, Event::Suspend)?;
-        Self::spend_slice(threads, id);
-        Ok(self.left_the_processor(id))
+        self.leaves_the_processor(threads, id, Event::Suspend)
     }
 
     /// Resumes a suspended or faulted thread.
@@ -414,22 +444,19 @@ impl Scheduler {
         Ok(self.preempts_current(threads, id))
     }
 
-    /// Stops `id` on a fault it has no handler for.
+    /// Stops `id` on a fault it has no handler for. Only the thread on the
+    /// processor can fault, so a thread in any other state is refused and
+    /// stays exactly where it was, its queue included.
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidHandle`] when the pool does not hold the thread;
-    /// [`Error::InvalidState`] when the transition table does not allow the
-    /// event in the thread's state.
+    /// As [`Scheduler::leaves_the_processor`].
     pub fn fault<const N: usize>(
         &mut self,
         threads: &mut Pool<Thread, N>,
         id: ThreadId,
     ) -> Result<Outcome, Error> {
-        self.dequeue(threads, id)?;
-        Self::apply(threads, id, Event::Fault)?;
-        Self::spend_slice(threads, id);
-        Ok(self.left_the_processor(id))
+        self.leaves_the_processor(threads, id, Event::Fault)
     }
 
     /// Ends `id`, wherever it was. A thread that has already exited is
@@ -437,9 +464,7 @@ impl Scheduler {
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidHandle`] when the pool does not hold the thread;
-    /// [`Error::InvalidState`] when the transition table does not allow the
-    /// event in the thread's state.
+    /// As [`Scheduler::leaves_the_processor`].
     pub fn exit<const N: usize>(
         &mut self,
         threads: &mut Pool<Thread, N>,
@@ -449,10 +474,7 @@ impl Scheduler {
         if state == ThreadState::Exited {
             return Ok(Outcome::NOTHING);
         }
-        self.dequeue(threads, id)?;
-        Self::apply(threads, id, Event::Exit)?;
-        Self::spend_slice(threads, id);
-        Ok(self.left_the_processor(id))
+        self.leaves_the_processor(threads, id, Event::Exit)
     }
 
     /// The running thread gives up the rest of its time slice; it goes to

@@ -621,3 +621,129 @@ fn setting_the_priority_of_a_thread_the_pool_does_not_hold_fails() {
         Err(Error::InvalidHandle)
     );
 }
+
+/// Every event that takes a thread off the processor, and the state a
+/// ready thread would have to be in for the table to allow it. A ready
+/// thread is the only kind that stands in a queue, so it is the only kind
+/// a refused event could strand outside one.
+const LEAVING: &[(Event, bool)] = &[
+    (Event::Suspend, true),
+    (Event::Exit, true),
+    (Event::Fault, false),
+    (Event::BlockSend, false),
+    (Event::BlockRecv, false),
+    (Event::BlockReply, false),
+    (Event::BlockNotification, false),
+];
+
+/// Applies `event` to `id` through the method that owns it.
+fn leave(
+    scheduler: &mut Scheduler,
+    threads: &mut Threads,
+    id: ThreadId,
+    event: Event,
+) -> Result<Outcome, Error> {
+    match event {
+        Event::Suspend => scheduler.suspend(threads, id),
+        Event::Exit => scheduler.exit(threads, id),
+        Event::Fault => scheduler.fault(threads, id),
+        other => scheduler.on_block(threads, id, other),
+    }
+}
+
+#[test]
+fn the_table_decides_before_a_thread_leaves_its_queue() {
+    for (event, allowed) in LEAVING {
+        let mut threads = Threads::new();
+        let mut scheduler = Scheduler::new();
+        let idle = add(&mut threads, 0);
+        scheduler.set_idle(idle);
+        let waiting = ready(&mut scheduler, &mut threads, 4);
+        let queued = scheduler.ready_bitmap();
+        assert_ne!(queued, 0, "{event:?}: the thread waits in a queue");
+
+        let outcome = leave(&mut scheduler, &mut threads, waiting, *event);
+
+        if *allowed {
+            assert!(outcome.is_ok(), "{event:?}: the table allows it from Ready");
+            assert_ne!(state(&threads, waiting), ThreadState::Ready);
+            assert_eq!(
+                scheduler.ready_bitmap(),
+                0,
+                "{event:?}: a thread that left `Ready` leaves its queue with it"
+            );
+            continue;
+        }
+
+        assert_eq!(
+            outcome,
+            Err(Error::InvalidState),
+            "{event:?}: the table has no row out of Ready"
+        );
+        assert_eq!(
+            state(&threads, waiting),
+            ThreadState::Ready,
+            "{event:?}: a refused event changes no state"
+        );
+        assert_eq!(
+            scheduler.ready_bitmap(),
+            queued,
+            "{event:?}: and takes nothing out of a queue"
+        );
+        assert_eq!(
+            scheduler.pick_next(&mut threads),
+            Ok(waiting),
+            "{event:?}: the thread is still the one that runs next"
+        );
+    }
+}
+
+#[test]
+fn a_refused_event_leaves_the_time_slice_of_the_running_thread_alone() {
+    let mut threads = Threads::new();
+    let mut scheduler = Scheduler::new();
+    let idle = add(&mut threads, 0);
+    scheduler.set_idle(idle);
+    let waiting = ready(&mut scheduler, &mut threads, 4);
+    let running = ready(&mut scheduler, &mut threads, 6);
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(running));
+    let slice = threads.get(waiting).unwrap().time_slice;
+
+    assert_eq!(
+        scheduler.fault(&mut threads, waiting),
+        Err(Error::InvalidState)
+    );
+
+    assert_eq!(
+        threads.get(waiting).unwrap().time_slice,
+        slice,
+        "a fault the table refused spent no slice"
+    );
+    assert_eq!(
+        scheduler.current(),
+        Some(running),
+        "and took nobody off the processor"
+    );
+}
+
+#[test]
+fn a_thread_the_pool_does_not_hold_leaves_no_queue() {
+    let mut threads = Threads::new();
+    let mut scheduler = Scheduler::new();
+    let idle = add(&mut threads, 0);
+    scheduler.set_idle(idle);
+    let waiting = ready(&mut scheduler, &mut threads, 4);
+    let stale: ThreadId = ObjectId::new(waiting.index(), waiting.generation() + 1);
+    let queued = scheduler.ready_bitmap();
+
+    for (event, _) in LEAVING {
+        assert_eq!(
+            leave(&mut scheduler, &mut threads, stale, *event),
+            Err(Error::InvalidHandle),
+            "{event:?}"
+        );
+    }
+
+    assert_eq!(scheduler.ready_bitmap(), queued);
+    assert_eq!(state(&threads, waiting), ThreadState::Ready);
+}
