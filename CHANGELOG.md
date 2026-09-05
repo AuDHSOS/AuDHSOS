@@ -64,6 +64,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - `crypto-ec`: P-256 with Montgomery arithmetic for both moduli, Jacobian
   point arithmetic, ECDSA verification, and deterministic signing per
   RFC 6979 behind `test-signing`.
+- Decision D-56: the key exchange of the TLS client is `x25519` alone.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.
 - `audhsos-abi`: error codes, rights, object types, handles, layout

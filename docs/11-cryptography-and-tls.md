@@ -24,7 +24,7 @@ In scope for the first version:
 - TLS 1.3 client, RFC 8446, as the only protocol version.
 - Cipher suites `TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384`,
   `TLS_CHACHA20_POLY1305_SHA256`.
-- Key exchange `x25519` and `secp256r1`.
+- Key exchange `x25519` (D-56).
 - Certificate signature verification with `ecdsa_secp256r1_sha256`,
   `ecdsa_secp256r1_sha384`, and `ed25519`.
 - Server certificate validation against caller-supplied trust anchors,
@@ -34,14 +34,24 @@ In scope for the first version:
 Not in scope for the first version, listed so that the boundary is
 explicit: TLS 1.2 and earlier; the server role; session resumption,
 pre-shared keys, and 0-RTT; client certificates; RSA signature
-verification; hybrid post-quantum key exchange; certificate revocation
-(CRL, OCSP, stapling); name constraints; renegotiation; compression;
-`record_size_limit`; DTLS.
+verification; the `secp256r1` key exchange; hybrid post-quantum key
+exchange; certificate revocation (CRL, OCSP, stapling); name constraints;
+renegotiation; compression; `record_size_limit`; DTLS.
 
 RSA verification is the one omission that costs interoperability: many
 public chains are RSA to the root. It is later work and needs a bignum
 crate with Montgomery multiplication. Everything else on the list is
 optional for a working HTTPS request.
+
+The `secp256r1` key exchange left the list with D-56, after the curve was
+implemented. A key exchange multiplies a secret scalar; the P-256 of
+`crypto-ec` verifies signatures, where every value is public and the code
+may branch on it, and that is what makes it short enough to compare
+against the formulas. Offering the group would mean a second scalar
+multiplication written to the constant-time discipline inside a module
+that earns its clarity by not needing one. X25519 is mandatory to
+implement in RFC 8446, so offering it alone reaches every conforming
+server.
 
 ## 11.3 Crate catalog
 
