@@ -232,6 +232,75 @@ impl<'a> Datagram<'a> {
     }
 }
 
+/// The beginning of a datagram, as an ICMP error quotes it.
+///
+/// A quote is a header and the first eight bytes behind it, so the total
+/// length the header declares is longer than what is there and it cannot
+/// be read as a whole datagram. What a transport wants from it is the
+/// addresses, the protocol, and those eight bytes, which carry its own
+/// ports — enough to find the connection the error belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Quoted<'a> {
+    /// Where the datagram that earned the error came from, which is this
+    /// host.
+    pub source: Ipv4Addr,
+    /// Where it was going.
+    pub destination: Ipv4Addr,
+    /// What it carried.
+    pub protocol: Protocol,
+    /// As much of its payload as the error quoted.
+    pub payload: &'a [u8],
+}
+
+impl<'a> Quoted<'a> {
+    /// The quoted beginning of a datagram in `bytes`.
+    ///
+    /// The header is checked as it is in a whole datagram, checksum
+    /// included, since a quote carries the header intact and only the
+    /// payload is cut. What is not checked is the total length against
+    /// the buffer, because a quote is short by design.
+    ///
+    /// # Errors
+    ///
+    /// [`IpError::Version`], [`IpError::HeaderLength`],
+    /// [`IpError::Checksum`], or [`IpError::Wire`] when the bytes end
+    /// inside the header.
+    pub fn parse(bytes: &'a [u8]) -> Result<Quoted<'a>, IpError> {
+        let mut reader = Reader::new(bytes);
+        let version_and_length = reader.read_u8()?;
+        let version = version_and_length.wrapping_shr(4);
+        if version != VERSION {
+            return Err(IpError::Version(version));
+        }
+        let words = version_and_length & 0x0F;
+        let header_len = usize::from(words).saturating_mul(4);
+        if header_len < MIN_HEADER_LEN || header_len > bytes.len() {
+            return Err(IpError::HeaderLength(words));
+        }
+        // The differentiated services byte, the total length, the
+        // identification, the flags with the offset, and the time to
+        // live: eight bytes between the first and the protocol.
+        reader.skip(8)?;
+        let protocol = Protocol::new(reader.read_u8()?);
+        let carried = reader.read_u16()?;
+        let source = reader.read_ipv4()?;
+        let destination = reader.read_ipv4()?;
+        let header = bytes
+            .get(..header_len)
+            .ok_or(IpError::HeaderLength(words))?;
+        if !is_valid(header) {
+            return Err(IpError::Checksum(carried));
+        }
+        let payload = bytes.get(header_len..).unwrap_or(&[]);
+        Ok(Quoted {
+            source,
+            destination,
+            protocol,
+            payload,
+        })
+    }
+}
+
 /// What a header is written from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {

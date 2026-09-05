@@ -6,11 +6,15 @@
 #![doc = include_str!("../README.md")]
 
 pub mod error;
+pub mod fragment;
 pub mod header;
+pub mod icmp;
 pub mod route;
 
 pub use error::IpError;
-pub use header::{Datagram, Header};
+pub use fragment::{Assembled, Fragments, Reassembler, fragment};
+pub use header::{Datagram, Header, Quoted};
+pub use icmp::{Message, RateLimit, TokenBucket, Unreachable};
 pub use route::{NextHop, Route, RoutingTable};
 
 #[cfg(test)]

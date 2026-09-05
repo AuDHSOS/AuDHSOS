@@ -15,7 +15,7 @@ use test_support::property::check;
 
 use crate::error::IpError;
 use crate::header::{
-    CHECKSUM_OFFSET, DEFAULT_TTL, Datagram, FRAGMENT_UNIT, Header, MIN_HEADER_LEN,
+    CHECKSUM_OFFSET, DEFAULT_TTL, Datagram, FRAGMENT_UNIT, Header, MIN_HEADER_LEN, Quoted,
 };
 
 /// A datagram of twenty-eight bytes: five words of header and eight of
@@ -297,4 +297,51 @@ fn fix_checksum(bytes: &mut [u8]) {
     bytes[CHECKSUM_OFFSET + 1] = 0;
     let sum = net_wire::checksum(&bytes[..MIN_HEADER_LEN]);
     bytes[CHECKSUM_OFFSET..CHECKSUM_OFFSET + 2].copy_from_slice(&sum.to_be_bytes());
+}
+
+#[test]
+fn a_quote_is_read_where_a_whole_datagram_cannot_be() {
+    let bytes = datagram_of(&HEADER);
+    // The header says twenty-eight bytes; a quote carries twenty of
+    // header and as much payload as the error had room for.
+    let quote = &bytes[..MIN_HEADER_LEN + 4];
+    assert_eq!(Datagram::parse(quote), Err(IpError::TotalLength(28)));
+
+    let quoted = Quoted::parse(quote).expect("a quote is read as one");
+    assert_eq!(quoted.source, Ipv4Addr::new(10, 0, 0, 2));
+    assert_eq!(quoted.destination, Ipv4Addr::new(10, 0, 0, 1));
+    assert_eq!(quoted.protocol, Protocol::UDP);
+    assert_eq!(quoted.payload, &PAYLOAD[..4]);
+
+    // A quote of the header alone carries no payload and is still read.
+    let bare = Quoted::parse(&bytes[..MIN_HEADER_LEN]).expect("a header alone");
+    assert_eq!(bare.payload, &[]);
+}
+
+#[test]
+fn a_quote_is_checked_the_way_a_header_is() {
+    let bytes = datagram_of(&HEADER);
+    let mut quote = bytes[..MIN_HEADER_LEN + 4].to_vec();
+
+    quote[0] = 0x65;
+    assert_eq!(Quoted::parse(&quote), Err(IpError::Version(6)));
+    quote[0] = 0x44;
+    assert_eq!(Quoted::parse(&quote), Err(IpError::HeaderLength(4)));
+    quote[0] = 0x4F;
+    assert_eq!(Quoted::parse(&quote), Err(IpError::HeaderLength(15)));
+    quote[0] = 0x45;
+    quote[8] = 0x3F;
+    assert_eq!(Quoted::parse(&quote), Err(IpError::Checksum(0x0A89)));
+
+    for length in 0..MIN_HEADER_LEN {
+        assert!(Quoted::parse(&bytes[..length]).is_err(), "{length} bytes");
+    }
+}
+
+#[test]
+fn a_quote_with_options_steps_over_them_too() {
+    let bytes = datagram_of(&HEADER_WITH_OPTION);
+    let quoted = Quoted::parse(&bytes[..24 + 8]).expect("a quote with an option");
+    assert_eq!(quoted.protocol, Protocol::UDP);
+    assert_eq!(quoted.payload, &PAYLOAD);
 }

@@ -4,5 +4,7 @@
 //! The host tests of the crate, one module per product module.
 
 mod error;
+mod fragment;
 mod header;
+mod icmp;
 mod route;
