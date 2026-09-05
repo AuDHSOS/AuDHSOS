@@ -50,6 +50,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto-aead"
+version = "0.1.0"
+dependencies = [
+ "crypto-ct",
+ "test-support",
+]
+
+[[package]]
 name = "crypto-ct"
 version = "0.1.0"
 dependencies = [

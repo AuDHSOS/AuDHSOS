@@ -17,6 +17,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   copy, `Secret<N>` with a best-effort erase on drop.
 - `crypto-hash`: SHA-256, SHA-384, SHA-512, HMAC, and HKDF, against the
   vectors of FIPS 180-4, RFC 4231, and RFC 5869.
+- `crypto-aead`: `ChaCha20`, `Poly1305`, and the `ChaCha20-Poly1305`
+  authenticated cipher of RFC 8439, sealing and opening in place, with
+  verification before decryption.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.
 - `audhsos-abi`: error codes, rights, object types, handles, layout
