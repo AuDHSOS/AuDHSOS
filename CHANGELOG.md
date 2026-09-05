@@ -84,6 +84,21 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   segments, the boot stack, and the boot information page with the
   kernel's own mapper, writes the boot information from the memory map it
   reads last, and enters the kernel.
+- `xtask`: `qemu-runner`, `run`, and `test --qemu`. The runner wraps a
+  test kernel into a disk image, runs the reference machine with a time
+  limit, reads the serial protocol, and maps the exit status; `test
+  --qemu` runs every test kernel and the three images the loader has to
+  reject; `check` runs it last.
+- `kernel-hal-x86_64`: `testing`, what a kernel test image needs: the
+  harness over the debug console and the exit device, the `test_kernel!`
+  macro that writes the entry point and the panic handler once, the trap
+  hook a test image registers, and the instructions that raise the
+  exceptions the trap tests expect.
+- `audhsos-kernel`: nine test kernels under `tests/`: boot, console,
+  descriptors, breakpoint, divide error, invalid opcode, general
+  protection, page fault, and the double fault of a kernel stack overflow.
+- `audhsos-abi`: the boot stack is 64 pages, not 16. An unoptimized test
+  image needs more than 64 KiB before it reaches the harness.
 - Planning for graphics output and input devices: roadmap Phases 9 to 11,
   decisions D-29 to D-33, catalog sections 6.6.24 to 6.6.29, and the
   framebuffer fields of the boot information structure in the documents.

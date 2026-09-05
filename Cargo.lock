@@ -97,6 +97,7 @@ dependencies = [
  "audhsos-sync",
  "driver-uart16550",
  "kernel-hal-api",
+ "kernel-test-harness",
  "kernel-types",
  "kernel-x86-tables",
 ]
@@ -150,4 +151,5 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "kernel-test-harness",
 ]

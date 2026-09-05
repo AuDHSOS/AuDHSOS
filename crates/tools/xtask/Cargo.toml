@@ -12,6 +12,7 @@ rust-version.workspace = true
 
 [dependencies]
 audhsos-abi.workspace = true
+kernel-test-harness.workspace = true
 
 [lints]
 workspace = true

@@ -890,21 +890,47 @@ linker script: `ENTRY(kernel_entry)`, `. = KERNEL_BASE` (write the constant
 `audhsos_abi::layout::KERNEL_BASE`), sections `.text` (R X), `.rodata`
 (R), `.data` and `.bss` (RW), each starting on a 4 KiB boundary
 (`ALIGN(4096)`), `.eh_frame` discarded. `.cargo/config.toml` gets
-`[target.x86_64-unknown-none] rustflags = ["-C", "relocation-model=static"]`
-and `runner = "cargo xtask qemu-runner"`.
+`[target.x86_64-unknown-none] rustflags = ["-C",
+"relocation-model=static"]`; the runner is not written there but passed
+through the environment by `test --qemu` (see 10.2.9).
 
 Test kernels under `crates/kernel/bin/tests/`: each file uses
-`#![feature(custom_test_frameworks)]`, `#![test_runner(run_tests)]`,
-`#![reexport_test_harness_main = "test_main"]`, its own `kernel_entry`
-wiring (through a shared `kernel_test_harness::entry!` macro so that the
-wiring is written once), and `#[test_case]` functions. Phase 2 kernels:
-`boot.rs` (banner, exit success), `console.rs` (writes a marker string the
-runner asserts), `exceptions.rs` (breakpoint returns; page fault at
-`0xdead_beef` reports that address through a handler hook; divide error;
-invalid opcode; general protection), `double_fault.rs` (`should_panic`:
-infinite recursion overflows the kernel stack; the double-fault handler
-runs on IST 1 and panics), `bad_kernel/` and `missing_image/` loader
-images built by the xtask from a corrupt ELF and an empty volume.
+`#![feature(custom_test_frameworks)]`,
+`#![test_runner(kernel_hal_x86_64::testing::run_tests)]`,
+`#![reexport_test_harness_main = "test_main"]`, the wiring macro
+`kernel_hal_x86_64::test_kernel!()`, and `#[test_case]` functions. Each
+file needs a `[[test]]` entry in the manifest and `use audhsos_abi as _;
+use kernel_core as _;`, because a test image uses neither crate while the
+kernel image uses both. `build.rs` emits `cargo:rustc-link-arg-tests` next
+to `cargo:rustc-link-arg-bins`, so that the test images get the same
+linker script.
+
+The wiring lives in `kernel-hal-x86_64::testing`, not in
+`kernel-test-harness`: the entry point needs `#[unsafe(no_mangle)]`, which
+a logic crate with `#![forbid(unsafe_code)]` may not carry. That module
+holds the harness over the debug console and the exit device, the trap
+hook a test image registers, and the instructions that raise the
+exceptions the trap tests expect (`int3`, `ud2`, `div` by zero, a segment
+selector beyond the descriptor table, a read from an unmapped address).
+The line of a test is written when the test is over, so that a test may
+write on the console without breaking the protocol; the name of the
+running test is kept in a cell and is what a panic or a trap reports.
+
+Phase 2 kernels: `boot.rs` (reaches the harness, the loader reported
+memory), `console.rs` (writes a marker string the runner asserts),
+`descriptors.rs` (a second load of the tables is refused),
+`breakpoint.rs` (the handler sees vector 3 and the test goes on),
+`divide_error.rs`, `invalid_opcode.rs`, `general_protection.rs`,
+`page_fault.rs` (the fault at `0xdead_beef` reports that address through
+the trap hook, which then ends the machine, because a fault cannot be
+resumed), and `double_fault.rs` (`should_panic`: infinite recursion
+overflows the kernel stack; the double fault handler runs on IST 1 and
+reports). The three loader failure images are built by the xtask, not
+checked in.
+
+`BOOT_STACK_PAGES` is 64, not 16: the unoptimized build of a test image
+needs well over 64 KiB of stack before it reaches the harness, and the
+sixteen-page stack ran into its guard page inside `descriptors::install`.
 
 ### 10.2.8 Crate `boot-uefi-x86_64` (`crates/boot/uefi-x86_64`)
 
@@ -1048,9 +1074,10 @@ identity mapping afterwards.
   `AUDHSOS` with `.` and `..` entries), plus a reader used only by the
   tests, behind `#[cfg(test)]`, so that the product only writes. Default
   image size 64 MiB, grown in whole mebibytes when the files need more.
-  `xtask` gains `audhsos-abi` as its one dependency, so that the boot image
-  header and the layout constants are written down once; the policy table
-  records it.
+  `xtask` gains `audhsos-abi` and `kernel-test-harness` as its two
+  dependencies, so that the boot image header, the layout constants, and
+  the serial protocol grammar are written down once; the policy table
+  records both.
 - `image [--release]`: writes `target/boot.img` and `target/audhsos.img`
   from the built loader and kernel.
 - `qemu.rs`: locate `qemu-system-x86_64` (`AUDHSOS_QEMU` or `PATH`) and the
@@ -1061,13 +1088,27 @@ identity mapping afterwards.
   (`AUDHSOS_QEMU_TIMEOUT`) implemented with a thread that kills the child;
   capture stdout; parse the protocol; map exit status 33/35/37; print the
   captured output on failure.
-- `qemu-runner <elf>`: build the loader if needed, write a disk image with
-  the given kernel ELF and the boot image, run QEMU, exit 0 on success.
-- `test --qemu`: `cargo test -p audhsos-kernel --target x86_64-unknown-none`
-  (Cargo invokes the runner for every test kernel) plus the loader failure
-  images.
-- `run`: `build`, `image`, then QEMU without timeout and with the serial
-  console attached to the terminal.
+- `qemu-runner <elf>`: write a disk image with the given kernel ELF, the
+  loader `build` left in `target/`, and the boot image, run QEMU, and exit
+  0 on success. The runner starts no Cargo of its own: it runs inside
+  `cargo test`, which holds the lock on the build directory.
+- `test --qemu`: `build`, then `cargo test -p audhsos-kernel --target
+  x86_64-unknown-none` (Cargo invokes the runner for every test kernel),
+  then the three loader failure images. The runner is passed through the
+  environment variable `CARGO_TARGET_X86_64_UNKNOWN_NONE_RUNNER`, set to
+  the path of the running xtask binary, and the workspace root through
+  `AUDHSOS_ROOT`; `.cargo/config.toml` carries no `runner`, because a
+  runner that started `cargo run -p xtask` would wait for the build
+  directory lock the enclosing `cargo test` holds. The three loader images
+  are a kernel file whose ELF magic is broken, a volume without
+  `AUDHSOS/KERNEL.ELF`, and a volume without `AUDHSOS/BOOT.IMG`; each has
+  to end with the loader failure status and a `[loader] ` diagnostic. A
+  table in `commands.rs` names the marker a test image has to write beyond
+  the protocol, so that the console image proves the debug UART carries
+  more than the protocol lines.
+- `run [--release] [--display]`: `build`, `image`, then QEMU without a
+  time limit and with the streams attached to the terminal; `--display`
+  replaces `-display none` with the platform's backend.
 - Tests: catalog 6.6.15 and the runner items of 6.6.20.
 
 ### 10.2.10 Policy and documents

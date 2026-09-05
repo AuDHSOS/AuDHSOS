@@ -13,6 +13,7 @@ mod layering;
 mod linker;
 mod policy;
 mod process;
+mod qemu;
 mod spdx;
 mod toolchain;
 mod unsafe_budget;

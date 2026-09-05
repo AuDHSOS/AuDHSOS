@@ -31,7 +31,7 @@ device register are operations the Rust language can only express as
 
 | Crate | Content that needs `unsafe` | Assembly |
 |-------|-----------------------------|----------|
-| `kernel-hal-x86_64` | privileged registers, descriptor table loading, page-table memory through the physical window, MMIO for the APICs, port I/O, boot information validation from a raw pointer, context switch | privileged instruction wrappers, one naked function |
+| `kernel-hal-x86_64` | privileged registers, descriptor table loading, page-table memory through the physical window, MMIO for the APICs, port I/O, boot information validation from a raw pointer, context switch, the entry point and the exception triggers of a kernel test image | privileged instruction wrappers, one naked function, the exceptions a test image raises |
 | `boot-uefi-x86_64` | firmware calls through function pointers, memory map buffer from a raw pointer, page-table memory through the identity mapping, `CR3` write, kernel entry | `CR3` write, port write for the exit device, one naked function |
 | `audhsos-sync` | `Global<T>`: a `Sync` cell with a runtime borrow flag for kernel and userland global state | none |
 | `user-sys-x86_64` | the system call trap instruction, `_start`, the `GlobalAlloc` adapter | one `asm!` statement: `int 0x80` |
@@ -71,6 +71,7 @@ The xtask policy table holds the machine-readable form.
 | `kernel-hal-x86_64` | model-specific registers (Phase 4) | `rdmsr`, `wrmsr` |
 | `kernel-hal-x86_64` | port I/O, byte and double word so far | `in`, `out` |
 | `kernel-hal-x86_64` | context switch (naked function, Phase 5) | save callee-saved registers, swap stack pointer, restore, return |
+| `kernel-hal-x86_64` | the exceptions a test image raises (`testing`, features `debug-uart` and `test-exit`) | `int3`, `ud2`, `div` by zero, `mov` of a selector beyond the table into a segment register |
 | `boot-uefi-x86_64` | kernel entry (naked function) | disable interrupts, write `CR3`, load stack pointer, jump |
 | `boot-uefi-x86_64` | exit device on loader failure | `out` |
 | `user-sys-x86_64` | system call trap | `int 0x80` |

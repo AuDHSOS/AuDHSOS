@@ -208,8 +208,8 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "kernel-hal-x86_64",
         path: "crates/kernel/hal-x86_64",
         kind: Kind::Adapter {
-            unsafe_budget: 51,
-            asm_budget: 15,
+            unsafe_budget: 62,
+            asm_budget: 19,
         },
         deps: &[
             "kernel-hal-api",
@@ -219,6 +219,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "driver-uart16550",
             "kernel-x86-tables",
             "kernel-mm",
+            "kernel-test-harness",
         ],
         coverage_gate: false,
         target: Target::X86_64None,
@@ -227,7 +228,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-kernel",
         path: "crates/kernel/bin",
         kind: Kind::Adapter {
-            unsafe_budget: 2,
+            unsafe_budget: 3,
             asm_budget: 0,
         },
         deps: &["kernel-core", "kernel-hal-x86_64", "audhsos-abi"],
@@ -254,7 +255,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "xtask",
         path: "crates/tools/xtask",
         kind: Kind::Host,
-        deps: &["audhsos-abi"],
+        deps: &["audhsos-abi", "kernel-test-harness"],
         coverage_gate: false,
         target: Target::Host,
     },

@@ -39,8 +39,10 @@ pub const ROOT_TASK_BASE: u64 = 0x0000_0000_1000_0000;
 /// Address one past the boot stack; the stack grows down from here.
 pub const BOOT_STACK_TOP: u64 = KERNEL_BASE - 0x0100_0000;
 
-/// Number of pages the boot stack occupies, guard page excluded.
-pub const BOOT_STACK_PAGES: u64 = 16;
+/// Number of pages the boot stack occupies, guard page excluded. The
+/// unoptimized build of a kernel test image needs well over 64 KiB before
+/// it reaches the harness, so the stack is a quarter of a mebibyte.
+pub const BOOT_STACK_PAGES: u64 = 64;
 
 /// Virtual address the loader maps the boot information page at.
 pub const BOOT_INFO_VADDR: u64 = KERNEL_BASE - 0x0200_0000;

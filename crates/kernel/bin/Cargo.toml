@@ -16,6 +16,33 @@ path = "src/main.rs"
 test = false
 bench = false
 
+[[test]]
+name = "boot"
+
+[[test]]
+name = "console"
+
+[[test]]
+name = "descriptors"
+
+[[test]]
+name = "breakpoint"
+
+[[test]]
+name = "divide_error"
+
+[[test]]
+name = "invalid_opcode"
+
+[[test]]
+name = "general_protection"
+
+[[test]]
+name = "page_fault"
+
+[[test]]
+name = "double_fault"
+
 [dependencies]
 audhsos-abi.workspace = true
 kernel-core.workspace = true

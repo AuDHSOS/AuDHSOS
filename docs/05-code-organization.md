@@ -7,7 +7,7 @@ AuDHSOS/
 ├── Cargo.toml                 workspace: members, shared metadata, lints, profiles
 ├── Cargo.lock                 workspace members only
 ├── rust-toolchain.toml        pinned nightly, components, targets
-├── .cargo/config.toml         `cargo xtask` alias; QEMU runner for the kernel target
+├── .cargo/config.toml         `cargo xtask` alias; relocation model of the kernel target
 ├── LICENSE                    AGPL-3.0 text, verbatim from gnu.org
 ├── README.md
 ├── CONTRIBUTING.md
@@ -91,9 +91,9 @@ AuDHSOS/
 | `kernel-ipc` | 3 | all | no | yes | `kernel-objects`, `kernel-sched`, `audhsos-abi` |
 | `kernel-syscall` | 3 | all | no | yes | layers 0-2, `kernel-ipc` |
 | `kernel-core` | 4 | all | no | yes, with doubles | layers 0-3, `audhsos-sync` |
-| `kernel-hal-x86_64` | 5 | `x86_64-unknown-none` | allowlisted | the pure parts live in `kernel-x86-tables` | `kernel-hal-api`, `kernel-types`, `audhsos-abi`, `driver-uart16550`, `audhsos-sync`, `kernel-x86-tables`, `kernel-mm` |
+| `kernel-hal-x86_64` | 5 | `x86_64-unknown-none` | allowlisted | the pure parts live in `kernel-x86-tables` | `kernel-hal-api`, `kernel-types`, `audhsos-abi`, `driver-uart16550`, `audhsos-sync`, `kernel-x86-tables`, `kernel-mm`, `kernel-test-harness` |
 | `kernel-test-harness` | 5 | all | no | yes | `kernel-hal-api` |
-| `audhsos-kernel` | 6 | `x86_64-unknown-none` | no | QEMU | `kernel-core`, `kernel-hal-x86_64`, `kernel-test-harness` |
+| `audhsos-kernel` | 6 | `x86_64-unknown-none` | allowlisted (the entry point and the test images) | QEMU | `kernel-core`, `kernel-hal-x86_64`, `audhsos-abi` |
 | `boot-uefi-x86_64` | b | `x86_64-unknown-uefi` | allowlisted | pure sub-modules | `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `kernel-types`, `kernel-mm`, `kernel-hal-api` |
 | `user-sys-x86_64` | u0 | `x86_64-unknown-none` | allowlisted | Miri | `audhsos-abi`, `audhsos-sync` |
 | `user-rt` | u1 | `x86_64-unknown-none` | no | yes | `audhsos-abi`, `user-sys-x86_64` |
@@ -110,7 +110,7 @@ AuDHSOS/
 | `audhsos-tls` | c4 | all | no | yes, fuzz | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-x509` |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
 | `fuzz-support` | dev | host | allowlisted | Miri | - |
-| `xtask` | host | host | no | yes | - |
+| `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once) |
 
 ## 5.3 Layering rules
 
