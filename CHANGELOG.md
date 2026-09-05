@@ -33,6 +33,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   certificate builder gains `TestKey::EcdsaP384Sha384`, so a whole chain
   of that curve is one the test suites build rather than vendor; the TLS
   client is driven through a handshake over such a chain.
+- `audhsos-x509`: `TrustAnchor::from_certificate` reads the subject and the
+  key out of a certificate and stops there. The certificate's own
+  signature is never verified, which is what lets a root that reaches a
+  system only as a cross-signed certificate serve as an anchor: the
+  `GTS Root R4` in Google's chain is signed by GlobalSign with RSA, and
+  `Certificate::parse` refused it for an algorithm nothing would have
+  looked at. The key is checked for being one this crate can verify with,
+  so an unusable anchor is refused while the caller still holds the file
+  rather than becoming a path that reaches nothing. Decision D-62.
 - `tools/tls-probe`: a host program that drives the sans-I/O client over a
   real socket, so that the stack is answered by a server instead of by a
   recording. It opens TCP, runs the handshake, and speaks enough HTTP/1.1

@@ -67,6 +67,128 @@ fn anchor<'a>(certificate: &Certificate<'a>) -> TrustAnchor<'a> {
     }
 }
 
+// The tests above build their anchors by hand, from certificates they have
+// already parsed for other reasons. `TrustAnchor::from_certificate` is what
+// a caller with only the bytes uses, and the tests below are about it.
+
+/// An `ecdsa-with-SHA256` identifier, and one of the same width that this
+/// crate does not verify: `ecdsa-with-SHA512`, 1.2.840.10045.4.3.4.
+const ECDSA_SHA256_OID: [u8; 8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02];
+/// The same width, so the lengths around it do not move.
+const ECDSA_SHA512_OID: [u8; 8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x04];
+
+#[test]
+fn an_anchor_is_the_subject_and_the_key_of_a_certificate() {
+    let bytes = root();
+    let parsed = Certificate::parse(bytes.as_slice()).expect("a well formed root");
+    let anchor = TrustAnchor::from_certificate(bytes.as_slice()).expect("a well formed anchor");
+    assert_eq!(anchor.subject, parsed.subject);
+    assert_eq!(anchor.spki, parsed.spki_bytes);
+}
+
+#[test]
+fn an_anchor_is_read_from_a_certificate_this_crate_cannot_verify() {
+    // A root whose own signature algorithm is one this crate does not
+    // know. `Certificate::parse` refuses it, because a certificate it
+    // returns must be one a chain can be checked against; the anchor is
+    // read from it all the same, because the signature it names is never
+    // looked at. That is what a cross-signed root is: `GTS Root R4` in
+    // Google's chain is signed by GlobalSign with RSA, and it carries the
+    // same subject and the same key as the self-signed copy.
+    let usable = root_of(TestKey::EcdsaSha256(AUTHORITY_SECRET));
+    let mut bytes = usable.as_slice().to_vec();
+    let replaced = replace_all(&mut bytes, &ECDSA_SHA256_OID, &ECDSA_SHA512_OID);
+    assert_eq!(
+        replaced, 2,
+        "the algorithm is named inside the body and beside the signature"
+    );
+
+    assert_eq!(
+        Certificate::parse(&bytes).err(),
+        Some(X509Error::UnsupportedAlgorithm),
+        "the certificate is not one a chain can be checked against"
+    );
+
+    let anchor = TrustAnchor::from_certificate(&bytes).expect("the anchor is readable");
+    let parsed = Certificate::parse(usable.as_slice()).expect("the untouched copy parses");
+    assert_eq!(anchor.subject, parsed.subject);
+    assert_eq!(anchor.spki, parsed.spki_bytes, "the same key either way");
+}
+
+#[test]
+fn an_anchor_whose_key_is_unusable_is_refused() {
+    // The key is where the line is: an anchor is a decision about a key,
+    // so a key that cannot verify anything is refused here rather than
+    // becoming a path that reaches nothing.
+    let built = root_of(TestKey::EcdsaSha256(AUTHORITY_SECRET));
+    let parsed = Certificate::parse(built.as_slice()).expect("a well formed root");
+    let start = position_of(built.as_slice(), parsed.spki_bytes);
+    let last = start
+        .saturating_add(parsed.spki_bytes.len())
+        .saturating_sub(1);
+
+    let mut bytes = built.as_slice().to_vec();
+    if let Some(byte) = bytes.get_mut(last) {
+        *byte ^= 0x01;
+    }
+    assert_eq!(
+        TrustAnchor::from_certificate(&bytes).err(),
+        Some(X509Error::BadPublicKey),
+        "the coordinates are no longer a point of the curve"
+    );
+}
+
+#[test]
+fn bytes_that_are_not_a_certificate_are_not_an_anchor() {
+    let bytes = root();
+    let whole = bytes.as_slice();
+    assert!(TrustAnchor::from_certificate(&[]).is_err(), "empty");
+    assert!(
+        TrustAnchor::from_certificate(whole.get(..whole.len() / 2).unwrap_or(&[])).is_err(),
+        "truncated"
+    );
+
+    let mut trailing = whole.to_vec();
+    trailing.push(0x00);
+    assert!(
+        TrustAnchor::from_certificate(&trailing).is_err(),
+        "a byte after the certificate"
+    );
+}
+
+/// A self-signed root under the given key.
+fn root_of(key: TestKey) -> Built {
+    let params = Params::authority("Root", "Root", None, early(), late());
+    build_certificate(&params, key, key).expect("the parameters fit")
+}
+
+/// Replaces every occurrence of `needle` with `replacement` of the same
+/// length, and says how many there were.
+fn replace_all(haystack: &mut [u8], needle: &[u8], replacement: &[u8]) -> usize {
+    let mut count = 0usize;
+    for index in 0..haystack.len() {
+        let matches = haystack
+            .get(index..index.saturating_add(needle.len()))
+            .is_some_and(|window| window == needle);
+        if matches {
+            let target = haystack
+                .get_mut(index..index.saturating_add(replacement.len()))
+                .unwrap_or(&mut []);
+            target.copy_from_slice(replacement);
+            count = count.saturating_add(1);
+        }
+    }
+    count
+}
+
+/// The position of `part` inside `whole`.
+fn position_of(whole: &[u8], part: &[u8]) -> usize {
+    whole
+        .windows(part.len())
+        .position(|window| window == part)
+        .unwrap_or(0)
+}
+
 #[test]
 fn a_chain_through_an_intermediate_reaches_the_anchor() {
     let root_bytes = root();

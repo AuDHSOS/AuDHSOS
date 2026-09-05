@@ -137,18 +137,13 @@ impl<'a> Certificate<'a> {
 
         let serial = body.read_integer()?;
         let algorithm = SignatureAlgorithm::parse(body)?;
-        let (_, issuer) = take_sequence(body)?;
-
-        let mut window = body.read_sequence()?;
-        let not_before = window.read_time()?;
-        let not_after = window.read_time()?;
-        window.finish()?;
-
-        let (_, subject) = take_sequence(body)?;
-
-        let before_key = body.rest();
-        let spki = SubjectPublicKey::parse(body)?;
-        let spki_bytes = consumed(before_key, body)?;
+        let Identity {
+            issuer,
+            validity,
+            subject,
+            spki,
+            spki_bytes,
+        } = read_identity(body)?;
 
         // The two unique identifiers of version two, which nothing issues
         // any more but the encoding still allows.
@@ -160,10 +155,7 @@ impl<'a> Certificate<'a> {
             serial,
             issuer,
             subject,
-            validity: Validity {
-                not_before,
-                not_after,
-            },
+            validity,
             spki,
             spki_bytes,
             algorithm,
@@ -384,6 +376,54 @@ fn consumed<'a>(before: &'a [u8], reader: &Reader<'a>) -> Result<&'a [u8], X509E
         .split_at_checked(length)
         .ok_or(X509Error::Encoding(DerError::Truncated))?;
     Ok(taken)
+}
+
+/// Who a certificate was issued by, when it is valid, who it is for, and
+/// the key it carries.
+///
+/// These are the fields between the algorithm named inside the signed body
+/// and the identifiers that may follow the key. They are a piece of their
+/// own because an anchor needs two of them and nothing else:
+/// [`crate::path::TrustAnchor::from_certificate`] reads a body this far
+/// and stops, without ever asking what the certificate is signed with.
+pub(crate) struct Identity<'a> {
+    /// The issuer name, as the bytes it is encoded as.
+    pub(crate) issuer: &'a [u8],
+    /// The window.
+    pub(crate) validity: Validity,
+    /// The subject name, as the bytes it is encoded as.
+    pub(crate) subject: &'a [u8],
+    /// The key.
+    pub(crate) spki: SubjectPublicKey<'a>,
+    /// The subject public key information, as the bytes it is encoded as.
+    pub(crate) spki_bytes: &'a [u8],
+}
+
+/// Reads those four fields, leaving the reader after the key.
+pub(crate) fn read_identity<'a>(body: &mut Reader<'a>) -> Result<Identity<'a>, X509Error> {
+    let (_, issuer) = take_sequence(body)?;
+
+    let mut window = body.read_sequence()?;
+    let not_before = window.read_time()?;
+    let not_after = window.read_time()?;
+    window.finish()?;
+
+    let (_, subject) = take_sequence(body)?;
+
+    let before_key = body.rest();
+    let spki = SubjectPublicKey::parse(body)?;
+    let spki_bytes = consumed(before_key, body)?;
+
+    Ok(Identity {
+        issuer,
+        validity: Validity {
+            not_before,
+            not_after,
+        },
+        subject,
+        spki,
+        spki_bytes,
+    })
 }
 
 /// A sequence and the bytes it occupies, tag and length included.

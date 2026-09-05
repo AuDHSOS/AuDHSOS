@@ -331,6 +331,15 @@ supplies into a DER table that goes into the boot image, using the PEM
 decoder of `audhsos-encoding` ([document 12](12-parallel-work.md),
 D-47).
 
+`TrustAnchor::from_certificate` is the conversion of one such certificate.
+It reads the body no further than the key and never looks at the
+certificate's own signature, which is the whole point rather than a
+shortcut: a self-signature says nothing about the operator's decision, and
+a root reaches a system often enough as a cross-signed certificate whose
+signature this system has no arithmetic for. What it does check is that
+the key is one this system can verify with, so that an unusable anchor is
+refused while the operator still holds the file (D-62).
+
 Certificates for tests are built by `x509::builder` behind the feature
 `test-certificates`, which writes DER and signs with the `test-signing`
 primitives of 11.7. Chains, expired certificates, wrong names, broken

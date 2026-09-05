@@ -23,7 +23,7 @@ use audhsos_der::Reader;
 use audhsos_time::CivilTime;
 
 use crate::algorithm::SubjectPublicKey;
-use crate::certificate::Certificate;
+use crate::certificate::{Certificate, read_identity};
 use crate::error::X509Error;
 use crate::name::{ServerName, matches};
 
@@ -41,6 +41,71 @@ pub struct TrustAnchor<'a> {
     pub subject: &'a [u8],
     /// The subject public key information, as the bytes it is encoded as.
     pub spki: &'a [u8],
+}
+
+impl<'a> TrustAnchor<'a> {
+    /// The anchor a certificate stands for: its subject and its key.
+    ///
+    /// The certificate's own signature is never looked at, and this is the
+    /// point of the function rather than an omission from it. A
+    /// self-signature says nothing about whether a root should be trusted,
+    /// because the party that signed it is the party being judged;
+    /// requiring one to be readable would only rule out certificates that
+    /// carry an anchor's key perfectly well without being self-signed at
+    /// all. A root cross-signed by an older authority is signed with that
+    /// authority's algorithm, which may be one this system cannot verify:
+    /// `GTS Root R4`, as the chain `google.de` presents it, is signed by
+    /// `GlobalSign` with RSA.
+    ///
+    /// Nothing else about the certificate is checked either — not the
+    /// window, not the authority bit, not the key usage. [`verify_chain`]
+    /// checks none of them at the anchor, and one of the four here would
+    /// suggest an anchor is validated when it is decided.
+    ///
+    /// What is checked is that the bytes are a certificate as far as the
+    /// key, so that the two fields taken out of them are the fields they
+    /// are meant to be, and that the key is one this crate can verify
+    /// with. An anchor nothing can use is then refused while the caller
+    /// still holds the file it came from, instead of becoming a path that
+    /// reaches nothing.
+    ///
+    /// # Errors
+    ///
+    /// The first rule broken: the encoding errors of the reader arrive
+    /// wrapped, [`X509Error::NotVersionThree`] for an older certificate,
+    /// [`X509Error::UnsupportedAlgorithm`] for a key of a kind this crate
+    /// does not verify, and [`X509Error::BadPublicKey`] for one that is
+    /// not a key of its kind.
+    pub fn from_certificate(der: &'a [u8]) -> Result<TrustAnchor<'a>, X509Error> {
+        let mut outer = Reader::new(der);
+        let mut certificate = outer.read_sequence()?;
+        outer.finish()?;
+
+        // The body, and nothing after it. The algorithm beside the
+        // signature and the signature itself stay in `certificate`, which
+        // is dropped unread.
+        let mut body = certificate.read_sequence()?;
+
+        let mut version = body
+            .read_context(0)
+            .map_err(|_| X509Error::NotVersionThree)?;
+        if version.read_integer()? != [0x02] {
+            return Err(X509Error::NotVersionThree);
+        }
+        version.finish()?;
+        let _serial = body.read_integer()?;
+
+        // The algorithm the body names is stepped over, not interpreted.
+        // It describes the signature this function does not verify.
+        let _ = body.read_sequence()?;
+
+        let identity = read_identity(&mut body)?;
+        identity.spki.check_usable()?;
+        Ok(TrustAnchor {
+            subject: identity.subject,
+            spki: identity.spki_bytes,
+        })
+    }
 }
 
 /// The anchors a system trusts.

@@ -109,6 +109,40 @@ impl<'a> SubjectPublicKey<'a> {
         Ok(key)
     }
 
+    /// Whether this is a key the verification of this crate can use.
+    ///
+    /// Parsing establishes that the algorithm is one of the three and that
+    /// the encoding has the width that algorithm prescribes. This goes one
+    /// step further for the two curves and asks whether the coordinates
+    /// are a point of the curve, which is what a verification would need
+    /// them to be. Ed25519 has no equivalent step that is cheaper than the
+    /// verification itself, so for that key the width is all there is.
+    ///
+    /// It exists for [`crate::path::TrustAnchor::from_certificate`], where
+    /// a key that cannot be used is worth refusing while the caller still
+    /// holds the file it came from.
+    ///
+    /// # Errors
+    ///
+    /// [`X509Error::BadPublicKey`] when the key is not one of its kind.
+    pub(crate) fn check_usable(self) -> Result<(), X509Error> {
+        match self {
+            SubjectPublicKey::EcdsaP256(key) => P256Key::from_sec1(key)
+                .map(|_| ())
+                .map_err(|_| X509Error::BadPublicKey),
+            SubjectPublicKey::EcdsaP384(key) => P384Key::from_sec1(key)
+                .map(|_| ())
+                .map_err(|_| X509Error::BadPublicKey),
+            SubjectPublicKey::Ed25519(key) => {
+                if key.len() == 32 {
+                    Ok(())
+                } else {
+                    Err(X509Error::BadPublicKey)
+                }
+            }
+        }
+    }
+
     /// Whether `signature` is a signature of `body` under this key and
     /// `algorithm`.
     ///
