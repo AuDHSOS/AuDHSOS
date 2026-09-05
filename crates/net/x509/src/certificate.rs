@@ -234,13 +234,20 @@ impl<'a> Certificate<'a> {
         Ok(())
     }
 
+    /// Every entry of the subject alternative name, with its tag.
+    #[must_use]
+    pub fn general_names(&self) -> GeneralNames<'a> {
+        GeneralNames {
+            reader: self.subject_alt_name.map(Reader::new),
+        }
+    }
+
     /// The names the subject alternative name carries, `dNSName` entries
     /// only.
     #[must_use]
     pub fn dns_names(&self) -> DnsNames<'a> {
         DnsNames {
-            reader: self.subject_alt_name.map(Reader::new),
-            entered: false,
+            names: self.general_names(),
         }
     }
 
@@ -302,22 +309,55 @@ impl<'a> Certificate<'a> {
     }
 }
 
-/// The `dNSName` entries of a subject alternative name.
-pub struct DnsNames<'a> {
+/// Every entry of a subject alternative name, with the tag that says what
+/// kind of name it is.
+pub struct GeneralNames<'a> {
     /// The remaining entries, or nothing when the extension is absent.
     reader: Option<Reader<'a>>,
-    /// Whether the sequence has been entered.
-    entered: bool,
+}
+
+impl GeneralNames<'_> {
+    /// The entries inside an encoded `GeneralNames`, for a caller that has
+    /// the content without a certificate around it.
+    #[must_use]
+    pub const fn over(bytes: &[u8]) -> GeneralNames<'_> {
+        GeneralNames {
+            reader: Some(Reader::new(bytes)),
+        }
+    }
+}
+
+impl<'a> Iterator for GeneralNames<'a> {
+    type Item = Result<(Tag, &'a [u8]), X509Error>;
+
+    fn next(&mut self) -> Option<Result<(Tag, &'a [u8]), X509Error>> {
+        let reader = self.reader.as_mut()?;
+        if reader.is_empty() {
+            return None;
+        }
+        match reader.read_any() {
+            Ok(entry) => Some(Ok(entry)),
+            Err(error) => {
+                self.reader = None;
+                Some(Err(X509Error::Encoding(error)))
+            }
+        }
+    }
+}
+
+/// The `dNSName` entries of a subject alternative name.
+pub struct DnsNames<'a> {
+    /// Every entry, of which this iterator yields some.
+    names: GeneralNames<'a>,
 }
 
 impl DnsNames<'_> {
     /// The names inside an encoded `GeneralNames`, for a test that has the
     /// content without a certificate around it.
     #[cfg(test)]
-    pub(crate) const fn over(bytes: &[u8]) -> DnsNames<'_> {
+    pub(crate) const fn from_names(bytes: &[u8]) -> DnsNames<'_> {
         DnsNames {
-            reader: Some(Reader::new(bytes)),
-            entered: false,
+            names: GeneralNames::over(bytes),
         }
     }
 }
@@ -326,19 +366,11 @@ impl<'a> Iterator for DnsNames<'a> {
     type Item = Result<&'a [u8], X509Error>;
 
     fn next(&mut self) -> Option<Result<&'a [u8], X509Error>> {
-        let reader = self.reader.as_mut()?;
-        self.entered = true;
         loop {
-            if reader.is_empty() {
-                return None;
-            }
-            match reader.read_any() {
+            match self.names.next()? {
                 Ok((tag, content)) if tag == DNS_NAME_TAG => return Some(Ok(content)),
                 Ok(_) => {}
-                Err(error) => {
-                    self.reader = None;
-                    return Some(Err(X509Error::Encoding(error)));
-                }
+                Err(error) => return Some(Err(error)),
             }
         }
     }

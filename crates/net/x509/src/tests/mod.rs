@@ -9,7 +9,9 @@
 //! private key of every test certificate is a constant in this directory.
 
 mod certificate;
+mod name;
 mod parts;
+mod path;
 
 use audhsos_der::Timestamp;
 

@@ -307,7 +307,11 @@ subject alternative name, authority and subject key identifier. Any
 unrecognized extension marked critical rejects the certificate.
 
 `verify_chain(end_entity, intermediates, anchors, name, now)` implements
-the RFC 5280 subset: issuer and subject distinguished names compared as
+the RFC 5280 subset. Until `audhsos-time` exists, `now` is a `Timestamp`
+of fields rather than an instant; the comparison is well defined either
+way, because a timestamp orders lexicographically in the order time runs,
+and the signature of the function does not change when the conversion
+arrives. The rules are: issuer and subject distinguished names compared as
 DER bytes, one signature verification per link, the validity window
 against `now`, `cA` and the path length constraint on every intermediate,
 `keyCertSign` on every CA, `serverAuth` on the leaf, chain length at most
@@ -429,7 +433,7 @@ checklist in 4.9.
 | T3 | `crypto-ec`: `fe25519` and X25519, then Ed25519, then P-256 | L | implemented |
 | T4 | `crypto-rng` | S | implemented |
 | T5 | `audhsos-der` | M | implemented but for the time conversion (11.14) |
-| T6 | `audhsos-x509` with the test certificate builder | L | |
+| T6 | `audhsos-x509` with the test certificate builder | L | implemented |
 | T7 | `audhsos-tls` | XL | |
 | T8 | Integration, jointly with step D9 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M | |
 
@@ -458,7 +462,7 @@ nobody finds again.
 
 | What is missing | Where it is felt | Who owns it |
 |-----------------|------------------|-------------|
-| The conversion of a certificate time to an instant, and the check of a day against the true length of its month | `audhsos-der` yields a `Timestamp` of fields; `audhsos-x509` cannot compare a validity window against a clock | `audhsos-time`, D-46, [document 12](12-parallel-work.md) |
+| The conversion of a certificate time to an instant, and the check of a day against the true length of its month | `audhsos-der` yields a `Timestamp` of fields, and `verify_chain` takes one as its `now`. That comparison is correct, so nothing is blocked; what is missing is the step from a clock to that value | `audhsos-time`, D-46, [document 12](12-parallel-work.md) |
 | A PEM decoder | the trust-anchor conversion of D-42, which the xtask performs at build time | `audhsos-encoding`, D-47, [document 12](12-parallel-work.md) |
 | The fuzz harness and the `fuzz/` tree | the targets `der`, `x509`, `tls_record`, and `tls_handshake` that catalog 6.6.35 to 6.6.38 require | `fuzz-support`, D-54, [document 12](12-parallel-work.md) |
 | A source of entropy | `crypto-rng` ships the generator and the `Entropy` trait; no product code can construct a generator without a source | `RDSEED` in the HAL behind a `random_bytes` system call, D-43 |

@@ -82,9 +82,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   rules, with bounded nesting and one encoding per value. Its time
   conversion waits on `audhsos-time` (D-46); section 11.14 of document 11
   lists that seam and the others.
-- `audhsos-x509`: certificate parsing and signature verification, with a
-  builder behind `test-certificates` that writes and signs the
-  certificates the tests use.
+- `audhsos-x509`: certificate parsing and signature verification, chain
+  validation against caller-supplied trust anchors, and RFC 6125 name
+  matching, with a builder behind `test-certificates` that writes and signs
+  the certificates the tests use.
 - Decision D-56: the key exchange of the TLS client is `x25519` alone.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.

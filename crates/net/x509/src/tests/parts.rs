@@ -11,7 +11,7 @@ use audhsos_der::Reader;
 use crate::algorithm::{SignatureAlgorithm, SubjectPublicKey};
 use crate::builder::{Params, TestKey, build};
 use crate::certificate::{
-    BasicConstraints, Certificate, DnsNames, parse_basic_constraints, parse_extended_key_usage,
+    BasicConstraints, Certificate, parse_basic_constraints, parse_extended_key_usage,
     parse_key_usage,
 };
 use crate::error::X509Error;
@@ -267,7 +267,7 @@ fn the_names_skip_what_is_not_a_dns_name_and_stop_at_what_is_broken() {
         encode(0x82, b"www.example.test"),
     ]
     .concat();
-    let names: Vec<&[u8]> = DnsNames::over(&entries)
+    let names: Vec<&[u8]> = crate::certificate::DnsNames::from_names(&entries)
         .map(|name| name.expect("the entries are well formed"))
         .collect();
     assert_eq!(names, vec![&b"example.test"[..], &b"www.example.test"[..]]);
@@ -275,7 +275,7 @@ fn the_names_skip_what_is_not_a_dns_name_and_stop_at_what_is_broken() {
     // A malformed entry ends the iteration with an error rather than a
     // name that was never there.
     let broken = [encode(0x82, b"example.test"), vec![0x82, 0x7F]].concat();
-    let mut iterator = DnsNames::over(&broken);
+    let mut iterator = crate::certificate::DnsNames::from_names(&broken);
     assert_eq!(iterator.next(), Some(Ok(&b"example.test"[..])));
     assert!(matches!(iterator.next(), Some(Err(_))));
     assert!(iterator.next().is_none());

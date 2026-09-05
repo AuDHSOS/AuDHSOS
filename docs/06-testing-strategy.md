@@ -813,14 +813,17 @@ done until every applicable item has a test. Items are added, never removed.
 - Constraints: an intermediate without `cA`, an intermediate without
   `keyCertSign`, a path length exceeded, and a leaf without `serverAuth`
   are rejected.
-- Names: an exact `dNSName` match; a wildcard in the leftmost label; a
-  wildcard elsewhere, a partial-label wildcard, and a wildcard matching
-  more than one label are rejected; a common name that would match is
-  ignored when no matching SAN exists; case is compared case-insensitively
-  for ASCII; a trailing dot is handled; an IP address matches only an
-  `iPAddress` entry.
-- Property: mutating any byte of a valid chain makes verification fail or
-  parsing fail, never succeed. Fuzz target `x509`.
+- Names: an exact `dNSName` match; a wildcard in the leftmost label
+  standing for exactly one label; a wildcard elsewhere, a partial-label
+  wildcard, a wildcard matching nothing, and one matching two labels are
+  rejected; a common name that would match is ignored when no alternative
+  name is present at all; case is compared case-insensitively for ASCII; a
+  trailing dot on either side is the same name; an IP address matches only
+  an `iPAddress` entry, and a `dNSName` that spells an address does not.
+- Property: mutating any byte of a valid certificate, in either of two
+  ways, makes parsing or verification fail; mutating any byte of an
+  intermediate makes the chain fail. The fuzz target `x509` waits on the
+  harness of D-54.
 
 ### 6.6.37 TLS record layer and key schedule (`audhsos-tls`)
 

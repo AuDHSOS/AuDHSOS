@@ -40,6 +40,26 @@ pub enum X509Error {
     BadName,
     /// The buffer a certificate was to be written into is too small.
     BufferTooSmall,
+    /// The certificate's window has not opened yet.
+    NotYetValid,
+    /// The certificate's window has closed.
+    Expired,
+    /// No name in the certificate is the name that was asked for.
+    NameMismatch,
+    /// A certificate that signed another is not marked as an authority.
+    NotAnAuthority,
+    /// An authority's path length does not reach as far as the chain does.
+    PathLengthExceeded,
+    /// An authority states a key usage that does not include signing
+    /// certificates.
+    NotForCertificateSigning,
+    /// The leaf states purposes and server authentication is not among
+    /// them.
+    NotForServerAuthentication,
+    /// The chain reaches nothing the system trusts.
+    NoTrustAnchor,
+    /// The chain is longer than this crate follows.
+    ChainTooLong,
 }
 
 impl From<DerError> for X509Error {
@@ -68,6 +88,19 @@ impl fmt::Display for X509Error {
             X509Error::DefaultEncoded => f.write_str("a default value is encoded"),
             X509Error::BadName => f.write_str("the name cannot be matched"),
             X509Error::BufferTooSmall => f.write_str("the buffer is too small"),
+            X509Error::NotYetValid => f.write_str("the certificate is not valid yet"),
+            X509Error::Expired => f.write_str("the certificate has expired"),
+            X509Error::NameMismatch => f.write_str("no name in the certificate was asked for"),
+            X509Error::NotAnAuthority => f.write_str("the signer is not an authority"),
+            X509Error::PathLengthExceeded => f.write_str("the chain is longer than allowed"),
+            X509Error::NotForCertificateSigning => {
+                f.write_str("the signer may not sign certificates")
+            }
+            X509Error::NotForServerAuthentication => {
+                f.write_str("the certificate is not for server authentication")
+            }
+            X509Error::NoTrustAnchor => f.write_str("the chain reaches no trust anchor"),
+            X509Error::ChainTooLong => f.write_str("the chain is too long"),
         }
     }
 }
