@@ -201,6 +201,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "net-ip",
+        path: "crates/net/ip",
+        kind: Kind::Logic,
+        deps: &["net-wire", "audhsos-collections", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-sync",
         path: "crates/sync",
         kind: Kind::Adapter {

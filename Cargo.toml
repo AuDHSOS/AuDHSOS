@@ -18,6 +18,7 @@ members = [
     "crates/net/tls",
     "crates/net/wire",
     "crates/net/eth",
+    "crates/net/ip",
     "crates/boot/uefi-x86_64",
     "crates/elf",
     "crates/symbols",
@@ -64,6 +65,7 @@ audhsos-x509 = { path = "crates/net/x509" }
 audhsos-tls = { path = "crates/net/tls" }
 net-wire = { path = "crates/net/wire" }
 net-eth = { path = "crates/net/eth" }
+net-ip = { path = "crates/net/ip" }
 boot-uefi-x86_64 = { path = "crates/boot/uefi-x86_64" }
 audhsos-elf = { path = "crates/elf" }
 audhsos-symbols = { path = "crates/symbols" }
