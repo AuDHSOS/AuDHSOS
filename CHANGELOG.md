@@ -544,6 +544,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   `check --quiet` before the option existed ran the whole check and
   reported success for a run nobody had asked for, and a typo did the same.
 
+- `tools/cargo.sh` follows the other two wrappers: it `exec`s Cargo instead
+  of running it, and leaves standard error where it was rather than folding
+  it into standard output. Its exit status was already Cargo's, since a
+  redirection is not a pipe. 07 section 7.5 names all three scripts.
+
 - The wrapper scripts under `tools/` report what a run did. Both ended in
   `… 2>&1 | tail -60`, and a pipeline in `sh` exits with the status of its
   last command, so `sh tools/xtask-check.sh` returned zero however the

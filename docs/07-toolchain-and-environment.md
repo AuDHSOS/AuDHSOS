@@ -77,7 +77,7 @@ Recorded on 2026-09-04. These influence Phase 0.
 | Git repository initialized on `main` with no commits | Phase 0 makes the first commit. |
 | Container software must not be used on this machine | CI and local runs are native. |
 
-Two wrapper scripts under `tools/` are the entry point that follows from
+Three wrapper scripts under `tools/` are the entry point that follows from
 these findings. They are what the commands in these documents mean on the
 development machine:
 
@@ -85,13 +85,18 @@ development machine:
 |-------------------------------------|------------------|
 | `cargo xtask <subcommand>` | `sh tools/xtask.sh <subcommand>` |
 | `cargo xtask check` | `sh tools/xtask-check.sh` |
+| any other Cargo command | `sh tools/cargo.sh <arguments>` |
 
 Each script changes into the workspace root, puts `~/.cargo/bin` in front of
 the `PATH`, turns the pager and the colors off, and then replaces itself
 with the proxy through `exec`. They add nothing to the run: the output is
-the xtask's own and the exit status is the xtask's own, so `$?` and `&&`
-mean what they say. They are tracked, so a worktree has them. CI calls the
-proxy directly, where the `PATH` is already right.
+the run's own and so is the exit status, so `$?` and `&&` mean what they
+say. They are tracked, so a worktree has them. CI calls the proxy directly,
+where the `PATH` is already right.
+
+The third exists for what is not an xtask subcommand, `cargo fmt -p <crate>`
+above all: `cargo fmt --all` fails while another session has a half-written
+crate in the workspace, and a single package is then formatted on its own.
 
 A warm full check writes about three thousand lines, which is worth
 watching and worth nothing in a log. `--quiet` reduces it to one line per
