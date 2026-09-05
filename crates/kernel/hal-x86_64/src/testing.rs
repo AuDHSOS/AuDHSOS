@@ -278,6 +278,19 @@ pub fn read_byte(address: u64) -> u8 {
     unsafe { pointer.read_volatile() }
 }
 
+/// Writes one byte to `address`, which raises the page fault exception
+/// when nothing is mapped there or the mapping is read-only. The exception
+/// is a fault, so the handler must end the machine instead of resuming.
+pub fn write_byte(address: u64, value: u8) {
+    let pointer = core::ptr::without_provenance_mut::<u8>(usize::try_from(address).unwrap_or(0));
+    // SAFETY: the caller writes either into memory the image mapped itself
+    // and nothing else reaches, or into a guard page, where the trap hook
+    // of the image ends the machine before the write takes effect.
+    unsafe {
+        pointer.write_volatile(value);
+    }
+}
+
 /// Declares the entry point and the panic handler of a test image. The
 /// image writes its tests as `#[test_case]` functions; the wiring is
 /// written once, here.

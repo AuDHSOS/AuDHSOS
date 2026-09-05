@@ -29,7 +29,7 @@ use kernel_mm::mapper::{MapError, Mapper, Progress};
 use kernel_mm::memory_map::{MapError as MemoryMapError, NormalizedMap, normalize};
 use kernel_mm::page_table::{EntryFormat, PageTable};
 use kernel_mm::reserve::select_reserve;
-use kernel_mm::stack::StackPool;
+use kernel_mm::stack::{KernelStack, StackError, StackPool};
 use kernel_types::{Page, PageRange, PhysAddr, PhysFrame, VirtAddr};
 
 use crate::config::{KERNEL_IMAGE_MAX_PAGES, KERNEL_REGIONS, KERNEL_STACK_WORDS};
@@ -46,8 +46,6 @@ pub enum KernelBacking {
     BootStack,
     /// The page the loader wrote the boot information into.
     BootInfo,
-    /// The stack of the kernel thread with this slot number.
-    Stack(u32),
 }
 
 /// The regions of the kernel address space.
@@ -173,6 +171,56 @@ impl KernelMemory {
     /// The pool of kernel stack slots, for modification.
     pub const fn stacks_mut(&mut self) -> &mut KernelStacks {
         &mut self.stacks
+    }
+
+    /// Takes a slot of the kernel stack area and maps its pages with
+    /// frames of the reserve.
+    ///
+    /// The stack area is one constant range of the kernel address space
+    /// and the pool answers which of its slots are taken, so a stack is
+    /// not a region of the region table: there are more slots than the
+    /// table has rows.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`StackPool::allocate`].
+    pub fn allocate_stack<F, A, T>(
+        &mut self,
+        access: &mut A,
+        tlb: &mut T,
+    ) -> Result<KernelStack, StackError>
+    where
+        F: EntryFormat,
+        A: FrameAccess<PageTable<F>>,
+        T: TlbControl,
+    {
+        let root = self.root;
+        let mut mapper =
+            Mapper::<'_, F, A, T, BitmapFrameAllocator>::new(root, access, tlb, &mut self.frames);
+        self.stacks.allocate(&mut mapper)
+    }
+
+    /// Unmaps the pages of `stack`, gives their frames back, and frees the
+    /// slot.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`StackPool::release`].
+    pub fn release_stack<F, A, T>(
+        &mut self,
+        access: &mut A,
+        tlb: &mut T,
+        stack: KernelStack,
+    ) -> Result<(), StackError>
+    where
+        F: EntryFormat,
+        A: FrameAccess<PageTable<F>>,
+        T: TlbControl,
+    {
+        let root = self.root;
+        let mut mapper =
+            Mapper::<'_, F, A, T, BitmapFrameAllocator>::new(root, access, tlb, &mut self.frames);
+        self.stacks.release(&mut mapper, stack)
     }
 
     /// The frame the boot information page is mapped to.
@@ -618,6 +666,5 @@ pub const fn backing_name(backing: KernelBacking) -> &'static str {
         KernelBacking::Window => "physical-window",
         KernelBacking::BootStack => "boot-stack",
         KernelBacking::BootInfo => "boot-info",
-        KernelBacking::Stack(_) => "kernel-stack",
     }
 }

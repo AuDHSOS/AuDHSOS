@@ -9,8 +9,9 @@
 
 use audhsos_abi::boot_image::{BOOT_IMAGE_HEADER_LEN, BootImageHeader};
 use audhsos_abi::layout::{
-    BOOT_INFO_VADDR, BOOT_STACK_PAGES, BOOT_STACK_TOP, KERNEL_BASE, MAX_PHYS_WINDOW_BYTES,
-    PAGE_SIZE, PHYS_WINDOW_BASE, USER_SPACE_END,
+    BOOT_INFO_VADDR, BOOT_STACK_PAGES, BOOT_STACK_TOP, KERNEL_BASE, KERNEL_STACK_PAGES,
+    KERNEL_STACK_SLOTS, KERNEL_STACKS_BASE, MAX_PHYS_WINDOW_BYTES, PAGE_SIZE, PHYS_WINDOW_BASE,
+    USER_SPACE_END,
 };
 use kernel_hal_api::doubles::{
     CountingFrameSource, MemoryFrameAccess, RecordingConsole, RecordingTlb, ScriptedPlatform,
@@ -23,6 +24,7 @@ use kernel_mm::memory_map::MapError as MemoryMapError;
 use kernel_mm::page_table::{CachePolicy, PageTable, Permissions, X86Entry};
 use kernel_types::{Page, PageRange, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
 
+use crate::config::KERNEL_REGIONS;
 use crate::memory::{
     Adopted, KernelBacking, MemoryError, adopt, backing_name, boot_image, bring_up, drop_identity,
     identity_range, report, requested_reserve, reserve, reserve_override,
@@ -57,11 +59,11 @@ const INFO_PHYS: u64 = 7 * MIB + 768 * 1024;
 /// The pages of the kernel image the loader mapped.
 const KERNEL_PAGES: u64 = KERNEL_LEN / PAGE_SIZE;
 
-/// The first frame the double materializes tables in, well above the
-/// memory of the machine so that a table frame is never a reserve frame.
+/// The first frame the loader's own tables use, well above the memory of
+/// the machine so that such a table frame is never a reserve frame.
 const TABLE_START: u64 = 0x1_0000;
 
-/// The number of frames the double materializes tables in.
+/// The number of frames above the machine the loader's own tables use.
 const TABLE_FRAMES: u64 = 512;
 
 type Access = MemoryFrameAccess<PageTable<X86Entry>>;
@@ -111,7 +113,11 @@ struct Machine {
 
 impl Machine {
     fn new(identity_pages: u64) -> Self {
-        let ram = PhysFrameRange::new(frame(TABLE_START), TABLE_FRAMES).unwrap();
+        // The window reaches every frame of the machine, so a table may
+        // live in any of them: the frames of the reserve carry the tables
+        // a later mapping needs, not only the frames above the machine
+        // that this fixture starts the loader's tables in.
+        let ram = PhysFrameRange::from_numbers(0, TABLE_START + TABLE_FRAMES).unwrap();
         let mut access = MemoryFrameAccess::with_lazy_tables(ram);
         let root = frame(TABLE_START);
         access.insert(root, PageTable::default());
@@ -438,7 +444,6 @@ fn every_backing_has_a_name() {
         KernelBacking::Window,
         KernelBacking::BootStack,
         KernelBacking::BootInfo,
-        KernelBacking::Stack(3),
     ];
     for backing in backings {
         assert!(!backing_name(backing).is_empty());
@@ -513,4 +518,60 @@ fn the_kernel_memory_is_reachable_once_the_bring_up_has_stored_it() {
         ),
         Err(MemoryError::AlreadyDone)
     );
+}
+
+#[test]
+fn a_kernel_stack_comes_out_of_the_reserve_and_goes_back_into_it() {
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let mut memory =
+        bring_up::<X86Entry, _, _, _>(&platform(), machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    let free = memory.frames().free_count();
+
+    let stack = memory
+        .allocate_stack::<X86Entry, _, _>(&mut machine.access, &mut tlb)
+        .unwrap();
+    assert_eq!(stack.pages().count(), KERNEL_STACK_PAGES);
+    assert_eq!(stack.guard().unwrap().start().as_u64(), KERNEL_STACKS_BASE);
+    // Four pages plus the tables the walk had to create.
+    assert!(memory.frames().free_count() <= free - KERNEL_STACK_PAGES);
+    assert_eq!(memory.stacks_mut().live(), 1);
+
+    let mut frames = no_frames();
+    {
+        let mapper = machine.mapper(&mut frames);
+        for page in stack.pages() {
+            assert!(mapper.translate(page).is_some(), "{page:?} is mapped");
+        }
+        assert!(mapper.translate(stack.guard().unwrap()).is_none());
+    }
+
+    memory
+        .release_stack::<X86Entry, _, _>(&mut machine.access, &mut tlb, stack)
+        .unwrap();
+    assert_eq!(memory.stacks_mut().live(), 0);
+    assert_eq!(memory.frames().free_count(), free);
+    let mut frames = no_frames();
+    let mapper = machine.mapper(&mut frames);
+    for page in stack.pages() {
+        assert!(mapper.translate(page).is_none(), "{page:?} is unmapped");
+    }
+}
+
+#[test]
+fn a_kernel_stack_is_not_a_region_of_the_region_table() {
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let mut memory =
+        bring_up::<X86Entry, _, _, _>(&platform(), machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    let before = memory.regions().len();
+    memory
+        .allocate_stack::<X86Entry, _, _>(&mut machine.access, &mut tlb)
+        .unwrap();
+    // The area is one constant range and the pool says which slots are
+    // taken; a row per stack would need more rows than the table has.
+    assert_eq!(memory.regions().len(), before);
+    assert!(u64::try_from(KERNEL_REGIONS).unwrap() < KERNEL_STACK_SLOTS);
 }

@@ -26,6 +26,9 @@ name = "memory"
 name = "memory_fault"
 
 [[test]]
+name = "kernel_stack"
+
+[[test]]
 name = "console"
 
 [[test]]

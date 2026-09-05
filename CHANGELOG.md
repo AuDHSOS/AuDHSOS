@@ -28,8 +28,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   bring-up and the boot information page need.
 - `audhsos-kernel`: the kernel takes its memory over after the boot report
   and reports the reserve, the regions of its address space, and the
-  identity mapping it dropped. Two test kernels, `memory` and
-  `memory_fault`, cover the memory items of catalog 6.6.21.
+  identity mapping it dropped. Three test kernels, `memory`,
+  `memory_fault`, and `kernel_stack`, cover the memory and kernel stack
+  items of catalog 6.6.21.
+- `kernel-core`: `KernelMemory::allocate_stack` and `release_stack`, which
+  build the mapper out of the root frame and the reserve and drive the
+  stack pool.
+- `kernel-hal-x86_64`: `testing::write_byte`, the write a test image needs
+  to show that a page it mapped carries what it wrote and that a guard
+  page faults.
+- Catalog 6.6.21 gains the kernel stack items and the boot information
+  address item.
 - Planning documents and the decision register under `docs/`.
 - `docs/11-cryptography-and-tls.md`: the design and implementation plan
   for the TLS 1.3 client track (constant-time primitives, hashes and

@@ -1214,14 +1214,23 @@ Goal: the kernel owns its memory after boot. Implemented.
   showed a `boot-info` line. Phase 3 removes that push and adds
   `push_boot_info(start)`, which the entry point calls with the frame the
   walk of the loader's tables gives, before the report runs.
+- `KernelMemory::allocate_stack` and `release_stack` build the mapper out
+  of the root frame and the reserve and drive the pool. A kernel stack is
+  not a row of the region table: the area is one constant range, the pool
+  bitmap says which of its 1024 slots are taken, and the table has 64 rows.
 - QEMU tests: `memory.rs` (the reserve leaves every frame free; every
   reserve frame is handed out and taken back; the identity mapping is
   gone; the boot information page is reported with the physical address
   the walk gives; a frame the kernel maps itself carries what the window
-  wrote) and `memory_fault.rs` (the read after the unmap faults at the
-  address of the mapping). The fault ends the machine, so it needs an
-  image of its own. Host tests in `kernel-core::tests::memory` run the
-  same bring-up against a page-table image built with the doubles.
+  wrote), `memory_fault.rs` (the read after the unmap faults at the
+  address of the mapping), and `kernel_stack.rs` (every page of a stack
+  carries what the kernel writes; a released stack is gone and its slot
+  comes back; a write to the guard page faults at the guard address). A
+  fault ends the machine, so each of the two fault tests needs an image of
+  its own. Host tests in `kernel-core::tests::memory` and
+  `kernel-mm::tests::stack` run the same code against a page-table image
+  built with the doubles; only the machine shows that a guard page
+  faults.
 
 Acceptance: `check` green; catalog 6.6.21 memory items covered.
 

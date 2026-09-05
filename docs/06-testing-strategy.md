@@ -491,7 +491,13 @@ done until every applicable item has a test. Items are added, never removed.
   vector is handled.
 - Memory: allocate every reserve frame and free them; map a frame at a user
   address, write through the physical window, read through the mapping, unmap,
-  and verify a page fault; the loader's identity mapping is gone after boot.
+  and verify a page fault; the loader's identity mapping is gone after boot;
+  the boot information page is reported with the physical address a walk of
+  the loader's tables gives.
+- Kernel stacks: every page of an allocated stack carries what the kernel
+  writes into it; a released stack is unmapped and its frames are back in
+  the reserve; the slot is handed out again with the same pages; a write to
+  the guard page below a stack raises a page fault at the guard address.
 - Threads: create a user thread that executes `thread_exit`; two threads of
   equal priority alternate (observed through a shared counter); a
   higher-priority thread preempts.
