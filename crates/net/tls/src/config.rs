@@ -3,7 +3,7 @@
 
 //! What a caller decides before a connection begins.
 
-use audhsos_der::Timestamp;
+use audhsos_time::CivilTime;
 use audhsos_x509::TrustAnchors;
 
 use crate::suite::CipherSuite;
@@ -31,7 +31,7 @@ pub struct ClientConfig<'a> {
     /// It is a parameter because this system has no clock yet; when
     /// `audhsos-time` arrives it becomes an instant, and the field keeps
     /// its place. Section 11.14 of document 11 carries the seam.
-    pub now: Timestamp,
+    pub now: CivilTime,
 }
 
 impl<'a> ClientConfig<'a> {
@@ -40,7 +40,7 @@ impl<'a> ClientConfig<'a> {
     pub const fn new(
         server_name: &'a str,
         anchors: TrustAnchors<'a>,
-        now: Timestamp,
+        now: CivilTime,
     ) -> ClientConfig<'a> {
         ClientConfig {
             server_name,

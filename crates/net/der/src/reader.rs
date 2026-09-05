@@ -11,7 +11,7 @@
 
 use crate::error::DerError;
 use crate::tag::Tag;
-use crate::time::Timestamp;
+use audhsos_time::CivilTime;
 
 /// How deep a value may nest. A certificate reaches about six.
 pub const MAX_DEPTH: usize = 16;
@@ -329,15 +329,15 @@ impl<'a> Reader<'a> {
     /// [`DerError::UnexpectedTag`] when the value is neither form, and
     /// [`DerError::BadTime`] when the form is right and the content is
     /// not.
-    pub fn read_time(&mut self) -> Result<Timestamp, DerError> {
+    pub fn read_time(&mut self) -> Result<CivilTime, DerError> {
         match self.peek() {
             Some(Tag::UTC_TIME) => {
                 let content = self.read_tagged(Tag::UTC_TIME)?;
-                Timestamp::from_utc_time(content)
+                crate::time::from_utc_time(content)
             }
             Some(Tag::GENERALIZED_TIME) => {
                 let content = self.read_tagged(Tag::GENERALIZED_TIME)?;
-                Timestamp::from_generalized_time(content)
+                crate::time::from_generalized_time(content)
             }
             Some(_) => Err(DerError::UnexpectedTag),
             None => Err(DerError::EndOfInput),

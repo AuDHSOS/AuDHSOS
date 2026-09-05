@@ -9,7 +9,8 @@
 //! the certificate when it is marked critical; and a field with a default
 //! value must be absent, as the distinguished encoding rules require.
 
-use audhsos_der::{DerError, Reader, Tag, Timestamp};
+use audhsos_der::{DerError, Reader, Tag};
+use audhsos_time::CivilTime;
 
 use crate::algorithm::{DNS_NAME_TAG, SignatureAlgorithm, SubjectPublicKey, expect_same};
 use crate::error::X509Error;
@@ -19,9 +20,9 @@ use crate::oid;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Validity {
     /// The first moment the certificate is valid.
-    pub not_before: Timestamp,
+    pub not_before: CivilTime,
     /// The last moment the certificate is valid.
-    pub not_after: Timestamp,
+    pub not_after: CivilTime,
 }
 
 /// What `basicConstraints` says.

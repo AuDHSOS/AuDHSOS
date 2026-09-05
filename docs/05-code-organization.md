@@ -127,13 +127,13 @@ AuDHSOS/
 | `user-loader` | u2 | `x86_64-unknown-none` | no | yes, fuzz | `user-rt`, `user-proto`, `audhsos-elf` |
 | servers and apps | u3 | `x86_64-unknown-none` | no | logic on host, e2e in QEMU | `user-rt`, `user-proto`, `user-loader`, `driver-uart16550`, `driver-i8042`, `gfx` |
 | `crypto-ct` | c0 | all | no | yes | - |
-| `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time` when it exists (11.14); `test-support` as a dev-dependency |
+| `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
 | `crypto-hash` | c1 | all | no | yes | `crypto-ct` |
 | `crypto-aead` | c1 | all | no | yes | `crypto-ct` |
 | `crypto-ec` | c2 | all | no | yes | `crypto-ct`, `crypto-hash`; feature `test-signing` |
 | `crypto-rng` | c2 | all | no | yes | `crypto-ct`, `crypto-aead`; feature `test-doubles` |
-| `audhsos-x509` | c3 | all | no | yes, fuzz | `audhsos-der`, `crypto-hash`, `crypto-ec`; feature `test-certificates` |
-| `audhsos-tls` | c4 | all | no | yes, fuzz | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-x509` |
+| `audhsos-x509` | c3 | all | no | yes, fuzz | `audhsos-der`, `audhsos-time`, `crypto-hash`, `crypto-ec`; feature `test-certificates` |
+| `audhsos-tls` | c4 | all | no | yes, fuzz | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-time`, `audhsos-x509` |
 | `net-wire` | n0 | all | no | yes | - |
 | `net-eth` | n1 | all | no | yes | `net-wire`, `audhsos-time`, `audhsos-collections` |
 | `net-ip` | n2 | all | no | yes, fuzz | `net-eth` and below |

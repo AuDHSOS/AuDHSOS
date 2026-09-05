@@ -286,13 +286,12 @@ window of RFC 5280; the calendar arithmetic itself lives in
 `audhsos-time`, so certificate validity and network timers share one
 type.
 
-Until `audhsos-time` exists, the reader checks the syntax of a time and
-stops there: the form the profile allows, the digits, the `Z` suffix, the
-field ranges, and the two-digit year window, yielding the six fields as a
-`Timestamp` rather than an instant. The day is checked against
-thirty-one, not against the true length of its month. Section 11.14
-carries this as an open seam, and a test states the current behaviour so
-that the gap is visible rather than assumed away.
+The reader owns the syntax of a time — the form the profile allows, the
+digits, the `Z` suffix, and the two-digit year window — and hands the six
+fields to `CivilTime::new`, which owns what a field may hold, the true
+length of a month included. A `UTCTime` naming the twenty-ninth of
+February of a year that is not leap is therefore refused here, and the
+value a caller gets converts to a `UnixTime` without a second parser.
 
 `audhsos-x509` parses a certificate into borrowed slices:
 
@@ -309,11 +308,10 @@ subject alternative name, authority and subject key identifier. Any
 unrecognized extension marked critical rejects the certificate.
 
 `verify_chain(end_entity, intermediates, anchors, name, now)` implements
-the RFC 5280 subset. Until `audhsos-time` exists, `now` is a `Timestamp`
-of fields rather than an instant; the comparison is well defined either
-way, because a timestamp orders lexicographically in the order time runs,
-and the signature of the function does not change when the conversion
-arrives. The rules are: issuer and subject distinguished names compared as
+the RFC 5280 subset. `now` is a `CivilTime`, whose fields order
+lexicographically in the order time runs, so the window comparison is the
+derived one; a caller that holds a `UnixTime` converts it first. The
+rules are: issuer and subject distinguished names compared as
 DER bytes, one signature verification per link, the validity window
 against `now`, `cA` and the path length constraint on every intermediate,
 `keyCertSign` on every CA, `serverAuth` on the leaf, chain length at most
@@ -345,7 +343,7 @@ bytes. It never allocates, never blocks, and knows nothing about sockets.
 pub struct Buffers<'a> { pub incoming: &'a mut [u8], pub outgoing: &'a mut [u8],
                          pub handshake: &'a mut [u8] }
 pub struct ClientConfig<'a> { pub server_name: &'a str, pub anchors: TrustAnchors<'a>,
-    pub alpn: &'a [&'a [u8]], pub suites: &'a [CipherSuite], pub now: Timestamp }
+    pub alpn: &'a [&'a [u8]], pub suites: &'a [CipherSuite], pub now: CivilTime }
 
 impl<'a> Connection<'a> {
     pub fn new(config: &'a ClientConfig<'a>, rng: &mut dyn Rng, buffers: Buffers<'a>)
@@ -526,13 +524,15 @@ nobody finds again.
 
 | What is missing | Where it is felt | Who owns it |
 |-----------------|------------------|-------------|
-| The conversion of a certificate time to an instant, and the check of a day against the true length of its month | `audhsos-der` yields a `Timestamp` of fields, and `verify_chain` takes one as its `now`. That comparison is correct, so nothing is blocked; what is missing is the step from a clock to that value | `audhsos-time`, D-46, [document 12](12-parallel-work.md) |
+| A clock | `audhsos-time` arrived, so `audhsos-der` yields a `CivilTime` that the calendar validated and `verify_chain` compares one as its `now`. What no crate of this project has is a source for that value, because none of them reads a clock | the platform timer of Phase 4 and the system call that carries it out |
 | A PEM decoder | the trust-anchor conversion of D-42, which the xtask performs at build time | `audhsos-encoding`, D-47, [document 12](12-parallel-work.md) |
 | A source of entropy | `crypto-rng` ships the generator and the `Entropy` trait; no product code can construct a generator without a source | `RDSEED` in the HAL behind a `random_bytes` system call, D-43 |
 | A transport | step T8: the client is sans-I/O and needs bytes moved for it | `net-tcp`, D-49, [document 12](12-parallel-work.md) |
 
 None of these blocks the steps that remain. T6 and T7 were built against
-the `Timestamp` of fields and gain the conversion when it arrives.
+the fields of a certificate time and needed no change when the calendar
+arrived: the type moved to `audhsos-time` and gained its checks, and the
+signatures that carry it stayed as they were.
 
 The fuzz harness of D-54 arrived, and with it the four targets this track
 owes: `der`, `x509`, `tls_record`, and `tls_handshake` live under `fuzz/`

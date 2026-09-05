@@ -13,7 +13,7 @@
 //! parses, into a buffer the caller owns, and refuses anything that does
 //! not fit.
 
-use audhsos_der::Timestamp;
+use audhsos_time::CivilTime;
 use crypto_ec::{ed25519, p256};
 use crypto_hash::{Sha256, Sha384};
 
@@ -118,9 +118,9 @@ pub struct Params<'a> {
     /// The common name of the subject.
     pub subject: &'a str,
     /// The first moment of validity.
-    pub not_before: Timestamp,
+    pub not_before: CivilTime,
     /// The last moment of validity.
-    pub not_after: Timestamp,
+    pub not_after: CivilTime,
     /// The names to put in the subject alternative name, if any.
     pub dns_names: &'a [&'a str],
     /// What `basicConstraints` is to say, if it is to be present.
@@ -148,8 +148,8 @@ impl<'a> Params<'a> {
         issuer: &'a str,
         subject: &'a str,
         dns_names: &'a [&'a str],
-        not_before: Timestamp,
-        not_after: Timestamp,
+        not_before: CivilTime,
+        not_after: CivilTime,
     ) -> Params<'a> {
         Params {
             serial: 1,
@@ -173,8 +173,8 @@ impl<'a> Params<'a> {
         issuer: &'a str,
         subject: &'a str,
         path_len: Option<u32>,
-        not_before: Timestamp,
-        not_after: Timestamp,
+        not_before: CivilTime,
+        not_after: CivilTime,
     ) -> Params<'a> {
         Params {
             serial: 1,
@@ -295,7 +295,7 @@ fn write_validity(writer: &mut Writer<'_>, params: &Params<'_>) -> Result<(), X5
 }
 
 /// Writes one time, in the form its year prescribes.
-fn write_time(writer: &mut Writer<'_>, time: Timestamp) -> Result<(), X509Error> {
+fn write_time(writer: &mut Writer<'_>, time: CivilTime) -> Result<(), X509Error> {
     let mut digits = [0u8; 16];
     let mut text = Writer::new(&mut digits);
     let tag = if (1950..=2049).contains(&time.year) {

@@ -12,7 +12,7 @@
 
 #![cfg_attr(fuzzing, no_main)]
 
-use audhsos_der::{MAX_DEPTH, Reader, Timestamp};
+use audhsos_der::{MAX_DEPTH, Reader, from_generalized_time, from_utc_time};
 
 fuzz_support::fuzz_target!(|bytes: &[u8]| {
     walk(&mut Reader::new(bytes), 0);
@@ -46,10 +46,7 @@ fn walk(reader: &mut Reader<'_>, depth: usize) {
 /// The two time forms against the whole input, because a walk reaches them
 /// only for an input that happens to carry their tag.
 fn times(bytes: &[u8]) {
-    for parsed in [
-        Timestamp::from_utc_time(bytes),
-        Timestamp::from_generalized_time(bytes),
-    ] {
+    for parsed in [from_utc_time(bytes), from_generalized_time(bytes)] {
         let Ok(time) = parsed else {
             continue;
         };

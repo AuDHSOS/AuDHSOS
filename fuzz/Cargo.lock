@@ -9,9 +9,16 @@ version = "0.1.0"
 [[package]]
 name = "audhsos-der"
 version = "0.1.0"
+dependencies = [
+ "audhsos-time",
+]
 
 [[package]]
 name = "audhsos-elf"
+version = "0.1.0"
+
+[[package]]
+name = "audhsos-time"
 version = "0.1.0"
 
 [[package]]
@@ -19,6 +26,7 @@ name = "audhsos-tls"
 version = "0.1.0"
 dependencies = [
  "audhsos-der",
+ "audhsos-time",
  "audhsos-x509",
  "crypto-aead",
  "crypto-ct",
@@ -32,6 +40,7 @@ name = "audhsos-x509"
 version = "0.1.0"
 dependencies = [
  "audhsos-der",
+ "audhsos-time",
  "crypto-ec",
  "crypto-hash",
 ]
@@ -148,7 +157,7 @@ dependencies = [
 name = "x509"
 version = "0.1.0"
 dependencies = [
- "audhsos-der",
+ "audhsos-time",
  "audhsos-x509",
  "fuzz-support",
 ]

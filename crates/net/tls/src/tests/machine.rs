@@ -11,7 +11,7 @@
 //! the arithmetic matches the world, the other that the machine does what
 //! the arithmetic allows.
 
-use audhsos_der::Timestamp;
+use audhsos_time::CivilTime;
 use audhsos_x509::builder::{Params, TestKey, build};
 use audhsos_x509::{Certificate, TrustAnchor, TrustAnchors};
 use crypto_ec::x25519;
@@ -83,8 +83,8 @@ impl Authority {
 }
 
 /// The moment every window in this file contains.
-fn now() -> Timestamp {
-    Timestamp {
+fn now() -> CivilTime {
+    CivilTime {
         year: 2025,
         month: 6,
         day: 15,
@@ -95,9 +95,9 @@ fn now() -> Timestamp {
 }
 
 /// A window that contains it.
-fn window() -> (Timestamp, Timestamp) {
+fn window() -> (CivilTime, CivilTime) {
     (
-        Timestamp {
+        CivilTime {
             year: 2020,
             month: 1,
             day: 1,
@@ -105,7 +105,7 @@ fn window() -> (Timestamp, Timestamp) {
             minute: 0,
             second: 0,
         },
-        Timestamp {
+        CivilTime {
             year: 2030,
             month: 12,
             day: 31,

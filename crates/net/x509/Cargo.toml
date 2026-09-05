@@ -15,6 +15,7 @@ test-certificates = ["crypto-ec/test-signing"]
 
 [dependencies]
 audhsos-der.workspace = true
+audhsos-time.workspace = true
 crypto-ec.workspace = true
 crypto-hash.workspace = true
 

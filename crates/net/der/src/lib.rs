@@ -10,10 +10,11 @@ pub mod reader;
 pub mod tag;
 pub mod time;
 
+pub use audhsos_time::CivilTime;
 pub use error::DerError;
 pub use reader::{BitString, MAX_DEPTH, Oid, Reader};
 pub use tag::Tag;
-pub use time::Timestamp;
+pub use time::{from_generalized_time, from_utc_time};
 
 #[cfg(test)]
 mod tests;

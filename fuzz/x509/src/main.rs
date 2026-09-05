@@ -12,11 +12,11 @@
 
 #![cfg_attr(fuzzing, no_main)]
 
-use audhsos_der::Timestamp;
+use audhsos_time::CivilTime;
 use audhsos_x509::{Certificate, ServerName, TrustAnchors, matches, verify_chain};
 
 /// A moment inside the window of any certificate a test would build.
-const NOW: Timestamp = Timestamp {
+const NOW: CivilTime = CivilTime {
     year: 2025,
     month: 6,
     day: 15,

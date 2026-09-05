@@ -111,9 +111,12 @@ modeled. Both are stated in the crate documentation as limits rather
 than left implicit.
 
 `UnixTime` is the type that document 11 attributes to `audhsos-der`. It
-moves here, and `audhsos-der` produces it from `UTCTime` and
-`GeneralizedTime` instead of defining it, so that the certificate
-validity window and the network timers speak one type (D-46).
+moved here, and `audhsos-der` produces a `CivilTime` from `UTCTime` and
+`GeneralizedTime` instead of defining one, so that the certificate
+validity window and the network timers speak one type (D-46). The parser
+kept the syntax and gave up the field ranges: a `UTCTime` naming the
+thirty-first of April or the twenty-ninth of February of a year that is
+not leap is refused, which the old check against thirty-one let through.
 
 Tests: catalog 6.6.39.
 

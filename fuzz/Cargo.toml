@@ -29,6 +29,7 @@ rust-version = "1.100"
 audhsos-abi = { path = "../crates/abi" }
 audhsos-der = { path = "../crates/net/der" }
 audhsos-elf = { path = "../crates/elf" }
+audhsos-time = { path = "../crates/time" }
 audhsos-tls = { path = "../crates/net/tls" }
 audhsos-x509 = { path = "../crates/net/x509" }
 kernel-acpi = { path = "../crates/kernel/acpi" }

@@ -13,6 +13,7 @@ dependencies = [
 name = "audhsos-der"
 version = "0.1.0"
 dependencies = [
+ "audhsos-time",
  "test-support",
 ]
 
@@ -59,6 +60,7 @@ name = "audhsos-tls"
 version = "0.1.0"
 dependencies = [
  "audhsos-der",
+ "audhsos-time",
  "audhsos-x509",
  "crypto-aead",
  "crypto-ct",
@@ -81,6 +83,7 @@ name = "audhsos-x509"
 version = "0.1.0"
 dependencies = [
  "audhsos-der",
+ "audhsos-time",
  "crypto-ec",
  "crypto-hash",
  "test-support",

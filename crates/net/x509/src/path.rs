@@ -19,7 +19,8 @@
 //! one intermediate, and no intermediate is used twice, so the walk cannot
 //! loop.
 
-use audhsos_der::{Reader, Timestamp};
+use audhsos_der::Reader;
+use audhsos_time::CivilTime;
 
 use crate::algorithm::SubjectPublicKey;
 use crate::certificate::Certificate;
@@ -80,7 +81,7 @@ pub fn verify_chain(
     intermediates: &[Certificate<'_>],
     anchors: &TrustAnchors<'_>,
     name: ServerName<'_>,
-    now: Timestamp,
+    now: CivilTime,
 ) -> Result<(), X509Error> {
     if intermediates.len() > MAX_CHAIN {
         // A server that sends more than this has not sent a chain.
@@ -139,7 +140,7 @@ fn next_issuer<'a, 'b>(
 }
 
 /// Whether `certificate` is inside its window at `now`.
-fn check_window(certificate: &Certificate<'_>, now: Timestamp) -> Result<(), X509Error> {
+fn check_window(certificate: &Certificate<'_>, now: CivilTime) -> Result<(), X509Error> {
     if now < certificate.validity.not_before {
         return Err(X509Error::NotYetValid);
     }
@@ -153,7 +154,7 @@ fn check_window(certificate: &Certificate<'_>, now: Timestamp) -> Result<(), X50
 /// intermediates under it.
 fn check_authority(
     issuer: &Certificate<'_>,
-    now: Timestamp,
+    now: CivilTime,
     below: usize,
 ) -> Result<(), X509Error> {
     check_window(issuer, now)?;

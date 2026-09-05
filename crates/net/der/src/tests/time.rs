@@ -3,9 +3,11 @@
 
 //! The two time forms, as far as this crate checks them.
 
+use audhsos_time::{CivilTime, UnixTime};
+
 use crate::error::DerError;
 use crate::reader::Reader;
-use crate::time::Timestamp;
+use crate::time::{from_generalized_time, from_utc_time};
 
 /// A time value with the given tag and text.
 fn encode(tag: u8, text: &str) -> Vec<u8> {
@@ -17,10 +19,10 @@ fn encode(tag: u8, text: &str) -> Vec<u8> {
 
 #[test]
 fn a_utc_time_is_read_with_its_two_digit_year_window() {
-    let value = Timestamp::from_utc_time(b"230405060708Z").expect("a well formed time");
+    let value = from_utc_time(b"230405060708Z").expect("a well formed time");
     assert_eq!(
         value,
-        Timestamp {
+        CivilTime {
             year: 2023,
             month: 4,
             day: 5,
@@ -33,19 +35,19 @@ fn a_utc_time_is_read_with_its_two_digit_year_window() {
     // RFC 5280: a two-digit year of fifty or more is nineteen hundred,
     // below it two thousand.
     assert_eq!(
-        Timestamp::from_utc_time(b"500101000000Z")
+        from_utc_time(b"500101000000Z")
             .expect("a well formed time")
             .year,
         1950
     );
     assert_eq!(
-        Timestamp::from_utc_time(b"490101000000Z")
+        from_utc_time(b"490101000000Z")
             .expect("a well formed time")
             .year,
         2049
     );
     assert_eq!(
-        Timestamp::from_utc_time(b"991231235959Z")
+        from_utc_time(b"991231235959Z")
             .expect("a well formed time")
             .year,
         1999
@@ -54,11 +56,11 @@ fn a_utc_time_is_read_with_its_two_digit_year_window() {
 
 #[test]
 fn a_generalized_time_carries_its_century() {
-    let value = Timestamp::from_generalized_time(b"20230405060708Z").expect("a well formed time");
+    let value = from_generalized_time(b"20230405060708Z").expect("a well formed time");
     assert_eq!(value.year, 2023);
     assert_eq!(value.second, 8);
     assert_eq!(
-        Timestamp::from_generalized_time(b"19500101000000Z")
+        from_generalized_time(b"19500101000000Z")
             .expect("a well formed time")
             .year,
         1950
@@ -77,7 +79,7 @@ fn the_forms_the_profile_forbids_are_refused() {
         "",                  // empty
     ] {
         assert_eq!(
-            Timestamp::from_utc_time(text.as_bytes()),
+            from_utc_time(text.as_bytes()),
             Err(DerError::BadTime),
             "utc time {text:?}"
         );
@@ -91,7 +93,7 @@ fn the_forms_the_profile_forbids_are_refused() {
         "230405060708Z",       // the two-digit form
     ] {
         assert_eq!(
-            Timestamp::from_generalized_time(text.as_bytes()),
+            from_generalized_time(text.as_bytes()),
             Err(DerError::BadTime),
             "generalized time {text:?}"
         );
@@ -110,7 +112,7 @@ fn a_field_out_of_range_is_refused() {
         "230405060760Z", // second sixty
     ] {
         assert_eq!(
-            Timestamp::from_utc_time(text.as_bytes()),
+            from_utc_time(text.as_bytes()),
             Err(DerError::BadTime),
             "{text:?}"
         );
@@ -118,18 +120,40 @@ fn a_field_out_of_range_is_refused() {
 }
 
 #[test]
-fn a_day_beyond_the_length_of_its_month_is_still_accepted_here() {
-    // This is the seam of decision D-46: the day is checked against
-    // thirty-one, and against the true length of its month where the
-    // calendar lives, which is `audhsos-time` and does not exist yet.
-    // The test states the current behaviour so that the gap is visible
-    // rather than assumed away, and it will be inverted when the
-    // conversion arrives.
-    assert!(Timestamp::from_utc_time(b"230231000000Z").is_ok());
-    assert!(Timestamp::from_utc_time(b"230431000000Z").is_ok());
+fn a_day_beyond_the_length_of_its_month_is_refused() {
+    // The seam of decision D-46 is closed: the day goes to the calendar of
+    // `audhsos-time`, which knows how long its month is.
+    for text in [
+        "230231000000Z", // the thirty-first of February
+        "230431000000Z", // the thirty-first of April
+        "230229000000Z", // the twenty-ninth of a year that is not leap
+    ] {
+        assert_eq!(
+            from_utc_time(text.as_bytes()),
+            Err(DerError::BadTime),
+            "{text:?}"
+        );
+    }
+    assert!(from_utc_time(b"240229000000Z").is_ok(), "a leap year");
     assert!(
-        Timestamp::from_utc_time(b"230229000000Z").is_ok(),
-        "not a leap year"
+        from_generalized_time(b"20000229000000Z").is_ok(),
+        "a leap century"
+    );
+    assert_eq!(
+        from_generalized_time(b"19000229000000Z"),
+        Err(DerError::BadTime),
+        "a century that is not leap"
+    );
+}
+
+#[test]
+fn a_time_the_parser_accepts_is_a_point_on_the_unix_scale() {
+    // What the seam was for: the fields become an instant without a second
+    // parser and without a second calendar.
+    let time = from_generalized_time(b"20010909014640Z").expect("a well formed time");
+    assert_eq!(
+        UnixTime::from_civil(time),
+        Ok(UnixTime::from_seconds(1_000_000_000))
     );
 }
 
@@ -166,10 +190,9 @@ fn the_reader_takes_either_form_and_refuses_a_third() {
 
 #[test]
 fn times_compare_in_the_order_they_happen() {
-    let earlier = Timestamp::from_utc_time(b"230405060708Z").expect("a well formed time");
-    let later = Timestamp::from_utc_time(b"230405060709Z").expect("a well formed time");
-    let much_later =
-        Timestamp::from_generalized_time(b"20240405060708Z").expect("a well formed time");
+    let earlier = from_utc_time(b"230405060708Z").expect("a well formed time");
+    let later = from_utc_time(b"230405060709Z").expect("a well formed time");
+    let much_later = from_generalized_time(b"20240405060708Z").expect("a well formed time");
     assert!(earlier < later);
     assert!(later < much_later);
     assert!(!format!("{earlier:?}").is_empty());

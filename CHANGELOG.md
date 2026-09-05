@@ -352,6 +352,25 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   decisions D-29 to D-33, catalog sections 6.6.24 to 6.6.29, and the
   framebuffer fields of the boot information structure in the documents.
 
+### Changed
+
+- `audhsos-der` no longer defines a time type. `Timestamp` is gone;
+  `read_time`, `from_utc_time`, and `from_generalized_time` yield the
+  `CivilTime` of `audhsos-time`, which closes the seam decision D-46
+  opened. The parser kept the syntax — the form RFC 5280 allows, the
+  digits, the `Z` suffix, the two-digit year window — and gave up the field
+  ranges to the calendar. A day is now checked against the true length of
+  its month, so the thirty-first of April and the twenty-ninth of February
+  of a year that is not leap are refused where the old check against
+  thirty-one let them through.
+- `audhsos-x509` and `audhsos-tls` take the type from its owner:
+  `Certificate::not_before` and `not_after`, the `now` of `verify_chain`,
+  and the `now` of `ClientConfig` are a `CivilTime`. No signature changed
+  shape, because the fields and their order did not.
+- Section 11.14 loses the first of its four seams. What remains missing is
+  not a conversion but a clock: no crate of this project reads one, so the
+  value still enters from outside.
+
 ### Fixed
 
 - `audhsos-tls`: a `Certificate` message was refused whole when any entry

@@ -19,17 +19,12 @@ Nesting is bounded at `MAX_DEPTH`, so a deeply nested input cannot drive
 the parser past what the stack allows, and every reader is finished
 explicitly, so a caller cannot silently ignore what it did not read.
 
-## What is missing, and why
+## Where time comes from
 
-`UTCTime` and `GeneralizedTime` are parsed and checked here as far as
-their syntax goes: the form RFC 5280 allows, the digits, the field ranges,
-the `Z` suffix, the two-digit year window. They are *not* converted to a
-point in time, and the day is checked against thirty-one rather than
-against the true length of its month.
-
-Both belong to `audhsos-time` under decision D-46, which does not exist
-yet. When it does, this crate gains that dependency, `Timestamp` becomes
-its `CivilTime`, and the conversion and the calendar checks arrive with
-it. Until then a caller comparing certificate validity has fields, not
-instants. Document 11, section 11.14, lists this and the other seams the
-track is waiting on.
+`UTCTime` and `GeneralizedTime` are parsed here and validated in
+`audhsos-time`. This crate owns the syntax — the form RFC 5280 allows, the
+digits, the `Z` suffix, the two-digit year window — and hands the six
+fields to `CivilTime`, which owns what a field may hold, the true length
+of a month included (D-46). A caller therefore gets a value that the
+calendar accepts, converts to a `UnixTime`, and compares against a
+network timer as one type.

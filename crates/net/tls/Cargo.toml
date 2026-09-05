@@ -12,6 +12,7 @@ rust-version.workspace = true
 
 [dependencies]
 audhsos-der.workspace = true
+audhsos-time.workspace = true
 audhsos-x509.workspace = true
 crypto-aead.workspace = true
 crypto-ct.workspace = true

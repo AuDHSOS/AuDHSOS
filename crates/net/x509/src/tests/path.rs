@@ -3,7 +3,7 @@
 
 //! Chain validation, against chains this crate builds.
 
-use audhsos_der::Timestamp;
+use audhsos_time::CivilTime;
 
 use crate::builder::{Params, TestKey};
 use crate::certificate::{BasicConstraints, Certificate};
@@ -16,8 +16,8 @@ use crate::tests::{AUTHORITY_SECRET, Built, LEAF_SECRET, build_certificate, earl
 const NAME: &str = "example.test";
 
 /// A moment inside every window these tests build.
-fn now() -> Timestamp {
-    Timestamp {
+fn now() -> CivilTime {
+    CivilTime {
         year: 2025,
         month: 6,
         day: 15,
@@ -53,7 +53,7 @@ fn intermediate(path_len: Option<u32>) -> Built {
 }
 
 /// A leaf under the given issuer name, signed by the given key.
-fn leaf_signed_by(issuer: &str, key: TestKey, window: (Timestamp, Timestamp)) -> Built {
+fn leaf_signed_by(issuer: &str, key: TestKey, window: (CivilTime, CivilTime)) -> Built {
     let names = [NAME];
     let params = Params::leaf(issuer, NAME, &names, window.0, window.1);
     build_certificate(&params, TestKey::Ed25519(LEAF_SECRET), key).expect("the parameters fit")
@@ -157,7 +157,7 @@ fn a_window_that_does_not_contain_the_moment_is_refused() {
     let root = Certificate::parse(root_bytes.as_slice()).expect("a well formed root");
     let anchors = [anchor(&root)];
 
-    let expired = Timestamp {
+    let expired = CivilTime {
         year: 2021,
         month: 1,
         day: 1,
@@ -182,7 +182,7 @@ fn a_window_that_does_not_contain_the_moment_is_refused() {
         Err(X509Error::Expired)
     );
 
-    let future = Timestamp {
+    let future = CivilTime {
         year: 2029,
         month: 1,
         day: 1,
@@ -208,7 +208,7 @@ fn a_window_that_does_not_contain_the_moment_is_refused() {
 fn an_intermediate_outside_its_window_is_refused() {
     let root_bytes = root();
     let root = Certificate::parse(root_bytes.as_slice()).expect("a well formed root");
-    let expired = Timestamp {
+    let expired = CivilTime {
         year: 2021,
         month: 1,
         day: 1,
@@ -553,7 +553,7 @@ fn the_boundary_moments_of_a_window_are_inside_it() {
     let root = Certificate::parse(root_bytes.as_slice()).expect("a well formed root");
     let anchors = [anchor(&root)];
 
-    let opens = Timestamp {
+    let opens = CivilTime {
         year: 2024,
         month: 3,
         day: 4,
@@ -561,7 +561,7 @@ fn the_boundary_moments_of_a_window_are_inside_it() {
         minute: 6,
         second: 7,
     };
-    let closes = Timestamp {
+    let closes = CivilTime {
         year: 2026,
         month: 8,
         day: 9,

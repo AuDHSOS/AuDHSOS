@@ -13,7 +13,7 @@ mod name;
 mod parts;
 mod path;
 
-use audhsos_der::Timestamp;
+use audhsos_time::CivilTime;
 
 use crate::builder::{Params, TestKey, build};
 use crate::error::X509Error;
@@ -24,8 +24,8 @@ pub(crate) const AUTHORITY_SECRET: [u8; 32] = [0x11; 32];
 pub(crate) const LEAF_SECRET: [u8; 32] = [0x22; 32];
 
 /// A moment before every certificate these tests build.
-pub(crate) fn early() -> Timestamp {
-    Timestamp {
+pub(crate) fn early() -> CivilTime {
+    CivilTime {
         year: 2020,
         month: 1,
         day: 1,
@@ -36,8 +36,8 @@ pub(crate) fn early() -> Timestamp {
 }
 
 /// A moment after every certificate these tests build.
-pub(crate) fn late() -> Timestamp {
-    Timestamp {
+pub(crate) fn late() -> CivilTime {
+    CivilTime {
         year: 2030,
         month: 12,
         day: 31,
