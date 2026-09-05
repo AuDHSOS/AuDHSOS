@@ -38,6 +38,12 @@ name = "user"
 name = "isolation"
 
 [[test]]
+name = "concurrency"
+
+[[test]]
+name = "preemption"
+
+[[test]]
 name = "console"
 
 [[test]]
@@ -72,6 +78,7 @@ kernel-hal-x86_64.workspace = true
 kernel-types.workspace = true
 
 [dev-dependencies]
+audhsos-sync.workspace = true
 kernel-mm.workspace = true
 kernel-objects.workspace = true
 kernel-syscall.workspace = true

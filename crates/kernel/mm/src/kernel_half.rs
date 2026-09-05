@@ -216,7 +216,7 @@ where
         }
     }
     if let Some(table) = access.table_mut(frame) {
-        *table = PageTable::new();
+        table.clear();
     }
     frames.release_frame(frame);
     freed.saturating_add(1)

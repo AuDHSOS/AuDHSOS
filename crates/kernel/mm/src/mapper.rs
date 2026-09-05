@@ -166,7 +166,7 @@ where
                         return Err(MapError::OutOfKernelMemory);
                     };
                     if let Some(table) = self.access.table_mut(fresh) {
-                        *table = PageTable::default();
+                        table.clear();
                     } else {
                         self.frames.release_frame(fresh);
                         self.rollback(&created, created_len);

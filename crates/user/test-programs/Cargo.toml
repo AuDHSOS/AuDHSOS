@@ -34,6 +34,18 @@ path = "src/bin/count_and_exit.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "two_threads"
+path = "src/bin/two_threads.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "spin"
+path = "src/bin/spin.rs"
+test = false
+bench = false
+
 [dependencies]
 audhsos-abi.workspace = true
 user-sys-x86_64.workspace = true

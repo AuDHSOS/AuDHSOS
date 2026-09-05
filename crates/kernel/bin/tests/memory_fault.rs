@@ -13,6 +13,7 @@
 #![reexport_test_harness_main = "test_main"]
 
 // The user test image uses these; this one does not.
+use audhsos_sync as _;
 use kernel_objects as _;
 use kernel_syscall as _;
 

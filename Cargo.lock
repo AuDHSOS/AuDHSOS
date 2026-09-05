@@ -43,6 +43,7 @@ name = "audhsos-kernel"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "audhsos-sync",
  "kernel-core",
  "kernel-hal-api",
  "kernel-hal-x86_64",

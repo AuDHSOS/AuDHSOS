@@ -21,8 +21,11 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use audhsos_sync::{Global, UncontendedToken};
+
 use audhsos_abi::layout::{
     BOOT_STACK_TOP, KERNEL_STACK_PAGES, KERNEL_STACK_SLOT_PAGES, KERNEL_STACKS_BASE, PAGE_SIZE,
+    TICKS_PER_SECOND,
 };
 use audhsos_abi::{ThreadState, ipc_buffer};
 use kernel_core::machine::with_machine;
@@ -35,14 +38,14 @@ use kernel_hal_x86_64::console::SerialConsole;
 use kernel_hal_x86_64::paging::{AddressSpaces, LocalTlb, X86Entry, active_root};
 use kernel_hal_x86_64::traps::TrapReport;
 use kernel_hal_x86_64::window::PhysicalWindow;
-use kernel_hal_x86_64::{context, descriptors, testing, traps};
+use kernel_hal_x86_64::{context, descriptors, instructions, interrupts, testing, traps, vectors};
 use kernel_mm::page_table::{CachePolicy, PageTable, Permissions};
 use kernel_objects::handle_table::HandleList;
 use kernel_objects::object::{Process, ProcessId, Thread, ThreadId};
 use kernel_objects::quota::Quota;
 use kernel_syscall::environment::{Environment, KernelStack};
 use kernel_syscall::fault;
-use kernel_types::{Page, PhysFrame, VirtAddr};
+use kernel_types::{Page, PhysFrame, PhysFrameRange, VirtAddr};
 
 /// Where a program is linked and mapped. The linker script of the user
 /// test programs and the xtask both name this address.
@@ -96,6 +99,35 @@ static LAST_IP: AtomicU64 = AtomicU64::new(0);
 
 /// Whether the bring-up has run.
 static READY: AtomicU32 = AtomicU32::new(0);
+
+/// Whether the timer has been started.
+static TIMER: AtomicU32 = AtomicU32::new(0);
+
+/// How many turns of the processor the log holds. A test that needs more
+/// than this to see the scheduler go round is asking the wrong question.
+pub(crate) const TURNS: usize = 32;
+
+/// The index of no thread at all, which is what an unwritten turn holds.
+pub(crate) const NO_THREAD: u32 = u32::MAX;
+
+/// The threads the timer found on the processor, one entry per turn: a
+/// tick that finds the same thread as the tick before it adds nothing, so
+/// what the log holds is the order the processor went round and not how
+/// long each turn was.
+static TURN_OF: [AtomicU32; TURNS] = [const { AtomicU32::new(NO_THREAD) }; TURNS];
+
+/// How many turns have been recorded, which may be more than the log
+/// holds.
+static TURNS_SEEN: AtomicU32 = AtomicU32::new(0);
+
+/// What an image does on every timer tick, beyond what the scheduler does
+/// with the time slice of the running thread. `true` asks for a switch.
+pub(crate) type TickHook = fn(u64) -> bool;
+
+/// The hook of the running image. The borrow is copied out before the
+/// hook runs, as every other hook of this system is, so that a hook which
+/// switches threads leaves no borrow alive on the stack it leaves.
+static TICK_HOOK: Global<TickHook> = Global::new();
 
 /// The window over physical memory. The tables the loader built stay
 /// active for the whole run, so the window maps every physical frame read
@@ -259,10 +291,11 @@ pub(crate) fn create_process(program: &[u8]) -> UserProcess {
     }
 }
 
-/// Adds a thread to `process` at `priority`, with a stack of its own, and
-/// starts it. Every thread of a process runs the same program: the kernel
-/// maps one binary, and where a thread begins is the entry it is given.
-pub(crate) fn spawn_thread(process: &mut UserProcess, priority: u8) -> Spawned {
+/// Adds a thread to `process` at `priority`, with a stack of its own. The
+/// thread is `Inactive` until [`start`] puts it in a run queue. Every
+/// thread of a process runs the same program: the kernel maps one binary,
+/// and where a thread begins is the entry it is given.
+pub(crate) fn add_thread(process: &mut UserProcess, priority: u8) -> Spawned {
     let index = process.threads;
     process.threads = process.threads.saturating_add(1);
     let stack_top = stack_top_for(index);
@@ -283,11 +316,101 @@ pub(crate) fn spawn_thread(process: &mut UserProcess, priority: u8) -> Spawned {
     build(process, priority, stack, buffer, stack_top)
 }
 
-/// A process with `program` and one thread of the default priority: the
-/// shortest way to a running user thread.
-pub(crate) fn spawn(program: &[u8]) -> Spawned {
+/// Starts `thread` and says whether it should take the processor from
+/// whoever holds it: a thread of higher priority does.
+pub(crate) fn start(thread: ThreadId) -> bool {
+    try_start(thread)
+        .unwrap_or_else(|| testing::fail(format_args!("the thread could not be started")))
+}
+
+/// The same, for a caller that cannot fail an image: a tick hook runs
+/// inside an interrupt, and an interrupt that arrives while the kernel
+/// holds the machine finds it busy. `None` says so; the caller tries
+/// again on the next tick.
+pub(crate) fn try_start(thread: ThreadId) -> Option<bool> {
+    with_machine(|machine| {
+        machine
+            .scheduler
+            .start(&mut machine.objects.threads, thread)
+            .ok()
+            .map(|outcome| outcome.reschedule)
+    })
+    .flatten()
+}
+
+/// Ends `thread` wherever it is, for a caller that cannot fail an image.
+/// `None` says the machine was busy; the caller tries again.
+pub(crate) fn try_kill(thread: ThreadId) -> Option<bool> {
+    with_machine(|machine| {
+        machine
+            .scheduler
+            .exit(&mut machine.objects.threads, thread)
+            .ok()
+            .map(|outcome| outcome.reschedule)
+    })
+    .flatten()
+}
+
+/// A thread id as one word, so that a tick hook can keep one in a `static`
+/// without a cell of its own. [`NO_THREAD_WORD`] is no thread.
+pub(crate) fn pack(thread: ThreadId) -> u64 {
+    (u64::from(thread.index()) << 32) | u64::from(thread.generation())
+}
+
+/// The thread `word` names, or `None` for [`NO_THREAD_WORD`].
+pub(crate) fn unpack(word: u64) -> Option<ThreadId> {
+    if word == NO_THREAD_WORD {
+        return None;
+    }
+    let index = u32::try_from(word >> 32).unwrap_or(0);
+    let generation = u32::try_from(word & 0xFFFF_FFFF).unwrap_or(0);
+    Some(ThreadId::new(index, generation))
+}
+
+/// The word that names no thread. No id packs to it: it would need a slot
+/// index and a generation that are both the widest a `u32` holds.
+pub(crate) const NO_THREAD_WORD: u64 = u64::MAX;
+
+/// The word `index` of the IPC buffer of `thread`, or zero when the pool
+/// does not hold it or the machine is busy.
+pub(crate) fn thread_word(thread: ThreadId, index: usize) -> u64 {
+    let frame = with_machine(|machine| {
+        machine
+            .objects
+            .threads
+            .get(thread)
+            .ok()
+            .map(|entry| entry.ipc_buffer)
+    })
+    .flatten();
+    frame.map_or(0, |frame| buffer_word(frame, index))
+}
+
+/// How many ticks the timer has delivered.
+pub(crate) fn ticks() -> u64 {
+    interrupts::ticks()
+}
+
+/// Empties the log of turns, so that what a run records is its own.
+pub(crate) fn forget_turns() {
+    for slot in &TURN_OF {
+        slot.store(NO_THREAD, Ordering::SeqCst);
+    }
+    TURNS_SEEN.store(0, Ordering::SeqCst);
+}
+
+/// A process with `program` and one running thread of `priority`.
+pub(crate) fn spawn_at(program: &[u8], priority: u8) -> Spawned {
     let mut process = create_process(program);
-    spawn_thread(&mut process, DEFAULT_PRIORITY)
+    let spawned = add_thread(&mut process, priority);
+    start(spawned.thread);
+    spawned
+}
+
+/// A process with `program` and one running thread of the default
+/// priority: the shortest way to a running user thread.
+pub(crate) fn spawn(program: &[u8]) -> Spawned {
+    spawn_at(program, DEFAULT_PRIORITY)
 }
 
 /// Maps one page of memory read and write at [`SHARED_BASE`] of `process`
@@ -456,9 +579,6 @@ fn build(
         if let Ok(entry_of) = machine.objects.threads.get_mut(thread) {
             *entry_of = entry_of.starting_at(entry, user_stack, address);
         }
-        let _ = machine
-            .scheduler
-            .start(&mut machine.objects.threads, thread);
         (thread, address)
     })
     .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")));
@@ -539,37 +659,45 @@ fn stack_frame_below(top: VirtAddr) -> PhysFrame {
     .unwrap_or_else(|| testing::fail(format_args!("the kernel memory is not reachable")))
 }
 
-/// Switches into whichever thread should run, and returns when the kernel
-/// is back on its own stack with nothing left to run.
+/// Gives the processor to whichever thread should run, and returns when
+/// the kernel is back on the stack it was called on.
+///
+/// One switch and no more. What comes after the switch runs when somebody
+/// switches back to this thread, which is a whole turn of the processor
+/// later; asking the scheduler a second time before returning would take
+/// the processor away from the thread that just got it, and two threads of
+/// equal priority would trade it back and forth without either of them
+/// ever reaching user mode again.
+///
+/// A call that finds nothing to switch to returns at once, which is how
+/// the idle thread learns that the run is over.
 ///
 /// `standing_on` names the thread whose kernel stack the processor stands
 /// on when the scheduler has already let go of it, which is what a thread
 /// that faulted looks like. Its context belongs in its own pool entry all
-/// the same, so that resuming the thread returns to this loop.
+/// the same, so that resuming the thread returns here.
 pub(crate) fn run_threads(standing_on: Option<ThreadId>) {
-    loop {
-        let Some(next) = next_switch(standing_on) else {
-            return;
-        };
-        let (from, to, top) = next;
-        // A thread that has ended has nowhere to keep a context any more,
-        // and nobody will ask for it: the switch writes it here, on the
-        // stack that goes with it.
-        let mut discarded = VirtAddr::ZERO;
-        let from = from.unwrap_or(&raw mut discarded);
-        if descriptors::set_kernel_stack(top.as_u64()).is_err() {
-            testing::fail(format_args!("the task state segment is not reachable"));
-        }
-        // SAFETY: `from` points at the context word of the thread that is
-        // running, which lives in the `static` cell of the machine and
-        // stays where it is; `to` is a context the kernel wrote, of a
-        // thread whose kernel stack is mapped in every address space.
-        unsafe {
-            context::switch_to(from, to);
-        }
-        // Back on this stack: whatever ended while we were away can go.
-        sweep();
+    let Some((from, to, top)) = next_switch(standing_on) else {
+        return;
+    };
+    // A thread that has ended has nowhere to keep a context any more, and
+    // nobody will ask for it: the switch writes it here, on the stack that
+    // goes with it.
+    let mut discarded = VirtAddr::ZERO;
+    let from = from.unwrap_or(&raw mut discarded);
+    if descriptors::set_kernel_stack(top.as_u64()).is_err() {
+        testing::fail(format_args!("the task state segment is not reachable"));
     }
+    // SAFETY: `from` points at the context word of the thread that is
+    // running, which lives in the `static` cell of the machine and stays
+    // where it is; `to` is a context the kernel wrote, of a thread whose
+    // kernel stack is mapped in every address space.
+    unsafe {
+        context::switch_to(from, to);
+    }
+    // Back on this stack, a turn of the processor later: whatever ended
+    // while we were away can go.
+    sweep();
 }
 
 /// Gives back what every thread that has ended held.
@@ -720,10 +848,11 @@ fn on_trap(report: TrapReport) {
     };
     if exception.response() == Response::StopMachine {
         testing::fail(format_args!(
-            "the kernel itself faulted: {} (vector {}) at ip {:#x} error {:#x} address {:#x}",
+            "the kernel itself faulted: {} (vector {}) at ip {:#x} sp {:#x} error {:#x} address {:#x}",
             exception.name(),
             exception.vector,
             exception.ip,
+            exception.sp,
             exception.error_code,
             exception.cr2
         ));
@@ -767,6 +896,173 @@ fn on_trap(report: TrapReport) {
     }
 }
 
+/// Starts the interval timer, once for the whole image, and lets
+/// interrupts through. From here on the scheduler can take the processor
+/// away from a thread that asks for nothing.
+///
+/// The image is the idle thread, and the timer has to keep reaching it:
+/// [`run_until_idle`] is what a test calls instead of [`run_threads`] once
+/// this has run.
+pub(crate) fn start_timer(hook: TickHook) {
+    if TIMER.swap(1, Ordering::SeqCst) == 1 {
+        return;
+    }
+    let _ = TICK_HOOK.init(hook);
+    traps::set_interrupt_handler(on_interrupt);
+    let brought_up = testing::with_platform(|platform| {
+        // SAFETY: the loader's tables are active, the descriptor tables of
+        // the image carry a handler for every vector of the plan,
+        // interrupts are off, and this runs once on the boot processor.
+        unsafe { interrupts::bring_up(platform, map_device) }
+    });
+    match brought_up {
+        Some(Ok(())) => {}
+        Some(Err(error)) => testing::fail(format_args!("the interrupt bring-up failed: {error}")),
+        None => testing::fail(format_args!("the platform is not reachable")),
+    }
+    // SAFETY: the interval timer belongs to the kernel, interrupts are
+    // still off, and this is the processor the controller belongs to.
+    if let Err(error) = unsafe { interrupts::start_timer(TICKS_PER_SECOND) } {
+        testing::fail(format_args!("the timer did not start: {error}"));
+    }
+    let ticks = interrupts::ticks();
+    say!("the timer runs, {ticks} ticks so far");
+    enable_interrupts();
+}
+
+/// Lets interrupts through again. The kernel comes back to the idle thread
+/// through a switch out of an interrupt handler, where interrupts are off,
+/// and the flags of a switch are not saved: the thread that stands here
+/// has to turn them back on itself.
+fn enable_interrupts() {
+    if TIMER.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    // SAFETY: the descriptor table is loaded and every vector the hardware
+    // can raise has a handler.
+    unsafe {
+        instructions::enable_interrupts();
+    }
+}
+
+/// Runs whatever is runnable and comes back when nothing is, with the
+/// timer still reaching this thread. This is the loop of the idle thread
+/// in an image that has a timer.
+pub(crate) fn run_until_idle() {
+    run_threads(None);
+    enable_interrupts();
+}
+
+/// Waits, halting, until `done` says the run is over, giving the processor
+/// to whoever the timer makes ready in between.
+pub(crate) fn idle_until(done: impl Fn() -> bool) {
+    let mut spins: u64 = 0;
+    while !done() {
+        run_until_idle();
+        if done() {
+            break;
+        }
+        if spins >= IDLE_LIMIT {
+            testing::fail(format_args!(
+                "the idle thread waited {IDLE_LIMIT} turns and the run did not end"
+            ));
+        }
+        spins = spins.saturating_add(1);
+        instructions::halt();
+    }
+    run_threads(None);
+}
+
+/// How long the idle thread waits before it believes the run will never
+/// end. The timer ticks a thousand times a second, so this is minutes.
+const IDLE_LIMIT: u64 = 200_000;
+
+/// Maps the frames of a device register window into the physical window,
+/// uncached, out of the address space the memory bring-up left.
+fn map_device(frames: PhysFrameRange) -> Option<VirtAddr> {
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    with_memory(|kernel| {
+        kernel
+            .map_device::<X86Entry, _, _>(&mut tables, &mut tlb, frames)
+            .ok()
+    })
+    .flatten()
+}
+
+/// What the kernel does with a device interrupt: acknowledge it at the
+/// hardware first, so that the next one can arrive whatever happens next;
+/// then give the image its turn, charge the running thread's time slice,
+/// and switch when either asks for it.
+fn on_interrupt(vector: u8) {
+    interrupts::acknowledge(vector);
+    if vector != vectors::TIMER {
+        return;
+    }
+    record_turn();
+    let ticks = interrupts::ticks();
+    let hook = TICK_HOOK.borrow(&UncontendedToken).ok().map(|hook| *hook);
+    let asked = hook.is_some_and(|hook| hook(ticks));
+    let expired = with_machine(|machine| {
+        machine
+            .scheduler
+            .tick(&mut machine.objects.threads)
+            .reschedule
+    })
+    .unwrap_or(false);
+    if asked || expired {
+        // The thread that leaves is the one the scheduler still calls
+        // current, so the switch finds where to write its context by
+        // itself; a thread the hook ended is not one to come back to.
+        run_threads(None);
+    }
+}
+
+/// Writes down which thread the timer found on the processor, unless it is
+/// the one the tick before it found.
+fn record_turn() {
+    // A tick that arrives while the kernel holds the machine says nothing
+    // about whose turn it is: it arrived inside a system call of the
+    // thread whose turn it already was.
+    let Some(running) = with_machine(|machine| machine.scheduler.current()) else {
+        return;
+    };
+    let current = running.map_or(NO_THREAD, |thread| thread.index());
+    let seen = TURNS_SEEN.load(Ordering::SeqCst);
+    let last = seen
+        .checked_sub(1)
+        .and_then(|index| TURN_OF.get(usize::try_from(index).unwrap_or(TURNS)))
+        .map(|slot| slot.load(Ordering::SeqCst));
+    if last == Some(current) {
+        return;
+    }
+    if let Some(slot) = TURN_OF.get(usize::try_from(seen).unwrap_or(TURNS)) {
+        slot.store(current, Ordering::SeqCst);
+    }
+    TURNS_SEEN.store(seen.saturating_add(1), Ordering::SeqCst);
+}
+
+/// How many turns of the processor the timer saw. More than [`TURNS`]
+/// means the log holds only the first ones.
+pub(crate) fn turns_seen() -> u32 {
+    TURNS_SEEN.load(Ordering::SeqCst)
+}
+
+/// The thread that held turn `index`, as its pool index; [`NO_THREAD`] for
+/// the idle thread and for a turn the log does not hold.
+pub(crate) fn turn(index: usize) -> u32 {
+    TURN_OF
+        .get(index)
+        .map_or(NO_THREAD, |slot| slot.load(Ordering::SeqCst))
+}
+
+/// `true` when the timer found `thread` on the processor at least once.
+pub(crate) fn took_a_turn(thread: ThreadId) -> bool {
+    let wanted = thread.index();
+    let seen = usize::try_from(turns_seen()).unwrap_or(TURNS).min(TURNS);
+    (0..seen).any(|index| turn(index) == wanted)
+}
+
 /// How many user threads a fault has stopped since the image started.
 pub(crate) fn faults() -> u32 {
     FAULTS.load(Ordering::SeqCst)
@@ -789,6 +1085,20 @@ pub(crate) fn buffer_word(frame: PhysFrame, index: usize) -> u64 {
         .frame_bytes_mut(frame)
         .and_then(|bytes| ipc_buffer::Buffer::new(bytes).word(index))
         .unwrap_or(0)
+}
+
+/// Writes the word `index` of the IPC buffer in `frame`. This is how the
+/// kernel of a test image tells a thread something before it starts: the
+/// program reads the word its own kind agreed on, and the buffer is the
+/// only thing both of them can reach.
+pub(crate) fn set_buffer_word(frame: PhysFrame, index: usize, value: u64) {
+    let mut window = window();
+    let Some(bytes) = window.frame_bytes_mut(frame) else {
+        testing::fail(format_args!("the buffer of a thread is not reachable"));
+    };
+    if !ipc_buffer::BufferMut::new(bytes).set_word(index, value) {
+        testing::fail(format_args!("word {index} is beyond the buffer"));
+    }
 }
 
 /// The word at `offset` of `frame`, as a page a program writes into holds

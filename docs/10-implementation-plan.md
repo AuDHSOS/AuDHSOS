@@ -1689,9 +1689,11 @@ mapped read and execute, a stack, an IPC buffer, a thread whose kernel
 stack carries the frame — switches into it, and runs the system call gate
 and the trap handler over it. The test images share it and differ in what
 they watch: `tests/user.rs` the lifecycle of a thread, `tests/isolation.rs`
-what a user thread cannot do. The programs are `thread_exit`,
-`count_and_exit`, `read_kernel_memory`, and `hlt_in_user`; `two_threads`,
-`spin`, and `every_syscall` are still to come.
+what a user thread cannot do, `tests/concurrency.rs` two threads of one
+process taking turns, and `tests/preemption.rs` what the timer does to
+threads that never ask for anything. The programs are `thread_exit`,
+`count_and_exit`, `read_kernel_memory`, `hlt_in_user`, `two_threads`, and
+`spin`; `every_syscall` is still to come.
 
 Acceptance: `check` green; catalog 6.6.6 handle and pool items, 6.6.7,
 6.6.9 for the calls this phase implements, the frame item of 6.6.16, the

@@ -87,7 +87,7 @@ where
     /// before reaches the thread that gets it.
     fn zero(&mut self, frame: PhysFrame) {
         if let Some(table) = self.access.table_mut(frame) {
-            *table = PageTable::new();
+            table.clear();
         }
     }
 }

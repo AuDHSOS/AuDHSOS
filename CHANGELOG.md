@@ -7,6 +7,40 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Two threads of equal priority take turns, and a thread of higher
+  priority takes the processor. `tests/concurrency.rs` runs two threads of
+  one process over a page they share: they take alternate tickets from a
+  counter in that page, which is what a run queue that hands the processor
+  to the thread that has waited longest does. `tests/preemption.rs` starts
+  the timer and runs `spin`, a program that makes no system call at all:
+  two of them at one priority both get the processor again and again, and
+  one of them at a low priority is displaced by a thread of a higher one
+  that becomes ready. The kernel writes down which thread the timer found
+  running, one entry per turn, and that log is the evidence.
+
+- `two_threads` and `spin`, the two user programs those tests run, and the
+  timer, the turn log, and the tick hook the shared test kernel needed for
+  them.
+
+### Fixed
+
+- A page table is emptied where it lies (D-70). `PageTable::clear` writes
+  the empty entry into every slot in place; assigning `PageTable::default()`
+  to a table reached through the physical window made a build without
+  optimization materialize the four-kilobyte value on the stack, more than
+  once: `Mapper::walk` carried a twenty-kilobyte frame and
+  `kernel_half::free_subtree` one per level of its recursion. A kernel
+  stack is sixteen kilobytes, so any system call that mapped or unmapped
+  anything ran off the end of it. The concurrency tests found it, because
+  they are the first in which the reaper runs on the kernel stack of a user
+  thread and not on the boot stack; the machine answered with a double
+  fault at the guard page.
+
+- One switch per call to the switch loop of the test kernel. Asking the
+  scheduler a second time before returning takes the processor away from
+  the thread that has just got it, and two threads of equal priority trade
+  it back and forth without either of them reaching user mode again.
+
 - A user thread that faults stops, and the machine runs on. The trap
   report carries the code segment of the frame, so the kernel can tell a
   fault at ring zero from a fault at ring three: the first ends the

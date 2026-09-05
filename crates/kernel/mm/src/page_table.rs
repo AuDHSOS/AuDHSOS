@@ -173,6 +173,20 @@ impl<F: EntryFormat> PageTable<F> {
         }
     }
 
+    /// Empties the table where it lies: every entry becomes
+    /// [`EntryFormat::EMPTY`].
+    ///
+    /// This is what a caller uses instead of assigning
+    /// [`PageTable::default`] to a table it reached through the physical
+    /// window. A table is four kilobytes and a kernel stack is sixteen, so
+    /// a build that materializes the new value before it copies it — which
+    /// a build without optimization does, more than once — puts a
+    /// noticeable part of a kernel stack on the line for a table that is
+    /// already there to be written into (D-70).
+    pub fn clear(&mut self) {
+        self.entries.fill(F::EMPTY);
+    }
+
     /// `true` if no entry of the table is present.
     #[must_use]
     pub fn is_unused(&self) -> bool {

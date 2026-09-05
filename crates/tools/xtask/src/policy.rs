@@ -215,6 +215,21 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "net-ipv6",
+        path: "crates/net/ipv6",
+        kind: Kind::Logic,
+        deps: &[
+            "net-ip",
+            "net-eth",
+            "net-wire",
+            "audhsos-time",
+            "audhsos-collections",
+            "test-support",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-sync",
         path: "crates/sync",
         kind: Kind::Adapter {
@@ -392,7 +407,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-kernel",
         path: "crates/kernel/bin",
         kind: Kind::Adapter {
-            unsafe_budget: 22,
+            unsafe_budget: 25,
             asm_budget: 0,
         },
         deps: &[
@@ -401,9 +416,11 @@ pub(crate) const CRATES: &[Crate] = &[
             "kernel-hal-x86_64",
             "kernel-mm",
             "kernel-objects",
+            "kernel-sched",
             "kernel-syscall",
             "kernel-types",
             "audhsos-abi",
+            "audhsos-sync",
         ],
         coverage_gate: false,
         target: Target::X86_64None,
@@ -423,7 +440,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-test-programs",
         path: "crates/user/test-programs",
         kind: Kind::Adapter {
-            unsafe_budget: 8,
+            unsafe_budget: 13,
             asm_budget: 1,
         },
         deps: &["audhsos-abi", "user-sys-x86_64"],
@@ -561,6 +578,7 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "der" },
     FuzzTarget { name: "elf" },
     FuzzTarget { name: "ipv4" },
+    FuzzTarget { name: "ipv6" },
     FuzzTarget { name: "madt" },
     FuzzTarget { name: "pem" },
     FuzzTarget {
