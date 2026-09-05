@@ -57,6 +57,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   send path takes an `IpAddr` pair and is the signature both families will
   use; it carries IPv4 today, because the header it writes is the IPv4 one,
   and `net-ipv6` will write its own and ask this same table and cache.
+- The fuzz target `ipv4` drives four parsers, because a byte stream reaches
+  each of them by a different door: the datagram, the quoted header an error
+  carries, the `ICMPv4` message behind the payload, and the reassembler,
+  which is the one with state. Twenty million inputs in twenty-five seconds
+  found no crash; the seed corpus is nine named datagrams and the fuzzer's
+  own findings stay out of the repository, as they do for every other
+  target.
 - RFC 791, RFC 792, and RFC 1122 join the reference documents under
   `docs/rfc/`, each fetched twice and recorded with its checksum.
 

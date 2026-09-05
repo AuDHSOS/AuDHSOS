@@ -7,6 +7,10 @@ name = "audhsos-abi"
 version = "0.1.0"
 
 [[package]]
+name = "audhsos-collections"
+version = "0.1.0"
+
+[[package]]
 name = "audhsos-der"
 version = "0.1.0"
 dependencies = [
@@ -120,6 +124,16 @@ name = "fuzz-support"
 version = "0.1.0"
 
 [[package]]
+name = "ipv4"
+version = "0.1.0"
+dependencies = [
+ "audhsos-time",
+ "fuzz-support",
+ "net-ip",
+ "net-wire",
+]
+
+[[package]]
 name = "kernel-acpi"
 version = "0.1.0"
 dependencies = [
@@ -140,6 +154,29 @@ dependencies = [
  "fuzz-support",
  "kernel-acpi",
 ]
+
+[[package]]
+name = "net-eth"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "audhsos-time",
+ "net-wire",
+]
+
+[[package]]
+name = "net-ip"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "audhsos-time",
+ "net-eth",
+ "net-wire",
+]
+
+[[package]]
+name = "net-wire"
+version = "0.1.0"
 
 [[package]]
 name = "pem"

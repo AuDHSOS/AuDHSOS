@@ -580,9 +580,12 @@ costs a timeout on a broken path rather than a wrong answer.
 - The address types of both families round-trip through their canonical
   text, and no text this parser accepts has a second spelling (property).
 - Fuzz targets `ipv4`, `ipv6`, `tcp_segment`, `dns_message`, and
-  `http_response`. The IPv6 target exists for the extension header chain,
-  which is the one part of that format a byte stream can drive in
-  circles.
+  `http_response`. `ipv4` exists and drives four parsers, because a byte
+  stream reaches each by a different door: the datagram, the quoted header
+  an error carries, the `ICMPv4` message behind the payload, and the
+  reassembler, which is the one with state. The IPv6 target follows in D4
+  for the extension header chain, which is the one part of that format a
+  byte stream can drive in circles.
 - No test sleeps. Time is an argument, so a sixty-second retransmission
   backoff is exercised in microseconds of wall clock.
 
@@ -594,7 +597,7 @@ Tests: catalog 6.6.42 to 6.6.50 and 6.6.54.
 |------|---------|------|
 | D1 | `net-wire`: addresses, cursor, checksums — implemented | S |
 | D2 | `net-eth`: frames, ARP, and the neighbor cache — implemented | M |
-| D3 | `net-ip`: IPv4 header, reassembly, fragmentation, `ICMPv4`, the routing table over both families | M |
+| D3 | `net-ip`: IPv4 header, reassembly, fragmentation, `ICMPv4`, the routing table over both families, the send path — implemented | M |
 | D4 | `net-ipv6`: header and extension chain, `ICMPv6`, Neighbor Discovery, router advertisements and SLAAC, path MTU discovery | L |
 | D5 | `net-udp` | S |
 | D6 | `net-tcp`: sequence arithmetic, state machine, timers, congestion control | XL |

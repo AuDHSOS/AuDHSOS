@@ -1205,6 +1205,15 @@ done until every applicable item has a test. Items are added, never removed.
   address, to a link-layer broadcast, to a non-initial fragment, or to a
   source that names no single host — the five restrictions of RFC 1122,
   section 3.2.2, each on its own.
+- Fuzz target `ipv4`: no byte stream makes the datagram parser, the
+  quoted-header parser, the `ICMPv4` parser, or the reassembler panic; a
+  datagram a parser accepts stays inside the bytes it came from and its
+  header, payload, and total length agree; a fragment offset is a multiple
+  of eight; an `ICMPv4` message that is written reads back as itself; and
+  the reassembly buffers empty once time passes every deadline. The seed
+  corpus carries a minimal datagram, one with an option, a first and a
+  later fragment, one that may not be fragmented, an echo request, and a
+  port-unreachable message.
 - Routing: longest-prefix match with a host route, a subnet route, and
   the default route; a destination with no route is an error; an on-link
   destination resolves through ARP, an off-link one through the gateway.

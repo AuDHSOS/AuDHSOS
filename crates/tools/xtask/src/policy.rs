@@ -535,6 +535,7 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "boot_info" },
     FuzzTarget { name: "der" },
     FuzzTarget { name: "elf" },
+    FuzzTarget { name: "ipv4" },
     FuzzTarget { name: "madt" },
     FuzzTarget { name: "pem" },
     FuzzTarget {
