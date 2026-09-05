@@ -499,6 +499,44 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The address space of a process lives in the `Process` object as a
+  page-table root and a region table; there is no address-space object, no
+  pool for one, and no `AddressSpaceId` (D-65). Plan 10.5.2 named an id it
+  defined nowhere. The kernel half is shared by copying the two page-map
+  level four entries the kernel occupies, 256 for the window and 511 for
+  the stacks, the boot information page, and the image; a kernel stack
+  allocated later changes only tables below entry 511 and needs no second
+  copy. Loading a root becomes the HAL trait `AddressSpaceControl` with a
+  double, and the kernel loads one only when the incoming thread belongs to
+  another process.
+- An empty object pool is all zeros and its constructor is `const`, so the
+  pools reach the `.bss` without passing through the boot stack (D-66). A
+  `Pool<MemoryObject, 4096>` is around 230 KiB and the handle arena 512 KiB
+  against a boot stack of 256 KiB, and `Global::init` takes its value by
+  move. The generation of a slot now counts up in `allocate`, the free list
+  is implicit through a high-water mark, `RegionTable` carries `kernel:
+  bool` instead of `user: bool`, and `audhsos-sync` gains a
+  `const`-initialized cell without the `Option` that `Global` has.
+- The saved machine context of a thread is one word, the kernel stack
+  pointer, and `Thread.context` is a `VirtAddr` (D-67). `kernel-objects`
+  keeps its dependencies, and no type parameter for the machine context
+  travels through the pools, the scheduler, the dispatcher, and
+  `kernel-core`. The HAL trait writes the synthesized frame into the kernel
+  stack as a slice of `u64` values, which is host-testable.
+- The catalog marks where a phase boundary runs through an item, the way
+  6.6.21 already did for the privileged instruction in user mode. The
+  isolation item becomes two: a fault stops the thread in `Faulted` and
+  leaves the system running, which Phase 5 carries, and the fault handler
+  endpoint receives the message, which is marked from Phase 6. The system
+  call items of 6.6.21 and 6.6.9 ask for a success and a failure test per
+  call the phase implements, and for `Unsupported` from every call it does
+  not.
+- Phase 5 implements twenty of the forty-one system calls, and the plan and
+  the roadmap name them instead of describing them as groups.
+  `process_set_fault_handler` moves to Phase 6, where it belongs: it is a
+  process call by name and an IPC call by nature, because the endpoint it
+  names is a Phase 6 object.
+- Roadmap 8.6 carries the status line every finished phase carries.
 - The documents name the wrapper scripts under `tools/` where they named
   rustup's Cargo proxy: `sh tools/xtask.sh <subcommand>`, and
   `sh tools/xtask-check.sh` for the full check (D-64, amending D-35). The

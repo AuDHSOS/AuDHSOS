@@ -115,6 +115,8 @@ Tests: catalog 6.6.21 memory items.
 
 ## 8.6 Phase 4: Interrupts and timer
 
+Status: implemented.
+
 Deliverables: safe MADT parser; local APIC and I/O APIC register blocks and
 adapters; legacy PIC masking; PIT-based timer calibration;
 `InterruptController` and `Timer` traits with doubles; tick handling in
@@ -128,21 +130,27 @@ interrupt items.
 Deliverables: handle tables, quotas, object types `Process`, `Thread`,
 `MemoryObject`; scheduler; the context-switch naked function; user-mode
 entry with synthesized frames; IPC buffer; system call vector `0x80`; the
-`syscalls!` table in `audhsos-abi`; dispatcher and validation; system calls
-for processes, threads, memory, and handles; `debug_log`; faults put
-threads into `Faulted`. User-mode test programs are `user-sys-x86_64`
-binaries embedded in test kernels as flat binaries.
+`syscalls!` table in `audhsos-abi`; dispatcher and validation; twenty of the
+forty-one system calls, those for processes except the fault handler, for
+threads, for memory, and for handles, plus `debug_log`; every other call
+returns `Unsupported`; faults put threads into `Faulted`. User-mode test
+programs are `user-sys-x86_64` binaries embedded in test kernels as flat
+binaries.
 
-Tests: catalog 6.6.6 (handle items), 6.6.7, 6.6.9, 6.6.21 thread, isolation,
-and system call items.
+Tests: catalog 6.6.6 (handle and pool items), 6.6.7, 6.6.9 for the calls
+this phase implements, 6.6.21 address space, thread, and system call items
+and the isolation item that names no handler.
 
 ## 8.8 Phase 6: IPC and interrupt forwarding
 
 Deliverables: `Endpoint`, `Reply`, `Notification`, badges, handle transfer,
-fault handler endpoints and fault messages, `Interrupt`, `IoPortRange`,
-`SystemControl`, `Device` memory objects, `system_info`.
+fault handler endpoints and fault messages including
+`process_set_fault_handler`, `Interrupt`, `IoPortRange`, `SystemControl`,
+`Device` memory objects, `system_info`; the twenty-one calls Phase 5 left
+returning `Unsupported`.
 
-Tests: catalog 6.6.8, 6.6.21 IPC items.
+Tests: catalog 6.6.8, 6.6.21 IPC items and the isolation item marked from
+Phase 6.
 
 ## 8.9 Phase 7: Userland foundation
 

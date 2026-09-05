@@ -198,10 +198,21 @@ The kernel address space (upper half) is managed by the same code. Layout:
 is the memory the window covers before it would reach the stack area; a
 machine with more memory is refused at boot.
 
+An address space belongs to a process and lives in the `Process` object:
+the page-table root and the region table are fields of it, there is no
+address-space object and no id for one (D-65). The kernel half is shared by
+copying page-map level four entries into every new root: the window stays
+inside entry 256, and the kernel stacks, the boot information page, and the
+image are all inside entry 511. Both entries exist once the memory bring-up
+is done, so a kernel stack allocated later changes only tables below entry
+511 and is visible in every address space at once.
+
 The frames of the reserve hold the page tables, the kernel stacks, and the
 IPC buffers of threads. The object pools of Phase 5 are `static` cells in
 the `.bss` of the kernel image, sized by the constants in
-`kernel-core::config` (D-57).
+`kernel-core::config` (D-57). Their empty state is all zeros and their
+constructors are `const`, so a pool is never built on the boot stack and
+never moved into its cell (D-66).
 
 ### 2.4.4 Memory management in safe Rust
 
@@ -242,8 +253,9 @@ There is one implementation of every algorithm.
 
 Stored in the thread pool: process id, state, priority, remaining time
 slice, kernel stack id, IPC buffer frame, IPC state, fault information,
-queue links (indices), and the architecture-specific saved context behind
-the HAL trait `Context`.
+queue links (indices), and the saved context, which is one word: the kernel
+stack pointer of the thread while it is not running, written and read
+through the HAL trait `Context` (D-67).
 
 ### 2.5.2 States
 
@@ -297,6 +309,10 @@ so that userland loops.
 - A newly created thread starts with a synthesized interrupt frame on its
   kernel stack, so the first switch into it "returns" into user mode at the
   entry point. The frame is written as plain `u64` values in safe Rust.
+- The page-table root is loaded through the HAL trait `AddressSpaceControl`
+  and only when the incoming thread belongs to another process, because
+  writing `CR3` costs the translation lookaside buffer (D-65). Threads of
+  one process switch without touching it.
 
 ## 2.6 IPC
 

@@ -268,10 +268,15 @@ impl From<PoolError> for audhsos_abi::Error { /* Exhausted -> PoolExhausted, Sta
 A slot is free exactly when it has no occupant; the generation and the
 free-list link live outside the occupant, so that no code path has to
 distinguish a case that cannot occur. `[Slot<T>; N]` needs `T: Sized`;
-build the array with `core::array::from_fn`. `N` is a const generic so that
-pool sizes come from boot-time constants in `kernel-core`; sizes are not
-decided here. `capacity` is not a `const fn` because `u32::try_from` is not
-const on the pinned toolchain.
+build the array with `core::array::from_fn`. Phase 5 changes two details of
+this so that an empty pool is all zeros and its constructor is `const`
+(D-66, described in 10.5.2): the generation counts up in `allocate` instead
+of starting at one, and the free list is implicit through a high-water mark
+instead of being linked at construction. What the pool does is unchanged,
+the FIFO reuse included. `N` is a const generic so that pool sizes come
+from boot-time constants in `kernel-core`; sizes are not decided here.
+`capacity` is not a `const fn` because `u32::try_from` is not const on the
+pinned toolchain.
 
 `src/quota.rs`:
 
@@ -501,7 +506,7 @@ impl<B: Copy, const M: usize> Removed<B, M> {
     pub const fn len(&self) -> usize; pub const fn is_empty(&self) -> bool;
     pub const fn remaining(&self) -> Option<PageRange>;
 }
-pub struct RegionTable<B: Copy, const N: usize> { regions: [Option<Region<B>>; N], len: usize, user: bool }
+pub struct RegionTable<B: Copy, const N: usize> { regions: [Option<Region<B>>; N], len: usize, user: bool } // Phase 5 inverts the flag to `kernel: bool` (D-66)
 impl RegionTable {
     pub const fn new() -> Self;                                                     // user address space
     pub const fn kernel() -> Self;                                                  // the half check relaxed
@@ -1513,13 +1518,39 @@ creator may grant, which is what
 [2.3.2](02-architecture.md#232-handles-and-rights) means by a capacity
 fixed at process creation within the creator's quota (D-58).
 
-Object structs: `Process { address_space: AddressSpaceId, handles:
-HandleList, threads: [Option<ThreadId>; 64], quota: Quota, fault_handler:
-Option<EndpointId>, kernel_object_quota: Quota }`, `Thread { process,
-state: ThreadState, priority, max_priority, time_slice, kernel_stack,
-ipc_buffer: PhysFrame, ipc_state, queue_links: Links, context: ArchContext
-}` where `ArchContext` is an associated type of the HAL `Context` trait,
-`MemoryObject { frames: PhysFrameRange, kind: MemoryKind, cache }`.
+Object structs: `Process { root: PhysFrame, regions: RegionTable<MemoryObjectId,
+REGIONS_PER_PROCESS>, handles: HandleList, threads: [Option<ThreadId>; 64],
+quota: Quota, fault_handler: Option<EndpointId>, kernel_object_quota: Quota
+}`, `Thread { process, state: ThreadState, priority, max_priority,
+time_slice, kernel_stack, ipc_buffer: PhysFrame, ipc_state, queue_links:
+Links, context: VirtAddr }`, `MemoryObject { frames: PhysFrameRange, kind:
+MemoryKind, cache }`.
+
+The address space of a process is the root and the region table inside the
+`Process`; there is no address-space object, no pool for one, and no
+`AddressSpaceId` (D-65). `context` is one word, the kernel stack pointer of
+the thread while it is not running, so no type parameter for the machine
+context reaches this crate or the crates above it (D-67); the dependencies
+stay `kernel-types` and `audhsos-abi`.
+
+A new root copies the kernel half from the kernel's own root: the two
+page-map level four entries the kernel occupies, 256 for the window and 511
+for the stacks, the boot information page, and the image. Both exist when
+the memory bring-up is done, and a kernel stack allocated later changes
+only tables below entry 511, so it needs no second copy. A QEMU test holds
+that no further kernel entry appears after boot; if one ever did, every
+address space created before it would be missing it.
+
+Every pool and the handle arena are `const`-constructible and all zeros
+when empty (D-66): the generation of a slot counts up in `allocate` instead
+of starting at one, and the free list is implicit through a high-water mark
+while released slots keep the FIFO chain that 6.6.6 requires. `RegionTable`
+carries `kernel: bool` instead of `user: bool` for the same reason. They
+live in one `Objects` structure in a `const`-initialized cell of
+`audhsos-sync` — the second cell type beside `Global`, without the `Option`,
+because `Some(value)` in a `static` carries a non-zero discriminant and
+would move the whole structure out of the `.bss` into the image file.
+`KernelState` keeps its counters and does not hold the pools.
 
 ### 10.5.3 `kernel-sched` (`crates/kernel/sched`)
 
@@ -1535,7 +1566,18 @@ zero.
 
 ### 10.5.4 HAL additions (`kernel-hal-api` trait, `kernel-hal-x86_64` adapter)
 
-- `trait Context { type Saved; fn initial_user(entry: VirtAddr, stack: VirtAddr, kernel_stack_top: VirtAddr) -> Self::Saved; fn switch(from: &mut Self::Saved, to: &Self::Saved); }`.
+- `trait Context { fn prepare_user(stack: &mut [u64], entry: VirtAddr, user_stack: VirtAddr) -> VirtAddr; fn switch(from: &mut VirtAddr, to: VirtAddr); }`.
+  The saved context is one word (D-67), so the trait has no associated type;
+  `prepare_user` receives the kernel stack of the new thread as the slice
+  the caller reaches through the physical window, writes the frame into its
+  upper end, and returns the stack pointer the first `switch` loads.
+  Writing the frame is arithmetic over `u64` values and is host-tested
+  against the layout the adapter's `switch` expects.
+- `trait AddressSpaceControl { fn activate(&mut self, root: PhysFrame); fn active(&self) -> PhysFrame; }`
+  with a recording double, replacing the free `unsafe fn activate` the
+  adapter carries today (D-65). `kernel-core` calls it before a switch only
+  when the incoming thread belongs to another process; threads of one
+  process switch without touching `CR3`.
 - Adapter: the saved context is the kernel stack pointer. A new thread's
   kernel stack is prepared in safe Rust as `u64` values: callee-saved
   registers (six zeros), the address of `enter_user_trampoline`, then the
@@ -1556,14 +1598,23 @@ zero.
 
 ### 10.5.5 `kernel-syscall` (`crates/kernel/syscall`)
 
-Layer 3. `dispatch(state: &mut KernelState, caller: ThreadId, buffer: &mut
-[u8; 4096]) -> ()` implementing the validation order of
+Layer 3. `dispatch(objects: &mut Objects, state: &mut KernelState, caller:
+ThreadId, buffer: &mut [u8; 4096]) -> ()` implementing the validation order of
 [02-architecture.md 2.8](02-architecture.md#28-system-call-interface):
 number → argument count → handle → type → rights → arguments → quota;
 then one function per system call in `calls/*.rs`; every error path
-tested on the host with `KernelState` built from doubles. Phase 5
-implements the process, thread, memory, handle, and `debug_log` calls;
-Phase 6 the rest (unimplemented ones return `Unsupported` until then).
+tested on the host with `KernelState` built from doubles.
+
+Phase 5 implements twenty of the forty-one calls: `process_create`,
+`process_install_handle`, `process_kill`, the nine thread calls
+(`thread_create` through `thread_yield`), the five memory calls
+(`memory_split` through `memory_info`), `handle_duplicate`,
+`handle_close`, and `debug_log`. The other twenty-one belong to Phase 6
+and return `Unsupported` until then, `process_set_fault_handler` among
+them: it is a process call by name and an IPC call by nature, because the
+endpoint it names is a Phase 6 object. A test covers every one of the
+twenty-one, so that the boundary is a fact of the build and not of this
+paragraph.
 
 ### 10.5.6 User-mode test programs
 
@@ -1580,8 +1631,10 @@ the xtask sets the variable when it builds test kernels. A test kernel
 creates a process, maps the flat binary, a stack, and an IPC buffer, starts
 the thread, and observes the outcome through the kernel state.
 
-Acceptance: `check` green; catalog 6.6.6 handle items, 6.6.7, 6.6.9,
-6.6.21 thread, isolation, and system call items.
+Acceptance: `check` green; catalog 6.6.6 handle and pool items, 6.6.7,
+6.6.9 for the calls this phase implements, the frame item of 6.6.16, the
+cell item of 6.6.18, 6.6.21 address space, thread, and system call items
+and the isolation item that does not name a handler.
 
 ## 10.6 Phase 6: IPC and interrupt forwarding
 
@@ -1602,6 +1655,8 @@ Acceptance: `check` green; catalog 6.6.6 handle items, 6.6.7, 6.6.9,
   operation takes the kernel state and returns `Result<Outcome, Error>`
   where `Outcome` says whether the caller blocks and which threads became
   ready; the syscall layer applies it.
+- `process_set_fault_handler`, which Phase 5 left returning `Unsupported`
+  because the endpoint it names is an object of this phase.
 - Fault delivery: the exception handler for user-mode faults builds the
   fault message in the faulting thread's IPC buffer (label
   `FAULT_LABEL_BASE + kind`, words: address, ip, error code) and performs
@@ -1618,7 +1673,9 @@ Acceptance: `check` green; catalog 6.6.6 handle items, 6.6.7, 6.6.9,
   the timer interrupt bound to a notification, fault message delivery for
   a kernel-address read, `hlt` in user mode.
 
-Acceptance: `check` green; catalog 6.6.8, 6.6.21 IPC items.
+Acceptance: `check` green; catalog 6.6.8, 6.6.21 IPC items and the
+isolation item marked from Phase 6; the system call items of 6.6.21 and
+6.6.9 now cover every call in the table.
 
 ## 10.7 Phase 7: Userland foundation
 

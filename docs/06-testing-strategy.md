@@ -227,6 +227,11 @@ done until every applicable item has a test. Items are added, never removed.
 - `Rights`: empty set, full set, subset and superset checks for every pair
   of single rights, union and intersection, unknown bits rejected on decode,
   every named right has a unique bit (table-driven).
+- A pool and the handle arena built by the `const` constructor are all
+  zeros, byte for byte, and behave like the ones built at run time: the
+  first `allocate` hands out generation 1, slots come from the high-water
+  mark in index order while none has been released, and released slots
+  keep the FIFO order (D-66).
 
 ### 6.6.7 Scheduler and thread states (`kernel-sched`)
 
@@ -247,6 +252,9 @@ done until every applicable item has a test. Items are added, never removed.
 - Priority above the thread's maximum is rejected.
 - Every illegal state transition in the transition table returns an error
   (table-driven test over all state pairs).
+- The page-table root is loaded on a switch between threads of two
+  processes and not on a switch between threads of one, observed in
+  `kernel-core` through the recording `AddressSpaceControl` double (D-65).
 
 ### 6.6.8 IPC (`kernel-ipc`)
 
@@ -295,7 +303,8 @@ done until every applicable item has a test. Items are added, never removed.
 - IPC buffer with the result area at the last bytes of the page: no
   out-of-page access.
 - Every error variant of every system call in its documentation table has a
-  test that produces it.
+  test that produces it, for the calls the phase implements; a call it does
+  not implement yet produces `Unsupported` and nothing else.
 - Round-trip encode/decode of every request and result layout, including
   maximum values of every field.
 
@@ -430,6 +439,11 @@ done until every applicable item has a test. Items are added, never removed.
 - Local APIC and I/O APIC register offsets (table-driven against the
   specification values); I/O APIC redirection entry encoding for masked,
   unmasked, level, edge, vector, destination.
+- The frame `prepare_user` writes into a kernel stack: the six callee-saved
+  words, the trampoline address, and `rip`, `cs`, `rflags`, `rsp`, `ss` at
+  the offsets `switch` and `iretq` read them from; the returned stack
+  pointer names the first of those words; a stack too small for the frame
+  is refused (D-67).
 
 ### 6.6.17 UART register logic (`driver-uart16550`)
 
@@ -452,8 +466,12 @@ done until every applicable item has a test. Items are added, never removed.
 - Initialization exactly once; a second initialization returns
   `AlreadyInitialized`; borrow before initialization returns
   `Uninitialized`.
+- The `const`-initialized cell: the value is reachable without an
+  initialization step, borrowing follows the same rules as `Global`, and a
+  cell holding a type whose `const` value is all zeros produces a `static`
+  in `.bss` (D-66).
 - Miri: the tests above run under Miri with the cell holding a type with a
-  destructor.
+  destructor, and with the `const`-initialized cell.
 
 ### 6.6.19 Property-test engine and model-test runner (`test-support`)
 
@@ -510,6 +528,11 @@ done until every applicable item has a test. Items are added, never removed.
   and verify a page fault; the loader's identity mapping is gone after boot;
   the boot information page is reported with the physical address a walk of
   the loader's tables gives.
+- Address spaces: a root created after boot carries the kernel half, so the
+  window, the boot information page, and the kernel image are reachable
+  through it; a kernel stack allocated after that root exists is reachable
+  through it as well; the kernel occupies exactly the page-map level four
+  entries 256 and 511 and gains no further one after boot (D-65).
 - Kernel stacks: every page of an allocated stack carries what the kernel
   writes into it; a released stack is unmapped and its frames are back in
   the reserve; the slot is handed out again with the same pages; a write to
@@ -517,10 +540,15 @@ done until every applicable item has a test. Items are added, never removed.
 - Threads: create a user thread that executes `thread_exit`; two threads of
   equal priority alternate (observed through a shared counter); a
   higher-priority thread preempts.
-- Isolation: a user thread that reads a kernel address faults and the fault
-  handler receives the message; a user thread that executes `hlt` faults.
-- System calls: every system call has at least one success and one failure
-  test issued from user mode.
+- Isolation: a user thread that reads a kernel address faults, stops in
+  `Faulted`, and leaves the rest of the system running; a user thread that
+  executes `hlt` faults the same way.
+- Isolation, from Phase 6: the fault handler endpoint of the process
+  receives the message for both faults, and a reply resumes the thread.
+- System calls: every system call the phase implements has at least one
+  success and one failure test issued from user mode; every call it does
+  not implement yet returns `Unsupported`, and that is tested for each of
+  them.
 - IPC: call and reply between two user threads; handle transfer; notification
   from a timer-bound interrupt to a user thread.
 

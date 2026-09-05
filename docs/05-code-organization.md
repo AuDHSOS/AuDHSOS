@@ -114,7 +114,7 @@ AuDHSOS/
 | `fs-fat` | 1 | all | no | yes | `audhsos-time`, `audhsos-collections`; feature `test-doubles` |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-objects` | 2 | all | no | yes | `kernel-types`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
-| `kernel-sched` | 2 | all | no | yes | `kernel-objects` |
+| `kernel-sched` | 2 | all | no | yes | `kernel-objects`, `audhsos-abi` |
 | `kernel-ipc` | 3 | all | no | yes | `kernel-objects`, `kernel-sched`, `audhsos-abi` |
 | `kernel-syscall` | 3 | all | no | yes | layers 0-2, `kernel-ipc` |
 | `kernel-core` | 4 | all | no | yes, with doubles | layers 0-3, `audhsos-sync` |
