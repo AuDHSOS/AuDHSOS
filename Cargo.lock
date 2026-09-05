@@ -144,6 +144,14 @@ name = "fuzz-support"
 version = "0.1.0"
 
 [[package]]
+name = "kernel-acpi"
+version = "0.1.0"
+dependencies = [
+ "kernel-types",
+ "test-support",
+]
+
+[[package]]
 name = "kernel-core"
 version = "0.1.0"
 dependencies = [

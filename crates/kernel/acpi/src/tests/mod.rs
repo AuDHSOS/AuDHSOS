@@ -4,10 +4,10 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
-mod gdt;
-mod idt;
-mod ioapic;
-mod lapic;
-mod pic;
-mod tss;
-mod vectors;
+mod build;
+mod error;
+mod madt;
+mod properties;
+mod raw;
+mod rsdp;
+mod sdt;

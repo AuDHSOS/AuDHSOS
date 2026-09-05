@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "kernel-acpi"
+description = "Validating parsers for the ACPI tables the kernel reads: the root pointer, the system description header, the root table, and the multiple APIC description table"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+kernel-types.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true
+
+[lints]
+workspace = true

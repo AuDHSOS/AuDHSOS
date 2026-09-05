@@ -7,6 +7,28 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `kernel-acpi` (Phase 4): the ACPI tables the kernel needs to find its
+  interrupt controllers, parsed in safe Rust. `parse_rsdp` reads the root
+  pointer of revision zero or two with both of its checksums;
+  `SdtHeader::parse` reads and checks the header every table starts with;
+  `RootTable` walks the RSDT or the XSDT, four-byte entries or eight-byte
+  ones as the signature says; `madt::parse` reads the multiple APIC
+  description table into fixed capacities of four I/O APICs and sixteen
+  interrupt source overrides. An entry of length zero is an error, because
+  a walk that accepted one would never end; an entry that leaves the table
+  is an error; more I/O APICs than the kernel holds are an error and not a
+  truncation; an entry of a type the parser does not read is skipped by
+  its length.
+- `kernel-acpi`: `Madt::route_isa` answers where an ISA line goes and how
+  it is taken, which is the one piece of interrupt routing that is logic
+  rather than register writes, and is therefore tested on the host.
+- `kernel-x86-tables` gains the register blocks of the two APICs and the
+  encoding of a redirection entry, the write sequence that moves the two
+  legacy controllers out of the way and masks them, and the vector plan:
+  exceptions `0..=31`, legacy controllers `0x20..=0x2F`, timer `0x30`,
+  I/O APIC lines `0x40 + gsi`, system call `0x80`, spurious `0xFF`.
+  `kernel-hal-x86_64::vectors` is that module, so that the plan is one
+  table with host tests behind it.
 - `audhsos-symbols` (track G2): an address to a function, a file, and a
   line. The symbol table gives the function, the DWARF line program of
   version 4 or 5 gives the file and the line. The state machine runs once

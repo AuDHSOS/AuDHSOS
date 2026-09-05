@@ -103,6 +103,7 @@ AuDHSOS/
 | `audhsos-collections` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
 | `kernel-types` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-x86-tables` | 1 | all | no | yes | - |
+| `kernel-acpi` | 1 | all | no | yes, fuzz | `kernel-types`; `test-support` as a dev-dependency |
 | `kernel-hal-api` | 1 | all | no | doubles are tested | `kernel-types`; features `test-doubles`, `port-io` |
 | `driver-uart16550` | 1 | all | no | yes | - (feature `test-doubles`) |
 | `driver-i8042` | 1 | all | no | yes, fuzz | - (feature `test-doubles`) |

@@ -310,14 +310,19 @@ done until every applicable item has a test. Items are added, never removed.
   stack ranges overlapping each other or lying outside every region; ACPI
   pointer zero; ACPI pointer above RAM.
 
-### 6.6.11 ACPI MADT parser (`kernel-hal-x86_64`, pure module)
+### 6.6.11 ACPI parsers (`kernel-acpi`)
 
 - Missing RSDP; RSDP with a bad checksum; revision 0 versus 2 (RSDT versus
-  XSDT); table length shorter than the header; entry length zero (must not
-  loop forever); entry length beyond the table; unknown entry types skipped;
-  local APIC address override; zero I/O APICs; more I/O APICs than the fixed
-  capacity (error, not truncation); interrupt source overrides for IRQ 0 and
-  IRQ 4.
+  XSDT); an announced length that does not reach the extended checksum or
+  leaves the structure; table length shorter than the header; table length
+  beyond the bytes; a table of the wrong signature; entry length zero (must
+  not loop forever); entry length beyond the table; an entry of a known type
+  with the wrong length; unknown entry types skipped; local APIC address
+  override; zero I/O APICs; more I/O APICs than the fixed capacity (error,
+  not truncation); more overrides than the fixed capacity; interrupt source
+  overrides for IRQ 0 and IRQ 4; flags that say `conforms` and flags the
+  specification reserves; a line without an override; an address that does
+  not fit the physical address width.
 - Fuzz target over the raw bytes.
 
 ### 6.6.12 Userland allocator (`user-rt`)

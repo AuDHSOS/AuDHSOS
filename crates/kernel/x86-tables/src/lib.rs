@@ -7,7 +7,11 @@
 
 pub mod gdt;
 pub mod idt;
+pub mod ioapic;
+pub mod lapic;
+pub mod pic;
 pub mod tss;
+pub mod vectors;
 
 pub use gdt::{GDT_ENTRIES, Selector, build_gdt};
 pub use idt::{IDT_ENTRIES, gate};

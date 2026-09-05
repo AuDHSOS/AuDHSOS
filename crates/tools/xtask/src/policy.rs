@@ -226,6 +226,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "kernel-acpi",
+        path: "crates/kernel/acpi",
+        kind: Kind::Logic,
+        deps: &["kernel-types"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "kernel-hal-api",
         path: "crates/kernel/hal-api",
         kind: Kind::Logic,
