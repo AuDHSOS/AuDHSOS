@@ -191,6 +191,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   into raw frames would need `unsafe` in a logic crate. Document 2.4.1 said
   the reserve holds them and is corrected. The reserve holds page tables,
   kernel stacks, and the IPC buffers of threads.
+- The handle slots of the machine are one shared arena of `HANDLE_ENTRIES`
+  (16384) and `HANDLES_PER_PROCESS` (4096) is the ceiling the quota
+  enforces against it, not memory set aside per process (D-58). This
+  supersedes the handle part of D-57: 1024 handles were too few for
+  `server-memory`, which holds one handle per memory object it hands out
+  and can therefore reach `MEMORY_OBJECTS`, and 4096 inside every `Process`
+  would have been 8 MiB of `.bss` for the one process that needs them.
+  Plan 10.5.2 describes the arena, and 2.3.2 is worded for it.
 - `THREADS` and `KERNEL_STACKS` are 256 and `KERNEL_STACK_SLOTS` follows
   them, because every thread costs five frames of the reserve and 1024 of
   them would need 5120 against the 4048 the reference machine has.

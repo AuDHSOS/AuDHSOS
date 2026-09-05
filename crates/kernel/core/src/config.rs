@@ -17,6 +17,10 @@
 //! logic crate (D-57). The reserve holds what the count of is not known
 //! before boot: page tables, kernel stacks, and IPC buffers.
 //!
+//! The handle slots are one shared arena of [`HANDLE_ENTRIES`] rather than
+//! a table inside every `Process`, so that a process that needs many
+//! handles does not cost every other process the same memory (D-58).
+//!
 //! Phase 3 uses the numbers that size the memory bring-up:
 //! [`KERNEL_STACKS`], [`KERNEL_REGIONS`], and [`KERNEL_IMAGE_MAX_PAGES`].
 
@@ -57,13 +61,28 @@ pub const KERNEL_STACK_WORDS: usize = KERNEL_STACKS / 64;
 /// Number of regions one process may map.
 pub const REGIONS_PER_PROCESS: usize = 64;
 
-/// Number of handles one process may hold. The handle table lives in the
-/// `Process` object and therefore in the pool, so this number multiplied by
-/// [`PROCESSES`] and by the size of an entry is memory the kernel image
-/// carries whether it is used or not. The largest known demand is the root
-/// task with one memory object per boot region, its servers, and their
-/// endpoints (D-57).
-pub const HANDLES_PER_PROCESS: usize = 1024;
+/// Number of kernel objects the machine can hold at once, which is what a
+/// handle can point at.
+pub const OBJECTS: usize = PROCESSES
+    + THREADS
+    + MEMORY_OBJECTS
+    + ENDPOINTS
+    + NOTIFICATIONS
+    + REPLIES
+    + INTERRUPTS
+    + IO_PORT_RANGES;
+
+/// Number of handle slots the machine holds, shared by every process. Two
+/// per object the machine can hold, because a handle may be duplicated and
+/// transferred (D-58).
+pub const HANDLE_ENTRIES: usize = 16384;
+
+/// Number of handles one process may hold: a ceiling the quota enforces
+/// against [`HANDLE_ENTRIES`], not memory that is set aside per process.
+/// The largest demand of this system is the memory server, which holds one
+/// handle per memory object it hands out and can therefore reach
+/// [`MEMORY_OBJECTS`] (D-58).
+pub const HANDLES_PER_PROCESS: usize = 4096;
 
 /// Number of regions the kernel address space holds: the physical window,
 /// the boot stack, the boot information page, and one per run of mapped
@@ -78,3 +97,10 @@ pub const KERNEL_IMAGE_MAX_PAGES: u64 = 8192;
 const _: () = assert!(KERNEL_STACKS == KERNEL_STACK_WORDS * 64);
 const _: () = assert!(KERNEL_STACKS == 256 && KERNEL_STACK_SLOTS == 256);
 const _: () = assert!(KERNEL_IMAGE_MAX_PAGES * PAGE_SIZE == 32 * 1024 * 1024);
+const _: () = assert!(OBJECTS == 7616);
+// Room for a second handle to every object the machine can hold.
+const _: () = assert!(HANDLE_ENTRIES >= 2 * OBJECTS);
+// A single process may not promise more than the machine has.
+const _: () = assert!(HANDLES_PER_PROCESS <= HANDLE_ENTRIES);
+// The memory server holds one handle per object it hands out.
+const _: () = assert!(HANDLES_PER_PROCESS >= MEMORY_OBJECTS);

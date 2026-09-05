@@ -1328,23 +1328,34 @@ have made 1024 fit, but it treats the symptom: the number was never derived
 from what the system runs, and the larger machine costs the test suite
 seven seconds per image that brings the memory up.
 
-**`Process` holds its handle table inline**, so `PROCESSES` multiplied by
-`HANDLES_PER_PROCESS` multiplied by the size of an entry is memory the
-image carries whether it is used or not. An entry is `AnyObjectId` plus
-`Rights` (a `u32`) plus a `u64` badge, so 32 bytes with the padding:
+**The handle slots are one shared arena**, not a table inside every
+`Process`. A table inside the object would mean `PROCESSES` multiplied by
+`HANDLES_PER_PROCESS` multiplied by the size of an entry, whether it is
+used or not. An entry is `AnyObjectId` plus `Rights` (a `u32`) plus a `u64`
+badge, so 32 bytes with the padding:
 
-| `PROCESSES` × `HANDLES_PER_PROCESS` | `.bss` |
-|-------------------------------------|--------|
-| 256 × 65536 (the first plan) | 512 MiB |
-| 64 × 65536 | 128 MiB |
-| 64 × 1024 (chosen) | 2 MiB |
+| Shape | `.bss` | Enough for the memory server? |
+|-------|--------|-------------------------------|
+| 256 × 65536 inline (the first plan) | 512 MiB | yes |
+| 64 × 4096 inline | 8 MiB | yes |
+| 64 × 1024 inline | 2 MiB | no |
+| arena of 16384, ceiling 4096 (chosen) | 0.5 MiB | yes |
 
-`Handle` carries 32 index bits, so `1 << 16` was policy and not an ABI
-constraint. The largest demand this system has is the root task with one
+The demand that decides it is `server-memory`, not the root task. The
+server owns the RAM memory objects and holds one handle per object it hands
+out; `memory_split` makes two objects out of one and
+[2.4.2](02-architecture.md#242-memory-objects-and-mappings) says the kernel
+never merges them, so its handle count rises with the fragmentation of the
+memory up to `MEMORY_OBJECTS`, which is 4096. The root task, with one
 memory object per boot region (`MAX_BOOT_REGIONS` is 128), its servers, and
-their endpoints, which 1024 holds eightfold. A handle table that grows out
-of the reserve frame by frame, with `HANDLES_PER_PROCESS` as the quota
-ceiling, stays the answer if a process ever needs more; it needs a
+their endpoints, is an order of magnitude below that.
+
+`HANDLE_ENTRIES` is 16384, two per object the machine can hold, because a
+handle may be duplicated and transferred. `HANDLES_PER_PROCESS` is 4096 and
+becomes the ceiling the quota enforces against the arena, not memory set
+aside per process; `Handle` carries 32 index bits, so no number here is an
+ABI constraint. A handle table that grows out of the reserve frame by frame
+stays the answer if the arena is ever too small; it needs a
 `FrameAccess`-shaped path into `kernel-objects` and is not built now.
 
 **What the bring-up costs in QEMU**, measured with the `memory` image on
@@ -1396,13 +1407,36 @@ syscalls! {
 
 ### 10.5.2 `kernel-objects` additions
 
-`handle_table.rs`: `HandleTable<const N: usize>` with `Entry { object:
-AnyObjectId, rights: Rights, badge: u64 }` where `AnyObjectId` is an enum
-over the typed ids; `insert`, `lookup(handle) -> Result<&Entry,
-Error::InvalidHandle>` checking index and generation, `duplicate(handle,
-rights)`, `close(handle)`, FIFO slot reuse, generation increment skipping
-0. Object structs: `Process { address_space: AddressSpaceId, handles:
-HandleTable, threads: [Option<ThreadId>; 64], quota: Quota, fault_handler:
+`handle_table.rs`: one arena for the whole machine, not a table inside
+every process. `HandleArena<const N: usize>` holds `Slot { generation: u32,
+owner: Option<ProcessId>, occupant: Option<Entry> }` with `Entry { object:
+AnyObjectId, rights: Rights, badge: u64 }`, where `AnyObjectId` is an enum
+over the typed ids, plus the free list of the arena and, per slot, the link
+that chains the slots of one owner. A process holds `HandleList { head:
+Option<u32>, count: u32, capacity: u32 }`: what it has and what its creator
+granted it, not memory set aside for it.
+
+`insert(process, entry)` takes a slot from the free list, stamps the owner,
+chains it, and refuses with `Error::QuotaExceeded` when `count` has reached
+`capacity` or the arena is full. `lookup(process, handle) -> Result<&Entry,
+Error::InvalidHandle>` checks the index, the generation, **and the owner**;
+without the owner check one process could name a slot of another.
+`duplicate(process, handle, rights)`, `close(process, handle)`, FIFO slot
+reuse, generation increment skipping 0. `close_all(process)` walks the
+owner chain, so that destroying a process does not scan the arena.
+
+The index of a handle is the index of the arena slot, which is what makes
+every operation constant time. A process therefore sees slot numbers that
+say roughly how many handles the machine holds; that is the price of the
+shared arena and it reveals nothing about what those handles name.
+
+`HANDLE_ENTRIES` sizes the arena and `HANDLES_PER_PROCESS` is the ceiling a
+creator may grant, which is what
+[2.3.2](02-architecture.md#232-handles-and-rights) means by a capacity
+fixed at process creation within the creator's quota (D-58).
+
+Object structs: `Process { address_space: AddressSpaceId, handles:
+HandleList, threads: [Option<ThreadId>; 64], quota: Quota, fault_handler:
 Option<EndpointId>, kernel_object_quota: Quota }`, `Thread { process,
 state: ThreadState, priority, max_priority, time_slice, kernel_stack,
 ipc_buffer: PhysFrame, ipc_state, queue_links: Links, context: ArchContext

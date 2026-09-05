@@ -81,15 +81,18 @@ Every object type also carries the generic rights `DUPLICATE` and
 
 ### 2.3.2 Handles and rights
 
-- A handle is a `NonZeroU64`. The low 32 bits index the process's handle
-  table; the high 32 bits are a generation counter that changes every time
-  the slot is reused. A stale handle fails with `InvalidHandle`. Freed slots
-  are reused in FIFO order. The `Handle` newtype and the index and
+- A handle is a `NonZeroU64`. The low 32 bits index the handle arena the
+  machine shares; the high 32 bits are a generation counter that changes
+  every time the slot is reused. A slot names the process it belongs to, and
+  a lookup checks that owner as well as the generation, so one process
+  cannot name a slot of another (D-58). A stale handle fails with
+  `InvalidHandle`. Freed slots are reused in FIFO order. The `Handle` newtype and the index and
   generation widths are defined once, in `audhsos-abi`; no code treats a
   handle as a bare integer.
 - Handle `0` is never valid.
-- Every handle table has a capacity fixed at process creation, chosen by the
-  creator within its own quota.
+- Every process has a handle capacity fixed at its creation, chosen by the
+  creator within its own quota. The capacity is a ceiling the quota enforces
+  against the shared arena, not memory set aside for the process.
 - `handle_duplicate(handle, rights)` succeeds only if `rights` is a subset of
   the current rights and the handle carries `DUPLICATE`.
 - `handle_close(handle)` releases the slot. Closing the last handle to an
