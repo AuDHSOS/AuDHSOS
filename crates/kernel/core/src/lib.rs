@@ -20,7 +20,7 @@ pub use memory::{KernelMemory, MEMORY, MemoryError, with_memory};
 pub use state::{KERNEL, KernelState, with_state};
 pub use syscall::{KernelEnvironment, Next, Switch, schedule};
 pub use tick::on_tick;
-pub use trap::Exception;
+pub use trap::{Exception, Response};
 
 #[cfg(test)]
 mod tests;

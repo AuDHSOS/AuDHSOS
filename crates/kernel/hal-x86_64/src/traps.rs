@@ -46,6 +46,19 @@ pub struct TrapReport {
     pub sp: u64,
     /// The address a page fault named.
     pub fault_address: u64,
+    /// The code segment the processor ran in when the trap arrived. Its
+    /// low two bits are the privilege level, which is what says whether
+    /// the kernel or a user thread fell over.
+    pub code_segment: u64,
+}
+
+impl TrapReport {
+    /// `true` when the trap arrived from ring three, which is where every
+    /// user thread of this system runs and nothing of the kernel does.
+    #[must_use]
+    pub const fn from_user(self) -> bool {
+        self.code_segment & 0b11 == 0b11
+    }
 }
 
 /// What the kernel registers to receive a trap.
@@ -115,10 +128,18 @@ extern "x86-interrupt" fn syscall_entry(_frame: InterruptFrame) {
 /// report, because none is registered or one is already being reported,
 /// is not survivable: the machine halts.
 fn dispatch(report: TrapReport) {
-    let Ok(handler) = HANDLER.borrow(&UncontendedToken) else {
+    // The borrow ends before the handler runs. A handler that stops a
+    // faulted user thread switches away from it and leaves this frame
+    // standing on its kernel stack for good; a borrow held across the
+    // call would stay alive there and make the next trap unreportable.
+    let handler = HANDLER
+        .borrow(&UncontendedToken)
+        .ok()
+        .map(|handler| *handler);
+    let Some(handler) = handler else {
         crate::instructions::halt_forever();
     };
-    (*handler)(report);
+    handler(report);
 }
 
 /// Hands `vector` to the registered device interrupt handler. The borrow
@@ -149,6 +170,7 @@ macro_rules! handlers {
                     ip: frame.ip,
                     sp: frame.sp,
                     fault_address: 0,
+                    code_segment: frame.code_segment,
                 });
             }
         )+
@@ -166,6 +188,7 @@ macro_rules! handlers_with_code {
                     ip: frame.ip,
                     sp: frame.sp,
                     fault_address: if $vector == 14u8 { read_fault_address() } else { 0 },
+                    code_segment: frame.code_segment,
                 });
             }
         )+

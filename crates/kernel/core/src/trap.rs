@@ -3,8 +3,10 @@
 
 //! What the kernel does with a processor exception.
 //!
-//! Invariant: an exception the kernel cannot handle is reported in full
-//! and ends the machine with a failure, never silently.
+//! Invariants: an exception is reported in full, never silently; an
+//! exception the kernel itself raised ends the machine, because nothing
+//! below the kernel could carry on without it; an exception a user thread
+//! raised ends that thread and nothing else.
 
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::exit::{ExitStatus, TestExit};
@@ -28,6 +30,18 @@ pub struct Exception {
     pub sp: u64,
     /// The address a page fault names; zero for every other vector.
     pub cr2: u64,
+    /// Whether the processor was in user mode when the exception arrived.
+    pub user: bool,
+}
+
+/// What an exception asks the kernel to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Response {
+    /// The thread that raised it stops; the rest of the system runs on.
+    StopThread,
+    /// Nothing runs on: the kernel itself fell over, and there is no
+    /// smaller thing to stop.
+    StopMachine,
 }
 
 impl Exception {
@@ -60,6 +74,17 @@ impl Exception {
         }
     }
 
+    /// What the kernel does with the exception. Everything a user thread
+    /// raises stops that thread; everything else stops the machine.
+    #[must_use]
+    pub const fn response(self) -> Response {
+        if self.user {
+            Response::StopThread
+        } else {
+            Response::StopMachine
+        }
+    }
+
     /// `true` for the vectors the processor pushes an error code for.
     #[must_use]
     pub const fn has_error_code(self) -> bool {
@@ -76,6 +101,26 @@ pub fn on_exception(
     exit: &mut impl TestExit,
 ) {
     state.record_trap();
+    describe(exception, console);
+    exit.exit(ExitStatus::Failure);
+}
+
+/// Reports `exception` and counts it in `state`, without ending the
+/// machine: a user thread raised it, and stopping that thread is the whole
+/// of the answer.
+pub fn on_user_fault(
+    exception: Exception,
+    state: &mut KernelState,
+    console: &mut impl DebugConsole,
+) {
+    state.record_trap();
+    println!(console, "[trap] a user thread faulted");
+    describe(exception, console);
+}
+
+/// Writes what the processor reported, in the three lines the vector asks
+/// for.
+fn describe(exception: Exception, console: &mut impl DebugConsole) {
     println!(
         console,
         "[trap] {} (vector {}) at ip {:#x} sp {:#x}",
@@ -90,5 +135,4 @@ pub fn on_exception(
     if exception.vector == 14 {
         println!(console, "[trap] faulting address {:#x}", exception.cr2);
     }
-    exit.exit(ExitStatus::Failure);
 }

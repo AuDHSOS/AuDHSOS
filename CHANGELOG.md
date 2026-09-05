@@ -7,6 +7,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- A user thread that faults stops, and the machine runs on. The trap
+  report carries the code segment of the frame, so the kernel can tell a
+  fault at ring zero from a fault at ring three: the first ends the
+  machine, the second ends one thread. `kernel_syscall::fault::stop` is
+  where that thread stops — `ThreadState::Faulted`, keeping its kernel
+  stack, its buffer, and its pool slot, so that whoever created it can
+  look at it and either resume it or kill it. Phase 6 puts the fault
+  handler endpoint above it; the state stays what a fault nobody took ends
+  in.
+
+- `tests/isolation.rs`: the two programs that go looking for the boundary.
+  `read_kernel_memory` reads an address of the kernel half, which its
+  page tables carry but not for ring three, and takes a page fault;
+  `hlt_in_user` runs an instruction only ring zero may, and takes a
+  general protection fault. Both threads stop in `Faulted`, keep what they
+  hold, and a thread started afterwards runs and ends in the same machine.
+  Five tests, and the second fault is handled as readily as the first.
+
+- `tests/support`: the kernel the Phase 5 test images share — the memory
+  bring-up, the machine, a process built by hand, the switch into ring
+  three, the system call gate, and the trap handler. `tests/user.rs` and
+  `tests/isolation.rs` differ in what they watch, not in what they run on.
+
 - The first user thread of this system runs. `tests/user.rs` builds a
   process by hand — an address space carrying the kernel half, a flat
   program mapped read and execute at `0x40_0000`, a stack, an IPC buffer —

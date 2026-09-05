@@ -35,6 +35,9 @@ name = "interrupts"
 name = "user"
 
 [[test]]
+name = "isolation"
+
+[[test]]
 name = "console"
 
 [[test]]

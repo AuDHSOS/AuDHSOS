@@ -7,7 +7,7 @@ use kernel_hal_api::doubles::{RecordingConsole, RecordingExit};
 use kernel_hal_api::exit::ExitStatus;
 
 use crate::state::KernelState;
-use crate::trap::{EXCEPTION_VECTORS, Exception, on_exception};
+use crate::trap::{EXCEPTION_VECTORS, Exception, Response, on_exception, on_user_fault};
 
 fn report(exception: Exception) -> String {
     let mut console = RecordingConsole::new();
@@ -71,6 +71,7 @@ fn a_reported_exception_names_its_vector_and_its_registers() {
         ip: 0xFFFF_FFFF_8000_1234,
         sp: 0xFFFF_FFFF_8010_0000,
         cr2: 0,
+        user: false,
     });
     assert!(text.contains("invalid opcode"), "{text}");
     assert!(text.contains("vector 6"), "{text}");
@@ -88,6 +89,7 @@ fn a_page_fault_reports_the_error_code_and_the_faulting_address() {
         ip: 0x1000,
         sp: 0x2000,
         cr2: 0xDEAD_BEEF,
+        user: false,
     });
     assert!(text.contains("page fault"), "{text}");
     assert!(text.contains("error code 0x7"), "{text}");
@@ -102,6 +104,7 @@ fn a_general_protection_reports_the_error_code_but_no_address() {
         ip: 0x1000,
         sp: 0x2000,
         cr2: 0x9999,
+        user: false,
     });
     assert!(text.contains("general protection"), "{text}");
     assert!(text.contains("error code 0x20"), "{text}");
@@ -128,4 +131,75 @@ fn every_reported_trap_is_counted() {
     assert_eq!(exit.status(), Some(ExitStatus::Failure));
     assert_eq!(KernelState::new().traps, 0);
     assert_eq!(KernelState::default(), KernelState::new());
+}
+
+#[test]
+fn an_exception_of_the_kernel_stops_the_machine_and_one_of_a_thread_stops_the_thread() {
+    let kernel = Exception {
+        vector: 14,
+        user: false,
+        ..Exception::default()
+    };
+    assert_eq!(kernel.response(), Response::StopMachine);
+    let thread = Exception {
+        vector: 14,
+        user: true,
+        ..Exception::default()
+    };
+    assert_eq!(thread.response(), Response::StopThread);
+    assert_eq!(
+        Exception::default().response(),
+        Response::StopMachine,
+        "an exception that says nothing came from the kernel"
+    );
+}
+
+#[test]
+fn a_user_fault_is_reported_in_full_and_the_machine_runs_on() {
+    let mut console = RecordingConsole::new();
+    let mut state = KernelState::new();
+    on_user_fault(
+        Exception {
+            vector: 14,
+            error_code: 0x5,
+            ip: 0x40_0000,
+            sp: 0x7F_FFF0,
+            cr2: 0xFFFF_FFFF_8000_0000,
+            user: true,
+        },
+        &mut state,
+        &mut console,
+    );
+    let text = console.text();
+    assert!(text.contains("a user thread faulted"), "{text}");
+    assert!(text.contains("page fault"), "{text}");
+    assert!(text.contains("error code 0x5"), "{text}");
+    assert!(
+        text.contains("faulting address 0xffffffff80000000"),
+        "{text}"
+    );
+    assert_eq!(state.traps, 1, "a user fault is a trap like any other");
+}
+
+#[test]
+fn a_user_fault_writes_the_same_report_a_kernel_exception_does() {
+    let exception = Exception {
+        vector: 13,
+        error_code: 0x20,
+        ip: 0x40_1000,
+        sp: 0x7F_FF00,
+        cr2: 0,
+        user: true,
+    };
+    let mut console = RecordingConsole::new();
+    let mut state = KernelState::new();
+    on_user_fault(exception, &mut state, &mut console);
+    let user = console.text();
+
+    let fatal = report(Exception {
+        user: false,
+        ..exception
+    });
+
+    assert!(user.ends_with(&fatal), "{user} against {fatal}");
 }

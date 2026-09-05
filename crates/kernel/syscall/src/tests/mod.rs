@@ -9,5 +9,6 @@ mod calls_memory;
 mod calls_process;
 mod calls_thread;
 mod double;
+mod fault;
 mod reaper;
 mod validation;

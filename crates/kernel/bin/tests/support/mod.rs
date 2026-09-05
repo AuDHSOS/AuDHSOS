@@ -1,0 +1,815 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+
+//! The kernel every Phase 5 test image is: the memory bring-up, the
+//! machine that holds the objects, a process built by hand the way the
+//! root task will be built in Phase 7, the switch into ring three, the
+//! system call gate, and the trap handler that tells a fault of the kernel
+//! from a fault of a user thread.
+//!
+//! Four images share it — `user`, `isolation`, `concurrency`, and
+//! `syscalls` — because what they differ in is what they watch, not what
+//! they run on.
+//!
+//! Invariants: the bring-up happens once per image, whichever test asks
+//! for it first; the thread the kernel switched away from finds its
+//! context in its own pool entry, so that a thread which is resumed
+//! carries on where it stopped; a fault at ring three stops one thread and
+//! a fault at ring zero fails the image.
+
+#![expect(dead_code, reason = "each image uses the part of the kernel it needs")]
+
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+use audhsos_abi::layout::{
+    BOOT_STACK_TOP, KERNEL_STACK_PAGES, KERNEL_STACK_SLOT_PAGES, KERNEL_STACKS_BASE, PAGE_SIZE,
+};
+use audhsos_abi::{ThreadState, ipc_buffer};
+use kernel_core::machine::with_machine;
+use kernel_core::memory::{self, with_memory};
+use kernel_core::state::KernelState;
+use kernel_core::syscall::{KernelEnvironment, handle_syscall, reap, schedule, store_context};
+use kernel_core::trap::{Exception, Response};
+use kernel_hal_api::paging::FrameAccess;
+use kernel_hal_x86_64::console::SerialConsole;
+use kernel_hal_x86_64::paging::{AddressSpaces, LocalTlb, X86Entry, active_root};
+use kernel_hal_x86_64::traps::TrapReport;
+use kernel_hal_x86_64::window::PhysicalWindow;
+use kernel_hal_x86_64::{context, descriptors, testing, traps};
+use kernel_mm::page_table::{CachePolicy, PageTable, Permissions};
+use kernel_objects::handle_table::HandleList;
+use kernel_objects::object::{Process, ProcessId, Thread, ThreadId};
+use kernel_objects::quota::Quota;
+use kernel_syscall::environment::{Environment, KernelStack};
+use kernel_syscall::fault;
+use kernel_types::{Page, PhysFrame, VirtAddr};
+
+/// Where a program is linked and mapped. The linker script of the user
+/// test programs and the xtask both name this address.
+pub(crate) const USER_BASE: u64 = 0x40_0000;
+
+/// Where the stack of the first thread of a process ends.
+pub(crate) const USER_STACK_TOP: u64 = 0x80_0000;
+
+/// How many pages a user stack has.
+pub(crate) const USER_STACK_PAGES: u64 = 2;
+
+/// The page a process shares between its threads, where a program that
+/// runs in more than one thread keeps what both of them touch.
+pub(crate) const SHARED_BASE: u64 = 0x90_0000;
+
+/// The priority a thread gets when a test does not say otherwise.
+pub(crate) const DEFAULT_PRIORITY: u8 = 4;
+
+/// The highest priority a thread of a test image may reach.
+pub(crate) const MAX_PRIORITY: u8 = 8;
+
+/// The slot the idle thread carries: it stands on the boot stack, which
+/// the loader made and the stack area does not hold.
+const BOOT_SLOT: u32 = u32::MAX;
+
+/// How many user threads have been stopped by a fault since the image
+/// started.
+static FAULTS: AtomicU32 = AtomicU32::new(0);
+
+/// What the processor reported for the last fault of a user thread.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct LastFault {
+    /// The vector the processor entered; [`NO_VECTOR`] before any fault.
+    pub(crate) vector: u32,
+    /// The error code it pushed, or zero.
+    pub(crate) error_code: u64,
+    /// The address a page fault named.
+    pub(crate) address: u64,
+    /// Where the thread stood.
+    pub(crate) ip: u64,
+}
+
+/// The vector of [`LastFault`] before a user thread has faulted. No vector
+/// is that wide, so it can never be one.
+pub(crate) const NO_VECTOR: u32 = u32::MAX;
+
+static LAST_VECTOR: AtomicU32 = AtomicU32::new(NO_VECTOR);
+static LAST_ERROR: AtomicU64 = AtomicU64::new(0);
+static LAST_ADDRESS: AtomicU64 = AtomicU64::new(0);
+static LAST_IP: AtomicU64 = AtomicU64::new(0);
+
+/// Whether the bring-up has run.
+static READY: AtomicU32 = AtomicU32::new(0);
+
+/// The window over physical memory. The tables the loader built stay
+/// active for the whole run, so the window maps every physical frame read
+/// and write, and this image is the only writer.
+pub(crate) fn window() -> PhysicalWindow {
+    // SAFETY: the loader's tables stay active and the image runs on one
+    // processor with nothing else touching kernel memory.
+    unsafe { PhysicalWindow::kernel() }
+}
+
+/// The serial console, for the running commentary of an image.
+pub(crate) fn console() -> SerialConsole {
+    // SAFETY: the first serial controller belongs to the kernel while the
+    // debug console is on; no userland driver exists in a test image.
+    unsafe { SerialConsole::new(0x3F8) }
+}
+
+/// Writes one line of commentary.
+macro_rules! say {
+    ($($argument:tt)*) => {{
+        use kernel_hal_api::console::DebugConsole;
+        let mut console = $crate::support::console();
+        console.write_bytes(b"[user] ");
+        let _ = core::fmt::Write::write_fmt(
+            &mut $crate::support::Writer(&mut console),
+            format_args!($($argument)*),
+        );
+        console.write_bytes(b"\n");
+    }};
+}
+
+pub(crate) use say;
+
+/// Turns a console into something `format_args!` can write to.
+pub(crate) struct Writer<'a>(pub &'a mut SerialConsole);
+
+impl core::fmt::Write for Writer<'_> {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        use kernel_hal_api::console::DebugConsole;
+        self.0.write_bytes(text.as_bytes());
+        Ok(())
+    }
+}
+
+/// Brings the memory of the kernel up and arms the two gates a user thread
+/// can reach the kernel through: the system call vector and the trap
+/// handler. Runs once per image, whichever test asks for it first.
+pub(crate) fn bring_up() {
+    if READY.swap(1, Ordering::SeqCst) == 1 {
+        return;
+    }
+    let Ok(root) = active_root() else {
+        testing::fail(format_args!("the page table root is not addressable"));
+    };
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    let brought_up = testing::with_platform(|platform| {
+        memory::initialize::<X86Entry, _, _, _>(platform, root, &mut tables, &mut tlb, 0)
+    });
+    match brought_up {
+        Some(Ok(())) => {}
+        Some(Err(error)) => testing::fail(format_args!("the memory bring-up failed: {error}")),
+        None => testing::fail(format_args!("the platform is not reachable")),
+    }
+    traps::set_syscall_handler(on_syscall);
+    testing::set_trap_hook(on_trap);
+    say!("memory is up, the system call gate is armed, and faults are caught");
+}
+
+/// The kernel's own process and the idle thread, which is this image
+/// itself: the thread the kernel switches back into when no user thread
+/// can run. Its context is written by the first switch away from it.
+pub(crate) fn idle_thread() -> ThreadId {
+    let root = with_memory(|memory| memory.root()).unwrap_or_else(|| {
+        testing::fail(format_args!("the kernel memory is not reachable"));
+    });
+    with_machine(|machine| {
+        if let Some(idle) = machine.scheduler.idle() {
+            return idle;
+        }
+        let process = machine
+            .objects
+            .processes
+            .allocate(Process::new(
+                root,
+                HandleList::with_capacity(4),
+                Quota::new(64),
+                Quota::new(64),
+            ))
+            .unwrap_or_else(|_| testing::fail(format_args!("no slot for the kernel process")));
+        let thread = machine
+            .objects
+            .threads
+            .allocate(
+                Thread::new(process, 0, 0, BOOT_SLOT, root)
+                    .unwrap_or_else(|_| testing::fail(format_args!("the idle thread is not one"))),
+            )
+            .unwrap_or_else(|_| testing::fail(format_args!("no slot for the idle thread")));
+        machine.scheduler.set_idle(thread);
+        // The kernel is that thread: it is what the first switch leaves.
+        machine.scheduler.adopt(thread);
+        thread
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")))
+}
+
+/// A user process: an address space that carries the kernel half, with a
+/// program mapped read and execute at [`USER_BASE`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UserProcess {
+    /// The process object.
+    pub(crate) id: ProcessId,
+    /// The frame its page tables are rooted in.
+    pub(crate) root: PhysFrame,
+    /// How many threads it holds, which is what decides where the stack of
+    /// the next one lies.
+    threads: u64,
+}
+
+/// A thread of such a process, and what a test needs to watch it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Spawned {
+    /// The process it belongs to.
+    pub(crate) process: ProcessId,
+    /// The thread.
+    pub(crate) thread: ThreadId,
+    /// The frame holding its IPC buffer.
+    pub(crate) buffer: PhysFrame,
+}
+
+/// Builds a process with `program` mapped at [`USER_BASE`].
+pub(crate) fn create_process(program: &[u8]) -> UserProcess {
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    let root = with_memory(|memory| {
+        let mut environment = environment(memory, &mut tables, &mut tlb);
+        let root = environment
+            .create_address_space()
+            .unwrap_or_else(|error| testing::fail(format_args!("no address space: {error}")));
+        map_program(&mut environment, root, program);
+        root
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the kernel memory is not reachable")));
+    let id = with_machine(|machine| {
+        machine
+            .objects
+            .processes
+            .allocate(Process::new(
+                root,
+                HandleList::with_capacity(8),
+                Quota::new(32),
+                Quota::new(32),
+            ))
+            .unwrap_or_else(|_| testing::fail(format_args!("no slot for the process")))
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")));
+    UserProcess {
+        id,
+        root,
+        threads: 0,
+    }
+}
+
+/// Adds a thread to `process` at `priority`, with a stack of its own, and
+/// starts it. Every thread of a process runs the same program: the kernel
+/// maps one binary, and where a thread begins is the entry it is given.
+pub(crate) fn spawn_thread(process: &mut UserProcess, priority: u8) -> Spawned {
+    let index = process.threads;
+    process.threads = process.threads.saturating_add(1);
+    let stack_top = stack_top_for(index);
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    let (stack, buffer) = with_memory(|memory| {
+        let mut environment = environment(memory, &mut tables, &mut tlb);
+        map_stack(&mut environment, process.root, stack_top);
+        let stack = environment
+            .allocate_kernel_stack()
+            .unwrap_or_else(|error| testing::fail(format_args!("no kernel stack: {error}")));
+        let buffer = environment
+            .allocate_frame()
+            .unwrap_or_else(|error| testing::fail(format_args!("no buffer frame: {error}")));
+        (stack, buffer)
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the kernel memory is not reachable")));
+    build(process, priority, stack, buffer, stack_top)
+}
+
+/// A process with `program` and one thread of the default priority: the
+/// shortest way to a running user thread.
+pub(crate) fn spawn(program: &[u8]) -> Spawned {
+    let mut process = create_process(program);
+    spawn_thread(&mut process, DEFAULT_PRIORITY)
+}
+
+/// Maps one page of memory read and write at [`SHARED_BASE`] of `process`
+/// and returns the frame behind it, so that a test can read what the
+/// threads of the process wrote there.
+pub(crate) fn share_page(process: &UserProcess) -> PhysFrame {
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    with_memory(|memory| {
+        let mut environment = environment(memory, &mut tables, &mut tlb);
+        let frame = environment
+            .allocate_frame()
+            .unwrap_or_else(|error| testing::fail(format_args!("no frame to share: {error}")));
+        let address = VirtAddr::new(SHARED_BASE).unwrap_or_else(|_| {
+            testing::fail(format_args!("the shared page is outside user space"))
+        });
+        let page = Page::from_start(address)
+            .unwrap_or_else(|_| testing::fail(format_args!("the shared page is not aligned")));
+        environment
+            .map(
+                process.root,
+                page,
+                frame,
+                Permissions::READ_WRITE.for_user(),
+                CachePolicy::WriteBack,
+            )
+            .unwrap_or_else(|error| {
+                testing::fail(format_args!("the shared page is not mapped: {error}"))
+            });
+        frame
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the kernel memory is not reachable")))
+}
+
+/// The environment the system call layer reaches the machine through.
+fn environment<'a>(
+    memory: &'a mut kernel_core::memory::KernelMemory,
+    tables: &'a mut PhysicalWindow,
+    tlb: &'a mut LocalTlb,
+) -> KernelEnvironment<'a, X86Entry, PhysicalWindow, LocalTlb, SerialConsole> {
+    KernelEnvironment::new(memory, tables, tlb, None)
+}
+
+/// Where the stack of thread `index` of a process ends. One unmapped page
+/// lies between two stacks, so that a thread that runs off the bottom of
+/// its own stack faults instead of writing into the one below.
+fn stack_top_for(index: u64) -> u64 {
+    let span = USER_STACK_PAGES.saturating_add(1).saturating_mul(PAGE_SIZE);
+    USER_STACK_TOP.saturating_sub(index.saturating_mul(span))
+}
+
+/// Copies the program into frames of the reserve and maps them read and
+/// execute at [`USER_BASE`].
+fn map_program<A>(
+    environment: &mut KernelEnvironment<'_, X86Entry, A, LocalTlb, SerialConsole>,
+    root: PhysFrame,
+    program: &[u8],
+) where
+    A: FrameAccess<PageTable<X86Entry>>,
+{
+    let pages = u64::try_from(program.len().div_ceil(4096))
+        .unwrap_or(0)
+        .max(1);
+    for index in 0..pages {
+        let frame = environment.allocate_frame().unwrap_or_else(|error| {
+            testing::fail(format_args!("no frame for the program: {error}"))
+        });
+        copy_page(frame, program, index);
+        let address = VirtAddr::new(USER_BASE.saturating_add(index.saturating_mul(PAGE_SIZE)))
+            .unwrap_or_else(|_| testing::fail(format_args!("the program does not fit user space")));
+        let page = Page::from_start(address)
+            .unwrap_or_else(|_| testing::fail(format_args!("the program is not page aligned")));
+        environment
+            .map(
+                root,
+                page,
+                frame,
+                Permissions::READ_EXECUTE.for_user(),
+                CachePolicy::WriteBack,
+            )
+            .unwrap_or_else(|error| {
+                testing::fail(format_args!("the program is not mapped: {error}"))
+            });
+    }
+    say!("program mapped at {USER_BASE:#x}, {pages} page(s)");
+}
+
+/// Copies page `index` of `program` into `frame`.
+fn copy_page(frame: PhysFrame, program: &[u8], index: u64) {
+    let mut window = window();
+    let Some(bytes) = window.frame_bytes_mut(frame) else {
+        testing::fail(format_args!("a frame of the reserve is not reachable"));
+    };
+    let start = usize::try_from(index.saturating_mul(PAGE_SIZE)).unwrap_or(0);
+    let end = start.saturating_add(4096).min(program.len());
+    let Some(source) = program.get(start..end) else {
+        return;
+    };
+    let Some(target) = bytes.get_mut(..source.len()) else {
+        testing::fail(format_args!("a page of the program does not fit a frame"));
+    };
+    target.copy_from_slice(source);
+}
+
+/// Maps the stack that ends at `top`, read and write.
+fn map_stack<A>(
+    environment: &mut KernelEnvironment<'_, X86Entry, A, LocalTlb, SerialConsole>,
+    root: PhysFrame,
+    top: u64,
+) where
+    A: FrameAccess<PageTable<X86Entry>>,
+{
+    for index in 0..USER_STACK_PAGES {
+        let frame = environment
+            .allocate_frame()
+            .unwrap_or_else(|error| testing::fail(format_args!("no frame for the stack: {error}")));
+        let offset = index.saturating_add(1).saturating_mul(PAGE_SIZE);
+        let address = VirtAddr::new(top.saturating_sub(offset))
+            .unwrap_or_else(|_| testing::fail(format_args!("the stack is outside user space")));
+        let page = Page::from_start(address)
+            .unwrap_or_else(|_| testing::fail(format_args!("the stack is not page aligned")));
+        environment
+            .map(
+                root,
+                page,
+                frame,
+                Permissions::READ_WRITE.for_user(),
+                CachePolicy::WriteBack,
+            )
+            .unwrap_or_else(|error| {
+                testing::fail(format_args!("the stack is not mapped: {error}"))
+            });
+    }
+}
+
+/// Puts the thread objects together, maps its IPC buffer, writes the frame
+/// the first switch returns through, and starts it.
+fn build(
+    process: &UserProcess,
+    priority: u8,
+    stack: KernelStack,
+    buffer: PhysFrame,
+    stack_top: u64,
+) -> Spawned {
+    let idle = idle_thread();
+    let entry = VirtAddr::new(USER_BASE).unwrap_or(VirtAddr::ZERO);
+    let user_stack = VirtAddr::new(stack_top).unwrap_or(VirtAddr::ZERO);
+    let (thread, buffer_address) = with_machine(|machine| {
+        let thread = machine
+            .objects
+            .threads
+            .allocate(
+                Thread::new(process.id, priority, MAX_PRIORITY, stack.slot, buffer)
+                    .unwrap_or_else(|_| testing::fail(format_args!("the thread is not one"))),
+            )
+            .unwrap_or_else(|_| testing::fail(format_args!("no slot for the thread")));
+        let slot = machine
+            .objects
+            .processes
+            .get_mut(process.id)
+            .ok()
+            .and_then(|holder| holder.add_thread(thread).ok())
+            .unwrap_or_else(|| testing::fail(format_args!("the process holds no thread")));
+        let raw = audhsos_abi::layout::ipc_buffer_address(slot).unwrap_or(0);
+        let address = VirtAddr::new(raw).unwrap_or(VirtAddr::ZERO);
+        if let Ok(entry_of) = machine.objects.threads.get_mut(thread) {
+            *entry_of = entry_of.starting_at(entry, user_stack, address);
+        }
+        let _ = machine
+            .scheduler
+            .start(&mut machine.objects.threads, thread);
+        (thread, address)
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")));
+    let _ = idle;
+
+    // The buffer of the thread, at the top of its own address space.
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    with_memory(|memory| {
+        let mut environment = environment(memory, &mut tables, &mut tlb);
+        let page = Page::from_start(buffer_address)
+            .unwrap_or_else(|_| testing::fail(format_args!("the buffer is not page aligned")));
+        environment
+            .map(
+                process.root,
+                page,
+                buffer,
+                Permissions::READ_WRITE.for_user(),
+                CachePolicy::WriteBack,
+            )
+            .unwrap_or_else(|error| {
+                testing::fail(format_args!("the buffer is not mapped: {error}"))
+            });
+    });
+
+    // The frame the first switch returns through, written into the top of
+    // the kernel stack of the thread.
+    let top_frame = stack_frame_below(stack.top);
+    let mut stack_window = window();
+    let context = context::prepare_user(
+        &mut stack_window,
+        top_frame,
+        stack.top,
+        entry,
+        user_stack,
+        buffer_address,
+    )
+    .unwrap_or_else(|| testing::fail(format_args!("the kernel stack has no room for the frame")));
+    with_machine(|machine| store_context(&mut machine.objects, thread, context));
+    say!(
+        "thread ready: entry {:#x}, stack {:#x}, buffer {:#x}, priority {priority}",
+        entry.as_u64(),
+        user_stack.as_u64(),
+        buffer_address.as_u64()
+    );
+    Spawned {
+        process: process.id,
+        thread,
+        buffer,
+    }
+}
+
+/// The frame the page below `top` is mapped to, which is the page the
+/// frame of a new thread is written into. The geometry of a slot is the
+/// business of `kernel-mm`; this asks the page tables where the stack
+/// really is.
+fn stack_frame_below(top: VirtAddr) -> PhysFrame {
+    let address = top
+        .checked_sub(PAGE_SIZE)
+        .unwrap_or_else(|| testing::fail(format_args!("the kernel stack starts at zero")));
+    let page = Page::from_start(address)
+        .unwrap_or_else(|_| testing::fail(format_args!("the kernel stack is not page aligned")));
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    with_memory(|memory| {
+        let root = memory.root();
+        let mapper = kernel_mm::mapper::Mapper::<'_, X86Entry, _, _, _>::new(
+            root,
+            &mut tables,
+            &mut tlb,
+            memory.frames_mut(),
+        );
+        mapper
+            .translate(page)
+            .map(|(frame, _)| frame)
+            .unwrap_or_else(|| testing::fail(format_args!("the kernel stack is not mapped")))
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the kernel memory is not reachable")))
+}
+
+/// Switches into whichever thread should run, and returns when the kernel
+/// is back on its own stack with nothing left to run.
+///
+/// `standing_on` names the thread whose kernel stack the processor stands
+/// on when the scheduler has already let go of it, which is what a thread
+/// that faulted looks like. Its context belongs in its own pool entry all
+/// the same, so that resuming the thread returns to this loop.
+pub(crate) fn run_threads(standing_on: Option<ThreadId>) {
+    loop {
+        let Some(next) = next_switch(standing_on) else {
+            return;
+        };
+        let (from, to, top) = next;
+        // A thread that has ended has nowhere to keep a context any more,
+        // and nobody will ask for it: the switch writes it here, on the
+        // stack that goes with it.
+        let mut discarded = VirtAddr::ZERO;
+        let from = from.unwrap_or(&raw mut discarded);
+        if descriptors::set_kernel_stack(top.as_u64()).is_err() {
+            testing::fail(format_args!("the task state segment is not reachable"));
+        }
+        // SAFETY: `from` points at the context word of the thread that is
+        // running, which lives in the `static` cell of the machine and
+        // stays where it is; `to` is a context the kernel wrote, of a
+        // thread whose kernel stack is mapped in every address space.
+        unsafe {
+            context::switch_to(from, to);
+        }
+        // Back on this stack: whatever ended while we were away can go.
+        sweep();
+    }
+}
+
+/// Gives back what every thread that has ended held.
+pub(crate) fn sweep() {
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    with_memory(|memory| {
+        with_machine(|machine| {
+            let mut environment = KernelEnvironment::<X86Entry, _, _, SerialConsole>::new(
+                memory,
+                &mut tables,
+                &mut tlb,
+                None,
+            );
+            // The kernel stands on the stack of the thread it just
+            // switched to, which is the one the scheduler now calls
+            // current.
+            let running = machine.scheduler.current();
+            reap(
+                &mut machine.objects,
+                &mut machine.scheduler,
+                &mut environment,
+                running,
+            )
+        })
+    });
+}
+
+/// The next switch, or `None` when the thread that should run is the one
+/// that is running. The first element is where the context of the thread
+/// that leaves belongs, and `None` when it has ended.
+fn next_switch(
+    standing_on: Option<ThreadId>,
+) -> Option<(Option<*mut VirtAddr>, VirtAddr, VirtAddr)> {
+    let mut spaces = AddressSpaces::current().ok()?;
+    with_machine(|machine| {
+        let next = schedule(
+            &mut machine.objects,
+            &mut machine.scheduler,
+            &mut spaces,
+            stack_top_of,
+        );
+        let switch = next.switch?;
+        let leaving = switch.from.or(standing_on);
+        let pointer = leaving.and_then(|from| {
+            machine
+                .objects
+                .threads
+                .get_mut(from)
+                .ok()
+                .map(|thread| &raw mut thread.context)
+        });
+        Some((pointer, switch.context, switch.kernel_stack_top))
+    })
+    .flatten()
+}
+
+/// The top of the kernel stack in `slot`: the slot begins with a guard
+/// page and holds [`KERNEL_STACK_PAGES`] mapped pages above it. The idle
+/// thread is the exception: it is this image, standing on the boot stack.
+fn stack_top_of(slot: u32) -> VirtAddr {
+    if slot == BOOT_SLOT {
+        return VirtAddr::new(BOOT_STACK_TOP).unwrap_or(VirtAddr::ZERO);
+    }
+    let base = KERNEL_STACKS_BASE
+        .saturating_add(u64::from(slot).saturating_mul(KERNEL_STACK_SLOT_PAGES * PAGE_SIZE));
+    let top = base
+        .saturating_add(PAGE_SIZE)
+        .saturating_add(KERNEL_STACK_PAGES.saturating_mul(PAGE_SIZE));
+    VirtAddr::new(top).unwrap_or(VirtAddr::ZERO)
+}
+
+/// What the kernel does with a system call: read the buffer of the thread
+/// that made it, answer, clear away what ended, and switch if the answer
+/// asks for it.
+fn on_syscall() {
+    let caller = with_machine(|machine| machine.scheduler.current()).flatten();
+    let Some(caller) = caller else {
+        return;
+    };
+    let frame = with_machine(|machine| {
+        machine
+            .objects
+            .threads
+            .get(caller)
+            .ok()
+            .map(|thread| thread.ipc_buffer)
+    })
+    .flatten();
+    let Some(frame) = frame else {
+        return;
+    };
+
+    // Two views of the window: one for the buffer of the thread, one for
+    // the page tables. They never name the same frame, and this image is
+    // the only writer of either.
+    let mut buffer_window = window();
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    let Some(bytes) = buffer_window.frame_bytes_mut(frame) else {
+        return;
+    };
+    let reschedule = with_memory(|memory| {
+        with_machine(|machine| {
+            let mut environment = KernelEnvironment::<X86Entry, _, _, SerialConsole>::new(
+                memory,
+                &mut tables,
+                &mut tlb,
+                None,
+            );
+            let reschedule = handle_syscall(
+                &mut machine.objects,
+                &mut machine.scheduler,
+                &mut environment,
+                caller,
+                bytes,
+            );
+            reap(
+                &mut machine.objects,
+                &mut machine.scheduler,
+                &mut environment,
+                Some(caller),
+            );
+            reschedule
+        })
+    })
+    .flatten()
+    .unwrap_or(false);
+    if reschedule {
+        run_threads(Some(caller));
+    }
+}
+
+/// What the kernel does with a processor exception.
+///
+/// A fault at ring zero is the kernel falling over, and the image fails
+/// with it. A fault at ring three is one thread falling over: it stops in
+/// [`ThreadState::Faulted`], keeps everything it holds, and the processor
+/// goes to whoever is next. Nothing else of the machine notices.
+fn on_trap(report: TrapReport) {
+    let exception = Exception {
+        vector: report.vector,
+        error_code: report.error_code,
+        ip: report.ip,
+        sp: report.sp,
+        cr2: report.fault_address,
+        user: report.from_user(),
+    };
+    if exception.response() == Response::StopMachine {
+        testing::fail(format_args!(
+            "the kernel itself faulted: {} (vector {}) at ip {:#x} error {:#x} address {:#x}",
+            exception.name(),
+            exception.vector,
+            exception.ip,
+            exception.error_code,
+            exception.cr2
+        ));
+    }
+    let mut state = KernelState::new();
+    let mut reported = console();
+    kernel_core::trap::on_user_fault(exception, &mut state, &mut reported);
+    LAST_VECTOR.store(u32::from(exception.vector), Ordering::SeqCst);
+    LAST_ERROR.store(exception.error_code, Ordering::SeqCst);
+    LAST_ADDRESS.store(exception.cr2, Ordering::SeqCst);
+    LAST_IP.store(exception.ip, Ordering::SeqCst);
+
+    let Some(faulted) = with_machine(|machine| machine.scheduler.current()).flatten() else {
+        testing::fail(format_args!(
+            "a user thread faulted and the kernel holds none"
+        ));
+    };
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    let reschedule = with_memory(|memory| {
+        with_machine(|machine| {
+            let mut environment = KernelEnvironment::<X86Entry, _, _, SerialConsole>::new(
+                memory,
+                &mut tables,
+                &mut tlb,
+                None,
+            );
+            let mut syscall = kernel_syscall::dispatch::Machine {
+                objects: &mut machine.objects,
+                scheduler: &mut machine.scheduler,
+                environment: &mut environment,
+            };
+            fault::stop(&mut syscall, faulted).reschedule
+        })
+    })
+    .flatten()
+    .unwrap_or(false);
+    FAULTS.fetch_add(1, Ordering::SeqCst);
+    if reschedule {
+        run_threads(Some(faulted));
+    }
+}
+
+/// How many user threads a fault has stopped since the image started.
+pub(crate) fn faults() -> u32 {
+    FAULTS.load(Ordering::SeqCst)
+}
+
+/// What the processor reported for the last one of them.
+pub(crate) fn last_fault() -> LastFault {
+    LastFault {
+        vector: LAST_VECTOR.load(Ordering::SeqCst),
+        error_code: LAST_ERROR.load(Ordering::SeqCst),
+        address: LAST_ADDRESS.load(Ordering::SeqCst),
+        ip: LAST_IP.load(Ordering::SeqCst),
+    }
+}
+
+/// The word `index` of the IPC buffer in `frame`.
+pub(crate) fn buffer_word(frame: PhysFrame, index: usize) -> u64 {
+    let mut window = window();
+    window
+        .frame_bytes_mut(frame)
+        .and_then(|bytes| ipc_buffer::Buffer::new(bytes).word(index))
+        .unwrap_or(0)
+}
+
+/// The word at `offset` of `frame`, as a page a program writes into holds
+/// it. A shared page carries no IPC buffer layout: it is what the program
+/// makes of it.
+pub(crate) fn page_word(frame: PhysFrame, index: usize) -> u64 {
+    let mut window = window();
+    let Some(bytes) = window.frame_bytes_mut(frame) else {
+        return 0;
+    };
+    let start = index.saturating_mul(8);
+    let end = start.saturating_add(8);
+    let Some(word) = bytes.get(start..end) else {
+        return 0;
+    };
+    let mut value = [0_u8; 8];
+    value.copy_from_slice(word);
+    u64::from_le_bytes(value)
+}
+
+/// The state of a thread, or `None` when the pool no longer holds it.
+pub(crate) fn state_of(thread: ThreadId) -> Option<ThreadState> {
+    with_machine(|machine| machine.objects.threads.get(thread).ok().map(|t| t.state)).flatten()
+}

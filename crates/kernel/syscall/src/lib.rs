@@ -8,6 +8,7 @@
 pub mod calls;
 pub mod dispatch;
 pub mod environment;
+pub mod fault;
 pub mod reaper;
 
 pub use dispatch::{Machine, Reply, Request, decode, dispatch, required_rights};

@@ -1683,14 +1683,15 @@ flat binaries by `build-user-tests` (using `llvm-objcopy -O binary`) into
 `include_bytes!(concat!(env!("AUDHSOS_USER_TESTS_DIR"), "/<name>.bin"))`;
 the xtask sets the variable when it builds test kernels.
 
-`tests/user.rs` builds a process the way the root task will be built in
+`tests/support` builds a process the way the root task will be built in
 Phase 7 — an address space that carries the kernel half, the program
 mapped read and execute, a stack, an IPC buffer, a thread whose kernel
-stack carries the frame — switches into it, and watches what comes back.
-The programs are `thread_exit` and `count_and_exit` today;
-`read_kernel_memory` and `hlt_in_user` are written and wait for the
-isolation tests, and `two_threads`, `preempt`, and `every_syscall_error`
-are still to come.
+stack carries the frame — switches into it, and runs the system call gate
+and the trap handler over it. The test images share it and differ in what
+they watch: `tests/user.rs` the lifecycle of a thread, `tests/isolation.rs`
+what a user thread cannot do. The programs are `thread_exit`,
+`count_and_exit`, `read_kernel_memory`, and `hlt_in_user`; `two_threads`,
+`spin`, and `every_syscall` are still to come.
 
 Acceptance: `check` green; catalog 6.6.6 handle and pool items, 6.6.7,
 6.6.9 for the calls this phase implements, the frame item of 6.6.16, the

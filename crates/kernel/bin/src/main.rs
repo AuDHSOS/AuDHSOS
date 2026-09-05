@@ -167,6 +167,11 @@ fn requested_reserve(platform: &X86Platform) -> u64 {
 }
 
 /// Reports a processor exception through the kernel and ends the machine.
+///
+/// Every exception this image can see is the kernel's own: it starts no
+/// user thread, so nothing of it runs at ring three. The privilege the
+/// report carries goes into the line anyway, because a line that named the
+/// wrong ring would be worse than no line at all.
 fn on_trap(report: TrapReport) {
     let exception = Exception {
         vector: report.vector,
@@ -174,6 +179,7 @@ fn on_trap(report: TrapReport) {
         ip: report.ip,
         sp: report.sp,
         cr2: report.fault_address,
+        user: report.from_user(),
     };
     let mut state = KernelState::new();
     let reported = entry::with_console(|console| {
