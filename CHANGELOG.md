@@ -234,6 +234,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `audhsos-tls`: the alert that ends a connection went out under the
+  handshake keys, and those are dropped the moment the application keys
+  exist, so after the handshake it was written in the clear and the server
+  could not read why its peer had gone. It now uses the keys of the epoch
+  the connection has reached.
+- `audhsos-tls`: the `change_cipher_spec` record of middlebox
+  compatibility mode was accepted anywhere and whatever it carried. RFC
+  8446 section 5 closes its window with the peer's `Finished` and allows
+  it one value, and both are enforced.
+- `audhsos-tls`: the sequence number is spent before its nonce is used
+  rather than after, so that no path can hand the same nonce out twice.
+  The last record of an epoch is still written; every call after it is
+  refused.
+
 - Plan 10.4 said that raising an interrupt vector from software was "not
   possible without asm" and settled for a weaker assertion about the
   spurious vector. That was written before `kernel-hal-x86_64::testing`

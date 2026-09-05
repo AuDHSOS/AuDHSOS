@@ -254,7 +254,10 @@ entry point on the development machine (D-35). No open decisions remain.
 ## 8.17 Track C: cryptography and TLS
 
 Status: specified in [document 11](11-cryptography-and-tls.md); steps T1
-and T2 are implemented, T3 is next.
+to T7 are implemented and reviewed as a whole. T8 is the integration and
+is not scheduled: it needs a transport from track D, the `random_bytes`
+system call, and the driver and server that carry the bytes. What the
+track is still waiting on, and who owns each piece, is section 11.14.
 
 The track prepares HTTPS for the day a network stack exists. Every crate
 in it is pure logic without I/O or allocation, host-tested, and depends on
@@ -268,7 +271,7 @@ phase order and is built between phases.
 | T3 | `crypto-ec` | L | implemented: X25519, Ed25519 verification, P-256 ECDSA verification |
 | T4 | `crypto-rng` | S | implemented: the ChaCha20 generator and the `Entropy` trait |
 | T5 | `audhsos-der` | M | implemented: a strict DER reader; its fuzz target and its time conversion wait on document 12 (11.14) |
-| T6 | `audhsos-x509` | L | certificate parsing, path validation, name matching, the test certificate builder |
+| T6 | `audhsos-x509` | L | implemented: certificate parsing, path validation, name matching, the test certificate builder |
 | T7 | `audhsos-tls` | XL | implemented: the client reproduces the RFC 8448 trace and completes a handshake against project-generated chains |
 | T8 | integration | M | not scheduled: transport, the `random_bytes` system call, an HTTP client |
 
