@@ -18,6 +18,10 @@ is project code on top of the Rust toolchain.
 | L7 Miri | host-executable `unsafe` in adapter crates | host | `cargo miri test` | every push |
 | L8 Static | lints, layering, external code, unsafe budget, documentation | host | `cargo xtask check` | every push |
 
+Locally every one of these levels is started through the wrapper scripts of
+[07 section 7.5](07-toolchain-and-environment.md#75-findings-about-the-development-machine),
+`sh tools/xtask.sh <subcommand>` and `sh tools/xtask-check.sh`.
+
 ## 6.2 Host testing of `no_std` crates
 
 - Every logic crate uses `#![cfg_attr(not(test), no_std)]`. Tests use `std`
@@ -482,6 +486,10 @@ done until every applicable item has a test. Items are added, never removed.
   identifier.
 - Runner: QEMU exit status mapping for 33, 35, 37, 0, 1, and a killed
   process; timeout produces a crash report with the captured output.
+- Command line: a subcommand that takes no option refuses one and names
+  it; `check` refuses an unknown option before it runs a step.
+- Quiet mode: a command that succeeds under `--quiet` prints nothing and
+  is still an `Ok`, a command that fails is still an error.
 
 ### 6.6.21 Kernel integration tests in QEMU
 

@@ -7,6 +7,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `xtask check --quiet`, and with it a quiet mode of the whole xtask. A run
+  keeps one line per step, `lint: ok` to `fuzz --regression: ok`, and the
+  output of a step reaches the terminal only when that step fails, where it
+  arrives whole and preceded by the command line that produced it. The full
+  check writes 3314 lines warm and eleven under `--quiet`; the long form is
+  worth watching and worth nothing in a log or in the context of an agent.
+  What a run prints is now decided in one place (`out`): progress goes
+  through `note!`, which a quiet run drops, and everything that explains a
+  failure stays a plain `eprintln!`, which it never touches. `Cmd::run`
+  reads a child's streams instead of inheriting them while the xtask is
+  quiet, and prints them if the child fails.
+
 - The fuzzing engine of this project, in `fuzz-support`, ported from
   libFuzzer (D-63). Apple's clang carries no libFuzzer runtime, so
   `-Clink-arg=-fsanitize=fuzzer` failed at the link step and no target
@@ -35,12 +47,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   states because nothing here is pushed, and writes a whole further
   checkout under `.claude/worktrees/`. `.gitignore` keeps that checkout
   and the permissions of one machine out of the index, and `.claude` joins
-  the directories the checks never descend into: otherwise the walker
-  judges the copy of a file by the path it has in the worktree, which is
-  not the path the tables of the policy name, and a correct file fails the
-  SPDX check. The wrapper scripts under `tools/` and the instructions an
-  agent reads are committed, because a worktree holds what is committed
-  and nothing else.
+  the directories the checks never descend into. Without the exclusion the
+  walker judges the copy of a ported file by the path it has in the
+  worktree, which is not the path `PORTED_FILES` names, and the SPDX check
+  fails on a file that is correct.
 - `crypto-ec` gains ECDSA over P-384, which is what a chain that ends at a
   P-384 root takes. `p384::PublicKey::from_sec1` reads the uncompressed
   point of ninety-seven bytes, `verify` checks a signature against a
@@ -489,6 +499,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The documents name the wrapper scripts under `tools/` where they named
+  rustup's Cargo proxy: `sh tools/xtask.sh <subcommand>`, and
+  `sh tools/xtask-check.sh` for the full check (D-64, amending D-35). The
+  scripts put `~/.cargo/bin` in front of the `PATH`, so the proxy finds the
+  pinned nightly and not MacPorts' `rustc`, and they are tracked, so a
+  worktree session has them. 07 section 7.5 holds what they do and the rule
+  for the mentions that still read `cargo xtask <subcommand>`: those are
+  what CI runs and what a subcommand is called. README, `CONTRIBUTING.md`,
+  `CLAUDE.md`, and the acceptance criteria of 08 and 10 name the scripts.
+
 - `xtask fuzz` no longer links a runtime from the platform's clang, and
   the coverage instrumentation moved out of `RUSTFLAGS` into per-package
   settings in `fuzz/Cargo.toml`, with `fuzz/.cargo/config.toml` turning on
@@ -516,6 +536,22 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   value still enters from outside.
 
 ### Fixed
+
+- A subcommand that takes no option no longer ignores one. `lint`,
+  `check-layering`, `check-deps`, `unsafe-budget`, `coverage`, `miri`,
+  `doc`, and `check` read their arguments through one check that refuses
+  what it does not know, as `run`, `build`, and the others already did.
+  `check --quiet` before the option existed ran the whole check and
+  reported success for a run nobody had asked for, and a typo did the same.
+
+- The wrapper scripts under `tools/` report what a run did. Both ended in
+  `… 2>&1 | tail -60`, and a pipeline in `sh` exits with the status of its
+  last command, so `sh tools/xtask-check.sh` returned zero however the
+  check went: `&&` after it ran, and a red check could be committed. Each
+  script now `exec`s Cargo, so output and exit status are the xtask's own.
+  The pager and the colors stay off; nothing else is added, and shortening
+  the output is the caller's business, which is where the status survives
+  it.
 
 - `audhsos-tls`: an alert from the peer was reported as
   `the record was not expected here`, and answered with one. Every alert

@@ -8,7 +8,7 @@ XL) and describe effort, not calendar time.
 
 | Phase | Name | Size | Ends with |
 |-------|------|------|-----------|
-| 0 | Project foundation | M | `cargo xtask check` passes on a configured workspace with the property-test engine and `kernel-types` |
+| 0 | Project foundation | M | `sh tools/xtask-check.sh` passes on a configured workspace with the property-test engine and `kernel-types` |
 | 1 | Memory management logic | L | memory map, frame allocator, page tables, mapper, address spaces, pools: complete and host-tested |
 | 2 | Loader, boot, and test harness | XL | own UEFI loader boots test kernels in QEMU, which report over serial and exit with a status |
 | 3 | Kernel memory bring-up | M | kernel reserve, pools, physical window, kernel stacks, address-space activation in QEMU |
@@ -22,8 +22,8 @@ XL) and describe effort, not calendar time.
 | 11 | Graphical demonstration | M | cursor, drawing, and typed text in `app-canvas`, verified end to end |
 
 Every phase has the same definition of done: all catalog items for the
-components in the phase have tests, `cargo xtask check` is green, the design
-documents reflect the code, the changelog is updated. The
+components in the phase have tests, `sh tools/xtask-check.sh` is green, the
+design documents reflect the code, the changelog is updated. The
 [implementation plan](10-implementation-plan.md) specifies the work of
 each phase down to crates, types, algorithms, and tests.
 
@@ -56,9 +56,9 @@ Deliverables:
 Tests: catalog 6.6.1, 6.6.6 (rights items), 6.6.18, 6.6.19, and the xtask
 items of 6.6.20 that exist at this point.
 
-Acceptance: `cargo xtask check` passes locally and in CI; coverage of
-`kernel-types` and `test-support` meets the thresholds; the first commit is
-on `main`.
+Acceptance: `sh tools/xtask-check.sh` passes locally and `cargo xtask check`
+in CI; coverage of `kernel-types` and `test-support` meets the thresholds;
+the first commit is on `main`.
 
 ## 8.3 Phase 1: Memory management logic
 
@@ -153,8 +153,8 @@ boot image with tar archive; release build with `debug-uart` off.
 
 Tests: catalog 6.6.12, 6.6.13 (tar items) with fuzz targets, 6.6.22, 6.6.23.
 
-Acceptance: `cargo xtask run --release` prints the greeting through the
-userland console driver; `cargo xtask test --e2e` passes.
+Acceptance: `sh tools/xtask.sh run --release` prints the greeting through
+the userland console driver; `sh tools/xtask.sh test --e2e` passes.
 
 ## 8.10 Phase 8: Consolidation
 
@@ -177,8 +177,8 @@ test image without a VGA device.
 Tests: catalog 6.6.24, 6.6.26, 6.6.27 (display items), 6.6.28, 6.6.29
 (output items).
 
-Acceptance: `cargo xtask test --e2e` verifies a filled rectangle and a
-rendered string in a screendump; the test kernels boot with `-vga none`
+Acceptance: `sh tools/xtask.sh test --e2e` verifies a filled rectangle and
+a rendered string in a screendump; the test kernels boot with `-vga none`
 and report an absent framebuffer.
 
 ## 8.12 Phase 10: PS/2 input
@@ -207,9 +207,9 @@ end-to-end tests that combine injected input with screendumps.
 
 Tests: catalog 6.6.29 (combined items).
 
-Acceptance: `cargo xtask run --display` shows the canvas; `cargo xtask
-test --e2e` verifies cursor movement, a drawn stroke, and typed text in
-screendumps.
+Acceptance: `sh tools/xtask.sh run --display` shows the canvas;
+`sh tools/xtask.sh test --e2e` verifies cursor movement, a drawn stroke,
+and typed text in screendumps.
 
 ## 8.14 Later work, not scheduled
 
@@ -249,7 +249,9 @@ tickless timer; long file names in the disk image writer.
 
 The two questions that were open before Phase 0 are decided in the
 decision register: the project name and crate prefix (D-34) and the build
-entry point on the development machine (D-35). No open decisions remain.
+entry point on the development machine (D-35, amended by D-64, which puts
+the wrapper scripts of `tools/` in front of the proxy). No open decisions
+remain.
 
 ## 8.17 Track C: cryptography and TLS
 
@@ -276,8 +278,9 @@ phase order and is built between phases.
 | T8 | integration | M | not scheduled: transport, the `random_bytes` system call, an HTTP client |
 
 Definition of done per step, as for every phase: the catalog items of
-6.6.30 to 6.6.38 that belong to the step have tests, `cargo xtask check`
-is green, the documents reflect the code, the changelog is updated.
+6.6.30 to 6.6.38 that belong to the step have tests,
+`sh tools/xtask-check.sh` is green, the documents reflect the code, the
+changelog is updated.
 
 ## 8.18 Track D: the network stack
 

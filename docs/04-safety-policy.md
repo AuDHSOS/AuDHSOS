@@ -118,6 +118,12 @@ fuzz entry point is project code.
 | Loader, kernel, and end-to-end tests | `cargo xtask test --qemu`, `cargo xtask test --e2e` | every push |
 | Fuzzing | `cargo xtask fuzz --all --time 60` using `-Zsanitizer=fuzzer` from the toolchain | nightly schedule; findings become regression tests |
 
+The commands are written as CI runs them. On the development machine each
+one goes through the wrapper scripts of
+[07 section 7.5](07-toolchain-and-environment.md#75-findings-about-the-development-machine):
+`sh tools/xtask.sh lint` for a single check, `sh tools/xtask-check.sh` for
+all of them.
+
 ## 4.9 Review checklist for adapter crates
 
 1. Does the `SAFETY:` comment state every precondition and who guarantees it?

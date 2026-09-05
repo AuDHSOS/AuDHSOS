@@ -112,4 +112,4 @@ When goals conflict, these principles decide, in this order.
 | Boot image | The file the loader places in memory next to the kernel. It contains a fixed header, the root task as a flat binary, and a tar archive with the remaining userland. |
 | Disk image | The GPT-partitioned disk QEMU boots from, with one FAT32 EFI system partition. Contains the loader, the kernel, and the boot image. |
 | Decision register | The list of binding decisions in [09-decisions.md](09-decisions.md). |
-| xtask | The project's build automation, implemented as a Rust binary invoked with `cargo xtask`. |
+| xtask | The project's build automation, implemented as a Rust binary invoked with `cargo xtask`, on the development machine through the wrapper script `sh tools/xtask.sh`. |

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Error;
 use crate::image::{boot_image, disk};
+use crate::out::{self, note, note_raw};
 use crate::policy::{FUZZ_TARGETS, MIRI_CRATES, Target, crates_for};
 use crate::process::Cmd;
 use crate::qemu::{self, Machine, Run};
@@ -76,12 +77,14 @@ pub(crate) fn check_deps(root: &Path) -> Result<(), Error> {
 /// `unsafe` and `asm!` sites against the budgets.
 pub(crate) fn unsafe_budget(root: &Path) -> Result<(), Error> {
     let reports = unsafe_budget::check(root)?;
-    eprintln!("{:<18} {:>6} {:>6}", "crate", "unsafe", "asm");
+    note!("{:<18} {:>6} {:>6}", "crate", "unsafe", "asm");
     let mut violations = Vec::new();
     for entry in &reports {
-        eprintln!(
+        note!(
             "{:<18} {:>6} {:>6}",
-            entry.name, entry.counts.unsafe_keywords, entry.counts.asm_macros
+            entry.name,
+            entry.counts.unsafe_keywords,
+            entry.counts.asm_macros
         );
         violations.extend(entry.violations.iter().cloned());
     }
@@ -217,7 +220,7 @@ fn loader_images(root: &Path) -> Result<(), Error> {
         let path = write_run_image(root, name, &image)?;
         let run = machine.run_captured(&path)?;
         let outcome = run.outcome();
-        eprintln!("qemu {name}: {}", outcome.name());
+        note!("qemu {name}: {}", outcome.name());
         if outcome != qemu::Outcome::LoaderFailure {
             eprint!("{}", run.output);
             violations.push(format!(
@@ -316,7 +319,7 @@ fn report_tests(
 ) -> Result<(), Error> {
     let report = qemu::parse(&run.output);
     let outcome = run.outcome();
-    eprintln!(
+    note!(
         "qemu {name}: {} ({} passed, {} failed)",
         outcome.name(),
         report.passed(),
@@ -383,7 +386,7 @@ pub(crate) fn run(root: &Path, options: &[String]) -> Result<(), Error> {
 pub(crate) fn coverage(root: &Path) -> Result<(), Error> {
     let totals = coverage::measure(root)?;
     let (table, violations) = coverage::evaluate(&totals);
-    eprint!("{table}");
+    note_raw!("{table}");
     report("coverage", &violations);
     Error::from_violations(violations)
 }
@@ -488,7 +491,7 @@ pub(crate) fn fuzz(root: &Path, options: &[String]) -> Result<(), Error> {
         .filter(|t| selected.as_deref().is_none_or(|s| s == t.name))
         .collect();
     if targets.is_empty() {
-        eprintln!("no fuzz targets are registered yet (policy::FUZZ_TARGETS); nothing to run");
+        note!("no fuzz targets are registered yet (policy::FUZZ_TARGETS); nothing to run");
         return Ok(());
     }
     for target in targets {
@@ -530,7 +533,7 @@ fn from_here(root: &Path, path: &str) -> PathBuf {
 /// Folds `from` into the stored corpus of one target, keeping the files
 /// that reach something the corpus does not.
 fn merge_corpus(root: &Path, name: &str, from: &str) -> Result<(), Error> {
-    eprintln!("merging {from} into the corpus of `{name}`");
+    note!("merging {from} into the corpus of `{name}`");
     Cmd::cargo()
         .cwd(&root.join("fuzz"))
         .args([
@@ -549,7 +552,7 @@ fn merge_corpus(root: &Path, name: &str, from: &str) -> Result<(), Error> {
 
 /// Shrinks one crashing input of a target, for at most `seconds`.
 fn minimize_crash(root: &Path, name: &str, file: &str, seconds: u64) -> Result<(), Error> {
-    eprintln!("shrinking {file} against `{name}` for {seconds} seconds");
+    note!("shrinking {file} against `{name}` for {seconds} seconds");
     Cmd::cargo()
         .cwd(&root.join("fuzz"))
         .args([
@@ -568,7 +571,7 @@ fn minimize_crash(root: &Path, name: &str, file: &str, seconds: u64) -> Result<(
 
 /// Runs the fuzzer of one target for `seconds` seconds.
 fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
-    eprintln!("fuzzing `{name}` for {seconds} seconds");
+    note!("fuzzing `{name}` for {seconds} seconds");
     Cmd::cargo()
         .cwd(&root.join("fuzz"))
         .args([
@@ -590,10 +593,10 @@ fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
 fn replay_corpus(root: &Path, name: &str) -> Result<(), Error> {
     let corpus = corpus_of(root, name);
     if !corpus.is_dir() {
-        eprintln!("`{name}`: no corpus at {}", corpus.display());
+        note!("`{name}`: no corpus at {}", corpus.display());
         return Ok(());
     }
-    eprintln!("replaying the corpus of `{name}`");
+    note!("replaying the corpus of `{name}`");
     Cmd::cargo()
         .cwd(&root.join("fuzz"))
         .args([
@@ -616,8 +619,24 @@ fn corpus_of(root: &Path, name: &str) -> PathBuf {
 type Step = fn(&Path) -> Result<(), Error>;
 
 /// Everything CI runs, in CI order.
-pub(crate) fn check(root: &Path, channel: &str) -> Result<(), Error> {
-    eprintln!("toolchain: {channel}");
+///
+/// `--quiet` reduces a run to one line per step: the output of a step that
+/// passes is dropped, and the output of one that fails is printed as it
+/// would have been. A full run writes some three thousand lines otherwise,
+/// which is worth reading while watching it and worth nothing in a log.
+///
+/// # Errors
+///
+/// [`Error::Usage`] for an unknown option; the error of the first step
+/// that fails.
+pub(crate) fn check(root: &Path, channel: &str, options: &[String]) -> Result<(), Error> {
+    for option in options {
+        match option.as_str() {
+            "--quiet" => out::set_quiet(true),
+            other => return Err(Error::Usage(format!("unknown option `{other}` for check"))),
+        }
+    }
+    note!("toolchain: {channel}");
     let steps: [(&str, Step); 10] = [
         ("lint", lint),
         ("check-layering", check_layering),
@@ -633,8 +652,12 @@ pub(crate) fn check(root: &Path, channel: &str) -> Result<(), Error> {
         }),
     ];
     for (name, step) in steps {
-        eprintln!("==> {name}");
-        step(root)?;
+        note!("==> {name}");
+        let result = step(root);
+        if out::quiet() {
+            eprintln!("{name}: {}", if result.is_ok() { "ok" } else { "failed" });
+        }
+        result?;
     }
     eprintln!("==> all checks passed");
     Ok(())
@@ -642,7 +665,7 @@ pub(crate) fn check(root: &Path, channel: &str) -> Result<(), Error> {
 
 fn report(what: &str, violations: &[String]) {
     if violations.is_empty() {
-        eprintln!("{what}: ok");
+        note!("{what}: ok");
     } else {
         eprintln!("{what}: {} violation(s)", violations.len());
     }
@@ -716,7 +739,7 @@ pub(crate) fn image(root: &Path, options: &[String]) -> Result<(), Error> {
     let disk_path = target.join("audhsos.img");
     fs::write_bytes(&boot_path, &boot)?;
     fs::write_bytes(&disk_path, &image)?;
-    eprintln!(
+    note!(
         "wrote {} ({} bytes) and {} ({} bytes)",
         boot_path.display(),
         boot.len(),

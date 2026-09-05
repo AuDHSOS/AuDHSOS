@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::error::Error;
+use crate::out::{self, note};
 
 /// A command line to run.
 #[derive(Clone, Debug)]
@@ -103,8 +104,13 @@ impl Cmd {
         command
     }
 
-    /// Runs with inherited output and fails on a non-zero status.
+    /// Runs with inherited output and fails on a non-zero status. A quiet
+    /// xtask reads the output instead and prints it only for a command
+    /// that failed.
     pub(crate) fn run(&self) -> Result<(), Error> {
+        if out::quiet() {
+            return self.run_buffered();
+        }
         eprintln!("$ {}", self.display());
         let status = self
             .command()
@@ -120,17 +126,55 @@ impl Cmd {
         }
     }
 
-    /// Runs and returns standard output; standard error is inherited.
+    /// `run` for a quiet xtask. A command that succeeds says nothing; a
+    /// command that fails prints its command line and both its streams,
+    /// each in its own order, since the two are read apart and cannot be
+    /// interleaved as a terminal would have shown them.
+    fn run_buffered(&self) -> Result<(), Error> {
+        let output = self
+            .command()
+            .output()
+            .map_err(|source| Error::io(format!("running `{}`", self.display()), source))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        eprintln!("$ {}", self.display());
+        Self::report_streams(&output.stdout, &output.stderr);
+        Err(Error::CommandFailed {
+            command: self.display(),
+            code: output.status.code(),
+        })
+    }
+
+    /// Prints what was read of a failed command's streams. What was
+    /// inherited rather than read arrives here empty and prints nothing.
+    fn report_streams(stdout: &[u8], stderr: &[u8]) {
+        eprint!("{}", String::from_utf8_lossy(stdout));
+        eprint!("{}", String::from_utf8_lossy(stderr));
+    }
+
+    /// Piped while the xtask is quiet, inherited while it is loud.
+    fn quiet_stdio() -> Stdio {
+        if out::quiet() {
+            Stdio::piped()
+        } else {
+            Stdio::inherit()
+        }
+    }
+
+    /// Runs and returns standard output; standard error is inherited, or
+    /// read and printed on a failure while the xtask is quiet.
     pub(crate) fn capture(&self) -> Result<String, Error> {
         let output = self
             .command()
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Self::quiet_stdio())
             .output()
             .map_err(|source| Error::io(format!("running `{}`", self.display()), source))?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {
+            Self::report_streams(&[], &output.stderr);
             Err(Error::CommandFailed {
                 command: self.display(),
                 code: output.status.code(),
@@ -138,19 +182,23 @@ impl Cmd {
         }
     }
 
-    /// Runs and returns standard error; standard output is inherited.
+    /// Runs and returns standard error; standard output is inherited, or
+    /// read and printed on a failure while the xtask is quiet.
     pub(crate) fn capture_stderr(&self) -> Result<String, Error> {
-        eprintln!("$ {}", self.display());
+        note!("$ {}", self.display());
         let output = self
             .command()
-            .stdout(Stdio::inherit())
+            .stdout(Self::quiet_stdio())
             .stderr(Stdio::piped())
             .output()
             .map_err(|source| Error::io(format!("running `{}`", self.display()), source))?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stderr).into_owned())
         } else {
-            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            if out::quiet() {
+                eprintln!("$ {}", self.display());
+            }
+            Self::report_streams(&output.stdout, &output.stderr);
             Err(Error::CommandFailed {
                 command: self.display(),
                 code: output.status.code(),

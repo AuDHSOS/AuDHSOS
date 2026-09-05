@@ -311,10 +311,13 @@ message.
 
 ## 5.7 Build automation
 
-All developer and CI commands go through `cargo xtask`. The xtask uses only
-the standard library and the toolchain binaries (`cargo`, `rustc`,
-`rustfmt`, `cargo-clippy`, `cargo-miri`, `llvm-profdata`, `llvm-cov`,
-`llvm-objcopy`) plus QEMU.
+All developer and CI commands go through `cargo xtask`, on the development
+machine through the wrapper scripts `tools/xtask.sh` and
+`tools/xtask-check.sh` that [07 section
+7.5](07-toolchain-and-environment.md#75-findings-about-the-development-machine)
+describes. The xtask uses only the standard library and the toolchain
+binaries (`cargo`, `rustc`, `rustfmt`, `cargo-clippy`, `cargo-miri`,
+`llvm-profdata`, `llvm-cov`, `llvm-objcopy`) plus QEMU.
 
 | Subcommand | Purpose |
 |------------|---------|
@@ -331,7 +334,11 @@ the standard library and the toolchain binaries (`cargo`, `rustc`,
 | `coverage` | build host tests with `-C instrument-coverage`, merge profiles with `llvm-profdata`, export LCOV with `llvm-cov`, enforce thresholds |
 | `miri` | run the tests of the host-executable adapter crates under Miri |
 | `doc` | build documentation with warnings as errors |
-| `check` | everything CI runs, in CI order |
+| `check [--quiet]` | everything CI runs, in CI order; `--quiet` leaves one line per step and prints the output of a step only when it fails |
+
+A subcommand refuses an option it does not know, so a mistyped
+`check --qiuet` stops with the usage text instead of running the whole
+check and reporting a success for something nobody asked for.
 
 The xtask verifies at start that `RUSTUP_TOOLCHAIN`, which rustup's proxies
 set for child processes, names the pinned channel, and stops with
@@ -346,7 +353,7 @@ on the `PATH` is never used.
   crate's short name. The body states what changes. A footer
   `Decision: D-07` links a decision register entry when one applies.
 - Trunk-based development on `main` with short-lived branches. Every merge
-  passes `cargo xtask check`.
+  passes `sh tools/xtask-check.sh`.
 - `CHANGELOG.md` follows Keep a Changelog and is updated in the same commit
   as the change.
 
@@ -355,7 +362,7 @@ on the `PATH` is never used.
 1. Tests exist for the new behavior and for every edge case listed in the
    catalog for the affected component.
 2. Documentation of every touched public item is current.
-3. `cargo xtask check` passes locally.
+3. `sh tools/xtask-check.sh` passes locally.
 4. No `unsafe` budget increase without a decision register entry.
 5. The change contains no duplicated logic that the review could point at.
 6. The changelog entry exists.

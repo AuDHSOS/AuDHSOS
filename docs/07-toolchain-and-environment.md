@@ -72,10 +72,34 @@ Recorded on 2026-09-04. These influence Phase 0.
 | Apple Silicon (`arm64`) | `x86_64` guests run under TCG without acceleration. An `aarch64` port runs under HVF. |
 | rustup with `stable-aarch64-apple-darwin` 1.97.0; no nightly installed | Phase 0 installs the pinned nightly through `rust-toolchain.toml` on first use. |
 | `/opt/local/bin/rustc` (MacPorts) precedes `~/.cargo/bin` on the `PATH` | A bare `rustc` is not rustup-managed, and rustup's Cargo would pick it up. The xtask therefore sets `RUSTC` and `RUSTDOC` for every Cargo it starts. |
-| `cargo` is a shell alias for a locally built Cargo 1.95 outside rustup | That Cargo ignores the toolchain pin. Project commands use rustup's proxy: `~/.cargo/bin/cargo xtask ...` or `rustup run <pinned> cargo ...`. The xtask verifies at start that `RUSTUP_TOOLCHAIN` names the pinned nightly and stops with this instruction otherwise. |
+| `cargo` is a shell alias for a locally built Cargo 1.95 outside rustup | That Cargo ignores the toolchain pin. Project commands go through the wrapper scripts below, which put `~/.cargo/bin` in front of the `PATH` and call rustup's proxy; `rustup run <pinned> cargo ...` is the equivalent by hand. The xtask verifies at start that `RUSTUP_TOOLCHAIN` names the pinned nightly and stops with this instruction otherwise. |
 | QEMU 11.1.1 from MacPorts with the EDK2 firmware files; no Homebrew | Reference configuration in 3.1.1 works unchanged. |
 | Git repository initialized on `main` with no commits | Phase 0 makes the first commit. |
 | Container software must not be used on this machine | CI and local runs are native. |
+
+Two wrapper scripts under `tools/` are the entry point that follows from
+these findings. They are what the commands in these documents mean on the
+development machine:
+
+| Command as these documents write it | What is run here |
+|-------------------------------------|------------------|
+| `cargo xtask <subcommand>` | `sh tools/xtask.sh <subcommand>` |
+| `cargo xtask check` | `sh tools/xtask-check.sh` |
+
+Each script changes into the workspace root, puts `~/.cargo/bin` in front of
+the `PATH`, turns the pager and the colors off, and then replaces itself
+with the proxy through `exec`. They add nothing to the run: the output is
+the xtask's own and the exit status is the xtask's own, so `$?` and `&&`
+mean what they say. They are tracked, so a worktree has them. CI calls the
+proxy directly, where the `PATH` is already right.
+
+A warm full check writes about three thousand lines, which is worth
+watching and worth nothing in a log. `--quiet` reduces it to one line per
+step and prints the output of a step only when that step fails:
+
+```bash
+sh tools/xtask-check.sh --quiet
+```
 
 ## 7.6 Continuous integration
 

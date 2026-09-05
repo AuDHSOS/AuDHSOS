@@ -5,7 +5,7 @@ form; the documents are binding.
 
 ## Rules
 
-- Every change passes `cargo xtask check` before it is merged.
+- Every change passes `sh tools/xtask-check.sh` before it is merged.
 - Every crate except the adapter crates listed in the safety policy carries
   `#![forbid(unsafe_code)]`. Every `unsafe` block in an adapter crate has a
   `// SAFETY:` comment and stays within the budget in
@@ -31,7 +31,7 @@ twice and its files judged by the path they have in the worktree. A
 worktree holds what is committed and nothing else, so whatever a session
 needs — the wrapper scripts under `tools/`, the instructions an agent
 reads — belongs in a commit. Each worktree builds into its own `target/`;
-`cargo xtask check` runs in it unchanged.
+`sh tools/xtask-check.sh` runs in it unchanged.
 
 ## Commits
 

@@ -13,6 +13,7 @@ mod fs;
 mod image;
 mod layering;
 mod linker;
+mod out;
 mod policy;
 mod process;
 mod qemu;
@@ -53,7 +54,9 @@ subcommands:
                    the function, file, and line of every address
   run [--release] [--display]
                    boot the system in QEMU with the console on the terminal
-  check            everything CI runs, in CI order
+  check [--quiet]  everything CI runs, in CI order; --quiet leaves one
+                   line per step and prints the output of a step only
+                   when it fails
 ";
 
 fn main() -> ExitCode {
@@ -83,22 +86,36 @@ fn run() -> Result<(), Error> {
     let channel = toolchain::verify(&root)?;
     let options = args.get(1..).unwrap_or_default();
     match subcommand.as_str() {
-        "lint" => commands::lint(&root),
-        "check-layering" => commands::check_layering(&root),
-        "check-deps" => commands::check_deps(&root),
-        "unsafe-budget" => commands::unsafe_budget(&root),
+        "lint" => none(subcommand, options).and_then(|()| commands::lint(&root)),
+        "check-layering" => {
+            none(subcommand, options).and_then(|()| commands::check_layering(&root))
+        }
+        "check-deps" => none(subcommand, options).and_then(|()| commands::check_deps(&root)),
+        "unsafe-budget" => none(subcommand, options).and_then(|()| commands::unsafe_budget(&root)),
         "test" => commands::test(&root, options),
-        "coverage" => commands::coverage(&root),
-        "miri" => commands::miri(&root),
-        "doc" => commands::doc(&root),
+        "coverage" => none(subcommand, options).and_then(|()| commands::coverage(&root)),
+        "miri" => none(subcommand, options).and_then(|()| commands::miri(&root)),
+        "doc" => none(subcommand, options).and_then(|()| commands::doc(&root)),
         "fuzz" => commands::fuzz(&root, options),
         "build" => commands::build(&root, options),
         "image" => commands::image(&root, options),
         "qemu-runner" => commands::qemu_runner(&root, options),
         "run" => commands::run(&root, options),
         "symbolize" => symbolize::command(options),
-        "check" => commands::check(&root, &channel),
+        "check" => commands::check(&root, &channel, options),
         other => Err(Error::Usage(format!("unknown subcommand `{other}`"))),
+    }
+}
+
+/// The option check of a subcommand that takes none. Without it an
+/// argument of such a subcommand is read by nobody, and a run that was
+/// asked for something it cannot do reports that it did it.
+fn none(subcommand: &str, options: &[String]) -> Result<(), Error> {
+    match options.first() {
+        Some(option) => Err(Error::Usage(format!(
+            "unknown option `{option}` for {subcommand}"
+        ))),
+        None => Ok(()),
     }
 }
 

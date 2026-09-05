@@ -35,10 +35,14 @@ the sections it points to.
 
 ### 10.0.3 Rules that apply to every phase
 
-- **Command entry point.** Run everything through rustup's Cargo proxy:
-  `~/.cargo/bin/cargo xtask <subcommand>`. The xtask refuses to run under
-  any other Cargo. `~/.cargo/bin/cargo xtask check` must pass before a
-  phase is complete.
+- **Command entry point.** Run everything through the wrapper scripts of
+  [07 section 7.5](07-toolchain-and-environment.md#75-findings-about-the-development-machine):
+  `sh tools/xtask.sh <subcommand>`, and `sh tools/xtask-check.sh` for the
+  full check. They put rustup's Cargo proxy in front of the `PATH`; the
+  xtask refuses to run under any other Cargo. The exit status is the
+  xtask's own, and `sh tools/xtask-check.sh --quiet` leaves one line per
+  step and the output of the step that failed. The full check must pass
+  before a phase is complete.
 - **No external code.** No dependency outside the workspace in any
   section of any `Cargo.toml`, ever. `check-deps` enforces it.
 - **`unsafe` only in adapter crates** (`Kind::Adapter` in `policy.rs`).
@@ -94,7 +98,7 @@ the sections it points to.
 3. Test doubles for any new trait.
 4. Adapters (only where the phase has hardware work), with QEMU tests.
 5. Policy tables, documents, changelog.
-6. `~/.cargo/bin/cargo xtask check` green, then commit.
+6. `sh tools/xtask-check.sh` green, then commit.
 
 ## 10.1 Phase 1: Memory management logic
 
@@ -569,13 +573,13 @@ close.
 
 ### 10.1.5 Acceptance
 
-`~/.cargo/bin/cargo xtask check` passes; the coverage table shows both new
+`sh tools/xtask-check.sh` passes; the coverage table shows both new
 crates above the thresholds; every item of 6.6.2 to 6.6.6 (pool items) and
 6.6.10 has a test whose name identifies the item.
 
 ## 10.2 Phase 2: Loader, boot, and test harness
 
-Goal: `~/.cargo/bin/cargo xtask test --qemu` boots test kernels through the
+Goal: `sh tools/xtask.sh test --qemu` boots test kernels through the
 project's own UEFI loader and reports over the serial line.
 
 ### 10.2.0 `audhsos-abi` additions
@@ -1137,9 +1141,9 @@ table of 02 and in 03.
 
 ### 10.2.11 Acceptance
 
-`~/.cargo/bin/cargo xtask check` (now including `test --qemu`) passes; at
-least eight test kernels and three loader images run; `~/.cargo/bin/cargo
-xtask run` shows the banner on the terminal.
+`sh tools/xtask-check.sh` (now including `test --qemu`) passes; at least
+eight test kernels and three loader images run; `sh tools/xtask.sh run`
+shows the banner on the terminal.
 
 ## 10.3 Phase 3: Kernel memory bring-up
 
@@ -1684,8 +1688,8 @@ startup message; start.
   inside the file; the xtask converts with `llvm-objcopy -O binary`.
 - The xtask `image` writes the real boot image: header, root task, ustar
   archive of the server and application ELFs.
-- Release build: `debug-uart` and `test-exit` off; `~/.cargo/bin/cargo
-  xtask run --release` shows the greeting through the userland driver.
+- Release build: `debug-uart` and `test-exit` off; `sh tools/xtask.sh run
+  --release` shows the greeting through the userland driver.
 
 ### 10.7.6 Fuzzing
 

@@ -17,15 +17,18 @@ The design, the rules, and the roadmap are in [docs/](docs/README.md).
 
 ## Building and checking
 
-All commands go through the build automation:
+All commands go through the build automation, started by the wrapper
+scripts under `tools/`:
 
 ```bash
-cargo xtask check
+sh tools/xtask-check.sh
 ```
 
-runs every check that CI runs. `cargo xtask --help` lists the subcommands.
-Use rustup's Cargo proxy (`~/.cargo/bin/cargo`), which honors the toolchain
-pin; the xtask stops otherwise.
+runs every check that CI runs. `sh tools/xtask.sh <subcommand>` runs a
+single one, `sh tools/xtask.sh --help` lists them. The scripts put rustup's
+Cargo proxy (`~/.cargo/bin/cargo`), which honors the toolchain pin, in front
+of the `PATH`; the xtask stops under any other Cargo. They add nothing else:
+the output and the exit status are the xtask's own.
 
 ## License
 
