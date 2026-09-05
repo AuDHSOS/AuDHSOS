@@ -815,9 +815,28 @@ Target crate, `no_std`, `forbid(unsafe_code)`, deps `kernel-hal-api`.
 ```rust
 pub trait Testable { fn run(&self); fn name(&self) -> &'static str; }
 impl<F: Fn()> Testable for F { /* name = core::any::type_name::<F>() */ }
-pub struct Harness<C: DebugConsole, E: TestExit> { console: C, exit: E, should_panic: bool }
-impl Harness { pub fn run(&mut self, tests: &[&dyn Testable]) -> !; pub fn on_panic(&mut self, info: &PanicInfo) -> !; }
+pub struct Harness<C: DebugConsole, E: TestExit> { console: C, exit: E, should_panic: bool, passed: u32, running: bool }
+impl Harness {
+    pub const fn new(console: C, exit: E) -> Self;
+    pub const fn expecting_panic(console: C, exit: E) -> Self;
+    pub fn run(&mut self, tests: &[&dyn Testable]);
+    pub fn begin(&mut self, name: &str); pub fn end(&mut self);
+    pub fn fail(&mut self, message: fmt::Arguments<'_>);
+    pub fn fail_at(&mut self, message: fmt::Arguments<'_>, location: Option<&Location<'_>>);
+    pub fn on_panic(&mut self, info: &PanicInfo<'_>);
+}
 ```
+
+The runner returns instead of diverging, and the image halts after it; a
+`-> !` would need a loop that no host test could leave, and the whole point
+of the crate is that the protocol is checked on the host. For the same
+reason the crate is built and tested for the host, not only for
+`x86_64-unknown-none`: it holds no hardware access. `begin` and `end` open
+and close a line for an image that runs its tests itself; `fail_at` is what
+`on_panic` calls, so that the reporting path is testable without a
+`PanicInfo`, which a test cannot build. The `x86_64` implementations of
+`DebugConsole` and `TestExit` are what makes the difference between a host
+run and a QEMU run.
 
 Output lines exactly as in
 [03-target-platform.md 3.1.7](03-target-platform.md#317-test-exit-protocol):
@@ -831,12 +850,25 @@ prints `ok` and the summary and exits with success; reaching the end of a
 ### 10.2.6 Crate `kernel-core` (`crates/kernel/core`)
 
 Layer 4, `no_std`, `forbid(unsafe_code)`. Phase 2 content:
-`boot::run<P: Platform, C: DebugConsole, E: TestExit>(platform: &P,
-console: &mut C, exit: &mut E) -> !`: prints the banner and the memory
-regions, then halts (in test builds the test kernel calls the harness
-instead). `trap::Exception` and `trap::on_exception` printing the
-exception and calling `exit(Failure)`. The `Global<KernelState>` cell is
-declared here (empty state in Phase 2).
+
+- `print`: a `core::fmt::Write` over a `DebugConsole` and the `println!`
+  macro the kernel writes with. A formatting error is dropped: a console
+  that cannot take the bytes must not stop the kernel.
+- `boot::run(platform, console) -> Result<(), BootError>`: prints the
+  banner, the physical window, the ACPI pointer, and every memory region,
+  then checks what the kernel cannot run without. A window somewhere else
+  than `PHYS_WINDOW_BASE` and a machine without usable memory are errors;
+  `boot::abort` reports one and exits with a failure, `boot::finish`
+  reports the end of the boot and exits with a success. `run` returns
+  rather than diverging, so that the whole sequence runs in a host test
+  against the recording doubles.
+- `trap::Exception { vector, error_code, ip, sp, cr2 }` with `name` and
+  `has_error_code`, and `trap::on_exception`, which reports the exception,
+  counts it in the kernel state, and exits with a failure. The error code
+  is reported only for the vectors that push one, the faulting address
+  only for a page fault.
+- `state::KERNEL`, the `Global<KernelState>` cell. Phase 2 keeps the number
+  of reported traps and nothing else.
 
 ### 10.2.7 Crate `audhsos-kernel` (`crates/kernel/bin`)
 

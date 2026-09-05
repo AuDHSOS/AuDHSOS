@@ -36,6 +36,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-core"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-sync",
+ "kernel-hal-api",
+ "kernel-types",
+ "test-support",
+]
+
+[[package]]
 name = "kernel-hal-api"
 version = "0.1.0"
 dependencies = [
@@ -61,6 +72,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-test-harness"
+version = "0.1.0"
+dependencies = [
+ "kernel-hal-api",
+]
+
+[[package]]
 name = "kernel-types"
 version = "0.1.0"
 dependencies = [
@@ -82,3 +100,6 @@ version = "0.1.0"
 [[package]]
 name = "xtask"
 version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+]

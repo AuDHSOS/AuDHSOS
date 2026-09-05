@@ -50,7 +50,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   set up. The fixed part grows to 136 bytes; the version stays 1.
 - `xtask`: the disk image writer with its own CRC-32, GUID partition
   table, and FAT32 file system, the boot image writer, and the `image`
-  subcommand.
+  subcommand; the policy table names the target every crate is built for,
+  and the host commands skip the crates that are not built for the host.
+- `kernel-core`: the boot report, the trap report, and the cell holding the
+  global kernel state.
+- `kernel-test-harness`: the test runner of a kernel image and the serial
+  line protocol it writes.
+- `kernel-hal-api`: a mutable reference to a debug console or an exit
+  device is one, so that the kernel can hand one out without giving it
+  away.
 - Planning for graphics output and input devices: roadmap Phases 9 to 11,
   decisions D-29 to D-33, catalog sections 6.6.24 to 6.6.29, and the
   framebuffer fields of the boot information structure in the documents.

@@ -7,31 +7,53 @@ use std::path::Path;
 
 use crate::error::Error;
 use crate::image::{boot_image, disk};
-use crate::policy::{FUZZ_TARGETS, MIRI_CRATES};
+use crate::policy::{FUZZ_TARGETS, MIRI_CRATES, Target, crates_for};
 use crate::process::Cmd;
 use crate::{coverage, deps, fs, layering, spdx, unsafe_budget};
 
-/// `rustfmt --check`, `clippy -D warnings`, SPDX headers.
+/// `rustfmt --check`, `clippy -D warnings` per target group, SPDX headers.
 pub(crate) fn lint(root: &Path) -> Result<(), Error> {
     Cmd::cargo()
         .cwd(root)
         .args(["fmt", "--all", "--", "--check"])
         .run()?;
-    Cmd::cargo()
-        .cwd(root)
-        .args([
-            "clippy",
-            "--workspace",
-            "--all-targets",
-            "--all-features",
-            "--",
-            "-D",
-            "warnings",
-        ])
-        .run()?;
+    let mut host =
+        Cmd::cargo()
+            .cwd(root)
+            .args(["clippy", "--workspace", "--all-targets", "--all-features"]);
+    host = exclude_cross(host);
+    host.args(["--", "-D", "warnings"]).run()?;
+    for target in Target::CROSS {
+        let crates = crates_for(target);
+        let Some(triple) = target.triple() else {
+            continue;
+        };
+        if crates.is_empty() {
+            continue;
+        }
+        let mut cmd = Cmd::cargo().cwd(root).args(["clippy", "--all-features"]);
+        for krate in crates {
+            cmd = cmd.arg("-p").arg(krate);
+        }
+        cmd.arg("--target")
+            .arg(triple)
+            .args(["--", "-D", "warnings"])
+            .run()?;
+    }
     let violations = spdx::check(root)?;
     report("SPDX headers", &violations);
     Error::from_violations(violations)
+}
+
+/// Adds one `--exclude` per crate that is not built for the host, so that
+/// a workspace command stays on the host crates.
+pub(crate) fn exclude_cross(mut cmd: Cmd) -> Cmd {
+    for target in Target::CROSS {
+        for krate in crates_for(target) {
+            cmd = cmd.arg("--exclude").arg(krate);
+        }
+    }
+    cmd
 }
 
 /// Dependency edges, crate roots, assembly files.
@@ -81,10 +103,10 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
         host = true;
     }
     if host {
-        Cmd::cargo()
+        let cmd = Cmd::cargo()
             .cwd(root)
-            .args(["test", "--workspace", "--all-features"])
-            .run()?;
+            .args(["test", "--workspace", "--all-features"]);
+        exclude_cross(cmd).run()?;
     }
     if qemu || e2e {
         return Err(Error::Usage(
