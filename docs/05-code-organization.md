@@ -62,7 +62,7 @@ AuDHSOS/
 |-------|-------|--------|----------|------------|---------------|
 | `audhsos-abi` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
 | `audhsos-elf` | 0 | all | no | yes, fuzz | `test-support` behind the feature `test-strategies` |
-| `audhsos-uefi` | 0 | all | no | yes (layouts) | - |
+| `audhsos-uefi` | 0 | all | no | yes (layouts) | `audhsos-abi` |
 | `audhsos-sync` | 0 | all | allowlisted | Miri | - |
 | `kernel-types` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-x86-tables` | 1 | all | no | yes | - |

@@ -41,3 +41,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   recording register double behind the feature `test-doubles`.
 - `kernel-x86-tables`: encoding and decoding of the global descriptor
   table, the interrupt descriptor table, and the task state segment.
+- `audhsos-uefi`: layouts, status codes, and identifiers of the UEFI
+  interfaces the loader uses, the memory map reader that honors the
+  firmware's stride, the conversion into boot regions, and UTF-16
+  encoding.

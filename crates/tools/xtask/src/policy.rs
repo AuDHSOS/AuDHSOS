@@ -63,6 +63,13 @@ pub(crate) const CRATES: &[Crate] = &[
         coverage_gate: true,
     },
     Crate {
+        name: "audhsos-uefi",
+        path: "crates/uefi",
+        kind: Kind::Logic,
+        deps: &["audhsos-abi"],
+        coverage_gate: true,
+    },
+    Crate {
         name: "driver-uart16550",
         path: "crates/drivers/uart16550",
         kind: Kind::Logic,

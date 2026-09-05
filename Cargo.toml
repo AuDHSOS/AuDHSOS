@@ -6,6 +6,7 @@ resolver = "3"
 members = [
     "crates/abi",
     "crates/elf",
+    "crates/uefi",
     "crates/sync",
     "crates/drivers/uart16550",
     "crates/kernel/types",
@@ -27,6 +28,7 @@ rust-version = "1.100"
 [workspace.dependencies]
 audhsos-abi = { path = "crates/abi" }
 audhsos-elf = { path = "crates/elf" }
+audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
 driver-uart16550 = { path = "crates/drivers/uart16550" }
 kernel-types = { path = "crates/kernel/types" }

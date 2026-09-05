@@ -45,6 +45,7 @@ pub(crate) fn count(source: &str) -> Counts {
         let tail = after.get(word_len..).unwrap_or("");
         let is_macro = tail.trim_start().starts_with('!');
         match word {
+            "unsafe" if is_function_pointer_type(tail) => {}
             "unsafe" => counts.unsafe_keywords = counts.unsafe_keywords.saturating_add(1),
             "asm" | "naked_asm" if is_macro => {
                 counts.asm_macros = counts.asm_macros.saturating_add(1);
@@ -57,6 +58,24 @@ pub(crate) fn count(source: &str) -> Counts {
         rest = tail;
     }
     counts
+}
+
+/// `true` if the `unsafe` that `tail` follows introduces a function
+/// pointer type such as `unsafe extern "efiapi" fn(u32) -> Status`. Such a
+/// type is not an unsafe site: it declares that calling the pointer is
+/// unsafe, and the crate that calls it pays for that. A definition, which
+/// carries a name between `fn` and the parameter list, still counts.
+pub(crate) fn is_function_pointer_type(tail: &str) -> bool {
+    let rest = tail.trim_start();
+    let rest = match rest.strip_prefix("extern") {
+        // The abi string is already blank, because the stripper replaced it.
+        Some(after) => after.trim_start(),
+        None => rest,
+    };
+    match rest.strip_prefix("fn") {
+        Some(after) => after.trim_start().starts_with('('),
+        None => false,
+    }
 }
 
 /// Replaces comments and string and character literals with spaces so that
