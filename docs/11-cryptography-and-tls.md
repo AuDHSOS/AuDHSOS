@@ -25,8 +25,16 @@ In scope for the first version:
 - Cipher suites `TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384`,
   `TLS_CHACHA20_POLY1305_SHA256`.
 - Key exchange `x25519` (D-56).
-- Certificate signature verification with `ecdsa_secp256r1_sha256`,
-  `ecdsa_secp256r1_sha384`, and `ed25519`.
+- Certificate signature verification with ECDSA over P-256 and over
+  P-384, with SHA-256 or SHA-384, and with `ed25519`. A chain that ends at
+  a P-384 root is therefore walked to the end; `GTS Root R4` is one such
+  root, and `tools/tls-probe` reaches it.
+- Handshake signature verification with `ecdsa_secp256r1_sha256`,
+  `ecdsa_secp384r1_sha384`, and `ed25519`. These are the schemes the
+  `ClientHello` offers, and the two lists are not the same list: a scheme
+  names one curve, while `ecdsa-with-SHA384` in a certificate names none,
+  so the `CertificateVerify` is held to a stricter rule than the chain
+  below it (D-61).
 - Server certificate validation against caller-supplied trust anchors,
   RFC 5280 path rules, RFC 6125 name matching.
 - ALPN, server name indication, key update, close notify.

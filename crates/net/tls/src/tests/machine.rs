@@ -13,7 +13,7 @@
 
 use audhsos_time::CivilTime;
 use audhsos_x509::builder::{Params, TestKey, build};
-use audhsos_x509::{Certificate, TrustAnchor, TrustAnchors};
+use audhsos_x509::{TrustAnchor, TrustAnchors};
 use crypto_ec::x25519;
 use crypto_rng::doubles::ScriptedRng;
 use test_support::generators::bytes;
@@ -37,6 +37,10 @@ const NAME: &str = "example.test";
 const ROOT_SECRET: [u8; 32] = [0x11; 32];
 /// The secret of the server's own key.
 const LEAF_SECRET: [u8; 32] = [0x22; 32];
+/// The secret of the authority the test trusts, for the wider curve.
+const ROOT_SECRET_384: [u8; 48] = [0x11; 48];
+/// The secret of the server's own key, for the wider curve.
+const LEAF_SECRET_384: [u8; 48] = [0x22; 48];
 /// The server's ephemeral private value.
 const SERVER_EPHEMERAL: [u8; 32] = [0x33; 32];
 /// The suite the server chooses.
@@ -44,16 +48,18 @@ const SUITE: CipherSuite = CipherSuite::Aes128GcmSha256;
 
 /// What the server's chain and its `CertificateVerify` are signed with.
 ///
-/// Most of this file uses Ed25519, because it is the shorter of the two
-/// and the connection does not care. One test uses the other, so that the
-/// path through `p256` is walked by a whole handshake and not only by the
-/// unit tests underneath it.
+/// Most of this file uses Ed25519, because it is the shortest of the three
+/// and the connection does not care. One test uses each of the others, so
+/// that the paths through `p256` and `p384` are walked by a whole
+/// handshake and not only by the unit tests underneath them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Authority {
     /// Ed25519 throughout, signature scheme `0x0807`.
     Ed25519,
     /// P-256 with SHA-256 throughout, signature scheme `0x0403`.
     EcdsaP256,
+    /// P-384 with SHA-384 throughout, signature scheme `0x0503`.
+    EcdsaP384,
 }
 
 impl Authority {
@@ -62,6 +68,7 @@ impl Authority {
         match self {
             Authority::Ed25519 => TestKey::Ed25519(ROOT_SECRET),
             Authority::EcdsaP256 => TestKey::EcdsaSha256(ROOT_SECRET),
+            Authority::EcdsaP384 => TestKey::EcdsaP384Sha384(ROOT_SECRET_384),
         }
     }
 
@@ -70,6 +77,7 @@ impl Authority {
         match self {
             Authority::Ed25519 => TestKey::Ed25519(LEAF_SECRET),
             Authority::EcdsaP256 => TestKey::EcdsaSha256(LEAF_SECRET),
+            Authority::EcdsaP384 => TestKey::EcdsaP384Sha384(LEAF_SECRET_384),
         }
     }
 
@@ -78,6 +86,7 @@ impl Authority {
         match self {
             Authority::Ed25519 => 0x0807,
             Authority::EcdsaP256 => 0x0403,
+            Authority::EcdsaP384 => 0x0503,
         }
     }
 }
@@ -169,6 +178,24 @@ fn leaf_of(kind: Authority) -> Built {
     )
 }
 
+/// What one server flight does differently from the usual one.
+///
+/// Every field is a rule the protocol has, expressed as a way of breaking
+/// it, so that the test which asserts the rule reads as the thing it
+/// checks rather than as a pile of parameters.
+#[derive(Clone, Copy, Default)]
+struct Deviation<'a> {
+    /// A first certificate entry other than the leaf the authority issues.
+    leaf: Option<&'a [u8]>,
+    /// Further entries behind the first.
+    extras: &'a [&'a [u8]],
+    /// A key for the `CertificateVerify` other than the leaf's own, which
+    /// is how a signature over another hash is produced.
+    verify_key: Option<TestKey>,
+    /// A code point other than the one the authority signs with.
+    scheme: Option<u16>,
+}
+
 /// The server side of one connection.
 struct Server {
     /// The running hash, which must match the client's.
@@ -196,11 +223,21 @@ impl Server {
     }
 
     /// The same, with the chain and the signature of one `Authority`.
+    fn answer_as(authority: Authority, hello_record: &[u8], flight: &mut Vec<u8>) -> Server {
+        Server::answer_with(authority, Deviation::default(), hello_record, flight)
+    }
+
+    /// The same, breaking whichever rules `deviation` names.
     #[expect(
         clippy::too_many_lines,
         reason = "one server flight, written in the order it goes on the wire"
     )]
-    fn answer_as(authority: Authority, hello_record: &[u8], flight: &mut Vec<u8>) -> Server {
+    fn answer_with(
+        authority: Authority,
+        deviation: Deviation<'_>,
+        hello_record: &[u8],
+        flight: &mut Vec<u8>,
+    ) -> Server {
         let (header, body, _) = record::read(hello_record)
             .expect("the client's record is well formed")
             .expect("it is complete");
@@ -313,13 +350,18 @@ impl Server {
 
         // The flight the client must decrypt.
         let leaf = leaf_of(authority);
+        let leaf_bytes = deviation.leaf.unwrap_or_else(|| leaf.as_slice());
         let mut messages = Vec::new();
         messages.extend_from_slice(&encrypted_extensions());
-        messages.extend_from_slice(&certificate_message(leaf.as_slice()));
+        messages.extend_from_slice(&certificate_message_with(leaf_bytes, deviation.extras));
         server.transcript.update(&messages);
 
         let signature_transcript = server.transcript.hash(SUITE);
-        let verify = certificate_verify(authority, signature_transcript.as_bytes());
+        let verify = certificate_verify(
+            deviation.verify_key.unwrap_or_else(|| authority.leaf_key()),
+            deviation.scheme.unwrap_or_else(|| authority.scheme()),
+            signature_transcript.as_bytes(),
+        );
         messages.extend_from_slice(&verify);
         server.transcript.update(&verify);
 
@@ -397,12 +439,17 @@ impl Server {
 
     /// Seals application data for the client.
     fn send(&mut self, plaintext: &[u8]) -> Vec<u8> {
+        self.seal(ContentType::ApplicationData, plaintext)
+    }
+
+    /// Seals a record of any type under the application keys.
+    fn seal(&mut self, kind: ContentType, body: &[u8]) -> Vec<u8> {
         let mut record = vec![0u8; 4096];
         let length = self
             .write_application
             .as_mut()
             .expect("the handshake is done")
-            .seal(ContentType::ApplicationData, plaintext, &mut record)
+            .seal(kind, body, &mut record)
             .expect("room");
         record.get(..length).unwrap_or(&[]).to_vec()
     }
@@ -439,6 +486,11 @@ fn encrypted_extensions() -> Vec<u8> {
 
 /// A `Certificate` message carrying one certificate.
 fn certificate_message(certificate: &[u8]) -> Vec<u8> {
+    certificate_message_with(certificate, &[])
+}
+
+/// The same, with further entries behind the leaf.
+fn certificate_message_with(certificate: &[u8], extras: &[&[u8]]) -> Vec<u8> {
     let mut buffer = vec![0u8; 2048];
     let mut writer = Writer::new(&mut buffer);
     writer
@@ -449,7 +501,12 @@ fn certificate_message(certificate: &[u8]) -> Vec<u8> {
             body.vector8(|context| context.bytes(&[]))?;
             body.vector24(|entries| {
                 entries.vector24(|data| data.bytes(certificate))?;
-                entries.vector16(|_| Ok(()))
+                entries.vector16(|_| Ok(()))?;
+                for extra in extras {
+                    entries.vector24(|data| data.bytes(extra))?;
+                    entries.vector16(|_| Ok(()))?;
+                }
+                Ok(())
             })
         })
         .expect("room");
@@ -457,15 +514,14 @@ fn certificate_message(certificate: &[u8]) -> Vec<u8> {
 }
 
 /// A `CertificateVerify` over the transcript, signed with the leaf key.
-fn certificate_verify(kind: Authority, transcript: &[u8]) -> Vec<u8> {
+fn certificate_verify(key: TestKey, scheme: u16, transcript: &[u8]) -> Vec<u8> {
     let mut content = Vec::new();
     content.extend(core::iter::repeat_n(0x20u8, 64));
     content.extend_from_slice(b"TLS 1.3, server CertificateVerify");
     content.push(0x00);
     content.extend_from_slice(transcript);
     let mut signature = [0u8; 128];
-    let length = kind
-        .leaf_key()
+    let length = key
         .sign(&content, &mut signature)
         .expect("the key signs and the signature fits");
     let signature = signature.get(..length).unwrap_or(&[]).to_vec();
@@ -477,7 +533,7 @@ fn certificate_verify(kind: Authority, transcript: &[u8]) -> Vec<u8> {
         .expect("room");
     writer
         .vector24(|body| {
-            body.u16(kind.scheme())?;
+            body.u16(scheme)?;
             body.vector16(|value| value.bytes(&signature))
         })
         .expect("room");
@@ -520,11 +576,7 @@ impl Fixture {
 #[test]
 fn a_connection_is_made_data_passes_both_ways_and_it_closes() {
     let root = root();
-    let parsed = Certificate::parse(root.as_slice()).expect("a well formed root");
-    let anchors = [TrustAnchor {
-        subject: parsed.subject,
-        spki: parsed.spki_bytes,
-    }];
+    let anchors = trusted(&root);
     let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
 
     let mut fixture = Fixture::new();
@@ -594,11 +646,7 @@ fn a_connection_is_made_data_passes_both_ways_and_it_closes() {
 #[test]
 fn a_connection_is_made_when_the_server_signs_with_p256() {
     let root = root_of(Authority::EcdsaP256);
-    let parsed = Certificate::parse(root.as_slice()).expect("a well formed root");
-    let anchors = [TrustAnchor {
-        subject: parsed.subject,
-        spki: parsed.spki_bytes,
-    }];
+    let anchors = trusted(&root);
     let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
 
     let mut fixture = Fixture::new();
@@ -644,13 +692,61 @@ fn a_connection_is_made_when_the_server_signs_with_p256() {
 }
 
 #[test]
+fn a_connection_is_made_when_the_server_signs_with_p384() {
+    // The whole stack over the wider curve: a chain of P-384 certificates
+    // verified by `verify_chain`, and a `CertificateVerify` under
+    // `ecdsa_secp384r1_sha384`, which is the scheme this client offers and
+    // could not honour before the curve existed.
+    let root = root_of(Authority::EcdsaP384);
+    let anchors = trusted(&root);
+    let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
+
+    let mut fixture = Fixture::new();
+    let mut rng = ScriptedRng::new(&fixture.script);
+    let mut client = Connection::new(
+        &config,
+        &mut rng,
+        Buffers {
+            incoming: &mut fixture.incoming,
+            outgoing: &mut fixture.outgoing,
+            handshake: &mut fixture.handshake,
+        },
+    )
+    .expect("the buffers are big enough");
+
+    let mut wire = vec![0u8; 4096];
+    let written = client.write_tls(&mut wire).expect("room");
+    let first = wire.get(..written).unwrap_or(&[]).to_vec();
+    let (_, _, hello_len) = record::read(&first)
+        .expect("well formed")
+        .expect("complete");
+
+    let mut flight = Vec::new();
+    let mut server = Server::answer_as(
+        Authority::EcdsaP384,
+        first.get(..hello_len).unwrap_or(&[]),
+        &mut flight,
+    );
+
+    let taken = client.read_tls(&flight).expect("room");
+    assert_eq!(taken, flight.len());
+    assert_eq!(client.poll(), Ok(Event::WantsWrite));
+    assert!(client.is_handshaked(), "the handshake is done");
+
+    let written = client.write_tls(&mut wire).expect("room");
+    server.take_client_finished(wire.get(..written).unwrap_or(&[]));
+
+    let answer = server.send(b"an answer");
+    client.read_tls(&answer).expect("room");
+    let mut out = vec![0u8; 16_384];
+    let length = client.recv(&mut out).expect("the record opens");
+    assert_eq!(out.get(..length), Some(&b"an answer"[..]));
+}
+
+#[test]
 fn a_server_that_closes_is_noticed() {
     let root = root();
-    let parsed = Certificate::parse(root.as_slice()).expect("a well formed root");
-    let anchors = [TrustAnchor {
-        subject: parsed.subject,
-        spki: parsed.spki_bytes,
-    }];
+    let anchors = trusted(&root);
     let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
 
     let mut fixture = Fixture::new();
@@ -706,11 +802,7 @@ fn a_chain_that_does_not_reach_the_anchor_ends_the_connection() {
         TestKey::Ed25519([0x77; 32]),
         TestKey::Ed25519([0x77; 32]),
     );
-    let parsed = Certificate::parse(stranger.as_slice()).expect("well formed");
-    let anchors = [TrustAnchor {
-        subject: parsed.subject,
-        spki: parsed.spki_bytes,
-    }];
+    let anchors = trusted(&stranger);
     let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
 
     let mut fixture = Fixture::new();
@@ -750,13 +842,218 @@ fn a_chain_that_does_not_reach_the_anchor_ends_the_connection() {
 }
 
 #[test]
+fn a_certificate_entry_that_cannot_be_read_is_passed_over() {
+    // RFC 8446 section 4.4.2: the entries behind the leaf are an aid to
+    // path building, and the list may hold certificates that belong to no
+    // path. A server that sends its own root sends one whose key this
+    // client has no arithmetic for — Google Trust Services sends a P-384
+    // root above a P-256 chain — and the handshake has to complete on the
+    // entries the client can read. The two entries here are what such a
+    // certificate is to this client: bytes that do not parse.
+    let root = root();
+    let anchors = trusted(&root);
+    let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
+
+    let mut fixture = Fixture::new();
+    let mut rng = ScriptedRng::new(&fixture.script);
+    let mut client = Connection::new(
+        &config,
+        &mut rng,
+        Buffers {
+            incoming: &mut fixture.incoming,
+            outgoing: &mut fixture.outgoing,
+            handshake: &mut fixture.handshake,
+        },
+    )
+    .expect("the buffers are big enough");
+
+    let mut wire = vec![0u8; 4096];
+    let written = client.write_tls(&mut wire).expect("room");
+    let first = wire.get(..written).unwrap_or(&[]).to_vec();
+    let (_, _, hello_len) = record::read(&first)
+        .expect("well formed")
+        .expect("complete");
+
+    // An empty sequence, and a sequence of one integer: both are DER, and
+    // neither is a certificate.
+    let unreadable: [&[u8]; 2] = [&[0x30, 0x00], &[0x30, 0x03, 0x02, 0x01, 0x00]];
+    let mut flight = Vec::new();
+    let mut server = Server::answer_with(
+        Authority::Ed25519,
+        Deviation {
+            extras: &unreadable,
+            ..Deviation::default()
+        },
+        first.get(..hello_len).unwrap_or(&[]),
+        &mut flight,
+    );
+
+    client.read_tls(&flight).expect("room");
+    assert_eq!(client.poll(), Ok(Event::WantsWrite));
+    assert!(
+        client.is_handshaked(),
+        "the readable entries carry the path"
+    );
+
+    // The server agrees, which is what says the transcript covered the
+    // whole message and not the part the client could read.
+    let written = client.write_tls(&mut wire).expect("room");
+    server.take_client_finished(wire.get(..written).unwrap_or(&[]));
+}
+
+#[test]
+fn a_leaf_that_cannot_be_read_still_ends_the_connection() {
+    // The rule above is about the entries behind the leaf. The first entry
+    // is the peer's identity, and one that does not parse is not an
+    // identity; passing over it would leave the connection with nobody on
+    // the other end.
+    let root = root();
+    let anchors = trusted(&root);
+    let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
+
+    let mut fixture = Fixture::new();
+    let mut rng = ScriptedRng::new(&fixture.script);
+    let mut client = Connection::new(
+        &config,
+        &mut rng,
+        Buffers {
+            incoming: &mut fixture.incoming,
+            outgoing: &mut fixture.outgoing,
+            handshake: &mut fixture.handshake,
+        },
+    )
+    .expect("the buffers are big enough");
+
+    let mut wire = vec![0u8; 4096];
+    let written = client.write_tls(&mut wire).expect("room");
+    let first = wire.get(..written).unwrap_or(&[]).to_vec();
+    let (_, _, hello_len) = record::read(&first)
+        .expect("well formed")
+        .expect("complete");
+
+    let leaf = leaf();
+    let mut flight = Vec::new();
+    let _server = Server::answer_with(
+        Authority::Ed25519,
+        Deviation {
+            leaf: Some(&[0x30, 0x00]),
+            extras: &[leaf.as_slice()],
+            ..Deviation::default()
+        },
+        first.get(..hello_len).unwrap_or(&[]),
+        &mut flight,
+    );
+
+    client.read_tls(&flight).expect("room");
+    assert_eq!(client.poll(), Err(TlsError::BadCertificate));
+}
+
+/// Runs one handshake whose flight deviates, and says how it ended.
+fn outcome_of(
+    authority: Authority,
+    deviation: Deviation<'_>,
+    anchors: &[TrustAnchor<'_>],
+) -> Result<Event, TlsError> {
+    let config = ClientConfig::new(NAME, TrustAnchors::new(anchors), now());
+    let mut fixture = Fixture::new();
+    let mut rng = ScriptedRng::new(&fixture.script);
+    let mut client = Connection::new(
+        &config,
+        &mut rng,
+        Buffers {
+            incoming: &mut fixture.incoming,
+            outgoing: &mut fixture.outgoing,
+            handshake: &mut fixture.handshake,
+        },
+    )
+    .expect("the buffers are big enough");
+
+    let mut wire = vec![0u8; 4096];
+    let written = client.write_tls(&mut wire).expect("room");
+    let first = wire.get(..written).unwrap_or(&[]).to_vec();
+    let (_, _, hello_len) = record::read(&first)
+        .expect("well formed")
+        .expect("complete");
+
+    let mut flight = Vec::new();
+    let _server = Server::answer_with(
+        authority,
+        deviation,
+        first.get(..hello_len).unwrap_or(&[]),
+        &mut flight,
+    );
+    client.read_tls(&flight).expect("room");
+    client.poll()
+}
+
+#[test]
+fn a_scheme_that_names_another_curve_than_the_certificate_is_refused() {
+    // RFC 8446 section 4.2.3: an ECDSA code point names the curve as
+    // firmly as it names the hash, and 0x0503 is `ecdsa_secp384r1_sha384`.
+    //
+    // The server here signs with the leaf's own P-256 key over a SHA-384
+    // digest and labels it 0x0503. The signature is sound, and X.509 would
+    // take it: `ecdsa-with-SHA384` binds no curve, so `audhsos-x509`
+    // verifies a P-256 key against a SHA-384 digest without complaint, and
+    // it has to, because certificates are signed that way. What is wrong
+    // is the label, and only the protocol's rule catches it.
+    let root = root_of(Authority::EcdsaP256);
+    let anchors = trusted(&root);
+    assert_eq!(
+        outcome_of(
+            Authority::EcdsaP256,
+            Deviation {
+                verify_key: Some(TestKey::EcdsaSha384(LEAF_SECRET)),
+                scheme: Some(0x0503),
+                ..Deviation::default()
+            },
+            &anchors,
+        ),
+        Err(TlsError::IllegalParameter),
+        "a P-256 certificate under the scheme that names P-384"
+    );
+
+    // The same rule the other way round: the code point of Ed25519 over a
+    // certificate that carries a point of P-256.
+    assert_eq!(
+        outcome_of(
+            Authority::EcdsaP256,
+            Deviation {
+                scheme: Some(0x0807),
+                ..Deviation::default()
+            },
+            &anchors,
+        ),
+        Err(TlsError::IllegalParameter),
+        "a P-256 certificate under the scheme that names Ed25519"
+    );
+
+    // And a code point this client never offered.
+    assert_eq!(
+        outcome_of(
+            Authority::EcdsaP256,
+            Deviation {
+                scheme: Some(0x0804),
+                ..Deviation::default()
+            },
+            &anchors,
+        ),
+        Err(TlsError::IllegalParameter),
+        "rsa_pss_rsae_sha256, which was not offered"
+    );
+
+    // The pair the code point does stand for still works.
+    assert_eq!(
+        outcome_of(Authority::EcdsaP256, Deviation::default(), &anchors),
+        Ok(Event::WantsWrite),
+        "P-256 under 0x0403"
+    );
+}
+
+#[test]
 fn a_message_in_the_wrong_place_ends_the_connection() {
     let root = root();
-    let parsed = Certificate::parse(root.as_slice()).expect("well formed");
-    let anchors = [TrustAnchor {
-        subject: parsed.subject,
-        spki: parsed.spki_bytes,
-    }];
+    let anchors = trusted(&root);
     let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
 
     let mut fixture = Fixture::new();
@@ -789,11 +1086,7 @@ fn a_message_in_the_wrong_place_ends_the_connection() {
 #[test]
 fn buffers_below_their_minimum_are_refused() {
     let root = root();
-    let parsed = Certificate::parse(root.as_slice()).expect("well formed");
-    let anchors = [TrustAnchor {
-        subject: parsed.subject,
-        spki: parsed.spki_bytes,
-    }];
+    let anchors = trusted(&root);
     let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
     let script: Vec<u8> = (0u8..=255).collect();
 
@@ -876,11 +1169,7 @@ fn connected<'a>(
 
 /// The anchors the trusted root stands for.
 fn trusted(root: &Built) -> [TrustAnchor<'_>; 1] {
-    let parsed = Certificate::parse(root.as_slice()).expect("a well formed root");
-    [TrustAnchor {
-        subject: parsed.subject,
-        spki: parsed.spki_bytes,
-    }]
+    [TrustAnchor::from_certificate(root.as_slice()).expect("a well formed root")]
 }
 
 #[test]
@@ -1155,14 +1444,55 @@ fn an_alert_from_the_server_during_the_handshake_ends_it() {
     let mut wire = vec![0u8; 4096];
     client.write_tls(&mut wire).expect("room");
 
-    // A handshake failure, which is not a closing alert.
+    // A handshake failure, which is not a closing alert. The connection
+    // ends with the alert the server sent, named as such.
     let mut flight = Vec::new();
     push_plain(&mut flight, ContentType::Alert, &[2, 40]);
     client.read_tls(&flight).expect("room");
-    assert_eq!(client.poll(), Err(TlsError::UnexpectedMessage));
+    assert_eq!(client.poll(), Err(TlsError::PeerAlert(40)));
 
-    // Closing before there are keys is refused rather than sent in clear.
-    assert_eq!(client.close(), Err(TlsError::UnexpectedMessage));
+    // RFC 8446 section 6.2: nothing goes back. The server has closed, and
+    // an alert about its alert would be written into a connection that no
+    // longer exists.
+    assert_eq!(client.write_tls(&mut wire), Ok(0), "nothing is sent back");
+
+    // And it stays ended, with the reason the server gave.
+    assert_eq!(client.poll(), Err(TlsError::PeerAlert(40)));
+    assert_eq!(client.close(), Err(TlsError::PeerAlert(40)));
+}
+
+#[test]
+fn an_alert_after_the_handshake_ends_it_without_an_answer() {
+    let root = root();
+    let anchors = trusted(&root);
+    let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
+    let mut fixture = Fixture::new();
+    let script: Vec<u8> = (0u8..=255).collect();
+    let Connected {
+        mut client,
+        mut server,
+    } = connected(&config, &mut fixture, &script);
+
+    // Under the application keys this time, so the alert is one the client
+    // has to decrypt before it can read it.
+    let record = server.seal(ContentType::Alert, &[2, 80]);
+    client.read_tls(&record).expect("room");
+    let mut out = vec![0u8; 16_384];
+    assert_eq!(client.recv(&mut out), Err(TlsError::PeerAlert(80)));
+
+    let mut wire = vec![0u8; 4096];
+    assert_eq!(client.write_tls(&mut wire), Ok(0), "nothing is sent back");
+
+    // A code this client does not know ends a connection just the same.
+    let mut fixture = Fixture::new();
+    let Connected {
+        mut client,
+        mut server,
+    } = connected(&config, &mut fixture, &script);
+    let record = server.seal(ContentType::Alert, &[2, 112]);
+    client.read_tls(&record).expect("room");
+    assert_eq!(client.recv(&mut out), Err(TlsError::PeerAlert(112)));
+    assert_eq!(client.write_tls(&mut wire), Ok(0), "nothing is sent back");
 }
 
 #[test]
@@ -1278,11 +1608,7 @@ fn a_compatibility_record_that_says_anything_else_is_refused() {
 fn property_any_bytes_from_the_transport_end_in_an_error_or_a_state() {
     check("tls_read_any_bytes", &bytes(0..=512), |input| {
         let root = root();
-        let parsed = Certificate::parse(root.as_slice()).expect("a well formed root");
-        let anchors = [TrustAnchor {
-            subject: parsed.subject,
-            spki: parsed.spki_bytes,
-        }];
+        let anchors = trusted(&root);
         let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
 
         let mut fixture = Fixture::new();

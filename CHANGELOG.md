@@ -473,6 +473,31 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `audhsos-tls`: an alert from the peer was reported as
+  `the record was not expected here`, and answered with one. Every alert
+  but `close_notify` became `UnexpectedMessage`, which says the wrong
+  thing — a server's `handshake_failure` is a message the client asked
+  for — and then `fail` wrote `unexpected_message` back into a connection
+  the peer had already closed, which RFC 8446 section 6.2 forbids: both
+  sides close at once on a fatal alert. `TlsError::PeerAlert` now carries
+  the code the peer sent, named where this client knows the name, and
+  `Alert::for_error` answers `None` for it, which is what stops the reply.
+  Seven bytes went back during a handshake and twenty-four after one; now
+  none do.
+- `audhsos-tls`: the signature scheme of a `CertificateVerify` was read for
+  its hash and not for its curve. RFC 8446 section 4.2.3 has an ECDSA code
+  point name both, and this client offers `ecdsa_secp384r1_sha384`
+  (0x0503); a server could present a P-256 certificate, sign with it over a
+  SHA-384 digest, and label the result 0x0503, and the handshake completed.
+  Nothing was forged by it — the signature still had to verify under the
+  leaf's real key, and the leaf still had to pass the path check — but the
+  client was not holding a peer to the scheme it named. The scheme and the
+  key now have to be the pair the code point stands for, and a mismatch is
+  `illegal_parameter`. X.509 is unchanged and must be: `ecdsa-with-SHA384`
+  binds no curve there, and certificates are signed that way. The constants
+  are renamed `ECDSA_SECP256R1_SHA256` and `ECDSA_SECP384R1_SHA384`, the
+  second of which was documented as `ecdsa_secp256r1_sha384` — a scheme
+  that does not exist, which is where the confusion sat. Decision D-61.
 - `audhsos-tls`: a `Certificate` message was refused whole when any entry
   in it failed to parse. RFC 8446 section 4.4.2 makes the entries behind
   the leaf an aid to path building and allows ones that belong to no path,

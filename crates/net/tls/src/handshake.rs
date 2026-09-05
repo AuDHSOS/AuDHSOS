@@ -27,10 +27,15 @@ pub const VERSION_TLS13: u16 = 0x0304;
 /// The group this client offers.
 pub const GROUP_X25519: u16 = 0x001D;
 
-/// `ecdsa_secp256r1_sha256`.
-pub const ECDSA_SHA256: u16 = 0x0403;
-/// `ecdsa_secp256r1_sha384`.
-pub const ECDSA_SHA384: u16 = 0x0503;
+/// `ecdsa_secp256r1_sha256`: P-256 and SHA-256, and no other pair.
+pub const ECDSA_SECP256R1_SHA256: u16 = 0x0403;
+/// `ecdsa_secp384r1_sha384`: P-384 and SHA-384, and no other pair.
+///
+/// RFC 8446 section 4.2.3 names the curve in an ECDSA scheme as firmly as
+/// it names the hash. There is no `ecdsa_secp256r1_sha384`; a P-256 key
+/// signing with SHA-384 has no code point here, whatever X.509 allows a
+/// certificate to do.
+pub const ECDSA_SECP384R1_SHA384: u16 = 0x0503;
 /// `ed25519`.
 pub const ED25519: u16 = 0x0807;
 
@@ -214,8 +219,8 @@ fn write_client_extensions(
     out.u16(extension::SIGNATURE_ALGORITHMS)?;
     out.vector16(|body| {
         body.vector16(|schemes| {
-            schemes.u16(ECDSA_SHA256)?;
-            schemes.u16(ECDSA_SHA384)?;
+            schemes.u16(ECDSA_SECP256R1_SHA256)?;
+            schemes.u16(ECDSA_SECP384R1_SHA384)?;
             schemes.u16(ED25519)
         })
     })?;

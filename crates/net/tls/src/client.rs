@@ -25,9 +25,9 @@ use crate::codec::Writer;
 use crate::config::ClientConfig;
 use crate::error::TlsError;
 use crate::handshake::{
-    CertificateChain, CertificateVerify, ClientHelloParams, ECDSA_SHA256, ECDSA_SHA384, ED25519,
-    EncryptedExtensions, HandshakeType, ServerHello, read_key_update, read_message,
-    write_client_hello, write_finished,
+    CertificateChain, CertificateVerify, ClientHelloParams, ECDSA_SECP256R1_SHA256,
+    ECDSA_SECP384R1_SHA384, ED25519, EncryptedExtensions, HandshakeType, ServerHello,
+    read_key_update, read_message, write_client_hello, write_finished,
 };
 use crate::keys::{Schedule, finished_key, next_traffic_secret, traffic_keys, verify_data};
 use crate::protection::RecordProtection;
@@ -36,8 +36,12 @@ use crate::secret::Secret;
 use crate::suite::CipherSuite;
 use crate::transcript::Transcript;
 
-/// The most a subject public key of the two supported kinds occupies,
+/// The most a subject public key of the three supported kinds occupies,
 /// wrapped in the information that names its algorithm.
+///
+/// P-384 is the widest at 120 bytes: the algorithm identifier, and a bit
+/// string holding the uncompressed point of ninety-seven. P-256 takes 91
+/// and Ed25519 fewer still.
 const MAX_SPKI: usize = 128;
 
 /// The context string of a signature a server makes over the handshake.
@@ -417,32 +421,40 @@ impl<'a> Connection<'a> {
         Ok(())
     }
 
-    /// Remembers the error and tells the peer about it.
+    /// Remembers the error and tells the peer about it, when there is
+    /// anything to tell.
     ///
     /// The alert goes out under the keys of the epoch the connection has
     /// reached: the application keys once they exist, the handshake keys
     /// before that, and in the clear only while there are no keys at all,
     /// which is the window between the first flight and the server's
     /// answer. An alert the peer cannot open is no alert.
+    ///
+    /// An error the peer's own alert caused sends nothing.
+    /// [`Alert::for_error`] answers `None` for it, and RFC 8446 section
+    /// 6.2 is why: a fatal alert closes the connection on both sides at
+    /// once, so the peer is not waiting to hear back. The connection is
+    /// still poisoned with the reason, which is what the caller reads.
     fn fail(&mut self, error: TlsError) {
         if self.machine.poison.is_none() {
             self.machine.poison = Some(error);
-            let alert = Alert::for_error(error);
-            let body = [alert.level(), alert.code()];
-            let keys = if self.machine.client_application.is_some() {
-                self.machine.client_application.as_mut()
-            } else {
-                self.machine.client_handshake.as_mut()
-            };
-            let sent = write_protected(
-                keys,
-                ContentType::Alert,
-                &body,
-                self.outgoing,
-                &mut self.outgoing_len,
-            );
-            if sent.is_err() {
-                let _ = self.write_plain(ContentType::Alert, &body);
+            if let Some(alert) = Alert::for_error(error) {
+                let body = [alert.level(), alert.code()];
+                let keys = if self.machine.client_application.is_some() {
+                    self.machine.client_application.as_mut()
+                } else {
+                    self.machine.client_handshake.as_mut()
+                };
+                let sent = write_protected(
+                    keys,
+                    ContentType::Alert,
+                    &body,
+                    self.outgoing,
+                    &mut self.outgoing_len,
+                );
+                if sent.is_err() {
+                    let _ = self.write_plain(ContentType::Alert, &body);
+                }
             }
         }
         self.machine.state = State::Closed;
@@ -626,6 +638,12 @@ impl Connection<'_> {
 
 impl Machine {
     /// Reads an alert, which either closes the connection or ends it.
+    ///
+    /// RFC 8446 section 6: in TLS 1.3 the level says nothing, and every
+    /// alert but `close_notify` is fatal whatever level it carries. So the
+    /// code is read and the level is not. A code this client does not know
+    /// is fatal too, and is reported as the number the peer sent rather
+    /// than as a message about the record it arrived in.
     fn take_alert(&mut self, body: &[u8]) -> Result<(), TlsError> {
         let [_level, description] = body else {
             return Err(TlsError::Decode);
@@ -635,7 +653,7 @@ impl Machine {
             self.state = State::Closed;
             return Ok(());
         }
-        Err(TlsError::UnexpectedMessage)
+        Err(TlsError::PeerAlert(*description))
     }
 
     /// Consumes every complete handshake message that has arrived.
@@ -798,7 +816,18 @@ impl Machine {
         let mut count = 0usize;
         for entry in entries {
             let bytes = entry?;
-            let parsed = Certificate::parse(bytes).map_err(|_| TlsError::BadCertificate)?;
+            // RFC 8446 section 4.4.2: the certificates after the first are
+            // an aid to path building, and the list may hold ones that
+            // belong to no path. A server that sends its own root sends a
+            // certificate whose key this client cannot read, and refusing
+            // the message for it would refuse every such server. An entry
+            // that does not parse is passed over instead: it is a path
+            // this client could not have taken either way. The leaf still
+            // has to parse, and the path still has to reach an anchor
+            // through signatures that verify.
+            let Ok(parsed) = Certificate::parse(bytes) else {
+                continue;
+            };
             let slot = list.get_mut(count).ok_or(TlsError::BadCertificate)?;
             *slot = parsed;
             count = count.wrapping_add(1);
@@ -829,13 +858,6 @@ impl Machine {
     /// The signature over everything up to the certificate.
     fn take_certificate_verify(&self, body: &[u8]) -> Result<(), TlsError> {
         let verify = CertificateVerify::parse(body)?;
-        let algorithm = match verify.scheme {
-            ECDSA_SHA256 => audhsos_x509::SignatureAlgorithm::EcdsaSha256,
-            ECDSA_SHA384 => audhsos_x509::SignatureAlgorithm::EcdsaSha384,
-            ED25519 => audhsos_x509::SignatureAlgorithm::Ed25519,
-            _ => return Err(TlsError::BadSignature),
-        };
-
         let suite = self.suite.ok_or(TlsError::UnexpectedMessage)?;
         let transcript = self.transcript.checked_hash(suite)?;
 
@@ -856,6 +878,26 @@ impl Machine {
             .ok_or(TlsError::BadCertificate)?;
         let mut reader = DerReader::new(spki);
         let key = SubjectPublicKey::parse(&mut reader).map_err(|_| TlsError::BadCertificate)?;
+
+        // RFC 8446 section 4.2.3: an ECDSA scheme names the curve as well
+        // as the hash, so the scheme and the key the certificate carries
+        // have to be the pair the code point stands for. X.509 binds no
+        // curve to `ecdsa-with-SHA384` — a P-256 key may sign with it, and
+        // `audhsos-x509` keeps that freedom for a chain — but the protocol
+        // takes it away here, and a scheme that does not match the key is a
+        // field inconsistent with another field rather than a signature
+        // worth trying.
+        let algorithm = match (verify.scheme, key) {
+            (ECDSA_SECP256R1_SHA256, SubjectPublicKey::EcdsaP256(_)) => {
+                audhsos_x509::SignatureAlgorithm::EcdsaSha256
+            }
+            (ECDSA_SECP384R1_SHA384, SubjectPublicKey::EcdsaP384(_)) => {
+                audhsos_x509::SignatureAlgorithm::EcdsaSha384
+            }
+            (ED25519, SubjectPublicKey::Ed25519(_)) => audhsos_x509::SignatureAlgorithm::Ed25519,
+            _ => return Err(TlsError::IllegalParameter),
+        };
+
         key.verify(algorithm, writer.written(), verify.signature)
             .map_err(|_| TlsError::BadSignature)
     }

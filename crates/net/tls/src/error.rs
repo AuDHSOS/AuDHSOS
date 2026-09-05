@@ -5,6 +5,8 @@
 
 use core::fmt;
 
+use crate::alert::Alert;
+
 /// Why the protocol refused something.
 ///
 /// Each variant is one rule. The alert a peer is told about is derived
@@ -53,6 +55,17 @@ pub enum TlsError {
     BadSignature,
     /// The key exchange produced nothing usable.
     NoSharedSecret,
+    /// The peer ended the connection with an alert, whose code this
+    /// carries.
+    ///
+    /// It is the one variant that is not a rule this client applied but a
+    /// message it received, and the only one there is no alert to send
+    /// about: RFC 8446 section 6.2 has both sides close at once on a fatal
+    /// alert, so answering one is a message nobody is waiting for.
+    /// `close_notify` is not among these — it ends a connection without
+    /// anything having gone wrong, and arrives as
+    /// [`crate::client::Event::PeerClosed`].
+    PeerAlert(u8),
 }
 
 impl fmt::Display for TlsError {
@@ -84,6 +97,13 @@ impl fmt::Display for TlsError {
             }
             TlsError::BadSignature => f.write_str("the signature does not verify"),
             TlsError::NoSharedSecret => f.write_str("the key exchange produced nothing usable"),
+            TlsError::PeerAlert(code) => match Alert::from_code(*code) {
+                Some(alert) => write!(f, "the peer sent the alert {}", alert.name()),
+                None => write!(
+                    f,
+                    "the peer sent alert {code}, which is not one this client knows"
+                ),
+            },
         }
     }
 }

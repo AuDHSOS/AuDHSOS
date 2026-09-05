@@ -7,7 +7,8 @@
 //! Every alert this client sends is derived from the error that caused it,
 //! so the reason a connection failed and the reason the peer is given
 //! cannot drift apart. The mapping is one function and it is tested
-//! exhaustively.
+//! exhaustively. It answers `None` for exactly one error: the one that
+//! says the peer already sent an alert of its own.
 
 use crate::error::TlsError;
 
@@ -83,10 +84,39 @@ impl Alert {
         }
     }
 
-    /// The alert a peer should be told about this error.
+    /// The name RFC 8446 gives the alert.
     #[must_use]
-    pub const fn for_error(error: TlsError) -> Alert {
-        match error {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Alert::CloseNotify => "close_notify",
+            Alert::UnexpectedMessage => "unexpected_message",
+            Alert::BadRecordMac => "bad_record_mac",
+            Alert::RecordOverflow => "record_overflow",
+            Alert::HandshakeFailure => "handshake_failure",
+            Alert::BadCertificate => "bad_certificate",
+            Alert::CertificateExpired => "certificate_expired",
+            Alert::UnknownCa => "unknown_ca",
+            Alert::IllegalParameter => "illegal_parameter",
+            Alert::ProtocolVersion => "protocol_version",
+            Alert::DecodeError => "decode_error",
+            Alert::DecryptError => "decrypt_error",
+            Alert::MissingExtension => "missing_extension",
+            Alert::UnsupportedExtension => "unsupported_extension",
+            Alert::InternalError => "internal_error",
+        }
+    }
+
+    /// The alert a peer should be told about this error, when there is one
+    /// to tell.
+    ///
+    /// [`TlsError::PeerAlert`] answers `None`, and it is the only error
+    /// that does. RFC 8446 section 6.2 has both sides close the connection
+    /// on a fatal alert; a client that answered one would be writing into
+    /// a connection the peer has already given up on, and saying
+    /// `unexpected_message` about a message that was perfectly expected.
+    #[must_use]
+    pub const fn for_error(error: TlsError) -> Option<Alert> {
+        let alert = match error {
             TlsError::RecordOverflow => Alert::RecordOverflow,
             TlsError::UnknownContentType | TlsError::UnexpectedMessage => Alert::UnexpectedMessage,
             TlsError::BadRecord | TlsError::SequenceExhausted => Alert::BadRecordMac,
@@ -104,7 +134,9 @@ impl Alert {
             | TlsError::BadDerivation
             | TlsError::TranscriptNotStarted
             | TlsError::NoSharedSecret => Alert::InternalError,
-        }
+            TlsError::PeerAlert(_) => return None,
+        };
+        Some(alert)
     }
 
     /// The alert a peer sent, when it is one this client knows.
