@@ -378,12 +378,27 @@ Tests: catalog 6.6.52.
 
 ### 12.8.1 `fuzz-support`
 
-Listed in the crate catalog since phase 0 and not yet written, which is
-why no fuzz target exists although catalog items from the ELF parser to
-the TLS handshake name one. Content: the `LLVMFuzzerTestOneInput` entry glue, which is the
+Implemented. The `LLVMFuzzerTestOneInput` entry glue, which is the
 allowlisted `unsafe` of this crate, a `fuzz_target!` macro, corpus
-handling, and the regression list that `cargo xtask fuzz` replays on
-every push.
+handling, and the regression replay that `cargo xtask fuzz --regression`
+runs as the last step of `check`.
+
+The one `unsafe` is `input(data, len)`, which turns the fuzzer's pointer
+and length into a slice and answers the empty slice for a length of zero
+or a null pointer, the two cases `from_raw_parts` does not allow. Miri
+covers it.
+
+A target is one source built two ways. With the coverage instrumentation
+and `--cfg fuzzing` it is a libFuzzer binary whose `main` comes from the
+runtime; without them it is an ordinary program that replays the files
+named on its command line, which is how a corpus is checked on a machine
+that has no fuzzer runtime. `fuzz/` is a workspace of its own, excluded
+from the root one, because those flags are not the flags of the checks.
+
+The targets that exist are the parsers that exist: `elf`,
+`boot_image_header`, and `boot_info`. `madt` follows in Phase 4, `tar` and
+`message` in Phase 5 and Phase 7. Every crash becomes a regression test in
+the parser's crate and its input a file under `fuzz/corpus/<target>/`.
 
 ### 12.8.2 `audhsos-symbols`
 

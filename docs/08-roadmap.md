@@ -329,15 +329,17 @@ Tests: catalog 6.6.51 and 6.6.52.
 
 ## 8.21 Track G: tooling
 
-Status: specified in [document 12](12-parallel-work.md), not started.
+Status: specified in [document 12](12-parallel-work.md); G1 is
+implemented, G2 is next.
 
 | Step | Crate | Size | Ends with |
 |------|-------|------|-----------|
-| G1 | `fuzz-support` | S | the fuzz targets of the catalog run and their corpora replay in CI |
+| G1 | `fuzz-support` | S | implemented: the entry glue, the `fuzz_target!` macro, the corpus replay, the `elf`, `boot_image_header`, and `boot_info` targets, and `fuzz --regression` as a step of `check` |
 | G2 | `audhsos-symbols` | M | the xtask resolves a panic address to function, file, and line |
 
 G2 is worth having before Phase 3, because that is where kernel panics
-begin to cost time.
+begin to cost time. It was not, and Phase 3 is done; it is the next step
+of this track.
 
 Tests: catalog 6.6.53.
 

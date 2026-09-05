@@ -302,7 +302,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "fuzz-support",
         path: "crates/support/fuzz",
         kind: Kind::Adapter {
-            unsafe_budget: 4,
+            unsafe_budget: 9,
             asm_budget: 0,
         },
         deps: &[],
@@ -374,8 +374,15 @@ pub(crate) struct FuzzTarget {
     pub(crate) name: &'static str,
 }
 
-/// Every fuzz target.
-pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[];
+/// Every fuzz target. The name is the binary under `fuzz/` and the
+/// directory of its corpus under `fuzz/corpus/`.
+pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
+    FuzzTarget {
+        name: "boot_image_header",
+    },
+    FuzzTarget { name: "boot_info" },
+    FuzzTarget { name: "elf" },
+];
 
 /// Extensions of assembly files, which must not exist.
 pub(crate) const ASSEMBLY_EXTENSIONS: &[&str] = &["S", "s", "asm"];

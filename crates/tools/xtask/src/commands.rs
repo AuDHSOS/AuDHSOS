@@ -425,14 +425,34 @@ pub(crate) fn doc(root: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-/// Fuzz targets.
+/// The flags that turn a fuzz target into a libFuzzer binary: the coverage
+/// instrumentation the fuzzer steers by, `--cfg fuzzing` so that the target
+/// leaves its `main` to the runtime, and the link flag that pulls that
+/// runtime in. The runtime comes from the platform's clang, not from the
+/// workspace, which has no dependency outside itself; a machine whose clang
+/// carries no libFuzzer fails at the link step with an undefined `main`.
+/// Without these flags the same source builds an ordinary program that
+/// replays a corpus, which is what `--regression` uses.
+const FUZZING_FLAGS: &str = "-Cpasses=sancov-module \
+ -Cllvm-args=-sanitizer-coverage-level=4 \
+ -Cllvm-args=-sanitizer-coverage-inline-8bit-counters \
+ -Cllvm-args=-sanitizer-coverage-pc-table \
+ -Cllvm-args=-sanitizer-coverage-trace-compares \
+ --cfg fuzzing \
+ -Clink-arg=-fsanitize=fuzzer";
+
+/// Fuzz targets. Without `--regression` this fuzzes; with it, every stored
+/// corpus file is replayed once, which needs no fuzzer runtime and is what
+/// CI runs on every push.
 pub(crate) fn fuzz(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut selected: Option<String> = None;
     let mut seconds = 60u64;
+    let mut regression = false;
     let mut iter = options.iter();
     while let Some(option) = iter.next() {
         match option.as_str() {
             "--target" => selected = iter.next().cloned(),
+            "--regression" => regression = true,
             "--time" => {
                 seconds = iter
                     .next()
@@ -451,21 +471,59 @@ pub(crate) fn fuzz(root: &Path, options: &[String]) -> Result<(), Error> {
         return Ok(());
     }
     for target in targets {
-        eprintln!("fuzzing `{}` for {seconds} seconds", target.name);
-        Cmd::cargo()
-            .cwd(&root.join("fuzz"))
-            .args([
-                "run",
-                "--release",
-                "--bin",
-                target.name,
-                "--",
-                &format!("-max_total_time={seconds}"),
-            ])
-            .env("RUSTFLAGS", "-Zsanitizer=fuzzer")
-            .run()?;
+        if regression {
+            replay_corpus(root, target.name)?;
+        } else {
+            run_fuzzer(root, target.name, seconds)?;
+        }
     }
     Ok(())
+}
+
+/// Runs the fuzzer of one target for `seconds` seconds.
+fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
+    eprintln!("fuzzing `{name}` for {seconds} seconds");
+    Cmd::cargo()
+        .cwd(&root.join("fuzz"))
+        .args([
+            "run",
+            "--release",
+            "--bin",
+            name,
+            "--",
+            &corpus_of(root, name).display().to_string(),
+            &format!("-max_total_time={seconds}"),
+        ])
+        .env("RUSTFLAGS", FUZZING_FLAGS)
+        .run()
+}
+
+/// Replays the stored corpus of one target. A target whose corpus
+/// directory does not exist is reported and skipped, so that a target that
+/// has found nothing yet does not fail the run.
+fn replay_corpus(root: &Path, name: &str) -> Result<(), Error> {
+    let corpus = corpus_of(root, name);
+    if !corpus.is_dir() {
+        eprintln!("`{name}`: no corpus at {}", corpus.display());
+        return Ok(());
+    }
+    eprintln!("replaying the corpus of `{name}`");
+    Cmd::cargo()
+        .cwd(&root.join("fuzz"))
+        .args([
+            "run",
+            "--quiet",
+            "--bin",
+            name,
+            "--",
+            &corpus.display().to_string(),
+        ])
+        .run()
+}
+
+/// The corpus directory of one target.
+fn corpus_of(root: &Path, name: &str) -> PathBuf {
+    root.join("fuzz").join("corpus").join(name)
 }
 
 /// One step of `check`.
@@ -474,7 +532,7 @@ type Step = fn(&Path) -> Result<(), Error>;
 /// Everything CI runs, in CI order.
 pub(crate) fn check(root: &Path, channel: &str) -> Result<(), Error> {
     eprintln!("toolchain: {channel}");
-    let steps: [(&str, Step); 9] = [
+    let steps: [(&str, Step); 10] = [
         ("lint", lint),
         ("check-layering", check_layering),
         ("check-deps", check_deps),
@@ -484,6 +542,9 @@ pub(crate) fn check(root: &Path, channel: &str) -> Result<(), Error> {
         ("miri", miri),
         ("doc", doc),
         ("test --qemu", |root| test(root, &["--qemu".to_owned()])),
+        ("fuzz --regression", |root| {
+            fuzz(root, &["--regression".to_owned()])
+        }),
     ];
     for (name, step) in steps {
         eprintln!("==> {name}");

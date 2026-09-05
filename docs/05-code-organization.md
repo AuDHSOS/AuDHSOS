@@ -30,7 +30,7 @@ AuDHSOS/
 │   │   └── i8042/             driver-i8042: PS/2 controller and decoder logic over a port access trait (Phase 10)
 │   ├── support/
 │   │   ├── testing/           test-support: property-test engine, builders, strategies, model-test runner
-│   │   └── fuzz/              fuzz-support: fuzzer entry glue (unsafe allowed, host only)
+│   │   └── fuzz/              fuzz-support: fuzzer entry glue and corpus replay (unsafe allowed, host only)
 │   ├── virtio/
 │   │   └── queue/             virtio-queue: split virtqueue and initialization logic (document 12)
 │   ├── fs/
@@ -142,7 +142,7 @@ AuDHSOS/
 | `net-http` | n4 | all | no | yes, fuzz | `net-wire` |
 | `net-stack` | n5 | all | no | yes | every `net-` crate |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
-| `fuzz-support` | dev | host | allowlisted | Miri | - |
+| `fuzz-support` | dev | host | allowlisted | yes, and Miri for the entry glue | - |
 | `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `fs-fat`, `audhsos-encoding`, `audhsos-symbols` |
 
 ## 5.3 Layering rules

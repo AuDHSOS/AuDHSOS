@@ -1618,11 +1618,25 @@ startup message; start.
 `crates/support/fuzz` (`fuzz-support`, adapter, host): defines
 `#[unsafe(no_mangle)] pub extern "C" fn LLVMFuzzerTestOneInput(data: *const u8,
 len: usize) -> i32` once through a macro `fuzz_target!(|bytes: &[u8]| { ...
-})` that builds the slice in one `unsafe` block. `fuzz/` holds one binary
-crate per target (`elf`, `tar`, `madt`, `boot_image_header`, `boot_info`,
-`message`), built by `xtask fuzz` with `RUSTFLAGS=-Zsanitizer=fuzzer` and
-`--release`; corpora under `fuzz/corpus/<target>/`; every crash becomes a
-regression test in the parser's crate. Register the targets in
+})` that builds the slice in one `unsafe` block. `fuzz/` is a workspace of
+its own and holds one binary crate per target (`elf`, `tar`, `madt`,
+`boot_image_header`, `boot_info`, `message`); the root workspace excludes
+it, because it is built with flags the checks do not use.
+
+`xtask fuzz` builds it `--release` with the coverage instrumentation
+(`-Cpasses=sancov-module` and the `-sanitizer-coverage-*` LLVM arguments),
+`--cfg fuzzing`, and `-Clink-arg=-fsanitize=fuzzer`. There is no
+`-Zsanitizer=fuzzer`: `fuzzer` is not one of the values rustc accepts
+there, and the libFuzzer runtime comes from the platform's clang and not
+from a package, because the workspace has no dependency outside itself. A
+machine whose clang carries no libFuzzer fails at the link step with an
+undefined `main`.
+
+`xtask fuzz --regression` builds the same sources without those flags,
+which makes every target an ordinary program that replays the files of its
+corpus, and runs it over `fuzz/corpus/<target>/`. That is the step `check`
+runs, and it needs no runtime. Every crash becomes a regression test in the
+parser's crate and its input a file in the corpus. Register the targets in
 `policy::FUZZ_TARGETS`.
 
 ### 10.7.7 Acceptance

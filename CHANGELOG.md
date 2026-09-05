@@ -7,6 +7,23 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `fuzz-support` (track G1): the `LLVMFuzzerTestOneInput` entry glue, the
+  `fuzz_target!` macro that writes it once, and the corpus replay. The one
+  `unsafe` of the project's fuzzing turns the fuzzer's pointer and length
+  into a slice and answers the empty slice for a length of zero or a null
+  pointer; Miri covers it.
+- `fuzz/`: a workspace of its own with the targets whose parsers exist,
+  `elf`, `boot_image_header`, and `boot_info`, each with a seed corpus
+  under `fuzz/corpus/`. A target built with the coverage instrumentation
+  and `--cfg fuzzing` is a libFuzzer binary; the same source built without
+  them replays a corpus and needs no fuzzer runtime.
+- `xtask`: `fuzz --regression` replays the stored corpus of every target
+  and is the tenth step of `check`. `fuzz` itself now passes the corpus
+  directory to the fuzzer and uses the coverage instrumentation flags
+  rather than `-Zsanitizer=fuzzer`, which rustc does not accept: the
+  libFuzzer runtime comes from the platform's clang, and a machine without
+  it fails at the link step.
+
 - `audhsos-abi`: `KERNEL_STACKS_BASE`, `KERNEL_STACK_PAGES`,
   `KERNEL_STACK_SLOT_PAGES`, `KERNEL_STACK_SLOTS`, and
   `MAX_PHYS_WINDOW_BYTES`.
