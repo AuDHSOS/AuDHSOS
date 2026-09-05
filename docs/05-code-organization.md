@@ -86,6 +86,7 @@ AuDHSOS/
 │   └── tools/
 │       └── xtask/             build, image (GPT + FAT32 writer, CRC32), run, test, lint, check-layering, check-deps, unsafe-budget, fuzz, coverage; policy tables
 ├── fuzz/                      fuzz target crates and corpora
+├── research/                  source of other projects, kept to be read; the checks never descend into it
 └── .github/workflows/         CI definitions
 ```
 

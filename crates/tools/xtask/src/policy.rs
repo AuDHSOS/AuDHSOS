@@ -404,6 +404,13 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
 /// Extensions of assembly files, which must not exist.
 pub(crate) const ASSEMBLY_EXTENSIONS: &[&str] = &["S", "s", "asm"];
 
+/// Directories the checks never descend into: what a build wrote, what
+/// version control keeps, and what is only kept to be read. `research`
+/// holds source of other projects, which carries the license headers of
+/// those projects and not this one; a check of this project has no
+/// business in it.
+pub(crate) const EXCLUDED_DIRECTORIES: &[&str] = &["target", ".git", "research"];
+
 /// Every crate that is built for `target`.
 pub(crate) fn crates_for(target: Target) -> Vec<&'static str> {
     CRATES

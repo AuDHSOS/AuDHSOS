@@ -7,12 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::Error;
+use crate::policy::EXCLUDED_DIRECTORIES;
 
-/// Directories never descended into.
-const SKIPPED_DIRECTORIES: &[&str] = &["target", ".git"];
-
-/// Every regular file below `root`, skipping build output and version
-/// control, in path order.
+/// Every regular file below `root`, skipping the directories
+/// [`EXCLUDED_DIRECTORIES`] names, in path order.
 pub(crate) fn walk_files(root: &Path) -> Result<Vec<PathBuf>, Error> {
     let mut files = Vec::new();
     walk_into(root, &mut files)?;
@@ -32,7 +30,7 @@ fn walk_into(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), Error> {
             .map_err(|source| Error::io(format!("inspecting {}", path.display()), source))?;
         if file_type.is_dir() {
             let name = entry.file_name();
-            if !SKIPPED_DIRECTORIES.iter().any(|skip| name == *skip) {
+            if !EXCLUDED_DIRECTORIES.iter().any(|skip| name == *skip) {
                 walk_into(&path, files)?;
             }
         } else if file_type.is_file() {

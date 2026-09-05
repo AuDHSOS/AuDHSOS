@@ -33,3 +33,27 @@ fn extension_and_file_name_handle_missing_parts() {
 fn walking_a_missing_directory_is_an_error() {
     assert!(walk_files(Path::new("/definitely/missing/dir")).is_err());
 }
+
+#[test]
+fn the_walk_skips_the_directories_the_policy_excludes() {
+    use crate::policy::EXCLUDED_DIRECTORIES;
+    let root = std::env::temp_dir().join("audhsos-xtask-excluded");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("crates")).expect("a directory");
+    std::fs::write(root.join("crates/kept.rs"), b"").expect("a file");
+    for excluded in EXCLUDED_DIRECTORIES {
+        std::fs::create_dir_all(root.join(excluded)).expect("a directory");
+        std::fs::write(root.join(excluded).join("skipped.rs"), b"").expect("a file");
+    }
+    let files = walk_files(&root).expect("the walk");
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert!(
+        files.first().is_some_and(|path| path.ends_with("kept.rs")),
+        "{files:?}"
+    );
+    assert!(
+        EXCLUDED_DIRECTORIES.contains(&"research"),
+        "reference material of other projects stays out of the checks"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

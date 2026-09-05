@@ -40,6 +40,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   under `fuzz/corpus/`. A target built with the coverage instrumentation
   and `--cfg fuzzing` is a libFuzzer binary; the same source built without
   them replays a corpus and needs no fuzzer runtime.
+- `xtask`: the directories the checks never descend into are a table in
+  `policy.rs`, where D-24 puts a policy, instead of a constant of the
+  file walker. `research`, which holds source of other projects kept to be
+  read, joins `target` and `.git`: that source carries the license headers
+  of those projects and not this one, and a check of this project has no
+  business in it.
 - `xtask`: `fuzz --regression` replays the stored corpus of every target
   and is the tenth step of `check`. `fuzz` itself now passes the corpus
   directory to the fuzzer and uses the coverage instrumentation flags
