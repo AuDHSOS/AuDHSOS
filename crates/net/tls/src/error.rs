@@ -28,6 +28,20 @@ pub enum TlsError {
     BadDerivation,
     /// The transcript was asked for a hash before its algorithm was known.
     TranscriptNotStarted,
+    /// A message does not have the shape its type prescribes.
+    Decode,
+    /// A message cannot be written as it was described.
+    Encode,
+    /// The peer named a version this client does not speak.
+    UnsupportedVersion,
+    /// The peer chose a cipher suite that was not offered.
+    UnsupportedSuite,
+    /// A message lacks an extension it must carry.
+    MissingExtension,
+    /// A message carries an extension twice, or one that was not offered.
+    UnexpectedExtension,
+    /// A field carries a value the protocol forbids here.
+    IllegalParameter,
 }
 
 impl fmt::Display for TlsError {
@@ -43,6 +57,15 @@ impl fmt::Display for TlsError {
             TlsError::TranscriptNotStarted => {
                 f.write_str("the transcript has no hash algorithm yet")
             }
+            TlsError::Decode => f.write_str("the message does not have the expected shape"),
+            TlsError::Encode => f.write_str("the message cannot be written as described"),
+            TlsError::UnsupportedVersion => f.write_str("the peer named another version"),
+            TlsError::UnsupportedSuite => {
+                f.write_str("the peer chose a suite that was not offered")
+            }
+            TlsError::MissingExtension => f.write_str("a required extension is absent"),
+            TlsError::UnexpectedExtension => f.write_str("an extension repeats or was not offered"),
+            TlsError::IllegalParameter => f.write_str("a field carries a forbidden value"),
         }
     }
 }

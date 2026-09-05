@@ -440,7 +440,7 @@ checklist in 4.9.
 | T4 | `crypto-rng` | S | implemented |
 | T5 | `audhsos-der` | M | implemented but for the time conversion (11.14) |
 | T6 | `audhsos-x509` with the test certificate builder | L | implemented |
-| T7 | `audhsos-tls` | XL | record layer and key schedule implemented; messages and the state machine follow |
+| T7 | `audhsos-tls` | XL | record layer, key schedule and messages implemented; the state machine follows |
 | T8 | Integration, jointly with step D9 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M | |
 
 T1 to T7 touch nothing outside their own crates and the policy table, so

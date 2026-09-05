@@ -105,6 +105,8 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   the certificates the tests use.
 - `audhsos-tls`: the record layer, the record protection, the key schedule
   of RFC 8446 section 7.1, and the handshake transcript.
+- `audhsos-tls`: the wire codec and the handshake messages, read against
+  the server side of the trace of RFC 8448.
 - `docs/rfc/`: the standards this system implements, verbatim, with their
   source and checksum recorded. The first is RFC 8448, whose trace is the
   test the TLS client must reproduce (D-59).
