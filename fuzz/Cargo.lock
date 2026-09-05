@@ -107,6 +107,28 @@ name = "fuzz-support"
 version = "0.1.0"
 
 [[package]]
+name = "kernel-acpi"
+version = "0.1.0"
+dependencies = [
+ "kernel-types",
+]
+
+[[package]]
+name = "kernel-types"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+]
+
+[[package]]
+name = "madt"
+version = "0.1.0"
+dependencies = [
+ "fuzz-support",
+ "kernel-acpi",
+]
+
+[[package]]
 name = "tls_handshake"
 version = "0.1.0"
 dependencies = [

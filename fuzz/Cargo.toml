@@ -12,6 +12,7 @@ members = [
     "boot_info",
     "der",
     "elf",
+    "madt",
     "tls_handshake",
     "tls_record",
     "x509",
@@ -30,6 +31,7 @@ audhsos-der = { path = "../crates/net/der" }
 audhsos-elf = { path = "../crates/elf" }
 audhsos-tls = { path = "../crates/net/tls" }
 audhsos-x509 = { path = "../crates/net/x509" }
+kernel-acpi = { path = "../crates/kernel/acpi" }
 fuzz-support = { path = "../crates/support/fuzz" }
 
 [workspace.lints.rust]

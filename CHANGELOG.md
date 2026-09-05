@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Fuzz target `madt` over the ACPI parsers, with fifteen seeds. The target
+  reads the bytes twice: as they are, so that signature, length, and
+  checksum are exercised, and once with those three repaired, so that the
+  fuzzer reaches the walk over the entries without having to guess a
+  checksum.
 - `kernel-hal-x86_64::acpi` finds the tables of the machine through the
   physical window and hands their bytes to the parsers. No range is read
   before it has been checked against the memory the firmware reported, so

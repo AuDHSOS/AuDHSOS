@@ -1236,60 +1236,106 @@ Acceptance: `check` green; catalog 6.6.21 memory items covered.
 
 ## 10.4 Phase 4: Interrupts and timer
 
-- `kernel-hal-x86_64::acpi` as a logic module in a new crate
-  `kernel-acpi` (`crates/kernel/acpi`, layer 1, deps `kernel-types`):
-  `parse_rsdp(bytes: &[u8; 36]) -> Result<Rsdp, AcpiError>` (signature
-  `RSD PTR `, checksum over 20 bytes, revision 2 adds length, XSDT address,
-  extended checksum over `length` bytes), `Sdt::parse(bytes) ->
-  Result<SdtHeader, _>` (signature, length ≥ 36, checksum over `length`),
-  `madt::parse(bytes) -> Result<Madt, _>` with `Madt { lapic_address: u64,
-  io_apics: [Option<IoApic>; 4], overrides: [Option<Override>; 16] }`, entry
-  types 0 (processor local APIC: ignored beyond counting), 1 (I/O APIC: id,
-  address, GSI base), 2 (interrupt source override: bus, source IRQ, GSI,
-  flags), 5 (local APIC address override); entry length zero is an error;
-  unknown types skipped by their length. The adapter reads the tables
-  through the window: RSDP page, then XSDT/RSDT, then each entry until the
-  `APIC` signature.
-- `kernel-hal-x86_64::apic`: register layouts in `kernel-x86-tables`
-  (`lapic::{ID = 0x20, VERSION = 0x30, TPR = 0x80, EOI = 0xB0, SVR = 0xF0,
-  LVT_TIMER = 0x320, LVT_LINT0 = 0x350, LVT_LINT1 = 0x360, LVT_ERROR = 0x370,
-  TIMER_INITIAL = 0x380, TIMER_CURRENT = 0x390, TIMER_DIVIDE = 0x3E0}`,
-  `ioapic::{IOREGSEL = 0x00, IOWIN = 0x10, ID = 0, VERSION = 1,
-  REDIRECTION_BASE = 0x10}` and the redirection entry encoding with tests).
-  `LocalApic` over the window (volatile reads and writes through one
-  `unsafe` block each for `read_register`/`write_register`): enable with
-  SVR bit 8 and spurious vector `0xFF`, `end_of_interrupt` writes `0` to
-  EOI. `IoApic`: `route(line, vector)` writes the redirection entry (vector,
-  fixed delivery, physical destination, level/polarity from the override
-  flags, masked), `mask`/`unmask` toggle bit 16; `InterruptController`
-  implementation resolves ISA lines through the overrides.
-- Legacy PIC: remap to vectors `0x20..0x2F` (ICW1 `0x11` to `0x20`/`0xA0`,
-  offsets `0x20`/`0x28` to `0x21`/`0xA1`, cascade `0x04`/`0x02`, ICW4
-  `0x01`), then mask everything (`0xFF` to `0x21` and `0xA1`).
-- Vector plan (constants in `kernel-hal-x86_64::vectors`): exceptions
-  `0..=31`, PIC spurious `0x20..=0x2F`, LAPIC timer `0x30`, I/O APIC lines
-  `0x40 + gsi`, system call `0x80`, LAPIC spurious `0xFF`.
-- Timer: PIT calibration of the LAPIC timer: divide by 16
-  (`TIMER_DIVIDE = 0x3`), initial count `u32::MAX`, PIT channel 2 one-shot
-  for 10 ms (`0x61` gate bit 0 set and bit 1 clear, command `0xB2` to
-  `0x43`, count 11932 to `0x42` low then high, poll `0x61` bit 5), read
-  the current count, compute ticks per millisecond, program periodic mode
-  (LVT bit 17) with the vector and `TIMER_INITIAL = ticks_per_ms *
-  1000 / TICKS_PER_SECOND`. `Timer::ticks` counts in `kernel-core`.
-- `kernel-core::tick`: increments the tick counter and calls the scheduler
-  hook (empty until Phase 5).
-- QEMU tests (`interrupts.rs`): the timer tick counter increases; a second
-  tick arrives after EOI; masking the timer stops it; a software interrupt
-  reaches the handler of its vector, for the timer vector `0x30` and for
-  the spurious vector `0xFF`.
+Phase 4 is implemented. What follows is what stands, with the deviations
+from the draft of this section named where they are.
 
-  An earlier draft of this section said that raising a vector from
-  software was "not possible without asm" and settled for asserting that
-  the spurious handler is installed. That was written before
-  `kernel-hal-x86_64::testing` existed. It now holds four `asm!` sites of
-  its own, one per exception a trap test raises, and the crate is
-  allowlisted for exactly that. The instruction needs the vector as an
-  immediate, which an inline constant supplies:
+- `kernel-acpi` (`crates/kernel/acpi`, layer 1, deps `kernel-types`) holds
+  every parser: `parse_rsdp(bytes: &[u8; 36]) -> Result<Rsdp, AcpiError>`
+  (signature `RSD PTR `, checksum over 20 bytes, revision 0 or 2, and for
+  revision 2 a length that reaches the extended checksum without leaving
+  the structure and a second checksum over that many bytes);
+  `SdtHeader::parse(bytes) -> Result<SdtHeader, AcpiError>` (signature,
+  length at least 36 and covered by the bytes, checksum over `length`) with
+  `require(signature)` and `announced_length`, which reads the length field
+  and checks nothing, because an adapter has to know how much to copy
+  before it can hand the whole table over; `RootTable::parse` walks an
+  `RSDT` or an `XSDT`, the signature deciding whether the entries are four
+  or eight bytes wide; `madt::parse(bytes) -> Result<Madt, AcpiError>` with
+  `Madt { lapic_address: PhysAddr, flags: u32, processors: usize,
+  io_apics: [Option<IoApic>; 4], overrides: [Option<Override>; 16] }`,
+  entry types 0 (processor local APIC: counted and nothing else), 1 (I/O
+  APIC), 2 (interrupt source override), 5 (local APIC address override);
+  entry length zero is an error, an entry that leaves the table is an
+  error, an entry of a type the parser reads with the wrong length is an
+  error, unknown types are skipped by their length.
+  `Madt::route_isa(irq)` answers where a line goes and how it is taken,
+  which is the one piece of routing that is logic rather than register
+  writes. The addresses are `PhysAddr` rather than `u64`, which is what
+  makes the dependency on `kernel-types` a real one and rejects an address
+  the machine cannot have.
+- `kernel-x86-tables` holds the register layouts, not the adapter:
+  `lapic::{ID = 0x20, VERSION = 0x30, TPR = 0x80, EOI = 0xB0, SVR = 0xF0,
+  LVT_TIMER = 0x320, LVT_LINT0 = 0x350, LVT_LINT1 = 0x360, LVT_ERROR =
+  0x370, TIMER_INITIAL = 0x380, TIMER_CURRENT = 0x390, TIMER_DIVIDE =
+  0x3E0}` with `lvt`, `spurious`, and `count_for_rate`;
+  `ioapic::{IOREGSEL = 0x00, IOWIN = 0x10, ID = 0, VERSION = 1,
+  REDIRECTION_BASE = 0x10}` with the redirection entry encoding and its
+  decoders; `pic::remap(master, slave)`, the ten writes that move the two
+  legacy controllers and then mask every line of both; and `vectors`, the
+  vector plan. All of it has host tests, which the adapter crate could not
+  have. `kernel_hal_x86_64::vectors` is a re-export of that module, so the
+  path the draft named still works.
+- `kernel-hal-x86_64::acpi` reads the tables through the window: the RSDP,
+  then the XSDT or the RSDT, then each table it names until one carries the
+  `APIC` signature. No range is read before it has been checked against the
+  memory the firmware reported, which is what the window maps.
+  `PhysicalWindow::bytes` is the one new `unsafe` read, and it is an
+  `unsafe fn` because the caller and not the window knows the bound.
+- `kernel-hal-x86_64::apic`: `LocalApic` over the window with one `unsafe`
+  block per volatile read and per volatile write, enabled through the
+  `IA32_APIC_BASE` model-specific register and the enable bit of the
+  spurious vector register with vector `0xFF`; `IoApic` over its two
+  registers, where reading is also a write and therefore needs the
+  exclusive borrow. `Apics` implements `InterruptController` — `route`
+  writes the redirection entry masked, with polarity and trigger from the
+  overrides, and refuses a line that is already routed — and `Timer`.
+- Legacy PIC: remapped to `0x20..0x2F` and masked, only on a machine whose
+  MADT sets the `PCAT_COMPAT` flag.
+- Vector plan (`kernel_x86_tables::vectors`): exceptions `0..=31`, legacy
+  controllers `0x20..=0x2F`, LAPIC timer `0x30`, I/O APIC line `gsi` at
+  `0x40 + gsi` for 24 lines, system call `0x80`, LAPIC spurious `0xFF`.
+  `traps::fill` installs a gate for every one of them except `0x80`, which
+  needs the ring three gate of Phase 5.
+- Timer: the local APIC timer measured against channel two of the interval
+  timer. Divide by 16, initial count `u32::MAX`, channel two armed one-shot
+  for 10 ms (gate low, command `0xB2` to `0x43`, count 11932 to `0x42` low
+  then high, gate high, then poll `0x61` bit 5 with a bound), read the
+  count that is left, divide, then periodic mode with the vector and
+  `TIMER_INITIAL = ticks_per_ms * 1000 / TICKS_PER_SECOND`. Every poll is
+  bounded, so a machine whose channel two does not run reports instead of
+  hanging.
+- `kernel-hal-x86_64::interrupts` is the bring-up and the cell the handler
+  reaches: the register windows are mapped by a closure the caller
+  supplies, because only the kernel knows its own address space, and
+  `KernelMemory::map_device` is what the kernel supplies (D-60).
+- `instructions::InterruptGuard` turns interrupts off for as long as a
+  borrow of the controller lasts. Without it a timer interrupt that
+  arrived while the kernel held the controller found the cell busy,
+  returned without acknowledging, and the local APIC delivered nothing
+  afterwards. The QEMU test image found this.
+- `kernel-core::tick` counts the tick and gives the scheduler its turn,
+  which is nothing until Phase 5. `KernelState` counts ticks, device
+  interrupts, and spurious interrupts, and `with_state` hands the state out
+  the way `with_memory` hands out the memory.
+- There are two tick counts, not one. The draft said `Timer::ticks` counts
+  in `kernel-core`, which the layering does not allow: `Timer` is
+  implemented by the adapter, and the adapter may not depend on
+  `kernel-core`. The adapter therefore counts what the hardware delivered,
+  in an atomic the handler of the timer vector raises, and that is what
+  `Timer::ticks` reads; `KernelState.ticks` counts what the kernel
+  processed. In this phase the two are equal, and they are two numbers
+  because they answer two questions.
+- QEMU tests (`interrupts.rs`, six of them): the tables name the hardware
+  and the unit is on; a second tick arrives after the end-of-interrupt; the
+  tick counter grows while the kernel does nothing; a masked timer delivers
+  nothing and unmasking starts it again; a vector raised from software
+  reaches the handler of that vector, for `0x30`, `0x40`, and `0xFF`; an
+  ISA line is routed once and refuses a second routing. None of them ends
+  the machine, so one image holds all six; each one begins by making sure
+  the bring-up has happened, because the order of the tests is not fixed.
+
+  Raising a vector from software needs the vector as an immediate, which an
+  inline constant supplies:
 
   ```rust
   pub fn raise_interrupt<const VECTOR: u8>() {
@@ -1299,13 +1345,15 @@ Acceptance: `check` green; catalog 6.6.21 memory items covered.
   }
   ```
 
-  This compiles on the pinned toolchain; it was tried before the sentence
-  was written. The test therefore asserts what it means to assert, and the
-  `asm!` site goes into the inventory of
-  [04-safety-policy.md 4.5](04-safety-policy.md#45-inline-assembly-inventory)
-  beside the exceptions.
-- Fuzz target `madt` under `fuzz/` with `fuzz-support` (see 10.7.6 for
-  the fuzz crate layout; create it in this phase).
+  The handler of a vector raised this way must not acknowledge: the local
+  APIC never delivered it, so an end-of-interrupt would acknowledge
+  whatever is actually in service. The test image sets a flag around the
+  instruction and its handler reads it.
+- Fuzz target `madt` under `fuzz/`, with fifteen seeds under
+  `fuzz/corpus/madt/`. The target reads the bytes twice: as they are, so
+  that signature, length, and checksum are exercised, and once with those
+  three repaired, so that the fuzzer reaches the walk over the entries
+  without having to guess a checksum.
 
 Acceptance: `check` green; catalog 6.6.11, 6.6.16 APIC items, 6.6.21
 interrupt items.
