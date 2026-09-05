@@ -48,6 +48,21 @@ pub(crate) fn read(path: &Path) -> Result<String, Error> {
         .map_err(|source| Error::io(format!("reading {}", path.display()), source))
 }
 
+/// Reads a binary file.
+pub(crate) fn read_bytes(path: &Path) -> Result<Vec<u8>, Error> {
+    fs::read(path).map_err(|source| Error::io(format!("reading {}", path.display()), source))
+}
+
+/// Writes a binary file, creating the directory it lives in.
+pub(crate) fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|source| Error::io(format!("creating {}", parent.display()), source))?;
+    }
+    fs::write(path, bytes)
+        .map_err(|source| Error::io(format!("writing {}", path.display()), source))
+}
+
 /// The extension of a path as a string, or an empty string.
 pub(crate) fn extension(path: &Path) -> &str {
     path.extension().and_then(|e| e.to_str()).unwrap_or("")

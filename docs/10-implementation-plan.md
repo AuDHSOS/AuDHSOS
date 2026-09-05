@@ -966,14 +966,21 @@ identity mapping afterwards.
   of 128 bytes, entry-array CRC; the array at LBA 2..=33; one entry: type
   GUID `C12A7328-F81F-11D2-BA4B-00A0C93EC93B`, fixed unique GUID, first LBA
   2048, last LBA `last - 34`, attributes 0, name `AUDHSOS ESP` in UTF-16LE;
-  backup array at `last - 33 ..= last - 1`, backup header at `last` with
-  swapped current/backup LBAs), `fat32.rs` (512-byte sectors, 1 sector per
+  backup array at `last - 32 ..= last - 1`, backup header at `last` with
+  swapped current and backup LBAs, so that the last usable sector is
+  `last - 33`), `fat32.rs` (512-byte sectors, 1 sector per
   cluster, 32 reserved sectors, 2 FATs, FSInfo at sector 1, backup boot
   sector at 6, root directory cluster 2, media `0xF8`, end-of-chain
   `0x0FFF_FFFF`, cluster count at least 65525, deterministic timestamps
   `2026-01-01 00:00:00`, 8.3 names uppercase, directories `EFI`, `EFI/BOOT`,
   `AUDHSOS` with `.` and `..` entries), plus a reader used only by the
-  tests. Default image size 64 MiB, sparse file.
+  tests, behind `#[cfg(test)]`, so that the product only writes. Default
+  image size 64 MiB, grown in whole mebibytes when the files need more.
+  `xtask` gains `audhsos-abi` as its one dependency, so that the boot image
+  header and the layout constants are written down once; the policy table
+  records it.
+- `image [--release]`: writes `target/boot.img` and `target/audhsos.img`
+  from the built loader and kernel.
 - `qemu.rs`: locate `qemu-system-x86_64` (`AUDHSOS_QEMU` or `PATH`) and the
   firmware (`AUDHSOS_OVMF` or `<qemu dir>/../share/qemu/edk2-x86_64-code.fd`);
   the command line of

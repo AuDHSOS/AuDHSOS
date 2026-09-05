@@ -6,9 +6,10 @@
 use std::path::Path;
 
 use crate::error::Error;
+use crate::image::{boot_image, disk};
 use crate::policy::{FUZZ_TARGETS, MIRI_CRATES};
 use crate::process::Cmd;
-use crate::{coverage, deps, layering, spdx, unsafe_budget};
+use crate::{coverage, deps, fs, layering, spdx, unsafe_budget};
 
 /// `rustfmt --check`, `clippy -D warnings`, SPDX headers.
 pub(crate) fn lint(root: &Path) -> Result<(), Error> {
@@ -199,4 +200,48 @@ fn report(what: &str, violations: &[String]) {
     } else {
         eprintln!("{what}: {} violation(s)", violations.len());
     }
+}
+
+/// Writes the boot image and the disk image into `target/`.
+///
+/// # Errors
+///
+/// [`Error::Usage`] for an unknown option; [`Error::Io`] if the loader or
+/// the kernel has not been built, or if a file cannot be written.
+pub(crate) fn image(root: &Path, options: &[String]) -> Result<(), Error> {
+    let mut profile = "debug";
+    for option in options {
+        match option.as_str() {
+            "--release" => profile = "release",
+            other => return Err(Error::Usage(format!("unknown option `{other}` for image"))),
+        }
+    }
+    let target = root.join("target");
+    let loader = target
+        .join("x86_64-unknown-uefi")
+        .join(profile)
+        .join("boot-uefi-x86_64.efi");
+    let kernel = target
+        .join("x86_64-unknown-none")
+        .join(profile)
+        .join("audhsos-kernel");
+    let boot = boot_image::build(&boot_image::placeholder_root_task(), &[], 0)?;
+    let files = vec![
+        (disk::LOADER_PATH, fs::read_bytes(&loader)?),
+        (disk::KERNEL_PATH, fs::read_bytes(&kernel)?),
+        (disk::BOOT_IMAGE_PATH, boot.clone()),
+    ];
+    let image = disk::build(&files)?;
+    let boot_path = target.join("boot.img");
+    let disk_path = target.join("audhsos.img");
+    fs::write_bytes(&boot_path, &boot)?;
+    fs::write_bytes(&disk_path, &image)?;
+    eprintln!(
+        "wrote {} ({} bytes) and {} ({} bytes)",
+        boot_path.display(),
+        boot.len(),
+        disk_path.display(),
+        image.len()
+    );
+    Ok(())
 }

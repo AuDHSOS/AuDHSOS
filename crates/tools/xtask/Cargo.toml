@@ -11,6 +11,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+audhsos-abi.workspace = true
 
 [lints]
 workspace = true

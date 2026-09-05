@@ -8,6 +8,7 @@ mod coverage;
 mod deps;
 mod error;
 mod fs;
+mod image;
 mod layering;
 mod policy;
 mod process;

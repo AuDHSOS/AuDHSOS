@@ -127,7 +127,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "xtask",
         path: "crates/tools/xtask",
         kind: Kind::Host,
-        deps: &[],
+        deps: &["audhsos-abi"],
         coverage_gate: false,
     },
 ];

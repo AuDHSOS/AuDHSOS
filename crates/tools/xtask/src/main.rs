@@ -10,6 +10,7 @@ mod coverage;
 mod deps;
 mod error;
 mod fs;
+mod image;
 mod layering;
 mod policy;
 mod process;
@@ -37,6 +38,8 @@ subcommands:
   doc              build documentation with warnings as errors
   fuzz [--target <name>] [--time <seconds>]
                    run fuzz targets
+  image [--release]
+                   write the boot image and the disk image into target/
   check            everything CI runs, in CI order
 ";
 
@@ -76,6 +79,7 @@ fn run() -> Result<(), Error> {
         "miri" => commands::miri(&root),
         "doc" => commands::doc(&root),
         "fuzz" => commands::fuzz(&root, options),
+        "image" => commands::image(&root, options),
         "check" => commands::check(&root, &channel),
         other => Err(Error::Usage(format!("unknown subcommand `{other}`"))),
     }
