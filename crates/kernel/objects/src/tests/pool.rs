@@ -39,7 +39,7 @@ fn allocating_from_a_full_pool_is_exhausted() {
     assert_eq!(pool.live(), 3);
     assert_eq!(pool.allocate(9), Err(PoolError::Exhausted));
     assert_eq!(pool.live(), 3);
-    assert_eq!(pool.release(ids[0]), Ok(Some(0)));
+    assert_eq!(pool.release(ids[0]), Ok(true));
     assert!(pool.allocate(9).is_ok());
 }
 
@@ -59,7 +59,7 @@ fn allocation_stores_the_value_and_hands_out_one_reference() {
 fn an_id_with_a_stale_generation_is_rejected_after_reuse() {
     let mut pool: Pool<u32, 1> = Pool::new();
     let first = pool.allocate(7).unwrap();
-    assert_eq!(pool.release(first), Ok(Some(7)));
+    assert_eq!(pool.release(first), Ok(true));
     let second = pool.allocate(8).unwrap();
     assert_eq!(second.index(), first.index());
     assert_eq!(second.generation(), first.generation() + 1);
@@ -92,7 +92,7 @@ fn the_generation_wraps_and_never_becomes_zero() {
     assert!(!pool.set_generation(9, 5), "an unknown slot is not changed");
     let last = pool.allocate(1).unwrap();
     assert_eq!(last.generation(), u32::MAX);
-    assert_eq!(pool.release(last), Ok(Some(1)));
+    assert_eq!(pool.release(last), Ok(true));
     assert_eq!(
         pool.generation_of(0),
         Some(u32::MAX),
@@ -146,7 +146,7 @@ fn the_first_generation_of_every_slot_is_one() {
 fn a_released_slot_is_handed_out_before_one_that_was_never_used() {
     let mut pool: Pool<u32, 3> = Pool::new();
     let first = pool.allocate(1).unwrap();
-    assert_eq!(pool.release(first), Ok(Some(1)));
+    assert_eq!(pool.release(first), Ok(true));
     let next = pool.allocate(2).unwrap();
     assert_eq!(next.index(), first.index(), "the released slot comes first");
     assert_eq!(next.generation(), 2, "and with the next generation");
@@ -169,11 +169,11 @@ fn only_the_last_release_destroys_the_value() {
     assert_eq!(pool.retain(id), Ok(()));
     assert_eq!(pool.retain(id), Ok(()));
     assert_eq!(pool.references(id), Ok(3));
-    assert_eq!(pool.release(id), Ok(None));
-    assert_eq!(pool.release(id), Ok(None));
+    assert_eq!(pool.release(id), Ok(false));
+    assert_eq!(pool.release(id), Ok(false));
     assert_eq!(pool.references(id), Ok(1));
     assert_eq!(pool.live(), 1);
-    assert_eq!(pool.release(id), Ok(Some(5)));
+    assert_eq!(pool.release(id), Ok(true));
     assert_eq!(pool.live(), 0);
     assert_eq!(
         pool.release(id),
@@ -202,8 +202,8 @@ fn linking_behind_a_slot_outside_the_pool_leaves_the_free_list_alone() {
     let first = pool.allocate(1).unwrap();
     let second = pool.allocate(2).unwrap();
     pool.link_free(9, 0);
-    assert_eq!(pool.release(first), Ok(Some(1)));
-    assert_eq!(pool.release(second), Ok(Some(2)));
+    assert_eq!(pool.release(first), Ok(true));
+    assert_eq!(pool.release(second), Ok(true));
     assert_eq!(pool.allocate(3).unwrap().index(), 0);
     assert_eq!(pool.allocate(4).unwrap().index(), 1);
 }
@@ -216,9 +216,9 @@ fn freed_slots_are_reused_in_the_order_they_were_freed() {
         ids.iter().map(|id| id.index()).collect::<Vec<_>>(),
         vec![0, 1, 2, 3]
     );
-    assert_eq!(pool.release(ids[2]), Ok(Some(2)));
-    assert_eq!(pool.release(ids[0]), Ok(Some(0)));
-    assert_eq!(pool.release(ids[3]), Ok(Some(3)));
+    assert_eq!(pool.release(ids[2]), Ok(true));
+    assert_eq!(pool.release(ids[0]), Ok(true));
+    assert_eq!(pool.release(ids[3]), Ok(true));
     assert_eq!(pool.allocate(10).unwrap().index(), 2);
     assert_eq!(pool.allocate(11).unwrap().index(), 0);
     assert_eq!(pool.allocate(12).unwrap().index(), 3);
@@ -230,8 +230,8 @@ fn emptying_a_pool_completely_refills_the_free_list() {
     let mut pool: Pool<u32, 2> = Pool::new();
     let first = pool.allocate(1).unwrap();
     let second = pool.allocate(2).unwrap();
-    assert_eq!(pool.release(first), Ok(Some(1)));
-    assert_eq!(pool.release(second), Ok(Some(2)));
+    assert_eq!(pool.release(first), Ok(true));
+    assert_eq!(pool.release(second), Ok(true));
     assert!(pool.is_empty());
     assert_eq!(pool.allocate(3).unwrap().index(), 0);
     assert_eq!(pool.allocate(4).unwrap().index(), 1);
@@ -343,10 +343,10 @@ impl ModelTest for PoolModel {
                     let id = ObjectId::new(key.0, key.1);
                     let entry = model.live.get(&key).copied();
                     match (sut.release(id), entry) {
-                        (Ok(None), Some((payload, refs))) if refs > 1 => {
+                        (Ok(false), Some((payload, refs))) if refs > 1 => {
                             model.live.insert(key, (payload, refs - 1));
                         }
-                        (Ok(Some(value)), Some((payload, 1))) if value == payload => {
+                        (Ok(true), Some((_, 1))) => {
                             model.live.remove(&key);
                         }
                         (Err(PoolError::StaleId), None) => {}

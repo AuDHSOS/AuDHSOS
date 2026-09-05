@@ -58,7 +58,14 @@ pub const BOOT_INFO_VADDR: u64 = KERNEL_BASE - 0x0200_0000;
 pub const KERNEL_STACKS_BASE: u64 = KERNEL_BASE - 0x4000_0000;
 
 /// Number of mapped pages of one kernel stack.
-pub const KERNEL_STACK_PAGES: u64 = 4;
+///
+/// Eight, not the four of D-57, and for the reason `BOOT_STACK_PAGES` is
+/// sixty-four: the unoptimized build the tests run needs the room. The
+/// deepest path from the system call gate is `process_create`, which
+/// carries a `Process` — four kilobytes of region table and thread slots —
+/// through three frames of the object pool; it measures twenty-three
+/// kilobytes, and sixteen is not enough for it (D-73).
+pub const KERNEL_STACK_PAGES: u64 = 8;
 
 /// Number of pages one kernel stack slot occupies, guard page included.
 pub const KERNEL_STACK_SLOT_PAGES: u64 = KERNEL_STACK_PAGES + 1;

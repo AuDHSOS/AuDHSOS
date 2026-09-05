@@ -7,6 +7,33 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Every system call of this kernel, made from ring three.
+  `tests/syscalls.rs` runs `every_syscall`, a program that walks the whole
+  table and writes down a pair per call — the number and the status word —
+  so the tests read the log rather than the order the program went in.
+  Sixty answers to forty-one calls: each of the twenty this phase
+  implements answered a success once and an error once, and each of the
+  twenty-one it leaves to Phase 6 answered exactly the refusal the table
+  of the interface asks for — `Unsupported` where the call is reachable,
+  `WrongObjectType` where its first argument names an object type of a
+  later phase. The host tests reach every path of every call with a
+  recording double; what this shows is that a user thread reaches them at
+  all.
+
+### Changed
+
+- A kernel stack is eight pages, not four, and `Pool::release` no longer
+  hands the object back (D-73). Both come out of one measurement, taken
+  when the system call tests first made `process_create` from ring three
+  and the machine answered with a double fault at the guard page: the
+  deepest path from the system call gate carries a `Process` — four
+  kilobytes of region table and thread slots — through three frames in a
+  row of the object pool, and measured 33 KiB in the unoptimized build the
+  tests run. `Pool::release` returning the value was two of those frames
+  and bought nobody anything; it now returns whether the last reference is
+  gone, which leaves the deepest path at 23 KiB. A thread therefore costs
+  nine frames of the reserve instead of five.
+
 - `net-ipv6`, the IPv6 half of the network stack (D4, 12.6.6). The header
   of RFC 8200 and its extension header chain, walked to the upper layer
   over hop-by-hop options, routing, fragment, and destination options and

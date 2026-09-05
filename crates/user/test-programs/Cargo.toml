@@ -46,6 +46,12 @@ path = "src/bin/spin.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "every_syscall"
+path = "src/bin/every_syscall.rs"
+test = false
+bench = false
+
 [dependencies]
 audhsos-abi.workspace = true
 user-sys-x86_64.workspace = true

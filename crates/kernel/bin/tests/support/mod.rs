@@ -27,7 +27,7 @@ use audhsos_abi::layout::{
     BOOT_STACK_TOP, KERNEL_STACK_PAGES, KERNEL_STACK_SLOT_PAGES, KERNEL_STACKS_BASE, PAGE_SIZE,
     TICKS_PER_SECOND,
 };
-use audhsos_abi::{ThreadState, ipc_buffer};
+use audhsos_abi::{Handle, Rights, ThreadState, ipc_buffer};
 use kernel_core::machine::with_machine;
 use kernel_core::memory::{self, with_memory};
 use kernel_core::state::KernelState;
@@ -40,12 +40,14 @@ use kernel_hal_x86_64::traps::TrapReport;
 use kernel_hal_x86_64::window::PhysicalWindow;
 use kernel_hal_x86_64::{context, descriptors, instructions, interrupts, testing, traps, vectors};
 use kernel_mm::page_table::{CachePolicy, PageTable, Permissions};
-use kernel_objects::handle_table::HandleList;
-use kernel_objects::object::{Process, ProcessId, Thread, ThreadId};
+use kernel_objects::handle_table::{Entry, HandleList};
+use kernel_objects::object::{
+    AnyObjectId, MemoryKind, MemoryObject, MemoryObjectId, Process, ProcessId, Thread, ThreadId,
+};
 use kernel_objects::quota::Quota;
 use kernel_syscall::environment::{Environment, KernelStack};
 use kernel_syscall::fault;
-use kernel_types::{Page, PhysFrame, PhysFrameRange, VirtAddr};
+use kernel_types::{Alignment, Page, PhysFrame, PhysFrameRange, VirtAddr};
 
 /// Where a program is linked and mapped. The linker script of the user
 /// test programs and the xtask both name this address.
@@ -411,6 +413,57 @@ pub(crate) fn spawn_at(program: &[u8], priority: u8) -> Spawned {
 /// priority: the shortest way to a running user thread.
 pub(crate) fn spawn(program: &[u8]) -> Spawned {
     spawn_at(program, DEFAULT_PRIORITY)
+}
+
+/// Installs a handle to `object` with `rights` in the table of `process`,
+/// the way the root task will install the handles of what it starts.
+pub(crate) fn install(process: ProcessId, object: AnyObjectId, rights: Rights) -> Handle {
+    with_machine(|machine| {
+        let Ok(mut list) = machine
+            .objects
+            .processes
+            .get(process)
+            .map(|held| held.handles)
+        else {
+            testing::fail(format_args!("the process holds no handle list"));
+        };
+        let handle = machine
+            .objects
+            .handles
+            .insert(process, &mut list, Entry::new(object, rights))
+            .unwrap_or_else(|error| testing::fail(format_args!("no handle slot: {error}")));
+        if let Ok(held) = machine.objects.processes.get_mut(process) {
+            held.handles = list;
+        }
+        handle
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")))
+}
+
+/// A memory object over `frames` contiguous frames of the reserve, the way
+/// the root task will hand memory out once it owns the boot regions.
+pub(crate) fn memory_object(frames: u64) -> MemoryObjectId {
+    let range = with_memory(|memory| {
+        memory
+            .frames_mut()
+            .allocate_contiguous(frames, Alignment::PAGE)
+            .unwrap_or_else(|error| {
+                testing::fail(format_args!("no run of {frames} frames: {error}"))
+            })
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the kernel memory is not reachable")));
+    with_machine(|machine| {
+        machine
+            .objects
+            .memory
+            .allocate(MemoryObject::new(
+                range,
+                MemoryKind::Ram,
+                CachePolicy::WriteBack,
+            ))
+            .unwrap_or_else(|_| testing::fail(format_args!("no slot for the memory object")))
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")))
 }
 
 /// Maps one page of memory read and write at [`SHARED_BASE`] of `process`

@@ -1401,13 +1401,17 @@ exceeds 64 MiB whatever the machine has:
 | 512 MiB | 31.8 MiB | 8144 |
 | 1 GiB and above | 64 MiB (the cap) | 16384 |
 
-**Every thread costs five frames of the reserve**: four for its kernel
-stack and one for its IPC buffer. `THREADS` and `KERNEL_STACKS` are
-therefore 256, not 1024, and `KERNEL_STACK_SLOTS` in `audhsos-abi` follows
-them. At 1024 the demand would be 5120 frames against the 4048 the
-reference machine has; at 256 it is 1280, which leaves 2768 frames for the
-page tables of the address spaces. Raising the machine to 512 MiB would
-have made 1024 fit, but it treats the symptom: the number was never derived
+**Every thread costs nine frames of the reserve**: eight for its kernel
+stack and one for its IPC buffer. It was five when this was written, and
+D-73 raised the stack to eight pages after the system call tests measured
+what the unoptimized build needs: twenty-three kilobytes on the deepest
+path, which is `process_create`. `THREADS` and `KERNEL_STACKS` are 256, not
+1024, and `KERNEL_STACK_SLOTS` in `audhsos-abi` follows them. At 1024 the
+demand would be 9216 frames against the 4048 the reference machine has; at
+256 it is 2304, which leaves 1744 frames — about 7 MiB — for the page
+tables of the address spaces, an order of magnitude more than the handful
+of processes of Phase 7 need. Raising the machine to 512 MiB would have
+made 1024 fit, but it treats the symptom: the number was never derived
 from what the system runs, and the larger machine costs the test suite
 seven seconds per image that brings the memory up.
 

@@ -299,22 +299,27 @@ impl<T, const N: usize> Pool<T, N> {
         Ok(())
     }
 
-    /// Drops one reference to the object `id` names and returns the value
-    /// when the last reference is gone. The slot is then free again and
-    /// goes to the end of the free list; its generation rises when it is
-    /// handed out next, which is what makes the old id stale.
+    /// Drops one reference to the object `id` names and says whether that
+    /// was the last one. The slot is then free again and goes to the end of
+    /// the free list; its generation rises when it is handed out next,
+    /// which is what makes the old id stale.
+    ///
+    /// The object itself does not come back out. A pool holds what nothing
+    /// else does, so there is nobody for it to go to, and an object of this
+    /// kernel is large enough that handing one back costs more of a kernel
+    /// stack than any caller was ever going to get out of it (D-73).
     ///
     /// # Errors
     ///
     /// [`PoolError::StaleId`] if `id` names no live object.
-    pub fn release(&mut self, id: ObjectId<T>) -> Result<Option<T>, PoolError> {
+    pub fn release(&mut self, id: ObjectId<T>) -> Result<bool, PoolError> {
         let occupant = self.occupant_mut(id)?;
         if occupant.refs > 1 {
             occupant.refs = occupant.refs.saturating_sub(1);
-            return Ok(None);
+            return Ok(false);
         }
         let slot = self.slot_mut(id.index).ok_or(PoolError::StaleId)?;
-        let value = slot.occupant.take().map(|occupant| occupant.value);
+        let freed = slot.occupant.take().is_some();
         slot.next_free = None;
         self.live = self.live.saturating_sub(1);
         match self.free_tail {
@@ -322,7 +327,7 @@ impl<T, const N: usize> Pool<T, N> {
             None => self.free_head = Some(id.index),
         }
         self.free_tail = Some(id.index);
-        Ok(value)
+        Ok(freed)
     }
 
     /// Every live object with its id, in slot order.

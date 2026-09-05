@@ -44,6 +44,9 @@ name = "concurrency"
 name = "preemption"
 
 [[test]]
+name = "syscalls"
+
+[[test]]
 name = "console"
 
 [[test]]

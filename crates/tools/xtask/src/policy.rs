@@ -440,7 +440,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-test-programs",
         path: "crates/user/test-programs",
         kind: Kind::Adapter {
-            unsafe_budget: 13,
+            unsafe_budget: 17,
             asm_budget: 1,
         },
         deps: &["audhsos-abi", "user-sys-x86_64"],
