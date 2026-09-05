@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! IPv6 addresses: the canonical text of RFC 5952 and nothing else.
+//! IPv6 addresses and networks: the canonical text of RFC 5952 and
+//! nothing else.
 
 use test_support::generators::bytes;
 use test_support::property::check;
 
-use crate::addr::{IpAddr, IpCidr, IpVersion, Ipv4Addr, Ipv4Cidr, Ipv6Addr, Ipv6Cidr};
+use crate::addr::{Ipv6Addr, Ipv6Cidr};
 use crate::error::WireError;
 
 #[test]
@@ -197,74 +198,6 @@ fn a_network_text_that_is_not_one_is_refused() {
     assert_eq!(
         Ipv6Cidr::parse("2001:db8::1/129"),
         Err(WireError::PrefixLength(129))
-    );
-}
-
-#[test]
-fn an_address_of_either_family_carries_its_own_version() {
-    let four = IpAddr::from(Ipv4Addr::new(192, 168, 1, 1));
-    let six = IpAddr::from(Ipv6Addr::LOCALHOST);
-    assert_eq!(four.version(), IpVersion::V4);
-    assert_eq!(six.version(), IpVersion::V6);
-    assert!(four.is_v4() && !four.is_v6());
-    assert!(six.is_v6() && !six.is_v4());
-    assert_eq!(four.to_string(), "192.168.1.1");
-    assert_eq!(six.to_string(), "::1");
-    assert_eq!(IpVersion::V4.to_string(), "IPv4");
-    assert_eq!(IpVersion::V6.to_string(), "IPv6");
-}
-
-#[test]
-fn a_text_with_a_colon_is_read_as_the_second_family() {
-    assert_eq!(
-        IpAddr::parse("10.0.0.1"),
-        Ok(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
-    );
-    assert_eq!(IpAddr::parse("::1"), Ok(IpAddr::V6(Ipv6Addr::LOCALHOST)));
-    assert_eq!(IpAddr::parse("10.0.0.256"), Err(WireError::Address));
-    assert_eq!(IpAddr::parse("::x"), Err(WireError::Address));
-}
-
-#[test]
-fn the_predicates_of_either_family_answer_through_the_enum() {
-    assert!(IpAddr::V4(Ipv4Addr::UNSPECIFIED).is_unspecified());
-    assert!(IpAddr::V6(Ipv6Addr::UNSPECIFIED).is_unspecified());
-    assert!(IpAddr::V4(Ipv4Addr::LOCALHOST).is_loopback());
-    assert!(IpAddr::V6(Ipv6Addr::LOCALHOST).is_loopback());
-    assert!(IpAddr::V4(Ipv4Addr::new(224, 0, 0, 1)).is_multicast());
-    assert!(IpAddr::V6(Ipv6Addr::ALL_NODES).is_multicast());
-    assert!(!IpAddr::V4(Ipv4Addr::LOCALHOST).is_multicast());
-    assert!(!IpAddr::V6(Ipv6Addr::LOCALHOST).is_multicast());
-    assert!(!IpAddr::V4(Ipv4Addr::LOCALHOST).is_unspecified());
-    assert!(!IpAddr::V6(Ipv6Addr::LOCALHOST).is_unspecified());
-}
-
-#[test]
-fn a_route_of_one_family_never_matches_a_destination_of_the_other() {
-    let four = IpCidr::from(Ipv4Cidr::parse("10.0.0.0/8").expect("a v4 network"));
-    let six = IpCidr::from(Ipv6Cidr::parse("2001:db8::/32").expect("a v6 network"));
-    assert!(four.contains(IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))));
-    assert!(!four.contains(IpAddr::V6(Ipv6Addr::LOCALHOST)));
-    assert!(six.contains(IpAddr::V6(Ipv6Addr::new([
-        0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1
-    ]))));
-    assert!(!six.contains(IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))));
-    assert_eq!(four.version(), IpVersion::V4);
-    assert_eq!(six.version(), IpVersion::V6);
-    assert_eq!(four.prefix_len(), 8);
-    assert_eq!(six.prefix_len(), 32);
-    assert_eq!(four.address(), IpAddr::V4(Ipv4Addr::new(10, 0, 0, 0)));
-    assert_eq!(
-        six.address(),
-        IpAddr::V6(Ipv6Addr::new([0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0]))
-    );
-    assert_eq!(four.to_string(), "10.0.0.0/8");
-    assert_eq!(six.to_string(), "2001:db8::/32");
-    assert_eq!(IpCidr::parse("10.0.0.0/8"), Ok(four));
-    assert_eq!(IpCidr::parse("2001:db8::/32"), Ok(six));
-    assert_eq!(
-        IpCidr::parse("10.0.0.0/33"),
-        Err(WireError::PrefixLength(33))
     );
 }
 

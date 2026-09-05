@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! Addresses: one text per value, in both directions.
+//! The hardware address, the port, and the two types that carry an
+//! address of either family. What belongs to one family is in
+//! [`ipv4`](super::ipv4) and [`ipv6`](super::ipv6).
 
-use test_support::generators::{Generator, bytes, range};
+use test_support::generators::bytes;
 use test_support::property::check;
 
-use crate::addr::{Ipv4Addr, Ipv4Cidr, MacAddr, Port};
+use crate::addr::{
+    IpAddr, IpCidr, IpVersion, Ipv4Addr, Ipv4Cidr, Ipv6Addr, Ipv6Cidr, MacAddr, Port,
+};
 use crate::error::WireError;
 
 #[test]
@@ -59,121 +63,17 @@ fn the_mac_predicates_follow_the_group_bit() {
 }
 
 #[test]
-fn an_ipv4_address_round_trips_through_its_canonical_text() {
-    let address = Ipv4Addr::new(192, 168, 1, 7);
-    assert_eq!(address.to_string(), "192.168.1.7");
-    assert_eq!(Ipv4Addr::parse("192.168.1.7"), Ok(address));
-    assert_eq!(Ipv4Addr::parse("0.0.0.0"), Ok(Ipv4Addr::UNSPECIFIED));
-    assert_eq!(Ipv4Addr::parse("255.255.255.255"), Ok(Ipv4Addr::BROADCAST));
-    assert_eq!(Ipv4Addr::parse("127.0.0.1"), Ok(Ipv4Addr::LOCALHOST));
-    assert_eq!(address.octets(), [192, 168, 1, 7]);
-    assert_eq!(address.to_bits(), 0xC0A8_0107);
-    assert_eq!(Ipv4Addr::from_bits(0xC0A8_0107), address);
-    assert_eq!(Ipv4Addr::from_octets([192, 168, 1, 7]), address);
-    assert_eq!(Ipv4Addr::LEN, 4);
-    assert_eq!(Ipv4Addr::default(), Ipv4Addr::UNSPECIFIED);
-}
-
-#[test]
-fn a_leading_zero_is_refused_rather_than_read_as_octal() {
-    for text in ["010.0.0.1", "0.0.0.01", "00.0.0.0"] {
-        assert_eq!(Ipv4Addr::parse(text), Err(WireError::Address), "{text:?}");
-    }
-}
-
-#[test]
-fn an_ipv4_text_that_is_not_four_octets_is_refused() {
-    for text in [
-        "",
-        "1.2.3",
-        "1.2.3.4.5",
-        "1.2.3.",
-        ".1.2.3",
-        "1.2.3.256",
-        "1.2.3.999",
-        "1.2.3.4444",
-        "1.2.3.x",
-        "1.2.3.-4",
-        "1.2. 3.4",
-    ] {
-        assert_eq!(Ipv4Addr::parse(text), Err(WireError::Address), "{text:?}");
-    }
-}
-
-#[test]
-fn the_ipv4_predicates_name_their_ranges() {
-    assert!(Ipv4Addr::UNSPECIFIED.is_unspecified());
-    assert!(Ipv4Addr::BROADCAST.is_broadcast());
-    assert!(Ipv4Addr::LOCALHOST.is_loopback());
-    assert!(Ipv4Addr::new(127, 255, 255, 254).is_loopback());
-    assert!(!Ipv4Addr::new(128, 0, 0, 1).is_loopback());
-    assert!(Ipv4Addr::new(224, 0, 0, 1).is_multicast());
-    assert!(Ipv4Addr::new(239, 255, 255, 255).is_multicast());
-    assert!(!Ipv4Addr::new(240, 0, 0, 1).is_multicast());
-    assert!(!Ipv4Addr::new(223, 255, 255, 255).is_multicast());
-    assert!(!Ipv4Addr::BROADCAST.is_unspecified());
-    assert!(!Ipv4Addr::UNSPECIFIED.is_broadcast());
-}
-
-#[test]
-fn a_prefix_of_zero_of_thirty_two_and_of_thirty_three() {
-    let address = Ipv4Addr::new(10, 1, 2, 3);
-
-    let everything = Ipv4Cidr::new(address, 0).expect("zero is a prefix length");
-    assert_eq!(everything.netmask(), Ipv4Addr::UNSPECIFIED);
-    assert_eq!(everything.network(), Ipv4Addr::UNSPECIFIED);
-    assert_eq!(everything.broadcast(), Ipv4Addr::BROADCAST);
-    assert!(everything.contains(Ipv4Addr::new(203, 0, 113, 9)));
-
-    let host = Ipv4Cidr::new(address, 32).expect("32 is a prefix length");
-    assert_eq!(host.netmask(), Ipv4Addr::BROADCAST);
-    assert_eq!(host.network(), address);
-    assert_eq!(host.broadcast(), address);
-    assert!(host.contains(address));
-    assert!(!host.contains(Ipv4Addr::new(10, 1, 2, 4)));
-
-    assert_eq!(Ipv4Cidr::new(address, 33), Err(WireError::PrefixLength(33)));
-    assert_eq!(Ipv4Cidr::MAX_PREFIX_LEN, 32);
-}
-
-#[test]
-fn a_network_contains_both_of_its_ends_and_nothing_beyond_them() {
-    let network = Ipv4Cidr::parse("192.168.1.7/24").expect("a network in canonical form");
-    assert_eq!(network.address(), Ipv4Addr::new(192, 168, 1, 7));
-    assert_eq!(network.prefix_len(), 24);
-    assert_eq!(network.netmask(), Ipv4Addr::new(255, 255, 255, 0));
-    assert_eq!(network.network(), Ipv4Addr::new(192, 168, 1, 0));
-    assert_eq!(network.broadcast(), Ipv4Addr::new(192, 168, 1, 255));
-    assert!(network.contains(Ipv4Addr::new(192, 168, 1, 0)));
-    assert!(network.contains(Ipv4Addr::new(192, 168, 1, 255)));
-    assert!(!network.contains(Ipv4Addr::new(192, 168, 0, 255)));
-    assert!(!network.contains(Ipv4Addr::new(192, 168, 2, 0)));
-    assert_eq!(network.to_string(), "192.168.1.7/24");
-
-    let odd = Ipv4Cidr::parse("10.0.0.130/26").expect("a prefix inside an octet");
-    assert_eq!(odd.netmask(), Ipv4Addr::new(255, 255, 255, 192));
-    assert_eq!(odd.network(), Ipv4Addr::new(10, 0, 0, 128));
-    assert_eq!(odd.broadcast(), Ipv4Addr::new(10, 0, 0, 191));
-    assert!(odd.contains(Ipv4Addr::new(10, 0, 0, 191)));
-    assert!(!odd.contains(Ipv4Addr::new(10, 0, 0, 192)));
-}
-
-#[test]
-fn a_network_text_that_is_not_one_is_refused() {
-    assert_eq!(Ipv4Cidr::parse("192.168.1.0"), Err(WireError::Address));
-    assert_eq!(Ipv4Cidr::parse("192.168.1.0/"), Err(WireError::Address));
-    assert_eq!(Ipv4Cidr::parse("192.168.1.0/x"), Err(WireError::Address));
-    assert_eq!(Ipv4Cidr::parse("192.168.1.0/024"), Err(WireError::Address));
-    assert_eq!(Ipv4Cidr::parse("192.168.1.0/300"), Err(WireError::Address));
-    assert_eq!(Ipv4Cidr::parse("192.168.1/24"), Err(WireError::Address));
-    assert_eq!(
-        Ipv4Cidr::parse("192.168.1.0/33"),
-        Err(WireError::PrefixLength(33))
-    );
-    assert_eq!(
-        Ipv4Cidr::parse("192.168.1.0/0"),
-        Ipv4Cidr::new(Ipv4Addr::new(192, 168, 1, 0), 0)
-    );
+fn every_mac_address_reads_back_from_what_it_wrote() {
+    check("mac text round trip", &bytes(6..=6), |octets| {
+        let mut value = [0u8; 6];
+        value.copy_from_slice(octets.get(..6).unwrap_or(&[0; 6]));
+        let address = MacAddr::new(value);
+        let text = address.to_string();
+        match MacAddr::parse(&text) {
+            Ok(back) if back == address => Ok(()),
+            other => Err(format!("{text} came back as {other:?}")),
+        }
+    });
 }
 
 #[test]
@@ -191,55 +91,69 @@ fn a_port_knows_the_dynamic_range() {
 }
 
 #[test]
-fn every_ipv4_address_reads_back_from_what_it_wrote() {
-    check("ipv4 text round trip", &bytes(4..=4), |octets| {
-        let mut value = [0u8; 4];
-        value.copy_from_slice(octets.get(..4).unwrap_or(&[0; 4]));
-        let address = Ipv4Addr::from_octets(value);
-        let text = address.to_string();
-        match Ipv4Addr::parse(&text) {
-            Ok(back) if back == address => Ok(()),
-            other => Err(format!("{text} came back as {other:?}")),
-        }
-    });
+fn an_address_of_either_family_carries_its_own_version() {
+    let four = IpAddr::from(Ipv4Addr::new(192, 168, 1, 1));
+    let six = IpAddr::from(Ipv6Addr::LOCALHOST);
+    assert_eq!(four.version(), IpVersion::V4);
+    assert_eq!(six.version(), IpVersion::V6);
+    assert!(four.is_v4() && !four.is_v6());
+    assert!(six.is_v6() && !six.is_v4());
+    assert_eq!(four.to_string(), "192.168.1.1");
+    assert_eq!(six.to_string(), "::1");
+    assert_eq!(IpVersion::V4.to_string(), "IPv4");
+    assert_eq!(IpVersion::V6.to_string(), "IPv6");
 }
 
 #[test]
-fn every_mac_address_reads_back_from_what_it_wrote() {
-    check("mac text round trip", &bytes(6..=6), |octets| {
-        let mut value = [0u8; 6];
-        value.copy_from_slice(octets.get(..6).unwrap_or(&[0; 6]));
-        let address = MacAddr::new(value);
-        let text = address.to_string();
-        match MacAddr::parse(&text) {
-            Ok(back) if back == address => Ok(()),
-            other => Err(format!("{text} came back as {other:?}")),
-        }
-    });
+fn a_text_with_a_colon_is_read_as_the_second_family() {
+    assert_eq!(
+        IpAddr::parse("10.0.0.1"),
+        Ok(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)))
+    );
+    assert_eq!(IpAddr::parse("::1"), Ok(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    assert_eq!(IpAddr::parse("10.0.0.256"), Err(WireError::Address));
+    assert_eq!(IpAddr::parse("::x"), Err(WireError::Address));
 }
 
 #[test]
-fn a_network_contains_exactly_the_addresses_between_its_ends() {
-    let generator = range(0u8..=32).map(|prefix_len| (prefix_len, 0xC0A8_2A07u32));
-    check("cidr bounds", &generator, |(prefix_len, bits)| {
-        let network = Ipv4Cidr::new(Ipv4Addr::from_bits(*bits), *prefix_len)
-            .map_err(|error| error.to_string())?;
-        let first = network.network().to_bits();
-        let last = network.broadcast().to_bits();
-        if first > last {
-            return Err(format!("{network} runs backwards"));
-        }
-        if !network.contains(Ipv4Addr::from_bits(first))
-            || !network.contains(Ipv4Addr::from_bits(last))
-        {
-            return Err(format!("{network} excludes one of its ends"));
-        }
-        let outside = last.checked_add(1).map(Ipv4Addr::from_bits);
-        match outside {
-            Some(address) if network.contains(address) && *prefix_len != 0 => {
-                Err(format!("{network} reaches {address}"))
-            }
-            _ => Ok(()),
-        }
-    });
+fn the_predicates_of_either_family_answer_through_the_enum() {
+    assert!(IpAddr::V4(Ipv4Addr::UNSPECIFIED).is_unspecified());
+    assert!(IpAddr::V6(Ipv6Addr::UNSPECIFIED).is_unspecified());
+    assert!(IpAddr::V4(Ipv4Addr::LOCALHOST).is_loopback());
+    assert!(IpAddr::V6(Ipv6Addr::LOCALHOST).is_loopback());
+    assert!(IpAddr::V4(Ipv4Addr::new(224, 0, 0, 1)).is_multicast());
+    assert!(IpAddr::V6(Ipv6Addr::ALL_NODES).is_multicast());
+    assert!(!IpAddr::V4(Ipv4Addr::LOCALHOST).is_multicast());
+    assert!(!IpAddr::V6(Ipv6Addr::LOCALHOST).is_multicast());
+    assert!(!IpAddr::V4(Ipv4Addr::LOCALHOST).is_unspecified());
+    assert!(!IpAddr::V6(Ipv6Addr::LOCALHOST).is_unspecified());
+}
+
+#[test]
+fn a_route_of_one_family_never_matches_a_destination_of_the_other() {
+    let four = IpCidr::from(Ipv4Cidr::parse("10.0.0.0/8").expect("a v4 network"));
+    let six = IpCidr::from(Ipv6Cidr::parse("2001:db8::/32").expect("a v6 network"));
+    assert!(four.contains(IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))));
+    assert!(!four.contains(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    assert!(six.contains(IpAddr::V6(Ipv6Addr::new([
+        0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1
+    ]))));
+    assert!(!six.contains(IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3))));
+    assert_eq!(four.version(), IpVersion::V4);
+    assert_eq!(six.version(), IpVersion::V6);
+    assert_eq!(four.prefix_len(), 8);
+    assert_eq!(six.prefix_len(), 32);
+    assert_eq!(four.address(), IpAddr::V4(Ipv4Addr::new(10, 0, 0, 0)));
+    assert_eq!(
+        six.address(),
+        IpAddr::V6(Ipv6Addr::new([0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0]))
+    );
+    assert_eq!(four.to_string(), "10.0.0.0/8");
+    assert_eq!(six.to_string(), "2001:db8::/32");
+    assert_eq!(IpCidr::parse("10.0.0.0/8"), Ok(four));
+    assert_eq!(IpCidr::parse("2001:db8::/32"), Ok(six));
+    assert_eq!(
+        IpCidr::parse("10.0.0.0/33"),
+        Err(WireError::PrefixLength(33))
+    );
 }
