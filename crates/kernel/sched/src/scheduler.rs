@@ -10,9 +10,9 @@
 //! only when every queue is empty.
 //!
 //! The first of those is why every operation that takes a thread off the
-//! processor goes through [`Scheduler::leaves_the_processor`], which asks
-//! the transition table before it touches a queue. An operation the table
-//! refuses changes nothing at all.
+//! processor — suspend, exit, fault, block — goes through one place that
+//! asks the transition table before it touches a queue. An operation the
+//! table refuses changes nothing at all.
 
 use audhsos_abi::layout::{DEFAULT_TIME_SLICE_TICKS, PRIORITY_COUNT};
 use audhsos_abi::{Error, ThreadState};
@@ -402,8 +402,11 @@ impl Scheduler {
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidArgument`] when `event` blocks nothing; otherwise as
-    /// [`Scheduler::leaves_the_processor`].
+    /// [`Error::InvalidArgument`] when `event` blocks nothing;
+    /// [`Error::InvalidHandle`] when the pool does not hold the thread;
+    /// [`Error::InvalidState`] when the transition table does not allow the
+    /// event in the thread's state. A refused operation changes nothing:
+    /// not the state, not a queue, not the time slice.
     pub fn on_block<const N: usize>(
         &mut self,
         threads: &mut Pool<Thread, N>,
@@ -420,7 +423,10 @@ impl Scheduler {
     ///
     /// # Errors
     ///
-    /// As [`Scheduler::leaves_the_processor`].
+    /// [`Error::InvalidHandle`] when the pool does not hold the thread;
+    /// [`Error::InvalidState`] when the transition table does not allow the
+    /// event in the thread's state. A refused operation changes nothing:
+    /// not the state, not a queue, not the time slice.
     pub fn suspend<const N: usize>(
         &mut self,
         threads: &mut Pool<Thread, N>,
@@ -450,7 +456,10 @@ impl Scheduler {
     ///
     /// # Errors
     ///
-    /// As [`Scheduler::leaves_the_processor`].
+    /// [`Error::InvalidHandle`] when the pool does not hold the thread;
+    /// [`Error::InvalidState`] when the transition table does not allow the
+    /// event in the thread's state. A refused operation changes nothing:
+    /// not the state, not a queue, not the time slice.
     pub fn fault<const N: usize>(
         &mut self,
         threads: &mut Pool<Thread, N>,
@@ -464,7 +473,10 @@ impl Scheduler {
     ///
     /// # Errors
     ///
-    /// As [`Scheduler::leaves_the_processor`].
+    /// [`Error::InvalidHandle`] when the pool does not hold the thread;
+    /// [`Error::InvalidState`] when the transition table does not allow the
+    /// event in the thread's state. A refused operation changes nothing:
+    /// not the state, not a queue, not the time slice.
     pub fn exit<const N: usize>(
         &mut self,
         threads: &mut Pool<Thread, N>,
