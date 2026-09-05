@@ -12,6 +12,7 @@ members = [
     "crates/crypto/rng",
     "crates/net/der",
     "crates/net/x509",
+    "crates/net/tls",
     "crates/boot/uefi-x86_64",
     "crates/elf",
     "crates/uefi",
@@ -26,6 +27,7 @@ members = [
     "crates/kernel/test-harness",
     "crates/kernel/x86-tables",
     "crates/kernel/mm",
+    "crates/support/fuzz",
     "crates/support/testing",
     "crates/tools/xtask",
 ]
@@ -37,6 +39,8 @@ license = "AGPL-3.0-only"
 authors = ["Manuel Baesler and contributors"]
 rust-version = "1.100"
 
+exclude = ["fuzz"]
+
 [workspace.dependencies]
 audhsos-abi = { path = "crates/abi" }
 crypto-ct = { path = "crates/crypto/ct" }
@@ -46,6 +50,7 @@ crypto-ec = { path = "crates/crypto/ec" }
 crypto-rng = { path = "crates/crypto/rng" }
 audhsos-der = { path = "crates/net/der" }
 audhsos-x509 = { path = "crates/net/x509" }
+audhsos-tls = { path = "crates/net/tls" }
 boot-uefi-x86_64 = { path = "crates/boot/uefi-x86_64" }
 audhsos-elf = { path = "crates/elf" }
 audhsos-uefi = { path = "crates/uefi" }
@@ -60,6 +65,7 @@ kernel-hal-x86_64 = { path = "crates/kernel/hal-x86_64" }
 kernel-test-harness = { path = "crates/kernel/test-harness" }
 kernel-x86-tables = { path = "crates/kernel/x86-tables" }
 kernel-mm = { path = "crates/kernel/mm" }
+fuzz-support = { path = "crates/support/fuzz" }
 test-support = { path = "crates/support/testing" }
 
 [workspace.lints.rust]

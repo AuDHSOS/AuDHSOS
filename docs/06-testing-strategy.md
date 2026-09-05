@@ -837,13 +837,19 @@ done until every applicable item has a test. Items are added, never removed.
   rejected, padding of the maximum length is accepted.
 - Sequence numbers: the nonce is the IV xor the sequence number; exhaustion
   of the sequence space is an error rather than a wrap.
-- Key schedule: the secrets, keys, and IVs of the RFC 8448 traces for all
-  three cipher suites; `hkdf_expand_label` against the label examples of
-  RFC 8446 §7.1; `key_update` in both directions produces the documented
-  successor keys.
-- Transcript: the hash after each message of the trace; the `message_hash`
-  substitution after a `HelloRetryRequest` reproduces the documented
-  value.
+- Key schedule: every secret of RFC 8446 §7.1 from the early stage to the
+  application secrets, the traffic key and nonce base, the finished key,
+  and the secret after a key update, for both hash lengths. RFC 8446
+  publishes no vectors of its own, so the expected values were computed
+  from section 7.1 by an implementation outside this repository over
+  inputs the test file fixes; the traces of RFC 8448 need whole handshake
+  messages and arrive with the state machine.
+- The nonce is the base with the sequence number exclusive-ored into its
+  tail, at zero, at one, and at a number that touches every byte.
+- Transcript: the hash equals the digest of the messages concatenated, for
+  both lengths and for any split of a message; the `message_hash`
+  substitution reproduces what the standard describes, and applies to each
+  hash with its own length so that both stay usable.
 
 ### 6.6.38 TLS handshake and connection (`audhsos-tls`)
 

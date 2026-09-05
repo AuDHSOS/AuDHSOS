@@ -374,9 +374,13 @@ Modules:
 - `keys.rs`: the RFC 8446 §7.1 key schedule. `hkdf_expand_label`,
   `derive_secret`, early, handshake, and master secrets, traffic keys and
   IVs, the per-record nonce as IV xor sequence number, and `key_update`.
-- `transcript.rs`: the running handshake hash, the buffering of
-  `ClientHello` until the suite fixes the hash, and the `message_hash`
-  substitution after a `HelloRetryRequest`.
+- `transcript.rs`: the running handshake hash and the `message_hash`
+  substitution after a `HelloRetryRequest`. The suite is not known when
+  the first message is sent, so the transcript keeps both hashes and hands
+  out the one that is asked for. The second hash costs a few kilobytes of
+  hashing per handshake and removes a buffer, a length limit, and the
+  failure that comes with them; the substitution is applied to each hash
+  with its own length, so both stay usable.
 - `messages/`: encoding and decoding of `ClientHello`, `ServerHello`,
   `EncryptedExtensions`, `Certificate`, `CertificateVerify`, `Finished`,
   `NewSessionTicket` (parsed, then ignored), `KeyUpdate`, and the
@@ -434,7 +438,7 @@ checklist in 4.9.
 | T4 | `crypto-rng` | S | implemented |
 | T5 | `audhsos-der` | M | implemented but for the time conversion (11.14) |
 | T6 | `audhsos-x509` with the test certificate builder | L | implemented |
-| T7 | `audhsos-tls` | XL | |
+| T7 | `audhsos-tls` | XL | record layer and key schedule implemented; messages and the state machine follow |
 | T8 | Integration, jointly with step D9 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M | |
 
 T1 to T7 touch nothing outside their own crates and the policy table, so

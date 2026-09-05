@@ -86,6 +86,8 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   validation against caller-supplied trust anchors, and RFC 6125 name
   matching, with a builder behind `test-certificates` that writes and signs
   the certificates the tests use.
+- `audhsos-tls`: the record layer, the record protection, the key schedule
+  of RFC 8446 section 7.1, and the handshake transcript.
 - Decision D-56: the key exchange of the TLS client is `x25519` alone.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.

@@ -40,6 +40,16 @@ name = "audhsos-sync"
 version = "0.1.0"
 
 [[package]]
+name = "audhsos-tls"
+version = "0.1.0"
+dependencies = [
+ "crypto-aead",
+ "crypto-ct",
+ "crypto-hash",
+ "test-support",
+]
+
+[[package]]
 name = "audhsos-uefi"
 version = "0.1.0"
 dependencies = [
@@ -116,6 +126,10 @@ version = "0.1.0"
 dependencies = [
  "test-support",
 ]
+
+[[package]]
+name = "fuzz-support"
+version = "0.1.0"
 
 [[package]]
 name = "kernel-core"

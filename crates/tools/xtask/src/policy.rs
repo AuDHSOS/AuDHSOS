@@ -132,6 +132,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "audhsos-tls",
+        path: "crates/net/tls",
+        kind: Kind::Logic,
+        deps: &["crypto-aead", "crypto-ct", "crypto-hash", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-sync",
         path: "crates/sync",
         kind: Kind::Adapter {
@@ -291,6 +299,17 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "fuzz-support",
+        path: "crates/support/fuzz",
+        kind: Kind::Adapter {
+            unsafe_budget: 4,
+            asm_budget: 0,
+        },
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "test-support",
         path: "crates/support/testing",
         kind: Kind::Host,
@@ -312,7 +331,7 @@ pub(crate) const CRATES: &[Crate] = &[
 pub(crate) const DEV_DEPENDENCIES: &[&str] = &["test-support"];
 
 /// Crates whose tests run under Miri.
-pub(crate) const MIRI_CRATES: &[&str] = &["audhsos-sync"];
+pub(crate) const MIRI_CRATES: &[&str] = &["audhsos-sync", "fuzz-support"];
 
 /// The two header lines every source file starts with (comment syntax
 /// added per file type).
