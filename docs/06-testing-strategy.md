@@ -653,6 +653,178 @@ done until every applicable item has a test. Items are added, never removed.
 - Absent hardware: with `-vga none` the input tests still pass and the
   display server reports `NotFound` to its clients.
 
+### 6.6.30 Constant-time helpers (`crypto-ct`)
+
+- `ct_eq` returns 1 exactly for equal slices and 0 otherwise; slices of
+  differing length are unequal; the empty slice equals the empty slice.
+- `ct_select_*` returns the first argument for `Choice(1)` and the second
+  for `Choice(0)`, for both extreme and random values (property).
+- `ct_swap` exchanges the buffers for `Choice(1)` and leaves them
+  untouched for `Choice(0)`; buffers of differing length are rejected.
+- `Secret<N>`: `Debug` prints the length and no byte of the content;
+  equality goes through `ct_eq`; a dropped secret leaves zeros in the
+  buffer the test still owns.
+
+### 6.6.31 Hashes, HMAC, and HKDF (`crypto-hash`)
+
+- SHA-256, SHA-384, and SHA-512 against the FIPS 180-4 and RFC 6234
+  vectors, including the empty message, exactly one block, one block minus
+  one byte, one block plus one byte, and the multi-megabyte repetition
+  case behind a slow test.
+- Incremental hashing: any splitting of a message into chunks produces the
+  digest of the one-shot call (property).
+- Padding boundaries: a message whose length leaves 55, 56, or 57 bytes in
+  the final block is padded into one or two blocks correctly.
+- HMAC against the RFC 4231 vectors, including keys shorter than, equal
+  to, and longer than the block length, and the empty key.
+- HKDF against the RFC 5869 vectors; an empty salt behaves as a zero salt;
+  an output longer than `255 * OUTPUT_LEN` is `OutputTooLong`; a
+  zero-length output is accepted.
+
+### 6.6.32 Authenticated encryption (`crypto-aead`)
+
+- ChaCha20 block function and keystream against RFC 8439 §2.3.2 and
+  §2.4.2; a counter that would wrap is an error.
+- Poly1305 against RFC 8439 §2.5.2 and the edge cases of its appendix:
+  the accumulator at the reduction boundary, an all-ones message, a
+  message of exactly one block, and the empty message.
+- ChaCha20-Poly1305 against RFC 8439 §2.8.2 and appendix A.5, with and
+  without associated data.
+- AES-128 and AES-256 block encryption against FIPS 197 appendix B and C;
+  the bitsliced batch of eight blocks equals eight single-block
+  encryptions (property).
+- GHASH and AES-GCM against the NIST CAVP vectors transcribed into the
+  test file, covering empty plaintext, empty associated data, both empty,
+  and lengths that are not a multiple of the block size.
+- Seal then open returns the plaintext for arbitrary inputs (property);
+  flipping any single bit of ciphertext, tag, nonce, or associated data
+  makes `open` fail; a failed `open` leaves no plaintext in the buffer.
+
+### 6.6.33 Elliptic curves (`crypto-ec`)
+
+- `fe25519`: addition, multiplication, and squaring agree with a
+  reference implementation over `u128` limbs on random inputs (property);
+  inversion of a non-zero element yields the identity when multiplied
+  back; the canonical encoding rejects values at or above the prime.
+- X25519 against RFC 7748 §5.2 and §6.1, including the iterated test at
+  one thousand rounds and, behind a slow test, at one million; a peer
+  value that produces an all-zero shared secret is rejected; non-canonical
+  peer encodings are handled as the RFC prescribes.
+- Ed25519 verification against RFC 8032 §7.1; rejection of `S >= L`, of
+  non-canonical point encodings, of small-order public keys, and of a
+  signature over a modified message.
+- P-256: point arithmetic against the NIST example points; ECDSA
+  verification against the CAVP vectors; rejection of `r` or `s` equal to
+  zero, of `r` or `s` at or above the order, of a public point not on the
+  curve, of the point at infinity, and of a signature over a different
+  digest.
+- With `test-signing`: signing then verifying round-trips for both
+  algorithms; the deterministic ECDSA nonce matches the RFC 6979 example.
+
+### 6.6.34 Random generator (`crypto-rng`)
+
+- `ChaChaRng` produces the expected stream for a fixed seed; requests of
+  zero, one, block-sized, and block-crossing lengths are contiguous.
+- The generator rekeys after each request: the state after a request never
+  reproduces the bytes just returned.
+- The reseed budget triggers exactly one `Entropy` call at the boundary; a
+  failing entropy source surfaces as an error and never yields bytes.
+- `ScriptedRng` returns the scripted bytes and reports exhaustion instead
+  of repeating.
+
+### 6.6.35 DER reader (`audhsos-der`)
+
+- Header parsing: single-byte and multi-byte lengths; a non-minimal
+  length, an indefinite length, a length beyond the input, and a length
+  whose encoding is longer than needed are all rejected.
+- Integers: a leading zero that is not required, a negative value where
+  unsigned is expected, and the empty integer are rejected.
+- Bit strings with a non-zero unused-bit count where zero is required;
+  octet strings of length zero; object identifiers compared as bytes.
+- Times: `UTCTime` and `GeneralizedTime` in the forms RFC 5280 allows,
+  and rejection of the forms it forbids; leap years, the two-digit year
+  window, the day-of-month bounds per month, and out-of-range fields.
+- Nesting deeper than `MAX_DEPTH` is rejected without recursion beyond the
+  limit; trailing bytes after the outermost value are rejected.
+- Property: no input causes a panic and every accepted value re-encodes to
+  the input bytes. Fuzz target `der`.
+
+### 6.6.36 Certificates and path validation (`audhsos-x509`)
+
+- Parsing: a minimal valid certificate; missing mandatory fields; an
+  unknown critical extension is rejected; an unknown non-critical
+  extension is ignored; duplicate extensions are rejected; a key algorithm
+  outside the supported set is rejected.
+- Signatures: each supported algorithm verifies a correct signature and
+  rejects one over a modified `tbs`; an algorithm mismatch between the
+  outer and inner fields is rejected.
+- Validity: `not_before` in the future, `not_after` in the past, and the
+  exact boundary instants.
+- Chain: a two-link and a three-link chain verify; a broken issuer name
+  link, a broken signature link, a missing intermediate, a chain longer
+  than eight, a self-signed leaf without an anchor, and an anchor that
+  signs nothing in the chain are all rejected.
+- Constraints: an intermediate without `cA`, an intermediate without
+  `keyCertSign`, a path length exceeded, and a leaf without `serverAuth`
+  are rejected.
+- Names: an exact `dNSName` match; a wildcard in the leftmost label; a
+  wildcard elsewhere, a partial-label wildcard, and a wildcard matching
+  more than one label are rejected; a common name that would match is
+  ignored when no matching SAN exists; case is compared case-insensitively
+  for ASCII; a trailing dot is handled; an IP address matches only an
+  `iPAddress` entry.
+- Property: mutating any byte of a valid chain makes verification fail or
+  parsing fail, never succeed. Fuzz target `x509`.
+
+### 6.6.37 TLS record layer and key schedule (`audhsos-tls`)
+
+- Records: the maximum plaintext and ciphertext lengths are accepted, one
+  byte more is `RecordOverflow`; a header with an unexpected content type
+  before the handshake is rejected; `change_cipher_spec` records are
+  dropped in the compatibility window and rejected outside it; a record
+  spanning two `read_tls` calls is reassembled; a zero-length inner
+  plaintext without a content type byte is rejected.
+- Padding: trailing zeros are stripped, an all-zero inner plaintext is
+  rejected, padding of the maximum length is accepted.
+- Sequence numbers: the nonce is the IV xor the sequence number; exhaustion
+  of the sequence space is an error rather than a wrap.
+- Key schedule: the secrets, keys, and IVs of the RFC 8448 traces for all
+  three cipher suites; `hkdf_expand_label` against the label examples of
+  RFC 8446 §7.1; `key_update` in both directions produces the documented
+  successor keys.
+- Transcript: the hash after each message of the trace; the `message_hash`
+  substitution after a `HelloRetryRequest` reproduces the documented
+  value.
+
+### 6.6.38 TLS handshake and connection (`audhsos-tls`)
+
+- The full RFC 8448 §3 trace: with a scripted generator and a fixed clock,
+  every byte the client writes matches the document, and every secret and
+  key matches; certificate verification is stubbed for this test because
+  the trace uses an RSA certificate.
+- A second full handshake against a project-generated ECDSA chain and a
+  third against an Ed25519 chain, with certificate verification on.
+- `HelloRetryRequest`: a server that asks for the other group completes;
+  a second retry is rejected.
+- Rejections: a `ServerHello` negotiating anything other than 1.3; the
+  TLS 1.2 downgrade sentinel in the server random; a cipher suite not
+  offered; a key share group not offered; a missing `key_share`; a
+  `Finished` with a wrong verify data; a `CertificateVerify` over the
+  wrong context string; an empty certificate list; an unexpected message
+  in every state of the machine.
+- After any fatal error the connection is poisoned: every further call
+  returns the same error and no further bytes are produced.
+- Buffers: a buffer below the documented minimum is rejected at
+  construction; a handshake message larger than the reassembly buffer is
+  `HandshakeTooLarge`; `write_tls` into a short output buffer makes
+  progress across calls without losing bytes.
+- Application data: `send` and `recv` round-trip through a paired client
+  and a scripted peer; `close` emits `close_notify` and a peer
+  `close_notify` surfaces as `PeerClosed`.
+- Property: arbitrary byte streams fed to `read_tls` never panic and
+  always end in an error or a consistent state. Fuzz targets `tls_record`
+  and `tls_handshake`.
+
 ## 6.7 CI pipeline
 
 Jobs run in this order; a failure stops the pipeline.

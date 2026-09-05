@@ -55,6 +55,16 @@ AuDHSOS/
 │   │   └── apps/
 │   │       ├── hello/         app-hello: end-to-end client
 │   │       └── canvas/        app-canvas: graphical demonstration and e2e client (Phase 11)
+│   ├── crypto/                (document 11)
+│   │   ├── ct/                crypto-ct: Choice, constant-time selection and comparison, Secret<N>
+│   │   ├── hash/              crypto-hash: SHA-256, SHA-384/512, HMAC, HKDF
+│   │   ├── aead/              crypto-aead: ChaCha20-Poly1305, bitsliced AES-GCM, GHASH
+│   │   ├── ec/                crypto-ec: fe25519, X25519, Ed25519 verify, P-256 ECDSA verify
+│   │   └── rng/               crypto-rng: Entropy and Rng traits, ChaCha20 generator
+│   ├── net/                   (document 11)
+│   │   ├── der/               audhsos-der: strict zero-copy DER reader
+│   │   ├── x509/              audhsos-x509: certificates, path validation, name matching
+│   │   └── tls/               audhsos-tls: TLS 1.3 client, sans-I/O
 │   └── tools/
 │       └── xtask/             build, image (GPT + FAT32 writer, CRC32), run, test, lint, check-layering, check-deps, unsafe-budget, fuzz, coverage; policy tables
 ├── fuzz/                      fuzz target crates and corpora
@@ -90,6 +100,14 @@ AuDHSOS/
 | `user-proto` | u1 | `x86_64-unknown-none` | no | yes | `audhsos-abi` |
 | `user-loader` | u2 | `x86_64-unknown-none` | no | yes, fuzz | `user-rt`, `user-proto`, `audhsos-elf` |
 | servers and apps | u3 | `x86_64-unknown-none` | no | logic on host, e2e in QEMU | `user-rt`, `user-proto`, `user-loader`, `driver-uart16550`, `driver-i8042`, `gfx` |
+| `crypto-ct` | c0 | all | no | yes | - |
+| `audhsos-der` | c0 | all | no | yes, fuzz | `test-support` behind the feature `test-strategies` |
+| `crypto-hash` | c1 | all | no | yes | `crypto-ct` |
+| `crypto-aead` | c1 | all | no | yes | `crypto-ct` |
+| `crypto-ec` | c2 | all | no | yes | `crypto-ct`, `crypto-hash`; feature `test-signing` |
+| `crypto-rng` | c2 | all | no | yes | `crypto-ct`, `crypto-aead` |
+| `audhsos-x509` | c3 | all | no | yes, fuzz | `audhsos-der`, `crypto-hash`, `crypto-ec`; feature `test-certificates` |
+| `audhsos-tls` | c4 | all | no | yes, fuzz | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-x509` |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
 | `fuzz-support` | dev | host | allowlisted | Miri | - |
 | `xtask` | host | host | no | yes | - |
@@ -111,10 +129,13 @@ AuDHSOS/
 5. Userland crates never depend on kernel crates other than those in rule 4.
 6. `cfg(target_arch = ...)` and `cfg(target_os = "uefi")` appear only in
    adapter crates and in the binaries' `Cargo.toml` target tables.
-7. The allowed edges are a table in `xtask/src/policy.rs`. `cargo xtask
+7. The cryptography and TLS crates (layers c0 to c4, document 11) depend
+   on each other only, never on kernel, loader, or userland crates.
+   Userland crates depend on them, not the reverse.
+8. The allowed edges are a table in `xtask/src/policy.rs`. `cargo xtask
    check-layering` reads `cargo tree --edges normal,build,dev --prefix
    depth` and fails on any edge not in the table.
-8. No dependency section of any manifest references a crate outside the
+9. No dependency section of any manifest references a crate outside the
    workspace. `cargo xtask check-deps` verifies `Cargo.lock` and every
    manifest.
 
@@ -130,10 +151,14 @@ AuDHSOS/
   or the adapter header, and the crate documentation.
 - Bare-metal targets abort on panic by definition; host test crates keep
   unwinding for `should_panic` tests.
-- Cargo features are limited to five: `debug-uart` and `test-exit` on the
-  kernel binary and adapter, `test-doubles` and `port-io` on
-  `kernel-hal-api`, `test-strategies` on crates that own types used in
-  property tests. Host tests use `#![cfg_attr(not(test), no_std)]` and need
+- Cargo features are limited to five in the kernel, the loader, and
+  userland: `debug-uart` and `test-exit` on the kernel binary and adapter,
+  `test-doubles` and `port-io` on `kernel-hal-api`, `test-strategies` on
+  crates that own types used in property tests. The cryptography track
+  adds two: `test-signing` on `crypto-ec` and `test-certificates` on
+  `audhsos-x509`. Both exist to generate test data, both are off in every
+  product build, and `cargo xtask check-layering` fails if a crate other
+  than a test target or the xtask enables them. Host tests use `#![cfg_attr(not(test), no_std)]` and need
   no feature. No feature changes behavior in release builds.
 
 ## 5.5 Conventions
@@ -159,7 +184,8 @@ header.
   `Rights` rather than `u32`. Constructors validate and return `Result`.
 - Functions are verbs. Predicates start with `is_`, `has_`, or `can_`.
 - Abbreviations are limited to `abi`, `hal`, `ipc`, `mm`, `tcb`, `tlb`,
-  `apic`, `irq`, `elf`, `id`, `uefi`.
+  `apic`, `irq`, `elf`, `id`, `uefi`, and, in the cryptography track,
+  `ct`, `aead`, `ec`, `rng`, `der`, `tls`, `hmac`, `hkdf`, `oid`, `spki`.
 - Tests: `<subject>_<condition>_<expected>`, for example
   `frame_allocator_exhausted_returns_out_of_frames`.
 

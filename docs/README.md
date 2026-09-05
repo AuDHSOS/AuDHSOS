@@ -7,7 +7,8 @@ order in which the system is built.
 
 Status: every entry of the decision register is decided; no open
 decisions remain. Phases 0 and 1 of the roadmap are implemented; Phase 2
-is in progress.
+is in progress. The cryptography and TLS track of document 11 is
+specified and not yet started.
 
 ## Reading order
 
@@ -23,6 +24,7 @@ is in progress.
 | 8 | [Roadmap](08-roadmap.md) | Phases, deliverables, acceptance criteria, risks, resolved decisions |
 | 9 | [Decision register](09-decisions.md) | Every binding decision as a statement |
 | 10 | [Implementation plan](10-implementation-plan.md) | Exactly what to build in each remaining phase: crates, types, algorithms, tests, acceptance |
+| 11 | [Cryptography and TLS](11-cryptography-and-tls.md) | The TLS 1.3 client track: primitives, certificates, protocol, tests, order of work |
 
 ## Conventions for these documents
 

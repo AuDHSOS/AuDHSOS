@@ -49,7 +49,9 @@ prevent them, but no effort is spent on them now.
 - Booting on physical hardware.
 - Legacy BIOS boot.
 - Symmetric multiprocessing (SMP) in the first release.
-- Networking and persistent storage in the first release.
+- Networking and persistent storage in the first release. The TLS 1.3
+  client library of [document 11](11-cryptography-and-tls.md) is built
+  before them, because it is pure logic and needs neither.
 - Performance tuning beyond what correctness requires.
 - Formal verification or security certification.
 

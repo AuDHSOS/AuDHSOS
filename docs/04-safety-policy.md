@@ -93,6 +93,7 @@ same ABI.
 | Allocators | The frame allocator and the userland heap allocator compute offsets. The userland `GlobalAlloc` adapter converts an offset to a pointer with `wrapping_add` on a base pointer obtained once at heap creation. |
 | Global state | `audhsos-sync::Global<T>` holds the kernel state and the userland heap state. Access requires the interrupt guard in the kernel; a second concurrent borrow is detected by a flag and reported as a kernel bug. |
 | User memory | Never dereferenced (R6). |
+| Cryptographic secrets | The cryptography crates of document 11 are logic crates without `unsafe`. They branch and index on public values only, use no lookup tables in a primitive that sees a key, and hold key material in `Secret<N>`. The one thing safe Rust cannot promise is erasure: without `write_volatile` the `Drop` implementation overwrites and calls `black_box`, which is best effort. The limit is documented, not hidden. |
 
 ## 4.7 External code
 
@@ -125,3 +126,21 @@ fuzz entry point is project code.
 4. Is there a host test (with Miri where possible) or a QEMU test that
    exercises the new site, including its failure mode?
 5. Does the change keep the trait crate architecture neutral?
+
+## 4.10 Review checklist for cryptographic crates
+
+The crates of document 11 contain no `unsafe`, so 4.9 does not apply to
+them. They carry their own checklist, and each crate documents its answers
+in the crate documentation.
+
+1. Which functions receive a secret as an argument or hold one in their
+   state?
+2. For each of those: is every branch condition and every index a public
+   value? A length, a protocol constant, and a certificate field are
+   public; a key, a shared secret, a traffic secret, and plaintext are not.
+3. Does any primitive that sees a key contain a lookup table? It must not.
+4. Is every comparison of secret bytes `ct_eq` rather than `==`?
+5. Does a failing authentication leave the output buffer without
+   unauthenticated plaintext?
+6. Is the new code covered by a vector test from the standard that defines
+   it, and by a negative test for every rejection rule it adds?

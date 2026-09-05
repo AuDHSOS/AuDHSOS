@@ -8,6 +8,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 ### Added
 
 - Planning documents and the decision register under `docs/`.
+- `docs/11-cryptography-and-tls.md`: the design and implementation plan
+  for the TLS 1.3 client track (constant-time primitives, hashes and
+  HKDF, AEADs, elliptic curves, random generator, DER, X.509, the sans-I/O
+  protocol crate), its test catalog entries 6.6.30 to 6.6.38, its roadmap
+  track 8.17, and decisions D-36 to D-44.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.
 - `audhsos-abi`: error codes, rights, object types, handles, layout

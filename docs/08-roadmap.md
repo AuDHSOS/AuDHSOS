@@ -27,6 +27,10 @@ documents reflect the code, the changelog is updated. The
 [implementation plan](10-implementation-plan.md) specifies the work of
 each phase down to crates, types, algorithms, and tests.
 
+Beside the phases runs one track that depends on none of them: the
+cryptography and TLS crates of section 8.17, specified in
+[document 11](11-cryptography-and-tls.md).
+
 ## 8.2 Phase 0: Project foundation
 
 Status: implemented.
@@ -201,7 +205,9 @@ screendumps.
 ## 8.14 Later work, not scheduled
 
 virtio-blk driver and a file system server; virtio-net and a network
-stack; virtio-gpu; virtio-input or `usb-tablet` for absolute pointer
+stack, which is what the TLS track of 8.17 is waiting for; RSA signature
+verification with the bignum crate it needs, and certificate revocation
+checking; virtio-gpu; virtio-input or `usb-tablet` for absolute pointer
 coordinates; a compositor with several windows; the `aarch64` port under
 HVF without a loader; SMP with per-CPU run queues; hardware port
 permission bitmaps; kernel-object memory donation; an interface
@@ -224,9 +230,36 @@ tickless timer; long file names in the disk image writer.
 | The bitmap font is project-authored data | glyph errors, effort | 95 printable ASCII glyphs only; one checksum test per glyph |
 | A relative PS/2 pointer needs a mouse grab in the QEMU window | awkward interactive use | absolute pointing through virtio-input or `usb-tablet` is listed as later work |
 | The firmware's default mode and the framebuffer address vary between firmware builds | pixel tests fail on a different resolution | tests read the resolution from the boot information and never assume one; the loader reports the framebuffer as an `MmioReserved` region |
+| Cryptography written from scratch has flaws that tests do not find | a connection that appears encrypted but is not | standards vectors, the RFC 8448 trace, negative tests for every rejection rule, fuzzing, a constant-time review section per crate, a verification-only asymmetric surface |
+| The TLS track competes with the kernel phases for attention | phases slip | the track touches no kernel crate and has no phase dependency; it is worked on between phases, never instead of one |
 
 ## 8.16 Resolved decisions
 
 The two questions that were open before Phase 0 are decided in the
 decision register: the project name and crate prefix (D-34) and the build
 entry point on the development machine (D-35). No open decisions remain.
+
+## 8.17 Track C: cryptography and TLS
+
+Status: specified in [document 11](11-cryptography-and-tls.md), not
+started.
+
+The track prepares HTTPS for the day a network stack exists. Every crate
+in it is pure logic without I/O or allocation, host-tested, and depends on
+no kernel, loader, or userland crate. It therefore has no place in the
+phase order and is built between phases.
+
+| Step | Crates | Size | Ends with |
+|------|--------|------|-----------|
+| T1 | `crypto-ct`, `crypto-hash` | S | SHA-256, SHA-384/512, HMAC, HKDF against the standards vectors |
+| T2 | `crypto-aead` | L | ChaCha20-Poly1305 and AES-GCM, both constant-time and table-free |
+| T3 | `crypto-ec` | L | X25519, Ed25519 verification, P-256 ECDSA verification |
+| T4 | `crypto-rng` | S | the ChaCha20 generator and the `Entropy` trait |
+| T5 | `audhsos-der` | M | a strict DER reader with its fuzz target |
+| T6 | `audhsos-x509` | L | certificate parsing, path validation, name matching, the test certificate builder |
+| T7 | `audhsos-tls` | XL | the TLS 1.3 client reproduces the RFC 8448 trace byte for byte and completes a handshake against project-generated chains |
+| T8 | integration | M | not scheduled: transport, the `random_bytes` system call, an HTTP client |
+
+Definition of done per step, as for every phase: the catalog items of
+6.6.30 to 6.6.38 that belong to the step have tests, `cargo xtask check`
+is green, the documents reflect the code, the changelog is updated.
