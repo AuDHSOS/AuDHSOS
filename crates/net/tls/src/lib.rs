@@ -5,7 +5,10 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+pub mod alert;
+pub mod client;
 pub mod codec;
+pub mod config;
 pub mod error;
 pub mod handshake;
 pub mod keys;

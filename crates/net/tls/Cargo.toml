@@ -11,11 +11,19 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+audhsos-der.workspace = true
+audhsos-x509.workspace = true
 crypto-aead.workspace = true
 crypto-ct.workspace = true
+crypto-ec.workspace = true
 crypto-hash.workspace = true
+crypto-rng.workspace = true
 
 [dev-dependencies]
+# The tests build the certificates they check, and drive the machine with
+# a generator whose output is written down.
+audhsos-x509 = { workspace = true, features = ["test-certificates"] }
+crypto-rng = { workspace = true, features = ["test-doubles"] }
 test-support.workspace = true
 
 [lints]

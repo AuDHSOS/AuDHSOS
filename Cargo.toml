@@ -15,6 +15,7 @@ members = [
     "crates/net/tls",
     "crates/boot/uefi-x86_64",
     "crates/elf",
+    "crates/symbols",
     "crates/uefi",
     "crates/sync",
     "crates/drivers/uart16550",
@@ -53,6 +54,7 @@ audhsos-x509 = { path = "crates/net/x509" }
 audhsos-tls = { path = "crates/net/tls" }
 boot-uefi-x86_64 = { path = "crates/boot/uefi-x86_64" }
 audhsos-elf = { path = "crates/elf" }
+audhsos-symbols = { path = "crates/symbols" }
 audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
 driver-uart16550 = { path = "crates/drivers/uart16550" }

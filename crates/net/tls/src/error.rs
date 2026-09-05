@@ -42,6 +42,17 @@ pub enum TlsError {
     UnexpectedExtension,
     /// A field carries a value the protocol forbids here.
     IllegalParameter,
+    /// A certificate is malformed, or is not one this client can read.
+    BadCertificate,
+    /// A certificate is outside its validity window.
+    CertificateExpired,
+    /// The chain reaches nothing this client trusts, or the name is not
+    /// the one that was asked for.
+    UnknownAuthority,
+    /// A signature does not verify.
+    BadSignature,
+    /// The key exchange produced nothing usable.
+    NoSharedSecret,
 }
 
 impl fmt::Display for TlsError {
@@ -66,6 +77,13 @@ impl fmt::Display for TlsError {
             TlsError::MissingExtension => f.write_str("a required extension is absent"),
             TlsError::UnexpectedExtension => f.write_str("an extension repeats or was not offered"),
             TlsError::IllegalParameter => f.write_str("a field carries a forbidden value"),
+            TlsError::BadCertificate => f.write_str("the certificate cannot be read"),
+            TlsError::CertificateExpired => f.write_str("the certificate is outside its window"),
+            TlsError::UnknownAuthority => {
+                f.write_str("the chain reaches nothing this client trusts")
+            }
+            TlsError::BadSignature => f.write_str("the signature does not verify"),
+            TlsError::NoSharedSecret => f.write_str("the key exchange produced nothing usable"),
         }
     }
 }

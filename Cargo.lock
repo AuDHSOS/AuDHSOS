@@ -36,6 +36,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "audhsos-symbols"
+version = "0.1.0"
+dependencies = [
+ "audhsos-elf",
+ "test-support",
+]
+
+[[package]]
 name = "audhsos-sync"
 version = "0.1.0"
 
@@ -43,9 +51,13 @@ version = "0.1.0"
 name = "audhsos-tls"
 version = "0.1.0"
 dependencies = [
+ "audhsos-der",
+ "audhsos-x509",
  "crypto-aead",
  "crypto-ct",
+ "crypto-ec",
  "crypto-hash",
+ "crypto-rng",
  "test-support",
 ]
 
@@ -213,5 +225,6 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "audhsos-symbols",
  "kernel-test-harness",
 ]

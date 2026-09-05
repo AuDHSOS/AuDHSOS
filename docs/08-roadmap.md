@@ -269,7 +269,7 @@ phase order and is built between phases.
 | T4 | `crypto-rng` | S | implemented: the ChaCha20 generator and the `Entropy` trait |
 | T5 | `audhsos-der` | M | implemented: a strict DER reader; its fuzz target and its time conversion wait on document 12 (11.14) |
 | T6 | `audhsos-x509` | L | certificate parsing, path validation, name matching, the test certificate builder |
-| T7 | `audhsos-tls` | XL | the TLS 1.3 client reproduces the RFC 8448 trace byte for byte and completes a handshake against project-generated chains |
+| T7 | `audhsos-tls` | XL | implemented: the client reproduces the RFC 8448 trace and completes a handshake against project-generated chains |
 | T8 | integration | M | not scheduled: transport, the `random_bytes` system call, an HTTP client |
 
 Definition of done per step, as for every phase: the catalog items of

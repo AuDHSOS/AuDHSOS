@@ -4,10 +4,13 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
+mod alert;
 mod handshake;
 mod keys;
+mod machine;
 mod protection;
 mod record;
+mod replay;
 mod trace;
 mod transcript;
 

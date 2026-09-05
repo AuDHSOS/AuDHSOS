@@ -107,6 +107,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   of RFC 8446 section 7.1, and the handshake transcript.
 - `audhsos-tls`: the wire codec and the handshake messages, read against
   the server side of the trace of RFC 8448.
+- `audhsos-tls`: the client state machine, the alerts, and the sans-I/O
+  interface. The handshake of RFC 8448 is reproduced, and a whole
+  connection runs against a server built in the tests.
 - `docs/rfc/`: the standards this system implements, verbatim, with their
   source and checksum recorded. The first is RFC 8448, whose trace is the
   test the TLS client must reproduce (D-59).

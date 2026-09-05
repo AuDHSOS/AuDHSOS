@@ -14,7 +14,7 @@
 //! for that step, and the caller passes it rather than this module
 //! guessing.
 
-use crypto_hash::{Prk, Sha256, Sha384, expand, extract};
+use crypto_hash::{Hmac, Prk, Sha256, Sha384, expand, extract};
 
 use crate::error::TlsError;
 use crate::secret::Secret;
@@ -186,6 +186,17 @@ pub fn next_traffic_secret(suite: CipherSuite, secret: &[u8]) -> Result<Secret, 
     let mut next = Secret::zero(suite.hash_len());
     expand_label(suite, secret, b"traffic upd", &[], next.as_bytes_mut())?;
     Ok(next)
+}
+
+/// The code a `Finished` message carries: the transcript hash
+/// authenticated under the finished key of that direction.
+#[must_use]
+pub fn verify_data(suite: CipherSuite, finished: &[u8], transcript: &[u8]) -> Secret {
+    if suite == CipherSuite::Aes256GcmSha384 {
+        Secret::from_slice(Hmac::<Sha384>::tag(finished, transcript).as_ref())
+    } else {
+        Secret::from_slice(Hmac::<Sha256>::tag(finished, transcript).as_ref())
+    }
 }
 
 /// The stage of the schedule a connection has reached.
