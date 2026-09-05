@@ -3,12 +3,14 @@
 
 //! The key schedule.
 //!
-//! RFC 8446 publishes no vectors of its own; the traces of RFC 8448 do,
-//! and they need whole handshake messages, which arrive with the state
-//! machine. Until then the expected values here were computed from
-//! section 7.1 by an implementation outside this repository, over inputs
-//! this file fixes: a shared value of the bytes zero to thirty-one, and
-//! two transcripts that are the hashes of two literal strings.
+//! RFC 8446 publishes no vectors of its own. The trace of RFC 8448 does,
+//! and `super::replay` walks the whole schedule of one handshake against
+//! it. This file covers what a single trace cannot: both hash lengths,
+//! the suite the trace does not negotiate, and the secret after a key
+//! update. Its expected values were computed from section 7.1 by an
+//! implementation outside this repository, over inputs this file fixes: a
+//! shared value of the bytes zero to thirty-one, and two transcripts that
+//! are the hashes of two literal strings.
 
 use crypto_hash::{Sha256, Sha384};
 

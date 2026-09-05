@@ -62,14 +62,16 @@ server.
 | `crypto-aead` | `crates/crypto/aead` | c1 | `crypto-ct` |
 | `crypto-ec` | `crates/crypto/ec` | c2 | `crypto-ct`, `crypto-hash` |
 | `crypto-rng` | `crates/crypto/rng` | c2 | `crypto-ct`, `crypto-aead` |
-| `audhsos-der` | `crates/net/der` | c0 | `audhsos-time` (D-46) |
+| `audhsos-der` | `crates/net/der` | c0 | - (`audhsos-time` when it exists, D-46 and 11.14) |
 | `audhsos-x509` | `crates/net/x509` | c3 | `audhsos-der`, `crypto-hash`, `crypto-ec` |
 | `audhsos-tls` | `crates/net/tls` | c4 | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-x509` |
 
 All eight are logic crates: `no_std`, `#![forbid(unsafe_code)]`, no
 allocation, `Target::Host` in the policy table, coverage gate on. Each
-takes `test-support` behind the feature `test-strategies` where it owns
-types used in property tests. No crate of this track is depended on by
+takes `test-support` as a dev-dependency. Three carry a feature for the
+data their own tests and the tests above them need: `test-signing` on
+`crypto-ec`, `test-certificates` on `audhsos-x509`, and `test-doubles` on
+`crypto-rng`. None is enabled by a product build. No crate of this track is depended on by
 the kernel; the dependency edges run from userland only, and from the
 network track of [document 12](12-parallel-work.md), which uses
 `crypto-rng` for initial sequence numbers and transaction ids (D-51).
@@ -342,35 +344,54 @@ bytes. It never allocates, never blocks, and knows nothing about sockets.
 ```rust
 pub struct Buffers<'a> { pub incoming: &'a mut [u8], pub outgoing: &'a mut [u8],
                          pub handshake: &'a mut [u8] }
-pub struct ClientConfig<'a> { pub anchors: TrustAnchors<'a>, pub server_name: DnsName<'a>,
-    pub alpn: &'a [&'a [u8]], pub suites: &'a [CipherSuite], pub groups: &'a [NamedGroup] }
+pub struct ClientConfig<'a> { pub server_name: &'a str, pub anchors: TrustAnchors<'a>,
+    pub alpn: &'a [&'a [u8]], pub suites: &'a [CipherSuite], pub now: Timestamp }
 
 impl<'a> Connection<'a> {
-    pub fn new(config: &'a ClientConfig<'a>, rng: &'a mut dyn Rng,
-               now: UnixTime, buffers: Buffers<'a>) -> Result<Self, Error>;
-    pub fn read_tls(&mut self, input: &[u8]) -> Result<usize, Error>;
-    pub fn write_tls(&mut self, output: &mut [u8]) -> Result<usize, Error>;
-    pub fn poll(&mut self) -> Result<Event, Error>;
-    pub fn send(&mut self, plaintext: &[u8]) -> Result<usize, Error>;
-    pub fn recv(&mut self, out: &mut [u8]) -> Result<usize, Error>;
-    pub fn close(&mut self) -> Result<(), Error>;
+    pub fn new(config: &'a ClientConfig<'a>, rng: &mut dyn Rng, buffers: Buffers<'a>)
+        -> Result<Self, TlsError>;
+    pub fn read_tls(&mut self, input: &[u8]) -> Result<usize, TlsError>;
+    pub fn write_tls(&mut self, output: &mut [u8]) -> Result<usize, TlsError>;
+    pub fn poll(&mut self) -> Result<Event, TlsError>;
+    pub fn send(&mut self, plaintext: &[u8]) -> Result<usize, TlsError>;
+    pub fn recv(&mut self, out: &mut [u8]) -> Result<usize, TlsError>;
+    pub fn close(&mut self) -> Result<(), TlsError>;
 }
-pub enum Event { WantsRead, WantsWrite, Handshaked, Data(usize), PeerClosed }
+pub enum Event { WantsRead, WantsWrite, Handshaked, PeerClosed }
 ```
 
+Four things about that shape are decisions rather than accidents.
+
+There is no list of groups: D-56 leaves one, so there is nothing to
+choose. The moment is a field of the configuration rather than a
+parameter, because it is checked against the anchors that sit beside it,
+and the two belong together. The generator is borrowed for the call and
+not stored: it is asked three times at the start, for a private value, a
+random, and a session identifier, and never again.
+
+And `Event` carries no data. `poll` drives the handshake; `recv` drives
+everything after it. Only decrypting a record says whether it carries
+application data or a post-handshake message, and a record decrypts once,
+so the two phases cannot share one entry point without a buffer for
+plaintext that nobody asked for yet.
+
 Buffer minimums are constants: `MIN_INCOMING = 16_645` (a maximum
-ciphertext record plus its header), `MIN_OUTGOING = 16_645`,
+ciphertext record plus its header), `MIN_OUTGOING = 16_645`, and
 `MIN_HANDSHAKE = 16_384` for reassembling handshake messages that span
-records. A larger message is `Error::HandshakeTooLarge`, which is a
-policy, not a protocol limit, and is documented as such.
+records. A message larger than that is `TlsError::BufferTooSmall`, which
+is a policy of this client, not a limit of the protocol. `recv` takes a
+buffer that can hold a whole record's plaintext, for the same reason.
 
 Modules:
 
 - `record.rs`: header parsing and writing, the legacy version fields,
   the 2^14 plaintext and 2^14+256 ciphertext limits, the inner content
-  type and padding removal, per-direction sequence numbers whose
-  exhaustion is an error, and the `change_cipher_spec` records that
-  middlebox compatibility mode permits and that are dropped.
+  type and padding removal, per-direction sequence numbers that are spent
+  before they are used and whose exhaustion ends the epoch rather than
+  wrapping, and the `change_cipher_spec` record that middlebox
+  compatibility mode permits: it is dropped while the window is open, and
+  refused after the server's `Finished` or when it carries anything but
+  the single byte one.
 - `keys.rs`: the RFC 8446 §7.1 key schedule. `hkdf_expand_label`,
   `derive_secret`, early, handshake, and master secrets, traffic keys and
   IVs, the per-record nonce as IV xor sequence number, and `key_update`.
@@ -381,11 +402,24 @@ Modules:
   hashing per handshake and removes a buffer, a length limit, and the
   failure that comes with them; the substitution is applied to each hash
   with its own length, so both stay usable.
-- `messages/`: encoding and decoding of `ClientHello`, `ServerHello`,
-  `EncryptedExtensions`, `Certificate`, `CertificateVerify`, `Finished`,
-  `NewSessionTicket` (parsed, then ignored), `KeyUpdate`, and the
-  extensions `supported_versions`, `supported_groups`, `key_share`,
-  `signature_algorithms`, `server_name`, `application_layer_protocol_negotiation`.
+- `protection.rs`: sealing and opening a record under one epoch's keys,
+  with the sequence number that must not wrap.
+- `codec.rs`: the shapes the wire uses — numbers of one, two and three
+  bytes, and vectors with their length in front of them.
+- `handshake.rs`: writing `ClientHello`, `Finished` and `KeyUpdate`, and
+  reading `ServerHello`, `EncryptedExtensions`, `Certificate`,
+  `CertificateVerify`, `Finished` and `KeyUpdate`, with the extensions
+  `supported_versions`, `supported_groups`, `key_share`,
+  `signature_algorithms`, `server_name`, and
+  `application_layer_protocol_negotiation`. A `NewSessionTicket` is
+  recognised by its type and skipped by its length: this client resumes
+  nothing, and parsing a ticket into fields nobody reads would be surface
+  without purpose.
+- `alert.rs`: the alert a peer is told about each error, in one function
+  that is tested exhaustively, so that the reason a connection failed and
+  the reason the peer is given cannot drift apart.
+- `secret.rs`, `suite.rs`, `config.rs`: a secret that clears itself, what
+  a suite decides, and what a caller decides.
 - `client.rs`: the state machine `WaitServerHello`,
   `WaitEncryptedExtensions`, `WaitCertificate`, `WaitCertificateVerify`,
   `WaitFinished`, `Connected`, `Closed`. It checks the downgrade sentinel

@@ -729,7 +729,9 @@ done until every applicable item has a test. Items are added, never removed.
 - `fe25519`: addition, multiplication, and squaring agree with a
   reference implementation over `u128` limbs on random inputs (property);
   inversion of a non-zero element yields the identity when multiplied
-  back; the canonical encoding rejects values at or above the prime.
+  back; the encoding reduces values at or above the prime instead of
+  refusing them, which is what RFC 7748 asks of X25519, and a test pins
+  the three cases that says: the prime itself, one above it, and all ones.
 - X25519 against RFC 7748 §5.2 and §6.1, including the iterated test at
   one thousand rounds and, behind a slow test, at one million; a peer
   value that produces an all-zero shared secret is rejected; non-canonical
@@ -797,10 +799,13 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.36 Certificates and path validation (`audhsos-x509`)
 
-- Parsing: a minimal valid certificate; missing mandatory fields; an
-  unknown critical extension is rejected; an unknown non-critical
-  extension is ignored; duplicate extensions are rejected; a key algorithm
-  outside the supported set is rejected.
+- Parsing: a minimal valid certificate, and an authority with its
+  constraints; a version other than three and a public key that does not
+  match its algorithm are rejected; an unknown critical extension is
+  rejected and an unknown extension that is not critical is passed over;
+  a repeated extension is rejected; a key algorithm outside the supported
+  set is rejected; an extension marked critical that carries the default
+  value is rejected.
 - Signatures: each supported algorithm verifies a correct signature and
   rejects one over a modified `tbs`; an algorithm mismatch between the
   outer and inner fields is rejected.
@@ -829,10 +834,12 @@ done until every applicable item has a test. Items are added, never removed.
 
 - Records: the maximum plaintext and ciphertext lengths are accepted, one
   byte more is `RecordOverflow`; a header with an unexpected content type
-  before the handshake is rejected; `change_cipher_spec` records are
-  dropped in the compatibility window and rejected outside it; a record
-  spanning two `read_tls` calls is reassembled; a zero-length inner
-  plaintext without a content type byte is rejected.
+  before the handshake is rejected; a `change_cipher_spec` record is
+  dropped inside the compatibility window and rejected after the server's
+  `Finished`, and one that carries anything but the single byte one is
+  rejected wherever it arrives; a record spanning two `read_tls` calls is
+  reassembled; a zero-length inner plaintext without a content type byte
+  is rejected.
 - Padding: trailing zeros are stripped, an all-zero inner plaintext is
   rejected, padding of the maximum length is accepted.
 - Sequence numbers: the nonce is the IV xor the sequence number; exhaustion
@@ -842,8 +849,8 @@ done until every applicable item has a test. Items are added, never removed.
   and the secret after a key update, for both hash lengths. RFC 8446
   publishes no vectors of its own, so the expected values were computed
   from section 7.1 by an implementation outside this repository over
-  inputs the test file fixes; the traces of RFC 8448 need whole handshake
-  messages and arrive with the state machine.
+  inputs the test file fixes. The trace of RFC 8448 pins a whole
+  handshake's schedule on top of that, in the replay of 6.6.38.
 - The nonce is the base with the sequence number exclusive-ored into its
   tail, at zero, at one, and at a number that touches every byte.
 - Transcript: the hash equals the digest of the messages concatenated, for
@@ -853,32 +860,48 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.38 TLS handshake and connection (`audhsos-tls`)
 
-- The full RFC 8448 §3 trace: with a scripted generator and a fixed clock,
-  every byte the client writes matches the document, and every secret and
-  key matches; certificate verification is stubbed for this test because
-  the trace uses an RSA certificate.
-- A second full handshake against a project-generated ECDSA chain and a
-  third against an Ed25519 chain, with certificate verification on.
-- `HelloRetryRequest`: a server that asks for the other group completes;
-  a second retry is rejected.
+- The RFC 8448 §3 trace, replayed through the pieces this crate is built
+  of: the transcript, every secret of the schedule, both traffic keys, the
+  finished key of each side, the verify data of both `Finished` messages,
+  and the client's own record opened under the keys the document names.
+  Each message of the trace is read by this crate's reader and says what
+  the document says it says. The replay does not run the state machine and
+  does not check the server's signature, and the test file names both
+  reasons: matching the document byte for byte would mean writing another
+  implementation's `ClientHello`, which enters the transcript every later
+  secret depends on, and the trace signs with RSA-PSS, which this client
+  does not verify.
+- The state machine driven end to end against a server built in the test
+  file, which uses the same pieces from the other side: handshake, data
+  in both directions, a key update, and a close. Once with an Ed25519
+  chain and once with a P-256 chain, so that both signature paths carry a
+  whole handshake, with certificate verification on in each.
+- `HelloRetryRequest` is recognised, must name a group, and replaces the
+  transcript with the hash of it — and is then refused, because D-56
+  leaves one group and a retry can only ask for a group that was already
+  offered.
 - Rejections: a `ServerHello` negotiating anything other than 1.3; the
   TLS 1.2 downgrade sentinel in the server random; a cipher suite not
   offered; a key share group not offered; a missing `key_share`; a
-  `Finished` with a wrong verify data; a `CertificateVerify` over the
-  wrong context string; an empty certificate list; an unexpected message
-  in every state of the machine.
+  `Finished` with a wrong verify data; a `CertificateVerify` this client
+  cannot check; a chain that does not reach an anchor; a record that does
+  not open; an alert from the server; a message in the wrong place.
 - After any fatal error the connection is poisoned: every further call
-  returns the same error and no further bytes are produced.
+  returns the same error, while `write_tls` still hands over the alert
+  that says why.
 - Buffers: a buffer below the documented minimum is rejected at
-  construction; a handshake message larger than the reassembly buffer is
-  `HandshakeTooLarge`; `write_tls` into a short output buffer makes
+  construction; a `ClientHello` or a handshake message that does not fit
+  is `BufferTooSmall`; `write_tls` into a short output buffer makes
   progress across calls without losing bytes.
-- Application data: `send` and `recv` round-trip through a paired client
-  and a scripted peer; `close` emits `close_notify` and a peer
-  `close_notify` surfaces as `PeerClosed`.
-- Property: arbitrary byte streams fed to `read_tls` never panic and
-  always end in an error or a consistent state. Fuzz targets `tls_record`
-  and `tls_handshake`.
+- Application data: `send` and `recv` round-trip against that server;
+  `close` emits `close_notify`, and a peer `close_notify` surfaces as
+  `PeerClosed`.
+- A `NewSessionTicket` is recognised and skipped, both inside the flight
+  and after the handshake.
+- Property: arbitrary byte streams fed to `read_tls` never panic; the
+  connection either makes no progress or ends, and once it has ended it
+  gives the same answer to every later call. The fuzz targets `tls_record`
+  and `tls_handshake` wait on the harness of D-54.
 
 ### 6.6.39 Time and calendar (`audhsos-time`)
 
