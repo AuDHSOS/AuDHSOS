@@ -75,6 +75,24 @@ fn the_iterated_vector_agrees_after_one_and_after_a_thousand_rounds() {
 }
 
 #[test]
+#[ignore = "one million ladder runs: half a minute with --release, minutes without"]
+fn the_iterated_vector_agrees_after_a_million_rounds() {
+    let mut scalar = [0u8; 32];
+    scalar[0] = 9;
+    let mut point = scalar;
+
+    for _ in 0..1_000_000u32 {
+        let next = x25519(&scalar, &point).expect("no round reaches a small-order point");
+        point = scalar;
+        scalar = next;
+    }
+    assert_eq!(
+        hex(&scalar),
+        "7c3911e0ab2586fd864497297e575e6f3bc601c0883c30df5f4dd2d24f665424"
+    );
+}
+
+#[test]
 fn a_point_of_small_order_is_refused_rather_than_returned() {
     let scalar = unhex32("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4");
     let prime = unhex32("edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f");
