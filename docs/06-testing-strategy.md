@@ -304,7 +304,9 @@ done until every applicable item has a test. Items are added, never removed.
   out-of-page access.
 - Every error variant of every system call in its documentation table has a
   test that produces it, for the calls the phase implements; a call it does
-  not implement yet produces `Unsupported` and nothing else.
+  not implement yet is refused before it does anything, with `Unsupported`
+  or, where its first argument names an object type of a later phase, with
+  `WrongObjectType`.
 - Round-trip encode/decode of every request and result layout, including
   maximum values of every field.
 
@@ -547,8 +549,9 @@ done until every applicable item has a test. Items are added, never removed.
   receives the message for both faults, and a reply resumes the thread.
 - System calls: every system call the phase implements has at least one
   success and one failure test issued from user mode; every call it does
-  not implement yet returns `Unsupported`, and that is tested for each of
-  them.
+  not implement yet is refused, with `Unsupported` where the call is
+  reachable and `WrongObjectType` where its first argument names an object
+  type of a later phase, and that is tested for each of them.
 - IPC: call and reply between two user threads; handle transfer; notification
   from a timer-bound interrupt to a user thread.
 
@@ -1177,19 +1180,53 @@ done until every applicable item has a test. Items are added, never removed.
   the frame, and a bad checksum are each handled as specified.
 - Fragmentation: a datagram exactly at the MTU is not fragmented, one
   byte more produces two fragments whose reassembly equals the original;
-  the don't-fragment bit turns an oversized datagram into an error.
-- Reassembly: fragments in order, in reverse order, and with a duplicate;
-  an overlapping fragment discards the datagram; a missing fragment
-  expires at the deadline and frees its buffer; more concurrent datagrams
-  than buffers evicts the oldest.
-- ICMP: an echo request produces a reply with the payload copied; a
-  destination-unreachable message is delivered to the upper layer with
-  the embedded header parsed; generated errors stop at the token-bucket
-  limit and resume after it refills; no error is generated for an
-  incoming error, for a broadcast, or for a non-initial fragment.
+  the don't-fragment bit turns an oversized datagram into an error and
+  leaves one that fits alone; an empty payload still makes one datagram;
+  an MTU with no room for a header and eight bytes behind it is refused;
+  the pieces are counted before they are walked.
+- Reassembly: fragments in order, in reverse order, in a third order, and
+  with a duplicate that agrees; an overlapping fragment that disagrees
+  discards the datagram; a missing fragment expires at the deadline and
+  frees its buffer, and one microsecond earlier it does not; more
+  concurrent datagrams than buffers evicts the oldest; a fragment beyond
+  the buffer is refused before a byte is copied; a datagram that was
+  never fragmented is not copied at all; a timeout of the caller's own is
+  used as given.
+- ICMP: an echo request produces a reply with the payload copied and
+  nothing else produces one; a destination-unreachable message is
+  delivered to the upper layer with the embedded header parsed, and the
+  quote is shorter when the datagram was; the unreachable codes map both
+  ways; a type this crate does not read is carried and refused on the way
+  out; a message that is short or does not verify is refused. Generated
+  errors stop at the token-bucket limit and resume as it refills, the
+  bucket never fills past its capacity, and its remainder is kept so the
+  rate does not drift. No error is generated in answer to an error, to a
+  broadcast or multicast destination, to this interface's own broadcast
+  address, to a link-layer broadcast, to a non-initial fragment, or to a
+  source that names no single host — the five restrictions of RFC 1122,
+  section 3.2.2, each on its own.
 - Routing: longest-prefix match with a host route, a subnet route, and
   the default route; a destination with no route is an error; an on-link
   destination resolves through ARP, an off-link one through the gateway.
+  A route of one family never reaches a destination of the other, and a
+  default route of each covers its own. Adding a prefix that is already
+  there replaces it, in kind as well as in gateway, and a full table
+  refuses rather than evicting.
+- The quoted header: a quote is read where a whole datagram cannot be,
+  because the total length it declares is longer than what arrived; the
+  version, the header length, and the checksum are checked as they are in
+  a datagram, each wrong in turn; a quote of the header alone carries no
+  payload and is still read; a quote with options steps over them.
+- The send path: a datagram to a known neighbor on this link goes out at
+  once and the frame is addressed to that neighbor; one to a far host is
+  addressed to the router while the datagram keeps the far address; one
+  to an unknown neighbor waits and goes when the answer comes, once and
+  not twice; one longer than the MTU leaves in several frames that
+  rejoin to the original and each fit an Ethernet; a destination with no
+  route, a pair of the second family, a buffer smaller than the MTU, and
+  an emitter that refuses each come back as an error; a datagram the
+  cache will not hold is dropped and said so. A frame this host writes is
+  one `net-eth` accepts for the neighbor and drops for this host.
 
 ### 6.6.45 UDP (`net-udp`)
 

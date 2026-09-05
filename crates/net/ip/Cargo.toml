@@ -13,6 +13,7 @@ rust-version.workspace = true
 [dependencies]
 audhsos-collections.workspace = true
 audhsos-time.workspace = true
+net-eth.workspace = true
 net-wire.workspace = true
 
 [dev-dependencies]

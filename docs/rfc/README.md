@@ -14,9 +14,12 @@ arrangement.
 
 | File | Document | Retrieved | Bytes | SHA-256 |
 |------|----------|-----------|-------|---------|
+| `rfc791.txt` | RFC 791, *Internet Protocol*, J. Postel, September 1981 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc791.txt` | 94892 | `6cfb387fcecfc1b72f2f69343c5b6951b5d263d708162e2b5c66ab8f394f6265` |
+| `rfc792.txt` | RFC 792, *Internet Control Message Protocol*, J. Postel, September 1981 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc792.txt` | 29186 | `58714393ded142bacf188d7e8977eef98f4110c4c87ac94595f750df5664c2c6` |
 | `rfc826.txt` | RFC 826, *An Ethernet Address Resolution Protocol*, D. C. Plummer, November 1982 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc826.txt` | 21556 | `01bc62fe6a37e90f1246ac43e8e145f1322b4ed1474836145c3da93d2bd3c8a6` |
 | `rfc894.txt` | RFC 894, *A Standard for the Transmission of IP Datagrams over Ethernet Networks*, C. Hornig, April 1984 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc894.txt` | 5697 | `be88b9301e53f986aca3a0e55e488d1d79bae3f88fe3f257640397bc089e7035` |
 | `rfc1071.txt` | RFC 1071, *Computing the Internet Checksum*, R. Braden, D. Borman, C. Partridge, September 1988 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1071.txt` | 53524 | `e10dfd6816447843d47a7f1b990eba756a791a6308fd5b698a6276075a8e4f9b` |
+| `rfc1122.txt` | RFC 1122, *Requirements for Internet Hosts — Communication Layers*, R. Braden (ed.), October 1989 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1122.txt` | 289148 | `9f526e6bebc868324fedb90aebbcf6e5b15c53fd373ca5d5ce1c2cdcd264e04f` |
 | `rfc4291.txt` | RFC 4291, *IP Version 6 Addressing Architecture*, R. Hinden, S. Deering, February 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4291.txt` | 52897 | `4d58dff6b432d5d524bf3a3b7f0337a4177fa65f92ed72f2a92e97b471de48b2` |
 | `rfc4861.txt` | RFC 4861, *Neighbor Discovery for IP version 6 (IPv6)*, T. Narten, E. Nordmark, W. Simpson, H. Soliman, September 2007 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4861.txt` | 235106 | `1a4309c117d765a7c0edfcb2297fc90c3c09f0fcae255f15e53b20748bcc09fb` |
 | `rfc5480.txt` | RFC 5480, *Elliptic Curve Cryptography Subject Public Key Information*, S. Turner, D. Brown, K. Yiu, R. Housley, T. Polk, March 2009 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5480.txt` | 36209 | `593bf29fd0da2ff8b903c3ebf1c9d189a770039159e2ba46a0c3b91355037f26` |
@@ -29,8 +32,9 @@ arrangement.
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
-including the page breaks: 470, 171, 1417, 1403, 5435, 1123, 451, 899,
-787, 4427, 2355, and 3811 lines respectively, in the order of the table.
+including the page breaks: 2887, 1218, 470, 171, 1417, 6844, 1403, 5435,
+1123, 451, 899, 787, 4427, 2355, and 3811 lines respectively, in the
+order of the table.
 Every one was fetched twice and the two fetches agreed.
 
 ## Terms
@@ -46,13 +50,14 @@ RFC 5952, 2013 for RFC 6979, 2017 for RFC 8200, and 2019 for RFC 8448.
 Those eight are subject to BCP 78 and the IETF Trust's Legal Provisions
 relating to IETF Documents, which permit reproduction in full.
 
-The four older ones carry the notice of their time. RFC 4861 has the IETF
+The seven older ones carry the notice of their time. RFC 4861 has the IETF
 Trust's of 2007 and RFC 4291 the Internet Society's of 2006, both in a
 full copyright statement at the end that permits reproduction in full
-under the same BCP 78. RFC 1071, RFC 894, and RFC 826 carry no notice at
+under the same BCP 78, and RFC 1122 carries that statement in the form of
+1989. RFC 1071, RFC 894, RFC 826, RFC 792, and RFC 791 carry no notice at
 all: RFC 1071 states unlimited distribution in its own Status of This
-Memo section, and the two from the early eighties predate even that form,
-under the practice the RFC Editor states for the series as a whole.
+Memo section, and the four from the early eighties predate even that
+form, under the practice the RFC Editor states for the series as a whole.
 
 Code components extracted from an RFC carry the Simplified BSD Licence;
 this project extracts test vectors, which it transcribes into Rust source
@@ -78,6 +83,29 @@ that comes from the protocol specifications. This document is kept for its
 numbers and for section 2, which states why the sum may be computed in
 either byte order and in any grouping — the property the incremental
 accumulator rests on.
+
+## The three documents of IPv4
+
+**RFC 791** is the protocol: the twenty-byte header and its fields, the
+rule that options are a whole number of words and may be skipped by a
+host that does not implement them, and — section 3.2, *Fragmentation and
+Reassembly* — the identification, flags, and offset that a datagram is
+cut and put together by, with the reassembly procedure written out as an
+algorithm.
+
+**RFC 792** is ICMP: the echo request and reply, destination unreachable
+with its codes, and time exceeded, each carrying the header of the
+datagram that caused it plus eight bytes, which is what lets the upper
+layer match an error to the connection that earned it.
+
+**RFC 1122, section 3.2.2** is the list this implementation follows most
+carefully: an ICMP error is never sent in answer to an ICMP error, to a
+datagram addressed to a broadcast or multicast address, to one that
+arrived as a link-layer broadcast, to a non-initial fragment, or to one
+whose source address names no single host. The memo says these
+restrictions take precedence over every other requirement to send an
+error, and it explains why — a broadcast to a closed port would otherwise
+draw an answer from every host on the link at once.
 
 ## The three documents of the link layer
 

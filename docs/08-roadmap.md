@@ -292,7 +292,7 @@ changelog is updated.
 
 ## 8.18 Track D: the network stack
 
-Status: D1 and D2 implemented, the rest specified in
+Status: D1, D2, and D3 implemented, the rest specified in
 [document 12](12-parallel-work.md).
 
 Sans-I/O logic crates that consume and produce frames, take time and
@@ -304,7 +304,7 @@ their bytes are later work (8.14).
 |------|--------|------|-----------|
 | D1 | `net-wire` | S | implemented: the addresses of both families with one canonical text each, `IpAddr` and `IpCidr`, the `EtherType` and `Protocol` tables, a `Reader` and `Writer` that never leave their buffer, and the internet checksum of RFC 1071 with both pseudo-header forms |
 | D2 | `net-eth` | M | implemented: Ethernet II frames with a receive filter that drops rather than reports, ARP over RFC 826, and one neighbor cache for both families with the five states and the schedule of RFC 4861 |
-| D3 | `net-ip` | M | IPv4 with reassembly, fragmentation, `ICMPv4`, and a longest-prefix routing table over both families |
+| D3 | `net-ip` | M | implemented: IPv4 with reassembly, fragmentation, `ICMPv4` under the restrictions of RFC 1122, a longest-prefix routing table over both families, and the send path that joins them to the neighbor cache |
 | D4 | `net-ipv6` | L | the header and its extension chain, `ICMPv6`, Neighbor Discovery, router advertisements with SLAAC, and path MTU discovery |
 | D5 | `net-udp` | S | sockets, ephemeral ports, the checksum of either family |
 | D6 | `net-tcp` | XL | the RFC 9293 state machine, RFC 6298 timers, and Reno congestion control, verified by two instances over a lossy network double |

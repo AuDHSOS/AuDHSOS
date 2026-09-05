@@ -7,6 +7,34 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `net-ip`, step D3 of track D: the IPv4 header of RFC 791, fragmentation
+  and reassembly, `ICMPv4` of RFC 792 under the restrictions of RFC 1122,
+  the routing table both families share, and the send path that joins them
+  to the neighbor cache of `net-eth`.
+- Options are located and skipped, never interpreted. This host originates
+  none and needs none to read a datagram, and a parser that understood them
+  would be reading a field an attacker writes. An ICMP error quotes a header
+  and eight bytes, so the total length that header declares is longer than
+  what arrived: `Quoted::parse` reads it where `Datagram::parse` correctly
+  refuses to, which is what lets a transport fail a connection fast instead
+  of timing out.
+- An overlapping fragment discards the whole datagram. RFC 791 leaves the
+  case open, and every answer but discarding lets a packet filter be walked
+  past — a first fragment shows one transport header and a second overwrites
+  it. A duplicate that agrees byte for byte is dropped instead and costs
+  nothing.
+- Generating an ICMP error goes through the five restrictions of RFC 1122,
+  section 3.2.2, which the memo says take precedence over every other reason
+  to send one, and a token bucket bounds what is left; it refills at a steady
+  rate and keeps the remainder, so the rate does not drift.
+- The routing table holds IPv4 and IPv6 together with longest-prefix match
+  and no metric, since a host with one interface has nothing to weigh. The
+  send path takes an `IpAddr` pair and is the signature both families will
+  use; it carries IPv4 today, because the header it writes is the IPv4 one,
+  and `net-ipv6` will write its own and ask this same table and cache.
+- RFC 791, RFC 792, and RFC 1122 join the reference documents under
+  `docs/rfc/`, each fetched twice and recorded with its checksum.
+
 - `net-eth`, step D2 of track D: Ethernet II frames over RFC 894, ARP over
   RFC 826, and the neighbor cache both families share. Reception is a filter
   and not a parse — a frame that is short, oversized, addressed elsewhere,

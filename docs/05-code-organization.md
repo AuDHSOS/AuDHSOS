@@ -138,7 +138,7 @@ AuDHSOS/
 | `audhsos-tls` | c4 | all | no | yes, fuzz | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-time`, `audhsos-x509` |
 | `net-wire` | n0 | all | no | yes | `test-support` as a dev-dependency |
 | `net-eth` | n1 | all | no | yes | `net-wire`, `audhsos-time`, `audhsos-collections`; `test-support` as a dev-dependency |
-| `net-ip` | n2 | all | no | yes, fuzz | `net-eth` and below |
+| `net-ip` | n2 | all | no | yes, fuzz | `net-eth`, `net-wire`, `audhsos-time`, `audhsos-collections`; `test-support` as a dev-dependency |
 | `net-ipv6` | n2 | all | no | yes, fuzz | `net-ip` and below |
 | `net-udp` | n3 | all | no | yes | `net-ip` and below, `crypto-rng` |
 | `net-tcp` | n3 | all | no | yes, fuzz | `net-ip` and below, `crypto-rng` |

@@ -379,6 +379,8 @@ implying more.
 
 ### 12.6.5 `net-ip`
 
+Implemented.
+
 - IPv4 header parsing and writing; options are skipped, never
   interpreted; the header checksum is verified on receipt and computed
   on send; a TTL of zero is dropped.
@@ -401,6 +403,38 @@ implying more.
 The reassembly machinery is here and not in `net-ipv6`, because the two
 differ in where the fragment fields sit and in nothing else that a
 reassembly buffer cares about.
+
+Four things came out of writing it.
+
+An ICMP error quotes a header and eight bytes, so the total length that
+header declares is longer than what is there and it cannot be read as a
+datagram. `Quoted::parse` reads it where `Datagram::parse` correctly
+refuses to: the version, the header length, and the checksum are checked
+as they are in a whole datagram, and only the total length is not. That
+is what lets a transport find the connection an error belongs to.
+
+An overlapping fragment discards the datagram. RFC 791 leaves the case
+open, and every answer but discarding lets a filter be walked past — a
+first fragment shows one transport header and a second overwrites it. A
+duplicate that agrees byte for byte is dropped instead, and costs
+nothing.
+
+`Fragments` carries a `next` and is deliberately not an `Iterator`. It is
+`Copy`, and an iterator that is copied silently starts again, which is
+the one shape of this type that would surprise a reader.
+
+The send path copies each piece once into its frame. Writing the link
+header into the front of the same buffer and letting the fragmenter write
+behind it would save the copy and would mean this crate knowing the
+layout of an Ethernet frame instead of asking `net-eth` for it; one
+memcpy of at most an MTU is the cheaper of the two on a path where the
+driver copies again anyway.
+
+The send path carries IPv4 only for now. `Sender::send` takes an `IpAddr`
+pair and refuses one of the second family, because the header it writes
+is the IPv4 one; `net-ipv6` writes its own and then asks this same
+routing table and the same neighbor cache. The signature is the one both
+families will use, so nothing above it changes when D4 lands.
 
 ### 12.6.6 `net-ipv6`
 
