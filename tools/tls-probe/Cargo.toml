@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+# A workspace of its own, like `fuzz/`: this is the only crate in the tree
+# that links `std`, and it must not appear in the checks or the coverage
+# of the kernel workspace.
+[workspace]
+resolver = "3"
+
+[package]
+name = "tls-probe"
+description = "Drives the sans-I/O TLS client over a host socket against a real server"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+authors = ["Manuel Baesler and contributors"]
+rust-version = "1.100"
+
+[dependencies]
+audhsos-encoding = { path = "../../crates/encoding" }
+audhsos-time = { path = "../../crates/time" }
+audhsos-tls = { path = "../../crates/net/tls" }
+audhsos-x509 = { path = "../../crates/net/x509" }
+crypto-rng = { path = "../../crates/crypto/rng" }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"

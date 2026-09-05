@@ -49,10 +49,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   repository's code; the host supplies the socket, the wall clock, and
   `/dev/urandom` under `crypto-rng`. It is a workspace of its own, like
   `fuzz/`, because it is the only crate in the tree that links `std`. Its
-  anchor is a pinned intermediate rather than a root: a chain to a P-384
-  root cannot be walked to the end until `crypto-ec` has that curve, which
-  the README of the probe writes down as the one thing the run does not
-  prove.
+  anchor is `GTS Root R4`, taken from the host's own trust store: the full
+  chain for `google.de` verifies, the P-384 signature on the intermediate
+  included. What a run still does not prove is that the anchor is one the
+  world trusts, there being no root program yet; the README of the probe
+  writes that down, with the negative cases that show the checks are real.
 - `kernel-acpi` (Phase 4): the ACPI tables the kernel needs to find its
   interrupt controllers, parsed in safe Rust. `parse_rsdp` reads the root
   pointer of revision zero or two with both of its checksums;
