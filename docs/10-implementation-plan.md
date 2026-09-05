@@ -909,23 +909,32 @@ images built by the xtask from a corrupt ELF and an empty volume.
 ### 10.2.8 Crate `boot-uefi-x86_64` (`crates/boot/uefi-x86_64`)
 
 Adapter crate, target `x86_64-unknown-uefi`, `#![no_std]`, `#![no_main]`,
-`#![allow(unsafe_code)]`, `panic = "abort"`, no `alloc`. Deps:
-`audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `kernel-types`, `kernel-mm`,
-`kernel-hal-api`.
+`#![allow(unsafe_code)]`, `panic = "abort"` (the target's own strategy), no
+`alloc`. Deps: `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`,
+`kernel-types`, `kernel-mm`, `kernel-hal-api`.
 
 Entry: `#[unsafe(no_mangle)] pub extern "efiapi" fn efi_main(image: Handle,
 system_table: *const SystemTable) -> Status`. Modules:
 
-- `firmware.rs`: `Firmware<'a> { image: Handle, table: &'a SystemTable }`
-  with one method per service, each containing exactly one `unsafe` block
-  that calls the function pointer: `allocate_pages(count) ->
+- `firmware.rs`: `Firmware<'a> { image: Handle, table: &'a SystemTable,
+  boot: &'a BootServices, console: Option<&'a SimpleTextOutputProtocol> }`,
+  built by an `unsafe fn new` that checks both table signatures, with one
+  method per service, each containing exactly one `unsafe` block that
+  calls the function pointer: `allocate_pages(count) ->
   Result<PhysFrameRange, Status>`, `free_pages`, `memory_map(buffer: &mut
-  [u8]) -> Result<MemoryMapInfo { size, key, descriptor_size }, Status>`
-  (retry with a larger buffer on `BUFFER_TOO_SMALL`; the buffer is one
-  firmware-allocated region of 16 pages), `handle_protocol<T>(handle,
-  guid) -> Result<&T, Status>`, `locate_protocol<T>(guid) ->
-  Result<&T, Status>`, `exit_boot_services(key)`,
-  `output_string(&[u16])`, `configuration_table(guid) -> Option<PhysAddr>`.
+  [u8]) -> Result<MemoryMapInfo { size, key, descriptor_size }, Status>`,
+  `handle_protocol<T>(handle, guid) -> Result<&T, Status>`,
+  `locate_protocol<T>(guid) -> Result<&T, Status>`,
+  `exit_boot_services(key)`, `output_string(&str)` (encoded through
+  `audhsos_uefi::utf16`), `configuration_table(guid) -> Option<u64>`. The
+  memory map buffer starts at 16 firmware-allocated pages and is doubled
+  up to 256 pages while the firmware reports `BUFFER_TOO_SMALL`.
+- `memory.rs`: the one conversion of a physical range into a byte slice,
+  `unsafe fn bytes_mut(range, len) -> Option<&mut [u8]>` with a single
+  `unsafe` block; precondition: the range is a firmware allocation, nobody
+  else borrows it, and the identity mapping is active. Files, the kernel
+  image, the memory map buffer, and the boot information page go through
+  it, so that no other module builds a pointer from an address.
 - `graphics.rs`: `locate_protocol::<GraphicsOutputProtocol>` with
   `GRAPHICS_OUTPUT_PROTOCOL`; two `unsafe` blocks turn the `mode` and
   `info` pointers into references (precondition: the firmware owns both
@@ -936,40 +945,65 @@ system_table: *const SystemTable) -> Status`. Modules:
   never writes to the framebuffer.
 - `files.rs`: open the loaded image's device (`LoadedImageProtocol::device_handle`
   → `SimpleFileSystemProtocol::open_volume`), `read_file(name: &str) ->
-  Result<&'static [u8], LoadError>`: `open` with mode read, `get_info`
-  with the `FILE_INFO` GUID to learn the size, allocate pages, `read`
-  until the size is reached, `close`. Buffers become slices through one
-  `unsafe` block each.
+  Result<LoadedFile { frames, len }, LoadError>`: `open` with mode read,
+  `get_info` with the `FILE_INFO` GUID into a stack buffer to learn the
+  size, allocate pages, `read` until the size is reached, `close`. A
+  protocol pointer is derived from the reference the firmware reported
+  (`ptr::from_ref(..).cast_mut()`), so that each call is one `unsafe`
+  block and no module keeps a raw pointer.
 - `placement.rs` (pure where possible): from the parsed kernel ELF compute
-  for each segment the frame count, allocate frames, copy `file_size`
-  bytes, zero the rest (`slice::fill`), record `(PageRange, PhysFrameRange,
-  Permissions)` per segment.
+  the page-aligned span of all segments, allocate that span as **one**
+  frame range (the boot information reports the kernel image as a single
+  physical range), zero it, copy `file_size` bytes of each segment to its
+  offset in the span, and record `(PageRange, PhysFrameRange,
+  Permissions)` per segment. A segment whose `vaddr` is not page aligned
+  is rejected, because two segments would then share a page.
 - `paging.rs`: `IdentityAccess` implementing `FrameAccess<PageTable<X86Entry>>`
-  by casting the frame address to `&mut PageTable` (one `unsafe` block;
-  precondition: the firmware identity-maps all memory while boot services
-  run), `FirmwareFrames` implementing `FrameSource` over `allocate_pages(1)`,
-  `NoTlb` implementing `TlbControl` as a no-op. Build the tables with
-  `kernel_mm::Mapper`: (1) the physical window: every byte of every region
-  in the memory map from `0` to the highest region end, mapped at
-  `PHYS_WINDOW_BASE + phys`, read/write, no-execute, global; (2) the kernel
-  segments at their `vaddr` with their permissions, global; (3) the boot
-  stack (16 pages plus one unmapped guard page below) at
-  `KERNEL_BASE - 0x100_0000` (a fixed constant `BOOT_STACK_TOP` in
-  `audhsos-abi`), read/write, no-execute; (4) the boot information page at
-  `BOOT_INFO_VADDR` (constant in `audhsos-abi`), read-only; (5) an identity
-  mapping of the same memory as (1) at `phys` (so that the loader keeps
-  running after the `CR3` switch), read/write/execute.
+  by casting the frame address to `&mut PageTable` (one `unsafe` block per
+  direction; precondition: the firmware identity-maps all memory while
+  boot services run and the loader keeps that mapping), `PoolFrames`
+  implementing `FrameSource` over one contiguous firmware allocation (so
+  that `page_tables_phys_start` and `page_tables_phys_len` describe one
+  range), `NoTlb` implementing `TlbControl` as a no-op, and `pool_frames`,
+  which sizes that allocation from the highest physical address the memory
+  map reports. Build the tables with `kernel_mm::Mapper`: (1) the physical
+  window: every byte of every region the memory map reports, mapped at
+  `PHYS_WINDOW_BASE + phys`, read/write, no-execute, global; (2) an
+  identity mapping of the same memory at `phys` (so that the loader keeps
+  running after the `CR3` switch), read/write/execute; (3) the kernel
+  segments at their `vaddr` with their permissions, global; (4) the boot
+  stack (`BOOT_STACK_PAGES` pages plus one unmapped guard page below) with
+  its top at `BOOT_STACK_TOP` (`KERNEL_BASE - 0x100_0000`, a constant in
+  `audhsos-abi`), read/write, no-execute; (5) the boot information page at
+  `BOOT_INFO_VADDR` (constant in `audhsos-abi`), read-only.
 - `bootinfo.rs`: fill a page with `BootInfoWriter` after
   `exit_boot_services`; the memory map used is the final one obtained
   immediately before the call; loader code and data are reported as
   `Usable`; the framebuffer, if present, is written into the header and
-  its range is appended as one `MmioReserved` region unless the final
-  memory map already covers it with an `MmioReserved` region.
+  its range is inserted, sorted by start address, as one `MmioReserved`
+  region unless the final memory map already covers it with an
+  `MmioReserved` region. A framebuffer that overlaps a `Usable` region, or
+  that no longer fits into the region array, is dropped instead of being
+  reported, so that the loader never writes a structure the kernel's own
+  parser rejects. An ACPI root pointer that lies outside every region is
+  reported as absent for the same reason.
+- `loader.rs`: the order of the work. Everything the firmware has to
+  supply is asked for before the boot services end: the two files, the
+  configuration table, the first memory map (for the extent of the
+  window), the kernel image frames, the boot stack, the boot information
+  page, the table pool, the tables themselves, and the graphics mode. Then
+  the memory map is read once more and `ExitBootServices` is called with
+  its key, retried up to three times with a fresh key. A failure after
+  that call can only end the machine, because nothing is left to report
+  through.
 - `entry.rs`: one naked function `enter_kernel(cr3: u64, stack_top: u64,
-  boot_info: u64, entry: u64) -> !`: `mov cr3, rdi; mov rsp, rsi; mov rdi,
-  rdx; jmp rcx`.
-- `exit.rs`: on any error, `output_string` a diagnostic and `outl(0xF4,
-  0x12)` (one `asm!`), then loop on `hlt`.
+  boot_info: u64, entry: u64) -> !`: `cli; mov cr3, rdi; mov rsp, rsi; mov
+  rdi, rdx; jmp rcx`. The function is `extern "sysv64"`, not `extern "C"`:
+  on the UEFI target `extern "C"` is the Microsoft ABI, and the kernel
+  entry point on `x86_64-unknown-none` takes its argument in `RDI`.
+- `exit.rs`: on any error, `output_string` a diagnostic built in a
+  fixed-size `fmt::Write` buffer and `outl(0xF4, 0x12)` (one `asm!`), then
+  spin forever.
 
 The loader does not use the physical memory window or any kernel address
 before the jump; it runs on firmware-provided identity mappings and its own

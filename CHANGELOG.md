@@ -69,6 +69,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   `BOOT_INFO_VADDR`.
 - `xtask`: the `build` subcommand, and a check that the constants the
   linker scripts repeat agree with the ABI.
+- `boot-uefi-x86_64`: the loader. It reads the kernel and the boot image
+  from the boot volume, places the kernel image in one physical range,
+  builds the physical memory window, an identity mapping, the kernel
+  segments, the boot stack, and the boot information page with the
+  kernel's own mapper, writes the boot information from the memory map it
+  reads last, and enters the kernel.
 - Planning for graphics output and input devices: roadmap Phases 9 to 11,
   decisions D-29 to D-33, catalog sections 6.6.24 to 6.6.29, and the
   framebuffer fields of the boot information structure in the documents.

@@ -103,6 +103,24 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "boot-uefi-x86_64",
+        path: "crates/boot/uefi-x86_64",
+        kind: Kind::Adapter {
+            unsafe_budget: 39,
+            asm_budget: 2,
+        },
+        deps: &[
+            "audhsos-abi",
+            "audhsos-elf",
+            "audhsos-uefi",
+            "kernel-hal-api",
+            "kernel-mm",
+            "kernel-types",
+        ],
+        coverage_gate: false,
+        target: Target::X86_64Uefi,
+    },
+    Crate {
         name: "driver-uart16550",
         path: "crates/drivers/uart16550",
         kind: Kind::Logic,

@@ -38,6 +38,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "boot-uefi-x86_64"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-elf",
+ "audhsos-uefi",
+ "kernel-hal-api",
+ "kernel-mm",
+ "kernel-types",
+]
+
+[[package]]
 name = "driver-uart16550"
 version = "0.1.0"
 dependencies = [
