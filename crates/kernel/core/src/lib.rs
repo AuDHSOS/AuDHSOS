@@ -6,10 +6,13 @@
 #![doc = include_str!("../README.md")]
 
 pub mod boot;
+pub mod config;
+pub mod memory;
 pub mod print;
 pub mod state;
 pub mod trap;
 
+pub use memory::{KernelMemory, MEMORY, MemoryError, with_memory};
 pub use state::{KERNEL, KernelState};
 pub use trap::Exception;
 

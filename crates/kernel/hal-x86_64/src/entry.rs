@@ -47,9 +47,14 @@ where
     }
     // SAFETY: the caller promises that the address names the page the
     // loader wrote and mapped readable for the whole run.
-    let Ok(platform) = (unsafe { X86Platform::from_address(boot_info) }) else {
+    let Ok(mut platform) = (unsafe { X86Platform::from_address(boot_info) }) else {
         fail(b"[boot] the boot information is not usable\n");
     };
+    // SAFETY: the tables the loader built are active, so the window maps
+    // every physical frame read and write.
+    if !unsafe { crate::memory::register_boot_info(&mut platform) } {
+        fail(b"[boot] the boot information page has no translation\n");
+    }
     main(&platform);
     halt_forever();
 }

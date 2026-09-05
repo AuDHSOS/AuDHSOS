@@ -14,9 +14,12 @@ rust-version.workspace = true
 audhsos-abi.workspace = true
 audhsos-sync.workspace = true
 kernel-hal-api.workspace = true
+kernel-mm.workspace = true
+kernel-types.workspace = true
 
 [dev-dependencies]
 kernel-hal-api = { workspace = true, features = ["test-doubles"] }
+kernel-mm = { workspace = true, features = ["test-strategies"] }
 kernel-types = { workspace = true, features = ["test-strategies"] }
 test-support.workspace = true
 

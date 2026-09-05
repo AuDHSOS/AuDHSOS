@@ -224,7 +224,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "kernel-hal-x86_64",
         path: "crates/kernel/hal-x86_64",
         kind: Kind::Adapter {
-            unsafe_budget: 62,
+            unsafe_budget: 73,
             asm_budget: 19,
         },
         deps: &[
@@ -244,10 +244,17 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-kernel",
         path: "crates/kernel/bin",
         kind: Kind::Adapter {
-            unsafe_budget: 3,
+            unsafe_budget: 8,
             asm_budget: 0,
         },
-        deps: &["kernel-core", "kernel-hal-x86_64", "audhsos-abi"],
+        deps: &[
+            "kernel-core",
+            "kernel-hal-api",
+            "kernel-hal-x86_64",
+            "kernel-mm",
+            "kernel-types",
+            "audhsos-abi",
+        ],
         coverage_gate: false,
         target: Target::X86_64None,
     },

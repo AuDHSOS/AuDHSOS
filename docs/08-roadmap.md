@@ -102,10 +102,14 @@ the real counts.
 
 ## 8.5 Phase 3: Kernel memory bring-up
 
-Deliverables: `PhysicalWindow` adapter, kernel reserve and pool
-initialization from the boot information, adoption of the loader's page
-tables, removal of the identity mapping, kernel stack pool with guard
-pages, `TlbControl` and `activate` adapters.
+Status: implemented.
+
+Deliverables: `PhysicalWindow` adapter with byte access, kernel reserve
+from the boot information in the size the boot image header asks for,
+adoption of the loader's page tables into the kernel region table,
+removal of the identity mapping, kernel stack pool with guard pages,
+`TlbControl` and `activate` adapters, and the object counts in
+`kernel-core::config` that size the pools of Phase 5.
 
 Tests: catalog 6.6.21 memory items.
 

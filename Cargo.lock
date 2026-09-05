@@ -22,7 +22,10 @@ version = "0.1.0"
 dependencies = [
  "audhsos-abi",
  "kernel-core",
+ "kernel-hal-api",
  "kernel-hal-x86_64",
+ "kernel-mm",
+ "kernel-types",
 ]
 
 [[package]]
@@ -69,6 +72,7 @@ name = "crypto-ec"
 version = "0.1.0"
 dependencies = [
  "crypto-ct",
+ "crypto-hash",
  "test-support",
 ]
 
@@ -94,6 +98,7 @@ dependencies = [
  "audhsos-abi",
  "audhsos-sync",
  "kernel-hal-api",
+ "kernel-mm",
  "kernel-types",
  "test-support",
 ]
@@ -113,6 +118,7 @@ dependencies = [
  "audhsos-sync",
  "driver-uart16550",
  "kernel-hal-api",
+ "kernel-mm",
  "kernel-test-harness",
  "kernel-types",
  "kernel-x86-tables",

@@ -5,5 +5,6 @@
 //! product code only.
 
 mod boot;
+mod memory;
 mod print;
 mod trap;

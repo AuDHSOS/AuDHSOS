@@ -182,12 +182,19 @@ The kernel address space (upper half) is managed by the same code. Layout:
 | Kernel image | Text read-only/execute, rodata read-only, data read/write, at `KERNEL_BASE` |
 | Boot information page | The structure the loader wrote, read-only, at `BOOT_INFO_VADDR` |
 | Boot stack | `BOOT_STACK_PAGES` pages read/write, no-execute, ending at `BOOT_STACK_TOP`, with one unmapped guard page below |
-| Kernel reserve | Pools, page tables, kernel stacks; each kernel stack is followed by an unmapped guard page |
+| Kernel stacks | `KERNEL_STACK_SLOTS` slots at `KERNEL_STACKS_BASE`, each slot one unmapped guard page followed by `KERNEL_STACK_PAGES` mapped pages the stack grows down through |
 | Per-CPU area | Current thread pointer, scratch space (one CPU in the first release) |
 
 `PHYS_WINDOW_BASE`, `KERNEL_BASE`, `BOOT_STACK_TOP`, `BOOT_STACK_PAGES`,
-and `BOOT_INFO_VADDR` are constants in `audhsos-abi` shared by the loader
-and the kernel.
+`BOOT_INFO_VADDR`, `KERNEL_STACKS_BASE`, `KERNEL_STACK_PAGES`,
+`KERNEL_STACK_SLOT_PAGES`, and `KERNEL_STACK_SLOTS` are constants in
+`audhsos-abi` shared by the loader and the kernel. `MAX_PHYS_WINDOW_BYTES`
+is the memory the window covers before it would reach the stack area; a
+machine with more memory is refused at boot.
+
+The frames of the reserve hold the page tables and the kernel stacks. The
+object pools of Phase 5 are sized by the constants in
+`kernel-core::config`.
 
 ### 2.4.4 Memory management in safe Rust
 
@@ -427,17 +434,23 @@ through shared memory objects.
    control.
 8. The kernel entry (`extern "C" fn(*const BootInfo) -> !` in the kernel
    binary) hands the pointer to the HAL adapter, which validates magic,
-   version, size, and region count and produces a `&BootInfo`. Control
-   passes to `kernel_core::boot`, which is architecture neutral.
+   version, size, and region count and produces a `&BootInfo`. The boot
+   information names its own physical address in no field, so the adapter
+   walks the loader's tables for `BOOT_INFO_VADDR` and appends the result
+   as the region of kind `BootInfo`. Control passes to
+   `kernel_core::boot`, which is architecture neutral.
 9. HAL initialization: GDT with kernel and user segments, TSS with a
    double-fault stack, IDT with all exception vectors, the interrupt
    vectors, and vector `0x80`; debug UART if compiled in; legacy PIC masked;
    local APIC and I/O APIC configured from the ACPI MADT; timer calibrated
    and started.
-10. Memory: normalize the memory regions, take the kernel reserve,
-    initialize the frame allocator and the object pools, adopt the loader's
-    page tables into the kernel's address-space bookkeeping, drop the
-    loader's identity mapping.
+10. Memory: normalize the memory regions, take the kernel reserve in the
+    size the boot image header asks for, initialize the frame allocator,
+    the kernel region table, and the kernel stack pool, adopt the loader's
+    page tables into the kernel's address-space bookkeeping by walking the
+    four fixed ranges of the kernel half, and drop the loader's identity
+    mapping without giving a frame back. The object pools follow in
+    Phase 5 with the types they hold.
 11. Boot image: validate the header. Create a `Ram` memory object for the
     image.
 12. Root task: create the process with maximum quotas; map the root task at

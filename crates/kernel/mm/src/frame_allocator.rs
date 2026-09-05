@@ -290,3 +290,24 @@ impl FrameSource for BitmapFrameAllocator {
         let _ = self.free(frame);
     }
 }
+
+/// A frame source that hands out nothing, for a walk that only reads the
+/// page tables.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoFrames;
+
+impl NoFrames {
+    /// The source that has no frame.
+    #[must_use]
+    pub const fn new() -> Self {
+        NoFrames
+    }
+}
+
+impl FrameSource for NoFrames {
+    fn allocate_frame(&mut self) -> Option<PhysFrame> {
+        None
+    }
+
+    fn release_frame(&mut self, _frame: PhysFrame) {}
+}

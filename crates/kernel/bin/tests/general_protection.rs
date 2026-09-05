@@ -14,6 +14,10 @@
 // The kernel image uses these crates; a test image does not.
 use audhsos_abi as _;
 use kernel_core as _;
+// The memory test image uses these crates; the other test images do not.
+use kernel_hal_api as _;
+use kernel_mm as _;
+use kernel_types as _;
 
 use kernel_hal_x86_64::testing;
 use kernel_hal_x86_64::traps::TrapReport;

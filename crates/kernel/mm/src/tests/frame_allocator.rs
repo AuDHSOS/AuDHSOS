@@ -12,7 +12,9 @@ use kernel_types::{Alignment, PhysFrame, PhysFrameRange};
 use test_support::generators::{range, vec};
 use test_support::property::check;
 
-use crate::frame_allocator::{BitmapFrameAllocator, FrameError, MAX_MANAGED_FRAMES, RESERVE_WORDS};
+use crate::frame_allocator::{
+    BitmapFrameAllocator, FrameError, MAX_MANAGED_FRAMES, NoFrames, RESERVE_WORDS,
+};
 
 fn frame(number: u64) -> PhysFrame {
     PhysFrame::from_number(number).unwrap()
@@ -353,4 +355,13 @@ fn the_bitmap_helpers_ignore_numbers_outside_the_bitmap() {
     assert!(allocator.is_set(0));
     allocator.set(0, false);
     assert!(!allocator.is_set(0));
+}
+
+#[test]
+fn the_empty_frame_source_hands_out_nothing_and_takes_anything_back() {
+    let mut frames = NoFrames::new();
+    assert!(frames.allocate_frame().is_none());
+    frames.release_frame(PhysFrame::from_number(1).unwrap());
+    assert!(frames.allocate_frame().is_none());
+    assert_eq!(format!("{NoFrames:?}"), "NoFrames");
 }

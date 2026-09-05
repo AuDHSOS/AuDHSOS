@@ -7,6 +7,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `audhsos-abi`: `KERNEL_STACKS_BASE`, `KERNEL_STACK_PAGES`,
+  `KERNEL_STACK_SLOT_PAGES`, `KERNEL_STACK_SLOTS`, and
+  `MAX_PHYS_WINDOW_BYTES`.
+- `kernel-mm`: the kernel stack pool. A slot is one unmapped guard page
+  followed by four mapped pages; an allocation that runs out of frames
+  leaves no slot taken and no page mapped. `NoFrames`, a frame source for
+  a walk that creates no table, and `Mapper::frames_mut`.
+- `kernel-core`: `config`, the number of each kind of kernel object and
+  the size of the fixed tables of the kernel address space; `memory`, the
+  bring-up. It takes the reserve out of the normalized map in the size the
+  boot image header asks for, adopts the loader's page tables by walking
+  the kernel image, the physical window, the boot stack, and the boot
+  information page into a kernel region table, drops the loader's identity
+  mapping without giving a frame back, and stores the result in the
+  `MEMORY` cell.
+- `kernel-hal-x86_64`: `PhysicalWindow` with `frame_bytes_mut`, which
+  replaces `WindowAccess`; `active_root` and `activate` beside `LocalTlb`;
+  and `memory`, the walk of the active tables through the window that the
+  bring-up and the boot information page need.
+- `audhsos-kernel`: the kernel takes its memory over after the boot report
+  and reports the reserve, the regions of its address space, and the
+  identity mapping it dropped. Two test kernels, `memory` and
+  `memory_fault`, cover the memory items of catalog 6.6.21.
 - Planning documents and the decision register under `docs/`.
 - `docs/11-cryptography-and-tls.md`: the design and implementation plan
   for the TLS 1.3 client track (constant-time primitives, hashes and
@@ -127,8 +150,23 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   decisions D-29 to D-33, catalog sections 6.6.24 to 6.6.29, and the
   framebuffer fields of the boot information structure in the documents.
 
+### Fixed
+
+- `kernel-hal-x86_64`: the boot information page was reported as a memory
+  region with its virtual address, which `PhysAddr::new` rejects, so the
+  region was silently dropped and no boot report ever showed a
+  `boot-info` line. The entry point now walks the loader's tables for
+  `BOOT_INFO_VADDR` and reports the frame that walk names.
+
 ### Changed
 
+- `kernel-hal-x86_64::WindowAccess` becomes `PhysicalWindow` in a module
+  of its own and gains the byte access the IPC buffers and the boot image
+  header need; `paging` keeps the lookaside buffer and the page-table
+  root.
+- The kernel binary carries `kernel-hal-api`, `kernel-mm`, and
+  `kernel-types` as dev-dependencies for its test kernels; the kernel
+  image itself keeps its three dependencies.
 - `UnixTime` moves out of `audhsos-der` into the new `audhsos-time`
   crate, and the trust-anchor PEM decoding into `audhsos-encoding`
   (D-46, D-47); document 11 is amended accordingly.

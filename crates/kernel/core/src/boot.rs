@@ -12,6 +12,7 @@ use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::exit::{ExitStatus, TestExit};
 use kernel_hal_api::platform::{MemoryRegion, MemoryRegionKind, Platform};
 
+use crate::memory::MemoryError;
 use crate::println;
 use crate::state::{KERNEL, KernelState};
 
@@ -29,6 +30,8 @@ pub enum BootError {
     WindowBase(u64),
     /// The loader reported no usable memory.
     NoUsableMemory,
+    /// The kernel could not take its memory over.
+    Memory(MemoryError),
 }
 
 impl core::fmt::Display for BootError {
@@ -39,6 +42,7 @@ impl core::fmt::Display for BootError {
                 "the physical window is at {base:#x}, not at {PHYS_WINDOW_BASE:#x}"
             ),
             BootError::NoUsableMemory => f.write_str("the loader reported no usable memory"),
+            BootError::Memory(error) => write!(f, "{error}"),
         }
     }
 }
@@ -127,6 +131,15 @@ pub fn usable_kib(regions: &[MemoryRegion]) -> u64 {
         .fold(0u64, |total, region| total.saturating_add(region.len >> 10))
 }
 
+/// The usable memory in bytes.
+#[must_use]
+pub fn usable_bytes(regions: &[MemoryRegion]) -> u64 {
+    regions
+        .iter()
+        .filter(|region| region.kind == MemoryRegionKind::Usable)
+        .fold(0u64, |total, region| total.saturating_add(region.len))
+}
+
 /// Reports that the kernel has nothing left to do and ends the machine
 /// with a success.
 pub fn finish(console: &mut impl DebugConsole, exit: &mut impl TestExit) {
@@ -139,4 +152,10 @@ pub fn finish(console: &mut impl DebugConsole, exit: &mut impl TestExit) {
 pub fn abort(error: BootError, console: &mut impl DebugConsole, exit: &mut impl TestExit) {
     println!(console, "[boot] {error}");
     exit.exit(ExitStatus::Failure);
+}
+
+impl From<MemoryError> for BootError {
+    fn from(error: MemoryError) -> Self {
+        BootError::Memory(error)
+    }
 }

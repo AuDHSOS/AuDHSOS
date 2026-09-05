@@ -47,6 +47,24 @@ pub const BOOT_STACK_PAGES: u64 = 64;
 /// Virtual address the loader maps the boot information page at.
 pub const BOOT_INFO_VADDR: u64 = KERNEL_BASE - 0x0200_0000;
 
+/// Virtual base of the kernel stack area. Each stack occupies a slot of
+/// [`KERNEL_STACK_SLOT_PAGES`] pages: one guard page that stays unmapped,
+/// then [`KERNEL_STACK_PAGES`] mapped pages the stack grows down through.
+pub const KERNEL_STACKS_BASE: u64 = KERNEL_BASE - 0x4000_0000;
+
+/// Number of mapped pages of one kernel stack.
+pub const KERNEL_STACK_PAGES: u64 = 4;
+
+/// Number of pages one kernel stack slot occupies, guard page included.
+pub const KERNEL_STACK_SLOT_PAGES: u64 = KERNEL_STACK_PAGES + 1;
+
+/// Number of kernel stack slots the area holds.
+pub const KERNEL_STACK_SLOTS: u64 = 1024;
+
+/// Largest amount of physical memory the window can map before it would
+/// reach the kernel stack area.
+pub const MAX_PHYS_WINDOW_BYTES: u64 = KERNEL_STACKS_BASE - PHYS_WINDOW_BASE;
+
 /// Maximum number of regions in the boot information structure.
 pub const MAX_BOOT_REGIONS: usize = 128;
 
@@ -94,3 +112,10 @@ const _: () = assert!(BOOT_STACK_TOP < KERNEL_BASE);
 // The boot stack and its guard page stay clear of the boot information.
 const _: () =
     assert!(BOOT_INFO_VADDR + PAGE_SIZE <= BOOT_STACK_TOP - (BOOT_STACK_PAGES + 1) * PAGE_SIZE);
+const _: () = assert!(KERNEL_STACKS_BASE.is_multiple_of(PAGE_SIZE));
+const _: () = assert!(KERNEL_STACKS_BASE > PHYS_WINDOW_BASE);
+// The stack area ends below the boot information page.
+const _: () = assert!(
+    KERNEL_STACKS_BASE + KERNEL_STACK_SLOTS * KERNEL_STACK_SLOT_PAGES * PAGE_SIZE
+        <= BOOT_INFO_VADDR
+);

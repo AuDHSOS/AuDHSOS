@@ -20,6 +20,12 @@ bench = false
 name = "boot"
 
 [[test]]
+name = "memory"
+
+[[test]]
+name = "memory_fault"
+
+[[test]]
 name = "console"
 
 [[test]]
@@ -50,6 +56,11 @@ name = "panic"
 audhsos-abi.workspace = true
 kernel-core.workspace = true
 kernel-hal-x86_64.workspace = true
+
+[dev-dependencies]
+kernel-hal-api.workspace = true
+kernel-mm.workspace = true
+kernel-types.workspace = true
 
 [lints]
 workspace = true

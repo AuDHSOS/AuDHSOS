@@ -10,13 +10,16 @@
 use core::panic::PanicInfo;
 
 use audhsos_abi::layout::BOOT_STACK_TOP;
+use kernel_core::memory::MemoryError;
 use kernel_core::state::KernelState;
 use kernel_core::trap::Exception;
-use kernel_core::{boot, trap};
+use kernel_core::{boot, memory, trap};
 use kernel_hal_x86_64::bootinfo::X86Platform;
 use kernel_hal_x86_64::entry;
 use kernel_hal_x86_64::exit::QemuExit;
+use kernel_hal_x86_64::paging::{LocalTlb, X86Entry, active_root};
 use kernel_hal_x86_64::traps::TrapReport;
+use kernel_hal_x86_64::window::PhysicalWindow;
 
 /// The entry the loader jumps to, with the address of the boot information
 /// page in the first argument.
@@ -35,7 +38,12 @@ pub extern "C" fn kernel_entry(boot_info: u64) -> ! {
 
 /// What the kernel does once the machine is ready.
 fn run(platform: &X86Platform) {
-    let outcome = entry::with_console(|console| boot::run(platform, console));
+    let outcome = entry::with_console(|console| {
+        boot::run(platform, console)?;
+        take_memory(platform)?;
+        memory::with_memory(|memory| memory::report(memory, console));
+        Ok(())
+    });
     match outcome {
         Some(Ok(())) => {
             entry::with_console(|console| boot::finish(console, &mut QemuExit::new()));
@@ -45,6 +53,34 @@ fn run(platform: &X86Platform) {
         }
         None => entry::fail(b"[boot] the console is not reachable\n"),
     }
+}
+
+/// Takes the memory of the machine over: the reserve, the regions of the
+/// kernel address space, and the end of the loader's identity mapping.
+fn take_memory(platform: &X86Platform) -> Result<(), boot::BootError> {
+    let root = active_root().map_err(|_| MemoryError::Address)?;
+    // SAFETY: the tables the loader built are active, so the window maps
+    // every physical frame read and write; the kernel is the only writer,
+    // because nothing else runs yet and interrupts are off.
+    let mut window = unsafe { PhysicalWindow::kernel() };
+    let mut tlb = LocalTlb::new();
+    let override_bytes = requested_reserve(platform);
+    memory::initialize::<X86Entry, _, _, _>(platform, root, &mut window, &mut tlb, override_bytes)?;
+    Ok(())
+}
+
+/// The reserve size the header of the boot image asks for, or zero for the
+/// default. A boot image the kernel cannot read asks for nothing.
+fn requested_reserve(platform: &X86Platform) -> u64 {
+    let Some((start, _)) = memory::boot_image(platform) else {
+        return 0;
+    };
+    // SAFETY: the tables the loader built are active, so the window maps
+    // every physical frame read and write.
+    let Some(bytes) = (unsafe { kernel_hal_x86_64::memory::read_frame(start) }) else {
+        return 0;
+    };
+    memory::requested_reserve(platform, &bytes)
 }
 
 /// Reports a processor exception through the kernel and ends the machine.

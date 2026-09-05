@@ -20,6 +20,7 @@ audhsos-abi.workspace = true
 audhsos-sync.workspace = true
 driver-uart16550.workspace = true
 kernel-hal-api.workspace = true
+kernel-mm.workspace = true
 kernel-test-harness.workspace = true
 kernel-types.workspace = true
 kernel-x86-tables.workspace = true

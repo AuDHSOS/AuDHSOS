@@ -6,7 +6,7 @@ They describe the target design, the rules the code must follow, and the
 order in which the system is built.
 
 Status: every entry of the decision register is decided; no open
-decisions remain. Phases 0 to 2 of the roadmap are implemented; Phase 3
+decisions remain. Phases 0 to 3 of the roadmap are implemented; Phase 4
 is next. The cryptography and TLS track of document 11 is specified and
 implemented through step T2. The parallel tracks of document 12 are
 specified and not yet started.

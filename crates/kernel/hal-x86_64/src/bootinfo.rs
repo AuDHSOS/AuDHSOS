@@ -96,14 +96,6 @@ impl X86Platform {
         for (start, len, kind) in fixed {
             push(&mut regions, &mut count, start, len, kind);
         }
-        let page_address = u64::try_from(core::ptr::from_ref(page).addr()).unwrap_or(0);
-        push(
-            &mut regions,
-            &mut count,
-            page_address,
-            u64::try_from(BOOT_INFO_PAGE_LEN).unwrap_or(0),
-            MemoryRegionKind::BootInfo,
-        );
         Ok(X86Platform {
             regions,
             count,
@@ -117,6 +109,27 @@ impl X86Platform {
     #[must_use]
     pub const fn framebuffer(&self) -> Option<Framebuffer> {
         self.framebuffer
+    }
+
+    /// Appends the boot information page as a region of its own.
+    ///
+    /// The boot information names its own physical address in no field,
+    /// which is why the page cannot report itself: the loader mapped it at
+    /// [`audhsos_abi::layout::BOOT_INFO_VADDR`], and only a walk of the
+    /// loader's page tables says which frame that is. The caller does that
+    /// walk and passes the frame here.
+    ///
+    /// Returns `false` if the region array is full.
+    pub fn push_boot_info(&mut self, start: PhysAddr) -> bool {
+        let before = self.count;
+        push(
+            &mut self.regions,
+            &mut self.count,
+            start.as_u64(),
+            u64::try_from(BOOT_INFO_PAGE_LEN).unwrap_or(0),
+            MemoryRegionKind::BootInfo,
+        );
+        self.count != before
     }
 }
 

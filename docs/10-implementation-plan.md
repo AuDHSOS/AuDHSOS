@@ -1143,50 +1143,85 @@ xtask run` shows the banner on the terminal.
 
 ## 10.3 Phase 3: Kernel memory bring-up
 
-Goal: the kernel owns its memory after boot.
+Goal: the kernel owns its memory after boot. Implemented.
 
+- `audhsos-abi::layout`: `KERNEL_STACKS_BASE`, `KERNEL_STACK_PAGES` (4),
+  `KERNEL_STACK_SLOT_PAGES` (5, the guard page included),
+  `KERNEL_STACK_SLOTS` (1024), and `MAX_PHYS_WINDOW_BYTES`, the memory the
+  window covers before it would reach the stack area.
 - `kernel-hal-x86_64::window`: `PhysicalWindow { base: VirtAddr }` with
-  `frame_bytes_mut(&mut self, frame: PhysFrame) -> &mut [u8; 4096]` (one
-  `unsafe` block; precondition: the window maps all RAM read/write and the
-  kernel is single-threaded) and `impl FrameAccess<PageTable<X86Entry>>`
-  built on it (a second `unsafe` block for the typed reference; alignment
-  holds because frames are 4 KiB aligned). `TlbControl` adapter:
-  `invlpg` per page, `write_cr3(read_cr3())` for `flush_all`.
-  `activate(root: PhysFrame)` writes `CR3`.
-- `kernel-core::memory`: from the platform regions: `normalize`,
-  `select_reserve` (override from the boot image header, which the kernel
-  reads through the window at `boot_image_phys_start`),
-  `BitmapFrameAllocator` over the reserve, then the object pools sized by
-  constants in `kernel-core::config` (`PROCESSES = 256`, `THREADS = 1024`,
+  `frame_bytes_mut(&mut self, frame) -> Option<&mut [u8; 4096]>` and
+  `impl<T> FrameAccess<T>`, three `unsafe` blocks, one per reference it
+  hands out; the constructor carries the precondition that the window maps
+  all of memory read and write and that the kernel is the only writer.
+  `kernel-hal-x86_64::paging` keeps `LocalTlb` (`invlpg` per page,
+  `write_cr3(read_cr3())` for `flush_all`) and adds `active_root()`, the
+  frame `CR3` names, and `activate(root)`, which writes `CR3`. It
+  re-exports `X86Entry`, so that a caller of the mapper need not name
+  `kernel-mm` for the entry format.
+- `kernel-hal-x86_64::memory`: `translate(address)`, the walk of the
+  active tables through the window with `NoFrames` as the frame source;
+  `register_boot_info(platform)`, which appends the boot information page
+  as a region with the physical address that walk gives; and
+  `read_frame(address)`, a copy of one frame out of the window, which the
+  kernel uses to read the boot image header.
+- `kernel-mm::frame_allocator`: `NoFrames`, a frame source for a walk that
+  creates no table.
+- `kernel-mm::stack`: `KernelStack { pages, index }` with `top` and
+  `guard`, `slot_pages(index, slots)` for the geometry, and
+  `StackPool<N>`, a bitmap of `N * 64` slots. `allocate(mapper)` takes the
+  lowest free slot and maps `KERNEL_STACK_PAGES` frames above its guard
+  page; an allocation that runs out of frames leaves no slot taken and no
+  page mapped. `release(mapper, stack)` unmaps the pages, gives the frames
+  back, and frees the slot. `Mapper::frames_mut` hands the frame source
+  out for it.
+- `kernel-core::config`: `PROCESSES = 256`, `THREADS = 1024`,
   `MEMORY_OBJECTS = 4096`, `ENDPOINTS = 1024`, `NOTIFICATIONS = 1024`,
-  `REPLIES = 1024`, `INTERRUPTS = 64`, `IO_PORT_RANGES = 64`, `KERNEL_STACKS
-  = 1024`, regions per process 64, handles per process up to `1 << 16`).
-  Pools are `static` `Global<Pool<..>>` cells, initialized in place.
-- Adopt the loader's tables: `root = read_cr3()`; walk the kernel half
-  with the mapper's `translate` to register the kernel image, the window,
-  the boot stack, and the boot information page in the kernel
-  `RegionTable`; unmap the identity range (every page below
-  `USER_SPACE_END` that is present) with `unmap_range` in `MAX_PAGES_PER_CALL`
-  steps and free nothing (the frames belong to the window).
-- `kernel-hal-x86_64::bootinfo`: `X86Platform::from_page` hands the address
-  of the page it read to `PhysAddr::new` and appends the result as the
-  `MemoryRegionKind::BootInfo` region. That address is `BOOT_INFO_VADDR`, a
-  virtual one, so the constructor rejects it and the region is silently
-  dropped: no boot report has ever shown a `boot-info` line. The physical
-  address is in no field of the boot information, and it does not need to
-  be, because `translate(BOOT_INFO_VADDR)` on the loader's tables gives it.
-  Phase 3 removes that push from `from_page` and registers the region where
-  the other three fixed ranges are registered, from the walk above.
-- Kernel stacks: `StackPool` in `kernel-mm`: `allocate() ->
-  Result<KernelStack { pages: PageRange }, _>` mapping 4 frames from the
-  reserve below a guard page at `KERNEL_STACKS_BASE` (constant) + index ×
-  5 pages; `release`.
-- QEMU tests (`memory.rs`): allocate every reserve frame and free them;
-  map a frame at a user page, write through the window, read through the
-  mapping, unmap, and verify that a read faults (handler hook records the
-  address); the identity mapping is gone (`translate` of page 0x1000 is
-  `None`); the region table holds one `BootInfo` region whose start is the
-  frame `translate(BOOT_INFO_VADDR)` names.
+  `REPLIES = 1024`, `INTERRUPTS = 64`, `IO_PORT_RANGES = 64`,
+  `KERNEL_STACKS = 1024`, `REGIONS_PER_PROCESS = 64`,
+  `HANDLES_PER_PROCESS = 1 << 16`, plus `KERNEL_REGIONS = 64` and
+  `KERNEL_IMAGE_MAX_PAGES = 8192`, how far above `KERNEL_BASE` the walk
+  looks for mapped pages. The pools of the object types are `static`
+  `Global<Pool<..>>` cells in Phase 5, with the types they hold; Phase 3
+  builds the cells the memory bring-up fills.
+- `kernel-core::memory`: the bring-up, over the HAL traits and therefore
+  the same code on the host and in QEMU.
+  - `reserve(platform, override_bytes)`: `normalize`, then
+    `select_reserve`, then `BitmapFrameAllocator::new`; it also reports the
+    number of pages the window maps and refuses a machine with more memory
+    than `MAX_PHYS_WINDOW_BYTES`.
+  - `requested_reserve(platform, header)` reads `kernel_reserve_size` out
+    of the boot image header the kernel copied through the window; a
+    header that does not parse asks for the default.
+  - `adopt(mapper, window_pages)` walks the four fixed ranges of the
+    kernel half with `Mapper::translate` and registers every maximal run
+    of mapped pages in a `RegionTable<KernelBacking, KERNEL_REGIONS>`:
+    `Image`, `Window`, `BootStack`, `BootInfo`. It also returns the frame
+    the boot information page is mapped to.
+  - `drop_identity(mapper, pages)` removes every translation below
+    `USER_SPACE_END` that exists, in steps of `MAX_PAGES_PER_CALL` pages,
+    and gives no frame back: those frames are the memory the window maps.
+    Table frames the mapper collects go to the allocator, which refuses
+    them because they lie outside the reserve.
+  - `bring_up` composes the three and returns `KernelMemory` with the
+    allocator, the free memory, the region table, the kernel stack pool,
+    the root frame, and the boot information frame; `initialize` stores it
+    in the `MEMORY` cell, `with_memory` borrows it, `report` writes it.
+- `kernel-hal-x86_64::bootinfo`: `X86Platform::from_page` pushed the
+  address of the page it read as the `MemoryRegionKind::BootInfo` region.
+  That address is `BOOT_INFO_VADDR`, a virtual one, so `PhysAddr::new`
+  rejected it and the region was silently dropped: no boot report ever
+  showed a `boot-info` line. Phase 3 removes that push and adds
+  `push_boot_info(start)`, which the entry point calls with the frame the
+  walk of the loader's tables gives, before the report runs.
+- QEMU tests: `memory.rs` (the reserve leaves every frame free; every
+  reserve frame is handed out and taken back; the identity mapping is
+  gone; the boot information page is reported with the physical address
+  the walk gives; a frame the kernel maps itself carries what the window
+  wrote) and `memory_fault.rs` (the read after the unmap faults at the
+  address of the mapping). The fault ends the machine, so it needs an
+  image of its own. Host tests in `kernel-core::tests::memory` run the
+  same bring-up against a page-table image built with the doubles.
 
 Acceptance: `check` green; catalog 6.6.21 memory items covered.
 

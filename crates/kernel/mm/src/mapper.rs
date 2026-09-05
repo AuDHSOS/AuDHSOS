@@ -108,6 +108,12 @@ where
         self.root
     }
 
+    /// The frame source the mapper builds tables from, for a caller that
+    /// needs frames for the pages it is about to map.
+    pub const fn frames_mut(&mut self) -> &mut S {
+        self.frames
+    }
+
     fn read(&self, frame: PhysFrame, index: usize) -> Result<F, MapError> {
         let table = self.access.table(frame).ok_or(MapError::UnreachableFrame)?;
         let entry = table.entry(index);

@@ -83,9 +83,14 @@ pub unsafe fn start(boot_info: u64, should_panic: bool, test_main: fn()) -> ! {
     }
     // SAFETY: the caller promises that the address names the page the
     // loader wrote and mapped readable for the whole run.
-    let Ok(platform) = (unsafe { X86Platform::from_address(boot_info) }) else {
+    let Ok(mut platform) = (unsafe { X86Platform::from_address(boot_info) }) else {
         fail(format_args!("the boot information is not usable"));
     };
+    // SAFETY: the tables the loader built are active, so the window maps
+    // every physical frame read and write.
+    if !unsafe { crate::memory::register_boot_info(&mut platform) } {
+        fail(format_args!("the boot information page has no translation"));
+    }
     if PLATFORM.init(platform).is_err() {
         fail(format_args!("the platform is already in place"));
     }
@@ -156,6 +161,12 @@ pub fn platform_regions() -> usize {
     PLATFORM
         .borrow(&UncontendedToken)
         .map_or(0, |platform| platform.memory_regions().len())
+}
+
+/// Runs `body` with the machine the loader described, if it is reachable.
+pub fn with_platform<R>(body: impl FnOnce(&X86Platform) -> R) -> Option<R> {
+    let platform = PLATFORM.borrow(&UncontendedToken).ok()?;
+    Some(body(&platform))
 }
 
 /// Registers what the image does with the next trap. Without a hook a

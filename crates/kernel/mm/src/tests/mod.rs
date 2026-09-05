@@ -10,4 +10,5 @@ mod mapper;
 mod memory_map;
 mod page_table;
 mod reserve;
+mod stack;
 mod strategies;

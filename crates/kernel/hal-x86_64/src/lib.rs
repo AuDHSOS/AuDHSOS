@@ -15,7 +15,9 @@ pub mod entry;
 #[cfg(feature = "test-exit")]
 pub mod exit;
 pub mod instructions;
+pub mod memory;
 pub mod paging;
 #[cfg(all(feature = "debug-uart", feature = "test-exit"))]
 pub mod testing;
 pub mod traps;
+pub mod window;

@@ -1,72 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! Reaching page-table memory through the physical window, and the
-//! translation lookaside buffer.
+//! The translation lookaside buffer and the register that names the active
+//! page tables.
 //!
-//! Invariants: the window maps every physical frame at
-//! `PHYS_WINDOW_BASE + address`, read and write, for the whole run; the
-//! kernel is the only writer of page-table memory.
+//! Invariant: a flush follows the change of a translation, never precedes
+//! it; the tables a switch installs map the code, the stack, and the data
+//! the caller uses next.
 
-use audhsos_abi::layout::PHYS_WINDOW_BASE;
-use kernel_hal_api::paging::{FrameAccess, TlbControl};
-use kernel_types::{Page, PhysFrame};
+use kernel_hal_api::paging::TlbControl;
+use kernel_types::{Error, Page, PhysAddr, PhysFrame};
 
-/// Reaches a frame through the physical memory window.
-#[derive(Clone, Copy, Debug)]
-pub struct WindowAccess {
-    base: u64,
-}
+/// The page-table entry format of this architecture, so that a caller of
+/// the mapper need not name `kernel-mm` for it.
+pub use kernel_mm::page_table::X86Entry;
 
-impl WindowAccess {
-    /// An access through the window at `base`.
-    ///
-    /// # Safety
-    ///
-    /// The window must map every physical frame at `base + address`, read
-    /// and write, for as long as this value exists, and the kernel must be
-    /// the only writer of the memory it hands out.
-    #[must_use]
-    pub const unsafe fn new(base: u64) -> Self {
-        WindowAccess { base }
-    }
-
-    /// An access through the window the layout names.
-    ///
-    /// # Safety
-    ///
-    /// The same as [`WindowAccess::new`].
-    #[must_use]
-    pub const unsafe fn kernel() -> Self {
-        // SAFETY: the caller promises what `new` requires.
-        unsafe { Self::new(PHYS_WINDOW_BASE) }
-    }
-
-    /// The virtual address `frame` is reachable at.
-    const fn address_of(self, frame: PhysFrame) -> Option<u64> {
-        self.base.checked_add(frame.start().as_u64())
-    }
-}
-
-impl<T> FrameAccess<T> for WindowAccess {
-    fn table(&self, frame: PhysFrame) -> Option<&T> {
-        let address = self.address_of(frame)?;
-        let pointer = core::ptr::without_provenance::<T>(usize::try_from(address).ok()?);
-        // SAFETY: the constructor promises that the window maps the frame
-        // for the lifetime of this value, and that the kernel is the only
-        // writer, so the reference is valid and nobody mutates through it.
-        Some(unsafe { &*pointer })
-    }
-
-    fn table_mut(&mut self, frame: PhysFrame) -> Option<&mut T> {
-        let address = self.address_of(frame)?;
-        let pointer = core::ptr::without_provenance_mut::<T>(usize::try_from(address).ok()?);
-        // SAFETY: the constructor promises that the window maps the frame
-        // read and write for the lifetime of this value, and that the
-        // kernel is the only writer, so no other reference exists.
-        Some(unsafe { &mut *pointer })
-    }
-}
+/// The bits of `CR3` above the frame number, which do not belong to the
+/// address of the root table.
+const ROOT_ADDRESS_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 
 /// Invalidates translations on this processor.
 #[derive(Clone, Copy, Debug, Default)]
@@ -96,5 +47,29 @@ impl TlbControl for LocalTlb {
         unsafe {
             crate::instructions::write_page_table_root(root);
         }
+    }
+}
+
+/// The frame the active page tables are rooted in.
+///
+/// # Errors
+///
+/// [`Error`] if `CR3` does not name an addressable frame, which the
+/// processor does not allow but the type system does not know.
+pub fn active_root() -> Result<PhysFrame, Error> {
+    let raw = crate::instructions::read_page_table_root() & ROOT_ADDRESS_MASK;
+    PhysAddr::new(raw).and_then(PhysFrame::from_start)
+}
+
+/// Switches to the page tables rooted in `root`.
+///
+/// # Safety
+///
+/// The tables must be complete: they must map the code, the stack, and the
+/// data the caller uses after the switch.
+pub unsafe fn activate(root: PhysFrame) {
+    // SAFETY: the caller promises that the tables are complete.
+    unsafe {
+        crate::instructions::write_page_table_root(root.start().as_u64());
     }
 }

@@ -39,12 +39,12 @@ AuDHSOS/
 │   ├── kernel/
 │   │   ├── types/             kernel-types: PhysAddr, VirtAddr, PhysFrame, Page, ranges, alignment
 │   │   ├── hal-api/           kernel-hal-api: HAL traits and their test doubles
-│   │   ├── mm/                kernel-mm: memory map, frame allocator, page tables, mapper, address spaces
+│   │   ├── mm/                kernel-mm: memory map, frame allocator, page tables, mapper, address spaces, kernel stacks
 │   │   ├── objects/           kernel-objects: pools, ids, handles, rights, object types, quotas
 │   │   ├── sched/             kernel-sched: thread states, run queues, time slices
 │   │   ├── ipc/               kernel-ipc: endpoints, notifications, rendezvous, message transfer
 │   │   ├── syscall/           kernel-syscall: argument decoding, validation, dispatch
-│   │   ├── core/              kernel-core: KernelState, boot sequence, reactions to traps and ticks
+│   │   ├── core/              kernel-core: KernelState, boot sequence, memory bring-up, reactions to traps and ticks
 │   │   ├── hal-x86_64/        kernel-hal-x86_64: the adapter (unsafe allowed)
 │   │   ├── test-harness/      kernel-test-harness: in-QEMU test runner, serial protocol
 │   │   └── bin/               audhsos-kernel: the binary; tests/*.rs are QEMU test kernels
@@ -116,7 +116,7 @@ AuDHSOS/
 | `kernel-core` | 4 | all | no | yes, with doubles | layers 0-3, `audhsos-sync` |
 | `kernel-hal-x86_64` | 5 | `x86_64-unknown-none` | allowlisted | the pure parts live in `kernel-x86-tables` | `kernel-hal-api`, `kernel-types`, `audhsos-abi`, `driver-uart16550`, `audhsos-sync`, `kernel-x86-tables`, `kernel-mm`, `kernel-test-harness` |
 | `kernel-test-harness` | 5 | all | no | yes | `kernel-hal-api` |
-| `audhsos-kernel` | 6 | `x86_64-unknown-none` | allowlisted (the entry point and the test images) | QEMU | `kernel-core`, `kernel-hal-x86_64`, `audhsos-abi` |
+| `audhsos-kernel` | 6 | `x86_64-unknown-none` | allowlisted (the entry point, the memory bring-up, and the test images) | QEMU | `kernel-core`, `kernel-hal-x86_64`, `audhsos-abi`; `kernel-hal-api`, `kernel-mm`, `kernel-types` for the test images |
 | `boot-uefi-x86_64` | b | `x86_64-unknown-uefi` | allowlisted | pure sub-modules | `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `kernel-types`, `kernel-mm`, `kernel-hal-api` |
 | `user-sys-x86_64` | u0 | `x86_64-unknown-none` | allowlisted | Miri | `audhsos-abi`, `audhsos-sync` |
 | `user-rt` | u1 | `x86_64-unknown-none` | no | yes | `audhsos-abi`, `user-sys-x86_64` |
