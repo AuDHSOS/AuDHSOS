@@ -62,6 +62,52 @@ pub unsafe fn enable_interrupts() {
     }
 }
 
+/// Turns interrupts off for as long as it lives, and back on when it goes
+/// if they were on when it was made.
+///
+/// This is the guard the safety policy names: kernel state that an
+/// interrupt handler also reaches is borrowed behind one of these, so that
+/// no handler ever finds the cell busy.
+#[derive(Debug)]
+pub struct InterruptGuard {
+    restore: bool,
+}
+
+impl InterruptGuard {
+    /// Turns interrupts off and remembers whether they were on.
+    #[must_use]
+    pub fn new() -> Self {
+        let restore = interrupts_enabled();
+        if restore {
+            // SAFETY: the guard turns them on again when it goes out of
+            // scope, which is what `disable_interrupts` asks of a caller.
+            unsafe {
+                disable_interrupts();
+            }
+        }
+        InterruptGuard { restore }
+    }
+}
+
+impl Default for InterruptGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for InterruptGuard {
+    fn drop(&mut self) {
+        if self.restore {
+            // SAFETY: interrupts were on when the guard was made, so the
+            // descriptor table is loaded and every vector the hardware can
+            // raise has a handler; this only restores what was found.
+            unsafe {
+                enable_interrupts();
+            }
+        }
+    }
+}
+
 /// The flags register.
 #[must_use]
 pub fn read_flags() -> u64 {
@@ -200,6 +246,53 @@ pub unsafe fn reload_segments(code: u16, data: u16) {
             code = in(reg) u64::from(code),
             data = in(reg) u64::from(data),
             tmp = lateout(reg) _,
+        );
+    }
+}
+
+/// Reads a model-specific register.
+///
+/// # Safety
+///
+/// The processor must implement `msr`; a register it does not implement
+/// raises a general protection fault.
+#[must_use]
+pub unsafe fn read_msr(msr: u32) -> u64 {
+    let low: u32;
+    let high: u32;
+    // SAFETY: the caller promises that the processor implements the
+    // register; the instruction reads two registers and changes no memory.
+    unsafe {
+        asm!(
+            "rdmsr",
+            in("ecx") msr,
+            out("eax") low,
+            out("edx") high,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    u64::from(low) | (u64::from(high) << 32)
+}
+
+/// Writes a model-specific register.
+///
+/// # Safety
+///
+/// The processor must implement `msr`, and `value` must be one it accepts:
+/// a reserved bit or an unimplemented register raises a general protection
+/// fault, and the register decides how the processor behaves afterwards.
+pub unsafe fn write_msr(msr: u32, value: u64) {
+    let low = u32::try_from(value & 0xFFFF_FFFF).unwrap_or(0);
+    let high = u32::try_from(value >> 32).unwrap_or(0);
+    // SAFETY: the caller promises that the register exists and that the
+    // value is one it accepts.
+    unsafe {
+        asm!(
+            "wrmsr",
+            in("ecx") msr,
+            in("eax") low,
+            in("edx") high,
+            options(nomem, nostack, preserves_flags),
         );
     }
 }

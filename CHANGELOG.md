@@ -7,6 +7,58 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `kernel-hal-x86_64::acpi` finds the tables of the machine through the
+  physical window and hands their bytes to the parsers. No range is read
+  before it has been checked against the memory the firmware reported, so
+  a root pointer that names nothing makes the kernel report rather than
+  fault.
+- `kernel-hal-x86_64::apic`: `LocalApic` and `IoApic` over their register
+  windows, one volatile access per `unsafe` block, and `Apics`, which
+  implements both `InterruptController` and `Timer`. A line is routed
+  masked, and the routing resolves ISA lines through the overrides of the
+  table.
+- `kernel-hal-x86_64::timer`: the local APIC timer measured once against
+  channel two of the interval timer, ten milliseconds with a bounded poll,
+  then programmed periodic at `TICKS_PER_SECOND`. Every poll is bounded, so
+  a machine whose channel two does not run reports instead of hanging.
+- `kernel-hal-x86_64::interrupts`: the bring-up that reads the tables, maps
+  the two register windows through a mapping the kernel supplies, quiets
+  the legacy controllers, turns the local APIC on, and masks every I/O APIC
+  line. `acknowledge` sends the end-of-interrupt, and sends none for the
+  spurious vector, which is the one that expects none.
+- `kernel-hal-x86_64::instructions`: `rdmsr` and `wrmsr`, and
+  `InterruptGuard`, which turns interrupts off for as long as a borrow of
+  kernel state lasts and back on afterwards if they were on. This is the
+  guard the safety policy names in 4.6.
+- `kernel-hal-x86_64::traps` gains a handler for every device vector of the
+  plan and a second registration point, `set_interrupt_handler`: a device
+  interrupt carries its vector and nothing else, which is not what a trap
+  report carries.
+- `kernel-hal-x86_64::testing::raise_interrupt` raises a vector from
+  software, with the vector as an inline constant. The interrupt tests
+  therefore assert what they mean to assert instead of asserting that a
+  handler is installed.
+- `kernel-core::tick` counts a timer tick and gives the scheduler its turn,
+  which is nothing until Phase 5. There are two tick counts: the adapter
+  counts what the hardware delivered, because `Timer::ticks` is the
+  adapter's method and the adapter may not depend on `kernel-core`, and
+  `KernelState` counts what the kernel processed. `KernelState` gains the counts of ticks,
+  of device interrupts, and of spurious interrupts, and `with_state` hands
+  the state out the way `with_memory` hands out the memory.
+- `kernel-core::memory`: `KernelMemory::map_device` maps a device register
+  window into the physical window, uncached, and registers it as a region
+  of kind `Device`. The window the loader builds covers memory, because it
+  is sized from the memory map; an aperture above it is the kernel's own to
+  map, at the address the window rule gives it.
+- The kernel image brings the interrupt hardware up, starts the timer, and
+  waits for its first ticks before it reports that the boot is complete.
+- QEMU test image `interrupts`: the tables name the hardware and the unit
+  is on; a second tick arrives after the end-of-interrupt; the tick counter
+  grows while the kernel does nothing; a masked timer delivers nothing and
+  unmasking starts it again; a vector raised from software reaches the
+  handler of that vector, for `0x30`, `0x40`, and `0xFF`; an ISA line is
+  routed once and refuses a second routing. Catalog 6.6.11, the APIC items
+  of 6.6.16, and the interrupt items of 6.6.21.
 - `kernel-acpi` (Phase 4): the ACPI tables the kernel needs to find its
   interrupt controllers, parsed in safe Rust. `parse_rsdp` reads the root
   pointer of revision zero or two with both of its checksums;

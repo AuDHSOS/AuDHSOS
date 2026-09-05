@@ -184,7 +184,7 @@ The kernel address space (upper half) is managed by the same code. Layout:
 
 | Range (virtual) | Content |
 |-----------------|---------|
-| Physical memory window | All of RAM mapped read/write, no-execute, at `PHYS_WINDOW_BASE` |
+| Physical memory window | All of RAM mapped read/write, no-execute, at `PHYS_WINDOW_BASE`; the kernel maps the device apertures it drives into the same range at the same offset, uncached (D-60) |
 | Kernel image | Text read-only/execute, rodata read-only, data read/write, at `KERNEL_BASE` |
 | Boot information page | The structure the loader wrote, read-only, at `BOOT_INFO_VADDR` |
 | Boot stack | `BOOT_STACK_PAGES` pages read/write, no-execute, ending at `BOOT_STACK_TOP`, with one unmapped guard page below |
@@ -447,10 +447,9 @@ through shared memory objects.
    as the region of kind `BootInfo`. Control passes to
    `kernel_core::boot`, which is architecture neutral.
 9. HAL initialization: GDT with kernel and user segments, TSS with a
-   double-fault stack, IDT with all exception vectors, the interrupt
-   vectors, and vector `0x80`; debug UART if compiled in; legacy PIC masked;
-   local APIC and I/O APIC configured from the ACPI MADT; timer calibrated
-   and started.
+   double-fault stack, IDT with a gate for every exception the processor
+   defines, for every device vector of the plan, and from Phase 5 for
+   vector `0x80`; debug UART if compiled in. Interrupts stay off.
 10. Memory: normalize the memory regions, take the kernel reserve in the
     size the boot image header asks for, initialize the frame allocator,
     the kernel region table, and the kernel stack pool, adopt the loader's
@@ -458,16 +457,25 @@ through shared memory objects.
     four fixed ranges of the kernel half, and drop the loader's identity
     mapping without giving a frame back. The object pools follow in
     Phase 5 with the types they hold.
-11. Boot image: validate the header. Create a `Ram` memory object for the
+11. Interrupts: read the root pointer, the root table, and the MADT through
+    the physical window; map the register window of the local APIC and of
+    every I/O APIC into the physical window, uncached (D-60); move the two
+    legacy controllers to the vectors of the plan and mask them; turn the
+    local APIC on with the spurious vector; mask every I/O APIC line;
+    measure the local APIC timer against channel two of the interval timer
+    and start it at `TICKS_PER_SECOND`; turn interrupts on. Interrupts come
+    after memory because the register windows are mapped out of the address
+    space the memory bring-up leaves.
+12. Boot image: validate the header. Create a `Ram` memory object for the
     image.
-12. Root task: create the process with maximum quotas; map the root task at
+13. Root task: create the process with maximum quotas; map the root task at
     `ROOT_TASK_BASE`; create an IPC buffer and a stack; install handles for
     `SystemControl`, the process itself, the boot-image memory object, and
     one memory object per free RAM region; write the startup message; start
     the thread.
-13. Idle thread on the boot stack; scheduler starts. From here on the kernel
+14. Idle thread on the boot stack; scheduler starts. From here on the kernel
     only reacts to interrupts and system calls.
-14. The root task parses the tar archive, loads the name server, the console
+15. The root task parses the tar archive, loads the name server, the console
     driver, and the memory server, and grants each its capabilities.
 
 ## 2.10 Userland

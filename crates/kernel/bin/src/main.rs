@@ -9,17 +9,20 @@
 
 use core::panic::PanicInfo;
 
-use audhsos_abi::layout::BOOT_STACK_TOP;
+use audhsos_abi::layout::{BOOT_STACK_TOP, TICKS_PER_SECOND};
 use kernel_core::memory::MemoryError;
 use kernel_core::state::KernelState;
 use kernel_core::trap::Exception;
-use kernel_core::{boot, memory, trap};
+use kernel_core::{boot, memory, println, tick, trap};
+use kernel_hal_api::exit::{ExitStatus, TestExit};
 use kernel_hal_x86_64::bootinfo::X86Platform;
-use kernel_hal_x86_64::entry;
 use kernel_hal_x86_64::exit::QemuExit;
+use kernel_hal_x86_64::interrupts::{self, ApicError};
 use kernel_hal_x86_64::paging::{LocalTlb, X86Entry, active_root};
-use kernel_hal_x86_64::traps::TrapReport;
+use kernel_hal_x86_64::traps::{self, TrapReport};
 use kernel_hal_x86_64::window::PhysicalWindow;
+use kernel_hal_x86_64::{entry, instructions, vectors};
+use kernel_types::{PhysFrameRange, VirtAddr};
 
 /// The entry the loader jumps to, with the address of the boot information
 /// page in the first argument.
@@ -45,14 +48,94 @@ fn run(platform: &X86Platform) {
         Ok(())
     });
     match outcome {
-        Some(Ok(())) => {
-            entry::with_console(|console| boot::finish(console, &mut QemuExit::new()));
-        }
+        Some(Ok(())) => {}
         Some(Err(error)) => {
             entry::with_console(|console| boot::abort(error, console, &mut QemuExit::new()));
+            return;
         }
         None => entry::fail(b"[boot] the console is not reachable\n"),
     }
+    let interrupts = take_interrupts(platform);
+    let reported = entry::with_console(|console| match interrupts {
+        Ok(ticks) => {
+            println!(console, "timer ticking, {ticks} ticks so far");
+            boot::finish(console, &mut QemuExit::new());
+        }
+        Err(error) => {
+            println!(console, "[boot] {error}");
+            QemuExit::new().exit(ExitStatus::Failure);
+        }
+    });
+    if reported.is_none() {
+        entry::fail(b"[boot] the console is not reachable\n");
+    }
+}
+
+/// Takes the interrupt hardware over: the tables of the machine, the two
+/// APIC register windows, the legacy controllers, and the timer. Returns
+/// the number of ticks that had arrived by the time the kernel had nothing
+/// left to do.
+fn take_interrupts(platform: &X86Platform) -> Result<u64, ApicError> {
+    traps::set_interrupt_handler(on_interrupt);
+    // SAFETY: the tables the loader built are active, the descriptor
+    // tables carry a handler for every vector of the plan, interrupts are
+    // off, and this runs once on the boot processor.
+    unsafe { interrupts::bring_up(platform, map_device) }?;
+    // SAFETY: the interval timer belongs to the kernel, interrupts are
+    // still off, and this is the processor the controller belongs to.
+    unsafe { interrupts::start_timer(TICKS_PER_SECOND) }?;
+    // SAFETY: the descriptor table is loaded and every vector the hardware
+    // can raise has a handler.
+    unsafe {
+        instructions::enable_interrupts();
+    }
+    Ok(wait_for_ticks(TICKS_BEFORE_HANDOVER))
+}
+
+/// How many ticks the kernel waits for before it reports that the timer
+/// runs. Phase 5 replaces the wait with a scheduler.
+const TICKS_BEFORE_HANDOVER: u64 = 3;
+
+/// Waits until `wanted` ticks have arrived, halting between them.
+fn wait_for_ticks(wanted: u64) -> u64 {
+    let mut seen = interrupts::ticks();
+    while seen < wanted {
+        instructions::halt();
+        seen = interrupts::ticks();
+    }
+    seen
+}
+
+/// Maps the frames of a device register window into the physical window,
+/// uncached, out of the address space the memory bring-up left.
+fn map_device(frames: PhysFrameRange) -> Option<VirtAddr> {
+    // SAFETY: the kernel tables are active, so the window maps every
+    // physical frame read and write, and the kernel is the only writer.
+    let mut window = unsafe { PhysicalWindow::kernel() };
+    let mut tlb = LocalTlb::new();
+    memory::with_memory(|kernel| {
+        kernel
+            .map_device::<X86Entry, _, _>(&mut window, &mut tlb, frames)
+            .ok()
+    })
+    .flatten()
+}
+
+/// Counts a device interrupt in the kernel state and acknowledges it at
+/// the hardware.
+fn on_interrupt(vector: u8) {
+    let counted = kernel_core::with_state(|state| {
+        state.record_interrupt();
+        match vector {
+            vectors::TIMER => {
+                tick::on_tick(state);
+            }
+            vectors::SPURIOUS => state.record_spurious(),
+            _ => {}
+        }
+    });
+    let _ = counted;
+    interrupts::acknowledge(vector);
 }
 
 /// Takes the memory of the machine over: the reserve, the regions of the

@@ -177,6 +177,7 @@ dependencies = [
  "audhsos-abi",
  "audhsos-sync",
  "driver-uart16550",
+ "kernel-acpi",
  "kernel-hal-api",
  "kernel-mm",
  "kernel-test-harness",

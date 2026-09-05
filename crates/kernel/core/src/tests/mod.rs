@@ -7,4 +7,5 @@
 mod boot;
 mod memory;
 mod print;
+mod tick;
 mod trap;

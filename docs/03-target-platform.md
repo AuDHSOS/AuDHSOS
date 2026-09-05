@@ -39,11 +39,11 @@ on macOS and `-display gtk` on Linux.
 |--------|-------------|---------|-------|
 | UEFI boot services and configuration table | `extern "efiapi"` calls through project-defined bindings | loader | 2 |
 | Serial 16550, COM1 (I/O ports `0x3F8`-`0x3FF`, IRQ 4) | port I/O | kernel debug output (`debug-uart` feature); userland console driver via `IoPortRange` and `Interrupt` | 2, 7 |
-| Local APIC (xAPIC, MMIO base from ACPI MADT) | MMIO through the physical memory window | timer tick, end-of-interrupt, spurious vector | 4 |
-| I/O APIC (MMIO base from ACPI MADT) | MMIO | routing IRQ lines to vectors, masking and unmasking | 4 |
+| Local APIC (xAPIC, MMIO base from ACPI MADT) | MMIO through the physical memory window, into which the kernel maps the aperture itself (D-60) | timer tick, end-of-interrupt, spurious vector | 4 |
+| I/O APIC (MMIO base from ACPI MADT) | MMIO, mapped the same way | routing IRQ lines to vectors, masking and unmasking | 4 |
 | Legacy 8259 PIC | port I/O | masked once at boot, never used again | 4 |
 | PIT channel 2 | port I/O | one-time calibration of the local APIC timer frequency | 4 |
-| ACPI RSDP (from the UEFI configuration table), RSDT/XSDT, MADT | bytes read through the physical window, parsed in safe Rust | APIC discovery | 4 |
+| ACPI RSDP (from the UEFI configuration table), RSDT/XSDT, MADT | bytes read through the physical window, parsed in safe Rust by `kernel-acpi` | APIC discovery | 4 |
 | `isa-debug-exit` (I/O port `0xF4`) | port I/O | test exit codes from loader and kernel | 2 |
 | PCI configuration space via ECAM (`MCFG`) | MMIO via `Device` memory objects | userland virtio drivers | later |
 | virtio-blk, virtio-net over PCI | MMIO, interrupts | userland drivers | later |

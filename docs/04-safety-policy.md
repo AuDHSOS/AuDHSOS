@@ -32,7 +32,7 @@ device register are operations the Rust language can only express as
 | Crate | Content that needs `unsafe` | Assembly |
 |-------|-----------------------------|----------|
 | `kernel-hal-x86_64` | privileged registers, descriptor table loading, physical memory through the window as page tables and as bytes, MMIO for the APICs, port I/O, boot information validation from a raw pointer, context switch, the entry point and the exception triggers of a kernel test image | privileged instruction wrappers, one naked function, the exceptions a test image raises |
-| `audhsos-kernel` | the entry the loader jumps to, the panic handler, the reads of physical memory through the window during the memory bring-up, and the same in the test images the crate carries (D-55) | none |
+| `audhsos-kernel` | the entry the loader jumps to, the panic handler, the reads of physical memory through the window during the memory bring-up, the interrupt bring-up and the instructions that turn interrupts on, and the same in the test images the crate carries (D-55) | none |
 | `boot-uefi-x86_64` | firmware calls through function pointers, memory map buffer from a raw pointer, page-table memory through the identity mapping, `CR3` write, kernel entry | `CR3` write, port write for the exit device, one naked function |
 | `audhsos-sync` | `Global<T>`: a `Sync` cell with a runtime borrow flag for kernel and userland global state | none |
 | `user-sys-x86_64` | the system call trap instruction, `_start`, the `GlobalAlloc` adapter | one `asm!` statement: `int 0x80` |
@@ -69,10 +69,10 @@ The xtask policy table holds the machine-readable form.
 | `kernel-hal-x86_64` | descriptor table loading | `lgdt`, `lidt`, `ltr` |
 | `kernel-hal-x86_64` | segment register reload after `lgdt` | `mov` to data segment registers, far return for `CS` |
 | `kernel-hal-x86_64` | flags register | `pushfq`, `pop` |
-| `kernel-hal-x86_64` | model-specific registers (Phase 4) | `rdmsr`, `wrmsr` |
+| `kernel-hal-x86_64` | model-specific registers | `rdmsr`, `wrmsr` |
 | `kernel-hal-x86_64` | port I/O, byte and double word so far | `in`, `out` |
 | `kernel-hal-x86_64` | context switch (naked function, Phase 5) | save callee-saved registers, swap stack pointer, restore, return |
-| `kernel-hal-x86_64` | the exceptions a test image raises, and from Phase 4 the vectors it raises from software (`testing`, features `debug-uart` and `test-exit`) | `int3`, `ud2`, `div` by zero, `mov` of a selector beyond the table into a segment register, `int` with the vector as an inline constant |
+| `kernel-hal-x86_64` | the exceptions a test image raises and the vectors it raises from software (`testing`, features `debug-uart` and `test-exit`) | `int3`, `ud2`, `div` by zero, `mov` of a selector beyond the table into a segment register, `int` with the vector as an inline constant |
 | `boot-uefi-x86_64` | kernel entry (naked function) | disable interrupts, write `CR3`, load stack pointer, jump |
 | `boot-uefi-x86_64` | exit device on loader failure | `out` |
 | `user-sys-x86_64` | system call trap | `int 0x80` |
@@ -88,12 +88,12 @@ same ABI.
 | Page tables | The walker is generic over `FrameAccess`, which returns `&mut PageTable` for a `PhysFrame`. The kernel adapter builds that reference from the physical window; the loader adapter builds it from the identity mapping; the test double from a `HashMap`. The walker never sees a pointer. |
 | Physical memory window | `PhysicalWindow::frame_bytes_mut(frame) -> &mut [u8; 4096]` is the single conversion from a physical frame to a byte slice. The safety argument: the window maps all RAM, the frame is inside RAM by construction of `PhysFrame`, the kernel is single-threaded and non-preemptible, and callers hold the slice only inside one system call. |
 | Descriptor tables | GDT entries, IDT entries, and the TSS are `repr(C)` types built by safe bit packing that is unit-tested for layout on the host. Only the three load instructions are `unsafe`. |
-| APIC register blocks | `repr(C)` register layouts in a logic module, unit-tested for offsets. The adapter obtains one `&mut` to the block through the physical window and uses volatile field access. |
-| ACPI tables and UEFI structures | The adapters hand table bytes to safe parsers as `&[u8]`. `audhsos-uefi` defines structure layouts only; the loader performs the calls. |
+| APIC register blocks | The register offsets and the encoding of a redirection entry live in `kernel-x86-tables`, unit-tested against the specification values. The adapter reaches the block through the physical window and uses one volatile read or one volatile write per `unsafe` block. The window the loader builds covers memory; the kernel maps the two apertures itself, uncached, at the address the window rule gives them. |
+| ACPI tables and UEFI structures | The adapters hand table bytes to safe parsers as `&[u8]`: `kernel-acpi` for the root pointer, the table headers, the root table, and the MADT. No range is read before it has been checked against the memory the firmware reported. `audhsos-uefi` defines structure layouts only; the loader performs the calls. |
 | Kernel stacks and thread entry | The initial user context is a sequence of `u64` values written into a `&mut [u64]` slice of the thread's kernel stack. The adapter only sets the stack pointer. |
 | Object storage | Typed pools with generation-checked ids replace reference-counted pointers. Intrusive queues use indices. |
 | Allocators | The frame allocator and the userland heap allocator compute offsets. The userland `GlobalAlloc` adapter converts an offset to a pointer with `wrapping_add` on a base pointer obtained once at heap creation. |
-| Global state | `audhsos-sync::Global<T>` holds the kernel state and the userland heap state. Access requires the interrupt guard in the kernel; a second concurrent borrow is detected by a flag and reported as a kernel bug. |
+| Global state | `audhsos-sync::Global<T>` holds the kernel state and the userland heap state. Access requires the interrupt guard in the kernel (`kernel-hal-x86_64::instructions::InterruptGuard`), because a handler that found the cell busy would return without acknowledging and the local APIC would deliver nothing after that; a second concurrent borrow is detected by a flag and reported as a kernel bug. |
 | User memory | Never dereferenced (R6). |
 | Cryptographic secrets | The cryptography crates of document 11 are logic crates without `unsafe`. They branch and index on public values only, use no lookup tables in a primitive that sees a key, and hold key material in `Secret<N>`. The one thing safe Rust cannot promise is erasure: without `write_volatile` the `Drop` implementation overwrites and calls `black_box`, which is best effort. The limit is documented, not hidden. |
 

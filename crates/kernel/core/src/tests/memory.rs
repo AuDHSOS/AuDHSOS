@@ -575,3 +575,68 @@ fn a_kernel_stack_is_not_a_region_of_the_region_table() {
     assert_eq!(memory.regions().len(), before);
     assert!(u64::try_from(KERNEL_REGIONS).unwrap() < KERNEL_STACK_SLOTS);
 }
+
+/// The address the machine puts a local APIC at, which is above the memory
+/// the window covers.
+const APIC_PHYS: u64 = 0xFEE0_0000;
+
+#[test]
+fn a_device_window_is_mapped_uncached_where_the_physical_window_would_put_it() {
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let mut memory =
+        bring_up::<X86Entry, _, _, _>(&platform(), machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    let before = memory.regions().len();
+    let frames = PhysFrameRange::new(frame(APIC_PHYS / PAGE_SIZE), 1).unwrap();
+    let base = memory
+        .map_device::<X86Entry, _, _>(&mut machine.access, &mut tlb, frames)
+        .unwrap();
+    assert_eq!(base.as_u64(), PHYS_WINDOW_BASE + APIC_PHYS);
+    assert_eq!(memory.regions().len(), before + 1);
+
+    let mut sources = no_frames();
+    let mapper = machine.mapper(&mut sources);
+    let (aperture, perms) = mapper.translate(page(base.as_u64())).unwrap();
+    assert_eq!(aperture, frame(APIC_PHYS / PAGE_SIZE));
+    assert_eq!(perms, Permissions::READ_WRITE);
+}
+
+#[test]
+fn a_device_window_of_two_frames_maps_both_of_them() {
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let mut memory =
+        bring_up::<X86Entry, _, _, _>(&platform(), machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    let frames = PhysFrameRange::new(frame(APIC_PHYS / PAGE_SIZE), 2).unwrap();
+    let base = memory
+        .map_device::<X86Entry, _, _>(&mut machine.access, &mut tlb, frames)
+        .unwrap();
+    let mut sources = no_frames();
+    let mapper = machine.mapper(&mut sources);
+    assert!(mapper.translate(page(base.as_u64())).is_some());
+    assert!(mapper.translate(page(base.as_u64() + PAGE_SIZE)).is_some());
+}
+
+#[test]
+fn a_device_window_that_is_already_mapped_is_refused() {
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let mut memory =
+        bring_up::<X86Entry, _, _, _>(&platform(), machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    let frames = PhysFrameRange::new(frame(APIC_PHYS / PAGE_SIZE), 1).unwrap();
+    memory
+        .map_device::<X86Entry, _, _>(&mut machine.access, &mut tlb, frames)
+        .unwrap();
+    assert_eq!(
+        memory.map_device::<X86Entry, _, _>(&mut machine.access, &mut tlb, frames),
+        Err(MemoryError::Paging(MapError::AlreadyMapped))
+    );
+}
+
+#[test]
+fn a_device_window_is_reported_under_its_own_name() {
+    assert_eq!(backing_name(KernelBacking::Device), "device");
+}

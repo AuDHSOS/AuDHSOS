@@ -48,13 +48,28 @@ pub struct TrapReport {
 /// What the kernel registers to receive a trap.
 pub type TrapHandler = fn(TrapReport);
 
+/// What the kernel registers to receive a device interrupt. A device
+/// interrupt carries nothing but its vector: what happened is the device's
+/// business, not the processor's.
+pub type InterruptHandler = fn(u8);
+
 /// The registered handler; empty before the kernel registers one.
 static HANDLER: Global<TrapHandler> = Global::new();
+
+/// The registered device interrupt handler; empty before the kernel
+/// registers one.
+static DEVICE_HANDLER: Global<InterruptHandler> = Global::new();
 
 /// Registers the function every handler calls. A second call is ignored,
 /// because the kernel registers once during boot.
 pub fn set_handler(handler: TrapHandler) {
     let _ = HANDLER.init(handler);
+}
+
+/// Registers the function every device vector calls. A second call is
+/// ignored, because the kernel registers once during boot.
+pub fn set_interrupt_handler(handler: InterruptHandler) {
+    let _ = DEVICE_HANDLER.init(handler);
 }
 
 /// Hands `report` to the registered handler. A trap the kernel cannot
@@ -65,6 +80,23 @@ fn dispatch(report: TrapReport) {
         crate::instructions::halt_forever();
     };
     (*handler)(report);
+}
+
+/// Hands `vector` to the registered device interrupt handler. The borrow
+/// ends before the handler runs, so that the handler may take an interrupt
+/// of its own without finding the cell busy.
+///
+/// An interrupt that arrives before the kernel has registered a handler is
+/// dropped without an end-of-interrupt: the only interrupt that can arrive
+/// then is one the kernel has not turned on yet, and the machine goes on.
+fn deliver(vector: u8) {
+    let handler = DEVICE_HANDLER
+        .borrow(&UncontendedToken)
+        .ok()
+        .map(|handler| *handler);
+    if let Some(handler) = handler {
+        handler(vector);
+    }
 }
 
 /// Declares one handler per vector and the table that names them.
@@ -117,6 +149,38 @@ handlers! {
     virtualization = 20,
 }
 
+/// Declares one handler per device vector. A device interrupt carries no
+/// error code and nothing of the frame the processor pushed, so every
+/// handler is the same but for the vector it names.
+macro_rules! device_handlers {
+    ($($name:ident = $vector:literal),+ $(,)?) => {
+        $(
+            extern "x86-interrupt" fn $name(_frame: InterruptFrame) {
+                deliver($vector);
+            }
+        )+
+
+        /// Every device vector that has a handler, with its handler.
+        const DEVICE_VECTORS: &[(u8, extern "x86-interrupt" fn(InterruptFrame))] =
+            &[$(($vector, $name)),+];
+    };
+}
+
+// The vectors of the plan in `kernel_x86_tables::vectors` that a device can
+// raise: the range the two legacy controllers were moved to, the timer, one
+// per global system interrupt, and the spurious vector of the local APIC.
+// The system call vector arrives with Phase 5, which needs a gate the
+// processor may enter from ring three.
+device_handlers! {
+    device_20 = 0x20, device_21 = 0x21, device_22 = 0x22, device_23 = 0x23, device_24 = 0x24, device_25 = 0x25,
+    device_26 = 0x26, device_27 = 0x27, device_28 = 0x28, device_29 = 0x29, device_2a = 0x2A, device_2b = 0x2B,
+    device_2c = 0x2C, device_2d = 0x2D, device_2e = 0x2E, device_2f = 0x2F, device_30 = 0x30, device_40 = 0x40,
+    device_41 = 0x41, device_42 = 0x42, device_43 = 0x43, device_44 = 0x44, device_45 = 0x45, device_46 = 0x46,
+    device_47 = 0x47, device_48 = 0x48, device_49 = 0x49, device_4a = 0x4A, device_4b = 0x4B, device_4c = 0x4C,
+    device_4d = 0x4D, device_4e = 0x4E, device_4f = 0x4F, device_50 = 0x50, device_51 = 0x51, device_52 = 0x52,
+    device_53 = 0x53, device_54 = 0x54, device_55 = 0x55, device_56 = 0x56, device_57 = 0x57, device_ff = 0xFF,
+}
+
 handlers_with_code! {
     double_fault = 8,
     invalid_tss = 10,
@@ -131,7 +195,8 @@ handlers_with_code! {
     security = 30,
 }
 
-/// Fills `table` with a gate for every vector the processor defines.
+/// Fills `table` with a gate for every vector the processor defines and
+/// for every device vector of the plan.
 #[expect(
     clippy::as_conversions,
     clippy::fn_to_numeric_cast_any,
@@ -185,6 +250,14 @@ pub fn fill(table: &mut [[u64; 2]; IDT_ENTRIES]) {
             table,
             vector,
             gate(address, selector, stack, GATE_INTERRUPT_DPL0),
+        );
+    }
+    for (vector, handler) in DEVICE_VECTORS {
+        let address = handler_address(*handler as usize);
+        put(
+            table,
+            *vector,
+            gate(address, selector, 0, GATE_INTERRUPT_DPL0),
         );
     }
 }

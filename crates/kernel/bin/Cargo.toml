@@ -29,6 +29,9 @@ name = "memory_fault"
 name = "kernel_stack"
 
 [[test]]
+name = "interrupts"
+
+[[test]]
 name = "console"
 
 [[test]]
@@ -58,12 +61,12 @@ name = "panic"
 [dependencies]
 audhsos-abi.workspace = true
 kernel-core.workspace = true
+kernel-hal-api.workspace = true
 kernel-hal-x86_64.workspace = true
+kernel-types.workspace = true
 
 [dev-dependencies]
-kernel-hal-api.workspace = true
 kernel-mm.workspace = true
-kernel-types.workspace = true
 
 [lints]
 workspace = true

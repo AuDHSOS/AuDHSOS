@@ -218,6 +218,21 @@ pub fn raise_breakpoint() {
     }
 }
 
+/// Raises `VECTOR` from software, which enters its handler exactly as the
+/// hardware would. The instruction needs the vector as an immediate, which
+/// is why it is a constant of the function and not an argument.
+///
+/// A handler entered this way sees no interrupt at the controller, so it
+/// must not acknowledge one: an end-of-interrupt for an interrupt that was
+/// never delivered acknowledges whatever is actually in service.
+pub fn raise_interrupt<const VECTOR: u8>() {
+    // SAFETY: every vector of the plan has a handler by the time a test
+    // image runs, and the instruction changes no register and no memory.
+    unsafe {
+        asm!("int {vector}", vector = const VECTOR, options(nomem, nostack));
+    }
+}
+
 /// Executes an undefined instruction, which raises the invalid opcode
 /// exception. The exception is a fault, so the handler must end the
 /// machine instead of resuming.

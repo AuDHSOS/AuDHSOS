@@ -27,10 +27,10 @@ use kernel_mm::address_space::{Region, RegionError, RegionTable};
 use kernel_mm::frame_allocator::{BitmapFrameAllocator, FrameError};
 use kernel_mm::mapper::{MapError, Mapper, Progress};
 use kernel_mm::memory_map::{MapError as MemoryMapError, NormalizedMap, normalize};
-use kernel_mm::page_table::{EntryFormat, PageTable};
+use kernel_mm::page_table::{CachePolicy, EntryFormat, PageTable, Permissions};
 use kernel_mm::reserve::select_reserve;
 use kernel_mm::stack::{KernelStack, StackError, StackPool};
-use kernel_types::{Page, PageRange, PhysAddr, PhysFrame, VirtAddr};
+use kernel_types::{Page, PageRange, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
 
 use crate::config::{KERNEL_IMAGE_MAX_PAGES, KERNEL_REGIONS, KERNEL_STACK_WORDS};
 use crate::println;
@@ -46,6 +46,8 @@ pub enum KernelBacking {
     BootStack,
     /// The page the loader wrote the boot information into.
     BootInfo,
+    /// The register window of a device the kernel drives itself.
+    Device,
 }
 
 /// The regions of the kernel address space.
@@ -221,6 +223,57 @@ impl KernelMemory {
         let mut mapper =
             Mapper::<'_, F, A, T, BitmapFrameAllocator>::new(root, access, tlb, &mut self.frames);
         self.stacks.release(&mut mapper, stack)
+    }
+
+    /// Maps the frames of a device register window into the physical
+    /// window, uncached, and registers the range as a region.
+    ///
+    /// The window the loader built covers memory, not the apertures above
+    /// it, because it is sized from the memory map. A device the kernel
+    /// drives itself is therefore mapped here, at the same address the
+    /// window would put it at, so that one rule reaches all of physical
+    /// space: `PHYS_WINDOW_BASE + address`.
+    ///
+    /// # Errors
+    ///
+    /// [`MemoryError::Address`] if the range is not addressable;
+    /// [`MemoryError::Paging`] if a page cannot be mapped, an aperture
+    /// that is already mapped included; [`MemoryError::Region`] if the
+    /// region table has no slot left.
+    pub fn map_device<F, A, T>(
+        &mut self,
+        access: &mut A,
+        tlb: &mut T,
+        frames: PhysFrameRange,
+    ) -> Result<VirtAddr, MemoryError>
+    where
+        F: EntryFormat,
+        A: FrameAccess<PageTable<F>>,
+        T: TlbControl,
+    {
+        let base = window_address(frames.start())?;
+        let start = Page::from_start(base).map_err(|_| MemoryError::Address)?;
+        let pages = PageRange::new(start, frames.count()).map_err(|_| MemoryError::Address)?;
+        let root = self.root;
+        let mut mapper =
+            Mapper::<'_, F, A, T, BitmapFrameAllocator>::new(root, access, tlb, &mut self.frames);
+        let mut offset = 0u64;
+        while offset < frames.count() {
+            let page = start.checked_add(offset).ok_or(MemoryError::Address)?;
+            let frame = frames
+                .start()
+                .checked_add(offset)
+                .ok_or(MemoryError::Address)?;
+            mapper.map(page, frame, Permissions::READ_WRITE, CachePolicy::Uncached)?;
+            offset = offset.saturating_add(1);
+        }
+        self.regions.insert(Region {
+            pages,
+            backing: KernelBacking::Device,
+            offset: 0,
+            perms: Permissions::READ_WRITE,
+        })?;
+        Ok(base)
     }
 
     /// The frame the boot information page is mapped to.
@@ -413,6 +466,14 @@ where
         .map(|(frame, _)| frame)
         .ok_or(MemoryError::NoBootInfo)?;
     Ok(Adopted { regions, boot_info })
+}
+
+/// The address a physical frame is reachable at through the window.
+fn window_address(frame: PhysFrame) -> Result<VirtAddr, MemoryError> {
+    let raw = PHYS_WINDOW_BASE
+        .checked_add(frame.start().as_u64())
+        .ok_or(MemoryError::Address)?;
+    VirtAddr::new(raw).map_err(|_| MemoryError::Address)
 }
 
 /// The page starting at `address`.
@@ -666,5 +727,6 @@ pub const fn backing_name(backing: KernelBacking) -> &'static str {
         KernelBacking::Window => "physical-window",
         KernelBacking::BootStack => "boot-stack",
         KernelBacking::BootInfo => "boot-info",
+        KernelBacking::Device => "device",
     }
 }

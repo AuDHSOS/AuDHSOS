@@ -12,7 +12,7 @@
 
 use audhsos_abi::layout::{PAGE_SIZE, PHYS_WINDOW_BASE};
 use kernel_hal_api::paging::FrameAccess;
-use kernel_types::{PhysFrame, VirtAddr};
+use kernel_types::{PhysAddr, PhysFrame, VirtAddr};
 
 /// The number of bytes of one frame, as the length of an array.
 pub const FRAME_BYTES: usize = 4096;
@@ -61,7 +61,12 @@ impl PhysicalWindow {
 
     /// The address `frame` is reachable at.
     const fn address_of(self, frame: PhysFrame) -> Option<u64> {
-        self.base.as_u64().checked_add(frame.start().as_u64())
+        self.address_of_addr(frame.start())
+    }
+
+    /// The address a physical address is reachable at.
+    const fn address_of_addr(self, address: PhysAddr) -> Option<u64> {
+        self.base.as_u64().checked_add(address.as_u64())
     }
 
     /// A pointer to the value of type `T` stored in `frame`.
@@ -70,6 +75,28 @@ impl PhysicalWindow {
         Some(core::ptr::without_provenance_mut::<T>(
             usize::try_from(address).ok()?,
         ))
+    }
+
+    /// The `len` bytes at `start`, read through the window.
+    ///
+    /// This is how the kernel reads a structure the firmware left in
+    /// memory whose length only its own header says: a page at a time is
+    /// not enough, because such a structure may cross a frame boundary.
+    ///
+    /// # Safety
+    ///
+    /// The whole range must lie inside the memory the window maps. The
+    /// window covers the memory the firmware reported and the apertures
+    /// the kernel mapped itself, and nothing else.
+    #[must_use]
+    pub unsafe fn bytes(&self, start: PhysAddr, len: usize) -> Option<&[u8]> {
+        let address = self.address_of_addr(start)?;
+        let pointer = core::ptr::without_provenance::<u8>(usize::try_from(address).ok()?);
+        // SAFETY: the constructor promises that the window maps every
+        // frame for the lifetime of this value and that the kernel is the
+        // only writer, and the caller promises that the whole range is
+        // inside the memory the window maps.
+        Some(unsafe { core::slice::from_raw_parts(pointer, len) })
     }
 
     /// The bytes of `frame`, for reading and writing.

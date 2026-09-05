@@ -10,10 +10,12 @@ pub mod config;
 pub mod memory;
 pub mod print;
 pub mod state;
+pub mod tick;
 pub mod trap;
 
 pub use memory::{KernelMemory, MEMORY, MemoryError, with_memory};
-pub use state::{KERNEL, KernelState};
+pub use state::{KERNEL, KernelState, with_state};
+pub use tick::on_tick;
 pub use trap::Exception;
 
 #[cfg(test)]
