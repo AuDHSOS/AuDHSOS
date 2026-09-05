@@ -20,8 +20,8 @@ use crate::error::Ipv6Error;
 use crate::header::{DISCOVERY_HOP_LIMIT, Packet};
 use crate::ndp::{Discovery, ROUTER_ADVERTISEMENT, option_type, receive};
 use crate::slaac::{
-    Configuration, Dad, DadEvent, DadState, Expired, INTERFACE_ID_LEN, address_from, expiry,
-    interface_identifier,
+    Configuration, Dad, DadEvent, DadState, Expired, INTERFACE_ID_LEN, TWO_HOURS, address_from,
+    expiry, held_valid_until, interface_identifier,
 };
 
 /// A configuration of two prefixes and three DNS servers.
@@ -148,6 +148,27 @@ fn a_lifetime_of_all_ones_never_runs_out() {
 }
 
 #[test]
+fn the_floor_of_rfc_4862_is_the_three_rules_the_document_writes() {
+    // Rule 1, above the floor: taken as given, even shortening.
+    assert_eq!(
+        held_valid_until(secs(36_000), 10_800, secs(0)),
+        secs(10_800)
+    );
+    // Rule 1, above what is left: taken as given.
+    assert_eq!(held_valid_until(secs(100), 3600, secs(0)), secs(3600));
+    // Rule 2, less than the floor left: left alone.
+    assert_eq!(held_valid_until(secs(100), 0, secs(0)), secs(100));
+    assert_eq!(held_valid_until(secs(7200), 1, secs(0)), secs(7200));
+    // Rule 3, more than the floor left: brought down to it.
+    assert_eq!(
+        held_valid_until(secs(36_000), 60, secs(0)),
+        Instant::ZERO.saturating_add(TWO_HOURS)
+    );
+    // A lifetime of for ever is above the floor and is taken.
+    assert_eq!(held_valid_until(secs(100), u32::MAX, secs(0)), Instant::MAX);
+}
+
+#[test]
 fn a_prefix_and_a_router_are_learned_and_an_address_is_formed() {
     let mut config = Config::new();
     assert_eq!(config.router(), None);
@@ -219,19 +240,142 @@ fn a_link_local_prefix_is_ignored() {
 }
 
 #[test]
-fn a_prefix_of_no_valid_lifetime_is_forgotten() {
+fn one_forged_advertisement_cannot_expire_a_held_address() {
+    // The attack RFC 4862, section 5.5.3 (e) exists for: a bogus
+    // advertisement with a valid lifetime of nothing, which without the
+    // rule would take this host off the network with one packet.
     let mut config = Config::new();
     let options = prefix_option(PREFIX, 64, true, true, 3600, 1800);
     let message = read(&advertisement(1800, 0, &options));
     config
         .on_advertisement(ROUTER, &message, HARDWARE, secs(0))
         .expect("room");
+    let address = config.address().expect("an address");
+
+    // Every one of these is shorter than the 3599 seconds that are left,
+    // and shorter than the floor, so none of them takes effect.
+    for lifetime in [0u32, 1, 60, 3000] {
+        let options = prefix_option(PREFIX, 64, true, true, lifetime, 0);
+        let message = read(&advertisement(1800, 0, &options));
+        config
+            .on_advertisement(ROUTER, &message, HARDWARE, secs(1))
+            .expect("room");
+        assert_eq!(config.address(), Some(address), "lifetime {lifetime}");
+        let entry = config.prefixes().next().expect("one prefix");
+        assert_eq!(
+            entry.valid_until,
+            secs(3600),
+            "an hour left is less than two, so rule 2 leaves it to run out"
+        );
+    }
+}
+
+#[test]
+fn a_held_address_is_shortened_to_the_floor_and_no_further() {
+    let mut config = Config::new();
+    // Ten hours, so more than two are left when the short one arrives.
+    let options = prefix_option(PREFIX, 64, true, true, 36_000, 1800);
+    let message = read(&advertisement(1800, 0, &options));
+    config
+        .on_advertisement(ROUTER, &message, HARDWARE, secs(0))
+        .expect("room");
+
+    let options = prefix_option(PREFIX, 64, true, true, 1, 0);
+    let message = read(&advertisement(1800, 0, &options));
+    config
+        .on_advertisement(ROUTER, &message, HARDWARE, secs(10))
+        .expect("room");
+    let entry = config.prefixes().next().expect("one prefix");
+    assert_eq!(entry.valid_until, secs(10).saturating_add(TWO_HOURS));
+}
+
+#[test]
+fn a_lifetime_above_the_floor_or_above_what_is_left_is_taken_as_given() {
+    let mut config = Config::new();
+    let options = prefix_option(PREFIX, 64, true, true, 36_000, 1800);
+    let message = read(&advertisement(1800, 0, &options));
+    config
+        .on_advertisement(ROUTER, &message, HARDWARE, secs(0))
+        .expect("room");
+
+    // Above two hours: taken, even though it shortens ten hours to three.
+    let options = prefix_option(PREFIX, 64, true, true, 10_800, 1800);
+    let message = read(&advertisement(1800, 0, &options));
+    config
+        .on_advertisement(ROUTER, &message, HARDWARE, secs(10))
+        .expect("room");
+    assert_eq!(
+        config.prefixes().next().expect("one prefix").valid_until,
+        secs(10_810)
+    );
+
+    // Below two hours but longer than what is left: taken.
+    let options = prefix_option(PREFIX, 64, true, true, 60, 60);
+    let message = read(&advertisement(1800, 0, &options));
+    config
+        .on_advertisement(ROUTER, &message, HARDWARE, secs(10_800))
+        .expect("room");
+    assert_eq!(
+        config.prefixes().next().expect("one prefix").valid_until,
+        secs(10_860)
+    );
+
+    // And a lengthening to for ever is a lengthening.
+    let options = prefix_option(PREFIX, 64, true, true, u32::MAX, u32::MAX);
+    let message = read(&advertisement(1800, 0, &options));
+    config
+        .on_advertisement(ROUTER, &message, HARDWARE, secs(10_810))
+        .expect("room");
+    assert_eq!(
+        config.prefixes().next().expect("one prefix").valid_until,
+        Instant::MAX
+    );
+}
+
+#[test]
+fn a_prefix_this_host_formed_no_address_under_is_withdrawn_at_once() {
+    // No floor applies: there is no address of this host's to protect,
+    // and RFC 4861, section 6.3.4 times the prefix out immediately.
+    let mut config = Config::new();
+    let options = prefix_option(PREFIX, 48, true, true, 3600, 1800);
+    let message = read(&advertisement(1800, 0, &options));
+    config
+        .on_advertisement(ROUTER, &message, HARDWARE, secs(0))
+        .expect("room");
     assert_eq!(config.prefixes().count(), 1);
 
-    let options = prefix_option(PREFIX, 64, true, true, 0, 0);
+    let options = prefix_option(PREFIX, 48, true, true, 0, 0);
     let message = read(&advertisement(1800, 0, &options));
     config
         .on_advertisement(ROUTER, &message, HARDWARE, secs(1))
+        .expect("room");
+    // It is not removed behind the caller's back: the caller installed a
+    // route for this prefix and hears that it must go.
+    let prefix = Ipv6Cidr::new(PREFIX, 48).expect("a /48");
+    assert_eq!(config.poll(secs(1)), Some(Expired::Prefix(prefix)));
+    assert_eq!(config.prefixes().count(), 0);
+}
+
+#[test]
+fn a_prefix_of_no_valid_lifetime_this_host_never_had_is_not_taken_up() {
+    let mut config = Config::new();
+    let options = prefix_option(PREFIX, 64, true, true, 0, 0);
+    let message = read(&advertisement(1800, 0, &options));
+    config
+        .on_advertisement(ROUTER, &message, HARDWARE, secs(0))
+        .expect("room");
+    assert_eq!(config.prefixes().count(), 0);
+    assert_eq!(config.address(), None);
+}
+
+#[test]
+fn an_option_preferred_for_longer_than_it_is_valid_is_ignored() {
+    // RFC 4862, section 5.5.3 (c): it says nothing a host could act on.
+    let mut config = Config::new();
+    let options = prefix_option(PREFIX, 64, true, true, 1800, 3600);
+    let message = read(&advertisement(1800, 0, &options));
+    config
+        .on_advertisement(ROUTER, &message, HARDWARE, secs(0))
         .expect("room");
     assert_eq!(config.prefixes().count(), 0);
 }
@@ -301,7 +445,7 @@ fn the_recursive_dns_servers_of_rfc_8106_are_read_out() {
 }
 
 #[test]
-fn a_dns_server_of_no_lifetime_is_forgotten() {
+fn a_dns_server_of_no_lifetime_is_withdrawn_through_poll() {
     let mut config = Config::new();
     let options = rdnss_option(600, &[SERVER]);
     let message = read(&advertisement(1800, 0, &options));
@@ -314,6 +458,20 @@ fn a_dns_server_of_no_lifetime_is_forgotten() {
     let message = read(&advertisement(1800, 0, &options));
     config
         .on_advertisement(ROUTER, &message, HARDWARE, secs(1))
+        .expect("room");
+    // Not removed behind the caller's back: it hears which server to
+    // stop asking.
+    assert_eq!(config.poll(secs(1)), Some(Expired::Server(SERVER)));
+    assert_eq!(config.servers().count(), 0);
+}
+
+#[test]
+fn a_server_of_no_lifetime_this_host_never_had_is_not_taken_up() {
+    let mut config = Config::new();
+    let options = rdnss_option(0, &[SERVER]);
+    let message = read(&advertisement(1800, 0, &options));
+    config
+        .on_advertisement(ROUTER, &message, HARDWARE, secs(0))
         .expect("room");
     assert_eq!(config.servers().count(), 0);
 }
@@ -466,10 +624,14 @@ fn a_message_that_is_not_an_advertisement_configures_nothing() {
     let mut message = vec![133u8, 0, 0, 0, 0, 0, 0, 0];
     checksummed(ROUTER, Ipv6Addr::ALL_NODES, &mut message);
     let solicitation = read(&message);
-    assert!(matches!(
+    // The error names the message that was handed over, and says it is
+    // not an advertisement rather than that it is not a discovery
+    // message, which it is.
+    assert_eq!(solicitation.message_type(), 133);
+    assert_eq!(
         config.on_advertisement(ROUTER, &solicitation, HARDWARE, secs(0)),
-        Err(Ipv6Error::NotDiscovery(0))
-    ));
+        Err(Ipv6Error::NotAdvertisement(133))
+    );
 }
 
 #[test]

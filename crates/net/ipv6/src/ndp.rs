@@ -35,7 +35,7 @@ use audhsos_time::Instant;
 
 use crate::error::Ipv6Error;
 use crate::header::{DISCOVERY_HOP_LIMIT, Packet};
-use crate::icmp::{self, HEADER_LEN as ICMP_HEADER_LEN};
+use crate::icmp;
 
 /// Router solicitation.
 pub const ROUTER_SOLICITATION: u8 = 133;
@@ -188,6 +188,18 @@ impl<'a> Discovery<'a> {
             other => return Err(Ipv6Error::NotDiscovery(other)),
         };
         Ok(message)
+    }
+
+    /// The type number on the wire, which is what an error names when a
+    /// caller was handed the wrong one of the four.
+    #[must_use]
+    pub const fn message_type(&self) -> u8 {
+        match *self {
+            Discovery::RouterSolicitation { .. } => ROUTER_SOLICITATION,
+            Discovery::RouterAdvertisement { .. } => ROUTER_ADVERTISEMENT,
+            Discovery::NeighborSolicitation { .. } => NEIGHBOR_SOLICITATION,
+            Discovery::NeighborAdvertisement { .. } => NEIGHBOR_ADVERTISEMENT,
+        }
     }
 
     /// What came with the message.
@@ -611,10 +623,6 @@ fn write_link_layer(writer: &mut Writer<'_>, kind: u8, hardware: MacAddr) -> Res
     Ok(())
 }
 
-/// How long the shortest message of each kind is, which is what a
-/// solicitation and an advertisement take with one link-layer option.
-pub const NEIGHBOR_SOLICITATION_LEN: usize = ICMP_HEADER_LEN + Ipv6Addr::LEN + 8;
-
 /// Whether this host owes an advertisement for `address` in answer to
 /// `message`.
 ///
@@ -639,11 +647,14 @@ pub fn answers(message: &Discovery<'_>, address: Ipv6Addr) -> bool {
 /// which is to say it never replaces the address of an entry this host is
 /// actively using.
 ///
-/// The override bit is honored on top of that. RFC 4861, section 7.2.5
-/// has an advertisement without it leave a cached link-layer address
-/// alone when the two disagree, whatever state the entry is in, and that
-/// is a check the cache cannot make for itself: it does not know the bit
-/// exists.
+/// The override bit is honored on top of that, and it is a check the
+/// cache cannot make for itself: it does not know the bit exists.
+/// RFC 4861, section 7.2.5 I splits the case in two. An advertisement
+/// without the bit never replaces a cached link-layer address that
+/// disagrees with it; but if the entry was `Reachable`, it is taken to
+/// `Stale` all the same, so that the next packet to that neighbor checks
+/// the mapping instead of trusting it for the rest of the reachable
+/// time. An entry in any other state ignores the advertisement.
 pub fn on_advertisement<const ENTRIES: usize, const PENDING: usize>(
     cache: &mut NeighborCache<ENTRIES, PENDING>,
     message: &Discovery<'_>,
@@ -671,7 +682,7 @@ pub fn on_advertisement<const ENTRIES: usize, const PENDING: usize>(
             .hardware(address)
             .is_some_and(|known| known != hardware)
     {
-        return false;
+        return cache.on_conflict(address);
     }
     if solicited {
         cache.on_confirmed(address, hardware, now);

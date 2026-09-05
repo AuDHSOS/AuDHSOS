@@ -19,9 +19,12 @@
 //! why every function here that sums takes the two addresses: a message
 //! read without them is read structurally and not verified.
 //!
-//! Errors are rate-limited with the token bucket of `net-ip`, which is
-//! the same mechanism under the same reasoning. RFC 4443, section 2.4 (f)
-//! asks for a limit and names no number.
+//! Nothing here generates an error. This module reads one, writes one it
+//! is given, and answers with [`may_answer_with_error`] whether one is
+//! allowed at all; a caller that decides to send one bounds the rate with
+//! `net_ip::TokenBucket`, which is the same mechanism under the same
+//! reasoning — RFC 4443, section 2.4 (f) asks for a limit and names no
+//! number, as RFC 1122 does for `ICMPv4`.
 
 use net_wire::{Ipv6Addr, Protocol, Reader, Writer, transport_v6};
 

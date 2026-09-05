@@ -179,8 +179,29 @@ fn an_advertisement_without_the_override_bit_leaves_a_known_address_alone() {
     let bytes = advertisement(PEER, HOST, PEER, Some(impostor), true, false);
     let packet_bytes = discovery_packet(PEER, HOST, &bytes);
     let message = read(&packet_bytes).expect("an advertisement");
+    // RFC 4861, section 7.2.5 I (a): the address is not taken, and the
+    // entry is demoted all the same, so the next packet to that neighbor
+    // checks the mapping rather than trusting it for the rest of the
+    // reachable time.
+    assert!(on_advertisement(&mut cache, &message, at(1)));
+    assert_eq!(cache.hardware(IpAddr::V6(PEER)), Some(PEER_HARDWARE));
+    assert_eq!(cache.state(IpAddr::V6(PEER)), Some(NeighborState::Stale));
+}
+
+#[test]
+fn an_advertisement_without_the_override_bit_is_ignored_by_an_entry_that_is_not_reachable() {
+    // RFC 4861, section 7.2.5 I (b): there is nothing to demote, and the
+    // address is still not taken.
+    let mut cache = Cache::new();
+    cache.on_observed(IpAddr::V6(PEER), PEER_HARDWARE, at(0));
+    assert_eq!(cache.state(IpAddr::V6(PEER)), Some(NeighborState::Stale));
+    let impostor = MacAddr::new([0x00, 0x1B, 0x44, 0x11, 0x3A, 0xFF]);
+    let bytes = advertisement(PEER, HOST, PEER, Some(impostor), true, false);
+    let packet_bytes = discovery_packet(PEER, HOST, &bytes);
+    let message = read(&packet_bytes).expect("an advertisement");
     assert!(!on_advertisement(&mut cache, &message, at(1)));
     assert_eq!(cache.hardware(IpAddr::V6(PEER)), Some(PEER_HARDWARE));
+    assert_eq!(cache.state(IpAddr::V6(PEER)), Some(NeighborState::Stale));
 }
 
 #[test]

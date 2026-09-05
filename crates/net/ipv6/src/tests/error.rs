@@ -55,6 +55,10 @@ fn every_variant_writes_a_sentence_of_its_own() {
             "type 137 is not a Neighbor Discovery message",
         ),
         (
+            Ipv6Error::NotAdvertisement(133),
+            "type 133 is not a router advertisement",
+        ),
+        (
             Ipv6Error::WouldFragment {
                 length: 2000,
                 mtu: 48,

@@ -47,7 +47,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   Stateless address configuration of RFC 4862 from a router
   advertisement, with the prefix, the router, the lifetimes, the link
   MTU, and the recursive DNS servers of RFC 8106, and duplicate address
-  detection before an address is used. Path MTU discovery of RFC 8201 in
+  detection before an address is used. A held address cannot be expired
+  by one advertisement: the floor of RFC 4862, section 5.5.3 (e) is what
+  stands between a forged valid lifetime of a second and a host that is
+  taken off the network by a single packet. Path MTU discovery of RFC 8201 in
   the send path and not beside it: the sender asks the estimate table for
   every packet, so a packet larger than the path is one this crate cannot
   write. And the send path itself, which cuts a datagram through the
@@ -60,6 +63,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   its option walk, and the reassembler. It exists for the chain, which is
   the one part of this format a byte stream can drive in circles. Its
   seeds are named in words, one per shape a test cites.
+
+- `net_eth::on_conflict`, which is the half of RFC 4861, section 7.2.5 I
+  the cache could not make for itself: a neighbor advertisement without
+  the override bit leaves a disagreeing hardware address alone and takes
+  a `Reachable` entry to `Stale` all the same, so a contradicted mapping
+  is checked before the next packet rather than trusted for the rest of
+  the reachable time.
 
 - `net_eth::multicast_hardware`, the mapping of RFC 2464, section 7 from
   an IPv6 multicast group to the Ethernet address it is reached at. It is

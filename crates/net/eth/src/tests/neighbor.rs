@@ -426,3 +426,42 @@ fn one_instant_can_fall_due_for_several_neighbors() {
         ]
     );
 }
+
+#[test]
+fn a_claim_that_disagrees_takes_a_reachable_entry_to_stale_and_no_further() {
+    // RFC 4861, section 7.2.5 I (a). The address is not touched — that is
+    // what the override bit would have said — but the entry stops being
+    // trusted for the rest of the reachable time, so the next packet to
+    // it starts the check.
+    let mut cache = Cache::new();
+    cache.on_confirmed(NEIGHBOR, HARDWARE, at(0));
+    assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Reachable));
+
+    assert!(cache.on_conflict(NEIGHBOR));
+    assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Stale));
+    assert_eq!(cache.hardware(NEIGHBOR), Some(HARDWARE));
+    // A stale entry waits for traffic and not for a clock.
+    assert_eq!(cache.poll_at(), None);
+}
+
+#[test]
+fn a_claim_that_disagrees_moves_nothing_else() {
+    // Section 7.2.5 I (b): an entry in any other state ignores it, and so
+    // does an address the cache has never heard of.
+    let mut cache = Cache::new();
+    assert!(!cache.on_conflict(NEIGHBOR));
+    assert!(cache.is_empty());
+
+    cache.on_observed(NEIGHBOR, HARDWARE, at(0));
+    assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Stale));
+    assert!(!cache.on_conflict(NEIGHBOR));
+    assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Stale));
+
+    assert_eq!(
+        cache.resolve(SECOND, b"waiting", at(0)),
+        Resolution::Waiting
+    );
+    assert_eq!(cache.state(SECOND), Some(NeighborState::Incomplete));
+    assert!(!cache.on_conflict(SECOND));
+    assert_eq!(cache.state(SECOND), Some(NeighborState::Incomplete));
+}

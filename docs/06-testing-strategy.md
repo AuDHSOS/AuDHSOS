@@ -1468,7 +1468,7 @@ added and never renumbered; the crate belongs beside 6.6.44 (D-69).
   datagram.
 - Fuzz target `ipv6`, whose corpus is seeded with the chains above.
 
-Four items were added while writing them, each because the code had a
+Seven items were added while writing them, each because the code had a
 boundary the list above does not name.
 
 - A message that did not arrive with a hop limit of 255 is not read as
@@ -1487,6 +1487,22 @@ boundary the list above does not name.
 - The clamp of RFC 8201 is tested where it acts, which is on the arriving
   message: a report below 1280 is discarded, and a link narrower than
   1280 is answered as it stands so that the send path refuses it.
+- The floor of RFC 4862, section 5.5.3 (e), as its three rules and as the
+  attack it exists for: an advertisement carrying a valid lifetime of
+  none, of a second, or of a minute leaves a held address alone; one
+  above two hours or above what is left is taken as given; one below both
+  brings the lifetime down to two hours and no further. A prefix this
+  host formed no address under is withdrawn at once, and one whose
+  preferred lifetime exceeds its valid lifetime is ignored (section
+  5.5.3 (c)).
+- A withdrawn prefix and a withdrawn DNS server leave through `poll`, so
+  that the caller which installed a route for the prefix hears that it
+  must go. A prefix or a server this host never held is not taken up by a
+  withdrawal either.
+- The two halves of RFC 4861, section 7.2.5 I, in `net-eth` beside the
+  cache: an advertisement without the override bit whose address
+  disagrees takes a `Reachable` entry to `Stale` without touching the
+  address, and moves an entry in any other state not at all.
 
 ## 6.7 CI pipeline
 

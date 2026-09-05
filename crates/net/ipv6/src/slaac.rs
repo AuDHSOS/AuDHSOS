@@ -46,6 +46,10 @@ pub const SLAAC_PREFIX_LEN: u8 = 64;
 /// How long an interface identifier is.
 pub const INTERFACE_ID_LEN: usize = 8;
 
+/// The floor an advertisement may not shorten a held address past in one
+/// step, from RFC 4862, section 5.5.3 (e).
+pub const TWO_HOURS: Duration = Duration::from_secs(7200);
+
 /// The modified EUI-64 interface identifier of an Ethernet address.
 ///
 /// RFC 2464, section 4: the three bytes of the OUI, then `FF FE`, then the
@@ -93,6 +97,34 @@ pub fn expiry(now: Instant, seconds: u32) -> Instant {
         return Instant::MAX;
     }
     now.saturating_add(Duration::from_secs(u64::from(seconds)))
+}
+
+/// How long a prefix this host has already formed an address under stays
+/// valid, when an advertisement says `advertised` seconds.
+///
+/// This is the rule of RFC 4862, section 5.5.3 (e), and it exists for one
+/// attack, which the document names. An advertisement may lengthen a
+/// lifetime freely and may shorten it to anything above two hours; below
+/// that it may only shorten an address that had less than two hours left
+/// anyway. Without the rule a single forged advertisement carrying a
+/// valid lifetime of one second — or of none — would expire every address
+/// this host holds, and a host that had configured itself from the
+/// network would be taken off it by one packet. Legitimate
+/// advertisements are periodic, so they cancel a short lifetime long
+/// before it takes effect.
+#[must_use]
+pub fn held_valid_until(current: Instant, advertised: u32, now: Instant) -> Instant {
+    let wanted = expiry(now, advertised);
+    if Duration::from_secs(u64::from(advertised)) > TWO_HOURS || wanted > current {
+        return wanted;
+    }
+    if current.saturating_duration_since(now) <= TWO_HOURS {
+        // Rule 2: what is nearly over is left to run out on its own.
+        return current;
+    }
+    // Rule 3: everything else is brought down to the floor and no
+    // further.
+    now.saturating_add(TWO_HOURS)
 }
 
 /// The default router, while it is one.
@@ -231,7 +263,26 @@ impl<const PREFIXES: usize, const SERVERS: usize> Configuration<PREFIXES, SERVER
     /// set the autonomous flag, the prefix is 64 bits long, and its valid
     /// lifetime is not zero. A link-local prefix is ignored, as
     /// RFC 4862, section 5.5.3 (a) requires — this host has its own
-    /// link-local address and does not take one from a router.
+    /// link-local address and does not take one from a router — and so is
+    /// an option whose preferred lifetime is longer than its valid one,
+    /// which section 5.5.3 (c) requires and which says nothing a host
+    /// could act on.
+    ///
+    /// A prefix that already carries an address cannot be shortened
+    /// arbitrarily: [`held_valid_until`] applies the rule of
+    /// section 5.5.3 (e), and it applies to the whole entry rather than
+    /// to the address alone. What that costs is that a router which
+    /// withdraws such a prefix is honoured after at most two hours rather
+    /// than at once, for the on-link route as well as for the address.
+    /// What it buys is that one forged advertisement cannot take this
+    /// host off the network, which is the attack the rule exists for.
+    /// A prefix this host formed no address under is withdrawn at once,
+    /// as RFC 4861, section 6.3.4 has it.
+    ///
+    /// Nothing is removed here. A withdrawal sets the lifetime to `now`
+    /// and [`poll`](Self::poll) hands it to the caller, so that the
+    /// route which was installed for the prefix is removed by whoever
+    /// installed it.
     ///
     /// An MTU below the minimum of 1280 is ignored rather than taken: a
     /// link that cannot carry 1280 bytes cannot carry IPv6, and a router
@@ -239,10 +290,10 @@ impl<const PREFIXES: usize, const SERVERS: usize> Configuration<PREFIXES, SERVER
     ///
     /// # Errors
     ///
-    /// [`Ipv6Error::NotDiscovery`] when the message is not a router
-    /// advertisement, and [`Ipv6Error::Ip`] carrying
-    /// [`IpError::NoRoute`] when there is no room for another prefix or
-    /// another server.
+    /// [`Ipv6Error::NotAdvertisement`] when the message is one of the
+    /// other three Neighbor Discovery messages, and [`Ipv6Error::Ip`]
+    /// carrying [`IpError::NoRoute`] when there is no room for another
+    /// prefix or another server.
     pub fn on_advertisement(
         &mut self,
         from: Ipv6Addr,
@@ -257,7 +308,7 @@ impl<const PREFIXES: usize, const SERVERS: usize> Configuration<PREFIXES, SERVER
             ..
         } = *message
         else {
-            return Err(Ipv6Error::NotDiscovery(0));
+            return Err(Ipv6Error::NotAdvertisement(message.message_type()));
         };
         if router_lifetime == 0 {
             // RFC 4861, section 6.3.4: a lifetime of zero says this
@@ -307,50 +358,64 @@ impl<const PREFIXES: usize, const SERVERS: usize> Configuration<PREFIXES, SERVER
         identifier: [u8; INTERFACE_ID_LEN],
         now: Instant,
     ) -> Result<(), Ipv6Error> {
-        if information.prefix.is_link_local() {
+        if information.prefix.is_link_local()
+            || information.preferred_lifetime > information.valid_lifetime
+        {
             return Ok(());
         }
         let Ok(prefix) = Ipv6Cidr::new(information.prefix, information.prefix_len) else {
             return Ok(());
         };
-        if information.valid_lifetime == 0 {
-            self.forget_prefix(prefix);
-            return Ok(());
-        }
         let forms_address = information.autonomous && information.prefix_len == SLAAC_PREFIX_LEN;
-        let entry = Configured {
-            prefix,
-            address: forms_address.then(|| address_from(information.prefix, identifier)),
-            on_link: information.on_link,
-            valid_until: expiry(now, information.valid_lifetime),
-            preferred_until: expiry(now, information.preferred_lifetime),
-        };
+        let address = forms_address.then(|| address_from(information.prefix, identifier));
+        let preferred_until = expiry(now, information.preferred_lifetime);
         if let Some(existing) = self
             .prefixes
             .iter_mut()
             .find(|existing| existing.prefix == prefix)
         {
-            *existing = entry;
+            existing.valid_until = if existing.address.is_some() {
+                held_valid_until(existing.valid_until, information.valid_lifetime, now)
+            } else {
+                expiry(now, information.valid_lifetime)
+            };
+            existing.address = address;
+            existing.on_link = information.on_link;
+            existing.preferred_until = preferred_until;
+            return Ok(());
+        }
+        if information.valid_lifetime == 0 {
+            // A prefix that is valid for no time is not taken up at all,
+            // which is what RFC 4861, section 6.3.4 says for the prefix
+            // list and RFC 4862, section 5.5.3 (d) for the address.
             return Ok(());
         }
         self.prefixes
-            .push(entry)
+            .push(Configured {
+                prefix,
+                address,
+                on_link: information.on_link,
+                valid_until: expiry(now, information.valid_lifetime),
+                preferred_until,
+            })
             .map_err(|_| Ipv6Error::Ip(IpError::NoRoute))
     }
 
     /// Takes one DNS server in.
+    ///
+    /// RFC 8106, section 5.1 has a lifetime of zero say to stop using the
+    /// addresses. That is a withdrawal and not a removal here: the
+    /// lifetime is set to `now` and [`poll`](Self::poll) hands the server
+    /// to the caller, the way every other lifetime that runs out is
+    /// handed over. There is no floor under this one — the option carries
+    /// no address of this host's, so a forged withdrawal costs a name
+    /// lookup and not the network.
     fn learn_server(
         &mut self,
         address: Ipv6Addr,
         lifetime: u32,
         expires_at: Instant,
     ) -> Result<(), Ipv6Error> {
-        if lifetime == 0 {
-            // RFC 8106, section 5.1: a lifetime of zero says stop using
-            // these addresses.
-            self.forget_server(address);
-            return Ok(());
-        }
         if let Some(existing) = self
             .servers
             .iter_mut()
@@ -359,36 +424,15 @@ impl<const PREFIXES: usize, const SERVERS: usize> Configuration<PREFIXES, SERVER
             existing.expires_at = expires_at;
             return Ok(());
         }
+        if lifetime == 0 {
+            return Ok(());
+        }
         self.servers
             .push(Server {
                 address,
                 expires_at,
             })
             .map_err(|_| Ipv6Error::Ip(IpError::NoRoute))
-    }
-
-    /// Drops the prefix and the address under it.
-    fn forget_prefix(&mut self, prefix: Ipv6Cidr) {
-        if let Some((index, _)) = self
-            .prefixes
-            .iter()
-            .enumerate()
-            .find(|(_, entry)| entry.prefix == prefix)
-        {
-            self.prefixes.remove(index);
-        }
-    }
-
-    /// Drops the server.
-    fn forget_server(&mut self, address: Ipv6Addr) {
-        if let Some((index, _)) = self
-            .servers
-            .iter()
-            .enumerate()
-            .find(|(_, entry)| entry.address == address)
-        {
-            self.servers.remove(index);
-        }
     }
 
     /// When something next runs out, or `None` when nothing does.

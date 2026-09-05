@@ -344,7 +344,16 @@ by Neighbor Discovery, which is `ICMPv6` and therefore lives in
 (D-69). The cache is thus driven from above in both cases, and `net-eth`
 owns the storage and the timers and neither of the two protocols.
 
-`multicast_hardware` came with D4 and is the one addition this crate took
+Two things came with D4. `on_conflict` is the second half of the rule
+`on_observed` implements: RFC 4861, section 7.2.5 I has a neighbor
+advertisement without the override bit leave a disagreeing hardware
+address alone, and take a `Reachable` entry to `Stale` all the same. The
+cache cannot make that call for itself — it does not know the bit exists
+— so the decision is Neighbor Discovery's and the state change is this
+crate's. What it buys is that a contradicted mapping is checked before
+the next packet rather than trusted for the rest of the reachable time.
+
+`multicast_hardware` is the other, and the one addition this crate took
 for it: the mapping of RFC 2464, section 7 from an IPv6 multicast group
 onto the Ethernet address it is reached at. It belongs here and not in
 `net-ipv6`, because it is a fact about an Ethernet and not about IPv6 —
@@ -489,8 +498,29 @@ Implemented.
 - Path MTU discovery, driven by the packet-too-big message. It is not
   optional here: no router will fragment for this host.
 
-Six things came out of writing it, and D-72 records the boundaries three
-of them draw.
+Seven things came out of writing it, and D-72 records the boundaries
+three of them draw.
+
+A router advertisement cannot expire an address this host holds. That is
+the rule of RFC 4862, section 5.5.3 (e), and the document says plainly
+what it is for: without it one forged advertisement carrying a valid
+lifetime of a second, or of none, would take a host that configured
+itself from the network off it again with a single packet. An
+advertisement may lengthen a lifetime freely and shorten it to anything
+above two hours; below that it may only shorten an address that had less
+than two hours left anyway, and legitimate advertisements, being
+periodic, cancel a short lifetime long before it takes effect. The floor
+here applies to the whole entry and not to the address alone, so a router
+that withdraws such a prefix is honoured after at most two hours for the
+on-link route as well. A prefix this host formed no address under has
+nothing to protect and is withdrawn at once, as RFC 4861, section 6.3.4
+has it.
+
+Nothing is removed behind the caller's back. A withdrawn prefix or DNS
+server has its lifetime set to the present instant and leaves through
+`poll` like every other lifetime that runs out, because the caller
+installed a route for that prefix and has to hear that it must go. The
+first version removed it silently and left the route standing.
 
 The chain walk is bounded twice and neither bound is the packet. Eight
 headers and 512 bytes end it, and running out of packet ends it too;

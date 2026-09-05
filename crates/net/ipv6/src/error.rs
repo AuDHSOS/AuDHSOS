@@ -46,6 +46,10 @@ pub enum Ipv6Error {
     /// messages this host reads, or it did not arrive the way RFC 4861,
     /// section 7.1 requires one to. The value is the message type.
     NotDiscovery(u8),
+    /// The message is a Neighbor Discovery message, and not the router
+    /// advertisement the caller asked to read it as. The value is the
+    /// message type.
+    NotAdvertisement(u8),
     /// The packet is longer than the MTU and could not be cut up, because
     /// the MTU has no room for a header and eight bytes behind it.
     WouldFragment {
@@ -99,6 +103,9 @@ impl fmt::Display for Ipv6Error {
             }
             Ipv6Error::NotDiscovery(message_type) => {
                 write!(f, "type {message_type} is not a Neighbor Discovery message")
+            }
+            Ipv6Error::NotAdvertisement(message_type) => {
+                write!(f, "type {message_type} is not a router advertisement")
             }
             Ipv6Error::WouldFragment { length, mtu } => {
                 write!(

@@ -346,6 +346,36 @@ impl<const ENTRIES: usize, const PENDING: usize> NeighborCache<ENTRIES, PENDING>
         self.insert(entry).is_some()
     }
 
+    /// A claim that disagrees with what this entry holds, from a station
+    /// this host has a reason to listen to.
+    ///
+    /// RFC 4861, section 7.2.5 I (a): a neighbor advertisement without
+    /// the override bit whose link-layer address differs from the cached
+    /// one takes a `Reachable` entry to `Stale` and changes nothing else;
+    /// an entry in any other state ignores it altogether.
+    ///
+    /// The address is not taken — that is what the override bit would
+    /// have said — but the disagreement is not nothing either: this host
+    /// has just heard something that contradicts what it believes, and a
+    /// `Stale` entry is checked before the next packet is trusted to it.
+    /// The difference from [`on_observed`](Self::on_observed) is exactly
+    /// that: this changes the state and never the address, that one
+    /// changes the address of an entry that is not `Reachable`.
+    ///
+    /// The answer says whether the entry moved.
+    pub fn on_conflict(&mut self, address: IpAddr) -> bool {
+        let Some(entry) = self.find_mut(address) else {
+            return false;
+        };
+        if entry.state != NeighborState::Reachable {
+            return false;
+        }
+        entry.state = NeighborState::Stale;
+        // A stale entry waits for traffic and not for a clock.
+        entry.deadline = Instant::MAX;
+        true
+    }
+
     /// The packet waiting for `address`, if one is.
     #[must_use]
     pub fn pending(&self, address: IpAddr) -> Option<(MacAddr, &[u8])> {
