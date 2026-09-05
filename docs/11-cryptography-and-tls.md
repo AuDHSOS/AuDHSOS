@@ -202,10 +202,22 @@ throughout; AES-GCM follows. Tests: catalog 6.6.32.
   message, signature)` per RFC 8032 with the canonicality checks: `S < L`,
   canonical point encodings, no small-order public keys. Verification
   handles public data only.
-- `p256.rs`: the field modulo p = 2^256 - 2^224 + 2^192 + 2^96 - 1 with
-  Solinas reduction, the scalar field modulo n, Jacobian point arithmetic,
-  and `ecdsa_verify(public, digest, r, s)` with the RFC 6979 §2.4 range
-  checks and an on-curve check of the public point.
+- `p256/`: the field modulo p = 2^256 - 2^224 + 2^192 + 2^96 - 1, the
+  scalar field modulo n, Jacobian point arithmetic, and
+  `PublicKey::verify(digest, r, s)` with the range checks on `r` and `s`
+  and an on-curve check of the public point. Both moduli are served by one
+  Montgomery multiplication parameterized by the modulus rather than by a
+  Solinas reduction for the field and a second implementation for the
+  order: the order has no shape a Solinas step can use, and one
+  multiplication that both use is one to check.
+
+  The key arrives as the uncompressed point encoding of SEC 1 and nothing
+  else; the signature arrives as two integers, because the DER that
+  carries them belongs to the certificate parser. Only the leftmost bytes
+  of a digest are used, as many as the order is wide, which is what makes
+  SHA-384 usable with this curve. A point carries no equality: Jacobian
+  coordinates are not unique, so a comparison would answer a question the
+  caller did not ask.
 
 Signature *creation* is not part of the product surface. It exists only
 behind the feature `test-signing`: deterministic Ed25519 signing and
@@ -386,7 +398,7 @@ checklist in 4.9.
 |------|---------|------|--------|
 | T1 | `crypto-ct`, `crypto-hash` | S | implemented |
 | T2 | `crypto-aead`: ChaCha20-Poly1305, then bitsliced AES-GCM | L | implemented |
-| T3 | `crypto-ec`: `fe25519` and X25519, then Ed25519, then P-256 | L | |
+| T3 | `crypto-ec`: `fe25519` and X25519, then Ed25519, then P-256 | L | implemented |
 | T4 | `crypto-rng` | S | |
 | T5 | `audhsos-der` | M | |
 | T6 | `audhsos-x509` with the test certificate builder | L | |

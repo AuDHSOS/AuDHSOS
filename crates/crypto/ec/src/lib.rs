@@ -8,6 +8,7 @@
 pub mod ed25519;
 pub mod error;
 pub mod fe25519;
+pub mod p256;
 pub mod scalar;
 pub mod x25519;
 

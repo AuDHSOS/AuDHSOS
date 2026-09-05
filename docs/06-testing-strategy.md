@@ -731,11 +731,19 @@ done until every applicable item has a test. Items are added, never removed.
 - Ed25519 verification against RFC 8032 §7.1; rejection of `S >= L`, of
   non-canonical point encodings, of small-order public keys, and of a
   signature over a modified message.
-- P-256: point arithmetic against the NIST example points; ECDSA
-  verification against the CAVP vectors; rejection of `r` or `s` equal to
-  zero, of `r` or `s` at or above the order, of a public point not on the
-  curve, of the point at infinity, and of a signature over a different
-  digest.
+- P-256: the generator and its first multiples against the published
+  points; the group law, including that the multiple by the order is the
+  neutral element and the multiple by one less is the negation of the
+  generator; both moduli round-tripping through their encodings and
+  refusing a value at or above them. ECDSA against the two P-256 vectors
+  of RFC 6979, appendix A.2.5, which pin the signature as well as the
+  verifier because the nonce is derived rather than chosen. Rejection of
+  `r` or `s` equal to zero or at or above the order, of a key that is not
+  an uncompressed point, of a coordinate at the field prime, of a pair
+  that is not on the curve, and of a signature over a different digest; a
+  digest longer than the order is truncated to its leftmost bytes, so a
+  change beyond them does not change the outcome and a change within them
+  does.
 - With `test-signing`: signing then verifying round-trips for both
   algorithms; the deterministic ECDSA nonce matches the RFC 6979 example.
 

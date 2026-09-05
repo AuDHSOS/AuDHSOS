@@ -265,7 +265,7 @@ phase order and is built between phases.
 |------|--------|------|-----------|
 | T1 | `crypto-ct`, `crypto-hash` | S | implemented: SHA-256, SHA-384/512, HMAC, HKDF against the standards vectors |
 | T2 | `crypto-aead` | L | implemented: ChaCha20-Poly1305 and AES-GCM, both constant-time and table-free |
-| T3 | `crypto-ec` | L | X25519, Ed25519 verification, P-256 ECDSA verification |
+| T3 | `crypto-ec` | L | implemented: X25519, Ed25519 verification, P-256 ECDSA verification |
 | T4 | `crypto-rng` | S | the ChaCha20 generator and the `Entropy` trait |
 | T5 | `audhsos-der` | M | a strict DER reader with its fuzz target |
 | T6 | `audhsos-x509` | L | certificate parsing, path validation, name matching, the test certificate builder |

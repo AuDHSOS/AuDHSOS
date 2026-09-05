@@ -61,6 +61,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - `crypto-ec`: Ed25519 verification and deterministic signing behind
   `test-signing`, with strict canonicality and small-order checks, against
   the vectors of RFC 8032.
+- `crypto-ec`: P-256 with Montgomery arithmetic for both moduli, Jacobian
+  point arithmetic, ECDSA verification, and deterministic signing per
+  RFC 6979 behind `test-signing`.
 - Workspace foundation: pinned toolchain, workspace lint set, SPDX headers,
   license, CI workflow.
 - `audhsos-abi`: error codes, rights, object types, handles, layout

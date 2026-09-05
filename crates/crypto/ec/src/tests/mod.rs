@@ -6,6 +6,7 @@
 
 mod ed25519;
 mod fe25519;
+mod p256;
 mod reference;
 mod x25519;
 
