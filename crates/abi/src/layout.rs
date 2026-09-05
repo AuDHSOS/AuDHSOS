@@ -36,6 +36,15 @@ pub const KERNEL_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 /// Virtual base the root task is linked at.
 pub const ROOT_TASK_BASE: u64 = 0x0000_0000_1000_0000;
 
+/// Address one past the boot stack; the stack grows down from here.
+pub const BOOT_STACK_TOP: u64 = KERNEL_BASE - 0x0100_0000;
+
+/// Number of pages the boot stack occupies, guard page excluded.
+pub const BOOT_STACK_PAGES: u64 = 16;
+
+/// Virtual address the loader maps the boot information page at.
+pub const BOOT_INFO_VADDR: u64 = KERNEL_BASE - 0x0200_0000;
+
 /// Maximum number of regions in the boot information structure.
 pub const MAX_BOOT_REGIONS: usize = 128;
 
@@ -77,3 +86,9 @@ const _: () = assert!(KERNEL_BASE > PHYS_WINDOW_BASE);
 const _: () = assert!(ROOT_TASK_BASE >= USER_SPACE_START && ROOT_TASK_BASE < USER_SPACE_END);
 const _: () = assert!(ROOT_TASK_BASE.is_multiple_of(PAGE_SIZE));
 const _: () = assert!(MAX_MESSAGE_WORDS * 8 + MAX_MESSAGE_HANDLES * 8 + 3 * 8 + 10 * 8 <= 4096);
+const _: () = assert!(BOOT_STACK_TOP.is_multiple_of(PAGE_SIZE));
+const _: () = assert!(BOOT_INFO_VADDR.is_multiple_of(PAGE_SIZE));
+const _: () = assert!(BOOT_STACK_TOP < KERNEL_BASE);
+// The boot stack and its guard page stay clear of the boot information.
+const _: () =
+    assert!(BOOT_INFO_VADDR + PAGE_SIZE <= BOOT_STACK_TOP - (BOOT_STACK_PAGES + 1) * PAGE_SIZE);

@@ -9,7 +9,7 @@ use crate::error::Error;
 use crate::image::{boot_image, disk};
 use crate::policy::{FUZZ_TARGETS, MIRI_CRATES, Target, crates_for};
 use crate::process::Cmd;
-use crate::{coverage, deps, fs, layering, spdx, unsafe_budget};
+use crate::{coverage, deps, fs, layering, linker, spdx, unsafe_budget};
 
 /// `rustfmt --check`, `clippy -D warnings` per target group, SPDX headers.
 pub(crate) fn lint(root: &Path) -> Result<(), Error> {
@@ -56,9 +56,10 @@ pub(crate) fn exclude_cross(mut cmd: Cmd) -> Cmd {
     cmd
 }
 
-/// Dependency edges, crate roots, assembly files.
+/// Dependency edges, crate roots, assembly files, linker constants.
 pub(crate) fn check_layering(root: &Path) -> Result<(), Error> {
-    let violations = layering::check(root)?;
+    let mut violations = layering::check(root)?;
+    violations.extend(linker::check(root)?);
     report("layering", &violations);
     Error::from_violations(violations)
 }
@@ -244,6 +245,40 @@ fn report(what: &str, violations: &[String]) {
     } else {
         eprintln!("{what}: {} violation(s)", violations.len());
     }
+}
+
+/// Builds every crate that is not built for the host, for its target.
+///
+/// # Errors
+///
+/// [`Error::Usage`] for an unknown option; the errors of the build.
+pub(crate) fn build(root: &Path, options: &[String]) -> Result<(), Error> {
+    let mut release = false;
+    for option in options {
+        match option.as_str() {
+            "--release" => release = true,
+            other => return Err(Error::Usage(format!("unknown option `{other}` for build"))),
+        }
+    }
+    for target in Target::CROSS {
+        let crates = crates_for(target);
+        let Some(triple) = target.triple() else {
+            continue;
+        };
+        if crates.is_empty() {
+            continue;
+        }
+        let mut cmd = Cmd::cargo().cwd(root).arg("build");
+        for krate in crates {
+            cmd = cmd.arg("-p").arg(krate);
+        }
+        cmd = cmd.arg("--target").arg(triple);
+        if release {
+            cmd = cmd.arg("--release");
+        }
+        cmd.run()?;
+    }
+    Ok(())
 }
 
 /// Writes the boot image and the disk image into `target/`.

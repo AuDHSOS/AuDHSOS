@@ -190,6 +190,17 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::X86_64None,
     },
     Crate {
+        name: "audhsos-kernel",
+        path: "crates/kernel/bin",
+        kind: Kind::Adapter {
+            unsafe_budget: 2,
+            asm_budget: 0,
+        },
+        deps: &["kernel-core", "kernel-hal-x86_64", "audhsos-abi"],
+        coverage_gate: false,
+        target: Target::X86_64None,
+    },
+    Crate {
         name: "kernel-test-harness",
         path: "crates/kernel/test-harness",
         kind: Kind::Logic,

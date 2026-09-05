@@ -10,6 +10,7 @@ mod error;
 mod fs;
 mod image;
 mod layering;
+mod linker;
 mod policy;
 mod process;
 mod spdx;

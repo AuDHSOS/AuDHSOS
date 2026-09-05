@@ -140,6 +140,12 @@ overlaps no `Usable` region, and the loader reports it as one
 `MmioReserved` region. The kernel exposes the description through
 `system_info`; the root task creates the `Device` memory object for it.
 
+The loader places the boot stack so that its top is `BOOT_STACK_TOP`
+(`KERNEL_BASE - 0x100_0000`), with `BOOT_STACK_PAGES` pages below it and one
+unmapped guard page below those, and maps the boot information page
+read-only at `BOOT_INFO_VADDR` (`KERNEL_BASE - 0x200_0000`). All three
+constants live in `audhsos-abi::layout`.
+
 ### 3.1.6 Boot image format
 
 The boot image is a single file built by `cargo xtask image`. Little-endian

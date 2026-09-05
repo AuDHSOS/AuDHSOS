@@ -12,6 +12,7 @@ members = [
     "crates/kernel/types",
     "crates/kernel/hal-api",
     "crates/kernel/objects",
+    "crates/kernel/bin",
     "crates/kernel/core",
     "crates/kernel/hal-x86_64",
     "crates/kernel/test-harness",
@@ -37,6 +38,7 @@ driver-uart16550 = { path = "crates/drivers/uart16550" }
 kernel-types = { path = "crates/kernel/types" }
 kernel-hal-api = { path = "crates/kernel/hal-api" }
 kernel-objects = { path = "crates/kernel/objects" }
+audhsos-kernel = { path = "crates/kernel/bin" }
 kernel-core = { path = "crates/kernel/core" }
 kernel-hal-x86_64 = { path = "crates/kernel/hal-x86_64" }
 kernel-test-harness = { path = "crates/kernel/test-harness" }

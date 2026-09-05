@@ -17,6 +17,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "audhsos-kernel"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "kernel-core",
+ "kernel-hal-x86_64",
+]
+
+[[package]]
 name = "audhsos-sync"
 version = "0.1.0"
 

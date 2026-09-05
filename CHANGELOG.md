@@ -63,6 +63,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   wrappers, the descriptor tables, the trap handlers, the boot information
   as a `Platform`, the serial debug console, the exit device, and page
   table memory through the physical window.
+- `audhsos-kernel`: the kernel image with its linker script, the entry the
+  loader jumps to, and the panic handler.
+- `audhsos-abi`: `BOOT_STACK_TOP`, `BOOT_STACK_PAGES`, and
+  `BOOT_INFO_VADDR`.
+- `xtask`: the `build` subcommand, and a check that the constants the
+  linker scripts repeat agree with the ABI.
 - Planning for graphics output and input devices: roadmap Phases 9 to 11,
   decisions D-29 to D-33, catalog sections 6.6.24 to 6.6.29, and the
   framebuffer fields of the boot information structure in the documents.

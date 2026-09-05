@@ -12,6 +12,7 @@ mod error;
 mod fs;
 mod image;
 mod layering;
+mod linker;
 mod policy;
 mod process;
 mod spdx;
@@ -38,6 +39,8 @@ subcommands:
   doc              build documentation with warnings as errors
   fuzz [--target <name>] [--time <seconds>]
                    run fuzz targets
+  build [--release]
+                   build the loader and the kernel for their targets
   image [--release]
                    write the boot image and the disk image into target/
   check            everything CI runs, in CI order
@@ -79,6 +82,7 @@ fn run() -> Result<(), Error> {
         "miri" => commands::miri(&root),
         "doc" => commands::doc(&root),
         "fuzz" => commands::fuzz(&root, options),
+        "build" => commands::build(&root, options),
         "image" => commands::image(&root, options),
         "check" => commands::check(&root, &channel),
         other => Err(Error::Usage(format!("unknown subcommand `{other}`"))),
