@@ -453,11 +453,15 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
 pub(crate) const ASSEMBLY_EXTENSIONS: &[&str] = &["S", "s", "asm"];
 
 /// Directories the checks never descend into: what a build wrote, what
-/// version control keeps, and what is only kept to be read. `research`
-/// holds source of other projects, which carries the license headers of
-/// those projects and not this one; a check of this project has no
-/// business in it.
-pub(crate) const EXCLUDED_DIRECTORIES: &[&str] = &["target", ".git", "research"];
+/// version control keeps, what is only kept to be read, and what an agent
+/// writes. `research` holds source of other projects, which carries the
+/// license headers of those projects and not this one; a check of this
+/// project has no business in it. `.claude` holds the configuration of
+/// the coding agent and, under `.claude/worktrees/`, whole further
+/// checkouts of this repository: a file there is walked a second time and
+/// judged by the path it has in the worktree, which is not the path the
+/// tables of this policy name.
+pub(crate) const EXCLUDED_DIRECTORIES: &[&str] = &["target", ".git", "research", ".claude"];
 
 /// Every crate that is built for `target`.
 pub(crate) fn crates_for(target: Target) -> Vec<&'static str> {

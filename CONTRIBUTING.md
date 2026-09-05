@@ -21,6 +21,18 @@ form; the documents are binding.
 // Copyright (C) 2026 Manuel Baesler and contributors
 ```
 
+## Worktrees
+
+A worktree session of the coding agent branches from the local `HEAD`, as
+`.claude/settings.json` says, and puts its checkout under
+`.claude/worktrees/`. That directory is ignored, and the checks never
+descend into it: a second checkout inside the checkout would be walked
+twice and its files judged by the path they have in the worktree. A
+worktree holds what is committed and nothing else, so whatever a session
+needs — the wrapper scripts under `tools/`, the instructions an agent
+reads — belongs in a commit. Each worktree builds into its own `target/`;
+`cargo xtask check` runs in it unchanged.
+
 ## Commits
 
 Conventional Commits: `feat(scope): ...`, `fix(scope): ...`, `test(scope):

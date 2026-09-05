@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The repository is ready for the worktree sessions of a coding agent: a
+  session branches from the local `HEAD`, which `.claude/settings.json`
+  states because nothing here is pushed, and writes a whole further
+  checkout under `.claude/worktrees/`. `.gitignore` keeps that checkout
+  and the permissions of one machine out of the index, and `.claude` joins
+  the directories the checks never descend into: otherwise the walker
+  judges the copy of a file by the path it has in the worktree, which is
+  not the path the tables of the policy name, and a correct file fails the
+  SPDX check. The wrapper scripts under `tools/` and the instructions an
+  agent reads are committed, because a worktree holds what is committed
+  and nothing else.
 - `crypto-ec` gains ECDSA over P-384, which is what a chain that ends at a
   P-384 root takes. `p384::PublicKey::from_sec1` reads the uncompressed
   point of ninety-seven bytes, `verify` checks a signature against a

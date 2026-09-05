@@ -55,5 +55,9 @@ fn the_walk_skips_the_directories_the_policy_excludes() {
         EXCLUDED_DIRECTORIES.contains(&"research"),
         "reference material of other projects stays out of the checks"
     );
+    assert!(
+        EXCLUDED_DIRECTORIES.contains(&".claude"),
+        "a worktree under `.claude/worktrees/` is a checkout of its own"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
