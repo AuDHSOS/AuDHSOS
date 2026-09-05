@@ -180,11 +180,14 @@ The kernel address space (upper half) is managed by the same code. Layout:
 |-----------------|---------|
 | Physical memory window | All of RAM mapped read/write, no-execute, at `PHYS_WINDOW_BASE` |
 | Kernel image | Text read-only/execute, rodata read-only, data read/write, at `KERNEL_BASE` |
+| Boot information page | The structure the loader wrote, read-only, at `BOOT_INFO_VADDR` |
+| Boot stack | `BOOT_STACK_PAGES` pages read/write, no-execute, ending at `BOOT_STACK_TOP`, with one unmapped guard page below |
 | Kernel reserve | Pools, page tables, kernel stacks; each kernel stack is followed by an unmapped guard page |
 | Per-CPU area | Current thread pointer, scratch space (one CPU in the first release) |
 
-`PHYS_WINDOW_BASE` and `KERNEL_BASE` are constants in `audhsos-abi` shared
-by the loader and the kernel.
+`PHYS_WINDOW_BASE`, `KERNEL_BASE`, `BOOT_STACK_TOP`, `BOOT_STACK_PAGES`,
+and `BOOT_INFO_VADDR` are constants in `audhsos-abi` shared by the loader
+and the kernel.
 
 ### 2.4.4 Memory management in safe Rust
 

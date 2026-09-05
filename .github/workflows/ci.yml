@@ -14,5 +14,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain from rust-toolchain.toml
         run: rustup show active-toolchain
+      - name: Install QEMU and the UEFI firmware
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 ovmf
+      - name: Name the UEFI firmware the distribution installed
+        run: |
+          for image in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd; do
+            if [ -f "$image" ]; then
+              echo "AUDHSOS_OVMF=$image" >> "$GITHUB_ENV"
+              break
+            fi
+          done
       - name: Run every check
         run: cargo xtask check

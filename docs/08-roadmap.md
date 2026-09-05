@@ -76,6 +76,8 @@ involved.
 
 ## 8.4 Phase 2: Loader, boot, and test harness
 
+Status: implemented.
+
 Deliverables: `audhsos-elf`; `audhsos-uefi`; `boot-uefi-x86_64` with file
 loading, kernel placement, page-table construction through the mapper,
 boot information, the naked entry function, diagnostics, and failure exit;

@@ -6,8 +6,8 @@ They describe the target design, the rules the code must follow, and the
 order in which the system is built.
 
 Status: every entry of the decision register is decided; no open
-decisions remain. Phases 0 and 1 of the roadmap are implemented; Phase 2
-is in progress. The cryptography and TLS track of document 11 is
+decisions remain. Phases 0 to 2 of the roadmap are implemented; Phase 3
+is next. The cryptography and TLS track of document 11 is
 specified and not yet started.
 
 ## Reading order

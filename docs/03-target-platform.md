@@ -77,8 +77,11 @@ The loader is the crate `boot-uefi-x86_64`, built for the target
 - The kernel ELF is parsed by `audhsos-elf`. The page tables are built by
   the `kernel-mm` mapper with the loader's `FrameAccess` adapter over the
   identity mapping.
-- The loader contains one naked function: write `CR3`, load the boot stack
-  pointer, jump to the kernel entry with the boot information address.
+- The loader contains one naked function: turn interrupts off, write
+  `CR3`, load the boot stack pointer, jump to the kernel entry with the
+  boot information address. It uses the `sysv64` calling convention,
+  because `extern "C"` on the UEFI target is the Microsoft one while the
+  kernel entry point takes its argument in `RDI`.
 - Every failure in the loader prints a diagnostic through the text output
   protocol and exits QEMU with the failure code through `isa-debug-exit`.
 - The loader is a build with `panic = "abort"` and no `alloc`.

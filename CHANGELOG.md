@@ -99,6 +99,8 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   protection, page fault, and the double fault of a kernel stack overflow.
 - `audhsos-abi`: the boot stack is 64 pages, not 16. An unoptimized test
   image needs more than 64 KiB before it reaches the harness.
+- CI installs QEMU and the UEFI firmware and names the firmware the
+  distribution installed, so that `check` can run `test --qemu`.
 - Planning for graphics output and input devices: roadmap Phases 9 to 11,
   decisions D-29 to D-33, catalog sections 6.6.24 to 6.6.29, and the
   framebuffer fields of the boot information structure in the documents.

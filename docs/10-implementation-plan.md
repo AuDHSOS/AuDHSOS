@@ -1113,21 +1113,26 @@ identity mapping afterwards.
 
 ### 10.2.10 Policy and documents
 
-`policy::CRATES` entries: `audhsos-elf` (Logic, deps none),
+`policy::CRATES` entries: `audhsos-elf` (Logic, deps `test-support` behind `test-strategies`),
 `audhsos-uefi` (Logic, deps `audhsos-abi`), `kernel-x86-tables` (Logic,
 deps none), `driver-uart16550` (Logic, deps none), `kernel-core` (Logic,
 deps `kernel-types`, `kernel-hal-api`, `kernel-mm`, `kernel-objects`,
 `audhsos-abi`, `audhsos-sync`), `kernel-hal-x86_64` (Adapter,
 `X86_64None`, deps `kernel-hal-api`, `kernel-types`, `audhsos-abi`,
 `driver-uart16550`, `audhsos-sync`, `kernel-x86-tables`, `kernel-mm`),
-`kernel-test-harness` (Logic, `X86_64None`, deps `kernel-hal-api`),
-`audhsos-kernel` (Logic, `X86_64None`, deps `kernel-core`,
-`kernel-hal-x86_64`, `kernel-test-harness`, `audhsos-abi`),
+`kernel-test-harness` (Logic, `Host`, deps `kernel-hal-api`: the runner is
+pure and is tested on the host, so the kernel images link it but the
+coverage gate still applies), `audhsos-kernel` (Adapter, `X86_64None`,
+deps `kernel-core`, `kernel-hal-x86_64`, `audhsos-abi`; the budget of
+three counts the `#[unsafe(no_mangle)]` attribute of the entry point, the
+call into the adapter, and the one call a test image makes),
 `boot-uefi-x86_64` (Adapter, `X86_64Uefi`, deps as in 10.2.8; the budget
 counts the three graphics blocks of `firmware.rs` and `graphics.rs`).
+`xtask` (Host, deps `audhsos-abi`, `kernel-test-harness`).
 Update the catalog in 05, the allowlist and inventory in 04,
-`rust-toolchain.toml` already lists both targets. Record `BOOT_STACK_TOP`
-and `BOOT_INFO_VADDR` in 02 and 03.
+`rust-toolchain.toml` already lists both targets. Record `BOOT_STACK_TOP`,
+`BOOT_STACK_PAGES`, and `BOOT_INFO_VADDR` in the kernel address space
+table of 02 and in 03.
 
 ### 10.2.11 Acceptance
 
