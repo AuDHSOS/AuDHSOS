@@ -17,6 +17,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   and a symbolizer cannot do without. `sections()` needs the magic, the
   class, and the byte order and nothing about segments, so a file without
   a loadable segment still yields its sections.
+- `audhsos-symbols`: `demangle` writes a Rust symbol name back readable,
+  in the `v0` scheme of RFC 2603 and the legacy `_ZN` scheme, straight
+  into a formatter and therefore without allocating. Generic arguments are
+  dropped and a name the parser does not understand is written unchanged.
+  Every one of the 1002 symbols of the kernel image reads back.
 - `xtask`: `symbolize <elf> <address>...` answers by hand, and a QEMU run
   that fails now resolves every address of the kernel half in its serial
   output against the image it ran. A file that cannot be read or carries

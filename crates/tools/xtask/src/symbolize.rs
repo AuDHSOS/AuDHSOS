@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use audhsos_abi::layout::KERNEL_SPACE_START;
-use audhsos_symbols::Symbols;
+use audhsos_symbols::{Symbols, demangle};
 
 use crate::error::Error;
 use crate::fs;
@@ -67,7 +67,7 @@ impl std::fmt::Display for Resolved {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:#018x}", self.address)?;
         match &self.function {
-            Some(name) => write!(f, " {name}")?,
+            Some(name) => write!(f, " {}", demangle(name))?,
             None => f.write_str(" <unknown>")?,
         }
         if let Some(place) = &self.place {

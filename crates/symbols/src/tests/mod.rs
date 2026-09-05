@@ -16,6 +16,7 @@
 
 mod build;
 mod cursor;
+mod demangle;
 mod functions;
 mod line;
 mod symbols;

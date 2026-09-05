@@ -1198,8 +1198,18 @@ done until every applicable item has a test. Items are added, never removed.
   matches; an address before the first row and after the last; a version
   the crate does not read and a line range of zero are rejected; a
   truncated program is rejected without panic.
+- Demangling: a path of a crate, a module, and a function; a method of an
+  inherent implementation, of a primitive, and of a slice; every basic
+  type letter; the shapes a type can have, a function signature, and a
+  trait object; the shapes a constant can have; a trait definition and a
+  disambiguated implementation; a backreference in a path and in a type; a
+  closure inside a closure, where two identifiers of no length stand next
+  to each other; a legacy name without its hash; a name the parser does
+  not read is written unchanged; a backreference that points forward and
+  nesting without end are refused.
 - Property: no input file causes a panic and every lookup either yields a
-  location inside the file's ranges or reports none.
+  location inside the file's ranges or reports none; no name makes the
+  demangler panic or loop.
 - The xtask: the addresses of a trap report are found once each and in
   order, and a number too short to be one is left alone; a resolved
   address reads as one line; a report over a file that is not there says

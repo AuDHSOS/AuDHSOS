@@ -420,9 +420,14 @@ rather than a guess. No inline frames, no call-frame information and
 therefore no stack unwinding (D-54).
 
 The directory and the file come back separately, because joining them
-would mean allocating; the xtask joins them. The name is the one the
-symbol table carries, which for Rust is the mangled one: demangling is not
-part of this version.
+would mean allocating; the xtask joins them.
+
+`demangle` writes a name back readable, in the `v0` scheme of RFC 2603 and
+the legacy `_ZN` scheme, straight into a formatter and therefore without
+allocating. Generic arguments are dropped, because a report wants the path
+and not the instantiation, and a name the parser does not understand is
+written unchanged. Every one of the 1002 symbols of the kernel image reads
+back.
 
 The xtask uses it two ways. `cargo xtask symbolize <elf> <address>...`
 answers by hand, and a QEMU run that fails resolves every address of the

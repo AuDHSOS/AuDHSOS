@@ -6,10 +6,12 @@
 #![doc = include_str!("../README.md")]
 
 pub mod cursor;
+pub mod demangle;
 pub mod error;
 pub mod functions;
 pub mod line;
 
+pub use demangle::{Demangled, demangle};
 pub use error::SymbolError;
 pub use functions::{Function, Functions};
 pub use line::{LineProgram, Row, Strings};
