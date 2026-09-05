@@ -7,6 +7,7 @@
 mod ed25519;
 mod fe25519;
 mod p256;
+mod p384;
 mod reference;
 mod x25519;
 
@@ -36,6 +37,15 @@ pub(crate) fn unhex(text: &str) -> Vec<u8> {
 /// A hexadecimal string as a fixed-size array.
 pub(crate) fn unhex32(text: &str) -> [u8; 32] {
     let mut bytes = [0u8; 32];
+    for (slot, byte) in bytes.iter_mut().zip(unhex(text)) {
+        *slot = byte;
+    }
+    bytes
+}
+
+/// A hexadecimal string as a fixed-size array of the width P-384 uses.
+pub(crate) fn unhex48(text: &str) -> [u8; 48] {
+    let mut bytes = [0u8; 48];
     for (slot, byte) in bytes.iter_mut().zip(unhex(text)) {
         *slot = byte;
     }

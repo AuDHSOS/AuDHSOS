@@ -39,9 +39,13 @@ exchange; certificate revocation (CRL, OCSP, stapling); name constraints;
 renegotiation; compression; `record_size_limit`; DTLS.
 
 RSA verification is the one omission that costs interoperability: many
-public chains are RSA to the root. It is later work and needs a bignum
-crate with Montgomery multiplication. Everything else on the list is
-optional for a working HTTPS request.
+public chains are RSA to the root. It is later work and needs wide
+arithmetic. Some of that now exists: `crypto-ec::montgomery` is a
+Montgomery multiplication generic over the number of limbs, written for
+the two ECDSA curves, and a 2048-bit modulus is the same code with
+thirty-two limbs rather than four or six. What it does not have is the
+exponentiation an RSA verification needs, or the PKCS #1 encoding around
+it. Everything else on the list is optional for a working HTTPS request.
 
 The `secp256r1` key exchange left the list with D-56, after the curve was
 implemented. A key exchange multiplies a secret scalar; the P-256 of
@@ -492,7 +496,7 @@ checklist in 4.9.
 |------|---------|------|--------|
 | T1 | `crypto-ct`, `crypto-hash` | S | implemented |
 | T2 | `crypto-aead`: ChaCha20-Poly1305, then bitsliced AES-GCM | L | implemented |
-| T3 | `crypto-ec`: `fe25519` and X25519, then Ed25519, then P-256 | L | implemented |
+| T3 | `crypto-ec`: `fe25519` and X25519, then Ed25519, then P-256, then P-384 | L | implemented |
 | T4 | `crypto-rng` | S | implemented |
 | T5 | `audhsos-der` | M | implemented but for the time conversion (11.14) |
 | T6 | `audhsos-x509` with the test certificate builder | L | implemented |

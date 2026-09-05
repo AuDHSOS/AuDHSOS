@@ -7,6 +7,24 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `crypto-ec` gains ECDSA over P-384, which is what a chain that ends at a
+  P-384 root takes. `p384::PublicKey::from_sec1` reads the uncompressed
+  point of ninety-seven bytes, `verify` checks a signature against a
+  digest of any width up to the order, and `sign` behind `test-signing` is
+  deterministic per RFC 6979 over SHA-384. The constants are RFC 5903,
+  section 3.2, and RFC 5114, section 2.7, states them independently and
+  agrees. The vectors are RFC 6979, appendix A.2.6 — the ten signatures of
+  two messages under five hashes — and RFC 5903, appendix 8.2, whose two
+  key pairs and shared point are three scalar multiplications the tests
+  did not compute.
+- `crypto-ec` grows two modules the two ECDSA curves share:
+  `montgomery` is the modular arithmetic, generic over the number of
+  limbs, and `jacobian` is the group law of a short Weierstrass curve
+  whose `a` is minus three. `p256` and `p384` are now the constants and
+  the ECDSA on top of them. P-256 is unchanged in behaviour: the same RFC
+  6979 vectors pass over the shared code. An element carries the width of
+  its encoding as a parameter, and a width that does not match its limbs
+  fails to compile.
 - `tools/tls-probe`: a host program that drives the sans-I/O client over a
   real socket, so that the stack is answered by a server instead of by a
   recording. It opens TCP, runs the handshake, and speaks enough HTTP/1.1

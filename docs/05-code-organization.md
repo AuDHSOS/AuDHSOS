@@ -68,7 +68,7 @@ AuDHSOS/
 │   │   ├── ct/                crypto-ct: Choice, constant-time selection and comparison, Secret<N>
 │   │   ├── hash/              crypto-hash: SHA-256, SHA-384/512, HMAC, HKDF
 │   │   ├── aead/              crypto-aead: ChaCha20-Poly1305, bitsliced AES-GCM, GHASH
-│   │   ├── ec/                crypto-ec: fe25519, X25519, Ed25519 verify, P-256 ECDSA verify
+│   │   ├── ec/                crypto-ec: fe25519, X25519, Ed25519 verify, P-256 and P-384 ECDSA verify
 │   │   └── rng/               crypto-rng: Entropy and Rng traits, ChaCha20 generator
 │   ├── net/                   (documents 11 and 12)
 │   │   ├── der/               audhsos-der: strict zero-copy DER reader
