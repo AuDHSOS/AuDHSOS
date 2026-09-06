@@ -107,6 +107,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- Every program of the userland is a binary of one crate rather than a
+  crate of its own (D-97). Five manifests, five policy entries and five
+  unsafe budgets for a few hundred lines of loop each buy nothing that the
+  three logic crates beneath them do not already buy; 05 5.1 still drew the
+  old shape.
+
 - Three unsafe budgets rise and a fourth opens (D-96): `kernel-hal-x86_64`
   to 144 for the read of the root task out of the boot image,
   `audhsos-kernel` to 31 for the bring-up of that task, `user-sys-x86_64`

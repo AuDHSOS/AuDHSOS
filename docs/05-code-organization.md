@@ -54,15 +54,21 @@ AuDHSOS/
 │   │   ├── sys-x86_64/        user-sys-x86_64: _start, trap instruction, the gate and its wrappers (unsafe allowed)
 │   │   ├── proto/             user-proto: protocol encodings
 │   │   ├── loader/            user-loader: tar reader, the segments a user ELF asks for
-│   │   ├── servers/
-│   │   │   ├── init/          server-init: the root task
+│   │   ├── servers/           the logic of the servers, host-tested, no system call
 │   │   │   ├── name/          server-name
 │   │   │   ├── console/       server-console
 │   │   │   ├── memory/        server-memory
 │   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor (Phase 9)
 │   │   │   └── input/         server-input: i8042 driver process, event rings (Phase 10)
+│   │   ├── programs/          user-programs: every program of the system as one
+│   │   │   │                  binary each of one crate, because a program is a
+│   │   │   │                  loop around a logic crate and seven crates of a
+│   │   │   │                  loop each are seven manifests saying the same
+│   │   │   │                  thing (D-97)
+│   │   │   └── src/bin/       server-init (the root task), server-memory,
+│   │   │                      server-name, server-console, app-hello,
+│   │   │                      app-checks, app-faulter
 │   │   └── apps/
-│   │       ├── hello/         app-hello: end-to-end client
 │   │       └── canvas/        app-canvas: graphical demonstration and e2e client (Phase 11)
 │   ├── crypto/                (document 11)
 │   │   ├── ct/                crypto-ct: Choice, constant-time selection and comparison, Secret<N>
@@ -132,8 +138,8 @@ AuDHSOS/
 | `user-loader` | u2 | all | no | yes, fuzz | `audhsos-abi`, `audhsos-elf`; `test-support` behind the feature `test-strategies` |
 | `server-name` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `user-proto` |
 | `server-memory` | u2 | all | no | yes, against a recording `Pages` | `audhsos-abi`, `audhsos-collections`; feature `test-doubles` |
-| `server-console` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `driver-uart16550` |
-| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | the server logic crates, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
+| `server-console` | u2 | all | no | yes | `audhsos-collections`, `driver-uart16550` |
+| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | the three server logic crates, `audhsos-abi`, `driver-uart16550`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
 | `crypto-ct` | c0 | all | no | yes | - |
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
 | `crypto-hash` | c1 | all | no | yes | `crypto-ct` |
