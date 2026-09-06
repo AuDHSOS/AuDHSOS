@@ -70,7 +70,8 @@ AuDHSOS/
 │   │   ├── aead/              crypto-aead: ChaCha20-Poly1305, bitsliced AES-GCM, GHASH
 │   │   ├── bignum/            crypto-bignum: limbs, Montgomery arithmetic, a run-time modulus
 │   │   ├── ec/                crypto-ec: fe25519, X25519, Ed25519 verify, P-256 and P-384 ECDSA verify
-│   │   └── rng/               crypto-rng: Entropy and Rng traits, ChaCha20 generator
+│   │   ├── rng/               crypto-rng: Entropy and Rng traits, ChaCha20 generator
+│   │   └── rsa/               crypto-rsa: RSA verification, PKCS #1 v1.5 and PSS
 │   ├── net/                   (documents 11 and 12)
 │   │   ├── der/               audhsos-der: strict zero-copy DER reader
 │   │   ├── x509/              audhsos-x509: certificates, path validation, name matching
@@ -137,6 +138,7 @@ AuDHSOS/
 | `crypto-bignum` | c0 | all | no | yes | `test-support` as a dev-dependency |
 | `crypto-ec` | c2 | all | no | yes | `crypto-bignum`, `crypto-ct`, `crypto-hash`; feature `test-signing` |
 | `crypto-rng` | c2 | all | no | yes | `crypto-ct`, `crypto-aead`; feature `test-doubles` |
+| `crypto-rsa` | c2 | all | no | yes, fuzz | `crypto-bignum`, `crypto-ct`, `crypto-hash`; feature `test-signing` |
 | `audhsos-x509` | c3 | all | no | yes, fuzz | `audhsos-der`, `audhsos-time`, `crypto-hash`, `crypto-ec`; feature `test-certificates` |
 | `audhsos-tls` | c4 | all | no | yes, fuzz | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-time`, `audhsos-x509` |
 | `net-wire` | n0 | all | no | yes | `test-support` as a dev-dependency |

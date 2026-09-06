@@ -148,6 +148,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "crypto-rsa",
+        path: "crates/crypto/rsa",
+        kind: Kind::Logic,
+        deps: &["crypto-bignum", "crypto-ct", "crypto-hash", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-der",
         path: "crates/net/der",
         kind: Kind::Logic,

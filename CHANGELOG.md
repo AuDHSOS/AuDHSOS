@@ -29,6 +29,36 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `crypto-rsa`, step R2 of the RSA track: the public key with the bounds
+  that belong to the primitive, and PKCS #1 v1.5 verification. The key
+  takes a modulus that is odd, has its top bit set, and is no wider than
+  the arithmetic allows, and an exponent that is odd and at least three.
+  It does not take the lower bound on the key size: that is a rule about
+  certificates and belongs where certificates are judged (D-79). One test
+  in the file says so by name — the thousand-and-twenty-four-bit key of
+  RFC 8448, section 2 is accepted here, and no chain will ever carry it.
+
+  The encoding is built and compared, never parsed (D-80). The three
+  `DigestInfo` prefixes are the byte strings RFC 8017, section 9.2 note 1
+  writes out, each with that citation beside it, and a test checks the
+  block this crate builds against them field by field. What the choice
+  buys is the eight refusals underneath it, each of them an encoded
+  message a decoding verifier would accept, signed with the private
+  exponent of that key so the arithmetic recovers it exactly: a padding
+  of seven `0xff` bytes, a `DigestInfo` moved into the block, bytes after
+  the digest, a separator overwritten, a first byte that is not `0x00`, a
+  second that is not `0x01`, a `DigestInfo` whose `SEQUENCE` carries an
+  indefinite length — which PKCS #1 v1.5 allows and this crate refuses,
+  the incompatibility D-80 states — and Bleichenbacher's forgery against
+  an exponent of three, which is not signed at all but is the integer cube
+  root of a block with a short padding and a long tail.
+
+  Verification has one error for every way it can fail. Which way it was
+  is exactly what the sender would like to know.
+
+  Signing is behind `test-signing` and is one call into `pow_wide` with
+  the private exponent. No key is generated (D-83).
+
 - `crypto-bignum`, step R1 of the RSA track: limb arithmetic over slices,
   and a `Modulus` that arrives at run time. `crypto-ec` kept its four
   `Params` implementations, whose modulus, inverse, and conversion

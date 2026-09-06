@@ -541,7 +541,7 @@ checklist in 4.9.
 | T7 | `audhsos-tls` | XL | implemented |
 | T8 | Integration, jointly with step D9 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M | |
 | R1 | `crypto-bignum`: the limb core out of `crypto-ec`, a runtime `Modulus`, and exponentiation (11.15) | M-L | implemented |
-| R2 | `crypto-rsa`: the key with its bounds, and PKCS #1 v1.5 | M | |
+| R2 | `crypto-rsa`: the key with its bounds, and PKCS #1 v1.5 | M | implemented |
 | R3 | `crypto-rsa`: MGF1 and EMSA-PSS-VERIFY | M | |
 | R4 | `audhsos-x509`: identifiers, parameters, the key, the pairs, and the builder | L | |
 | R5 | `audhsos-tls`: code points, the hello, `MAX_SPKI`, the `CertificateVerify` rule, the trace | M | |
@@ -693,12 +693,24 @@ pub struct PublicKey { modulus: Modulus, exponent: u64, size: usize }
 
 impl PublicKey {
     pub fn new(modulus: &[u8], exponent: &[u8]) -> Result<PublicKey, RsaError>;
+    pub fn size(&self) -> usize;      // k, the width every signature has
+    pub fn bits(&self) -> usize;      // modBits
+    pub fn exponent(&self) -> u64;
     pub fn verify_pkcs1(&self, hash: HashId, message: &[u8], signature: &[u8])
         -> Result<(), RsaError>;
     pub fn verify_pss(&self, hash: HashId, message: &[u8], signature: &[u8])
         -> Result<(), RsaError>;
 }
 ```
+
+`HashId` is this crate's, not `crypto-hash`'s: the two encodings hash the
+message more than once, so a caller that passed a digest could not do the
+second hashing, and naming the function is the only interface that works
+for both. `RsaError` has three variants and verification uses one of
+them. A signature of the wrong length, one that is not below the modulus,
+one whose padding is short, and one whose digest does not match are the
+same refusal, because telling them apart tells whoever sent the signature
+which of them it was.
 
 `new` takes the shape rules of D-79 that are the primitive's own: the
 modulus odd with its top bit set and no wider than `MAX_LIMBS`, the
