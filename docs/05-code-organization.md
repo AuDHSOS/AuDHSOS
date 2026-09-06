@@ -116,12 +116,12 @@ AuDHSOS/
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-objects` | 2 | all | no | yes | `kernel-types`, `kernel-mm`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-sched` | 2 | all | no | yes | `kernel-objects`, `audhsos-abi` |
-| `kernel-ipc` | 3 | all | no | yes | `kernel-objects`, `kernel-sched`, `audhsos-abi` |
-| `kernel-syscall` | 3 | all | no | yes, against a recording `Environment` | layers 0-2, `kernel-sched`; `kernel-ipc` from Phase 6 |
+| `kernel-ipc` | 3 | all | no | yes | `kernel-objects`, `kernel-sched`, `audhsos-abi`; `kernel-types` and `test-support` as dev-dependencies |
+| `kernel-syscall` | 3 | all | no | yes, against a recording `Environment` | layers 0-2, `kernel-sched`, `kernel-ipc` |
 | `kernel-core` | 4 | all | no | yes, with doubles | layers 0-3, `audhsos-sync` |
 | `kernel-hal-x86_64` | 5 | `x86_64-unknown-none` | allowlisted | the pure parts live in `kernel-x86-tables` and `kernel-acpi` | `kernel-acpi`, `kernel-hal-api`, `kernel-types`, `audhsos-abi`, `driver-uart16550`, `audhsos-sync`, `kernel-x86-tables`, `kernel-mm`, `kernel-test-harness` |
 | `kernel-test-harness` | 5 | all | no | yes | `kernel-hal-api` |
-| `audhsos-kernel` | 6 | `x86_64-unknown-none` | allowlisted (the entry point, the memory and interrupt bring-up, and the test images) | QEMU | `kernel-core`, `kernel-hal-api`, `kernel-hal-x86_64`, `kernel-types`, `audhsos-abi`; `kernel-mm` for the test images |
+| `audhsos-kernel` | 6 | `x86_64-unknown-none` | allowlisted (the entry point, the memory and interrupt bring-up, and the test images) | QEMU | `kernel-core`, `kernel-hal-api`, `kernel-hal-x86_64`, `kernel-ipc`, `kernel-types`, `audhsos-abi`; `kernel-mm`, `kernel-objects`, `kernel-syscall`, `audhsos-sync` for the test images |
 | `boot-uefi-x86_64` | b | `x86_64-unknown-uefi` | allowlisted | pure sub-modules | `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `kernel-types`, `kernel-mm`, `kernel-hal-api` |
 | `user-sys-x86_64` | u0 | `x86_64-unknown-none` | allowlisted | through the programs of `user-test-programs` in QEMU | `audhsos-abi` |
 | `user-test-programs` | u0 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-sys-x86_64` |

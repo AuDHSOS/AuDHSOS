@@ -1832,12 +1832,27 @@ that Phase 5 called `links`, `wait: Wait`, and `fault: Option<Fault>`.
 ```rust
 pub enum Wait {
     Nothing,
-    Endpoint { endpoint: EndpointId, queue: Queue },
+    Endpoint { endpoint: EndpointId, queue: Queue, badge: u64 },
     Reply { reply: ReplyId },
     Notification { notification: NotificationId },
 }
-pub enum Queue { Senders, Receivers }
+pub enum Queue { Senders, Callers, Receivers }
 ```
+
+`Queue` has three variants and not two because the rendezvous is completed
+by whichever side arrives second, so the record has to say what the side
+that arrived first asked for: a thread that used `ipc_send` is done when its
+message is taken, and one that used `ipc_call` waits for the answer
+afterwards. Both wait in the senders queue and a cancellation treats them
+alike. The badge beside them is the badge of the capability a queued sender
+sent through, which is what the receiver that meets it later sees; a
+receiver carries none, having no capability of anyone else's in its hand.
+
+The operations of `WaitQueue` — `enqueue`, `dequeue_front`, `unlink`, and
+the `requeue` that puts a peer back where a meeting took it from — live in
+`kernel-objects` beside the pool their links thread through, because a
+method has to live in the crate that defines the type and the queue is a
+field of `Endpoint`. `kernel-ipc` is the rendezvous that uses them.
 
 `Process::fault_handler` becomes `Option<EndpointId>`, which is what
 10.5.2 sketched and Phase 5 could not name.
@@ -1848,7 +1863,13 @@ each nine numbers — the eight pools and the handle arena — which is what
 `system_info` reports. `Objects::destroy(id)` is the one
 place that turns a reference count of zero into the destruction of the
 object it names; what destruction does to waiters belongs to `kernel-ipc`
-and is passed back to the caller rather than done here.
+and is passed back to the caller rather than done here. It comes back as
+`Destroyed`, which carries the object away with it: the pool slot is free by
+the time the caller sees it, and the queues are the only record of who has
+to be woken. Beside it, `Pool::force_release` frees a slot whatever its
+count, which is what a `process_kill` and the reaper of a thread do — a
+process ends when it is killed and a thread when what it held has been given
+back, whatever handle still names either of them.
 
 `handle_table.rs`: `close_all` is replaced by `close_next(list) ->
 Option<Entry>`, so that every entry a dying process held passes through
@@ -1896,16 +1917,23 @@ order, and a failing reply does not become a receive.
 **`transfer`.** The one function that moves a message:
 
 ```rust
-pub fn transfer<const N: usize>(
+pub fn transfer<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     from: &[u8; SIZE],
     to: &mut [u8; SIZE],
-    sender: (ProcessId, &mut HandleList),
-    receiver: (ProcessId, &mut HandleList),
-    arena: &mut HandleArena<N>,
+    objects: &mut Objects<NP, NT, NM, NH>,
+    sender: ProcessId,
+    receiver: ProcessId,
 ) -> Result<Transferred, Error>;
 
 pub struct Transferred { pub words: u16, pub handles: u8, pub truncated: bool }
 ```
+
+It takes the store and not two handle lists and the arena, for two reasons:
+a handle that arrives retains a reference to the object it names, which
+needs the pools; and the two processes may be one process, so two mutable
+borrows of one list would be two views of the same thing and whichever was
+written back last would win. The list is read out of the store and written
+back instead.
 
 The order is what makes a refused message change nothing: the header is
 validated first (`word_count <= 480`, `handle_count <= 4`), then all four
@@ -1952,11 +1980,19 @@ fn with_buffer<R>(
 ) -> Result<R, Error>;
 fn read_port(&mut self, port: u16, width: u8) -> Result<u64, Error>;
 fn write_port(&mut self, port: u16, width: u8, value: u64) -> Result<(), Error>;
+fn interrupt_vector(&self, line: u8) -> Option<u8>;
 fn route_interrupt(&mut self, line: u8, vector: u8) -> Result<(), Error>;
 fn mask_interrupt(&mut self, line: u8);
 fn unmask_interrupt(&mut self, line: u8);
+fn meets_ram(&self, frames: PhysFrameRange) -> bool;
 fn acpi_pointer(&self) -> u64;
 ```
+
+`interrupt_vector` is a question and not a table of this crate: the vector
+plan is the architecture's, so `kernel-hal-api` gains
+`InterruptController::vector_of` and the environment passes the question on.
+`meets_ram` is the other question only the architecture layer can answer,
+and it is what `memory_create_device` refuses an aperture with.
 
 `dispatch` holds the buffer of the calling thread and nothing else, and
 every transfer has the caller on one side: a send copies out of the
@@ -2009,8 +2045,14 @@ pub fn deliver(
     machine: &mut Machine<'_, E, NP, NT, NM, NH>,
     thread: ThreadId,
     fault: Fault,
+    buffer: &mut [u8; SIZE],
 ) -> Outcome;
 ```
+
+`buffer` is the IPC buffer of the faulting thread, which the caller reaches
+the way the system call gate does. The message is built there and copied
+from there, and a copy needs both buffers at once, which one `with_buffer`
+cannot give.
 
 It records the fault in the thread, builds the message in the faulting
 thread's own IPC buffer — label `FAULT_LABEL_BASE + kind`, word count 3,
@@ -2074,9 +2116,13 @@ object types with waiters that is the operation of 10.6.3.
 
 New programs in `user-test-programs`: `ipc_client` and `ipc_server`, which
 are a call and a reply with a badge, four words, and a handle;
-`fault_handler`, which receives fault messages and answers them; and
+`fault_handler`, which receives fault messages and answers them;
+`write_unmapped`, whose fault a handler can repair; and
 `notification_waiter`, which programs the interval timer through a port
-range, binds its line, and waits for the bit. What each of them needs
+range, binds its line, and waits for the bit. What a program observes goes
+into a page the kernel shares with it and not into its own IPC buffer: a
+message of 480 words fills the message area, and a log kept there would be
+overwritten by the message it is about. What each of them needs
 beyond its own endpoint the test installs into its process with
 `support::install`, the way the root task will in Phase 7: the memory
 object of the transfer test, the `SystemControl` capability of
@@ -2091,8 +2137,10 @@ process carrying `MANAGE` and `MAP` and a memory object to map with.
   server maps it and writes, the client reads what the server wrote;
 - a message with zero words, with 480 words, and one with 481, which is
   refused before anything is copied;
-- a sender killed while blocked, and an endpoint destroyed under waiters
-  on both queues;
+- a sender killed while blocked, and an endpoint destroyed under a waiter.
+  The two queues of one endpoint cannot both hold a waiter at once, because
+  whichever side arrives second meets the first, so the image shows them one
+  at a time and the host test of `kernel-ipc` shows them together;
 - `try_recv` on an empty endpoint;
 - the interrupt: `notification_waiter` creates an interrupt object for ISA
   line 0, binds it to bit 3 of a notification, programs the interval timer
@@ -2124,8 +2172,8 @@ resumes.
 - `policy::CRATES` gains `kernel-ipc` (`Kind::Logic`, deps
   `kernel-objects`, `kernel-sched`, `audhsos-abi`, coverage gate on, host
   target); `kernel-syscall` gains `kernel-ipc`; the budgets of
-  `kernel-hal-x86_64` and `user-test-programs` rise to their measured
-  counts. Root `Cargo.toml` members, `README.md` for the new crate, and
+  `kernel-hal-x86_64`, `audhsos-kernel`, `user-sys-x86_64`, and
+  `user-test-programs` rise to their measured counts. Root `Cargo.toml` members, `README.md` for the new crate, and
   the `[[test]]` and `[[bin]]` entries for the new images and programs.
 - [05-code-organization.md 5.2](05-code-organization.md#52-crate-catalog)
   already carries the row for `kernel-ipc`; the deviations this phase

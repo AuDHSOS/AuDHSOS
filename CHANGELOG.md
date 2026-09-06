@@ -27,6 +27,27 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   itself.
 
 
+### Changed
+
+- The documents follow the code of Phase 6. 2.3.4 gains the reference a
+  process and a thread hold to themselves: a process ends when it is killed
+  and a thread when the kernel has given back what it held, whatever handle
+  still names either of them, so closing the last handle to a running thread
+  does not end it and the handles that named one afterwards name nothing.
+  That is the one place where 2.3.2's "closing the last handle to an object
+  destroys the object" does not hold, and 2.3.2 now says where to look. 2.8's
+  row for `system_info` names what it actually reports, the framebuffer
+  description being Phase 9's.
+
+  In 5.2 the dependency columns of `kernel-ipc`, `kernel-syscall`, and
+  `audhsos-kernel` say what the manifests do, and 4.3 says what the test
+  programs use `unsafe` for now that they write into a page they share with
+  the test. In the plan, 10.6 says what the implementation settled: where the
+  operations of `WaitQueue` live, why `Queue` has three variants and carries
+  a badge, what `transfer` takes and why, the two questions the environment
+  passes on to the architecture layer, and the buffer `fault::deliver` is
+  handed.
+
 ### Added
 
 - Two user threads that meet, and a driver at ring three. Five new programs
