@@ -172,6 +172,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "audhsos-time",
             "crypto-ec",
             "crypto-hash",
+            "crypto-rsa",
             "test-support",
         ],
         coverage_gate: true,

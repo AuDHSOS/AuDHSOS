@@ -900,6 +900,24 @@ done until every applicable item has a test. Items are added, never removed.
   name is present at all; case is compared case-insensitively for ASCII; a
   trailing dot on either side is the same name; an IP address matches only
   an `iPAddress` entry, and a `dNSName` that spells an address does not.
+- RSA: the three `sha*WithRSAEncryption` identifiers are read with NULL
+  parameters and with the field absent, and both are right (RFC 4055,
+  section 5) where absence is the only right answer for ECDSA and
+  Ed25519, which still refuse a NULL; a parameter that is neither is
+  rejected. `id-RSASSA-PSS` is read for the three parameter sets that
+  pair a hash with MGF1 over that same hash and a salt as long as its
+  output, and rejected for a salt of another length, a mask over another
+  hash, a hash this crate does not know, a mask function that is not
+  MGF1, and no parameters at all. An `rsaEncryption` key is the two
+  integers of RFC 3279, section 2.3.1 and its parameters must be NULL.
+  The size bound of D-79 is applied at each edge — two thousand and
+  forty-eight, three thousand and seventy-two, and four thousand and
+  ninety-six bits accepted; a thousand and twenty-four, two thousand and
+  forty, and four thousand one hundred and four refused — and it is
+  applied here rather than in `crypto-rsa`. A chain verifies under each of
+  the six schemes and a modified body under none of them; the widest key
+  is built and verified once, which is what took `MAX_CERTIFICATE` past a
+  kibibyte.
 - Property: mutating any byte of a valid certificate, in either of two
   ways, makes parsing or verification fail; mutating any byte of an
   intermediate makes the chain fail. The fuzz target `x509` parses

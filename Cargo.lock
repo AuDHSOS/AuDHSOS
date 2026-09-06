@@ -103,6 +103,7 @@ dependencies = [
  "audhsos-time",
  "crypto-ec",
  "crypto-hash",
+ "crypto-rsa",
  "test-support",
 ]
 

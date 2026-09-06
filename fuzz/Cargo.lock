@@ -51,6 +51,7 @@ dependencies = [
  "audhsos-time",
  "crypto-ec",
  "crypto-hash",
+ "crypto-rsa",
 ]
 
 [[package]]
@@ -106,6 +107,15 @@ version = "0.1.0"
 dependencies = [
  "crypto-aead",
  "crypto-ct",
+]
+
+[[package]]
+name = "crypto-rsa"
+version = "0.1.0"
+dependencies = [
+ "crypto-bignum",
+ "crypto-ct",
+ "crypto-hash",
 ]
 
 [[package]]

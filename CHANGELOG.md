@@ -29,6 +29,39 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `audhsos-x509` reads and verifies RSA, step R4 of the RSA track. `oid`
+  gains `rsaEncryption`, the three `sha*WithRSAEncryption` arcs,
+  `id-RSASSA-PSS`, `id-mgf1`, and the three hash identifiers, each with
+  the section that assigns it.
+
+  `SignatureAlgorithm::parse` had one rule for every algorithm — it
+  called `finish` on the identifier's fields and so demanded the
+  parameters be absent — and now has a rule apiece. Absence stays the
+  only right answer for ECDSA and Ed25519. For the three RSA identifiers
+  NULL and absent are both right, which is what RFC 4055, section 5
+  says and what the old rule got wrong. `id-RSASSA-PSS` is a third rule:
+  its parameters are required, and only the three sets that pair a hash
+  with MGF1 over that same hash and a salt as long as its output are read
+  (D-81). A set with a salt of another length, a mask over another hash,
+  an unknown hash, or a mask function that is not MGF1 is refused.
+
+  `SubjectPublicKey` gains an `Rsa` variant holding the modulus and the
+  exponent as borrowed slices, parsed from the inner `RSAPublicKey` of
+  RFC 3279, section 2.3.1. The DER reader needed nothing new for it:
+  `read_integer` already strips the leading zero of a positive integer
+  and refuses a negative one. `check_usable` applies the size bound of
+  D-79 — two thousand and forty-eight to four thousand and ninety-six
+  bits — which is what makes an out-of-range anchor a refusal rather than
+  a path that reaches nothing, and it is here rather than in `crypto-rsa`
+  for the reason that decision gives.
+
+  The builder gains RSA keys over the fixed pairs of D-83, and three
+  sizes stop fitting: `MAX_CERTIFICATE` goes from a kibibyte to two,
+  `TestKey::public_key` from a 97-byte array to a 526-byte one, and the
+  signature buffers from 128 bytes to 512. Two key pairs, of two thousand
+  and forty-eight and four thousand and ninety-six bits, join the test
+  sources with the `openssl genrsa` invocation that made them.
+
 - `crypto-rsa` gains MGF1 and EMSA-PSS-VERIFY, step R3 of the RSA track.
   RFC 8017, appendix B.2.1 is the mask and section 9.1.2 is the
   verification, with three of that section's parameters fixed rather than

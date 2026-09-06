@@ -543,7 +543,7 @@ checklist in 4.9.
 | R1 | `crypto-bignum`: the limb core out of `crypto-ec`, a runtime `Modulus`, and exponentiation (11.15) | M-L | implemented |
 | R2 | `crypto-rsa`: the key with its bounds, and PKCS #1 v1.5 | M | implemented |
 | R3 | `crypto-rsa`: MGF1 and EMSA-PSS-VERIFY | M | implemented |
-| R4 | `audhsos-x509`: identifiers, parameters, the key, the pairs, and the builder | L | |
+| R4 | `audhsos-x509`: identifiers, parameters, the key, the pairs, and the builder | L | implemented |
 | R5 | `audhsos-tls`: code points, the hello, `MAX_SPKI`, the `CertificateVerify` rule, the trace | M | |
 | R6 | The fuzz target, `tools/tls-probe` against three hosts, and the documents | S-M | |
 
@@ -772,6 +772,15 @@ D-83, and two constants stop fitting: `MAX_CERTIFICATE` is 1024 where a
 4096-bit leaf under a 4096-bit issuer is about 1450 bytes, and
 `TestKey::public_key` returns a 97-byte array where an RSA key body is up
 to 526.
+
+The pair itself is borrowed rather than copied. A modulus and a private
+exponent are half a kibibyte each at the widest and `TestKey` is passed
+by value through every builder call, so the RSA variant carries an
+`RsaTestKey` of two `&'static [u8]` and a scheme, and the numbers stay
+constants in test source where D-83 puts them. The salt of a PSS
+signature is the digest of the body, which is as long as the scheme wants
+and is a number this repository computed: every certificate the tests
+build is the same bytes every time.
 
 `audhsos-tls` is a smaller change with one number in it. `MAX_SPKI` is
 128 today, computed for P-384 at 120; an RSA-4096 subject public key

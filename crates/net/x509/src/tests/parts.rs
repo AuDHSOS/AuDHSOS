@@ -26,8 +26,9 @@ fn encode(tag: u8, content: &[u8]) -> Vec<u8> {
 
 #[test]
 fn an_algorithm_this_crate_does_not_verify_is_refused() {
-    // sha256WithRSAEncryption, which real chains use and this one does not.
-    let rsa = [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
+    // sha1WithRSAEncryption, {pkcs-1 5}: the arc beside the three this
+    // crate does verify, and one it will not.
+    let rsa = [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x05];
     let identifier = encode(0x30, &encode(0x06, &rsa));
     assert_eq!(
         SignatureAlgorithm::parse(&mut Reader::new(&identifier)).err(),
@@ -118,11 +119,8 @@ fn a_public_key_must_match_its_algorithm() {
         Some(X509Error::BadPublicKey)
     );
 
-    // An algorithm nothing here knows.
-    let algorithm = encode(
-        0x06,
-        &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01],
-    );
+    // An algorithm nothing here knows: `id-dsa`, 1.2.840.10040.4.1.
+    let algorithm = encode(0x06, &[0x2A, 0x86, 0x48, 0xCE, 0x38, 0x04, 0x01]);
     let mut info = encode(0x30, &algorithm);
     info.extend_from_slice(&encode(0x03, &short));
     let encoded = encode(0x30, &info);

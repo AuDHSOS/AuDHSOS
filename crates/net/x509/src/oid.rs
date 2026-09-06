@@ -37,3 +37,28 @@ pub const SUBJECT_KEY_IDENTIFIER: &[u8] = &[0x55, 0x1D, 0x0E];
 pub const AUTHORITY_KEY_IDENTIFIER: &[u8] = &[0x55, 0x1D, 0x23];
 /// `id-kp-serverAuth`, 1.3.6.1.5.5.7.3.1.
 pub const SERVER_AUTH: &[u8] = &[0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01];
+/// `rsaEncryption`, 1.2.840.113549.1.1.1. RFC 3279, section 2.3.1 assigns
+/// it and is the only document that says what the key it names looks
+/// like; the parameters field must be NULL.
+pub const RSA_ENCRYPTION: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01];
+/// `id-RSASSA-PSS`, 1.2.840.113549.1.1.10, `{pkcs-1 10}`. RFC 4055,
+/// section 3.1.
+pub const RSASSA_PSS: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0A];
+/// `sha256WithRSAEncryption`, 1.2.840.113549.1.1.11, `{pkcs-1 11}`.
+/// RFC 4055, section 5.
+pub const SHA256_WITH_RSA: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
+/// `sha384WithRSAEncryption`, 1.2.840.113549.1.1.12, `{pkcs-1 12}`.
+/// RFC 4055, section 5.
+pub const SHA384_WITH_RSA: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C];
+/// `sha512WithRSAEncryption`, 1.2.840.113549.1.1.13, `{pkcs-1 13}`.
+/// RFC 4055, section 5.
+pub const SHA512_WITH_RSA: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0D];
+/// `id-mgf1`, 1.2.840.113549.1.1.8, `{pkcs-1 8}`, the mask generation
+/// function of PSS. RFC 4055, section 2.2.
+pub const MGF1: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x08];
+/// `id-sha256`, 2.16.840.1.101.3.4.2.1. RFC 4055, section 2.1.
+pub const SHA256: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
+/// `id-sha384`, 2.16.840.1.101.3.4.2.2. RFC 4055, section 2.1.
+pub const SHA384: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02];
+/// `id-sha512`, 2.16.840.1.101.3.4.2.3. RFC 4055, section 2.1.
+pub const SHA512: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03];
