@@ -74,6 +74,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `user-proto`, the messages the servers speak: the name protocol, the
+  console protocol, and the memory protocol, each a type with `encode` and
+  `decode` and no system call in it. A label carries the version in its high
+  sixteen bits, the protocol in the next sixteen, and the message in the
+  low sixteen, so a server refuses a version it does not speak before it
+  reads a word — and the version is read before the protocol, so a client of
+  a later release is told which of the two it is.
+
+  Every reply begins with a status word, zero or the code of an error of the
+  interface, and carries its payload only behind a status that says the
+  request succeeded: a failed lookup carries no endpoint, a failed
+  allocation no memory object. Catalog item 6.6.56 is new and covers them;
+  12.9 had asked for it before the encodings could be written.
+
 - The gate, in `user-sys-x86_64`: the address of a thread's IPC buffer and
   the forty-one system calls as methods with names, types, and `Result`. A
   wrapper writes the call number and its arguments into the buffer, executes

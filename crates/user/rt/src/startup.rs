@@ -10,7 +10,7 @@
 //! finds `None` when it was started without one rather than a handle that
 //! names nothing.
 //!
-//! The exception is [`Role::Ram`](audhsos_abi::Role::Ram), which the root
+//! The exception is [`Role::Ram`], which the root
 //! task receives once per free region of memory. It is a list, and its
 //! capacity is the number of regions the boot information can carry, so a
 //! machine whose memory is in as many pieces as the loader can report still

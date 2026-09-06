@@ -914,7 +914,7 @@ the integration.
 | `driver-i8042` | 10 | 6.6.25 | port access trait with a double, exactly as `driver-uart16550` today |
 | QMP client and PPM reader in the xtask | 9 | 6.6.28 | protocol logic over a stream, tested against recorded sessions |
 | allocator logic in `user-rt` | 7 | 6.6.12 | offsets in a byte region, testable against a reference model |
-| encodings in `user-proto` | 7 | none yet | each message is a type with `encode` and `decode` and no system call; the catalog covers them only through the end-to-end items 6.6.22, so pulling them forward means writing a catalog item for them first |
+| encodings in `user-proto` | 7 | 6.6.56 | each message is a type with `encode` and `decode` and no system call; the catalog item 6.6.56 was written for them, as this row asked (D-87) |
 
 ## 12.10 Capacity
 

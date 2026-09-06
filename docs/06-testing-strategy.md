@@ -1641,6 +1641,42 @@ follows the catalog rather than the layer, as 6.6.54 records.
   schemes, the eight malformed encodings above, and two inputs that are
   not a key at all.
 
+### 6.6.56 Protocol encodings (`user-proto`)
+
+The catalog covered these messages only through the end-to-end items of
+6.6.22, which is a test of the whole system and not of an encoding. This
+item is what 12.9 asked for before the encodings could be written
+(D-87).
+
+- Labels: the version, the protocol, and the message number come back out
+  of a label they were built into; every label of every protocol lies
+  below the range the kernel keeps for its own messages; a bit set between
+  the version and the protocol is refused; a version this release does not
+  speak is refused, and it is refused *before* an unknown protocol, so
+  that a client of a later release is told which of the two it is; a
+  protocol code and a message number the release does not have are each
+  refused.
+- Round trip, per message of each of the three protocols: what was encoded
+  decodes to what it was. The names and the chunks are tested at zero
+  bytes and at the full width of their field.
+- Replies: every reply carries a status word first, and the payload only
+  behind a status that says the request succeeded — a failed lookup
+  carries no endpoint, a failed allocation no memory object, a failed
+  write no count. Each is checked on the encoded message and not only
+  through the decoder.
+- Every error of the interface travels: a status word built from each
+  `Error` of the table reads back as that error, and a word that names no
+  error is refused.
+- Truncation: a message whose counts are cut so that a field is missing —
+  the handle of a registration, the alignment of an allocation, the object
+  of a release, the count of a write — is refused rather than read as a
+  zero.
+- A byte string whose length word is longer than the field that carries it
+  is refused where it is read, which is the case an encoder of this crate
+  cannot produce and a sender of another release could.
+- A message of one protocol handed to the decoder of another is refused
+  with both protocols named.
+
 ## 6.7 CI pipeline
 
 Jobs run in this order; a failure stops the pipeline.

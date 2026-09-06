@@ -30,6 +30,7 @@ members = [
     "crates/uefi",
     "crates/sync",
     "crates/drivers/uart16550",
+    "crates/user/proto",
     "crates/user/rt",
     "crates/user/sys-x86_64",
     "crates/user/test-programs",
@@ -90,6 +91,7 @@ audhsos-symbols = { path = "crates/symbols" }
 audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
 driver-uart16550 = { path = "crates/drivers/uart16550" }
+user-proto = { path = "crates/user/proto" }
 user-rt = { path = "crates/user/rt" }
 user-sys-x86_64 = { path = "crates/user/sys-x86_64" }
 user-test-programs = { path = "crates/user/test-programs" }
