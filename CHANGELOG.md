@@ -74,6 +74,22 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `user-rt`, the part of a user program that needs no machine: the nine
+  typed handles the system calls take, the heap, the message area of the IPC
+  buffer, the startup message as named fields, and a line of text in a fixed
+  number of bytes. The crate makes no system call and knows no instruction,
+  so all of it runs on the host under test and under the coverage gate.
+
+  The heap is one free list with first fit and coalescing on release, and
+  not the size classes 10.7.2 sketched: 6.6.12 requires that two released
+  neighbours become one block large enough for their sum, and a class list
+  hands back two blocks of the class they came from however they lie in
+  memory. A release names only its offset, because a table of live blocks
+  remembers the length — which also lets the allocator refuse a release of
+  something it never handed out. Both tables are const generics, so a
+  program that allocates twice does not carry the tables of one that
+  allocates ten thousand times.
+
 - The startup message, in `audhsos-abi::startup`. A process that has just been
   created finds it in the IPC buffer of its first thread, and it says which
   handle of its table holds which role: a handle is a number, and nothing else

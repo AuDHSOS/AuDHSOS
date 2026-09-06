@@ -2200,31 +2200,43 @@ isolation item marked from Phase 6; the system call items of 6.6.21 and
 
 ## 10.7 Phase 7: Userland foundation
 
-### 10.7.1 `user-sys-x86_64` (complete)
+### 10.7.1 `user-rt` (`crates/user/rt`, logic, layer u0)
 
-`_start` receives the initial `rsp` from the kernel with the IPC buffer
-address in the startup message; `syscall(buffer: &mut IpcBuffer)`
-(`int 0x80`); `GlobalAlloc` adapter `HeapAdapter` over `user_rt::heap::Allocator`
-with `wrapping_add` on the base pointer obtained when the heap memory
-object is mapped; the panic handler delegates to `user_rt::panic::report`.
-
-### 10.7.2 `user-rt` (`crates/user/rt`, logic)
+Everything a program works out for itself, with no system call in it, so
+that all of it runs on the host under test (D-87).
 
 - Typed handles: `ProcessHandle`, `ThreadHandle`, `MemoryHandle`,
   `EndpointHandle`, `ReplyHandle`, `NotificationHandle`,
   `InterruptHandle`, `IoPortHandle`, `SystemControlHandle`, each a newtype
-  over `Handle` with `Drop` calling `handle_close` and methods generated
-  from the `syscalls!` table by a second macro `wrappers!`.
-- `heap.rs`: the offset-based allocator: `Allocator { arena_len, classes:
-  [FreeList; 8] (16, 32, 64, 128, 256, 512, 1024, 2048 bytes), large:
-  fixed table of free extents }`; blocks larger than 2048 bytes come from
-  the extent table with first-fit and coalescing on release; the
-  bookkeeping is a fixed table of `MAX_BLOCKS = 4096` entries; failure is
-  `Err(OutOfMemory)`; `grow(new_len)` extends the arena.
-- `message.rs`: builder and parser over the IPC buffer layout;
-  `startup.rs`: the startup message (`label = STARTUP`, words: handle
-  numbers by role); `log.rs`: `log!` macro sending to the log endpoint;
-  `panic.rs`: report and `thread_exit`.
+  over `Handle` behind the trait `Typed`, which names the object type. They
+  are `#[must_use]` and do not close themselves; `handle_close` needs the
+  buffer of the calling thread, which `Drop` is not given (D-87).
+- `heap.rs`: `Allocator<BLOCKS, EXTENTS>` over an arena named by its
+  length. One free list, first fit, coalescing on release, and a table of
+  live blocks so that a release names only its offset. Not size classes:
+  6.6.12 wants two released neighbours to become one block large enough
+  for their sum, and a class list cannot do that. `grow(new_len)` extends
+  the arena; every failure is an `AllocError` and nothing is changed by
+  one.
+- `message.rs`: `Writer` and `Reader` over the message area. A byte string
+  is a word with its length and then the bytes, eight to a word,
+  little-endian.
+- `startup.rs`: the startup message as named fields, over the pairs
+  `audhsos_abi::startup` defines.
+- `report.rs`: `Line<N>`, a `core::fmt::Write` into a fixed array, which is
+  what a program with no heap formats a log line or a panic report into.
+
+### 10.7.2 `user-sys-x86_64` (layer u1, adapter)
+
+`_start` receives the address of the thread's IPC buffer in the first
+argument register, which is where the kernel put it, and hands it to the
+program's `main` together with the startup message it read from the
+buffer. `Gate { buffer: u64 }` holds that address and carries the
+forty-one system call wrappers, written out one by one; each writes the
+call number and its arguments into the buffer, executes `int 0x80`, and
+turns the status word into a `Result`. A test checks that every entry of
+`Syscall::ALL` has one. The panic handler formats a `user_rt::Line` and
+sends it to the log endpoint.
 
 ### 10.7.3 `user-proto` (`crates/user/proto`)
 

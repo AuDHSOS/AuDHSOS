@@ -397,6 +397,15 @@ name = "test-support"
 version = "0.1.0"
 
 [[package]]
+name = "user-rt"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-collections",
+ "test-support",
+]
+
+[[package]]
 name = "user-sys-x86_64"
 version = "0.1.0"
 dependencies = [

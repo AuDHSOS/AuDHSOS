@@ -50,8 +50,8 @@ AuDHSOS/
 │   │   ├── test-harness/      kernel-test-harness: in-QEMU test runner, serial protocol
 │   │   └── bin/               audhsos-kernel: the binary; tests/*.rs are QEMU test kernels
 │   ├── user/
-│   │   ├── sys-x86_64/        user-sys-x86_64: _start, trap instruction, GlobalAlloc adapter (unsafe allowed)
-│   │   ├── rt/                user-rt: typed handles, syscall wrappers, allocator logic, panic handler, logging
+│   │   ├── rt/                user-rt: typed handles, heap, message area, startup message, report lines
+│   │   ├── sys-x86_64/        user-sys-x86_64: _start, trap instruction, the gate and its wrappers (unsafe allowed)
 │   │   ├── proto/             user-proto: protocol encodings
 │   │   ├── loader/            user-loader: tar reader, process creation from ELF
 │   │   ├── servers/
@@ -125,9 +125,9 @@ AuDHSOS/
 | `kernel-test-harness` | 5 | all | no | yes | `kernel-hal-api` |
 | `audhsos-kernel` | 6 | `x86_64-unknown-none` | allowlisted (the entry point, the memory and interrupt bring-up, and the test images) | QEMU | `kernel-core`, `kernel-hal-api`, `kernel-hal-x86_64`, `kernel-ipc`, `kernel-types`, `audhsos-abi`; `kernel-mm`, `kernel-objects`, `kernel-syscall`, `audhsos-sync` for the test images |
 | `boot-uefi-x86_64` | b | `x86_64-unknown-uefi` | allowlisted | pure sub-modules | `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `kernel-types`, `kernel-mm`, `kernel-hal-api` |
-| `user-sys-x86_64` | u0 | `x86_64-unknown-none` | allowlisted | through the programs of `user-test-programs` in QEMU | `audhsos-abi` |
-| `user-test-programs` | u0 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-sys-x86_64` |
-| `user-rt` | u1 | `x86_64-unknown-none` | no | yes | `audhsos-abi`, `user-sys-x86_64` |
+| `user-rt` | u0 | all | no | yes | `audhsos-abi`, `audhsos-collections`; `test-support` as a dev-dependency |
+| `user-sys-x86_64` | u1 | `x86_64-unknown-none` | allowlisted | through the programs of `user-test-programs` in QEMU | `audhsos-abi`, `user-rt` |
+| `user-test-programs` | u1 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-sys-x86_64` |
 | `user-proto` | u1 | `x86_64-unknown-none` | no | yes | `audhsos-abi` |
 | `user-loader` | u2 | `x86_64-unknown-none` | no | yes, fuzz | `user-rt`, `user-proto`, `audhsos-elf` |
 | servers and apps | u3 | `x86_64-unknown-none` | no | logic on host, e2e in QEMU | `user-rt`, `user-proto`, `user-loader`, `driver-uart16550`, `driver-i8042`, `gfx` |
