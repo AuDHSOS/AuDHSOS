@@ -505,6 +505,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "server-console",
+        path: "crates/user/servers/console",
+        kind: Kind::Logic,
+        deps: &["audhsos-collections", "driver-uart16550"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "server-memory",
         path: "crates/user/servers/memory",
         kind: Kind::Logic,

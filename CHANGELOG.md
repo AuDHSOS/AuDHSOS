@@ -74,6 +74,21 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `server-console`, what the console driver does with the controller and
+  with the bytes that arrive on it: a write that reports how far it came,
+  and a ring for what came in until a client asks for it. The controller is
+  `driver-uart16550` over its `Registers` trait, so the tests use the
+  recording implementation that crate already had, and nothing here makes a
+  system call.
+
+  The ring drops the oldest byte when it is full and counts what it dropped.
+  For a console that is the right end to lose: what a person is typing now
+  is what they will look for on the screen, and a count is something a
+  client can act on where a silently missing byte is not.
+
+  `Uart16550::registers` is new beside `into_registers`, for a caller that
+  has to reach a register the crate has no method for.
+
 - `server-memory`, the allocation policy of the memory server, and
   `server-name`, the registry behind the name server. Neither makes a system
   call: the memory policy reaches the kernel through the `Pages` trait — map,

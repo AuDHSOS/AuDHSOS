@@ -169,7 +169,14 @@ impl<R: Registers> Uart16550<R> {
         uart
     }
 
-    /// The register block, for a driver that needs it back.
+    /// The register block, for a caller that has to reach it directly: a
+    /// test that reads what was written, or a driver that owns the
+    /// controller and needs a register this crate has no method for.
+    pub const fn registers(&mut self) -> &mut R {
+        &mut self.registers
+    }
+
+    /// Gives the register block back.
     pub fn into_registers(self) -> R {
         self.registers
     }

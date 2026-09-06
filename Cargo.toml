@@ -31,6 +31,7 @@ members = [
     "crates/sync",
     "crates/drivers/uart16550",
     "crates/user/loader",
+    "crates/user/servers/console",
     "crates/user/servers/memory",
     "crates/user/servers/name",
     "crates/user/proto",
@@ -94,6 +95,7 @@ audhsos-symbols = { path = "crates/symbols" }
 audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
 driver-uart16550 = { path = "crates/drivers/uart16550" }
+server-console = { path = "crates/user/servers/console" }
 server-memory = { path = "crates/user/servers/memory" }
 server-name = { path = "crates/user/servers/name" }
 user-loader = { path = "crates/user/loader" }

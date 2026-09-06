@@ -210,3 +210,11 @@ fn property_a_write_sends_exactly_one_byte_when_it_succeeds() {
         },
     );
 }
+
+#[test]
+fn the_register_block_is_reachable_through_the_controller() {
+    use crate::uart::Registers as _;
+    let mut uart = Uart16550::new(RecordingRegisters::new());
+    uart.registers().write(Register::Data, 0x5A);
+    assert_eq!(uart.registers().writes(), vec![(Register::Data, 0x5A)]);
+}

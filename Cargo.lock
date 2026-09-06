@@ -393,6 +393,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "server-console"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "driver-uart16550",
+]
+
+[[package]]
 name = "server-memory"
 version = "0.1.0"
 dependencies = [

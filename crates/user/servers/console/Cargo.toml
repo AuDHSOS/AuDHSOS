@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "server-console"
+description = "What the console driver does with the controller and with the bytes that arrive on it"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+audhsos-collections.workspace = true
+driver-uart16550.workspace = true
+
+[dev-dependencies]
+driver-uart16550 = { workspace = true, features = ["test-doubles"] }
+
+[lints]
+workspace = true
