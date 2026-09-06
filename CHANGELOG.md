@@ -29,6 +29,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- One row in the transition table of `kernel-sched`: `BlockedSend` plus
+  `BlockReply` is `BlockedReply`. It is the only transition from one blocked
+  state to another, and it is the queued caller of `ipc_call`, which waited
+  for a receiver and waits for the answer once one has taken its message —
+  without ever having been ready in between, which is what makes the send
+  and the wait of a call atomic from the receiver's point of view.
+
 - The six object structures of Phase 6 in `kernel-objects`: `Endpoint` with
   a queue of senders and one of receivers, `Reply`, `Notification`,
   `Interrupt`, `IoPortRange`, and `SystemControl`, which holds nothing and

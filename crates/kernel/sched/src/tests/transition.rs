@@ -107,6 +107,10 @@ fn only_the_running_thread_blocks_and_every_block_has_its_state() {
             if state == ThreadState::Running {
                 continue;
             }
+            // The one exception is the queued caller of the test below.
+            if state == ThreadState::BlockedSend && event == Event::BlockReply {
+                continue;
+            }
             assert!(
                 !is_legal(state, event),
                 "{} + {}",
@@ -122,6 +126,25 @@ fn only_the_running_thread_blocks_and_every_block_has_its_state() {
             .count(),
         4
     );
+}
+
+#[test]
+fn a_queued_caller_whose_message_was_taken_waits_for_the_answer() {
+    // The only row from one blocked state to another: a thread that used
+    // `ipc_call` and found no receiver waits in the senders queue, and the
+    // receiver that takes its message leaves it waiting for the answer
+    // without it ever having been ready in between. That is what makes the
+    // send and the wait of a call atomic from the receiver's point of view.
+    assert_eq!(
+        next(ThreadState::BlockedSend, Event::BlockReply),
+        Ok(ThreadState::BlockedReply)
+    );
+    let between_blocked: Vec<&str> = TRANSITIONS
+        .iter()
+        .filter(|(from, _, to)| from.is_blocked() && to.is_blocked())
+        .map(|(_, event, _)| event.name())
+        .collect();
+    assert_eq!(between_blocked, vec![Event::BlockReply.name()]);
 }
 
 #[test]
