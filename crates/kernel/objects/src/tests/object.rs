@@ -345,6 +345,7 @@ fn the_wait_record_names_the_queue_and_what_it_asked_for() {
     let waiting = Wait::Endpoint {
         endpoint: ObjectId::new(1, 1),
         queue: Queue::Callers,
+        badge: 7,
     };
     assert!(!waiting.is_nothing());
 }

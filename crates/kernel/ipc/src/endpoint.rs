@@ -49,12 +49,51 @@ pub enum Reception {
         sender: ThreadId,
         /// Whether it used `ipc_call` and waits for the answer.
         wants_reply: bool,
+        /// The badge of the capability it sent through.
+        badge: u64,
     },
     /// Nobody was waiting; the caller is in the receivers queue and blocks.
     Queued(Outcome),
     /// Nobody was waiting and the caller asked not to block. Both queues
     /// are as they were.
     Empty,
+}
+
+/// What a thread that wants to send asks for: an answer or none, and the
+/// badge of the capability it sends through, which is what the receiver sees
+/// however long the message waits for one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Intent {
+    /// `true` for `ipc_call`, which waits for the answer.
+    pub wants_reply: bool,
+    /// The badge of the capability the sender used.
+    pub badge: u64,
+}
+
+impl Intent {
+    /// A send that expects no answer, through a capability with no badge.
+    pub const PLAIN: Intent = Intent {
+        wants_reply: false,
+        badge: 0,
+    };
+
+    /// A send through a capability carrying `badge`.
+    #[must_use]
+    pub const fn badged(badge: u64) -> Self {
+        Intent {
+            wants_reply: false,
+            badge,
+        }
+    }
+
+    /// A call through a capability carrying `badge`.
+    #[must_use]
+    pub const fn call(badge: u64) -> Self {
+        Intent {
+            wants_reply: true,
+            badge,
+        }
+    }
 }
 
 /// What the two sides of a completed rendezvous get.
@@ -65,8 +104,9 @@ pub struct Handover {
     /// The return words of the receiving side: the badge of the capability
     /// the sender used, and the reply handle or zero.
     pub received: [u64; 2],
-    /// The status of the side that does not block, which is
-    /// [`Status::PARTIAL`] when a handle of the message did not fit.
+    /// The status of the side that received the message, which is
+    /// [`Status::PARTIAL`] when a handle of it did not fit. The sending side
+    /// always succeeds: what did not fit is not its business.
     pub status: Status,
 }
 
@@ -95,8 +135,9 @@ pub fn send<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     scheduler: &mut Scheduler,
     sender: ThreadId,
     endpoint: EndpointId,
-    wants_reply: bool,
+    intent: Intent,
 ) -> Result<Meeting, Error> {
+    let (wants_reply, badge) = (intent.wants_reply, intent.badge);
     let mut held = objects
         .endpoints
         .get(endpoint)
@@ -113,7 +154,15 @@ pub fn send<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
         Queue::Senders
     };
     held.senders.enqueue(&mut objects.threads, sender)?;
-    record(objects, sender, Wait::Endpoint { endpoint, queue });
+    record(
+        objects,
+        sender,
+        Wait::Endpoint {
+            endpoint,
+            queue,
+            badge,
+        },
+    );
     let blocked = block(&mut objects.threads, scheduler, sender, Event::BlockSend);
     match blocked {
         Ok(reschedule) => {
@@ -151,17 +200,15 @@ pub fn recv<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
         .copied()
         .map_err(|_| Error::InvalidHandle)?;
     if let Some(sender) = held.senders.dequeue_front(&mut objects.threads) {
-        let wants_reply = matches!(
-            objects.threads.get(sender).map(|thread| thread.wait),
-            Ok(Wait::Endpoint {
-                queue: Queue::Callers,
-                ..
-            })
-        );
+        let (wants_reply, badge) = match objects.threads.get(sender).map(|thread| thread.wait) {
+            Ok(Wait::Endpoint { queue, badge, .. }) => (queue.wants_reply(), badge),
+            _ => (false, 0),
+        };
         write_back(objects, endpoint, held);
         return Ok(Reception::Sender {
             sender,
             wants_reply,
+            badge,
         });
     }
     if !blocking {
@@ -174,6 +221,7 @@ pub fn recv<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
         Wait::Endpoint {
             endpoint,
             queue: Queue::Receivers,
+            badge: 0,
         },
     );
     match block(&mut objects.threads, scheduler, receiver, Event::BlockRecv) {
@@ -204,14 +252,18 @@ pub fn sent<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     handover: Handover,
 ) -> Result<Outcome, Error> {
     let woken = wake(&mut objects.threads, scheduler, receiver).unwrap_or(false);
-    let wakeup = Wakeup::ok(receiver, handover.received);
+    let wakeup = Wakeup {
+        thread: receiver,
+        status: handover.status,
+        values: handover.received,
+    };
     let outcome = match handover.reply {
         Some(reply) => {
             record(objects, sender, Wait::Reply { reply });
             let reschedule = block(&mut objects.threads, scheduler, sender, Event::BlockReply)?;
             Outcome::blocked().switching(reschedule)
         }
-        None => Outcome::DONE.with_status(handover.status).switching(woken),
+        None => Outcome::DONE.switching(woken),
     };
     Ok(outcome.waking(wakeup))
 }
@@ -255,6 +307,7 @@ pub fn undo_meeting<const NP: usize, const NT: usize, const NM: usize, const NH:
     endpoint: EndpointId,
     peer: ThreadId,
     queue: Queue,
+    badge: u64,
 ) {
     {
         let Objects {
@@ -272,7 +325,15 @@ pub fn undo_meeting<const NP: usize, const NT: usize, const NM: usize, const NH:
             held.receivers.requeue(threads, peer)
         };
     }
-    record(objects, peer, Wait::Endpoint { endpoint, queue });
+    record(
+        objects,
+        peer,
+        Wait::Endpoint {
+            endpoint,
+            queue,
+            badge,
+        },
+    );
 }
 
 /// A reply object for `caller`, with a handle to it in `receiver`.

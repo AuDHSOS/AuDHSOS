@@ -13,8 +13,8 @@ use test_support::property::check;
 use super::fixture::Fixture;
 use crate::cancel::cancel;
 use crate::endpoint::{
-    Handover, Meeting, Reception, close_reply, open_reply, received, recv, replied, reply_caller,
-    send, sent, undo_meeting,
+    Handover, Intent, Meeting, Reception, close_reply, open_reply, received, recv, replied,
+    reply_caller, send, sent, undo_meeting,
 };
 use crate::outcome::Wakeup;
 
@@ -34,7 +34,7 @@ fn a_call_with_no_receiver_blocks_the_caller_and_a_later_receive_completes_it() 
         &mut fixture.scheduler,
         caller,
         endpoint,
-        true,
+        Intent::call(BADGE),
     )
     .unwrap();
     let Meeting::Queued(outcome) = met else {
@@ -47,7 +47,8 @@ fn a_call_with_no_receiver_blocks_the_caller_and_a_later_receive_completes_it() 
         fixture.wait_of(caller),
         Wait::Endpoint {
             endpoint,
-            queue: Queue::Callers
+            queue: Queue::Callers,
+            badge: BADGE
         }
     );
     assert_eq!(fixture.senders(endpoint), vec![caller]);
@@ -65,12 +66,14 @@ fn a_call_with_no_receiver_blocks_the_caller_and_a_later_receive_completes_it() 
     let Reception::Sender {
         sender,
         wants_reply,
+        badge,
     } = found
     else {
         panic!("the receiver did not find the queued caller");
     };
     assert_eq!(sender, caller);
     assert!(wants_reply, "the caller used `ipc_call`");
+    assert_eq!(badge, BADGE, "the badge waited with the caller");
     assert!(fixture.senders(endpoint).is_empty());
 
     let (reply, handle) = open_reply(&mut fixture.objects, caller, server).unwrap();
@@ -122,7 +125,7 @@ fn a_receive_with_no_sender_blocks_and_a_later_call_completes_it() {
         &mut fixture.scheduler,
         caller,
         endpoint,
-        true,
+        Intent::call(BADGE),
     )
     .unwrap();
     assert_eq!(met, Meeting::Receiver(receiver));
@@ -175,7 +178,7 @@ fn a_send_that_meets_a_receiver_answers_the_sender_and_wakes_the_receiver() {
         &mut fixture.scheduler,
         sender,
         endpoint,
-        false,
+        Intent::PLAIN,
     )
     .unwrap();
     assert_eq!(met, Meeting::Receiver(receiver));
@@ -209,14 +212,15 @@ fn a_queued_sender_wakes_when_a_receiver_takes_its_message() {
         &mut fixture.scheduler,
         sender,
         endpoint,
-        false,
+        Intent::PLAIN,
     )
     .unwrap();
     assert_eq!(
         fixture.wait_of(sender),
         Wait::Endpoint {
             endpoint,
-            queue: Queue::Senders
+            queue: Queue::Senders,
+            badge: 0
         }
     );
     let receiver = fixture.running(server, 4);
@@ -232,7 +236,8 @@ fn a_queued_sender_wakes_when_a_receiver_takes_its_message() {
         found,
         Reception::Sender {
             sender,
-            wants_reply: false
+            wants_reply: false,
+            badge: 0
         }
     );
     let outcome = received(
@@ -288,7 +293,7 @@ fn several_senders_are_served_by_priority_and_then_by_arrival() {
             &mut fixture.scheduler,
             sender,
             endpoint,
-            false,
+            Intent::PLAIN,
         )
         .unwrap();
         queued.push((priority, sender));
@@ -313,7 +318,8 @@ fn several_senders_are_served_by_priority_and_then_by_arrival() {
             found,
             Reception::Sender {
                 sender: wanted,
-                wants_reply: false
+                wants_reply: false,
+                badge: 0
             }
         );
         received(
@@ -348,7 +354,7 @@ fn the_order_of_the_senders_queue_is_priority_then_arrival_for_any_arrival() {
                     &mut fixture.scheduler,
                     sender,
                     endpoint,
-                    false,
+                    Intent::PLAIN,
                 )
                 .map_err(|error| format!("the send was refused: {error}"))?;
                 arrived.push((priority, sender));
@@ -381,7 +387,7 @@ fn a_reply_wakes_its_caller_and_a_second_one_is_refused() {
         &mut fixture.scheduler,
         caller,
         endpoint,
-        true,
+        Intent::call(BADGE),
     )
     .unwrap();
     let receiver = fixture.running(server, 4);
@@ -449,7 +455,7 @@ fn a_reply_object_whose_caller_is_gone_is_refused_without_touching_memory() {
         &mut fixture.scheduler,
         caller,
         endpoint,
-        true,
+        Intent::call(BADGE),
     )
     .unwrap();
     let receiver = fixture.running(server, 4);
@@ -555,7 +561,7 @@ fn a_sender_killed_while_it_waits_is_no_longer_in_the_queue() {
         &mut fixture.scheduler,
         doomed,
         endpoint,
-        false,
+        Intent::PLAIN,
     )
     .unwrap();
     let other = fixture.thread(client, 4);
@@ -565,7 +571,7 @@ fn a_sender_killed_while_it_waits_is_no_longer_in_the_queue() {
         &mut fixture.scheduler,
         other,
         endpoint,
-        false,
+        Intent::PLAIN,
     )
     .unwrap();
     assert_eq!(fixture.senders(endpoint), vec![doomed, other]);
@@ -594,7 +600,8 @@ fn a_sender_killed_while_it_waits_is_no_longer_in_the_queue() {
         found,
         Reception::Sender {
             sender: other,
-            wants_reply: false
+            wants_reply: false,
+            badge: 0
         }
     );
 }
@@ -626,7 +633,7 @@ fn a_sender_stays_blocked_when_the_receiver_that_waited_is_killed() {
         &mut fixture.scheduler,
         sender,
         endpoint,
-        false,
+        Intent::PLAIN,
     )
     .unwrap();
     assert_eq!(
@@ -648,7 +655,7 @@ fn a_thread_suspended_while_it_waits_leaves_the_queue_it_waited_in() {
         &mut fixture.scheduler,
         waiting,
         endpoint,
-        true,
+        Intent::call(BADGE),
     )
     .unwrap();
     assert!(cancel(&mut fixture.objects, waiting));
@@ -735,7 +742,7 @@ fn cancelling_a_thread_whose_endpoint_is_gone_still_clears_its_record() {
         &mut fixture.scheduler,
         waiting,
         endpoint,
-        false,
+        Intent::PLAIN,
     )
     .unwrap();
     fixture
@@ -758,7 +765,7 @@ fn an_endpoint_that_is_gone_can_neither_be_sent_on_nor_received_from() {
             &mut fixture.scheduler,
             thread,
             stale,
-            false
+            Intent::PLAIN
         ),
         Err(Error::InvalidHandle)
     );
@@ -788,7 +795,7 @@ fn a_thread_that_may_not_block_leaves_the_endpoint_as_it_found_it() {
             &mut fixture.scheduler,
             inactive,
             endpoint,
-            false
+            Intent::PLAIN
         ),
         Err(Error::InvalidState)
     );
@@ -818,7 +825,7 @@ fn a_peer_that_was_taken_for_a_message_nobody_could_copy_goes_back_in_front() {
         &mut fixture.scheduler,
         first,
         endpoint,
-        false,
+        Intent::badged(BADGE),
     )
     .unwrap();
     let second = fixture.thread(client, 4);
@@ -828,7 +835,7 @@ fn a_peer_that_was_taken_for_a_message_nobody_could_copy_goes_back_in_front() {
         &mut fixture.scheduler,
         second,
         endpoint,
-        false,
+        Intent::PLAIN,
     )
     .unwrap();
 
@@ -846,10 +853,11 @@ fn a_peer_that_was_taken_for_a_message_nobody_could_copy_goes_back_in_front() {
         found,
         Reception::Sender {
             sender: first,
-            wants_reply: false
+            wants_reply: false,
+            badge: BADGE
         }
     );
-    undo_meeting(&mut fixture.objects, endpoint, first, Queue::Senders);
+    undo_meeting(&mut fixture.objects, endpoint, first, Queue::Senders, BADGE);
     assert_eq!(
         fixture.senders(endpoint),
         vec![first, second],
@@ -859,7 +867,8 @@ fn a_peer_that_was_taken_for_a_message_nobody_could_copy_goes_back_in_front() {
         fixture.wait_of(first),
         Wait::Endpoint {
             endpoint,
-            queue: Queue::Senders
+            queue: Queue::Senders,
+            badge: BADGE
         }
     );
 }
@@ -870,7 +879,7 @@ fn undoing_a_meeting_on_an_endpoint_that_is_gone_does_nothing() {
     let client = fixture.process(8);
     let thread = fixture.running(client, 4);
     let stale = kernel_objects::pool::ObjectId::new(4, 2);
-    undo_meeting(&mut fixture.objects, stale, thread, Queue::Receivers);
+    undo_meeting(&mut fixture.objects, stale, thread, Queue::Receivers, 0);
     assert_eq!(fixture.wait_of(thread), Wait::Nothing);
 }
 
@@ -896,17 +905,24 @@ fn a_receiver_that_was_taken_for_a_refused_message_goes_back_in_its_queue() {
             &mut fixture.scheduler,
             sender,
             endpoint,
-            false
+            Intent::PLAIN
         ),
         Ok(Meeting::Receiver(receiver))
     );
-    undo_meeting(&mut fixture.objects, endpoint, receiver, Queue::Receivers);
+    undo_meeting(
+        &mut fixture.objects,
+        endpoint,
+        receiver,
+        Queue::Receivers,
+        0,
+    );
     assert_eq!(fixture.receivers(endpoint), vec![receiver]);
     assert_eq!(
         fixture.wait_of(receiver),
         Wait::Endpoint {
             endpoint,
-            queue: Queue::Receivers
+            queue: Queue::Receivers,
+            badge: 0
         }
     );
     assert_eq!(fixture.state(receiver), Some(ThreadState::BlockedRecv));
@@ -998,7 +1014,7 @@ fn call_and_receive(
         &mut fixture.scheduler,
         caller,
         endpoint,
-        true,
+        Intent::call(BADGE),
     )
     .unwrap();
     fixture.on_the_processor(receiver);

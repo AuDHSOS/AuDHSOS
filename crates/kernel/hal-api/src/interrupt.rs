@@ -78,6 +78,14 @@ impl fmt::Display for InterruptError {
 
 /// Routes, masks, and acknowledges interrupt lines.
 pub trait InterruptController {
+    /// The vector the plan of this machine routes `line` to, or `None` for a
+    /// line it reserves no vector for.
+    ///
+    /// The plan is the architecture's, which is why this is a question of
+    /// the controller: the system call layer derives the vector of an
+    /// interrupt object from it and refuses a line that has none.
+    fn vector_of(&self, line: InterruptLine) -> Option<Vector>;
+
     /// Routes `line` to `vector`, initially masked.
     ///
     /// # Errors

@@ -11,7 +11,7 @@ use kernel_objects::store::Destroyed;
 
 use super::fixture::Fixture;
 use crate::destroy::{destroy_endpoint, destroy_notification, destroy_reply, destroyed};
-use crate::endpoint::{Handover, open_reply, received, recv, send};
+use crate::endpoint::{Handover, Intent, open_reply, received, recv, send};
 use crate::notify::wait;
 use crate::outcome::Waiters;
 
@@ -30,7 +30,7 @@ fn the_last_handle_to_an_endpoint_wakes_everyone_on_both_queues() {
         &mut fixture.scheduler,
         first,
         endpoint,
-        true,
+        Intent::call(0),
     )
     .unwrap();
     let second = fixture.thread(client, 2);
@@ -40,7 +40,7 @@ fn the_last_handle_to_an_endpoint_wakes_everyone_on_both_queues() {
         &mut fixture.scheduler,
         second,
         endpoint,
-        false,
+        Intent::PLAIN,
     )
     .unwrap();
     let waiting = fixture.thread(server, 4);
@@ -68,6 +68,7 @@ fn the_last_handle_to_an_endpoint_wakes_everyone_on_both_queues() {
     fixture.objects.threads.get_mut(waiting).unwrap().wait = Wait::Endpoint {
         endpoint,
         queue: kernel_objects::object::Queue::Receivers,
+        badge: 0,
     };
 
     // Closing the last handle destroys the endpoint (D-75): a thread that
@@ -105,7 +106,7 @@ fn the_senders_of_a_destroyed_endpoint_wake_in_the_order_they_waited() {
             &mut fixture.scheduler,
             sender,
             endpoint,
-            false,
+            Intent::PLAIN,
         )
         .unwrap();
         queued.push((priority, sender));
@@ -179,7 +180,7 @@ fn a_reply_object_dropped_without_an_answer_wakes_its_caller() {
         &mut fixture.scheduler,
         caller,
         endpoint,
-        true,
+        Intent::call(0),
     )
     .unwrap();
     let receiver = fixture.running(server, 4);
@@ -264,7 +265,7 @@ fn a_waiter_the_pool_no_longer_holds_is_dropped_rather_than_reported() {
         &mut fixture.scheduler,
         doomed,
         endpoint,
-        false,
+        Intent::PLAIN,
     )
     .unwrap();
     let held = *fixture.objects.endpoints.get(endpoint).unwrap();

@@ -43,6 +43,18 @@ pub(super) enum Call {
     ReleaseFrame(PhysFrame),
     /// Bytes reached the console.
     Log(usize),
+    /// The buffer in a frame was reached.
+    Buffer(PhysFrame),
+    /// A port was read, with the width in bytes.
+    ReadPort(u16, u8),
+    /// A port was written, with the width in bytes and the value.
+    WritePort(u16, u8, u64),
+    /// An interrupt line was routed to a vector.
+    Route(u8, u8),
+    /// An interrupt line was masked.
+    Mask(u8),
+    /// An interrupt line was unmasked.
+    Unmask(u8),
 }
 
 /// An environment that records what it was asked and answers with what the
@@ -67,6 +79,18 @@ pub(super) struct Recorder {
     pub(super) not_mapped: bool,
     /// The next root, stack slot, and frame to hand out.
     next: u64,
+    /// The IPC buffers of the threads other than the caller.
+    pub(super) buffers: std::collections::HashMap<PhysFrame, Box<[u8; SIZE]>>,
+    /// What the next port read answers, per port.
+    pub(super) port_reads: std::collections::HashMap<u16, u64>,
+    /// The lines the plan of this machine reserves no vector for.
+    pub(super) unroutable: Vec<u8>,
+    /// The lines the controller has already routed.
+    routed: Vec<u8>,
+    /// The frames the machine reported as usable.
+    pub(super) ram: Option<PhysFrameRange>,
+    /// The address of the root system description pointer.
+    pub(super) rsdp: u64,
 }
 
 impl Recorder {
@@ -114,7 +138,7 @@ impl Recorder {
         out.saturating_sub(back)
     }
 
-    fn fresh_frame(&mut self) -> PhysFrame {
+    pub(super) fn fresh_frame(&mut self) -> PhysFrame {
         self.next = self.next.saturating_add(1);
         PhysFrame::containing(PhysAddr::new(self.next.saturating_mul(PAGE_SIZE)).unwrap())
     }
@@ -198,6 +222,68 @@ impl Environment for Recorder {
     fn log(&mut self, bytes: &[u8]) {
         self.calls.push(Call::Log(bytes.len()));
     }
+
+    fn with_buffer<R>(
+        &mut self,
+        frame: PhysFrame,
+        body: impl FnOnce(&mut [u8; SIZE]) -> R,
+    ) -> Result<R, Error> {
+        self.calls.push(Call::Buffer(frame));
+        let bytes = self.buffers.get_mut(&frame).ok_or(Error::InvalidArgument)?;
+        Ok(body(bytes))
+    }
+
+    fn read_port(&mut self, port: u16, width: u8) -> Result<u64, Error> {
+        if !matches!(width, 1 | 2 | 4) {
+            return Err(Error::InvalidArgument);
+        }
+        self.calls.push(Call::ReadPort(port, width));
+        Ok(self.port_reads.get(&port).copied().unwrap_or(0))
+    }
+
+    fn write_port(&mut self, port: u16, width: u8, value: u64) -> Result<(), Error> {
+        if !matches!(width, 1 | 2 | 4) {
+            return Err(Error::InvalidArgument);
+        }
+        self.calls.push(Call::WritePort(port, width, value));
+        Ok(())
+    }
+
+    fn interrupt_vector(&self, line: u8) -> Option<u8> {
+        if self.unroutable.contains(&line) {
+            return None;
+        }
+        line.checked_add(0x40)
+    }
+
+    fn route_interrupt(&mut self, line: u8, vector: u8) -> Result<(), Error> {
+        if self.routed.contains(&line) {
+            return Err(Error::AlreadyExists);
+        }
+        self.routed.push(line);
+        self.calls.push(Call::Route(line, vector));
+        Ok(())
+    }
+
+    fn mask_interrupt(&mut self, line: u8) {
+        self.calls.push(Call::Mask(line));
+    }
+
+    fn unmask_interrupt(&mut self, line: u8) {
+        self.calls.push(Call::Unmask(line));
+    }
+
+    fn meets_ram(&self, frames: PhysFrameRange) -> bool {
+        self.ram.is_some_and(|ram| {
+            let ends = frames.start().number().saturating_add(frames.count());
+            let ram_ends = ram.start().number().saturating_add(ram.count());
+            frames.start().number() < ram_ends && ram.start().number() < ends
+        })
+    }
+
+    fn acpi_pointer(&self) -> u64 {
+        self.rsdp
+    }
 }
 
 /// The machine the tests run on: small enough to keep on a stack.
@@ -240,6 +326,11 @@ impl Fixture {
             ))
             .unwrap();
         let buffer = PhysFrame::containing(PhysAddr::new(0x20_0000).unwrap());
+        let mut environment = Recorder::new();
+        // The buffer of the calling thread is reachable through the
+        // environment as well as through the argument the dispatcher takes:
+        // a thread that is answered by another one is answered there.
+        environment.buffers.insert(buffer, Box::new([0; SIZE]));
         let thread = objects
             .threads
             .allocate(Thread::new(process, 4, 8, 0, buffer).unwrap())
@@ -281,11 +372,16 @@ impl Fixture {
             )
             .unwrap();
         objects.processes.get_mut(process).unwrap().handles = list;
+        // Every handle is a reference, the way the calls that install one
+        // make it: the process and the thread each hold one to themselves
+        // besides.
+        objects.retain(AnyObjectId::of(process)).unwrap();
+        objects.retain(AnyObjectId::of(thread)).unwrap();
 
         Fixture {
             objects,
             scheduler,
-            environment: Recorder::new(),
+            environment,
             process,
             thread,
             own_process,
@@ -302,20 +398,94 @@ impl Fixture {
         }
     }
 
-    /// Installs a handle to `object` with `rights` in the process.
+    /// Installs a handle to `object` with `rights` in the process, with the
+    /// reference the handle holds.
     pub(super) fn install(&mut self, object: AnyObjectId, rights: Rights) -> Handle {
-        let mut list = self.objects.processes.get(self.process).unwrap().handles;
-        let handle = self
+        let handle = self.install_first(object, rights);
+        self.objects.retain(object).unwrap();
+        handle
+    }
+
+    /// Installs the first handle to an object that was just allocated, the
+    /// way `memory_split`, `endpoint_create`, and `notification_create` do:
+    /// the reference the allocation gave is the one that handle holds.
+    pub(super) fn install_first(&mut self, object: AnyObjectId, rights: Rights) -> Handle {
+        self.objects
+            .install_handle(self.process, Entry::new(object, rights))
+            .unwrap()
+    }
+
+    /// A second process with `capacity` handle slots and no thread.
+    pub(super) fn process(&mut self, capacity: u32) -> ProcessId {
+        let root = self.environment.fresh_frame();
+        self.objects
+            .processes
+            .allocate(Process::new(
+                root,
+                HandleList::with_capacity(capacity),
+                Quota::new(64),
+                Quota::new(16),
+            ))
+            .unwrap()
+    }
+
+    /// A thread of `process`, with its IPC buffer reachable through the
+    /// environment the way the buffer of a live thread is.
+    pub(super) fn add_thread(&mut self, process: ProcessId, priority: u8) -> ThreadId {
+        let buffer = self.environment.fresh_frame();
+        self.environment.buffers.insert(buffer, Box::new([0; SIZE]));
+        let thread = self
             .objects
-            .handles
-            .insert(self.process, &mut list, Entry::new(object, rights))
+            .threads
+            .allocate(Thread::new(process, priority, 8, 0, buffer).unwrap())
             .unwrap();
         self.objects
             .processes
-            .get_mut(self.process)
+            .get_mut(process)
             .unwrap()
-            .handles = list;
-        handle
+            .add_thread(thread)
+            .unwrap();
+        thread
+    }
+
+    /// A thread of `process` that is running, which is what a thread that
+    /// made a system call is.
+    pub(super) fn running(&mut self, process: ProcessId, priority: u8) -> ThreadId {
+        let thread = self.add_thread(process, priority);
+        self.scheduler
+            .start(&mut self.objects.threads, thread)
+            .unwrap();
+        self.objects.threads.get_mut(thread).unwrap().state = audhsos_abi::ThreadState::Running;
+        let _ = self.scheduler.dequeue(&mut self.objects.threads, thread);
+        thread
+    }
+
+    /// The buffer of `thread`, as the environment holds it.
+    pub(super) fn buffer_of(&self, thread: kernel_objects::object::ThreadId) -> &[u8; SIZE] {
+        let frame = self.objects.threads.get(thread).unwrap().ipc_buffer;
+        self.environment.buffers.get(&frame).unwrap()
+    }
+
+    /// The status word `thread` found in its buffer.
+    pub(super) fn status_of(&self, thread: kernel_objects::object::ThreadId) -> Status {
+        Buffer::new(self.buffer_of(thread)).status().unwrap()
+    }
+
+    /// The return words `thread` found in its buffer.
+    pub(super) fn returns_of(&self, thread: kernel_objects::object::ThreadId) -> [u64; 2] {
+        let view = Buffer::new(self.buffer_of(thread));
+        [view.return_word(0).unwrap(), view.return_word(1).unwrap()]
+    }
+
+    /// Writes `message` into the buffer of `thread`, which is what a thread
+    /// that is about to send does.
+    pub(super) fn write_buffer(
+        &mut self,
+        thread: kernel_objects::object::ThreadId,
+        message: &[u8; SIZE],
+    ) {
+        let frame = self.objects.threads.get(thread).unwrap().ipc_buffer;
+        self.environment.buffers.insert(frame, Box::new(*message));
     }
 
     /// Installs handles until the list of the process is full, so that the
@@ -348,7 +518,7 @@ impl Fixture {
                 CachePolicy::WriteBack,
             ))
             .unwrap();
-        let handle = self.install(AnyObjectId::of(id), rights);
+        let handle = self.install_first(AnyObjectId::of(id), rights);
         (id, handle)
     }
 }

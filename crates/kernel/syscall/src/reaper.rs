@@ -85,7 +85,9 @@ fn clear<E: Environment, const NP: usize, const NT: usize, const NM: usize, cons
     }
     machine.environment.release_kernel_stack(stack);
     machine.environment.release_frame(buffer);
-    let _ = machine.objects.threads.release(id);
+    // The slot goes whatever handle still names it: a thread that has
+    // been cleared away holds nothing, and there is nothing left to name.
+    machine.objects.threads.force_release(id);
     1
 }
 

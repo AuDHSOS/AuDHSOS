@@ -267,3 +267,53 @@ fn the_devices_of_one_machine_forward_to_the_controller_and_the_ports() {
     assert_eq!(devices.ports.writes_to(0x44), vec![0xDEAD_BEEF]);
     assert_eq!(RecordingDevices::default().interrupts.events().len(), 0);
 }
+
+#[test]
+fn the_controller_says_which_vector_a_line_reaches_and_which_has_none() {
+    let controller = FakeInterruptController::new(4);
+    assert_eq!(
+        controller.vector_of(InterruptLine::new(0)),
+        Vector::new(Vector::FIRST_DEVICE).ok()
+    );
+    assert_eq!(
+        controller.vector_of(InterruptLine::new(3)),
+        Vector::new(Vector::FIRST_DEVICE + 3).ok()
+    );
+    assert_eq!(
+        controller.vector_of(InterruptLine::new(4)),
+        None,
+        "a line the controller does not have reaches no vector"
+    );
+    assert_eq!(controller.vector_of(InterruptLine::new(u8::MAX)), None);
+    let devices = crate::doubles::RecordingDevices::new(4);
+    assert_eq!(
+        devices.vector_of(InterruptLine::new(1)),
+        Vector::new(Vector::FIRST_DEVICE + 1).ok()
+    );
+    assert_eq!(devices.vector_of(InterruptLine::new(9)), None);
+}
+
+#[test]
+fn the_page_table_double_reaches_the_bytes_of_a_frame_as_well() {
+    use crate::paging::{FRAME_BYTES, FrameBytes};
+
+    let ram = kernel_types::PhysFrameRange::new(frame(4), 2).unwrap();
+    let mut access: MemoryFrameAccess<u64> = MemoryFrameAccess::with_lazy_tables(ram);
+    // A frame of the lazy range has its bytes on the first access, the way a
+    // frame of the reserve is already reachable through the window.
+    assert!(access.frame_bytes(frame(4)).is_none());
+    access.frame_bytes_mut(frame(4)).unwrap()[3] = 9;
+    assert_eq!(access.frame_bytes(frame(4)).unwrap().get(3), Some(&9));
+    // One outside it has to be named.
+    assert!(access.frame_bytes_mut(frame(9)).is_none());
+    access.add_bytes(frame(9));
+    assert_eq!(access.frame_bytes(frame(9)), Some(&[0; FRAME_BYTES]));
+    access.add_bytes(frame(9));
+    assert_eq!(
+        access.frame_bytes(frame(9)),
+        Some(&[0; FRAME_BYTES]),
+        "a frame that is there already keeps what it holds"
+    );
+    let mut plain: MemoryFrameAccess<u64> = MemoryFrameAccess::new();
+    assert!(plain.frame_bytes_mut(frame(1)).is_none());
+}

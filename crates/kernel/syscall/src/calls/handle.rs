@@ -37,17 +37,24 @@ pub fn duplicate<
     let handle = request.handle.ok_or(Error::InvalidHandle)?;
     let bits = u32::try_from(request.argument(1)).map_err(|_| Error::InvalidArgument)?;
     let rights = Rights::from_bits(bits)?;
+    let object = machine.objects.entry(process, handle)?.object;
     let mut list = machine.objects.processes.get(process)?.handles;
     let copy = machine
         .objects
         .handles
         .duplicate(process, &mut list, handle, rights)?;
-    machine.objects.processes.get_mut(process)?.handles = list;
+    machine
+        .objects
+        .processes
+        .with(process, |held| held.handles = list);
+    // The second handle holds a second reference.
+    machine.objects.retain(object)?;
     Ok(Reply::value(copy.raw()))
 }
 
-/// `handle_close`: the caller gives up a handle. What it named lives on
-/// until its last handle is gone.
+/// `handle_close`: the caller gives up a handle, and with it the reference
+/// the handle held. What it named lives on until its last handle is gone;
+/// closing that one destroys it and wakes everyone who waited on it.
 ///
 /// # Errors
 ///
@@ -59,8 +66,8 @@ pub fn close<E: Environment, const NP: usize, const NT: usize, const NM: usize, 
     request: &Request,
 ) -> Result<Reply, Error> {
     let handle = request.handle.ok_or(Error::InvalidHandle)?;
-    let mut list = machine.objects.processes.get(process)?.handles;
-    machine.objects.handles.close(process, &mut list, handle)?;
-    machine.objects.processes.get_mut(process)?.handles = list;
-    Ok(Reply::DONE)
+    let entry = machine.objects.close_handle(process, handle)?;
+    let switch = crate::lifetime::release(machine, entry.object)?;
+    let reply = Reply::DONE;
+    Ok(if switch { reply.reschedule() } else { reply })
 }

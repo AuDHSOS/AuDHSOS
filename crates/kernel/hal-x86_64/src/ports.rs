@@ -92,6 +92,13 @@ impl<'a> DeviceAccess<'a> {
 }
 
 impl kernel_hal_api::interrupt::InterruptController for DeviceAccess<'_> {
+    fn vector_of(
+        &self,
+        line: kernel_hal_api::interrupt::InterruptLine,
+    ) -> Option<kernel_hal_api::interrupt::Vector> {
+        self.apics.vector_of(line)
+    }
+
     fn route(
         &mut self,
         line: kernel_hal_api::interrupt::InterruptLine,

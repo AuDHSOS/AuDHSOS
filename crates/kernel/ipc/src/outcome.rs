@@ -132,6 +132,7 @@ pub struct Waiters {
     second: WaitQueue,
     single: Option<ThreadId>,
     error: Error,
+    switch: bool,
 }
 
 impl Waiters {
@@ -143,6 +144,7 @@ impl Waiters {
             second: WaitQueue::EMPTY,
             single: None,
             error: Error::ObjectDestroyed,
+            switch: false,
         }
     }
 
@@ -154,6 +156,7 @@ impl Waiters {
             second,
             single: None,
             error,
+            switch: false,
         }
     }
 
@@ -165,6 +168,7 @@ impl Waiters {
             second: WaitQueue::EMPTY,
             single: thread,
             error,
+            switch: false,
         }
     }
 
@@ -186,11 +190,19 @@ impl Waiters {
     ) -> Option<Wakeup> {
         while let Some(id) = self.take_next(threads) {
             threads.with(id, |thread| thread.wait = Wait::Nothing);
-            if wake(threads, scheduler, id).is_some() {
+            if let Some(reschedule) = wake(threads, scheduler, id) {
+                self.switch |= reschedule;
                 return Some(Wakeup::failed(id, self.error));
             }
         }
         None
+    }
+
+    /// `true` when one of the threads that woke should take the processor
+    /// from the one that holds it.
+    #[must_use]
+    pub const fn wants_switch(&self) -> bool {
+        self.switch
     }
 
     /// The next thread to wake, out of the single waiter first and then the

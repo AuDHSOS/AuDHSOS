@@ -29,7 +29,9 @@ pub fn cancel<const NP: usize, const NT: usize, const NM: usize, const NH: usize
     };
     match wait {
         Wait::Nothing => return false,
-        Wait::Endpoint { endpoint, queue } => {
+        Wait::Endpoint {
+            endpoint, queue, ..
+        } => {
             // The two pools are separate fields, so the queue reaches the
             // threads while the endpoint is borrowed.
             let Objects {

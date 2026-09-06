@@ -121,8 +121,9 @@ fn map_device(frames: PhysFrameRange) -> Option<VirtAddr> {
     .flatten()
 }
 
-/// Counts a device interrupt in the kernel state and acknowledges it at
-/// the hardware.
+/// Counts a device interrupt in the kernel state, forwards it to whoever
+/// holds the interrupt object of its vector, and acknowledges it at the
+/// hardware.
 fn on_interrupt(vector: u8) {
     let counted = kernel_core::with_state(|state| {
         state.record_interrupt();
@@ -135,7 +136,78 @@ fn on_interrupt(vector: u8) {
         }
     });
     let _ = counted;
+    if vector != vectors::TIMER && vector != vectors::SPURIOUS {
+        forward(vector);
+    }
     interrupts::acknowledge(vector);
+}
+
+/// Hands `vector` to the driver that holds its interrupt object, in the
+/// order [2.7](../../../docs/02-architecture.md) gives: mask the line at
+/// the I/O APIC, end the interrupt at the local APIC, then signal the
+/// notification. A vector no interrupt object names is acknowledged and
+/// nothing else.
+///
+/// Interrupts arrive through interrupt gates, so no device interrupt reaches
+/// a kernel that holds the machine borrow; one that finds it busy all the
+/// same leaves the bits for the next one.
+fn forward(vector: u8) {
+    let line = kernel_core::with_machine(|machine| {
+        kernel_ipc::interrupt_for(&machine.objects, vector).and_then(|id| {
+            machine
+                .objects
+                .interrupts
+                .get(id)
+                .ok()
+                .map(|held| held.line)
+        })
+    })
+    .flatten();
+    if let Some(line) = line {
+        interrupts::with_controller(|apics| {
+            use kernel_hal_api::interrupt::{InterruptController, InterruptLine};
+            apics.mask(InterruptLine::new(line));
+        });
+    }
+    let outcome = kernel_core::with_machine(|machine| {
+        kernel_ipc::deliver(&mut machine.objects, &mut machine.scheduler, vector)
+    })
+    .flatten();
+    let Some(outcome) = outcome else {
+        return;
+    };
+    if let Some(wakeup) = outcome.wakeup {
+        announce(wakeup);
+    }
+}
+
+/// Writes the status word and the return words a thread that a device
+/// interrupt woke finds in its buffer.
+fn announce(wakeup: kernel_ipc::Wakeup) {
+    let frame = kernel_core::with_machine(|machine| {
+        machine
+            .objects
+            .threads
+            .get(wakeup.thread)
+            .ok()
+            .map(|thread| thread.ipc_buffer)
+    })
+    .flatten();
+    let Some(frame) = frame else {
+        return;
+    };
+    // SAFETY: the kernel tables are active, so the window maps every
+    // physical frame read and write, and the kernel is the only writer.
+    let mut window = unsafe { PhysicalWindow::kernel() };
+    let Some(bytes) = PhysicalWindow::frame_bytes_mut(&mut window, frame) else {
+        return;
+    };
+    let mut writer = audhsos_abi::ipc_buffer::BufferMut::new(bytes);
+    writer.clear_result();
+    writer.set_status(wakeup.status);
+    for (index, value) in wakeup.values.iter().enumerate() {
+        writer.set_return_word(index, *value);
+    }
 }
 
 /// Takes the memory of the machine over: the reserve, the regions of the

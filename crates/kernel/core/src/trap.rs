@@ -8,6 +8,7 @@
 //! below the kernel could carry on without it; an exception a user thread
 //! raised ends that thread and nothing else.
 
+use audhsos_abi::{Fault, FaultKind};
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::exit::{ExitStatus, TestExit};
 
@@ -89,6 +90,41 @@ impl Exception {
     #[must_use]
     pub const fn has_error_code(self) -> bool {
         matches!(self.vector, 8 | 10 | 11 | 12 | 13 | 14 | 17 | 21 | 29 | 30)
+    }
+
+    /// The fault a user thread's fault handler is told about, or `None` for a
+    /// vector that has no kind of its own.
+    ///
+    /// A vector with no kind stops the thread without a message, which is
+    /// what every fault does for a process that named no handler.
+    #[must_use]
+    pub const fn fault(self) -> Option<Fault> {
+        let Some(kind) = self.kind() else {
+            return None;
+        };
+        // A page fault names the address of the access; every other kind
+        // names the instruction that raised it.
+        let address = if self.vector == 14 { self.cr2 } else { self.ip };
+        Some(Fault {
+            kind,
+            address,
+            instruction_pointer: self.ip,
+            error_code: self.error_code,
+        })
+    }
+
+    /// The kind of fault this vector is, for the six the interface names.
+    #[must_use]
+    pub const fn kind(self) -> Option<FaultKind> {
+        match self.vector {
+            0 => Some(FaultKind::DivideError),
+            3 => Some(FaultKind::Breakpoint),
+            6 => Some(FaultKind::InvalidOpcode),
+            13 => Some(FaultKind::GeneralProtection),
+            14 => Some(FaultKind::PageFault),
+            17 => Some(FaultKind::AlignmentCheck),
+            _ => None,
+        }
     }
 }
 

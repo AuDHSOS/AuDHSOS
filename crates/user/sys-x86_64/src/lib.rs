@@ -55,6 +55,20 @@ pub unsafe fn buffer<'a>(address: u64) -> BufferMut<'a> {
 /// As [`syscall`] and [`buffer`].
 #[must_use]
 pub unsafe fn call(address: u64, number: Syscall, arguments: &[u64]) -> (u64, u64) {
+    // SAFETY: the caller promises what `returning` requires.
+    let (status, values) = unsafe { returning(address, number, arguments) };
+    (status, values[0])
+}
+
+/// Makes the call `number` with `arguments` and returns the status word and
+/// both return words. `ipc_recv` needs the second one, which carries the
+/// reply handle.
+///
+/// # Safety
+///
+/// As [`syscall`] and [`buffer`].
+#[must_use]
+pub unsafe fn returning(address: u64, number: Syscall, arguments: &[u64]) -> (u64, [u64; 2]) {
     {
         // SAFETY: the caller promises the address is the one the kernel
         // gave this thread; the borrow ends before the call.
@@ -73,7 +87,10 @@ pub unsafe fn call(address: u64, number: Syscall, arguments: &[u64]) -> (u64, u6
     let view = reader.reader();
     (
         view.status().map_or(u64::MAX, audhsos_abi::Status::raw),
-        view.return_word(0).unwrap_or(0),
+        [
+            view.return_word(0).unwrap_or(0),
+            view.return_word(1).unwrap_or(0),
+        ],
     )
 }
 

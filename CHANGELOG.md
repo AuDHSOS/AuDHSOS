@@ -29,6 +29,52 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The twenty-one calls the system call table was still missing, which
+  completes it: `process_set_fault_handler`, `endpoint_create`,
+  `endpoint_badge`, the six endpoint operations, the four notification
+  operations, the three interrupt operations, the three port operations,
+  `memory_create_device`, and `system_info`. `kernel_syscall::calls::
+  UNIMPLEMENTED` is empty, and no call of the interface answers
+  `Unsupported` any more.
+
+  `Environment` grows the seam to a second buffer — `with_buffer`, which
+  reaches the IPC buffer of a frame — beside the port, interrupt, memory-map
+  and firmware questions the new calls ask. `Reply` grows `blocked`, which is
+  what a call whose caller has no result yet leaves: the dispatcher writes
+  neither the status word nor the return words, and the thread that
+  completes the rendezvous writes them into the buffer of the thread it
+  wakes. It also grows the words of a result that does not fit into two
+  return words, which go into the message area of the caller's own buffer
+  with label zero and handle count zero: `system_info` reports twenty and
+  says so in its first return word, and `thread_info` reports the three of a
+  fault beside the state and the kind.
+
+  A handle is now a reference. `handle_close` and the close of a dying
+  process's list release it, `handle_duplicate`, `process_install_handle`,
+  and the handle installation of a transfer take one, and when the last one
+  goes the object is destroyed — which for an endpoint, a notification, and a
+  reply object wakes everyone who waited (D-75). A process and a thread each
+  hold one reference to themselves besides, because a process ends when it is
+  killed and a thread when the reaper has given back what it held, whatever
+  handle still names it; `Pool::force_release` is what those two do.
+
+  `fault::deliver` builds the fault message in the faulting thread's own
+  buffer — the reserved label of its kind, the address, the instruction
+  pointer, and the error code — and performs a `call` on the fault handler
+  endpoint of its process. The thread is then blocked as any caller is, and
+  the reply resumes it at the instruction it faulted on. A process with no
+  handler, a handler endpoint that is gone, and a reply pool with no slot
+  left all end the same way, in `Faulted`. `Exception::fault` in
+  `kernel-core` is the mapping from vector to kind, and
+  `KernelEnvironment` gains the devices of the machine and the ACPI pointer
+  the bring-up read.
+
+  In QEMU, `every_syscall` walks the whole table: every call answers exactly
+  one error, and every call whose success a single thread can observe answers
+  a success as well. The six endpoint calls whose success is a rendezvous are
+  the exception — a thread that sends with nobody receiving waits for ever —
+  and the `ipc` image covers those.
+
 - The two hardware seams the system call layer of Phase 6 needs.
   `kernel-hal-api` gains `paging::FrameBytes`, which reaches a frame as
   bytes — the seam a second IPC buffer is read and written through — with

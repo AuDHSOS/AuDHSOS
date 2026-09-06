@@ -47,6 +47,7 @@ dependencies = [
  "kernel-core",
  "kernel-hal-api",
  "kernel-hal-x86_64",
+ "kernel-ipc",
  "kernel-mm",
  "kernel-objects",
  "kernel-syscall",
@@ -283,6 +284,7 @@ name = "kernel-syscall"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "kernel-ipc",
  "kernel-mm",
  "kernel-objects",
  "kernel-sched",

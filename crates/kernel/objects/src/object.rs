@@ -652,6 +652,10 @@ pub enum Wait {
         endpoint: EndpointId,
         /// Which queue, and what it asked for.
         queue: Queue,
+        /// The badge of the capability a queued sender used, which is what
+        /// the receiver that meets it later sees. Zero for a receiver, which
+        /// has no capability of anyone else's in its hand.
+        badge: u64,
     },
     /// The thread waits for the answer to a call.
     Reply {

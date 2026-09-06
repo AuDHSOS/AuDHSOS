@@ -3,11 +3,13 @@
 
 //! Tests of `crate::fault`.
 
-use audhsos_abi::{Syscall, ThreadState};
+use audhsos_abi::ipc_buffer::{Buffer, SIZE, fault_kind_of};
+use audhsos_abi::{Error, Fault, FaultKind, Handle, Rights, Syscall, ThreadState};
+use kernel_objects::object::{AnyObjectId, Endpoint, EndpointId};
 
-use crate::fault::{is_faulted, stop};
+use crate::fault::{deliver, is_faulted, stop};
 use crate::reaper::has_work;
-use crate::tests::double::{Fixture, error_of, request, value_of};
+use crate::tests::double::{Fixture, call, error_of, request, value_of};
 
 #[test]
 fn a_thread_that_faults_stops_and_leaves_the_processor() {
@@ -178,4 +180,246 @@ fn a_fault_of_a_thread_that_is_not_running_asks_for_no_switch() {
     assert!(!outcome.reschedule);
     assert!(!is_faulted(&fixture.machine(), other));
     assert_eq!(fixture.scheduler.current(), running);
+}
+
+/// The fault every test of the delivery reports.
+fn page_fault() -> Fault {
+    Fault {
+        kind: FaultKind::PageFault,
+        address: 0x0DE_AD000,
+        instruction_pointer: 0x40_1234,
+        error_code: 0b110,
+    }
+}
+
+/// An endpoint of the calling process, named as the fault handler of its
+/// own process, and the handle to it.
+fn handler(fixture: &mut Fixture) -> (EndpointId, Handle) {
+    let raw = value_of(fixture, request(Syscall::EndpointCreate, &[]));
+    let handle = Handle::from_raw(raw).unwrap();
+    let id = fixture
+        .objects
+        .entry(fixture.process, handle)
+        .unwrap()
+        .object
+        .typed::<Endpoint>()
+        .unwrap();
+    let own = fixture.own_process.raw();
+    assert!(
+        error_of(
+            fixture,
+            request(Syscall::ProcessSetFaultHandler, &[own, raw])
+        )
+        .is_none()
+    );
+    (id, handle)
+}
+
+#[test]
+fn a_fault_handler_is_retained_replaced_and_cleared() {
+    let mut fixture = Fixture::new();
+    let (first, _handle) = handler(&mut fixture);
+    assert_eq!(
+        fixture
+            .objects
+            .processes
+            .get(fixture.process)
+            .unwrap()
+            .fault_handler,
+        Some(first)
+    );
+    assert_eq!(
+        fixture.objects.endpoints.references(first),
+        Ok(2),
+        "the handle and the handler are two references"
+    );
+
+    let second_raw = value_of(&mut fixture, request(Syscall::EndpointCreate, &[]));
+    let own = fixture.own_process.raw();
+    assert!(
+        error_of(
+            &mut fixture,
+            request(Syscall::ProcessSetFaultHandler, &[own, second_raw])
+        )
+        .is_none()
+    );
+    assert_eq!(
+        fixture.objects.endpoints.references(first),
+        Ok(1),
+        "the one it replaced gave its reference back"
+    );
+
+    assert!(
+        error_of(
+            &mut fixture,
+            request(Syscall::ProcessSetFaultHandler, &[own, 0])
+        )
+        .is_none()
+    );
+    assert_eq!(
+        fixture
+            .objects
+            .processes
+            .get(fixture.process)
+            .unwrap()
+            .fault_handler,
+        None
+    );
+}
+
+#[test]
+fn a_fault_handler_has_to_be_an_endpoint_the_caller_may_send_on() {
+    let mut fixture = Fixture::new();
+    let own = fixture.own_process.raw();
+    let wrong = fixture.own_thread.raw();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::ProcessSetFaultHandler, &[own, wrong])
+        ),
+        Some(Error::WrongObjectType)
+    );
+    let raw = value_of(&mut fixture, request(Syscall::EndpointCreate, &[]));
+    let id = fixture
+        .objects
+        .entry(fixture.process, Handle::from_raw(raw).unwrap())
+        .unwrap()
+        .object
+        .typed::<Endpoint>()
+        .unwrap();
+    let weak = fixture.install(AnyObjectId::of(id), Rights::RECV).raw();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::ProcessSetFaultHandler, &[own, weak])
+        ),
+        Some(Error::AccessDenied)
+    );
+}
+
+#[test]
+fn a_fault_reaches_the_handler_as_a_call_with_the_reserved_label() {
+    let mut fixture = Fixture::new();
+    let (_id, handle) = handler(&mut fixture);
+    // A thread of the same process waits on the handler endpoint.
+    let own = fixture.process;
+    let taker = fixture.running(own, 4);
+    let mut waiting = [0; SIZE];
+    {
+        let mut writer = audhsos_abi::ipc_buffer::BufferMut::new(&mut waiting);
+        writer.set_syscall_number(u64::from(Syscall::IpcRecv.number()));
+        assert!(writer.set_argument(0, handle.raw()));
+    }
+    fixture.write_buffer(taker, &waiting);
+    crate::dispatch::dispatch(&mut fixture.machine(), taker, &mut waiting);
+    assert_eq!(
+        fixture.objects.threads.get(taker).unwrap().state,
+        ThreadState::BlockedRecv
+    );
+
+    let faulted = fixture.thread;
+    let mut buffer = [0; SIZE];
+    let outcome = deliver(&mut fixture.machine(), faulted, page_fault(), &mut buffer);
+    assert!(outcome.reschedule);
+    assert_eq!(
+        fixture.objects.threads.get(faulted).unwrap().state,
+        ThreadState::BlockedReply,
+        "the faulting thread is blocked as any caller is"
+    );
+    assert_eq!(
+        fixture.objects.threads.get(faulted).unwrap().fault,
+        Some(page_fault())
+    );
+
+    let arrived = *fixture.buffer_of(taker);
+    let view = Buffer::new(&arrived);
+    let message = view.message().unwrap();
+    assert!(message.is_kernel_label());
+    assert_eq!(fault_kind_of(message.label), Some(FaultKind::PageFault));
+    assert_eq!(message.word_count, 3);
+    assert_eq!(message.handle_count, 0);
+    assert_eq!(view.word(0), Some(page_fault().address));
+    assert_eq!(view.word(1), Some(page_fault().instruction_pointer));
+    assert_eq!(view.word(2), Some(page_fault().error_code));
+    let reply = Handle::from_raw(fixture.returns_of(taker)[1]).expect("a reply handle");
+
+    // The reply resumes the thread at the instruction it faulted on: the
+    // handler answers, and the faulting thread is ready again.
+    let mut answer = request(Syscall::IpcReply, &[reply.raw()]);
+    fixture.write_buffer(taker, &answer);
+    crate::dispatch::dispatch(&mut fixture.machine(), taker, &mut answer);
+    assert_eq!(
+        Buffer::new(&answer).status().unwrap().error(),
+        None,
+        "the handler answered"
+    );
+    assert_eq!(
+        fixture.objects.threads.get(faulted).unwrap().state,
+        ThreadState::Ready,
+        "the thread the fault stopped runs again"
+    );
+    assert_eq!(fixture.status_of(faulted).error(), None);
+}
+
+#[test]
+fn a_process_with_no_handler_stops_the_thread_that_faulted() {
+    let mut fixture = Fixture::new();
+    let faulted = fixture.thread;
+    let mut buffer = [0; SIZE];
+    let outcome = deliver(&mut fixture.machine(), faulted, page_fault(), &mut buffer);
+    assert!(outcome.reschedule);
+    assert!(is_faulted(&fixture.machine(), faulted));
+    assert_eq!(
+        fixture.objects.threads.get(faulted).unwrap().fault,
+        Some(page_fault()),
+        "the fault is recorded whether anybody takes it or not"
+    );
+}
+
+#[test]
+fn a_handler_endpoint_that_is_gone_stops_the_thread_as_no_handler_would() {
+    let mut fixture = Fixture::new();
+    let (id, handle) = handler(&mut fixture);
+    // Both references go: the handle and the handler itself.
+    let (status, _, _) = call(
+        &mut fixture,
+        &mut request(Syscall::HandleClose, &[handle.raw()]),
+    );
+    assert_eq!(status.error(), None);
+    fixture.objects.endpoints.force_release(id);
+    let faulted = fixture.thread;
+    let mut buffer = [0; SIZE];
+    deliver(&mut fixture.machine(), faulted, page_fault(), &mut buffer);
+    assert!(is_faulted(&fixture.machine(), faulted));
+}
+
+#[test]
+fn a_fault_nobody_has_a_reply_slot_for_stops_the_thread() {
+    let mut fixture = Fixture::new();
+    let (_id, handle) = handler(&mut fixture);
+    let own = fixture.process;
+    let taker = fixture.running(own, 4);
+    let mut waiting = [0; SIZE];
+    {
+        let mut writer = audhsos_abi::ipc_buffer::BufferMut::new(&mut waiting);
+        writer.set_syscall_number(u64::from(Syscall::IpcRecv.number()));
+        assert!(writer.set_argument(0, handle.raw()));
+    }
+    fixture.write_buffer(taker, &waiting);
+    crate::dispatch::dispatch(&mut fixture.machine(), taker, &mut waiting);
+    // No handle slot left for the reply object the call needs.
+    fixture.fill_handles();
+
+    let faulted = fixture.thread;
+    let mut buffer = [0; SIZE];
+    deliver(&mut fixture.machine(), faulted, page_fault(), &mut buffer);
+    assert!(
+        is_faulted(&fixture.machine(), faulted),
+        "a fault nobody can take ends where a fault nobody takes ends"
+    );
+    assert_eq!(
+        fixture.objects.threads.get(taker).unwrap().state,
+        ThreadState::BlockedRecv,
+        "and the handler is back in its queue"
+    );
 }

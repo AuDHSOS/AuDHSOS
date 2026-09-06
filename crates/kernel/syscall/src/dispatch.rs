@@ -12,6 +12,7 @@
 //! word and the return words are written exactly once per call.
 
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status};
+use audhsos_abi::layout::MAX_RESULT_WORDS;
 use audhsos_abi::{Error, FirstArgument, Handle, Rights, Syscall};
 use kernel_objects::object::{ProcessId, ThreadId};
 use kernel_objects::store::Objects;
@@ -40,22 +41,52 @@ pub struct Machine<
 }
 
 /// What a call leaves for its caller.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Reply {
     /// The return words, written whether the call fills them or not.
     pub values: [u64; 2],
+    /// The words of a result that does not fit into the return words. They
+    /// go into the message area of the caller's own buffer, with label zero
+    /// and handle count zero.
+    pub words: [u64; MAX_RESULT_WORDS],
+    /// How many of them the call wrote, or `None` for a call that leaves the
+    /// message area of its caller alone. `Some(0)` is a call that uses the
+    /// convention and had nothing to say, which is what `thread_info`
+    /// reports for a thread that did not fault.
+    pub word_count: Option<u8>,
     /// The call did part of its work; the first return word says how much.
     pub partial: bool,
+    /// The call blocked its caller, which therefore has no result yet: the
+    /// dispatcher writes neither the status word nor the return words, and
+    /// the thread that completes the rendezvous writes them later.
+    pub blocked: bool,
     /// What the caller should do before it returns to user mode.
     pub outcome: Outcome,
+}
+
+impl Default for Reply {
+    fn default() -> Self {
+        Reply::DONE
+    }
 }
 
 impl Reply {
     /// A call that returns nothing and changes nobody's turn.
     pub const DONE: Reply = Reply {
         values: [0, 0],
+        words: [0; MAX_RESULT_WORDS],
+        word_count: None,
         partial: false,
+        blocked: false,
         outcome: Outcome::NOTHING,
+    };
+
+    /// A call whose caller blocks and asks for a switch. Nothing of the
+    /// result area is written: there is no result yet.
+    pub const BLOCKED: Reply = Reply {
+        blocked: true,
+        outcome: Outcome::RESCHEDULE,
+        ..Reply::DONE
     };
 
     /// A call that returns one value.
@@ -97,8 +128,36 @@ impl Reply {
         Reply {
             values: [progress, 0],
             partial: true,
-            outcome: Outcome::NOTHING,
+            ..Reply::DONE
         }
+    }
+
+    /// A result of `words` in the message area of the caller's own buffer,
+    /// with the count in the first return word. That is the convention for
+    /// every result that does not fit into two words; `system_info` uses it.
+    #[must_use]
+    pub fn message(words: &[u64]) -> Self {
+        let reply = Reply::DONE.with_words(words);
+        let count = reply.word_count.unwrap_or(0);
+        Reply {
+            values: [u64::from(count), 0],
+            ..reply
+        }
+    }
+
+    /// The same reply with `words` in the message area of the caller's own
+    /// buffer and the return words left as they are. `thread_info` uses it:
+    /// its two return words are the state and the fault kind, so the count
+    /// of the message travels in the header of the message itself.
+    #[must_use]
+    pub fn with_words(self, words: &[u64]) -> Self {
+        let mut reply = self;
+        let count = words.len().min(MAX_RESULT_WORDS);
+        for (slot, word) in reply.words.iter_mut().zip(words.iter()).take(count) {
+            *slot = *word;
+        }
+        reply.word_count = Some(u8::try_from(count).unwrap_or(0));
+        reply
     }
 }
 
@@ -251,6 +310,13 @@ pub fn dispatch<
     buffer: &mut [u8; SIZE],
 ) -> Outcome {
     let result = handle(machine, caller, buffer);
+    // A caller that blocked has no result yet, so nothing of its result area
+    // is touched: the thread that completes the rendezvous writes it.
+    if let Ok(reply) = result
+        && reply.blocked
+    {
+        return reply.outcome;
+    }
     let mut writer = BufferMut::new(buffer);
     writer.clear_result();
     match result {
@@ -263,6 +329,7 @@ pub fn dispatch<
             for (index, value) in reply.values.iter().enumerate() {
                 writer.set_return_word(index, *value);
             }
+            write_message(&mut writer, &reply);
             reply.outcome
         }
         Err(error) => {
@@ -272,11 +339,25 @@ pub fn dispatch<
     }
 }
 
+/// Writes the words of a result that did not fit into the return words:
+/// label zero, handle count zero, and the words themselves.
+fn write_message(writer: &mut BufferMut<'_>, reply: &Reply) {
+    let Some(count) = reply.word_count else {
+        return;
+    };
+    let count = usize::from(count);
+    writer.set_label(0);
+    let _ = writer.set_counts(count, 0);
+    for (index, word) in reply.words.iter().enumerate().take(count) {
+        writer.set_word(index, *word);
+    }
+}
+
 /// The call itself, before its result is written.
 fn handle<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     machine: &mut Machine<'_, E, NP, NT, NM, NH>,
     caller: ThreadId,
-    buffer: &[u8; SIZE],
+    buffer: &mut [u8; SIZE],
 ) -> Result<Reply, Error> {
     let process = machine
         .objects

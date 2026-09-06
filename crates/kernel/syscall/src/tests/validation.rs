@@ -122,9 +122,18 @@ fn a_handle_of_another_process_is_no_handle_of_the_caller() {
 }
 
 #[test]
-fn every_call_this_phase_does_not_implement_refuses_it() {
-    let mut fixture = Fixture::new();
-    for &call in UNIMPLEMENTED {
+fn no_call_of_the_table_answers_that_it_does_not_exist() {
+    // The table is complete: nothing is left to a later phase, and
+    // `UNIMPLEMENTED` is therefore empty. What a call refuses it refuses for
+    // a reason of its own, never because the kernel does not have it.
+    assert!(
+        UNIMPLEMENTED.is_empty(),
+        "{UNIMPLEMENTED:?} are still missing"
+    );
+    for &call in Syscall::ALL {
+        // A fixture per call: some of them end the caller or its process,
+        // and what this asks of each is only what it answers first.
+        let mut fixture = Fixture::new();
         let arguments: Vec<u64> = (0..call.argument_count())
             .map(|index| {
                 if index == 0 && call.takes_handle() {
@@ -135,25 +144,13 @@ fn every_call_this_phase_does_not_implement_refuses_it() {
             })
             .collect();
         let buffer = request(call, &arguments);
-        let error = error_of(&mut fixture, buffer);
-        // A call whose first argument is an object of this phase, or none,
-        // reaches the call itself and is answered `Unsupported`. One that
-        // wants an endpoint, a reply, a notification, an interrupt, a port
-        // range, or the system control does not get that far: no such
-        // object exists yet, so the type check answers first, and both
-        // answers say the same thing to a caller.
-        let reachable = matches!(
-            call.object_type(),
-            None | Some(ObjectType::Process | ObjectType::Thread | ObjectType::MemoryObject)
+        assert_ne!(
+            error_of(&mut fixture, buffer),
+            Some(Error::Unsupported),
+            "{}",
+            call.name()
         );
-        let expected = if reachable {
-            Error::Unsupported
-        } else {
-            Error::WrongObjectType
-        };
-        assert_eq!(error, Some(expected), "{}", call.name());
     }
-    assert_eq!(UNIMPLEMENTED.len(), 21);
 }
 
 /// A handle of the type `call` expects, with the rights it requires.
@@ -166,28 +163,20 @@ fn handle_for(fixture: &mut Fixture, call: Syscall) -> u64 {
         Some(ObjectType::Thread) => fixture
             .install(AnyObjectId::of(fixture.thread), rights)
             .raw(),
-        // The types of Phase 6 have no objects yet, so the call is handed a
-        // thread and answers about the type.
+        // Every other type is handed a thread: the call answers about the
+        // type before it does anything, which is what this asks of it.
         _ => fixture.own_thread.raw(),
     }
 }
 
 #[test]
-fn every_call_of_the_table_is_either_implemented_or_named_as_missing() {
-    for &call in Syscall::ALL {
-        let unimplemented = UNIMPLEMENTED.contains(&call);
-        let implemented = !unimplemented;
-        assert!(
-            implemented || unimplemented,
-            "{} is in neither list",
-            call.name()
-        );
-    }
+fn every_call_of_the_table_is_implemented() {
     assert_eq!(
         Syscall::ALL.len() - UNIMPLEMENTED.len(),
-        20,
-        "twenty calls in this phase"
+        41,
+        "the whole table, which is what Phase 6 completes"
     );
+    assert!(UNIMPLEMENTED.is_empty());
 }
 
 #[test]

@@ -16,8 +16,8 @@ pub mod transfer;
 pub use cancel::cancel;
 pub use destroy::{destroy_endpoint, destroy_notification, destroy_reply, destroyed};
 pub use endpoint::{
-    Handover, Meeting, Reception, close_reply, open_reply, received, recv, replied, reply_caller,
-    send, sent, undo_meeting,
+    Handover, Intent, Meeting, Reception, close_reply, open_reply, received, recv, replied,
+    reply_caller, send, sent, undo_meeting,
 };
 pub use interrupt::{acknowledge, bind, deliver, interrupt_for, interrupt_of_line};
 pub use notify::{poll, signal, wait};

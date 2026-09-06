@@ -13,6 +13,7 @@ rust-version.workspace = true
 [dependencies]
 audhsos-abi.workspace = true
 kernel-mm.workspace = true
+kernel-ipc.workspace = true
 kernel-objects.workspace = true
 kernel-sched.workspace = true
 kernel-types.workspace = true

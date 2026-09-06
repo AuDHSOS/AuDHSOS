@@ -203,3 +203,47 @@ fn a_user_fault_writes_the_same_report_a_kernel_exception_does() {
 
     assert!(user.ends_with(&fatal), "{user} against {fatal}");
 }
+
+#[test]
+fn the_six_kinds_the_interface_names_come_out_of_their_vectors() {
+    use audhsos_abi::FaultKind;
+
+    let wanted = [
+        (0, FaultKind::DivideError),
+        (3, FaultKind::Breakpoint),
+        (6, FaultKind::InvalidOpcode),
+        (13, FaultKind::GeneralProtection),
+        (14, FaultKind::PageFault),
+        (17, FaultKind::AlignmentCheck),
+    ];
+    for (vector, kind) in wanted {
+        let exception = Exception {
+            vector,
+            error_code: 0b101,
+            ip: 0x40_1000,
+            sp: 0x7F_F000,
+            cr2: 0xDEAD_0000,
+            user: true,
+        };
+        let fault = exception.fault().expect("a kind of its own");
+        assert_eq!(fault.kind, kind, "vector {vector}");
+        assert_eq!(fault.instruction_pointer, 0x40_1000);
+        assert_eq!(fault.error_code, 0b101);
+        let address = if vector == 14 { 0xDEAD_0000 } else { 0x40_1000 };
+        assert_eq!(fault.address, address, "vector {vector}");
+        assert_eq!(exception.kind(), Some(kind));
+    }
+}
+
+#[test]
+fn every_other_vector_stops_a_thread_without_a_message() {
+    for vector in 0..64_u8 {
+        let exception = Exception {
+            vector,
+            ..Exception::default()
+        };
+        let named = matches!(vector, 0 | 3 | 6 | 13 | 14 | 17);
+        assert_eq!(exception.fault().is_some(), named, "vector {vector}");
+        assert_eq!(exception.kind().is_some(), named, "vector {vector}");
+    }
+}

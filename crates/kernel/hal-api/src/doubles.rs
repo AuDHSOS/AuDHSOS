@@ -25,6 +25,7 @@ use crate::timer::{Timer, TimerError};
 #[derive(Debug)]
 pub struct MemoryFrameAccess<T> {
     tables: HashMap<PhysFrame, Box<T>>,
+    bytes: HashMap<PhysFrame, Box<[u8; FRAME_BYTES]>>,
     memory: Option<PhysFrameRange>,
 }
 
@@ -32,6 +33,7 @@ impl<T> Default for MemoryFrameAccess<T> {
     fn default() -> Self {
         MemoryFrameAccess {
             tables: HashMap::new(),
+            bytes: HashMap::new(),
             memory: None,
         }
     }
@@ -50,6 +52,7 @@ impl<T> MemoryFrameAccess<T> {
     pub fn with_lazy_tables(ram: PhysFrameRange) -> Self {
         MemoryFrameAccess {
             tables: HashMap::new(),
+            bytes: HashMap::new(),
             memory: Some(ram),
         }
     }
@@ -86,6 +89,29 @@ impl<T> MemoryFrameAccess<T> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.tables.is_empty()
+    }
+
+    /// Makes the bytes of `frame` reachable, filled with zeros. A frame of
+    /// the lazy range needs no such call: its bytes appear on the first
+    /// access, the way a frame of the reserve is already reachable through
+    /// the physical window.
+    pub fn add_bytes(&mut self, frame: PhysFrame) {
+        self.bytes
+            .entry(frame)
+            .or_insert_with(|| Box::new([0; FRAME_BYTES]));
+    }
+}
+
+impl<T> FrameBytes for MemoryFrameAccess<T> {
+    fn frame_bytes(&self, frame: PhysFrame) -> Option<&[u8; FRAME_BYTES]> {
+        self.bytes.get(&frame).map(AsRef::as_ref)
+    }
+
+    fn frame_bytes_mut(&mut self, frame: PhysFrame) -> Option<&mut [u8; FRAME_BYTES]> {
+        if !self.bytes.contains_key(&frame) && self.memory.is_some_and(|ram| ram.contains(frame)) {
+            self.add_bytes(frame);
+        }
+        self.bytes.get_mut(&frame).map(AsMut::as_mut)
     }
 }
 
@@ -415,6 +441,13 @@ impl FakeInterruptController {
 }
 
 impl InterruptController for FakeInterruptController {
+    fn vector_of(&self, line: InterruptLine) -> Option<Vector> {
+        if line.number() >= self.lines {
+            return None;
+        }
+        Vector::new(Vector::FIRST_DEVICE.checked_add(line.number())?).ok()
+    }
+
     fn route(&mut self, line: InterruptLine, vector: Vector) -> Result<(), InterruptError> {
         if line.number() >= self.lines {
             return Err(InterruptError::UnknownLine(line.number()));
@@ -675,6 +708,10 @@ impl Default for RecordingDevices {
 
 #[cfg(feature = "port-io")]
 impl InterruptController for RecordingDevices {
+    fn vector_of(&self, line: InterruptLine) -> Option<Vector> {
+        self.interrupts.vector_of(line)
+    }
+
     fn route(&mut self, line: InterruptLine, vector: Vector) -> Result<(), InterruptError> {
         self.interrupts.route(line, vector)
     }
