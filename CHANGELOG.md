@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- A cut line carries the mark it was documented to carry. `user_rt::Line`
+  said a line that does not fit "is cut and says so", and `ELLIPSIS` stood
+  public beside it as "the mark a cut line ends with" — and nothing ever
+  wrote it. Only the program could tell, through `is_truncated`; whoever
+  read the line could not. The last bytes of a cut line are the mark now,
+  and a line with no room for one carries none, because three dots in place
+  of the only three bytes there was room for say less than the bytes do.
+
 - A capability that does not fit the startup message refuses the start of
   the child rather than disappearing. The root task staged eight pairs while
   its own constant said two hundred and forty, so a memory server given more

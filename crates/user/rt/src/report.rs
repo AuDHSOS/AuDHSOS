@@ -82,14 +82,32 @@ impl<const N: usize> Line<N> {
     pub fn put(&mut self, bytes: &[u8]) {
         let room = N.saturating_sub(self.len);
         let taken = bytes.len().min(room);
-        if taken < bytes.len() {
-            self.truncated = true;
-        }
         let end = self.len.wrapping_add(taken);
         if let (Some(slot), Some(source)) = (self.bytes.get_mut(self.len..end), bytes.get(..taken))
         {
             slot.copy_from_slice(source);
             self.len = end;
+        }
+        if taken < bytes.len() {
+            self.truncated = true;
+            self.mark();
+        }
+    }
+
+    /// Writes [`ELLIPSIS`] over the last bytes of the line, which is how a
+    /// reader of the output sees that something was cut: `is_truncated`
+    /// says it to the program, and the mark says it to whoever reads the
+    /// line.
+    ///
+    /// A line with no room for the mark carries none. Three dots in place
+    /// of the only three bytes there was room for say less than the bytes
+    /// do.
+    fn mark(&mut self) {
+        let Some(from) = self.len.checked_sub(ELLIPSIS.len()) else {
+            return;
+        };
+        if let Some(slot) = self.bytes.get_mut(from..self.len) {
+            slot.copy_from_slice(ELLIPSIS);
         }
     }
 

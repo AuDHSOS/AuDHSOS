@@ -30,7 +30,15 @@ fn what_was_written_comes_back_in_order() {
 fn a_line_that_does_not_fit_is_cut_and_says_so() {
     let mut line: Line<4> = Line::new();
     line.put(b"abcdef");
-    assert_eq!(line.as_bytes(), b"abcd");
+    assert_eq!(line.as_bytes(), b"a...", "the cut is not marked");
+    assert!(line.is_truncated());
+}
+
+#[test]
+fn a_line_with_no_room_for_the_mark_carries_none() {
+    let mut line: Line<2> = Line::new();
+    line.put(b"abc");
+    assert_eq!(line.as_bytes(), b"ab");
     assert!(line.is_truncated());
 }
 
@@ -40,7 +48,7 @@ fn a_write_into_a_full_line_adds_nothing() {
     line.put(b"abcd");
     assert!(!line.is_truncated());
     line.put(b"e");
-    assert_eq!(line.as_bytes(), b"abcd");
+    assert_eq!(line.as_bytes(), b"a...");
     assert!(line.is_truncated());
 }
 
@@ -54,7 +62,7 @@ fn formatting_fills_a_fresh_line() {
 #[test]
 fn formatting_that_does_not_fit_is_cut() {
     let line: Line<4> = Line::of(format_args!("{}", "abcdefgh"));
-    assert_eq!(line.as_bytes(), b"abcd");
+    assert_eq!(line.as_bytes(), b"a...");
     assert!(line.is_truncated());
 }
 
