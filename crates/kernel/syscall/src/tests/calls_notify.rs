@@ -185,3 +185,29 @@ fn the_last_handle_to_a_notification_wakes_its_waiter() {
         ThreadState::Ready
     );
 }
+
+#[test]
+fn a_notification_the_machine_has_no_slot_for_leaves_the_quota_as_it_was() {
+    let mut fixture = Fixture::new();
+    while fixture
+        .objects
+        .notifications
+        .allocate(Notification::new())
+        .is_ok()
+    {}
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::NotificationCreate, &[])),
+        Some(Error::PoolExhausted)
+    );
+    assert_eq!(
+        fixture
+            .objects
+            .processes
+            .get(fixture.process)
+            .unwrap()
+            .kernel_object_quota
+            .used(),
+        0,
+        "what the call charged, it gave back"
+    );
+}

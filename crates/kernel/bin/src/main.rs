@@ -137,7 +137,10 @@ fn on_interrupt(vector: u8) {
     });
     let _ = counted;
     if vector != vectors::TIMER && vector != vectors::SPURIOUS {
+        // The forwarding acknowledges at the hardware itself: the order of
+        // the three steps is part of what 2.7 asks for.
         forward(vector);
+        return;
     }
     interrupts::acknowledge(vector);
 }
@@ -151,6 +154,11 @@ fn on_interrupt(vector: u8) {
 /// Interrupts arrive through interrupt gates, so no device interrupt reaches
 /// a kernel that holds the machine borrow; one that finds it busy all the
 /// same leaves the bits for the next one.
+///
+/// The switch a woken driver of higher priority asks for is not here: this
+/// image starts no user thread, so there is nobody to switch to. The test
+/// kernel the images of this crate share has that last step, and the root
+/// task of Phase 7 brings the same shape to the boot kernel.
 fn forward(vector: u8) {
     let line = kernel_core::with_machine(|machine| {
         kernel_ipc::interrupt_for(&machine.objects, vector).and_then(|id| {
@@ -169,6 +177,7 @@ fn forward(vector: u8) {
             apics.mask(InterruptLine::new(line));
         });
     }
+    interrupts::acknowledge(vector);
     let outcome = kernel_core::with_machine(|machine| {
         kernel_ipc::deliver(&mut machine.objects, &mut machine.scheduler, vector)
     })

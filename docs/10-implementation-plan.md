@@ -2105,12 +2105,19 @@ object types with waiters that is the operation of 10.6.3.
   to `GeneralProtection`, 6 to `InvalidOpcode`, 0 to `DivideError`, 3 to
   `Breakpoint`, 17 to `AlignmentCheck`, and `None` for every other vector,
   which stops the thread without a message as Phase 5 does.
-- The device interrupt handler of the kernel binary counts the interrupt,
-  hands the vector to `kernel_ipc::deliver` through the machine, masks,
-  acknowledges, and switches if a woken thread outranks the running one.
-  Interrupts arrive through interrupt gates, so no device interrupt
-  reaches a kernel that holds the machine borrow; the vector that names no
-  interrupt object is acknowledged and nothing else.
+- The device interrupt handler counts the interrupt, masks the line at the
+  I/O APIC, acknowledges at the local APIC, hands the vector to
+  `kernel_ipc::deliver` through the machine, writes the word into the buffer
+  of the thread it woke, and switches if that thread outranks the running
+  one. That is the order
+  [2.7](02-architecture.md#27-interrupts-and-devices) gives, and the switch
+  is the last of it. The kernel binary has the first four and not the
+  switch, because it starts no user thread and there is nobody to switch
+  to; the test kernel its images share has all five, and the root task of
+  Phase 7 brings the same shape to the boot kernel. Interrupts arrive
+  through interrupt gates, so no device interrupt reaches a kernel that
+  holds the machine borrow; the vector that names no interrupt object is
+  acknowledged and nothing else.
 
 ### 10.6.6 User-mode test programs and QEMU tests
 

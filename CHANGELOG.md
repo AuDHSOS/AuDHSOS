@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The device interrupt handler of the kernel binary acknowledges at the local
+  APIC before it signals the notification, not after. 2.7 gives the three
+  steps in one order — mask the line at the I/O APIC, end the interrupt at the
+  local APIC, then signal — and the binary had the last two the wrong way
+  round. Nothing of Phase 6 could observe it, because that image starts no
+  user thread and therefore signals nobody; the test kernel its images share
+  had the order right from the start. What the wrong order costs is a wake-up
+  that runs a driver with the interrupt still unacknowledged at the local
+  APIC, which delays every later interrupt of that priority class until the
+  handler returns.
+
 - The scheduler asks the transition table before it takes a thread out of
   its run queue. It did it the other way round in the four operations that
   take a thread off the processor, and for two of them that was wrong: the

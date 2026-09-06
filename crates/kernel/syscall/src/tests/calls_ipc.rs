@@ -736,3 +736,185 @@ fn write_raw(bytes: &mut [u8; SIZE], offset: usize, value: u64) {
         .unwrap()
         .copy_from_slice(&value.to_le_bytes());
 }
+
+#[test]
+fn an_endpoint_the_machine_has_no_slot_for_leaves_the_quota_as_it_was() {
+    let mut fixture = Fixture::new();
+    // Every slot of the pool is taken; the pool takes its size from the
+    // configuration and not from a parameter of the machine (D-74's
+    // neighbour in 10.6.0), so this is the real number.
+    while fixture.objects.endpoints.allocate(Endpoint::new()).is_ok() {}
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::EndpointCreate, &[])),
+        Some(Error::PoolExhausted)
+    );
+    assert_eq!(
+        fixture
+            .objects
+            .processes
+            .get(fixture.process)
+            .unwrap()
+            .kernel_object_quota
+            .used(),
+        0,
+        "what the call charged, it gave back"
+    );
+}
+
+#[test]
+fn a_badged_capability_that_has_nowhere_to_go_takes_no_second_reference() {
+    let mut fixture = Fixture::new();
+    let (id, handle) = endpoint(&mut fixture);
+    fixture.fill_handles();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::EndpointBadge, &[handle.raw(), BADGE])
+        ),
+        Some(Error::QuotaExceeded)
+    );
+    assert_eq!(
+        fixture.objects.endpoints.references(id),
+        Ok(1),
+        "the one handle is the one reference"
+    );
+}
+
+#[test]
+fn a_call_whose_message_is_refused_takes_back_the_reply_object_it_opened() {
+    let mut fixture = Fixture::new();
+    let (endpoint_id, handle) = endpoint(&mut fixture);
+    let server = fixture.process(8);
+    let receiver = fixture.running(server, 4);
+    let theirs = install_endpoint(&mut fixture, server, endpoint_id, Rights::RECV);
+    receive_on(&mut fixture, receiver, theirs);
+    let before = fixture
+        .objects
+        .processes
+        .get(server)
+        .unwrap()
+        .handles
+        .count();
+
+    let (_stays, refused) = fixture.memory(0x90, 1, Rights::READ);
+    let mut buffer = message(1, 1, &[refused]);
+    with_call(&mut buffer, Syscall::IpcCall, &[handle.raw()]);
+    let (status, _, _) = call(&mut fixture, &mut buffer);
+    assert_eq!(status.error(), Some(Error::AccessDenied));
+    assert_eq!(
+        fixture.objects.replies.live(),
+        0,
+        "the reply object went with the message"
+    );
+    assert_eq!(
+        fixture
+            .objects
+            .processes
+            .get(server)
+            .unwrap()
+            .handles
+            .count(),
+        before,
+        "and so did the handle to it"
+    );
+    assert_eq!(
+        fixture.objects.threads.get(receiver).unwrap().state,
+        ThreadState::BlockedRecv,
+        "the receiver is back in its queue"
+    );
+    assert_eq!(
+        fixture.objects.threads.get(fixture.thread).unwrap().state,
+        ThreadState::Running,
+        "and the caller never left the processor"
+    );
+}
+
+#[test]
+fn a_receive_whose_sender_shares_its_buffer_puts_the_sender_back() {
+    // Two threads never share an IPC buffer, so this is a check on the
+    // argument and not a state the kernel can reach; it is reached here by
+    // giving the queued sender the buffer of the thread that receives.
+    let mut fixture = Fixture::new();
+    let (endpoint_id, handle) = endpoint(&mut fixture);
+    let client = fixture.process(8);
+    let sender = fixture.running(client, 4);
+    let theirs = install_endpoint(&mut fixture, client, endpoint_id, Rights::SEND);
+    fixture
+        .objects
+        .handles
+        .lookup_mut(client, theirs)
+        .unwrap()
+        .badge = BADGE;
+    let mut theirs_buffer = message(1, 1, &[]);
+    with_call(&mut theirs_buffer, Syscall::IpcSend, &[theirs.raw()]);
+    fixture.write_buffer(sender, &theirs_buffer);
+    crate::dispatch::dispatch(&mut fixture.machine(), sender, &mut theirs_buffer);
+    assert_eq!(
+        fixture.objects.threads.get(sender).unwrap().state,
+        ThreadState::BlockedSend
+    );
+    let sharing = fixture
+        .objects
+        .threads
+        .get(fixture.thread)
+        .unwrap()
+        .ipc_buffer;
+    fixture
+        .objects
+        .threads
+        .with(sender, |thread| thread.ipc_buffer = sharing);
+
+    let mut buffer = [0; SIZE];
+    with_call(&mut buffer, Syscall::IpcRecv, &[handle.raw()]);
+    let (status, _, _) = call(&mut fixture, &mut buffer);
+    assert_eq!(status.error(), Some(Error::InvalidArgument));
+    assert_eq!(
+        fixture.objects.threads.get(sender).unwrap().state,
+        ThreadState::BlockedSend,
+        "the sender is back in the queue it waited in"
+    );
+    assert_eq!(
+        fixture.objects.threads.get(sender).unwrap().wait,
+        kernel_objects::object::Wait::Endpoint {
+            endpoint: endpoint_id,
+            queue: kernel_objects::object::Queue::Senders,
+            badge: BADGE
+        },
+        "with the badge it sent through"
+    );
+}
+
+#[test]
+fn closing_a_reply_handle_without_answering_wakes_the_caller() {
+    let mut fixture = Fixture::new();
+    let (endpoint_id, handle) = endpoint(&mut fixture);
+    let client = fixture.process(8);
+    let caller = fixture.running(client, 4);
+    let theirs = install_endpoint(&mut fixture, client, endpoint_id, Rights::SEND);
+    let reply = queue_a_call(&mut fixture, caller, theirs, handle);
+    assert_eq!(
+        fixture.objects.threads.get(caller).unwrap().state,
+        ThreadState::BlockedReply
+    );
+
+    // The server gives up on the call instead of answering it.
+    let (status, _, _) = call(
+        &mut fixture,
+        &mut request(Syscall::HandleClose, &[reply.raw()]),
+    );
+    assert_eq!(status.error(), None);
+    assert_eq!(fixture.objects.replies.live(), 0, "the object went with it");
+    assert_eq!(
+        fixture.objects.threads.get(caller).unwrap().state,
+        ThreadState::Ready
+    );
+    assert_eq!(
+        fixture.status_of(caller).error(),
+        Some(Error::ReplyDropped),
+        "the caller learns that its answer will never come"
+    );
+    assert_eq!(
+        fixture.objects.threads.get(caller).unwrap().wait,
+        kernel_objects::object::Wait::Nothing
+    );
+}
