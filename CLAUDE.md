@@ -9,6 +9,12 @@ Schreiben sie nicht von`Naht`. Sondern nutzen sie den englischen Begriff.
 Es sei denn, es wird von der Stoff-Naht geschrieben.
 Fachbegriffe, insbesondere aus der Informatik, bleiben englisch. In der deutschen Kommunikation werden Rust- und Systembegriffe nicht übersetzt: Crate, Trait, Slice, Borrow, Lifetime, Frame, Page, Handle, Endpoint, Guard Page, Fuzzing, Mangling, Kernel, Memory, Page Table, seed corpus, seed, seeds, corpus entry, corpus file. Sie werden als Fremdwörter dekliniert („des Crates", „die Traits").
 
+# RFC-Dokumente
+
+RFC-Dokumente nie aus dem Gedächtnis zitieren, rondern im Pfad `docs/rfc`
+prüfen ob das RFC-Dokument geladen wurde. Wenn nicht lesen sie
+`docs/rfc/README.md` um das RFC-Dokument zu laden und anschließend zu lesen.
+
 # Build- und Check-Kommandos
 
 Alle Cargo-Aufrufe dieses Projekts laufen über die Wrapper in `tools/`, nie
