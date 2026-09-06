@@ -368,7 +368,7 @@ Status: implemented.
 
 | Step | Crate | Size | Ends with |
 |------|-------|------|-----------|
-| G1 | `fuzz-support` | S | implemented: the entry glue, the `fuzz_target!` macro, the corpus replay, the `elf`, `boot_image_header`, and `boot_info` targets, and `fuzz --regression` as a step of `check`. Track C added `der`, `x509`, `tls_record`, and `tls_handshake` on top of it |
+| G1 | `fuzz-support` | S | implemented: the entry glue, the `fuzz_target!` macro, the corpus replay, the `elf`, `boot_image_header`, and `boot_info` targets, and `fuzz --regression` as a step of `check`. Track C added `der`, `x509`, `tls_record`, `tls_handshake`, and — with the RSA steps R1 to R6 — `rsa` on top of it |
 | G2 | `audhsos-symbols` | M | implemented: the symbol table, the DWARF 4 and 5 line programs, `xtask symbolize`, and the automatic report on a failing QEMU run |
 
 G2 was worth having before Phase 3, because that is where kernel panics

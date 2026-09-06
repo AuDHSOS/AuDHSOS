@@ -1580,7 +1580,7 @@ boundary the list above does not name.
 
 ### 6.6.55 Wide arithmetic and RSA (`crypto-bignum`, `crypto-rsa`)
 
-Planned with steps R1 to R3 of document 11, section 11.15. The number
+Built with steps R1 to R3 of document 11, section 11.15. The number
 follows the catalog rather than the layer, as 6.6.54 records.
 
 - The modulus: a value that is even, one that is zero, one wider than
@@ -1601,8 +1601,12 @@ follows the catalog rather than the layer, as 6.6.54 records.
   trip that signs with a wide exponent and verifies with a small one over
   the key of RFC 8448, section 2.
 - The key: the bounds of D-79 at each edge — an exponent of one, of two,
-  of three; a modulus one bit below the lower bound and one bit above the
-  upper — refused where the rule says and accepted where it does not.
+  of four, and of three; a modulus above the upper bound, and one whose
+  top bit is clear — refused where the rule says and accepted where it
+  does not. The lower bound is not among them, and a test says so by
+  name: the thousand-and-twenty-four-bit key of RFC 8448 is accepted
+  here, because that bound belongs to `audhsos-x509` and is checked in
+  6.6.36.
 - PKCS #1 v1.5, the positive direction: a signature this crate made
   verifies, for SHA-256, SHA-384, and SHA-512, and the encoded message it
   builds matches the `DigestInfo` prefixes of RFC 8017, section 9.2
@@ -1623,11 +1627,19 @@ follows the catalog rather than the layer, as 6.6.54 records.
 - The one vector from outside: the `CertificateVerify` of the simple
   1-RTT handshake of RFC 8448 verifies as `rsa_pss_rsae_sha256` under the
   key that document's section 2 prints. It is 1024 bits and therefore
-  never reaches a chain (D-79); it reaches the primitive.
-- Fuzz target `rsa`: a subject public key and a signature from the same
-  input, parsed and verified, must not panic and must not loop. The
-  corpus holds a valid signature of each kind and the malformed encodings
-  above.
+  never reaches a chain (D-79); it reaches the primitive. The test lives
+  in the replay of 6.6.38, because that is where the transcript the
+  signature was made over is computed.
+- Fuzz target `rsa`: a key and a signature from the same input, parsed
+  and verified, must not panic and must not loop. Everything it reaches is
+  bounded before it runs — the modulus by `MAX_LIMBS`, the exponent by the
+  sixty-four bits it is read into, the encodings by the width of the key —
+  so a verification that took a long time would be a bound that is
+  missing, and the engine would find it as a timeout. The one thing
+  asserted of a key that parses is that it reads back as the key it was
+  built from. The corpus holds a valid signature under each of the six
+  schemes, the eight malformed encodings above, and two inputs that are
+  not a key at all.
 
 ## 6.7 CI pipeline
 

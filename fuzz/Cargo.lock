@@ -224,6 +224,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsa"
+version = "0.1.0"
+dependencies = [
+ "crypto-rsa",
+ "fuzz-support",
+]
+
+[[package]]
 name = "tls_handshake"
 version = "0.1.0"
 dependencies = [

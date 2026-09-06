@@ -26,15 +26,22 @@ In scope for the first version:
   `TLS_CHACHA20_POLY1305_SHA256`.
 - Key exchange `x25519` (D-56).
 - Certificate signature verification with ECDSA over P-256 and over
-  P-384, with SHA-256 or SHA-384, and with `ed25519`. A chain that ends at
-  a P-384 root is therefore walked to the end; `GTS Root R4` is one such
-  root, and `tools/tls-probe` reaches it.
+  P-384, with SHA-256 or SHA-384, with `ed25519`, and with RSA — PKCS #1
+  v1.5 and PSS, each over SHA-256, SHA-384, or SHA-512, for a key of two
+  thousand and forty-eight to four thousand and ninety-six bits (D-79).
+  A chain that ends at a P-384 root is therefore walked to the end, and so
+  is one that ends at an RSA root; `ISRG Root X2` is one of the first and
+  `ISRG Root X1` one of the second, and `tools/tls-probe` reaches both.
 - Handshake signature verification with `ecdsa_secp256r1_sha256`,
-  `ecdsa_secp384r1_sha384`, and `ed25519`. These are the schemes the
-  `ClientHello` offers, and the two lists are not the same list: a scheme
-  names one curve, while `ecdsa-with-SHA384` in a certificate names none,
-  so the `CertificateVerify` is held to a stricter rule than the chain
-  below it (D-61).
+  `ecdsa_secp384r1_sha384`, `ed25519`, and the three `rsa_pss_rsae_*`
+  schemes. The `ClientHello` offers those six and three more — the
+  `rsa_pkcs1_*` code points, which RFC 8446 section 4.2.3 gives one
+  meaning, that a certificate may be signed that way, and forbids in a
+  `CertificateVerify`. The two lists are not the same list: a scheme names
+  one curve, while `ecdsa-with-SHA384` in a certificate names none, so the
+  `CertificateVerify` is held to a stricter rule than the chain below it
+  (D-61), and the three PKCS #1 code points are offered and refused
+  (D-82).
 - Server certificate validation against caller-supplied trust anchors,
   RFC 5280 path rules, RFC 6125 name matching.
 - ALPN, server name indication, key update, close notify.
@@ -46,11 +53,13 @@ exchange; hybrid post-quantum key
 exchange; certificate revocation (CRL, OCSP, stapling); name constraints;
 renegotiation; compression; `record_size_limit`; DTLS.
 
-RSA verification was on that list and is now section 11.15, planned and
-not yet built. It is the one omission that costs interoperability: many
+RSA verification was on that list until steps R1 to R6 of section 11.15
+took it off. It was the one omission that cost interoperability: many
 public chains are RSA to the root, and `www.ietf.org`,
-`www.rust-lang.org`, and `www.bbc.co.uk` are three that this client
-cannot reach for that reason alone.
+`www.rust-lang.org`, and `www.bbc.co.uk` were three this client could not
+reach for that reason alone. All three are reached now, and so is
+`google.de`, whose chain moved from a P-384 root to an RSA one while this
+work was going on — which is the plainest argument for it there is.
 
 An earlier version of this section said the arithmetic was nearly there —
 that `crypto-ec::montgomery` is generic over the number of limbs, so a
@@ -524,8 +533,8 @@ thousand and ninety-six, which is the width `MAX_SPKI` is sized for.
 Beyond that: the vector tests of each primitive, property tests for
 round trips and for parsers that must not panic, model tests for path
 validation, negative tests for every rejection rule in 11.9 and 11.10,
-and the four fuzz targets `der`, `x509`, `tls_record`, and
-`tls_handshake`. Coverage thresholds apply to all eight crates.
+and the five fuzz targets `der`, `x509`, `rsa`, `tls_record`, and
+`tls_handshake`. Coverage thresholds apply to all ten crates.
 
 Every crate whose code touches secrets carries a constant-time review
 section in its crate documentation: which functions see secret input, and
@@ -550,7 +559,7 @@ checklist in 4.9.
 | R3 | `crypto-rsa`: MGF1 and EMSA-PSS-VERIFY | M | implemented |
 | R4 | `audhsos-x509`: identifiers, parameters, the key, the pairs, and the builder | L | implemented |
 | R5 | `audhsos-tls`: code points, the hello, `MAX_SPKI`, the `CertificateVerify` rule, the trace | M | implemented |
-| R6 | The fuzz target, `tools/tls-probe` against three hosts, and the documents | S-M | |
+| R6 | The fuzz target, `tools/tls-probe` against three hosts, and the documents | S-M | implemented |
 
 T1 to T7 touch nothing outside their own crates and the policy table, so
 they can be built between kernel phases without disturbing them. T5 and
@@ -572,7 +581,7 @@ separate workspace and no part of the checks.
 |------|--------|------------|
 | Self-written cryptography has flaws that tests do not find | a connection that looks encrypted but is not | vector tests from the standards, the RFC 8448 trace, negative tests for every rejection rule, fuzzing, the constant-time review section per crate, verification-only asymmetric surface |
 | Constant-time properties are lost to compiler optimization | timing side channels | no tables, no secret-dependent control flow at the source level; `black_box` where the source must not be folded away; the discipline is documented per function |
-| No RSA verification yet | many real chains cannot be validated | scoped as steps R1 to R6 (11.15) against documents this repository now holds; until they are done it is a stated limit, and the interfaces already leave room for the algorithm |
+| Self-written RSA has flaws the tests do not find | a chain that looks verified and is not | the construction of D-80 rather than a decoder, a negative test for each rejection rule of both encodings, the `CertificateVerify` of RFC 8448 as a vector from outside, the fuzz target `rsa`, and three real chains through `tools/tls-probe` |
 | Wide arithmetic is written for one purpose and used for another | a bignum that is safe for public values used where values are secret | `crypto-bignum` serves verification only: no secret ever reaches it, its module documentation says so in the form `montgomery.rs` already uses, and nothing in the track signs outside `test-signing` |
 | No revocation checking | a revoked certificate is accepted | stated as a known limit; short-lived anchors and operator-chosen trust stores are the only mitigation in this version |
 | The track grows past its estimate | kernel phases slip | the track is independent; work on it happens between phases, never instead of one |
@@ -605,9 +614,11 @@ program, which is what the regression step uses.
 
 ## 11.15 RSA verification
 
-Planned, not built. This section is the design and the order of work for
-the one omission of 11.2 that costs interoperability, in the form the
-rest of this document uses. The decisions it rests on are D-77 to D-83.
+Built, in the six steps R1 to R6 of 11.12. This section was the design and
+the order of work for the one omission of 11.2 that cost
+interoperability, and it is kept in that shape, in the tense it was
+written in, with what the building changed said where it changed it. The
+decisions it rests on are D-77 to D-83.
 
 ### 11.15.1 What the reference documents settle
 
@@ -838,4 +849,9 @@ ninety percent of lines and eighty-five of branches for both new crates.
 The end of it is `tools/tls-probe` against `www.ietf.org`,
 `www.rust-lang.org`, and `www.bbc.co.uk`. That is the only check that says
 the chains this omission cost are reachable, and it is the one the whole
-step is for.
+step is for. All three complete, and they do not exercise the same thing:
+`www.rust-lang.org` is RSA the whole way, `www.bbc.co.uk` puts a
+`sha384WithRSAEncryption` link on a real path, and `www.ietf.org` serves
+an ECDSA chain whose root is cross-signed with RSA — so the same host
+verifies through RSA under one anchor and through P-384 under another.
+The probe's own README carries the anchors and their provenance.

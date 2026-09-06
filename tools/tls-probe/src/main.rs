@@ -38,10 +38,11 @@ use crate::error::ProbeError;
 
 /// The anchor a run pins when the caller names no other.
 ///
-/// It is `GTS Root R4`, the Google Trust Services root the chain for
-/// `google.de` reaches. Its key is P-384, so until `crypto-ec` had that
-/// curve this had to be the intermediate below it instead.
-const DEFAULT_ANCHOR: &[u8] = include_bytes!("../anchors/gts-root-r4.der");
+/// It is `GTS Root R1`, the Google Trust Services root the chain for
+/// `google.de` reaches today. It was `GTS Root R4` until Google moved
+/// that chain from a P-384 root to this RSA one; `anchors/` still holds
+/// R4, and the README says which host each anchor is for.
+const DEFAULT_ANCHOR: &[u8] = include_bytes!("../anchors/gts-root-r1.der");
 
 /// The host a run reaches when the caller names no other.
 const DEFAULT_HOST: &str = "google.de";

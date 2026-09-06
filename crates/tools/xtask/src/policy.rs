@@ -670,6 +670,7 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "ipv6" },
     FuzzTarget { name: "madt" },
     FuzzTarget { name: "pem" },
+    FuzzTarget { name: "rsa" },
     FuzzTarget {
         name: "tls_handshake",
     },

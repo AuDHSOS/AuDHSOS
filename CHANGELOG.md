@@ -29,6 +29,41 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The fuzz target `rsa` and three real chains, step R6 of the RSA track,
+  which is the end of it.
+
+  The target builds a key and a signature out of the same input and
+  verifies one against the other under whichever of the six schemes the
+  first byte names. Nothing in it asserts that a signature verifies — a
+  random string almost never is one, and asserting that it is not would be
+  asserting that the fuzzer is unlucky. What it asserts is that a key that
+  parses reads back as the key it was built from, and what it watches for
+  is time: everything it reaches is bounded before it runs, so a
+  verification that took long would be a bound that is missing. The corpus
+  holds a valid signature under each of the six schemes, the eight
+  malformed encodings the unit tests refuse, and two inputs that are not a
+  key at all.
+
+  `tools/tls-probe` reaches `www.ietf.org`, `www.rust-lang.org`, and
+  `www.bbc.co.uk` — the three chains section 11.15 named as the cost of
+  the omission. They do not exercise the same thing.
+  `www.rust-lang.org` is RSA the whole way, a 2048-bit leaf under a
+  2048-bit intermediate under the 4096-bit `ISRG Root X1`.
+  `www.bbc.co.uk` is the same shape under `GlobalSign Root R46` with a
+  `sha384WithRSAEncryption` link in it. `www.ietf.org` serves an ECDSA
+  chain whose root is cross-signed with RSA, so the same host verifies
+  through RSA under `ISRG Root X1` and through P-384 under
+  `ISRG Root X2` — two anchors, two algorithms, one connection.
+
+  The default anchor changes from `GTS Root R4` to `GTS Root R1`, because
+  Google moved `*.google.de` from a P-384 root to an RSA one while this
+  work was going on. The probe's own default host stopped verifying
+  without a line of its code changing, which is the plainest argument for
+  this whole track there is. `GTS Root R4` stays in `anchors/` for the
+  record, `ISRG Root X2` joins it as the P-384 anchor that a live chain
+  still reaches, and each of the five is recorded with its fingerprint and
+  the trust store it was taken from.
+
 - `audhsos-tls` offers and honours the RSA signature schemes, step R5 of
   the RSA track, and the seam section 11.11 named as open is closed.
 
