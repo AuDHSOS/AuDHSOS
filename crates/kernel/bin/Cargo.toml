@@ -35,6 +35,9 @@ name = "interrupts"
 name = "user"
 
 [[test]]
+name = "ipc"
+
+[[test]]
 name = "isolation"
 
 [[test]]
@@ -76,6 +79,7 @@ name = "panic"
 [dependencies]
 audhsos-abi.workspace = true
 kernel-core.workspace = true
+kernel-ipc.workspace = true
 kernel-hal-api.workspace = true
 kernel-hal-x86_64.workspace = true
 kernel-types.workspace = true

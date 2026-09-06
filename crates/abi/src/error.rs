@@ -79,6 +79,7 @@ error_codes! {
     ArgumentCount = 22 => "the number of arguments does not match the system call",
     InvalidState = 23 => "the object is not in a state the operation allows",
     NotRunnable = 24 => "the thread cannot run: it has no entry point, no stack, or it has exited",
+    Cancelled = 25 => "the operation was cancelled before it completed",
 }
 
 impl TryFrom<u32> for Error {

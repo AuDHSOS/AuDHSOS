@@ -137,7 +137,9 @@ pub const TRANSITIONS: &[(ThreadState, Event, ThreadState)] = &[
     (ThreadState::Running, Event::Fault, ThreadState::Faulted),
     (ThreadState::Running, Event::Exit, ThreadState::Exited),
     // Waiting for something that happens elsewhere. Every blocked state
-    // wakes into `Ready`, is suspendable, and can be killed.
+    // wakes into `Ready`, is suspendable, and can be killed. The one
+    // transition from one blocked state to another is the queued caller
+    // below, whose message was taken and who now waits for the answer.
     (ThreadState::BlockedSend, Event::Wake, ThreadState::Ready),
     (
         ThreadState::BlockedSend,
@@ -145,6 +147,15 @@ pub const TRANSITIONS: &[(ThreadState, Event, ThreadState)] = &[
         ThreadState::Suspended,
     ),
     (ThreadState::BlockedSend, Event::Exit, ThreadState::Exited),
+    // A queued caller whose message a receiver has taken. It waited for a
+    // receiver and now waits for the answer, without ever having been
+    // ready in between, which is what makes `ipc_call` atomic from the
+    // receiver's point of view (2.6.1).
+    (
+        ThreadState::BlockedSend,
+        Event::BlockReply,
+        ThreadState::BlockedReply,
+    ),
     (ThreadState::BlockedRecv, Event::Wake, ThreadState::Ready),
     (
         ThreadState::BlockedRecv,

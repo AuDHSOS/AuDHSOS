@@ -11,7 +11,7 @@
 //! type this module hands out a reference to.
 
 use audhsos_abi::layout::{PAGE_SIZE, PHYS_WINDOW_BASE};
-use kernel_hal_api::paging::FrameAccess;
+use kernel_hal_api::paging::{FRAME_BYTES as API_FRAME_BYTES, FrameAccess, FrameBytes};
 use kernel_types::{PhysAddr, PhysFrame, VirtAddr};
 
 /// The number of bytes of one frame, as the length of an array.
@@ -110,6 +110,22 @@ impl PhysicalWindow {
         // kernel is the only writer; the exclusive borrow of the window
         // means no other reference obtained from it is alive.
         Some(unsafe { &mut *pointer })
+    }
+}
+
+const _: () = assert!(FRAME_BYTES == API_FRAME_BYTES);
+
+impl FrameBytes for PhysicalWindow {
+    fn frame_bytes(&self, frame: PhysFrame) -> Option<&[u8; FRAME_BYTES]> {
+        let pointer = self.pointer::<[u8; FRAME_BYTES]>(frame)?;
+        // SAFETY: the constructor promises that the window maps the frame
+        // for the lifetime of this value and that the kernel is the only
+        // writer, so the reference is valid and nobody mutates through it.
+        Some(unsafe { &*pointer })
+    }
+
+    fn frame_bytes_mut(&mut self, frame: PhysFrame) -> Option<&mut [u8; FRAME_BYTES]> {
+        PhysicalWindow::frame_bytes_mut(self, frame)
     }
 }
 

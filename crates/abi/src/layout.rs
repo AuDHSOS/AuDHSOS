@@ -116,6 +116,12 @@ pub const MAX_MESSAGE_WORDS: usize = 480;
 /// Maximum number of handles in a message.
 pub const MAX_MESSAGE_HANDLES: usize = 4;
 
+/// Maximum number of words a system call result writes into the message
+/// area of the caller's own buffer when it does not fit into
+/// [`MAX_SYSCALL_RETURN_WORDS`] return words. `system_info` writes twenty,
+/// which is the widest result of this interface.
+pub const MAX_RESULT_WORDS: usize = 20;
+
 /// Number of threads one process may hold.
 pub const THREADS_PER_PROCESS: usize = 64;
 
@@ -151,6 +157,7 @@ const _: () = assert!(KERNEL_BASE > PHYS_WINDOW_BASE);
 const _: () = assert!(ROOT_TASK_BASE >= USER_SPACE_START && ROOT_TASK_BASE < USER_SPACE_END);
 const _: () = assert!(ROOT_TASK_BASE.is_multiple_of(PAGE_SIZE));
 const _: () = assert!(MAX_MESSAGE_WORDS * 8 + MAX_MESSAGE_HANDLES * 8 + 3 * 8 + 10 * 8 <= 4096);
+const _: () = assert!(MAX_RESULT_WORDS <= MAX_MESSAGE_WORDS);
 const _: () = assert!(BOOT_STACK_TOP.is_multiple_of(PAGE_SIZE));
 const _: () = assert!(BOOT_INFO_VADDR.is_multiple_of(PAGE_SIZE));
 const _: () = assert!(BOOT_STACK_TOP < KERNEL_BASE);

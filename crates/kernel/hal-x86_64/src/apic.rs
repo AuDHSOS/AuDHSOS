@@ -425,6 +425,10 @@ impl Apics {
 }
 
 impl InterruptController for Apics {
+    fn vector_of(&self, line: InterruptLine) -> Option<Vector> {
+        Vector::new(kernel_x86_tables::vectors::for_gsi(self.gsi_of(line))?).ok()
+    }
+
     fn route(&mut self, line: InterruptLine, vector: Vector) -> Result<(), InterruptError> {
         let gsi = self.gsi_of(line);
         let entry = self.entry_for(line, vector);

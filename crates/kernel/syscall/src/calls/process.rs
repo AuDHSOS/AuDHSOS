@@ -11,7 +11,7 @@
 use audhsos_abi::{Error, Handle, Rights};
 use kernel_objects::config::HANDLES_PER_PROCESS;
 use kernel_objects::handle_table::{Entry, HandleList};
-use kernel_objects::object::{AnyObjectId, Process, ProcessId};
+use kernel_objects::object::{AnyObjectId, Endpoint, Process, ProcessId};
 use kernel_objects::quota::Quota;
 
 use crate::dispatch::{Machine, Reply, Request};
@@ -110,14 +110,15 @@ pub fn create<
         AnyObjectId::of(id),
         Rights::MANAGE | Rights::MAP | Rights::INSTALL | Rights::DUPLICATE | Rights::TRANSFER,
     );
-    let mut list = machine.objects.processes.get(caller)?.handles;
-    match machine.objects.handles.insert(caller, &mut list, entry) {
+    match machine.objects.install_handle(caller, entry) {
         Ok(handle) => {
-            machine.objects.processes.get_mut(caller)?.handles = list;
+            // The handle is a reference of its own, beside the one the
+            // process holds to itself while it lives.
+            machine.objects.retain(AnyObjectId::of(id))?;
             Ok(Reply::value(handle.raw()))
         }
         Err(error) => {
-            let _ = machine.objects.processes.release(id);
+            machine.objects.processes.force_release(id);
             machine.environment.destroy_address_space(root);
             give_back(machine, parent, frames, objects);
             Err(error)
@@ -177,13 +178,59 @@ pub fn install_handle<
         rights,
         badge: entry.badge,
     };
-    let mut list = machine.objects.processes.get(target)?.handles;
-    let handle = machine
-        .objects
-        .handles
-        .insert(target, &mut list, installed)?;
-    machine.objects.processes.get_mut(target)?.handles = list;
+    let handle = machine.objects.install_handle(target, installed)?;
+    // The handle the target now holds is a second reference.
+    machine.objects.retain(entry.object)?;
     Ok(Reply::value(handle.raw()))
+}
+
+/// `process_set_fault_handler`: the endpoint the faults of a process are
+/// reported on. A second argument of zero clears it.
+///
+/// The endpoint it retains, and the one it replaces it releases, so a
+/// handler that is set and then replaced does not keep the old endpoint
+/// alive.
+///
+/// # Errors
+///
+/// [`Error::InvalidHandle`] for either handle; [`Error::WrongObjectType`]
+/// when the second names no endpoint; [`Error::AccessDenied`] when it does
+/// not carry `SEND`, which is what the kernel needs to send a fault message
+/// through it.
+pub fn set_fault_handler<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    caller: ProcessId,
+    request: &Request,
+) -> Result<Reply, Error> {
+    let target = process_of(machine, caller, request)?;
+    let wanted = request.argument(1);
+    let handler = if wanted == 0 {
+        None
+    } else {
+        let handle = Handle::from_raw(wanted).ok_or(Error::InvalidHandle)?;
+        let (id, _rights) = machine
+            .objects
+            .resolve::<Endpoint>(caller, handle, Rights::SEND)?;
+        machine.objects.retain(AnyObjectId::of(id))?;
+        Some(id)
+    };
+    let previous = machine.objects.processes.get(target)?.fault_handler;
+    machine
+        .objects
+        .processes
+        .with(target, |holder| holder.fault_handler = handler);
+    let switch = match previous {
+        Some(old) => crate::lifetime::release(machine, AnyObjectId::of(old))?,
+        None => false,
+    };
+    let reply = Reply::DONE;
+    Ok(if switch { reply.reschedule() } else { reply })
 }
 
 /// `process_kill`: ends every thread of the process, closes every handle it
@@ -202,22 +249,29 @@ pub fn kill<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
     let mut reschedule = false;
     // The threads end here; what they held is cleared away by
     // `crate::reaper::reap` once the kernel has switched off the stack the
-    // caller is standing on, which may be one of these.
+    // caller is standing on, which may be one of these. A thread that waited
+    // on something leaves its queue first, or the endpoint would go on
+    // naming a thread that is no longer in it.
     for id in holder.threads() {
+        kernel_ipc::cancel(machine.objects, id);
         if let Ok(outcome) = machine.scheduler.exit(&mut machine.objects.threads, id) {
             reschedule |= outcome.reschedule;
         }
     }
-    let mut list = holder.handles;
-    machine.objects.handles.close_all(&mut list);
+    // Every handle it held was a reference; each of them goes through the
+    // release path, so an endpoint whose last handle this was is destroyed
+    // and its waiters are woken.
+    reschedule |= crate::lifetime::close_every_handle(machine, target);
     machine.environment.destroy_address_space(holder.root);
     machine.objects.with_process(target, |entry| {
-        entry.handles = list;
         for id in holder.threads() {
             entry.remove_thread(id);
         }
     });
-    let _ = machine.objects.processes.release(target);
+    if let Some(handler) = holder.fault_handler {
+        reschedule |= crate::lifetime::release(machine, AnyObjectId::of(handler))?;
+    }
+    machine.objects.processes.force_release(target);
     let reply = Reply::DONE;
     Ok(if reschedule {
         reply.reschedule()

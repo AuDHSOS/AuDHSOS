@@ -36,13 +36,15 @@ use kernel_core::trap::{Exception, Response};
 use kernel_hal_api::paging::FrameAccess;
 use kernel_hal_x86_64::console::SerialConsole;
 use kernel_hal_x86_64::paging::{AddressSpaces, LocalTlb, X86Entry, active_root};
+use kernel_hal_x86_64::ports::DeviceAccess;
 use kernel_hal_x86_64::traps::TrapReport;
 use kernel_hal_x86_64::window::PhysicalWindow;
 use kernel_hal_x86_64::{context, descriptors, instructions, interrupts, testing, traps, vectors};
 use kernel_mm::page_table::{CachePolicy, PageTable, Permissions};
 use kernel_objects::handle_table::{Entry, HandleList};
 use kernel_objects::object::{
-    AnyObjectId, MemoryKind, MemoryObject, MemoryObjectId, Process, ProcessId, Thread, ThreadId,
+    AnyObjectId, Endpoint, EndpointId, MemoryKind, MemoryObject, MemoryObjectId, Process,
+    ProcessId, Thread, ThreadId,
 };
 use kernel_objects::quota::Quota;
 use kernel_syscall::environment::{Environment, KernelStack};
@@ -279,9 +281,11 @@ pub(crate) fn create_process(program: &[u8]) -> UserProcess {
             .processes
             .allocate(Process::new(
                 root,
-                HandleList::with_capacity(8),
+                // Room for the handles the root task will install and the
+                // objects a program of this system makes for itself.
+                HandleList::with_capacity(64),
                 Quota::new(32),
-                Quota::new(32),
+                Quota::new(64),
             ))
             .unwrap_or_else(|_| testing::fail(format_args!("no slot for the process")))
     })
@@ -444,9 +448,163 @@ pub(crate) fn install(process: ProcessId, object: AnyObjectId, rights: Rights) -
         if let Ok(held) = machine.objects.processes.get_mut(process) {
             held.handles = list;
         }
+        // A handle is a reference: the root task will take one the same way.
+        machine
+            .objects
+            .retain(object)
+            .unwrap_or_else(|error| testing::fail(format_args!("no reference: {error}")));
         handle
     })
     .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")))
+}
+
+/// An endpoint of the machine, which the root task will make with
+/// `endpoint_create` once it runs.
+pub(crate) fn endpoint() -> EndpointId {
+    with_machine(|machine| {
+        machine
+            .objects
+            .endpoints
+            .allocate(Endpoint::new())
+            .unwrap_or_else(|_| testing::fail(format_args!("no slot for the endpoint")))
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")))
+}
+
+/// Installs a handle to `object` with `rights` and `badge` in the table of
+/// `process`, which is what `endpoint_badge` makes of a capability.
+pub(crate) fn install_badged(
+    process: ProcessId,
+    object: AnyObjectId,
+    rights: Rights,
+    badge: u64,
+) -> Handle {
+    let handle = install(process, object, rights);
+    with_machine(|machine| {
+        if let Ok(entry) = machine.objects.handles.lookup_mut(process, handle) {
+            entry.badge = badge;
+        }
+    });
+    handle
+}
+
+/// Maps every frame of `object` read and write at `address` of `process`,
+/// which is what the root task does for a program it hands memory to.
+pub(crate) fn map_memory(process: &UserProcess, object: MemoryObjectId, address: u64) {
+    let frames = with_machine(|machine| {
+        machine
+            .objects
+            .memory
+            .get(object)
+            .map(|held| held.frames)
+            .unwrap_or_else(|_| testing::fail(format_args!("the memory object is gone")))
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")));
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    with_memory(|memory| {
+        let mut environment = environment(memory, &mut tables, &mut tlb);
+        for index in 0..frames.count() {
+            let frame = frames
+                .start()
+                .checked_add(index)
+                .unwrap_or_else(|| testing::fail(format_args!("the object runs past memory")));
+            let at = VirtAddr::new(address.saturating_add(index.saturating_mul(PAGE_SIZE)))
+                .unwrap_or_else(|_| {
+                    testing::fail(format_args!("the mapping is outside user space"))
+                });
+            let page = Page::from_start(at)
+                .unwrap_or_else(|_| testing::fail(format_args!("the mapping is not aligned")));
+            environment
+                .map(
+                    process.root,
+                    page,
+                    frame,
+                    Permissions::READ_WRITE.for_user(),
+                    CachePolicy::WriteBack,
+                )
+                .unwrap_or_else(|error| {
+                    testing::fail(format_args!("the object is not mapped: {error}"))
+                });
+        }
+    });
+}
+
+/// Names `endpoint` as the endpoint the faults of `process` are reported on,
+/// which `process_set_fault_handler` does once a program runs.
+pub(crate) fn set_fault_handler(process: ProcessId, endpoint: EndpointId) {
+    with_machine(|machine| {
+        machine
+            .objects
+            .retain(AnyObjectId::of(endpoint))
+            .unwrap_or_else(|error| testing::fail(format_args!("no reference: {error}")));
+        machine
+            .objects
+            .processes
+            .with(process, |held| held.fault_handler = Some(endpoint));
+    });
+}
+
+/// Drops one reference to `object` and wakes whoever waited on it if that
+/// was the last one, which is what the close of a handle does.
+pub(crate) fn release(object: AnyObjectId) -> bool {
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    with_memory(|memory| {
+        with_machine(|machine| {
+            let mut environment = environment(memory, &mut tables, &mut tlb);
+            let mut syscall = kernel_syscall::dispatch::Machine {
+                objects: &mut machine.objects,
+                scheduler: &mut machine.scheduler,
+                environment: &mut environment,
+            };
+            kernel_syscall::lifetime::release(&mut syscall, object).unwrap_or(false)
+        })
+    })
+    .flatten()
+    .unwrap_or(false)
+}
+
+/// Ends `thread` wherever it is, taking it out of whatever it waits on
+/// first, which is what `thread_kill` does.
+pub(crate) fn kill(thread: ThreadId) -> bool {
+    with_machine(|machine| {
+        kernel_ipc::cancel(&mut machine.objects, thread);
+        machine
+            .scheduler
+            .exit(&mut machine.objects.threads, thread)
+            .is_ok_and(|outcome| outcome.reschedule)
+    })
+    .unwrap_or(false)
+}
+
+/// Gives the processor to whoever can run, over and over, until `done` says
+/// the run is over. An image without a timer comes back here every time a
+/// thread blocks or ends.
+pub(crate) fn run_until(done: impl Fn() -> bool) {
+    for _ in 0..RUN_LIMIT {
+        if done() {
+            return;
+        }
+        run_threads(None);
+    }
+    if !done() {
+        testing::fail(format_args!(
+            "the run did not end in {RUN_LIMIT} turns of the processor"
+        ));
+    }
+}
+
+/// How many turns of the processor a run of [`run_until`] may take.
+const RUN_LIMIT: usize = 64;
+
+/// The status word a thread found in its buffer.
+pub(crate) fn thread_status(frame: PhysFrame) -> u64 {
+    let mut window = window();
+    window
+        .frame_bytes_mut(frame)
+        .and_then(|bytes| ipc_buffer::Buffer::new(bytes).status().ok())
+        .map_or(u64::MAX, audhsos_abi::Status::raw)
 }
 
 /// A memory object over `frames` contiguous frames of the reserve, the way
@@ -512,8 +670,18 @@ fn environment<'a>(
     memory: &'a mut kernel_core::memory::KernelMemory,
     tables: &'a mut PhysicalWindow,
     tlb: &'a mut LocalTlb,
-) -> KernelEnvironment<'a, X86Entry, PhysicalWindow, LocalTlb, SerialConsole> {
-    KernelEnvironment::new(memory, tables, tlb, None)
+) -> KernelEnvironment<'a, X86Entry, PhysicalWindow, LocalTlb, SerialConsole, DeviceAccess<'a>> {
+    KernelEnvironment::new(memory, tables, tlb, None, None, acpi_pointer())
+}
+
+/// The address of the root system description pointer, or zero when the
+/// platform named none. `system_info` reports it.
+pub(crate) fn acpi_pointer() -> u64 {
+    testing::with_platform(|platform| {
+        use kernel_hal_api::platform::Platform;
+        platform.acpi_rsdp().map_or(0, |address| address.as_u64())
+    })
+    .unwrap_or(0)
 }
 
 /// Where the stack of thread `index` of a process ends. One unmapped page
@@ -527,11 +695,11 @@ fn stack_top_for(index: u64) -> u64 {
 /// Copies the program into frames of the reserve and maps them read and
 /// execute at [`USER_BASE`].
 fn map_program<A>(
-    environment: &mut KernelEnvironment<'_, X86Entry, A, LocalTlb, SerialConsole>,
+    environment: &mut KernelEnvironment<'_, X86Entry, A, LocalTlb, SerialConsole, DeviceAccess<'_>>,
     root: PhysFrame,
     program: &[u8],
 ) where
-    A: FrameAccess<PageTable<X86Entry>>,
+    A: FrameAccess<PageTable<X86Entry>> + kernel_hal_api::paging::FrameBytes,
 {
     let pages = u64::try_from(program.len().div_ceil(4096))
         .unwrap_or(0)
@@ -579,11 +747,11 @@ fn copy_page(frame: PhysFrame, program: &[u8], index: u64) {
 
 /// Maps the stack that ends at `top`, read and write.
 fn map_stack<A>(
-    environment: &mut KernelEnvironment<'_, X86Entry, A, LocalTlb, SerialConsole>,
+    environment: &mut KernelEnvironment<'_, X86Entry, A, LocalTlb, SerialConsole, DeviceAccess<'_>>,
     root: PhysFrame,
     top: u64,
 ) where
-    A: FrameAccess<PageTable<X86Entry>>,
+    A: FrameAccess<PageTable<X86Entry>> + kernel_hal_api::paging::FrameBytes,
 {
     for index in 0..USER_STACK_PAGES {
         let frame = environment
@@ -768,11 +936,14 @@ pub(crate) fn sweep() {
     let mut tlb = LocalTlb;
     with_memory(|memory| {
         with_machine(|machine| {
-            let mut environment = KernelEnvironment::<X86Entry, _, _, SerialConsole>::new(
-                memory,
-                &mut tables,
-                &mut tlb,
-                None,
+            let mut environment = KernelEnvironment::<
+                X86Entry,
+                _,
+                _,
+                SerialConsole,
+                DeviceAccess<'_>,
+            >::new(
+                memory, &mut tables, &mut tlb, None, None, acpi_pointer()
             );
             // The kernel stands on the stack of the thread it just
             // switched to, which is the one the scheduler now calls
@@ -857,19 +1028,57 @@ fn on_syscall() {
     // the page tables. They never name the same frame, and this image is
     // the only writer of either.
     let mut buffer_window = window();
-    let mut tables = window();
-    let mut tlb = LocalTlb;
     let Some(bytes) = buffer_window.frame_bytes_mut(frame) else {
         return;
     };
-    let reschedule = with_memory(|memory| {
+    // The interrupt controller and the ports, in an image that brought them
+    // up. Holding the controller turns interrupts off for the length of the
+    // call, which is what the calls that touch it need.
+    let reschedule = if DEVICES.load(Ordering::SeqCst) == 0 {
+        answer(caller, bytes, None)
+    } else {
+        interrupts::with_controller(|apics| {
+            let mut devices = DeviceAccess::new(apics);
+            answer(caller, bytes, Some(&mut devices))
+        })
+        .unwrap_or(false)
+    };
+    if reschedule {
+        run_threads(Some(caller));
+    }
+}
+
+/// The fault an exception names, or `None` for a vector that stops a thread
+/// without a message. This is the mapping of `kernel_core::trap`.
+fn of(exception: Exception) -> audhsos_abi::Fault {
+    exception.fault().unwrap_or(audhsos_abi::Fault {
+        kind: audhsos_abi::FaultKind::GeneralProtection,
+        address: exception.ip,
+        instruction_pointer: exception.ip,
+        error_code: exception.error_code,
+    })
+}
+
+/// Answers the system call of `caller` and clears away what ended.
+fn answer(
+    caller: ThreadId,
+    bytes: &mut [u8; ipc_buffer::SIZE],
+    devices: Option<&mut DeviceAccess<'_>>,
+) -> bool {
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    let mut devices = devices;
+    with_memory(|memory| {
         with_machine(|machine| {
-            let mut environment = KernelEnvironment::<X86Entry, _, _, SerialConsole>::new(
-                memory,
-                &mut tables,
-                &mut tlb,
-                None,
-            );
+            let mut environment =
+                KernelEnvironment::<X86Entry, _, _, SerialConsole, DeviceAccess<'_>>::new(
+                    memory,
+                    &mut tables,
+                    &mut tlb,
+                    None,
+                    devices.as_deref_mut(),
+                    acpi_pointer(),
+                );
             let reschedule = handle_syscall(
                 &mut machine.objects,
                 &mut machine.scheduler,
@@ -887,9 +1096,30 @@ fn on_syscall() {
         })
     })
     .flatten()
-    .unwrap_or(false);
-    if reschedule {
-        run_threads(Some(caller));
+    .unwrap_or(false)
+}
+
+/// Whether the interrupt hardware of the machine is in place, so that the
+/// calls which touch a line or a port can reach it.
+static DEVICES: AtomicU32 = AtomicU32::new(0);
+
+/// Takes the interrupt hardware over without starting the timer: an image
+/// that wants the port and interrupt calls but no preemption asks for this,
+/// and one that wants ticks calls [`start_timer`], which does it as well.
+pub(crate) fn bring_up_devices() {
+    if DEVICES.swap(1, Ordering::SeqCst) == 1 {
+        return;
+    }
+    let brought_up = testing::with_platform(|platform| {
+        // SAFETY: the loader's tables are active, the descriptor tables of
+        // the image carry a handler for every vector of the plan, interrupts
+        // are off, and this runs once on the boot processor.
+        unsafe { interrupts::bring_up(platform, map_device) }
+    });
+    match brought_up {
+        Some(Ok(())) => say!("the interrupt hardware is in place"),
+        Some(Err(error)) => testing::fail(format_args!("the interrupt bring-up failed: {error}")),
+        None => testing::fail(format_args!("the platform is not reachable")),
     }
 }
 
@@ -932,22 +1162,42 @@ fn on_trap(report: TrapReport) {
             "a user thread faulted and the kernel holds none"
         ));
     };
+    // The message a fault handler receives is built in the buffer of the
+    // thread that faulted, which the kernel reaches the way the system call
+    // gate does.
+    let frame = with_machine(|machine| {
+        machine
+            .objects
+            .threads
+            .get(faulted)
+            .ok()
+            .map(|thread| thread.ipc_buffer)
+    })
+    .flatten();
+    let mut buffer_window = window();
     let mut tables = window();
     let mut tlb = LocalTlb;
+    let bytes = frame.and_then(|frame| buffer_window.frame_bytes_mut(frame));
+    let Some(bytes) = bytes else {
+        testing::fail(format_args!("the buffer of a faulting thread is gone"));
+    };
     let reschedule = with_memory(|memory| {
         with_machine(|machine| {
-            let mut environment = KernelEnvironment::<X86Entry, _, _, SerialConsole>::new(
-                memory,
-                &mut tables,
-                &mut tlb,
-                None,
+            let mut environment = KernelEnvironment::<
+                X86Entry,
+                _,
+                _,
+                SerialConsole,
+                DeviceAccess<'_>,
+            >::new(
+                memory, &mut tables, &mut tlb, None, None, acpi_pointer()
             );
             let mut syscall = kernel_syscall::dispatch::Machine {
                 objects: &mut machine.objects,
                 scheduler: &mut machine.scheduler,
                 environment: &mut environment,
             };
-            fault::stop(&mut syscall, faulted).reschedule
+            fault::deliver(&mut syscall, faulted, of(exception), bytes).reschedule
         })
     })
     .flatten()
@@ -971,17 +1221,7 @@ pub(crate) fn start_timer(hook: TickHook) {
     }
     let _ = TICK_HOOK.init(hook);
     traps::set_interrupt_handler(on_interrupt);
-    let brought_up = testing::with_platform(|platform| {
-        // SAFETY: the loader's tables are active, the descriptor tables of
-        // the image carry a handler for every vector of the plan,
-        // interrupts are off, and this runs once on the boot processor.
-        unsafe { interrupts::bring_up(platform, map_device) }
-    });
-    match brought_up {
-        Some(Ok(())) => {}
-        Some(Err(error)) => testing::fail(format_args!("the interrupt bring-up failed: {error}")),
-        None => testing::fail(format_args!("the platform is not reachable")),
-    }
+    bring_up_devices();
     // SAFETY: the interval timer belongs to the kernel, interrupts are
     // still off, and this is the processor the controller belongs to.
     if let Err(error) = unsafe { interrupts::start_timer(TICKS_PER_SECOND) } {
@@ -1081,10 +1321,11 @@ fn map_device(frames: PhysFrameRange) -> Option<VirtAddr> {
 /// then give the image its turn, charge the running thread's time slice,
 /// and switch when either asks for it.
 fn on_interrupt(vector: u8) {
-    interrupts::acknowledge(vector);
     if vector != vectors::TIMER {
+        forward_interrupt(vector);
         return;
     }
+    interrupts::acknowledge(vector);
     record_turn();
     let ticks = interrupts::ticks();
     let hook = TICK_HOOK.borrow(&UncontendedToken).ok().map(|hook| *hook);
@@ -1101,6 +1342,72 @@ fn on_interrupt(vector: u8) {
         // current, so the switch finds where to write its context by
         // itself; a thread the hook ended is not one to come back to.
         run_threads(None);
+    }
+}
+
+/// Forwards a device interrupt to whoever holds the interrupt object of its
+/// vector, in the order 2.7 gives: mask the line at the I/O APIC, end the
+/// interrupt at the local APIC, then signal the notification.
+///
+/// A vector no interrupt object names is acknowledged and nothing else.
+fn forward_interrupt(vector: u8) {
+    let line = with_machine(|machine| {
+        kernel_ipc::interrupt_for(&machine.objects, vector).and_then(|id| {
+            machine
+                .objects
+                .interrupts
+                .get(id)
+                .ok()
+                .map(|held| held.line)
+        })
+    })
+    .flatten();
+    if let Some(line) = line {
+        interrupts::with_controller(|apics| {
+            use kernel_hal_api::interrupt::InterruptController;
+            apics.mask(kernel_hal_api::interrupt::InterruptLine::new(line));
+        });
+    }
+    interrupts::acknowledge(vector);
+    let outcome = with_machine(|machine| {
+        kernel_ipc::deliver(&mut machine.objects, &mut machine.scheduler, vector)
+    })
+    .flatten();
+    let Some(outcome) = outcome else {
+        return;
+    };
+    if let Some(wakeup) = outcome.wakeup {
+        write_wakeup(wakeup);
+    }
+    if outcome.reschedule {
+        run_threads(None);
+    }
+}
+
+/// Writes the status word and the return words a thread that a device
+/// interrupt woke finds in its buffer.
+fn write_wakeup(wakeup: kernel_ipc::Wakeup) {
+    let frame = with_machine(|machine| {
+        machine
+            .objects
+            .threads
+            .get(wakeup.thread)
+            .ok()
+            .map(|thread| thread.ipc_buffer)
+    })
+    .flatten();
+    let Some(frame) = frame else {
+        return;
+    };
+    let mut buffer_window = window();
+    let Some(bytes) = buffer_window.frame_bytes_mut(frame) else {
+        return;
+    };
+    let mut writer = ipc_buffer::BufferMut::new(bytes);
+    writer.clear_result();
+    writer.set_status(wakeup.status);
+    for (index, value) in wakeup.values.iter().enumerate() {
+        writer.set_return_word(index, *value);
     }
 }
 

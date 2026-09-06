@@ -9,6 +9,13 @@
 //! thread is in no queue; the idle thread is never in a queue and is picked
 //! only when every queue is empty.
 //!
+//! The links are the `queue_links` of a thread; the `wait_links` beside
+//! them belong to the wait queues of `kernel-ipc`, and a thread is in at
+//! most one of the two kinds of queue at a time (D-74). They are separate
+//! fields because [`Scheduler::dequeue`] corrects the head, the tail, and
+//! the ready bitmap of a run queue after it unlinks: handed a thread whose
+//! links pointed into an endpoint queue it would splice that queue.
+//!
 //! The first of those is why every operation that takes a thread off the
 //! processor — suspend, exit, fault, block — goes through one place that
 //! asks the transition table before it touches a queue. An operation the
@@ -190,7 +197,7 @@ impl Scheduler {
         if usize::from(priority) >= PRIORITIES {
             return Err(Error::InvalidArgument);
         }
-        if !thread.links.is_unlinked() {
+        if !thread.queue_links.is_unlinked() {
             return Err(Error::InvalidState);
         }
         let tail = self.queue(priority).and_then(|queue| queue.tail);
@@ -200,7 +207,7 @@ impl Scheduler {
         {
             return Err(Error::InvalidState);
         }
-        thread.links = Links {
+        thread.queue_links = Links {
             next: None,
             previous: tail,
         };
@@ -209,7 +216,7 @@ impl Scheduler {
                 let before = threads
                     .get_mut(previous)
                     .map_err(|_| Error::InvalidHandle)?;
-                before.links.next = Some(id);
+                before.queue_links.next = Some(id);
             }
             None => {
                 if let Some(queue) = self.queue_mut(priority) {
@@ -237,7 +244,7 @@ impl Scheduler {
     ) -> Result<(), Error> {
         let thread = threads.get(id).map_err(|_| Error::InvalidHandle)?;
         let priority = thread.priority;
-        let links = thread.links;
+        let links = thread.queue_links;
         let head = self.queue(priority).and_then(|queue| queue.head);
         if links.is_unlinked() && head != Some(id) {
             return Ok(());
@@ -246,11 +253,11 @@ impl Scheduler {
             let before = threads
                 .get_mut(previous)
                 .map_err(|_| Error::InvalidHandle)?;
-            before.links.next = links.next;
+            before.queue_links.next = links.next;
         }
         if let Some(next) = links.next {
             let after = threads.get_mut(next).map_err(|_| Error::InvalidHandle)?;
-            after.links.previous = links.previous;
+            after.queue_links.previous = links.previous;
         }
         if let Some(queue) = self.queue_mut(priority) {
             if queue.head == Some(id) {
@@ -263,7 +270,7 @@ impl Scheduler {
             self.mark_ready(priority, !empty);
         }
         let thread = threads.get_mut(id).map_err(|_| Error::InvalidHandle)?;
-        thread.links = Links::UNLINKED;
+        thread.queue_links = Links::UNLINKED;
         Ok(())
     }
 

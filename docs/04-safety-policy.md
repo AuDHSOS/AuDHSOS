@@ -36,7 +36,7 @@ device register are operations the Rust language can only express as
 | `boot-uefi-x86_64` | firmware calls through function pointers, memory map buffer from a raw pointer, page-table memory through the identity mapping, `CR3` write, kernel entry | `CR3` write, port write for the exit device, one naked function |
 | `audhsos-sync` | `Global<T>` and `Preset<T>`: two `Sync` cells with a runtime borrow flag for kernel and userland global state, the first initialized once at run time, the second `const`-initialized so that a large value reaches the `.bss` without travelling over a stack (D-66) | none |
 | `user-sys-x86_64` | the system call trap instruction, `_start`, the IPC buffer of the thread as a reference, the `GlobalAlloc` adapter from Phase 7 | one `asm!` statement: `int 0x80` |
-| `user-test-programs` | what each program does on purpose: a privileged instruction, a read of a kernel address, and the calls of `user-sys-x86_64` | one `asm!` statement: `hlt`, in the program whose point it is |
+| `user-test-programs` | what each program does on purpose: a privileged instruction, a read of a kernel address, a write where nothing is mapped, the volatile reads and writes of the page a program shares with the test, and the calls of `user-sys-x86_64` | one `asm!` statement: `hlt`, in the program whose point it is |
 | `fuzz-support` (host only) | the fuzzing engine's boundary to the coverage instrumentation: the callbacks the compiler emits calls to, and the blocks that turn the counter ranges the linker placed into slices (D-63) | none |
 
 No other crate may contain `unsafe`. Adding a crate to this list requires a
@@ -71,7 +71,7 @@ The xtask policy table holds the machine-readable form.
 | `kernel-hal-x86_64` | segment register reload after `lgdt` | `mov` to data segment registers, far return for `CS` |
 | `kernel-hal-x86_64` | flags register | `pushfq`, `pop` |
 | `kernel-hal-x86_64` | model-specific registers | `rdmsr`, `wrmsr` |
-| `kernel-hal-x86_64` | port I/O, byte and double word so far | `in`, `out` |
+| `kernel-hal-x86_64` | port I/O, byte, word, and double word | `in`, `out` |
 | `kernel-hal-x86_64` | context switch (naked function) | save callee-saved registers, swap stack pointer, restore, return |
 | `kernel-hal-x86_64` | entry into user mode (naked function) | `iretq` through the frame the kernel wrote onto a fresh kernel stack |
 | `kernel-hal-x86_64` | the exceptions a test image raises and the vectors it raises from software (`testing`, features `debug-uart` and `test-exit`) | `int3`, `ud2`, `div` by zero, `mov` of a selector beyond the table into a segment register, `int` with the vector as an inline constant |

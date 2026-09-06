@@ -423,20 +423,23 @@ impl<const N: usize> HandleArena<N> {
         Some(occupant.entry)
     }
 
-    /// Closes every handle of `process`, walking its chain rather than the
-    /// arena, and returns how many it closed.
-    pub fn close_all(&mut self, list: &mut HandleList) -> u32 {
-        let mut closed: u32 = 0;
-        while let Some(index) = list.head.index() {
-            if self.detach(index, list).is_none() {
-                // The head names no occupant, which the invariants rule
-                // out; drop the list rather than looping.
-                list.head = Link::NONE;
-                break;
-            }
-            closed = closed.saturating_add(1);
+    /// Closes the first handle of `list` and returns what it named, or
+    /// `None` when the process holds none.
+    ///
+    /// One at a time, so that every entry a dying process held passes
+    /// through the caller's release path: a handle is a reference to the
+    /// object it names, and a count of how many were closed says nothing
+    /// about which objects lost their last one.
+    pub fn close_next(&mut self, list: &mut HandleList) -> Option<Entry> {
+        let index = list.head.index()?;
+        if let Some(entry) = self.detach(index, list) {
+            return Some(entry);
         }
-        closed
+        // The head names no occupant, which the invariants rule out; drop
+        // the list rather than handing it back.
+        list.head = Link::NONE;
+        list.count = 0;
+        None
     }
 
     /// The handles of `process`, most recently installed first.

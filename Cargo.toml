@@ -35,6 +35,7 @@ members = [
     "crates/kernel/hal-api",
     "crates/kernel/objects",
     "crates/kernel/sched",
+    "crates/kernel/ipc",
     "crates/kernel/syscall",
     "crates/kernel/bin",
     "crates/kernel/core",
@@ -91,6 +92,7 @@ kernel-acpi = { path = "crates/kernel/acpi" }
 kernel-hal-api = { path = "crates/kernel/hal-api" }
 kernel-objects = { path = "crates/kernel/objects" }
 kernel-sched = { path = "crates/kernel/sched" }
+kernel-ipc = { path = "crates/kernel/ipc" }
 kernel-syscall = { path = "crates/kernel/syscall" }
 audhsos-kernel = { path = "crates/kernel/bin" }
 kernel-core = { path = "crates/kernel/core" }

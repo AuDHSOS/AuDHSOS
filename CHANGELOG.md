@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The device interrupt handler of the kernel binary acknowledges at the local
+  APIC before it signals the notification, not after. 2.7 gives the three
+  steps in one order — mask the line at the I/O APIC, end the interrupt at the
+  local APIC, then signal — and the binary had the last two the wrong way
+  round. Nothing of Phase 6 could observe it, because that image starts no
+  user thread and therefore signals nobody; the test kernel its images share
+  had the order right from the start. What the wrong order costs is a wake-up
+  that runs a driver with the interrupt still unacknowledged at the local
+  APIC, which delays every later interrupt of that priority class until the
+  handler returns.
+
 - The scheduler asks the transition table before it takes a thread out of
   its run queue. It did it the other way round in the four operations that
   take a thread off the processor, and for two of them that was wrong: the
@@ -27,7 +38,248 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   itself.
 
 
+### Changed
+
+- D-86: four unsafe budgets rise, and a process and a thread each hold one
+  reference to themselves. The budgets are `kernel-hal-x86_64` (129 to 142
+  unsafe, 24 to 27 `asm!`, for the three port widths that were missing and
+  the six methods that reach them), `audhsos-kernel` (26 to 27, for the
+  buffer a forwarded interrupt writes), `user-sys-x86_64` (11 to 13, for the
+  call that hands out both return words), and `user-test-programs` (17 to 65,
+  for the five new programs). The reference model is the second half: a handle
+  is a reference and the last one destroys what it names, except for a process
+  and a thread, which end when they are killed and when the reaper has given
+  back what they held. The reaper is the reason — it needs the `Thread` object
+  after the last handle to the thread has closed, to find the kernel stack and
+  the buffer to give back.
+
+- The documents follow the code of Phase 6. 2.3.4 gains the reference a
+  process and a thread hold to themselves: a process ends when it is killed
+  and a thread when the kernel has given back what it held, whatever handle
+  still names either of them, so closing the last handle to a running thread
+  does not end it and the handles that named one afterwards name nothing.
+  That is the one place where 2.3.2's "closing the last handle to an object
+  destroys the object" does not hold, and 2.3.2 now says where to look. 2.8's
+  row for `system_info` names what it actually reports, the framebuffer
+  description being Phase 9's.
+
+  In 5.2 the dependency columns of `kernel-ipc`, `kernel-syscall`, and
+  `audhsos-kernel` say what the manifests do, and 4.3 says what the test
+  programs use `unsafe` for now that they write into a page they share with
+  the test. In the plan, 10.6 says what the implementation settled: where the
+  operations of `WaitQueue` live, why `Queue` has three variants and carries
+  a badge, what `transfer` takes and why, the two questions the environment
+  passes on to the architecture layer, and the buffer `fault::deliver` is
+  handed.
+
 ### Added
+
+- Two user threads that meet, and a driver at ring three. Five new programs
+  under `user-test-programs`: `ipc_client` and `ipc_server`, which are a call
+  and a reply with a badge, four words, and a handle to a memory object both
+  processes end up mapping; `fault_handler`, which receives the fault messages
+  of another process and either answers, repairs, or ends it;
+  `write_unmapped`, whose fault a handler can do something about; and
+  `notification_waiter`, which takes ISA line zero, binds it to a bit of a
+  notification, programs the interval timer through a range of I/O ports, and
+  waits for the bit.
+
+  The interval timer and not the local APIC timer: that one is the kernel's
+  own, it carries a vector of its own, and the vector plan gives it no global
+  system interrupt, so no interrupt object can name it. ISA line zero reaches
+  the I/O APIC through the interrupt source override the tables carry, and
+  programming it is three port writes — which makes the one program cover the
+  interrupt path, the port path, and the notification path from ring three.
+
+  `tests/ipc.rs` reads what the pair left: the badge, the words, the handle
+  that names the same memory in both processes, a message of no words, one of
+  the widest payload, one word too many, a receive that refuses to wait, a
+  sender killed while it waited, and an endpoint destroyed under a waiter. The
+  two queues of one endpoint cannot both hold a waiter at once — whichever
+  side arrives second meets the first — so the QEMU test shows them one at a
+  time and the host test of `kernel-ipc` shows them together.
+  `tests/isolation.rs` gains the fault handler: the message with the reserved
+  label, the kind, and the address; a reply that resumes the thread into the
+  instruction it faulted on, where it faults again; a handler that gives up
+  and ends the process; and one that maps a page at the address the fault
+  named, answers, and lets the thread run on.
+
+  A program that has more to report than two return words hold writes into a
+  page the kernel shares with it: its own message area is where the messages
+  of the test are, and a log kept there would be overwritten by the very
+  message it is about.
+
+- The twenty-one calls the system call table was still missing, which
+  completes it: `process_set_fault_handler`, `endpoint_create`,
+  `endpoint_badge`, the six endpoint operations, the four notification
+  operations, the three interrupt operations, the three port operations,
+  `memory_create_device`, and `system_info`. `kernel_syscall::calls::
+  UNIMPLEMENTED` is empty, and no call of the interface answers
+  `Unsupported` any more.
+
+  `Environment` grows the seam to a second buffer — `with_buffer`, which
+  reaches the IPC buffer of a frame — beside the port, interrupt, memory-map
+  and firmware questions the new calls ask. `Reply` grows `blocked`, which is
+  what a call whose caller has no result yet leaves: the dispatcher writes
+  neither the status word nor the return words, and the thread that
+  completes the rendezvous writes them into the buffer of the thread it
+  wakes. It also grows the words of a result that does not fit into two
+  return words, which go into the message area of the caller's own buffer
+  with label zero and handle count zero: `system_info` reports twenty and
+  says so in its first return word, and `thread_info` reports the three of a
+  fault beside the state and the kind.
+
+  A handle is now a reference. `handle_close` and the close of a dying
+  process's list release it, `handle_duplicate`, `process_install_handle`,
+  and the handle installation of a transfer take one, and when the last one
+  goes the object is destroyed — which for an endpoint, a notification, and a
+  reply object wakes everyone who waited (D-75). A process and a thread each
+  hold one reference to themselves besides, because a process ends when it is
+  killed and a thread when the reaper has given back what it held, whatever
+  handle still names it; `Pool::force_release` is what those two do.
+
+  `fault::deliver` builds the fault message in the faulting thread's own
+  buffer — the reserved label of its kind, the address, the instruction
+  pointer, and the error code — and performs a `call` on the fault handler
+  endpoint of its process. The thread is then blocked as any caller is, and
+  the reply resumes it at the instruction it faulted on. A process with no
+  handler, a handler endpoint that is gone, and a reply pool with no slot
+  left all end the same way, in `Faulted`. `Exception::fault` in
+  `kernel-core` is the mapping from vector to kind, and
+  `KernelEnvironment` gains the devices of the machine and the ACPI pointer
+  the bring-up read.
+
+  In QEMU, `every_syscall` walks the whole table: every call answers exactly
+  one error, and every call whose success a single thread can observe answers
+  a success as well. The six endpoint calls whose success is a rendezvous are
+  the exception — a thread that sends with nobody receiving waits for ever —
+  and the `ipc` image covers those.
+
+- The two hardware seams the system call layer of Phase 6 needs.
+  `kernel-hal-api` gains `paging::FrameBytes`, which reaches a frame as
+  bytes — the seam a second IPC buffer is read and written through — with
+  the double `MemoryFrameBytes` and the implementation of the physical
+  window. And it gains `device::Devices`, one bound over
+  `InterruptController` and `PortAccess`, because the four calls that need
+  them are four calls of one table and the kernel environment carries what
+  they need in one field; the double is `RecordingDevices` over the two that
+  exist. The feature `port-io` stops being unused: `kernel-hal-x86_64`
+  enables it.
+
+  In the adapter, `Ports` is the `PortAccess` implementation and
+  `DeviceAccess` joins it with the interrupt controller. `instructions`
+  gains `read_port_u16`, `write_port_u16`, and `read_port_u32` beside the
+  three it had, which are three new `asm!` sites; the budgets rise with
+  them.
+
+- The crate `kernel-ipc` at `crates/kernel/ipc`, layer 3: the rendezvous
+  state machine over the object pools and the scheduler. Endpoints with a
+  queue of senders and one of receivers, reply objects, notifications,
+  message transfer, interrupt delivery, and what a destroyed object owes the
+  threads that waited on it.
+
+  Every endpoint operation is two steps, because a message moves through two
+  IPC buffers and nothing in this crate reaches a frame or an address space.
+  The first step finds the peer or queues the caller; the caller then copies;
+  the second step says what became of the two threads. Between the two steps
+  the endpoint holds neither of them, which is what makes a refused copy
+  leave nothing behind — and `undo_meeting` puts the peer back at the front
+  of its own priority, where the meeting took it from, because nothing runs
+  between the meeting and the copy.
+
+  `transfer` is the one function that moves a message, and its order is what
+  makes a refused message change nothing: the header is validated first,
+  then every handle is resolved in the sender's list and checked for
+  `TRANSFER`, and only then are the words copied and the handles installed.
+  A handle without that right therefore fails before any other handle of the
+  same message is installed. Installation stops when the receiver's list is
+  full: the message is delivered, the receiver's handle count says how many
+  arrived, and its status word carries `PARTIAL`, which is the error flag of
+  2.6.2 and not an error. The reserved label range is checked at the entry
+  of `ipc_send` and `ipc_call` and not here, because the fault message the
+  kernel builds carries such a label by construction.
+
+  Every operation returns an `Outcome`: whether the caller blocks, its
+  status and return words when it does not, which thread became ready and
+  what goes into its buffer, and whether the caller should switch. A
+  destroyed object returns `Waiters`, which hands out the threads it left one
+  at a time — there can be as many of them as the machine has threads, and
+  each needs its own buffer written (D-75).
+
+  Two things the writing settled. `WaitQueue` keeps its operations in
+  `kernel-objects`, beside the pool its links thread through, because a
+  method has to live in the crate that defines the type and the queue is a
+  field of `Endpoint`; `kernel-ipc` is the rendezvous that uses it.  And a
+  thread queued as a sender has to say what it asked for, because whichever
+  side arrives second completes the meeting: `Queue` therefore has three
+  variants, `Senders` and `Callers` in the senders queue and `Receivers` in
+  the other, and a cancellation treats the first two alike.
+
+- One row in the transition table of `kernel-sched`: `BlockedSend` plus
+  `BlockReply` is `BlockedReply`. It is the only transition from one blocked
+  state to another, and it is the queued caller of `ipc_call`, which waited
+  for a receiver and waits for the answer once one has taken its message —
+  without ever having been ready in between, which is what makes the send
+  and the wait of a call atomic from the receiver's point of view.
+
+- The six object structures of Phase 6 in `kernel-objects`: `Endpoint` with
+  a queue of senders and one of receivers, `Reply`, `Notification`,
+  `Interrupt`, `IoPortRange`, and `SystemControl`, which holds nothing and
+  therefore has no pool — a capability to it is the whole of the right to
+  create interrupts, port ranges, and device memory. Their five pools take
+  their sizes from `config` directly rather than becoming parameters of
+  `Objects`: together they stay under 200 KiB against the 1.2 MiB the four
+  parameterized pools reach, so a host test can still hold a machine with
+  all of them at full size, and the signature of everything that touches
+  the machine stays four parameters wide instead of nine.
+
+  A `Thread` now carries two link pairs. The run queues of `kernel-sched`
+  use `queue_links`, the wait queues use `wait_links`, and a thread is in
+  at most one of the two at a time, because a thread in a run queue is
+  `Ready` and a thread in a wait queue is blocked. They are separate
+  fields because `Scheduler::dequeue` corrects the head, the tail, and the
+  ready bitmap of a run queue after it unlinks: handed a thread whose
+  links pointed into an endpoint queue it would splice that queue and
+  leave the endpoint naming a thread that is no longer in it. Beside the
+  links the thread carries `wait`, which names what it waits on so that a
+  cancellation finds the queue without searching every endpoint, and
+  `fault`, which is what `thread_info` and a fault message report.
+
+  `WaitQueue` orders by priority and then by arrival: a thread goes behind
+  the last thread of a priority at least its own, so the walk is bounded by
+  the length of the queue and no second structure carries the order. The
+  position is fixed at that moment; a later `thread_set_priority` does not
+  move a thread that already waits. The queue lives beside the pool its
+  links thread through and not in `kernel-ipc`, because its operations need
+  that pool.
+
+  `Objects` gains `retain`, `destroy`, and `capacities`. `destroy` is the
+  one place a reference count of zero turns into the destruction of an
+  object; what destruction owes the threads that waited travels back to the
+  caller in `Destroyed`, because waking a thread needs the scheduler and
+  writing its status word needs its IPC buffer. `counts` reports nine
+  numbers rather than four, the eight pools and the handle arena, which is
+  what `system_info` will report. `HandleArena::close_all` becomes
+  `close_next`, so that every entry a dying process held passes through the
+  caller's release path one at a time: a count is not enough once a handle
+  is a reference.
+
+- The label range the kernel keeps for its own messages, in
+  `audhsos_abi::ipc_buffer`: `KERNEL_LABEL_BASE` is the first reserved
+  label, `FAULT_LABEL_BASE` is the same value, and the label of a fault
+  message is that base plus the code of its `FaultKind`, so the six kinds
+  occupy the first six labels and 250 are left for the kernel messages of
+  later phases. `is_kernel_label`, `fault_label`, `fault_kind_of`, and
+  `Message::is_kernel_label` read it. The range is reserved rather than
+  merely documented because `ipc_send` and `ipc_call` refuse such a label
+  before anything is copied; the check is at their entry and not in the
+  transfer, which exists to carry the one message that has to have one.
+
+  Beside it two smaller pieces the phase needs: `Error::Cancelled`, which
+  is what a thread finds in its status word when `thread_suspend` took it
+  out of a wait queue, and `layout::MAX_RESULT_WORDS`, the width of a
+  system call result that does not fit into two return words and goes into
+  the message area of the caller's own buffer instead.
 
 - RFC 8017, RFC 4055, RFC 5756, and RFC 3279 join the reference documents
   under `docs/rfc/`, each fetched twice and recorded with its checksum.

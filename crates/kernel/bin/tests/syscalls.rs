@@ -15,12 +15,14 @@
 //! the order the program went in:
 //!
 //! - every call of the table was made;
-//! - each of the twenty this phase implements answered a success once and
-//!   an error once;
-//! - each of the twenty-one it does not answered exactly the refusal the
-//!   table of the interface asks for: `Unsupported` where the call is
-//!   reachable, `WrongObjectType` where its first argument names an object
-//!   type of a later phase.
+//! - every call answered exactly one error, and it is the one its failure
+//!   case asks for;
+//! - every call whose success a single thread can observe answered a success
+//!   as well. The six endpoint calls whose success is a rendezvous are the
+//!   exception: a thread that sends with nobody receiving waits for ever, and
+//!   the `ipc` image covers those with two threads that meet.
+//!
+//! No call answers `Unsupported`: after Phase 6 the table is complete.
 
 #![no_std]
 #![no_main]
@@ -30,9 +32,9 @@
 #![reexport_test_harness_main = "test_main"]
 
 use audhsos_abi::ipc_buffer::Status;
-use audhsos_abi::{Error, FirstArgument, Handle, ObjectType, Rights, Syscall};
+use audhsos_abi::{Error, Handle, Rights, Syscall};
 use kernel_hal_x86_64::testing;
-use kernel_objects::object::AnyObjectId;
+use kernel_objects::object::{AnyObjectId, SystemControl};
 use kernel_syscall::calls::UNIMPLEMENTED;
 
 use crate::support::say;
@@ -53,9 +55,11 @@ const PROCESS_WORD: usize = 0;
 const THREAD_WORD: usize = 1;
 const MEMORY_WORD: usize = 2;
 const BAD_WORD: usize = 3;
+const CONTROL_WORD: usize = 4;
 
-/// The payload word the first pair is in.
-const FIRST_RESULT: usize = 8;
+/// The payload word the first pair is in. Above the twenty words
+/// `system_info` writes into the message area of the caller's own buffer.
+const FIRST_RESULT: usize = 24;
 
 /// The payload word past the last pair.
 const RESULTS_END: usize = 400;
@@ -126,6 +130,9 @@ fn run_once() {
         return;
     }
     support::bring_up();
+    // The interrupt controller and the ports, without the timer: the image
+    // wants the calls that touch them and no preemption.
+    support::bring_up_devices();
     let mut process = support::create_process(EVERY_SYSCALL);
     let spawned = support::add_thread(&mut process, support::DEFAULT_PRIORITY);
     let memory = support::memory_object(MEMORY_FRAMES);
@@ -154,6 +161,12 @@ fn run_once() {
             | Rights::DUPLICATE
             | Rights::TRANSFER,
     );
+    // The root authority, which the root task will hold and hand out.
+    let control = support::install(
+        process.id,
+        AnyObjectId::of(SystemControl::ID),
+        Rights::MANAGE | Rights::DUPLICATE | Rights::TRANSFER,
+    );
     let Some(nothing) = Handle::new(BEYOND_THE_ARENA, 1) else {
         testing::fail(format_args!(
             "the handle that names nothing is not a handle"
@@ -163,6 +176,7 @@ fn run_once() {
     support::set_buffer_word(spawned.buffer, THREAD_WORD, own_thread.raw());
     support::set_buffer_word(spawned.buffer, MEMORY_WORD, own_memory.raw());
     support::set_buffer_word(spawned.buffer, BAD_WORD, nothing.raw());
+    support::set_buffer_word(spawned.buffer, CONTROL_WORD, control.raw());
 
     support::start(spawned.thread);
     say!("switching into a thread that makes every call of the table");
@@ -219,26 +233,17 @@ fn with_log(body: impl FnOnce(&Log)) {
     body(&log);
 }
 
-/// `true` for a call this phase leaves to Phase 6.
-fn is_of_a_later_phase(call: Syscall) -> bool {
-    UNIMPLEMENTED.contains(&call)
-}
-
-/// The refusal a call of a later phase has to answer with, given what the
-/// program passes it: the handle of its own process where the call takes
-/// one, and nothing where it takes none.
-///
-/// A call whose first argument names a type this phase holds is reachable,
-/// and the dispatcher gets as far as the call itself, which refuses it. A
-/// call whose first argument names a type of a later phase is refused by
-/// the type check before that, because a process is not an endpoint.
-fn refusal_of(call: Syscall) -> Error {
-    match call.first_argument() {
-        FirstArgument::Nothing | FirstArgument::Any => Error::Unsupported,
-        FirstArgument::Object(ObjectType::Process) => Error::Unsupported,
-        FirstArgument::Object(_) => Error::WrongObjectType,
-    }
-}
+/// The six calls whose success is a rendezvous: a thread on its own cannot
+/// observe one, because a send with nobody receiving waits for ever. The
+/// `ipc` image covers them with two threads that meet.
+const SUCCEEDS_IN_THE_IPC_IMAGE: &[Syscall] = &[
+    Syscall::IpcSend,
+    Syscall::IpcCall,
+    Syscall::IpcRecv,
+    Syscall::IpcTryRecv,
+    Syscall::IpcReply,
+    Syscall::IpcReplyRecv,
+];
 
 /// Every call of the table was made from user mode.
 #[test_case]
@@ -263,10 +268,10 @@ fn every_call_of_the_table_was_made_from_ring_three() {
 
 /// Every call this phase implements answered a success at least once.
 #[test_case]
-fn every_call_this_phase_implements_succeeds_from_user_mode() {
+fn every_call_whose_success_one_thread_can_observe_succeeds_from_user_mode() {
     with_log(|log| {
         for call in Syscall::ALL {
-            if is_of_a_later_phase(*call) {
+            if SUCCEEDS_IN_THE_IPC_IMAGE.contains(call) {
                 continue;
             }
             if *call == Syscall::ThreadExit {
@@ -283,13 +288,13 @@ fn every_call_this_phase_implements_succeeds_from_user_mode() {
                 ));
             }
         }
-        say!("every call of this phase succeeded from user mode");
+        say!("every call whose success one thread can observe succeeded");
     });
 }
 
-/// The one failure case of every call this phase implements, and the error
-/// it has to answer with. `every_syscall.rs` makes exactly one of these
-/// per call; what each of them is wrong about is in the second column.
+/// The one failure case of every call of the table, and the error it has to
+/// answer with. `every_syscall.rs` makes exactly one of these per call; what
+/// each of them is wrong about is in the second column.
 const REFUSALS: &[(Syscall, Error, &str)] = &[
     (
         Syscall::DebugLog,
@@ -391,6 +396,111 @@ const REFUSALS: &[(Syscall, Error, &str)] = &[
         Error::InvalidHandle,
         "a handle that names nothing",
     ),
+    (
+        Syscall::ProcessSetFaultHandler,
+        Error::InvalidHandle,
+        "a handle that names nothing as the handler endpoint",
+    ),
+    (
+        Syscall::EndpointCreate,
+        Error::ArgumentCount,
+        "an argument word above the count of a call that takes none",
+    ),
+    (
+        Syscall::EndpointBadge,
+        Error::InvalidArgument,
+        "a badge of zero, which is what an unbadged capability carries",
+    ),
+    (
+        Syscall::IpcSend,
+        Error::InvalidArgument,
+        "a label of the range the kernel keeps for its own messages",
+    ),
+    (
+        Syscall::IpcCall,
+        Error::InvalidArgument,
+        "a label of the range the kernel keeps for its own messages",
+    ),
+    (
+        Syscall::IpcRecv,
+        Error::AccessDenied,
+        "a badged capability, which carries `SEND` alone",
+    ),
+    (
+        Syscall::IpcTryRecv,
+        Error::WouldBlock,
+        "an endpoint nobody is sending on",
+    ),
+    (
+        Syscall::IpcReply,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
+    (
+        Syscall::IpcReplyRecv,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
+    (
+        Syscall::NotificationCreate,
+        Error::ArgumentCount,
+        "an argument word above the count of a call that takes none",
+    ),
+    (
+        Syscall::NotificationSignal,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
+    (
+        Syscall::NotificationWait,
+        Error::AccessDenied,
+        "a capability that may signal and not wait",
+    ),
+    (
+        Syscall::NotificationPoll,
+        Error::AccessDenied,
+        "a capability that may signal and not wait",
+    ),
+    (
+        Syscall::InterruptCreate,
+        Error::InvalidArgument,
+        "a line the vector plan of the machine reserves no vector for",
+    ),
+    (
+        Syscall::InterruptBind,
+        Error::InvalidArgument,
+        "a bit index above the sixty-four a notification has",
+    ),
+    (
+        Syscall::InterruptAck,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
+    (
+        Syscall::IoPortCreate,
+        Error::InvalidArgument,
+        "a range of no ports at all",
+    ),
+    (
+        Syscall::IoPortRead,
+        Error::InvalidArgument,
+        "a port one past the end of the range",
+    ),
+    (
+        Syscall::IoPortWrite,
+        Error::InvalidArgument,
+        "a width that is not one, two, or four bytes",
+    ),
+    (
+        Syscall::MemoryCreateDevice,
+        Error::InvalidArgument,
+        "an aperture of no frames at all",
+    ),
+    (
+        Syscall::SystemInfo,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
 ];
 
 /// Every call this phase implements answered exactly one error, and it is
@@ -398,12 +508,9 @@ const REFUSALS: &[(Syscall, Error, &str)] = &[
 /// twenty of the phase: nothing is refused for the wrong reason, and
 /// nothing is missing.
 #[test_case]
-fn every_call_this_phase_implements_fails_from_user_mode() {
+fn every_call_of_the_table_fails_from_user_mode_for_a_reason_of_its_own() {
     with_log(|log| {
         for call in Syscall::ALL {
-            if is_of_a_later_phase(*call) {
-                continue;
-            }
             let Some((_, wanted, what)) = REFUSALS.iter().find(|(named, _, _)| named == call)
             else {
                 testing::fail(format_args!(
@@ -433,66 +540,60 @@ fn every_call_this_phase_implements_fails_from_user_mode() {
             }
         }
         say!(
-            "all {} calls of this phase refused their one case, each with its own error",
+            "all {} calls of the table refused their one case, each with its own error",
             REFUSALS.len()
         );
     });
 }
 
-/// Every call of a later phase is refused, and refused with the error the
-/// table of the interface asks for.
+/// No call of the table answers that the kernel does not have it: Phase 6
+/// completes the table, so `Unsupported` is an answer nothing gives.
 #[test_case]
-fn every_call_of_a_later_phase_is_refused() {
+fn no_call_of_the_table_answers_that_it_does_not_exist() {
+    if !UNIMPLEMENTED.is_empty() {
+        testing::fail(format_args!(
+            "{} calls are still missing",
+            UNIMPLEMENTED.len()
+        ));
+    }
     with_log(|log| {
-        for call in UNIMPLEMENTED {
-            let wanted = refusal_of(*call);
-            let mut answers = log.statuses(*call);
-            let Some(status) = answers.next() else {
-                testing::fail(format_args!("{} was never called", call.name()));
-            };
-            match status.error() {
-                Some(error) if error == wanted => {}
-                Some(error) => testing::fail(format_args!(
-                    "{} answered {error:?}, not {wanted:?}",
-                    call.name()
-                )),
-                None => testing::fail(format_args!(
-                    "{} succeeded; no call of a later phase may",
-                    call.name()
-                )),
+        for call in Syscall::ALL {
+            for status in log.statuses(*call) {
+                if status.error() == Some(Error::Unsupported) {
+                    testing::fail(format_args!(
+                        "{} answered that the kernel does not have it",
+                        call.name()
+                    ));
+                }
             }
         }
-        say!(
-            "all {} calls of a later phase were refused, each with its own error",
-            UNIMPLEMENTED.len()
-        );
+        say!("no call of the table is missing");
     });
 }
 
-/// The two halves of the table are the whole of it and nothing twice: what
-/// the kernel calls unimplemented is what the tests above skip.
+/// The table and the two tables of this image are the same length: every
+/// call has a failure case, and nothing is named twice.
 #[test_case]
-fn the_table_is_split_in_two_and_nothing_falls_between() {
-    let implemented = Syscall::ALL
-        .iter()
-        .filter(|call| !is_of_a_later_phase(**call))
-        .count();
-    if implemented != 20 {
+fn the_table_of_refusals_covers_the_table_of_calls_exactly() {
+    if REFUSALS.len() != Syscall::ALL.len() {
         testing::fail(format_args!(
-            "this phase implements {implemented} calls, not the twenty of the plan"
+            "{} calls and {} failure cases",
+            Syscall::ALL.len(),
+            REFUSALS.len()
         ));
     }
-    if UNIMPLEMENTED.len() != 21 {
-        testing::fail(format_args!(
-            "{} calls are left to Phase 6, not the twenty-one of the plan",
-            UNIMPLEMENTED.len()
-        ));
-    }
-    if Syscall::ALL.len() != implemented + UNIMPLEMENTED.len() {
-        testing::fail(format_args!("the two halves are not the whole table"));
+    for (index, (call, _, _)) in REFUSALS.iter().enumerate() {
+        if REFUSALS
+            .iter()
+            .skip(index.saturating_add(1))
+            .any(|(other, _, _)| other == call)
+        {
+            testing::fail(format_args!("{} has two failure cases", call.name()));
+        }
     }
     say!(
-        "{implemented} calls of this phase, {} of the next",
-        UNIMPLEMENTED.len()
+        "{} calls, {} failure cases",
+        Syscall::ALL.len(),
+        REFUSALS.len()
     );
 }

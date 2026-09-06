@@ -9,13 +9,14 @@
 //! object it names, and turning one back into a typed id checks that type.
 
 use audhsos_abi::layout::{PRIORITY_COUNT, REGIONS_PER_PROCESS, THREADS_PER_PROCESS};
-use audhsos_abi::{Error, ObjectType, ThreadState};
+use audhsos_abi::{Error, Fault, ObjectType, ThreadState};
 use kernel_mm::address_space::RegionTable;
 use kernel_types::{CachePolicy, PhysFrame, PhysFrameRange, VirtAddr};
 
 use crate::handle_table::HandleList;
 use crate::pool::ObjectId;
 use crate::quota::Quota;
+use crate::wait_queue::WaitQueue;
 
 /// An object the kernel holds in a pool. The associated type code is what
 /// lets an [`AnyObjectId`] be checked against the type an operation needs.
@@ -32,6 +33,25 @@ pub type ThreadId = ObjectId<Thread>;
 
 /// The name of a memory object.
 pub type MemoryObjectId = ObjectId<MemoryObject>;
+
+/// The name of an endpoint.
+pub type EndpointId = ObjectId<Endpoint>;
+
+/// The name of a reply object.
+pub type ReplyId = ObjectId<Reply>;
+
+/// The name of a notification.
+pub type NotificationId = ObjectId<Notification>;
+
+/// The name of an interrupt object.
+pub type InterruptId = ObjectId<Interrupt>;
+
+/// The name of an I/O port range.
+pub type IoPortRangeId = ObjectId<IoPortRange>;
+
+/// The name of the system control capability. Nothing looks it up: the
+/// index and the generation it carries name no slot of any pool.
+pub type SystemControlId = ObjectId<SystemControl>;
 
 /// An object id with the type of its object, as a handle table entry holds
 /// it. The typed id is recovered with [`AnyObjectId::typed`], which is
@@ -161,9 +181,10 @@ pub struct Process {
     pub quota: Quota,
     /// The kernel objects the process may still create.
     pub kernel_object_quota: Quota,
-    /// Where faults of this process are reported, once endpoints exist.
-    /// Phase 5 leaves it empty and every fault stops its thread.
-    pub fault_handler: Option<AnyObjectId>,
+    /// The endpoint faults of this process are reported on. A process
+    /// with none stops the thread that faulted, which is what a fault
+    /// nobody takes ends in.
+    pub fault_handler: Option<EndpointId>,
 }
 
 impl Object for Process {
@@ -289,8 +310,19 @@ pub struct Thread {
     /// One word is the whole saved context (D-67); everything else the
     /// switch has to keep lies on the stack this points at.
     pub context: VirtAddr,
-    /// The queue the scheduler has it in.
-    pub links: Links,
+    /// The run queue the scheduler has it in.
+    pub queue_links: Links,
+    /// The wait queue of an endpoint or a notification it is in. A thread
+    /// is in at most one of the two kinds of queue at a time, because a
+    /// thread in a run queue is `Ready` and a thread in a wait queue is
+    /// blocked (D-74).
+    pub wait_links: Links,
+    /// What the thread waits on, so that a cancellation finds the queue
+    /// without searching every endpoint.
+    pub wait: Wait,
+    /// What the thread stopped on, for `thread_info` and for the message a
+    /// fault handler receives.
+    pub fault: Option<Fault>,
 }
 
 impl Object for Thread {
@@ -326,7 +358,10 @@ impl Thread {
             entry: VirtAddr::ZERO,
             user_stack: VirtAddr::ZERO,
             context: VirtAddr::ZERO,
-            links: Links::UNLINKED,
+            queue_links: Links::UNLINKED,
+            wait_links: Links::UNLINKED,
+            wait: Wait::Nothing,
+            fault: None,
         })
     }
 
@@ -351,5 +386,293 @@ impl Thread {
     #[must_use]
     pub const fn is_runnable(&self) -> bool {
         self.state.is_runnable()
+    }
+}
+
+/// A synchronous rendezvous point: a queue of threads that want to send
+/// and a queue of threads that want to receive.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Endpoint {
+    /// The threads waiting for a receiver, `ipc_send` and `ipc_call` alike.
+    pub senders: WaitQueue,
+    /// The threads waiting for a sender.
+    pub receivers: WaitQueue,
+}
+
+impl Object for Endpoint {
+    const TYPE: ObjectType = ObjectType::Endpoint;
+}
+
+impl Endpoint {
+    /// An endpoint nobody waits on.
+    pub const EMPTY: Endpoint = Endpoint {
+        senders: WaitQueue::EMPTY,
+        receivers: WaitQueue::EMPTY,
+    };
+
+    /// An endpoint nobody waits on.
+    #[must_use]
+    pub const fn new() -> Self {
+        Endpoint::EMPTY
+    }
+
+    /// `true` if neither queue holds anyone.
+    #[must_use]
+    pub const fn is_quiet(&self) -> bool {
+        self.senders.is_empty() && self.receivers.is_empty()
+    }
+}
+
+/// The one-shot right to answer a specific caller, created by `ipc_recv`
+/// for a sender that used `ipc_call`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Reply {
+    /// The thread that waits for the answer.
+    pub caller: ThreadId,
+    /// Whether the answer has been given, after which the object refuses a
+    /// second one.
+    pub consumed: bool,
+}
+
+impl Object for Reply {
+    const TYPE: ObjectType = ObjectType::Reply;
+}
+
+impl Reply {
+    /// A reply object for `caller`, not yet answered.
+    #[must_use]
+    pub const fn new(caller: ThreadId) -> Self {
+        Reply {
+            caller,
+            consumed: false,
+        }
+    }
+}
+
+/// Sixty-four signal bits, at most one waiter, and the interrupt bound to
+/// it if one is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Notification {
+    /// The bits that have been signalled and not yet consumed.
+    pub word: u64,
+    /// The one thread that may wait; a second gets `Busy`.
+    pub waiter: Option<ThreadId>,
+    /// The interrupt object that signals into this notification.
+    pub bound_interrupt: Option<InterruptId>,
+}
+
+impl Object for Notification {
+    const TYPE: ObjectType = ObjectType::Notification;
+}
+
+impl Notification {
+    /// A notification with nothing signalled and nobody waiting.
+    pub const EMPTY: Notification = Notification {
+        word: 0,
+        waiter: None,
+        bound_interrupt: None,
+    };
+
+    /// A notification with nothing signalled and nobody waiting.
+    #[must_use]
+    pub const fn new() -> Self {
+        Notification::EMPTY
+    }
+
+    /// Takes the bits that are present and clears the word.
+    pub const fn consume(&mut self) -> u64 {
+        let word = self.word;
+        self.word = 0;
+        word
+    }
+}
+
+/// A hardware interrupt line the kernel forwards to a notification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Interrupt {
+    /// The line, as the interrupt controller numbers it.
+    pub line: u8,
+    /// The vector the plan of `kernel_x86_tables::vectors` gives that line.
+    pub vector: u8,
+    /// The notification the kernel signals, and which bit of it.
+    pub notification: Option<(NotificationId, u8)>,
+    /// Whether the line is masked, which it is from the moment an
+    /// interrupt arrives until `interrupt_ack`.
+    pub masked: bool,
+}
+
+impl Object for Interrupt {
+    const TYPE: ObjectType = ObjectType::Interrupt;
+}
+
+impl Interrupt {
+    /// An interrupt object for `line`, routed to `vector`, bound to
+    /// nothing and unmasked.
+    #[must_use]
+    pub const fn new(line: u8, vector: u8) -> Self {
+        Interrupt {
+            line,
+            vector,
+            notification: None,
+            masked: false,
+        }
+    }
+}
+
+/// The permission to read and write a range of x86 I/O ports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct IoPortRange {
+    /// The lowest port of the range.
+    pub first: u16,
+    /// How many ports it covers, which is never zero.
+    pub count: u16,
+}
+
+impl Object for IoPortRange {
+    const TYPE: ObjectType = ObjectType::IoPortRange;
+}
+
+impl IoPortRange {
+    /// The range of `count` ports at `first`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for a count of zero and for a range that
+    /// would run past `0xFFFF`.
+    pub const fn new(first: u16, count: u16) -> Result<Self, Error> {
+        if count == 0 {
+            return Err(Error::InvalidArgument);
+        }
+        match first.checked_add(count.wrapping_sub(1)) {
+            Some(_) => Ok(IoPortRange { first, count }),
+            None => Err(Error::InvalidArgument),
+        }
+    }
+
+    /// The highest port of the range.
+    #[must_use]
+    pub const fn last(&self) -> u16 {
+        self.first.wrapping_add(self.count.wrapping_sub(1))
+    }
+
+    /// `true` if `port` is in the range.
+    #[must_use]
+    pub const fn contains(&self, port: u16) -> bool {
+        port >= self.first && port <= self.last()
+    }
+
+    /// `true` if an access of `width` bytes at `port` stays inside the
+    /// range.
+    #[must_use]
+    #[expect(
+        clippy::as_conversions,
+        reason = "widening a byte width to a port number in a const fn, where From is not yet const"
+    )]
+    pub const fn holds(&self, port: u16, width: u8) -> bool {
+        if !self.contains(port) {
+            return false;
+        }
+        match port.checked_add(width.wrapping_sub(1) as u16) {
+            Some(end) => end <= self.last(),
+            None => false,
+        }
+    }
+
+    /// `true` if the two ranges share a port.
+    #[must_use]
+    pub const fn overlaps(&self, other: &IoPortRange) -> bool {
+        self.first <= other.last() && other.first <= self.last()
+    }
+}
+
+/// The root authority to create interrupt objects, port ranges, and device
+/// memory objects.
+///
+/// It holds nothing: a capability to it is the whole of that right. The
+/// four calls that take one check the type the handle names and never look
+/// an object up, so it needs no pool, and the index and the generation its
+/// [`AnyObjectId`] carries name nothing. The root task receives the one
+/// handle to it at boot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct SystemControl;
+
+impl Object for SystemControl {
+    const TYPE: ObjectType = ObjectType::SystemControl;
+}
+
+impl SystemControl {
+    /// The id every handle to the system control capability names. Nothing
+    /// looks it up; a generation of one keeps it from looking like an id
+    /// that was never handed out.
+    pub const ID: SystemControlId = ObjectId::new(0, 1);
+}
+
+/// Which queue of an endpoint a thread waits in, and what it asked for.
+///
+/// The rendezvous is completed by whichever side arrives second, so the
+/// record has to say what the side that arrived first wanted: a thread
+/// that used `ipc_send` is done when its message is taken, and one that
+/// used `ipc_call` waits for the answer afterwards. Both wait in the
+/// senders queue, and a cancellation treats them alike.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Queue {
+    /// Waiting for a receiver, with no answer expected (`ipc_send`).
+    Senders,
+    /// Waiting for a receiver and then for the answer (`ipc_call`).
+    Callers,
+    /// Waiting for a sender (`ipc_recv`).
+    Receivers,
+}
+
+impl Queue {
+    /// `true` for the two that wait in the senders queue of the endpoint.
+    #[must_use]
+    pub const fn is_sender(self) -> bool {
+        matches!(self, Queue::Senders | Queue::Callers)
+    }
+
+    /// `true` when the thread expects an answer after its message is
+    /// taken.
+    #[must_use]
+    pub const fn wants_reply(self) -> bool {
+        matches!(self, Queue::Callers)
+    }
+}
+
+/// What a thread waits on. A cancellation reads this to find the queue the
+/// thread is in, so that no operation has to search every endpoint (D-74).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Wait {
+    /// The thread waits on nothing.
+    #[default]
+    Nothing,
+    /// The thread waits in one of the two queues of an endpoint.
+    Endpoint {
+        /// The endpoint.
+        endpoint: EndpointId,
+        /// Which queue, and what it asked for.
+        queue: Queue,
+        /// The badge of the capability a queued sender used, which is what
+        /// the receiver that meets it later sees. Zero for a receiver, which
+        /// has no capability of anyone else's in its hand.
+        badge: u64,
+    },
+    /// The thread waits for the answer to a call.
+    Reply {
+        /// The reply object the receiver holds.
+        reply: ReplyId,
+    },
+    /// The thread waits for signal bits.
+    Notification {
+        /// The notification.
+        notification: NotificationId,
+    },
+}
+
+impl Wait {
+    /// `true` if the thread waits on nothing.
+    #[must_use]
+    pub const fn is_nothing(self) -> bool {
+        matches!(self, Wait::Nothing)
     }
 }

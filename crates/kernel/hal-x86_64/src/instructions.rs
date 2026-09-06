@@ -325,6 +325,50 @@ pub unsafe fn write_port_u8(port: u16, value: u8) {
     }
 }
 
+/// Reads a word from a port.
+///
+/// # Safety
+///
+/// The port must belong to a device the kernel owns; a read can change the
+/// state of the device.
+#[must_use]
+pub unsafe fn read_port_u16(port: u16) -> u16 {
+    let value: u16;
+    // SAFETY: the caller promises that the port belongs to the kernel.
+    unsafe {
+        asm!("in ax, dx", out("ax") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+/// Writes a word to a port.
+///
+/// # Safety
+///
+/// The port must belong to a device the kernel owns.
+pub unsafe fn write_port_u16(port: u16, value: u16) {
+    // SAFETY: the caller promises that the port belongs to the kernel.
+    unsafe {
+        asm!("out dx, ax", in("dx") port, in("ax") value, options(nomem, nostack, preserves_flags));
+    }
+}
+
+/// Reads a double word from a port.
+///
+/// # Safety
+///
+/// The port must belong to a device the kernel owns; a read can change the
+/// state of the device.
+#[must_use]
+pub unsafe fn read_port_u32(port: u16) -> u32 {
+    let value: u32;
+    // SAFETY: the caller promises that the port belongs to the kernel.
+    unsafe {
+        asm!("in eax, dx", out("eax") value, in("dx") port, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
 /// Writes a double word to a port.
 ///
 /// # Safety

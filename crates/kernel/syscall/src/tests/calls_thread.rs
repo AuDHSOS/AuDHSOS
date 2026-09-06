@@ -276,8 +276,19 @@ fn thread_info_reports_the_state_and_whether_it_faulted() {
     assert_eq!(values[0], u64::from(ThreadState::Running.code()));
     assert_eq!(values[1], 0);
 
-    // A thread the scheduler stopped on a fault says so.
+    // A thread that carries a fault reports its kind in the second return
+    // word and the three words of it in the message area.
     let id = fixture.thread;
+    let fault = audhsos_abi::Fault {
+        kind: audhsos_abi::FaultKind::PageFault,
+        address: 0x1234,
+        instruction_pointer: 0x40_0000,
+        error_code: 0b110,
+    };
+    fixture
+        .objects
+        .threads
+        .with(id, |thread| thread.fault = Some(fault));
     fixture
         .scheduler
         .fault(&mut fixture.objects.threads, id)
@@ -285,7 +296,31 @@ fn thread_info_reports_the_state_and_whether_it_faulted() {
     let mut buffer = request(Syscall::ThreadInfo, &[fixture.own_thread.raw()]);
     let (_, values, _) = call(&mut fixture, &mut buffer);
     assert_eq!(values[0], u64::from(ThreadState::Faulted.code()));
-    assert_eq!(values[1], 1);
+    assert_eq!(
+        values[1],
+        u64::from(audhsos_abi::FaultKind::PageFault.code())
+    );
+    let view = audhsos_abi::ipc_buffer::Buffer::new(&buffer);
+    let message = view.message().unwrap();
+    assert_eq!(message.label, 0, "a result carries no label");
+    assert_eq!(message.word_count, 3);
+    assert_eq!(message.handle_count, 0);
+    assert_eq!(view.word(0), Some(0x1234));
+    assert_eq!(view.word(1), Some(0x40_0000));
+    assert_eq!(view.word(2), Some(0b110));
+}
+
+#[test]
+fn thread_info_of_a_thread_that_did_not_fault_reports_no_words() {
+    let mut fixture = Fixture::new();
+    let mut buffer = request(Syscall::ThreadInfo, &[fixture.own_thread.raw()]);
+    let (status, values, _) = call(&mut fixture, &mut buffer);
+    assert_eq!(status.error(), None);
+    assert_eq!(values[1], 0);
+    let message = audhsos_abi::ipc_buffer::Buffer::new(&buffer)
+        .message()
+        .unwrap();
+    assert_eq!(message.word_count, 0);
 }
 
 #[test]

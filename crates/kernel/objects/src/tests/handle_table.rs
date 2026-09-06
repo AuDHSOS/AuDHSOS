@@ -328,8 +328,34 @@ fn closing_from_the_middle_keeps_the_chain_whole() {
     assert_eq!(held, vec![first.index()], "closing the head works too");
 }
 
+/// Closes every handle of `list`, one at a time as the reaper does, and
+/// returns how many entries came back.
+fn drain<const N: usize>(arena: &mut HandleArena<N>, list: &mut HandleList) -> u32 {
+    let mut closed: u32 = 0;
+    while arena.close_next(list).is_some() {
+        closed = closed.saturating_add(1);
+    }
+    closed
+}
+
 #[test]
-fn closing_all_walks_the_chain_and_frees_every_slot() {
+fn every_entry_a_closed_list_held_comes_back_one_at_a_time() {
+    let mut arena: HandleArena<8> = HandleArena::new();
+    let mut list = HandleList::with_capacity(8);
+    arena
+        .insert(owner(), &mut list, memory_entry(1, Rights::READ))
+        .unwrap();
+    arena.insert(owner(), &mut list, thread_entry(2)).unwrap();
+    let first = arena.close_next(&mut list).unwrap();
+    assert_eq!(first.object_type(), ObjectType::Thread, "the head first");
+    let second = arena.close_next(&mut list).unwrap();
+    assert_eq!(second.object_type(), ObjectType::MemoryObject);
+    assert_eq!(arena.close_next(&mut list), None);
+    assert!(list.is_empty());
+}
+
+#[test]
+fn closing_the_next_handle_walks_the_chain_and_frees_every_slot() {
     let mut arena: HandleArena<16> = HandleArena::new();
     let mut mine = HandleList::with_capacity(16);
     let mut theirs = HandleList::with_capacity(16);
@@ -342,14 +368,14 @@ fn closing_all_walks_the_chain_and_frees_every_slot() {
     }
     let kept = arena.insert(other(), &mut theirs, thread_entry(9)).unwrap();
 
-    assert_eq!(arena.close_all(&mut mine), 5);
+    assert_eq!(drain(&mut arena, &mut mine), 5);
     assert!(mine.is_empty());
     assert_eq!(mine.count(), 0);
     assert_eq!(arena.handles_of(mine).count(), 0);
     assert_eq!(arena.live(), 1, "the other process keeps its handle");
     assert!(arena.lookup(other(), kept).is_ok());
     assert_eq!(
-        arena.close_all(&mut mine),
+        drain(&mut arena, &mut mine),
         0,
         "a second sweep finds nothing"
     );
@@ -370,7 +396,7 @@ fn every_slot_of_a_closed_process_is_handed_out_again() {
         arena.insert(owner(), &mut list, thread_entry(4)),
         Err(Error::QuotaExceeded)
     );
-    assert_eq!(arena.close_all(&mut list), 4);
+    assert_eq!(drain(&mut arena, &mut list), 4);
     assert!(arena.is_empty());
     let mut second = HandleList::with_capacity(4);
     for index in 0..4 {

@@ -95,8 +95,9 @@ Every object type also carries the generic rights `DUPLICATE` and
   against the shared arena, not memory set aside for the process.
 - `handle_duplicate(handle, rights)` succeeds only if `rights` is a subset of
   the current rights and the handle carries `DUPLICATE`.
-- `handle_close(handle)` releases the slot. Closing the last handle to an
-  object destroys the object.
+- `handle_close(handle)` releases the slot and the reference the handle
+  held. Closing the last handle to an object destroys the object; a process
+  and a thread are the exception named in 2.3.4 (D-86).
 - `Rights` is a project-defined bit set type with constant-time subset
   checks; every right has a fixed bit position listed in `audhsos-abi`.
 - A badge is attached to an endpoint capability with `endpoint_badge`. The
@@ -116,10 +117,17 @@ generation. Pools are plain arrays in safe Rust and are tested on the host.
   come from handles, from mappings, and from bindings. A thread blocked on
   an object holds no reference to it, so closing the last handle to an
   endpoint destroys it while threads still wait on it (D-75).
+- A process and a thread hold one further reference: their own (D-86). A
+  process ends when it is killed and a thread when the kernel has given back
+  what it held, whatever handle still names either of them, and closing the
+  last handle to a running thread therefore does not end it. The handles that
+  named one afterwards name nothing, which is what a stale handle is.
 - Destroying an endpoint or notification wakes every blocked thread with
-  `ObjectDestroyed`.
+  `ObjectDestroyed`. Dropping a reply object without replying wakes its
+  caller with `ReplyDropped`.
 - Destroying a process kills its threads, drops its mappings, and closes its
-  handle table.
+  handle table, and every handle it closes releases the reference that handle
+  held.
 - Destroying a `Ram` memory object does not return frames to the kernel. The
   memory server keeps a handle to every object it hands out. The kernel
   makes no promise about the contents of memory. The memory server
@@ -427,7 +435,7 @@ through shared memory objects.
 | `interrupt_create`, `interrupt_bind`, `interrupt_ack` | SystemControl / Interrupt | interrupt forwarding |
 | `ioport_create`, `ioport_read`, `ioport_write` | SystemControl / IoPortRange | x86 port I/O |
 | `memory_create_device` | SystemControl | device memory object |
-| `system_info` | SystemControl | pool capacities and usage, tick frequency, boot information including the framebuffer description |
+| `system_info` | SystemControl | pool capacities and usage, tick frequency, and the address of the root system description pointer; the framebuffer description joins it in Phase 9 |
 | `debug_log` | none | writes the message region to the debug UART; exists only in builds with the `debug-uart` feature |
 
 ## 2.9 Boot sequence

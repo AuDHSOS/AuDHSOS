@@ -361,10 +361,25 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "kernel-ipc",
+        path: "crates/kernel/ipc",
+        kind: Kind::Logic,
+        deps: &[
+            "kernel-objects",
+            "kernel-sched",
+            "kernel-types",
+            "audhsos-abi",
+            "test-support",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "kernel-syscall",
         path: "crates/kernel/syscall",
         kind: Kind::Logic,
         deps: &[
+            "kernel-ipc",
             "kernel-objects",
             "kernel-sched",
             "kernel-mm",
@@ -408,8 +423,8 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "kernel-hal-x86_64",
         path: "crates/kernel/hal-x86_64",
         kind: Kind::Adapter {
-            unsafe_budget: 129,
-            asm_budget: 24,
+            unsafe_budget: 142,
+            asm_budget: 27,
         },
         deps: &[
             "kernel-acpi",
@@ -429,13 +444,14 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-kernel",
         path: "crates/kernel/bin",
         kind: Kind::Adapter {
-            unsafe_budget: 26,
+            unsafe_budget: 27,
             asm_budget: 0,
         },
         deps: &[
             "kernel-core",
             "kernel-hal-api",
             "kernel-hal-x86_64",
+            "kernel-ipc",
             "kernel-mm",
             "kernel-objects",
             "kernel-sched",
@@ -451,7 +467,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-sys-x86_64",
         path: "crates/user/sys-x86_64",
         kind: Kind::Adapter {
-            unsafe_budget: 11,
+            unsafe_budget: 13,
             asm_budget: 1,
         },
         deps: &["audhsos-abi"],
@@ -462,7 +478,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-test-programs",
         path: "crates/user/test-programs",
         kind: Kind::Adapter {
-            unsafe_budget: 17,
+            unsafe_budget: 65,
             asm_budget: 1,
         },
         deps: &["audhsos-abi", "user-sys-x86_64"],

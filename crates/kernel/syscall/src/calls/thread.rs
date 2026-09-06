@@ -8,7 +8,7 @@
 //! and no pool slot behind.
 
 use audhsos_abi::layout::{PRIORITY_COUNT, USER_SPACE_START, ipc_buffer_address};
-use audhsos_abi::{Error, Rights, ThreadState};
+use audhsos_abi::{Error, Rights};
 use kernel_mm::page_table::Permissions;
 use kernel_objects::handle_table::Entry;
 use kernel_objects::object::{AnyObjectId, Process, ProcessId, Thread, ThreadId};
@@ -128,7 +128,7 @@ pub fn create<
     let slot = match recorded {
         Ok(slot) => slot,
         Err(error) => {
-            let _ = machine.objects.threads.release(id);
+            machine.objects.threads.force_release(id);
             machine.environment.release_frame(ipc_buffer);
             machine.environment.release_kernel_stack(stack_area.slot);
             refund_object(machine, target);
@@ -241,7 +241,7 @@ fn forget_thread<
     machine.objects.with_process(process, |holder| {
         holder.remove_thread(id);
     });
-    let _ = machine.objects.threads.release(id);
+    machine.objects.threads.force_release(id);
 }
 
 /// An address a user thread may run at or stand on.
@@ -295,9 +295,10 @@ fn install<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
         AnyObjectId::of(thread),
         Rights::MANAGE | Rights::DUPLICATE | Rights::TRANSFER,
     );
-    let mut list = machine.objects.processes.get(process)?.handles;
-    let handle = machine.objects.handles.insert(process, &mut list, entry)?;
-    machine.objects.processes.get_mut(process)?.handles = list;
+    let handle = machine.objects.install_handle(process, entry)?;
+    // The handle is a reference of its own, beside the one the thread holds
+    // to itself until the reaper has given back what it had.
+    machine.objects.retain(AnyObjectId::of(thread))?;
     Ok(handle.raw())
 }
 
@@ -335,9 +336,18 @@ pub fn suspend<
     request: &Request,
 ) -> Result<Reply, Error> {
     let id = thread_of(machine, process, request)?;
+    // A thread that waits leaves its queue before the scheduler moves it,
+    // and finds `Cancelled` where the answer it waited for would have gone.
+    // Every blocked state allows a suspend, so the operation below cannot
+    // refuse a thread this cancelled.
+    let waiting = machine.objects.threads.get(id)?.state.is_blocked()
+        && kernel_ipc::cancel(machine.objects, id);
     let outcome = machine
         .scheduler
         .suspend(&mut machine.objects.threads, id)?;
+    if waiting {
+        crate::calls::ipc::write_result(machine, kernel_ipc::Wakeup::failed(id, Error::Cancelled))?;
+    }
     Ok(Reply::DONE.after(outcome))
 }
 
@@ -400,6 +410,9 @@ fn end<E: Environment, const NP: usize, const NT: usize, const NM: usize, const 
     machine: &mut Machine<'_, E, NP, NT, NM, NH>,
     id: ThreadId,
 ) -> Result<kernel_sched::Outcome, Error> {
+    // A thread that waited leaves its queue before it ends; nothing is
+    // written into its buffer, because there is nobody left to read it.
+    kernel_ipc::cancel(machine.objects, id);
     let outcome = machine.scheduler.exit(&mut machine.objects.threads, id)?;
     let process = machine.objects.threads.get(id)?.process;
     machine.objects.with_process(process, |holder| {
@@ -437,6 +450,13 @@ pub fn set_priority<
 
 /// `thread_info`: the state, and the fault it stopped on if it did.
 ///
+/// Return word 0 is the state code and return word 1 the code of the fault
+/// kind, or zero when the thread carries no fault. A thread that carries one
+/// also gets three message words in its caller's own buffer — the faulting
+/// address, the instruction pointer, and the error code — and the first
+/// return word of that convention is the word count, which is why the count
+/// travels in the message and not in a return word here.
+///
 /// # Errors
 ///
 /// [`Error::InvalidHandle`] for the handle.
@@ -448,8 +468,11 @@ pub fn info<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
     let id = thread_of(machine, process, request)?;
     let thread = machine.objects.threads.get(id)?;
     let state = u64::from(thread.state.code());
-    let faulted = u64::from(thread.state == ThreadState::Faulted);
-    Ok(Reply::values(state, faulted))
+    let Some(fault) = thread.fault else {
+        return Ok(Reply::values(state, 0).with_words(&[]));
+    };
+    let words = [fault.address, fault.instruction_pointer, fault.error_code];
+    Ok(Reply::values(state, u64::from(fault.kind.code())).with_words(&words))
 }
 
 /// `thread_yield`.

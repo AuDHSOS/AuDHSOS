@@ -202,3 +202,118 @@ fn a_mutable_reference_to_a_console_or_an_exit_is_one() {
     assert_eq!(console.text(), "through the reference");
     assert_eq!(exit.status(), Some(ExitStatus::Failure));
 }
+
+#[test]
+fn the_bytes_of_a_frame_read_back_what_was_written_into_them() {
+    use crate::doubles::MemoryFrameBytes;
+    use crate::paging::{FRAME_BYTES, FrameBytes};
+
+    let mut frames = MemoryFrameBytes::new();
+    assert!(frames.is_empty());
+    let frame = PhysFrame::containing(PhysAddr::new(0x20_0000).unwrap());
+    assert!(frames.frame_bytes(frame).is_none());
+    assert!(frames.frame_bytes_mut(frame).is_none());
+    frames.add(frame);
+    assert!(frames.contains(frame));
+    assert_eq!(frames.len(), 1);
+    assert!(!frames.is_empty());
+    assert_eq!(frames.frame_bytes(frame), Some(&[0; FRAME_BYTES]));
+    frames.frame_bytes_mut(frame).unwrap()[7] = 0xAB;
+    assert_eq!(frames.frame_bytes(frame).unwrap().get(7), Some(&0xAB));
+    frames.add(frame);
+    assert_eq!(
+        frames.frame_bytes(frame).unwrap().get(7),
+        Some(&0xAB),
+        "a frame that is already there keeps what it holds"
+    );
+    let other = PhysFrame::containing(PhysAddr::new(0x30_0000).unwrap());
+    assert!(frames.frame_bytes(other).is_none());
+    assert_eq!(MemoryFrameBytes::default().len(), 0);
+}
+
+#[test]
+fn the_devices_of_one_machine_forward_to_the_controller_and_the_ports() {
+    use crate::device::Devices;
+    use crate::doubles::RecordingDevices;
+
+    fn drive(devices: &mut impl Devices) {
+        let line = InterruptLine::new(3);
+        let vector = Vector::new(0x43).unwrap();
+        devices.route(line, vector).unwrap();
+        devices.mask(line);
+        devices.unmask(line);
+        devices.end_of_interrupt(vector);
+        devices.write_u8(0x40, 0x36);
+        devices.write_u16(0x42, 0x1234);
+        devices.write_u32(0x44, 0xDEAD_BEEF);
+        assert_eq!(devices.read_u8(0x40), 0x11);
+        assert_eq!(devices.read_u16(0x42), 0x2222);
+        assert_eq!(devices.read_u32(0x44), 0x3333_3333);
+    }
+
+    let mut devices = RecordingDevices::new(8);
+    devices.ports.script_read(0x40, 0x11);
+    devices.ports.script_read(0x42, 0x2222);
+    devices.ports.script_read(0x44, 0x3333_3333);
+    drive(&mut devices);
+    assert_eq!(
+        devices.interrupts.route_of(InterruptLine::new(3)),
+        Some(Vector::new(0x43).unwrap())
+    );
+    assert!(!devices.interrupts.is_masked(InterruptLine::new(3)));
+    assert_eq!(devices.interrupts.events().len(), 4);
+    assert_eq!(devices.ports.writes_to(0x40), vec![0x36]);
+    assert_eq!(devices.ports.writes_to(0x42), vec![0x1234]);
+    assert_eq!(devices.ports.writes_to(0x44), vec![0xDEAD_BEEF]);
+    assert_eq!(RecordingDevices::default().interrupts.events().len(), 0);
+}
+
+#[test]
+fn the_controller_says_which_vector_a_line_reaches_and_which_has_none() {
+    let controller = FakeInterruptController::new(4);
+    assert_eq!(
+        controller.vector_of(InterruptLine::new(0)),
+        Vector::new(Vector::FIRST_DEVICE).ok()
+    );
+    assert_eq!(
+        controller.vector_of(InterruptLine::new(3)),
+        Vector::new(Vector::FIRST_DEVICE + 3).ok()
+    );
+    assert_eq!(
+        controller.vector_of(InterruptLine::new(4)),
+        None,
+        "a line the controller does not have reaches no vector"
+    );
+    assert_eq!(controller.vector_of(InterruptLine::new(u8::MAX)), None);
+    let devices = crate::doubles::RecordingDevices::new(4);
+    assert_eq!(
+        devices.vector_of(InterruptLine::new(1)),
+        Vector::new(Vector::FIRST_DEVICE + 1).ok()
+    );
+    assert_eq!(devices.vector_of(InterruptLine::new(9)), None);
+}
+
+#[test]
+fn the_page_table_double_reaches_the_bytes_of_a_frame_as_well() {
+    use crate::paging::{FRAME_BYTES, FrameBytes};
+
+    let ram = kernel_types::PhysFrameRange::new(frame(4), 2).unwrap();
+    let mut access: MemoryFrameAccess<u64> = MemoryFrameAccess::with_lazy_tables(ram);
+    // A frame of the lazy range has its bytes on the first access, the way a
+    // frame of the reserve is already reachable through the window.
+    assert!(access.frame_bytes(frame(4)).is_none());
+    access.frame_bytes_mut(frame(4)).unwrap()[3] = 9;
+    assert_eq!(access.frame_bytes(frame(4)).unwrap().get(3), Some(&9));
+    // One outside it has to be named.
+    assert!(access.frame_bytes_mut(frame(9)).is_none());
+    access.add_bytes(frame(9));
+    assert_eq!(access.frame_bytes(frame(9)), Some(&[0; FRAME_BYTES]));
+    access.add_bytes(frame(9));
+    assert_eq!(
+        access.frame_bytes(frame(9)),
+        Some(&[0; FRAME_BYTES]),
+        "a frame that is there already keeps what it holds"
+    );
+    let mut plain: MemoryFrameAccess<u64> = MemoryFrameAccess::new();
+    assert!(plain.frame_bytes_mut(frame(1)).is_none());
+}

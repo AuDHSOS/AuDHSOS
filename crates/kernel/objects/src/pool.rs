@@ -330,6 +330,37 @@ impl<T, const N: usize> Pool<T, N> {
         Ok(freed)
     }
 
+    /// Frees the slot `id` names whatever its reference count is, and says
+    /// whether it held an object.
+    ///
+    /// This is what a kill is, and it is not a release: a process ends when
+    /// it is killed and a thread when what it held has been given back, and
+    /// the handles that still name either of them name nothing afterwards.
+    /// Every other reference goes through [`Pool::release`].
+    pub fn force_release(&mut self, id: ObjectId<T>) -> bool {
+        match self.occupant_mut(id) {
+            Ok(occupant) => occupant.refs = 1,
+            Err(_) => return false,
+        }
+        self.release(id).unwrap_or(false)
+    }
+
+    /// Does something to the object `id` names, if the pool holds it, and
+    /// says whether it did.
+    ///
+    /// Every caller that changes an object it has already looked up goes
+    /// through this: the lookup cannot fail there, and writing it out at
+    /// each of them would be a branch per caller that nothing can reach.
+    pub fn with(&mut self, id: ObjectId<T>, body: impl FnOnce(&mut T)) -> bool {
+        match self.get_mut(id) {
+            Ok(value) => {
+                body(value);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Every live object with its id, in slot order.
     pub fn iter(&self) -> impl Iterator<Item = (ObjectId<T>, &T)> {
         self.slots.iter().enumerate().filter_map(|(index, slot)| {

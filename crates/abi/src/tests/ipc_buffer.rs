@@ -4,14 +4,15 @@
 //! Tests of `crate::ipc_buffer`.
 
 use crate::ipc_buffer::{
-    ARGS, Buffer, BufferMut, HANDLE_COUNT, HANDLES, LABEL, MessageError, RETURN, SIZE, STATUS,
-    SYSCALL_NUMBER, Status, WORD, WORD_COUNT, WORDS, argument_offset, handle_offset, return_offset,
+    ARGS, Buffer, BufferMut, FAULT_LABEL_BASE, HANDLE_COUNT, HANDLES, KERNEL_LABEL_BASE, LABEL,
+    MessageError, RETURN, SIZE, STATUS, SYSCALL_NUMBER, Status, WORD, WORD_COUNT, WORDS,
+    argument_offset, fault_kind_of, fault_label, handle_offset, is_kernel_label, return_offset,
     word_offset,
 };
 use crate::layout::{
     MAX_MESSAGE_HANDLES, MAX_MESSAGE_WORDS, MAX_SYSCALL_ARGUMENTS, MAX_SYSCALL_RETURN_WORDS,
 };
-use crate::{Error, Handle};
+use crate::{Error, FaultKind, Handle};
 
 /// A buffer of zeros to work on.
 fn buffer() -> [u8; SIZE] {
@@ -337,4 +338,53 @@ fn the_reader_of_a_writer_sees_the_same_bytes() {
     assert_eq!(writer.reader().syscall_number(), 13);
     assert_eq!(writer.bytes_mut().len(), SIZE);
     assert_eq!(Buffer::new(&bytes).bytes().len(), SIZE);
+}
+
+#[test]
+fn the_reserved_labels_are_the_top_two_hundred_and_fifty_six() {
+    assert_eq!(KERNEL_LABEL_BASE, u64::MAX - 0xFF);
+    assert!(!is_kernel_label(KERNEL_LABEL_BASE - 1));
+    assert!(is_kernel_label(KERNEL_LABEL_BASE));
+    assert!(is_kernel_label(u64::MAX));
+    assert!(!is_kernel_label(0));
+}
+
+#[test]
+fn every_fault_kind_has_a_label_of_its_own_inside_the_reserved_range() {
+    let mut seen = std::collections::HashSet::new();
+    for &kind in FaultKind::ALL {
+        let label = fault_label(kind);
+        assert!(is_kernel_label(label), "{kind:?}");
+        assert_eq!(fault_kind_of(label), Some(kind));
+        assert!(seen.insert(label), "{kind:?} shares its label");
+    }
+    // The six kinds occupy the first six labels above the base, so 250 of
+    // the 256 are left for the kernel messages of later phases.
+    assert_eq!(seen.len(), 6);
+    assert_eq!(fault_label(FaultKind::PageFault), FAULT_LABEL_BASE + 1);
+    assert_eq!(fault_label(FaultKind::AlignmentCheck), FAULT_LABEL_BASE + 6);
+    assert_eq!(fault_kind_of(FAULT_LABEL_BASE), None);
+    assert_eq!(fault_kind_of(FAULT_LABEL_BASE + 7), None);
+    assert_eq!(fault_kind_of(FAULT_LABEL_BASE - 1), None);
+}
+
+#[test]
+fn a_message_says_whether_its_label_is_the_kernels() {
+    let mut bytes = buffer();
+    let mut writer = BufferMut::new(&mut bytes);
+    writer.set_label(fault_label(FaultKind::PageFault));
+    writer.set_counts(3, 0).unwrap();
+    let message = Buffer::new(&bytes).message().unwrap();
+    assert!(message.is_kernel_label());
+    assert_eq!(message.fault_kind(), Some(FaultKind::PageFault));
+
+    BufferMut::new(&mut bytes).set_label(KERNEL_LABEL_BASE - 1);
+    let message = Buffer::new(&bytes).message().unwrap();
+    assert!(!message.is_kernel_label());
+    assert_eq!(message.fault_kind(), None);
+}
+
+#[test]
+fn a_label_far_above_the_range_names_no_fault_kind() {
+    assert_eq!(fault_kind_of(u64::MAX), None);
 }

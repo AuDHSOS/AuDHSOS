@@ -16,7 +16,9 @@ use core::marker::PhantomData;
 use audhsos_abi::Error;
 use audhsos_abi::ipc_buffer::SIZE;
 use kernel_hal_api::console::DebugConsole;
-use kernel_hal_api::paging::{AddressSpaceControl, FrameAccess, TlbControl};
+use kernel_hal_api::device::Devices;
+use kernel_hal_api::interrupt::{InterruptError, InterruptLine, Vector};
+use kernel_hal_api::paging::{AddressSpaceControl, FrameAccess, FrameBytes, TlbControl};
 use kernel_mm::BitmapFrameAllocator;
 use kernel_mm::kernel_half;
 use kernel_mm::mapper::Mapper;
@@ -27,7 +29,7 @@ use kernel_sched::Scheduler;
 use kernel_syscall::dispatch::Machine as SyscallMachine;
 use kernel_syscall::environment::{Environment, KernelStack};
 use kernel_syscall::{dispatch, reaper};
-use kernel_types::{CachePolicy, Page, PhysFrame, VirtAddr};
+use kernel_types::{CachePolicy, Page, PhysFrame, PhysFrameRange, VirtAddr};
 
 use crate::memory::KernelMemory;
 
@@ -37,43 +39,58 @@ use crate::memory::KernelMemory;
 /// The type parameters are what the architecture layer supplies; nothing
 /// here knows what a page-table entry looks like.
 #[derive(Debug)]
-pub struct KernelEnvironment<'a, F, A, T, C>
+pub struct KernelEnvironment<'a, F, A, T, C, D>
 where
     F: EntryFormat,
-    A: FrameAccess<PageTable<F>>,
+    A: FrameAccess<PageTable<F>> + FrameBytes,
     T: TlbControl,
     C: DebugConsole,
+    D: Devices,
 {
     /// What the kernel owns after the bring-up.
     pub memory: &'a mut KernelMemory,
-    /// The page tables, reachable through the physical window.
+    /// The page tables and the bytes of a frame, both reachable through the
+    /// physical window.
     pub access: &'a mut A,
     /// The translation lookaside buffer.
     pub tlb: &'a mut T,
     /// The debug console, in a build that has one.
     pub console: Option<&'a mut C>,
+    /// The interrupt controller and the I/O ports, once the interrupt
+    /// bring-up has run. A kernel that has not brought them up refuses the
+    /// calls that need them.
+    pub devices: Option<&'a mut D>,
+    /// The physical address of the root system description pointer, which
+    /// the bring-up read and `system_info` reports. It is the only thing of
+    /// the firmware the kernel keeps.
+    pub acpi: u64,
     format: PhantomData<fn() -> F>,
 }
 
-impl<'a, F, A, T, C> KernelEnvironment<'a, F, A, T, C>
+impl<'a, F, A, T, C, D> KernelEnvironment<'a, F, A, T, C, D>
 where
     F: EntryFormat,
-    A: FrameAccess<PageTable<F>>,
+    A: FrameAccess<PageTable<F>> + FrameBytes,
     T: TlbControl,
     C: DebugConsole,
+    D: Devices,
 {
-    /// The environment over these four.
+    /// The environment over these six.
     pub fn new(
         memory: &'a mut KernelMemory,
         access: &'a mut A,
         tlb: &'a mut T,
         console: Option<&'a mut C>,
+        devices: Option<&'a mut D>,
+        acpi: u64,
     ) -> Self {
         KernelEnvironment {
             memory,
             access,
             tlb,
             console,
+            devices,
+            acpi,
             format: PhantomData,
         }
     }
@@ -92,12 +109,13 @@ where
     }
 }
 
-impl<F, A, T, C> Environment for KernelEnvironment<'_, F, A, T, C>
+impl<F, A, T, C, D> Environment for KernelEnvironment<'_, F, A, T, C, D>
 where
     F: EntryFormat,
-    A: FrameAccess<PageTable<F>>,
+    A: FrameAccess<PageTable<F>> + FrameBytes,
     T: TlbControl,
     C: DebugConsole,
+    D: Devices,
 {
     fn create_address_space(&mut self) -> Result<PhysFrame, Error> {
         let root = self
@@ -189,6 +207,106 @@ where
         if let Some(console) = self.console.as_mut() {
             console.write_bytes(bytes);
         }
+    }
+
+    fn with_buffer<R>(
+        &mut self,
+        frame: PhysFrame,
+        body: impl FnOnce(&mut [u8; SIZE]) -> R,
+    ) -> Result<R, Error> {
+        let bytes = self
+            .access
+            .frame_bytes_mut(frame)
+            .ok_or(Error::InvalidArgument)?;
+        Ok(body(bytes))
+    }
+
+    fn read_port(&mut self, port: u16, width: u8) -> Result<u64, Error> {
+        let devices = self.devices.as_mut().ok_or(Error::Unsupported)?;
+        match width {
+            1 => Ok(u64::from(devices.read_u8(port))),
+            2 => Ok(u64::from(devices.read_u16(port))),
+            4 => Ok(u64::from(devices.read_u32(port))),
+            _ => Err(Error::InvalidArgument),
+        }
+    }
+
+    fn write_port(&mut self, port: u16, width: u8, value: u64) -> Result<(), Error> {
+        let devices = self.devices.as_mut().ok_or(Error::Unsupported)?;
+        match width {
+            1 => devices.write_u8(port, truncate(value)),
+            2 => devices.write_u16(port, truncate(value)),
+            4 => devices.write_u32(port, truncate(value)),
+            _ => return Err(Error::InvalidArgument),
+        }
+        Ok(())
+    }
+
+    fn interrupt_vector(&self, line: u8) -> Option<u8> {
+        let devices = self.devices.as_ref()?;
+        Some(devices.vector_of(InterruptLine::new(line))?.number())
+    }
+
+    fn route_interrupt(&mut self, line: u8, vector: u8) -> Result<(), Error> {
+        let devices = self.devices.as_mut().ok_or(Error::Unsupported)?;
+        let vector = Vector::new(vector).map_err(routing_error)?;
+        devices
+            .route(InterruptLine::new(line), vector)
+            .map_err(routing_error)
+    }
+
+    fn mask_interrupt(&mut self, line: u8) {
+        if let Some(devices) = self.devices.as_mut() {
+            devices.mask(InterruptLine::new(line));
+        }
+    }
+
+    fn unmask_interrupt(&mut self, line: u8) {
+        if let Some(devices) = self.devices.as_mut() {
+            devices.unmask(InterruptLine::new(line));
+        }
+    }
+
+    fn meets_ram(&self, frames: PhysFrameRange) -> bool {
+        let reserve = self.memory.frames().range();
+        overlaps(frames, reserve) || self.memory.free().iter().any(|ram| overlaps(frames, ram))
+    }
+
+    fn acpi_pointer(&self) -> u64 {
+        self.acpi
+    }
+}
+
+/// The low bytes of a word, as a port write of the width of `T` takes them.
+fn truncate<T>(value: u64) -> T
+where
+    T: TryFrom<u64> + Default,
+{
+    let bits = size_of::<T>().saturating_mul(8);
+    let mask = if bits >= 64 {
+        u64::MAX
+    } else {
+        1_u64
+            .wrapping_shl(u32::try_from(bits).unwrap_or(0))
+            .wrapping_sub(1)
+    };
+    T::try_from(value & mask).unwrap_or_default()
+}
+
+/// `true` when the two ranges share a frame.
+const fn overlaps(first: PhysFrameRange, second: PhysFrameRange) -> bool {
+    let first_end = first.start().number().saturating_add(first.count());
+    let second_end = second.start().number().saturating_add(second.count());
+    first.start().number() < second_end && second.start().number() < first_end
+}
+
+/// What a routing failure says to a caller of a system call.
+const fn routing_error(error: InterruptError) -> Error {
+    match error {
+        InterruptError::ReservedVector(_) | InterruptError::UnknownLine(_) => {
+            Error::InvalidArgument
+        }
+        InterruptError::AlreadyRouted(_) => Error::AlreadyExists,
     }
 }
 
@@ -304,6 +422,7 @@ pub fn handle_syscall<
     A,
     T,
     C,
+    D,
     const NP: usize,
     const NT: usize,
     const NM: usize,
@@ -311,15 +430,16 @@ pub fn handle_syscall<
 >(
     objects: &mut Objects<NP, NT, NM, NH>,
     scheduler: &mut Scheduler,
-    environment: &mut KernelEnvironment<'_, F, A, T, C>,
+    environment: &mut KernelEnvironment<'_, F, A, T, C, D>,
     caller: ThreadId,
     buffer: &mut [u8; SIZE],
 ) -> bool
 where
     F: EntryFormat,
-    A: FrameAccess<PageTable<F>>,
+    A: FrameAccess<PageTable<F>> + FrameBytes,
     T: TlbControl,
     C: DebugConsole,
+    D: Devices,
 {
     let mut syscall = SyscallMachine {
         objects,
@@ -334,17 +454,18 @@ where
 /// processor is still on. `running` is that thread: the caller of a system
 /// call, or the thread the kernel has just switched to. The scheduler has
 /// already forgotten a thread that ended, so it cannot be asked.
-pub fn reap<F, A, T, C, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+pub fn reap<F, A, T, C, D, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     objects: &mut Objects<NP, NT, NM, NH>,
     scheduler: &mut Scheduler,
-    environment: &mut KernelEnvironment<'_, F, A, T, C>,
+    environment: &mut KernelEnvironment<'_, F, A, T, C, D>,
     running: Option<ThreadId>,
 ) -> u32
 where
     F: EntryFormat,
-    A: FrameAccess<PageTable<F>>,
+    A: FrameAccess<PageTable<F>> + FrameBytes,
     T: TlbControl,
     C: DebugConsole,
+    D: Devices,
 {
     let mut syscall = SyscallMachine {
         objects,

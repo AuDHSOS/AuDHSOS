@@ -9,8 +9,9 @@
 //! space shares; a kernel stack slot it hands out is mapped and guarded.
 
 use audhsos_abi::Error;
+use audhsos_abi::ipc_buffer::SIZE;
 use kernel_mm::page_table::Permissions;
-use kernel_types::{CachePolicy, Page, PhysFrame, VirtAddr};
+use kernel_types::{CachePolicy, Page, PhysFrame, PhysFrameRange, VirtAddr};
 
 /// A kernel stack the kernel handed out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -96,4 +97,70 @@ pub trait Environment {
     /// Writes the bytes of a `debug_log` call. A build without the debug
     /// console drops them.
     fn log(&mut self, bytes: &[u8]);
+
+    /// Runs `body` on the IPC buffer in `frame`.
+    ///
+    /// This is the seam to a second buffer. The dispatcher holds the buffer
+    /// of the calling thread and nothing else, and every transfer has the
+    /// caller on one side: a send copies out of the caller's buffer into the
+    /// one this reaches, a receive copies the other way.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] when the frame is not reachable, which no
+    /// IPC buffer of a live thread is.
+    fn with_buffer<R>(
+        &mut self,
+        frame: PhysFrame,
+        body: impl FnOnce(&mut [u8; SIZE]) -> R,
+    ) -> Result<R, Error>;
+
+    /// Reads `width` bytes from `port`.
+    ///
+    /// The range check is the caller's: this is reached only after an
+    /// `IoPortRange` capability has allowed the access.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for a width that is not 1, 2, or 4.
+    fn read_port(&mut self, port: u16, width: u8) -> Result<u64, Error>;
+
+    /// Writes the low `width` bytes of `value` to `port`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Environment::read_port`].
+    fn write_port(&mut self, port: u16, width: u8, value: u64) -> Result<(), Error>;
+
+    /// The vector the plan of this machine routes `line` to, or `None` for a
+    /// line it reserves no vector for.
+    ///
+    /// The plan is the architecture's, which is why this is a question and
+    /// not a table of this crate: nothing here depends on
+    /// `kernel-x86-tables` and nothing here will start to.
+    fn interrupt_vector(&self, line: u8) -> Option<u8>;
+
+    /// Routes `line` to `vector` at the interrupt controller, masked.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for a line the controller does not have;
+    /// [`Error::AlreadyExists`] for one it has already routed.
+    fn route_interrupt(&mut self, line: u8, vector: u8) -> Result<(), Error>;
+
+    /// Stops delivery of `line`.
+    fn mask_interrupt(&mut self, line: u8);
+
+    /// Resumes delivery of `line`.
+    fn unmask_interrupt(&mut self, line: u8);
+
+    /// `true` when any frame of `frames` is memory the machine reported as
+    /// usable. A device object is an aperture, and the frames of the memory
+    /// map belong to the memory server.
+    fn meets_ram(&self, frames: PhysFrameRange) -> bool;
+
+    /// The physical address of the root system description pointer, or zero
+    /// when the platform named none. It is the only thing of the firmware
+    /// the kernel keeps, and `system_info` is what reports it.
+    fn acpi_pointer(&self) -> u64;
 }

@@ -21,6 +21,7 @@
 // The memory test image uses this crate; this one does not.
 // The user test image uses these; this one does not.
 use audhsos_sync as _;
+use kernel_ipc as _;
 use kernel_objects as _;
 use kernel_syscall as _;
 

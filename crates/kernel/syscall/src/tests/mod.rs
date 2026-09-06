@@ -4,8 +4,11 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
+mod calls_device;
 mod calls_handle;
+mod calls_ipc;
 mod calls_memory;
+mod calls_notify;
 mod calls_process;
 mod calls_thread;
 mod double;

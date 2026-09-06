@@ -20,7 +20,7 @@ audhsos-abi.workspace = true
 audhsos-sync.workspace = true
 kernel-acpi.workspace = true
 driver-uart16550.workspace = true
-kernel-hal-api.workspace = true
+kernel-hal-api = { workspace = true, features = ["port-io"] }
 kernel-mm.workspace = true
 kernel-test-harness.workspace = true
 kernel-types.workspace = true

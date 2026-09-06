@@ -7,7 +7,9 @@
 use audhsos_abi::ipc_buffer::{BufferMut, SIZE};
 use audhsos_abi::layout::PAGE_SIZE;
 use audhsos_abi::{Error, Syscall};
-use kernel_hal_api::doubles::{RecordingAddressSpaces, RecordingConsole, RecordingTlb};
+use kernel_hal_api::doubles::{
+    RecordingAddressSpaces, RecordingConsole, RecordingDevices, RecordingTlb,
+};
 use kernel_hal_api::paging::FrameAccess;
 use kernel_mm::kernel_half::{entry_of, shares_kernel_half};
 use kernel_mm::page_table::{EntryFormat, PageTable, Permissions, X86Entry};
@@ -56,11 +58,13 @@ fn a_fresh_address_space_carries_the_kernel_half_and_nothing_else() {
     let mut tlb = RecordingTlb::new();
     let mut console = RecordingConsole::new();
     let kernel_root = memory.root();
-    let mut environment = KernelEnvironment::<X86Entry, _, _, _>::new(
+    let mut environment = KernelEnvironment::<X86Entry, _, _, _, RecordingDevices>::new(
         &mut memory,
         &mut machine.access,
         &mut tlb,
         Some(&mut console),
+        None,
+        0,
     );
 
     let root = environment.create_address_space().unwrap();
@@ -91,11 +95,13 @@ fn an_address_space_without_a_frame_is_refused() {
     while memory.frames_mut().allocate().is_ok() {}
     let mut tlb = RecordingTlb::new();
     let mut console = RecordingConsole::new();
-    let mut environment = KernelEnvironment::<X86Entry, _, _, _>::new(
+    let mut environment = KernelEnvironment::<X86Entry, _, _, _, RecordingDevices>::new(
         &mut memory,
         &mut machine.access,
         &mut tlb,
         Some(&mut console),
+        None,
+        0,
     );
     assert_eq!(
         environment.create_address_space(),
@@ -109,11 +115,13 @@ fn an_address_space_that_is_taken_apart_gives_its_tables_back() {
     let mut tlb = RecordingTlb::new();
     let mut console = RecordingConsole::new();
     let kernel_root = memory.root();
-    let mut environment = KernelEnvironment::<X86Entry, _, _, _>::new(
+    let mut environment = KernelEnvironment::<X86Entry, _, _, _, RecordingDevices>::new(
         &mut memory,
         &mut machine.access,
         &mut tlb,
         Some(&mut console),
+        None,
+        0,
     );
     let free = environment.memory.frames().free_count();
     let root = environment.create_address_space().unwrap();
@@ -145,11 +153,13 @@ fn a_mapping_of_a_user_page_is_what_the_page_tables_hold_afterwards() {
     let (mut machine, mut memory) = kernel_memory();
     let mut tlb = RecordingTlb::new();
     let mut console = RecordingConsole::new();
-    let mut environment = KernelEnvironment::<X86Entry, _, _, _>::new(
+    let mut environment = KernelEnvironment::<X86Entry, _, _, _, RecordingDevices>::new(
         &mut memory,
         &mut machine.access,
         &mut tlb,
         Some(&mut console),
+        None,
+        0,
     );
     let root = environment.create_address_space().unwrap();
     let page = Page::containing(kernel_address(0x40_0000));
@@ -179,11 +189,13 @@ fn a_kernel_stack_and_a_frame_come_out_of_the_reserve_and_go_back() {
     let (mut machine, mut memory) = kernel_memory();
     let mut tlb = RecordingTlb::new();
     let mut console = RecordingConsole::new();
-    let mut environment = KernelEnvironment::<X86Entry, _, _, _>::new(
+    let mut environment = KernelEnvironment::<X86Entry, _, _, _, RecordingDevices>::new(
         &mut memory,
         &mut machine.access,
         &mut tlb,
         Some(&mut console),
+        None,
+        0,
     );
     let free = environment.memory.frames().free_count();
 
@@ -205,11 +217,13 @@ fn a_frame_for_an_ipc_buffer_is_zeroed_before_it_is_handed_out() {
     let (mut machine, mut memory) = kernel_memory();
     let mut tlb = RecordingTlb::new();
     let mut console = RecordingConsole::new();
-    let mut environment = KernelEnvironment::<X86Entry, _, _, _>::new(
+    let mut environment = KernelEnvironment::<X86Entry, _, _, _, RecordingDevices>::new(
         &mut memory,
         &mut machine.access,
         &mut tlb,
         Some(&mut console),
+        None,
+        0,
     );
     let frame = environment.allocate_frame().unwrap();
     // What a frame of the reserve looks like through the window is a page
@@ -228,22 +242,27 @@ fn what_debug_log_writes_reaches_the_console_and_a_build_without_one_drops_it() 
     let mut tlb = RecordingTlb::new();
     let mut console = RecordingConsole::new();
     {
-        let mut environment = KernelEnvironment::<X86Entry, _, _, _>::new(
+        let mut environment = KernelEnvironment::<X86Entry, _, _, _, RecordingDevices>::new(
             &mut memory,
             &mut machine.access,
             &mut tlb,
             Some(&mut console),
+            None,
+            0,
         );
         environment.log(b"hello");
     }
     assert_eq!(console.output(), b"hello");
 
-    let mut environment = KernelEnvironment::<X86Entry, _, _, RecordingConsole>::new(
-        &mut memory,
-        &mut machine.access,
-        &mut tlb,
-        None,
-    );
+    let mut environment =
+        KernelEnvironment::<X86Entry, _, _, RecordingConsole, RecordingDevices>::new(
+            &mut memory,
+            &mut machine.access,
+            &mut tlb,
+            None,
+            None,
+            0,
+        );
     environment.log(b"nowhere");
 }
 
@@ -421,11 +440,13 @@ fn a_system_call_of_a_thread_goes_through_the_kernel_environment() {
     let thread = objects.threads.ids().next().unwrap();
     scheduler.pick_next(&mut objects.threads).unwrap();
 
-    let mut environment = KernelEnvironment::<X86Entry, _, _, _>::new(
+    let mut environment = KernelEnvironment::<X86Entry, _, _, _, RecordingDevices>::new(
         &mut memory,
         &mut machine.access,
         &mut tlb,
         Some(&mut console),
+        None,
+        0,
     );
     let mut buffer = [0_u8; SIZE];
     BufferMut::new(&mut buffer).set_syscall_number(u64::from(Syscall::ThreadYield.number()));
@@ -457,11 +478,13 @@ fn what_a_thread_that_ended_held_goes_back_through_the_environment() {
     let (mut objects, mut scheduler, _) = two_processes(5, 5);
     let thread = objects.threads.ids().next().unwrap();
 
-    let mut environment = KernelEnvironment::<X86Entry, _, _, _>::new(
+    let mut environment = KernelEnvironment::<X86Entry, _, _, _, RecordingDevices>::new(
         &mut memory,
         &mut machine.access,
         &mut tlb,
         Some(&mut console),
+        None,
+        0,
     );
     // A stack of the reserve for the thread, so that the sweep has
     // something to give back.
@@ -481,4 +504,170 @@ fn what_a_thread_that_ended_held_goes_back_through_the_environment() {
         "the stack of the thread went back into the reserve"
     );
     assert!(objects.threads.get(thread).is_err(), "the slot came back");
+}
+
+#[test]
+fn the_buffer_of_a_thread_is_reached_through_the_window() {
+    let (mut machine, mut memory) = kernel_memory();
+    let mut tlb = RecordingTlb::new();
+    let mut environment =
+        KernelEnvironment::<X86Entry, _, _, RecordingConsole, RecordingDevices>::new(
+            &mut memory,
+            &mut machine.access,
+            &mut tlb,
+            None,
+            None,
+            0,
+        );
+    let held = environment.allocate_frame().unwrap();
+    let written = environment
+        .with_buffer(held, |bytes| {
+            let mut writer = BufferMut::new(bytes);
+            writer.set_word(0, 0x00C0_FFEE);
+            42
+        })
+        .unwrap();
+    assert_eq!(written, 42, "the closure answers the caller");
+    let read = environment
+        .with_buffer(held, |bytes| {
+            audhsos_abi::ipc_buffer::Buffer::new(bytes).word(0)
+        })
+        .unwrap();
+    assert_eq!(read, Some(0x00C0_FFEE));
+    // A frame the window does not reach is no buffer.
+    let beyond = PhysFrame::from_number(0xF_FFFF).unwrap();
+    assert_eq!(
+        environment.with_buffer(beyond, |_| ()),
+        Err(Error::InvalidArgument)
+    );
+}
+
+#[test]
+fn a_kernel_without_devices_refuses_the_calls_that_need_them() {
+    let (mut machine, mut memory) = kernel_memory();
+    let mut tlb = RecordingTlb::new();
+    let mut environment =
+        KernelEnvironment::<X86Entry, _, _, RecordingConsole, RecordingDevices>::new(
+            &mut memory,
+            &mut machine.access,
+            &mut tlb,
+            None,
+            None,
+            0,
+        );
+    assert_eq!(environment.read_port(0x40, 1), Err(Error::Unsupported));
+    assert_eq!(environment.write_port(0x40, 1, 0), Err(Error::Unsupported));
+    assert_eq!(environment.interrupt_vector(0), None);
+    assert_eq!(
+        environment.route_interrupt(0, 0x40),
+        Err(Error::Unsupported)
+    );
+    // The two that answer nothing are no-operations without devices.
+    environment.mask_interrupt(0);
+    environment.unmask_interrupt(0);
+}
+
+#[test]
+fn a_port_is_read_and_written_at_every_width_the_interface_allows() {
+    let (mut machine, mut memory) = kernel_memory();
+    let mut tlb = RecordingTlb::new();
+    let mut devices = RecordingDevices::new(24);
+    devices.ports.script_read(0x40, 0xAB);
+    devices.ports.script_read(0x42, 0xBEEF);
+    devices.ports.script_read(0x44, 0xDEAD_BEEF);
+    let mut environment = KernelEnvironment::<X86Entry, _, _, RecordingConsole, _>::new(
+        &mut memory,
+        &mut machine.access,
+        &mut tlb,
+        None,
+        Some(&mut devices),
+        0,
+    );
+    assert_eq!(environment.read_port(0x40, 1), Ok(0xAB));
+    assert_eq!(environment.read_port(0x42, 2), Ok(0xBEEF));
+    assert_eq!(environment.read_port(0x44, 4), Ok(0xDEAD_BEEF));
+    assert_eq!(environment.read_port(0x40, 3), Err(Error::InvalidArgument));
+    assert!(environment.write_port(0x50, 1, 0x1FF).is_ok());
+    assert!(environment.write_port(0x52, 2, 0x1_FFFF).is_ok());
+    assert!(environment.write_port(0x54, 4, 0x1_FFFF_FFFF).is_ok());
+    assert_eq!(
+        environment.write_port(0x50, 8, 0),
+        Err(Error::InvalidArgument)
+    );
+    let _ = &environment;
+    assert_eq!(
+        devices.ports.writes_to(0x50),
+        vec![0xFF],
+        "a write of one byte carries one byte"
+    );
+    assert_eq!(devices.ports.writes_to(0x52), vec![0xFFFF]);
+    assert_eq!(devices.ports.writes_to(0x54), vec![0xFFFF_FFFF]);
+}
+
+#[test]
+fn a_line_is_routed_once_and_the_plan_says_which_vector_it_reaches() {
+    let (mut machine, mut memory) = kernel_memory();
+    let mut tlb = RecordingTlb::new();
+    let mut devices = RecordingDevices::new(4);
+    let mut environment = KernelEnvironment::<X86Entry, _, _, RecordingConsole, _>::new(
+        &mut memory,
+        &mut machine.access,
+        &mut tlb,
+        None,
+        Some(&mut devices),
+        0,
+    );
+    assert_eq!(environment.interrupt_vector(0), Some(32));
+    assert_eq!(environment.interrupt_vector(9), None, "no such line");
+    assert!(environment.route_interrupt(0, 32).is_ok());
+    assert_eq!(
+        environment.route_interrupt(0, 32),
+        Err(Error::AlreadyExists)
+    );
+    assert_eq!(
+        environment.route_interrupt(1, 3),
+        Err(Error::InvalidArgument),
+        "a vector the processor keeps for its exceptions"
+    );
+    assert_eq!(
+        environment.route_interrupt(9, 41),
+        Err(Error::InvalidArgument),
+        "a line the controller does not have"
+    );
+    environment.mask_interrupt(0);
+    environment.unmask_interrupt(0);
+    let _ = &environment;
+    let line = kernel_hal_api::interrupt::InterruptLine::new(0);
+    assert!(
+        !devices.interrupts.is_masked(line),
+        "the last word was the unmask"
+    );
+    assert_eq!(devices.interrupts.events().len(), 3);
+}
+
+#[test]
+fn a_device_range_that_meets_memory_of_the_machine_is_recognised() {
+    let (mut machine, mut memory) = kernel_memory();
+    let mut tlb = RecordingTlb::new();
+    let reserve = memory.frames().range();
+    let free = memory.free().iter().next().unwrap();
+    let environment = KernelEnvironment::<X86Entry, _, _, RecordingConsole, RecordingDevices>::new(
+        &mut memory,
+        &mut machine.access,
+        &mut tlb,
+        None,
+        None,
+        0x1234,
+    );
+    assert!(
+        environment.meets_ram(reserve),
+        "the reserve is memory of the machine too"
+    );
+    assert!(environment.meets_ram(free));
+    let aperture = kernel_types::PhysFrameRange::new(frame(0xF_0000), 4).unwrap();
+    assert!(
+        !environment.meets_ram(aperture),
+        "an aperture above every region meets nothing"
+    );
+    assert_eq!(environment.acpi_pointer(), 0x1234);
 }
