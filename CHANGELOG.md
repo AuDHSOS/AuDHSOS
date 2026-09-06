@@ -107,6 +107,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The register entries of this phase moved from D-87 to D-93 up to D-89 to
+  D-95, main having taken D-87 and D-88 for the network work while the
+  branch was open. Commit subjects written before the merge name the old
+  numbers; the register and every document name the new ones.
+
 - The root task is an ELF and no longer a flat binary (D-92). A flat image
   says nothing about which of its pages may be written and which may be
   executed, so either the whole program is writable and executable or it
