@@ -18,6 +18,15 @@ pub struct Handle(NonZeroU64);
 const INDEX_MASK: u64 = (1 << HANDLE_INDEX_BITS) - 1;
 
 impl Handle {
+    /// The widest handle there is: the last index of a table at the last
+    /// generation.
+    ///
+    /// No table hands it out — a generation counts up from one and an index
+    /// is bounded by the capacity of the table — and it is here so that code
+    /// which has to name a handle without an `Option` can, in a `const`
+    /// where a fallible constructor cannot be used.
+    pub const MAX: Handle = Handle(NonZeroU64::MAX);
+
     /// Builds a handle from a table index and a generation. Returns `None`
     /// for generation `0`, which is reserved so that the raw value is never
     /// `0`.

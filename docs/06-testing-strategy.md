@@ -613,7 +613,9 @@ done until every applicable item has a test. Items are added, never removed.
 - Exhaustion returns `OutOfMemory`; after releases the same request
   succeeds again.
 - Adjacency bookkeeping: two released neighbors are handed out as one
-  object for a request of their combined size.
+  object for a request of their combined size. This is what `memory_merge`
+  was added for (D-88); against a kernel that only splits it cannot be
+  satisfied at all.
 - Property: every handed-out range is disjoint from every other live range
   and from the free set; every range handed out was zeroed after its last
   release.

@@ -55,3 +55,11 @@ fn property_every_valid_pair_round_trips() {
         Ok(())
     });
 }
+
+#[test]
+fn the_widest_handle_is_a_handle() {
+    assert_eq!(Handle::MAX.raw(), u64::MAX);
+    assert_eq!(Handle::from_raw(u64::MAX), Some(Handle::MAX));
+    assert_eq!(Handle::MAX.index(), u32::MAX);
+    assert_eq!(Handle::MAX.generation(), u32::MAX);
+}

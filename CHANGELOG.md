@@ -74,6 +74,24 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `server-memory`, the allocation policy of the memory server, and
+  `server-name`, the registry behind the name server. Neither makes a system
+  call: the memory policy reaches the kernel through the `Pages` trait — map,
+  zero, unmap, split, merge — and through nothing else, so the whole of it
+  runs on the host against the recording double catalog item 6.6.23 asks
+  for. The zeroing is a thing a test watches happen, in the order it
+  happens: one pass over exactly the range of the object, before the handle
+  goes out and again the moment it comes back.
+
+  The free list holds whole objects sorted by physical address; a request is
+  served from the first that can hold it at the alignment it asks for, and
+  what lies before and behind is split off and stays free. A release joins
+  the object to the neighbours it touches, which is what `memory_merge` is
+  for and what keeps the store from grinding itself down.
+
+  `Handle::MAX` is new in `audhsos-abi`: the widest handle there is, so that
+  code which must name a handle in a `const` can.
+
 - `memory_merge`, a forty-second system call: one memory object out of two
   that lie side by side. The two must be in that order, agree in kind and
   cache policy, carry the same rights, and be held by the caller and by

@@ -393,6 +393,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "server-memory"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-collections",
+ "test-support",
+]
+
+[[package]]
 name = "server-name"
 version = "0.1.0"
 dependencies = [
