@@ -1392,37 +1392,76 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.49 HTTP/1.1 client (`net-http`)
 
-- Requests: the request line and headers for a minimal `GET`, with a
-  host header always present; a header value with a control character is
-  rejected at encoding time.
+- Requests: the request line and headers for a minimal `GET`, with a host
+  header always present; a body brings its own `Content-Length`; a header
+  value with a control character is rejected at encoding time, as is a
+  name that is not a token, a target that is not an origin-form path, an
+  empty host, and any attempt to write `Host`, `Content-Length` or
+  `Transfer-Encoding` from the caller's header list.
 - Responses: a minimal response, a response with a body of declared
   length, a chunked body in one and in several reads, a chunk with an
-  extension, the terminating zero chunk with and without trailers.
+  extension, the terminating zero chunk with and without trailers, and a
+  body that ends when the connection does.
 - Rejections: a status line that is too long, more headers than the
-  limit, a header longer than the limit, obsolete line folding, both
-  `Content-Length` and `Transfer-Encoding` present, two `Content-Length`
-  headers that disagree, and a non-numeric length.
-- Framing: a response split across arbitrary read boundaries produces the
-  same result as one read (property); a body larger than the caller's
-  buffer is delivered in parts without loss.
-- A redirect status is reported with its location and is not followed.
-  Fuzz target `http_response`.
+  limit, a header longer than the limit, a head longer than the buffer it
+  was given, obsolete line folding, both `Content-Length` and
+  `Transfer-Encoding` present, two `Content-Length` headers that
+  disagree, a non-numeric length, a transfer encoding that is not chunked
+  alone, a chunk size that is not hexadecimal or overflows, and a chunk
+  that does not end where it said it would. Two `Content-Length` values
+  that agree are the one value they agree on.
+- Framing: a response split across every read boundary produces the same
+  result as one read, for a chunked body and for one of declared length
+  (property); a body larger than the caller's buffer is delivered in
+  parts without loss; a message that said how long it was and was not is
+  truncated, and the decoder says the same error to every further call.
+- A response to `HEAD` and one of status 1xx, 204 or 304 carries no body
+  whatever its fields say. A redirect status is reported with its
+  location and is not followed; 300 and 304 are 3xx and are not among the
+  five a client follows. Fuzz target `http_response`.
 
 ### 6.6.50 Interface and demultiplexing (`net-stack`)
 
-- Demultiplexing: an ARP frame, an IPv4 frame for a bound UDP socket,
-  one for a TCP connection, one for an unbound port, and one for a
-  foreign address each reach the right layer or are dropped.
-- Sockets: handles are generation-checked, a handle from a closed socket
-  is rejected, and the table reports exhaustion rather than reusing a
-  live slot.
-- `poll_at` returns the earliest deadline of every layer; after `poll`
-  at that instant the deadline has advanced; an idle stack reports no
-  deadline.
-- `poll` drains the outgoing work into a transmit buffer that is too
-  small across several calls without losing or reordering a frame.
-- An interface without an address answers no ARP request and produces no
-  IP traffic; configuring an address through DHCP makes both work.
+- Demultiplexing: an ARP frame for this host's address and one for
+  another, an IPv4 frame for a bound UDP socket, one for a TCP
+  connection, one for an unbound port, one for a foreign address, one for
+  another station, and a frame of a type this stack does not read, each
+  reach the right layer or are dropped. The same over IPv6, with a
+  neighbor solicitation, a neighbor advertisement, a duplicate address
+  probe, and a router advertisement. Bytes that are not the thing they
+  claim to be — a broken ARP packet, a broken header, a datagram whose
+  checksum does not verify — are dropped without an answer.
+- Sockets and connections: handles are generation-checked, a handle from
+  a closed socket is rejected and so is a second close of it, the slot is
+  used again under a new generation, a handle to no slot at all is
+  refused, a slot that has been through every generation hands out no
+  more, and the table reports exhaustion rather than reusing a live slot.
+- `poll_at` returns the earliest deadline of every layer; after `poll` at
+  that instant the deadline has advanced; an idle stack reports no
+  deadline; a stack with a backlog reports the present instant.
+- `poll` drains the outgoing work into a transmit buffer of one frame
+  across several calls without losing or reordering a frame, and the
+  queue itself keeps its order however it wraps (property).
+- An interface without an address answers no ARP request, no neighbor
+  solicitation, no echo request and no broadcast, and produces no IP
+  traffic; the four-message exchange of DHCP makes all of it work, a
+  refusal or an expiry takes the address and the routes away again, and a
+  router advertisement does the same for IPv6 once duplicate address
+  detection has finished — an address somebody else claims is not used.
+- A datagram to an unresolved neighbor waits for the answer and goes when
+  it arrives, over both families; a neighbor that never answers is given
+  up on.
+- Address selection: the policy table and the scopes of RFC 6724, a
+  source of the other family is never one, the destination itself wins,
+  the longest matching prefix decides between equals, a name of both
+  families is tried in the document's order, and what nothing can reach
+  comes last.
+- Connecting: a list of addresses is tried in the order it is given and
+  the next is taken when one is refused; every candidate refusing leaves
+  the attempt failed and the buffers come back; a name is resolved,
+  ordered and connected to; a second connection or a second resolution
+  waits for the first; a resolution with no server to ask is refused; and
+  a server of the other family is not one this resolution asks.
 
 ### 6.6.51 Virtqueue logic (`virtio-queue`)
 

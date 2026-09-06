@@ -29,6 +29,105 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `net-http`, the HTTP/1.1 client (D8, 12.6.11). A request written into
+  the caller's buffer with every field checked before a byte of it goes
+  down: a value carrying a carriage return is a value that ends its field
+  and begins another, so a client that writes one has let whoever supplied
+  it write a header of its own choosing. `Host` and `Content-Length` come
+  from the fields of the request and never from the caller's header list,
+  because RFC 9112, section 3.2 has one `Host` in a message and a second
+  length is a second framing.
+
+  The response decoder takes at most one line of the head per call. That
+  is what keeps a byte of the body from ever being copied into the buffer
+  the head is assembled in, and it is what makes a response split at any
+  boundary decode to what the whole of it decodes to — which is a property
+  test over every split there is, not a hope.
+
+  Framing is decided once, in the order of RFC 9112, section 6.3, and
+  where that list leaves two readings this client takes neither. Point 3
+  lets a recipient prefer `Transfer-Encoding` over `Content-Length` and
+  says in the same paragraph that such a message ought to be handled as an
+  error; this one does the latter, because a preference rule is a second
+  reading with a tie-breaker rather than one reading, and two readings of
+  one message is the whole of request smuggling. Two `Content-Length`
+  fields that disagree go the same way; two that agree are the value they
+  agree on. The obsolete line folding of section 5.2 is refused although
+  that section has a user agent unfold it, for the same reason: a folded
+  value is a value whose length is not its line's length.
+
+  What is left is four framings and no ambiguity — no body, chunked, a
+  declared length, and a body that ends at the close, which is why the
+  caller has to say when it did. Redirects are reported with their
+  location and never followed (D-87). Catalog 6.6.49, fuzz target
+  `http_response`.
+
+- `net-stack`, the facade (D9, 12.6.12). One interface, one `poll`, one
+  `poll_at`, and under them every other crate of the track: frames and
+  ARP, both internet layers with their shared reassembler and their two
+  `ICMP`s, UDP sockets and TCP connections, address configuration by DHCP
+  and by router advertisement with duplicate address detection, and the
+  resolver. A server process is a loop around `poll` and nothing else.
+
+  The frames that have been written wait in a queue in memory the caller
+  supplied, and the layers are asked for new work only when that queue is
+  empty. That is what makes a transmit buffer of one frame enough:
+  nothing is produced while there is a backlog, so nothing is lost and
+  nothing overtakes anything. One received frame can make several go
+  out — an answer to it, and the datagram that was waiting for the
+  neighbor it just taught the cache about, cut into as many pieces as the
+  MTU needs — and a driver with a full ring can take none of them at that
+  moment.
+
+  A handle is an index and the generation of the slot it names. A bare
+  index is a handle that comes back to life — the socket is closed, the
+  slot is used again, and a caller holding the old number is reading
+  somebody else's socket with no error anywhere — and the answer is the
+  kernel's. A slot that has been through every generation hands out no
+  more handles, which costs one slot of the table and is the only answer
+  that keeps the guarantee.
+
+  Two limits are the caller's and the rest are this host's. Sockets and
+  connections are what an application sizes; routes, neighbors, held
+  datagrams, reassembly buffers and prefixes are properties of a host with
+  one interface, whatever runs on it, so they are constants that say what
+  they are rather than five more numbers in a type.
+
+  Neighbor Discovery does not go through either sender, and the reason is
+  the hop limit: RFC 4861, section 7.1 requires 255 and that is the whole
+  of what makes the protocol link-local, so a message written with the
+  default is one every receiver is right to throw away. It needs no route
+  and no neighbor resolved either — which is fortunate, because resolving
+  one is what it is for. The address configuration client is the same case
+  for the same reason: a host with no address has no route.
+
+  Connecting to a list of addresses and connecting to a name are two
+  operations. `connect_to_any` tries a list in the order it is given,
+  moving on when a candidate times out or is reset; `connect_to_name`
+  resolves, orders what came back by RFC 6724, and hands that list to the
+  same loop. They are not raced: Happy Eyeballs is a policy about how much
+  of somebody's network to spend on a guess and belongs above a stack. The
+  policy table of RFC 6724 is written over IPv6 prefixes with IPv4
+  standing in as the mapped range, which D-69 refuses outright, so that
+  one row is read as the row of the IPv4 family rather than by forming an
+  address the rest of the stack would reject (D-87). Catalog 6.6.50.
+
+- RFC 6724, RFC 9110, and RFC 9112 join the reference documents under
+  `docs/rfc/`, each fetched twice and recorded with its checksum. They are
+  what D8 and D9 read: the address selection, the HTTP semantics, and the
+  HTTP/1.1 message syntax. The README gains a section for the first and
+  one for the other two.
+
+  Three passages are why the files are here rather than a summary of them.
+  RFC 9112, section 6.3 is an ordered list of eight rules where the order
+  is the whole of the meaning, and its third rule states the error this
+  client makes of a double framing in the same words this changelog does.
+  RFC 6724, section 3.1 says an IPv4 private address has *global* scope,
+  which is the opposite of what a reader guesses. And its policy table
+  turned out to be unusable as written for this system: it keys IPv4 by
+  the mapped range D-69 refuses, so what the row means here had to be read
+  out of the document rather than assumed.
+
 - `net-dns`, the message format of RFC 1035 and a stub resolver over it
   (D7, 12.6.9). A name is read with compression and written without it,
   and the read is bounded three times over — only the last of the three

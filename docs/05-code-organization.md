@@ -145,8 +145,8 @@ AuDHSOS/
 | `net-tcp` | n3 | all | no | yes, fuzz | `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `net-dns` | n4 | all | no | yes, fuzz | `net-udp`, `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `net-dhcp` | n4 | all | no | yes | `net-udp`, `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
-| `net-http` | n4 | all | no | yes, fuzz | `net-wire` |
-| `net-stack` | n5 | all | no | yes | every `net-` crate |
+| `net-http` | n4 | all | no | yes, fuzz | `net-wire`; `test-support` as a dev-dependency |
+| `net-stack` | n5 | all | no | yes | every `net-` crate, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
 | `fuzz-support` | dev | host | allowlisted | yes, and Miri over `counters` and `sancov`, which hold its `unsafe` | - |
 | `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `fs-fat`, `audhsos-encoding`, `audhsos-symbols` |

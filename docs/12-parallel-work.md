@@ -245,7 +245,7 @@ unscheduled.
 | `net-dns` | `crates/net/dns` | n4 | `net-udp`, `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng` |
 | `net-dhcp` | `crates/net/dhcp` | n4 | `net-udp`, `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng` |
 | `net-http` | `crates/net/http` | n4 | `net-wire` |
-| `net-stack` | `crates/net/stack` | n5 | all of the above |
+| `net-stack` | `crates/net/stack` | n5 | all of the above, `audhsos-time`, `audhsos-collections`, `crypto-rng` |
 
 `net-ip` holds what the two families share — the routing table over
 `IpCidr`, the reassembly machinery, and the interface a packet leaves
@@ -819,29 +819,110 @@ IPv6 configures itself from a router advertisement instead, which is
 
 ### 12.6.11 `net-http`
 
-An HTTP/1.1 client: request line and headers encoded into a
-caller-supplied buffer; the response parsed strictly — a bounded status
-line, a bounded number of headers of bounded length, no obsolete line
-folding, and `Content-Length` together with `Transfer-Encoding` rejected
-outright, which is the rule that closes request smuggling. Chunked
-transfer decoding is supported. Redirects are reported to the caller,
-never followed. No content encodings in the first version.
+Implemented. A request written into the caller's buffer, and a response
+decoded as it arrives.
+
+- The request line and the fields, with `Host` and `Content-Length`
+  written from the fields of the type and never from the caller's header
+  list, because RFC 9112, section 3.2 has one `Host` in a message and a
+  second length is a second framing. Every name is checked against the
+  `tchar` set of RFC 9110, section 5.6.2 and every value against the field
+  value of section 5.5 before a byte of either goes down: a value carrying
+  a carriage return is a value that ends its field and begins another, and
+  a client that writes one has let its caller write a header of its own.
+- The response decoder is incremental and takes at most one line of the
+  head per call. That is what keeps a byte of the body from ever being
+  copied into the buffer the head is assembled in, and it is what makes a
+  response split at any boundary decode to what the whole of it decodes
+  to.
+- The head is read strictly: a status line longer than 256 bytes, a header
+  line longer than 1024, more fields than the decoder holds, and a folded
+  line are each refused. `obs-text` is refused as well, which is what
+  makes every value the decoder hands out ASCII and therefore text.
+- Chunked decoding with extensions and trailers, both read past and
+  dropped. Redirects are reported with their location and never followed.
+  No content encodings (D-50).
+
+Two things came out of writing it, and D-87 records them.
+
+Two framings in one message is an error and not a preference.
+RFC 9112, section 6.3, point 3 lets a recipient prefer `Transfer-Encoding`
+over `Content-Length` and says in the same paragraph that such a message
+ought to be handled as an error; this client does the latter. A preference
+rule is a second reading with a tie-breaker rather than one reading, and
+two readings of one message is the whole of request smuggling. Two
+`Content-Length` fields that disagree go the same way, and two that agree
+are the one value they agree on, which is what point 5 of the same list
+says.
+
+A body that ends at the close needs the caller to say when it did. Point 8
+of that list gives a response with no declared length exactly that
+framing, so `finish` is not a convenience: without it a body that ended
+and a body that was cut off are the same bytes.
+
+The obsolete line folding of section 5.2 is refused, which is stricter
+than the document — it has a user agent replace the fold with spaces. The
+reason is the same one: a folded value is a value whose length is not its
+line's length, so a parser that unfolds and one that does not read two
+different messages out of the same bytes.
 
 ### 12.6.12 `net-stack`
 
-The facade: an `Interface` with its MAC address, its addresses of both
-families, its routes, and its MTU; `poll(now, rx, tx)` which
-demultiplexes an incoming frame down the layers and drains the outgoing
-work; socket handles as generation-checked indices, in the form of the
-kernel's handles; and `poll_at(now)`. The whole stack has one entry
-point, so a server process is a loop around it and nothing else.
+Implemented. The facade: an `Interface` with its hardware address, its
+addresses of both families, its routes and its MTU; `poll(now, rx, tx)`
+which demultiplexes an arriving frame down the layers and drains the
+outgoing work; socket and connection handles as generation-checked
+indices, in the form of the kernel's handles; and `poll_at(now)`.
 
-Source and destination address selection follows RFC 6724, which is what
-decides which of a host's addresses a packet leaves with and which of a
-name's addresses it goes to. Connecting to a name that resolves to both
-families tries them in that order and does not race them: Happy Eyeballs
-(RFC 8305) is a policy above the stack and not in it, and its absence
-costs a timeout on a broken path rather than a wrong answer.
+- Under it: frames and ARP, both internet layers with their shared
+  reassembler and their two `ICMP`s, UDP sockets and TCP connections,
+  address configuration by DHCP and by router advertisement with
+  duplicate address detection, and the resolver.
+- Two limits are the caller's — how many sockets and how many
+  connections — and the rest are constants of this crate, because how many
+  routes, neighbors, reassembly buffers and prefixes a host with one
+  interface has is not a property of what runs on it. A type with seven
+  numbers in it is a type nobody writes down twice.
+
+Four things came out of writing it, and D-87 records them.
+
+The frames that have been written wait in a queue in the caller's memory,
+as self-describing records, and the layers are asked for new work only
+when that queue is empty. That is what makes a transmit buffer of one
+frame enough: nothing is produced while there is a backlog, so nothing is
+lost and nothing overtakes anything. One received frame can make several
+go out, and a driver with a full ring can take none of them at that
+moment.
+
+A handle is an index and the generation of the slot it names. A bare index
+is a handle that comes back to life, which is the same bug as a dangling
+pointer; a slot that has been through every generation hands out no more
+handles, which costs one slot and is the only answer that keeps the
+guarantee.
+
+Neighbor Discovery does not go through either sender. RFC 4861,
+section 7.1 requires a hop limit of 255 and that is the whole of what
+makes the protocol link-local, so a message written with the default is
+one every receiver is right to throw away; and a discovery message needs
+no route and no neighbor resolved, which is fortunate, because resolving
+one is what it is for. Address configuration by DHCP is the same case for
+the same reason: a client with no address has no route either, so a
+datagram to the limited broadcast address goes out without the routing
+table being asked.
+
+Connecting to a list of addresses and connecting to a name are two
+operations. `connect_to_any` tries a list in the order it is given, moving
+on when a candidate times out or is reset; `connect_to_name` resolves,
+orders what came back by RFC 6724, and hands that list to the same loop.
+The policy table of RFC 6724, section 2.1 is written over IPv6 prefixes
+with IPv4 standing in as the mapped range, which D-69 refuses outright, so
+that one row is read as the row of the IPv4 family. Of the rules, those a
+host with one interface, no deprecated addresses, no Mobile IPv6, no
+privacy extensions and no tunnels can decide are implemented and the rest
+are named where they are not, so that their absence is not mistaken for an
+oversight. Happy Eyeballs (RFC 8305) is a policy above the stack; its
+absence costs one timeout on a path the routing table does not know is
+broken.
 
 ### 12.6.13 Testing
 
@@ -879,7 +960,14 @@ costs a timeout on a broken path rather than a wrong answer.
   family, a pointer to an earlier name, a pointer that points forwards, a
   ladder of pointers, an alias chain, an alias chain that loops, a label
   of a reserved kind, a name of 255 bytes, and a body that is not an
-  address.
+  address. `http_response` exists and drives one
+  door twice, once for each of the two methods whose answers are framed
+  differently — and it drives it in pieces the first byte of the input
+  names, because the one bug a whole-message test of a line-oriented
+  parser cannot find is the state it keeps between the piece that ended
+  mid-line and the piece that finishes it. Its seeds are the four framings,
+  the shapes that are refused for being readable two ways, and a message
+  fed one byte at a time.
 - No test sleeps. Time is an argument, so a sixty-second retransmission
   backoff is exercised in microseconds of wall clock.
 
@@ -896,8 +984,8 @@ Tests: catalog 6.6.42 to 6.6.50 and 6.6.54.
 | D5 | `net-udp` — implemented | S |
 | D6 | `net-tcp`: sequence arithmetic, state machine, timers, congestion control — implemented | XL |
 | D7 | `net-dns` and `net-dhcp` — implemented | M |
-| D8 | `net-http` | S |
-| D9 | `net-stack`: the facade, with the address selection of RFC 6724 | M |
+| D8 | `net-http` — implemented | S |
+| D9 | `net-stack`: the facade, with the address selection of RFC 6724 — implemented | L |
 | D10 | integration, jointly with T8 of document 11: `driver-virtio-net`, `server-net`, the socket protocol, the entropy system call, the TLS transport | not scheduled |
 
 D6 is the one step that must not be started beside an XL phase.
@@ -1035,8 +1123,8 @@ the integration.
   C at T5 and T6; then track C to T7; then track D from D1; track F when
   a driver becomes foreseeable; `audhsos-symbols` from track G before
   phase 3, because that is where kernel panics start. Tracks E and G are
-  done, track C stands at T7, and track D has D1 to D7 behind it, so the
-  next step of the side work is D8.
+  done, track C stands at T7, and track D has D1 to D9 behind it, so what
+  is left of it is D10, which is integration and is not scheduled.
 - The pulled-forward work of 12.9 fills short gaps, because it needs no
   new design.
 

@@ -13,6 +13,7 @@ members = [
     "der",
     "dns_message",
     "elf",
+    "http_response",
     "ipv4",
     "ipv6",
     "madt",
@@ -41,6 +42,7 @@ audhsos-tls = { path = "../crates/net/tls" }
 audhsos-x509 = { path = "../crates/net/x509" }
 kernel-acpi = { path = "../crates/kernel/acpi" }
 net-dns = { path = "../crates/net/dns" }
+net-http = { path = "../crates/net/http" }
 net-ip = { path = "../crates/net/ip" }
 net-ipv6 = { path = "../crates/net/ipv6" }
 net-tcp = { path = "../crates/net/tcp" }
@@ -116,6 +118,15 @@ rustflags = [
 ]
 
 [profile.release.package.elf]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
+
+[profile.release.package.http_response]
 rustflags = [
     "-Cpasses=sancov-module",
     "-Cllvm-args=-sanitizer-coverage-level=4",

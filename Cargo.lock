@@ -335,6 +335,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "net-http"
+version = "0.1.0"
+dependencies = [
+ "net-wire",
+ "test-support",
+]
+
+[[package]]
 name = "net-ip"
 version = "0.1.0"
 dependencies = [
@@ -353,6 +361,24 @@ dependencies = [
  "audhsos-time",
  "net-eth",
  "net-ip",
+ "net-wire",
+ "test-support",
+]
+
+[[package]]
+name = "net-stack"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "audhsos-time",
+ "crypto-rng",
+ "net-dhcp",
+ "net-dns",
+ "net-eth",
+ "net-ip",
+ "net-ipv6",
+ "net-tcp",
+ "net-udp",
  "net-wire",
  "test-support",
 ]

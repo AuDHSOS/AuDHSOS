@@ -135,6 +135,14 @@ name = "fuzz-support"
 version = "0.1.0"
 
 [[package]]
+name = "http_response"
+version = "0.1.0"
+dependencies = [
+ "fuzz-support",
+ "net-http",
+]
+
+[[package]]
 name = "ipv4"
 version = "0.1.0"
 dependencies = [
@@ -194,6 +202,13 @@ version = "0.1.0"
 dependencies = [
  "audhsos-collections",
  "audhsos-time",
+ "net-wire",
+]
+
+[[package]]
+name = "net-http"
+version = "0.1.0"
+dependencies = [
  "net-wire",
 ]
 

@@ -37,20 +37,23 @@ arrangement.
 | `rfc5758.txt` | RFC 5758, *Internet X.509 Public Key Infrastructure: Additional Algorithms and Identifiers for DSA and ECDSA*, Q. Dang, S. Santesson, K. Moriarty, D. Brown, T. Polk, January 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5758.txt` | 15834 | `4d02628ff0875a1960d34be584a68f88528b96242bdc5a05a40a29ef01cf1532` |
 | `rfc5903.txt` | RFC 5903, *Elliptic Curve Groups modulo a Prime (ECP Groups) for IKE and IKEv2*, D. Fu, J. Solinas, June 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5903.txt` | 29175 | `939fab548a6e6bb49a5b3c4dd24a3c5df54a46645447b2d6f4df4fd88ff2d69f` |
 | `rfc5952.txt` | RFC 5952, *A Recommendation for IPv6 Address Text Representation*, S. Kawamura, M. Kawashima, August 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5952.txt` | 26570 | `c75e82c5f53bcec8148820fadf0d65935336ee2031fa6ce10504797ed4c1979d` |
+| `rfc6724.txt` | RFC 6724, *Default Address Selection for Internet Protocol Version 6 (IPv6)*, D. Thaler (ed.), R. Draves, A. Matsumoto, T. Chown, September 2012 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc6724.txt` | 74407 | `deab574626b2bc886748401617f29a33cf97927f3690dba2fb183d31315741f6` |
 | `rfc6979.txt` | RFC 6979, *Deterministic Usage of the Digital Signature Algorithm (DSA) and Elliptic Curve Digital Signature Algorithm (ECDSA)*, T. Pornin, August 2013 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc6979.txt` | 140386 | `456e8f17558fdbd206f968b96fc6f1b4a71ea331ab30ad17f711ab3adaa7d701` |
 | `rfc8017.txt` | RFC 8017, *PKCS #1: RSA Cryptography Specifications Version 2.2*, K. Moriarty (ed.), B. Kaliski, J. Jonsson, A. Rusch, November 2016 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc8017.txt` | 154696 | `1e72dc473d18df3fc5598cdc12795a9f18f36f1aef15abc23a55eb0d58151d11` |
 | `rfc8106.txt` | RFC 8106, *IPv6 Router Advertisement Options for DNS Configuration*, J. Jeong, S. Park, L. Beloeil, S. Madanapalli, March 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8106.txt` | 43092 | `9a44a5e06d36506da358fa0d62d02f484dd76b4e6ca75920ebda2cfed315ef2f` |
 | `rfc8200.txt` | RFC 8200, *Internet Protocol, Version 6 (IPv6) Specification*, S. Deering, R. Hinden, July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8200.txt` | 93162 | `371ae3f133d562db5d6385e6def4ca9914c4f831be228ea7779fd28799c2f490` |
 | `rfc8201.txt` | RFC 8201, *Path MTU Discovery for IP version 6*, J. McCann, S. Deering, J. Mogul, R. Hinden (ed.), July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8201.txt` | 42751 | `96c2ea7ac1bf5810f6b817d4ac372a35f68231d2bd0e2675740f1268eb9ac752` |
 | `rfc8448.txt` | RFC 8448, *Example Handshake Traces for TLS 1.3*, M. Thomson, January 2019 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8448.txt` | 159343 | `6564d1376d1ec744fc7a9993da15ebc1b9be361908b166091f47ef605c537fba` |
+| `rfc9110.txt` | RFC 9110, *HTTP Semantics*, R. Fielding (ed.), M. Nottingham (ed.), J. Reschke (ed.), June 2022 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc9110.txt` | 502941 | `21c1cdce6ab0e5509b04d84a28000836c7a087cf786efe6f04877ebfff47232a` |
+| `rfc9112.txt` | RFC 9112, *HTTP/1.1*, R. Fielding (ed.), M. Nottingham (ed.), J. Reschke (ed.), June 2022 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc9112.txt` | 109913 | `e4f426bac6206b67fdf9e0da826154f70588db2133a0a86b15cde4ff725d8937` |
 | `rfc9293.txt` | RFC 9293, *Transmission Control Protocol (TCP)*, W. Eddy, Ed., August 2022 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc9293.txt` | 263696 | `6d9ac8be4b0286f8c3d337addf442b2eb6a9b14e1366594ea7fbc273f93dc2d9` |
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
 including the page breaks: 2887, 1218, 470, 171, 3077, 1417, 6844, 2523,
 1907, 1067, 395, 1515, 451, 1403, 1403, 1347, 5435, 1683, 1123, 339, 451,
-899, 787, 4427, 4371, 1067, 2355, 1067, 3811, and 5576 lines respectively,
-in the order of the table.
+899, 787, 1795, 4427, 4371, 1067, 2355, 1067, 3811, 10785, 2461, and 5576
+lines respectively, in the order of the table.
 Every one was fetched twice and the two fetches agreed.
 
 ## Terms
@@ -62,10 +65,11 @@ carries a notice of the form
 > document authors. All rights reserved.
 
 with the year 2009 for RFC 5480, 2010 for RFC 5756, RFC 5758, RFC 5903,
-and RFC 5952, 2013 for RFC 6979, 2016 for RFC 8017, 2017 for RFC 8106,
-RFC 8200, and RFC 8201, 2019 for RFC 8448, and 2022 for RFC 9293. Those
-twelve are subject to BCP 78 and the IETF Trust's Legal Provisions
-relating to IETF Documents, which permit reproduction in full.
+and RFC 5952, 2012 for RFC 6724, 2013 for RFC 6979, 2016 for RFC 8017,
+2017 for RFC 8106, RFC 8200, and RFC 8201, 2019 for RFC 8448, and 2022 for
+RFC 9110, RFC 9112, and RFC 9293. Those fifteen are subject to BCP 78 and
+the IETF Trust's Legal Provisions relating to IETF Documents, which permit
+reproduction in full.
 
 RFC 4055 stands between the two forms. Its statement names the Internet
 Society and the year 2005, and then refers the reader to BCP 78 in the
@@ -332,6 +336,59 @@ What is deliberately not read is the option overload of section 9.3, which
 lets a server put options in the `sname` and `file` fields when the option
 field runs out. The six options a lease needs come to under forty bytes,
 and the option field holds three hundred.
+
+## Why RFC 6724
+
+It is the only document that says which of a host's addresses a packet
+leaves with, and it is the reason a dual-stack host reaches a name over
+the family it should. What is kept here rather than summarised is the
+policy table of section 2.1 and the two rule lists of sections 5 and 6:
+the table is nine rows of numbers that exist nowhere else, and the rules
+are an ordered list where the order is the whole of the meaning.
+
+One thing about it had to be read rather than assumed. The table is
+written over IPv6 prefixes with IPv4 present as `::ffff:0:0/96`, the
+mapped range — and D-69 refuses mapped addresses outright, so the table as
+written cannot be applied to an IPv4 address of this system at all. What
+the document actually needs from that row is a precedence and a label for
+the IPv4 family, which is what this implementation reads it as (D-87).
+Section 3.1 settles the other thing a summary gets wrong: an IPv4 private
+address has *global* scope, and only the loopback and link-local ranges do
+not.
+
+Happy Eyeballs (RFC 8305) is not here and is not needed: this stack tries
+a name's addresses in the order this document gives and does not race
+them, which section 1 of RFC 8305 is itself a departure from.
+
+## The two documents of HTTP
+
+**RFC 9112** is the wire format: the request line, the field lines, the
+chunked coding of section 7.1, and — the reason the file is here — the
+message body length of section 6.3. That section is an ordered list of
+eight rules, and an implementation that reads them out of order reads a
+different protocol. Point 3 is the one this client departs from and says
+so: it lets a recipient prefer `Transfer-Encoding` over `Content-Length`
+and states in the same paragraph that such a message ought to be handled
+as an error. This client does the latter, because a preference rule is a
+second reading with a tie-breaker rather than one reading, and two
+readings of one message is the whole of request smuggling. Point 8 is what
+makes `Decoder::finish` necessary: a response with no declared length runs
+until the connection closes, so a caller has to say when it did.
+
+Section 5.2 is the other passage read at the source. It has a user agent
+*replace* an obsolete line fold with spaces rather than refuse the
+message; this client refuses it, and the deviation is recorded rather than
+discovered.
+
+**RFC 9110** is the grammar and the semantics. What is taken from it is
+small and exact: the `tchar` set of section 5.6.2, which is what a field
+name may be made of; the field value of section 5.5, which is visible
+ASCII, the space and the tab, with `obs-text` allowed and deprecated in
+one sentence — this client refuses `obs-text`, which is what makes every
+value it hands out text and not bytes; the case-insensitive comparison of
+field names in section 5.1; and the status classes of section 15, of which
+the five redirects a client may follow are 301, 302, 303, 307 and 308 and
+not the whole 3xx range.
 
 ## The four documents of P-384
 
