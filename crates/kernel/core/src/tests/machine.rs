@@ -19,7 +19,7 @@ fn the_cell_holds_the_machine_from_the_start_and_one_borrow_at_a_time() {
         );
         machine.objects.counts()
     });
-    assert_eq!(counts, Some([0, 0, 0, 0]));
+    assert_eq!(counts, Some([0; 9]));
     assert!(!MACHINE.is_borrowed(), "the borrow was released");
 
     let idle = with_machine(|machine| machine.scheduler.idle());
@@ -33,7 +33,7 @@ fn a_machine_of_its_own_starts_empty() {
     // over a mebibyte and never travels over a stack (D-66).
     static OWN: Preset<Machine> = Preset::new(Machine::new());
     let machine = OWN.borrow(&UncontendedToken).unwrap();
-    assert_eq!(machine.objects.counts(), [0, 0, 0, 0]);
+    assert_eq!(machine.objects.counts(), [0; 9]);
     assert!(machine.scheduler.is_idle());
     assert_eq!(machine.scheduler.current(), None);
 }

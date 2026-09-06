@@ -10,3 +10,4 @@ mod pool;
 mod quota;
 mod store;
 mod strategies;
+mod wait_queue;

@@ -29,6 +29,48 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The six object structures of Phase 6 in `kernel-objects`: `Endpoint` with
+  a queue of senders and one of receivers, `Reply`, `Notification`,
+  `Interrupt`, `IoPortRange`, and `SystemControl`, which holds nothing and
+  therefore has no pool — a capability to it is the whole of the right to
+  create interrupts, port ranges, and device memory. Their five pools take
+  their sizes from `config` directly rather than becoming parameters of
+  `Objects`: together they stay under 200 KiB against the 1.2 MiB the four
+  parameterized pools reach, so a host test can still hold a machine with
+  all of them at full size, and the signature of everything that touches
+  the machine stays four parameters wide instead of nine.
+
+  A `Thread` now carries two link pairs. The run queues of `kernel-sched`
+  use `queue_links`, the wait queues use `wait_links`, and a thread is in
+  at most one of the two at a time, because a thread in a run queue is
+  `Ready` and a thread in a wait queue is blocked. They are separate
+  fields because `Scheduler::dequeue` corrects the head, the tail, and the
+  ready bitmap of a run queue after it unlinks: handed a thread whose
+  links pointed into an endpoint queue it would splice that queue and
+  leave the endpoint naming a thread that is no longer in it. Beside the
+  links the thread carries `wait`, which names what it waits on so that a
+  cancellation finds the queue without searching every endpoint, and
+  `fault`, which is what `thread_info` and a fault message report.
+
+  `WaitQueue` orders by priority and then by arrival: a thread goes behind
+  the last thread of a priority at least its own, so the walk is bounded by
+  the length of the queue and no second structure carries the order. The
+  position is fixed at that moment; a later `thread_set_priority` does not
+  move a thread that already waits. The queue lives beside the pool its
+  links thread through and not in `kernel-ipc`, because its operations need
+  that pool.
+
+  `Objects` gains `retain`, `destroy`, and `capacities`. `destroy` is the
+  one place a reference count of zero turns into the destruction of an
+  object; what destruction owes the threads that waited travels back to the
+  caller in `Destroyed`, because waking a thread needs the scheduler and
+  writing its status word needs its IPC buffer. `counts` reports nine
+  numbers rather than four, the eight pools and the handle arena, which is
+  what `system_info` will report. `HandleArena::close_all` becomes
+  `close_next`, so that every entry a dying process held passes through the
+  caller's release path one at a time: a count is not enough once a handle
+  is a reference.
+
 - The label range the kernel keeps for its own messages, in
   `audhsos_abi::ipc_buffer`: `KERNEL_LABEL_BASE` is the first reserved
   label, `FAULT_LABEL_BASE` is the same value, and the label of a fault

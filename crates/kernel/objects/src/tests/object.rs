@@ -9,7 +9,8 @@ use kernel_types::{CachePolicy, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
 
 use crate::handle_table::HandleList;
 use crate::object::{
-    AnyObjectId, Links, MemoryKind, MemoryObject, Object, Process, ProcessId, Thread, ThreadId,
+    AnyObjectId, Endpoint, Interrupt, IoPortRange, Links, MemoryKind, MemoryObject, Notification,
+    Object, Process, ProcessId, Queue, Reply, SystemControl, Thread, ThreadId, Wait,
 };
 use crate::pool::ObjectId;
 use crate::quota::Quota;
@@ -157,7 +158,7 @@ fn a_new_thread_starts_inactive_with_no_context() {
     assert_eq!(thread.ipc_buffer, frame);
     assert_eq!(thread.time_slice, 0);
     assert_eq!(thread.context, VirtAddr::ZERO);
-    assert!(thread.links.is_unlinked());
+    assert!(thread.queue_links.is_unlinked());
 }
 
 #[test]
@@ -221,4 +222,137 @@ fn a_memory_object_covers_its_frames() {
     assert_eq!(device.kind.name(), "Device");
     assert!(device.cache.is_uncached());
     assert_eq!(MemoryKind::default(), MemoryKind::Ram);
+}
+
+#[test]
+fn a_fresh_thread_waits_on_nothing_and_carries_no_fault() {
+    let frame = PhysFrame::containing(PhysAddr::new(0x20_0000).unwrap());
+    let thread = Thread::new(process_id(0), 3, 7, 11, frame).unwrap();
+    assert_eq!(thread.wait, Wait::Nothing);
+    assert!(thread.wait.is_nothing());
+    assert!(thread.wait_links.is_unlinked());
+    assert!(thread.queue_links.is_unlinked());
+    assert_eq!(thread.fault, None);
+}
+
+#[test]
+fn a_fresh_endpoint_has_two_empty_queues() {
+    let endpoint = Endpoint::new();
+    assert_eq!(endpoint, Endpoint::EMPTY);
+    assert_eq!(endpoint, Endpoint::default());
+    assert!(endpoint.is_quiet());
+    assert!(endpoint.senders.is_empty());
+    assert!(endpoint.receivers.is_empty());
+    assert_eq!(Endpoint::TYPE, ObjectType::Endpoint);
+}
+
+#[test]
+fn a_reply_object_names_its_caller_and_starts_unconsumed() {
+    let caller: ThreadId = ObjectId::new(2, 5);
+    let reply = Reply::new(caller);
+    assert_eq!(reply.caller, caller);
+    assert!(!reply.consumed);
+    assert_eq!(Reply::TYPE, ObjectType::Reply);
+}
+
+#[test]
+fn a_notification_merges_signals_and_clears_when_consumed() {
+    let mut notification = Notification::new();
+    assert_eq!(notification, Notification::EMPTY);
+    assert_eq!(notification, Notification::default());
+    assert_eq!(notification.waiter, None);
+    assert_eq!(notification.bound_interrupt, None);
+    notification.word |= 0b0010;
+    notification.word |= 0b1000;
+    assert_eq!(notification.consume(), 0b1010, "two signals are merged");
+    assert_eq!(notification.word, 0);
+    assert_eq!(notification.consume(), 0, "and nothing is left");
+    assert_eq!(Notification::TYPE, ObjectType::Notification);
+}
+
+#[test]
+fn an_interrupt_object_starts_bound_to_nothing_and_unmasked() {
+    let interrupt = Interrupt::new(0, 0x40);
+    assert_eq!(interrupt.line, 0);
+    assert_eq!(interrupt.vector, 0x40);
+    assert_eq!(interrupt.notification, None);
+    assert!(!interrupt.masked);
+    assert_eq!(Interrupt::TYPE, ObjectType::Interrupt);
+}
+
+#[test]
+fn a_port_range_covers_what_it_says_and_nothing_beside_it() {
+    let range = IoPortRange::new(0x40, 4).unwrap();
+    assert_eq!(range.first, 0x40);
+    assert_eq!(range.count, 4);
+    assert_eq!(range.last(), 0x43);
+    assert!(range.contains(0x40));
+    assert!(range.contains(0x43));
+    assert!(!range.contains(0x3F));
+    assert!(!range.contains(0x44));
+    assert_eq!(IoPortRange::TYPE, ObjectType::IoPortRange);
+}
+
+#[test]
+fn a_port_range_of_no_ports_and_one_past_the_end_are_refused() {
+    assert_eq!(IoPortRange::new(0, 0), Err(Error::InvalidArgument));
+    assert_eq!(IoPortRange::new(0xFFFF, 2), Err(Error::InvalidArgument));
+    assert!(IoPortRange::new(0xFFFF, 1).is_ok());
+    assert!(IoPortRange::new(0, 0xFFFF).is_ok());
+}
+
+#[test]
+fn an_access_has_to_fit_inside_the_range_it_is_made_through() {
+    let range = IoPortRange::new(0x40, 4).unwrap();
+    assert!(range.holds(0x40, 1));
+    assert!(range.holds(0x40, 4));
+    assert!(range.holds(0x42, 2));
+    assert!(!range.holds(0x42, 4), "it would run past the end");
+    assert!(!range.holds(0x44, 1), "outside the range altogether");
+    let edge = IoPortRange::new(0xFFFF, 1).unwrap();
+    assert!(edge.holds(0xFFFF, 1));
+    assert!(!edge.holds(0xFFFF, 2), "the addition would wrap");
+}
+
+#[test]
+fn two_port_ranges_overlap_exactly_when_they_share_a_port() {
+    let range = IoPortRange::new(0x40, 4).unwrap();
+    assert!(range.overlaps(&IoPortRange::new(0x43, 1).unwrap()));
+    assert!(range.overlaps(&IoPortRange::new(0x3F, 2).unwrap()));
+    assert!(range.overlaps(&IoPortRange::new(0x00, 0x100).unwrap()));
+    assert!(!range.overlaps(&IoPortRange::new(0x44, 1).unwrap()));
+    assert!(!range.overlaps(&IoPortRange::new(0x3E, 2).unwrap()));
+}
+
+#[test]
+fn the_system_control_capability_holds_nothing_and_lives_in_no_pool() {
+    assert_eq!(size_of::<SystemControl>(), 0);
+    assert_eq!(SystemControl::TYPE, ObjectType::SystemControl);
+    let id = AnyObjectId::of(SystemControl::ID);
+    assert_eq!(id.object_type(), ObjectType::SystemControl);
+    assert_eq!(id.generation(), 1, "never an id that was never handed out");
+}
+
+#[test]
+fn the_wait_record_names_the_queue_and_what_it_asked_for() {
+    assert!(Queue::Senders.is_sender());
+    assert!(Queue::Callers.is_sender());
+    assert!(!Queue::Receivers.is_sender());
+    assert!(!Queue::Senders.wants_reply());
+    assert!(Queue::Callers.wants_reply());
+    assert!(!Queue::Receivers.wants_reply());
+    assert_eq!(Wait::default(), Wait::Nothing);
+    let waiting = Wait::Endpoint {
+        endpoint: ObjectId::new(1, 1),
+        queue: Queue::Callers,
+    };
+    assert!(!waiting.is_nothing());
+}
+
+#[test]
+fn a_process_reports_faults_on_an_endpoint_or_on_nothing() {
+    let mut holder = process(4);
+    assert_eq!(holder.fault_handler, None);
+    holder.fault_handler = Some(ObjectId::new(3, 2));
+    assert_eq!(holder.fault_handler, Some(ObjectId::new(3, 2)));
 }

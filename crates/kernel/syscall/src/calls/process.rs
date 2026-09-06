@@ -209,7 +209,7 @@ pub fn kill<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
         }
     }
     let mut list = holder.handles;
-    machine.objects.handles.close_all(&mut list);
+    while machine.objects.handles.close_next(&mut list).is_some() {}
     machine.environment.destroy_address_space(holder.root);
     machine.objects.with_process(target, |entry| {
         entry.handles = list;
