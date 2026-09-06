@@ -16,7 +16,7 @@
 //! | `process_install_handle` | target process handle, handle of the caller, rights |
 //! | `process_set_fault_handler` | process handle, endpoint handle (zero clears it) |
 //! | `process_kill` | process handle |
-//! | `thread_create` | process handle, entry, user stack, priority, maximum priority, reserved (zero) |
+//! | `thread_create` | process handle, entry, user stack, priority, maximum priority, memory object for the IPC buffer (zero for one out of the kernel reserve) |
 //! | `thread_start`, `thread_suspend`, `thread_resume`, `thread_kill` | thread handle |
 //! | `thread_set_priority` | thread handle, priority |
 //! | `thread_info` | thread handle |

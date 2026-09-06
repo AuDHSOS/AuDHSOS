@@ -298,6 +298,10 @@ pub struct Thread {
     pub kernel_stack: u32,
     /// The frame holding the thread's IPC buffer.
     pub ipc_buffer: PhysFrame,
+    /// The memory object the buffer frame belongs to, for a thread whose
+    /// creator supplied one. `None` means the frame came out of the kernel
+    /// reserve and goes back there when the thread ends.
+    pub buffer_object: Option<MemoryObjectId>,
     /// Where that frame is mapped in the address space of the process,
     /// which is where the thread finds it and what the kernel hands it in
     /// its first register.
@@ -354,6 +358,7 @@ impl Thread {
             time_slice: 0,
             kernel_stack,
             ipc_buffer,
+            buffer_object: None,
             ipc_address: VirtAddr::ZERO,
             entry: VirtAddr::ZERO,
             user_stack: VirtAddr::ZERO,
@@ -363,6 +368,16 @@ impl Thread {
             wait: Wait::Nothing,
             fault: None,
         })
+    }
+
+    /// The same thread, with its IPC buffer taken out of `object` rather
+    /// than out of the kernel reserve.
+    #[must_use]
+    pub const fn with_buffer_object(self, object: MemoryObjectId) -> Self {
+        Thread {
+            buffer_object: Some(object),
+            ..self
+        }
     }
 
     /// The same thread, starting at `entry` on `user_stack` with its IPC

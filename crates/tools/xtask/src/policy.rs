@@ -551,6 +551,27 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::X86_64None,
     },
     Crate {
+        name: "user-programs",
+        path: "crates/user/programs",
+        kind: Kind::Adapter {
+            unsafe_budget: 15,
+            asm_budget: 0,
+        },
+        deps: &[
+            "audhsos-abi",
+            "driver-uart16550",
+            "server-console",
+            "server-memory",
+            "server-name",
+            "user-loader",
+            "user-proto",
+            "user-rt",
+            "user-sys-x86_64",
+        ],
+        coverage_gate: false,
+        target: Target::X86_64None,
+    },
+    Crate {
         name: "kernel-test-harness",
         path: "crates/kernel/test-harness",
         kind: Kind::Logic,

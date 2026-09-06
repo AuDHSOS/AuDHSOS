@@ -74,6 +74,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The five programs of the userland: the root task, the name server, the
+  console driver, the memory server, and the application. Each is a thin
+  loop around a logic crate — receive, decode, ask the policy, encode, send
+  — and what is only here is the part that needs a capability or a pointer.
+
+  The root task reads the archive out of the boot image and starts the four
+  others in order. The memory server comes first, out of one region the root
+  task keeps back for exactly that; everything after it is asked of the
+  memory server, so the boot of the system is the first three tests of it.
+  The console driver runs two threads, because a thread of this kernel waits
+  on one thing: one waits on the endpoint and owns the controller, the other
+  waits on the interrupt and sends the byte it took to the first under a
+  badge of its own. Nothing is held by both, so nothing needs a lock.
+
+- `thread_create` takes the page for the thread's IPC buffer (D-89). The
+  fifth argument was reserved and had to be zero; it is now a memory object
+  of one page, and zero still means the kernel takes a frame out of its own
+  reserve. Without it the root task cannot do what 2.10 has always required
+  of it — write the startup message into the buffer of the child before the
+  child runs — because the kernel allocated that frame and the parent held
+  nothing that named it. A child would then hold capabilities it could not
+  tell apart.
+
 - The kernel starts the root task. Steps 12 to 14 of the boot sequence have
   been in 2.9 since it was written and in the implementation plan nowhere:
   the boot image becomes a memory object, a process is built with the flat

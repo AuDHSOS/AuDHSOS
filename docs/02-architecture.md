@@ -534,9 +534,11 @@ through shared memory objects.
 Process creation from userland: `process_create` → for each ELF segment,
 allocate memory from the memory server, map it into the loader's own address
 space, copy the bytes, unmap, then map it into the child with the segment's
-permissions → allocate stack and IPC buffer → `thread_create` →
-`process_install_handle` for every initial capability → write the startup
-message into the child's IPC buffer → `thread_start`.
+permissions → allocate the stack and map it → allocate one page for the IPC
+buffer, map it into the loader, `process_install_handle` for every initial
+capability, write the startup message into that page, unmap it →
+`thread_create` with the page as its fifth argument, which is what puts the
+message where the child will find it (D-89) → `thread_start`.
 
 ## 2.11 Security model
 

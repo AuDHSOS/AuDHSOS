@@ -360,6 +360,12 @@ impl Gate {
     /// `thread_create`: a thread of `process` that will begin at `entry` on
     /// `stack`. It is inactive until `thread_start`.
     ///
+    /// `buffer` is the page its IPC buffer goes in. A creator that supplies
+    /// one can write the startup message into it before the thread runs,
+    /// which is the only way a userland parent has of telling a child what
+    /// its handles are; `None` lets the kernel take a frame out of its own
+    /// reserve, which is what the root task's own threads get (D-89).
+    ///
     /// # Errors
     ///
     /// Whatever the kernel answered.
@@ -370,10 +376,18 @@ impl Gate {
         stack: u64,
         priority: u64,
         maximum_priority: u64,
+        buffer: Option<MemoryHandle>,
     ) -> Result<ThreadHandle, Error> {
         self.capability(
             Syscall::ThreadCreate,
-            &[process.raw(), entry, stack, priority, maximum_priority, 0],
+            &[
+                process.raw(),
+                entry,
+                stack,
+                priority,
+                maximum_priority,
+                buffer.map_or(0, Typed::raw),
+            ],
         )
     }
 

@@ -117,8 +117,9 @@ pub fn startup(gate: &Gate) -> Startup {
 
 /// Declares the entry point of a user program that works through a gate.
 ///
-/// The function it names is called once with the gate of the thread and
-/// with what the process was given at its start, and never returns; a
+/// The function it names is called once and never returns; it is given the
+/// gate of the thread and what the process was given at its start, both by
+/// value, because a program owns its gate and there is exactly one. A
 /// program that has nothing left to do ends its thread with
 /// [`Gate::thread_exit`].
 ///
@@ -147,10 +148,10 @@ macro_rules! program {
             // SAFETY: the kernel starts this thread once and puts the
             // address of its buffer in the first argument register; this
             // is the only gate over it, because it is the only one built.
-            let mut gate = unsafe { $crate::Gate::adopt(ipc_buffer) };
+            let gate = unsafe { $crate::Gate::adopt(ipc_buffer) };
             let startup = $crate::startup(&gate);
-            let main: fn(&mut $crate::Gate, &$crate::Startup) -> ! = $main;
-            main(&mut gate, &startup)
+            let main: fn($crate::Gate, $crate::Startup) -> ! = $main;
+            main(gate, startup)
         }
 
         #[panic_handler]

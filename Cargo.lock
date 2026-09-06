@@ -432,6 +432,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "user-programs"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "driver-uart16550",
+ "server-console",
+ "server-memory",
+ "server-name",
+ "user-loader",
+ "user-proto",
+ "user-rt",
+ "user-sys-x86_64",
+]
+
+[[package]]
 name = "user-proto"
 version = "0.1.0"
 dependencies = [

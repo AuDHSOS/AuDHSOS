@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "user-programs"
+description = "The programs of the userland: the root task, the three servers, and the application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "user_programs"
+path = "src/lib.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "server-init"
+path = "src/bin/server_init.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "server-memory"
+path = "src/bin/server_memory.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "server-name"
+path = "src/bin/server_name.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "server-console"
+path = "src/bin/server_console.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "app-hello"
+path = "src/bin/app_hello.rs"
+test = false
+bench = false
+
+[dependencies]
+audhsos-abi.workspace = true
+driver-uart16550.workspace = true
+server-console.workspace = true
+server-memory.workspace = true
+server-name.workspace = true
+user-loader.workspace = true
+user-proto.workspace = true
+user-rt.workspace = true
+user-sys-x86_64.workspace = true
+
+[lints]
+workspace = true

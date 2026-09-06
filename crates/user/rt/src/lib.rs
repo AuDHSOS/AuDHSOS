@@ -16,6 +16,7 @@ pub use handle::{
     ReplyHandle, SystemControlHandle, ThreadHandle, Typed,
 };
 pub use heap::{AllocError, Allocator, Block, Extent};
+pub use message::Writer as MessageWriter;
 pub use message::{CodecError, MAX_BYTES, Reader, Writer};
 pub use report::Line;
 pub use startup::{MAX_RAM_OBJECTS, ReadError, Startup};

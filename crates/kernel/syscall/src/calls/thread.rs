@@ -8,10 +8,12 @@
 //! and no pool slot behind.
 
 use audhsos_abi::layout::{PRIORITY_COUNT, USER_SPACE_START, ipc_buffer_address};
-use audhsos_abi::{Error, Rights};
+use audhsos_abi::{Error, Handle, Rights};
 use kernel_mm::page_table::Permissions;
 use kernel_objects::handle_table::Entry;
-use kernel_objects::object::{AnyObjectId, Process, ProcessId, Thread, ThreadId};
+use kernel_objects::object::{
+    AnyObjectId, MemoryKind, MemoryObject, MemoryObjectId, Process, ProcessId, Thread, ThreadId,
+};
 use kernel_types::{CachePolicy, Page, PhysFrame, VirtAddr};
 
 use crate::dispatch::{Machine, Reply, Request};
@@ -80,9 +82,12 @@ pub fn create<
     let stack = user_address(request.argument(2))?;
     let priority = u8::try_from(request.argument(3)).map_err(|_| Error::InvalidArgument)?;
     let max_priority = u8::try_from(request.argument(4)).map_err(|_| Error::InvalidArgument)?;
-    if request.argument(5) != 0 {
-        return Err(Error::InvalidArgument);
-    }
+    // The buffer of the thread: a page the caller supplies, or none, in
+    // which case the kernel takes a frame out of its reserve. A creator
+    // that supplies one can write the startup message into it before the
+    // thread runs, which is the only way a userland parent has of telling
+    // a child what its handles are (D-89).
+    let supplied = supplied_buffer(machine, process, request.argument(5))?;
     if max_priority >= PRIORITY_COUNT || priority > max_priority {
         return Err(Error::InvalidArgument);
     }
@@ -101,7 +106,7 @@ pub fn create<
             return Err(error);
         }
     };
-    let ipc_buffer = match machine.environment.allocate_frame() {
+    let ipc_buffer = match take_buffer(machine, supplied) {
         Ok(frame) => frame,
         Err(error) => {
             machine.environment.release_kernel_stack(stack_area.slot);
@@ -109,11 +114,14 @@ pub fn create<
             return Err(error);
         }
     };
-    let thread = Thread::new(target, priority, max_priority, stack_area.slot, ipc_buffer)?;
+    let mut thread = Thread::new(target, priority, max_priority, stack_area.slot, ipc_buffer)?;
+    if let Some((object, _)) = supplied {
+        thread = thread.with_buffer_object(object);
+    }
     let id = match machine.objects.threads.allocate(thread) {
         Ok(id) => id,
         Err(error) => {
-            machine.environment.release_frame(ipc_buffer);
+            give_buffer_back(machine, supplied, ipc_buffer);
             machine.environment.release_kernel_stack(stack_area.slot);
             refund_object(machine, target);
             return Err(Error::from(error));
@@ -129,7 +137,7 @@ pub fn create<
         Ok(slot) => slot,
         Err(error) => {
             machine.objects.threads.force_release(id);
-            machine.environment.release_frame(ipc_buffer);
+            give_buffer_back(machine, supplied, ipc_buffer);
             machine.environment.release_kernel_stack(stack_area.slot);
             refund_object(machine, target);
             return Err(error);
@@ -143,7 +151,7 @@ pub fn create<
         Ok(address) => address,
         Err(error) => {
             forget_thread(machine, target, id);
-            machine.environment.release_frame(ipc_buffer);
+            give_buffer_back(machine, supplied, ipc_buffer);
             machine.environment.release_kernel_stack(stack_area.slot);
             refund_object(machine, target);
             return Err(error);
@@ -158,11 +166,86 @@ pub fn create<
         Err(error) => {
             unmap_buffer(machine, target, ipc_address);
             forget_thread(machine, target, id);
-            machine.environment.release_frame(ipc_buffer);
+            give_buffer_back(machine, supplied, ipc_buffer);
             machine.environment.release_kernel_stack(stack_area.slot);
             refund_object(machine, target);
             Err(error)
         }
+    }
+}
+
+/// The memory object the caller named for the buffer, checked, or `None`
+/// when the argument was zero.
+///
+/// Nothing is changed here: the retain that makes the mapping a reference
+/// happens in [`take_buffer`], where the sequence of undoable steps is.
+fn supplied_buffer<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &Machine<'_, E, NP, NT, NM, NH>,
+    caller: ProcessId,
+    argument: u64,
+) -> Result<Option<(MemoryObjectId, PhysFrame)>, Error> {
+    if argument == 0 {
+        return Ok(None);
+    }
+    let handle = Handle::from_raw(argument).ok_or(Error::InvalidHandle)?;
+    let (id, _rights) = machine
+        .objects
+        .resolve::<MemoryObject>(caller, handle, Rights::MAP)?;
+    let object = machine.objects.memory.get(id)?;
+    // One page of memory and not of a device: the buffer is read and
+    // written by the kernel and cached like everything else.
+    if object.kind != MemoryKind::Ram || object.frames.count() != 1 {
+        return Err(Error::InvalidArgument);
+    }
+    Ok(Some((id, object.frames.start())))
+}
+
+/// The frame the buffer goes in: the one of the object the caller supplied,
+/// retained because the mapping is a reference to it, or a fresh one out of
+/// the kernel reserve.
+fn take_buffer<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    supplied: Option<(MemoryObjectId, PhysFrame)>,
+) -> Result<PhysFrame, Error> {
+    match supplied {
+        Some((id, frame)) => {
+            machine.objects.memory.retain(id)?;
+            Ok(frame)
+        }
+        None => machine.environment.allocate_frame(),
+    }
+}
+
+/// Gives the buffer back: the reference to the object the caller supplied,
+/// or the frame to the reserve.
+fn give_buffer_back<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    supplied: Option<(MemoryObjectId, PhysFrame)>,
+    frame: PhysFrame,
+) {
+    match supplied {
+        Some((id, _)) => {
+            let _gone = machine.objects.memory.release(id);
+        }
+        None => machine.environment.release_frame(frame),
     }
 }
 

@@ -74,6 +74,7 @@ fn clear<E: Environment, const NP: usize, const NT: usize, const NM: usize, cons
     };
     let stack = thread.kernel_stack;
     let buffer = thread.ipc_buffer;
+    let buffer_object = thread.buffer_object;
     let address = thread.ipc_address;
     let process = thread.process;
     // The page the buffer was mapped at goes with it, so that the slot of
@@ -84,7 +85,15 @@ fn clear<E: Environment, const NP: usize, const NT: usize, const NM: usize, cons
         let _ = machine.environment.unmap(root, page);
     }
     machine.environment.release_kernel_stack(stack);
-    machine.environment.release_frame(buffer);
+    // The frame goes back where it came from: to the reserve, or to the
+    // memory object the creator supplied, whose mapping was a reference to
+    // it (D-89).
+    match buffer_object {
+        Some(object) => {
+            let _gone = machine.objects.memory.release(object);
+        }
+        None => machine.environment.release_frame(buffer),
+    }
     // The slot goes whatever handle still names it: a thread that has
     // been cleared away holds nothing, and there is nothing left to name.
     machine.objects.threads.force_release(id);
