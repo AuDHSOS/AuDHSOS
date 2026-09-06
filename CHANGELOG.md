@@ -101,6 +101,73 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   the other, are decisions of layers that hold the header fields those
   rules are about (D-74). Catalog 6.6.45.
 
+- `net-tcp`, the state machine of RFC 9293 (D6, 12.6.8). The eleven
+  states, active and passive open, and the sequence arithmetic every one
+  of their decisions rests on — a comparison of distances on a circle of
+  `2^32` and never of magnitudes, so that the wrap at the top of the range
+  costs nothing and the one case the relation cannot decide is the one a
+  window of 65535 bytes cannot produce.
+
+  The two windows are byte rings the caller supplied. A segment that
+  arrives out of order is written straight to its place in the receive
+  ring, because its sequence number says where that place is, and a short
+  list of ranges remembers which parts have arrived; when the gap in front
+  of them closes the ranges grow together and the bytes are readable
+  without having been copied a second time. A segment's payload on the way
+  out is a borrow into the send ring and never a copy, which is why a run
+  stops at the physical end of the buffer rather than wrapping around it:
+  the cost is one short segment per wrap, and what it buys is that a
+  retransmission is the same borrow again.
+
+  The retransmission timer is RFC 6298 with Karn's rule — a segment sent
+  twice yields no measurement, and the backoff it earned stands until an
+  unambiguous one arrives — and the attempts are counted per segment as
+  RFC 1122, section 4.2.3.5 counts them, so a connection that loses one
+  segment in each of nine rounds is not a connection that gives up.
+  Congestion control is Reno of RFC 5681: slow start, congestion
+  avoidance, and a fast recovery in which the third duplicate
+  acknowledgment sends the one segment the duplicates point at and not
+  everything behind it. Acknowledgments are delayed to the second
+  full-sized segment or half a second, whichever comes first, and never
+  delayed for a segment that opens a gap, fills one, or arrives at a
+  window this end had closed. A closed window is probed by one byte that
+  does not count as sent, so the next probe carries the same byte again.
+
+  Resets follow RFC 5961: a reset is believed only at the exact number
+  expected, and one merely inside the window draws an acknowledgment,
+  which costs a blind attacker the sequence number as well as the window.
+  A `SYN` inside the window of an open connection is answered and never
+  acted on.
+
+  Two send pointers are kept apart, and both distinctions are ones that
+  leave two ends answering each other for ever when they are not made. A
+  segment that carries nothing carries the highest number ever sent and
+  not the number to send next, which a retransmission timeout has wound
+  back; and an acknowledgment is judged against that same highest number,
+  so that an acknowledgment of everything that went out before the rewind
+  is good news rather than a segment to argue with (D-75).
+
+  Above it a connection table: a segment finds its connection by the
+  four-tuple, failing that the connection listening on its destination
+  port, and failing that a reset — which is the processing of state
+  `CLOSED` and belongs here, because which numbers that reset carries is
+  decided by header fields nothing above this crate reads.
+
+  Ninety-nine tests and a model test. The model runs two instances of the
+  machine back to back over a link that delays, duplicates, reorders, and
+  drops, under a generated schedule, and holds that both streams arrive
+  whole and in order, that both ends reach `CLOSED`, and that neither ever
+  sends a segment at an instant at which it said it had nothing to say.
+  Nothing sleeps: a sixty-second `TIME-WAIT` and a one-second timeout both
+  pass in microseconds of wall clock. Fuzz target `tcp_segment` drives the
+  parser, its option list, and the state machine behind them.
+  Catalog 6.6.46.
+
+- RFC 9293 under `docs/rfc/`, which is TCP in one document: the seven
+  memos that amended RFC 793 over forty years, folded back into the text
+  the state machine of section 3.3.2, the segment-arrives procedure of
+  section 3.10.7, and the acceptance test of section 3.4 are read from.
+
 ### Changed
 
 - A kernel stack is eight pages, not four, and `Pool::release` no longer

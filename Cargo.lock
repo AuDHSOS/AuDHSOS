@@ -334,6 +334,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "net-tcp"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "audhsos-time",
+ "crypto-rng",
+ "net-wire",
+ "test-support",
+]
+
+[[package]]
 name = "net-udp"
 version = "0.1.0"
 dependencies = [

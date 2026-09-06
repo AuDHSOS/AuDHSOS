@@ -241,7 +241,7 @@ unscheduled.
 | `net-ip` | `crates/net/ip` | n2 | `net-eth` and below |
 | `net-ipv6` | `crates/net/ipv6` | n2 | `net-ip` and below |
 | `net-udp` | `crates/net/udp` | n3 | `net-wire`, `crypto-rng` |
-| `net-tcp` | `crates/net/tcp` | n3 | `net-ip` and below, `crypto-rng` |
+| `net-tcp` | `crates/net/tcp` | n3 | `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng` |
 | `net-dns` | `crates/net/dns` | n4 | `net-udp` and below, `crypto-rng` |
 | `net-dhcp` | `crates/net/dhcp` | n4 | `net-udp` and below, `crypto-rng` |
 | `net-http` | `crates/net/http` | n4 | `net-wire` |
@@ -624,7 +624,8 @@ of the layers that have the header fields those rules are about.
 
 ### 12.6.8 `net-tcp`
 
-The largest single piece of the track, and the reason it is XL.
+Implemented. The largest single piece of the track, and the reason it
+is XL.
 
 - The complete state machine of RFC 9293: all eleven states, active and
   passive open. Passive open is included although the first client needs
@@ -657,6 +658,40 @@ The largest single piece of the track, and the reason it is XL.
 - Reset handling with the RFC 5961 checks: an in-window test for
   incoming resets and SYNs, and a challenge acknowledgment rather than a
   blind teardown.
+
+Five things the specification left open, as D-75 decided them:
+
+- **The windows are two byte rings the caller supplied, and a segment out
+  of order is written straight to its place in the receive ring.** Its
+  sequence number says where that place is, and a short list of ranges
+  remembers which parts have arrived; when the gap in front of them
+  closes, the ranges grow together and the bytes are readable without
+  having been copied a second time. The list holds four ranges, which is
+  more than a sender without selective acknowledgment can act on; a range
+  that does not fit is forgotten and the peer sends its bytes again.
+- **Passive open has no backlog.** One connection may stand in `LISTEN`,
+  and the first `SYN` that matches makes it that connection, which is
+  what the two-instances test needs and all that anything in this project
+  needs. A server that accepts several at once is a queue above this
+  crate.
+- **The connection table is in this crate.** A segment finds its
+  connection by the four-tuple, failing that the connection listening on
+  its destination port, and failing that a reset — which is the
+  processing of state `CLOSED` in RFC 9293, section 3.10.7.1, and is
+  decided by header fields nothing above this crate reads.
+- **The urgent pointer is read and never acted on.** This system sends no
+  urgent data and offers no interface for asking; a segment carrying
+  `URG` is processed for everything else it carries, which is what
+  RFC 6093 recommends for a receiver with no use for the mechanism.
+- **A segment that carries nothing carries `SND.MAX`, and an
+  acknowledgment is judged against `SND.MAX`.** A retransmission timeout
+  winds `SND.NXT` back to the oldest unacknowledged number; a bare
+  acknowledgment at that older number is one the peer throws away as an
+  old duplicate, and an acknowledgment of everything that went out before
+  the rewind would look like an acknowledgment of what was never sent.
+  Both are the difference between the number to send next and the highest
+  number ever sent, and both leave two ends answering each other for ever
+  when the distinction is not made.
 
 ### 12.6.9 `net-dns`
 
@@ -750,7 +785,7 @@ Tests: catalog 6.6.42 to 6.6.50 and 6.6.54.
 | D3 | `net-ip`: IPv4 header, reassembly, fragmentation, `ICMPv4`, the routing table over both families, the send path — implemented | M |
 | D4 | `net-ipv6`: header and extension chain, `ICMPv6`, Neighbor Discovery, router advertisements and SLAAC, path MTU discovery — implemented | L |
 | D5 | `net-udp` — implemented | S |
-| D6 | `net-tcp`: sequence arithmetic, state machine, timers, congestion control | XL |
+| D6 | `net-tcp`: sequence arithmetic, state machine, timers, congestion control — implemented | XL |
 | D7 | `net-dns` and `net-dhcp` | M |
 | D8 | `net-http` | S |
 | D9 | `net-stack`: the facade, with the address selection of RFC 6724 | M |
@@ -891,8 +926,8 @@ the integration.
   C at T5 and T6; then track C to T7; then track D from D1; track F when
   a driver becomes foreseeable; `audhsos-symbols` from track G before
   phase 3, because that is where kernel panics start. Tracks E and G are
-  done, track C stands at T7, and track D has D1 to D5 behind it, so the
-  next step of the side work is D6.
+  done, track C stands at T7, and track D has D1 to D6 behind it, so the
+  next step of the side work is D7.
 - The pulled-forward work of 12.9 fills short gaps, because it needs no
   new design.
 

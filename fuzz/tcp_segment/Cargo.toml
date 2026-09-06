@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "tcp_segment"
+description = "Fuzz target: tcp_segment"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "tcp_segment"
+path = "src/main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+audhsos-time.workspace = true
+crypto-rng.workspace = true
+fuzz-support.workspace = true
+net-tcp.workspace = true
+net-wire.workspace = true
+
+[lints]
+workspace = true

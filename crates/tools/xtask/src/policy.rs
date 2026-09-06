@@ -238,6 +238,20 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "net-tcp",
+        path: "crates/net/tcp",
+        kind: Kind::Logic,
+        deps: &[
+            "net-wire",
+            "audhsos-time",
+            "audhsos-collections",
+            "crypto-rng",
+            "test-support",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-sync",
         path: "crates/sync",
         kind: Kind::Adapter {
@@ -613,6 +627,9 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "ipv6" },
     FuzzTarget { name: "madt" },
     FuzzTarget { name: "pem" },
+    FuzzTarget {
+        name: "tcp_segment",
+    },
     FuzzTarget {
         name: "tls_handshake",
     },

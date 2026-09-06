@@ -34,12 +34,13 @@ arrangement.
 | `rfc8200.txt` | RFC 8200, *Internet Protocol, Version 6 (IPv6) Specification*, S. Deering, R. Hinden, July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8200.txt` | 93162 | `371ae3f133d562db5d6385e6def4ca9914c4f831be228ea7779fd28799c2f490` |
 | `rfc8201.txt` | RFC 8201, *Path MTU Discovery for IP version 6*, J. McCann, S. Deering, J. Mogul, R. Hinden (ed.), July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8201.txt` | 42751 | `96c2ea7ac1bf5810f6b817d4ac372a35f68231d2bd0e2675740f1268eb9ac752` |
 | `rfc8448.txt` | RFC 8448, *Example Handshake Traces for TLS 1.3*, M. Thomson, January 2019 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8448.txt` | 159343 | `6564d1376d1ec744fc7a9993da15ebc1b9be361908b166091f47ef605c537fba` |
+| `rfc9293.txt` | RFC 9293, *Transmission Control Protocol (TCP)*, W. Eddy, Ed., August 2022 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc9293.txt` | 263696 | `6d9ac8be4b0286f8c3d337addf442b2eb6a9b14e1366594ea7fbc273f93dc2d9` |
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
 including the page breaks: 2887, 1218, 470, 171, 1417, 6844, 395, 1403,
-1347, 5435, 1683, 1123, 451, 899, 787, 4427, 1067, 2355, 1067, and 3811
-lines respectively, in the order of the table.
+1347, 5435, 1683, 1123, 451, 899, 787, 4427, 1067, 2355, 1067, 3811, and
+5576 lines respectively, in the order of the table.
 Every one was fetched twice and the two fetches agreed.
 
 ## Terms
@@ -52,9 +53,9 @@ carries a notice of the form
 
 with the year 2009 for RFC 5480, 2010 for RFC 5758, RFC 5903, and
 RFC 5952, 2013 for RFC 6979, 2017 for RFC 8106, RFC 8200, and RFC 8201,
-and 2019 for RFC 8448. Those nine are subject to BCP 78 and the IETF
-Trust's Legal Provisions relating to IETF Documents, which permit
-reproduction in full.
+2019 for RFC 8448, and 2022 for RFC 9293. Those ten are subject to BCP 78
+and the IETF Trust's Legal Provisions relating to IETF Documents, which
+permit reproduction in full.
 
 The eleven older ones carry the notice of their time, each in a full
 copyright statement at the end that permits reproduction in whole
@@ -234,6 +235,23 @@ private keys that produced them. A client that reproduces it byte for
 byte has been checked against an implementation that was not this one,
 which no amount of testing a client against its own idea of a server can
 do.
+
+## Why RFC 9293
+
+It is the whole of TCP in one document. RFC 793 had been amended by seven
+memos over forty years — the initial sequence number of RFC 6528, the
+urgent pointer of RFC 6093, the reset checks of RFC 5961 among them — and
+RFC 9293 is those amendments folded back into one text, which is why it
+obsoletes all seven. An implementation written against the old memo and
+its errata is an implementation whose reader has to know which of them
+applied; written against this one, the state machine of section 3.3.2,
+the segment-arrives procedure of section 3.10.7, and the acceptance test
+of section 3.4 are read where they stand.
+
+What it does not carry is the two mechanisms that surround the state
+machine and are specified elsewhere: the retransmission timer of RFC 6298
+and the congestion control of RFC 5681. This implementation follows both,
+and cites them by section where it does.
 
 ## The four documents of P-384
 

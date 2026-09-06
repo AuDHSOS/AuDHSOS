@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "net-tcp"
+description = "The TCP state machine of RFC 9293, its timers, and Reno congestion control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+audhsos-collections.workspace = true
+audhsos-time.workspace = true
+crypto-rng.workspace = true
+net-wire.workspace = true
+
+[dev-dependencies]
+crypto-rng = { workspace = true, features = ["test-doubles"] }
+test-support.workspace = true
+
+[lints]
+workspace = true

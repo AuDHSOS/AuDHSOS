@@ -16,6 +16,7 @@ members = [
     "ipv6",
     "madt",
     "pem",
+    "tcp_segment",
     "tls_handshake",
     "tls_record",
     "x509",
@@ -34,11 +35,13 @@ audhsos-der = { path = "../crates/net/der" }
 audhsos-encoding = { path = "../crates/encoding" }
 audhsos-elf = { path = "../crates/elf" }
 audhsos-time = { path = "../crates/time" }
+crypto-rng = { path = "../crates/crypto/rng", features = ["test-doubles"] }
 audhsos-tls = { path = "../crates/net/tls" }
 audhsos-x509 = { path = "../crates/net/x509" }
 kernel-acpi = { path = "../crates/kernel/acpi" }
 net-ip = { path = "../crates/net/ip" }
 net-ipv6 = { path = "../crates/net/ipv6" }
+net-tcp = { path = "../crates/net/tcp" }
 net-wire = { path = "../crates/net/wire" }
 fuzz-support = { path = "../crates/support/fuzz" }
 

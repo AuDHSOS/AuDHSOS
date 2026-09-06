@@ -197,6 +197,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "net-tcp"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "audhsos-time",
+ "crypto-rng",
+ "net-wire",
+]
+
+[[package]]
 name = "net-wire"
 version = "0.1.0"
 
@@ -206,6 +216,17 @@ version = "0.1.0"
 dependencies = [
  "audhsos-encoding",
  "fuzz-support",
+]
+
+[[package]]
+name = "tcp_segment"
+version = "0.1.0"
+dependencies = [
+ "audhsos-time",
+ "crypto-rng",
+ "fuzz-support",
+ "net-tcp",
+ "net-wire",
 ]
 
 [[package]]
