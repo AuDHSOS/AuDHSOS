@@ -21,15 +21,19 @@ arrangement.
 | `rfc1071.txt` | RFC 1071, *Computing the Internet Checksum*, R. Braden, D. Borman, C. Partridge, September 1988 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1071.txt` | 53524 | `e10dfd6816447843d47a7f1b990eba756a791a6308fd5b698a6276075a8e4f9b` |
 | `rfc1122.txt` | RFC 1122, *Requirements for Internet Hosts — Communication Layers*, R. Braden (ed.), October 1989 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1122.txt` | 289148 | `9f526e6bebc868324fedb90aebbcf6e5b15c53fd373ca5d5ce1c2cdcd264e04f` |
 | `rfc2464.txt` | RFC 2464, *Transmission of IPv6 Packets over Ethernet Networks*, M. Crawford, December 1998 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc2464.txt` | 12725 | `f9554329ef1f4e093513e5b6f7af00bb5d206710e0c61d08bd578fa5f00aee9a` |
+| `rfc3279.txt` | RFC 3279, *Algorithms and Identifiers for the Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile*, W. Polk, R. Housley, L. Bassham, April 2002 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc3279.txt` | 53833 | `6d3f19f18e17fa1c68da5aaf4021327748fabca840d7300443b77357a1fc1614` |
+| `rfc4055.txt` | RFC 4055, *Additional Algorithms and Identifiers for RSA Cryptography for use in the Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile*, J. Schaad, B. Kaliski, R. Housley, June 2005 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc4055.txt` | 57479 | `b8a1ef3fb135c32aed4eee121264f3ec83a46def746c8fe68e05bd1b60324e9a` |
 | `rfc4291.txt` | RFC 4291, *IP Version 6 Addressing Architecture*, R. Hinden, S. Deering, February 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4291.txt` | 52897 | `4d58dff6b432d5d524bf3a3b7f0337a4177fa65f92ed72f2a92e97b471de48b2` |
 | `rfc4443.txt` | RFC 4443, *Internet Control Message Protocol (ICMPv6) for the Internet Protocol Version 6 (IPv6) Specification*, A. Conta, S. Deering, M. Gupta (ed.), March 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4443.txt` | 48969 | `f20d1de8878e1142000bfeaa3ad1b0540fab7653a395cf7b07e81d2da2f650bf` |
 | `rfc4861.txt` | RFC 4861, *Neighbor Discovery for IP version 6 (IPv6)*, T. Narten, E. Nordmark, W. Simpson, H. Soliman, September 2007 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4861.txt` | 235106 | `1a4309c117d765a7c0edfcb2297fc90c3c09f0fcae255f15e53b20748bcc09fb` |
 | `rfc4862.txt` | RFC 4862, *IPv6 Stateless Address Autoconfiguration*, S. Thomson, T. Narten, T. Jinmei, September 2007 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4862.txt` | 72482 | `6d3d2af5d2f6c9109b4ebd038ff7a6cec56771bbb0b5d8bd520357e03f097aa2` |
 | `rfc5480.txt` | RFC 5480, *Elliptic Curve Cryptography Subject Public Key Information*, S. Turner, D. Brown, K. Yiu, R. Housley, T. Polk, March 2009 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5480.txt` | 36209 | `593bf29fd0da2ff8b903c3ebf1c9d189a770039159e2ba46a0c3b91355037f26` |
+| `rfc5756.txt` | RFC 5756, *Updates for RSAES-OAEP and RSASSA-PSS Algorithm Parameters*, S. Turner, D. Brown, K. Yiu, R. Housley, T. Polk, January 2010 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc5756.txt` | 12017 | `304a0b826bf211028209db48bd1419c1088127f33e1689d62028378c739e67f5` |
 | `rfc5758.txt` | RFC 5758, *Internet X.509 Public Key Infrastructure: Additional Algorithms and Identifiers for DSA and ECDSA*, Q. Dang, S. Santesson, K. Moriarty, D. Brown, T. Polk, January 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5758.txt` | 15834 | `4d02628ff0875a1960d34be584a68f88528b96242bdc5a05a40a29ef01cf1532` |
 | `rfc5903.txt` | RFC 5903, *Elliptic Curve Groups modulo a Prime (ECP Groups) for IKE and IKEv2*, D. Fu, J. Solinas, June 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5903.txt` | 29175 | `939fab548a6e6bb49a5b3c4dd24a3c5df54a46645447b2d6f4df4fd88ff2d69f` |
 | `rfc5952.txt` | RFC 5952, *A Recommendation for IPv6 Address Text Representation*, S. Kawamura, M. Kawashima, August 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5952.txt` | 26570 | `c75e82c5f53bcec8148820fadf0d65935336ee2031fa6ce10504797ed4c1979d` |
 | `rfc6979.txt` | RFC 6979, *Deterministic Usage of the Digital Signature Algorithm (DSA) and Elliptic Curve Digital Signature Algorithm (ECDSA)*, T. Pornin, August 2013 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc6979.txt` | 140386 | `456e8f17558fdbd206f968b96fc6f1b4a71ea331ab30ad17f711ab3adaa7d701` |
+| `rfc8017.txt` | RFC 8017, *PKCS #1: RSA Cryptography Specifications Version 2.2*, K. Moriarty (ed.), B. Kaliski, J. Jonsson, A. Rusch, November 2016 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc8017.txt` | 154696 | `1e72dc473d18df3fc5598cdc12795a9f18f36f1aef15abc23a55eb0d58151d11` |
 | `rfc8106.txt` | RFC 8106, *IPv6 Router Advertisement Options for DNS Configuration*, J. Jeong, S. Park, L. Beloeil, S. Madanapalli, March 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8106.txt` | 43092 | `9a44a5e06d36506da358fa0d62d02f484dd76b4e6ca75920ebda2cfed315ef2f` |
 | `rfc8200.txt` | RFC 8200, *Internet Protocol, Version 6 (IPv6) Specification*, S. Deering, R. Hinden, July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8200.txt` | 93162 | `371ae3f133d562db5d6385e6def4ca9914c4f831be228ea7779fd28799c2f490` |
 | `rfc8201.txt` | RFC 8201, *Path MTU Discovery for IP version 6*, J. McCann, S. Deering, J. Mogul, R. Hinden (ed.), July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8201.txt` | 42751 | `96c2ea7ac1bf5810f6b817d4ac372a35f68231d2bd0e2675740f1268eb9ac752` |
@@ -37,9 +41,9 @@ arrangement.
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
-including the page breaks: 2887, 1218, 470, 171, 1417, 6844, 395, 1403,
-1347, 5435, 1683, 1123, 451, 899, 787, 4427, 1067, 2355, 1067, and 3811
-lines respectively, in the order of the table.
+including the page breaks: 2887, 1218, 470, 171, 1417, 6844, 395, 1515,
+1403, 1403, 1347, 5435, 1683, 1123, 339, 451, 899, 787, 4427, 4371, 1067,
+2355, 1067, and 3811 lines respectively, in the order of the table.
 Every one was fetched twice and the two fetches agreed.
 
 ## Terms
@@ -50,18 +54,23 @@ carries a notice of the form
 > Copyright (c) YEAR IETF Trust and the persons identified as the
 > document authors. All rights reserved.
 
-with the year 2009 for RFC 5480, 2010 for RFC 5758, RFC 5903, and
-RFC 5952, 2013 for RFC 6979, 2017 for RFC 8106, RFC 8200, and RFC 8201,
-and 2019 for RFC 8448. Those nine are subject to BCP 78 and the IETF
-Trust's Legal Provisions relating to IETF Documents, which permit
-reproduction in full.
+with the year 2009 for RFC 5480, 2010 for RFC 5756, RFC 5758, RFC 5903,
+and RFC 5952, 2013 for RFC 6979, 2016 for RFC 8017, 2017 for RFC 8106,
+RFC 8200, and RFC 8201, and 2019 for RFC 8448. Those eleven are subject to
+BCP 78 and the IETF Trust's Legal Provisions relating to IETF Documents,
+which permit reproduction in full.
 
-The eleven older ones carry the notice of their time, each in a full
+RFC 4055 stands between the two forms. Its statement names the Internet
+Society and the year 2005, and then refers the reader to BCP 78 in the
+same words the later ones use, so it is read here as the group above
+rather than the group below.
+
+The twelve older ones carry the notice of their time, each in a full
 copyright statement at the end that permits reproduction in whole
 provided the notice travels with it. RFC 4862 and RFC 4861 have the IETF
 Trust's of 2007; RFC 4443 and RFC 4291 the Internet Society's of 2006;
-RFC 2464 the Internet Society's of 1998; and RFC 1122 carries that
-statement in the form of 1989. RFC 1071, RFC 894, RFC 826, RFC 792, and
+RFC 3279 the Internet Society's of 2002; RFC 2464 the Internet Society's
+of 1998; and RFC 1122 carries that statement in the form of 1989. RFC 1071, RFC 894, RFC 826, RFC 792, and
 RFC 791 carry no notice at all: RFC 1071 states unlimited distribution in
 its own Status of This Memo section, and the four from the early eighties
 predate even that form, under the practice the RFC Editor states for the
@@ -295,7 +304,10 @@ not repeat the search.
   are transcriptions of FIPS 186 and SEC 2. Read it there if the check is
   wanted; it earns no copy.
 - **RFC 3279** defines `ECDSA-Sig-Value`, but RFC 5480 updates it and
-  carries the same definition in its own module.
+  carries the same definition in its own module. P-384 took nothing from
+  it. It is in the table now for a different reason, which the section
+  below gives: section 2.3.1 is where `rsaEncryption` and `RSAPublicKey`
+  are written down, and no later document restates them.
 - **RFC 6090** gives elliptic curve algorithms without naming P-384, and
   points at RFC 5903 for the parameters.
 - **RFC 8422** is ECC for TLS 1.2 and earlier. This client speaks 1.3
@@ -307,3 +319,107 @@ not repeat the search.
   a chain, not for the key exchange, which decision D-56 settles on
   `x25519` alone. Whether the TLS 1.3 specification itself belongs in this
   directory is a separate question from this one.
+
+## The four documents of RSA
+
+These four are what RSA verification takes. They were gathered for the
+reason the P-384 set was gathered: a real chain stops without them.
+Document 11 names RSA as the one omission that costs interoperability, and
+it costs it in the same place as before — `SubjectPublicKey::parse` meets
+`rsaEncryption`, answers `UnsupportedAlgorithm`, and every chain above
+that certificate is out of reach. `www.ietf.org`, `www.rust-lang.org`, and
+`www.bbc.co.uk` are three such chains.
+
+**RFC 8017** — the arithmetic and the two encodings. Section 5.2.2 is
+RSAVP1, the verification primitive, and sections 4.1 and 4.2 are the
+conversions between integers and octet strings that bracket it. Section
+8.2.2 is RSASSA-PKCS1-v1_5 verification and section 9.2 the encoding it
+compares against; note 1 after section 9.2 writes out the DER encoding of
+`DigestInfo` for each of nine hash functions, byte for byte, and three of
+those lines become constants in the source. Section 8.1.2 is RSASSA-PSS
+verification, section 9.1.2 EMSA-PSS-VERIFY, and appendix B.2.1 MGF1.
+
+Section 8.2.2 also settles the shape the implementation takes. Its steps
+three and four build the expected encoded message and compare it with the
+one recovered from the signature. The note after step four offers the
+other form — decode the recovered message and compare the hash inside it —
+and weighs the two by storage against code size, saying nothing about what
+a decoder gets wrong. That is this project's reason rather than the
+document's: a decoder is where a signature with slack in its padding is
+accepted, and building the encoding leaves no slack to accept.
+
+**RFC 4055** — what an X.509 certificate calls these. Section 5 assigns
+`sha256WithRSAEncryption`, `sha384WithRSAEncryption`, and
+`sha512WithRSAEncryption` the arcs `{pkcs-1 11}`, `{pkcs-1 12}`, and
+`{pkcs-1 13}`, and settles a question the current parser answers wrongly
+for these algorithms: the parameters MUST be NULL, and an implementation
+MUST accept them absent as well as present. `SignatureAlgorithm::parse`
+calls `finish` on the identifier's fields today and so accepts only
+absence, which is right for ECDSA and Ed25519 and wrong here. Section 3.1
+gives `id-RSASSA-PSS` and the `RSASSA-PSS-params` syntax, section 2.2 the
+`id-mgf1` mask generation function, and section 6, the ASN.1 module, the
+parameter sets that pair a hash with MGF1 over that same hash and a salt
+as long as its output.
+
+**RFC 5756** — the correction to the one above. It updates RFC 4055 on
+where `RSASSA-PSS-params` must appear and where it merely may, in the
+signature field, the signature algorithm field, and the subject public key
+information. RFC 4055 alone reads as demanding the structure in places
+where it is optional, so the first document without the second states a
+rule the world does not follow.
+
+**RFC 3279, section 2.3.1** — the key itself. `rsaEncryption` is
+`{pkcs-1 1}`, its parameters field MUST have ASN.1 type NULL, and the
+subject public key is the DER encoding of
+`RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER }`.
+RFC 4055 adds identifiers to this profile but does not restate the key, so
+this is the only document here that says what an RSA
+`SubjectPublicKey` parses.
+
+## What RSA does not need, and why it is not here
+
+These were read and left out, in the form of the section above.
+
+- **RFC 3447**, PKCS #1 version 2.1, is obsoleted by RFC 8017, which says
+  so in its header.
+- **RFC 2313**, PKCS #1 version 1.5, is where RFC 4055 section 5 points
+  for the padding of the older signature algorithm rather than restating
+  it. The pointer does not have to be followed. RFC 8017 section 9.2
+  writes the encoding operation out in six steps —
+  `EM = 0x00 || 0x01 || PS || 0x00 || T`, with `PS` at least eight octets
+  of `0xff` — and appendix A.2.4 carries the ASN.1. Nothing in it is
+  delegated: the normative references of RFC 8017 are three, and none of
+  them is a PKCS #1 document; RFC 2313, RFC 2437, and RFC 3447 are all
+  informative.
+
+  The one place where version 1.5 genuinely differs is recorded in
+  RFC 8017 as well, in note 2 after section 9.2: version 1.5 defined `T`
+  as the BER encoding of `DigestInfo` rather than the DER encoding, so a
+  signature that is valid under version 1.5 — an indefinite length on the
+  `SEQUENCE`, say — is rejected by the operation this repository
+  implements. The note offers a BER-decoding verifier to those who want
+  that compatibility. This project declines it: a decoder is the thing
+  construct-and-compare exists to avoid, and the note itself calls the
+  case unlikely in practice.
+- **RFC 2437**, PKCS #1 version 2.0, is on no path at all. RFC 4055 never
+  names it, and the version brought OAEP encryption; PSS arrived one
+  version later, in RFC 3447, which RFC 8017 obsoletes.
+- **RFC 8446, section 4.2.3** assigns the six code points —
+  `rsa_pkcs1_sha256`, `sha384`, `sha512`, and `rsa_pss_rsae_sha256`,
+  `sha384`, `sha512` — and states that the `rsa_pkcs1_*` schemes stand for
+  certificate signatures and MUST NOT appear in a `CertificateVerify`.
+  That asymmetry is the whole of what the protocol adds here. Whether the
+  TLS 1.3 specification belongs in this directory is the same open
+  question the P-384 section left open, and adding RSA does not answer it.
+- **NIST CAVP** signature verification vectors and **FIPS 186-4** are not
+  RFCs. This project cites NIST publications by section where it uses
+  them — FIPS 197 for AES, SP 800-38D for GCM — and keeps no copies. The
+  practice does not change for RSA.
+- **A test key** is not a document, and there is no need to fetch one.
+  RFC 8448 section 2 already prints a complete RSA private key — modulus,
+  public exponent, private exponent, both primes, and the Chinese
+  remainder values — and the traces it belongs to carry real
+  `rsa_pss_rsae_sha256` signatures made with it. The modulus is 1024 bits,
+  which is below what this system will accept from a certificate, so the
+  key is a vector for the primitive and not a chain anything would trust.
+  That is what it is wanted for.

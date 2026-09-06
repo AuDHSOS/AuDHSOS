@@ -5,6 +5,45 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- RFC 8017, RFC 4055, RFC 5756, and RFC 3279 join the reference documents
+  under `docs/rfc/`, each fetched twice and recorded with its checksum.
+  They are what RSA verification reads: PKCS #1 for the primitive and both
+  encodings, the two X.509 documents that name the algorithms and their
+  parameters, and RFC 3279 section 2.3.1 for `rsaEncryption` and
+  `RSAPublicKey`. The README gains a section for the four and a second for
+  what was read and left out, and the RFC 3279 entry under *What P-384
+  does not need* is corrected: it was kept out because RFC 5480 restates
+  `ECDSA-Sig-Value`, and that reason says nothing about the RSA key, which
+  no later document restates.
+
+  Nothing is implemented yet. The documents are here so that the plan can
+  cite sections rather than recollection — among them one correction the
+  plan needed: RFC 4055 section 5 requires the parameters of
+  `sha256WithRSAEncryption` and its two siblings to be NULL and requires
+  an implementation to accept them absent as well, so the parser has to
+  take both forms and not, as first written down, only the present one.
+
+- RSA verification is planned rather than deferred: section 11.15 of
+  document 11, decisions D-74 to D-80, catalog section 6.6.55, and steps
+  R1 to R6 in the roadmap and in the order of work. Nothing is
+  implemented.
+
+  Two things the planning turned up are worth naming here, because both
+  contradict what was written down before. `crypto-ec::montgomery` cannot
+  serve an RSA modulus as it stands: it is generic over the limb count,
+  which is what section 11.2 said, but its `Params` carries the modulus
+  and the conversion constants as associated constants, and a certificate
+  brings its modulus at run time. The arithmetic therefore moves to a
+  crate of its own (D-74), keeping the three free functions that already
+  take a modulus as an argument. And the RSA key printed in RFC 8448
+  section 2 is 1024 bits, not 2048 as this changelog's previous entry and
+  the reference README first said: it is below what a certificate may
+  carry (D-76), which makes it a vector for the primitive and never a
+  chain. Section 11.2, section 11.11, and the reference README are
+  corrected accordingly.
+
 ### Fixed
 
 - The scheduler asks the transition table before it takes a thread out of

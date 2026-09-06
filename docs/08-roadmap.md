@@ -269,6 +269,13 @@ is not scheduled: it needs a transport from track D, the `random_bytes`
 system call, and the driver and server that carry the bytes. What the
 track is still waiting on, and who owns each piece, is section 11.14.
 
+R1 to R6 are RSA verification, specified in section 11.15 and not started.
+They are the one thing on this track that changes what the system can
+reach rather than how well it is checked: without them a chain that is RSA
+to the root cannot be walked, which is most of the public web. They need
+nothing from another track and can be built between phases as T1 to T7
+were.
+
 The track prepares HTTPS for the day a network stack exists. Every crate
 in it is pure logic without I/O or allocation, host-tested, and depends on
 no kernel, loader, or userland crate. It therefore has no place in the
@@ -284,9 +291,15 @@ phase order and is built between phases.
 | T6 | `audhsos-x509` | L | implemented: certificate parsing, path validation, name matching, the test certificate builder |
 | T7 | `audhsos-tls` | XL | implemented: the client reproduces the RFC 8448 trace and completes a handshake against project-generated chains |
 | T8 | integration | M | not scheduled: transport, the `random_bytes` system call, an HTTP client |
+| R1 | `crypto-bignum` | M-L | not started: the limb arithmetic with a modulus known at run time |
+| R2 | `crypto-rsa` | M | not started: the key with its bounds, and PKCS #1 v1.5 by construction |
+| R3 | `crypto-rsa` | M | not started: MGF1 and PSS verification |
+| R4 | `audhsos-x509` | L | not started: the RSA identifiers, key, and test certificates |
+| R5 | `audhsos-tls` | M | not started: the six code points, and the RFC 8448 signature verified |
+| R6 | fuzzing and the probe | S-M | not started: the `rsa` target, and three RSA-rooted hosts reached |
 
 Definition of done per step, as for every phase: the catalog items of
-6.6.30 to 6.6.38 that belong to the step have tests,
+6.6.30 to 6.6.38 and 6.6.55 that belong to the step have tests,
 `sh tools/xtask-check.sh` is green, the documents reflect the code, the
 changelog is updated.
 
