@@ -225,7 +225,8 @@ fn a_fault_handler_is_retained_replaced_and_cleared() {
             .processes
             .get(fixture.process)
             .unwrap()
-            .fault_handler,
+            .fault_handler
+            .map(|(endpoint, _badge)| endpoint),
         Some(first)
     );
     assert_eq!(

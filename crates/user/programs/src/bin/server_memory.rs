@@ -13,7 +13,7 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds five programs and each uses a different part of
+// The package holds seven programs and each uses a different part of
 // what it depends on; these are the crates this one does not.
 use driver_uart16550 as _;
 use server_console as _;
@@ -83,9 +83,14 @@ fn handle(
                 .allocate(&mut pages, badge, *len, *align)
                 .map(|object| object.handle),
         ),
-        Request::Release { memory } => {
-            Reply::Released(store.release(&mut pages, badge, *memory).map(|_| ()))
-        }
+        // What the client sent is a capability, and where the object lies
+        // is what says which object it is; the server asks the kernel
+        // rather than trusting a number the client chose.
+        Request::Release { memory } => Reply::Released(
+            describe(pages.gate, MemoryHandle::from_handle(*memory))
+                .and_then(|object| store.release(&mut pages, badge, object))
+                .map(|_object| ()),
+        ),
     }
 }
 
@@ -174,5 +179,9 @@ impl Pages for GatePages<'_> {
             MemoryHandle::from_handle(lower),
             MemoryHandle::from_handle(upper),
         )
+    }
+
+    fn close(&mut self, handle: audhsos_abi::Handle) -> Result<(), Error> {
+        self.gate.handle_close(handle)
     }
 }

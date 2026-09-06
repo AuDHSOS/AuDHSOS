@@ -48,11 +48,18 @@ pub fn deliver<
         .objects
         .threads
         .with(thread, |held| held.fault = Some(fault));
-    let Some((process, handler)) = handler_of(machine, thread) else {
+    let Some((process, handler, badge)) = handler_of(machine, thread) else {
         return stop(machine, thread);
     };
     write_message(buffer, fault);
-    let outcome = ipc::deliver(machine, thread, process, handler, Intent::call(0), buffer);
+    let outcome = ipc::deliver(
+        machine,
+        thread,
+        process,
+        handler,
+        Intent::call(badge),
+        buffer,
+    );
     match outcome {
         Ok(reply) => reply.outcome,
         // Nobody could take the message: no reply slot, no handle slot, or
@@ -72,14 +79,14 @@ fn handler_of<
 >(
     machine: &Machine<'_, E, NP, NT, NM, NH>,
     thread: ThreadId,
-) -> Option<(kernel_objects::object::ProcessId, EndpointId)> {
+) -> Option<(kernel_objects::object::ProcessId, EndpointId, u64)> {
     let process = machine.objects.threads.get(thread).ok()?.process;
-    let handler = machine.objects.processes.get(process).ok()?.fault_handler?;
+    let (handler, badge) = machine.objects.processes.get(process).ok()?.fault_handler?;
     // An endpoint that is gone takes the handler with it.
     if machine.objects.endpoints.get(handler).is_err() {
         return None;
     }
-    Some((process, handler))
+    Some((process, handler, badge))
 }
 
 /// Builds the fault message: the reserved label of its kind, three words,

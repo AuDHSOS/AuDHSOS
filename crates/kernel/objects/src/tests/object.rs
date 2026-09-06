@@ -354,6 +354,6 @@ fn the_wait_record_names_the_queue_and_what_it_asked_for() {
 fn a_process_reports_faults_on_an_endpoint_or_on_nothing() {
     let mut holder = process(4);
     assert_eq!(holder.fault_handler, None);
-    holder.fault_handler = Some(ObjectId::new(3, 2));
-    assert_eq!(holder.fault_handler, Some(ObjectId::new(3, 2)));
+    holder.fault_handler = Some((ObjectId::new(3, 2), 0x5EED));
+    assert_eq!(holder.fault_handler, Some((ObjectId::new(3, 2), 0x5EED)));
 }

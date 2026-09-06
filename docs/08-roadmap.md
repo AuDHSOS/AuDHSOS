@@ -156,13 +156,18 @@ Phase 6.
 
 Deliverables: `user-sys-x86_64`, `user-rt` with the safe allocator,
 `user-proto`, `user-loader`, `server-init`, `server-name`,
-`server-console` over `driver-uart16550`, `server-memory`, `app-hello`;
-boot image with tar archive; release build with `debug-uart` off.
+`server-console` over `driver-uart16550`, `server-memory`, `app-hello`,
+`app-checks`, `app-faulter`; the kernel starts the root task from an ELF
+of the boot image (D-90); boot image with tar archive; the kernel gives
+COM1 up when the userland takes it, so the handover and not a feature
+flag decides who writes.
 
-Tests: catalog 6.6.12, 6.6.13 (tar items) with fuzz targets, 6.6.22, 6.6.23.
+Tests: catalog 6.6.12, 6.6.13 (tar items) with fuzz targets, 6.6.22,
+6.6.23, 6.6.56.
 
 Acceptance: `sh tools/xtask.sh run --release` prints the greeting through
-the userland console driver; `sh tools/xtask.sh test --e2e` passes.
+the userland console driver; `sh tools/xtask.sh test --e2e` passes and the
+root task ends the machine itself (D-92); `check` runs it.
 
 ## 8.10 Phase 8: Consolidation
 

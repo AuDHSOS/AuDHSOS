@@ -256,12 +256,16 @@ There is one implementation of every algorithm.
   divide error, breakpoint, alignment check) becomes an IPC call from the
   faulting thread to the process's fault handler endpoint. The message
   carries the fault kind, faulting address, instruction pointer, and error
-  code. The handler replies to resume the thread, or kills it.
+  code, and it arrives under the badge of the capability that named the
+  handler, which is how a handler of many processes knows whose fault it
+  is. The handler replies to resume the thread, or kills it.
 - If a process has no fault handler, the thread enters state `Faulted`; the
   process's creator inspects it with `thread_info`.
-- A fault in kernel mode prints diagnostics on the debug UART (if compiled
-  in), exits QEMU with the failure code (if compiled in), and otherwise
-  halts.
+- A fault in kernel mode prints diagnostics on the debug UART, exits QEMU
+  with the failure code (if compiled in), and otherwise halts. The kernel
+  writes on the serial line until the userland takes the port over — an
+  `IoPortRange` over it is the handover — and after that only the panic
+  handler does, because after a panic no driver writes either.
 - Double faults run on a separate interrupt stack (IST).
 
 ## 2.5 Threads and scheduling
@@ -340,7 +344,7 @@ so that userland loops.
 | `ipc_call(endpoint)` | Sends the message in the IPC buffer and blocks until the receiver replies. Send and wait-for-reply are atomic from the receiver's point of view. |
 | `ipc_send(endpoint)` | Sends and blocks until a receiver has taken the message. No reply. |
 | `ipc_recv(endpoint)` | Blocks until a sender arrives. Returns the message, the badge, and a `Reply` handle if the sender used `call`. |
-| `ipc_reply(reply)` | Delivers the message in the IPC buffer to the caller and consumes the reply object. |
+| `ipc_reply(reply)` | Delivers the message in the IPC buffer to the caller and consumes the reply object, handle and all (D-91). |
 | `ipc_reply_recv(reply, endpoint)` | `reply` followed by `recv` without returning to userland in between. |
 | `ipc_try_recv(endpoint)` | Like `recv` but returns `WouldBlock` instead of blocking. |
 
@@ -387,12 +391,19 @@ through shared memory objects.
 - When a process is created, its creator writes a startup message into the
   first thread's IPC buffer before `thread_start`. It lists the initial
   handles and their meaning. The kernel does not interpret this message.
+- One of those handles may be `Parent`: the endpoint the faults of this
+  process go to, badged with what the parent knows it by. A child reports
+  what it finished through it, so one endpoint carries both kinds of news
+  about a child and the label tells them apart (D-92).
 
 ## 2.7 Interrupts and devices
 
 - The root task holds the `SystemControl` capability and creates `Interrupt`
   objects for specific lines, `IoPortRange` objects, and `Device` memory
   objects for MMIO regions. It hands them to drivers.
+- An interrupt object is created with its line masked and armed when a
+  notification is bound to it, because a line nothing names would assert
+  into nothing (D-91).
 - Interrupt flow: line asserts → kernel masks the line at the I/O APIC and
   sends end-of-interrupt to the local APIC → kernel signals the bound
   notification → driver thread wakes, services the device →

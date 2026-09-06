@@ -293,8 +293,9 @@ Configured once in the workspace. Level `deny` unless stated.
 
 Project-defined logging macros: `klog!` in `kernel-core` writes through the
 `DebugConsole` trait when the feature is on and compiles to nothing
-otherwise; `log!` in `user-rt` sends to the log endpoint from the startup
-message.
+otherwise; `user_sys_x86_64::write_line` sends a line to the log
+endpoint of the startup message, or through `debug_log` while a program
+still has none.
 
 ## 5.6 Avoiding duplication
 
@@ -305,7 +306,7 @@ message.
 | UART register handling in the kernel debug console and in the userland console driver | `driver-uart16550` over a port access trait; two adapters (direct port I/O, `IoPortRange` system calls) |
 | i8042 register handling and PS/2 decoding | `driver-i8042` over its own port access trait, following the UART pattern; one adapter over `IoPortRange` system calls |
 | Pixel operations in the display server and in applications | `gfx`: one surface type, one font, one damage tracker; the display server and applications draw with the same code |
-| System call numbers, names, argument counts, kernel dispatch, userland wrappers | one declarative table in `audhsos-abi` (a `syscalls!` macro) consumed by the kernel dispatcher and by `user-rt` |
+| System call numbers, names, argument counts, kernel dispatch | one declarative table in `audhsos-abi` (a `syscalls!` macro) consumed by the kernel dispatcher; the wrappers of `user-sys-x86_64` are written out by hand and a constant assertion holds them to the same table (D-90) |
 | Object types, their rights masks, and `TryFrom<u32>` conversions | one declarative table in `audhsos-abi` |
 | Error mapping | one `From` implementation per crate pair, tested by a table |
 | Test doubles | one implementation in `kernel-hal-api` behind `test-doubles` |

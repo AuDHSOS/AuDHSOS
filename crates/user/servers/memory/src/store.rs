@@ -147,7 +147,7 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     ///
     /// [`Error::InvalidArgument`] for a length of zero, for an alignment
     /// that is zero or no power of two, or for an owner of zero;
-    /// [`Error::OutOfKernelMemory`] when no free object holds the request;
+    /// [`Error::OutOfMemory`] when no free object holds the request;
     /// [`Error::PoolExhausted`] when a table is full; the errors of the
     /// split and of the zeroing pass.
     pub fn allocate(
@@ -166,9 +166,7 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         if self.live.is_full() {
             return Err(Error::PoolExhausted);
         }
-        let (index, start, object) = self
-            .first_fit(wanted, align)
-            .ok_or(Error::OutOfKernelMemory)?;
+        let (index, start, object) = self.first_fit(wanted, align).ok_or(Error::OutOfMemory)?;
         // Two splits at most, and each of them needs a slot the free list
         // may not have. Both are refused before anything is cut.
         let leading = start.wrapping_sub(object.start);
@@ -217,25 +215,39 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
 
     /// Takes an object back from the client that holds it.
     ///
+    /// `returned` is what the server sees of what came back: the capability
+    /// the client sent, which is a handle of the server's own table and not
+    /// the one this store handed out, and where the object lies. A handle
+    /// that travels through a message arrives under a new number, so an
+    /// object is recognized by the memory it covers and not by a name for
+    /// it; the store closes the new name once it has, because the object
+    /// already has one here and a second reference would stop it ever being
+    /// joined to its neighbours (D-88).
+    ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] for a handle this store did not hand out, a
-    /// second release of the same one included;
-    /// [`Error::AccessDenied`] when another client holds it; the errors of
-    /// the zeroing pass and of a join. Nothing is zeroed in the two cases
-    /// that are refused.
+    /// [`Error::NotFound`] for memory this store did not hand out, a second
+    /// release of the same object included; [`Error::AccessDenied`] when
+    /// another client holds it; the errors of the zeroing pass and of a
+    /// join. Nothing is zeroed in the two cases that are refused.
     pub fn release(
         &mut self,
         pages: &mut impl Pages,
         owner: u64,
-        handle: Handle,
+        returned: Object,
     ) -> Result<Object, Error> {
-        let index = self.position(handle).ok_or(Error::NotFound)?;
+        let index = self.position(returned.start).ok_or(Error::NotFound)?;
         let held = *self.live.get(index).ok_or(Error::NotFound)?;
         if held.owner != owner {
             return Err(Error::AccessDenied);
         }
+        if held.object.len != returned.len {
+            return Err(Error::InvalidArgument);
+        }
         let _returned = self.live.remove(index);
+        if returned.handle != held.object.handle {
+            pages.close(returned.handle)?;
+        }
         wipe(pages, held.object)?;
         self.put_free(pages, held.object)?;
         Ok(held.object)
@@ -267,7 +279,8 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     /// touches.
     fn put_free(&mut self, pages: &mut impl Pages, object: Object) -> Result<(), Error> {
         self.insert_free(object)?;
-        self.join_around(pages, object.start)
+        self.join_around(pages, object.start);
+        Ok(())
     }
 
     /// Puts `object` in the free list, sorted by address.
@@ -284,15 +297,14 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
 
     /// Joins the free object that begins at `start` to the one below it and
     /// to the one above it, where they touch.
-    fn join_around(&mut self, pages: &mut impl Pages, start: u64) -> Result<(), Error> {
+    fn join_around(&mut self, pages: &mut impl Pages, start: u64) {
         let Some(at) = self.free.iter().position(|free| free.start == start) else {
-            return Ok(());
+            return;
         };
         // Upwards first: joining downwards would move this object's index.
-        self.join_at(pages, at)?;
-        match at.checked_sub(1) {
-            Some(below) => self.join_at(pages, below),
-            None => Ok(()),
+        self.join_at(pages, at);
+        if let Some(below) = at.checked_sub(1) {
+            self.join_at(pages, below);
         }
     }
 
@@ -306,11 +318,17 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
 
     /// Joins the free object above `index` into the one at `index`, when
     /// the two touch.
-    fn join_at(&mut self, pages: &mut impl Pages, index: usize) -> Result<(), Error> {
+    fn join_at(&mut self, pages: &mut impl Pages, index: usize) {
         let Some((lower, upper)) = self.touching(index) else {
-            return Ok(());
+            return;
         };
-        pages.merge(lower.handle, upper.handle)?;
+        // A join the kernel refuses leaves the two where they are. The
+        // usual reason is that something else still holds one of them —
+        // a client that has not yet given its capability up — and two free
+        // objects side by side are no worse than one, only smaller.
+        if pages.merge(lower.handle, upper.handle).is_err() {
+            return;
+        }
         let above = index.wrapping_add(1);
         let _joined = self.free.remove(above);
         // Two objects came out of the list and one goes back in, so the
@@ -324,7 +342,6 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
                 len: lower.len.saturating_add(upper.len),
             },
         );
-        Ok(())
     }
 
     /// The first free object that holds `len` bytes aligned to `align`,
@@ -337,11 +354,9 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         })
     }
 
-    /// Where the object `handle` names stands among the live ones.
-    fn position(&self, handle: Handle) -> Option<usize> {
-        self.live
-            .iter()
-            .position(|held| held.object.handle == handle)
+    /// Where the object that begins at `start` stands among the live ones.
+    fn position(&self, start: u64) -> Option<usize> {
+        self.live.iter().position(|held| held.object.start == start)
     }
 }
 

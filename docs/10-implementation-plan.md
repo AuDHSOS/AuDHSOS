@@ -2232,10 +2232,11 @@ that all of it runs on the host under test (D-87).
 argument register, which is where the kernel put it, and hands it to the
 program's `main` together with the startup message it read from the
 buffer. `Gate { buffer: u64 }` holds that address and carries the
-forty-one system call wrappers, written out one by one; each writes the
+forty-two system call wrappers, written out one by one; each writes the
 call number and its arguments into the buffer, executes `int 0x80`, and
-turns the status word into a `Result`. A test checks that every entry of
-`Syscall::ALL` has one. The panic handler formats a `user_rt::Line` and
+turns the status word into a `Result`. A constant assertion holds them to
+the table: `COVERED` lists what exists, `Syscall::ALL` lists what must, and
+a build fails when they differ (D-90). The panic handler formats a `user_rt::Line` and
 sends it to the log endpoint.
 
 ### 10.7.3 `user-proto` (`crates/user/proto`)
@@ -2277,7 +2278,8 @@ the difference between a kernel that boots and a system that runs.
 
 `kernel-core` gains `root.rs`, which is architecture-neutral and host-tested
 over the doubles the memory and system call tests already use: it creates
-the address space, maps the flat binary at `ROOT_TASK_BASE`, maps a stack of
+the address space, reads the root task as an ELF and maps every segment with
+the permissions its header names (D-90), maps a stack of
 sixteen pages with one unmapped page between it and the program, allocates a
 kernel stack and an IPC buffer, makes the thread, installs the handles —
 `SystemControl`, the process itself, the boot image, and one `Ram` memory
@@ -2316,13 +2318,23 @@ of frames is a range of bytes.
 - `server-memory`: allocation policy over memory objects with the zeroing
   rules of D-12 (zero before hand-out and immediately after return), adjacency
   bookkeeping, per-client accounting by badge.
-- `app-hello`: looks up `console`, writes `hello from userland`, exits.
-- Root task as flat binary: linker script at `ROOT_TASK_BASE` with `.bss`
-  inside the file; the xtask converts with `llvm-objcopy -O binary`.
+- `app-hello`: looks up `console`, writes `hello from userland`, reads a
+  line back and says it again, then reports to its parent and exits.
+- Root task as an ELF at `ROOT_TASK_BASE`, with every section on a page of
+  its own so that no two segments share one set of permissions (D-90).
 - The xtask `image` writes the real boot image: header, root task, ustar
   archive of the server and application ELFs.
-- Release build: `debug-uart` and `test-exit` off; `sh tools/xtask.sh run
-  --release` shows the greeting through the userland driver.
+- The kernel owns COM1 until userland takes it: `ioport_create` over the
+  range of the port makes the kernel give the line up, and after that it
+  writes nothing, `debug_log` included. So `debug-uart` stays in both
+  profiles — there is no silent window while the first servers come up,
+  and no interleaving afterwards, because the handover and not a feature
+  flag decides who writes.
+- The run ends through the userland: `app-hello` reports `Finished` to the
+  root task, and the root task writes to the exit device through its
+  `SystemControl` (D-92). `sh tools/xtask.sh run --release` shows the
+  greeting through the userland driver and ends when a line is typed;
+  `test --e2e --release` is the same run without a person at it.
 
 ### 10.7.7 Fuzzing
 
@@ -2359,9 +2371,11 @@ parser's crate and its input a file in the corpus. Register the targets in
 
 ### 10.7.8 Acceptance
 
-`check` green; `test --e2e` passes with the userland test programs
-reporting through the console driver; catalog 6.6.12, 6.6.13 tar items,
-6.6.22, 6.6.23; fuzz targets run for 60 seconds each without findings.
+`check` green — it runs `test --e2e` as its tenth step, so the end-to-end
+run is part of it — with the userland programs reporting through the
+console driver and the root task ending the machine; catalog 6.6.12,
+6.6.13 tar items, 6.6.22, 6.6.23, 6.6.56; fuzz targets run for 60 seconds
+each without findings.
 
 ## 10.8 Phase 8: Consolidation and release 0.1.0
 

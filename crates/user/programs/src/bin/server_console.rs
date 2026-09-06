@@ -19,7 +19,7 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds five programs and each uses a different part of
+// The package holds seven programs and each uses a different part of
 // what it depends on; these are the crates this one does not.
 use server_memory as _;
 use server_name as _;

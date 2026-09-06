@@ -65,6 +65,11 @@ pub enum Call {
         /// The object that ceased to exist.
         upper: Handle,
     },
+    /// A capability was given up.
+    Close {
+        /// The handle.
+        handle: Handle,
+    },
 }
 
 /// The kernel as the tests play it.
@@ -76,6 +81,9 @@ pub struct RecordingPages {
     /// The call number after which every operation answers with this error.
     /// `None` lets everything succeed.
     pub fail_after: Option<(usize, Error)>,
+    /// Whether a join is refused, which is what the kernel does when
+    /// something other than the server still holds one of the two.
+    pub refuse_merges: bool,
 }
 
 /// Where the double puts the first mapping.
@@ -99,6 +107,7 @@ impl RecordingPages {
             next_handle: 1000,
             next_address: FIRST_ADDRESS,
             fail_after: None,
+            refuse_merges: false,
         }
     }
 
@@ -175,6 +184,14 @@ impl Pages for RecordingPages {
     }
 
     fn merge(&mut self, lower: Handle, upper: Handle) -> Result<(), Error> {
-        self.record(Call::Merge { lower, upper })
+        self.record(Call::Merge { lower, upper })?;
+        if self.refuse_merges {
+            return Err(Error::InvalidArgument);
+        }
+        Ok(())
+    }
+
+    fn close(&mut self, handle: Handle) -> Result<(), Error> {
+        self.record(Call::Close { handle })
     }
 }

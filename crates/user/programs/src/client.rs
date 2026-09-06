@@ -94,10 +94,19 @@ pub fn release(gate: &mut Gate, server: EndpointHandle, object: MemoryHandle) ->
     };
     request.encode(&mut gate.writer())?;
     gate.ipc_call(server)?;
-    match memory::Reply::decode(gate.reader())? {
+    let outcome = match memory::Reply::decode(gate.reader())? {
         memory::Reply::Released(outcome) => outcome,
         memory::Reply::Allocated(_) => Err(Error::InvalidArgument),
+    };
+    // A handle that travels through a message is copied and not moved, so
+    // after a release the object has two names: the server's and this one.
+    // Giving this one up is what makes the release a release; a server that
+    // still shares the object with a client cannot join it to its
+    // neighbours (D-88).
+    if outcome.is_ok() {
+        gate.handle_close(object.handle())?;
     }
+    outcome
 }
 
 /// Writes `bytes` to the console driver, in as many messages as it takes.

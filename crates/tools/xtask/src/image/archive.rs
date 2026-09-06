@@ -16,11 +16,13 @@ use crate::error::Error;
 ///
 /// The order does not matter to the reader, which searches by name, and it
 /// is kept because a dump of the image is easier to read that way.
-pub(crate) const PROGRAMS: [&str; 4] = [
+pub(crate) const PROGRAMS: [&str; 6] = [
     "server-memory",
     "server-name",
     "server-console",
     "app-hello",
+    "app-checks",
+    "app-faulter",
 ];
 
 /// Writes a ustar archive holding `files`.

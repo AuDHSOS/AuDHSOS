@@ -217,8 +217,9 @@ pub fn set_fault_handler<
         let (id, _rights) = machine
             .objects
             .resolve::<Endpoint>(caller, handle, Rights::SEND)?;
+        let badge = machine.objects.entry(caller, handle)?.badge;
         machine.objects.retain(AnyObjectId::of(id))?;
-        Some(id)
+        Some((id, badge))
     };
     let previous = machine.objects.processes.get(target)?.fault_handler;
     machine
@@ -226,7 +227,7 @@ pub fn set_fault_handler<
         .processes
         .with(target, |holder| holder.fault_handler = handler);
     let switch = match previous {
-        Some(old) => crate::lifetime::release(machine, AnyObjectId::of(old))?,
+        Some((old, _badge)) => crate::lifetime::release(machine, AnyObjectId::of(old))?,
         None => false,
     };
     let reply = Reply::DONE;
@@ -268,7 +269,7 @@ pub fn kill<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
             entry.remove_thread(id);
         }
     });
-    if let Some(handler) = holder.fault_handler {
+    if let Some((handler, _badge)) = holder.fault_handler {
         reschedule |= crate::lifetime::release(machine, AnyObjectId::of(handler))?;
     }
     machine.objects.processes.force_release(target);

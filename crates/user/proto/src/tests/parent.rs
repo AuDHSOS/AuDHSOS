@@ -9,7 +9,7 @@ use crate::label::{Label, ProtoError, Protocol};
 use crate::parent::{FINISHED, Request, SUCCESS};
 
 /// Encodes `request` and reads it back.
-fn round_trip(request: &Request) -> Result<Request, ProtoError> {
+fn round_trip(request: Request) -> Result<Request, ProtoError> {
     let mut bytes = [0u8; SIZE];
     request.encode(&mut BufferMut::new(&mut bytes))?;
     Request::decode(Buffer::new(&bytes))
@@ -19,7 +19,7 @@ fn round_trip(request: &Request) -> Result<Request, ProtoError> {
 fn a_report_comes_back_with_the_status_it_carried() {
     for status in [SUCCESS, 1, u64::MAX] {
         let request = Request::Finished { status };
-        assert_eq!(round_trip(&request).unwrap(), request);
+        assert_eq!(round_trip(request).unwrap(), request);
     }
 }
 

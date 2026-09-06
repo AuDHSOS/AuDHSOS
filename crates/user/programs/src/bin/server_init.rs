@@ -23,7 +23,7 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds five programs and each uses a different part of
+// The package holds seven programs and each uses a different part of
 // what it depends on; these are the crates this one does not.
 use driver_uart16550 as _;
 use server_console as _;
@@ -89,7 +89,7 @@ struct Program {
 /// The quotas are what the programs measured out at need with room over
 /// them; a program that asks for more than its line says is refused by the
 /// kernel and not by this table.
-const PROGRAMS: [Program; 4] = [
+const PROGRAMS: [Program; 6] = [
     Program {
         name: b"server-memory",
         priority: priority::SERVER,
@@ -133,6 +133,30 @@ const PROGRAMS: [Program; 4] = [
         names: true,
         memory: true,
         reports: true,
+    },
+    Program {
+        name: b"app-checks",
+        priority: priority::APPLICATION,
+        handles: 32,
+        frames: 32,
+        objects: 32,
+        grant: Grant::None,
+        names: true,
+        memory: true,
+        reports: true,
+    },
+    // It faults and its thread stops there, so it never reports and the
+    // machine does not wait for it.
+    Program {
+        name: b"app-faulter",
+        priority: priority::APPLICATION,
+        handles: 32,
+        frames: 32,
+        objects: 32,
+        grant: Grant::None,
+        names: true,
+        memory: true,
+        reports: false,
     },
 ];
 

@@ -44,6 +44,16 @@ bench = false
 name = "app-hello"
 path = "src/bin/app_hello.rs"
 test = false
+
+[[bin]]
+name = "app-checks"
+path = "src/bin/app_checks.rs"
+test = false
+
+[[bin]]
+name = "app-faulter"
+path = "src/bin/app_faulter.rs"
+test = false
 bench = false
 
 [dependencies]

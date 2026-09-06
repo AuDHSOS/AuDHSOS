@@ -541,7 +541,7 @@ pub(crate) fn set_fault_handler(process: ProcessId, endpoint: EndpointId) {
         machine
             .objects
             .processes
-            .with(process, |held| held.fault_handler = Some(endpoint));
+            .with(process, |held| held.fault_handler = Some((endpoint, 0)));
     });
 }
 
@@ -671,7 +671,15 @@ fn environment<'a>(
     tables: &'a mut PhysicalWindow,
     tlb: &'a mut LocalTlb,
 ) -> KernelEnvironment<'a, X86Entry, PhysicalWindow, LocalTlb, SerialConsole, DeviceAccess<'a>> {
-    KernelEnvironment::new(memory, tables, tlb, None, None, acpi_pointer())
+    KernelEnvironment::new(
+        memory,
+        tables,
+        tlb,
+        None,
+        None,
+        acpi_pointer(),
+        context::prepare_user,
+    )
 }
 
 /// The address of the root system description pointer, or zero when the

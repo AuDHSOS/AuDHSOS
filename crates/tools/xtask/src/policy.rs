@@ -555,7 +555,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-programs",
         path: "crates/user/programs",
         kind: Kind::Adapter {
-            unsafe_budget: 15,
+            unsafe_budget: 18,
             asm_budget: 0,
         },
         deps: &[
@@ -635,7 +635,12 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "xtask",
         path: "crates/tools/xtask",
         kind: Kind::Host,
-        deps: &["audhsos-abi", "audhsos-symbols", "kernel-test-harness"],
+        deps: &[
+            "audhsos-abi",
+            "audhsos-symbols",
+            "kernel-test-harness",
+            "user-loader",
+        ],
         coverage_gate: false,
         target: Target::Host,
     },

@@ -137,7 +137,7 @@ const E2E_TIMEOUT: Duration = Duration::from_secs(60);
 /// archive, the memory server answered, the name server answered, the
 /// console driver took the port, and the application found it and said
 /// something through it.
-const E2E_LINES: [(&str, &str); 5] = [
+const E2E_LINES: [(&str, &str); 11] = [
     (
         "[init] started server-memory",
         "the memory server did not start",
@@ -154,6 +154,30 @@ const E2E_LINES: [(&str, &str); 5] = [
     (
         "hello from userland",
         "the application said nothing through the console driver",
+    ),
+    (
+        "[checks] missing name: the requested item does not exist",
+        "a lookup of a name nobody registered was not refused with NotFound",
+    ),
+    (
+        "[checks] memory comes back zeroed: ok",
+        "memory that was used, given back, and asked for again was not zeroed",
+    ),
+    (
+        "[checks] more than there is: ",
+        "the memory server said nothing to a request no machine can meet",
+    ),
+    (
+        "[checks] line 7 of 8, and the whole of it",
+        "a line of the second client did not arrive whole",
+    ),
+    (
+        "[faulter] about to write to nowhere",
+        "the program that faults on purpose never ran",
+    ),
+    (
+        "faulted: PageFault",
+        "the root task did not report the fault of its child",
     ),
 ];
 
@@ -775,7 +799,7 @@ pub(crate) fn check(root: &Path, channel: &str, options: &[String]) -> Result<()
         }
     }
     note!("toolchain: {channel}");
-    let steps: [(&str, Step); 10] = [
+    let steps: [(&str, Step); 11] = [
         ("lint", lint),
         ("check-layering", check_layering),
         ("check-deps", check_deps),
@@ -785,6 +809,7 @@ pub(crate) fn check(root: &Path, channel: &str, options: &[String]) -> Result<()
         ("miri", miri),
         ("doc", doc),
         ("test --qemu", |root| test(root, &["--qemu".to_owned()])),
+        ("test --e2e", |root| test(root, &["--e2e".to_owned()])),
         ("fuzz --regression", |root| {
             fuzz(root, &["--regression".to_owned()])
         }),

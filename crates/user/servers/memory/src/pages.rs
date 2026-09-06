@@ -3,11 +3,11 @@
 
 //! What the policy needs of the kernel, and nothing else.
 //!
-//! Five operations: map an object into the server's own address space, fill
-//! it with zeros, take it out again, split an object, and join two that lie
-//! side by side. Everything the memory server does with memory is one of
-//! those, so a double that records them is a complete account of what a run
-//! of the policy did — which is what
+//! Six operations: map an object into the server's own address space, fill
+//! it with zeros, take it out again, split an object, join two that lie
+//! side by side, and give a capability up. Everything the memory server
+//! does with memory is one of those, so a double that records them is a
+//! complete account of what a run of the policy did — which is what
 //! [6.6.23](../../../../docs/06-testing-strategy.md#6623-memory-server-logic-server-memory-host-tested-with-a-recording-double-for-map-zero-and-unmap)
 //! asks for.
 //!
@@ -59,6 +59,16 @@ pub trait Pages {
     ///
     /// # Errors
     ///
-    /// Whatever the kernel answered.
+    /// Whatever the kernel answered. [`Error::InvalidArgument`] for two
+    /// objects the kernel will not join, which includes two that something
+    /// other than this server still holds.
     fn merge(&mut self, lower: Handle, upper: Handle) -> Result<(), Error>;
+
+    /// Gives up `handle`. What it named lives on while anything else names
+    /// it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    fn close(&mut self, handle: Handle) -> Result<(), Error>;
 }

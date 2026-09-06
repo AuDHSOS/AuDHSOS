@@ -181,10 +181,14 @@ pub struct Process {
     pub quota: Quota,
     /// The kernel objects the process may still create.
     pub kernel_object_quota: Quota,
-    /// The endpoint faults of this process are reported on. A process
-    /// with none stops the thread that faulted, which is what a fault
-    /// nobody takes ends in.
-    pub fault_handler: Option<EndpointId>,
+    /// The endpoint faults of this process are reported on, and the badge
+    /// of the capability that named it. A process with none stops the
+    /// thread that faulted, which is what a fault nobody takes ends in.
+    ///
+    /// The badge is kept because a handler serves more than one process:
+    /// it is the only thing in the message that says whose fault this is,
+    /// exactly as it is for every other message a server receives.
+    pub fault_handler: Option<(EndpointId, u64)>,
 }
 
 impl Object for Process {

@@ -120,7 +120,7 @@ fn a_release_is_zeroed_at_once_and_the_memory_goes_back() {
         .allocate(&mut kernel, 7, 2 * PAGE_SIZE, PAGE_SIZE)
         .unwrap();
     kernel.forget();
-    let back = store.release(&mut kernel, 7, given.handle).unwrap();
+    let back = store.release(&mut kernel, 7, given).unwrap();
     assert_eq!(back, given);
     let zeroing = kernel.zeroed();
     assert_eq!(zeroing.len(), 1, "exactly one pass");
@@ -131,15 +131,84 @@ fn a_release_is_zeroed_at_once_and_the_memory_goes_back() {
 }
 
 #[test]
+fn an_object_that_comes_back_under_another_name_is_recognized_and_the_name_given_up() {
+    let (mut store, mut kernel) = adopted(8);
+    let given = store
+        .allocate(&mut kernel, 7, 2 * PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    kernel.forget();
+    // A handle that travels through a message arrives under a number of the
+    // receiver's own, so what comes back names the same memory and nothing
+    // else about it agrees.
+    let returned = Object {
+        handle: handle(9999),
+        ..given
+    };
+    assert_eq!(store.release(&mut kernel, 7, returned).unwrap(), given);
+    assert!(
+        kernel.calls().contains(&Call::Close {
+            handle: handle(9999)
+        }),
+        "the second name for the object was not given up"
+    );
+    assert_eq!(store.live_objects(), 0);
+    assert_eq!(store.free_objects(), 1, "and the region is whole again");
+}
+
+#[test]
+fn memory_returned_at_a_length_the_store_never_handed_out_is_refused() {
+    let (mut store, mut kernel) = adopted(8);
+    let given = store
+        .allocate(&mut kernel, 7, 2 * PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    kernel.forget();
+    let returned = Object {
+        len: PAGE_SIZE,
+        ..given
+    };
+    assert_eq!(
+        store.release(&mut kernel, 7, returned).unwrap_err(),
+        Error::InvalidArgument
+    );
+    assert!(kernel.calls().is_empty());
+    assert_eq!(store.live_objects(), 1, "and it still holds it");
+}
+
+#[test]
+fn a_join_the_kernel_refuses_leaves_the_two_objects_where_they_are() {
+    let (mut store, mut kernel) = adopted(8);
+    let low = store
+        .allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    let high = store
+        .allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    store.release(&mut kernel, 7, low).unwrap();
+    let before = store.free_objects();
+    // A client that has not yet given its capability up is the usual reason
+    // the kernel refuses; the store keeps two free objects rather than
+    // failing the release.
+    kernel.refuse_merges = true;
+    store.release(&mut kernel, 7, high).unwrap();
+    assert_eq!(store.live_objects(), 0);
+    assert_eq!(
+        store.free_objects(),
+        before.wrapping_add(1),
+        "the object went back and stayed a piece of its own"
+    );
+    assert_eq!(store.free_bytes(), 8 * PAGE_SIZE, "and no memory was lost");
+}
+
+#[test]
 fn a_second_release_of_the_same_object_is_refused_and_zeroes_nothing() {
     let (mut store, mut kernel) = adopted(8);
     let given = store
         .allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE)
         .unwrap();
-    store.release(&mut kernel, 7, given.handle).unwrap();
+    store.release(&mut kernel, 7, given).unwrap();
     kernel.forget();
     assert_eq!(
-        store.release(&mut kernel, 7, given.handle).unwrap_err(),
+        store.release(&mut kernel, 7, given).unwrap_err(),
         Error::NotFound
     );
     assert!(
@@ -153,7 +222,17 @@ fn a_release_of_an_object_this_store_never_handed_out_is_refused() {
     let (mut store, mut kernel) = adopted(8);
     kernel.forget();
     assert_eq!(
-        store.release(&mut kernel, 7, handle(4242)).unwrap_err(),
+        store
+            .release(
+                &mut kernel,
+                7,
+                Object {
+                    handle: handle(4242),
+                    start: 0xDEAD_0000,
+                    len: PAGE_SIZE,
+                },
+            )
+            .unwrap_err(),
         Error::NotFound
     );
     assert!(kernel.calls().is_empty());
@@ -167,7 +246,7 @@ fn a_client_may_not_release_what_another_holds() {
         .unwrap();
     kernel.forget();
     assert_eq!(
-        store.release(&mut kernel, 9, given.handle).unwrap_err(),
+        store.release(&mut kernel, 9, given).unwrap_err(),
         Error::AccessDenied
     );
     assert!(kernel.calls().is_empty());
@@ -238,7 +317,7 @@ fn an_alignment_no_free_object_can_meet_finds_nothing() {
         store
             .allocate(&mut kernel, 7, PAGE_SIZE, TWO_MIB)
             .unwrap_err(),
-        Error::OutOfKernelMemory
+        Error::OutOfMemory
     );
 }
 
@@ -301,10 +380,10 @@ fn exhaustion_is_an_error_and_a_release_makes_the_request_work_again() {
         store
             .allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE)
             .unwrap_err(),
-        Error::OutOfKernelMemory
+        Error::OutOfMemory
     );
     store
-        .release(&mut kernel, 7, given.first().unwrap().handle)
+        .release(&mut kernel, 7, *given.first().unwrap())
         .unwrap();
     let again = store
         .allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE)
@@ -325,8 +404,8 @@ fn two_released_neighbours_are_handed_out_as_one() {
     assert_eq!(second.start, first.end());
     assert_eq!(store.free_objects(), 0);
 
-    store.release(&mut kernel, 7, first.handle).unwrap();
-    store.release(&mut kernel, 7, second.handle).unwrap();
+    store.release(&mut kernel, 7, first).unwrap();
+    store.release(&mut kernel, 7, second).unwrap();
     assert_eq!(store.free_objects(), 1, "the two became one");
     assert_eq!(store.free_bytes(), 4 * PAGE_SIZE);
 
@@ -348,11 +427,11 @@ fn a_release_joins_the_neighbour_below_and_the_one_above() {
     let high = store
         .allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE)
         .unwrap();
-    store.release(&mut kernel, 7, low.handle).unwrap();
-    store.release(&mut kernel, 7, high.handle).unwrap();
+    store.release(&mut kernel, 7, low).unwrap();
+    store.release(&mut kernel, 7, high).unwrap();
     assert_eq!(store.free_objects(), 2, "a hole where the middle one is");
     kernel.forget();
-    store.release(&mut kernel, 7, middle.handle).unwrap();
+    store.release(&mut kernel, 7, middle).unwrap();
     assert_eq!(store.free_objects(), 1);
     assert_eq!(store.free_bytes(), 6 * PAGE_SIZE);
     let merges = kernel
@@ -530,7 +609,7 @@ fn what_is_out_never_overlaps_and_every_byte_of_it_was_zeroed() {
                     if !out.is_empty() {
                         let given = out.remove(which % out.len());
                         store
-                            .release(&mut kernel, 7, given.handle)
+                            .release(&mut kernel, 7, given)
                             .map_err(|error| format!("{error:?}"))?;
                     }
                 }
@@ -538,7 +617,7 @@ fn what_is_out_never_overlaps_and_every_byte_of_it_was_zeroed() {
         }
         for given in out {
             store
-                .release(&mut kernel, 7, given.handle)
+                .release(&mut kernel, 7, given)
                 .map_err(|error| format!("{error:?}"))?;
         }
         if store.free_bytes() != ARENA_PAGES * PAGE_SIZE {

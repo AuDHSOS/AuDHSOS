@@ -267,9 +267,12 @@ done until every applicable item has a test. Items are added, never removed.
 - `call` with no receiver blocks the caller; a later `recv` completes the
   rendezvous; the receiver sees the badge and gets a reply object.
 - `recv` with no sender blocks; a later `call` completes.
-- `reply` on a consumed reply object fails; on a reply object whose caller
-  was killed fails without touching memory; dropping a reply object wakes the
-  caller with `ReplyDropped`.
+- `reply` on a reply object that was answered fails: the answer consumed
+  the object and the handle that named it, so the second attempt reaches
+  nothing (D-91). A run of a thousand calls leaves a server holding no more
+  handles than it started with.
+- `reply` on a reply object whose caller was killed fails without touching
+  memory; dropping a reply object wakes the caller with `ReplyDropped`.
 - Messages with zero words, the maximum number of words, and one more than
   the maximum (rejected before any copy).
 - Zero handles, four handles, five handles (rejected).
@@ -583,14 +586,16 @@ done until every applicable item has a test. Items are added, never removed.
 - The root task starts, parses the archive, and starts the name server, the
   console driver, and the memory server.
 - `app-hello` looks up the console by name, writes a line, and the line
-  appears on the serial port through the userland driver while the kernel
-  debug UART is disabled.
+  appears on the serial port through the userland driver, which owns COM1
+  from the moment it created the `IoPortRange` over it.
 - Name lookup of a missing name returns `NotFound`.
 - Two clients write interleaved lines; no line is torn.
 - A client that faults is reported by the root task and the system keeps
   running.
 - Console input: the runner sends bytes over the serial port and a test
   program echoes them.
+- The root task ends the machine when every child that reports has reported,
+  and the run insists on that rather than killing it (D-92).
 - Memory server: allocate, release, allocate again returns zeroed memory.
 - Out of memory: exhausting the memory server produces an error in the
   client, not a system failure.
@@ -615,7 +620,12 @@ done until every applicable item has a test. Items are added, never removed.
 - Adjacency bookkeeping: two released neighbors are handed out as one
   object for a request of their combined size. This is what `memory_merge`
   was added for (D-88); against a kernel that only splits it cannot be
-  satisfied at all.
+  satisfied at all. A join the kernel refuses leaves the two objects where
+  they are, and no memory is lost by it (D-93).
+- An object that comes back under another handle than the one it went out
+  under is recognized by the memory it covers, and the second name is given
+  up; one returned at a length the store never handed out is refused
+  (D-93).
 - Property: every handed-out range is disjoint from every other live range
   and from the free set; every range handed out was zeroed after its last
   release.
@@ -1658,7 +1668,7 @@ item is what 12.9 asked for before the encodings could be written
   that a client of a later release is told which of the two it is; a
   protocol code and a message number the release does not have are each
   refused.
-- Round trip, per message of each of the three protocols: what was encoded
+- Round trip, per message of each of the four protocols: what was encoded
   decodes to what it was. The names and the chunks are tested at zero
   bytes and at the full width of their field.
 - Replies: every reply carries a status word first, and the payload only
@@ -1678,6 +1688,10 @@ item is what 12.9 asked for before the encodings could be written
   cannot produce and a sender of another release could.
 - A message of one protocol handed to the decoder of another is refused
   with both protocols named.
+- The parent protocol has one message and no reply, because the child that
+  sends it exits behind it (D-92): the status it carries comes back, a
+  message number the protocol does not have is refused, and a report
+  without its status word is refused rather than read as a zero.
 
 ## 6.7 CI pipeline
 

@@ -7,6 +7,65 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The badge of a fault handler travels with it. `process_set_fault_handler`
+  kept the endpoint and dropped the badge of the capability that named it,
+  so every fault arrived under badge zero and a root task serving five
+  children could not tell whose fault it was. A fault is a message like
+  every other: what the sender is known by is what says who it was.
+
+- A memory object that comes back is recognized by the memory it covers. A
+  handle that travels through a message is copied into the receiver's table
+  under a new number, so the number a client returns is not the number the
+  server handed out and the store found nothing under it. The store matches
+  on the region, closes the second name once it has, and the client gives
+  its own up when the release succeeds — without which the object keeps a
+  reference nobody accounts for and can never be joined to its neighbours.
+  A join the kernel refuses now leaves the two objects where they are: two
+  free pieces side by side are no worse than one, only smaller, and a
+  release that failed over it would be worse than both.
+
+- A memory server with no region large enough says so. It answered
+  `OutOfKernelMemory`, whose message is about the kernel reserve and which
+  is a false statement in the mouth of a userland server. `OutOfMemory` is
+  the twenty-sixth error of the interface.
+
+- A bound interrupt line is armed (D-91). `interrupt_create` writes a masked
+  redirection entry, because a line the plan routes but no notification
+  names would assert into nothing; nothing unmasked it afterwards but
+  `interrupt_ack`, which a driver reaches only after its first interrupt. A
+  driver that bound its line and waited therefore waited forever. The
+  binding is the moment the line has somewhere to go, and it is where the
+  line is armed; from there the cycle of 2.7 runs as it is written.
+
+- An answer consumes the reply handle with the reply object (D-91). 2.6 says
+  `ipc_reply` consumes the reply object, and it did — but the handle that
+  named it stayed in the server's table, pointing at a destroyed object and
+  holding the reference that would have let the object go back to its pool.
+  A server lost one handle and one object slot per call and stopped
+  receiving after as many calls as its table has slots, which for the
+  console driver is sixty-four. A second reply through the same handle now
+  answers `InvalidHandle` rather than `InvalidState`: the capability is
+  gone, not merely spent.
+
+- What a child holds of a server is a capability with the child's badge on
+  it. A server tells its clients apart by the badge of the capability a
+  message came through, and a request that arrives without one names nobody
+  — which is why the name server refused every registration and the memory
+  server every allocation.
+
+- The memory server maps and zeroes an object in windows and not whole. A
+  region this machine hands it is hundreds of mebibytes, and an address
+  space region that wide needs more page tables than the kernel reserve
+  holds.
+
+- A log line the kernel console carries says how many bytes of its last word
+  belong to the line. `debug_log` reads the message area as bytes and takes
+  that count out of the label; the writer had been sending a protocol field
+  instead, so every line arrived with its length word in front of it.
+
+- The linker scripts of the userland put every section on a page of its own.
+  Two segments in one page would need one set of permissions for both.
+
 - The device interrupt handler of the kernel binary acknowledges at the local
   APIC before it signals the notification, not after. 2.7 gives the three
   steps in one order — mask the line at the I/O APIC, end the interrupt at the
@@ -39,6 +98,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 
 ### Changed
+
+- The root task is an ELF and no longer a flat binary (D-90). A flat image
+  says nothing about which of its pages may be written and which may be
+  executed, so either the whole program is writable and executable or it
+  cannot hold a variable. The kernel reads it through `audhsos-elf`, which
+  it already carries for the loader, and maps every segment with the
+  permissions its header names.
+
+- The forty-two system call wrappers of `user-sys-x86_64` are written out
+  one by one rather than generated from the table (D-90). What a wrapper
+  does with the buffer is the whole of the seam between a program and the
+  kernel, and a reader who cannot see it cannot check it. A constant
+  assertion holds them to the table: `COVERED` lists what exists,
+  `Syscall::ALL` lists what must, and a build fails when they differ. It
+  caught the missing wrapper for `memory_merge` the hour that call was
+  added.
+
+- The kernel owns COM1 until the userland takes it, and the handover and not
+  a feature flag decides who writes. `ioport_create` over the range of the
+  port makes the kernel give the line up; after that it writes nothing,
+  `debug_log` included. So `debug-uart` stays in both profiles: there is no
+  silent window while the first servers come up, and no interleaving once
+  the driver runs.
 
 - D-86: four unsafe budgets rise, and a process and a thread each hold one
   reference to themselves. The budgets are `kernel-hal-x86_64` (129 to 142
@@ -74,6 +156,38 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The system runs end to end, and the run ends itself (D-92). `app-hello`
+  looks the console up, greets, reads a line back, says it again, and then
+  reports `Finished` to the process that started it; the root task, when
+  every child that reports has reported, takes the port of the exit device
+  through its `SystemControl` and writes to it. The kernel cannot end the
+  machine any more — once the root task runs it only answers calls — so the
+  end of a run comes from the userland or not at all.
+
+  What carries the report is an eleventh role of the startup message,
+  `Parent`: a capability to the endpoint the kernel sends this process's
+  faults to, badged with what the parent knows the child by. One endpoint
+  therefore carries both kinds of news about a child, told apart by the
+  label, and a parent hears of a program that finished and of one that broke
+  in the same place.
+
+- `sh tools/xtask.sh test --e2e` boots the real system, waits for each
+  server to say it started, types a line into the machine while it runs, and
+  insists the line comes back and that the machine then ends by itself. It
+  is the tenth step of `check`. `--release` runs the same from the release
+  profile, which is not a formality: the release build is fast enough to
+  reach a resource limit the debug build never reached, which is how the
+  reply handle leak below was found.
+
+- `app-checks` and `app-faulter`, the two programs the end-to-end items of
+  6.6.22 need. The first asks the servers the questions the catalog asks — a
+  lookup of a name nobody registered, memory used, given back and asked for
+  again, a request no machine can meet — and writes each answer on the
+  console while `app-hello` writes its own lines, which is the interleaving
+  case. The second writes to a page nothing has mapped, so that the run has
+  a client which breaks and the root task has a fault to report. Each of the
+  three defects above was found by one of them.
+
 - The five programs of the userland: the root task, the name server, the
   console driver, the memory server, and the application. Each is a thin
   loop around a logic crate — receive, decode, ask the policy, encode, send
@@ -99,8 +213,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 - The kernel starts the root task. Steps 12 to 14 of the boot sequence have
   been in 2.9 since it was written and in the implementation plan nowhere:
-  the boot image becomes a memory object, a process is built with the flat
-  binary mapped at `ROOT_TASK_BASE`, a stack of sixteen pages below it with
+  the boot image becomes a memory object, a process is built with the root
+  task's segments mapped from `ROOT_TASK_BASE`, a stack of sixteen pages
+  below it with
   an unmapped page between, a kernel stack, an IPC buffer, and the handles it
   starts with — system control, itself, the boot image, and one memory object
   per free region of memory — and then the startup message that says which
