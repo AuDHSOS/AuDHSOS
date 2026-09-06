@@ -78,7 +78,7 @@ AuDHSOS/
 │   │   ├── eth/               net-eth: Ethernet II frames, ARP, the neighbor cache
 │   │   ├── ip/                net-ip: IPv4, reassembly, ICMPv4, routes over both families
 │   │   ├── ipv6/              net-ipv6: IPv6, extension headers, ICMPv6, Neighbor Discovery, SLAAC
-│   │   ├── udp/               net-udp: sockets and datagrams
+│   │   ├── udp/               net-udp: UDP datagrams, the socket table, the receive ring
 │   │   ├── tcp/               net-tcp: the RFC 9293 state machine, timers, congestion control
 │   │   ├── dns/               net-dns: message format and resolver state machine
 │   │   ├── dhcp/              net-dhcp: client state machine and lease timers
@@ -141,7 +141,7 @@ AuDHSOS/
 | `net-eth` | n1 | all | no | yes | `net-wire`, `audhsos-time`, `audhsos-collections`; `test-support` as a dev-dependency |
 | `net-ip` | n2 | all | no | yes, fuzz | `net-eth`, `net-wire`, `audhsos-time`, `audhsos-collections`; `test-support` as a dev-dependency |
 | `net-ipv6` | n2 | all | no | yes, fuzz | `net-ip`, `net-eth`, `net-wire`, `audhsos-time`, `audhsos-collections`; `test-support` as a dev-dependency |
-| `net-udp` | n3 | all | no | yes | `net-ip` and below, `crypto-rng` |
+| `net-udp` | n3 | all | no | yes | `net-wire`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `net-tcp` | n3 | all | no | yes, fuzz | `net-ip` and below, `crypto-rng` |
 | `net-dns` | n4 | all | no | yes, fuzz | `net-udp` and below, `crypto-rng` |
 | `net-dhcp` | n4 | all | no | yes | `net-udp` and below, `crypto-rng` |

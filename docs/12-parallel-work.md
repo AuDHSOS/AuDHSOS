@@ -240,7 +240,7 @@ unscheduled.
 | `net-eth` | `crates/net/eth` | n1 | `net-wire`, `audhsos-time`, `audhsos-collections` |
 | `net-ip` | `crates/net/ip` | n2 | `net-eth` and below |
 | `net-ipv6` | `crates/net/ipv6` | n2 | `net-ip` and below |
-| `net-udp` | `crates/net/udp` | n3 | `net-ip` and below, `crypto-rng` |
+| `net-udp` | `crates/net/udp` | n3 | `net-wire`, `crypto-rng` |
 | `net-tcp` | `crates/net/tcp` | n3 | `net-ip` and below, `crypto-rng` |
 | `net-dns` | `crates/net/dns` | n4 | `net-udp` and below, `crypto-rng` |
 | `net-dhcp` | `crates/net/dhcp` | n4 | `net-udp` and below, `crypto-rng` |
@@ -248,10 +248,13 @@ unscheduled.
 | `net-stack` | `crates/net/stack` | n5 | all of the above |
 
 `net-ip` holds what the two families share — the routing table over
-`IpCidr`, the reassembly machinery, and the interface the transports send
-through — and the IPv4 half; `net-ipv6` holds the IPv6 half and
-implements that interface. The transports therefore depend on `net-ip`
-alone and know no family, which is what makes a socket one piece of code.
+`IpCidr`, the reassembly machinery, and the interface a packet leaves
+through — and the IPv4 half; `net-ipv6` holds the IPv6 half. Neither of
+the two senders is a transport's concern: a transport writes its segment
+into a buffer and names the two addresses it wrote it for, and the facade
+of 12.6.12 picks the sender that carries it out. A transport therefore
+reaches no further down than `net-wire`, which is what makes a socket one
+piece of code and what keeps `net-udp` from depending on `net-ip` at all.
 
 `crypto-rng` is the only edge into track C, and it exists because
 initial sequence numbers, ephemeral ports, and transaction ids must not
@@ -571,16 +574,53 @@ ignore, rather than as a reason to drop the message: the length field was
 right, so the option walk is not lost.
 ### 12.6.7 `net-udp`
 
-A fixed number of sockets, each bound to an explicit port or to an
-ephemeral port drawn from `Rng` within a documented range; a receive
-ring over caller-supplied memory; broadcast permitted, because DHCP
-needs it. A socket carries an `IpAddr` and no family of its own.
+Implemented. A fixed number of sockets, each bound to an explicit port or
+to an ephemeral port drawn from `Rng` within a documented range; a receive
+ring over caller-supplied memory; broadcast permitted, because DHCP needs
+it. A socket carries an `IpAddr` and no family of its own.
 
 The checksum differs by family and the difference is not cosmetic: over
 IPv4 it is verified when non-zero and may be omitted on send, over IPv6
 it is mandatory in both directions, because there is no header checksum
 underneath it to catch a corrupted address (RFC 8200, section 8.1). A
 datagram whose sum comes out zero is sent as all ones in both.
+
+Four things the specification left open, as D-74 decided them:
+
+- **The length field is what is believed.** Bytes behind it are padding
+  that a link layer left standing — an Ethernet frame is padded to sixty
+  bytes — and are cut away; a length that reaches past the bytes that
+  arrived is an error. The checksum covers exactly what the length field
+  claims, so a truncated view and its sum agree.
+- **The ring holds self-describing records, not fixed slots.** Each record
+  carries the two addresses the datagram arrived between, the port it came
+  from, and its payload; a record that no longer fits behind the last
+  begins at the front of the buffer rather than being cut in two, so a
+  payload comes back as one slice. One buffer, one limit, and nothing
+  wasted on a slot that is larger than the datagram in it. A full ring
+  drops the newest datagram and counts the drop, and a datagram that would
+  not fit an empty ring is refused at entry. The destination address is in
+  the record because a socket bound to no address of its own serves every
+  address of the host, and a reply that leaves from the wrong one is one
+  the peer discards.
+- **A port is held once, whichever address holds it.** A socket bound to
+  one of this host's addresses takes only what named that address; a
+  socket bound to none takes everything that reaches the port, broadcast
+  and multicast included, which is the form a DHCP client needs. Two
+  sockets on one port with different local addresses would turn a lookup
+  into a precedence rule and buys nothing this system wants.
+- **An ephemeral port that is taken is answered by drawing again**, as
+  RFC 6056, section 3.3.1 asks, and not by walking to the next port: a
+  port beside a taken one is a port an observer who saw the first can
+  guess. The dynamic range of RFC 6335 is exactly `2^14` ports wide, so
+  the low fourteen bits of two random bytes name one without the bias a
+  remainder would introduce. The number of draws is bounded at eight.
+
+The crate sends nothing and therefore depends on no internet layer. It
+writes a datagram for a pair of addresses and reports a datagram for a
+port nobody holds as such; which sender carries the one out, and whether
+RFC 1122, section 3.2.2 allows an ICMP error for the other, are decisions
+of the layers that have the header fields those rules are about.
 
 ### 12.6.8 `net-tcp`
 
@@ -709,7 +749,7 @@ Tests: catalog 6.6.42 to 6.6.50 and 6.6.54.
 | D2 | `net-eth`: frames, ARP, and the neighbor cache — implemented | M |
 | D3 | `net-ip`: IPv4 header, reassembly, fragmentation, `ICMPv4`, the routing table over both families, the send path — implemented | M |
 | D4 | `net-ipv6`: header and extension chain, `ICMPv6`, Neighbor Discovery, router advertisements and SLAAC, path MTU discovery — implemented | L |
-| D5 | `net-udp` | S |
+| D5 | `net-udp` — implemented | S |
 | D6 | `net-tcp`: sequence arithmetic, state machine, timers, congestion control | XL |
 | D7 | `net-dns` and `net-dhcp` | M |
 | D8 | `net-http` | S |
@@ -851,8 +891,8 @@ the integration.
   C at T5 and T6; then track C to T7; then track D from D1; track F when
   a driver becomes foreseeable; `audhsos-symbols` from track G before
   phase 3, because that is where kernel panics start. Tracks E and G are
-  done, track C stands at T7, and track D has D1 behind it, so the next
-  step of the side work is D2.
+  done, track C stands at T7, and track D has D1 to D5 behind it, so the
+  next step of the side work is D6.
 - The pulled-forward work of 12.9 fills short gaps, because it needs no
   new design.
 

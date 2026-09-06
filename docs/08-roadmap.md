@@ -292,7 +292,7 @@ changelog is updated.
 
 ## 8.18 Track D: the network stack
 
-Status: D1, D2, and D3 implemented, the rest specified in
+Status: D1 to D5 implemented, the rest specified in
 [document 12](12-parallel-work.md).
 
 Sans-I/O logic crates that consume and produce frames, take time and
@@ -306,7 +306,7 @@ their bytes are later work (8.14).
 | D2 | `net-eth` | M | implemented: Ethernet II frames with a receive filter that drops rather than reports, ARP over RFC 826, and one neighbor cache for both families with the five states and the schedule of RFC 4861 |
 | D3 | `net-ip` | M | implemented: IPv4 with reassembly, fragmentation, `ICMPv4` under the restrictions of RFC 1122, a longest-prefix routing table over both families, and the send path that joins them to the neighbor cache |
 | D4 | `net-ipv6` | L | implemented: the header and its extension chain bounded in headers and in bytes, `ICMPv6` summed over the pseudo-header, Neighbor Discovery into the cache of `net-eth`, router advertisements with SLAAC and the DNS servers of RFC 8106, duplicate address detection, and path MTU discovery in the send path |
-| D5 | `net-udp` | S | sockets, ephemeral ports, the checksum of either family |
+| D5 | `net-udp` | S | implemented: datagrams under the checksum rule of each family, a fixed socket table with wildcard and address-specific bindings, ephemeral ports drawn as RFC 6056 asks, and a receive ring of self-describing records in the caller's memory |
 | D6 | `net-tcp` | XL | the RFC 9293 state machine, RFC 6298 timers, and Reno congestion control, verified by two instances over a lossy network double |
 | D7 | `net-dns`, `net-dhcp` | M | name resolution over `A` and `AAAA`, and IPv4 address configuration as a state machine |
 | D8 | `net-http` | S | an HTTP/1.1 client that rejects the smuggling forms |

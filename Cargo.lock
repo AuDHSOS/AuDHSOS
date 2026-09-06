@@ -334,6 +334,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "net-udp"
+version = "0.1.0"
+dependencies = [
+ "crypto-rng",
+ "net-wire",
+ "test-support",
+]
+
+[[package]]
 name = "net-wire"
 version = "0.1.0"
 dependencies = [

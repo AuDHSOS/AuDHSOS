@@ -61,6 +61,46 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   recording double; what this shows is that a user thread reaches them at
   all.
 
+- `net-udp`, the first transport of the network stack (D5, 12.6.7). The
+  datagram of RFC 768 under the checksum rule of each family: over IPv4 a
+  zero means the sender computed none and the datagram is taken as it is,
+  over IPv6 a zero is a datagram to discard, because RFC 8200,
+  section 8.1 took away the header checksum that used to catch a
+  corrupted address underneath it. A sum that comes out zero goes on the
+  wire as all ones in both, so that the omitted form keeps a spelling of
+  its own. The length field is what a reader believes: bytes behind it are
+  padding a link layer left standing and are cut away, and a length that
+  reaches past what arrived is an error — the checksum covers exactly what
+  the field claims, so the two always agree.
+
+  A fixed table of sockets above it. A socket bound to one of this host's
+  addresses takes only what named that address; one bound to none takes
+  everything that reaches its port, broadcast and multicast included,
+  which is the form a DHCP client needs before it has an address at all.
+  A port is held once, whichever address holds it. An ephemeral port is
+  drawn from the dynamic range of RFC 6335, which is exactly `2^14` ports
+  wide, so the low fourteen bits of two random bytes name one without the
+  bias a remainder would introduce; a port already taken is answered by
+  drawing again rather than by walking to the next one, as RFC 6056,
+  section 3.3.1 asks, because a port beside a taken one is a port an
+  observer who saw the first can guess (D-51).
+
+  The receive ring lies in memory the caller supplied and holds
+  self-describing records — the two addresses the datagram arrived
+  between, the port it came from, and the payload. A record that no longer
+  fits behind the last begins at the front of the buffer instead of being
+  cut in two, so a payload always comes back as one slice, and one limit
+  governs the whole ring instead of a slot size that is wrong for every
+  datagram but one. A full ring drops the newest and counts it, and a
+  datagram that would not fit an empty ring is refused at entry.
+
+  The crate sends nothing, and therefore depends on no internet layer at
+  all: it writes a datagram for a pair of addresses and reports a datagram
+  for a port nobody holds as such. Which of the two senders carries the
+  one out, and whether RFC 1122, section 3.2.2 allows an ICMP error for
+  the other, are decisions of layers that hold the header fields those
+  rules are about (D-74). Catalog 6.6.45.
+
 ### Changed
 
 - A kernel stack is eight pages, not four, and `Pool::release` no longer

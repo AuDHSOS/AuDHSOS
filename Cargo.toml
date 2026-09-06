@@ -20,6 +20,7 @@ members = [
     "crates/net/eth",
     "crates/net/ip",
     "crates/net/ipv6",
+    "crates/net/udp",
     "crates/boot/uefi-x86_64",
     "crates/elf",
     "crates/symbols",
@@ -74,6 +75,7 @@ net-wire = { path = "crates/net/wire" }
 net-eth = { path = "crates/net/eth" }
 net-ip = { path = "crates/net/ip" }
 net-ipv6 = { path = "crates/net/ipv6" }
+net-udp = { path = "crates/net/udp" }
 boot-uefi-x86_64 = { path = "crates/boot/uefi-x86_64" }
 audhsos-elf = { path = "crates/elf" }
 audhsos-symbols = { path = "crates/symbols" }
