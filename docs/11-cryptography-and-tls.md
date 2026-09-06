@@ -61,7 +61,7 @@ limb count, but its `Params` carries the modulus and its two conversion
 constants as associated *constants*: they are known when the code is
 compiled, and an RSA modulus is known when a certificate is read. What
 carries over is smaller and further down — the three free functions that
-already take their modulus as an argument. D-74 records the consequence,
+already take their modulus as an argument. D-77 records the consequence,
 which is that the arithmetic moves into a crate of its own.
 
 Everything else on the list is optional for a working HTTPS request.
@@ -512,7 +512,7 @@ handshake to reproduce but a signature vector: the `CertificateVerify` of
 the simple 1-RTT handshake is a real `rsa_pss_rsae_sha256` signature under
 a key this repository holds. It verifies through `crypto-rsa` directly.
 It does not verify through the client, and not because anything is
-missing: the modulus is 1024 bits, which D-76 puts below what a
+missing: the modulus is 1024 bits, which D-79 puts below what a
 certificate may carry. The chain around it stays stubbed, the signature
 inside it stops being.
 
@@ -602,7 +602,7 @@ program, which is what the regression step uses.
 
 Planned, not built. This section is the design and the order of work for
 the one omission of 11.2 that costs interoperability, in the form the
-rest of this document uses. The decisions it rests on are D-74 to D-80.
+rest of this document uses. The decisions it rests on are D-77 to D-83.
 
 ### 11.15.1 What the reference documents settle
 
@@ -611,19 +611,19 @@ README says what each is for. Three rules out of them shape the code and
 are stated here so that no reader has to rediscover them.
 
 RFC 8017 section 8.2.2 gives two shapes for verifying a PKCS #1 v1.5
-signature and this project takes the one that constructs (D-77). RFC 4055
+signature and this project takes the one that constructs (D-80). RFC 4055
 section 5 requires the parameters of `sha256WithRSAEncryption` and its two
 siblings to be NULL and requires an implementation to accept them absent
 as well, which no other algorithm in this crate allows. And RFC 8446
 section 4.2.3 gives the `rsa_pkcs1_*` code points one meaning in the
-`ClientHello` and forbids them in the `CertificateVerify` (D-79).
+`ClientHello` and forbids them in the `CertificateVerify` (D-82).
 
 The fifth document is what the first of those three costs. RFC 2313 is
 PKCS #1 version 1.5 itself, and its verification is not the construction
 of RFC 8017 with a looser encoding — it is the other operation, written
 out as its own sections: 10.2.3 BER-decodes the recovered data into a
 `DigestInfo` and separates it into a digest and an algorithm identifier,
-and 10.2.4 compares that digest against a fresh one. D-77 declines that
+and 10.2.4 compares that digest against a fresh one. D-80 declines that
 operation, so a signature whose `DigestInfo` is BER but not DER is refused
 here and valid there. That is a deliberate incompatibility with a
 published specification, not a tolerance this client happens not to have,
@@ -633,7 +633,7 @@ practice, and the certificates on the public web are DER.
 ### 11.15.2 `crypto-bignum`
 
 The limb arithmetic, moved out of `crypto-ec` and given a modulus it does
-not know until it runs (D-74).
+not know until it runs (D-77).
 
 ```rust
 pub struct Modulus { limbs: [u64; MAX_LIMBS], used: usize, n0inv: u64, r2: [u64; MAX_LIMBS] }
@@ -660,7 +660,7 @@ documentation says so, in the form of the constant-time review sections
 of 11.11 — with the opposite conclusion, and the same obligation to state
 it.
 
-The invariant that pays for the single width of D-75: limbs at or above
+The invariant that pays for the single width of D-78: limbs at or above
 `used` are zero, in every value the crate holds. The loops run over
 `used`, so a 2048-bit key costs a 2048-bit multiplication and a
 4096-bit stack frame.
@@ -686,7 +686,7 @@ impl PublicKey {
 }
 ```
 
-`new` takes the shape rules of D-76 that are the primitive's own: the
+`new` takes the shape rules of D-79 that are the primitive's own: the
 modulus odd with its top bit set and no wider than `MAX_LIMBS`, the
 exponent odd and at least three. It does not take the lower bound on the
 size. That rule belongs to whoever judges a certificate, and putting it
@@ -707,10 +707,10 @@ from MGF1 over the chosen hash, the leftmost bits checked against that
 width, the `0x01` separator, the trailer `0xBC`, and `H'` recomputed over
 eight zero bytes, the message hash, and the recovered salt. The salt is
 as long as the hash output and is not read from the encoding, because the
-three schemes this client offers fix it (D-78).
+three schemes this client offers fix it (D-81).
 
 Signing exists behind `test-signing` and is one call into `pow` with a
-wide exponent. No key is generated (D-80).
+wide exponent. No key is generated (D-83).
 
 ### 11.15.4 What changes above the primitive
 
@@ -725,12 +725,12 @@ gains a variant holding the modulus and the exponent as borrowed slices,
 parsed from the inner `RSAPublicKey` of RFC 3279 section 2.3.1; the DER
 reader needs nothing new for it, since `read_integer` already strips the
 leading zero of a positive integer and refuses a negative one.
-`check_usable` applies the size bound of D-76, which is what makes an
+`check_usable` applies the size bound of D-79, which is what makes an
 out-of-range anchor a refusal rather than a path that reaches nothing.
 
 The builder behind `test-certificates` is the part that is easy to
 underestimate. It gains RSA `TestKey` variants over the fixed pairs of
-D-80, and two constants stop fitting: `MAX_CERTIFICATE` is 1024 where a
+D-83, and two constants stop fitting: `MAX_CERTIFICATE` is 1024 where a
 4096-bit leaf under a 4096-bit issuer is about 1450 bytes, and
 `TestKey::public_key` returns a 97-byte array where an RSA key body is up
 to 526.
@@ -746,7 +746,7 @@ handshake messages to save the bytes, and is not worth it.
 
 Six code points join `signature_algorithms` in the `ClientHello`, and
 `take_certificate_verify` gains the pairs it accepts and, more
-importantly, the three it refuses (D-79). The 160-byte buffer that holds
+importantly, the three it refuses (D-82). The 160-byte buffer that holds
 the signed content does not change: the transcript hash is the cipher
 suite's, which is SHA-256 or SHA-384 and never SHA-512, however the
 signature is hashed.
@@ -763,7 +763,7 @@ tests against it over moduli of all four widths, in the form
 For PKCS #1: the negative tests are the point. A padding shorter than
 eight bytes of `0xff`, a `DigestInfo` moved inside the block, bytes
 appended after the digest, a missing `0x00` separator, and a forgery
-against a small exponent. These are what the construction of D-77 buys,
+against a small exponent. These are what the construction of D-80 buys,
 and a test suite that only checks that valid signatures verify would not
 notice if the code stopped buying it.
 

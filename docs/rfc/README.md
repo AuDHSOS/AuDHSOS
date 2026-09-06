@@ -389,7 +389,7 @@ six steps and appendix A.2.4 carries the ASN.1.
 What this document holds is the source for a decision. RFC 8017's note 2
 after section 9.2 says version 1.5 defined `T` as the BER encoding rather
 than the DER encoding, and offers a BER-decoding verifier to anyone who
-wants compatibility with it. D-77 declines that offer, and declining it
+wants compatibility with it. D-80 declines that offer, and declining it
 means refusing signatures another specification calls valid — which is a
 claim about a document, and a claim about a document is checked against
 the document.

@@ -1548,7 +1548,7 @@ follows the catalog rather than the layer, as 6.6.54 records.
   65537, and for an exponent with its top and bottom bits set; a round
   trip that signs with a wide exponent and verifies with a small one over
   the key of RFC 8448, section 2.
-- The key: the bounds of D-76 at each edge — an exponent of one, of two,
+- The key: the bounds of D-79 at each edge — an exponent of one, of two,
   of three; a modulus one bit below the lower bound and one bit above the
   upper — refused where the rule says and accepted where it does not.
 - PKCS #1 v1.5, the positive direction: a signature this crate made
@@ -1556,7 +1556,7 @@ follows the catalog rather than the layer, as 6.6.54 records.
   builds matches the `DigestInfo` prefixes of RFC 8017, section 9.2
   note 1 byte for byte.
 - PKCS #1 v1.5, the negative direction, which is what the construction of
-  D-77 is for: padding shorter than eight bytes of `0xff`; a
+  D-80 is for: padding shorter than eight bytes of `0xff`; a
   `DigestInfo` moved inside the block with the padding adjusted to fit; a
   digest followed by trailing bytes; a missing `0x00` separator; a first
   byte that is not `0x00`; a second that is not `0x01`; a `DigestInfo`
@@ -1571,7 +1571,7 @@ follows the catalog rather than the layer, as 6.6.54 records.
 - The one vector from outside: the `CertificateVerify` of the simple
   1-RTT handshake of RFC 8448 verifies as `rsa_pss_rsae_sha256` under the
   key that document's section 2 prints. It is 1024 bits and therefore
-  never reaches a chain (D-76); it reaches the primitive.
+  never reaches a chain (D-79); it reaches the primitive.
 - Fuzz target `rsa`: a subject public key and a signature from the same
   input, parsed and verified, must not panic and must not loop. The
   corpus holds a valid signature of each kind and the malformed encodings

@@ -28,7 +28,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - RFC 2313, PKCS #1 version 1.5, joins the reference documents, fetched
   twice and recorded with its checksum. It was listed as not needed, and
   as an implementation reference it still is not: RFC 8017 delegates
-  nothing to it and names it only informatively. It is here because D-77
+  nothing to it and names it only informatively. It is here because D-80
   refuses a `DigestInfo` that is BER but not DER, and that refusal is a
   claim about this document. From the source the claim is sharper than
   from RFC 8017's summary of it. Version 1.5 does not merely permit the
@@ -41,7 +41,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   RFC 8017 section 9.2 note 1 have one source and not two.
 
 - RSA verification is planned rather than deferred: section 11.15 of
-  document 11, decisions D-74 to D-80, catalog section 6.6.55, and steps
+  document 11, decisions D-77 to D-83, catalog section 6.6.55, and steps
   R1 to R6 in the roadmap and in the order of work. Nothing is
   implemented.
 
@@ -51,11 +51,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   which is what section 11.2 said, but its `Params` carries the modulus
   and the conversion constants as associated constants, and a certificate
   brings its modulus at run time. The arithmetic therefore moves to a
-  crate of its own (D-74), keeping the three free functions that already
+  crate of its own (D-77), keeping the three free functions that already
   take a modulus as an argument. And the RSA key printed in RFC 8448
   section 2 is 1024 bits, not 2048 as this changelog's previous entry and
   the reference README first said: it is below what a certificate may
-  carry (D-76), which makes it a vector for the primitive and never a
+  carry (D-79), which makes it a vector for the primitive and never a
   chain. Section 11.2, section 11.11, and the reference README are
   corrected accordingly.
 
