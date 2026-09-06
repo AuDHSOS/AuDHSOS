@@ -519,8 +519,56 @@ pub(crate) const CRATES: &[Crate] = &[
 /// Crates every workspace crate may use as a dev-dependency.
 pub(crate) const DEV_DEPENDENCIES: &[&str] = &["test-support"];
 
-/// Crates whose tests run under Miri.
-pub(crate) const MIRI_CRATES: &[&str] = &["audhsos-sync", "fuzz-support"];
+/// A crate whose host-executable `unsafe` runs under Miri, and the tests
+/// that reach that `unsafe`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MiriTarget {
+    /// The crate.
+    pub(crate) name: &'static str,
+    /// What libtest selects by: a test whose name begins with one of these
+    /// runs. An empty list runs every test of the crate.
+    pub(crate) filters: &'static [&'static str],
+}
+
+/// What Miri runs. Miri interprets MIR instead of executing machine code,
+/// so it costs one to two orders of magnitude more than the same test on
+/// the host, and it is worth that only where it checks something no other
+/// step can: the aliasing and the provenance of the `unsafe` an adapter
+/// crate can execute on the host. Logic that happens to live in the same
+/// crate is covered by `test --host` and by `coverage`, and running it
+/// under Miri buys nothing.
+///
+/// A crate with no filters runs whole, which is right where every test
+/// reaches the `unsafe`: `audhsos-sync` is two `unsafe` sites and the cell
+/// around them. `fuzz-support` is the other case — its `unsafe` is the
+/// counter registry of `counters.rs` and the sanitizer callbacks of
+/// `sancov.rs`, and the mutators, the corpus, the pool, the dictionary,
+/// the options, and the generator around them are safe Rust. The filters
+/// name the module that tests each of those two files, and nothing else.
+///
+/// The line is where the `unsafe` is written, not where it is reached.
+/// `tests::mutate` reaches the same global through `sancov::with_trace`,
+/// which `tests::sancov` tests directly, and it does so over forty
+/// thousand mutation rounds: interpreting those checks one dereference no
+/// better than the one round that `tests::sancov` already interprets, and
+/// it cost more than the whole rest of the step. The tests of
+/// `tests::engine` that touch the registry are `#[cfg_attr(miri, ignore)]`
+/// already, because Miri runs without a file system.
+///
+/// [`crate::unsafe_budget::miri_gaps`] holds the list to that promise: a
+/// product file with `unsafe` whose module no filter names is a violation
+/// of the `miri` step, so `unsafe` cannot appear in a new module and
+/// quietly fall out of Miri's reach.
+pub(crate) const MIRI_TARGETS: &[MiriTarget] = &[
+    MiriTarget {
+        name: "audhsos-sync",
+        filters: &[],
+    },
+    MiriTarget {
+        name: "fuzz-support",
+        filters: &["tests::counters::", "tests::sancov::"],
+    },
+];
 
 /// The two header lines every source file starts with (comment syntax
 /// added per file type).

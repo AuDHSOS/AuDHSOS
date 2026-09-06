@@ -63,6 +63,25 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- Miri runs the tests of the modules that hold `unsafe`, not every test of
+  the crates around them (D-76). `MIRI_TARGETS` carries a test-name filter
+  per crate: `audhsos-sync` runs whole, being two `unsafe` sites and the
+  cell around them, and `fuzz-support` runs `tests::counters` and
+  `tests::sancov`, which test its two files that hold `unsafe`. Everything
+  else in that crate — the mutators, the corpus, the pool, the dictionary,
+  the options, the generator — is safe Rust that `test --host` and the
+  coverage gate already cover, and interpreting it bought nothing.
+
+  What it cost was the check. `tests::mutate` reached the same global as
+  `tests::sancov` through `sancov::with_trace`, over sixty thousand
+  mutation rounds, and that one module was nearly the whole of the step:
+  `miri` went from 243 seconds to 4, and the full check from just over six
+  minutes to two. The filters are held to the code by
+  `unsafe_budget::miri_gaps`, which reads every product file of a filtered
+  crate and fails the step when one holds `unsafe` and no filter names its
+  module, naming the filter that would close it — so `unsafe` cannot
+  appear in a new module and quietly leave Miri's reach.
+
 - A kernel stack is eight pages, not four, and `Pool::release` no longer
   hands the object back (D-73). Both come out of one measurement, taken
   when the system call tests first made `process_create` from ring three

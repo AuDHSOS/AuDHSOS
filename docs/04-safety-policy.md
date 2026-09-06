@@ -54,7 +54,7 @@ new entry in the decision register.
 | R6 | The kernel never dereferences a user-supplied address. User data is reached only through IPC buffer frames that the kernel owns a reference to. | design of the system call interface; reviewed per system call |
 | R7 | No panics on user-controllable paths. `unwrap`, `expect`, `panic!`, `todo!`, `unimplemented!`, `unreachable!`, slice indexing, implicit arithmetic overflow, and `as` casts are denied by lint; each justified exception uses `#[expect(lint, reason = "...")]`. | `clippy::unwrap_used`, `clippy::expect_used`, `clippy::panic`, `clippy::todo`, `clippy::unimplemented`, `clippy::unreachable`, `clippy::indexing_slicing`, `clippy::arithmetic_side_effects`, `clippy::as_conversions` at `deny` |
 | R8 | No external code. `Cargo.lock` lists only workspace members. No `[dependencies]`, `[dev-dependencies]`, or `[build-dependencies]` entry points outside the workspace. No external Cargo subcommand is used by the xtask or CI. | `cargo xtask check-deps` parses `Cargo.lock` and every manifest |
-| R9 | Unsafe code that can run on the host (`audhsos-sync`, the `GlobalAlloc` adapter, `fuzz-support`) runs under Miri in CI. | `cargo miri test` job |
+| R9 | Unsafe code that can run on the host (`audhsos-sync`, the `GlobalAlloc` adapter, `fuzz-support`) runs under Miri in CI: the tests of the modules that hold that `unsafe`, and not the safe logic around them (D-76). | `cargo xtask miri`, whose list of modules is checked against the files that hold `unsafe` |
 | R10 | A change touching an adapter crate needs a review with the checklist in 4.9. | pull request template |
 
 ## 4.5 Inline assembly inventory
@@ -115,7 +115,7 @@ fuzz entry point is project code.
 | Layering, forbids, assembly files | `cargo xtask check-layering` | every push |
 | External code | `cargo xtask check-deps` | every push |
 | Unsafe budget | `cargo xtask unsafe-budget` | every push |
-| Miri | `cargo miri test` on the host-executable adapter crates | every push |
+| Miri | `cargo xtask miri` over the tests of the `unsafe` modules of the host-executable adapter crates | every push |
 | Host tests, property tests, model-based tests | `cargo xtask test --host` | every push |
 | Coverage | `cargo xtask coverage` using `-C instrument-coverage` and the `llvm-profdata` and `llvm-cov` binaries of the toolchain | every push |
 | Loader, kernel, and end-to-end tests | `cargo xtask test --qemu`, `cargo xtask test --e2e` | every push |

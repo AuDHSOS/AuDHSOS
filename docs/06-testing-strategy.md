@@ -15,7 +15,7 @@ is project code on top of the Rust toolchain.
 | L4 Fuzz | parsers and decoders | host | `-Zsanitizer=fuzzer` from the toolchain with `fuzz-support` | nightly schedule; regressions on every push |
 | L5 Loader and kernel integration | loader, HAL adapter, and kernel core in QEMU | QEMU | custom test framework, serial protocol, exit device | every push |
 | L6 End-to-end | the full system with userland test programs | QEMU | same runner | every push |
-| L7 Miri | host-executable `unsafe` in adapter crates | host | `cargo miri test` | every push |
+| L7 Miri | host-executable `unsafe` in adapter crates: the tests of the modules that hold it | host | `cargo xtask miri` | every push |
 | L8 Static | lints, layering, external code, unsafe budget, documentation | host | `cargo xtask check` | every push |
 
 Locally every one of these levels is started through the wrapper scripts of
@@ -516,6 +516,10 @@ done until every applicable item has a test. Items are added, never removed.
 - Unsafe counter: `unsafe` inside comments and strings is not counted;
   `unsafe fn`, `unsafe impl`, `unsafe {` and `asm!` are counted; a budget
   exactly met passes, one above fails.
+- Miri coverage: a module holding `unsafe` that a filter of `MIRI_TARGETS`
+  names is no gap; one that no filter names is reported, and the report
+  names both the file and the filter that would close it; a crate that runs
+  whole has no gaps (D-76).
 - `cargo tree` parser: nested depth prefixes; a crate appearing twice;
   workspace members versus the toolchain's own crates.
 - `check-deps`: a lock file with a non-workspace package fails; a manifest
@@ -1420,7 +1424,8 @@ done until every applicable item has a test. Items are added, never removed.
 
 - `fuzz-support`: the entry glue passes the input slice through
   unchanged, including the empty slice; the regression list replays every
-  stored corpus file; Miri covers the glue.
+  stored corpus file; Miri covers the counter registry and the sanitizer
+  callbacks, which is where the crate's `unsafe` is (D-76).
 - Symbol table: an address inside a function, at its first byte, at its
   last byte, and one past it; an address in no function; a symbol that is
   not a function; the narrowest of two functions that enclose each other;

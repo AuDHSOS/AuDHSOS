@@ -8,7 +8,7 @@ use std::path::Path;
 
 use crate::error::Error;
 use crate::fs;
-use crate::policy::{CRATES, Kind};
+use crate::policy::{CRATES, Kind, MIRI_TARGETS, MiriTarget, find};
 
 /// Counts of the sites in a piece of source code.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -259,6 +259,64 @@ pub(crate) fn check(root: &Path) -> Result<Vec<CrateReport>, Error> {
         });
     }
     Ok(reports)
+}
+
+/// Files of a Miri target that hold `unsafe` and that no filter of
+/// [`MIRI_TARGETS`] names.
+///
+/// The filters exist so that Miri interprets the tests of the `unsafe`
+/// and not the whole crate around it, which makes them a promise about
+/// where the `unsafe` is. This is what holds them to it: a product file
+/// with an `unsafe` site is expected to be tested by `src/tests/<stem>.rs`
+/// and that module is expected to be named in the filters. A crate with no
+/// filters runs whole and needs no entry.
+///
+/// # Errors
+///
+/// The errors of reading the crate's sources; [`Error::Usage`] for a
+/// target that names no crate of the policy.
+pub(crate) fn miri_gaps(root: &Path) -> Result<Vec<String>, Error> {
+    let mut violations = Vec::new();
+    for target in MIRI_TARGETS {
+        if target.filters.is_empty() {
+            continue;
+        }
+        let krate = find(target.name).ok_or_else(|| {
+            Error::Usage(format!("`{}` is not a crate of the policy", target.name))
+        })?;
+        for path in fs::walk_files(&root.join(krate.path).join("src"))? {
+            if fs::extension(&path) != "rs" {
+                continue;
+            }
+            if path.components().any(|part| part.as_os_str() == "tests") {
+                continue;
+            }
+            if count(&fs::read(&path)?).unsafe_keywords == 0 {
+                continue;
+            }
+            let module = fs::file_name(&path).trim_end_matches(".rs");
+            violations.extend(filter_gap(target, module));
+        }
+    }
+    Ok(violations)
+}
+
+/// What is wrong when `module` of `target` holds `unsafe`: the filter that
+/// would run its tests, and that the target does not carry. `None` when
+/// the target names it, and `None` for a target that runs whole.
+pub(crate) fn filter_gap(target: &MiriTarget, module: &str) -> Option<String> {
+    if target.filters.is_empty() {
+        return None;
+    }
+    let wanted = format!("tests::{module}::");
+    if target.filters.contains(&wanted.as_str()) {
+        return None;
+    }
+    Some(format!(
+        "`{}` has unsafe in {module}.rs, which no Miri filter names; \
+         add `{wanted}` to MIRI_TARGETS",
+        target.name
+    ))
 }
 
 /// The budget violations of one crate.
