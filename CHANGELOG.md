@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- A capability that does not fit the startup message refuses the start of
+  the child rather than disappearing. The root task staged eight pairs while
+  its own constant said two hundred and forty, so a memory server given more
+  than a handful of regions would have been started with most of them
+  silently missing; this machine has one usable region, so nothing showed
+  it. The array is now as long as the message, which is half its words in
+  pairs.
+
 - The badge of a fault handler travels with it. `process_set_fault_handler`
   kept the endpoint and dropped the badge of the capability that named it,
   so every fault arrived under badge zero and a root task serving five

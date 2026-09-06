@@ -405,13 +405,13 @@ fn install_all(
     unsafe {
         mapping.zero();
     }
-    let mut given: [(Role, Handle); 8] = [(Role::OwnProcess, Handle::MAX); 8];
+    let mut given: [(Role, Handle); MAX_GIVEN] = [(Role::OwnProcess, Handle::MAX); MAX_GIVEN];
     let mut count = 0usize;
 
     let own = gate.process_install_handle(child, child.handle(), ObjectRights::PROCESS)?;
-    push(&mut given, &mut count, Role::OwnProcess, own);
+    push(&mut given, &mut count, Role::OwnProcess, own)?;
     let served = gate.process_install_handle(child, endpoint.handle(), ObjectRights::RECV)?;
-    push(&mut given, &mut count, Role::OwnEndpoint, served);
+    push(&mut given, &mut count, Role::OwnEndpoint, served)?;
 
     // What a child holds of a server is a capability with the child's badge
     // on it: the badge is the only thing about a sender a server can trust,
@@ -421,14 +421,14 @@ fn install_all(
     {
         let marked = gate.endpoint_badge(names, badge)?;
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
-        push(&mut given, &mut count, Role::NameServer, handle);
+        push(&mut given, &mut count, Role::NameServer, handle)?;
     }
     if program.memory
         && let Some(memory) = world.memory
     {
         let marked = gate.endpoint_badge(memory, badge)?;
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
-        push(&mut given, &mut count, Role::MemoryServer, handle);
+        push(&mut given, &mut count, Role::MemoryServer, handle)?;
     }
     // Everyone but the console driver gets the console as its log. The
     // driver is the console: a line it sent itself would be a call on the
@@ -439,14 +439,14 @@ fn install_all(
     if program.reports {
         let marked = gate.endpoint_badge(world.faults, badge)?;
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
-        push(&mut given, &mut count, Role::Parent, handle);
+        push(&mut given, &mut count, Role::Parent, handle)?;
     }
     if let Some(console) = world.console
         && program.grant != Grant::Serial
     {
         let marked = gate.endpoint_badge(console, badge)?;
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
-        push(&mut given, &mut count, Role::Log, handle);
+        push(&mut given, &mut count, Role::Log, handle)?;
     }
     match program.grant {
         Grant::None => {}
@@ -454,15 +454,15 @@ fn install_all(
             for region in startup.ram.iter().skip(1).take(MAX_RAM) {
                 let handle =
                     gate.process_install_handle(child, region.handle(), ObjectRights::MEMORY)?;
-                push(&mut given, &mut count, Role::Ram, handle);
+                push(&mut given, &mut count, Role::Ram, handle)?;
             }
         }
         Grant::Serial => {
             let (ports, line) = serial(gate, world)?;
             let handle = gate.process_install_handle(child, ports.handle(), ObjectRights::PORTS)?;
-            push(&mut given, &mut count, Role::IoPorts, handle);
+            push(&mut given, &mut count, Role::IoPorts, handle)?;
             let handle = gate.process_install_handle(child, line.handle(), ObjectRights::MANAGE)?;
-            push(&mut given, &mut count, Role::Interrupt, handle);
+            push(&mut given, &mut count, Role::Interrupt, handle)?;
         }
     }
 
@@ -482,15 +482,29 @@ fn install_all(
     mapping.unmap(gate, world.own)
 }
 
-/// How many memory objects fit into the startup message beside the rest.
-const MAX_RAM: usize = 240;
+/// How many pairs the startup message holds: it is a run of role and
+/// handle over the message area, so half the words of one.
+const MAX_GIVEN: usize = audhsos_abi::layout::MAX_MESSAGE_WORDS / 2;
+
+/// How many memory objects fit beside the rest. Six roles is the most any
+/// program of the table is given besides its memory.
+const MAX_RAM: usize = MAX_GIVEN - 6;
 
 /// Records one pair of the startup message.
-fn push(given: &mut [(Role, Handle); 8], count: &mut usize, role: Role, handle: Handle) {
-    if let Some(slot) = given.get_mut(*count) {
-        *slot = (role, handle);
-        *count = count.wrapping_add(1);
-    }
+///
+/// A pair that does not fit is refused rather than dropped: a child that
+/// silently received fewer capabilities than its parent meant to give it
+/// would fail somewhere else, for a reason nothing names.
+fn push(
+    given: &mut [(Role, Handle); MAX_GIVEN],
+    count: &mut usize,
+    role: Role,
+    handle: Handle,
+) -> Result<(), Error> {
+    let slot = given.get_mut(*count).ok_or(Error::BufferTooSmall)?;
+    *slot = (role, handle);
+    *count = count.wrapping_add(1);
+    Ok(())
 }
 
 /// The rights each kind of handle goes out with.
