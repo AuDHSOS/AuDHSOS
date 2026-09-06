@@ -6,7 +6,9 @@
 //! Invariant: the port range belongs to the kernel while the debug console
 //! is enabled; no userland driver may claim it in the same build.
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use driver_uart16550::{Register, Registers, Uart16550};
+
 use kernel_hal_api::console::DebugConsole;
 
 /// Base port of the first serial controller.
@@ -73,8 +75,34 @@ impl SerialConsole {
     }
 }
 
+/// Whether the kernel still owns the serial controller.
+///
+/// It owns it from the moment the memory bring-up runs until somebody else
+/// reaches one of its ports through an `IoPortRange` capability — which is
+/// the console driver of the userland taking it over. From then on the
+/// kernel writes nothing there: two writers on one line make one stream of
+/// interleaved halves and no reader can take them apart.
+///
+/// The panic handler is the exception, and it is not one in practice: after
+/// a kernel panic nothing else writes.
+static OURS: AtomicBool = AtomicBool::new(true);
+
+/// Gives the controller up, because somebody else has begun to drive it.
+pub fn give_up() {
+    OURS.store(false, Ordering::SeqCst);
+}
+
+/// `true` while the kernel is still the one writing on the line.
+#[must_use]
+pub fn is_ours() -> bool {
+    OURS.load(Ordering::SeqCst)
+}
+
 impl DebugConsole for SerialConsole {
     fn write_bytes(&mut self, bytes: &[u8]) {
+        if !is_ours() {
+            return;
+        }
         for byte in bytes {
             if *byte == b'\n' {
                 let _ = self.uart.write_byte(b'\r');

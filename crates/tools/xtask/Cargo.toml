@@ -14,6 +14,7 @@ rust-version.workspace = true
 audhsos-abi.workspace = true
 audhsos-symbols.workspace = true
 kernel-test-harness.workspace = true
+user-loader.workspace = true
 
 [lints]
 workspace = true

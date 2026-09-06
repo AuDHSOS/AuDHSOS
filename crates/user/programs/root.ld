@@ -9,26 +9,26 @@ ROOT_TASK_BASE = 0x10000000;
 SECTIONS {
     . = ROOT_TASK_BASE;
 
-    /* The entry point is the first byte of the image: the kernel maps a
-       flat binary and jumps at its base, so nothing may come before it. */
     .text : {
         KEEP(*(.text.entry))
         *(.text .text.*)
     }
 
+    /* Every section on a page of its own: a loader maps pages, and two
+       segments that share one cannot both have the permissions they ask
+       for. */
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
     .rodata : {
         *(.rodata .rodata.*)
     }
 
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
     .data : {
         *(.data .data.*)
         *(.got .got.*)
     }
 
-    /* `.bss` lies inside the file. A flat binary carries what it says and
-       nothing more: the kernel copies the bytes of the image into frames
-       and zeroes nothing behind them, so the zeros have to be in the
-       image. */
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
     .bss : {
         *(.bss .bss.*)
         *(COMMON)

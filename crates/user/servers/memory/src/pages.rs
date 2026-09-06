@@ -11,22 +11,26 @@
 //! [6.6.23](../../../../docs/06-testing-strategy.md#6623-memory-server-logic-server-memory-host-tested-with-a-recording-double-for-map-zero-and-unmap)
 //! asks for.
 //!
-//! Map and zero are apart, and the object is mapped whole rather than in
-//! pieces, so that one zeroing pass is one recorded call whose range is the
-//! range of the object. A test can then say what the catalog says: exactly
-//! one pass, over exactly these bytes, before the handle went out.
+//! Map and zero are apart, so that a test can see the fill happen and say
+//! over which bytes. An object is mapped and zeroed in windows of
+//! [`WINDOW`](crate::store::WINDOW) bytes and not whole: a region of memory
+//! this machine hands the server is hundreds of mebibytes, and an address
+//! space region that wide would need more page tables than the kernel
+//! reserve holds. The zeroing of an object is therefore a run of calls
+//! whose ranges follow one another and cover it exactly once, which for
+//! every object smaller than the window is one call.
 
 use audhsos_abi::{Error, Handle};
 
 /// The operations the policy makes on memory.
 pub trait Pages {
-    /// Maps `object`, whose length is `len`, into the server's own address
-    /// space, and answers with the address it went to.
+    /// Maps `len` bytes of `object`, from `offset`, into the server's own
+    /// address space, and answers with the address they went to.
     ///
     /// # Errors
     ///
     /// Whatever the kernel answered.
-    fn map(&mut self, object: Handle, len: u64) -> Result<u64, Error>;
+    fn map(&mut self, object: Handle, offset: u64, len: u64) -> Result<u64, Error>;
 
     /// Overwrites `len` bytes at `address` with zeros.
     ///

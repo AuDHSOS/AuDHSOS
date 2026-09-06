@@ -161,6 +161,27 @@ pub fn create<
         *created = created.starting_at(entry, stack, ipc_address);
     });
 
+    // The frame the first switch into the thread returns through. Without
+    // it the switch would load a stack pointer of zero and the machine
+    // would double fault on the first push.
+    let prepared = machine
+        .environment
+        .prepare_thread(stack_area.top, entry, stack, ipc_address);
+    let context = match prepared {
+        Ok(context) => context,
+        Err(error) => {
+            unmap_buffer(machine, target, ipc_address);
+            forget_thread(machine, target, id);
+            give_buffer_back(machine, supplied, ipc_buffer);
+            machine.environment.release_kernel_stack(stack_area.slot);
+            refund_object(machine, target);
+            return Err(error);
+        }
+    };
+    machine.objects.with_thread(id, |created| {
+        created.context = context;
+    });
+
     match install(machine, process, id) {
         Ok(handle) => Ok(Reply::value(handle)),
         Err(error) => {

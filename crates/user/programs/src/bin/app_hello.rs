@@ -26,7 +26,7 @@ use server_name as _;
 use user_loader as _;
 use user_proto as _;
 
-use user_programs::client::{lookup, write_line};
+use user_programs::client::{lookup, read_bytes, write_line};
 use user_rt::Startup;
 use user_sys_x86_64::{self as sys, Gate};
 
@@ -38,25 +38,86 @@ const CONSOLE: &[u8] = b"console";
 /// What this program has to say.
 const GREETING: &[u8] = b"hello from userland\n";
 
+/// What it says when it is ready to be typed at, which is what the
+/// end-to-end run waits for before it sends anything: bytes sent earlier
+/// would reach a controller whose receive path is not up yet.
+const READY: &[u8] = b"[hello] ready\n";
+
+/// How many bytes it reads back before it gives up waiting for a line.
+const INPUT: usize = 64;
+
 /// Says it, and ends.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "the shape of `main` is what `program!` calls; the gate and the startup message belong to the program"
 )]
 fn main(mut gate: Gate, startup: Startup) -> ! {
+    // The log is the console the root task gave this program, which is the
+    // one place it can say anything before it has looked one up itself.
+    if let Some(log) = startup.log {
+        let _running = write_line(&mut gate, log, b"[hello] running\n");
+    }
     let Some(names) = startup.name_server else {
+        if let Some(log) = startup.log {
+            let _said = write_line(&mut gate, log, b"[hello] no name server\n");
+        }
         gate.thread_exit()
     };
     match lookup(&mut gate, names, CONSOLE) {
         Ok(console) => {
             let _said = write_line(&mut gate, console, GREETING);
+            echo(&mut gate, console);
         }
         Err(error) => {
-            // No console to report on; the kernel still owns the port at
-            // this point only if the driver never started, and this is what
-            // says so.
-            let _logged = sys::write_line(&mut gate, startup.log, error.message().as_bytes());
+            if let Some(log) = startup.log {
+                let mut line = user_rt::Line::<96>::new();
+                line.put(b"[hello] no console: ");
+                line.put(error.message().as_bytes());
+                line.put(b"\n");
+                let _said = write_line(&mut gate, log, line.as_bytes());
+            }
         }
     }
     gate.thread_exit()
+}
+
+/// Says it is ready, waits for a line, and says it back.
+///
+/// The wait is a yield in a loop and not a sleep: this system has no timer
+/// a program can ask for. It costs nothing that matters, because the driver
+/// runs above this program and takes the processor the moment the interrupt
+/// wakes it.
+fn echo(gate: &mut Gate, console: user_rt::EndpointHandle) {
+    let _ready = write_line(gate, console, READY);
+    let mut line = [0u8; INPUT];
+    let mut have = 0usize;
+    loop {
+        let mut chunk = [0u8; INPUT];
+        let taken =
+            read_bytes(gate, console, u64::try_from(INPUT).unwrap_or(0), &mut chunk).unwrap_or(0);
+        for byte in chunk.get(..taken).unwrap_or(&[]) {
+            if let Some(slot) = line.get_mut(have) {
+                *slot = *byte;
+                have = have.wrapping_add(1);
+            }
+            if *byte == b'\n' || have >= INPUT {
+                say_back(gate, console, line.get(..have).unwrap_or(&[]));
+                return;
+            }
+        }
+        if taken == 0 {
+            let _yielded = gate.thread_yield();
+        }
+    }
+}
+
+/// Says back what was typed, so that whoever typed it can see it arrived.
+fn say_back(gate: &mut Gate, console: user_rt::EndpointHandle, line: &[u8]) {
+    let mut said = user_rt::Line::<96>::new();
+    said.put(b"[hello] echo: ");
+    said.put(line);
+    if line.last() != Some(&b'\n') {
+        said.put(b"\n");
+    }
+    let _echoed = write_line(gate, console, said.as_bytes());
 }

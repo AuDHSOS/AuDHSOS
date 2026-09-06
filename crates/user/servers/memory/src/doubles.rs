@@ -24,10 +24,12 @@ use crate::pages::Pages;
 /// One call the policy made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Call {
-    /// An object was mapped into the server's address space.
+    /// A window of an object was mapped into the server's address space.
     Map {
         /// The object.
         object: Handle,
+        /// Where in the object the window begins.
+        offset: u64,
         /// How many bytes.
         len: u64,
         /// Where it went.
@@ -142,11 +144,12 @@ impl RecordingPages {
 }
 
 impl Pages for RecordingPages {
-    fn map(&mut self, object: Handle, len: u64) -> Result<u64, Error> {
+    fn map(&mut self, object: Handle, offset: u64, len: u64) -> Result<u64, Error> {
         let address = self.next_address;
         self.next_address = self.next_address.saturating_add(len).next_multiple_of(4096);
         self.record(Call::Map {
             object,
+            offset,
             len,
             address,
         })?;

@@ -107,7 +107,7 @@ fn an_interrupt_that_has_nowhere_to_go_gives_its_quota_back() {
 }
 
 #[test]
-fn a_binding_names_one_bit_and_an_acknowledgement_unmasks_the_line() {
+fn a_binding_arms_the_line_names_one_bit_and_an_acknowledgement_unmasks_it_again() {
     let mut fixture = Fixture::new();
     let system = control(&mut fixture);
     let interrupt = value_of(
@@ -132,6 +132,14 @@ fn a_binding_names_one_bit_and_an_acknowledgement_unmasks_the_line() {
     let bound = fixture.objects.interrupts.get(id).unwrap().notification;
     assert!(bound.is_some());
     assert_eq!(bound.map(|(_, bit)| bit), Some(3));
+    // The binding armed the line: a created interrupt is routed masked,
+    // because until a notification names it the line would assert into
+    // nothing.
+    assert_eq!(
+        fixture.environment.count(&Call::Unmask(0)),
+        1,
+        "the binding did not arm the line"
+    );
 
     // The interrupt arrives, the line is masked, and the acknowledgement
     // lets the next one through.
@@ -139,7 +147,7 @@ fn a_binding_names_one_bit_and_an_acknowledgement_unmasks_the_line() {
     assert!(fixture.objects.interrupts.get(id).unwrap().masked);
     assert!(error_of(&mut fixture, request(Syscall::InterruptAck, &[interrupt])).is_none());
     assert!(!fixture.objects.interrupts.get(id).unwrap().masked);
-    assert_eq!(fixture.environment.count(&Call::Unmask(0)), 1);
+    assert_eq!(fixture.environment.count(&Call::Unmask(0)), 2);
 }
 
 #[test]

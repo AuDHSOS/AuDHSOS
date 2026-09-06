@@ -89,6 +89,14 @@ pub fn interrupt_create<
 
 /// `interrupt_bind`: the interrupt signals one bit of a notification.
 ///
+/// The line is unmasked here, because this is the moment it has somewhere
+/// to go: a line the plan routes but no notification names would assert
+/// into nothing, so [`interrupt_create`] leaves it masked and the binding
+/// arms it. After that the cycle of
+/// [2.7](../../../../docs/02-architecture.md#27-interrupts-and-devices)
+/// runs: the line asserts, the kernel masks it and signals, the driver
+/// services the device and acknowledges, which unmasks it again.
+///
 /// # Errors
 ///
 /// [`Error::InvalidHandle`] for either handle; [`Error::AccessDenied`] when
@@ -117,6 +125,10 @@ pub fn interrupt_bind<
             .resolve::<Notification>(process, second, Rights::BIND)?;
     let bit = u8::try_from(request.argument(2)).map_err(|_| Error::InvalidArgument)?;
     interrupt::bind(machine.objects, id, notification, bit)?;
+    let line = machine.objects.interrupts.get(id).map(|held| held.line);
+    if let Ok(line) = line {
+        machine.environment.unmask_interrupt(line);
+    }
     Ok(Reply::DONE)
 }
 

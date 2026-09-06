@@ -345,16 +345,33 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     }
 }
 
-/// Maps `object`, fills it with zeros, and takes it out again.
+/// How many bytes of an object are mapped at once while it is being
+/// zeroed.
 ///
-/// One pass over the whole object, so that what a recording double sees is
-/// one zeroing of exactly the range the object covers.
+/// A region of memory this machine hands the server is hundreds of
+/// mebibytes; an address space region that wide would need more page tables
+/// than the kernel reserve holds, and the window is reused, so the tables
+/// are built once and then stand.
+pub const WINDOW: u64 = 64 * PAGE_SIZE;
+
+/// Fills `object` with zeros, in windows.
+///
+/// The windows follow one another and cover the object exactly once, so
+/// what a recording double sees is the object's range and nothing else —
+/// in one call for every object smaller than [`WINDOW`], and in as many as
+/// it takes for one that is larger.
 fn wipe(pages: &mut impl Pages, object: Object) -> Result<(), Error> {
-    let address = pages.map(object.handle, object.len)?;
-    let zeroed = pages.zero(address, object.len);
-    // The object comes out of the address space whether the fill worked or
-    // not: a window left behind would be memory this server maps and does
-    // not know it maps.
-    let unmapped = pages.unmap(address, object.len);
-    zeroed.and(unmapped)
+    let mut done = 0u64;
+    while done < object.len {
+        let chunk = object.len.wrapping_sub(done).min(WINDOW);
+        let address = pages.map(object.handle, done, chunk)?;
+        let zeroed = pages.zero(address, chunk);
+        // The window comes out of the address space whether the fill worked
+        // or not: one left behind would be memory this server maps and does
+        // not know it maps, and the next window would meet it.
+        let unmapped = pages.unmap(address, chunk);
+        zeroed.and(unmapped)?;
+        done = done.wrapping_add(chunk);
+    }
+    Ok(())
 }

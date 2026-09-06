@@ -136,6 +136,14 @@ const COM1_PORTS: u64 = 8;
 /// The interrupt line the controller raises on.
 const COM1_LINE: u64 = 4;
 
+/// The badge the root task's own messages to a server carry.
+///
+/// A server tells its clients apart by the badge of the capability the
+/// message came through, and a capability without one names nobody: the
+/// memory server refuses such a request outright, because memory it handed
+/// to nobody is memory it could never take back.
+const INIT_BADGE: u64 = u64::MAX;
+
 /// Where the boot image is mapped while the archive is read out of it.
 const IMAGE: u64 = 0x0000_2000_0000_0000;
 
@@ -157,8 +165,9 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         system: startup.system_control,
         names: None,
         memory: None,
+        memory_for_self: None,
         console: None,
-        log: None,
+        console_for_self: None,
         next_badge: 1,
     };
 
@@ -182,10 +191,17 @@ struct World {
     own: ProcessHandle,
     faults: EndpointHandle,
     system: Option<SystemControlHandle>,
+    /// The endpoint of the name server, as the root task holds it.
     names: Option<EndpointHandle>,
+    /// The endpoint of the memory server.
     memory: Option<EndpointHandle>,
+    /// The same, badged for the root task's own requests.
+    memory_for_self: Option<EndpointHandle>,
+    /// The endpoint of the console driver.
     console: Option<EndpointHandle>,
-    log: Option<EndpointHandle>,
+    /// The same, badged for the root task's own lines.
+    console_for_self: Option<EndpointHandle>,
+    /// What the next child reports its faults under.
     next_badge: u64,
 }
 
@@ -252,14 +268,19 @@ fn start(
     program: &Program,
     elf: &[u8],
     reserve: &mut Option<MemoryHandle>,
-) -> Result<(), Error> {
-    let plan = user_loader::plan(elf).map_err(|_| Error::InvalidArgument)?;
-    let child = gate.process_create(world.own, program.handles, program.frames, program.objects)?;
-    let endpoint = gate.endpoint_create()?;
+) -> Result<(), Failure> {
+    let plan = user_loader::plan(elf).map_err(|_| Failure {
+        step: "elf",
+        error: Error::InvalidArgument,
+    })?;
+    let child = gate
+        .process_create(world.own, program.handles, program.frames, program.objects)
+        .map_err(at("process"))?;
+    let endpoint = gate.endpoint_create().map_err(at("endpoint"))?;
 
     for region in plan.regions() {
-        let object = take(gate, world, reserve, region.len, PAGE_SIZE)?;
-        copy_region(gate, world.own, object, &region, elf)?;
+        let object = take(gate, world, reserve, region.len, PAGE_SIZE).map_err(at("region"))?;
+        copy_region(gate, world.own, object, &region, elf).map_err(at("copy"))?;
         let bits = if region.write {
             permissions::WRITE
         } else if region.execute {
@@ -267,12 +288,12 @@ fn start(
         } else {
             permissions::READ
         };
-        map_into(gate, child, object, region.vaddr, region.len, bits)?;
+        map_into(gate, child, object, region.vaddr, region.len, bits).map_err(at("map"))?;
     }
 
     let stack_bytes = STACK_PAGES.wrapping_mul(PAGE_SIZE);
-    let stack = take(gate, world, reserve, stack_bytes, PAGE_SIZE)?;
-    zero(gate, world.own, stack, stack_bytes)?;
+    let stack = take(gate, world, reserve, stack_bytes, PAGE_SIZE).map_err(at("stack"))?;
+    zero(gate, world.own, stack, stack_bytes).map_err(at("stack zero"))?;
     map_into(
         gate,
         child,
@@ -280,29 +301,52 @@ fn start(
         plan.stack_base,
         stack_bytes,
         permissions::WRITE,
-    )?;
+    )
+    .map_err(at("stack map"))?;
 
-    let buffer = take(gate, world, reserve, PAGE_SIZE, PAGE_SIZE)?;
+    let buffer = take(gate, world, reserve, PAGE_SIZE, PAGE_SIZE).map_err(at("buffer"))?;
     let badge = world.badge();
-    install_all(gate, startup, world, program, child, endpoint, buffer)?;
+    install_all(
+        gate, startup, world, program, child, endpoint, badge, buffer,
+    )
+    .map_err(at("handles"))?;
 
-    let handler = badged(gate, world.faults, badge)?;
-    gate.process_set_fault_handler(child, Some(handler))?;
-    let thread = gate.thread_create(
-        child,
-        plan.entry,
-        plan.stack_top,
-        u64::from(program.priority),
-        u64::from(program.priority),
-        Some(buffer),
-    )?;
-    gate.thread_start(thread)?;
-    remember(world, program, endpoint);
-    Ok(())
+    let handler = badged(gate, world.faults, badge).map_err(at("handler"))?;
+    gate.process_set_fault_handler(child, Some(handler))
+        .map_err(at("fault handler"))?;
+    let thread = gate
+        .thread_create(
+            child,
+            plan.entry,
+            plan.stack_top,
+            u64::from(program.priority),
+            u64::from(program.priority),
+            Some(buffer),
+        )
+        .map_err(at("thread"))?;
+    gate.thread_start(thread).map_err(at("start"))?;
+    remember(gate, world, program, endpoint).map_err(at("remember"))
+}
+
+/// Names the step an error came out of, so that a line the root task writes
+/// says where the boot stopped and not only that it did.
+const fn at(step: &'static str) -> impl Fn(Error) -> Failure {
+    move |error| Failure { step, error }
+}
+
+/// A step that did not work.
+#[derive(Clone, Copy, Debug)]
+struct Failure {
+    step: &'static str,
+    error: Error,
 }
 
 /// Installs everything the child gets and writes the startup message into
 /// the page that will be its IPC buffer.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "what a child is given is what a child is given; a struct for it would be the same list with a name"
+)]
 fn install_all(
     gate: &mut Gate,
     startup: &Startup,
@@ -310,6 +354,7 @@ fn install_all(
     program: &Program,
     child: ProcessHandle,
     endpoint: EndpointHandle,
+    badge: u64,
     buffer: MemoryHandle,
 ) -> Result<(), Error> {
     let mut mapping = Mapping::new(gate, world.own, buffer, SCRATCH, PAGE_SIZE)?;
@@ -325,20 +370,31 @@ fn install_all(
     let served = gate.process_install_handle(child, endpoint.handle(), ObjectRights::RECV)?;
     push(&mut given, &mut count, Role::OwnEndpoint, served);
 
+    // What a child holds of a server is a capability with the child's badge
+    // on it: the badge is the only thing about a sender a server can trust,
+    // and a request that arrives without one names nobody.
     if program.names
         && let Some(names) = world.names
     {
-        let handle = gate.process_install_handle(child, names.handle(), ObjectRights::SEND)?;
+        let marked = gate.endpoint_badge(names, badge)?;
+        let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
         push(&mut given, &mut count, Role::NameServer, handle);
     }
     if program.memory
         && let Some(memory) = world.memory
     {
-        let handle = gate.process_install_handle(child, memory.handle(), ObjectRights::SEND)?;
+        let marked = gate.endpoint_badge(memory, badge)?;
+        let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
         push(&mut given, &mut count, Role::MemoryServer, handle);
     }
-    if let Some(log) = world.log {
-        let handle = gate.process_install_handle(child, log.handle(), ObjectRights::SEND)?;
+    // Everyone but the console driver gets the console as its log. The
+    // driver is the console: a line it sent itself would be a call on the
+    // endpoint it is the only receiver of, and it would wait for itself.
+    if let Some(console) = world.console
+        && program.grant != Grant::Serial
+    {
+        let marked = gate.endpoint_badge(console, badge)?;
+        let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
         push(&mut given, &mut count, Role::Log, handle);
     }
     match program.grant {
@@ -391,10 +447,22 @@ struct ObjectRights;
 
 impl ObjectRights {
     const PROCESS: Rights = Rights::MAP.union(Rights::MANAGE);
-    const RECV: Rights = Rights::RECV.union(Rights::BADGE).union(Rights::SEND);
+    /// A program's own endpoint: it receives on it, badges it for the
+    /// clients it hands it to, and passes it on — which is what registering
+    /// a name is, and what needs `TRANSFER`.
+    const RECV: Rights = Rights::RECV
+        .union(Rights::BADGE)
+        .union(Rights::SEND)
+        .union(Rights::TRANSFER)
+        .union(Rights::DUPLICATE);
     const SEND: Rights = Rights::SEND.union(Rights::TRANSFER);
+    /// A memory object goes out with every right its type accepts but the
+    /// duplication of the handle. `EXECUTE` is among them and has to be:
+    /// memory the server hands back becomes the text of some program, and
+    /// an object without the right cannot be mapped executable.
     const MEMORY: Rights = Rights::READ
         .union(Rights::WRITE)
+        .union(Rights::EXECUTE)
         .union(Rights::MAP)
         .union(Rights::INFO)
         .union(Rights::TRANSFER);
@@ -424,7 +492,7 @@ fn take(
     len: u64,
     align: u64,
 ) -> Result<MemoryHandle, Error> {
-    if let Some(memory) = world.memory {
+    if let Some(memory) = world.memory_for_self {
         return allocate(gate, memory, len, align);
     }
     let object = reserve.ok_or(Error::OutOfKernelMemory)?;
@@ -495,21 +563,31 @@ fn map_into(
 }
 
 /// Remembers the endpoint of a server that has just started, so that the
-/// programs after it can be given one.
-const fn remember(world: &mut World, program: &Program, endpoint: EndpointHandle) {
+/// programs after it can be given one — and so that the root task itself
+/// has one to ask, badged, because a request without a badge names nobody.
+fn remember(
+    gate: &mut Gate,
+    world: &mut World,
+    program: &Program,
+    endpoint: EndpointHandle,
+) -> Result<(), Error> {
     match program.name {
-        b"server-memory" => world.memory = Some(endpoint),
+        b"server-memory" => {
+            world.memory = Some(endpoint);
+            world.memory_for_self = Some(gate.endpoint_badge(endpoint, INIT_BADGE)?);
+        }
         b"server-name" => world.names = Some(endpoint),
         b"server-console" => {
             world.console = Some(endpoint);
-            world.log = Some(endpoint);
+            world.console_for_self = Some(gate.endpoint_badge(endpoint, INIT_BADGE)?);
         }
         _ => {}
     }
+    Ok(())
 }
 
 /// Says what came of starting a program.
-fn report(gate: &mut Gate, world: &World, name: &[u8], outcome: Result<(), Error>) {
+fn report(gate: &mut Gate, world: &World, name: &[u8], outcome: Result<(), Failure>) {
     match outcome {
         Ok(()) => {
             let mut line: Line<96> = Line::new();
@@ -518,12 +596,14 @@ fn report(gate: &mut Gate, world: &World, name: &[u8], outcome: Result<(), Error
             line.put(b"\n");
             say(gate, world, line.as_bytes());
         }
-        Err(error) => {
-            let mut line: Line<160> = Line::new();
+        Err(failure) => {
+            let mut line: Line<192> = Line::new();
             line.put(b"[init] ");
             line.put(name);
+            line.put(b" at ");
+            line.put(failure.step.as_bytes());
             line.put(b": ");
-            line.put(error.message().as_bytes());
+            line.put(failure.error.message().as_bytes());
             line.put(b"\n");
             say(gate, world, line.as_bytes());
         }
@@ -533,7 +613,7 @@ fn report(gate: &mut Gate, world: &World, name: &[u8], outcome: Result<(), Error
 /// Puts a line out: through the console once there is one, and through the
 /// kernel's own before that.
 fn say(gate: &mut Gate, world: &World, line: &[u8]) {
-    match world.console {
+    match world.console_for_self {
         Some(console) => {
             let _said = user_programs::client::write_line(gate, console, line);
         }

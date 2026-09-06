@@ -48,6 +48,7 @@ fn pass(calls: &[Call]) -> Option<(Handle, u64, u64)> {
     let (object, len, address) = match walk.next()? {
         Call::Map {
             object,
+            offset: 0,
             len,
             address,
         } => (*object, *len, *address),

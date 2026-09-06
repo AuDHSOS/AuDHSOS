@@ -17,6 +17,7 @@ mod out;
 mod policy;
 mod process;
 mod qemu;
+mod session;
 mod spdx;
 mod symbolize;
 mod toolchain;

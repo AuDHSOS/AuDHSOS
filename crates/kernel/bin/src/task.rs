@@ -241,32 +241,38 @@ pub(crate) fn answer(
     let mut tables = window();
     let mut tlb = LocalTlb;
     let mut devices = devices;
-    with_memory(|memory| {
-        with_machine(|machine| {
-            let mut environment =
-                KernelEnvironment::<X86Entry, _, _, SerialConsole, DeviceAccess<'_>>::new(
+    // The console goes in: `debug_log` is what the root task says anything
+    // through until it has handed the serial port to the console driver,
+    // and after that the console gives itself up and writes nothing.
+    entry::with_console(|console| {
+        with_memory(|memory| {
+            with_machine(|machine| {
+                let mut environment = KernelEnvironment::<X86Entry, _, _, _, DeviceAccess<'_>>::new(
                     memory,
                     &mut tables,
                     &mut tlb,
-                    None,
+                    Some(console),
                     devices.take(),
                     acpi_pointer(),
+                    context::prepare_user,
                 );
-            let reschedule = handle_syscall(
-                &mut machine.objects,
-                &mut machine.scheduler,
-                &mut environment,
-                caller,
-                bytes,
-            );
-            let _cleared = reap(
-                &mut machine.objects,
-                &mut machine.scheduler,
-                &mut environment,
-                Some(caller),
-            );
-            reschedule
+                let reschedule = handle_syscall(
+                    &mut machine.objects,
+                    &mut machine.scheduler,
+                    &mut environment,
+                    caller,
+                    bytes,
+                );
+                let _cleared = reap(
+                    &mut machine.objects,
+                    &mut machine.scheduler,
+                    &mut environment,
+                    Some(caller),
+                );
+                reschedule
+            })
         })
+        .flatten()
     })
     .flatten()
     .unwrap_or(false)
@@ -393,7 +399,15 @@ fn environment<'a>(
     tables: &'a mut PhysicalWindow,
     tlb: &'a mut LocalTlb,
 ) -> KernelEnvironment<'a, X86Entry, PhysicalWindow, LocalTlb, SerialConsole, DeviceAccess<'a>> {
-    KernelEnvironment::new(memory, tables, tlb, None, None, acpi_pointer())
+    KernelEnvironment::new(
+        memory,
+        tables,
+        tlb,
+        None,
+        None,
+        acpi_pointer(),
+        context::prepare_user,
+    )
 }
 
 /// The physical address of the root system description pointer, which is

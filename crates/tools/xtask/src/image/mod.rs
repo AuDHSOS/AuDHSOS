@@ -5,6 +5,7 @@
 //! with one EFI system partition, a FAT32 file system in it, and the boot
 //! image the kernel reads.
 
+pub(crate) mod archive;
 pub(crate) mod boot_image;
 pub(crate) mod crc32;
 pub(crate) mod disk;

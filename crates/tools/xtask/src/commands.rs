@@ -4,13 +4,15 @@
 //! The subcommands.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::error::Error;
-use crate::image::{boot_image, disk};
+use crate::image::{archive, boot_image, disk};
 use crate::out::{self, note, note_raw};
 use crate::policy::{FUZZ_TARGETS, MIRI_TARGETS, Target, crates_for};
 use crate::process::Cmd;
 use crate::qemu::{self, Machine, Run};
+use crate::session::Session;
 use crate::symbolize;
 use crate::{coverage, deps, fs, layering, linker, spdx, unsafe_budget};
 
@@ -118,11 +120,87 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
         test_qemu(root)?;
     }
     if e2e {
-        return Err(Error::Usage(
-            "end-to-end tests arrive with Phase 6".to_owned(),
-        ));
+        test_e2e(root)?;
     }
     Ok(())
+}
+
+/// How long an end-to-end run waits for a line before it gives up.
+const E2E_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// What the run has to see, in this order, for the system to have worked.
+///
+/// Each line is written by a different part of it, so the first one that
+/// does not come says where the boot stopped: the root task read the
+/// archive, the memory server answered, the name server answered, the
+/// console driver took the port, and the application found it and said
+/// something through it.
+const E2E_LINES: [(&str, &str); 5] = [
+    (
+        "[init] started server-memory",
+        "the memory server did not start",
+    ),
+    (
+        "[init] started server-name",
+        "the name server did not start",
+    ),
+    (
+        "[init] started server-console",
+        "the console driver did not start",
+    ),
+    ("[init] started app-hello", "the application did not start"),
+    (
+        "hello from userland",
+        "the application said nothing through the console driver",
+    ),
+];
+
+/// The end-to-end tests: the whole system, from the loader to a line an
+/// application wrote through a driver that runs at ring three.
+///
+/// # Errors
+///
+/// [`Error::Violations`] for every line of [`E2E_LINES`] that did not come;
+/// the errors of the build, of the images, and of the machine.
+fn test_e2e(root: &Path) -> Result<(), Error> {
+    build(root, &[])?;
+    image(root, &[])?;
+    let machine = Machine::locate()?;
+    let path = root.join("target").join("audhsos.img");
+    let mut session = Session::start(&machine, &path)?;
+
+    let mut violations = Vec::new();
+    for (needle, complaint) in E2E_LINES {
+        if !session.wait_for(needle, E2E_TIMEOUT) {
+            violations.push((*complaint).to_owned());
+            break;
+        }
+    }
+    // Console input: the bytes go the other way, through the same port, and
+    // only once the program on the far side says it is listening — a byte
+    // sent earlier would reach a controller whose receive path is not up.
+    if violations.is_empty() {
+        if session.wait_for("[hello] ready", E2E_TIMEOUT) {
+            session.send(b"typed\n")?;
+            if !session.wait_for("[hello] echo: typed", E2E_TIMEOUT) {
+                violations.push("what was typed did not come back".to_owned());
+            }
+        } else {
+            violations.push("the application never said it was ready".to_owned());
+        }
+    }
+    let output = session.finish();
+    note!(
+        "qemu end-to-end: {} line(s) of output",
+        output.lines().count()
+    );
+    report("end-to-end", &violations);
+    if !violations.is_empty() {
+        eprintln!("--- serial output of the end-to-end run ---");
+        eprintln!("{output}");
+        eprintln!("--- end ---");
+    }
+    Error::from_violations(violations)
 }
 
 /// Every test kernel in QEMU, then the three images that must make the
@@ -734,6 +812,63 @@ pub(crate) const USER_TEST_BASE: u64 = 0x40_0000;
 /// The linker script of the user programs.
 const USER_SCRIPT: &str = "crates/user/test-programs/user.ld";
 
+/// The address the root task is linked at, which its linker script repeats
+/// and this checks against the layout constant of the interface.
+const ROOT_TASK_BASE: u64 = audhsos_abi::layout::ROOT_TASK_BASE;
+
+/// The linker script of the root task.
+const ROOT_SCRIPT: &str = "crates/user/programs/root.ld";
+
+/// The address the programs of the archive are linked at, which their
+/// linker script repeats and this checks.
+const PROGRAM_BASE: u64 = 0x0100_0000;
+
+/// The linker script of those programs.
+const PROGRAM_SCRIPT: &str = "crates/user/programs/program.ld";
+
+/// Checks the two linker scripts of the userland against the addresses the
+/// code says they hold.
+///
+/// # Errors
+///
+/// [`Error::Violations`] when a script and this disagree.
+pub(crate) fn check_userland(root: &Path) -> Result<(), Error> {
+    check_base(root, ROOT_SCRIPT, "ROOT_TASK_BASE", ROOT_TASK_BASE)?;
+    check_base(root, PROGRAM_SCRIPT, "PROGRAM_BASE", PROGRAM_BASE)
+}
+
+/// Refuses a linker script whose base address is not the one the code says.
+fn check_base(root: &Path, path: &str, name: &str, expected: u64) -> Result<(), Error> {
+    let script = fs::read(&root.join(path))?;
+    let violations = match linker::constant(&script, name) {
+        Some(base) if base == expected => Vec::new(),
+        Some(base) => vec![format!(
+            "{path}: {name} is {base:#x}, the xtask says {expected:#x}"
+        )],
+        None => vec![format!("{path}: {name} is missing")],
+    };
+    report("program base", &violations);
+    Error::from_violations(violations)
+}
+
+/// The boot image of the real system: the header, the root task as a flat
+/// binary, and the archive of the four programs.
+///
+/// # Errors
+///
+/// The errors of reading what the build wrote and of writing the archive.
+fn boot_image_of(root: &Path, profile: &str) -> Result<Vec<u8>, Error> {
+    let built = root.join("target/x86_64-unknown-none").join(profile);
+    let task = fs::read_bytes(&built.join("server-init"))?;
+    let mut files = Vec::new();
+    for name in archive::PROGRAMS {
+        files.push((name, fs::read_bytes(&built.join(name))?));
+    }
+    let archive = archive::build(&files)?;
+    note!("archive: {} programs, {} bytes", files.len(), archive.len());
+    boot_image::build(&task, &archive, 0)
+}
+
 /// Builds the user test programs and turns each into a flat binary in
 /// [`USER_TESTS_DIR`].
 ///
@@ -868,7 +1003,8 @@ pub(crate) fn image(root: &Path, options: &[String]) -> Result<(), Error> {
         .join("x86_64-unknown-none")
         .join(profile)
         .join("audhsos-kernel");
-    let boot = boot_image::build(&boot_image::placeholder_root_task(), &[], 0)?;
+    check_userland(root)?;
+    let boot = boot_image_of(root, profile)?;
     let files = vec![
         (disk::LOADER_PATH, fs::read_bytes(&loader)?),
         (disk::KERNEL_PATH, fs::read_bytes(&kernel)?),

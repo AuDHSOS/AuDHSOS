@@ -160,6 +160,11 @@ impl Machine {
         arguments(&self.firmware, image, display)
     }
 
+    /// The QEMU binary of the reference machine.
+    pub(crate) fn qemu(&self) -> &Path {
+        &self.qemu
+    }
+
     /// The command line for messages.
     pub(crate) fn display(&self, image: &Path, display: bool) -> String {
         let mut text = self.qemu.display().to_string();

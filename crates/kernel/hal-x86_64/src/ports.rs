@@ -120,28 +120,50 @@ impl kernel_hal_api::interrupt::InterruptController for DeviceAccess<'_> {
     }
 }
 
+/// The ports of the first serial controller, which the kernel writes its
+/// own diagnostics on until somebody else asks for them.
+const COM1: core::ops::Range<u16> = 0x3F8..0x400;
+
+/// Notes that userland has reached `port`, and gives the serial controller
+/// up when that is what the port belongs to.
+///
+/// The handover is here and not at `ioport_create`, because this is where
+/// it is true: a capability that has been created and not used yet has
+/// taken nothing over.
+fn note(port: u16) {
+    if COM1.contains(&port) {
+        crate::console::give_up();
+    }
+}
+
 impl PortAccess for DeviceAccess<'_> {
     fn read_u8(&mut self, port: u16) -> u8 {
+        note(port);
         self.ports.read_u8(port)
     }
 
     fn write_u8(&mut self, port: u16, value: u8) {
+        note(port);
         self.ports.write_u8(port, value);
     }
 
     fn read_u16(&mut self, port: u16) -> u16 {
+        note(port);
         self.ports.read_u16(port)
     }
 
     fn write_u16(&mut self, port: u16, value: u16) {
+        note(port);
         self.ports.write_u16(port, value);
     }
 
     fn read_u32(&mut self, port: u16) -> u32 {
+        note(port);
         self.ports.read_u32(port)
     }
 
     fn write_u32(&mut self, port: u16, value: u32) {
+        note(port);
         self.ports.write_u32(port, value);
     }
 }

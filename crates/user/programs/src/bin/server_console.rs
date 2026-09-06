@@ -29,7 +29,7 @@ use audhsos_abi::Error;
 use audhsos_abi::layout::PAGE_SIZE;
 use driver_uart16550::{Register, Registers};
 use server_console::Console;
-use user_programs::client::{allocate, register};
+use user_programs::client::allocate;
 use user_programs::mapping::Mapping;
 use user_programs::serve::{Serving, receive};
 use user_proto::console::{Chunk, Reply, Request};
@@ -82,12 +82,30 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         gate.thread_exit()
     };
     SHARED.set_ports(ports);
-    let mut console = Console::new(PortRegisters { gate, ports });
 
-    if let Some(names) = startup.name_server {
-        let _registered = register(held(&mut console), names, NAME, endpoint);
+    // The name goes up before the controller comes over. Until this driver
+    // touches a port of it the kernel still owns the line, so a failure
+    // here can still be said out loud; afterwards the only voice on the
+    // line is this program's own.
+    match startup.name_server {
+        Some(names) => {
+            if let Err(error) = register(&mut gate, names, endpoint) {
+                let mut line = user_rt::Line::<128>::new();
+                line.put(b"[console] cannot register: ");
+                line.put(error.message().as_bytes());
+                line.put(b"\n");
+                let _said = sys::write_line(&mut gate, None, line.as_bytes());
+            }
+        }
+        None => {
+            let _said = sys::write_line(&mut gate, None, b"[console] no name server\n");
+        }
     }
-    let _second = start_second_thread(&mut console, &startup, endpoint, interrupt);
+
+    let mut console = Console::new(PortRegisters { gate, ports });
+    if let Err(error) = start_second_thread(&mut console, &startup, endpoint, interrupt) {
+        complain(&mut console, b"no interrupt thread", error);
+    }
 
     let mut serving = Serving::default();
     loop {
@@ -105,6 +123,54 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         };
         let _written = answer.encode(&mut held(&mut console).writer());
     }
+}
+
+/// Registers the driver under its name.
+///
+/// The endpoint travels as a handle in the message, so the name server
+/// ends up holding a capability to this driver and can hand copies of it
+/// to whoever asks for `console`.
+fn register(
+    gate: &mut Gate,
+    names: user_rt::EndpointHandle,
+    endpoint: EndpointHandle,
+) -> Result<(), Error> {
+    use user_proto::name;
+    use user_rt::Typed as _;
+    let request = name::Request::Register {
+        name: name::Name::new(NAME)?,
+        endpoint: endpoint.handle(),
+    };
+    request.encode(&mut gate.writer())?;
+    gate.ipc_call(names)?;
+    match name::Reply::decode(gate.reader())? {
+        name::Reply::Registered(outcome) => outcome,
+        name::Reply::Found(_) => Err(Error::InvalidArgument),
+    }
+}
+
+/// Runs one step and says on the line which one did not work.
+fn step<T>(
+    console: &mut Console<PortRegisters>,
+    what: &'static [u8],
+    body: impl FnOnce(&mut Gate) -> Result<T, Error>,
+) -> Result<T, Error> {
+    let outcome = body(held(console));
+    if let Err(error) = outcome.as_ref() {
+        complain(console, what, *error);
+    }
+    outcome
+}
+
+/// Says what went wrong, on the line the driver owns.
+fn complain(console: &mut Console<PortRegisters>, what: &[u8], error: Error) {
+    let mut line = user_rt::Line::<128>::new();
+    line.put(b"[console] ");
+    line.put(what);
+    line.put(b": ");
+    line.put(error.message().as_bytes());
+    line.put(b"\n");
+    let _said = console.write(line.as_bytes());
 }
 
 /// The gate the console holds.
@@ -166,19 +232,27 @@ fn start_second_thread(
     let (Some(own), Some(memory)) = (startup.own_process, startup.memory_server) else {
         return Err(Error::NotFound);
     };
-    let gate = held(console);
-    let notification = gate.notification_create()?;
-    gate.interrupt_bind(interrupt, notification, INTERRUPT_BIT)?;
-    let badged = gate.endpoint_badge(endpoint, INTERRUPT_BADGE)?;
+    let notification = step(console, b"notification", Gate::notification_create)?;
+    step(console, b"bind", |gate| {
+        gate.interrupt_bind(interrupt, notification, INTERRUPT_BIT)
+    })?;
+    let badged = step(console, b"badge", |gate| {
+        gate.endpoint_badge(endpoint, INTERRUPT_BADGE)
+    })?;
 
     let bytes = STACK_PAGES.wrapping_mul(PAGE_SIZE);
-    let object = allocate(gate, memory, bytes, PAGE_SIZE)?;
+    let object = step(console, b"stack memory", |gate| {
+        allocate(gate, memory, bytes, PAGE_SIZE)
+    })?;
     let base = SECOND_STACK_TOP.wrapping_sub(bytes);
     // The mapping stays: the stack of a thread that never ends is never
     // taken back.
-    let _stack = Mapping::new(gate, own, object, base, bytes)?;
+    let _stack = step(console, b"stack map", |gate| {
+        Mapping::new(gate, own, object, base, bytes)
+    })?;
 
     SHARED.set(badged, notification, interrupt);
+    let gate = held(console);
     let thread = gate.thread_create(
         own,
         entry_address(),

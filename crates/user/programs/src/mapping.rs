@@ -53,7 +53,26 @@ impl Mapping {
         address: u64,
         len: u64,
     ) -> Result<Self, Error> {
-        map_all(gate, process, object, address, len)?;
+        Self::window(gate, process, object, address, 0, len)
+    }
+
+    /// Maps `len` bytes of `object`, from `offset`, at `address`.
+    ///
+    /// This is what a program uses when the object is larger than the
+    /// window it wants to look at it through.
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new).
+    pub fn window(
+        gate: &mut Gate,
+        process: ProcessHandle,
+        object: MemoryHandle,
+        address: u64,
+        offset: u64,
+        len: u64,
+    ) -> Result<Self, Error> {
+        map_all(gate, process, object, address, offset, len)?;
         Ok(Mapping { address, len })
     }
 
@@ -137,6 +156,7 @@ fn map_all(
     process: ProcessHandle,
     object: MemoryHandle,
     address: u64,
+    offset: u64,
     len: u64,
 ) -> Result<(), Error> {
     let mut done = 0u64;
@@ -147,7 +167,7 @@ fn map_all(
             process,
             object,
             address.wrapping_add(done),
-            done,
+            offset.wrapping_add(done),
             chunk,
             permissions::WRITE,
         )?;

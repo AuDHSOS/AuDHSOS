@@ -936,15 +936,16 @@ pub(crate) fn sweep() {
     let mut tlb = LocalTlb;
     with_memory(|memory| {
         with_machine(|machine| {
-            let mut environment = KernelEnvironment::<
-                X86Entry,
-                _,
-                _,
-                SerialConsole,
-                DeviceAccess<'_>,
-            >::new(
-                memory, &mut tables, &mut tlb, None, None, acpi_pointer()
-            );
+            let mut environment =
+                KernelEnvironment::<X86Entry, _, _, SerialConsole, DeviceAccess<'_>>::new(
+                    memory,
+                    &mut tables,
+                    &mut tlb,
+                    None,
+                    None,
+                    acpi_pointer(),
+                    context::prepare_user,
+                );
             // The kernel stands on the stack of the thread it just
             // switched to, which is the one the scheduler now calls
             // current.
@@ -1078,6 +1079,7 @@ fn answer(
                     None,
                     devices.as_deref_mut(),
                     acpi_pointer(),
+                    context::prepare_user,
                 );
             let reschedule = handle_syscall(
                 &mut machine.objects,
@@ -1183,15 +1185,16 @@ fn on_trap(report: TrapReport) {
     };
     let reschedule = with_memory(|memory| {
         with_machine(|machine| {
-            let mut environment = KernelEnvironment::<
-                X86Entry,
-                _,
-                _,
-                SerialConsole,
-                DeviceAccess<'_>,
-            >::new(
-                memory, &mut tables, &mut tlb, None, None, acpi_pointer()
-            );
+            let mut environment =
+                KernelEnvironment::<X86Entry, _, _, SerialConsole, DeviceAccess<'_>>::new(
+                    memory,
+                    &mut tables,
+                    &mut tlb,
+                    None,
+                    None,
+                    acpi_pointer(),
+                    context::prepare_user,
+                );
             let mut syscall = kernel_syscall::dispatch::Machine {
                 objects: &mut machine.objects,
                 scheduler: &mut machine.scheduler,

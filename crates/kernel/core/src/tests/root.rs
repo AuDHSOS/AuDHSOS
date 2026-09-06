@@ -7,6 +7,7 @@ use audhsos_abi::ipc_buffer::{Buffer, SIZE};
 use audhsos_abi::layout::{PAGE_SIZE, ROOT_TASK_BASE, ipc_buffer_address};
 use audhsos_abi::startup::{Given, Role};
 use audhsos_abi::{Error, ObjectType};
+use audhsos_elf::strategies::{ElfBuilder, ProgramHeader};
 use kernel_hal_api::doubles::{RecordingConsole, RecordingDevices, RecordingTlb};
 use kernel_hal_api::paging::FrameBytes;
 use kernel_mm::page_table::X86Entry;
@@ -69,12 +70,45 @@ fn root_task(
         Some(&mut console),
         None,
         0,
+        no_frame,
     );
     let grants = Grants {
         boot_image: range(0x900, 2),
         ram,
     };
     build(&mut environment, objects, program, &grants)
+}
+
+/// Where the content of the one segment sits in the file.
+///
+/// A loader maps whole pages, so the bytes of a segment have to sit at the
+/// same place inside a page in the file as they will in memory. The root
+/// task is linked to a page boundary, so any whole page will do.
+const CONTENT: u64 = PAGE_SIZE;
+
+/// An executable image of `len` bytes, linked where the root task is
+/// linked and entered at its first byte.
+fn image(len: u64) -> Vec<u8> {
+    let mut bytes = ElfBuilder {
+        entry: ROOT_TASK_BASE,
+        headers: vec![ProgramHeader::code(CONTENT, ROOT_TASK_BASE, len)],
+        ..ElfBuilder::new()
+    }
+    .build();
+    content(&mut bytes, len).fill(0xF4);
+    bytes
+}
+
+/// The `len` bytes of the segment inside `bytes`.
+fn content(bytes: &mut [u8], len: u64) -> &mut [u8] {
+    let from = usize::try_from(CONTENT).unwrap();
+    let to = from.checked_add(usize::try_from(len).unwrap()).unwrap();
+    bytes.get_mut(from..to).unwrap()
+}
+
+/// The smallest image that builds: one page of halts.
+fn smallest() -> Vec<u8> {
+    image(PAGE_SIZE)
 }
 
 /// The pairs of the startup message the build wrote.
@@ -88,6 +122,7 @@ fn startup(fixture: &mut Fixture, frame: PhysFrame) -> Vec<Given> {
         Some(&mut console),
         None,
         0,
+        no_frame,
     );
     environment
         .with_buffer(frame, |bytes: &mut [u8; SIZE]| {
@@ -102,7 +137,7 @@ fn startup(fixture: &mut Fixture, frame: PhysFrame) -> Vec<Given> {
 fn the_root_task_begins_where_it_is_linked_and_stands_on_its_own_stack() {
     let mut fixture = Fixture::new();
     let mut objects = Small::new();
-    let task = root_task(&mut fixture, &mut objects, &[0xF4; 100], &[]).unwrap();
+    let task = root_task(&mut fixture, &mut objects, &smallest(), &[]).unwrap();
     assert_eq!(task.entry.as_u64(), ROOT_TASK_BASE);
     assert_eq!(task.stack.as_u64(), STACK_TOP);
     assert_eq!(STACK_TOP, ROOT_TASK_BASE - PAGE_SIZE);
@@ -113,7 +148,7 @@ fn the_root_task_begins_where_it_is_linked_and_stands_on_its_own_stack() {
 fn the_thread_runs_at_the_highest_priority_and_has_not_started() {
     let mut fixture = Fixture::new();
     let mut objects = Small::new();
-    let task = root_task(&mut fixture, &mut objects, &[0xF4; 100], &[]).unwrap();
+    let task = root_task(&mut fixture, &mut objects, &smallest(), &[]).unwrap();
     let thread = objects.threads.get(task.thread).unwrap();
     assert_eq!(thread.priority, PRIORITY);
     assert_eq!(thread.max_priority, PRIORITY);
@@ -135,15 +170,15 @@ fn a_program_of_no_bytes_is_no_root_task() {
 fn a_program_of_several_pages_is_mapped_whole_and_the_bytes_are_there() {
     let mut fixture = Fixture::new();
     let mut objects = Small::new();
-    let mut program = vec![0xF4u8; usize::try_from(PAGE_SIZE * 2 + 1).unwrap()];
-    // A byte in each page that says which page it is.
-    *program.first_mut().unwrap() = 0xA0;
-    *program
-        .get_mut(usize::try_from(PAGE_SIZE).unwrap())
-        .unwrap() = 0xA1;
-    *program
-        .get_mut(usize::try_from(PAGE_SIZE * 2).unwrap())
-        .unwrap() = 0xA2;
+    let len = PAGE_SIZE.wrapping_mul(2).wrapping_add(1);
+    let mut program = image(len);
+    // A byte in each page of the segment that says which page it is.
+    for (index, marker) in [0xA0u8, 0xA1, 0xA2].into_iter().enumerate() {
+        let offset = u64::try_from(index).unwrap().wrapping_mul(PAGE_SIZE);
+        *content(&mut program, len)
+            .get_mut(usize::try_from(offset).unwrap())
+            .unwrap() = marker;
+    }
     let task = root_task(&mut fixture, &mut objects, &program, &[]).unwrap();
 
     for (index, marker) in [0xA0u8, 0xA1, 0xA2].into_iter().enumerate() {
@@ -196,7 +231,7 @@ fn translate(
 fn the_root_task_is_given_itself_the_system_and_the_boot_image() {
     let mut fixture = Fixture::new();
     let mut objects = Small::new();
-    let task = root_task(&mut fixture, &mut objects, &[0xF4; 100], &[]).unwrap();
+    let task = root_task(&mut fixture, &mut objects, &smallest(), &[]).unwrap();
     let given = startup(&mut fixture, task.buffer_frame);
     let roles: Vec<Role> = given.iter().map(|pair| pair.role).collect();
     assert_eq!(
@@ -221,7 +256,7 @@ fn every_free_region_becomes_a_memory_object_of_the_root_task() {
     let mut fixture = Fixture::new();
     let mut objects = Small::new();
     let ram = [range(0x1000, 4), range(0x2000, 8), range(0x4000, 16)];
-    let task = root_task(&mut fixture, &mut objects, &[0xF4; 100], &ram).unwrap();
+    let task = root_task(&mut fixture, &mut objects, &smallest(), &ram).unwrap();
     let given = startup(&mut fixture, task.buffer_frame);
     let regions: Vec<u64> = given
         .iter()
@@ -242,7 +277,7 @@ fn every_free_region_becomes_a_memory_object_of_the_root_task() {
 fn the_boot_image_object_covers_the_frames_it_was_given() {
     let mut fixture = Fixture::new();
     let mut objects = Small::new();
-    let task = root_task(&mut fixture, &mut objects, &[0xF4; 100], &[]).unwrap();
+    let task = root_task(&mut fixture, &mut objects, &smallest(), &[]).unwrap();
     let given = startup(&mut fixture, task.buffer_frame);
     let pair = given
         .iter()
@@ -274,13 +309,28 @@ fn a_machine_whose_pools_are_full_builds_no_root_task() {
         Some(&mut console),
         None,
         0,
+        no_frame,
     );
     let grants = Grants {
         boot_image: range(0x900, 2),
         ram: &ram,
     };
     assert_eq!(
-        build(&mut environment, &mut objects, &[0xF4; 100], &grants).unwrap_err(),
+        build(&mut environment, &mut objects, &smallest(), &grants).unwrap_err(),
         Error::PoolExhausted
     );
+}
+
+/// The frame a new thread returns through, for tests that do not switch
+/// into one: the word below the top of the stack, which is where a real
+/// frame leaves the pointer.
+fn no_frame<A>(
+    _access: &mut A,
+    _frame: kernel_types::PhysFrame,
+    stack_top: kernel_types::VirtAddr,
+    _entry: kernel_types::VirtAddr,
+    _user_stack: kernel_types::VirtAddr,
+    _buffer: kernel_types::VirtAddr,
+) -> Option<kernel_types::VirtAddr> {
+    stack_top.checked_sub(8)
 }

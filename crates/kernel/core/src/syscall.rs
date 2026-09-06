@@ -15,6 +15,7 @@ use core::marker::PhantomData;
 
 use audhsos_abi::Error;
 use audhsos_abi::ipc_buffer::SIZE;
+use audhsos_abi::layout::PAGE_SIZE;
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::device::Devices;
 use kernel_hal_api::interrupt::{InterruptError, InterruptLine, Vector};
@@ -32,6 +33,12 @@ use kernel_syscall::{dispatch, reaper};
 use kernel_types::{CachePolicy, Page, PhysFrame, PhysFrameRange, VirtAddr};
 
 use crate::memory::KernelMemory;
+
+/// Writes the frame a new thread returns through into `frame`, which is the
+/// frame the page below the top of its kernel stack lies in, and answers
+/// with the word the switch loads as its stack pointer.
+pub type PrepareThread<A> =
+    fn(&mut A, PhysFrame, VirtAddr, VirtAddr, VirtAddr, VirtAddr) -> Option<VirtAddr>;
 
 /// The machine as the system calls reach it: the memory of the kernel, the
 /// page tables, the lookaside buffer, and the console.
@@ -64,6 +71,14 @@ where
     /// the bring-up read and `system_info` reports. It is the only thing of
     /// the firmware the kernel keeps.
     pub acpi: u64,
+    /// Writes the frame a new thread returns through, in the frame the top
+    /// of its kernel stack lies in.
+    ///
+    /// It is a function and not a trait, because it holds nothing: what a
+    /// processor needs on a stack before it can return into user mode is a
+    /// fixed sequence of words, and the architecture layer is the only
+    /// place that knows which.
+    pub prepare: PrepareThread<A>,
     format: PhantomData<fn() -> F>,
 }
 
@@ -83,6 +98,7 @@ where
         console: Option<&'a mut C>,
         devices: Option<&'a mut D>,
         acpi: u64,
+        prepare: PrepareThread<A>,
     ) -> Self {
         KernelEnvironment {
             memory,
@@ -91,6 +107,7 @@ where
             console,
             devices,
             acpi,
+            prepare,
             format: PhantomData,
         }
     }
@@ -166,6 +183,30 @@ where
 
     fn protect(&mut self, root: PhysFrame, page: Page, perms: Permissions) -> Result<(), Error> {
         self.mapper(root).protect(page, perms).map_err(map_error)
+    }
+
+    fn prepare_thread(
+        &mut self,
+        stack_top: VirtAddr,
+        entry: VirtAddr,
+        user_stack: VirtAddr,
+        ipc_buffer: VirtAddr,
+    ) -> Result<VirtAddr, Error> {
+        // The frame the page below the top lies in: the frame is written
+        // through the physical window, and the stack is mapped in the
+        // kernel half of every address space.
+        let below = stack_top
+            .checked_sub(PAGE_SIZE)
+            .ok_or(Error::OutOfKernelMemory)?;
+        let page = Page::from_start(below).map_err(|_| Error::Unaligned)?;
+        let root = self.memory.root();
+        let frame = self
+            .mapper(root)
+            .translate(page)
+            .map(|(frame, _)| frame)
+            .ok_or(Error::OutOfKernelMemory)?;
+        (self.prepare)(self.access, frame, stack_top, entry, user_stack, ipc_buffer)
+            .ok_or(Error::OutOfKernelMemory)
     }
 
     fn allocate_kernel_stack(&mut self) -> Result<KernelStack, Error> {

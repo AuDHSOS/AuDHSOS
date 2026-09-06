@@ -26,7 +26,8 @@
 //! message finds every handle it names.
 
 use audhsos_abi::layout::{
-    PAGE_SIZE, PRIORITY_COUNT, ROOT_TASK_BASE, USER_SPACE_START, ipc_buffer_address,
+    PAGE_SIZE, PRIORITY_COUNT, ROOT_TASK_BASE, THREADS_PER_PROCESS, USER_SPACE_START,
+    ipc_buffer_address,
 };
 use audhsos_abi::startup::{Role, Writer};
 use audhsos_abi::{Error, ObjectType};
@@ -169,48 +170,122 @@ pub fn build<E: Environment, const NP: usize, const NT: usize, const NM: usize, 
     })
 }
 
-/// Copies the program into frames of the reserve and maps them read and
-/// execute at [`ROOT_TASK_BASE`].
+/// Reads the root task as an executable and maps every segment of it with
+/// the permissions it asks for.
 ///
-/// The root task is a flat binary with its `.bss` inside the file, so what
-/// is mapped is what the file holds and nothing has to be zeroed behind it.
+/// An executable and not a flat binary. A blob has one set of permissions
+/// for all of it, and the root task, like every program, has bytes it
+/// executes and bytes it writes; mapping the whole of it both ways would
+/// give the one program that holds every capability of the machine a
+/// writable text segment. The kernel therefore reads the same format the
+/// root task itself reads for its children, out of the crate all three of
+/// the loader, the kernel, and the userland share (D-90).
 fn map_program<E: Environment>(
     environment: &mut E,
     root: PhysFrame,
     program: &[u8],
 ) -> Result<(), Error> {
-    for (index, chunk) in program
-        .chunks(usize::try_from(PAGE_SIZE).unwrap_or(4096))
-        .enumerate()
-    {
-        let frame = environment.allocate_frame()?;
-        // A frame is a page and an IPC buffer is a page, so the seam that
-        // reaches the bytes of one reaches the bytes of the other.
-        environment.with_buffer(frame, |bytes| {
-            if let Some(slot) = bytes.get_mut(..chunk.len()) {
-                slot.copy_from_slice(chunk);
-            }
-        })?;
-        let offset = u64::try_from(index)
-            .map_err(|_| Error::InvalidArgument)?
-            .checked_mul(PAGE_SIZE)
-            .ok_or(Error::InvalidArgument)?;
-        let address = VirtAddr::new(
-            ROOT_TASK_BASE
-                .checked_add(offset)
-                .ok_or(Error::InvalidArgument)?,
-        )
-        .map_err(|_| Error::InvalidArgument)?;
-        let page = Page::from_start(address).map_err(|_| Error::Unaligned)?;
-        environment.map(
-            root,
-            page,
-            frame,
-            Permissions::READ_EXECUTE.for_user(),
-            CachePolicy::WriteBack,
-        )?;
+    let image =
+        audhsos_elf::parse(program, ROOT_TASK_CONSTRAINTS).map_err(|_| Error::InvalidArgument)?;
+    if image.entry != ROOT_TASK_BASE {
+        return Err(Error::InvalidArgument);
+    }
+    let mut previous_end = 0u64;
+    for segment in image.segments() {
+        let start = segment
+            .vaddr
+            .wrapping_sub(segment.vaddr.wrapping_rem(PAGE_SIZE));
+        let end = segment
+            .vaddr
+            .saturating_add(segment.mem_size)
+            .next_multiple_of(PAGE_SIZE);
+        // Two segments in one page would need one set of permissions for
+        // both, and the linker script of the root task puts every section
+        // on a page of its own so that this cannot happen.
+        if start < previous_end {
+            return Err(Error::AddressInUse);
+        }
+        previous_end = end;
+        map_segment(environment, root, program, &segment, start, end)?;
     }
     Ok(())
+}
+
+/// The constraints the root task is read under: from where it is linked up
+/// to the page below the buffers of its own threads.
+const ROOT_TASK_CONSTRAINTS: audhsos_elf::Constraints = audhsos_elf::Constraints {
+    lowest_vaddr: ROOT_TASK_BASE,
+    highest_vaddr: match ipc_buffer_address(THREADS_PER_PROCESS - 1) {
+        Some(lowest) => lowest.saturating_sub(1),
+        None => ROOT_TASK_BASE,
+    },
+};
+
+/// Maps the pages of one segment, with the bytes of the file in them and
+/// zeros behind those bytes.
+fn map_segment<E: Environment>(
+    environment: &mut E,
+    root: PhysFrame,
+    program: &[u8],
+    segment: &audhsos_elf::Segment,
+    start: u64,
+    end: u64,
+) -> Result<(), Error> {
+    let leading = segment.vaddr.wrapping_sub(start);
+    let from = usize::try_from(segment.file_offset).map_err(|_| Error::InvalidArgument)?;
+    let to = from.saturating_add(usize::try_from(segment.file_size).unwrap_or(0));
+    let content = program.get(from..to).ok_or(Error::InvalidArgument)?;
+    let permissions = Permissions {
+        write: segment.write,
+        execute: segment.execute,
+        user: true,
+    };
+    let pages = end.saturating_sub(start).wrapping_div(PAGE_SIZE);
+    for index in 0..pages {
+        let offset = index.wrapping_mul(PAGE_SIZE);
+        let frame = environment.allocate_frame()?;
+        // A frame is a page and an IPC buffer is a page, so the seam that
+        // reaches the bytes of one reaches the bytes of the other. What the
+        // file does not fill stays as the frame came: the frames of the
+        // reserve are zero, which is what `.bss` needs.
+        environment.with_buffer(frame, |bytes| {
+            copy_page(bytes, content, leading, offset);
+        })?;
+        let address = VirtAddr::new(start.checked_add(offset).ok_or(Error::InvalidArgument)?)
+            .map_err(|_| Error::InvalidArgument)?;
+        let page = Page::from_start(address).map_err(|_| Error::Unaligned)?;
+        environment.map(root, page, frame, permissions, CachePolicy::WriteBack)?;
+    }
+    Ok(())
+}
+
+/// Copies the part of `content` that belongs on the page at `offset` of a
+/// segment whose bytes begin `leading` bytes into its first page.
+fn copy_page(
+    bytes: &mut [u8; audhsos_abi::ipc_buffer::SIZE],
+    content: &[u8],
+    leading: u64,
+    offset: u64,
+) {
+    let page = usize::try_from(PAGE_SIZE).unwrap_or(4096);
+    let at = usize::try_from(leading).unwrap_or(0);
+    let skipped = usize::try_from(offset).unwrap_or(0);
+    // Where in the segment's bytes this page begins, and where in the page
+    // they land.
+    let (source_from, target_from) = if skipped == 0 {
+        (0usize, at)
+    } else {
+        (skipped.saturating_sub(at), 0usize)
+    };
+    let room = page.saturating_sub(target_from);
+    let source = content.get(source_from..).unwrap_or(&[]);
+    let take = source.len().min(room);
+    if let (Some(slot), Some(from)) = (
+        bytes.get_mut(target_from..target_from.saturating_add(take)),
+        source.get(..take),
+    ) {
+        slot.copy_from_slice(from);
+    }
 }
 
 /// Maps the stack below the program, read and write.

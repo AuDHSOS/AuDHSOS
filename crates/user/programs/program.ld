@@ -17,15 +17,21 @@ SECTIONS {
         *(.text .text.*)
     }
 
+    /* Every section on a page of its own: a loader maps pages, and two
+       segments that share one cannot both have the permissions they ask
+       for. */
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
     .rodata : {
         *(.rodata .rodata.*)
     }
 
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
     .data : {
         *(.data .data.*)
         *(.got .got.*)
     }
 
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
     .bss : {
         *(.bss .bss.*)
         *(COMMON)

@@ -424,6 +424,7 @@ pub(crate) const CRATES: &[Crate] = &[
         path: "crates/kernel/core",
         kind: Kind::Logic,
         deps: &[
+            "audhsos-elf",
             "kernel-types",
             "kernel-hal-api",
             "kernel-mm",

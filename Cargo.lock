@@ -226,6 +226,7 @@ name = "kernel-core"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "audhsos-elf",
  "audhsos-sync",
  "kernel-hal-api",
  "kernel-mm",
@@ -486,4 +487,5 @@ dependencies = [
  "audhsos-abi",
  "audhsos-symbols",
  "kernel-test-harness",
+ "user-loader",
 ]
