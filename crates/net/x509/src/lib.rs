@@ -13,6 +13,8 @@ pub mod error;
 pub mod name;
 pub mod oid;
 pub mod path;
+#[cfg(any(test, feature = "test-certificates"))]
+pub mod test_keys;
 
 pub use algorithm::{SignatureAlgorithm, SubjectPublicKey};
 pub use certificate::{BasicConstraints, Certificate, DnsNames, GeneralNames, KeyUsage, Validity};

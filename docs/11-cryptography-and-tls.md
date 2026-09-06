@@ -89,7 +89,7 @@ server.
 | `crypto-rsa` | `crates/crypto/rsa` | c2 | `crypto-ct`, `crypto-hash`, `crypto-bignum` |
 | `audhsos-der` | `crates/net/der` | c0 | - (`audhsos-time` when it exists, D-46 and 11.14) |
 | `audhsos-x509` | `crates/net/x509` | c3 | `audhsos-der`, `crypto-hash`, `crypto-ec`, `crypto-rsa` |
-| `audhsos-tls` | `crates/net/tls` | c4 | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `crypto-rsa`, `audhsos-der`, `audhsos-x509` |
+| `audhsos-tls` | `crates/net/tls` | c4 | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-x509` |
 
 All ten are logic crates: `no_std`, `#![forbid(unsafe_code)]`, no
 allocation, `Target::Host` in the policy table, coverage gate on. Each
@@ -499,13 +499,13 @@ the tests instead, and the two checks cover different halves: the replay
 that the arithmetic matches the world, the machine test that the state
 machine does what the arithmetic allows.
 
-The trace cannot yet check a signature: it signs with RSA-PSS, which this
-client does not verify, so the replay runs with certificate verification
-stubbed out and tests the transcript, the key schedule, record protection,
-and `Finished`. Certificate validation is tested separately against
+The trace could not check a signature while this client did not verify
+RSA-PSS: the replay ran with certificate verification stubbed out and
+tested the transcript, the key schedule, record protection, and
+`Finished`, and certificate validation was tested separately against
 project-generated ECDSA and Ed25519 chains.
 
-Step R5 of 11.15 closes that seam, and closes it further than was
+Step R5 of 11.15 closed that seam, and closed it further than was
 expected when this paragraph was first written. RFC 8448 section 2 prints
 the whole private key the traces sign with, so the trace is not only a
 handshake to reproduce but a signature vector: the `CertificateVerify` of
@@ -514,7 +514,12 @@ a key this repository holds. It verifies through `crypto-rsa` directly.
 It does not verify through the client, and not because anything is
 missing: the modulus is 1024 bits, which D-79 puts below what a
 certificate may carry. The chain around it stays stubbed, the signature
-inside it stops being.
+inside it has stopped being.
+
+The whole path is walked elsewhere, and it is walked twice: the state
+machine of `super::machine` is driven end to end against a server whose
+chain is RSA, once at two thousand and forty-eight bits and once at four
+thousand and ninety-six, which is the width `MAX_SPKI` is sized for.
 
 Beyond that: the vector tests of each primitive, property tests for
 round trips and for parsers that must not panic, model tests for path
@@ -544,7 +549,7 @@ checklist in 4.9.
 | R2 | `crypto-rsa`: the key with its bounds, and PKCS #1 v1.5 | M | implemented |
 | R3 | `crypto-rsa`: MGF1 and EMSA-PSS-VERIFY | M | implemented |
 | R4 | `audhsos-x509`: identifiers, parameters, the key, the pairs, and the builder | L | implemented |
-| R5 | `audhsos-tls`: code points, the hello, `MAX_SPKI`, the `CertificateVerify` rule, the trace | M | |
+| R5 | `audhsos-tls`: code points, the hello, `MAX_SPKI`, the `CertificateVerify` rule, the trace | M | implemented |
 | R6 | The fuzz target, `tools/tls-probe` against three hosts, and the documents | S-M | |
 
 T1 to T7 touch nothing outside their own crates and the policy table, so
@@ -781,6 +786,12 @@ constants in test source where D-83 puts them. The salt of a PSS
 signature is the digest of the body, which is as long as the scheme wants
 and is a number this repository computed: every certificate the tests
 build is the same bytes every time.
+
+`audhsos-tls` gains no dependency for any of this, which the crate table
+of 11.3 first said it would. A handshake signature is verified the way a
+certificate signature is, through `SubjectPublicKey::verify`, so the edge
+that carries RSA into the client is the one to `audhsos-x509` that was
+already there. The table is corrected.
 
 `audhsos-tls` is a smaller change with one number in it. `MAX_SPKI` is
 128 today, computed for P-384 at 120; an RSA-4096 subject public key

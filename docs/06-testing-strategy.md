@@ -963,17 +963,32 @@ done until every applicable item has a test. Items are added, never removed.
   finished key of each side, the verify data of both `Finished` messages,
   and the client's own record opened under the keys the document names.
   Each message of the trace is read by this crate's reader and says what
-  the document says it says. The replay does not run the state machine and
-  does not check the server's signature, and the test file names both
-  reasons: matching the document byte for byte would mean writing another
-  implementation's `ClientHello`, which enters the transcript every later
-  secret depends on, and the trace signs with RSA-PSS, which this client
-  does not verify.
+  the document says it says. The replay does not run the state machine,
+  and the test file names the reason: matching the document byte for byte
+  would mean writing another implementation's `ClientHello`, which enters
+  the transcript every later secret depends on. It does check the server's
+  signature — the `CertificateVerify` of the trace is a real
+  `rsa_pss_rsae_sha256` signature under the key section 2 of that document
+  prints, and it verifies through `crypto-rsa` against the transcript this
+  crate computes, and fails against a transcript one bit different. That
+  key is a thousand and twenty-four bits, so no chain is walked with it
+  (D-79); the signature inside the chain is checked, the chain around it
+  is not.
 - The state machine driven end to end against a server built in the test
   file, which uses the same pieces from the other side: handshake, data
   in both directions, a key update, and a close. Once with an Ed25519
-  chain and once with a P-256 chain, so that both signature paths carry a
+  chain, once with P-256, once with P-384, and twice with RSA — at two
+  thousand and forty-eight bits and at four thousand and ninety-six, the
+  width `MAX_SPKI` is sized for — so that every signature path carries a
   whole handshake, with certificate verification on in each.
+- The two lists of signature schemes are not the same list, and the RSA
+  code points make the difference visible (D-82). The `ClientHello`
+  offers all nine, the three `rsa_pkcs1_*` among them, which the written
+  hello is checked against byte for byte; a `CertificateVerify` naming any
+  of those three is refused as an illegal parameter, and the PSS code
+  point over the same key is accepted. Both directions have a test, and
+  they do not contradict each other: the offer is about the chain, the
+  refusal is about the handshake signature.
 - `HelloRetryRequest` is recognised, must name a group, and replaces the
   transcript with the hash of it — and is then refused, because D-56
   leaves one group and a retry can only ask for a group that was already

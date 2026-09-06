@@ -26,8 +26,10 @@ use crate::config::ClientConfig;
 use crate::error::TlsError;
 use crate::handshake::{
     CertificateChain, CertificateVerify, ClientHelloParams, ECDSA_SECP256R1_SHA256,
-    ECDSA_SECP384R1_SHA384, ED25519, EncryptedExtensions, HandshakeType, ServerHello,
-    read_key_update, read_message, write_client_hello, write_finished,
+    ECDSA_SECP384R1_SHA384, ED25519, EncryptedExtensions, HandshakeType, RSA_PKCS1_SHA256,
+    RSA_PKCS1_SHA384, RSA_PKCS1_SHA512, RSA_PSS_RSAE_SHA256, RSA_PSS_RSAE_SHA384,
+    RSA_PSS_RSAE_SHA512, ServerHello, read_key_update, read_message, write_client_hello,
+    write_finished,
 };
 use crate::keys::{Schedule, finished_key, next_traffic_secret, traffic_keys, verify_data};
 use crate::protection::RecordProtection;
@@ -36,13 +38,19 @@ use crate::secret::Secret;
 use crate::suite::CipherSuite;
 use crate::transcript::Transcript;
 
-/// The most a subject public key of the three supported kinds occupies,
+/// The most a subject public key of the four supported kinds occupies,
 /// wrapped in the information that names its algorithm.
 ///
-/// P-384 is the widest at 120 bytes: the algorithm identifier, and a bit
-/// string holding the uncompressed point of ninety-seven. P-256 takes 91
-/// and Ed25519 fewer still.
-const MAX_SPKI: usize = 128;
+/// RSA at four thousand and ninety-six bits is the widest at 550 bytes:
+/// fifteen for the algorithm identifier, five hundred and twenty-six for
+/// the inner sequence of two integers, five for the bit string around it,
+/// four for the outer sequence. P-384 takes 120, P-256 91, and Ed25519
+/// fewer still.
+///
+/// The alternative, borrowing the leaf's `spki_bytes` instead of copying
+/// them, would tie a borrow across two handshake messages to save the
+/// bytes, and is not worth it.
+const MAX_SPKI: usize = 550;
 
 /// The context string of a signature a server makes over the handshake.
 const SERVER_CONTEXT: &[u8] = b"TLS 1.3, server CertificateVerify";
@@ -887,6 +895,14 @@ impl Machine {
         // takes it away here, and a scheme that does not match the key is a
         // field inconsistent with another field rather than a signature
         // worth trying.
+        //
+        // The three `rsa_pkcs1_*` schemes are the sharper case, and they
+        // have an arm of their own so that the refusal is visible rather
+        // than a fall-through. This client offers them one message
+        // earlier, because RFC 8446 section 4.2.3 gives them exactly one
+        // meaning — that a certificate may be signed that way — and the
+        // same section forbids them here (D-82). The offer is about the
+        // chain and the refusal is about this signature.
         let algorithm = match (verify.scheme, key) {
             (ECDSA_SECP256R1_SHA256, SubjectPublicKey::EcdsaP256(_)) => {
                 audhsos_x509::SignatureAlgorithm::EcdsaSha256
@@ -895,6 +911,18 @@ impl Machine {
                 audhsos_x509::SignatureAlgorithm::EcdsaSha384
             }
             (ED25519, SubjectPublicKey::Ed25519(_)) => audhsos_x509::SignatureAlgorithm::Ed25519,
+            (RSA_PSS_RSAE_SHA256, SubjectPublicKey::Rsa { .. }) => {
+                audhsos_x509::SignatureAlgorithm::RsaPssSha256
+            }
+            (RSA_PSS_RSAE_SHA384, SubjectPublicKey::Rsa { .. }) => {
+                audhsos_x509::SignatureAlgorithm::RsaPssSha384
+            }
+            (RSA_PSS_RSAE_SHA512, SubjectPublicKey::Rsa { .. }) => {
+                audhsos_x509::SignatureAlgorithm::RsaPssSha512
+            }
+            (RSA_PKCS1_SHA256 | RSA_PKCS1_SHA384 | RSA_PKCS1_SHA512, _) => {
+                return Err(TlsError::IllegalParameter);
+            }
             _ => return Err(TlsError::IllegalParameter),
         };
 

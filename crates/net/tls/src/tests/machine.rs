@@ -12,7 +12,8 @@
 //! the arithmetic allows.
 
 use audhsos_time::CivilTime;
-use audhsos_x509::builder::{Params, TestKey, build};
+use audhsos_x509::builder::{MAX_CERTIFICATE, Params, RsaScheme, TestKey, build};
+use audhsos_x509::test_keys::{RSA_2048, RSA_4096};
 use audhsos_x509::{TrustAnchor, TrustAnchors};
 use crypto_ec::x25519;
 use crypto_rng::doubles::ScriptedRng;
@@ -60,6 +61,12 @@ enum Authority {
     EcdsaP256,
     /// P-384 with SHA-384 throughout, signature scheme `0x0503`.
     EcdsaP384,
+    /// RSA at two thousand and forty-eight bits with PSS over SHA-256
+    /// throughout, signature scheme `0x0804`.
+    Rsa2048,
+    /// The same at four thousand and ninety-six bits, which is the widest
+    /// key this client accepts and the one `MAX_SPKI` is sized for.
+    Rsa4096,
 }
 
 impl Authority {
@@ -69,6 +76,8 @@ impl Authority {
             Authority::Ed25519 => TestKey::Ed25519(ROOT_SECRET),
             Authority::EcdsaP256 => TestKey::EcdsaSha256(ROOT_SECRET),
             Authority::EcdsaP384 => TestKey::EcdsaP384Sha384(ROOT_SECRET_384),
+            Authority::Rsa2048 => TestKey::Rsa(RSA_2048, RsaScheme::PssSha256),
+            Authority::Rsa4096 => TestKey::Rsa(RSA_4096, RsaScheme::PssSha256),
         }
     }
 
@@ -78,6 +87,8 @@ impl Authority {
             Authority::Ed25519 => TestKey::Ed25519(LEAF_SECRET),
             Authority::EcdsaP256 => TestKey::EcdsaSha256(LEAF_SECRET),
             Authority::EcdsaP384 => TestKey::EcdsaP384Sha384(LEAF_SECRET_384),
+            Authority::Rsa2048 => TestKey::Rsa(RSA_2048, RsaScheme::PssSha256),
+            Authority::Rsa4096 => TestKey::Rsa(RSA_4096, RsaScheme::PssSha256),
         }
     }
 
@@ -87,6 +98,7 @@ impl Authority {
             Authority::Ed25519 => 0x0807,
             Authority::EcdsaP256 => 0x0403,
             Authority::EcdsaP384 => 0x0503,
+            Authority::Rsa2048 | Authority::Rsa4096 => 0x0804,
         }
     }
 }
@@ -128,7 +140,7 @@ fn window() -> (CivilTime, CivilTime) {
 /// A certificate and the bytes it lives in.
 struct Built {
     /// The encoding.
-    bytes: [u8; 1024],
+    bytes: [u8; MAX_CERTIFICATE],
     /// How much of it is the certificate.
     length: usize,
 }
@@ -142,7 +154,7 @@ impl Built {
 
 /// Builds one certificate.
 fn certificate(params: &Params<'_>, subject: TestKey, issuer: TestKey) -> Built {
-    let mut bytes = [0u8; 1024];
+    let mut bytes = [0u8; MAX_CERTIFICATE];
     let length = build(params, subject, issuer, &mut bytes).expect("the parameters fit");
     Built { bytes, length }
 }
@@ -520,13 +532,13 @@ fn certificate_verify(key: TestKey, scheme: u16, transcript: &[u8]) -> Vec<u8> {
     content.extend_from_slice(b"TLS 1.3, server CertificateVerify");
     content.push(0x00);
     content.extend_from_slice(transcript);
-    let mut signature = [0u8; 128];
+    let mut signature = [0u8; 512];
     let length = key
         .sign(&content, &mut signature)
         .expect("the key signs and the signature fits");
     let signature = signature.get(..length).unwrap_or(&[]).to_vec();
 
-    let mut buffer = [0u8; 256];
+    let mut buffer = [0u8; 1024];
     let mut writer = Writer::new(&mut buffer);
     writer
         .u8(HandshakeType::CertificateVerify.to_byte())
@@ -986,6 +998,104 @@ fn outcome_of(
     client.poll()
 }
 
+/// A whole handshake over an RSA chain, which is what the whole of steps
+/// R1 to R6 is for: `www.ietf.org`, `www.rust-lang.org`, and
+/// `www.bbc.co.uk` are all RSA to the root, and none of them was
+/// reachable before.
+fn a_connection_is_made_over(authority: Authority) {
+    let root = root_of(authority);
+    let anchors = trusted(&root);
+    let config = ClientConfig::new(NAME, TrustAnchors::new(&anchors), now());
+
+    let mut fixture = Fixture::new();
+    let mut rng = ScriptedRng::new(&fixture.script);
+    let mut client = Connection::new(
+        &config,
+        &mut rng,
+        Buffers {
+            incoming: &mut fixture.incoming,
+            outgoing: &mut fixture.outgoing,
+            handshake: &mut fixture.handshake,
+        },
+    )
+    .expect("the buffers are big enough");
+
+    let mut wire = vec![0u8; 8192];
+    let written = client.write_tls(&mut wire).expect("room");
+    let first = wire.get(..written).unwrap_or(&[]).to_vec();
+    let (_, _, hello_len) = record::read(&first)
+        .expect("well formed")
+        .expect("complete");
+
+    let mut flight = Vec::new();
+    let mut server = Server::answer_as(
+        authority,
+        first.get(..hello_len).unwrap_or(&[]),
+        &mut flight,
+    );
+
+    let taken = client.read_tls(&flight).expect("room");
+    assert_eq!(taken, flight.len());
+    assert_eq!(client.poll(), Ok(Event::WantsWrite));
+    assert!(client.is_handshaked(), "the handshake is done");
+
+    let written = client.write_tls(&mut wire).expect("room");
+    server.take_client_finished(wire.get(..written).unwrap_or(&[]));
+
+    let answer = server.send(b"an answer");
+    client.read_tls(&answer).expect("room");
+    let mut out = vec![0u8; 16_384];
+    let length = client.recv(&mut out).expect("the record opens");
+    assert_eq!(out.get(..length), Some(&b"an answer"[..]));
+}
+
+#[test]
+fn a_connection_is_made_when_the_server_signs_with_rsa() {
+    a_connection_is_made_over(Authority::Rsa2048);
+}
+
+/// The same at the widest key the client accepts, which is the one
+/// `MAX_SPKI` is sized for: five hundred and fifty bytes of subject
+/// public key information, where a P-384 chain needs a hundred and
+/// twenty.
+#[test]
+fn a_connection_is_made_when_the_server_key_is_the_widest_allowed() {
+    a_connection_is_made_over(Authority::Rsa4096);
+}
+
+/// D-82, the half of it that refuses. This client offers
+/// `rsa_pkcs1_sha256` and its two siblings in the `ClientHello`, because
+/// RFC 8446 section 4.2.3 gives them exactly one meaning — that a
+/// certificate may be signed that way — and the same section forbids them
+/// in a `CertificateVerify`. The two directions are tested here and in
+/// `super::handshake`, and they do not contradict each other: the offer
+/// is about the chain, the refusal is about this signature.
+#[test]
+fn a_certificate_verify_naming_a_pkcs1_scheme_is_refused() {
+    let root = root_of(Authority::Rsa2048);
+    let anchors = trusted(&root);
+    for scheme in [0x0401u16, 0x0501, 0x0601] {
+        assert_eq!(
+            outcome_of(
+                Authority::Rsa2048,
+                Deviation {
+                    scheme: Some(scheme),
+                    ..Deviation::default()
+                },
+                &anchors,
+            ),
+            Err(TlsError::IllegalParameter),
+            "{scheme:#06x} in a CertificateVerify"
+        );
+    }
+    // The PSS code point over the same key is the one that works.
+    assert_eq!(
+        outcome_of(Authority::Rsa2048, Deviation::default(), &anchors),
+        Ok(Event::WantsWrite),
+        "rsa_pss_rsae_sha256 over an RSA key"
+    );
+}
+
 #[test]
 fn a_scheme_that_names_another_curve_than_the_certificate_is_refused() {
     // RFC 8446 section 4.2.3: an ECDSA code point names the curve as
@@ -1028,7 +1138,9 @@ fn a_scheme_that_names_another_curve_than_the_certificate_is_refused() {
         "a P-256 certificate under the scheme that names Ed25519"
     );
 
-    // And a code point this client never offered.
+    // And a code point this client does offer, over a key it does not
+    // stand for: `rsa_pss_rsae_sha256` names an RSA key, and the
+    // certificate carries a point of P-256.
     assert_eq!(
         outcome_of(
             Authority::EcdsaP256,
@@ -1039,7 +1151,7 @@ fn a_scheme_that_names_another_curve_than_the_certificate_is_refused() {
             &anchors,
         ),
         Err(TlsError::IllegalParameter),
-        "rsa_pss_rsae_sha256, which was not offered"
+        "rsa_pss_rsae_sha256 over a curve key"
     );
 
     // The pair the code point does stand for still works.

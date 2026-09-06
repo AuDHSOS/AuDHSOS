@@ -29,6 +29,47 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `audhsos-tls` offers and honours the RSA signature schemes, step R5 of
+  the RSA track, and the seam section 11.11 named as open is closed.
+
+  Six code points join `signature_algorithms` in the `ClientHello`, so it
+  now carries nine. The three `rsa_pss_rsae_*` are accepted in a
+  `CertificateVerify` over an RSA key. The three `rsa_pkcs1_*` are
+  refused there, by an arm of their own so that the refusal is visible
+  rather than a fall-through — RFC 8446 section 4.2.3 gives those code
+  points exactly one meaning, that a certificate may be signed that way,
+  and forbids them in a handshake signature (D-82). Offering what one
+  refuses is not a contradiction here: the offer is about the chain, the
+  refusal is about the signature the server makes itself, and both
+  directions have a test.
+
+  `MAX_SPKI` goes from 128 to 550, which is what an RSA-4096 subject
+  public key information occupies — fifteen for the algorithm identifier,
+  five hundred and twenty-six for the inner sequence of two integers, five
+  for the bit string, four for the outer sequence. The 160-byte buffer
+  that holds the signed content does not change: the transcript hash is
+  the cipher suite's, which is SHA-256 or SHA-384 and never SHA-512,
+  however the signature is hashed.
+
+  The replay of RFC 8448 now checks the server's signature. It did not
+  before, and the reason was that the trace signs with
+  `rsa_pss_rsae_sha256`. The `CertificateVerify` of the simple 1-RTT
+  handshake verifies through `crypto-rsa` under the key section 2 of that
+  document prints, against the transcript this crate computes, and fails
+  against a transcript one bit different. The key is a thousand and
+  twenty-four bits, below what a certificate may carry (D-79), so the
+  chain around the signature stays stubbed and the signature inside it
+  does not. The whole path is walked in the state-machine test instead,
+  twice: against a server with a two-thousand-and-forty-eight-bit RSA
+  chain and against one at four thousand and ninety-six.
+
+  `audhsos-tls` gained no dependency for any of this. The crate table of
+  section 11.3 said it would take `crypto-rsa`; a handshake signature is
+  verified the way a certificate signature is, through
+  `SubjectPublicKey::verify`, so the edge that carries RSA into the client
+  is the one to `audhsos-x509` that was already there. The table is
+  corrected.
+
 - `audhsos-x509` reads and verifies RSA, step R4 of the RSA track. `oid`
   gains `rsaEncryption`, the three `sha*WithRSAEncryption` arcs,
   `id-RSASSA-PSS`, `id-mgf1`, and the three hash identifiers, each with

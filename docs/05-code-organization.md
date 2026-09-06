@@ -139,7 +139,7 @@ AuDHSOS/
 | `crypto-ec` | c2 | all | no | yes | `crypto-bignum`, `crypto-ct`, `crypto-hash`; feature `test-signing` |
 | `crypto-rng` | c2 | all | no | yes | `crypto-ct`, `crypto-aead`; feature `test-doubles` |
 | `crypto-rsa` | c2 | all | no | yes, fuzz | `crypto-bignum`, `crypto-ct`, `crypto-hash`; feature `test-signing` |
-| `audhsos-x509` | c3 | all | no | yes, fuzz | `audhsos-der`, `audhsos-time`, `crypto-hash`, `crypto-ec`; feature `test-certificates` |
+| `audhsos-x509` | c3 | all | no | yes, fuzz | `audhsos-der`, `audhsos-time`, `crypto-hash`, `crypto-ec`, `crypto-rsa`; feature `test-certificates` |
 | `audhsos-tls` | c4 | all | no | yes, fuzz | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-time`, `audhsos-x509` |
 | `net-wire` | n0 | all | no | yes | `test-support` as a dev-dependency |
 | `net-eth` | n1 | all | no | yes | `net-wire`, `audhsos-time`, `audhsos-collections`; `test-support` as a dev-dependency |

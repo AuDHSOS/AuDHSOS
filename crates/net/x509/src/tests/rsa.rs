@@ -11,7 +11,7 @@ use crate::algorithm::{MAX_RSA_BITS, MIN_RSA_BITS, SignatureAlgorithm, SubjectPu
 use crate::builder::{Params, RsaScheme, RsaTestKey, TestKey};
 use crate::error::X509Error;
 use crate::oid;
-use crate::tests::rsa_keys::{RSA_2048, RSA_2048_MODULUS, RSA_4096};
+use crate::test_keys::{RSA_2048, RSA_2048_MODULUS, RSA_4096};
 use crate::tests::{build_certificate, early, late};
 
 /// A value with the given tag and content, for the identifiers this file

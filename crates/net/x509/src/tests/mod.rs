@@ -13,7 +13,6 @@ mod name;
 mod parts;
 mod path;
 mod rsa;
-mod rsa_keys;
 
 use audhsos_time::CivilTime;
 
