@@ -451,7 +451,7 @@ fn install_all(
     match program.grant {
         Grant::None => {}
         Grant::Ram => {
-            for region in startup.ram.iter().skip(1).take(MAX_RAM) {
+            for region in startup.ram.iter().skip(1) {
                 let handle =
                     gate.process_install_handle(child, region.handle(), ObjectRights::MEMORY)?;
                 push(&mut given, &mut count, Role::Ram, handle)?;
@@ -485,10 +485,6 @@ fn install_all(
 /// How many pairs the startup message holds: it is a run of role and
 /// handle over the message area, so half the words of one.
 const MAX_GIVEN: usize = audhsos_abi::layout::MAX_MESSAGE_WORDS / 2;
-
-/// How many memory objects fit beside the rest. Six roles is the most any
-/// program of the table is given besides its memory.
-const MAX_RAM: usize = MAX_GIVEN - 6;
 
 /// Records one pair of the startup message.
 ///

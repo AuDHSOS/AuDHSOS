@@ -6,7 +6,7 @@
 //!
 //! A system call is three steps — write the call number and the arguments
 //! into the page, execute `int 0x80`, read the status word back — and the
-//! forty-one methods here are those three steps with the names and the
+//! forty-two methods here are those three steps with the names and the
 //! types of the call table. Everything they need of the machine is the
 //! address of the page, which the kernel put in the first argument register
 //! when it started the thread.

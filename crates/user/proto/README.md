@@ -11,4 +11,6 @@ a single word.
 
 Every reply begins with a status word — zero, or the code of the error the
 server answers with — so that a client reads the outcome of a request from
-the same place whatever the request was.
+the same place whatever the request was. The parent protocol has no reply:
+its one message is what a child says on its way out, and there is nobody
+left to answer.

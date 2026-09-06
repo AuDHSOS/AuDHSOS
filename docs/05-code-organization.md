@@ -333,7 +333,7 @@ binaries (`cargo`, `rustc`, `rustfmt`, `cargo-clippy`, `cargo-miri`,
 | Subcommand | Purpose |
 |------------|---------|
 | `build [--release]` | build the loader, the kernel, the userland binaries, and the boot image |
-| `image` | assemble the boot image (root task flat binary plus tar archive) and the disk image (GPT, FAT32 file system, loader, kernel, boot image) |
+| `image` | assemble the boot image (root task ELF plus tar archive) and the disk image (GPT, FAT32 file system, loader, kernel, boot image) |
 | `run [--display]` | boot the system in QEMU with the serial console on the terminal; `--display` opens QEMU's display window instead of `-display none` |
 | `qemu-runner <elf>` | the Cargo runner for the kernel target: wraps a test kernel into a disk image, runs QEMU with a timeout, parses the serial protocol, maps the exit status |
 | `test [--host] [--qemu] [--e2e]` | run the selected test levels; default runs all |

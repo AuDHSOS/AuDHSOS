@@ -83,13 +83,25 @@ impl SerialConsole {
 /// kernel writes nothing there: two writers on one line make one stream of
 /// interleaved halves and no reader can take them apart.
 ///
-/// The panic handler is the exception, and it is not one in practice: after
-/// a kernel panic nothing else writes.
+/// The end of the machine is the exception, and it is not one in practice:
+/// after a kernel panic or a fault of the kernel itself nothing else
+/// writes, so [`reclaim`] takes the line back and the last thing the
+/// machine says is said.
 static OURS: AtomicBool = AtomicBool::new(true);
 
 /// Gives the controller up, because somebody else has begun to drive it.
 pub fn give_up() {
     OURS.store(false, Ordering::SeqCst);
+}
+
+/// Takes the controller back, because the machine is ending and nothing
+/// else will write on the line.
+///
+/// This is for the panic handler and for the paths that end the machine,
+/// and for nothing else: a kernel that took the line back while a driver
+/// still held it would interleave with it.
+pub fn reclaim() {
+    OURS.store(true, Ordering::SeqCst);
 }
 
 /// `true` while the kernel is still the one writing on the line.

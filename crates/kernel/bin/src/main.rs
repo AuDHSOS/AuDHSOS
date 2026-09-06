@@ -357,6 +357,9 @@ fn on_trap(report: TrapReport) {
 /// Reports a panic through the console and ends the machine.
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
+    // As `entry::fail`: the machine is ending, so the line is the
+    // kernel's again.
+    kernel_hal_x86_64::console::reclaim();
     entry::with_console(|console| {
         use kernel_core::println;
         println!(console, "[panic] {}", info.message());

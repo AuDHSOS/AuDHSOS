@@ -131,7 +131,7 @@ Deliverables: handle tables, quotas, object types `Process`, `Thread`,
 `MemoryObject`; scheduler; the context-switch naked function; user-mode
 entry with synthesized frames; IPC buffer; system call vector `0x80`; the
 `syscalls!` table in `audhsos-abi`; dispatcher and validation; twenty of the
-forty-one system calls, those for processes except the fault handler, for
+forty-one system calls the table held then, those for processes except the fault handler, for
 threads, for memory, and for handles, plus `debug_log`; every other call
 returns `Unsupported`; faults put threads into `Faulted`. User-mode test
 programs are `user-sys-x86_64` binaries embedded in test kernels as flat

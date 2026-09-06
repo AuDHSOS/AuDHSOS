@@ -5,7 +5,7 @@ the kernel jumps to, and the instruction that makes a system call.
 
 A thread starts at `_start` with the address of its IPC buffer in the first
 argument register, which is where the kernel put it. That address is the
-whole of what `Gate` holds, and the forty-one wrappers of the gate are the
+whole of what `Gate` holds, and the forty-two wrappers of the gate are the
 system call table with names and types: each writes the call number and its
 arguments into the buffer, executes `int 0x80`, and turns the status word
 into a `Result`.

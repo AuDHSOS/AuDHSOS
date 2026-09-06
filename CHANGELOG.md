@@ -107,6 +107,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- Three unsafe budgets rise and a fourth opens (D-96): `kernel-hal-x86_64`
+  to 144 for the read of the root task out of the boot image,
+  `audhsos-kernel` to 31 for the bring-up of that task, `user-sys-x86_64`
+  to 21 for the gate over a thread's IPC buffer, and `user-programs` at 18
+  with no assembly at all. R4 asks for an entry whenever a budget rises,
+  and this phase had raised three without one.
+
 - The register entries of this phase moved from D-87 to D-93 up to D-89 to
   D-95, main having taken D-87 and D-88 for the network work while the
   branch was open. Commit subjects written before the merge name the old
@@ -128,12 +135,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   caught the missing wrapper for `memory_merge` the hour that call was
   added.
 
-- The kernel owns COM1 until the userland takes it, and the handover and not
-  a feature flag decides who writes. `ioport_create` over the range of the
-  port makes the kernel give the line up; after that it writes nothing,
-  `debug_log` included. So `debug-uart` stays in both profiles: there is no
-  silent window while the first servers come up, and no interleaving once
-  the driver runs.
+- The kernel owns COM1 until the userland drives it, and the handover and
+  not a feature flag decides who writes. The first read or write of one of
+  its ports through an `IoPortRange` capability makes the kernel give the
+  line up; after that it writes nothing, `debug_log` included. The handover
+  is the access and not the creation of the capability, because the root
+  task creates the range itself and logs through the kernel until the driver
+  it hands it to touches a register. A panic or a fault of the kernel takes
+  the line back, because after it nothing else writes. So `debug-uart` stays
+  in both profiles: there is no silent window while the first servers come
+  up, and no interleaving once the driver runs.
 
 - D-86: four unsafe budgets rise, and a process and a thread each hold one
   reference to themselves. The budgets are `kernel-hal-x86_64` (129 to 142

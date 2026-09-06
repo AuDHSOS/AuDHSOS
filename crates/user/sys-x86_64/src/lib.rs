@@ -133,10 +133,11 @@ macro_rules! program {
     ($main:path) => {
         /// The address the kernel starts the thread at.
         ///
-        /// The section is what puts it at the front of the program: the
-        /// kernel maps a flat binary and jumps at its base, so the entry
-        /// point has to be the first byte and not wherever the linker
-        /// would otherwise have put it.
+        /// The section is what puts it at the front of the program. The
+        /// entry point of an ELF is named by its header, so this is no
+        /// longer needed to be found; it is kept because it puts the one
+        /// function the kernel jumps to where a reader of a disassembly
+        /// looks for it first.
         ///
         /// # Safety
         ///

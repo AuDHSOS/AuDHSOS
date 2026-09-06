@@ -3,9 +3,9 @@
 
 //! Points the linker at the script each program needs.
 //!
-//! The root task is a flat binary at the address the kernel maps it to;
-//! everything else is an executable in the archive, linked where the loader
-//! is happy to put it.
+//! The root task is linked at the address the kernel maps it to, with
+//! every section on a page of its own; everything else is an executable in
+//! the archive, linked where the loader is happy to put it.
 
 fn main() {
     let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));

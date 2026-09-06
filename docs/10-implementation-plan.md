@@ -1661,7 +1661,8 @@ the stack, the IPC buffer, and the pool slot stay until the kernel has
 switched away from it; the state `Exited` is the whole record of what is
 left to do. The kernel calls `reap` after a switch.
 
-Phase 5 implements twenty of the forty-one calls: `process_create`,
+Phase 5 implements twenty of the forty-one calls the table held then
+(`memory_merge` is the forty-second and comes in Phase 7, D-90): `process_create`,
 `process_install_handle`, `process_kill`, the nine thread calls
 (`thread_create` through `thread_yield`), the five memory calls
 (`memory_split` through `memory_info`), `handle_duplicate`,
@@ -2244,9 +2245,11 @@ sends it to the log endpoint.
 Name protocol: `Register { name: [u8; 32], endpoint handle }`,
 `Lookup { name } -> endpoint`; console protocol: `Write { bytes in words }`,
 `Read { max } -> bytes`; memory protocol: `Allocate { len, align } ->
-memory handle`, `Release { handle }`; each message a struct with
-`encode(&self, &mut Message)` and `decode(&Message) -> Result`, labels as
-constants, versions in the label's high 16 bits.
+memory handle`, `Release { handle }`; parent protocol: `Finished { status }`
+and no reply, because the child that sends it exits behind it (D-94); each
+message a struct with `encode(&self, &mut Message)` and
+`decode(&Message) -> Result`, labels as constants, versions in the label's
+high 16 bits.
 
 ### 10.7.4 `user-loader` (`crates/user/loader`)
 
@@ -2330,9 +2333,13 @@ of frames is a range of bytes.
   its own so that no two segments share one set of permissions (D-92).
 - The xtask `image` writes the real boot image: header, root task, ustar
   archive of the server and application ELFs.
-- The kernel owns COM1 until userland takes it: `ioport_create` over the
-  range of the port makes the kernel give the line up, and after that it
-  writes nothing, `debug_log` included. So `debug-uart` stays in both
+- The kernel owns COM1 until userland drives it: the first read or write of
+  one of its ports through an `IoPortRange` capability makes the kernel give
+  the line up, and after that it writes nothing, `debug_log` included. The
+  handover is the access and not the creation of the capability, because the
+  root task creates the range itself and logs through the kernel until the
+  driver it hands it to touches a register. A panic or a fault of the kernel
+  takes the line back, because after it nothing else writes. So `debug-uart` stays in both
   profiles — there is no silent window while the first servers come up,
   and no interleaving afterwards, because the handover and not a feature
   flag decides who writes.

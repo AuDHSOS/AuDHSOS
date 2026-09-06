@@ -263,9 +263,15 @@ There is one implementation of every algorithm.
   process's creator inspects it with `thread_info`.
 - A fault in kernel mode prints diagnostics on the debug UART, exits QEMU
   with the failure code (if compiled in), and otherwise halts. The kernel
-  writes on the serial line until the userland takes the port over — an
-  `IoPortRange` over it is the handover — and after that only the panic
-  handler does, because after a panic no driver writes either.
+  writes on the serial line until the userland takes the port over: the
+  handover is the first read or write of one of its ports through an
+  `IoPortRange` capability, not the creation of that capability, because
+  the root task creates the range itself and still logs through the kernel
+  until the driver it hands it to actually drives the controller. After the
+  handover the kernel writes nothing there, `debug_log` included. The
+  exception is the end of the machine — a panic or a fault of the kernel
+  itself — which takes the line back, because after it nothing else
+  writes.
 - Double faults run on a separate interrupt stack (IST).
 
 ## 2.5 Threads and scheduling
@@ -527,7 +533,7 @@ through shared memory objects.
 
 | Crate | Content | `unsafe` |
 |-------|---------|----------|
-| `user-sys-x86_64` | `_start`, the `int 0x80` wrapper, the `GlobalAlloc` adapter that turns allocator offsets into pointers | allowlisted |
+| `user-sys-x86_64` | `_start`, the `int 0x80` wrapper, the gate over the thread's IPC buffer | allowlisted |
 | `user-rt` | typed handle newtypes with `Drop`, system call wrappers over the IPC buffer, message builder and parser, safe offset-based heap allocator, panic handler that reports over a log endpoint and exits, logging macros | no |
 | `user-proto` | message encodings for the name and console protocols, versioned labels | no |
 | `user-loader` | tar (ustar) reader; process creation from an ELF using `audhsos-elf` | no |
