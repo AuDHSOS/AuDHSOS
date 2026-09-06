@@ -239,6 +239,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kernel-ipc"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "kernel-objects",
+ "kernel-sched",
+ "kernel-types",
+ "test-support",
+]
+
+[[package]]
 name = "kernel-mm"
 version = "0.1.0"
 dependencies = [

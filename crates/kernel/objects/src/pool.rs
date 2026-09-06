@@ -330,6 +330,22 @@ impl<T, const N: usize> Pool<T, N> {
         Ok(freed)
     }
 
+    /// Does something to the object `id` names, if the pool holds it, and
+    /// says whether it did.
+    ///
+    /// Every caller that changes an object it has already looked up goes
+    /// through this: the lookup cannot fail there, and writing it out at
+    /// each of them would be a branch per caller that nothing can reach.
+    pub fn with(&mut self, id: ObjectId<T>, body: impl FnOnce(&mut T)) -> bool {
+        match self.get_mut(id) {
+            Ok(value) => {
+                body(value);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Every live object with its id, in slot order.
     pub fn iter(&self) -> impl Iterator<Item = (ObjectId<T>, &T)> {
         self.slots.iter().enumerate().filter_map(|(index, slot)| {

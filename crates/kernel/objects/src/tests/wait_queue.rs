@@ -204,3 +204,63 @@ fn every_thread_of_a_full_queue_comes_back_out_in_order() {
     assert!(queue.is_empty());
     assert_eq!(queue.len(), 0);
 }
+
+#[test]
+fn a_thread_that_comes_back_goes_before_the_threads_it_was_ahead_of() {
+    let mut threads = Threads::new();
+    let mut queue = WaitQueue::EMPTY;
+    let first = spawn(&mut threads, 4);
+    let second = spawn(&mut threads, 4);
+    let low = spawn(&mut threads, 1);
+    for id in [first, second, low] {
+        queue.enqueue(&mut threads, id).unwrap();
+    }
+    assert_eq!(queue.dequeue_front(&mut threads), Some(first));
+    queue.requeue(&mut threads, first).unwrap();
+    assert_eq!(
+        order(&queue, &threads),
+        vec![first, second, low],
+        "back where it was, not behind its equals"
+    );
+    assert_eq!(queue.len(), 3);
+}
+
+#[test]
+fn a_thread_that_comes_back_to_an_empty_queue_is_the_whole_of_it() {
+    let mut threads = Threads::new();
+    let mut queue = WaitQueue::EMPTY;
+    let only = spawn(&mut threads, 4);
+    queue.enqueue(&mut threads, only).unwrap();
+    assert_eq!(queue.dequeue_front(&mut threads), Some(only));
+    queue.requeue(&mut threads, only).unwrap();
+    assert_eq!(order(&queue, &threads), vec![only]);
+    assert_eq!(queue.head(), Some(only));
+    assert_eq!(queue.tail(), Some(only));
+}
+
+#[test]
+fn a_thread_that_comes_back_behind_a_higher_priority_stays_behind_it() {
+    let mut threads = Threads::new();
+    let mut queue = WaitQueue::EMPTY;
+    let high = spawn(&mut threads, 9);
+    let middle = spawn(&mut threads, 4);
+    queue.enqueue(&mut threads, high).unwrap();
+    queue.enqueue(&mut threads, middle).unwrap();
+    assert!(queue.unlink(&mut threads, middle));
+    queue.requeue(&mut threads, middle).unwrap();
+    assert_eq!(order(&queue, &threads), vec![high, middle]);
+}
+
+#[test]
+fn a_thread_that_already_waits_cannot_come_back_a_second_time() {
+    let mut threads = Threads::new();
+    let mut queue = WaitQueue::EMPTY;
+    let only = spawn(&mut threads, 4);
+    queue.enqueue(&mut threads, only).unwrap();
+    assert_eq!(queue.requeue(&mut threads, only), Err(Error::InvalidState));
+    let stale: ThreadId = ObjectId::new(7, 3);
+    assert_eq!(
+        queue.requeue(&mut threads, stale),
+        Err(Error::InvalidHandle)
+    );
+}

@@ -97,6 +97,34 @@ impl WaitQueue {
         Ok(())
     }
 
+    /// Puts `id` back where a rendezvous took it from: at the front of its
+    /// own priority, before the threads it was already ahead of.
+    ///
+    /// This is for the one caller that has to undo a meeting — a message the
+    /// system call layer could not copy — and it is right because nothing
+    /// runs between the meeting and the copy: the kernel holds the machine
+    /// for the whole of a system call, so no thread has arrived since.
+    ///
+    /// # Errors
+    ///
+    /// As [`WaitQueue::enqueue`].
+    pub fn requeue<const N: usize>(
+        &mut self,
+        threads: &mut Pool<Thread, N>,
+        id: ThreadId,
+    ) -> Result<(), Error> {
+        let priority = threads.get(id).map_err(|_| Error::InvalidHandle)?.priority;
+        if !links_of(threads, id)?.is_unlinked() || self.head == Some(id) {
+            return Err(Error::InvalidState);
+        }
+        match self.first_at_or_below(threads, priority) {
+            Some(next) => self.link_before(threads, id, next)?,
+            None => self.append(threads, id)?,
+        }
+        self.len = self.len.saturating_add(1);
+        Ok(())
+    }
+
     /// Takes the thread at the front out of the queue.
     pub fn dequeue_front<const N: usize>(
         &mut self,
@@ -142,18 +170,35 @@ impl WaitQueue {
     }
 
     /// The first thread of the queue whose priority is below `priority`,
-    /// which is where a thread of that priority goes. The walk is the
-    /// iterator, so it is bounded by the length the queue records.
+    /// which is where a thread of that priority goes.
     fn first_below<const N: usize>(
         &self,
         threads: &Pool<Thread, N>,
         priority: u8,
     ) -> Option<ThreadId> {
-        self.iter(threads).find(|id| {
-            threads
-                .get(*id)
-                .is_ok_and(|thread| thread.priority < priority)
-        })
+        self.find_by_priority(threads, |waiting| waiting < priority)
+    }
+
+    /// The first thread of the queue whose priority is at most `priority`,
+    /// which is where a thread returning to its old place goes.
+    fn first_at_or_below<const N: usize>(
+        &self,
+        threads: &Pool<Thread, N>,
+        priority: u8,
+    ) -> Option<ThreadId> {
+        self.find_by_priority(threads, |waiting| waiting <= priority)
+    }
+
+    /// The first thread of the queue whose priority satisfies `wanted`. The
+    /// walk is the iterator, so it is bounded by the length the queue
+    /// records.
+    fn find_by_priority<const N: usize>(
+        &self,
+        threads: &Pool<Thread, N>,
+        wanted: impl Fn(u8) -> bool,
+    ) -> Option<ThreadId> {
+        self.iter(threads)
+            .find(|id| threads.get(*id).is_ok_and(|thread| wanted(thread.priority)))
     }
 
     /// Puts `id` at the back of the queue.

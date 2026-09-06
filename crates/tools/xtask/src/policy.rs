@@ -339,6 +339,20 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "kernel-ipc",
+        path: "crates/kernel/ipc",
+        kind: Kind::Logic,
+        deps: &[
+            "kernel-objects",
+            "kernel-sched",
+            "kernel-types",
+            "audhsos-abi",
+            "test-support",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "kernel-syscall",
         path: "crates/kernel/syscall",
         kind: Kind::Logic,

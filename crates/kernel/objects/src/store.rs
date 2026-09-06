@@ -213,6 +213,49 @@ impl<const NP: usize, const NT: usize, const NM: usize, const NH: usize> Objects
         ]
     }
 
+    /// Installs `entry` as a handle of `process` and returns the handle.
+    ///
+    /// The list of a process lives in the process object and the slots live
+    /// in the arena, so an insertion reads the list out, changes it, and
+    /// writes it back. That is one place and not one per caller.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidHandle`] when the process is gone;
+    /// [`Error::QuotaExceeded`] when it holds as many handles as its creator
+    /// granted it; [`Error::OutOfHandles`] when the arena has no slot left.
+    pub fn install_handle(&mut self, process: ProcessId, entry: Entry) -> Result<Handle, Error> {
+        let mut list = self.processes.get(process)?.handles;
+        let handle = self.handles.insert(process, &mut list, entry)?;
+        self.processes.with(process, |held| held.handles = list);
+        Ok(handle)
+    }
+
+    /// Removes `handle` from `process` and returns what it named.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidHandle`] when the process is gone or holds no such
+    /// handle.
+    pub fn close_handle(&mut self, process: ProcessId, handle: Handle) -> Result<Entry, Error> {
+        let mut list = self.processes.get(process)?.handles;
+        let entry = self.handles.close(process, &mut list, handle)?;
+        self.processes.with(process, |held| held.handles = list);
+        Ok(entry)
+    }
+
+    /// Closes the first handle of `process` and returns what it named, or
+    /// `None` when it holds none.
+    ///
+    /// One at a time, so that every entry a dying process held passes
+    /// through the caller's release path.
+    pub fn close_next_handle(&mut self, process: ProcessId) -> Option<Entry> {
+        let mut list = self.processes.get(process).ok()?.handles;
+        let entry = self.handles.close_next(&mut list);
+        self.processes.with(process, |held| held.handles = list);
+        entry
+    }
+
     /// Adds one reference to the object `id` names, whichever pool holds
     /// it.
     ///

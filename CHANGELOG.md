@@ -29,6 +29,49 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The crate `kernel-ipc` at `crates/kernel/ipc`, layer 3: the rendezvous
+  state machine over the object pools and the scheduler. Endpoints with a
+  queue of senders and one of receivers, reply objects, notifications,
+  message transfer, interrupt delivery, and what a destroyed object owes the
+  threads that waited on it.
+
+  Every endpoint operation is two steps, because a message moves through two
+  IPC buffers and nothing in this crate reaches a frame or an address space.
+  The first step finds the peer or queues the caller; the caller then copies;
+  the second step says what became of the two threads. Between the two steps
+  the endpoint holds neither of them, which is what makes a refused copy
+  leave nothing behind — and `undo_meeting` puts the peer back at the front
+  of its own priority, where the meeting took it from, because nothing runs
+  between the meeting and the copy.
+
+  `transfer` is the one function that moves a message, and its order is what
+  makes a refused message change nothing: the header is validated first,
+  then every handle is resolved in the sender's list and checked for
+  `TRANSFER`, and only then are the words copied and the handles installed.
+  A handle without that right therefore fails before any other handle of the
+  same message is installed. Installation stops when the receiver's list is
+  full: the message is delivered, the receiver's handle count says how many
+  arrived, and its status word carries `PARTIAL`, which is the error flag of
+  2.6.2 and not an error. The reserved label range is checked at the entry
+  of `ipc_send` and `ipc_call` and not here, because the fault message the
+  kernel builds carries such a label by construction.
+
+  Every operation returns an `Outcome`: whether the caller blocks, its
+  status and return words when it does not, which thread became ready and
+  what goes into its buffer, and whether the caller should switch. A
+  destroyed object returns `Waiters`, which hands out the threads it left one
+  at a time — there can be as many of them as the machine has threads, and
+  each needs its own buffer written (D-75).
+
+  Two things the writing settled. `WaitQueue` keeps its operations in
+  `kernel-objects`, beside the pool its links thread through, because a
+  method has to live in the crate that defines the type and the queue is a
+  field of `Endpoint`; `kernel-ipc` is the rendezvous that uses it.  And a
+  thread queued as a sender has to say what it asked for, because whichever
+  side arrives second completes the meeting: `Queue` therefore has three
+  variants, `Senders` and `Callers` in the senders queue and `Receivers` in
+  the other, and a cancellation treats the first two alike.
+
 - One row in the transition table of `kernel-sched`: `BlockedSend` plus
   `BlockReply` is `BlockedReply`. It is the only transition from one blocked
   state to another, and it is the queued caller of `ipc_call`, which waited
