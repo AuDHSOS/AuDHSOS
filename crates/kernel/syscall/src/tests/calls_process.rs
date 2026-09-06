@@ -418,3 +418,36 @@ fn a_process_whose_handle_has_nowhere_to_go_is_taken_apart_again() {
     assert_eq!(holder.quota.used(), 0, "every quota went back");
     assert_eq!(holder.kernel_object_quota.used(), 0);
 }
+
+#[test]
+fn installing_a_badged_handle_carries_the_badge_with_it() {
+    // What a server knows a client by is the badge of the capability the
+    // message came through, and a capability a parent installs into a child
+    // has to arrive with the badge the parent put on it.
+    let mut fixture = Fixture::new();
+    let own = fixture.own_process.raw();
+    let endpoint = value_of(&mut fixture, request(Syscall::EndpointCreate, &[]));
+    let badged = value_of(
+        &mut fixture,
+        request(Syscall::EndpointBadge, &[endpoint, 0x5EED]),
+    );
+    let child = value_of(
+        &mut fixture,
+        request(Syscall::ProcessCreate, &[own, 4, 1, 1, 0]),
+    );
+    let installed = value_of(
+        &mut fixture,
+        request(
+            Syscall::ProcessInstallHandle,
+            &[child, badged, Rights::SEND.bits().into()],
+        ),
+    );
+    let target = Handle::from_raw(child)
+        .and_then(|handle| fixture.objects.entry(fixture.process, handle).ok())
+        .and_then(|entry| entry.object.typed::<Process>().ok())
+        .expect("a process");
+    let handle = Handle::from_raw(installed).expect("a handle");
+    let entry = fixture.objects.entry(target, handle).expect("the handle");
+    assert_eq!(entry.badge, 0x5EED, "the badge did not travel");
+    assert_eq!(entry.rights, Rights::SEND);
+}

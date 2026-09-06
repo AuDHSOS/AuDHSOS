@@ -50,19 +50,25 @@ AuDHSOS/
 │   │   ├── test-harness/      kernel-test-harness: in-QEMU test runner, serial protocol
 │   │   └── bin/               audhsos-kernel: the binary; tests/*.rs are QEMU test kernels
 │   ├── user/
-│   │   ├── sys-x86_64/        user-sys-x86_64: _start, trap instruction, GlobalAlloc adapter (unsafe allowed)
-│   │   ├── rt/                user-rt: typed handles, syscall wrappers, allocator logic, panic handler, logging
+│   │   ├── rt/                user-rt: typed handles, heap, message area, startup message, report lines
+│   │   ├── sys-x86_64/        user-sys-x86_64: _start, trap instruction, the gate and its wrappers (unsafe allowed)
 │   │   ├── proto/             user-proto: protocol encodings
-│   │   ├── loader/            user-loader: tar reader, process creation from ELF
-│   │   ├── servers/
-│   │   │   ├── init/          server-init: the root task
+│   │   ├── loader/            user-loader: tar reader, the segments a user ELF asks for
+│   │   ├── servers/           the logic of the servers, host-tested, no system call
 │   │   │   ├── name/          server-name
 │   │   │   ├── console/       server-console
 │   │   │   ├── memory/        server-memory
 │   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor (Phase 9)
 │   │   │   └── input/         server-input: i8042 driver process, event rings (Phase 10)
+│   │   ├── programs/          user-programs: every program of the system as one
+│   │   │   │                  binary each of one crate, because a program is a
+│   │   │   │                  loop around a logic crate and seven crates of a
+│   │   │   │                  loop each are seven manifests saying the same
+│   │   │   │                  thing (D-97)
+│   │   │   └── src/bin/       server-init (the root task), server-memory,
+│   │   │                      server-name, server-console, app-hello,
+│   │   │                      app-checks, app-faulter
 │   │   └── apps/
-│   │       ├── hello/         app-hello: end-to-end client
 │   │       └── canvas/        app-canvas: graphical demonstration and e2e client (Phase 11)
 │   ├── crypto/                (document 11)
 │   │   ├── ct/                crypto-ct: Choice, constant-time selection and comparison, Secret<N>
@@ -125,12 +131,15 @@ AuDHSOS/
 | `kernel-test-harness` | 5 | all | no | yes | `kernel-hal-api` |
 | `audhsos-kernel` | 6 | `x86_64-unknown-none` | allowlisted (the entry point, the memory and interrupt bring-up, and the test images) | QEMU | `kernel-core`, `kernel-hal-api`, `kernel-hal-x86_64`, `kernel-ipc`, `kernel-types`, `audhsos-abi`; `kernel-mm`, `kernel-objects`, `kernel-syscall`, `audhsos-sync` for the test images |
 | `boot-uefi-x86_64` | b | `x86_64-unknown-uefi` | allowlisted | pure sub-modules | `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `kernel-types`, `kernel-mm`, `kernel-hal-api` |
-| `user-sys-x86_64` | u0 | `x86_64-unknown-none` | allowlisted | through the programs of `user-test-programs` in QEMU | `audhsos-abi` |
-| `user-test-programs` | u0 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-sys-x86_64` |
-| `user-rt` | u1 | `x86_64-unknown-none` | no | yes | `audhsos-abi`, `user-sys-x86_64` |
-| `user-proto` | u1 | `x86_64-unknown-none` | no | yes | `audhsos-abi` |
-| `user-loader` | u2 | `x86_64-unknown-none` | no | yes, fuzz | `user-rt`, `user-proto`, `audhsos-elf` |
-| servers and apps | u3 | `x86_64-unknown-none` | no | logic on host, e2e in QEMU | `user-rt`, `user-proto`, `user-loader`, `driver-uart16550`, `driver-i8042`, `gfx` |
+| `user-rt` | u0 | all | no | yes | `audhsos-abi`, `audhsos-collections`; `test-support` as a dev-dependency |
+| `user-sys-x86_64` | u1 | `x86_64-unknown-none` | allowlisted | through the programs of `user-test-programs` in QEMU | `audhsos-abi`, `user-rt` |
+| `user-test-programs` | u1 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-rt`, `user-sys-x86_64` |
+| `user-proto` | u1 | all | no | yes | `audhsos-abi`, `user-rt` |
+| `user-loader` | u2 | all | no | yes, fuzz | `audhsos-abi`, `audhsos-elf`; `test-support` behind the feature `test-strategies` |
+| `server-name` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `user-proto` |
+| `server-memory` | u2 | all | no | yes, against a recording `Pages` | `audhsos-abi`, `audhsos-collections`; feature `test-doubles` |
+| `server-console` | u2 | all | no | yes | `audhsos-collections`, `driver-uart16550` |
+| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | the three server logic crates, `audhsos-abi`, `driver-uart16550`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
 | `crypto-ct` | c0 | all | no | yes | - |
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
 | `crypto-hash` | c1 | all | no | yes | `crypto-ct` |
@@ -290,8 +299,9 @@ Configured once in the workspace. Level `deny` unless stated.
 
 Project-defined logging macros: `klog!` in `kernel-core` writes through the
 `DebugConsole` trait when the feature is on and compiles to nothing
-otherwise; `log!` in `user-rt` sends to the log endpoint from the startup
-message.
+otherwise; `user_sys_x86_64::write_line` sends a line to the log
+endpoint of the startup message, or through `debug_log` while a program
+still has none.
 
 ## 5.6 Avoiding duplication
 
@@ -302,7 +312,7 @@ message.
 | UART register handling in the kernel debug console and in the userland console driver | `driver-uart16550` over a port access trait; two adapters (direct port I/O, `IoPortRange` system calls) |
 | i8042 register handling and PS/2 decoding | `driver-i8042` over its own port access trait, following the UART pattern; one adapter over `IoPortRange` system calls |
 | Pixel operations in the display server and in applications | `gfx`: one surface type, one font, one damage tracker; the display server and applications draw with the same code |
-| System call numbers, names, argument counts, kernel dispatch, userland wrappers | one declarative table in `audhsos-abi` (a `syscalls!` macro) consumed by the kernel dispatcher and by `user-rt` |
+| System call numbers, names, argument counts, kernel dispatch | one declarative table in `audhsos-abi` (a `syscalls!` macro) consumed by the kernel dispatcher; the wrappers of `user-sys-x86_64` are written out by hand and a constant assertion holds them to the same table (D-92) |
 | Object types, their rights masks, and `TryFrom<u32>` conversions | one declarative table in `audhsos-abi` |
 | Error mapping | one `From` implementation per crate pair, tested by a table |
 | Test doubles | one implementation in `kernel-hal-api` behind `test-doubles` |
@@ -329,7 +339,7 @@ binaries (`cargo`, `rustc`, `rustfmt`, `cargo-clippy`, `cargo-miri`,
 | Subcommand | Purpose |
 |------------|---------|
 | `build [--release]` | build the loader, the kernel, the userland binaries, and the boot image |
-| `image` | assemble the boot image (root task flat binary plus tar archive) and the disk image (GPT, FAT32 file system, loader, kernel, boot image) |
+| `image` | assemble the boot image (root task ELF plus tar archive) and the disk image (GPT, FAT32 file system, loader, kernel, boot image) |
 | `run [--display]` | boot the system in QEMU with the serial console on the terminal; `--display` opens QEMU's display window instead of `-display none` |
 | `qemu-runner <elf>` | the Cargo runner for the kernel target: wraps a test kernel into a disk image, runs QEMU with a timeout, parses the serial protocol, maps the exit status |
 | `test [--host] [--qemu] [--e2e]` | run the selected test levels; default runs all |

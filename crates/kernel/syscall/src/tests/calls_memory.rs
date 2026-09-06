@@ -634,3 +634,236 @@ fn mapping_with_a_full_region_table_is_refused_and_takes_its_pages_back() {
         .count();
     assert_eq!(unmapped, 1, "the page it had mapped went back");
 }
+
+#[test]
+fn merging_two_neighbours_makes_one_object_of_them() {
+    let mut fixture = Fixture::new();
+    let (lower, low) = fixture.memory(0x100, 2, full());
+    let (upper, high) = fixture.memory(0x102, 4, full());
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryMerge, &[low.raw(), high.raw()])
+        ),
+        None
+    );
+    let joined = *fixture.objects.memory.get(lower).unwrap();
+    assert_eq!(joined.frames.start().number(), 0x100);
+    assert_eq!(joined.frame_count(), 6, "the two ranges, end to end");
+    assert!(
+        fixture.objects.memory.get(upper).is_err(),
+        "the upper object is gone"
+    );
+    assert!(
+        fixture.objects.entry(fixture.process, high).is_err(),
+        "and so is the handle that named it"
+    );
+}
+
+#[test]
+fn what_a_split_made_a_merge_undoes() {
+    let mut fixture = Fixture::new();
+    let (object, handle) = fixture.memory(0x200, 8, full());
+    let raw = value_of(
+        &mut fixture,
+        request(Syscall::MemorySplit, &[handle.raw(), 3 * PAGE_SIZE]),
+    );
+    let second = Handle::from_raw(raw).expect("a handle");
+    assert_eq!(fixture.objects.memory.get(object).unwrap().frame_count(), 3);
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryMerge, &[handle.raw(), second.raw()])
+        ),
+        None
+    );
+    let back = *fixture.objects.memory.get(object).unwrap();
+    assert_eq!(back.frames.start().number(), 0x200);
+    assert_eq!(back.frame_count(), 8, "the object it was before the split");
+}
+
+#[test]
+fn merging_two_that_do_not_touch_is_refused() {
+    let mut fixture = Fixture::new();
+    let (_, low) = fixture.memory(0x100, 2, full());
+    let (_, high) = fixture.memory(0x110, 2, full());
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryMerge, &[low.raw(), high.raw()])
+        ),
+        Some(Error::InvalidArgument)
+    );
+}
+
+#[test]
+fn merging_them_the_wrong_way_round_is_refused() {
+    let mut fixture = Fixture::new();
+    let (_, low) = fixture.memory(0x100, 2, full());
+    let (_, high) = fixture.memory(0x102, 2, full());
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryMerge, &[high.raw(), low.raw()])
+        ),
+        Some(Error::InvalidArgument),
+        "the first argument is the lower part"
+    );
+}
+
+#[test]
+fn merging_an_object_with_itself_is_refused() {
+    let mut fixture = Fixture::new();
+    let (_, handle) = fixture.memory(0x100, 2, full());
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryMerge, &[handle.raw(), handle.raw()])
+        ),
+        Some(Error::InvalidArgument)
+    );
+}
+
+#[test]
+fn merging_two_that_carry_different_rights_is_refused() {
+    let mut fixture = Fixture::new();
+    let (_, low) = fixture.memory(0x100, 2, full());
+    let (_, high) = fixture.memory(0x102, 2, Rights::MAP | Rights::READ);
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryMerge, &[low.raw(), high.raw()])
+        ),
+        Some(Error::AccessDenied)
+    );
+}
+
+#[test]
+fn merging_without_the_map_right_is_refused() {
+    let mut fixture = Fixture::new();
+    let (_, low) = fixture.memory(0x100, 2, Rights::READ);
+    let (_, high) = fixture.memory(0x102, 2, Rights::READ);
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryMerge, &[low.raw(), high.raw()])
+        ),
+        Some(Error::AccessDenied)
+    );
+}
+
+#[test]
+fn merging_an_object_that_something_else_holds_is_refused() {
+    let mut fixture = Fixture::new();
+    let (_, low) = fixture.memory(0x100, 2, full());
+    let (upper, high) = fixture.memory(0x102, 2, full());
+    // A second handle to the upper part, which is a second reference.
+    let second = fixture.install(AnyObjectId::of(upper), full());
+    fixture.objects.retain(AnyObjectId::of(upper)).unwrap();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryMerge, &[low.raw(), high.raw()])
+        ),
+        Some(Error::Busy)
+    );
+    assert!(
+        fixture.objects.entry(fixture.process, second).is_ok(),
+        "the refused merge took nothing away"
+    );
+}
+
+#[test]
+fn merging_a_mapped_object_is_refused() {
+    let mut fixture = Fixture::new();
+    let own = fixture.own_process.raw();
+    let (_, low) = fixture.memory(0x100, 2, full());
+    let (_, high) = fixture.memory(0x102, 2, full());
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryMap,
+                &[own, high.raw(), ADDRESS, 0, PAGE_SIZE, WRITABLE]
+            )
+        ),
+        None
+    );
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryMerge, &[low.raw(), high.raw()])
+        ),
+        Some(Error::Busy),
+        "a mapping is a reference"
+    );
+}
+
+#[test]
+fn merging_a_handle_the_caller_does_not_hold_is_refused() {
+    let mut fixture = Fixture::new();
+    let (_, low) = fixture.memory(0x100, 2, full());
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::MemoryMerge, &[low.raw(), 0])),
+        Some(Error::InvalidHandle),
+        "a second argument that is no handle"
+    );
+    let stranger = Handle::new(4000, 1).unwrap();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryMerge, &[low.raw(), stranger.raw()])
+        ),
+        Some(Error::InvalidHandle)
+    );
+}
+
+#[test]
+fn merging_something_that_is_no_memory_object_is_refused() {
+    let mut fixture = Fixture::new();
+    let (_, low) = fixture.memory(0x100, 2, full());
+    let thread = fixture.own_thread.raw();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryMerge, &[low.raw(), thread])
+        ),
+        Some(Error::WrongObjectType)
+    );
+}
+
+#[test]
+fn a_merge_gives_the_kernel_object_back_to_the_quota() {
+    let mut fixture = Fixture::new();
+    let (_, handle) = fixture.memory(0x300, 4, full());
+    let before = fixture
+        .objects
+        .processes
+        .get(fixture.process)
+        .unwrap()
+        .kernel_object_quota
+        .used();
+    let raw = value_of(
+        &mut fixture,
+        request(Syscall::MemorySplit, &[handle.raw(), 2 * PAGE_SIZE]),
+    );
+    let second = Handle::from_raw(raw).expect("a handle");
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryMerge, &[handle.raw(), second.raw()])
+        ),
+        None
+    );
+    let after = fixture
+        .objects
+        .processes
+        .get(fixture.process)
+        .unwrap()
+        .kernel_object_quota
+        .used();
+    assert_eq!(
+        after, before,
+        "the split charged one and the merge gave it back"
+    );
+}

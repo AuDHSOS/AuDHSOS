@@ -81,6 +81,27 @@ pub trait Environment {
     /// no frame left.
     fn allocate_kernel_stack(&mut self) -> Result<KernelStack, Error>;
 
+    /// Writes the frame a new thread returns through into the top of its
+    /// kernel stack, and answers with the word the switch loads as its
+    /// stack pointer.
+    ///
+    /// This is the one step of starting a thread that knows what a
+    /// processor register is, and it is why the trait has it: a thread the
+    /// kernel creates but never prepares is one the first switch jumps into
+    /// with a stack pointer of zero.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::OutOfKernelMemory`] when the top of the stack is not
+    /// reachable, which no stack the kernel has just allocated is.
+    fn prepare_thread(
+        &mut self,
+        stack_top: VirtAddr,
+        entry: VirtAddr,
+        user_stack: VirtAddr,
+        ipc_buffer: VirtAddr,
+    ) -> Result<VirtAddr, Error>;
+
     /// Returns the kernel stack in `slot`.
     fn release_kernel_stack(&mut self, slot: u32);
 

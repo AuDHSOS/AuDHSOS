@@ -1661,7 +1661,8 @@ the stack, the IPC buffer, and the pool slot stay until the kernel has
 switched away from it; the state `Exited` is the whole record of what is
 left to do. The kernel calls `reap` after a switch.
 
-Phase 5 implements twenty of the forty-one calls: `process_create`,
+Phase 5 implements twenty of the forty-one calls the table held then
+(`memory_merge` is the forty-second and comes in Phase 7, D-90): `process_create`,
 `process_install_handle`, `process_kill`, the nine thread calls
 (`thread_create` through `thread_yield`), the five memory calls
 (`memory_split` through `memory_info`), `handle_duplicate`,
@@ -2200,53 +2201,115 @@ isolation item marked from Phase 6; the system call items of 6.6.21 and
 
 ## 10.7 Phase 7: Userland foundation
 
-### 10.7.1 `user-sys-x86_64` (complete)
+### 10.7.1 `user-rt` (`crates/user/rt`, logic, layer u0)
 
-`_start` receives the initial `rsp` from the kernel with the IPC buffer
-address in the startup message; `syscall(buffer: &mut IpcBuffer)`
-(`int 0x80`); `GlobalAlloc` adapter `HeapAdapter` over `user_rt::heap::Allocator`
-with `wrapping_add` on the base pointer obtained when the heap memory
-object is mapped; the panic handler delegates to `user_rt::panic::report`.
-
-### 10.7.2 `user-rt` (`crates/user/rt`, logic)
+Everything a program works out for itself, with no system call in it, so
+that all of it runs on the host under test (D-89).
 
 - Typed handles: `ProcessHandle`, `ThreadHandle`, `MemoryHandle`,
   `EndpointHandle`, `ReplyHandle`, `NotificationHandle`,
   `InterruptHandle`, `IoPortHandle`, `SystemControlHandle`, each a newtype
-  over `Handle` with `Drop` calling `handle_close` and methods generated
-  from the `syscalls!` table by a second macro `wrappers!`.
-- `heap.rs`: the offset-based allocator: `Allocator { arena_len, classes:
-  [FreeList; 8] (16, 32, 64, 128, 256, 512, 1024, 2048 bytes), large:
-  fixed table of free extents }`; blocks larger than 2048 bytes come from
-  the extent table with first-fit and coalescing on release; the
-  bookkeeping is a fixed table of `MAX_BLOCKS = 4096` entries; failure is
-  `Err(OutOfMemory)`; `grow(new_len)` extends the arena.
-- `message.rs`: builder and parser over the IPC buffer layout;
-  `startup.rs`: the startup message (`label = STARTUP`, words: handle
-  numbers by role); `log.rs`: `log!` macro sending to the log endpoint;
-  `panic.rs`: report and `thread_exit`.
+  over `Handle` behind the trait `Typed`, which names the object type. They
+  are `#[must_use]` and do not close themselves; `handle_close` needs the
+  buffer of the calling thread, which `Drop` is not given (D-89).
+- `heap.rs`: `Allocator<BLOCKS, EXTENTS>` over an arena named by its
+  length. One free list, first fit, coalescing on release, and a table of
+  live blocks so that a release names only its offset. Not size classes:
+  6.6.12 wants two released neighbours to become one block large enough
+  for their sum, and a class list cannot do that. `grow(new_len)` extends
+  the arena; every failure is an `AllocError` and nothing is changed by
+  one.
+- `message.rs`: `Writer` and `Reader` over the message area. A byte string
+  is a word with its length and then the bytes, eight to a word,
+  little-endian.
+- `startup.rs`: the startup message as named fields, over the pairs
+  `audhsos_abi::startup` defines.
+- `report.rs`: `Line<N>`, a `core::fmt::Write` into a fixed array, which is
+  what a program with no heap formats a log line or a panic report into.
+
+### 10.7.2 `user-sys-x86_64` (layer u1, adapter)
+
+`_start` receives the address of the thread's IPC buffer in the first
+argument register, which is where the kernel put it, and hands it to the
+program's `main` together with the startup message it read from the
+buffer. `Gate { buffer: u64 }` holds that address and carries the
+forty-two system call wrappers, written out one by one; each writes the
+call number and its arguments into the buffer, executes `int 0x80`, and
+turns the status word into a `Result`. A constant assertion holds the list of
+them to the table: `COVERED` names every call the gate is meant to cover,
+`Syscall::ALL` names every call there is, and a build fails when the two
+differ in length or in order (D-92). What a list of values cannot see —
+whether a method exists for each entry and passes the entry it belongs
+to — the test image `wrappers` sees by running them (D-98). The panic handler formats a `user_rt::Line` and
+sends it to the log endpoint.
 
 ### 10.7.3 `user-proto` (`crates/user/proto`)
 
 Name protocol: `Register { name: [u8; 32], endpoint handle }`,
 `Lookup { name } -> endpoint`; console protocol: `Write { bytes in words }`,
 `Read { max } -> bytes`; memory protocol: `Allocate { len, align } ->
-memory handle`, `Release { handle }`; each message a struct with
-`encode(&self, &mut Message)` and `decode(&Message) -> Result`, labels as
-constants, versions in the label's high 16 bits.
+memory handle`, `Release { handle }`; parent protocol: `Finished { status }`
+and no reply, because the child that sends it exits behind it (D-94); each
+message a struct with `encode(&self, &mut Message)` and
+`decode(&Message) -> Result`, labels as constants, versions in the label's
+high 16 bits.
 
 ### 10.7.4 `user-loader` (`crates/user/loader`)
 
-`tar.rs`: ustar reader over `&[u8]`: 512-byte headers, octal size field,
-checksum (sum of the header with the checksum field as spaces), `ustar\0`
-magic, prefix field for long names, reject `..` components and absolute
-paths, iterate entries; `process.rs`: create a process from an ELF using
-`audhsos-elf` with user constraints and the memory server: for each
-segment allocate, map into the loader, copy, unmap, map into the child;
-allocate stack (16 pages) and IPC buffer; install handles; write the
-startup message; start.
+`tar.rs`: a ustar reader and a ustar writer over `&[u8]`. The reader takes
+512-byte headers, the octal size field, the checksum (the sum of the header
+with the checksum field as spaces), the `ustar\0` magic, and the prefix
+field for long names; it refuses `..` components and absolute paths, and it
+ends the walk at the end marker whatever follows it. The writer is there so
+that the archive of the boot image and the archives the tests read are made
+by one piece of code, and so that what the crate reads can be checked
+against what it writes.
 
-### 10.7.5 Servers and the application
+`program.rs`: `plan(bytes)`, which reads a user ELF through `audhsos-elf`
+under the constraints of user space — above the lowest mappable page, below
+the buffers of the process — and answers with the whole pages that have to
+be mapped, the entry point, and where the stack of sixteen pages goes, with
+one unmapped page between the stack and the program.
+
+It is a plan and not an action. Carrying it out — allocate, map into the
+loader, copy, unmap, map into the child, then the stack, the buffer, the
+handles, the startup message, and the start — needs capabilities, and that
+is the wiring of the root task in `user-programs`.
+
+### 10.7.5 The kernel starts the root task
+
+[2.9](02-architecture.md#29-boot-sequence) steps 12 to 14 have always been
+part of this phase and were written down nowhere in it. They are what makes
+the difference between a kernel that boots and a system that runs.
+
+`kernel-core` gains `root.rs`, which is architecture-neutral and host-tested
+over the doubles the memory and system call tests already use: it creates
+the address space, reads the root task as an ELF and maps every segment with
+the permissions its header names (D-92), maps a stack of
+sixteen pages with one unmapped page between it and the program, allocates a
+kernel stack and an IPC buffer, makes the thread, installs the handles —
+`SystemControl`, the process itself, the boot image, and one `Ram` memory
+object per free region — and writes the startup message into the buffer.
+The root task runs at the highest priority, because it is the fault handler
+of everything it starts.
+
+`audhsos-kernel` gains `task.rs`, which is the rest: the frame a new thread
+returns through (`context::prepare_user`), the switch of the stacks, the
+task state segment, the idle thread on the boot stack, and the loop the
+kernel becomes once the root task runs — switch to whatever the scheduler
+picked, halt when there is nothing. The system call gate is armed with
+`traps::set_syscall_handler`, and the trap handler now tells a fault of the
+kernel from a fault of a user thread: the first ends the machine, the second
+becomes a message to the fault handler of that process. The device interrupt
+handler gains the switch that was the missing third step of
+[2.7](02-architecture.md#27-interrupts-and-devices), because there is now a
+thread to switch to.
+
+`kernel_hal_x86_64::memory::physical_slice` is what reads the root task out
+of the boot image: the window maps physical memory contiguously, so a range
+of frames is a range of bytes.
+
+### 10.7.6 Servers and the application
 
 - `server-init`: parse the boot image header again (root task side), read
   the archive, start `server-memory` first with the RAM memory objects,
@@ -2261,15 +2324,35 @@ startup message; start.
 - `server-memory`: allocation policy over memory objects with the zeroing
   rules of D-12 (zero before hand-out and immediately after return), adjacency
   bookkeeping, per-client accounting by badge.
-- `app-hello`: looks up `console`, writes `hello from userland`, exits.
-- Root task as flat binary: linker script at `ROOT_TASK_BASE` with `.bss`
-  inside the file; the xtask converts with `llvm-objcopy -O binary`.
+- `app-hello`: looks up `console`, writes `hello from userland`, reads a
+  line back and says it again, then reports to its parent and exits.
+- `app-checks`: the questions 6.6.22 asks of the servers — a lookup of a
+  name nobody registered, memory used, given back and asked for again, a
+  request no machine can meet — each answered on one line of the console,
+  written while `app-hello` writes its own, which is the interleaving case.
+- `app-faulter`: writes to a page nothing has mapped, so that the run has a
+  client which breaks and the root task has a fault to report.
+- Root task as an ELF at `ROOT_TASK_BASE`, with every section on a page of
+  its own so that no two segments share one set of permissions (D-92).
 - The xtask `image` writes the real boot image: header, root task, ustar
   archive of the server and application ELFs.
-- Release build: `debug-uart` and `test-exit` off; `sh tools/xtask.sh run
-  --release` shows the greeting through the userland driver.
+- The kernel owns COM1 until userland drives it: the first read or write of
+  one of its ports through an `IoPortRange` capability makes the kernel give
+  the line up, and after that it writes nothing, `debug_log` included. The
+  handover is the access and not the creation of the capability, because the
+  root task creates the range itself and logs through the kernel until the
+  driver it hands it to touches a register. A panic or a fault of the kernel
+  takes the line back, because after it nothing else writes. So `debug-uart` stays in both
+  profiles — there is no silent window while the first servers come up,
+  and no interleaving afterwards, because the handover and not a feature
+  flag decides who writes.
+- The run ends through the userland: `app-hello` reports `Finished` to the
+  root task, and the root task writes to the exit device through its
+  `SystemControl` (D-94). `sh tools/xtask.sh run --release` shows the
+  greeting through the userland driver and ends when a line is typed;
+  `test --e2e --release` is the same run without a person at it.
 
-### 10.7.6 Fuzzing
+### 10.7.7 Fuzzing
 
 `crates/support/fuzz` (`fuzz-support`, adapter, host) is the fuzzing
 engine and the macro `fuzz_target!(|bytes: &[u8]| { ... })` that writes a
@@ -2302,11 +2385,13 @@ runs, and it is uninstrumented and therefore quick. Every crash becomes a regres
 parser's crate and its input a file in the corpus. Register the targets in
 `policy::FUZZ_TARGETS`.
 
-### 10.7.7 Acceptance
+### 10.7.8 Acceptance
 
-`check` green; `test --e2e` passes with the userland test programs
-reporting through the console driver; catalog 6.6.12, 6.6.13 tar items,
-6.6.22, 6.6.23; fuzz targets run for 60 seconds each without findings.
+`check` green — it runs `test --e2e` as its tenth step, so the end-to-end
+run is part of it — with the userland programs reporting through the
+console driver and the root task ending the machine; catalog 6.6.12,
+6.6.13 tar items, 6.6.22, 6.6.23, 6.6.56, 6.6.57; fuzz targets run for 60 seconds
+each without findings.
 
 ## 10.8 Phase 8: Consolidation and release 0.1.0
 

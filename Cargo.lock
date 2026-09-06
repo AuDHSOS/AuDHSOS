@@ -226,6 +226,7 @@ name = "kernel-core"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "audhsos-elf",
  "audhsos-sync",
  "kernel-hal-api",
  "kernel-mm",
@@ -443,14 +444,82 @@ dependencies = [
 ]
 
 [[package]]
+name = "server-console"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "driver-uart16550",
+]
+
+[[package]]
+name = "server-memory"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-collections",
+ "test-support",
+]
+
+[[package]]
+name = "server-name"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-collections",
+ "user-proto",
+]
+
+[[package]]
 name = "test-support"
 version = "0.1.0"
+
+[[package]]
+name = "user-loader"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-elf",
+ "test-support",
+]
+
+[[package]]
+name = "user-programs"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "driver-uart16550",
+ "server-console",
+ "server-memory",
+ "server-name",
+ "user-loader",
+ "user-proto",
+ "user-rt",
+ "user-sys-x86_64",
+]
+
+[[package]]
+name = "user-proto"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "user-rt",
+]
+
+[[package]]
+name = "user-rt"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-collections",
+ "test-support",
+]
 
 [[package]]
 name = "user-sys-x86_64"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "user-rt",
 ]
 
 [[package]]
@@ -458,6 +527,7 @@ name = "user-test-programs"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "user-rt",
  "user-sys-x86_64",
 ]
 
@@ -476,4 +546,5 @@ dependencies = [
  "audhsos-abi",
  "audhsos-symbols",
  "kernel-test-harness",
+ "user-loader",
 ]

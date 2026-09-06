@@ -13,6 +13,7 @@ pub mod ipc_buffer;
 pub mod layout;
 pub mod object;
 pub mod rights;
+pub mod startup;
 #[cfg(any(test, feature = "test-strategies"))]
 pub mod strategies;
 pub mod syscall;
@@ -28,6 +29,7 @@ pub use handle::Handle;
 pub use ipc_buffer::{Buffer, BufferMut, Message, MessageError, Status};
 pub use object::ObjectType;
 pub use rights::Rights;
+pub use startup::{Given, Role, STARTUP_LABEL, StartupError};
 pub use syscall::{FirstArgument, Syscall};
 pub use thread::{Fault, FaultKind, ThreadState};
 

@@ -80,6 +80,7 @@ error_codes! {
     InvalidState = 23 => "the object is not in a state the operation allows",
     NotRunnable = 24 => "the thread cannot run: it has no entry point, no stack, or it has exited",
     Cancelled = 25 => "the operation was cancelled before it completed",
+    OutOfMemory = 26 => "no free memory of the requested size and alignment is left",
 }
 
 impl TryFrom<u32> for Error {

@@ -18,6 +18,7 @@
 
 use audhsos_abi::Syscall;
 use audhsos_abi::ipc_buffer::fault_kind_of;
+use user_rt as _;
 use user_sys_x86_64 as sys;
 
 sys::entry!(main);

@@ -267,9 +267,12 @@ done until every applicable item has a test. Items are added, never removed.
 - `call` with no receiver blocks the caller; a later `recv` completes the
   rendezvous; the receiver sees the badge and gets a reply object.
 - `recv` with no sender blocks; a later `call` completes.
-- `reply` on a consumed reply object fails; on a reply object whose caller
-  was killed fails without touching memory; dropping a reply object wakes the
-  caller with `ReplyDropped`.
+- `reply` on a reply object that was answered fails: the answer consumed
+  the object and the handle that named it, so the second attempt reaches
+  nothing (D-93). A run of a thousand calls leaves a server holding no more
+  handles than it started with.
+- `reply` on a reply object whose caller was killed fails without touching
+  memory; dropping a reply object wakes the caller with `ReplyDropped`.
 - Messages with zero words, the maximum number of words, and one more than
   the maximum (rejected before any copy).
 - Zero handles, four handles, five handles (rejected).
@@ -583,14 +586,19 @@ done until every applicable item has a test. Items are added, never removed.
 - The root task starts, parses the archive, and starts the name server, the
   console driver, and the memory server.
 - `app-hello` looks up the console by name, writes a line, and the line
-  appears on the serial port through the userland driver while the kernel
-  debug UART is disabled.
+  appears on the serial port through the userland driver, which owns COM1
+  from the moment it created the `IoPortRange` over it.
 - Name lookup of a missing name returns `NotFound`.
-- Two clients write interleaved lines; no line is torn.
+- Two clients write interleaved lines; no line is torn: every line the
+  second client writes carries its own number and has to stand whole and
+  exactly once in the output, so a line that lost bytes to the other writer
+  is a violation and not a line the run happened not to look at.
 - A client that faults is reported by the root task and the system keeps
   running.
 - Console input: the runner sends bytes over the serial port and a test
   program echoes them.
+- The root task ends the machine when every child that reports has reported,
+  and the run insists on that rather than killing it (D-94).
 - Memory server: allocate, release, allocate again returns zeroed memory.
 - Out of memory: exhausting the memory server produces an error in the
   client, not a system failure.
@@ -613,7 +621,14 @@ done until every applicable item has a test. Items are added, never removed.
 - Exhaustion returns `OutOfMemory`; after releases the same request
   succeeds again.
 - Adjacency bookkeeping: two released neighbors are handed out as one
-  object for a request of their combined size.
+  object for a request of their combined size. This is what `memory_merge`
+  was added for (D-90); against a kernel that only splits it cannot be
+  satisfied at all. A join the kernel refuses leaves the two objects where
+  they are, and no memory is lost by it (D-95).
+- An object that comes back under another handle than the one it went out
+  under is recognized by the memory it covers, and the second name is given
+  up; one returned at a length the store never handed out is refused
+  (D-95).
 - Property: every handed-out range is disjoint from every other live range
   and from the free set; every range handed out was zeroed after its last
   release.
@@ -1761,6 +1776,65 @@ follows the catalog rather than the layer, as 6.6.54 records.
   built from. The corpus holds a valid signature under each of the six
   schemes, the eight malformed encodings above, and two inputs that are
   not a key at all.
+
+### 6.6.56 Protocol encodings (`user-proto`)
+
+The catalog covered these messages only through the end-to-end items of
+6.6.22, which is a test of the whole system and not of an encoding. This
+item is what 12.9 asked for before the encodings could be written
+(D-89).
+
+- Labels: the version, the protocol, and the message number come back out
+  of a label they were built into; every label of every protocol lies
+  below the range the kernel keeps for its own messages; a bit set between
+  the version and the protocol is refused; a version this release does not
+  speak is refused, and it is refused *before* an unknown protocol, so
+  that a client of a later release is told which of the two it is; a
+  protocol code and a message number the release does not have are each
+  refused.
+- Round trip, per message of each of the four protocols: what was encoded
+  decodes to what it was. The names and the chunks are tested at zero
+  bytes and at the full width of their field.
+- Replies: every reply carries a status word first, and the payload only
+  behind a status that says the request succeeded — a failed lookup
+  carries no endpoint, a failed allocation no memory object, a failed
+  write no count. Each is checked on the encoded message and not only
+  through the decoder.
+- Every error of the interface travels: a status word built from each
+  `Error` of the table reads back as that error, and a word that names no
+  error is refused.
+- Truncation: a message whose counts are cut so that a field is missing —
+  the handle of a registration, the alignment of an allocation, the object
+  of a release, the count of a write — is refused rather than read as a
+  zero.
+- A byte string whose length word is longer than the field that carries it
+  is refused where it is read, which is the case an encoder of this crate
+  cannot produce and a sender of another release could.
+- A message of one protocol handed to the decoder of another is refused
+  with both protocols named.
+- The parent protocol has one message and no reply, because the child that
+  sends it exits behind it (D-94): the status it carries comes back, a
+  message number the protocol does not have is refused, and a report
+  without its status word is refused rather than read as a zero.
+
+### 6.6.57 The wrappers of the gate against the table (`user-sys-x86_64`, QEMU)
+
+The constant assertion beside the wrappers holds a list of values to the
+system call table; it cannot see the methods themselves (D-92). This item
+is the other half, and it needs a machine: the numbers a wrapper writes are
+what the kernel dispatches on, so the check is what the kernel saw.
+
+- `every_wrapper` calls all forty-two methods of `Gate` in the order of the
+  table, each with a handle that names nothing, so that every call is
+  refused and none of them waits for a partner or ends the thread;
+  `thread_exit` is last, because it does not come back.
+- The kernel writes down the number each call arrived under and the image
+  holds the sequence against `Syscall::ALL`, with `thread_exit` moved to
+  the end: as many calls as the table has entries, each entry in its place,
+  and no entry without one.
+- Each of the three failures is checked against the code it names: two
+  wrappers whose calls are swapped, a wrapper the program does not call,
+  and a call of the table with no wrapper that reached the kernel.
 
 ## 6.7 CI pipeline
 

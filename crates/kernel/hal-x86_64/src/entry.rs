@@ -70,6 +70,10 @@ pub fn with_console<R>(body: impl FnOnce(&mut SerialConsole) -> R) -> Option<R> 
 /// Reports `message` on the console, if it is reachable, and ends the
 /// machine with a failure.
 pub fn fail(message: &[u8]) -> ! {
+    // The machine ends here, so nothing else will write on the line and
+    // the kernel may say the last word on it even after it gave the port
+    // to a driver.
+    crate::console::reclaim();
     with_console(|console| console.write_bytes(message));
     QemuExit::new().exit(ExitStatus::Failure);
     halt_forever();

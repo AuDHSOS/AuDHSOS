@@ -8,6 +8,7 @@ mod boot;
 mod machine;
 mod memory;
 mod print;
+mod root;
 mod syscall;
 mod tick;
 mod trap;

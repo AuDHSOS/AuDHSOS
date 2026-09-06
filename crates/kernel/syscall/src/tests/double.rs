@@ -35,6 +35,8 @@ pub(super) enum Call {
     Protect(PhysFrame, Page, Permissions),
     /// A kernel stack was handed out.
     AllocateStack(u32),
+    /// The frame a new thread returns through was written.
+    PrepareThread(VirtAddr),
     /// A kernel stack went back.
     ReleaseStack(u32),
     /// A frame was handed out.
@@ -71,6 +73,8 @@ pub(super) struct Recorder {
     pub(super) no_address_space: bool,
     /// The next kernel stack fails.
     pub(super) no_stack: bool,
+    /// Whether the frame of the next thread is refused.
+    pub(super) no_context: bool,
     /// The next frame fails.
     pub(super) no_frame: bool,
     /// Every mapping fails.
@@ -200,6 +204,22 @@ impl Environment for Recorder {
             slot,
             top: VirtAddr::new(0xFFFF_FFFF_4000_0000).unwrap(),
         })
+    }
+
+    fn prepare_thread(
+        &mut self,
+        stack_top: VirtAddr,
+        _entry: VirtAddr,
+        _user_stack: VirtAddr,
+        _ipc_buffer: VirtAddr,
+    ) -> Result<VirtAddr, Error> {
+        if self.no_context {
+            return Err(Error::OutOfKernelMemory);
+        }
+        self.calls.push(Call::PrepareThread(stack_top));
+        // A word below the top, which is where a frame written into the
+        // stack leaves the pointer.
+        stack_top.checked_sub(8).ok_or(Error::OutOfKernelMemory)
     }
 
     fn release_kernel_stack(&mut self, slot: u32) {

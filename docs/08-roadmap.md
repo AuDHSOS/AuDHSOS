@@ -133,7 +133,7 @@ Deliverables: handle tables, quotas, object types `Process`, `Thread`,
 `MemoryObject`; scheduler; the context-switch naked function; user-mode
 entry with synthesized frames; IPC buffer; system call vector `0x80`; the
 `syscalls!` table in `audhsos-abi`; dispatcher and validation; twenty of the
-forty-one system calls, those for processes except the fault handler, for
+forty-one system calls the table held then, those for processes except the fault handler, for
 threads, for memory, and for handles, plus `debug_log`; every other call
 returns `Unsupported`; faults put threads into `Faulted`. User-mode test
 programs are `user-sys-x86_64` binaries embedded in test kernels as flat
@@ -162,13 +162,18 @@ Status: in progress.
 
 Deliverables: `user-sys-x86_64`, `user-rt` with the safe allocator,
 `user-proto`, `user-loader`, `server-init`, `server-name`,
-`server-console` over `driver-uart16550`, `server-memory`, `app-hello`;
-boot image with tar archive; release build with `debug-uart` off.
+`server-console` over `driver-uart16550`, `server-memory`, `app-hello`,
+`app-checks`, `app-faulter`; the kernel starts the root task from an ELF
+of the boot image (D-92); boot image with tar archive; the kernel gives
+COM1 up when the userland takes it, so the handover and not a feature
+flag decides who writes.
 
-Tests: catalog 6.6.12, 6.6.13 (tar items) with fuzz targets, 6.6.22, 6.6.23.
+Tests: catalog 6.6.12, 6.6.13 (tar items) with fuzz targets, 6.6.22,
+6.6.23, 6.6.56, 6.6.57.
 
 Acceptance: `sh tools/xtask.sh run --release` prints the greeting through
-the userland console driver; `sh tools/xtask.sh test --e2e` passes.
+the userland console driver; `sh tools/xtask.sh test --e2e` passes and the
+root task ends the machine itself (D-94); `check` runs it.
 
 ## 8.10 Phase 8: Consolidation
 
@@ -366,7 +371,7 @@ Status: F1 implemented, F2 specified in
 
 | Step | Crate | Size | Ends with |
 |------|-------|------|-----------|
-| F1 | `virtio-queue` | M | implemented: the descriptor table, the two rings and the chain arithmetic over a memory access trait, with the free set in the queue's own memory rather than in the table the device can see; the initialization state machine with its two failure paths; no packed ring, no indirect descriptor and no `EVENT_IDX`, each refused by name at negotiation (D-52, D-89) |
+| F1 | `virtio-queue` | M | implemented: the descriptor table, the two rings and the chain arithmetic over a memory access trait, with the free set in the queue's own memory rather than in the table the device can see; the initialization state machine with its two failure paths; no packed ring, no indirect descriptor and no `EVENT_IDX`, each refused by name at negotiation (D-52, D-99) |
 | F2 | `fs-fat` | M | FAT32 read and write over a block device trait; the xtask image writer uses it |
 
 Tests: catalog 6.6.51 and 6.6.52.

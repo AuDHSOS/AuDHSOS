@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "user-loader"
+description = "Reading the boot archive and the programs in it: a ustar reader and the segments of a user ELF"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[features]
+test-strategies = ["dep:test-support"]
+
+[dependencies]
+audhsos-abi.workspace = true
+audhsos-elf.workspace = true
+test-support = { workspace = true, optional = true }
+
+[dev-dependencies]
+test-support.workspace = true
+
+[lints]
+workspace = true

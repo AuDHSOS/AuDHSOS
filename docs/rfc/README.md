@@ -12,7 +12,7 @@ arrangement.
 
 This directory holds what the RFC Editor publishes.
 [`docs/oasis/`](../oasis/README.md) holds what OASIS publishes, under the
-same rule and for the same reason (D-90).
+same rule and for the same reason (D-100).
 
 ## What is here
 

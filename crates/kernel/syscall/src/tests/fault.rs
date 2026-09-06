@@ -225,7 +225,8 @@ fn a_fault_handler_is_retained_replaced_and_cleared() {
             .processes
             .get(fixture.process)
             .unwrap()
-            .fault_handler,
+            .fault_handler
+            .map(|(endpoint, _badge)| endpoint),
         Some(first)
     );
     assert_eq!(
@@ -359,6 +360,49 @@ fn a_fault_reaches_the_handler_as_a_call_with_the_reserved_label() {
         "the thread the fault stopped runs again"
     );
     assert_eq!(fixture.status_of(faulted).error(), None);
+}
+
+#[test]
+fn a_fault_reaches_the_handler_under_the_badge_of_the_capability_that_named_it() {
+    let mut fixture = Fixture::new();
+    let raw = value_of(&mut fixture, request(Syscall::EndpointCreate, &[]));
+    let plain = Handle::from_raw(raw).unwrap();
+    // A handler serves more than one process, and the badge of the
+    // capability its parent named it with is the only thing in the message
+    // that says which of them this fault belongs to.
+    let marked = value_of(
+        &mut fixture,
+        request(Syscall::EndpointBadge, &[raw, 0x5EED]),
+    );
+    let own = fixture.own_process.raw();
+    assert!(
+        error_of(
+            &mut fixture,
+            request(Syscall::ProcessSetFaultHandler, &[own, marked])
+        )
+        .is_none()
+    );
+
+    // Somebody waits on the endpoint the badge was cut from.
+    let taker = fixture.running(fixture.process, 4);
+    let mut waiting = [0; SIZE];
+    {
+        let mut writer = audhsos_abi::ipc_buffer::BufferMut::new(&mut waiting);
+        writer.set_syscall_number(u64::from(Syscall::IpcRecv.number()));
+        assert!(writer.set_argument(0, plain.raw()));
+    }
+    fixture.write_buffer(taker, &waiting);
+    crate::dispatch::dispatch(&mut fixture.machine(), taker, &mut waiting);
+
+    let faulted = fixture.thread;
+    let mut buffer = [0; SIZE];
+    let _outcome = deliver(&mut fixture.machine(), faulted, page_fault(), &mut buffer);
+    let arrived = *fixture.buffer_of(taker);
+    assert_eq!(
+        Buffer::new(&arrived).return_word(0),
+        Some(0x5EED),
+        "the fault arrived under no badge"
+    );
 }
 
 #[test]

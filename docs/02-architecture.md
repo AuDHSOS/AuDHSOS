@@ -167,7 +167,15 @@ badge.
   policy.
 - `memory_split(handle, offset)` turns one object into two adjacent ones. The
   original handle refers to the lower part; a new handle for the upper part
-  is returned. The kernel never merges objects.
+  is returned.
+- `memory_merge(lower, upper)` turns two back into one. The two must lie side
+  by side in that order, agree in kind and cache policy, carry the same
+  rights, and be held by the caller and by nothing else — a mapping is a
+  reference, and an object that something maps may not be dissolved under
+  it. The lower object grows to cover both; the upper one ceases to exist,
+  and the handle that named it names nothing. Without this an object could
+  only ever become smaller, and a server that hands memory out and takes it
+  back would grind its objects down to single pages (D-90).
 - `memory_map(process, memory, vaddr, offset, len, permissions)` populates
   page tables immediately. Page-table frames come from the kernel reserve
   and count against the process's kernel-object quota.
@@ -248,12 +256,22 @@ There is one implementation of every algorithm.
   divide error, breakpoint, alignment check) becomes an IPC call from the
   faulting thread to the process's fault handler endpoint. The message
   carries the fault kind, faulting address, instruction pointer, and error
-  code. The handler replies to resume the thread, or kills it.
+  code, and it arrives under the badge of the capability that named the
+  handler, which is how a handler of many processes knows whose fault it
+  is. The handler replies to resume the thread, or kills it.
 - If a process has no fault handler, the thread enters state `Faulted`; the
   process's creator inspects it with `thread_info`.
-- A fault in kernel mode prints diagnostics on the debug UART (if compiled
-  in), exits QEMU with the failure code (if compiled in), and otherwise
-  halts.
+- A fault in kernel mode prints diagnostics on the debug UART, exits QEMU
+  with the failure code (if compiled in), and otherwise halts. The kernel
+  writes on the serial line until the userland takes the port over: the
+  handover is the first read or write of one of its ports through an
+  `IoPortRange` capability, not the creation of that capability, because
+  the root task creates the range itself and still logs through the kernel
+  until the driver it hands it to actually drives the controller. After the
+  handover the kernel writes nothing there, `debug_log` included. The
+  exception is the end of the machine — a panic or a fault of the kernel
+  itself — which takes the line back, because after it nothing else
+  writes.
 - Double faults run on a separate interrupt stack (IST).
 
 ## 2.5 Threads and scheduling
@@ -332,7 +350,7 @@ so that userland loops.
 | `ipc_call(endpoint)` | Sends the message in the IPC buffer and blocks until the receiver replies. Send and wait-for-reply are atomic from the receiver's point of view. |
 | `ipc_send(endpoint)` | Sends and blocks until a receiver has taken the message. No reply. |
 | `ipc_recv(endpoint)` | Blocks until a sender arrives. Returns the message, the badge, and a `Reply` handle if the sender used `call`. |
-| `ipc_reply(reply)` | Delivers the message in the IPC buffer to the caller and consumes the reply object. |
+| `ipc_reply(reply)` | Delivers the message in the IPC buffer to the caller and consumes the reply object, handle and all (D-93). |
 | `ipc_reply_recv(reply, endpoint)` | `reply` followed by `recv` without returning to userland in between. |
 | `ipc_try_recv(endpoint)` | Like `recv` but returns `WouldBlock` instead of blocking. |
 
@@ -379,12 +397,19 @@ through shared memory objects.
 - When a process is created, its creator writes a startup message into the
   first thread's IPC buffer before `thread_start`. It lists the initial
   handles and their meaning. The kernel does not interpret this message.
+- One of those handles may be `Parent`: the endpoint the faults of this
+  process go to, badged with what the parent knows it by. A child reports
+  what it finished through it, so one endpoint carries both kinds of news
+  about a child and the label tells them apart (D-94).
 
 ## 2.7 Interrupts and devices
 
 - The root task holds the `SystemControl` capability and creates `Interrupt`
   objects for specific lines, `IoPortRange` objects, and `Device` memory
   objects for MMIO regions. It hands them to drivers.
+- An interrupt object is created with its line masked and armed when a
+  notification is bound to it, because a line nothing names would assert
+  into nothing (D-93).
 - Interrupt flow: line asserts → kernel masks the line at the I/O APIC and
   sends end-of-interrupt to the local APIC → kernel signals the bound
   notification → driver thread wakes, services the device →
@@ -426,6 +451,7 @@ through shared memory objects.
 | `thread_info` | Thread | state and fault information |
 | `thread_exit`, `thread_yield` | self | no handle |
 | `memory_split` | MemoryObject | split at offset |
+| `memory_merge` | MemoryObject | join two that lie side by side |
 | `memory_map`, `memory_unmap`, `memory_protect` | Process + MemoryObject | mappings; bounded per call |
 | `memory_info` | MemoryObject | physical range (requires `INFO`) |
 | `handle_duplicate`, `handle_close` | any | handle table operations |
@@ -507,7 +533,7 @@ through shared memory objects.
 
 | Crate | Content | `unsafe` |
 |-------|---------|----------|
-| `user-sys-x86_64` | `_start`, the `int 0x80` wrapper, the `GlobalAlloc` adapter that turns allocator offsets into pointers | allowlisted |
+| `user-sys-x86_64` | `_start`, the `int 0x80` wrapper, the gate over the thread's IPC buffer | allowlisted |
 | `user-rt` | typed handle newtypes with `Drop`, system call wrappers over the IPC buffer, message builder and parser, safe offset-based heap allocator, panic handler that reports over a log endpoint and exits, logging macros | no |
 | `user-proto` | message encodings for the name and console protocols, versioned labels | no |
 | `user-loader` | tar (ustar) reader; process creation from an ELF using `audhsos-elf` | no |
@@ -525,9 +551,11 @@ through shared memory objects.
 Process creation from userland: `process_create` → for each ELF segment,
 allocate memory from the memory server, map it into the loader's own address
 space, copy the bytes, unmap, then map it into the child with the segment's
-permissions → allocate stack and IPC buffer → `thread_create` →
-`process_install_handle` for every initial capability → write the startup
-message into the child's IPC buffer → `thread_start`.
+permissions → allocate the stack and map it → allocate one page for the IPC
+buffer, map it into the loader, `process_install_handle` for every initial
+capability, write the startup message into that page, unmap it →
+`thread_create` with the page as its fifth argument, which is what puts the
+message where the child will find it (D-91) → `thread_start`.
 
 ## 2.11 Security model
 

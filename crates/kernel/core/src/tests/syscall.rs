@@ -65,6 +65,7 @@ fn a_fresh_address_space_carries_the_kernel_half_and_nothing_else() {
         Some(&mut console),
         None,
         0,
+        no_frame,
     );
 
     let root = environment.create_address_space().unwrap();
@@ -102,6 +103,7 @@ fn an_address_space_without_a_frame_is_refused() {
         Some(&mut console),
         None,
         0,
+        no_frame,
     );
     assert_eq!(
         environment.create_address_space(),
@@ -122,6 +124,7 @@ fn an_address_space_that_is_taken_apart_gives_its_tables_back() {
         Some(&mut console),
         None,
         0,
+        no_frame,
     );
     let free = environment.memory.frames().free_count();
     let root = environment.create_address_space().unwrap();
@@ -160,6 +163,7 @@ fn a_mapping_of_a_user_page_is_what_the_page_tables_hold_afterwards() {
         Some(&mut console),
         None,
         0,
+        no_frame,
     );
     let root = environment.create_address_space().unwrap();
     let page = Page::containing(kernel_address(0x40_0000));
@@ -196,6 +200,7 @@ fn a_kernel_stack_and_a_frame_come_out_of_the_reserve_and_go_back() {
         Some(&mut console),
         None,
         0,
+        no_frame,
     );
     let free = environment.memory.frames().free_count();
 
@@ -224,6 +229,7 @@ fn a_frame_for_an_ipc_buffer_is_zeroed_before_it_is_handed_out() {
         Some(&mut console),
         None,
         0,
+        no_frame,
     );
     let frame = environment.allocate_frame().unwrap();
     // What a frame of the reserve looks like through the window is a page
@@ -249,6 +255,7 @@ fn what_debug_log_writes_reaches_the_console_and_a_build_without_one_drops_it() 
             Some(&mut console),
             None,
             0,
+            no_frame,
         );
         environment.log(b"hello");
     }
@@ -262,6 +269,7 @@ fn what_debug_log_writes_reaches_the_console_and_a_build_without_one_drops_it() 
             None,
             None,
             0,
+            no_frame,
         );
     environment.log(b"nowhere");
 }
@@ -447,6 +455,7 @@ fn a_system_call_of_a_thread_goes_through_the_kernel_environment() {
         Some(&mut console),
         None,
         0,
+        no_frame,
     );
     let mut buffer = [0_u8; SIZE];
     BufferMut::new(&mut buffer).set_syscall_number(u64::from(Syscall::ThreadYield.number()));
@@ -485,6 +494,7 @@ fn what_a_thread_that_ended_held_goes_back_through_the_environment() {
         Some(&mut console),
         None,
         0,
+        no_frame,
     );
     // A stack of the reserve for the thread, so that the sweep has
     // something to give back.
@@ -518,6 +528,7 @@ fn the_buffer_of_a_thread_is_reached_through_the_window() {
             None,
             None,
             0,
+            no_frame,
         );
     let held = environment.allocate_frame().unwrap();
     let written = environment
@@ -554,6 +565,7 @@ fn a_kernel_without_devices_refuses_the_calls_that_need_them() {
             None,
             None,
             0,
+            no_frame,
         );
     assert_eq!(environment.read_port(0x40, 1), Err(Error::Unsupported));
     assert_eq!(environment.write_port(0x40, 1, 0), Err(Error::Unsupported));
@@ -582,6 +594,7 @@ fn a_port_is_read_and_written_at_every_width_the_interface_allows() {
         None,
         Some(&mut devices),
         0,
+        no_frame,
     );
     assert_eq!(environment.read_port(0x40, 1), Ok(0xAB));
     assert_eq!(environment.read_port(0x42, 2), Ok(0xBEEF));
@@ -616,6 +629,7 @@ fn a_line_is_routed_once_and_the_plan_says_which_vector_it_reaches() {
         None,
         Some(&mut devices),
         0,
+        no_frame,
     );
     assert_eq!(environment.interrupt_vector(0), Some(32));
     assert_eq!(environment.interrupt_vector(9), None, "no such line");
@@ -658,6 +672,7 @@ fn a_device_range_that_meets_memory_of_the_machine_is_recognised() {
         None,
         None,
         0x1234,
+        no_frame,
     );
     assert!(
         environment.meets_ram(reserve),
@@ -670,4 +685,18 @@ fn a_device_range_that_meets_memory_of_the_machine_is_recognised() {
         "an aperture above every region meets nothing"
     );
     assert_eq!(environment.acpi_pointer(), 0x1234);
+}
+
+/// The frame a new thread returns through, for tests that do not switch
+/// into one: the word below the top of the stack, which is where a real
+/// frame leaves the pointer.
+fn no_frame<A>(
+    _access: &mut A,
+    _frame: kernel_types::PhysFrame,
+    stack_top: kernel_types::VirtAddr,
+    _entry: kernel_types::VirtAddr,
+    _user_stack: kernel_types::VirtAddr,
+    _buffer: kernel_types::VirtAddr,
+) -> Option<kernel_types::VirtAddr> {
+    stack_top.checked_sub(8)
 }

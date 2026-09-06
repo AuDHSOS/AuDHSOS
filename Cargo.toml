@@ -35,6 +35,13 @@ members = [
     "crates/sync",
     "crates/drivers/uart16550",
     "crates/virtio/queue",
+    "crates/user/loader",
+    "crates/user/programs",
+    "crates/user/servers/console",
+    "crates/user/servers/memory",
+    "crates/user/servers/name",
+    "crates/user/proto",
+    "crates/user/rt",
     "crates/user/sys-x86_64",
     "crates/user/test-programs",
     "crates/kernel/types",
@@ -99,6 +106,13 @@ audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
 driver-uart16550 = { path = "crates/drivers/uart16550" }
 virtio-queue = { path = "crates/virtio/queue" }
+server-console = { path = "crates/user/servers/console" }
+user-programs = { path = "crates/user/programs" }
+server-memory = { path = "crates/user/servers/memory" }
+server-name = { path = "crates/user/servers/name" }
+user-loader = { path = "crates/user/loader" }
+user-proto = { path = "crates/user/proto" }
+user-rt = { path = "crates/user/rt" }
 user-sys-x86_64 = { path = "crates/user/sys-x86_64" }
 user-test-programs = { path = "crates/user/test-programs" }
 kernel-types = { path = "crates/kernel/types" }

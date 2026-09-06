@@ -387,6 +387,11 @@ const REFUSALS: &[(Syscall, Error, &str)] = &[
         "an offset that is no page",
     ),
     (
+        Syscall::MemoryMerge,
+        Error::InvalidArgument,
+        "an object joined to itself",
+    ),
+    (
         Syscall::HandleDuplicate,
         Error::InvalidHandle,
         "a handle that names nothing",

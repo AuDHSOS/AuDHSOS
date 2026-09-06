@@ -7,6 +7,81 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- A cut line carries the mark it was documented to carry. `user_rt::Line`
+  said a line that does not fit "is cut and says so", and `ELLIPSIS` stood
+  public beside it as "the mark a cut line ends with" — and nothing ever
+  wrote it. Only the program could tell, through `is_truncated`; whoever
+  read the line could not. The last bytes of a cut line are the mark now,
+  and a line with no room for one carries none, because three dots in place
+  of the only three bytes there was room for say less than the bytes do.
+
+- A capability that does not fit the startup message refuses the start of
+  the child rather than disappearing. The root task staged eight pairs while
+  its own constant said two hundred and forty, so a memory server given more
+  than a handful of regions would have been started with most of them
+  silently missing; this machine has one usable region, so nothing showed
+  it. The array is now as long as the message, which is half its words in
+  pairs.
+
+- The badge of a fault handler travels with it. `process_set_fault_handler`
+  kept the endpoint and dropped the badge of the capability that named it,
+  so every fault arrived under badge zero and a root task serving five
+  children could not tell whose fault it was. A fault is a message like
+  every other: what the sender is known by is what says who it was.
+
+- A memory object that comes back is recognized by the memory it covers. A
+  handle that travels through a message is copied into the receiver's table
+  under a new number, so the number a client returns is not the number the
+  server handed out and the store found nothing under it. The store matches
+  on the region, closes the second name once it has, and the client gives
+  its own up when the release succeeds — without which the object keeps a
+  reference nobody accounts for and can never be joined to its neighbours.
+  A join the kernel refuses now leaves the two objects where they are: two
+  free pieces side by side are no worse than one, only smaller, and a
+  release that failed over it would be worse than both.
+
+- A memory server with no region large enough says so. It answered
+  `OutOfKernelMemory`, whose message is about the kernel reserve and which
+  is a false statement in the mouth of a userland server. `OutOfMemory` is
+  the twenty-sixth error of the interface.
+
+- A bound interrupt line is armed (D-93). `interrupt_create` writes a masked
+  redirection entry, because a line the plan routes but no notification
+  names would assert into nothing; nothing unmasked it afterwards but
+  `interrupt_ack`, which a driver reaches only after its first interrupt. A
+  driver that bound its line and waited therefore waited forever. The
+  binding is the moment the line has somewhere to go, and it is where the
+  line is armed; from there the cycle of 2.7 runs as it is written.
+
+- An answer consumes the reply handle with the reply object (D-93). 2.6 says
+  `ipc_reply` consumes the reply object, and it did — but the handle that
+  named it stayed in the server's table, pointing at a destroyed object and
+  holding the reference that would have let the object go back to its pool.
+  A server lost one handle and one object slot per call and stopped
+  receiving after as many calls as its table has slots, which for the
+  console driver is sixty-four. A second reply through the same handle now
+  answers `InvalidHandle` rather than `InvalidState`: the capability is
+  gone, not merely spent.
+
+- What a child holds of a server is a capability with the child's badge on
+  it. A server tells its clients apart by the badge of the capability a
+  message came through, and a request that arrives without one names nobody
+  — which is why the name server refused every registration and the memory
+  server every allocation.
+
+- The memory server maps and zeroes an object in windows and not whole. A
+  region this machine hands it is hundreds of mebibytes, and an address
+  space region that wide needs more page tables than the kernel reserve
+  holds.
+
+- A log line the kernel console carries says how many bytes of its last word
+  belong to the line. `debug_log` reads the message area as bytes and takes
+  that count out of the label; the writer had been sending a protocol field
+  instead, so every line arrived with its length word in front of it.
+
+- The linker scripts of the userland put every section on a page of its own.
+  Two segments in one page would need one set of permissions for both.
+
 - The device interrupt handler of the kernel binary acknowledges at the local
   APIC before it signals the notification, not after. 2.7 gives the three
   steps in one order — mask the line at the I/O APIC, end the interrupt at the
@@ -39,6 +114,60 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 
 ### Changed
+
+- Every program of the userland is a binary of one crate rather than a
+  crate of its own (D-97). Five manifests, five policy entries and five
+  unsafe budgets for a few hundred lines of loop each buy nothing that the
+  three logic crates beneath them do not already buy; 05 5.1 still drew the
+  old shape.
+
+- `user-test-programs` rises from 65 to 66 unsafe sites for the one of
+  `every_wrapper` (D-98), and three budgets rise and a fourth opens (D-96): `kernel-hal-x86_64`
+  to 144 for the read of the root task out of the boot image,
+  `audhsos-kernel` to 31 for the bring-up of that task, `user-sys-x86_64`
+  to 21 for the gate over a thread's IPC buffer, and `user-programs` at 18
+  with no assembly at all. R4 asks for an entry whenever a budget rises,
+  and this phase had raised three without one.
+
+- The register entries of this phase moved from D-87 to D-93 up to D-89 to
+  D-95, main having taken D-87 and D-88 for the network work while the
+  branch was open. Commit subjects written before the merge name the old
+  numbers; the register and every document name the new ones.
+
+- The two register entries of the virtio work moved from D-89 and D-90 to
+  D-99 and D-100. The Phase 7 branch was open first and had already taken
+  D-89 to D-98 when `virtio-queue` landed on main, so the later work is the
+  work that moves. The commit subject and body of `feat(virtio)` name the
+  old numbers; the register and every document name the new ones.
+
+- The root task is an ELF and no longer a flat binary (D-92). A flat image
+  says nothing about which of its pages may be written and which may be
+  executed, so either the whole program is writable and executable or it
+  cannot hold a variable. The kernel reads it through `audhsos-elf`, which
+  it already carries for the loader, and maps every segment with the
+  permissions its header names.
+
+- The forty-two system call wrappers of `user-sys-x86_64` are written out
+  one by one rather than generated from the table (D-92). What a wrapper
+  does with the buffer is the whole of the seam between a program and the
+  kernel, and a reader who cannot see it cannot check it. A constant
+  assertion holds the list of them to the table: `COVERED` names every call
+  the gate is meant to cover, `Syscall::ALL` names every call there is, and
+  a build fails when the two differ in length or in order. It caught the
+  missing wrapper for `memory_merge` the hour that call was added. It does
+  not prove that a method exists for each entry or that each passes the
+  entry it belongs to; that half is proved by running them (D-98).
+
+- The kernel owns COM1 until the userland drives it, and the handover and
+  not a feature flag decides who writes. The first read or write of one of
+  its ports through an `IoPortRange` capability makes the kernel give the
+  line up; after that it writes nothing, `debug_log` included. The handover
+  is the access and not the creation of the capability, because the root
+  task creates the range itself and logs through the kernel until the driver
+  it hands it to touches a register. A panic or a fault of the kernel takes
+  the line back, because after it nothing else writes. So `debug-uart` stays
+  in both profiles: there is no silent window while the first servers come
+  up, and no interleaving once the driver runs.
 
 - D-86: four unsafe budgets rise, and a process and a thread each hold one
   reference to themselves. The budgets are `kernel-hal-x86_64` (129 to 142
@@ -75,7 +204,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 ### Added
 
 - `docs/oasis/`, the reference documents of a second standards body, kept
-  the way `docs/rfc/` keeps the first (D-90). It holds the virtio
+  the way `docs/rfc/` keeps the first (D-100). It holds the virtio
   specification, version 1.4, Committee Specification 01 of 8 April 2026 —
   a Committee Specification and not an OASIS Standard, because the last
   version of this specification to become one is 1.1 of 2019 and citing a
@@ -138,7 +267,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 - `virtio-queue`, the split virtqueue of virtio 1.x and the device
   initialization state machine, with no device access in the crate (F1 of
-  8.20, D-52, D-89). The `QueueMemory` trait hands over three byte regions
+  8.20, D-52, D-99). The `QueueMemory` trait hands over three byte regions
   and the layout stays here, because the layout is what the specification
   fixes and what a test can pin down; `DeviceRegisters` hands over the
   status and the sixty-four feature bits, the window they arrive through
@@ -190,6 +319,243 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   driver's index, the published index and the ring slot stay in step
   across it, and the entry gained the cases the crate answers that it had
   not named.
+
+- The system runs end to end, and the run ends itself (D-94). `app-hello`
+  looks the console up, greets, reads a line back, says it again, and then
+  reports `Finished` to the process that started it; the root task, when
+  every child that reports has reported, takes the port of the exit device
+  through its `SystemControl` and writes to it. The kernel cannot end the
+  machine any more — once the root task runs it only answers calls — so the
+  end of a run comes from the userland or not at all.
+
+  What carries the report is an eleventh role of the startup message,
+  `Parent`: a capability to the endpoint the kernel sends this process's
+  faults to, badged with what the parent knows the child by. One endpoint
+  therefore carries both kinds of news about a child, told apart by the
+  label, and a parent hears of a program that finished and of one that broke
+  in the same place.
+
+- The test image `wrappers` runs every wrapper of the gate against the
+  table it claims to cover (D-98). `every_wrapper` calls all forty-two
+  methods in table order with a handle that names nothing, so every call is
+  refused and none waits for a partner; the kernel writes down the number
+  each arrived under, which is the number the wrapper wrote. A swapped
+  pair, a wrapper the program forgot, and a call added to the table without
+  one all fail there. Nothing in the system could find any of the three
+  before: the constant assertion beside the wrappers holds a list of values
+  to the table and cannot see the methods, and the kernel's argument-count
+  check passes two calls of the same arity.
+
+- `sh tools/xtask.sh test --e2e` boots the real system, waits for each
+  server to say it started, types a line into the machine while it runs, and
+  insists the line comes back and that the machine then ends by itself. It
+  is the tenth step of `check`. `--release` runs the same from the release
+  profile, which is not a formality: the release build is fast enough to
+  reach a resource limit the debug build never reached, which is how the
+  reply handle leak below was found.
+
+- `app-checks` and `app-faulter`, the two programs the end-to-end items of
+  6.6.22 need. The first asks the servers the questions the catalog asks — a
+  lookup of a name nobody registered, memory used, given back and asked for
+  again, a request no machine can meet — and writes each answer on the
+  console while `app-hello` writes its own lines, which is the interleaving
+  case. The second writes to a page nothing has mapped, so that the run has
+  a client which breaks and the root task has a fault to report. Each of the
+  three defects above was found by one of them.
+
+- The five programs of the userland: the root task, the name server, the
+  console driver, the memory server, and the application. Each is a thin
+  loop around a logic crate — receive, decode, ask the policy, encode, send
+  — and what is only here is the part that needs a capability or a pointer.
+
+  The root task reads the archive out of the boot image and starts the four
+  others in order. The memory server comes first, out of one region the root
+  task keeps back for exactly that; everything after it is asked of the
+  memory server, so the boot of the system is the first three tests of it.
+  The console driver runs two threads, because a thread of this kernel waits
+  on one thing: one waits on the endpoint and owns the controller, the other
+  waits on the interrupt and sends the byte it took to the first under a
+  badge of its own. Nothing is held by both, so nothing needs a lock.
+
+- `thread_create` takes the page for the thread's IPC buffer (D-91). The
+  fifth argument was reserved and had to be zero; it is now a memory object
+  of one page, and zero still means the kernel takes a frame out of its own
+  reserve. Without it the root task cannot do what 2.10 has always required
+  of it — write the startup message into the buffer of the child before the
+  child runs — because the kernel allocated that frame and the parent held
+  nothing that named it. A child would then hold capabilities it could not
+  tell apart.
+
+- The kernel starts the root task. Steps 12 to 14 of the boot sequence have
+  been in 2.9 since it was written and in the implementation plan nowhere:
+  the boot image becomes a memory object, a process is built with the root
+  task's segments mapped from `ROOT_TASK_BASE`, a stack of sixteen pages
+  below it with
+  an unmapped page between, a kernel stack, an IPC buffer, and the handles it
+  starts with — system control, itself, the boot image, and one memory object
+  per free region of memory — and then the startup message that says which
+  handle is which.
+
+  What knows nothing of a processor is `kernel_core::root`, host-tested over
+  the doubles the memory tests already use. What is left is `task.rs` in the
+  kernel binary: the frame a new thread returns through, the switch of the
+  stacks, the idle thread on the boot stack, and the loop the kernel becomes
+  — switch to whatever the scheduler picked, halt when there is nothing.
+
+  Two things follow from there being a user thread at last. The trap handler
+  now tells a fault of the kernel from a fault of a user thread: the first
+  ends the machine, the second becomes a message to the fault handler of that
+  process. And the device interrupt handler gains the switch that 2.7 asks
+  for as its third step, which the binary could not do while it had nobody to
+  switch to.
+
+- `server-console`, what the console driver does with the controller and
+  with the bytes that arrive on it: a write that reports how far it came,
+  and a ring for what came in until a client asks for it. The controller is
+  `driver-uart16550` over its `Registers` trait, so the tests use the
+  recording implementation that crate already had, and nothing here makes a
+  system call.
+
+  The ring drops the oldest byte when it is full and counts what it dropped.
+  For a console that is the right end to lose: what a person is typing now
+  is what they will look for on the screen, and a count is something a
+  client can act on where a silently missing byte is not.
+
+  `Uart16550::registers` is new beside `into_registers`, for a caller that
+  has to reach a register the crate has no method for.
+
+- `server-memory`, the allocation policy of the memory server, and
+  `server-name`, the registry behind the name server. Neither makes a system
+  call: the memory policy reaches the kernel through the `Pages` trait — map,
+  zero, unmap, split, merge — and through nothing else, so the whole of it
+  runs on the host against the recording double catalog item 6.6.23 asks
+  for. The zeroing is a thing a test watches happen, in the order it
+  happens: one pass over exactly the range of the object, before the handle
+  goes out and again the moment it comes back.
+
+  The free list holds whole objects sorted by physical address; a request is
+  served from the first that can hold it at the alignment it asks for, and
+  what lies before and behind is split off and stays free. A release joins
+  the object to the neighbours it touches, which is what `memory_merge` is
+  for and what keeps the store from grinding itself down.
+
+  `Handle::MAX` is new in `audhsos-abi`: the widest handle there is, so that
+  code which must name a handle in a `const` can.
+
+- `memory_merge`, a forty-second system call: one memory object out of two
+  that lie side by side. The two must be in that order, agree in kind and
+  cache policy, carry the same rights, and be held by the caller and by
+  nothing else — a mapping is a reference, and an object that something maps
+  may not be dissolved under it. The lower one grows to cover both, the
+  upper one ceases to exist, and its kernel object goes back to the quota.
+
+  This supersedes the clause of D-12 that had objects split and never
+  merged, and what forced it is not a test. An object that can only become
+  smaller means a memory server that hands memory out and takes it back
+  grinds its objects down to single pages and can never serve a large
+  request again: fragmentation with no floor under it. Catalog item 6.6.23
+  had asked since it was written that two released neighbours be handed out
+  as one, and with a kernel that only splits, that is unsatisfiable (D-90).
+
+  The const assertion in `user-sys-x86_64` earned its keep on the first
+  build after the table grew: it named the missing wrapper before anything
+  else could.
+
+- `user-loader`: the ustar reader for the boot archive, a ustar writer
+  beside it, and `plan`, which says what of a user ELF has to be mapped
+  where. Both are parsers over borrowed bytes with no system call in them,
+  so both run on the host and under the fuzzer.
+
+  The reader is strict where a loader has to be: an archive is input the
+  root task did not write, so a name that is absolute or that walks upwards
+  through `..` is refused where it is read; a header whose checksum does not
+  match is refused; and the walk ends at the first entry that does not read,
+  because the next header is found by the size field of this one.
+
+  `plan` adds to the ELF reader only what is about user space — the bounds,
+  and two segments that share a page once rounded, which the format allows
+  and a loader that maps pages cannot. It answers with a plan and not an
+  action, so all of it is testable without a capability in sight.
+
+  New fuzz target `tar`, with its own seed corpus. It found one thing on its
+  first run, in the target rather than in the reader: a search stops at its
+  match, so it can succeed over an archive whose later headers are broken,
+  and the assertion that the two must agree was wrong. That input is in the
+  corpus as `find-stops-before-a-broken-header`.
+
+- `user-proto`, the messages the servers speak: the name protocol, the
+  console protocol, and the memory protocol, each a type with `encode` and
+  `decode` and no system call in it. A label carries the version in its high
+  sixteen bits, the protocol in the next sixteen, and the message in the
+  low sixteen, so a server refuses a version it does not speak before it
+  reads a word — and the version is read before the protocol, so a client of
+  a later release is told which of the two it is.
+
+  Every reply begins with a status word, zero or the code of an error of the
+  interface, and carries its payload only behind a status that says the
+  request succeeded: a failed lookup carries no endpoint, a failed
+  allocation no memory object. Catalog item 6.6.56 is new and covers them;
+  12.9 had asked for it before the encodings could be written.
+
+- The gate, in `user-sys-x86_64`: the address of a thread's IPC buffer and
+  the forty-one system calls as methods with names, types, and `Result`. A
+  wrapper writes the call number and its arguments into the buffer, executes
+  `int 0x80`, and turns the status word into an error or a value; a handle
+  comes back as the typed handle of its object kind. The assembly is
+  unchanged — one `int 0x80`, as it has been since Phase 5.
+
+  The address belongs to the thread and not to the process: the buffer of
+  the thread in slot `n` lies `n` pages below `IPC_BUFFER_TOP`, so a process
+  with two threads has two of them. A gate is therefore a value a thread
+  carries, and never a global — there is no thread-local storage in this
+  system to put one in, and a single global would be a silent corruption the
+  moment `server-console` starts its second thread.
+
+  The wrappers are written out one by one rather than expanded from the call
+  table. What holds them to it is `COVERED`, a list of the calls the gate
+  has a method for, checked against `Syscall::ALL` in a const assertion: a
+  call added to the table and forgotten here fails the build, and so does a
+  wrapper for a call the table no longer has.
+
+  `program!` is the entry point that goes with it. It builds the gate,
+  reads the startup message out of the buffer before the first call
+  overwrites it, and hands `main` both. The older `entry!` stays for the
+  programs of the kernel test images, which make calls on purpose that no
+  typed wrapper would let them make.
+
+- `user-rt`, the part of a user program that needs no machine: the nine
+  typed handles the system calls take, the heap, the message area of the IPC
+  buffer, the startup message as named fields, and a line of text in a fixed
+  number of bytes. The crate makes no system call and knows no instruction,
+  so all of it runs on the host under test and under the coverage gate.
+
+  The heap is one free list with first fit and coalescing on release, and
+  not the size classes 10.7.2 sketched: 6.6.12 requires that two released
+  neighbours become one block large enough for their sum, and a class list
+  hands back two blocks of the class they came from however they lie in
+  memory. A release names only its offset, because a table of live blocks
+  remembers the length — which also lets the allocator refuse a release of
+  something it never handed out. Both tables are const generics, so a
+  program that allocates twice does not carry the tables of one that
+  allocates ten thousand times.
+
+- The startup message, in `audhsos-abi::startup`. A process that has just been
+  created finds it in the IPC buffer of its first thread, and it says which
+  handle of its table holds which role: a handle is a number, and nothing else
+  tells a new program that entry two is the name server and not the memory
+  server. Whoever created the process writes it — the kernel for the root
+  task, the root task for every other process.
+
+  It is a list of pairs, role and handle, and not a list of fixed positions,
+  because the processes of this system are given different things: the root
+  task receives one memory object per free region of memory, of which there
+  are as many as the machine has, and an application receives two endpoints
+  and nothing else. A reader takes the roles it knows and passes over the
+  rest, so a role added later reaches an older program as nothing at all
+  rather than as a shifted field. The ten roles are a table macro beside
+  `error_codes!` and `object_types!`, so name, code, and lookup come from one
+  place. The label spells `STARTUP` and lies below the range the kernel keeps
+  for itself, which a const assertion holds to.
 
 - Two user threads that meet, and a driver at ring three. Five new programs
   under `user-test-programs`: `ipc_client` and `ipc_server`, which are a call

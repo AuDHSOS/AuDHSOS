@@ -9,7 +9,7 @@
 //! are active, so the window maps all of memory and the boot information
 //! page is where the layout says.
 
-use audhsos_abi::layout::BOOT_INFO_VADDR;
+use audhsos_abi::layout::{BOOT_INFO_VADDR, PHYS_WINDOW_BASE};
 use kernel_mm::frame_allocator::NoFrames;
 use kernel_mm::mapper::Mapper;
 use kernel_mm::page_table::X86Entry;
@@ -54,6 +54,31 @@ pub unsafe fn register_boot_info(platform: &mut X86Platform) -> bool {
         return false;
     };
     platform.push_boot_info(frame.start())
+}
+
+/// The bytes at `address`, as a slice through the physical window.
+///
+/// This is what a caller needs when the bytes span more than one frame —
+/// the root task inside the boot image, say. The window maps physical
+/// memory contiguously, so the frames of a physical range are contiguous
+/// virtual bytes too.
+///
+/// # Safety
+///
+/// The window must map all of memory, which it does once the memory
+/// bring-up has run, and `address .. address + len` must lie inside a
+/// region the loader reported. Nothing may write those bytes while the
+/// slice lives.
+#[must_use]
+pub unsafe fn physical_slice(address: PhysAddr, len: u64) -> Option<&'static [u8]> {
+    let base = PHYS_WINDOW_BASE.checked_add(address.as_u64())?;
+    let start = usize::try_from(base).ok()?;
+    let count = usize::try_from(len).ok()?;
+    let pointer = core::ptr::without_provenance::<u8>(start);
+    // SAFETY: the caller promises the window maps the range and that
+    // nothing writes it, so the bytes are readable and unchanging for as
+    // long as the kernel runs.
+    Some(unsafe { core::slice::from_raw_parts(pointer, count) })
 }
 
 /// The bytes of the frame holding `address`, copied out of the window.

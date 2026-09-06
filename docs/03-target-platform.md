@@ -166,11 +166,12 @@ throughout.
 | 48 | 8 | kernel reserve size | `0` selects the default; otherwise frame-aligned and below total RAM |
 | 56 | 8 | flags | must be `0` in version 1 |
 
-The root task is a flat binary linked for the fixed user address
-`ROOT_TASK_BASE` with its entry point at offset 0 and its `.bss` included in
-the file. The kernel maps the whole root task range read/write/execute at
-`ROOT_TASK_BASE`. Every other process is loaded from ELF by the root task
-with segment permissions.
+The root task is an ELF executable linked for the fixed user address
+`ROOT_TASK_BASE`, with every section on a page of its own. The kernel reads
+it with the same parser the loader uses and maps each segment with the
+permissions its header names, refusing an image in which two segments share
+a page (D-92). Every other process is loaded from ELF by the root task the
+same way.
 
 The archive is a ustar tar archive. The kernel never reads it.
 

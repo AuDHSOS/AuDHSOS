@@ -12,6 +12,7 @@ rust-version.workspace = true
 
 [dependencies]
 audhsos-abi.workspace = true
+audhsos-elf.workspace = true
 audhsos-sync.workspace = true
 kernel-hal-api = { workspace = true, features = ["port-io"] }
 kernel-mm.workspace = true
@@ -21,6 +22,7 @@ kernel-syscall.workspace = true
 kernel-types.workspace = true
 
 [dev-dependencies]
+audhsos-elf = { workspace = true, features = ["test-strategies"] }
 kernel-hal-api = { workspace = true, features = ["test-doubles"] }
 kernel-mm = { workspace = true, features = ["test-strategies"] }
 kernel-types = { workspace = true, features = ["test-strategies"] }

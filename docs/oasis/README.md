@@ -4,7 +4,7 @@ The standards this system implements that OASIS publishes, kept verbatim
 so that a constant can be checked against its source without a network,
 and so that the source cannot change under a crate that cites it. This is
 [`docs/rfc/`](../rfc/README.md) for a second standards body, under the
-same rule and for the same reason (D-59, D-90).
+same rule and for the same reason (D-59, D-100).
 
 Nothing here is compiled, linked, or read at run time. These are
 documents. Rule R8 of the safety policy is about dependencies, and it is

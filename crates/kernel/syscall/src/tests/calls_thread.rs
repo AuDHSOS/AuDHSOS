@@ -114,13 +114,67 @@ fn an_entry_or_a_stack_outside_user_space_is_refused() {
 }
 
 #[test]
-fn the_reserved_argument_of_thread_create_must_be_zero() {
+fn a_buffer_argument_that_is_no_handle_is_refused() {
     let mut fixture = Fixture::new();
     let mut arguments = creation(&fixture);
+    // The word is not zero, so it names a memory object, and it names none.
     arguments[5] = 1;
     assert_eq!(
         error_of(&mut fixture, request(Syscall::ThreadCreate, &arguments)),
+        Some(Error::InvalidHandle)
+    );
+}
+
+#[test]
+fn a_buffer_that_is_no_memory_object_is_refused() {
+    let mut fixture = Fixture::new();
+    let mut arguments = creation(&fixture);
+    arguments[5] = fixture.own_thread.raw();
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::ThreadCreate, &arguments)),
+        Some(Error::WrongObjectType)
+    );
+}
+
+#[test]
+fn a_buffer_of_more_than_one_page_is_refused() {
+    let mut fixture = Fixture::new();
+    let (_, wide) = fixture.memory(0x400, 2, Rights::MAP);
+    let mut arguments = creation(&fixture);
+    arguments[5] = wide.raw();
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::ThreadCreate, &arguments)),
         Some(Error::InvalidArgument)
+    );
+}
+
+#[test]
+fn a_thread_whose_buffer_was_supplied_uses_that_page() {
+    let mut fixture = Fixture::new();
+    let (object, page) = fixture.memory(0x400, 1, Rights::MAP);
+    let frames = fixture.objects.memory.get(object).unwrap().frames.start();
+    let mut arguments = creation(&fixture);
+    arguments[5] = page.raw();
+    let raw = value_of(&mut fixture, request(Syscall::ThreadCreate, &arguments));
+    let handle = Handle::from_raw(raw).expect("a handle");
+    let id = fixture
+        .objects
+        .entry(fixture.process, handle)
+        .unwrap()
+        .object
+        .typed::<kernel_objects::object::Thread>()
+        .unwrap();
+    let thread = fixture.objects.threads.get(id).unwrap();
+    assert_eq!(thread.ipc_buffer, frames, "the page the caller supplied");
+    assert_eq!(
+        thread.buffer_object,
+        Some(object),
+        "and the object it came out of"
+    );
+    assert_eq!(
+        fixture.objects.memory.references(object).unwrap(),
+        2,
+        "the handle and the mapping"
     );
 }
 

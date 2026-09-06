@@ -9,7 +9,7 @@
 //! the process exactly when it exists in its page tables.
 
 use audhsos_abi::layout::{MAX_PAGES_PER_CALL, PAGE_SIZE};
-use audhsos_abi::{Error, Rights};
+use audhsos_abi::{Error, Handle, Rights};
 use kernel_mm::address_space::{Region, user_range};
 use kernel_mm::page_table::Permissions;
 use kernel_objects::handle_table::Entry;
@@ -328,6 +328,91 @@ pub fn split<E: Environment, const NP: usize, const NT: usize, const NM: usize, 
             Err(error)
         }
     }
+}
+
+/// `memory_merge`: one object out of two that lie side by side in physical
+/// memory. The caller keeps its handle to the lower part, which grows to
+/// cover both, and gives up its handle to the upper part, which ceases to
+/// exist.
+///
+/// This is the operation that lets memory recover. Without it an object can
+/// only ever become smaller, so a server that hands memory out and takes it
+/// back grinds its objects down to single pages and can never serve a large
+/// request again — which is fragmentation with no floor under it (D-90).
+///
+/// Both objects must be held by the caller and by nothing else: a mapping
+/// is a reference, and an object that something maps may not be dissolved
+/// under it.
+///
+/// # Errors
+///
+/// [`Error::InvalidHandle`] for a handle the caller does not hold, and for
+/// a second argument that is no handle; [`Error::AccessDenied`] without
+/// `MAP` on either, or when the two carry different rights;
+/// [`Error::InvalidArgument`] when the two are the same object, when they
+/// do not lie side by side in that order, or when their kind or cache
+/// policy differs; [`Error::Busy`] when either is mapped or held under a
+/// second handle. Nothing is changed in any of those cases.
+pub fn merge<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    process: ProcessId,
+    request: &Request,
+) -> Result<Reply, Error> {
+    let lower_handle = request.handle.ok_or(Error::InvalidHandle)?;
+    let upper_handle = Handle::from_raw(request.argument(1)).ok_or(Error::InvalidHandle)?;
+    let (lower, lower_rights) =
+        machine
+            .objects
+            .resolve::<MemoryObject>(process, lower_handle, Rights::MAP)?;
+    let (upper, upper_rights) =
+        machine
+            .objects
+            .resolve::<MemoryObject>(process, upper_handle, Rights::MAP)?;
+    if lower == upper {
+        return Err(Error::InvalidArgument);
+    }
+    if lower_rights != upper_rights {
+        return Err(Error::AccessDenied);
+    }
+
+    let low = *machine.objects.memory.get(lower)?;
+    let high = *machine.objects.memory.get(upper)?;
+    if low.kind != high.kind || low.cache != high.cache {
+        return Err(Error::InvalidArgument);
+    }
+    let end = low
+        .frames
+        .start()
+        .checked_add(low.frames.count())
+        .ok_or(Error::InvalidArgument)?;
+    if end != high.frames.start() {
+        return Err(Error::InvalidArgument);
+    }
+    let count = low
+        .frames
+        .count()
+        .checked_add(high.frames.count())
+        .ok_or(Error::InvalidArgument)?;
+    let joined =
+        PhysFrameRange::new(low.frames.start(), count).map_err(|_| Error::InvalidArgument)?;
+
+    // One reference each: the handle in this call and nothing else. A
+    // mapping is a reference too, so this is what says neither is mapped.
+    if machine.objects.memory.references(lower)? != 1
+        || machine.objects.memory.references(upper)? != 1
+    {
+        return Err(Error::Busy);
+    }
+
+    // From here nothing can fail. The upper object leaves through the same
+    // path a closed handle takes, so the pool slot and the quota go back
+    // exactly once.
+    let entry = machine.objects.close_handle(process, upper_handle)?;
+    let switch = crate::lifetime::release(machine, entry.object)?;
+    machine.objects.memory.get_mut(lower)?.frames = joined;
+    refund_object(machine, process);
+    let reply = Reply::DONE;
+    Ok(if switch { reply.reschedule() } else { reply })
 }
 
 /// `memory_info`: where the object lies in physical memory and how large

@@ -26,6 +26,7 @@
 
 use audhsos_abi::ipc_buffer;
 use audhsos_abi::{Rights, Syscall};
+use user_rt as _;
 use user_sys_x86_64 as sys;
 
 sys::entry!(main);
@@ -341,6 +342,14 @@ fn implemented(log: &mut Log, process: u64, thread: u64, memory: u64, bad: u64) 
     log.run(Syscall::MemoryUnmap, &[process, NOTHING_MAPPED, PAGE]);
     let half = log.run(Syscall::MemorySplit, &[memory, PAGE.saturating_mul(2)]);
     log.run(Syscall::MemorySplit, &[memory, 1]);
+    // Two objects this program alone holds, cut apart and joined again.
+    // `memory` itself cannot be joined to anything: the image holds a
+    // handle to it as well, and an object something else holds may not be
+    // dissolved under it (D-90).
+    let tail = log.run(Syscall::MemorySplit, &[half, PAGE]);
+    log.run(Syscall::MemoryMerge, &[half, tail]);
+    // And an object joined to itself, which no pair of neighbours is.
+    log.run(Syscall::MemoryMerge, &[memory, memory]);
 
     // Handles, and the process that held them.
     let copy = log.run(Syscall::HandleDuplicate, &[half, rights]);

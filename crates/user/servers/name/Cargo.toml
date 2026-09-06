@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "server-name"
+description = "The registry of the name server: names, the endpoints they stand for, and who owns them"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+audhsos-abi.workspace = true
+audhsos-collections.workspace = true
+user-proto.workspace = true
+
+[lints]
+workspace = true

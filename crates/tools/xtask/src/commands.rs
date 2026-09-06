@@ -4,13 +4,15 @@
 //! The subcommands.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::error::Error;
-use crate::image::{boot_image, disk};
+use crate::image::{archive, boot_image, disk};
 use crate::out::{self, note, note_raw};
 use crate::policy::{FUZZ_TARGETS, MIRI_TARGETS, Target, crates_for};
 use crate::process::Cmd;
 use crate::qemu::{self, Machine, Run};
+use crate::session::Session;
 use crate::symbolize;
 use crate::{coverage, deps, fs, layering, linker, spdx, unsafe_budget};
 
@@ -97,11 +99,13 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut host = false;
     let mut qemu = false;
     let mut e2e = false;
+    let mut profile = Vec::new();
     for option in options {
         match option.as_str() {
             "--host" => host = true,
             "--qemu" => qemu = true,
             "--e2e" => e2e = true,
+            "--release" => profile.push("--release".to_owned()),
             other => return Err(Error::Usage(format!("unknown option `{other}` for test"))),
         }
     }
@@ -118,11 +122,155 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
         test_qemu(root)?;
     }
     if e2e {
-        return Err(Error::Usage(
-            "end-to-end tests arrive with Phase 6".to_owned(),
-        ));
+        test_e2e(root, &profile)?;
     }
     Ok(())
+}
+
+/// How long an end-to-end run waits for a line before it gives up.
+const E2E_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// What the run has to see, in this order, for the system to have worked.
+///
+/// Each line is written by a different part of it, so the first one that
+/// does not come says where the boot stopped: the root task read the
+/// archive, the memory server answered, the name server answered, the
+/// console driver took the port, and the application found it and said
+/// something through it.
+const E2E_LINES: [(&str, &str); 11] = [
+    (
+        "[init] started server-memory",
+        "the memory server did not start",
+    ),
+    (
+        "[init] started server-name",
+        "the name server did not start",
+    ),
+    (
+        "[init] started server-console",
+        "the console driver did not start",
+    ),
+    ("[init] started app-hello", "the application did not start"),
+    (
+        "hello from userland",
+        "the application said nothing through the console driver",
+    ),
+    (
+        "[checks] missing name: the requested item does not exist",
+        "a lookup of a name nobody registered was not refused with NotFound",
+    ),
+    (
+        "[checks] memory comes back zeroed: ok",
+        "memory that was used, given back, and asked for again was not zeroed",
+    ),
+    (
+        "[checks] more than there is: ",
+        "the memory server said nothing to a request no machine can meet",
+    ),
+    (
+        "[checks] line 7 of 8, and the whole of it",
+        "the last line of the second client did not arrive",
+    ),
+    (
+        "[faulter] about to write to nowhere",
+        "the program that faults on purpose never ran",
+    ),
+    (
+        "faulted: PageFault",
+        "the root task did not report the fault of its child",
+    ),
+];
+
+/// How many lines the second client writes while the first writes its own.
+///
+/// It repeats the number of the run in the text, so a line that lost bytes
+/// to another writer cannot be mistaken for one that kept them. `LINES` in
+/// `app-checks` says the same number; a disagreement makes this run fail
+/// with the line it could not find.
+const E2E_INTERLEAVED: usize = 8;
+
+/// Every line of the second client that did not arrive whole and exactly
+/// once.
+fn torn_lines(output: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    for index in 0..E2E_INTERLEAVED {
+        let wanted = format!("[checks] line {index} of {E2E_INTERLEAVED}, and the whole of it");
+        let seen = output.lines().filter(|line| line.trim() == wanted).count();
+        if seen != 1 {
+            violations.push(format!(
+                "the line `{wanted}` stands {seen} times, not once: two writers tore it"
+            ));
+        }
+    }
+    violations
+}
+
+/// The end-to-end tests: the whole system, from the loader to a line an
+/// application wrote through a driver that runs at ring three.
+///
+/// # Errors
+///
+/// [`Error::Violations`] for every line of [`E2E_LINES`] that did not come;
+/// the errors of the build, of the images, and of the machine.
+fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
+    build(root, options)?;
+    image(root, options)?;
+    let machine = Machine::locate()?;
+    let path = root.join("target").join("audhsos.img");
+    let mut session = Session::start(&machine, &path)?;
+
+    let mut violations = Vec::new();
+    for (needle, complaint) in E2E_LINES {
+        if !session.wait_for(needle, E2E_TIMEOUT) {
+            violations.push((*complaint).to_owned());
+            break;
+        }
+    }
+    // Console input: the bytes go the other way, through the same port, and
+    // only once the program on the far side says it is listening — a byte
+    // sent earlier would reach a controller whose receive path is not up.
+    if violations.is_empty() {
+        if session.wait_for("[hello] ready", E2E_TIMEOUT) {
+            session.send(b"typed\n")?;
+            if !session.wait_for("[hello] echo: typed", E2E_TIMEOUT) {
+                violations.push("what was typed did not come back".to_owned());
+            }
+        } else {
+            violations.push("the application never said it was ready".to_owned());
+        }
+    }
+    // Two clients wrote at once and no line of either may be torn: every
+    // line the second one wrote has to stand whole and once, which the
+    // last one arriving does not by itself say.
+    if violations.is_empty() {
+        violations.extend(torn_lines(&session.output()));
+    }
+    // The run ends itself: the application reports to the root task, and
+    // the root task writes to the exit device through its `SystemControl`.
+    // A run this had to kill would say nothing about whether that works.
+    if violations.is_empty() {
+        match session.wait_for_end(E2E_TIMEOUT) {
+            None => violations.push("the machine did not end by itself".to_owned()),
+            status => {
+                let outcome = qemu::outcome_of(status, false);
+                if outcome != qemu::Outcome::Success {
+                    violations.push(format!("the machine reported a {}", outcome.name()));
+                }
+            }
+        }
+    }
+    let output = session.finish();
+    note!(
+        "qemu end-to-end: {} line(s) of output",
+        output.lines().count()
+    );
+    report("end-to-end", &violations);
+    if !violations.is_empty() {
+        eprintln!("--- serial output of the end-to-end run ---");
+        eprintln!("{output}");
+        eprintln!("--- end ---");
+    }
+    Error::from_violations(violations)
 }
 
 /// Every test kernel in QEMU, then the three images that must make the
@@ -342,7 +490,7 @@ fn report_tests(
             missing.push(format!("the image `{name}` did not write `{marker}`"));
         }
     }
-    match qemu::check(&report, outcome).and_then(|()| Error::from_violations(missing)) {
+    match qemu::check(&report, run).and_then(|()| Error::from_violations(missing)) {
         Ok(()) => Ok(()),
         Err(error) => {
             eprintln!("--- serial output of {name} ---");
@@ -681,7 +829,7 @@ pub(crate) fn check(root: &Path, channel: &str, options: &[String]) -> Result<()
         }
     }
     note!("toolchain: {channel}");
-    let steps: [(&str, Step); 10] = [
+    let steps: [(&str, Step); 11] = [
         ("lint", lint),
         ("check-layering", check_layering),
         ("check-deps", check_deps),
@@ -691,6 +839,7 @@ pub(crate) fn check(root: &Path, channel: &str, options: &[String]) -> Result<()
         ("miri", miri),
         ("doc", doc),
         ("test --qemu", |root| test(root, &["--qemu".to_owned()])),
+        ("test --e2e", |root| test(root, &["--e2e".to_owned()])),
         ("fuzz --regression", |root| {
             fuzz(root, &["--regression".to_owned()])
         }),
@@ -733,6 +882,63 @@ pub(crate) const USER_TEST_BASE: u64 = 0x40_0000;
 
 /// The linker script of the user programs.
 const USER_SCRIPT: &str = "crates/user/test-programs/user.ld";
+
+/// The address the root task is linked at, which its linker script repeats
+/// and this checks against the layout constant of the interface.
+const ROOT_TASK_BASE: u64 = audhsos_abi::layout::ROOT_TASK_BASE;
+
+/// The linker script of the root task.
+const ROOT_SCRIPT: &str = "crates/user/programs/root.ld";
+
+/// The address the programs of the archive are linked at, which their
+/// linker script repeats and this checks.
+const PROGRAM_BASE: u64 = 0x0100_0000;
+
+/// The linker script of those programs.
+const PROGRAM_SCRIPT: &str = "crates/user/programs/program.ld";
+
+/// Checks the two linker scripts of the userland against the addresses the
+/// code says they hold.
+///
+/// # Errors
+///
+/// [`Error::Violations`] when a script and this disagree.
+pub(crate) fn check_userland(root: &Path) -> Result<(), Error> {
+    check_base(root, ROOT_SCRIPT, "ROOT_TASK_BASE", ROOT_TASK_BASE)?;
+    check_base(root, PROGRAM_SCRIPT, "PROGRAM_BASE", PROGRAM_BASE)
+}
+
+/// Refuses a linker script whose base address is not the one the code says.
+fn check_base(root: &Path, path: &str, name: &str, expected: u64) -> Result<(), Error> {
+    let script = fs::read(&root.join(path))?;
+    let violations = match linker::constant(&script, name) {
+        Some(base) if base == expected => Vec::new(),
+        Some(base) => vec![format!(
+            "{path}: {name} is {base:#x}, the xtask says {expected:#x}"
+        )],
+        None => vec![format!("{path}: {name} is missing")],
+    };
+    report("program base", &violations);
+    Error::from_violations(violations)
+}
+
+/// The boot image of the real system: the header, the root task as an ELF,
+/// and the archive of the six programs.
+///
+/// # Errors
+///
+/// The errors of reading what the build wrote and of writing the archive.
+fn boot_image_of(root: &Path, profile: &str) -> Result<Vec<u8>, Error> {
+    let built = root.join("target/x86_64-unknown-none").join(profile);
+    let task = fs::read_bytes(&built.join("server-init"))?;
+    let mut files = Vec::new();
+    for name in archive::PROGRAMS {
+        files.push((name, fs::read_bytes(&built.join(name))?));
+    }
+    let archive = archive::build(&files)?;
+    note!("archive: {} programs, {} bytes", files.len(), archive.len());
+    boot_image::build(&task, &archive, 0)
+}
 
 /// Builds the user test programs and turns each into a flat binary in
 /// [`USER_TESTS_DIR`].
@@ -868,7 +1074,8 @@ pub(crate) fn image(root: &Path, options: &[String]) -> Result<(), Error> {
         .join("x86_64-unknown-none")
         .join(profile)
         .join("audhsos-kernel");
-    let boot = boot_image::build(&boot_image::placeholder_root_task(), &[], 0)?;
+    check_userland(root)?;
+    let boot = boot_image_of(root, profile)?;
     let files = vec![
         (disk::LOADER_PATH, fs::read_bytes(&loader)?),
         (disk::KERNEL_PATH, fs::read_bytes(&kernel)?),

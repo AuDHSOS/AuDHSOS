@@ -11,6 +11,7 @@ mod handle;
 mod ipc_buffer;
 mod object;
 mod rights;
+mod startup;
 mod strategies;
 mod syscall;
 mod thread;

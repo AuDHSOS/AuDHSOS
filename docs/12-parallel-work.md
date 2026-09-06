@@ -1047,7 +1047,7 @@ threaded through the `next` fields of the descriptor table, which is how
 the classic implementation does it. The device cannot write that table,
 but it writes the used ring, and a used element naming a descriptor that
 is already free is exactly what would tear a free list living in shared
-memory. Here it is one bit test and a refusal (D-89). The same bit is
+memory. Here it is one bit test and a refusal (D-99). The same bit is
 what bounds the chain walk: every step frees one descriptor that was in
 use, there are at most `size` of those, and a step onto one that is
 already free is refused, so the walk needs no step counter to terminate.
@@ -1060,7 +1060,7 @@ forbids earlier, and the used ring, which the device may not have
 written earlier.
 
 The specification is kept under [`docs/oasis/`](oasis/README.md) as the
-RFCs are kept under `docs/rfc/` (D-90), and every constant of the crate
+RFCs are kept under `docs/rfc/` (D-100), and every constant of the crate
 names the section it comes from: the layout and the alignments from
 section 2.7, the descriptor and its flags from 2.7.5, the two rings from
 2.7.6 and 2.7.8, the notification flags from 2.7.7 and 2.7.10, the seven
@@ -1164,7 +1164,7 @@ the integration.
 | `driver-i8042` | 10 | 6.6.25 | port access trait with a double, exactly as `driver-uart16550` today |
 | QMP client and PPM reader in the xtask | 9 | 6.6.28 | protocol logic over a stream, tested against recorded sessions |
 | allocator logic in `user-rt` | 7 | 6.6.12 | offsets in a byte region, testable against a reference model |
-| encodings in `user-proto` | 7 | none yet | each message is a type with `encode` and `decode` and no system call; the catalog covers them only through the end-to-end items 6.6.22, so pulling them forward means writing a catalog item for them first |
+| encodings in `user-proto` | 7 | 6.6.56 | each message is a type with `encode` and `decode` and no system call; the catalog item 6.6.56 was written for them, as this row asked (D-89) |
 
 ## 12.10 Capacity
 

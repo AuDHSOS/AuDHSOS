@@ -541,7 +541,7 @@ pub(crate) fn set_fault_handler(process: ProcessId, endpoint: EndpointId) {
         machine
             .objects
             .processes
-            .with(process, |held| held.fault_handler = Some(endpoint));
+            .with(process, |held| held.fault_handler = Some((endpoint, 0)));
     });
 }
 
@@ -671,7 +671,15 @@ fn environment<'a>(
     tables: &'a mut PhysicalWindow,
     tlb: &'a mut LocalTlb,
 ) -> KernelEnvironment<'a, X86Entry, PhysicalWindow, LocalTlb, SerialConsole, DeviceAccess<'a>> {
-    KernelEnvironment::new(memory, tables, tlb, None, None, acpi_pointer())
+    KernelEnvironment::new(
+        memory,
+        tables,
+        tlb,
+        None,
+        None,
+        acpi_pointer(),
+        context::prepare_user,
+    )
 }
 
 /// The address of the root system description pointer, or zero when the
@@ -936,15 +944,16 @@ pub(crate) fn sweep() {
     let mut tlb = LocalTlb;
     with_memory(|memory| {
         with_machine(|machine| {
-            let mut environment = KernelEnvironment::<
-                X86Entry,
-                _,
-                _,
-                SerialConsole,
-                DeviceAccess<'_>,
-            >::new(
-                memory, &mut tables, &mut tlb, None, None, acpi_pointer()
-            );
+            let mut environment =
+                KernelEnvironment::<X86Entry, _, _, SerialConsole, DeviceAccess<'_>>::new(
+                    memory,
+                    &mut tables,
+                    &mut tlb,
+                    None,
+                    None,
+                    acpi_pointer(),
+                    context::prepare_user,
+                );
             // The kernel stands on the stack of the thread it just
             // switched to, which is the one the scheduler now calls
             // current.
@@ -1031,6 +1040,7 @@ fn on_syscall() {
     let Some(bytes) = buffer_window.frame_bytes_mut(frame) else {
         return;
     };
+    watch(bytes);
     // The interrupt controller and the ports, in an image that brought them
     // up. Holding the controller turns interrupts off for the length of the
     // call, which is what the calls that touch it need.
@@ -1078,6 +1088,7 @@ fn answer(
                     None,
                     devices.as_deref_mut(),
                     acpi_pointer(),
+                    context::prepare_user,
                 );
             let reschedule = handle_syscall(
                 &mut machine.objects,
@@ -1097,6 +1108,60 @@ fn answer(
     })
     .flatten()
     .unwrap_or(false)
+}
+
+/// How many system call numbers [`watch_syscalls`] remembers. More than
+/// the table holds, so that a run which made an extra call shows it
+/// instead of losing it off the end.
+pub(crate) const WATCH_CAPACITY: usize = 64;
+
+/// The numbers the kernel saw, in the order the calls arrived.
+static WATCHED: [AtomicU32; WATCH_CAPACITY] = [const { AtomicU32::new(0) }; WATCH_CAPACITY];
+
+/// How many of [`WATCHED`] hold a number.
+static WATCHED_LEN: AtomicU32 = AtomicU32::new(0);
+
+/// Whether the numbers are being remembered.
+static WATCHING: AtomicU32 = AtomicU32::new(0);
+
+/// Remembers the number every later system call of a user thread arrives
+/// under.
+///
+/// This is what makes a wrapper of `user-sys-x86_64` checkable: the number
+/// is what the wrapper wrote into the buffer, so a run of the wrappers in
+/// the order of the table has to arrive here in the order of the table.
+pub(crate) fn watch_syscalls() {
+    WATCHED_LEN.store(0, Ordering::SeqCst);
+    WATCHING.store(1, Ordering::SeqCst);
+}
+
+/// Copies the numbers that were seen into `into` and answers with how many
+/// there were, which may be more than `into` holds.
+pub(crate) fn watched_syscalls(into: &mut [u32]) -> usize {
+    let len = usize::try_from(WATCHED_LEN.load(Ordering::SeqCst)).unwrap_or(0);
+    for (slot, seen) in into.iter_mut().zip(WATCHED.iter().take(len)) {
+        *slot = seen.load(Ordering::SeqCst);
+    }
+    len
+}
+
+/// Remembers the number of the call standing in `bytes`.
+fn watch(bytes: &[u8; ipc_buffer::SIZE]) {
+    if WATCHING.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    let number = ipc_buffer::Buffer::new(bytes).syscall_number();
+    let at = usize::try_from(WATCHED_LEN.load(Ordering::SeqCst)).unwrap_or(usize::MAX);
+    if let Some(slot) = WATCHED.get(at) {
+        slot.store(u32::try_from(number).unwrap_or(u32::MAX), Ordering::SeqCst);
+    }
+    // The length counts every call, whether there was room for it or not,
+    // so a run that made more calls than the watch holds is a run the
+    // reader can see was too long.
+    WATCHED_LEN.store(
+        u32::try_from(at.saturating_add(1)).unwrap_or(u32::MAX),
+        Ordering::SeqCst,
+    );
 }
 
 /// Whether the interrupt hardware of the machine is in place, so that the
@@ -1183,15 +1248,16 @@ fn on_trap(report: TrapReport) {
     };
     let reschedule = with_memory(|memory| {
         with_machine(|machine| {
-            let mut environment = KernelEnvironment::<
-                X86Entry,
-                _,
-                _,
-                SerialConsole,
-                DeviceAccess<'_>,
-            >::new(
-                memory, &mut tables, &mut tlb, None, None, acpi_pointer()
-            );
+            let mut environment =
+                KernelEnvironment::<X86Entry, _, _, SerialConsole, DeviceAccess<'_>>::new(
+                    memory,
+                    &mut tables,
+                    &mut tlb,
+                    None,
+                    None,
+                    acpi_pointer(),
+                    context::prepare_user,
+                );
             let mut syscall = kernel_syscall::dispatch::Machine {
                 objects: &mut machine.objects,
                 scheduler: &mut machine.scheduler,

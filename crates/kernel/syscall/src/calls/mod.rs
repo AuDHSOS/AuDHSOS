@@ -16,12 +16,13 @@
 //! | `process_install_handle` | target process handle, handle of the caller, rights |
 //! | `process_set_fault_handler` | process handle, endpoint handle (zero clears it) |
 //! | `process_kill` | process handle |
-//! | `thread_create` | process handle, entry, user stack, priority, maximum priority, reserved (zero) |
+//! | `thread_create` | process handle, entry, user stack, priority, maximum priority, memory object for the IPC buffer (zero for one out of the kernel reserve) |
 //! | `thread_start`, `thread_suspend`, `thread_resume`, `thread_kill` | thread handle |
 //! | `thread_set_priority` | thread handle, priority |
 //! | `thread_info` | thread handle |
 //! | `thread_exit`, `thread_yield` | none |
 //! | `memory_split` | memory handle, offset in bytes |
+//! | `memory_merge` | memory handle of the lower part, handle of the upper |
 //! | `memory_map` | process handle, memory handle, virtual address, offset, length, permissions |
 //! | `memory_unmap` | process handle, virtual address, length |
 //! | `memory_protect` | process handle, virtual address, length, permissions |
@@ -88,6 +89,7 @@ pub fn run<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
         Syscall::ThreadExit => thread::exit(machine, caller),
         Syscall::ThreadYield => thread::yield_now(machine, caller),
         Syscall::MemorySplit => memory::split(machine, process, request),
+        Syscall::MemoryMerge => memory::merge(machine, process, request),
         Syscall::MemoryMap => memory::map(machine, process, request),
         Syscall::MemoryUnmap => memory::unmap(machine, process, request),
         Syscall::MemoryProtect => memory::protect(machine, process, request),

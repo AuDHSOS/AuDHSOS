@@ -287,6 +287,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tar"
+version = "0.1.0"
+dependencies = [
+ "fuzz-support",
+ "user-loader",
+]
+
+[[package]]
 name = "tcp_segment"
 version = "0.1.0"
 dependencies = [
@@ -311,6 +319,14 @@ version = "0.1.0"
 dependencies = [
  "audhsos-tls",
  "fuzz-support",
+]
+
+[[package]]
+name = "user-loader"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-elf",
 ]
 
 [[package]]

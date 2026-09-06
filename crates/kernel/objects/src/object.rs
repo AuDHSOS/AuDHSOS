@@ -181,10 +181,14 @@ pub struct Process {
     pub quota: Quota,
     /// The kernel objects the process may still create.
     pub kernel_object_quota: Quota,
-    /// The endpoint faults of this process are reported on. A process
-    /// with none stops the thread that faulted, which is what a fault
-    /// nobody takes ends in.
-    pub fault_handler: Option<EndpointId>,
+    /// The endpoint faults of this process are reported on, and the badge
+    /// of the capability that named it. A process with none stops the
+    /// thread that faulted, which is what a fault nobody takes ends in.
+    ///
+    /// The badge is kept because a handler serves more than one process:
+    /// it is the only thing in the message that says whose fault this is,
+    /// exactly as it is for every other message a server receives.
+    pub fault_handler: Option<(EndpointId, u64)>,
 }
 
 impl Object for Process {
@@ -298,6 +302,10 @@ pub struct Thread {
     pub kernel_stack: u32,
     /// The frame holding the thread's IPC buffer.
     pub ipc_buffer: PhysFrame,
+    /// The memory object the buffer frame belongs to, for a thread whose
+    /// creator supplied one. `None` means the frame came out of the kernel
+    /// reserve and goes back there when the thread ends.
+    pub buffer_object: Option<MemoryObjectId>,
     /// Where that frame is mapped in the address space of the process,
     /// which is where the thread finds it and what the kernel hands it in
     /// its first register.
@@ -354,6 +362,7 @@ impl Thread {
             time_slice: 0,
             kernel_stack,
             ipc_buffer,
+            buffer_object: None,
             ipc_address: VirtAddr::ZERO,
             entry: VirtAddr::ZERO,
             user_stack: VirtAddr::ZERO,
@@ -363,6 +372,16 @@ impl Thread {
             wait: Wait::Nothing,
             fault: None,
         })
+    }
+
+    /// The same thread, with its IPC buffer taken out of `object` rather
+    /// than out of the kernel reserve.
+    #[must_use]
+    pub const fn with_buffer_object(self, object: MemoryObjectId) -> Self {
+        Thread {
+            buffer_object: Some(object),
+            ..self
+        }
     }
 
     /// The same thread, starting at `entry` on `user_stack` with its IPC

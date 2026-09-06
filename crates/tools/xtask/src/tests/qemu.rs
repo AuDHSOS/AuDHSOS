@@ -7,8 +7,8 @@
 use std::path::Path;
 
 use crate::qemu::{
-    EXIT_LOADER_FAILURE, EXIT_SUCCESS, EXIT_TEST_FAILURE, Outcome, Report, TestOutcome, arguments,
-    check, firmware_next_to, outcome_of, parse, strip_escapes,
+    EXIT_LOADER_FAILURE, EXIT_SUCCESS, EXIT_TEST_FAILURE, Outcome, Report, Run, TestOutcome,
+    arguments, check, firmware_next_to, outcome_of, parse, strip_escapes,
 };
 
 /// A run whose lines are all well formed.
@@ -18,6 +18,21 @@ const PASSING: &str = "\
 [summary] passed=2 failed=0
 ";
 
+/// A run that ended the way `status`, `signal` and `timed_out` say.
+fn run(status: Option<i32>, signal: Option<i32>, timed_out: bool) -> Run {
+    Run {
+        status,
+        signal,
+        output: String::new(),
+        timed_out,
+    }
+}
+
+/// A run the machine ended by itself with `code`.
+fn ended_with(code: i32) -> Run {
+    run(Some(code), None, false)
+}
+
 #[test]
 fn well_formed_lines_are_read_with_their_names_and_outcomes() {
     let report = parse(PASSING);
@@ -25,7 +40,7 @@ fn well_formed_lines_are_read_with_their_names_and_outcomes() {
     assert_eq!(report.passed(), 2);
     assert_eq!(report.failed(), 0);
     assert_eq!(report.summary, Some((2, 0)));
-    assert!(check(&report, Outcome::Success).is_ok());
+    assert!(check(&report, &ended_with(EXIT_SUCCESS)).is_ok());
 }
 
 #[test]
@@ -44,13 +59,13 @@ fn a_failed_line_carries_its_message_and_an_empty_message_is_allowed() {
         report.failures(),
         vec!["a: it broke".to_owned(), "b".to_owned()]
     );
-    assert!(check(&report, Outcome::TestFailure).is_err());
+    assert!(check(&report, &ended_with(EXIT_TEST_FAILURE)).is_err());
 }
 
 #[test]
 fn a_summary_that_disagrees_with_the_lines_is_a_runner_error() {
     let report = parse("[test] a ... ok\n[summary] passed=7 failed=0\n");
-    let error = check(&report, Outcome::Success).unwrap_err();
+    let error = check(&report, &ended_with(EXIT_SUCCESS)).unwrap_err();
     assert!(format!("{error}").contains("the summary says passed=7"));
 }
 
@@ -58,7 +73,7 @@ fn a_summary_that_disagrees_with_the_lines_is_a_runner_error() {
 fn output_without_a_summary_is_a_runner_error() {
     let report = parse("[test] a ... ok\n");
     assert_eq!(report.summary, None);
-    let error = check(&report, Outcome::Success).unwrap_err();
+    let error = check(&report, &ended_with(EXIT_SUCCESS)).unwrap_err();
     assert!(format!("{error}").contains("no summary line"));
 }
 
@@ -102,7 +117,7 @@ fn every_exit_status_maps_to_one_outcome() {
 #[test]
 fn a_run_the_time_limit_ended_is_a_crash_whatever_the_status_says() {
     let report = parse("");
-    assert!(check(&report, outcome_of(Some(EXIT_SUCCESS), true)).is_err());
+    assert!(check(&report, &run(Some(EXIT_SUCCESS), None, true)).is_err());
 }
 
 #[test]
@@ -134,5 +149,33 @@ fn the_firmware_lies_next_to_the_qemu_binary() {
     assert_eq!(
         firmware_next_to(Path::new("qemu-system-x86_64")),
         Path::new("../share/qemu/edk2-x86_64-code.fd")
+    );
+}
+
+#[test]
+fn a_crash_says_which_of_the_three_it_was() {
+    assert_eq!(
+        run(Some(EXIT_SUCCESS), None, true).how(),
+        "the time limit ended it while it was still running"
+    );
+    assert_eq!(run(Some(7), None, false).how(), "it exited with code 7");
+    assert_eq!(
+        run(None, Some(9), false).how(),
+        "something killed QEMU with signal 9"
+    );
+    assert_eq!(
+        run(None, None, false).how(),
+        "QEMU ended without a code and without a signal"
+    );
+}
+
+#[test]
+fn the_violation_of_a_crash_carries_the_reason() {
+    let report = parse("");
+    let error = check(&report, &run(None, Some(9), false)).unwrap_err();
+    let text = format!("{error}");
+    assert!(
+        text.contains("signal 9"),
+        "the reason is not in the report: {text}"
     );
 }

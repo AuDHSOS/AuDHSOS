@@ -7,7 +7,7 @@
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, KERNEL_LABEL_BASE, SIZE, Status, fault_label};
 use audhsos_abi::layout::{MAX_MESSAGE_HANDLES, MAX_MESSAGE_WORDS};
 use audhsos_abi::{Error, FaultKind, Handle, ObjectType, Rights, Syscall, ThreadState};
-use kernel_objects::object::{AnyObjectId, Endpoint, ThreadId};
+use kernel_objects::object::{AnyObjectId, Endpoint, ProcessId, ThreadId};
 
 use super::double::{Fixture, call, error_of, request, value_of};
 
@@ -475,11 +475,12 @@ fn a_receive_that_meets_a_queued_call_answers_the_badge_and_the_reply() {
     assert_eq!(Buffer::new(&back).message().unwrap().label, 8);
     assert_eq!(Buffer::new(&back).word(0), Some(1));
 
-    // A second reply through the same object is refused.
+    // The answer consumed the reply object, so the handle that named it is
+    // gone with it and a second reply reaches nothing.
     let mut again = message(8, 0, &[]);
     with_call(&mut again, Syscall::IpcReply, &[reply.raw()]);
     let (status, _, _) = call(&mut fixture, &mut again);
-    assert_eq!(status.error(), Some(Error::InvalidState));
+    assert_eq!(status.error(), Some(Error::InvalidHandle));
 }
 
 #[test]
@@ -513,6 +514,45 @@ fn a_reply_recv_answers_first_and_then_waits_for_the_next_sender() {
             .label,
         3
     );
+}
+
+#[test]
+fn a_server_that_answers_a_thousand_calls_holds_no_more_handles_than_at_the_start() {
+    let mut fixture = Fixture::new();
+    let (endpoint_id, handle) = endpoint(&mut fixture);
+    let client = fixture.process(8);
+    let theirs = install_endpoint(&mut fixture, client, endpoint_id, Rights::SEND);
+    let before = held_handles(&fixture, fixture.process);
+
+    // A server's table is what a run of calls costs it. Every answer
+    // consumes its reply object, so the entry that named it goes too; a
+    // server that kept them would stop receiving after as many calls as
+    // its table has slots.
+    let caller = fixture.running(client, 4);
+    for round in 0..1000u32 {
+        fixture.objects.threads.get_mut(caller).unwrap().state = ThreadState::Running;
+        let reply = queue_a_call(&mut fixture, caller, theirs, handle);
+        let mut answer = message(3, 1, &[]);
+        with_call(&mut answer, Syscall::IpcReply, &[reply.raw()]);
+        let (status, _, _) = call(&mut fixture, &mut answer);
+        assert_eq!(status.error(), None, "round {round}");
+        assert_eq!(
+            held_handles(&fixture, fixture.process),
+            before,
+            "round {round} left a handle behind"
+        );
+    }
+}
+
+/// How many handles `process` holds.
+fn held_handles(fixture: &Fixture, process: ProcessId) -> u32 {
+    fixture
+        .objects
+        .processes
+        .get(process)
+        .unwrap()
+        .handles
+        .count()
 }
 
 #[test]
