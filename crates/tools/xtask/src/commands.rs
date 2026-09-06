@@ -99,11 +99,13 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut host = false;
     let mut qemu = false;
     let mut e2e = false;
+    let mut profile = Vec::new();
     for option in options {
         match option.as_str() {
             "--host" => host = true,
             "--qemu" => qemu = true,
             "--e2e" => e2e = true,
+            "--release" => profile.push("--release".to_owned()),
             other => return Err(Error::Usage(format!("unknown option `{other}` for test"))),
         }
     }
@@ -120,7 +122,7 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
         test_qemu(root)?;
     }
     if e2e {
-        test_e2e(root)?;
+        test_e2e(root, &profile)?;
     }
     Ok(())
 }
@@ -162,9 +164,9 @@ const E2E_LINES: [(&str, &str); 5] = [
 ///
 /// [`Error::Violations`] for every line of [`E2E_LINES`] that did not come;
 /// the errors of the build, of the images, and of the machine.
-fn test_e2e(root: &Path) -> Result<(), Error> {
-    build(root, &[])?;
-    image(root, &[])?;
+fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
+    build(root, options)?;
+    image(root, options)?;
     let machine = Machine::locate()?;
     let path = root.join("target").join("audhsos.img");
     let mut session = Session::start(&machine, &path)?;
@@ -187,6 +189,20 @@ fn test_e2e(root: &Path) -> Result<(), Error> {
             }
         } else {
             violations.push("the application never said it was ready".to_owned());
+        }
+    }
+    // The run ends itself: the application reports to the root task, and
+    // the root task writes to the exit device through its `SystemControl`.
+    // A run this had to kill would say nothing about whether that works.
+    if violations.is_empty() {
+        match session.wait_for_end(E2E_TIMEOUT) {
+            None => violations.push("the machine did not end by itself".to_owned()),
+            status => {
+                let outcome = qemu::outcome_of(status, false);
+                if outcome != qemu::Outcome::Success {
+                    violations.push(format!("the machine reported a {}", outcome.name()));
+                }
+            }
         }
     }
     let output = session.finish();

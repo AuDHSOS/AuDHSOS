@@ -342,8 +342,26 @@ pub fn reply<E: Environment, const NP: usize, const NT: usize, const NM: usize, 
     let (id, _rights) = machine
         .objects
         .resolve::<ReplyObject>(process, handle, Rights::EMPTY)?;
-    let outcome = answer(machine, process, id, buffer)?;
+    let mut outcome = answer(machine, process, id, buffer)?;
+    outcome.reschedule |= consume(machine, process, handle)?;
     apply(machine, outcome)
+}
+
+/// Gives up the reply handle once the answer has gone out.
+///
+/// A reply object is answered once, and 2.6 says the answer consumes it.
+/// The handle has to go with it: an entry that names a destroyed object is
+/// a slot nobody can use and nobody can free, and a server that leaves one
+/// behind per call fills its table and stops receiving. Closing it here
+/// also drops the reference the entry held, which is what lets the object
+/// itself go back to its pool.
+fn consume<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    process: ProcessId,
+    handle: Handle,
+) -> Result<bool, Error> {
+    let entry = machine.objects.close_handle(process, handle)?;
+    crate::lifetime::release(machine, entry.object)
 }
 
 /// `ipc_reply_recv`: the answer and then the next receive, without
@@ -378,8 +396,9 @@ pub fn reply_recv<
     if let Some(wakeup) = answered.wakeup {
         write_result(machine, wakeup)?;
     }
+    let switched = consume(machine, process, handle)?;
     let mut reply = recv(machine, caller, process, endpoint, buffer, true)?;
-    if answered.reschedule {
+    if answered.reschedule || switched {
         reply.outcome = Outcome::RESCHEDULE;
     }
     Ok(reply)

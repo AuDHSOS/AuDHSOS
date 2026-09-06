@@ -10,6 +10,7 @@ pub mod console;
 pub mod label;
 pub mod memory;
 pub mod name;
+pub mod parent;
 
 pub use bytes::Bytes;
 pub use console::{Chunk, MAX_CHUNK};

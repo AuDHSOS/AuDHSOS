@@ -86,6 +86,9 @@ pub struct Startup {
     pub io_ports: Option<IoPortHandle>,
     /// The interrupt the process serves.
     pub interrupt: Option<InterruptHandle>,
+    /// The endpoint of the process that started this one, badged with what
+    /// that process knows this one by.
+    pub parent: Option<EndpointHandle>,
 }
 
 impl Default for Startup {
@@ -109,6 +112,7 @@ impl Startup {
             log: None,
             io_ports: None,
             interrupt: None,
+            parent: None,
         }
     }
 
@@ -139,6 +143,7 @@ impl Startup {
             Role::Log => once(&mut self.log, role, handle),
             Role::IoPorts => once(&mut self.io_ports, role, handle),
             Role::Interrupt => once(&mut self.interrupt, role, handle),
+            Role::Parent => once(&mut self.parent, role, handle),
             Role::Ram => self
                 .ram
                 .push(MemoryHandle::from_handle(handle))

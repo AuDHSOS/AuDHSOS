@@ -50,11 +50,18 @@ pub enum Protocol {
     Console = 2,
     /// The memory server.
     Memory = 3,
+    /// The process that started this one.
+    Parent = 4,
 }
 
 impl Protocol {
     /// Every protocol, in table order.
-    pub const ALL: &[Protocol] = &[Protocol::Name, Protocol::Console, Protocol::Memory];
+    pub const ALL: &[Protocol] = &[
+        Protocol::Name,
+        Protocol::Console,
+        Protocol::Memory,
+        Protocol::Parent,
+    ];
 
     /// The stable code of the protocol.
     #[must_use]
@@ -73,6 +80,7 @@ impl Protocol {
             1 => Some(Protocol::Name),
             2 => Some(Protocol::Console),
             3 => Some(Protocol::Memory),
+            4 => Some(Protocol::Parent),
             _ => None,
         }
     }
@@ -84,6 +92,7 @@ impl Protocol {
             Protocol::Name => "name",
             Protocol::Console => "console",
             Protocol::Memory => "memory",
+            Protocol::Parent => "parent",
         }
     }
 }

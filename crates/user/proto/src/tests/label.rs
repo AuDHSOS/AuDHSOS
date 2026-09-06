@@ -23,8 +23,13 @@ fn every_protocol_has_a_unique_code_and_a_name() {
 
 #[test]
 fn a_code_no_protocol_has_decodes_to_none() {
+    let highest = Protocol::ALL
+        .iter()
+        .map(|protocol| protocol.code())
+        .max()
+        .unwrap();
     assert_eq!(Protocol::from_code(0), None);
-    assert_eq!(Protocol::from_code(4), None);
+    assert_eq!(Protocol::from_code(highest.checked_add(1).unwrap()), None);
     assert_eq!(Protocol::from_code(u16::MAX), None);
 }
 

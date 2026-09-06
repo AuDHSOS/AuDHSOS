@@ -124,6 +124,27 @@ impl Session {
             .map_err(|source| Error::io("writing to the serial port", source))
     }
 
+    /// Waits until the machine has ended by itself and answers with its
+    /// exit status, or `None` when `timeout` was up first.
+    ///
+    /// The end of a run belongs to the run: the root task writes to the
+    /// exit device when its children are done, and a session that killed
+    /// the machine instead would never find out whether it does.
+    pub(crate) fn wait_for_end(&mut self, timeout: Duration) -> Option<i32> {
+        let deadline = Instant::now().checked_add(timeout);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return status.code(),
+                Ok(None) => {}
+                Err(_) => return None,
+            }
+            if deadline.is_none_or(|deadline| Instant::now() >= deadline) {
+                return None;
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+
     /// Everything the machine has written so far.
     pub(crate) fn output(&mut self) -> String {
         while let Ok(line) = self.lines.try_recv() {

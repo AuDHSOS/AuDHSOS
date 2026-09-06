@@ -103,6 +103,7 @@ roles! {
     Log = 8 => "The endpoint diagnostics are sent to. It is the console once there is one.",
     IoPorts = 9 => "A range of I/O ports the process is allowed to reach. A driver receives one.",
     Interrupt = 10 => "An interrupt object for the line the process serves. A driver receives one.",
+    Parent = 11 => "The endpoint of the process that started this one, badged with what that process knows it by. It is the same endpoint the kernel sends this process's faults to, so a report and a fault arrive at one place, told apart by the label.",
 }
 
 /// Why a startup message could not be read.

@@ -29,7 +29,7 @@ use driver_uart16550 as _;
 use server_console as _;
 use server_memory as _;
 use server_name as _;
-use user_proto as _;
+use user_proto::parent;
 
 use audhsos_abi::layout::{MAX_MESSAGE_HANDLES, PAGE_SIZE};
 use audhsos_abi::startup::{Role, Writer};
@@ -79,6 +79,9 @@ struct Program {
     names: bool,
     /// Whether it may ask the memory server.
     memory: bool,
+    /// Whether it reports to this program when it is done. The machine
+    /// ends when every program that reports has reported.
+    reports: bool,
 }
 
 /// The programs of this system, in the order they are started.
@@ -96,6 +99,7 @@ const PROGRAMS: [Program; 4] = [
         grant: Grant::Ram,
         names: false,
         memory: false,
+        reports: false,
     },
     Program {
         name: b"server-name",
@@ -106,6 +110,7 @@ const PROGRAMS: [Program; 4] = [
         grant: Grant::None,
         names: false,
         memory: true,
+        reports: false,
     },
     Program {
         name: b"server-console",
@@ -116,6 +121,7 @@ const PROGRAMS: [Program; 4] = [
         grant: Grant::Serial,
         names: true,
         memory: true,
+        reports: false,
     },
     Program {
         name: b"app-hello",
@@ -126,8 +132,21 @@ const PROGRAMS: [Program; 4] = [
         grant: Grant::None,
         names: true,
         memory: true,
+        reports: true,
     },
 ];
+
+/// How many programs of the table report when they are done.
+fn reporters() -> usize {
+    PROGRAMS.iter().filter(|program| program.reports).count()
+}
+
+/// The port of the exit device of the machine and how many there are.
+const EXIT_PORT: u64 = 0xF4;
+const EXIT_PORTS: u64 = 4;
+
+/// The value a write to the exit device reports a success with.
+const EXIT_SUCCESS: u64 = 0x10;
 
 /// The first port of the serial controller and how many there are.
 const COM1: u64 = 0x3F8;
@@ -183,7 +202,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
             b"[init] the boot image is not readable\n",
         ),
     }
-    serve_faults(&mut gate, &world)
+    serve_faults(&mut gate, &world, reporters())
 }
 
 /// What the root task knows about the system it has started.
@@ -390,6 +409,14 @@ fn install_all(
     // Everyone but the console driver gets the console as its log. The
     // driver is the console: a line it sent itself would be a call on the
     // endpoint it is the only receiver of, and it would wait for itself.
+    // A program that reports gets the endpoint the kernel sends its faults
+    // to, under the badge its parent knows it by: one endpoint carries both
+    // kinds of news about a child, told apart by the label.
+    if program.reports {
+        let marked = gate.endpoint_badge(world.faults, badge)?;
+        let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
+        push(&mut given, &mut count, Role::Parent, handle);
+    }
     if let Some(console) = world.console
         && program.grant != Grant::Serial
     {
@@ -627,11 +654,28 @@ fn say(gate: &mut Gate, world: &World, line: &[u8]) {
 ///
 /// A child that faulted is reported and killed. It will not get better by
 /// being left standing, and what it holds is what somebody else needs.
-fn serve_faults(gate: &mut Gate, world: &World) -> ! {
+fn serve_faults(gate: &mut Gate, world: &World, mut outstanding: usize) -> ! {
     loop {
         let Ok(received) = gate.ipc_recv(world.faults) else {
             gate.thread_exit()
         };
+        // One endpoint carries two kinds of news: a fault, which the kernel
+        // sends under a label of its own, and a child's report that it is
+        // done. The label says which.
+        if let Ok(parent::Request::Finished { status }) = parent::Request::decode(gate.reader()) {
+            let mut line: Line<96> = Line::new();
+            line.put(b"[init] child ");
+            put_number(&mut line, received.badge);
+            line.put(b" finished with ");
+            put_number(&mut line, status);
+            line.put(b"\n");
+            say(gate, world, line.as_bytes());
+            outstanding = outstanding.saturating_sub(1);
+            if outstanding == 0 {
+                end_machine(gate, world)
+            }
+            continue;
+        }
         let label = gate.reader().message().map_or(0, |message| message.label);
         let kind = audhsos_abi::ipc_buffer::fault_kind_of(label);
         let mut line: Line<128> = Line::new();
@@ -651,8 +695,28 @@ fn serve_faults(gate: &mut Gate, world: &World) -> ! {
     }
 }
 
+/// Ends the machine, which is the last thing the root task does.
+///
+/// The kernel cannot do it any more: once the root task runs, the kernel
+/// only answers calls. So the root task takes the port of the exit device
+/// through its `SystemControl` and writes to it, and the end of the run
+/// goes through the userland like everything before it.
+///
+/// On a machine with no such device the write reaches nothing and the
+/// thread exits, which is the right outcome: a system whose work is done
+/// and that has no way to switch the machine off stops.
+fn end_machine(gate: &mut Gate, world: &World) -> ! {
+    say(gate, world, b"[init] all children are done\n");
+    if let Some(system) = world.system
+        && let Ok(ports) = gate.ioport_create(system, EXIT_PORT, EXIT_PORTS)
+    {
+        let _written = gate.ioport_write(ports, EXIT_PORT, EXIT_PORTS, EXIT_SUCCESS);
+    }
+    gate.thread_exit()
+}
+
 /// Writes `value` into `line` in decimal.
-fn put_number(line: &mut Line<128>, value: u64) {
+fn put_number<const N: usize>(line: &mut Line<N>, value: u64) {
     let mut digits = [0u8; 20];
     let mut rest = value;
     let mut written = 0usize;

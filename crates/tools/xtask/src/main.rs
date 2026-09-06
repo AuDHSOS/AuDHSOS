@@ -36,8 +36,10 @@ subcommands:
   check-layering   dependency edges, forbid(unsafe_code), assembly files
   check-deps       no dependency outside the workspace
   unsafe-budget    unsafe blocks and asm! sites per adapter crate
-  test [--host] [--qemu] [--e2e]
-                   run the selected test levels (default: all available)
+  test [--host] [--qemu] [--e2e] [--release]
+                   run the selected test levels (default: all available);
+                   --release builds the end-to-end run from the release
+                   profile
   pdf [options]    every Markdown document and every RFC as PDF, under
                    target/pdf/; options are passed to the tool, which
                    explains them with --help

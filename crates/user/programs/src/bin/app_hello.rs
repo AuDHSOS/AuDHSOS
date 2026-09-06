@@ -24,9 +24,9 @@ use server_console as _;
 use server_memory as _;
 use server_name as _;
 use user_loader as _;
-use user_proto as _;
 
 use user_programs::client::{lookup, read_bytes, write_line};
+use user_proto::parent;
 use user_rt::Startup;
 use user_sys_x86_64::{self as sys, Gate};
 
@@ -78,7 +78,26 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
             }
         }
     }
+    report(&mut gate, &startup);
     gate.thread_exit()
+}
+
+/// Tells the process that started this one that the work is done.
+///
+/// The endpoint is the one the kernel sends this program's faults to, so
+/// its parent hears of a program that finished and of one that broke at
+/// the same place. Nothing is expected back: this is a send, and the
+/// thread exits right after it.
+fn report(gate: &mut Gate, startup: &Startup) {
+    let Some(parent) = startup.parent else {
+        return;
+    };
+    let finished = parent::Request::Finished {
+        status: parent::SUCCESS,
+    };
+    if finished.encode(&mut gate.writer()).is_ok() {
+        let _reported = gate.ipc_send(parent);
+    }
 }
 
 /// Says it is ready, waits for a line, and says it back.
