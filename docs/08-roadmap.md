@@ -127,6 +127,8 @@ interrupt items.
 
 ## 8.7 Phase 5: Objects, threads, user mode, system calls
 
+Status: implemented.
+
 Deliverables: handle tables, quotas, object types `Process`, `Thread`,
 `MemoryObject`; scheduler; the context-switch naked function; user-mode
 entry with synthesized frames; IPC buffer; system call vector `0x80`; the
@@ -143,6 +145,8 @@ and the isolation item that names no handler.
 
 ## 8.8 Phase 6: IPC and interrupt forwarding
 
+Status: implemented.
+
 Deliverables: `Endpoint`, `Reply`, `Notification`, badges, handle transfer,
 fault handler endpoints and fault messages including
 `process_set_fault_handler`, `Interrupt`, `IoPortRange`, `SystemControl`,
@@ -153,6 +157,8 @@ Tests: catalog 6.6.8, 6.6.21 IPC items and the isolation item marked from
 Phase 6.
 
 ## 8.9 Phase 7: Userland foundation
+
+Status: in progress.
 
 Deliverables: `user-sys-x86_64`, `user-rt` with the safe allocator,
 `user-proto`, `user-loader`, `server-init`, `server-name`,
@@ -264,17 +270,18 @@ remain.
 ## 8.17 Track C: cryptography and TLS
 
 Status: specified in [document 11](11-cryptography-and-tls.md); steps T1
-to T7 are implemented and reviewed as a whole. T8 is the integration and
-is not scheduled: it needs a transport from track D, the `random_bytes`
-system call, and the driver and server that carry the bytes. What the
-track is still waiting on, and who owns each piece, is section 11.14.
+to T7 and R1 to R6 are implemented and reviewed as a whole. T8 is the
+integration and is not scheduled: it needs a transport from track D, the
+`random_bytes` system call, and the driver and server that carry the
+bytes. What the track is still waiting on, and who owns each piece, is
+section 11.14.
 
-R1 to R6 are RSA verification, specified in section 11.15 and not started.
-They are the one thing on this track that changes what the system can
-reach rather than how well it is checked: without them a chain that is RSA
-to the root cannot be walked, which is most of the public web. They need
-nothing from another track and can be built between phases as T1 to T7
-were.
+R1 to R6 are RSA verification, specified in section 11.15 and
+implemented. They are the one thing on this track that changed what the
+system can reach rather than how well it is checked: without them a chain
+that is RSA to the root cannot be walked, which is most of the public web.
+They needed nothing from another track and were built between phases as T1
+to T7 were.
 
 The track prepares HTTPS for the day a network stack exists. Every crate
 in it is pure logic without I/O or allocation, host-tested, and depends on
@@ -291,12 +298,12 @@ phase order and is built between phases.
 | T6 | `audhsos-x509` | L | implemented: certificate parsing, path validation, name matching, the test certificate builder |
 | T7 | `audhsos-tls` | XL | implemented: the client reproduces the RFC 8448 trace and completes a handshake against project-generated chains |
 | T8 | integration | M | not scheduled: transport, the `random_bytes` system call, an HTTP client |
-| R1 | `crypto-bignum` | M-L | not started: the limb arithmetic with a modulus known at run time |
-| R2 | `crypto-rsa` | M | not started: the key with its bounds, and PKCS #1 v1.5 by construction |
-| R3 | `crypto-rsa` | M | not started: MGF1 and PSS verification |
-| R4 | `audhsos-x509` | L | not started: the RSA identifiers, key, and test certificates |
-| R5 | `audhsos-tls` | M | not started: the six code points, and the RFC 8448 signature verified |
-| R6 | fuzzing and the probe | S-M | not started: the `rsa` target, and three RSA-rooted hosts reached |
+| R1 | `crypto-bignum` | M-L | implemented: the limb arithmetic moved out of `crypto-ec`, with a modulus known at run time and Montgomery exponentiation in a narrow and a wide form |
+| R2 | `crypto-rsa` | M | implemented: the key with its bounds, and PKCS #1 v1.5 verified by construction (D-80) |
+| R3 | `crypto-rsa` | M | implemented: MGF1 and EMSA-PSS-VERIFY |
+| R4 | `audhsos-x509` | L | implemented: the RSA identifiers with the NULL parameter rule of RFC 4055, the key, and the test certificates |
+| R5 | `audhsos-tls` | M | implemented: the six code points under the `CertificateVerify` rule of D-82, and the RFC 8448 signature verified |
+| R6 | fuzzing and the probe | S-M | implemented: the `rsa` fuzz target, and three RSA-rooted hosts reached by `tools/tls-probe` |
 
 Definition of done per step, as for every phase: the catalog items of
 6.6.30 to 6.6.38 and 6.6.55 that belong to the step have tests,
@@ -305,8 +312,9 @@ changelog is updated.
 
 ## 8.18 Track D: the network stack
 
-Status: D1 to D6 implemented, the rest specified in
-[document 12](12-parallel-work.md).
+Status: D1 to D9 implemented, which is every step but the integration.
+D10 is specified in [document 12](12-parallel-work.md) and is not
+scheduled.
 
 Sans-I/O logic crates that consume and produce frames, take time and
 randomness as parameters, allocate nothing, and depend on no kernel,
@@ -353,11 +361,12 @@ Tests: catalog 6.6.39 to 6.6.41. Fuzz target `pem`.
 
 ## 8.20 Track F: device logic without devices
 
-Status: specified in [document 12](12-parallel-work.md), not started.
+Status: F1 implemented, F2 specified in
+[document 12](12-parallel-work.md) and not started.
 
 | Step | Crate | Size | Ends with |
 |------|-------|------|-----------|
-| F1 | `virtio-queue` | M | split virtqueue and initialization state machine over a memory access trait |
+| F1 | `virtio-queue` | M | implemented: the descriptor table, the two rings and the chain arithmetic over a memory access trait, with the free set in the queue's own memory rather than in the table the device can see; the initialization state machine with its two failure paths; no packed ring, no indirect descriptor and no `EVENT_IDX`, each refused by name at negotiation (D-52, D-89) |
 | F2 | `fs-fat` | M | FAT32 read and write over a block device trait; the xtask image writer uses it |
 
 Tests: catalog 6.6.51 and 6.6.52.

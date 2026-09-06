@@ -1498,22 +1498,59 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.51 Virtqueue logic (`virtio-queue`)
 
-- Descriptors: a single-descriptor request, a chain of three, a chain
-  that exhausts the free list, and a chain whose length exceeds the queue
-  size are handled as specified.
-- Rings: the available index wraps at 2^16 while the queue size is not a
-  power-of-two divisor of it; a used element that names an unknown
-  descriptor is rejected; the used index moving backwards is rejected.
+- Descriptors: a single-descriptor request, a chain of three with both
+  directions, a chain that takes every descriptor, a chain that exhausts
+  the free list and gives back what it had taken, a chain of no buffers,
+  a chain whose length exceeds the queue size, and a chain that puts a
+  buffer the device writes before one it reads are handled as
+  specified.
+- Rings: the available index wraps at 2^16 while the ring slot wraps at
+  the queue size, which is the case the two wraps have to agree in — a
+  legal size is a power of two no larger than 32768 and therefore always
+  divides 2^16, so what is checked is that the driver's index, the
+  published index and the slot stay in step across the wrap, not that
+  they can fall out of it. A used element that names a descriptor outside
+  the table, and one that names a descriptor that is free, are rejected;
+  a used index that moved backwards, and one that moved past the
+  outstanding chains, are rejected. Chains come back in an order the
+  driver did not add them in.
+- The reported length: a device reporting exactly the writable bytes of
+  the chain, and one reporting fewer, are believed; one reporting more is
+  refused with both numbers, and the chain is freed and the element
+  consumed either way. A chain the device only reads may report nothing
+  and nothing else. Only the device-writable descriptors count towards
+  the room.
+- Chains that cannot be walked: one that loops back on itself and one
+  that leaves the table are rejected, and what the walk reached before
+  the bad step is back in the free set. A chain leaving the queue is
+  rejected also when the free set is wider than the queue, so that the
+  bound is the size and not the number of bits.
+- Regions: a size that is not a power of two, and one wider than the free
+  set, are refused; a table, an available ring, or a used ring too short
+  for the field being accessed is refused with the byte it wanted, and a
+  short descriptor table costs no descriptor. A region that shrinks after
+  the queue was built is refused rather than indexed past.
 - Notification suppression: with the no-notify flag set the driver emits
-  no notification; clearing it resumes them.
+  no notification; clearing it resumes them. The driver's own
+  no-interrupt flag reaches the available ring. Publishing and reaping
+  each ask for a barrier.
 - Initialization: the status sequence reset, acknowledge, driver,
-  features-ok, driver-ok; a device that clears features-ok leaves the
-  machine in failure; an operation on a queue before driver-ok is
-  rejected; a device that sets `DEVICE_NEEDS_RESET` refuses every further
-  operation.
+  features-ok, driver-ok, checked as the exact sequence of writes; a step
+  out of order changes nothing; a device that clears features-ok leaves
+  the machine in failure; a device offering no `VERSION_1` is refused; a
+  driver asking for one of the three unimplemented features is refused
+  before anything is written, and a device offering one is driven without
+  it; a queue is filled from features-ok on and read only from driver-ok
+  on, which is where 3.1.1 puts the boundary — populating a virtqueue is
+  step 7 and driver-ok is step 8, and what step 7 may not do is notify;
+  nothing at all reaches a queue before features-ok; a device that sets
+  `DEVICE_NEEDS_RESET` refuses every further operation, a live one is
+  noticed by polling, and a reset is the way out.
 - Model test: descriptors are allocated and freed against a reference
-  free-list model over generated sequences; no sequence leaks a
-  descriptor or hands out one twice.
+  free-list model over generated sequences of adding, completing out of
+  order, and reaping; no sequence leaks a descriptor or hands out one
+  twice, and a run that never reaches a full free set, a chain of three,
+  or an out-of-order completion fails as vacuous.
 
 ### 6.6.52 FAT32 logic (`fs-fat`)
 

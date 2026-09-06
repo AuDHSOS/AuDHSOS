@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "virtio-queue"
+description = "Split virtqueue and device initialization logic of virtio 1.x over a memory access trait, with no register access"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[features]
+test-doubles = []
+
+[dependencies]
+audhsos-collections.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true
+
+[lints]
+workspace = true

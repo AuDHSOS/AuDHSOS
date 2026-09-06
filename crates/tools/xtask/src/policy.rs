@@ -389,6 +389,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "virtio-queue",
+        path: "crates/virtio/queue",
+        kind: Kind::Logic,
+        deps: &["audhsos-collections", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "kernel-x86-tables",
         path: "crates/kernel/x86-tables",
         kind: Kind::Logic,

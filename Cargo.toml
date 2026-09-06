@@ -34,6 +34,7 @@ members = [
     "crates/uefi",
     "crates/sync",
     "crates/drivers/uart16550",
+    "crates/virtio/queue",
     "crates/user/sys-x86_64",
     "crates/user/test-programs",
     "crates/kernel/types",
@@ -97,6 +98,7 @@ audhsos-symbols = { path = "crates/symbols" }
 audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
 driver-uart16550 = { path = "crates/drivers/uart16550" }
+virtio-queue = { path = "crates/virtio/queue" }
 user-sys-x86_64 = { path = "crates/user/sys-x86_64" }
 user-test-programs = { path = "crates/user/test-programs" }
 kernel-types = { path = "crates/kernel/types" }

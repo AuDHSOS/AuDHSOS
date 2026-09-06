@@ -74,6 +74,123 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `docs/oasis/`, the reference documents of a second standards body, kept
+  the way `docs/rfc/` keeps the first (D-90). It holds the virtio
+  specification, version 1.4, Committee Specification 01 of 8 April 2026 —
+  a Committee Specification and not an OASIS Standard, because the last
+  version of this specification to become one is 1.1 of 2019 and citing a
+  document two versions behind what devices are built against would be
+  worse than naming the stage plainly.
+
+  The copy did not come from the document's own address. A content
+  delivery network in front of it rewrites every address in the front
+  matter with a key it draws afresh for each response, so two fetches a
+  second apart differ in 144 lines and a checksum of either records
+  nothing a later reader could check. It came from the archive the same
+  directory publishes, which is served as a file and was byte-identical
+  across two fetches; the README records the checksum of the archive and
+  of the file taken out of it, so the copy can be checked against its
+  source.
+
+  Reading the crate back against it found one rule wrong and two
+  descriptions wrong. `Queue::add` had refused every buffer until
+  `DRIVER_OK`; section 3.1.1 populates virtqueues in step 7 and sets
+  `DRIVER_OK` in step 8, so a receive queue is filled before the device
+  is live and a queue that waited would refuse the one thing that step
+  exists for. Buffers now go in from `FEATURES_OK` on, as does settling
+  the interrupt flag; what still waits for `DRIVER_OK` is the
+  notification, which section 3.1.1 forbids earlier in as many words, and
+  the used ring, which section 2.1.2 forbids the device to have written
+  earlier.
+
+  `QueueError::CorruptChain` said the descriptors of a torn chain are not
+  given back. They are: the walk frees each descriptor it reaches and
+  stops at the step that makes no sense, so what it reached is back and
+  only what lay behind the bad step is lost. The test that claimed
+  otherwise was named for a state it never checked and now checks the
+  real one. And zeroing the used ring before the device is told where it
+  is had been described as the caller's tidiness; section 2.7.10.1 makes
+  it the driver's requirement.
+
+  The length a used element reports is now checked. It is the one number
+  the device writes that a caller uses as a length, and it went through
+  unexamined; the walk that frees a chain now adds up the lengths of its
+  device-writable descriptors and refuses a report above that sum. A
+  device may report fewer bytes than it wrote — section 2.7.8.2 permits
+  it, because a device that failed part way may not know how far it got,
+  and reporting too few is what keeps a driver from handing out memory
+  that was never overwritten — but it cannot have written into room it
+  was never given, so a report above the sum is a number no failure case
+  explains. The chain is freed and the element consumed either way, so
+  only the number is refused and the queue does not stall on it.
+
+  `Queue` is no longer `Copy`. It is the record of which descriptors are
+  out, and two records of one table would each believe the descriptors
+  the other handed out are free — the one mistake the free set exists to
+  make impossible.
+
+  Every constant of `virtio-queue` was read back against it and every one
+  agreed. The crate now names the section beside each group: the layout
+  and alignments from 2.7, the descriptor and its flags from 2.7.5, the
+  rings from 2.7.6 and 2.7.8, the notification flags from 2.7.7 and
+  2.7.10, the seven steps of adding a chain from 2.7.13, the status bits
+  from 2.1, the sequence from 3.1.1, and the feature bits from section 6.
+
+- `virtio-queue`, the split virtqueue of virtio 1.x and the device
+  initialization state machine, with no device access in the crate (F1 of
+  8.20, D-52, D-89). The `QueueMemory` trait hands over three byte regions
+  and the layout stays here, because the layout is what the specification
+  fixes and what a test can pin down; `DeviceRegisters` hands over the
+  status and the sixty-four feature bits, the window they arrive through
+  being the transport's business and not this crate's.
+
+  The free descriptors are a `BitSet` in the queue rather than a list
+  threaded through the `next` fields of the descriptor table, which is
+  where the classic implementation keeps it. The device cannot write that
+  table, but it writes the used ring, and a used element naming a
+  descriptor that is already free is exactly what would tear a free list
+  living in shared memory; here it is one bit test and a refusal. The same
+  bit is what bounds the chain walk, so the walk needs no step counter:
+  every step frees one descriptor that was in use, there are at most
+  `size` of those, and a step onto one that is already free is refused.
+
+  `QueueMemory` carries a `barrier` beside its three accessors. The ring
+  entry has to reach the device before the index that publishes it, and
+  the used index before the element it names; what that ordering costs is
+  the adapter's business, so the default does nothing, but leaving the
+  method out would have left the crate correct on a host and wrong on a
+  machine.
+
+  A used index is believed only as far as the driver has chains
+  outstanding. Sixteen bits that wrap give no way to tell a backwards move
+  from a forward jump, so both are one comparison against the number of
+  chains that are out. A region is measured where it is used, so that
+  every refusal names the byte it wanted; the descriptor table is the
+  exception, measured before the first descriptor is taken, so that a
+  short table costs none.
+
+  A chain keeps the order its buffers were given in, and that order has
+  one rule: everything the device reads comes before everything it
+  writes. A slice that breaks it is refused rather than sorted, because
+  the order of the buffers is the order of the bytes and sorting them
+  would answer a different request than the one asked.
+
+  Three features are refused by name at negotiation and not masked away —
+  `INDIRECT_DESC`, `EVENT_IDX`, and `RING_PACKED` — so a driver that asks
+  for one learns it at the call rather than at the first descriptor.
+  `VERSION_1` is required and a device without it is failed. A feature the
+  driver wanted and the device does not offer is neither: the accepted set
+  comes back, and whether the device is usable without it is the driver's
+  judgement.
+
+  Catalog 6.6.51, whose ring item said the available index wraps while the
+  queue size is not a power-of-two divisor of 2^16. There is no such size:
+  a legal size is a power of two no larger than 32768 and divides 2^16
+  always. The item now says what the wrap has to show, which is that the
+  driver's index, the published index and the ring slot stay in step
+  across it, and the entry gained the cases the crate answers that it had
+  not named.
+
 - Two user threads that meet, and a driver at ring three. Five new programs
   under `user-test-programs`: `ipc_client` and `ipc_server`, which are a call
   and a reply with a badge, four words, and a handle to a memory object both

@@ -52,10 +52,10 @@ integration around it stays in its phase.
 
 | Track | Content | Size | Relation to the rest |
 |-------|---------|------|----------------------|
-| C | cryptography and TLS ([document 11](11-cryptography-and-tls.md)) | XL | in progress; its step T8 waits for track D |
+| C | cryptography and TLS ([document 11](11-cryptography-and-tls.md)) | XL | implemented but for step T8, which is the integration D10 also waits for |
 | D | the network stack, sans-I/O (12.6) | XL | unblocks C's transport; unblocks HTTP |
 | E | shared foundations: time, encodings, collections (12.5) | M | implemented; needed by C at T5 and T6, by D throughout, by phases 5 and 6 |
-| F | device logic without devices: virtqueues, FAT32 (12.7) | M | prepares the network and storage drivers that are later work |
+| F | device logic without devices: virtqueues, FAT32 (12.7) | M | `virtio-queue` implemented, `fs-fat` open; prepares the network and storage drivers that are later work |
 | G | tooling: fuzz support, symbolization (12.8) | M | serves every track and every phase |
 
 Track E comes first in this document because tracks C and D both rest on
@@ -1002,8 +1002,8 @@ Two components that a driver needs and that contain no device access.
 
 ### 12.7.1 `virtio-queue`
 
-The split virtqueue of virtio 1.x as data-structure logic over a
-`QueueMemory` trait with a test double: the descriptor table, the
+Implemented. The split virtqueue of virtio 1.x as data-structure logic
+over a `QueueMemory` trait with a test double: the descriptor table, the
 available and used rings, descriptor chains, index arithmetic modulo the
 queue size, and the notification suppression flag. Separately, the
 device initialization state machine — reset, acknowledge, driver,
@@ -1013,9 +1013,62 @@ feature negotiation, features-ok, driver-ok — with the failure path into
 No memory-mapped register touches this crate; the adapter that maps a
 device does, and it lives in a driver process later. Packed rings,
 indirect descriptors, and `EVENT_IDX` are not in the first version
-(D-52).
+(D-52); `Device::negotiate` refuses each of the three by name rather than
+masking it away, so a driver that asks for one learns it at the call and
+not at the first descriptor.
 
-Tests: catalog 6.6.51.
+The trait hands over three byte regions and the layout stays in the
+crate, because the layout is what the specification fixes and what a test
+can pin down. Two of the three are the driver's to write and the used
+ring is the device's, which the trait says by giving it no mutable
+accessor. It has one method that is not an access: `barrier`, which
+orders the ring entry against the index that publishes it and the used
+index against the element it names. What that costs is the adapter's
+business, so the default does nothing and a host test needs no
+implementation — but leaving it out of the trait would have left the
+crate correct on a host and wrong on a machine.
+
+The one number the device writes that a caller uses as a length is
+checked. The walk that frees a chain adds up the lengths of its
+device-writable descriptors, and a used element reporting more than that
+is refused. A device may report fewer bytes than it wrote — section
+2.7.8.2 permits it, because a device that failed part way may not know
+how far it got — but a device cannot have written into room it was never
+given, so that direction is a number no failure explains.
+
+A chain keeps the order the caller gave its buffers in, and that order
+has one rule the specification fixes: everything the device reads comes
+before everything it writes. A slice that breaks it is refused rather
+than sorted, because the order of the buffers is the order of the bytes
+and sorting them would answer a different request.
+
+The free descriptors are a `BitSet` in the queue rather than a list
+threaded through the `next` fields of the descriptor table, which is how
+the classic implementation does it. The device cannot write that table,
+but it writes the used ring, and a used element naming a descriptor that
+is already free is exactly what would tear a free list living in shared
+memory. Here it is one bit test and a refusal (D-89). The same bit is
+what bounds the chain walk: every step frees one descriptor that was in
+use, there are at most `size` of those, and a step onto one that is
+already free is refused, so the walk needs no step counter to terminate.
+
+Buffers go into a queue from `FEATURES_OK` on and not from `DRIVER_OK`,
+because section 3.1.1 populates virtqueues in step 7 and sets
+`DRIVER_OK` in step 8: a receive queue is filled before the device is
+live. What waits for step 8 is the notification, which the same section
+forbids earlier, and the used ring, which the device may not have
+written earlier.
+
+The specification is kept under [`docs/oasis/`](oasis/README.md) as the
+RFCs are kept under `docs/rfc/` (D-90), and every constant of the crate
+names the section it comes from: the layout and the alignments from
+section 2.7, the descriptor and its flags from 2.7.5, the two rings from
+2.7.6 and 2.7.8, the notification flags from 2.7.7 and 2.7.10, the seven
+steps of adding a chain from 2.7.13, the status bits from 2.1, the
+initialization sequence from 3.1.1, and the feature bits from section 6.
+
+Tests: catalog 6.6.51. Coverage 99.7 percent of lines and 100 percent of
+branches.
 
 ### 12.7.2 `fs-fat`
 
@@ -1123,8 +1176,16 @@ the integration.
   C at T5 and T6; then track C to T7; then track D from D1; track F when
   a driver becomes foreseeable; `audhsos-symbols` from track G before
   phase 3, because that is where kernel panics start. Tracks E and G are
-  done, track C stands at T7, and track D has D1 to D9 behind it, so what
-  is left of it is D10, which is integration and is not scheduled.
+  done, track C has T1 to T7 and the RSA steps R1 to R6 behind it, and
+  track D has D1 to D9 behind it, so what is left of either is T8 and
+  D10, which are one integration and are not scheduled. A driver became
+  foreseeable with Phase 7, which puts a console driver at ring three, so
+  track F is the side track that is open: `virtio-queue` is done and
+  `fs-fat` is not.
+- `fs-fat` waits for the boot image work of Phase 7. It moves the
+  structural logic out of `crates/tools/xtask/src/image`, and the tar
+  archive that phase adds to the boot image lands in the same directory;
+  two hands in one refactoring is the one avoidable collision here.
 - The pulled-forward work of 12.9 fills short gaps, because it needs no
   new design.
 
@@ -1134,9 +1195,13 @@ Each item below would pass the admission test and has no consumer in the
 current plan. They are listed so that they do not return as ideas.
 
 DEFLATE and gzip; a VT100 terminal emulator and a line editor; a JSON
-parser beyond the QMP subset the xtask needs; IPv6; the TLS server role;
-the bignum crate that RSA verification needs (document 11); USB;
+parser beyond the QMP subset the xtask needs; the TLS server role; USB;
 compression or encryption of the boot image.
+
+Two items left this list rather than returning as ideas. IPv6 gained a
+consumer and became step D4 (D-69). The bignum crate that RSA
+verification needs gained one too and became `crypto-bignum` in step R1
+of document 11.
 
 ## 12.12 Risks
 

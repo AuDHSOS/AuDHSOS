@@ -462,6 +462,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "virtio-queue"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "test-support",
+]
+
+[[package]]
 name = "xtask"
 version = "0.1.0"
 dependencies = [
