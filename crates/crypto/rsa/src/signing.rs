@@ -17,6 +17,7 @@ use crate::error::RsaError;
 use crate::hash::HashId;
 use crate::key::PublicKey;
 use crate::pkcs1;
+use crate::pss;
 use crate::window::head_mut;
 
 /// The signature of an encoded message that is already the width of the
@@ -54,6 +55,36 @@ pub fn sign_pkcs1(
 ) -> Result<(), RsaError> {
     let mut encoded = [0u8; MAX_BYTES];
     pkcs1::encode(hash, message, head_mut(&mut encoded, key.size()))?;
+    sign_encoded(
+        key,
+        private_exponent,
+        head_mut(&mut encoded, key.size()),
+        signature,
+    )
+}
+
+/// An RSASSA-PSS signature of `message` with the salt supplied.
+///
+/// # Errors
+///
+/// As [`sign_encoded`], and when the key is too small for the encoding.
+pub fn sign_pss(
+    key: &PublicKey,
+    private_exponent: &[u8],
+    hash: HashId,
+    message: &[u8],
+    salt: &[u8],
+    signature: &mut [u8],
+) -> Result<(), RsaError> {
+    let mut encoded = [0u8; MAX_BYTES];
+    let em_bits = key.bits().saturating_sub(1);
+    pss::encode(
+        hash,
+        em_bits,
+        message,
+        salt,
+        head_mut(&mut encoded, key.size()),
+    )?;
     sign_encoded(
         key,
         private_exponent,

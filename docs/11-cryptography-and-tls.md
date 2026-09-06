@@ -542,7 +542,7 @@ checklist in 4.9.
 | T8 | Integration, jointly with step D9 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M | |
 | R1 | `crypto-bignum`: the limb core out of `crypto-ec`, a runtime `Modulus`, and exponentiation (11.15) | M-L | implemented |
 | R2 | `crypto-rsa`: the key with its bounds, and PKCS #1 v1.5 | M | implemented |
-| R3 | `crypto-rsa`: MGF1 and EMSA-PSS-VERIFY | M | |
+| R3 | `crypto-rsa`: MGF1 and EMSA-PSS-VERIFY | M | implemented |
 | R4 | `audhsos-x509`: identifiers, parameters, the key, the pairs, and the builder | L | |
 | R5 | `audhsos-tls`: code points, the hello, `MAX_SPKI`, the `CertificateVerify` rule, the trace | M | |
 | R6 | The fuzz target, `tools/tls-probe` against three hosts, and the documents | S-M | |
@@ -733,7 +733,19 @@ from MGF1 over the chosen hash, the leftmost bits checked against that
 width, the `0x01` separator, the trailer `0xBC`, and `H'` recomputed over
 eight zero bytes, the message hash, and the recovered salt. The salt is
 as long as the hash output and is not read from the encoding, because the
-three schemes this client offers fix it (D-81).
+three schemes this client offers fix it (D-81). A verifier that took the
+length from the position of the separator would accept a signature made
+with a salt of any length, which is a wider rule than the schemes state.
+
+A modulus with its top bit set has `modBits = 8k`, so `emBits` is
+`8k - 1`, the encoded message is `k` bytes, and exactly one bit at the
+top of it must be zero. That is why the size rule and the encoding rule
+are the same rule read twice: the thousand-and-twenty-four-bit key of
+RFC 8448 carries PSS with SHA-256 and SHA-384 and cannot carry SHA-512,
+whose `hLen + sLen + 2` is a hundred and thirty bytes. The test suite has
+a two-thousand-and-forty-eight-bit pair for that one case, generated once
+outside this repository with `openssl genrsa 2048` and recorded with the
+command that made it, as D-83 requires.
 
 Signing exists behind `test-signing` and is one call into `pow` with a
 wide exponent. No key is generated (D-83).

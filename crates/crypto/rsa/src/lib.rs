@@ -9,6 +9,7 @@ pub mod error;
 pub mod hash;
 pub mod key;
 pub mod pkcs1;
+pub mod pss;
 #[cfg(feature = "test-signing")]
 pub mod signing;
 

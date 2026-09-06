@@ -8,7 +8,7 @@
 //! because both encodings hash the message more than once and a caller
 //! that passed a digest could not do the second one.
 
-use crypto_hash::{Sha256, Sha384, Sha512};
+use crypto_hash::{Hash, Sha256, Sha384, Sha512};
 
 use crate::window::head;
 
@@ -49,6 +49,29 @@ impl HashId {
         }
         out
     }
+
+    /// The digest of pieces fed in order, which is the shape PSS needs
+    /// for the two hashes it computes over a construction rather than
+    /// over the message.
+    #[must_use]
+    pub fn digest_parts(self, parts: &[&[u8]]) -> [u8; MAX_DIGEST] {
+        let mut out = [0u8; MAX_DIGEST];
+        match self {
+            HashId::Sha256 => copy(&mut out, feed::<Sha256>(parts).as_ref()),
+            HashId::Sha384 => copy(&mut out, feed::<Sha384>(parts).as_ref()),
+            HashId::Sha512 => copy(&mut out, feed::<Sha512>(parts).as_ref()),
+        }
+        out
+    }
+}
+
+/// The digest of the pieces in order.
+fn feed<H: Hash>(parts: &[&[u8]]) -> H::Output {
+    let mut state = H::new();
+    for part in parts {
+        state.update(part);
+    }
+    state.finish()
 }
 
 /// The bytes of `digest` at the front of `out`.

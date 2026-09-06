@@ -29,6 +29,32 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `crypto-rsa` gains MGF1 and EMSA-PSS-VERIFY, step R3 of the RSA track.
+  RFC 8017, appendix B.2.1 is the mask and section 9.1.2 is the
+  verification, with three of that section's parameters fixed rather than
+  read: the mask uses the same hash that made the digest, the salt is as
+  long as that hash's output, and the trailer is `0xBC`. That is what
+  RFC 8446 fixes for the three `rsa_pss_rsae_*` schemes, which are the
+  only PSS this client offers (D-81). The salt length in particular is
+  not recovered from the position of the separator, because a verifier
+  that recovered it would accept a salt of any length.
+
+  Each of the five inconsistencies section 9.1.2 names has a test, and
+  each is a block laid out by hand and then signed with a private
+  exponent, so what verification meets is a signature that recovers
+  exactly the block the test meant: a trailer that is not `0xBC`, a
+  leftmost bit set where `emBits` says there is none, padding before the
+  separator that is not zero, a separator that is not `0x01`, a salt one
+  byte short and one byte long, and a recovered salt that `H` was not
+  computed over.
+
+  A two-thousand-and-forty-eight-bit key pair joins the test sources for
+  the one case the RFC 8448 key cannot carry: PSS with SHA-512 needs a
+  hundred and thirty bytes of encoding and that key has a hundred and
+  twenty-eight. It was made once outside this repository with
+  `openssl genrsa 2048` and is recorded with the command that made it,
+  which is the arrangement D-83 sets out.
+
 - `crypto-rsa`, step R2 of the RSA track: the public key with the bounds
   that belong to the primitive, and PKCS #1 v1.5 verification. The key
   takes a modulus that is odd, has its top bit set, and is no wider than

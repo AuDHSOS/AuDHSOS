@@ -9,6 +9,7 @@ use crypto_ct::ct_eq;
 use crate::error::RsaError;
 use crate::hash::HashId;
 use crate::pkcs1;
+use crate::pss;
 use crate::window::{head, head_mut};
 
 /// An RSA public key: a modulus, a public exponent, and the width the
@@ -88,6 +89,28 @@ impl PublicKey {
             return Ok(());
         }
         Err(RsaError::BadSignature)
+    }
+
+    /// Whether `signature` is an RSASSA-PSS signature of `message` under
+    /// this key, by RFC 8017, section 8.1.2.
+    ///
+    /// The encoded message is `modBits - 1` bits wide, which for a
+    /// modulus with its top bit set is one bit short of the whole key, so
+    /// the leftmost bit of the encoding is the one that must be zero.
+    ///
+    /// # Errors
+    ///
+    /// [`RsaError::BadSignature`] for every way it can fail to be one.
+    pub fn verify_pss(
+        &self,
+        hash: HashId,
+        message: &[u8],
+        signature: &[u8],
+    ) -> Result<(), RsaError> {
+        let mut recovered = [0u8; MAX_BYTES];
+        self.recover(signature, &mut recovered)?;
+        let em_bits = self.bits().saturating_sub(1);
+        pss::verify(hash, em_bits, message, head(&recovered, self.size))
     }
 
     /// The RSAVP1 of RFC 8017, section 5.2.2: the signature raised to the
