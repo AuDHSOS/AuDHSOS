@@ -6,6 +6,8 @@
 #![doc = include_str!("../README.md")]
 
 pub mod console;
+#[cfg(feature = "port-io")]
+pub mod device;
 #[cfg(any(test, feature = "test-doubles"))]
 pub mod doubles;
 pub mod exit;

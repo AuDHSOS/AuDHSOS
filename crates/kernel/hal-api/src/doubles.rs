@@ -12,7 +12,9 @@ use kernel_types::{Page, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
 use crate::console::DebugConsole;
 use crate::exit::{ExitStatus, TestExit};
 use crate::interrupt::{InterruptController, InterruptError, InterruptLine, Vector};
-use crate::paging::{AddressSpaceControl, FrameAccess, FrameSource, TlbControl};
+use crate::paging::{
+    AddressSpaceControl, FRAME_BYTES, FrameAccess, FrameBytes, FrameSource, TlbControl,
+};
 use crate::platform::{MemoryRegion, MemoryRegionKind, Platform};
 use crate::timer::{Timer, TimerError};
 
@@ -97,6 +99,56 @@ impl<T: Default> FrameAccess<T> for MemoryFrameAccess<T> {
             self.tables.insert(frame, Box::new(T::default()));
         }
         self.tables.get_mut(&frame).map(AsMut::as_mut)
+    }
+}
+
+/// Frames whose bytes live in a map, so that a test can read and write what
+/// the kernel wrote into one.
+#[derive(Debug, Default)]
+pub struct MemoryFrameBytes {
+    frames: HashMap<PhysFrame, Box<[u8; FRAME_BYTES]>>,
+}
+
+impl MemoryFrameBytes {
+    /// No reachable frame.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Makes `frame` reachable, filled with zeros.
+    pub fn add(&mut self, frame: PhysFrame) {
+        self.frames
+            .entry(frame)
+            .or_insert_with(|| Box::new([0; FRAME_BYTES]));
+    }
+
+    /// `true` if `frame` is reachable.
+    #[must_use]
+    pub fn contains(&self, frame: PhysFrame) -> bool {
+        self.frames.contains_key(&frame)
+    }
+
+    /// How many frames are reachable.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    /// `true` if no frame is reachable.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+}
+
+impl FrameBytes for MemoryFrameBytes {
+    fn frame_bytes(&self, frame: PhysFrame) -> Option<&[u8; FRAME_BYTES]> {
+        self.frames.get(&frame).map(AsRef::as_ref)
+    }
+
+    fn frame_bytes_mut(&mut self, frame: PhysFrame) -> Option<&mut [u8; FRAME_BYTES]> {
+        self.frames.get_mut(&frame).map(AsMut::as_mut)
     }
 }
 
@@ -588,5 +640,81 @@ impl AddressSpaceControl for RecordingAddressSpaces {
 
     fn active(&self) -> PhysFrame {
         self.active
+    }
+}
+
+/// The interrupt controller and the ports of one machine, for the kernel
+/// environment that needs both at once.
+#[cfg(feature = "port-io")]
+#[derive(Debug)]
+pub struct RecordingDevices {
+    /// The controller.
+    pub interrupts: FakeInterruptController,
+    /// The ports.
+    pub ports: RecordingPorts,
+}
+
+#[cfg(feature = "port-io")]
+impl RecordingDevices {
+    /// Devices with `lines` interrupt lines and no scripted port reads.
+    #[must_use]
+    pub fn new(lines: u8) -> Self {
+        RecordingDevices {
+            interrupts: FakeInterruptController::new(lines),
+            ports: RecordingPorts::new(),
+        }
+    }
+}
+
+#[cfg(feature = "port-io")]
+impl Default for RecordingDevices {
+    fn default() -> Self {
+        Self::new(24)
+    }
+}
+
+#[cfg(feature = "port-io")]
+impl InterruptController for RecordingDevices {
+    fn route(&mut self, line: InterruptLine, vector: Vector) -> Result<(), InterruptError> {
+        self.interrupts.route(line, vector)
+    }
+
+    fn mask(&mut self, line: InterruptLine) {
+        self.interrupts.mask(line);
+    }
+
+    fn unmask(&mut self, line: InterruptLine) {
+        self.interrupts.unmask(line);
+    }
+
+    fn end_of_interrupt(&mut self, vector: Vector) {
+        self.interrupts.end_of_interrupt(vector);
+    }
+}
+
+#[cfg(feature = "port-io")]
+impl crate::port::PortAccess for RecordingDevices {
+    fn read_u8(&mut self, port: u16) -> u8 {
+        self.ports.read_u8(port)
+    }
+
+    fn write_u8(&mut self, port: u16, value: u8) {
+        self.ports.write_u8(port, value);
+    }
+
+    fn read_u16(&mut self, port: u16) -> u16 {
+        self.ports.read_u16(port)
+    }
+
+    fn write_u16(&mut self, port: u16, value: u16) {
+        self.ports.write_u16(port, value);
+    }
+
+    fn read_u32(&mut self, port: u16) -> u32 {
+        self.ports.read_u32(port)
+    }
+
+    fn write_u32(&mut self, port: u16, value: u32) {
+        self.ports.write_u32(port, value);
     }
 }

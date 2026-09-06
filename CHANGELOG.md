@@ -29,6 +29,23 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The two hardware seams the system call layer of Phase 6 needs.
+  `kernel-hal-api` gains `paging::FrameBytes`, which reaches a frame as
+  bytes — the seam a second IPC buffer is read and written through — with
+  the double `MemoryFrameBytes` and the implementation of the physical
+  window. And it gains `device::Devices`, one bound over
+  `InterruptController` and `PortAccess`, because the four calls that need
+  them are four calls of one table and the kernel environment carries what
+  they need in one field; the double is `RecordingDevices` over the two that
+  exist. The feature `port-io` stops being unused: `kernel-hal-x86_64`
+  enables it.
+
+  In the adapter, `Ports` is the `PortAccess` implementation and
+  `DeviceAccess` joins it with the interrupt controller. `instructions`
+  gains `read_port_u16`, `write_port_u16`, and `read_port_u32` beside the
+  three it had, which are three new `asm!` sites; the budgets rise with
+  them.
+
 - The crate `kernel-ipc` at `crates/kernel/ipc`, layer 3: the rendezvous
   state machine over the object pools and the scheduler. Endpoints with a
   queue of senders and one of receivers, reply objects, notifications,

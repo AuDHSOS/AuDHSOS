@@ -400,8 +400,8 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "kernel-hal-x86_64",
         path: "crates/kernel/hal-x86_64",
         kind: Kind::Adapter {
-            unsafe_budget: 129,
-            asm_budget: 24,
+            unsafe_budget: 142,
+            asm_budget: 27,
         },
         deps: &[
             "kernel-acpi",
