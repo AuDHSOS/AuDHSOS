@@ -76,6 +76,19 @@ impl Outcome {
     }
 }
 
+/// The signal that ended a process, where the platform reports one.
+#[cfg(unix)]
+fn signal_of(status: ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+/// Platforms that do not report signals say nothing.
+#[cfg(not(unix))]
+const fn signal_of(_status: ExitStatus) -> Option<i32> {
+    None
+}
+
 /// The outcome an exit status means. A run the time limit ended is a
 /// crash whatever the status says.
 pub(crate) const fn outcome_of(status: Option<i32>, timed_out: bool) -> Outcome {
@@ -95,6 +108,8 @@ pub(crate) const fn outcome_of(status: Option<i32>, timed_out: bool) -> Outcome 
 pub(crate) struct Run {
     /// The exit status, if QEMU exited by itself.
     pub(crate) status: Option<i32>,
+    /// The signal that ended QEMU, if one did.
+    pub(crate) signal: Option<i32>,
     /// Everything the serial port carried.
     pub(crate) output: String,
     /// Whether the time limit ended the run.
@@ -105,6 +120,25 @@ impl Run {
     /// What the run amounted to.
     pub(crate) const fn outcome(&self) -> Outcome {
         outcome_of(self.status, self.timed_out)
+    }
+
+    /// How the run ended, in words.
+    ///
+    /// A crash is three different things — the time limit ended a machine
+    /// that was still going, something killed QEMU, or the machine exited
+    /// with a code that is neither of the two the exit device writes — and
+    /// they are diagnosed differently. A report that calls all three a
+    /// crash sends a reader looking in the wrong place, which is what
+    /// happened to the intermittent failure of the `ipc` image.
+    pub(crate) fn how(&self) -> String {
+        if self.timed_out {
+            return "the time limit ended it while it was still running".to_owned();
+        }
+        match (self.status, self.signal) {
+            (Some(code), _) => format!("it exited with code {code}"),
+            (None, Some(signal)) => format!("something killed QEMU with signal {signal}"),
+            (None, None) => "QEMU ended without a code and without a signal".to_owned(),
+        }
     }
 }
 
@@ -200,6 +234,7 @@ impl Machine {
         output.push_str(&errors.join().unwrap_or_default());
         Ok(Run {
             status: status.code(),
+            signal: signal_of(status),
             output,
             timed_out,
         })
@@ -449,7 +484,8 @@ pub(crate) fn strip_escapes(line: &str) -> &str {
 ///
 /// [`Error::Violations`] naming every failed test, a summary that
 /// disagrees with the lines, or a missing summary.
-pub(crate) fn check(report: &Report, outcome: Outcome) -> Result<(), Error> {
+pub(crate) fn check(report: &Report, run: &Run) -> Result<(), Error> {
+    let outcome = run.outcome();
     let mut violations = report.failures();
     match report.summary {
         None => violations.push("the machine wrote no summary line".to_owned()),
@@ -464,7 +500,11 @@ pub(crate) fn check(report: &Report, outcome: Outcome) -> Result<(), Error> {
         Some(_) => {}
     }
     if outcome != Outcome::Success {
-        violations.push(format!("the machine reported a {}", outcome.name()));
+        violations.push(format!(
+            "the machine reported a {}: {}",
+            outcome.name(),
+            run.how()
+        ));
     }
     Error::from_violations(violations)
 }

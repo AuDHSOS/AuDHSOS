@@ -490,7 +490,7 @@ fn report_tests(
             missing.push(format!("the image `{name}` did not write `{marker}`"));
         }
     }
-    match qemu::check(&report, outcome).and_then(|()| Error::from_violations(missing)) {
+    match qemu::check(&report, run).and_then(|()| Error::from_violations(missing)) {
         Ok(()) => Ok(()),
         Err(error) => {
             eprintln!("--- serial output of {name} ---");
