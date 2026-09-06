@@ -74,6 +74,24 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The startup message, in `audhsos-abi::startup`. A process that has just been
+  created finds it in the IPC buffer of its first thread, and it says which
+  handle of its table holds which role: a handle is a number, and nothing else
+  tells a new program that entry two is the name server and not the memory
+  server. Whoever created the process writes it — the kernel for the root
+  task, the root task for every other process.
+
+  It is a list of pairs, role and handle, and not a list of fixed positions,
+  because the processes of this system are given different things: the root
+  task receives one memory object per free region of memory, of which there
+  are as many as the machine has, and an application receives two endpoints
+  and nothing else. A reader takes the roles it knows and passes over the
+  rest, so a role added later reaches an older program as nothing at all
+  rather than as a shifted field. The ten roles are a table macro beside
+  `error_codes!` and `object_types!`, so name, code, and lookup come from one
+  place. The label spells `STARTUP` and lies below the range the kernel keeps
+  for itself, which a const assertion holds to.
+
 - Two user threads that meet, and a driver at ring three. Five new programs
   under `user-test-programs`: `ipc_client` and `ipc_server`, which are a call
   and a reply with a badge, four words, and a handle to a memory object both
