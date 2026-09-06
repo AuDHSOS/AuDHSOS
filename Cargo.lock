@@ -393,6 +393,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "server-name"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-collections",
+ "user-proto",
+]
+
+[[package]]
 name = "test-support"
 version = "0.1.0"
 

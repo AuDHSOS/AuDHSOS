@@ -74,6 +74,25 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `memory_merge`, a forty-second system call: one memory object out of two
+  that lie side by side. The two must be in that order, agree in kind and
+  cache policy, carry the same rights, and be held by the caller and by
+  nothing else — a mapping is a reference, and an object that something maps
+  may not be dissolved under it. The lower one grows to cover both, the
+  upper one ceases to exist, and its kernel object goes back to the quota.
+
+  This supersedes the clause of D-12 that had objects split and never
+  merged, and what forced it is not a test. An object that can only become
+  smaller means a memory server that hands memory out and takes it back
+  grinds its objects down to single pages and can never serve a large
+  request again: fragmentation with no floor under it. Catalog item 6.6.23
+  had asked since it was written that two released neighbours be handed out
+  as one, and with a kernel that only splits, that is unsatisfiable (D-88).
+
+  The const assertion in `user-sys-x86_64` earned its keep on the first
+  build after the table grew: it named the missing wrapper before anything
+  else could.
+
 - `user-loader`: the ustar reader for the boot archive, a ustar writer
   beside it, and `plan`, which says what of a user ELF has to be mapped
   where. Both are parsers over borrowed bytes with no system call in them,

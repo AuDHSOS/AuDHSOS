@@ -22,6 +22,7 @@
 //! | `thread_info` | thread handle |
 //! | `thread_exit`, `thread_yield` | none |
 //! | `memory_split` | memory handle, offset in bytes |
+//! | `memory_merge` | memory handle of the lower part, handle of the upper |
 //! | `memory_map` | process handle, memory handle, virtual address, offset, length, permissions |
 //! | `memory_unmap` | process handle, virtual address, length |
 //! | `memory_protect` | process handle, virtual address, length, permissions |
@@ -88,6 +89,7 @@ pub fn run<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
         Syscall::ThreadExit => thread::exit(machine, caller),
         Syscall::ThreadYield => thread::yield_now(machine, caller),
         Syscall::MemorySplit => memory::split(machine, process, request),
+        Syscall::MemoryMerge => memory::merge(machine, process, request),
         Syscall::MemoryMap => memory::map(machine, process, request),
         Syscall::MemoryUnmap => memory::unmap(machine, process, request),
         Syscall::MemoryProtect => memory::protect(machine, process, request),

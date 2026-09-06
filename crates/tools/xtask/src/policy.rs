@@ -505,6 +505,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "server-name",
+        path: "crates/user/servers/name",
+        kind: Kind::Logic,
+        deps: &["audhsos-abi", "audhsos-collections", "user-proto"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "user-sys-x86_64",
         path: "crates/user/sys-x86_64",
         kind: Kind::Adapter {

@@ -163,6 +163,7 @@ syscalls! {
     MemoryCreateDevice = 39 => "memory_create_device" (3, SystemControl),
     SystemInfo = 40 => "system_info" (1, SystemControl),
     DebugLog = 41 => "debug_log" (0, Nothing),
+    MemoryMerge = 42 => "memory_merge" (2, MemoryObject),
 }
 
 impl Syscall {

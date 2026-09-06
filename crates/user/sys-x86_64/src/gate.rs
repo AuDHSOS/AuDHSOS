@@ -88,7 +88,7 @@ pub struct Received {
 /// `syscalls!` and forgotten here fails the build of this crate, and so
 /// does a wrapper written for a call that is no longer in the table. The
 /// order has to match too, which makes the two lists readable side by side.
-const COVERED: [Syscall; 41] = [
+const COVERED: [Syscall; 42] = [
     Syscall::ProcessCreate,
     Syscall::ProcessInstallHandle,
     Syscall::ProcessSetFaultHandler,
@@ -130,6 +130,7 @@ const COVERED: [Syscall; 41] = [
     Syscall::MemoryCreateDevice,
     Syscall::SystemInfo,
     Syscall::DebugLog,
+    Syscall::MemoryMerge,
 ];
 
 /// `true` when [`COVERED`] is the system call table, in its order.
@@ -491,6 +492,21 @@ impl Gate {
         offset: u64,
     ) -> Result<MemoryHandle, Error> {
         self.capability(Syscall::MemorySplit, &[memory.raw(), offset])
+    }
+
+    /// `memory_merge`: one object out of two that lie side by side in
+    /// physical memory. `lower` grows to cover both and `upper` ceases to
+    /// exist, so the handle to it names nothing afterwards.
+    ///
+    /// This is what lets memory recover: without it an object can only ever
+    /// become smaller, and a server that hands memory out and takes it back
+    /// would grind its objects down to single pages (D-88).
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn memory_merge(&mut self, lower: MemoryHandle, upper: MemoryHandle) -> Result<(), Error> {
+        self.done(Syscall::MemoryMerge, &[lower.raw(), upper.raw()])
     }
 
     /// `memory_map`: maps `length` bytes of `memory`, from `offset`, at

@@ -191,7 +191,8 @@ pub const fn required_rights(call: Syscall) -> Rights {
         Syscall::MemoryMap
         | Syscall::MemoryUnmap
         | Syscall::MemoryProtect
-        | Syscall::MemorySplit => Rights::MAP,
+        | Syscall::MemorySplit
+        | Syscall::MemoryMerge => Rights::MAP,
         Syscall::MemoryInfo => Rights::INFO,
         Syscall::EndpointBadge => Rights::BADGE,
         Syscall::IpcSend | Syscall::IpcCall => Rights::SEND,

@@ -167,7 +167,15 @@ badge.
   policy.
 - `memory_split(handle, offset)` turns one object into two adjacent ones. The
   original handle refers to the lower part; a new handle for the upper part
-  is returned. The kernel never merges objects.
+  is returned.
+- `memory_merge(lower, upper)` turns two back into one. The two must lie side
+  by side in that order, agree in kind and cache policy, carry the same
+  rights, and be held by the caller and by nothing else — a mapping is a
+  reference, and an object that something maps may not be dissolved under
+  it. The lower object grows to cover both; the upper one ceases to exist,
+  and the handle that named it names nothing. Without this an object could
+  only ever become smaller, and a server that hands memory out and takes it
+  back would grind its objects down to single pages (D-88).
 - `memory_map(process, memory, vaddr, offset, len, permissions)` populates
   page tables immediately. Page-table frames come from the kernel reserve
   and count against the process's kernel-object quota.
@@ -426,6 +434,7 @@ through shared memory objects.
 | `thread_info` | Thread | state and fault information |
 | `thread_exit`, `thread_yield` | self | no handle |
 | `memory_split` | MemoryObject | split at offset |
+| `memory_merge` | MemoryObject | join two that lie side by side |
 | `memory_map`, `memory_unmap`, `memory_protect` | Process + MemoryObject | mappings; bounded per call |
 | `memory_info` | MemoryObject | physical range (requires `INFO`) |
 | `handle_duplicate`, `handle_close` | any | handle table operations |
