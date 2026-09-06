@@ -28,7 +28,7 @@ use crate::layout::{
     IPC_BUFFER_SIZE, MAX_MESSAGE_HANDLES, MAX_MESSAGE_WORDS, MAX_SYSCALL_ARGUMENTS,
     MAX_SYSCALL_RETURN_WORDS,
 };
-use crate::{Error, Handle};
+use crate::{Error, FaultKind, Handle};
 
 /// Size of the buffer in bytes, as a `usize` for indexing.
 #[expect(
@@ -76,6 +76,57 @@ const _: () = assert!(RETURN + MAX_SYSCALL_RETURN_WORDS * WORD <= MESSAGE);
 const _: () = assert!(HANDLES + MAX_MESSAGE_HANDLES * WORD <= WORDS);
 const _: () = assert!(WORDS + MAX_MESSAGE_WORDS * WORD <= SIZE);
 const _: () = assert!(WORDS + MAX_MESSAGE_WORDS * WORD == 4024);
+
+/// The first label the kernel keeps for messages of its own.
+///
+/// A `send` or a `call` whose label is at or above this is refused with
+/// [`Error::InvalidArgument`] before anything is copied, which is what
+/// makes the range reserved rather than merely documented. The check is at
+/// the entry of the two calls and not in the transfer itself, because the
+/// fault message the kernel builds carries such a label by construction.
+pub const KERNEL_LABEL_BASE: u64 = 0xFFFF_FFFF_FFFF_FF00;
+
+/// The base of the fault labels. The label of a fault message is this plus
+/// the code of its [`FaultKind`], so the six kinds occupy the first six
+/// labels of the reserved range and 250 are left for the kernel messages
+/// of later phases.
+pub const FAULT_LABEL_BASE: u64 = KERNEL_LABEL_BASE;
+
+/// The label of the fault message for `kind`.
+#[must_use]
+pub const fn fault_label(kind: FaultKind) -> u64 {
+    #[expect(
+        clippy::as_conversions,
+        reason = "widening a fault code to the width of a label in a const fn"
+    )]
+    let code = kind.code() as u64;
+    FAULT_LABEL_BASE.wrapping_add(code)
+}
+
+/// The fault kind `label` names, or `None` for a label that is no fault
+/// label.
+#[must_use]
+pub const fn fault_kind_of(label: u64) -> Option<FaultKind> {
+    let Some(code) = label.checked_sub(FAULT_LABEL_BASE) else {
+        return None;
+    };
+    if code > 0xFFFF_FFFF {
+        return None;
+    }
+    #[expect(
+        clippy::as_conversions,
+        clippy::cast_possible_truncation,
+        reason = "the bound above keeps the value inside u32, and the function is const"
+    )]
+    let code = code as u32;
+    FaultKind::from_code(code)
+}
+
+/// `true` for a label the kernel keeps for its own messages.
+#[must_use]
+pub const fn is_kernel_label(label: u64) -> bool {
+    label >= KERNEL_LABEL_BASE
+}
 
 /// The byte offset of payload word `index`, or `None` beyond the area.
 #[must_use]
@@ -255,6 +306,21 @@ pub struct Message {
     pub word_count: usize,
     /// How many handles the message carries.
     pub handle_count: usize,
+}
+
+impl Message {
+    /// `true` when the label lies in the range the kernel keeps for its own
+    /// messages, which a user thread may not send.
+    #[must_use]
+    pub const fn is_kernel_label(&self) -> bool {
+        is_kernel_label(self.label)
+    }
+
+    /// The fault kind the label names, for a message the kernel built.
+    #[must_use]
+    pub const fn fault_kind(&self) -> Option<FaultKind> {
+        fault_kind_of(self.label)
+    }
 }
 
 /// Reads the eight bytes at `offset` as a little-endian word.

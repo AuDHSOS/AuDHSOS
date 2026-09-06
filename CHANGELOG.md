@@ -29,6 +29,23 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The label range the kernel keeps for its own messages, in
+  `audhsos_abi::ipc_buffer`: `KERNEL_LABEL_BASE` is the first reserved
+  label, `FAULT_LABEL_BASE` is the same value, and the label of a fault
+  message is that base plus the code of its `FaultKind`, so the six kinds
+  occupy the first six labels and 250 are left for the kernel messages of
+  later phases. `is_kernel_label`, `fault_label`, `fault_kind_of`, and
+  `Message::is_kernel_label` read it. The range is reserved rather than
+  merely documented because `ipc_send` and `ipc_call` refuse such a label
+  before anything is copied; the check is at their entry and not in the
+  transfer, which exists to carry the one message that has to have one.
+
+  Beside it two smaller pieces the phase needs: `Error::Cancelled`, which
+  is what a thread finds in its status word when `thread_suspend` took it
+  out of a wait queue, and `layout::MAX_RESULT_WORDS`, the width of a
+  system call result that does not fit into two return words and goes into
+  the message area of the caller's own buffer instead.
+
 - RFC 8017, RFC 4055, RFC 5756, and RFC 3279 join the reference documents
   under `docs/rfc/`, each fetched twice and recorded with its checksum.
   They are what RSA verification reads: PKCS #1 for the primitive and both

@@ -52,3 +52,9 @@ fn codes_are_dense_from_one() {
     let expected: Vec<u32> = (1..=u32::try_from(Error::ALL.len()).unwrap()).collect();
     assert_eq!(codes, expected);
 }
+
+#[test]
+fn a_cancelled_operation_has_a_code_of_its_own() {
+    assert_eq!(Error::Cancelled.code(), 25);
+    assert_eq!(Error::from_code(25), Some(Error::Cancelled));
+}
