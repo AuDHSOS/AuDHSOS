@@ -2320,6 +2320,12 @@ of frames is a range of bytes.
   bookkeeping, per-client accounting by badge.
 - `app-hello`: looks up `console`, writes `hello from userland`, reads a
   line back and says it again, then reports to its parent and exits.
+- `app-checks`: the questions 6.6.22 asks of the servers — a lookup of a
+  name nobody registered, memory used, given back and asked for again, a
+  request no machine can meet — each answered on one line of the console,
+  written while `app-hello` writes its own, which is the interleaving case.
+- `app-faulter`: writes to a page nothing has mapped, so that the run has a
+  client which breaks and the root task has a fault to report.
 - Root task as an ELF at `ROOT_TASK_BASE`, with every section on a page of
   its own so that no two segments share one set of permissions (D-92).
 - The xtask `image` writes the real boot image: header, root task, ustar
