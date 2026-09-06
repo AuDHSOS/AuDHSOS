@@ -148,7 +148,7 @@ AuDHSOS/
 | `net-http` | n4 | all | no | yes, fuzz | `net-wire` |
 | `net-stack` | n5 | all | no | yes | every `net-` crate |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
-| `fuzz-support` | dev | host | allowlisted | yes, and Miri for the entry glue | - |
+| `fuzz-support` | dev | host | allowlisted | yes, and Miri over `counters` and `sancov`, which hold its `unsafe` | - |
 | `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `fs-fat`, `audhsos-encoding`, `audhsos-symbols` |
 
 ## 5.3 Layering rules
@@ -335,7 +335,7 @@ binaries (`cargo`, `rustc`, `rustfmt`, `cargo-clippy`, `cargo-miri`,
 | `unsafe-budget` | count `unsafe` blocks and `asm!` sites per adapter crate against the policy table |
 | `fuzz [--target <name>] [--time <s>]` | build fuzz targets with `-Zsanitizer=fuzzer` and run them |
 | `coverage` | build host tests with `-C instrument-coverage`, merge profiles with `llvm-profdata`, export LCOV with `llvm-cov`, enforce thresholds |
-| `miri` | run the tests of the host-executable adapter crates under Miri |
+| `miri` | run the tests of the `unsafe` modules of the host-executable adapter crates under Miri, after checking that no module holding `unsafe` is left out |
 | `doc` | build documentation with warnings as errors |
 | `check [--quiet]` | everything CI runs, in CI order; `--quiet` leaves one line per step and prints the output of a step only when it fails |
 

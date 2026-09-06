@@ -15,7 +15,7 @@ is project code on top of the Rust toolchain.
 | L4 Fuzz | parsers and decoders | host | `-Zsanitizer=fuzzer` from the toolchain with `fuzz-support` | nightly schedule; regressions on every push |
 | L5 Loader and kernel integration | loader, HAL adapter, and kernel core in QEMU | QEMU | custom test framework, serial protocol, exit device | every push |
 | L6 End-to-end | the full system with userland test programs | QEMU | same runner | every push |
-| L7 Miri | host-executable `unsafe` in adapter crates | host | `cargo miri test` | every push |
+| L7 Miri | host-executable `unsafe` in adapter crates: the tests of the modules that hold it | host | `cargo xtask miri` | every push |
 | L8 Static | lints, layering, external code, unsafe budget, documentation | host | `cargo xtask check` | every push |
 
 Locally every one of these levels is started through the wrapper scripts of
@@ -298,6 +298,13 @@ done until every applicable item has a test. Items are added, never removed.
 - Fault message: has the reserved label range, carries fault kind, address,
   instruction pointer, and error code; the reply resumes the thread; the
   handler killing the process ends the wait cleanly.
+- A message whose label lies in the range the kernel reserves for its own
+  messages is refused before anything is copied.
+- A thread suspended while it waits leaves the queue it waited in, finds
+  `Cancelled` in its status word, and is in no queue when it resumes.
+- The last handle to an endpoint closes while threads wait on both queues:
+  the endpoint is destroyed and everyone wakes with `ObjectDestroyed`
+  (D-75).
 
 ### 6.6.9 System call decoding and dispatch (`kernel-syscall`)
 
@@ -315,6 +322,12 @@ done until every applicable item has a test. Items are added, never removed.
   `WrongObjectType`.
 - Round-trip encode/decode of every request and result layout, including
   maximum values of every field.
+- A result that does not fit into two return words is written as message
+  words of the caller's buffer with label zero and handle count zero, and
+  the first return word says how many: `thread_info` reports the kind,
+  address, instruction pointer, and error code of a thread that faulted and
+  a word count of zero for one that did not, and `system_info` reports the
+  capacity and the live count of every pool.
 
 ### 6.6.10 Boot image header and boot information (`audhsos-abi`, `kernel-core`)
 
@@ -503,6 +516,10 @@ done until every applicable item has a test. Items are added, never removed.
 - Unsafe counter: `unsafe` inside comments and strings is not counted;
   `unsafe fn`, `unsafe impl`, `unsafe {` and `asm!` are counted; a budget
   exactly met passes, one above fails.
+- Miri coverage: a module holding `unsafe` that a filter of `MIRI_TARGETS`
+  names is no gap; one that no filter names is reported, and the report
+  names both the file and the filter that would close it; a crate that runs
+  whole has no gaps (D-76).
 - `cargo tree` parser: nested depth prefixes; a crate appearing twice;
   workspace members versus the toolchain's own crates.
 - `check-deps`: a lock file with a non-workspace package fails; a manifest
@@ -1407,7 +1424,8 @@ done until every applicable item has a test. Items are added, never removed.
 
 - `fuzz-support`: the entry glue passes the input slice through
   unchanged, including the empty slice; the regression list replays every
-  stored corpus file; Miri covers the glue.
+  stored corpus file; Miri covers the counter registry and the sanitizer
+  callbacks, which is where the crate's `unsafe` is (D-76).
 - Symbol table: an address inside a function, at its first byte, at its
   last byte, and one past it; an address in no function; a symbol that is
   not a function; the narrowest of two functions that enclose each other;
@@ -1526,6 +1544,56 @@ boundary the list above does not name.
   nothing disagreed, a requirement that is reached is not reported beside
   one that is not, and a disagreement is reported before a missed
   requirement.
+
+### 6.6.55 Wide arithmetic and RSA (`crypto-bignum`, `crypto-rsa`)
+
+Planned with steps R1 to R3 of document 11, section 11.15. The number
+follows the catalog rather than the layer, as 6.6.54 records.
+
+- The modulus: a value that is even, one that is zero, one wider than
+  `MAX_LIMBS`, and one whose top limb is zero are each refused by
+  `Modulus::new`; an accepted one has zero in every limb at or above its
+  used count, which is the invariant the rest of the crate rests on.
+- The derived constants: `n0inv` multiplied by the low limb of the
+  modulus is one modulo `2^64`; `R2` agrees with the value computed by
+  repeated doubling, for a modulus of each of the four widths.
+- Montgomery multiplication and squaring agree with a schoolbook
+  reference in the test module on random inputs at 1024, 2048, 3072, and
+  4096 bits (property), in the form 6.6.33 uses for `fe25519`. The
+  reference is the one place where the arithmetic is written twice on
+  purpose.
+- Exponentiation: `pow` against the reference for small exponents, for
+  65537, and for an exponent with its top and bottom bits set; a round
+  trip that signs with a wide exponent and verifies with a small one over
+  the key of RFC 8448, section 2.
+- The key: the bounds of D-79 at each edge — an exponent of one, of two,
+  of three; a modulus one bit below the lower bound and one bit above the
+  upper — refused where the rule says and accepted where it does not.
+- PKCS #1 v1.5, the positive direction: a signature this crate made
+  verifies, for SHA-256, SHA-384, and SHA-512, and the encoded message it
+  builds matches the `DigestInfo` prefixes of RFC 8017, section 9.2
+  note 1 byte for byte.
+- PKCS #1 v1.5, the negative direction, which is what the construction of
+  D-80 is for: padding shorter than eight bytes of `0xff`; a
+  `DigestInfo` moved inside the block with the padding adjusted to fit; a
+  digest followed by trailing bytes; a missing `0x00` separator; a first
+  byte that is not `0x00`; a second that is not `0x01`; a `DigestInfo`
+  whose `SEQUENCE` carries an indefinite length, which PKCS #1 v1.5
+  allowed and this crate refuses; and a forgery constructed against an
+  exponent of three.
+- PSS: a signature this crate made verifies for each of the three hashes;
+  and each rejection rule separately — a trailer that is not `0xBC`, a
+  leftmost bit set where `emBits` says it must be zero, a separator that
+  is not `0x01`, a salt of a length other than the hash output, and a
+  recomputed `H'` that does not match.
+- The one vector from outside: the `CertificateVerify` of the simple
+  1-RTT handshake of RFC 8448 verifies as `rsa_pss_rsae_sha256` under the
+  key that document's section 2 prints. It is 1024 bits and therefore
+  never reaches a chain (D-79); it reaches the primitive.
+- Fuzz target `rsa`: a subject public key and a signature from the same
+  input, parsed and verified, must not panic and must not loop. The
+  corpus holds a valid signature of each kind and the malformed encodings
+  above.
 
 ## 6.7 CI pipeline
 

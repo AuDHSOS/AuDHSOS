@@ -41,19 +41,30 @@ In scope for the first version:
 
 Not in scope for the first version, listed so that the boundary is
 explicit: TLS 1.2 and earlier; the server role; session resumption,
-pre-shared keys, and 0-RTT; client certificates; RSA signature
-verification; the `secp256r1` key exchange; hybrid post-quantum key
+pre-shared keys, and 0-RTT; client certificates; the `secp256r1` key
+exchange; hybrid post-quantum key
 exchange; certificate revocation (CRL, OCSP, stapling); name constraints;
 renegotiation; compression; `record_size_limit`; DTLS.
 
-RSA verification is the one omission that costs interoperability: many
-public chains are RSA to the root. It is later work and needs wide
-arithmetic. Some of that now exists: `crypto-ec::montgomery` is a
-Montgomery multiplication generic over the number of limbs, written for
-the two ECDSA curves, and a 2048-bit modulus is the same code with
-thirty-two limbs rather than four or six. What it does not have is the
-exponentiation an RSA verification needs, or the PKCS #1 encoding around
-it. Everything else on the list is optional for a working HTTPS request.
+RSA verification was on that list and is now section 11.15, planned and
+not yet built. It is the one omission that costs interoperability: many
+public chains are RSA to the root, and `www.ietf.org`,
+`www.rust-lang.org`, and `www.bbc.co.uk` are three that this client
+cannot reach for that reason alone.
+
+An earlier version of this section said the arithmetic was nearly there —
+that `crypto-ec::montgomery` is generic over the number of limbs, so a
+2048-bit modulus is the same code with thirty-two limbs rather than four
+or six, and only the exponentiation and the PKCS #1 encoding were
+missing. The first half of that was wrong. The module is generic over the
+limb count, but its `Params` carries the modulus and its two conversion
+constants as associated *constants*: they are known when the code is
+compiled, and an RSA modulus is known when a certificate is read. What
+carries over is smaller and further down — the three free functions that
+already take their modulus as an argument. D-77 records the consequence,
+which is that the arithmetic moves into a crate of its own.
+
+Everything else on the list is optional for a working HTTPS request.
 
 The `secp256r1` key exchange left the list with D-56, after the curve was
 implemented. A key exchange multiplies a secret scalar; the P-256 of
@@ -72,18 +83,20 @@ server.
 | `crypto-ct` | `crates/crypto/ct` | c0 | - |
 | `crypto-hash` | `crates/crypto/hash` | c1 | `crypto-ct` |
 | `crypto-aead` | `crates/crypto/aead` | c1 | `crypto-ct` |
-| `crypto-ec` | `crates/crypto/ec` | c2 | `crypto-ct`, `crypto-hash` |
+| `crypto-bignum` | `crates/crypto/bignum` | c0 | - |
+| `crypto-ec` | `crates/crypto/ec` | c2 | `crypto-ct`, `crypto-hash`, `crypto-bignum` |
 | `crypto-rng` | `crates/crypto/rng` | c2 | `crypto-ct`, `crypto-aead` |
+| `crypto-rsa` | `crates/crypto/rsa` | c2 | `crypto-ct`, `crypto-hash`, `crypto-bignum` |
 | `audhsos-der` | `crates/net/der` | c0 | - (`audhsos-time` when it exists, D-46 and 11.14) |
-| `audhsos-x509` | `crates/net/x509` | c3 | `audhsos-der`, `crypto-hash`, `crypto-ec` |
-| `audhsos-tls` | `crates/net/tls` | c4 | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-x509` |
+| `audhsos-x509` | `crates/net/x509` | c3 | `audhsos-der`, `crypto-hash`, `crypto-ec`, `crypto-rsa` |
+| `audhsos-tls` | `crates/net/tls` | c4 | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `crypto-rsa`, `audhsos-der`, `audhsos-x509` |
 
-All eight are logic crates: `no_std`, `#![forbid(unsafe_code)]`, no
+All ten are logic crates: `no_std`, `#![forbid(unsafe_code)]`, no
 allocation, `Target::Host` in the policy table, coverage gate on. Each
-takes `test-support` as a dev-dependency. Three carry a feature for the
+takes `test-support` as a dev-dependency. Four carry a feature for the
 data their own tests and the tests above them need: `test-signing` on
-`crypto-ec`, `test-certificates` on `audhsos-x509`, and `test-doubles` on
-`crypto-rng`. None is enabled by a product build. No crate of this track is depended on by
+`crypto-ec` and on `crypto-rsa`, `test-certificates` on `audhsos-x509`,
+and `test-doubles` on `crypto-rng`. None is enabled by a product build. No crate of this track is depended on by
 the kernel; the dependency edges run from userland only, and from the
 network track of [document 12](12-parallel-work.md), which uses
 `crypto-rng` for initial sequence numbers and transaction ids (D-51).
@@ -486,14 +499,22 @@ the tests instead, and the two checks cover different halves: the replay
 that the arithmetic matches the world, the machine test that the state
 machine does what the arithmetic allows.
 
-The trace also cannot check a signature: it signs with RSA-PSS, which
-this client does not verify. That path is checked in `audhsos-x509`
-against chains this project builds. That trace uses an
-RSA certificate, so it runs with certificate verification stubbed out; it
-tests the transcript, the key schedule, record protection, and
-`Finished`. Certificate validation is tested separately against
-project-generated ECDSA and Ed25519 chains. Adding RSA verification later
-would close this seam.
+The trace cannot yet check a signature: it signs with RSA-PSS, which this
+client does not verify, so the replay runs with certificate verification
+stubbed out and tests the transcript, the key schedule, record protection,
+and `Finished`. Certificate validation is tested separately against
+project-generated ECDSA and Ed25519 chains.
+
+Step R5 of 11.15 closes that seam, and closes it further than was
+expected when this paragraph was first written. RFC 8448 section 2 prints
+the whole private key the traces sign with, so the trace is not only a
+handshake to reproduce but a signature vector: the `CertificateVerify` of
+the simple 1-RTT handshake is a real `rsa_pss_rsae_sha256` signature under
+a key this repository holds. It verifies through `crypto-rsa` directly.
+It does not verify through the client, and not because anything is
+missing: the modulus is 1024 bits, which D-79 puts below what a
+certificate may carry. The chain around it stays stubbed, the signature
+inside it stops being.
 
 Beyond that: the vector tests of each primitive, property tests for
 round trips and for parsers that must not panic, model tests for path
@@ -519,6 +540,12 @@ checklist in 4.9.
 | T6 | `audhsos-x509` with the test certificate builder | L | implemented |
 | T7 | `audhsos-tls` | XL | implemented |
 | T8 | Integration, jointly with step D9 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M | |
+| R1 | `crypto-bignum`: the limb core out of `crypto-ec`, a runtime `Modulus`, and exponentiation (11.15) | M-L | |
+| R2 | `crypto-rsa`: the key with its bounds, and PKCS #1 v1.5 | M | |
+| R3 | `crypto-rsa`: MGF1 and EMSA-PSS-VERIFY | M | |
+| R4 | `audhsos-x509`: identifiers, parameters, the key, the pairs, and the builder | L | |
+| R5 | `audhsos-tls`: code points, the hello, `MAX_SPKI`, the `CertificateVerify` rule, the trace | M | |
+| R6 | The fuzz target, `tools/tls-probe` against three hosts, and the documents | S-M | |
 
 T1 to T7 touch nothing outside their own crates and the policy table, so
 they can be built between kernel phases without disturbing them. T5 and
@@ -526,13 +553,22 @@ T6 additionally need steps E1 and E2 of document 12, which are small and
 are scheduled before them. T8 depends on the network stack and on the
 kernel and is not scheduled.
 
+R1 to R6 have the same property and none of T8's: they are logic in logic
+crates, they wait on nothing outside this track, and each one leaves the
+workspace green on its own. R1 is the only one that touches a crate that
+is finished — it moves the limb arithmetic out of `crypto-ec`, whose P-256
+and P-384 suites are what say the move changed nothing. R6 is the only one
+that needs the network, and only for `tools/tls-probe`, which is a
+separate workspace and no part of the checks.
+
 ## 11.13 Risks
 
 | Risk | Effect | Mitigation |
 |------|--------|------------|
 | Self-written cryptography has flaws that tests do not find | a connection that looks encrypted but is not | vector tests from the standards, the RFC 8448 trace, negative tests for every rejection rule, fuzzing, the constant-time review section per crate, verification-only asymmetric surface |
 | Constant-time properties are lost to compiler optimization | timing side channels | no tables, no secret-dependent control flow at the source level; `black_box` where the source must not be folded away; the discipline is documented per function |
-| No RSA verification | many real chains cannot be validated | stated as a known limit; the bignum crate is scoped as later work and the interfaces leave room for a third signature algorithm |
+| No RSA verification yet | many real chains cannot be validated | scoped as steps R1 to R6 (11.15) against documents this repository now holds; until they are done it is a stated limit, and the interfaces already leave room for the algorithm |
+| Wide arithmetic is written for one purpose and used for another | a bignum that is safe for public values used where values are secret | `crypto-bignum` serves verification only: no secret ever reaches it, its module documentation says so in the form `montgomery.rs` already uses, and nothing in the track signs outside `test-signing` |
 | No revocation checking | a revoked certificate is accepted | stated as a known limit; short-lived anchors and operator-chosen trust stores are the only mitigation in this version |
 | The track grows past its estimate | kernel phases slip | the track is independent; work on it happens between phases, never instead of one |
 | Zeroization is best effort without `unsafe` | key material may remain in freed memory | keys live in `Secret<N>` with the shortest possible lifetime; the limit is documented rather than hidden |
@@ -561,3 +597,187 @@ with a corpus each, and `cargo xtask fuzz --regression` replays them as a
 step of `check`. Fuzzing proper needs a clang that carries the libFuzzer
 runtime; on a machine without one the same sources still build the replay
 program, which is what the regression step uses.
+
+## 11.15 RSA verification
+
+Planned, not built. This section is the design and the order of work for
+the one omission of 11.2 that costs interoperability, in the form the
+rest of this document uses. The decisions it rests on are D-77 to D-83.
+
+### 11.15.1 What the reference documents settle
+
+Five documents are kept under `docs/rfc/` for this track, and their
+README says what each is for. Three rules out of them shape the code and
+are stated here so that no reader has to rediscover them.
+
+RFC 8017 section 8.2.2 gives two shapes for verifying a PKCS #1 v1.5
+signature and this project takes the one that constructs (D-80). RFC 4055
+section 5 requires the parameters of `sha256WithRSAEncryption` and its two
+siblings to be NULL and requires an implementation to accept them absent
+as well, which no other algorithm in this crate allows. And RFC 8446
+section 4.2.3 gives the `rsa_pkcs1_*` code points one meaning in the
+`ClientHello` and forbids them in the `CertificateVerify` (D-82).
+
+The fifth document is what the first of those three costs. RFC 2313 is
+PKCS #1 version 1.5 itself, and its verification is not the construction
+of RFC 8017 with a looser encoding — it is the other operation, written
+out as its own sections: 10.2.3 BER-decodes the recovered data into a
+`DigestInfo` and separates it into a digest and an algorithm identifier,
+and 10.2.4 compares that digest against a fresh one. D-80 declines that
+operation, so a signature whose `DigestInfo` is BER but not DER is refused
+here and valid there. That is a deliberate incompatibility with a
+published specification, not a tolerance this client happens not to have,
+and it is stated as one. RFC 8017's own note calls the case unlikely in
+practice, and the certificates on the public web are DER.
+
+### 11.15.2 `crypto-bignum`
+
+The limb arithmetic, moved out of `crypto-ec` and given a modulus it does
+not know until it runs (D-77).
+
+```rust
+pub struct Modulus { limbs: [u64; MAX_LIMBS], used: usize, n0inv: u64, r2: [u64; MAX_LIMBS] }
+pub const MAX_LIMBS: usize = 64;                       // 4096 bits
+
+impl Modulus {
+    pub fn new(big_endian: &[u8]) -> Result<Modulus, BignumError>;
+    pub fn pow(&self, base: &[u8], exponent: u64, out: &mut [u8]) -> Result<(), BignumError>;
+}
+```
+
+`new` derives what `Params` used to carry as constants. `n0inv` is
+`-m^-1` modulo `2^64` by Hensel doubling, five steps from the low limb of
+an odd modulus, which is where the requirement that the modulus be odd
+comes from. `R2` is `2^(128*N)` modulo the modulus by that many modular
+doublings: at four thousand ninety-six bits it is eight thousand one
+hundred and ninety-two doublings of sixty-four limbs, once per key.
+
+`pow` is left-to-right square-and-multiply, and it is not constant time.
+The argument is the one `montgomery.rs` already makes for the curves and
+it is stronger here: a modulus, an exponent, and a signature are all on
+the wire, and nothing secret ever enters this crate. The module
+documentation says so, in the form of the constant-time review sections
+of 11.11 — with the opposite conclusion, and the same obligation to state
+it.
+
+The invariant that pays for the single width of D-78: limbs at or above
+`used` are zero, in every value the crate holds. The loops run over
+`used`, so a 2048-bit key costs a 2048-bit multiplication and a
+4096-bit stack frame.
+
+Two lints shape the code more than the algorithm does.
+`arithmetic_side_effects` forces `wrapping_add` and friends, which is what
+the method specifies anyway. `indexing_slicing` forces every access
+through `get` and the iterators, which was free while the width was a
+const generic and is not free now: `zip` over two arrays becomes `zip`
+over two `get(..used)`. That is most of why R1 is not a small step.
+
+### 11.15.3 `crypto-rsa`
+
+```rust
+pub struct PublicKey { modulus: Modulus, exponent: u64, size: usize }
+
+impl PublicKey {
+    pub fn new(modulus: &[u8], exponent: &[u8]) -> Result<PublicKey, RsaError>;
+    pub fn verify_pkcs1(&self, hash: HashId, message: &[u8], signature: &[u8])
+        -> Result<(), RsaError>;
+    pub fn verify_pss(&self, hash: HashId, message: &[u8], signature: &[u8])
+        -> Result<(), RsaError>;
+}
+```
+
+`new` takes the shape rules of D-79 that are the primitive's own: the
+modulus odd with its top bit set and no wider than `MAX_LIMBS`, the
+exponent odd and at least three. It does not take the lower bound on the
+size. That rule belongs to whoever judges a certificate, and putting it
+here would make the RFC 8448 vector unusable by the crate that should
+check it.
+
+`verify_pkcs1` builds `EM = 0x00 || 0x01 || PS || 0x00 || T` with `PS` at
+least eight bytes of `0xff`, and compares with `ct_eq`. The three
+`DigestInfo` prefixes are byte constants, each with the note of RFC 8017
+section 9.2 named beside it, in the form `oid.rs` already uses for object
+identifiers. The comparison is over public bytes; `ct_eq` is used because
+it is what the workspace has for comparing bytes and because a comparison
+with no early exit is the right habit in this crate whether or not this
+call needs it.
+
+`verify_pss` is EMSA-PSS-VERIFY with `emBits = modBits - 1`: the mask
+from MGF1 over the chosen hash, the leftmost bits checked against that
+width, the `0x01` separator, the trailer `0xBC`, and `H'` recomputed over
+eight zero bytes, the message hash, and the recovered salt. The salt is
+as long as the hash output and is not read from the encoding, because the
+three schemes this client offers fix it (D-81).
+
+Signing exists behind `test-signing` and is one call into `pow` with a
+wide exponent. No key is generated (D-83).
+
+### 11.15.4 What changes above the primitive
+
+`audhsos-x509` takes most of the work. `oid.rs` gains `rsaEncryption`, the
+three `sha*WithRSAEncryption` arcs, and for PSS `id-RSASSA-PSS`, `id-mgf1`
+and the three hash identifiers. `SignatureAlgorithm::parse` gains a rule
+per algorithm where it now has one rule for all of them: today it calls
+`finish` on the identifier's fields and so demands the parameters be
+absent, which is right for ECDSA and Ed25519 and wrong for the three RSA
+identifiers, where NULL and absent are both correct. `SubjectPublicKey`
+gains a variant holding the modulus and the exponent as borrowed slices,
+parsed from the inner `RSAPublicKey` of RFC 3279 section 2.3.1; the DER
+reader needs nothing new for it, since `read_integer` already strips the
+leading zero of a positive integer and refuses a negative one.
+`check_usable` applies the size bound of D-79, which is what makes an
+out-of-range anchor a refusal rather than a path that reaches nothing.
+
+The builder behind `test-certificates` is the part that is easy to
+underestimate. It gains RSA `TestKey` variants over the fixed pairs of
+D-83, and two constants stop fitting: `MAX_CERTIFICATE` is 1024 where a
+4096-bit leaf under a 4096-bit issuer is about 1450 bytes, and
+`TestKey::public_key` returns a 97-byte array where an RSA key body is up
+to 526.
+
+`audhsos-tls` is a smaller change with one number in it. `MAX_SPKI` is
+128 today, computed for P-384 at 120; an RSA-4096 subject public key
+information is 550 bytes — fifteen for the algorithm identifier, 526 for
+the inner sequence of two integers, five for the bit string around it,
+four for the outer sequence — so the constant becomes 550 and
+`Connection` grows by that much. The alternative, borrowing the leaf's
+`spki_bytes` instead of copying them, would tie a borrow across two
+handshake messages to save the bytes, and is not worth it.
+
+Six code points join `signature_algorithms` in the `ClientHello`, and
+`take_certificate_verify` gains the pairs it accepts and, more
+importantly, the three it refuses (D-82). The 160-byte buffer that holds
+the signed content does not change: the transcript hash is the cipher
+suite's, which is SHA-256 or SHA-384 and never SHA-512, however the
+signature is hashed.
+
+### 11.15.5 Tests
+
+A section of the catalog for `crypto-bignum` and `crypto-rsa`, and
+additions to 6.6.33, 6.6.35, 6.6.36, 6.6.37, and 6.6.38.
+
+For the arithmetic: a schoolbook reference in the test module and property
+tests against it over moduli of all four widths, in the form
+`crates/crypto/ec/src/tests/reference.rs` already uses for the curves.
+
+For PKCS #1: the negative tests are the point. A padding shorter than
+eight bytes of `0xff`, a `DigestInfo` moved inside the block, bytes
+appended after the digest, a missing `0x00` separator, and a forgery
+against a small exponent. These are what the construction of D-80 buys,
+and a test suite that only checks that valid signatures verify would not
+notice if the code stopped buying it.
+
+For PSS: a wrong trailer, a leftmost bit that should be zero, a salt of
+the wrong length, a separator that is not `0x01`, and a hash that does
+not match.
+
+For the whole: the `CertificateVerify` of the RFC 8448 simple 1-RTT
+handshake, verified through `crypto-rsa` under the key of section 2 of
+that document, and a fuzz target `rsa` under `fuzz/` with a corpus,
+registered in the policy table beside the other four. Coverage holds at
+ninety percent of lines and eighty-five of branches for both new crates.
+
+The end of it is `tools/tls-probe` against `www.ietf.org`,
+`www.rust-lang.org`, and `www.bbc.co.uk`. That is the only check that says
+the chains this omission cost are reachable, and it is the one the whole
+step is for.

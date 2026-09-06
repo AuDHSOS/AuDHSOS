@@ -29,6 +29,58 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- RFC 8017, RFC 4055, RFC 5756, and RFC 3279 join the reference documents
+  under `docs/rfc/`, each fetched twice and recorded with its checksum.
+  They are what RSA verification reads: PKCS #1 for the primitive and both
+  encodings, the two X.509 documents that name the algorithms and their
+  parameters, and RFC 3279 section 2.3.1 for `rsaEncryption` and
+  `RSAPublicKey`. The README gains a section for the four and a second for
+  what was read and left out, and the RFC 3279 entry under *What P-384
+  does not need* is corrected: it was kept out because RFC 5480 restates
+  `ECDSA-Sig-Value`, and that reason says nothing about the RSA key, which
+  no later document restates.
+
+  Nothing is implemented yet. The documents are here so that the plan can
+  cite sections rather than recollection — among them one correction the
+  plan needed: RFC 4055 section 5 requires the parameters of
+  `sha256WithRSAEncryption` and its two siblings to be NULL and requires
+  an implementation to accept them absent as well, so the parser has to
+  take both forms and not, as first written down, only the present one.
+
+- RFC 2313, PKCS #1 version 1.5, joins the reference documents, fetched
+  twice and recorded with its checksum. It was listed as not needed, and
+  as an implementation reference it still is not: RFC 8017 delegates
+  nothing to it and names it only informatively. It is here because D-80
+  refuses a `DigestInfo` that is BER but not DER, and that refusal is a
+  claim about this document. From the source the claim is sharper than
+  from RFC 8017's summary of it. Version 1.5 does not merely permit the
+  looser encoding: its sections 10.2.3 and 10.2.4 define verification as a
+  BER decode followed by a digest comparison, so the two specifications
+  describe two different operations. The refusal is a deliberate
+  incompatibility and section 11.15.1 now says so. The document also
+  settles what could until now only be inferred — it carries no table of
+  `DigestInfo` prefixes, indeed no byte string at all, so the constants of
+  RFC 8017 section 9.2 note 1 have one source and not two.
+
+- RSA verification is planned rather than deferred: section 11.15 of
+  document 11, decisions D-77 to D-83, catalog section 6.6.55, and steps
+  R1 to R6 in the roadmap and in the order of work. Nothing is
+  implemented.
+
+  Two things the planning turned up are worth naming here, because both
+  contradict what was written down before. `crypto-ec::montgomery` cannot
+  serve an RSA modulus as it stands: it is generic over the limb count,
+  which is what section 11.2 said, but its `Params` carries the modulus
+  and the conversion constants as associated constants, and a certificate
+  brings its modulus at run time. The arithmetic therefore moves to a
+  crate of its own (D-77), keeping the three free functions that already
+  take a modulus as an argument. And the RSA key printed in RFC 8448
+  section 2 is 1024 bits, not 2048 as this changelog's previous entry and
+  the reference README first said: it is below what a certificate may
+  carry (D-79), which makes it a vector for the primitive and never a
+  chain. Section 11.2, section 11.11, and the reference README are
+  corrected accordingly.
+
 - The model-test runner refuses a run that reached nothing.
   `ModelTest::required` names the states a run's sequences have to arrive
   at and `ModelTest::reached` reads back what the model arrived at; a run
@@ -99,7 +151,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   for a port nobody holds as such. Which of the two senders carries the
   one out, and whether RFC 1122, section 3.2.2 allows an ICMP error for
   the other, are decisions of layers that hold the header fields those
-  rules are about (D-74). Catalog 6.6.45.
+  rules are about (D-84). Catalog 6.6.45.
 
 - `net-tcp`, the state machine of RFC 9293 (D6, 12.6.8). The eleven
   states, active and passive open, and the sequence arithmetic every one
@@ -145,7 +197,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   not the number to send next, which a retransmission timeout has wound
   back; and an acknowledgment is judged against that same highest number,
   so that an acknowledgment of everything that went out before the rewind
-  is good news rather than a segment to argue with (D-75).
+  is good news rather than a segment to argue with (D-85).
 
   Above it a connection table: a segment finds its connection by the
   four-tuple, failing that the connection listening on its destination
@@ -169,6 +221,25 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   section 3.10.7, and the acceptance test of section 3.4 are read from.
 
 ### Changed
+
+- Miri runs the tests of the modules that hold `unsafe`, not every test of
+  the crates around them (D-76). `MIRI_TARGETS` carries a test-name filter
+  per crate: `audhsos-sync` runs whole, being two `unsafe` sites and the
+  cell around them, and `fuzz-support` runs `tests::counters` and
+  `tests::sancov`, which test its two files that hold `unsafe`. Everything
+  else in that crate — the mutators, the corpus, the pool, the dictionary,
+  the options, the generator — is safe Rust that `test --host` and the
+  coverage gate already cover, and interpreting it bought nothing.
+
+  What it cost was the check. `tests::mutate` reached the same global as
+  `tests::sancov` through `sancov::with_trace`, over sixty thousand
+  mutation rounds, and that one module was nearly the whole of the step:
+  `miri` went from 243 seconds to 4, and the full check from just over six
+  minutes to two. The filters are held to the code by
+  `unsafe_budget::miri_gaps`, which reads every product file of a filtered
+  crate and fails the step when one holds `unsafe` and no filter names its
+  module, naming the filter that would close it — so `unsafe` cannot
+  appear in a new module and quietly leave Miri's reach.
 
 - A kernel stack is eight pages, not four, and `Pool::release` no longer
   hands the object back (D-73). Both come out of one measurement, taken

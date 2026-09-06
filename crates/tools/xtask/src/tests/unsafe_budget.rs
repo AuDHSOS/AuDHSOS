@@ -4,8 +4,9 @@
 //! Tests of `crate::unsafe_budget`.
 
 use crate::policy::Kind;
+use crate::policy::MiriTarget;
 use crate::unsafe_budget::is_function_pointer_type;
-use crate::unsafe_budget::{Counts, count, strip_comments_and_strings, violations_for};
+use crate::unsafe_budget::{Counts, count, filter_gap, strip_comments_and_strings, violations_for};
 
 #[test]
 fn unsafe_in_comments_and_strings_is_not_counted() {
@@ -116,4 +117,24 @@ fn unsafe_function_pointer_types_are_not_sites_but_definitions_are() {
     assert!(!is_function_pointer_type(" impl Send for S"));
     assert!(!is_function_pointer_type(" { let x = 1; }"));
     assert!(!is_function_pointer_type(" fnord()"));
+}
+
+#[test]
+fn a_module_holding_unsafe_is_a_gap_unless_a_filter_names_it() {
+    let named = MiriTarget {
+        name: "fuzz-support",
+        filters: &["tests::counters::", "tests::sancov::"],
+    };
+    assert!(filter_gap(&named, "counters").is_none());
+    assert!(filter_gap(&named, "sancov").is_none());
+    let gap = filter_gap(&named, "window").unwrap();
+    assert!(gap.contains("window.rs"), "{gap}");
+    assert!(gap.contains("tests::window::"), "{gap}");
+    assert!(gap.contains("fuzz-support"), "{gap}");
+    // A crate that runs whole needs no filter and can have no gap.
+    let whole = MiriTarget {
+        name: "audhsos-sync",
+        filters: &[],
+    };
+    assert!(filter_gap(&whole, "window").is_none());
 }

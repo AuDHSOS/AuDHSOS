@@ -30,7 +30,7 @@
 //! urgent data and has no interface through which a caller could ask for
 //! it; a segment that carries `URG` is processed for everything else it
 //! carries, which is what RFC 6093 recommends for a receiver that has no
-//! use for the mechanism (D-75).
+//! use for the mechanism (D-85).
 
 use core::fmt;
 

@@ -585,7 +585,7 @@ it is mandatory in both directions, because there is no header checksum
 underneath it to catch a corrupted address (RFC 8200, section 8.1). A
 datagram whose sum comes out zero is sent as all ones in both.
 
-Four things the specification left open, as D-74 decided them:
+Four things the specification left open, as D-84 decided them:
 
 - **The length field is what is believed.** Bytes behind it are padding
   that a link layer left standing — an Ethernet frame is padded to sixty
@@ -659,7 +659,7 @@ is XL.
   incoming resets and SYNs, and a challenge acknowledgment rather than a
   blind teardown.
 
-Five things the specification left open, as D-75 decided them:
+Five things the specification left open, as D-85 decided them:
 
 - **The windows are two byte rings the caller supplied, and a segment out
   of order is written straight to its place in the receive ring.** Its
