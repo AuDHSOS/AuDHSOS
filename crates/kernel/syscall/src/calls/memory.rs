@@ -338,7 +338,7 @@ pub fn split<E: Environment, const NP: usize, const NT: usize, const NM: usize, 
 /// This is the operation that lets memory recover. Without it an object can
 /// only ever become smaller, so a server that hands memory out and takes it
 /// back grinds its objects down to single pages and can never serve a large
-/// request again — which is fragmentation with no floor under it (D-88).
+/// request again — which is fragmentation with no floor under it (D-90).
 ///
 /// Both objects must be held by the caller and by nothing else: a mapping
 /// is a reference, and an object that something maps may not be dissolved

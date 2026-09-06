@@ -158,7 +158,7 @@ Deliverables: `user-sys-x86_64`, `user-rt` with the safe allocator,
 `user-proto`, `user-loader`, `server-init`, `server-name`,
 `server-console` over `driver-uart16550`, `server-memory`, `app-hello`,
 `app-checks`, `app-faulter`; the kernel starts the root task from an ELF
-of the boot image (D-90); boot image with tar archive; the kernel gives
+of the boot image (D-92); boot image with tar archive; the kernel gives
 COM1 up when the userland takes it, so the handover and not a feature
 flag decides who writes.
 
@@ -167,7 +167,7 @@ Tests: catalog 6.6.12, 6.6.13 (tar items) with fuzz targets, 6.6.22,
 
 Acceptance: `sh tools/xtask.sh run --release` prints the greeting through
 the userland console driver; `sh tools/xtask.sh test --e2e` passes and the
-root task ends the machine itself (D-92); `check` runs it.
+root task ends the machine itself (D-94); `check` runs it.
 
 ## 8.10 Phase 8: Consolidation
 
@@ -326,9 +326,9 @@ their bytes are later work (8.14).
 | D4 | `net-ipv6` | L | implemented: the header and its extension chain bounded in headers and in bytes, `ICMPv6` summed over the pseudo-header, Neighbor Discovery into the cache of `net-eth`, router advertisements with SLAAC and the DNS servers of RFC 8106, duplicate address detection, and path MTU discovery in the send path |
 | D5 | `net-udp` | S | implemented: datagrams under the checksum rule of each family, a fixed socket table with wildcard and address-specific bindings, ephemeral ports drawn as RFC 6056 asks, and a receive ring of self-describing records in the caller's memory |
 | D6 | `net-tcp` | XL | implemented: the eleven states of RFC 9293 with active and passive open, the sequence arithmetic they are decided by, send and receive windows over caller-supplied rings with reassembly in place, the RFC 6298 timer with Karn's rule, Reno congestion control, delayed acknowledgments, a persist timer, the reset checks of RFC 5961, and a connection table that answers a segment to a closed port; two instances verified back to back over a network double that delays, duplicates, reorders, and drops |
-| D7 | `net-dns`, `net-dhcp` | M | name resolution over `A` and `AAAA`, and IPv4 address configuration as a state machine |
-| D8 | `net-http` | S | an HTTP/1.1 client that rejects the smuggling forms |
-| D9 | `net-stack` | M | one interface, one `poll`, one `poll_at`, and the address selection of RFC 6724 |
+| D7 | `net-dns`, `net-dhcp` | M | implemented: the RFC 1035 message format with name compression bounded three ways, a stub resolver that asks `A` and `AAAA` at once over `net-udp` with retry, server rotation and a deadline, alias chains followed across messages under one budget of eight; and the RFC 2131 client with the four-message exchange, the strict option walk of RFC 2132, and the lease timers with T1 renewal, T2 rebinding and expiry |
+| D8 | `net-http` | S | implemented: the request writer with every field checked before a byte of it goes down, and an incremental response decoder that takes one line of the head per call, decides its framing once under RFC 9112 section 6.3, and refuses every message that two parsers could read differently |
+| D9 | `net-stack` | L | implemented: one interface, one `poll`, one `poll_at`, generation-checked handles, an outgoing frame queue in the caller's memory, the demultiplexer down both families, DHCP and router advertisements wired to the address table and the routes, duplicate address detection, the resolver, and the address selection of RFC 6724 |
 | D10 | integration | - | not scheduled: virtio-net driver, network server, socket protocol, entropy system call, TLS transport (jointly with T8 of 8.17) |
 
 The stack carries IPv4 and IPv6 together (D-69), which supersedes the

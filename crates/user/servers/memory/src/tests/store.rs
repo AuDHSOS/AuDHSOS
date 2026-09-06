@@ -393,7 +393,7 @@ fn exhaustion_is_an_error_and_a_release_makes_the_request_work_again() {
 
 #[test]
 fn two_released_neighbours_are_handed_out_as_one() {
-    // The item of the catalog that `memory_merge` was added for (D-88).
+    // The item of the catalog that `memory_merge` was added for (D-90).
     let (mut store, mut kernel) = adopted(4);
     let first = store
         .allocate(&mut kernel, 7, 2 * PAGE_SIZE, PAGE_SIZE)

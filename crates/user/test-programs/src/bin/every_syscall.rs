@@ -344,7 +344,7 @@ fn implemented(log: &mut Log, process: u64, thread: u64, memory: u64, bad: u64) 
     // Two objects this program alone holds, cut apart and joined again.
     // `memory` itself cannot be joined to anything: the image holds a
     // handle to it as well, and an object something else holds may not be
-    // dissolved under it (D-88).
+    // dissolved under it (D-90).
     let tail = log.run(Syscall::MemorySplit, &[half, PAGE]);
     log.run(Syscall::MemoryMerge, &[half, tail]);
     // And an object joined to itself, which no pair of neighbours is.

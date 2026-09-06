@@ -82,8 +82,8 @@ AuDHSOS/
 │   │   ├── ipv6/              net-ipv6: IPv6, extension headers, ICMPv6, Neighbor Discovery, SLAAC
 │   │   ├── udp/               net-udp: UDP datagrams, the socket table, the receive ring
 │   │   ├── tcp/               net-tcp: the RFC 9293 state machine, its timers, Reno congestion control
-│   │   ├── dns/               net-dns: message format and resolver state machine
-│   │   ├── dhcp/              net-dhcp: client state machine and lease timers
+│   │   ├── dns/               net-dns: the RFC 1035 message format, name compression, the stub resolver
+│   │   ├── dhcp/              net-dhcp: the RFC 2131 client state machine, its options, the lease timers
 │   │   ├── http/              net-http: HTTP/1.1 client encoding and parsing
 │   │   └── stack/             net-stack: interface, demultiplexing, poll
 │   └── tools/
@@ -150,10 +150,10 @@ AuDHSOS/
 | `net-ipv6` | n2 | all | no | yes, fuzz | `net-ip`, `net-eth`, `net-wire`, `audhsos-time`, `audhsos-collections`; `test-support` as a dev-dependency |
 | `net-udp` | n3 | all | no | yes | `net-wire`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `net-tcp` | n3 | all | no | yes, fuzz | `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
-| `net-dns` | n4 | all | no | yes, fuzz | `net-udp` and below, `crypto-rng` |
-| `net-dhcp` | n4 | all | no | yes | `net-udp` and below, `crypto-rng` |
-| `net-http` | n4 | all | no | yes, fuzz | `net-wire` |
-| `net-stack` | n5 | all | no | yes | every `net-` crate |
+| `net-dns` | n4 | all | no | yes, fuzz | `net-udp`, `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
+| `net-dhcp` | n4 | all | no | yes | `net-udp`, `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
+| `net-http` | n4 | all | no | yes, fuzz | `net-wire`; `test-support` as a dev-dependency |
+| `net-stack` | n5 | all | no | yes | every `net-` crate, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
 | `fuzz-support` | dev | host | allowlisted | yes, and Miri over `counters` and `sancov`, which hold its `unsafe` | - |
 | `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `fs-fat`, `audhsos-encoding`, `audhsos-symbols` |
@@ -306,7 +306,7 @@ still has none.
 | UART register handling in the kernel debug console and in the userland console driver | `driver-uart16550` over a port access trait; two adapters (direct port I/O, `IoPortRange` system calls) |
 | i8042 register handling and PS/2 decoding | `driver-i8042` over its own port access trait, following the UART pattern; one adapter over `IoPortRange` system calls |
 | Pixel operations in the display server and in applications | `gfx`: one surface type, one font, one damage tracker; the display server and applications draw with the same code |
-| System call numbers, names, argument counts, kernel dispatch | one declarative table in `audhsos-abi` (a `syscalls!` macro) consumed by the kernel dispatcher; the wrappers of `user-sys-x86_64` are written out by hand and a constant assertion holds them to the same table (D-90) |
+| System call numbers, names, argument counts, kernel dispatch | one declarative table in `audhsos-abi` (a `syscalls!` macro) consumed by the kernel dispatcher; the wrappers of `user-sys-x86_64` are written out by hand and a constant assertion holds them to the same table (D-92) |
 | Object types, their rights masks, and `TryFrom<u32>` conversions | one declarative table in `audhsos-abi` |
 | Error mapping | one `From` implementation per crate pair, tested by a table |
 | Test doubles | one implementation in `kernel-hal-api` behind `test-doubles` |

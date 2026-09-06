@@ -87,7 +87,7 @@ fn clear<E: Environment, const NP: usize, const NT: usize, const NM: usize, cons
     machine.environment.release_kernel_stack(stack);
     // The frame goes back where it came from: to the reserve, or to the
     // memory object the creator supplied, whose mapping was a reference to
-    // it (D-89).
+    // it (D-91).
     match buffer_object {
         Some(object) => {
             let _gone = machine.objects.memory.release(object);

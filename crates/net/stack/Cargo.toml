@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "net-stack"
+description = "The facade of the network stack: one interface, one poll, generation-checked handles"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+audhsos-collections.workspace = true
+audhsos-time.workspace = true
+crypto-rng.workspace = true
+net-dhcp.workspace = true
+net-dns.workspace = true
+net-eth.workspace = true
+net-ip.workspace = true
+net-ipv6.workspace = true
+net-tcp.workspace = true
+net-udp.workspace = true
+net-wire.workspace = true
+
+[dev-dependencies]
+crypto-rng = { workspace = true, features = ["test-doubles"] }
+test-support.workspace = true
+
+[lints]
+workspace = true

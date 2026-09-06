@@ -102,7 +102,7 @@ pub fn release(gate: &mut Gate, server: EndpointHandle, object: MemoryHandle) ->
     // after a release the object has two names: the server's and this one.
     // Giving this one up is what makes the release a release; a server that
     // still shares the object with a client cannot join it to its
-    // neighbours (D-88).
+    // neighbours (D-90).
     if outcome.is_ok() {
         gate.handle_close(object.handle())?;
     }

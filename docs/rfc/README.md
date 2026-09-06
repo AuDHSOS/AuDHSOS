@@ -18,11 +18,15 @@ arrangement.
 | `rfc792.txt` | RFC 792, *Internet Control Message Protocol*, J. Postel, September 1981 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc792.txt` | 29186 | `58714393ded142bacf188d7e8977eef98f4110c4c87ac94595f750df5664c2c6` |
 | `rfc826.txt` | RFC 826, *An Ethernet Address Resolution Protocol*, D. C. Plummer, November 1982 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc826.txt` | 21556 | `01bc62fe6a37e90f1246ac43e8e145f1322b4ed1474836145c3da93d2bd3c8a6` |
 | `rfc894.txt` | RFC 894, *A Standard for the Transmission of IP Datagrams over Ethernet Networks*, C. Hornig, April 1984 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc894.txt` | 5697 | `be88b9301e53f986aca3a0e55e488d1d79bae3f88fe3f257640397bc089e7035` |
+| `rfc1035.txt` | RFC 1035, *Domain Names — Implementation and Specification*, P. Mockapetris, November 1987 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc1035.txt` | 122549 | `d14ae809fc9b41bbcae26bb38c937c9515808b944f3252b00de9fe0e95f4fdfb` |
 | `rfc1071.txt` | RFC 1071, *Computing the Internet Checksum*, R. Braden, D. Borman, C. Partridge, September 1988 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1071.txt` | 53524 | `e10dfd6816447843d47a7f1b990eba756a791a6308fd5b698a6276075a8e4f9b` |
 | `rfc1122.txt` | RFC 1122, *Requirements for Internet Hosts — Communication Layers*, R. Braden (ed.), October 1989 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1122.txt` | 289148 | `9f526e6bebc868324fedb90aebbcf6e5b15c53fd373ca5d5ce1c2cdcd264e04f` |
+| `rfc2131.txt` | RFC 2131, *Dynamic Host Configuration Protocol*, R. Droms, March 1997 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2131.txt` | 113738 | `a043b705785b81762505ded4cf71d61392b2b1da2b4ce1e32c13bc984de5f4a5` |
+| `rfc2132.txt` | RFC 2132, *DHCP Options and BOOTP Vendor Extensions*, S. Alexander, R. Droms, March 1997 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2132.txt` | 63670 | `0cfbedab7cfe859624ae78c07a722bc51bf8ea123a7b43b099fc546ddcf00b90` |
 | `rfc2313.txt` | RFC 2313, *PKCS #1: RSA Encryption Version 1.5*, B. Kaliski, March 1998 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2313.txt` | 37777 | `2d93e9f0f02343a29a8f64ad507e1779f65377319ed4945b6ac3dcb1f74fd69c` |
 | `rfc2464.txt` | RFC 2464, *Transmission of IPv6 Packets over Ethernet Networks*, M. Crawford, December 1998 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc2464.txt` | 12725 | `f9554329ef1f4e093513e5b6f7af00bb5d206710e0c61d08bd578fa5f00aee9a` |
 | `rfc3279.txt` | RFC 3279, *Algorithms and Identifiers for the Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile*, W. Polk, R. Housley, L. Bassham, April 2002 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc3279.txt` | 53833 | `6d3f19f18e17fa1c68da5aaf4021327748fabca840d7300443b77357a1fc1614` |
+| `rfc3596.txt` | RFC 3596, *DNS Extensions to Support IP Version 6*, S. Thomson, C. Huitema, V. Ksinant, M. Souissi, October 2003 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc3596.txt` | 14093 | `2a3d44744086f66a7ba00e7d282dc1f740a3e0b63b4b6f7c763ffc0e61ee1dbb` |
 | `rfc4055.txt` | RFC 4055, *Additional Algorithms and Identifiers for RSA Cryptography for use in the Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile*, J. Schaad, B. Kaliski, R. Housley, June 2005 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc4055.txt` | 57479 | `b8a1ef3fb135c32aed4eee121264f3ec83a46def746c8fe68e05bd1b60324e9a` |
 | `rfc4291.txt` | RFC 4291, *IP Version 6 Addressing Architecture*, R. Hinden, S. Deering, February 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4291.txt` | 52897 | `4d58dff6b432d5d524bf3a3b7f0337a4177fa65f92ed72f2a92e97b471de48b2` |
 | `rfc4443.txt` | RFC 4443, *Internet Control Message Protocol (ICMPv6) for the Internet Protocol Version 6 (IPv6) Specification*, A. Conta, S. Deering, M. Gupta (ed.), March 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4443.txt` | 48969 | `f20d1de8878e1142000bfeaa3ad1b0540fab7653a395cf7b07e81d2da2f650bf` |
@@ -33,20 +37,23 @@ arrangement.
 | `rfc5758.txt` | RFC 5758, *Internet X.509 Public Key Infrastructure: Additional Algorithms and Identifiers for DSA and ECDSA*, Q. Dang, S. Santesson, K. Moriarty, D. Brown, T. Polk, January 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5758.txt` | 15834 | `4d02628ff0875a1960d34be584a68f88528b96242bdc5a05a40a29ef01cf1532` |
 | `rfc5903.txt` | RFC 5903, *Elliptic Curve Groups modulo a Prime (ECP Groups) for IKE and IKEv2*, D. Fu, J. Solinas, June 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5903.txt` | 29175 | `939fab548a6e6bb49a5b3c4dd24a3c5df54a46645447b2d6f4df4fd88ff2d69f` |
 | `rfc5952.txt` | RFC 5952, *A Recommendation for IPv6 Address Text Representation*, S. Kawamura, M. Kawashima, August 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5952.txt` | 26570 | `c75e82c5f53bcec8148820fadf0d65935336ee2031fa6ce10504797ed4c1979d` |
+| `rfc6724.txt` | RFC 6724, *Default Address Selection for Internet Protocol Version 6 (IPv6)*, D. Thaler (ed.), R. Draves, A. Matsumoto, T. Chown, September 2012 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc6724.txt` | 74407 | `deab574626b2bc886748401617f29a33cf97927f3690dba2fb183d31315741f6` |
 | `rfc6979.txt` | RFC 6979, *Deterministic Usage of the Digital Signature Algorithm (DSA) and Elliptic Curve Digital Signature Algorithm (ECDSA)*, T. Pornin, August 2013 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc6979.txt` | 140386 | `456e8f17558fdbd206f968b96fc6f1b4a71ea331ab30ad17f711ab3adaa7d701` |
 | `rfc8017.txt` | RFC 8017, *PKCS #1: RSA Cryptography Specifications Version 2.2*, K. Moriarty (ed.), B. Kaliski, J. Jonsson, A. Rusch, November 2016 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc8017.txt` | 154696 | `1e72dc473d18df3fc5598cdc12795a9f18f36f1aef15abc23a55eb0d58151d11` |
 | `rfc8106.txt` | RFC 8106, *IPv6 Router Advertisement Options for DNS Configuration*, J. Jeong, S. Park, L. Beloeil, S. Madanapalli, March 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8106.txt` | 43092 | `9a44a5e06d36506da358fa0d62d02f484dd76b4e6ca75920ebda2cfed315ef2f` |
 | `rfc8200.txt` | RFC 8200, *Internet Protocol, Version 6 (IPv6) Specification*, S. Deering, R. Hinden, July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8200.txt` | 93162 | `371ae3f133d562db5d6385e6def4ca9914c4f831be228ea7779fd28799c2f490` |
 | `rfc8201.txt` | RFC 8201, *Path MTU Discovery for IP version 6*, J. McCann, S. Deering, J. Mogul, R. Hinden (ed.), July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8201.txt` | 42751 | `96c2ea7ac1bf5810f6b817d4ac372a35f68231d2bd0e2675740f1268eb9ac752` |
 | `rfc8448.txt` | RFC 8448, *Example Handshake Traces for TLS 1.3*, M. Thomson, January 2019 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8448.txt` | 159343 | `6564d1376d1ec744fc7a9993da15ebc1b9be361908b166091f47ef605c537fba` |
+| `rfc9110.txt` | RFC 9110, *HTTP Semantics*, R. Fielding (ed.), M. Nottingham (ed.), J. Reschke (ed.), June 2022 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc9110.txt` | 502941 | `21c1cdce6ab0e5509b04d84a28000836c7a087cf786efe6f04877ebfff47232a` |
+| `rfc9112.txt` | RFC 9112, *HTTP/1.1*, R. Fielding (ed.), M. Nottingham (ed.), J. Reschke (ed.), June 2022 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc9112.txt` | 109913 | `e4f426bac6206b67fdf9e0da826154f70588db2133a0a86b15cde4ff725d8937` |
 | `rfc9293.txt` | RFC 9293, *Transmission Control Protocol (TCP)*, W. Eddy, Ed., August 2022 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc9293.txt` | 263696 | `6d9ac8be4b0286f8c3d337addf442b2eb6a9b14e1366594ea7fbc273f93dc2d9` |
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
-including the page breaks: 2887, 1218, 470, 171, 1417, 6844, 1067, 395,
-1515, 1403, 1403, 1347, 5435, 1683, 1123, 339, 451, 899, 787, 4427, 4371,
-1067, 2355, 1067, 3811, and 5576 lines respectively, in the order of the
-table.
+including the page breaks: 2887, 1218, 470, 171, 3077, 1417, 6844, 2523,
+1907, 1067, 395, 1515, 451, 1403, 1403, 1347, 5435, 1683, 1123, 339, 451,
+899, 787, 1795, 4427, 4371, 1067, 2355, 1067, 3811, 10785, 2461, and 5576
+lines respectively, in the order of the table.
 Every one was fetched twice and the two fetches agreed.
 
 ## Terms
@@ -58,27 +65,29 @@ carries a notice of the form
 > document authors. All rights reserved.
 
 with the year 2009 for RFC 5480, 2010 for RFC 5756, RFC 5758, RFC 5903,
-and RFC 5952, 2013 for RFC 6979, 2016 for RFC 8017, 2017 for RFC 8106,
-RFC 8200, and RFC 8201, 2019 for RFC 8448, and 2022 for RFC 9293. Those
-twelve are subject to BCP 78 and the IETF Trust's Legal Provisions
-relating to IETF Documents, which permit reproduction in full.
+and RFC 5952, 2012 for RFC 6724, 2013 for RFC 6979, 2016 for RFC 8017,
+2017 for RFC 8106, RFC 8200, and RFC 8201, 2019 for RFC 8448, and 2022 for
+RFC 9110, RFC 9112, and RFC 9293. Those fifteen are subject to BCP 78 and
+the IETF Trust's Legal Provisions relating to IETF Documents, which permit
+reproduction in full.
 
 RFC 4055 stands between the two forms. Its statement names the Internet
 Society and the year 2005, and then refers the reader to BCP 78 in the
 same words the later ones use, so it is read here as the group above
 rather than the group below.
 
-The thirteen older ones carry the notice of their time, each in a full
+The seventeen older ones carry the notice of their time, each in a full
 copyright statement at the end that permits reproduction in whole
 provided the notice travels with it. RFC 4862 and RFC 4861 have the IETF
 Trust's of 2007; RFC 4443 and RFC 4291 the Internet Society's of 2006;
-RFC 3279 the Internet Society's of 2002; RFC 2464 and RFC 2313 the
-Internet Society's of 1998; and RFC 1122 carries that statement in the
-form of 1989. RFC 1071, RFC 894, RFC 826, RFC 792, and
-RFC 791 carry no notice at all: RFC 1071 states unlimited distribution in
-its own Status of This Memo section, and the four from the early eighties
-predate even that form, under the practice the RFC Editor states for the
-series as a whole.
+RFC 3596 the Internet Society's of 2003; RFC 3279 the Internet Society's
+of 2002; RFC 2464 and RFC 2313 the Internet Society's of 1998; and
+RFC 1122 carries that statement in the form of 1989. RFC 1071, RFC 1035,
+RFC 2131, RFC 2132, RFC 894, RFC 826, RFC 792, and RFC 791 carry no notice
+at all. Each of the first four states unlimited distribution in its own
+Status of This Memo section, and the four from the early eighties predate
+even that form, under the practice the RFC Editor states for the series as
+a whole.
 
 Code components extracted from an RFC carry the Simplified BSD Licence;
 this project extracts test vectors, which it transcribes into Rust source
@@ -264,6 +273,122 @@ What it does not carry is the two mechanisms that surround the state
 machine and are specified elsewhere: the retransmission timer of RFC 6298
 and the congestion control of RFC 5681. This implementation follows both,
 and cites them by section where it does.
+
+## The two documents of DNS
+
+**RFC 1035** is the format and the resolver: the header of section 4.1.1,
+the question of 4.1.2, the resource record of 4.1.3, and the compression
+of 4.1.4, with the size limits of section 2.3.4 and the case rule of
+2.3.3. It is kept for four passages that a summary cannot stand in for.
+Section 4.1.4 states that a pointer replaces "a list of labels at the end
+of a domain name" — the end, which is why a pointer is the last thing in a
+name and why the name goes on where the pointer stood and not where it
+pointed. Section 2.3.4 gives the two numbers a reader has to enforce while
+it assembles a name and not afterwards: 63 for a label, 255 for a name.
+Section 3.3.1 gives `CNAME` a body that is a name, which is what makes the
+alias chain a chain and not a string. And section 4.2.1 puts a UDP answer
+at 512 bytes, which is the whole of why the truncation bit exists and the
+whole of what this resolver cannot do about it (there is no TCP here).
+
+What the document does not carry is the rule this crate follows for
+believing a response. RFC 1035 was written when a resolver's only worry
+was a lost datagram; the four things that have to agree — the id, the
+question, the source address and the source port — are RFC 5452, and only
+the last of them is a real addition, the other three being the document's
+own matching rules read as a security property. That memo is cited where
+it is followed and is not kept here, because it states a requirement and
+gives nothing to check against.
+
+**RFC 3596** is three pages of the four that matter: the `AAAA` type is
+28, its body is sixteen bytes in network order, and a query for it is a
+query like any other. It obsoletes RFC 1886, which had the same type
+number and a different `IP6.INT` reverse zone that nothing in this system
+asks about. It is kept rather than summarised because the alternative is a
+constant with no source, and because section 2.2 is what says the body is
+the address itself and not a text form of it.
+
+## The two documents of DHCP
+
+**RFC 2131** is the protocol: the message of section 2, the exchange of
+section 3.1, the state machine of figure 5, and the client behaviour of
+section 4. Three passages of it are the reason the file is here rather
+than a summary. Section 4.1 states the deadlock the BROADCAST flag exists
+for, in the words of a document that had watched it happen — a client that
+cannot accept a unicast datagram before it is configured cannot be told
+what to configure — and it is the source for the decision to set the flag
+until the address stands. The same section gives the backoff in numbers:
+four seconds, doubled to sixty-four, each delay moved by a uniform value
+between minus one and plus one second. And section 4.4.5 gives the two
+lease timers their defaults — half the lease and seven eighths of it — and
+the retransmission rule that replaces the backoff once a lease exists:
+half of what is left until the next deadline, never below sixty seconds.
+
+**RFC 2132** is the option catalog. What is taken from it is small — the
+magic cookie of section 2, pad and end of 3.1 and 3.2, the subnet mask of
+3.3, the routers of 3.5, the name servers of 3.8, and the seven DHCP
+options of section 9 — but the numbers are only in this document, and the
+shape of the walk is only in section 2: code, length, body, with two codes
+that break that shape and are named there and nowhere else. Section 3.5
+also states that the routers come in order of preference, which is why the
+first of them is the one used and the rest are read past.
+
+What is deliberately not read is the option overload of section 9.3, which
+lets a server put options in the `sname` and `file` fields when the option
+field runs out. The six options a lease needs come to under forty bytes,
+and the option field holds three hundred.
+
+## Why RFC 6724
+
+It is the only document that says which of a host's addresses a packet
+leaves with, and it is the reason a dual-stack host reaches a name over
+the family it should. What is kept here rather than summarised is the
+policy table of section 2.1 and the two rule lists of sections 5 and 6:
+the table is nine rows of numbers that exist nowhere else, and the rules
+are an ordered list where the order is the whole of the meaning.
+
+One thing about it had to be read rather than assumed. The table is
+written over IPv6 prefixes with IPv4 present as `::ffff:0:0/96`, the
+mapped range — and D-69 refuses mapped addresses outright, so the table as
+written cannot be applied to an IPv4 address of this system at all. What
+the document actually needs from that row is a precedence and a label for
+the IPv4 family, which is what this implementation reads it as (D-88).
+Section 3.1 settles the other thing a summary gets wrong: an IPv4 private
+address has *global* scope, and only the loopback and link-local ranges do
+not.
+
+Happy Eyeballs (RFC 8305) is not here and is not needed: this stack tries
+a name's addresses in the order this document gives and does not race
+them, which section 1 of RFC 8305 is itself a departure from.
+
+## The two documents of HTTP
+
+**RFC 9112** is the wire format: the request line, the field lines, the
+chunked coding of section 7.1, and — the reason the file is here — the
+message body length of section 6.3. That section is an ordered list of
+eight rules, and an implementation that reads them out of order reads a
+different protocol. Point 3 is the one this client departs from and says
+so: it lets a recipient prefer `Transfer-Encoding` over `Content-Length`
+and states in the same paragraph that such a message ought to be handled
+as an error. This client does the latter, because a preference rule is a
+second reading with a tie-breaker rather than one reading, and two
+readings of one message is the whole of request smuggling. Point 8 is what
+makes `Decoder::finish` necessary: a response with no declared length runs
+until the connection closes, so a caller has to say when it did.
+
+Section 5.2 is the other passage read at the source. It has a user agent
+*replace* an obsolete line fold with spaces rather than refuse the
+message; this client refuses it, and the deviation is recorded rather than
+discovered.
+
+**RFC 9110** is the grammar and the semantics. What is taken from it is
+small and exact: the `tchar` set of section 5.6.2, which is what a field
+name may be made of; the field value of section 5.5, which is visible
+ASCII, the space and the tab, with `obs-text` allowed and deprecated in
+one sentence — this client refuses `obs-text`, which is what makes every
+value it hands out text and not bytes; the case-insensitive comparison of
+field names in section 5.1; and the status classes of section 15, of which
+the five redirects a client may follow are 301, 302, 303, 307 and 308 and
+not the whole 3xx range.
 
 ## The four documents of P-384
 

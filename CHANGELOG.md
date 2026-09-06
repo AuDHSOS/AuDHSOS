@@ -29,7 +29,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   is a false statement in the mouth of a userland server. `OutOfMemory` is
   the twenty-sixth error of the interface.
 
-- A bound interrupt line is armed (D-91). `interrupt_create` writes a masked
+- A bound interrupt line is armed (D-93). `interrupt_create` writes a masked
   redirection entry, because a line the plan routes but no notification
   names would assert into nothing; nothing unmasked it afterwards but
   `interrupt_ack`, which a driver reaches only after its first interrupt. A
@@ -37,7 +37,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   binding is the moment the line has somewhere to go, and it is where the
   line is armed; from there the cycle of 2.7 runs as it is written.
 
-- An answer consumes the reply handle with the reply object (D-91). 2.6 says
+- An answer consumes the reply handle with the reply object (D-93). 2.6 says
   `ipc_reply` consumes the reply object, and it did — but the handle that
   named it stayed in the server's table, pointing at a destroyed object and
   holding the reference that would have let the object go back to its pool.
@@ -99,7 +99,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
-- The root task is an ELF and no longer a flat binary (D-90). A flat image
+- The root task is an ELF and no longer a flat binary (D-92). A flat image
   says nothing about which of its pages may be written and which may be
   executed, so either the whole program is writable and executable or it
   cannot hold a variable. The kernel reads it through `audhsos-elf`, which
@@ -107,7 +107,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   permissions its header names.
 
 - The forty-two system call wrappers of `user-sys-x86_64` are written out
-  one by one rather than generated from the table (D-90). What a wrapper
+  one by one rather than generated from the table (D-92). What a wrapper
   does with the buffer is the whole of the seam between a program and the
   kernel, and a reader who cannot see it cannot check it. A constant
   assertion holds them to the table: `COVERED` lists what exists,
@@ -156,7 +156,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
-- The system runs end to end, and the run ends itself (D-92). `app-hello`
+- The system runs end to end, and the run ends itself (D-94). `app-hello`
   looks the console up, greets, reads a line back, says it again, and then
   reports `Finished` to the process that started it; the root task, when
   every child that reports has reported, takes the port of the exit device
@@ -202,7 +202,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   waits on the interrupt and sends the byte it took to the first under a
   badge of its own. Nothing is held by both, so nothing needs a lock.
 
-- `thread_create` takes the page for the thread's IPC buffer (D-89). The
+- `thread_create` takes the page for the thread's IPC buffer (D-91). The
   fifth argument was reserved and had to be zero; it is now a memory object
   of one page, and zero still means the kernel takes a frame out of its own
   reserve. Without it the root task cannot do what 2.10 has always required
@@ -280,7 +280,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   grinds its objects down to single pages and can never serve a large
   request again: fragmentation with no floor under it. Catalog item 6.6.23
   had asked since it was written that two released neighbours be handed out
-  as one, and with a kernel that only splits, that is unsatisfiable (D-88).
+  as one, and with a kernel that only splits, that is unsatisfiable (D-90).
 
   The const assertion in `user-sys-x86_64` earned its keep on the first
   build after the table grew: it named the missing wrapper before anything
@@ -792,6 +792,200 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   thousand and ninety-six bits. The round trip of catalog 6.6.55 signs
   with the private exponent of the key RFC 8448, section 2 prints and
   verifies with its public one.
+
+- `net-http`, the HTTP/1.1 client (D8, 12.6.11). A request written into
+  the caller's buffer with every field checked before a byte of it goes
+  down: a value carrying a carriage return is a value that ends its field
+  and begins another, so a client that writes one has let whoever supplied
+  it write a header of its own choosing. `Host` and `Content-Length` come
+  from the fields of the request and never from the caller's header list,
+  because RFC 9112, section 3.2 has one `Host` in a message and a second
+  length is a second framing.
+
+  The response decoder takes at most one line of the head per call. That
+  is what keeps a byte of the body from ever being copied into the buffer
+  the head is assembled in, and it is what makes a response split at any
+  boundary decode to what the whole of it decodes to — which is a property
+  test over every split there is, not a hope.
+
+  Framing is decided once, in the order of RFC 9112, section 6.3, and
+  where that list leaves two readings this client takes neither. Point 3
+  lets a recipient prefer `Transfer-Encoding` over `Content-Length` and
+  says in the same paragraph that such a message ought to be handled as an
+  error; this one does the latter, because a preference rule is a second
+  reading with a tie-breaker rather than one reading, and two readings of
+  one message is the whole of request smuggling. Two `Content-Length`
+  fields that disagree go the same way; two that agree are the value they
+  agree on. The obsolete line folding of section 5.2 is refused although
+  that section has a user agent unfold it, for the same reason: a folded
+  value is a value whose length is not its line's length.
+
+  What is left is four framings and no ambiguity — no body, chunked, a
+  declared length, and a body that ends at the close, which is why the
+  caller has to say when it did. Redirects are reported with their
+  location and never followed (D-88). Catalog 6.6.49, fuzz target
+  `http_response`.
+
+- `net-stack`, the facade (D9, 12.6.12). One interface, one `poll`, one
+  `poll_at`, and under them every other crate of the track: frames and
+  ARP, both internet layers with their shared reassembler and their two
+  `ICMP`s, UDP sockets and TCP connections, address configuration by DHCP
+  and by router advertisement with duplicate address detection, and the
+  resolver. A server process is a loop around `poll` and nothing else.
+
+  The frames that have been written wait in a queue in memory the caller
+  supplied, and the layers are asked for new work only when that queue is
+  empty. That is what makes a transmit buffer of one frame enough:
+  nothing is produced while there is a backlog, so nothing is lost and
+  nothing overtakes anything. One received frame can make several go
+  out — an answer to it, and the datagram that was waiting for the
+  neighbor it just taught the cache about, cut into as many pieces as the
+  MTU needs — and a driver with a full ring can take none of them at that
+  moment.
+
+  A handle is an index and the generation of the slot it names. A bare
+  index is a handle that comes back to life — the socket is closed, the
+  slot is used again, and a caller holding the old number is reading
+  somebody else's socket with no error anywhere — and the answer is the
+  kernel's. A slot that has been through every generation hands out no
+  more handles, which costs one slot of the table and is the only answer
+  that keeps the guarantee.
+
+  Two limits are the caller's and the rest are this host's. Sockets and
+  connections are what an application sizes; routes, neighbors, held
+  datagrams, reassembly buffers and prefixes are properties of a host with
+  one interface, whatever runs on it, so they are constants that say what
+  they are rather than five more numbers in a type.
+
+  Neighbor Discovery does not go through either sender, and the reason is
+  the hop limit: RFC 4861, section 7.1 requires 255 and that is the whole
+  of what makes the protocol link-local, so a message written with the
+  default is one every receiver is right to throw away. It needs no route
+  and no neighbor resolved either — which is fortunate, because resolving
+  one is what it is for. The address configuration client is the same case
+  for the same reason: a host with no address has no route.
+
+  Connecting to a list of addresses and connecting to a name are two
+  operations. `connect_to_any` tries a list in the order it is given,
+  moving on when a candidate times out or is reset; `connect_to_name`
+  resolves, orders what came back by RFC 6724, and hands that list to the
+  same loop. They are not raced: Happy Eyeballs is a policy about how much
+  of somebody's network to spend on a guess and belongs above a stack. The
+  policy table of RFC 6724 is written over IPv6 prefixes with IPv4
+  standing in as the mapped range, which D-69 refuses outright, so that
+  one row is read as the row of the IPv4 family rather than by forming an
+  address the rest of the stack would reject (D-88). Catalog 6.6.50.
+
+- RFC 6724, RFC 9110, and RFC 9112 join the reference documents under
+  `docs/rfc/`, each fetched twice and recorded with its checksum. They are
+  what D8 and D9 read: the address selection, the HTTP semantics, and the
+  HTTP/1.1 message syntax. The README gains a section for the first and
+  one for the other two.
+
+  Three passages are why the files are here rather than a summary of them.
+  RFC 9112, section 6.3 is an ordered list of eight rules where the order
+  is the whole of the meaning, and its third rule states the error this
+  client makes of a double framing in the same words this changelog does.
+  RFC 6724, section 3.1 says an IPv4 private address has *global* scope,
+  which is the opposite of what a reader guesses. And its policy table
+  turned out to be unusable as written for this system: it keys IPv4 by
+  the mapped range D-69 refuses, so what the row means here had to be read
+  out of the document rather than assumed.
+
+- `net-dns`, the message format of RFC 1035 and a stub resolver over it
+  (D7, 12.6.9). A name is read with compression and written without it,
+  and the read is bounded three times over — only the last of the three
+  being about the bytes that arrived. A compression pointer must point
+  strictly backwards, so the walk provably moves towards the front of the
+  message and can never return to where it has been; the number of jumps
+  is bounded besides, because a chain of pointers that yields no label is
+  work no encoder asks for; and the name being assembled is bounded at the
+  255 bytes of RFC 1035, section 2.3.4, which is what a message trying to
+  be expensive runs into first. A pointer loop needs a pointer forwards
+  somewhere in it, so the first bound catches every loop there is and the
+  other two are what keep an expensive name from being merely legal.
+
+  A decoded name is a value of its own and not a borrow. It cannot be one:
+  a compressed name is not contiguous in the bytes it arrived in. And it
+  must not be one: the resolver holds the name it is asking across the
+  datagrams it asks in, by which time the message is gone. `A`, `AAAA` and
+  `CNAME` are decoded, every other type and every class but `IN` is
+  carried as the bytes of its body and stepped over, and comparison
+  ignores ASCII case as section 2.3.3 requires.
+
+  The resolver asks both types at once, each with its own transaction id,
+  its own attempt counter and its own place in the server rotation, under
+  one deadline, so a family that never answers costs its own attempts and
+  nothing more. A response is believed only when four things agree — the
+  source address is one of this resolver's servers, the source port is 53,
+  the id is the one that went out, and the question section is the
+  question that was asked — and the id is kept across retries, because a
+  fresh one per retry makes every answer that is merely late unusable and
+  leaves an attacker the same window. An alias chain is followed inside
+  the answer it arrived in, and where it ends at a name that answer
+  carries no address for, that name is asked on its own under the same
+  deadline and the same budget of eight links (D-87). A response longer
+  than the 512 bytes RFC 1035, section 4.2.1 allows a server that was told
+  of no larger buffer is not read at all. Catalog 6.6.47, fuzz target
+  `dns_message`.
+
+- `net-dhcp`, the client of RFC 2131 (D7, 12.6.10). IPv4 only: six states,
+  the four messages between them, the negative acknowledgment that returns
+  the machine to the start, and the lease timers — T1 renewal by unicast
+  to the server that granted the lease, T2 rebinding by broadcast, and an
+  expiry that takes the address away. The backoff before a lease is the
+  one section 4.1 asks for, four seconds doubled to sixty-four with a
+  uniform second either way; after it, the rule of section 4.4.5 takes
+  over, half of what is left until the next deadline and never below
+  sixty.
+
+  The BROADCAST flag is set until the address stands. RFC 2131,
+  section 4.1 has that flag for exactly one deadlock, and states it in the
+  words of a document that had watched it happen: a host that cannot
+  accept an IP datagram addressed to an address it has not configured
+  cannot be told the address it is being given. With the flag set the
+  server answers to 255.255.255.255, the wildcard socket on port 68 takes
+  it, and no layer below has to know about an address this host does not
+  yet have; from the bound state on the flag is clear, because by then a
+  unicast reply arrives. It costs two broadcast frames per lease.
+
+  Options are read strictly: padding skipped, the end marker required, an
+  unknown option stepped over, and one whose length reaches past the block
+  an error rather than a short read. A subnet mask whose bits do not run
+  together is refused, because it is no prefix and a route from it would
+  be a guess; so is an address no host can hold — the unspecified one, the
+  limited broadcast, a multicast group, a loopback address — and so is an
+  acknowledgment with no mask, no lease time or no server identifier. In
+  each case the request stands and is asked again, and `Lease::from_reply`
+  is public so that which of them it was is a question a caller can ask
+  rather than something the client swallows. The first offer that carries
+  a server identifier wins, because collecting offers would need a timer
+  and a policy for a choice this system has no basis to make (D-87).
+
+  Both crates write a complete UDP datagram into the caller's buffer and
+  name the two addresses it was written for, which is D-84 one layer up,
+  and both take a response as the payload with the address and port it
+  arrived from — the three things a receive record of `net-udp` carries.
+  In both, the attempt counter and the backoff move only once the datagram
+  is in that buffer, so a buffer with no room for one costs nothing.
+  Catalog 6.6.48.
+
+- RFC 1035, RFC 3596, RFC 2131, and RFC 2132 join the reference documents
+  under `docs/rfc/`, each fetched twice and recorded with its checksum.
+  They are what D7 reads: the DNS message and its compression, the `AAAA`
+  record, the DHCP protocol, and the option catalog. The README gains a
+  section for each pair.
+
+  Two passages are the reason the files are here rather than a summary of
+  them. RFC 1035, section 4.1.4 says a pointer replaces "a list of labels
+  at the end of a domain name" — the end, which is what makes a pointer
+  the last thing in a name and what says the name goes on where the
+  pointer stood and not where it pointed; a reader who has only the
+  picture of the two-octet form gets that wrong. And RFC 2131,
+  section 4.1 states the deadlock the BROADCAST flag exists for as a fact
+  about implementations of the day, which is what turns the flag from an
+  option into the answer to a question this client would otherwise have
+  had to guess at.
 
 - RFC 8017, RFC 4055, RFC 5756, and RFC 3279 join the reference documents
   under `docs/rfc/`, each fetched twice and recorded with its checksum.

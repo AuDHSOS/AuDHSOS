@@ -9,7 +9,7 @@
 //! it at the alignment it asks for; what lies before and behind the piece
 //! that goes out is split off and stays free. A release puts the object
 //! back and joins it to the neighbours it touches, which is what keeps the
-//! store from grinding its objects down to single pages (D-88).
+//! store from grinding its objects down to single pages (D-90).
 //!
 //! Zeroing happens twice over the same bytes and both are meant. The pass
 //! on return is what keeps what a client wrote out of free memory; the pass
@@ -222,7 +222,7 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     /// object is recognized by the memory it covers and not by a name for
     /// it; the store closes the new name once it has, because the object
     /// already has one here and a second reference would stop it ever being
-    /// joined to its neighbours (D-88).
+    /// joined to its neighbours (D-90).
     ///
     /// # Errors
     ///

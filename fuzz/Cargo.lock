@@ -127,6 +127,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dns_message"
+version = "0.1.0"
+dependencies = [
+ "audhsos-time",
+ "crypto-rng",
+ "fuzz-support",
+ "net-dns",
+ "net-wire",
+]
+
+[[package]]
 name = "elf"
 version = "0.1.0"
 dependencies = [
@@ -137,6 +148,14 @@ dependencies = [
 [[package]]
 name = "fuzz-support"
 version = "0.1.0"
+
+[[package]]
+name = "http_response"
+version = "0.1.0"
+dependencies = [
+ "fuzz-support",
+ "net-http",
+]
 
 [[package]]
 name = "ipv4"
@@ -182,11 +201,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "net-dns"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "audhsos-time",
+ "crypto-rng",
+ "net-udp",
+ "net-wire",
+]
+
+[[package]]
 name = "net-eth"
 version = "0.1.0"
 dependencies = [
  "audhsos-collections",
  "audhsos-time",
+ "net-wire",
+]
+
+[[package]]
+name = "net-http"
+version = "0.1.0"
+dependencies = [
  "net-wire",
 ]
 
@@ -217,6 +254,14 @@ version = "0.1.0"
 dependencies = [
  "audhsos-collections",
  "audhsos-time",
+ "crypto-rng",
+ "net-wire",
+]
+
+[[package]]
+name = "net-udp"
+version = "0.1.0"
+dependencies = [
  "crypto-rng",
  "net-wire",
 ]

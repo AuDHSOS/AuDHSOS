@@ -2203,14 +2203,14 @@ isolation item marked from Phase 6; the system call items of 6.6.21 and
 ### 10.7.1 `user-rt` (`crates/user/rt`, logic, layer u0)
 
 Everything a program works out for itself, with no system call in it, so
-that all of it runs on the host under test (D-87).
+that all of it runs on the host under test (D-89).
 
 - Typed handles: `ProcessHandle`, `ThreadHandle`, `MemoryHandle`,
   `EndpointHandle`, `ReplyHandle`, `NotificationHandle`,
   `InterruptHandle`, `IoPortHandle`, `SystemControlHandle`, each a newtype
   over `Handle` behind the trait `Typed`, which names the object type. They
   are `#[must_use]` and do not close themselves; `handle_close` needs the
-  buffer of the calling thread, which `Drop` is not given (D-87).
+  buffer of the calling thread, which `Drop` is not given (D-89).
 - `heap.rs`: `Allocator<BLOCKS, EXTENTS>` over an arena named by its
   length. One free list, first fit, coalescing on release, and a table of
   live blocks so that a release names only its offset. Not size classes:
@@ -2236,7 +2236,7 @@ forty-two system call wrappers, written out one by one; each writes the
 call number and its arguments into the buffer, executes `int 0x80`, and
 turns the status word into a `Result`. A constant assertion holds them to
 the table: `COVERED` lists what exists, `Syscall::ALL` lists what must, and
-a build fails when they differ (D-90). The panic handler formats a `user_rt::Line` and
+a build fails when they differ (D-92). The panic handler formats a `user_rt::Line` and
 sends it to the log endpoint.
 
 ### 10.7.3 `user-proto` (`crates/user/proto`)
@@ -2279,7 +2279,7 @@ the difference between a kernel that boots and a system that runs.
 `kernel-core` gains `root.rs`, which is architecture-neutral and host-tested
 over the doubles the memory and system call tests already use: it creates
 the address space, reads the root task as an ELF and maps every segment with
-the permissions its header names (D-90), maps a stack of
+the permissions its header names (D-92), maps a stack of
 sixteen pages with one unmapped page between it and the program, allocates a
 kernel stack and an IPC buffer, makes the thread, installs the handles —
 `SystemControl`, the process itself, the boot image, and one `Ram` memory
@@ -2321,7 +2321,7 @@ of frames is a range of bytes.
 - `app-hello`: looks up `console`, writes `hello from userland`, reads a
   line back and says it again, then reports to its parent and exits.
 - Root task as an ELF at `ROOT_TASK_BASE`, with every section on a page of
-  its own so that no two segments share one set of permissions (D-90).
+  its own so that no two segments share one set of permissions (D-92).
 - The xtask `image` writes the real boot image: header, root task, ustar
   archive of the server and application ELFs.
 - The kernel owns COM1 until userland takes it: `ioport_create` over the
@@ -2332,7 +2332,7 @@ of frames is a range of bytes.
   flag decides who writes.
 - The run ends through the userland: `app-hello` reports `Finished` to the
   root task, and the root task writes to the exit device through its
-  `SystemControl` (D-92). `sh tools/xtask.sh run --release` shows the
+  `SystemControl` (D-94). `sh tools/xtask.sh run --release` shows the
   greeting through the userland driver and ends when a line is typed;
   `test --e2e --release` is the same run without a person at it.
 

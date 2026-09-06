@@ -86,7 +86,7 @@ pub fn create<
     // which case the kernel takes a frame out of its reserve. A creator
     // that supplies one can write the startup message into it before the
     // thread runs, which is the only way a userland parent has of telling
-    // a child what its handles are (D-89).
+    // a child what its handles are (D-91).
     let supplied = supplied_buffer(machine, process, request.argument(5))?;
     if max_priority >= PRIORITY_COUNT || priority > max_priority {
         return Err(Error::InvalidArgument);

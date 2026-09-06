@@ -364,7 +364,7 @@ impl Gate {
     /// one can write the startup message into it before the thread runs,
     /// which is the only way a userland parent has of telling a child what
     /// its handles are; `None` lets the kernel take a frame out of its own
-    /// reserve, which is what the root task's own threads get (D-89).
+    /// reserve, which is what the root task's own threads get (D-91).
     ///
     /// # Errors
     ///
@@ -514,7 +514,7 @@ impl Gate {
     ///
     /// This is what lets memory recover: without it an object can only ever
     /// become smaller, and a server that hands memory out and takes it back
-    /// would grind its objects down to single pages (D-88).
+    /// would grind its objects down to single pages (D-90).
     ///
     /// # Errors
     ///

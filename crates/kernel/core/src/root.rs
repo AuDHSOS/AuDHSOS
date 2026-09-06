@@ -179,7 +179,7 @@ pub fn build<E: Environment, const NP: usize, const NT: usize, const NM: usize, 
 /// give the one program that holds every capability of the machine a
 /// writable text segment. The kernel therefore reads the same format the
 /// root task itself reads for its children, out of the crate all three of
-/// the loader, the kernel, and the userland share (D-90).
+/// the loader, the kernel, and the userland share (D-92).
 fn map_program<E: Environment>(
     environment: &mut E,
     root: PhysFrame,

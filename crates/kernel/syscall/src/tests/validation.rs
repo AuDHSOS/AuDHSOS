@@ -174,7 +174,7 @@ fn every_call_of_the_table_is_implemented() {
     assert_eq!(
         Syscall::ALL.len() - UNIMPLEMENTED.len(),
         42,
-        "the whole table: forty-one from Phase 6, and `memory_merge` (D-88)"
+        "the whole table: forty-one from Phase 6, and `memory_merge` (D-90)"
     );
     assert!(UNIMPLEMENTED.is_empty());
 }

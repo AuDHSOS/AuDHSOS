@@ -242,10 +242,10 @@ unscheduled.
 | `net-ipv6` | `crates/net/ipv6` | n2 | `net-ip` and below |
 | `net-udp` | `crates/net/udp` | n3 | `net-wire`, `crypto-rng` |
 | `net-tcp` | `crates/net/tcp` | n3 | `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng` |
-| `net-dns` | `crates/net/dns` | n4 | `net-udp` and below, `crypto-rng` |
-| `net-dhcp` | `crates/net/dhcp` | n4 | `net-udp` and below, `crypto-rng` |
+| `net-dns` | `crates/net/dns` | n4 | `net-udp`, `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng` |
+| `net-dhcp` | `crates/net/dhcp` | n4 | `net-udp`, `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng` |
 | `net-http` | `crates/net/http` | n4 | `net-wire` |
-| `net-stack` | `crates/net/stack` | n5 | all of the above |
+| `net-stack` | `crates/net/stack` | n5 | all of the above, `audhsos-time`, `audhsos-collections`, `crypto-rng` |
 
 `net-ip` holds what the two families share — the routing table over
 `IpCidr`, the reassembly machinery, and the interface a packet leaves
@@ -695,54 +695,234 @@ Five things the specification left open, as D-85 decided them:
 
 ### 12.6.9 `net-dns`
 
-Message encoding and decoding with name compression on read — bounded
-jumps and loop detection, because a compression pointer loop is the
-classic denial of service of this format — and without compression on
-write. `A` and `AAAA` records and `CNAME` chains up to depth eight; other
-types are parsed as opaque and ignored. A name is asked for in both types
-and the answers of both are returned, because which family a host reaches
-a name over is the caller's question and not the resolver's. The resolver
-is a state machine over UDP with retry, server rotation, and a deadline;
-the transaction id and the source port come from `Rng`, and a response is
-accepted only when id, question section, source address, and port all
-match.
+Implemented. Message encoding and decoding with name compression on read
+and without it on write, and a stub resolver over UDP above it.
+
+- The message of RFC 1035, section 4: the header, the question section
+  read at once, and the record sections walked by iterators. `A`
+  (section 3.4.1), `AAAA` (RFC 3596, section 2.2) and `CNAME`
+  (section 3.3.1) are decoded; every other type, and every class but `IN`,
+  is carried as the bytes of its body and stepped over.
+- A name is bounded three times over, and only the last bound is about the
+  bytes that arrived. A compression pointer must point strictly backwards,
+  so the walk provably moves towards the front of the message and can
+  never return to where it has been; the number of jumps is bounded at
+  sixteen, because a chain of pointers that yields no label is work no
+  encoder asks for; and the name being assembled is bounded at the 255
+  bytes of section 2.3.4, which is what a message trying to be expensive
+  runs into first.
+- A decoded name is a value of 255 bytes and not a borrow. It cannot be a
+  borrow — a compressed name is not contiguous in the message — and it must
+  not be one, because the resolver holds the name it is asking across the
+  datagrams it asks in.
+- Comparison ignores ASCII case, as section 2.3.3 requires. The
+  presentation form is the preferred syntax of section 2.3.1 as RFC 1123,
+  section 2.1 relaxed it; an underscore label is refused, which costs
+  nothing because this resolver asks for addresses and for nothing else.
+- The resolver asks both types and returns the answers of both, because
+  which family a host reaches a name over is the question of the layer
+  that opens the connection.
+
+Four things came out of writing it, and D-87 records the boundaries three
+of them draw.
+
+The resolver writes a whole UDP datagram and names two addresses. That is
+D-84 one layer up: what it produces is a datagram in the caller's buffer
+and the pair of addresses it was written for, and what it consumes is a
+payload with the address and port it arrived from — the three things a
+receive record of `net-udp` carries. The transaction id comes from `Rng`;
+the source port is the port of the socket the caller bound, which
+`net-udp` drew from the dynamic range, so the randomness D-51 asks for is
+in both fields and is drawn once in each crate that owns one.
+
+The two questions are in the air at once. Each carries its own id, its own
+attempt counter and its own place in the server rotation, and one deadline
+governs both, so a family that never answers costs its own attempts and
+nothing more. Asking one after the other would spend the whole deadline on
+the first and reach the second on no path that matters.
+
+An alias the answer does not resolve is asked on its own. The chain is
+followed inside the answer as far as it goes; where it ends at a name that
+answer carries no address for, a new question about that name begins with
+the same deadline and the same budget. One budget of eight links therefore
+governs the chain however many messages it is spread over, and a record
+the chain has already stepped through ends it as a loop rather than
+spending the budget.
+
+A transaction id is kept across retries. RFC 5452 wants the id
+unguessable, which a single draw already is; drawing a fresh one per retry
+would in addition make every answer that is merely late unusable, and the
+window it leaves an attacker is the same either way.
+
+There is no TCP fallback (RFC 1035, section 4.2.2), so a truncated answer
+is a question this resolver cannot finish and says so. What that costs is
+a name with more addresses than 512 bytes hold, which is not a name this
+system asks about. The same 512 bytes bound what is read: this resolver
+announces no buffer of its own, so RFC 1035, section 4.2.1 is the whole of
+what a server may send it, and a longer datagram is not an answer to
+anything it asked.
 
 ### 12.6.10 `net-dhcp`
 
-IPv4 only. The four-message exchange, the options the stack needs (subnet
-mask, router, DNS servers, lease time, server identifier, message type),
-and the lease state machine with T1 renewal, T2 rebinding, and expiry. The
-transaction id comes from `Rng`; retransmission backs off exponentially
-with jitter, as RFC 2131 requires.
+Implemented. IPv4 only: the four-message exchange, the options the stack
+needs, and the lease state machine of RFC 2131, figure 5.
+
+- Six states — init, selecting, requesting, bound, renewing, rebinding —
+  and the four messages between them, with the negative acknowledgment
+  that returns the machine to the start. Init-reboot and rebooting are not
+  here: they are the shortcut a client takes when it remembers an address
+  across a restart, and nothing in this system remembers anything across
+  one. Decline, release and inform are not here either.
+- The options of RFC 2132 a lease is made of: subnet mask, router, DNS
+  servers, lease time, server identifier, and message type, with the two
+  renewal times where the server sends usable ones. The walk is strict —
+  padding skipped, the end marker required, an unknown option stepped
+  over, and an option whose length reaches past the block an error rather
+  than a short read.
+- T1 renewal by unicast to the server that granted the lease, T2 rebinding
+  by broadcast, and an expiry that takes the address away. The delays
+  before a lease exists are the backoff of section 4.1 — four seconds
+  doubled to sixty-four, each moved by a uniform value between minus one
+  and plus one second — and after it the rule of section 4.4.5: half of
+  what is left until the next deadline, never below sixty seconds.
+
+Three more things D-87 decides.
+
+The BROADCAST flag is set until the address stands. RFC 2131, section 4.1
+has the flag for exactly the deadlock it names: a host that cannot accept
+an IP datagram addressed to an address it has not configured cannot be
+told the address it is being given. With the flag set the server answers
+to 255.255.255.255 and the wildcard socket on port 68 takes it, and no
+layer below has to know about an address this host does not yet have. From
+the bound state on the flag is clear, because by then the address is
+configured and a unicast reply arrives. What it costs is two broadcast
+frames per lease.
+
+The first offer wins. RFC 2131 lets a client collect offers and choose;
+this one takes the first that carries a server identifier and moves to
+requesting, where a second offer arrives in a state that ignores it.
+Collecting would mean a timer and a policy for a choice this system has no
+basis to make.
+
+A subnet mask that is not a prefix is refused, and so is an address no
+host can hold. Bits that do not run together are no network, and a route
+derived from them would be a guess; the unspecified address, the limited
+broadcast, a multicast group and a loopback address name no one host on
+one link. An acknowledgment that carries any of those, or no mask, no
+lease time or no server identifier, is one no lease can be made of, so the
+request stands and is asked again — and `Lease::from_reply` is public, so
+which of them it was is a question a caller can ask rather than a thing
+the client swallows.
 
 IPv6 configures itself from a router advertisement instead, which is
 `ICMPv6` and therefore in `net-ipv6`. There is no DHCPv6 (D-69).
 
 ### 12.6.11 `net-http`
 
-An HTTP/1.1 client: request line and headers encoded into a
-caller-supplied buffer; the response parsed strictly — a bounded status
-line, a bounded number of headers of bounded length, no obsolete line
-folding, and `Content-Length` together with `Transfer-Encoding` rejected
-outright, which is the rule that closes request smuggling. Chunked
-transfer decoding is supported. Redirects are reported to the caller,
-never followed. No content encodings in the first version.
+Implemented. A request written into the caller's buffer, and a response
+decoded as it arrives.
+
+- The request line and the fields, with `Host` and `Content-Length`
+  written from the fields of the type and never from the caller's header
+  list, because RFC 9112, section 3.2 has one `Host` in a message and a
+  second length is a second framing. Every name is checked against the
+  `tchar` set of RFC 9110, section 5.6.2 and every value against the field
+  value of section 5.5 before a byte of either goes down: a value carrying
+  a carriage return is a value that ends its field and begins another, and
+  a client that writes one has let its caller write a header of its own.
+- The response decoder is incremental and takes at most one line of the
+  head per call. That is what keeps a byte of the body from ever being
+  copied into the buffer the head is assembled in, and it is what makes a
+  response split at any boundary decode to what the whole of it decodes
+  to.
+- The head is read strictly: a status line longer than 256 bytes, a header
+  line longer than 1024, more fields than the decoder holds, and a folded
+  line are each refused. `obs-text` is refused as well, which is what
+  makes every value the decoder hands out ASCII and therefore text.
+- Chunked decoding with extensions and trailers, both read past and
+  dropped. Redirects are reported with their location and never followed.
+  No content encodings (D-50).
+
+Two things came out of writing it, and D-88 records them.
+
+Two framings in one message is an error and not a preference.
+RFC 9112, section 6.3, point 3 lets a recipient prefer `Transfer-Encoding`
+over `Content-Length` and says in the same paragraph that such a message
+ought to be handled as an error; this client does the latter. A preference
+rule is a second reading with a tie-breaker rather than one reading, and
+two readings of one message is the whole of request smuggling. Two
+`Content-Length` fields that disagree go the same way, and two that agree
+are the one value they agree on, which is what point 5 of the same list
+says.
+
+A body that ends at the close needs the caller to say when it did. Point 8
+of that list gives a response with no declared length exactly that
+framing, so `finish` is not a convenience: without it a body that ended
+and a body that was cut off are the same bytes.
+
+The obsolete line folding of section 5.2 is refused, which is stricter
+than the document — it has a user agent replace the fold with spaces. The
+reason is the same one: a folded value is a value whose length is not its
+line's length, so a parser that unfolds and one that does not read two
+different messages out of the same bytes.
 
 ### 12.6.12 `net-stack`
 
-The facade: an `Interface` with its MAC address, its addresses of both
-families, its routes, and its MTU; `poll(now, rx, tx)` which
-demultiplexes an incoming frame down the layers and drains the outgoing
-work; socket handles as generation-checked indices, in the form of the
-kernel's handles; and `poll_at(now)`. The whole stack has one entry
-point, so a server process is a loop around it and nothing else.
+Implemented. The facade: an `Interface` with its hardware address, its
+addresses of both families, its routes and its MTU; `poll(now, rx, tx)`
+which demultiplexes an arriving frame down the layers and drains the
+outgoing work; socket and connection handles as generation-checked
+indices, in the form of the kernel's handles; and `poll_at(now)`.
 
-Source and destination address selection follows RFC 6724, which is what
-decides which of a host's addresses a packet leaves with and which of a
-name's addresses it goes to. Connecting to a name that resolves to both
-families tries them in that order and does not race them: Happy Eyeballs
-(RFC 8305) is a policy above the stack and not in it, and its absence
-costs a timeout on a broken path rather than a wrong answer.
+- Under it: frames and ARP, both internet layers with their shared
+  reassembler and their two `ICMP`s, UDP sockets and TCP connections,
+  address configuration by DHCP and by router advertisement with
+  duplicate address detection, and the resolver.
+- Two limits are the caller's — how many sockets and how many
+  connections — and the rest are constants of this crate, because how many
+  routes, neighbors, reassembly buffers and prefixes a host with one
+  interface has is not a property of what runs on it. A type with seven
+  numbers in it is a type nobody writes down twice.
+
+Four things came out of writing it, and D-88 records them.
+
+The frames that have been written wait in a queue in the caller's memory,
+as self-describing records, and the layers are asked for new work only
+when that queue is empty. That is what makes a transmit buffer of one
+frame enough: nothing is produced while there is a backlog, so nothing is
+lost and nothing overtakes anything. One received frame can make several
+go out, and a driver with a full ring can take none of them at that
+moment.
+
+A handle is an index and the generation of the slot it names. A bare index
+is a handle that comes back to life, which is the same bug as a dangling
+pointer; a slot that has been through every generation hands out no more
+handles, which costs one slot and is the only answer that keeps the
+guarantee.
+
+Neighbor Discovery does not go through either sender. RFC 4861,
+section 7.1 requires a hop limit of 255 and that is the whole of what
+makes the protocol link-local, so a message written with the default is
+one every receiver is right to throw away; and a discovery message needs
+no route and no neighbor resolved, which is fortunate, because resolving
+one is what it is for. Address configuration by DHCP is the same case for
+the same reason: a client with no address has no route either, so a
+datagram to the limited broadcast address goes out without the routing
+table being asked.
+
+Connecting to a list of addresses and connecting to a name are two
+operations. `connect_to_any` tries a list in the order it is given, moving
+on when a candidate times out or is reset; `connect_to_name` resolves,
+orders what came back by RFC 6724, and hands that list to the same loop.
+The policy table of RFC 6724, section 2.1 is written over IPv6 prefixes
+with IPv4 standing in as the mapped range, which D-69 refuses outright, so
+that one row is read as the row of the IPv4 family. Of the rules, those a
+host with one interface, no deprecated addresses, no Mobile IPv6, no
+privacy extensions and no tunnels can decide are implemented and the rest
+are named where they are not, so that their absence is not mistaken for an
+oversight. Happy Eyeballs (RFC 8305) is a policy above the stack; its
+absence costs one timeout on a path the routing table does not know is
+broken.
 
 ### 12.6.13 Testing
 
@@ -770,7 +950,24 @@ costs a timeout on a broken path rather than a wrong answer.
   words, one per shape a test cites: the four headers in order, a chain
   without an end, a header that reaches past the packet, the two halves
   of a fragmented datagram, and one message of each `ICMPv6` and Neighbor
-  Discovery kind.
+  Discovery kind. `dns_message` exists and drives three: the
+  message with its two section walks, `Name::read` at offsets the message
+  parser would never choose, and the resolver, which is reached by asking
+  for the name the input itself carries and then writing the transaction
+  id of that query into the input — a response with the wrong id is one
+  the resolver is right to throw away and wrong to spend a fuzzing budget
+  on. Its seeds are named in words as well: a query, an answer of each
+  family, a pointer to an earlier name, a pointer that points forwards, a
+  ladder of pointers, an alias chain, an alias chain that loops, a label
+  of a reserved kind, a name of 255 bytes, and a body that is not an
+  address. `http_response` exists and drives one
+  door twice, once for each of the two methods whose answers are framed
+  differently — and it drives it in pieces the first byte of the input
+  names, because the one bug a whole-message test of a line-oriented
+  parser cannot find is the state it keeps between the piece that ended
+  mid-line and the piece that finishes it. Its seeds are the four framings,
+  the shapes that are refused for being readable two ways, and a message
+  fed one byte at a time.
 - No test sleeps. Time is an argument, so a sixty-second retransmission
   backoff is exercised in microseconds of wall clock.
 
@@ -786,9 +983,9 @@ Tests: catalog 6.6.42 to 6.6.50 and 6.6.54.
 | D4 | `net-ipv6`: header and extension chain, `ICMPv6`, Neighbor Discovery, router advertisements and SLAAC, path MTU discovery — implemented | L |
 | D5 | `net-udp` — implemented | S |
 | D6 | `net-tcp`: sequence arithmetic, state machine, timers, congestion control — implemented | XL |
-| D7 | `net-dns` and `net-dhcp` | M |
-| D8 | `net-http` | S |
-| D9 | `net-stack`: the facade, with the address selection of RFC 6724 | M |
+| D7 | `net-dns` and `net-dhcp` — implemented | M |
+| D8 | `net-http` — implemented | S |
+| D9 | `net-stack`: the facade, with the address selection of RFC 6724 — implemented | L |
 | D10 | integration, jointly with T8 of document 11: `driver-virtio-net`, `server-net`, the socket protocol, the entropy system call, the TLS transport | not scheduled |
 
 D6 is the one step that must not be started beside an XL phase.
@@ -914,7 +1111,7 @@ the integration.
 | `driver-i8042` | 10 | 6.6.25 | port access trait with a double, exactly as `driver-uart16550` today |
 | QMP client and PPM reader in the xtask | 9 | 6.6.28 | protocol logic over a stream, tested against recorded sessions |
 | allocator logic in `user-rt` | 7 | 6.6.12 | offsets in a byte region, testable against a reference model |
-| encodings in `user-proto` | 7 | 6.6.56 | each message is a type with `encode` and `decode` and no system call; the catalog item 6.6.56 was written for them, as this row asked (D-87) |
+| encodings in `user-proto` | 7 | 6.6.56 | each message is a type with `encode` and `decode` and no system call; the catalog item 6.6.56 was written for them, as this row asked (D-89) |
 
 ## 12.10 Capacity
 
@@ -926,8 +1123,8 @@ the integration.
   C at T5 and T6; then track C to T7; then track D from D1; track F when
   a driver becomes foreseeable; `audhsos-symbols` from track G before
   phase 3, because that is where kernel panics start. Tracks E and G are
-  done, track C stands at T7, and track D has D1 to D6 behind it, so the
-  next step of the side work is D7.
+  done, track C stands at T7, and track D has D1 to D9 behind it, so what
+  is left of it is D10, which is integration and is not scheduled.
 - The pulled-forward work of 12.9 fills short gaps, because it needs no
   new design.
 

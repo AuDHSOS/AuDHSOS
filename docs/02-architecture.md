@@ -175,7 +175,7 @@ badge.
   it. The lower object grows to cover both; the upper one ceases to exist,
   and the handle that named it names nothing. Without this an object could
   only ever become smaller, and a server that hands memory out and takes it
-  back would grind its objects down to single pages (D-88).
+  back would grind its objects down to single pages (D-90).
 - `memory_map(process, memory, vaddr, offset, len, permissions)` populates
   page tables immediately. Page-table frames come from the kernel reserve
   and count against the process's kernel-object quota.
@@ -344,7 +344,7 @@ so that userland loops.
 | `ipc_call(endpoint)` | Sends the message in the IPC buffer and blocks until the receiver replies. Send and wait-for-reply are atomic from the receiver's point of view. |
 | `ipc_send(endpoint)` | Sends and blocks until a receiver has taken the message. No reply. |
 | `ipc_recv(endpoint)` | Blocks until a sender arrives. Returns the message, the badge, and a `Reply` handle if the sender used `call`. |
-| `ipc_reply(reply)` | Delivers the message in the IPC buffer to the caller and consumes the reply object, handle and all (D-91). |
+| `ipc_reply(reply)` | Delivers the message in the IPC buffer to the caller and consumes the reply object, handle and all (D-93). |
 | `ipc_reply_recv(reply, endpoint)` | `reply` followed by `recv` without returning to userland in between. |
 | `ipc_try_recv(endpoint)` | Like `recv` but returns `WouldBlock` instead of blocking. |
 
@@ -394,7 +394,7 @@ through shared memory objects.
 - One of those handles may be `Parent`: the endpoint the faults of this
   process go to, badged with what the parent knows it by. A child reports
   what it finished through it, so one endpoint carries both kinds of news
-  about a child and the label tells them apart (D-92).
+  about a child and the label tells them apart (D-94).
 
 ## 2.7 Interrupts and devices
 
@@ -403,7 +403,7 @@ through shared memory objects.
   objects for MMIO regions. It hands them to drivers.
 - An interrupt object is created with its line masked and armed when a
   notification is bound to it, because a line nothing names would assert
-  into nothing (D-91).
+  into nothing (D-93).
 - Interrupt flow: line asserts → kernel masks the line at the I/O APIC and
   sends end-of-interrupt to the local APIC → kernel signals the bound
   notification → driver thread wakes, services the device →
@@ -549,7 +549,7 @@ permissions → allocate the stack and map it → allocate one page for the IPC
 buffer, map it into the loader, `process_install_handle` for every initial
 capability, write the startup message into that page, unmap it →
 `thread_create` with the page as its fifth argument, which is what puts the
-message where the child will find it (D-89) → `thread_start`.
+message where the child will find it (D-91) → `thread_start`.
 
 ## 2.11 Security model
 
