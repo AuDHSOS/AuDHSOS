@@ -18,11 +18,15 @@ arrangement.
 | `rfc792.txt` | RFC 792, *Internet Control Message Protocol*, J. Postel, September 1981 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc792.txt` | 29186 | `58714393ded142bacf188d7e8977eef98f4110c4c87ac94595f750df5664c2c6` |
 | `rfc826.txt` | RFC 826, *An Ethernet Address Resolution Protocol*, D. C. Plummer, November 1982 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc826.txt` | 21556 | `01bc62fe6a37e90f1246ac43e8e145f1322b4ed1474836145c3da93d2bd3c8a6` |
 | `rfc894.txt` | RFC 894, *A Standard for the Transmission of IP Datagrams over Ethernet Networks*, C. Hornig, April 1984 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc894.txt` | 5697 | `be88b9301e53f986aca3a0e55e488d1d79bae3f88fe3f257640397bc089e7035` |
+| `rfc1035.txt` | RFC 1035, *Domain Names — Implementation and Specification*, P. Mockapetris, November 1987 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc1035.txt` | 122549 | `d14ae809fc9b41bbcae26bb38c937c9515808b944f3252b00de9fe0e95f4fdfb` |
 | `rfc1071.txt` | RFC 1071, *Computing the Internet Checksum*, R. Braden, D. Borman, C. Partridge, September 1988 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1071.txt` | 53524 | `e10dfd6816447843d47a7f1b990eba756a791a6308fd5b698a6276075a8e4f9b` |
 | `rfc1122.txt` | RFC 1122, *Requirements for Internet Hosts — Communication Layers*, R. Braden (ed.), October 1989 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1122.txt` | 289148 | `9f526e6bebc868324fedb90aebbcf6e5b15c53fd373ca5d5ce1c2cdcd264e04f` |
+| `rfc2131.txt` | RFC 2131, *Dynamic Host Configuration Protocol*, R. Droms, March 1997 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2131.txt` | 113738 | `a043b705785b81762505ded4cf71d61392b2b1da2b4ce1e32c13bc984de5f4a5` |
+| `rfc2132.txt` | RFC 2132, *DHCP Options and BOOTP Vendor Extensions*, S. Alexander, R. Droms, March 1997 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2132.txt` | 63670 | `0cfbedab7cfe859624ae78c07a722bc51bf8ea123a7b43b099fc546ddcf00b90` |
 | `rfc2313.txt` | RFC 2313, *PKCS #1: RSA Encryption Version 1.5*, B. Kaliski, March 1998 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2313.txt` | 37777 | `2d93e9f0f02343a29a8f64ad507e1779f65377319ed4945b6ac3dcb1f74fd69c` |
 | `rfc2464.txt` | RFC 2464, *Transmission of IPv6 Packets over Ethernet Networks*, M. Crawford, December 1998 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc2464.txt` | 12725 | `f9554329ef1f4e093513e5b6f7af00bb5d206710e0c61d08bd578fa5f00aee9a` |
 | `rfc3279.txt` | RFC 3279, *Algorithms and Identifiers for the Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile*, W. Polk, R. Housley, L. Bassham, April 2002 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc3279.txt` | 53833 | `6d3f19f18e17fa1c68da5aaf4021327748fabca840d7300443b77357a1fc1614` |
+| `rfc3596.txt` | RFC 3596, *DNS Extensions to Support IP Version 6*, S. Thomson, C. Huitema, V. Ksinant, M. Souissi, October 2003 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc3596.txt` | 14093 | `2a3d44744086f66a7ba00e7d282dc1f740a3e0b63b4b6f7c763ffc0e61ee1dbb` |
 | `rfc4055.txt` | RFC 4055, *Additional Algorithms and Identifiers for RSA Cryptography for use in the Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile*, J. Schaad, B. Kaliski, R. Housley, June 2005 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc4055.txt` | 57479 | `b8a1ef3fb135c32aed4eee121264f3ec83a46def746c8fe68e05bd1b60324e9a` |
 | `rfc4291.txt` | RFC 4291, *IP Version 6 Addressing Architecture*, R. Hinden, S. Deering, February 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4291.txt` | 52897 | `4d58dff6b432d5d524bf3a3b7f0337a4177fa65f92ed72f2a92e97b471de48b2` |
 | `rfc4443.txt` | RFC 4443, *Internet Control Message Protocol (ICMPv6) for the Internet Protocol Version 6 (IPv6) Specification*, A. Conta, S. Deering, M. Gupta (ed.), March 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4443.txt` | 48969 | `f20d1de8878e1142000bfeaa3ad1b0540fab7653a395cf7b07e81d2da2f650bf` |
@@ -43,10 +47,10 @@ arrangement.
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
-including the page breaks: 2887, 1218, 470, 171, 1417, 6844, 1067, 395,
-1515, 1403, 1403, 1347, 5435, 1683, 1123, 339, 451, 899, 787, 4427, 4371,
-1067, 2355, 1067, 3811, and 5576 lines respectively, in the order of the
-table.
+including the page breaks: 2887, 1218, 470, 171, 3077, 1417, 6844, 2523,
+1907, 1067, 395, 1515, 451, 1403, 1403, 1347, 5435, 1683, 1123, 339, 451,
+899, 787, 4427, 4371, 1067, 2355, 1067, 3811, and 5576 lines respectively,
+in the order of the table.
 Every one was fetched twice and the two fetches agreed.
 
 ## Terms
@@ -68,17 +72,18 @@ Society and the year 2005, and then refers the reader to BCP 78 in the
 same words the later ones use, so it is read here as the group above
 rather than the group below.
 
-The thirteen older ones carry the notice of their time, each in a full
+The seventeen older ones carry the notice of their time, each in a full
 copyright statement at the end that permits reproduction in whole
 provided the notice travels with it. RFC 4862 and RFC 4861 have the IETF
 Trust's of 2007; RFC 4443 and RFC 4291 the Internet Society's of 2006;
-RFC 3279 the Internet Society's of 2002; RFC 2464 and RFC 2313 the
-Internet Society's of 1998; and RFC 1122 carries that statement in the
-form of 1989. RFC 1071, RFC 894, RFC 826, RFC 792, and
-RFC 791 carry no notice at all: RFC 1071 states unlimited distribution in
-its own Status of This Memo section, and the four from the early eighties
-predate even that form, under the practice the RFC Editor states for the
-series as a whole.
+RFC 3596 the Internet Society's of 2003; RFC 3279 the Internet Society's
+of 2002; RFC 2464 and RFC 2313 the Internet Society's of 1998; and
+RFC 1122 carries that statement in the form of 1989. RFC 1071, RFC 1035,
+RFC 2131, RFC 2132, RFC 894, RFC 826, RFC 792, and RFC 791 carry no notice
+at all. Each of the first four states unlimited distribution in its own
+Status of This Memo section, and the four from the early eighties predate
+even that form, under the practice the RFC Editor states for the series as
+a whole.
 
 Code components extracted from an RFC carry the Simplified BSD Licence;
 this project extracts test vectors, which it transcribes into Rust source
@@ -264,6 +269,69 @@ What it does not carry is the two mechanisms that surround the state
 machine and are specified elsewhere: the retransmission timer of RFC 6298
 and the congestion control of RFC 5681. This implementation follows both,
 and cites them by section where it does.
+
+## The two documents of DNS
+
+**RFC 1035** is the format and the resolver: the header of section 4.1.1,
+the question of 4.1.2, the resource record of 4.1.3, and the compression
+of 4.1.4, with the size limits of section 2.3.4 and the case rule of
+2.3.3. It is kept for four passages that a summary cannot stand in for.
+Section 4.1.4 states that a pointer replaces "a list of labels at the end
+of a domain name" — the end, which is why a pointer is the last thing in a
+name and why the name goes on where the pointer stood and not where it
+pointed. Section 2.3.4 gives the two numbers a reader has to enforce while
+it assembles a name and not afterwards: 63 for a label, 255 for a name.
+Section 3.3.1 gives `CNAME` a body that is a name, which is what makes the
+alias chain a chain and not a string. And section 4.2.1 puts a UDP answer
+at 512 bytes, which is the whole of why the truncation bit exists and the
+whole of what this resolver cannot do about it (there is no TCP here).
+
+What the document does not carry is the rule this crate follows for
+believing a response. RFC 1035 was written when a resolver's only worry
+was a lost datagram; the four things that have to agree — the id, the
+question, the source address and the source port — are RFC 5452, and only
+the last of them is a real addition, the other three being the document's
+own matching rules read as a security property. That memo is cited where
+it is followed and is not kept here, because it states a requirement and
+gives nothing to check against.
+
+**RFC 3596** is three pages of the four that matter: the `AAAA` type is
+28, its body is sixteen bytes in network order, and a query for it is a
+query like any other. It obsoletes RFC 1886, which had the same type
+number and a different `IP6.INT` reverse zone that nothing in this system
+asks about. It is kept rather than summarised because the alternative is a
+constant with no source, and because section 2.2 is what says the body is
+the address itself and not a text form of it.
+
+## The two documents of DHCP
+
+**RFC 2131** is the protocol: the message of section 2, the exchange of
+section 3.1, the state machine of figure 5, and the client behaviour of
+section 4. Three passages of it are the reason the file is here rather
+than a summary. Section 4.1 states the deadlock the BROADCAST flag exists
+for, in the words of a document that had watched it happen — a client that
+cannot accept a unicast datagram before it is configured cannot be told
+what to configure — and it is the source for the decision to set the flag
+until the address stands. The same section gives the backoff in numbers:
+four seconds, doubled to sixty-four, each delay moved by a uniform value
+between minus one and plus one second. And section 4.4.5 gives the two
+lease timers their defaults — half the lease and seven eighths of it — and
+the retransmission rule that replaces the backoff once a lease exists:
+half of what is left until the next deadline, never below sixty seconds.
+
+**RFC 2132** is the option catalog. What is taken from it is small — the
+magic cookie of section 2, pad and end of 3.1 and 3.2, the subnet mask of
+3.3, the routers of 3.5, the name servers of 3.8, and the seven DHCP
+options of section 9 — but the numbers are only in this document, and the
+shape of the walk is only in section 2: code, length, body, with two codes
+that break that shape and are named there and nowhere else. Section 3.5
+also states that the routers come in order of preference, which is why the
+first of them is the one used and the rest are read past.
+
+What is deliberately not read is the option overload of section 9.3, which
+lets a server put options in the `sname` and `file` fields when the option
+field runs out. The six options a lease needs come to under forty bytes,
+and the option field holds three hundred.
 
 ## The four documents of P-384
 

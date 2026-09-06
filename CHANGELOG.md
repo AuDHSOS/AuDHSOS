@@ -29,6 +29,101 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `net-dns`, the message format of RFC 1035 and a stub resolver over it
+  (D7, 12.6.9). A name is read with compression and written without it,
+  and the read is bounded three times over — only the last of the three
+  being about the bytes that arrived. A compression pointer must point
+  strictly backwards, so the walk provably moves towards the front of the
+  message and can never return to where it has been; the number of jumps
+  is bounded besides, because a chain of pointers that yields no label is
+  work no encoder asks for; and the name being assembled is bounded at the
+  255 bytes of RFC 1035, section 2.3.4, which is what a message trying to
+  be expensive runs into first. A pointer loop needs a pointer forwards
+  somewhere in it, so the first bound catches every loop there is and the
+  other two are what keep an expensive name from being merely legal.
+
+  A decoded name is a value of its own and not a borrow. It cannot be one:
+  a compressed name is not contiguous in the bytes it arrived in. And it
+  must not be one: the resolver holds the name it is asking across the
+  datagrams it asks in, by which time the message is gone. `A`, `AAAA` and
+  `CNAME` are decoded, every other type and every class but `IN` is
+  carried as the bytes of its body and stepped over, and comparison
+  ignores ASCII case as section 2.3.3 requires.
+
+  The resolver asks both types at once, each with its own transaction id,
+  its own attempt counter and its own place in the server rotation, under
+  one deadline, so a family that never answers costs its own attempts and
+  nothing more. A response is believed only when four things agree — the
+  source address is one of this resolver's servers, the source port is 53,
+  the id is the one that went out, and the question section is the
+  question that was asked — and the id is kept across retries, because a
+  fresh one per retry makes every answer that is merely late unusable and
+  leaves an attacker the same window. An alias chain is followed inside
+  the answer it arrived in, and where it ends at a name that answer
+  carries no address for, that name is asked on its own under the same
+  deadline and the same budget of eight links (D-86). A response longer
+  than the 512 bytes RFC 1035, section 4.2.1 allows a server that was told
+  of no larger buffer is not read at all. Catalog 6.6.47, fuzz target
+  `dns_message`.
+
+- `net-dhcp`, the client of RFC 2131 (D7, 12.6.10). IPv4 only: six states,
+  the four messages between them, the negative acknowledgment that returns
+  the machine to the start, and the lease timers — T1 renewal by unicast
+  to the server that granted the lease, T2 rebinding by broadcast, and an
+  expiry that takes the address away. The backoff before a lease is the
+  one section 4.1 asks for, four seconds doubled to sixty-four with a
+  uniform second either way; after it, the rule of section 4.4.5 takes
+  over, half of what is left until the next deadline and never below
+  sixty.
+
+  The BROADCAST flag is set until the address stands. RFC 2131,
+  section 4.1 has that flag for exactly one deadlock, and states it in the
+  words of a document that had watched it happen: a host that cannot
+  accept an IP datagram addressed to an address it has not configured
+  cannot be told the address it is being given. With the flag set the
+  server answers to 255.255.255.255, the wildcard socket on port 68 takes
+  it, and no layer below has to know about an address this host does not
+  yet have; from the bound state on the flag is clear, because by then a
+  unicast reply arrives. It costs two broadcast frames per lease.
+
+  Options are read strictly: padding skipped, the end marker required, an
+  unknown option stepped over, and one whose length reaches past the block
+  an error rather than a short read. A subnet mask whose bits do not run
+  together is refused, because it is no prefix and a route from it would
+  be a guess; so is an address no host can hold — the unspecified one, the
+  limited broadcast, a multicast group, a loopback address — and so is an
+  acknowledgment with no mask, no lease time or no server identifier. In
+  each case the request stands and is asked again, and `Lease::from_reply`
+  is public so that which of them it was is a question a caller can ask
+  rather than something the client swallows. The first offer that carries
+  a server identifier wins, because collecting offers would need a timer
+  and a policy for a choice this system has no basis to make (D-86).
+
+  Both crates write a complete UDP datagram into the caller's buffer and
+  name the two addresses it was written for, which is D-84 one layer up,
+  and both take a response as the payload with the address and port it
+  arrived from — the three things a receive record of `net-udp` carries.
+  In both, the attempt counter and the backoff move only once the datagram
+  is in that buffer, so a buffer with no room for one costs nothing.
+  Catalog 6.6.48.
+
+- RFC 1035, RFC 3596, RFC 2131, and RFC 2132 join the reference documents
+  under `docs/rfc/`, each fetched twice and recorded with its checksum.
+  They are what D7 reads: the DNS message and its compression, the `AAAA`
+  record, the DHCP protocol, and the option catalog. The README gains a
+  section for each pair.
+
+  Two passages are the reason the files are here rather than a summary of
+  them. RFC 1035, section 4.1.4 says a pointer replaces "a list of labels
+  at the end of a domain name" — the end, which is what makes a pointer
+  the last thing in a name and what says the name goes on where the
+  pointer stood and not where it pointed; a reader who has only the
+  picture of the two-octet form gets that wrong. And RFC 2131,
+  section 4.1 states the deadlock the BROADCAST flag exists for as a fact
+  about implementations of the day, which is what turns the flag from an
+  option into the answer to a question this client would otherwise have
+  had to guess at.
+
 - RFC 8017, RFC 4055, RFC 5756, and RFC 3279 join the reference documents
   under `docs/rfc/`, each fetched twice and recorded with its checksum.
   They are what RSA verification reads: PKCS #1 for the primitive and both

@@ -1316,34 +1316,79 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.47 DNS (`net-dns`)
 
-- Encoding: a question, an answer with an `A` record, a `CNAME` chain of
-  depth two, and a response with no answers.
+- Encoding: a question, an answer with an `A` record, one with an `AAAA`
+  record, a `CNAME` chain of depth two, and a response with no answers.
+  Every message and every record reads back as what was written.
 - Names: a label of 63 characters, one of 64 rejected, a name of 255
-  bytes, one of 256 rejected, an empty name, and a name with a
-  compression pointer to an earlier label.
+  bytes, one of 256 rejected, an empty name, a name with a compression
+  pointer to an earlier label, and one whose labels are assembled from
+  pointers past the 255-byte limit. The preferred syntax is enforced: a
+  leading or trailing hyphen, an underscore, a space, and a byte outside
+  ASCII are each refused. Case is written as it came and ignored when two
+  names are compared, and two names that compare equal hash alike.
 - Compression: a pointer loop, a forward pointer, and a pointer chain
-  longer than the jump limit are rejected without unbounded work.
-- Resolver: a matching response is accepted; responses with a wrong
-  transaction id, a wrong question section, a wrong source address, or a
-  wrong source port are ignored; the query is retried at the scheduled
-  instants and rotates servers; exhaustion is an error.
-- `CNAME` chains longer than eight and a chain that loops are rejected.
-  Fuzz target `dns_message`.
+  longer than the jump limit are rejected without unbounded work. A
+  length octet of a reserved kind is refused.
+- Records: a body that is not the length its type has is rejected for `A`
+  and for `AAAA`; a `CNAME` that does not end where its body does is
+  rejected; a type this crate has no use for and a class other than `IN`
+  are carried whole and stepped over; a `CNAME` may point into the
+  message it stands in.
+- Resolver: both questions go out at once, to different servers and with
+  different transaction ids, and the answers of both come back together.
+  A matching response is accepted; responses with a wrong transaction id,
+  a wrong question section, a wrong source address, or a wrong source
+  port are ignored, as are a message that is a query, bytes that are no
+  message, and one whose answer section cannot be walked. The query is
+  retried at the scheduled instants and rotates servers, the transaction
+  id is kept across retries so that a late answer is still an answer, and
+  exhaustion is an error; so is a deadline that passes with nothing
+  settled. A response longer than the 512 bytes of RFC 1035, section 4.2.1
+  is ignored, and a buffer with no room for a query costs no attempt. A
+  name that does not exist is an answer and not a failure; a
+  truncated answer is a failure, because there is no TCP here; a server
+  that answers a failure code is asked again at once rather than after
+  the retry. One address that came back twice is one address, and a
+  record of the other family does not answer this question.
+- `CNAME`: a chain inside one answer is followed; a chain that leaves the
+  answer is asked on its own with a new transaction id; chains longer
+  than eight and a chain that returns to a record it has used are
+  rejected. Fuzz target `dns_message`.
 
 ### 6.6.48 DHCP (`net-dhcp`)
 
 - The four-message exchange produces a bound lease with address, mask,
-  router, and DNS servers taken from the options.
+  router, and DNS servers taken from the options, and the discover and
+  the request carry the parameter request list and the BROADCAST flag.
 - Options: an unknown option is skipped; a truncated option is rejected;
-  the end marker is required; padding is accepted; a missing message
-  type is rejected.
-- An offer with a foreign transaction id is ignored; a NAK returns the
-  machine to the start; two offers select the first and ignore the
-  second.
-- Lease timers: renewal at T1 through unicast, rebinding at T2 through
-  broadcast, and expiry that clears the address; a renewal answered late
-  keeps the lease; backoff grows exponentially and stays inside the
-  jitter bounds.
+  the end marker is required; padding is accepted; a missing message type
+  is rejected, as is one whose body is not one byte; an option that
+  stands twice is read as the last of them.
+- Messages: the magic cookie is required; a hardware type or length that
+  is not Ethernet's is refused; an op code that is neither direction is
+  refused; a message shorter than the fixed part is no message; what this
+  client writes is padded to 300 bytes and reads back as itself.
+- An offer with a foreign transaction id is ignored, as are one for
+  another hardware address, one from a wrong source port, one over IPv6,
+  and one that is not a reply; a NAK returns the machine to the start;
+  two offers select the first and ignore the second; an offer with no
+  server identifier is no offer.
+- Lease timers: renewal at T1 through unicast to the server that granted
+  the lease, with neither the requested address nor the server identifier
+  repeated; rebinding at T2 through broadcast; and expiry that clears the
+  address and starts a new exchange. A renewal answered late keeps the
+  lease. Backoff grows exponentially and stays inside the jitter bounds
+  at both ends of the generator's range; a renewal waits half of what is
+  left and never less than a minute, and never past the deadline. The T1
+  and T2 the server sends are used where they make sense and fall back to
+  the defaults where they do not.
+- An acknowledgment with no mask, no lease time or no server identifier
+  is ignored and the request stands; so is one whose mask is not a prefix,
+  one whose mask is not four bytes, and one whose address is the
+  unspecified one, a broadcast, a multicast group or a loopback address —
+  an offer of such an address is no offer either. `Lease::from_reply` says
+  which of them it was. A buffer with no room for a message costs neither
+  an attempt nor a step of the backoff.
 
 ### 6.6.49 HTTP/1.1 client (`net-http`)
 

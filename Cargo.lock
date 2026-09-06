@@ -301,6 +301,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "net-dhcp"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "audhsos-time",
+ "crypto-rng",
+ "net-udp",
+ "net-wire",
+ "test-support",
+]
+
+[[package]]
+name = "net-dns"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+ "audhsos-time",
+ "crypto-rng",
+ "net-udp",
+ "net-wire",
+ "test-support",
+]
+
+[[package]]
 name = "net-eth"
 version = "0.1.0"
 dependencies = [
