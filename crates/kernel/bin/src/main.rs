@@ -7,12 +7,14 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![doc = include_str!("../README.md")]
 
+mod task;
+
 use core::panic::PanicInfo;
 
 use audhsos_abi::layout::{BOOT_STACK_TOP, TICKS_PER_SECOND};
 use kernel_core::memory::MemoryError;
 use kernel_core::state::KernelState;
-use kernel_core::trap::Exception;
+use kernel_core::trap::{Exception, Response};
 use kernel_core::{boot, memory, println, tick, trap};
 use kernel_hal_api::exit::{ExitStatus, TestExit};
 use kernel_hal_x86_64::bootinfo::X86Platform;
@@ -55,19 +57,72 @@ fn run(platform: &X86Platform) {
         }
         None => entry::fail(b"[boot] the console is not reachable\n"),
     }
-    let interrupts = take_interrupts(platform);
-    let reported = entry::with_console(|console| match interrupts {
-        Ok(ticks) => {
-            println!(console, "timer ticking, {ticks} ticks so far");
-            boot::finish(console, &mut QemuExit::new());
-        }
-        Err(error) => {
+    if let Err(error) = take_interrupts(platform) {
+        entry::with_console(|console| {
             println!(console, "[boot] {error}");
             QemuExit::new().exit(ExitStatus::Failure);
-        }
-    });
-    if reported.is_none() {
-        entry::fail(b"[boot] the console is not reachable\n");
+        });
+        entry::fail(b"[boot] the interrupt hardware did not come up\n");
+    }
+
+    traps::set_syscall_handler(on_syscall);
+    if !task::start(platform) {
+        entry::with_console(|console| {
+            println!(console, "[boot] there is no root task to start");
+            QemuExit::new().exit(ExitStatus::Failure);
+        });
+        entry::fail(b"[boot] there is no root task to start\n");
+    }
+    idle();
+}
+
+/// What the kernel is once the root task runs: the thread that takes the
+/// processor when nothing else can, and gives it up again the moment
+/// something can.
+fn idle() -> ! {
+    loop {
+        task::run(None);
+        instructions::halt();
+    }
+}
+
+/// What the kernel does with a system call: read the buffer of the thread
+/// that made it, answer, clear away what ended, and switch if the answer
+/// asks for it.
+fn on_syscall() {
+    let Some(Some(caller)) = kernel_core::with_machine(|machine| machine.scheduler.current())
+    else {
+        return;
+    };
+    let frame = kernel_core::with_machine(|machine| {
+        machine
+            .objects
+            .threads
+            .get(caller)
+            .ok()
+            .map(|thread| thread.ipc_buffer)
+    })
+    .flatten();
+    let Some(frame) = frame else {
+        return;
+    };
+    // SAFETY: the kernel tables are active, so the window maps every
+    // physical frame read and write, and this is the only writer of the
+    // buffer while the call runs.
+    let mut buffer_window = unsafe { PhysicalWindow::kernel() };
+    let Some(bytes) = PhysicalWindow::frame_bytes_mut(&mut buffer_window, frame) else {
+        return;
+    };
+    // The interrupt controller and the ports, which the calls that touch a
+    // line or a port need. Holding it turns interrupts off for the length
+    // of the call.
+    let reschedule = interrupts::with_controller(|apics| {
+        let mut devices = kernel_hal_x86_64::ports::DeviceAccess::new(apics);
+        task::answer(caller, bytes, Some(&mut devices))
+    })
+    .unwrap_or(false);
+    if reschedule {
+        task::run(Some(caller));
     }
 }
 
@@ -155,10 +210,10 @@ fn on_interrupt(vector: u8) {
 /// a kernel that holds the machine borrow; one that finds it busy all the
 /// same leaves the bits for the next one.
 ///
-/// The switch a woken driver of higher priority asks for is not here: this
-/// image starts no user thread, so there is nobody to switch to. The test
-/// kernel the images of this crate share has that last step, and the root
-/// task of Phase 7 brings the same shape to the boot kernel.
+/// The switch a woken driver of higher priority asks for is the last of the
+/// three steps, and it is here now that the image starts a root task: a
+/// driver that the interrupt made runnable takes the processor from
+/// whatever was on it, which is the whole point of waking it.
 fn forward(vector: u8) {
     let line = kernel_core::with_machine(|machine| {
         kernel_ipc::interrupt_for(&machine.objects, vector).and_then(|id| {
@@ -187,6 +242,9 @@ fn forward(vector: u8) {
     };
     if let Some(wakeup) = outcome.wakeup {
         announce(wakeup);
+    }
+    if outcome.reschedule {
+        task::run(None);
     }
 }
 
@@ -247,12 +305,13 @@ fn requested_reserve(platform: &X86Platform) -> u64 {
     memory::requested_reserve(platform, &bytes)
 }
 
-/// Reports a processor exception through the kernel and ends the machine.
+/// What the kernel does with a processor exception.
 ///
-/// Every exception this image can see is the kernel's own: it starts no
-/// user thread, so nothing of it runs at ring three. The privilege the
-/// report carries goes into the line anyway, because a line that named the
-/// wrong ring would be worse than no line at all.
+/// An exception of the kernel's own ends the machine: there is nothing left
+/// that could be trusted to report it. One from user mode is a fault of the
+/// thread that took it, and becomes a message to whoever handles that
+/// process — which is what [2.6](../../../docs/02-architecture.md) asks for
+/// and what a system with a root task can now do.
 fn on_trap(report: TrapReport) {
     let exception = Exception {
         vector: report.vector,
@@ -262,12 +321,36 @@ fn on_trap(report: TrapReport) {
         cr2: report.fault_address,
         user: report.from_user(),
     };
+    if exception.response() == Response::StopMachine {
+        let mut state = KernelState::new();
+        let reported = entry::with_console(|console| {
+            trap::on_exception(exception, &mut state, console, &mut QemuExit::new());
+        });
+        if reported.is_none() {
+            entry::fail(b"[trap] a trap arrived while one was being reported\n");
+        }
+        return;
+    }
+
     let mut state = KernelState::new();
     let reported = entry::with_console(|console| {
-        trap::on_exception(exception, &mut state, console, &mut QemuExit::new());
+        kernel_core::trap::on_user_fault(exception, &mut state, console);
     });
     if reported.is_none() {
-        entry::fail(b"[trap] a trap arrived while one was being reported\n");
+        entry::fail(b"[trap] the console is not reachable\n");
+    }
+    let Some(Some(faulted)) = kernel_core::with_machine(|machine| machine.scheduler.current())
+    else {
+        entry::fail(b"[trap] a user thread faulted and the kernel holds none\n");
+    };
+    let fault = exception.fault().unwrap_or(audhsos_abi::Fault {
+        kind: audhsos_abi::FaultKind::GeneralProtection,
+        address: exception.cr2,
+        instruction_pointer: exception.ip,
+        error_code: exception.error_code,
+    });
+    if task::deliver_fault(faulted, fault) {
+        task::run(Some(faulted));
     }
 }
 

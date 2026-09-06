@@ -82,13 +82,13 @@ kernel-core.workspace = true
 kernel-ipc.workspace = true
 kernel-hal-api.workspace = true
 kernel-hal-x86_64.workspace = true
+kernel-mm.workspace = true
+kernel-objects.workspace = true
+kernel-syscall.workspace = true
 kernel-types.workspace = true
 
 [dev-dependencies]
 audhsos-sync.workspace = true
-kernel-mm.workspace = true
-kernel-objects.workspace = true
-kernel-syscall.workspace = true
 
 [lints]
 workspace = true

@@ -2269,7 +2269,39 @@ loader, copy, unmap, map into the child, then the stack, the buffer, the
 handles, the startup message, and the start — needs capabilities, and that
 is the wiring of the root task in `user-programs`.
 
-### 10.7.5 Servers and the application
+### 10.7.5 The kernel starts the root task
+
+[2.9](02-architecture.md#29-boot-sequence) steps 12 to 14 have always been
+part of this phase and were written down nowhere in it. They are what makes
+the difference between a kernel that boots and a system that runs.
+
+`kernel-core` gains `root.rs`, which is architecture-neutral and host-tested
+over the doubles the memory and system call tests already use: it creates
+the address space, maps the flat binary at `ROOT_TASK_BASE`, maps a stack of
+sixteen pages with one unmapped page between it and the program, allocates a
+kernel stack and an IPC buffer, makes the thread, installs the handles —
+`SystemControl`, the process itself, the boot image, and one `Ram` memory
+object per free region — and writes the startup message into the buffer.
+The root task runs at the highest priority, because it is the fault handler
+of everything it starts.
+
+`audhsos-kernel` gains `task.rs`, which is the rest: the frame a new thread
+returns through (`context::prepare_user`), the switch of the stacks, the
+task state segment, the idle thread on the boot stack, and the loop the
+kernel becomes once the root task runs — switch to whatever the scheduler
+picked, halt when there is nothing. The system call gate is armed with
+`traps::set_syscall_handler`, and the trap handler now tells a fault of the
+kernel from a fault of a user thread: the first ends the machine, the second
+becomes a message to the fault handler of that process. The device interrupt
+handler gains the switch that was the missing third step of
+[2.7](02-architecture.md#27-interrupts-and-devices), because there is now a
+thread to switch to.
+
+`kernel_hal_x86_64::memory::physical_slice` is what reads the root task out
+of the boot image: the window maps physical memory contiguously, so a range
+of frames is a range of bytes.
+
+### 10.7.6 Servers and the application
 
 - `server-init`: parse the boot image header again (root task side), read
   the archive, start `server-memory` first with the RAM memory objects,
@@ -2292,7 +2324,7 @@ is the wiring of the root task in `user-programs`.
 - Release build: `debug-uart` and `test-exit` off; `sh tools/xtask.sh run
   --release` shows the greeting through the userland driver.
 
-### 10.7.6 Fuzzing
+### 10.7.7 Fuzzing
 
 `crates/support/fuzz` (`fuzz-support`, adapter, host) is the fuzzing
 engine and the macro `fuzz_target!(|bytes: &[u8]| { ... })` that writes a
@@ -2325,7 +2357,7 @@ runs, and it is uninstrumented and therefore quick. Every crash becomes a regres
 parser's crate and its input a file in the corpus. Register the targets in
 `policy::FUZZ_TARGETS`.
 
-### 10.7.7 Acceptance
+### 10.7.8 Acceptance
 
 `check` green; `test --e2e` passes with the userland test programs
 reporting through the console driver; catalog 6.6.12, 6.6.13 tar items,

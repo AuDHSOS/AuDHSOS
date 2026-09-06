@@ -74,6 +74,28 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The kernel starts the root task. Steps 12 to 14 of the boot sequence have
+  been in 2.9 since it was written and in the implementation plan nowhere:
+  the boot image becomes a memory object, a process is built with the flat
+  binary mapped at `ROOT_TASK_BASE`, a stack of sixteen pages below it with
+  an unmapped page between, a kernel stack, an IPC buffer, and the handles it
+  starts with — system control, itself, the boot image, and one memory object
+  per free region of memory — and then the startup message that says which
+  handle is which.
+
+  What knows nothing of a processor is `kernel_core::root`, host-tested over
+  the doubles the memory tests already use. What is left is `task.rs` in the
+  kernel binary: the frame a new thread returns through, the switch of the
+  stacks, the idle thread on the boot stack, and the loop the kernel becomes
+  — switch to whatever the scheduler picked, halt when there is nothing.
+
+  Two things follow from there being a user thread at last. The trap handler
+  now tells a fault of the kernel from a fault of a user thread: the first
+  ends the machine, the second becomes a message to the fault handler of that
+  process. And the device interrupt handler gains the switch that 2.7 asks
+  for as its third step, which the binary could not do while it had nobody to
+  switch to.
+
 - `server-console`, what the console driver does with the controller and
   with the bytes that arrive on it: a write that reports how far it came,
   and a ring for what came in until a client asks for it. The controller is

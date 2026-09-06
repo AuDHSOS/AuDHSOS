@@ -572,8 +572,7 @@ impl<'a> Builder<'a> {
     ///
     /// [`WriteError::Full`] when the buffer has no room;
     /// [`WriteError::NameTooLong`] for a name that does not fit the two
-    /// fields; [`WriteError::FileTooLarge`] for a file the size field
-    /// cannot express.
+    /// fields.
     pub fn file(&mut self, name: &[u8], data: &[u8]) -> Result<(), WriteError> {
         self.entry(name, Kind::File, data)
     }
