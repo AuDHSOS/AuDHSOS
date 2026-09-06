@@ -1349,68 +1349,152 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.47 DNS (`net-dns`)
 
-- Encoding: a question, an answer with an `A` record, a `CNAME` chain of
-  depth two, and a response with no answers.
+- Encoding: a question, an answer with an `A` record, one with an `AAAA`
+  record, a `CNAME` chain of depth two, and a response with no answers.
+  Every message and every record reads back as what was written.
 - Names: a label of 63 characters, one of 64 rejected, a name of 255
-  bytes, one of 256 rejected, an empty name, and a name with a
-  compression pointer to an earlier label.
+  bytes, one of 256 rejected, an empty name, a name with a compression
+  pointer to an earlier label, and one whose labels are assembled from
+  pointers past the 255-byte limit. The preferred syntax is enforced: a
+  leading or trailing hyphen, an underscore, a space, and a byte outside
+  ASCII are each refused. Case is written as it came and ignored when two
+  names are compared, and two names that compare equal hash alike.
 - Compression: a pointer loop, a forward pointer, and a pointer chain
-  longer than the jump limit are rejected without unbounded work.
-- Resolver: a matching response is accepted; responses with a wrong
-  transaction id, a wrong question section, a wrong source address, or a
-  wrong source port are ignored; the query is retried at the scheduled
-  instants and rotates servers; exhaustion is an error.
-- `CNAME` chains longer than eight and a chain that loops are rejected.
-  Fuzz target `dns_message`.
+  longer than the jump limit are rejected without unbounded work. A
+  length octet of a reserved kind is refused.
+- Records: a body that is not the length its type has is rejected for `A`
+  and for `AAAA`; a `CNAME` that does not end where its body does is
+  rejected; a type this crate has no use for and a class other than `IN`
+  are carried whole and stepped over; a `CNAME` may point into the
+  message it stands in.
+- Resolver: both questions go out at once, to different servers and with
+  different transaction ids, and the answers of both come back together.
+  A matching response is accepted; responses with a wrong transaction id,
+  a wrong question section, a wrong source address, or a wrong source
+  port are ignored, as are a message that is a query, bytes that are no
+  message, and one whose answer section cannot be walked. The query is
+  retried at the scheduled instants and rotates servers, the transaction
+  id is kept across retries so that a late answer is still an answer, and
+  exhaustion is an error; so is a deadline that passes with nothing
+  settled. A response longer than the 512 bytes of RFC 1035, section 4.2.1
+  is ignored, and a buffer with no room for a query costs no attempt. A
+  name that does not exist is an answer and not a failure; a
+  truncated answer is a failure, because there is no TCP here; a server
+  that answers a failure code is asked again at once rather than after
+  the retry. One address that came back twice is one address, and a
+  record of the other family does not answer this question.
+- `CNAME`: a chain inside one answer is followed; a chain that leaves the
+  answer is asked on its own with a new transaction id; chains longer
+  than eight and a chain that returns to a record it has used are
+  rejected. Fuzz target `dns_message`.
 
 ### 6.6.48 DHCP (`net-dhcp`)
 
 - The four-message exchange produces a bound lease with address, mask,
-  router, and DNS servers taken from the options.
+  router, and DNS servers taken from the options, and the discover and
+  the request carry the parameter request list and the BROADCAST flag.
 - Options: an unknown option is skipped; a truncated option is rejected;
-  the end marker is required; padding is accepted; a missing message
-  type is rejected.
-- An offer with a foreign transaction id is ignored; a NAK returns the
-  machine to the start; two offers select the first and ignore the
-  second.
-- Lease timers: renewal at T1 through unicast, rebinding at T2 through
-  broadcast, and expiry that clears the address; a renewal answered late
-  keeps the lease; backoff grows exponentially and stays inside the
-  jitter bounds.
+  the end marker is required; padding is accepted; a missing message type
+  is rejected, as is one whose body is not one byte; an option that
+  stands twice is read as the last of them.
+- Messages: the magic cookie is required; a hardware type or length that
+  is not Ethernet's is refused; an op code that is neither direction is
+  refused; a message shorter than the fixed part is no message; what this
+  client writes is padded to 300 bytes and reads back as itself.
+- An offer with a foreign transaction id is ignored, as are one for
+  another hardware address, one from a wrong source port, one over IPv6,
+  and one that is not a reply; a NAK returns the machine to the start;
+  two offers select the first and ignore the second; an offer with no
+  server identifier is no offer.
+- Lease timers: renewal at T1 through unicast to the server that granted
+  the lease, with neither the requested address nor the server identifier
+  repeated; rebinding at T2 through broadcast; and expiry that clears the
+  address and starts a new exchange. A renewal answered late keeps the
+  lease. Backoff grows exponentially and stays inside the jitter bounds
+  at both ends of the generator's range; a renewal waits half of what is
+  left and never less than a minute, and never past the deadline. The T1
+  and T2 the server sends are used where they make sense and fall back to
+  the defaults where they do not.
+- An acknowledgment with no mask, no lease time or no server identifier
+  is ignored and the request stands; so is one whose mask is not a prefix,
+  one whose mask is not four bytes, and one whose address is the
+  unspecified one, a broadcast, a multicast group or a loopback address —
+  an offer of such an address is no offer either. `Lease::from_reply` says
+  which of them it was. A buffer with no room for a message costs neither
+  an attempt nor a step of the backoff.
 
 ### 6.6.49 HTTP/1.1 client (`net-http`)
 
-- Requests: the request line and headers for a minimal `GET`, with a
-  host header always present; a header value with a control character is
-  rejected at encoding time.
+- Requests: the request line and headers for a minimal `GET`, with a host
+  header always present; a body brings its own `Content-Length`; a header
+  value with a control character is rejected at encoding time, as is a
+  name that is not a token, a target that is not an origin-form path, an
+  empty host, and any attempt to write `Host`, `Content-Length` or
+  `Transfer-Encoding` from the caller's header list.
 - Responses: a minimal response, a response with a body of declared
   length, a chunked body in one and in several reads, a chunk with an
-  extension, the terminating zero chunk with and without trailers.
+  extension, the terminating zero chunk with and without trailers, and a
+  body that ends when the connection does.
 - Rejections: a status line that is too long, more headers than the
-  limit, a header longer than the limit, obsolete line folding, both
-  `Content-Length` and `Transfer-Encoding` present, two `Content-Length`
-  headers that disagree, and a non-numeric length.
-- Framing: a response split across arbitrary read boundaries produces the
-  same result as one read (property); a body larger than the caller's
-  buffer is delivered in parts without loss.
-- A redirect status is reported with its location and is not followed.
-  Fuzz target `http_response`.
+  limit, a header longer than the limit, a head longer than the buffer it
+  was given, obsolete line folding, both `Content-Length` and
+  `Transfer-Encoding` present, two `Content-Length` headers that
+  disagree, a non-numeric length, a transfer encoding that is not chunked
+  alone, a chunk size that is not hexadecimal or overflows, and a chunk
+  that does not end where it said it would. Two `Content-Length` values
+  that agree are the one value they agree on.
+- Framing: a response split across every read boundary produces the same
+  result as one read, for a chunked body and for one of declared length
+  (property); a body larger than the caller's buffer is delivered in
+  parts without loss; a message that said how long it was and was not is
+  truncated, and the decoder says the same error to every further call.
+- A response to `HEAD` and one of status 1xx, 204 or 304 carries no body
+  whatever its fields say. A redirect status is reported with its
+  location and is not followed; 300 and 304 are 3xx and are not among the
+  five a client follows. Fuzz target `http_response`.
 
 ### 6.6.50 Interface and demultiplexing (`net-stack`)
 
-- Demultiplexing: an ARP frame, an IPv4 frame for a bound UDP socket,
-  one for a TCP connection, one for an unbound port, and one for a
-  foreign address each reach the right layer or are dropped.
-- Sockets: handles are generation-checked, a handle from a closed socket
-  is rejected, and the table reports exhaustion rather than reusing a
-  live slot.
-- `poll_at` returns the earliest deadline of every layer; after `poll`
-  at that instant the deadline has advanced; an idle stack reports no
-  deadline.
-- `poll` drains the outgoing work into a transmit buffer that is too
-  small across several calls without losing or reordering a frame.
-- An interface without an address answers no ARP request and produces no
-  IP traffic; configuring an address through DHCP makes both work.
+- Demultiplexing: an ARP frame for this host's address and one for
+  another, an IPv4 frame for a bound UDP socket, one for a TCP
+  connection, one for an unbound port, one for a foreign address, one for
+  another station, and a frame of a type this stack does not read, each
+  reach the right layer or are dropped. The same over IPv6, with a
+  neighbor solicitation, a neighbor advertisement, a duplicate address
+  probe, and a router advertisement. Bytes that are not the thing they
+  claim to be — a broken ARP packet, a broken header, a datagram whose
+  checksum does not verify — are dropped without an answer.
+- Sockets and connections: handles are generation-checked, a handle from
+  a closed socket is rejected and so is a second close of it, the slot is
+  used again under a new generation, a handle to no slot at all is
+  refused, a slot that has been through every generation hands out no
+  more, and the table reports exhaustion rather than reusing a live slot.
+- `poll_at` returns the earliest deadline of every layer; after `poll` at
+  that instant the deadline has advanced; an idle stack reports no
+  deadline; a stack with a backlog reports the present instant.
+- `poll` drains the outgoing work into a transmit buffer of one frame
+  across several calls without losing or reordering a frame, and the
+  queue itself keeps its order however it wraps (property).
+- An interface without an address answers no ARP request, no neighbor
+  solicitation, no echo request and no broadcast, and produces no IP
+  traffic; the four-message exchange of DHCP makes all of it work, a
+  refusal or an expiry takes the address and the routes away again, and a
+  router advertisement does the same for IPv6 once duplicate address
+  detection has finished — an address somebody else claims is not used.
+- A datagram to an unresolved neighbor waits for the answer and goes when
+  it arrives, over both families; a neighbor that never answers is given
+  up on.
+- Address selection: the policy table and the scopes of RFC 6724, a
+  source of the other family is never one, the destination itself wins,
+  the longest matching prefix decides between equals, a name of both
+  families is tried in the document's order, and what nothing can reach
+  comes last.
+- Connecting: a list of addresses is tried in the order it is given and
+  the next is taken when one is refused; every candidate refusing leaves
+  the attempt failed and the buffers come back; a name is resolved,
+  ordered and connected to; a second connection or a second resolution
+  waits for the first; a resolution with no server to ask is refused; and
+  a server of the other family is not one this resolution asks.
 
 ### 6.6.51 Virtqueue logic (`virtio-queue`)
 
