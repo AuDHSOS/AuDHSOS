@@ -29,6 +29,19 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- D-86: four unsafe budgets rise, and a process and a thread each hold one
+  reference to themselves. The budgets are `kernel-hal-x86_64` (129 to 142
+  unsafe, 24 to 27 `asm!`, for the three port widths that were missing and
+  the six methods that reach them), `audhsos-kernel` (26 to 27, for the
+  buffer a forwarded interrupt writes), `user-sys-x86_64` (11 to 13, for the
+  call that hands out both return words), and `user-test-programs` (17 to 65,
+  for the five new programs). The reference model is the second half: a handle
+  is a reference and the last one destroys what it names, except for a process
+  and a thread, which end when they are killed and when the reaper has given
+  back what they held. The reaper is the reason — it needs the `Thread` object
+  after the last handle to the thread has closed, to find the kernel stack and
+  the buffer to give back.
+
 - The documents follow the code of Phase 6. 2.3.4 gains the reference a
   process and a thread hold to themselves: a process ends when it is killed
   and a thread when the kernel has given back what it held, whatever handle

@@ -97,7 +97,7 @@ Every object type also carries the generic rights `DUPLICATE` and
   the current rights and the handle carries `DUPLICATE`.
 - `handle_close(handle)` releases the slot and the reference the handle
   held. Closing the last handle to an object destroys the object; a process
-  and a thread are the exception named in 2.3.4.
+  and a thread are the exception named in 2.3.4 (D-86).
 - `Rights` is a project-defined bit set type with constant-time subset
   checks; every right has a fixed bit position listed in `audhsos-abi`.
 - A badge is attached to an endpoint capability with `endpoint_badge`. The
@@ -117,10 +117,10 @@ generation. Pools are plain arrays in safe Rust and are tested on the host.
   come from handles, from mappings, and from bindings. A thread blocked on
   an object holds no reference to it, so closing the last handle to an
   endpoint destroys it while threads still wait on it (D-75).
-- A process and a thread hold one further reference: their own. A process
-  ends when it is killed and a thread when the kernel has given back what it
-  held, whatever handle still names either of them, and closing the last
-  handle to a running thread therefore does not end it. The handles that
+- A process and a thread hold one further reference: their own (D-86). A
+  process ends when it is killed and a thread when the kernel has given back
+  what it held, whatever handle still names either of them, and closing the
+  last handle to a running thread therefore does not end it. The handles that
   named one afterwards name nothing, which is what a stale handle is.
 - Destroying an endpoint or notification wakes every blocked thread with
   `ObjectDestroyed`. Dropping a reply object without replying wakes its
