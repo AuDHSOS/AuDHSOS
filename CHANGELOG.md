@@ -281,6 +281,210 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   system call result that does not fit into two return words and goes into
   the message area of the caller's own buffer instead.
 
+- The fuzz target `rsa` and three real chains, step R6 of the RSA track,
+  which is the end of it.
+
+  The target builds a key and a signature out of the same input and
+  verifies one against the other under whichever of the six schemes the
+  first byte names. Nothing in it asserts that a signature verifies — a
+  random string almost never is one, and asserting that it is not would be
+  asserting that the fuzzer is unlucky. What it asserts is that a key that
+  parses reads back as the key it was built from, and what it watches for
+  is time: everything it reaches is bounded before it runs, so a
+  verification that took long would be a bound that is missing. The corpus
+  holds a valid signature under each of the six schemes, the eight
+  malformed encodings the unit tests refuse, and two inputs that are not a
+  key at all.
+
+  `tools/tls-probe` reaches `www.ietf.org`, `www.rust-lang.org`, and
+  `www.bbc.co.uk` — the three chains section 11.15 named as the cost of
+  the omission. They do not exercise the same thing.
+  `www.rust-lang.org` is RSA the whole way, a 2048-bit leaf under a
+  2048-bit intermediate under the 4096-bit `ISRG Root X1`.
+  `www.bbc.co.uk` is the same shape under `GlobalSign Root R46` with a
+  `sha384WithRSAEncryption` link in it. `www.ietf.org` serves an ECDSA
+  chain whose root is cross-signed with RSA, so the same host verifies
+  through RSA under `ISRG Root X1` and through P-384 under
+  `ISRG Root X2` — two anchors, two algorithms, one connection.
+
+  The default anchor changes from `GTS Root R4` to `GTS Root R1`, because
+  Google moved `*.google.de` from a P-384 root to an RSA one while this
+  work was going on. The probe's own default host stopped verifying
+  without a line of its code changing, which is the plainest argument for
+  this whole track there is. `GTS Root R4` stays in `anchors/` for the
+  record, `ISRG Root X2` joins it as the P-384 anchor that a live chain
+  still reaches, and each of the five is recorded with its fingerprint and
+  the trust store it was taken from.
+
+- `audhsos-tls` offers and honours the RSA signature schemes, step R5 of
+  the RSA track, and the seam section 11.11 named as open is closed.
+
+  Six code points join `signature_algorithms` in the `ClientHello`, so it
+  now carries nine. The three `rsa_pss_rsae_*` are accepted in a
+  `CertificateVerify` over an RSA key. The three `rsa_pkcs1_*` are
+  refused there, by an arm of their own so that the refusal is visible
+  rather than a fall-through — RFC 8446 section 4.2.3 gives those code
+  points exactly one meaning, that a certificate may be signed that way,
+  and forbids them in a handshake signature (D-82). Offering what one
+  refuses is not a contradiction here: the offer is about the chain, the
+  refusal is about the signature the server makes itself, and both
+  directions have a test.
+
+  `MAX_SPKI` goes from 128 to 550, which is what an RSA-4096 subject
+  public key information occupies — fifteen for the algorithm identifier,
+  five hundred and twenty-six for the inner sequence of two integers, five
+  for the bit string, four for the outer sequence. The 160-byte buffer
+  that holds the signed content does not change: the transcript hash is
+  the cipher suite's, which is SHA-256 or SHA-384 and never SHA-512,
+  however the signature is hashed.
+
+  The replay of RFC 8448 now checks the server's signature. It did not
+  before, and the reason was that the trace signs with
+  `rsa_pss_rsae_sha256`. The `CertificateVerify` of the simple 1-RTT
+  handshake verifies through `crypto-rsa` under the key section 2 of that
+  document prints, against the transcript this crate computes, and fails
+  against a transcript one bit different. The key is a thousand and
+  twenty-four bits, below what a certificate may carry (D-79), so the
+  chain around the signature stays stubbed and the signature inside it
+  does not. The whole path is walked in the state-machine test instead,
+  twice: against a server with a two-thousand-and-forty-eight-bit RSA
+  chain and against one at four thousand and ninety-six.
+
+  `audhsos-tls` gained no dependency for any of this. The crate table of
+  section 11.3 said it would take `crypto-rsa`; a handshake signature is
+  verified the way a certificate signature is, through
+  `SubjectPublicKey::verify`, so the edge that carries RSA into the client
+  is the one to `audhsos-x509` that was already there. The table is
+  corrected.
+
+- `audhsos-x509` reads and verifies RSA, step R4 of the RSA track. `oid`
+  gains `rsaEncryption`, the three `sha*WithRSAEncryption` arcs,
+  `id-RSASSA-PSS`, `id-mgf1`, and the three hash identifiers, each with
+  the section that assigns it.
+
+  `SignatureAlgorithm::parse` had one rule for every algorithm — it
+  called `finish` on the identifier's fields and so demanded the
+  parameters be absent — and now has a rule apiece. Absence stays the
+  only right answer for ECDSA and Ed25519. For the three RSA identifiers
+  NULL and absent are both right, which is what RFC 4055, section 5
+  says and what the old rule got wrong. `id-RSASSA-PSS` is a third rule:
+  its parameters are required, and only the three sets that pair a hash
+  with MGF1 over that same hash and a salt as long as its output are read
+  (D-81). A set with a salt of another length, a mask over another hash,
+  an unknown hash, or a mask function that is not MGF1 is refused.
+
+  `SubjectPublicKey` gains an `Rsa` variant holding the modulus and the
+  exponent as borrowed slices, parsed from the inner `RSAPublicKey` of
+  RFC 3279, section 2.3.1. The DER reader needed nothing new for it:
+  `read_integer` already strips the leading zero of a positive integer
+  and refuses a negative one. `check_usable` applies the size bound of
+  D-79 — two thousand and forty-eight to four thousand and ninety-six
+  bits — which is what makes an out-of-range anchor a refusal rather than
+  a path that reaches nothing, and it is here rather than in `crypto-rsa`
+  for the reason that decision gives.
+
+  The builder gains RSA keys over the fixed pairs of D-83, and three
+  sizes stop fitting: `MAX_CERTIFICATE` goes from a kibibyte to two,
+  `TestKey::public_key` from a 97-byte array to a 526-byte one, and the
+  signature buffers from 128 bytes to 512. Two key pairs, of two thousand
+  and forty-eight and four thousand and ninety-six bits, join the test
+  sources with the `openssl genrsa` invocation that made them.
+
+- `crypto-rsa` gains MGF1 and EMSA-PSS-VERIFY, step R3 of the RSA track.
+  RFC 8017, appendix B.2.1 is the mask and section 9.1.2 is the
+  verification, with three of that section's parameters fixed rather than
+  read: the mask uses the same hash that made the digest, the salt is as
+  long as that hash's output, and the trailer is `0xBC`. That is what
+  RFC 8446 fixes for the three `rsa_pss_rsae_*` schemes, which are the
+  only PSS this client offers (D-81). The salt length in particular is
+  not recovered from the position of the separator, because a verifier
+  that recovered it would accept a salt of any length.
+
+  Each of the five inconsistencies section 9.1.2 names has a test, and
+  each is a block laid out by hand and then signed with a private
+  exponent, so what verification meets is a signature that recovers
+  exactly the block the test meant: a trailer that is not `0xBC`, a
+  leftmost bit set where `emBits` says there is none, padding before the
+  separator that is not zero, a separator that is not `0x01`, a salt one
+  byte short and one byte long, and a recovered salt that `H` was not
+  computed over.
+
+  A two-thousand-and-forty-eight-bit key pair joins the test sources for
+  the one case the RFC 8448 key cannot carry: PSS with SHA-512 needs a
+  hundred and thirty bytes of encoding and that key has a hundred and
+  twenty-eight. It was made once outside this repository with
+  `openssl genrsa 2048` and is recorded with the command that made it,
+  which is the arrangement D-83 sets out.
+
+- `crypto-rsa`, step R2 of the RSA track: the public key with the bounds
+  that belong to the primitive, and PKCS #1 v1.5 verification. The key
+  takes a modulus that is odd, has its top bit set, and is no wider than
+  the arithmetic allows, and an exponent that is odd and at least three.
+  It does not take the lower bound on the key size: that is a rule about
+  certificates and belongs where certificates are judged (D-79). One test
+  in the file says so by name — the thousand-and-twenty-four-bit key of
+  RFC 8448, section 2 is accepted here, and no chain will ever carry it.
+
+  The encoding is built and compared, never parsed (D-80). The three
+  `DigestInfo` prefixes are the byte strings RFC 8017, section 9.2 note 1
+  writes out, each with that citation beside it, and a test checks the
+  block this crate builds against them field by field. What the choice
+  buys is the eight refusals underneath it, each of them an encoded
+  message a decoding verifier would accept, signed with the private
+  exponent of that key so the arithmetic recovers it exactly: a padding
+  of seven `0xff` bytes, a `DigestInfo` moved into the block, bytes after
+  the digest, a separator overwritten, a first byte that is not `0x00`, a
+  second that is not `0x01`, a `DigestInfo` whose `SEQUENCE` carries an
+  indefinite length — which PKCS #1 v1.5 allows and this crate refuses,
+  the incompatibility D-80 states — and Bleichenbacher's forgery against
+  an exponent of three, which is not signed at all but is the integer cube
+  root of a block with a short padding and a long tail.
+
+  Verification has one error for every way it can fail. Which way it was
+  is exactly what the sender would like to know.
+
+  Signing is behind `test-signing` and is one call into `pow_wide` with
+  the private exponent. No key is generated (D-83).
+
+- `crypto-bignum`, step R1 of the RSA track: limb arithmetic over slices,
+  and a `Modulus` that arrives at run time. `crypto-ec` kept its four
+  `Params` implementations, whose modulus, inverse, and conversion
+  constant are known when the code is compiled, and gave up the three
+  operations underneath them — `montgomery`, `add_limbs`, and `subtract`,
+  which already took their modulus as an argument. Those now live in the
+  new crate over `&[u64]` rather than `[u64; N]`, together with the
+  comparison the in-place shape of the other two needs, and `crypto-ec`
+  imports them. Its P-256 and P-384 suites are what says the move changed
+  nothing: they pass unaltered.
+
+  What is new above them is `Modulus`, which derives at run time what
+  `Params` writes down. `n0inv` is `-m^-1` modulo `2^64` by Hensel
+  doubling — an odd modulus is its own inverse modulo eight, so five steps
+  carry three correct bits past sixty-four — and `R2` is `2^(128*used)` by
+  that many modular doublings, eight thousand one hundred and ninety-two
+  of them for a four-thousand-and-ninety-six-bit key, paid once. One width
+  is held and the used count decides every loop bound (D-78), so a
+  two-thousand-and-forty-eight-bit key costs a
+  two-thousand-and-forty-eight-bit multiplication and a
+  four-thousand-and-ninety-six-bit frame.
+
+  `pow` is left-to-right square-and-multiply and is not constant time; the
+  crate documentation states that as the design and says what holds it up,
+  which is the boundary rather than the code — no secret enters this
+  crate. The exponentiation has two doors: `pow` takes the exponent as a
+  `u64`, which is what verification needs, and `pow_wide` takes it as
+  bytes, which is what signing a test certificate with a private exponent
+  needs. Section 11.15.2 records the second one, which the plan implied in
+  prose and left out of its sketch.
+
+  The tests are a schoolbook reference in the test module — quadratic
+  multiplication, binary long division, no Montgomery form anywhere — and
+  properties against it at one thousand and twenty-four,
+  two thousand and forty-eight, three thousand and seventy-two, and four
+  thousand and ninety-six bits. The round trip of catalog 6.6.55 signs
+  with the private exponent of the key RFC 8448, section 2 prints and
+  verifies with its public one.
+
 - RFC 8017, RFC 4055, RFC 5756, and RFC 3279 join the reference documents
   under `docs/rfc/`, each fetched twice and recorded with its checksum.
   They are what RSA verification reads: PKCS #1 for the primitive and both

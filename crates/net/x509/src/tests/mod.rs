@@ -12,10 +12,11 @@ mod certificate;
 mod name;
 mod parts;
 mod path;
+mod rsa;
 
 use audhsos_time::CivilTime;
 
-use crate::builder::{Params, TestKey, build};
+use crate::builder::{MAX_CERTIFICATE, Params, TestKey, build};
 use crate::error::X509Error;
 
 /// The secret of the authority, and of everything that signs.
@@ -50,7 +51,7 @@ pub(crate) fn late() -> CivilTime {
 /// A built certificate and the bytes it lives in.
 pub(crate) struct Built {
     /// The encoding.
-    pub(crate) bytes: [u8; 1024],
+    pub(crate) bytes: [u8; MAX_CERTIFICATE],
     /// How much of it is the certificate.
     pub(crate) length: usize,
 }
@@ -68,7 +69,7 @@ pub(crate) fn build_certificate(
     subject: TestKey,
     issuer: TestKey,
 ) -> Result<Built, X509Error> {
-    let mut bytes = [0u8; 1024];
+    let mut bytes = [0u8; MAX_CERTIFICATE];
     let length = build(params, subject, issuer, &mut bytes)?;
     Ok(Built { bytes, length })
 }

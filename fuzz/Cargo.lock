@@ -51,6 +51,7 @@ dependencies = [
  "audhsos-time",
  "crypto-ec",
  "crypto-hash",
+ "crypto-rsa",
 ]
 
 [[package]]
@@ -77,6 +78,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto-bignum"
+version = "0.1.0"
+
+[[package]]
 name = "crypto-ct"
 version = "0.1.0"
 
@@ -84,6 +89,7 @@ version = "0.1.0"
 name = "crypto-ec"
 version = "0.1.0"
 dependencies = [
+ "crypto-bignum",
  "crypto-ct",
  "crypto-hash",
 ]
@@ -101,6 +107,15 @@ version = "0.1.0"
 dependencies = [
  "crypto-aead",
  "crypto-ct",
+]
+
+[[package]]
+name = "crypto-rsa"
+version = "0.1.0"
+dependencies = [
+ "crypto-bignum",
+ "crypto-ct",
+ "crypto-hash",
 ]
 
 [[package]]
@@ -215,6 +230,14 @@ name = "pem"
 version = "0.1.0"
 dependencies = [
  "audhsos-encoding",
+ "fuzz-support",
+]
+
+[[package]]
+name = "rsa"
+version = "0.1.0"
+dependencies = [
+ "crypto-rsa",
  "fuzz-support",
 ]
 

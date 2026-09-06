@@ -900,6 +900,24 @@ done until every applicable item has a test. Items are added, never removed.
   name is present at all; case is compared case-insensitively for ASCII; a
   trailing dot on either side is the same name; an IP address matches only
   an `iPAddress` entry, and a `dNSName` that spells an address does not.
+- RSA: the three `sha*WithRSAEncryption` identifiers are read with NULL
+  parameters and with the field absent, and both are right (RFC 4055,
+  section 5) where absence is the only right answer for ECDSA and
+  Ed25519, which still refuse a NULL; a parameter that is neither is
+  rejected. `id-RSASSA-PSS` is read for the three parameter sets that
+  pair a hash with MGF1 over that same hash and a salt as long as its
+  output, and rejected for a salt of another length, a mask over another
+  hash, a hash this crate does not know, a mask function that is not
+  MGF1, and no parameters at all. An `rsaEncryption` key is the two
+  integers of RFC 3279, section 2.3.1 and its parameters must be NULL.
+  The size bound of D-79 is applied at each edge — two thousand and
+  forty-eight, three thousand and seventy-two, and four thousand and
+  ninety-six bits accepted; a thousand and twenty-four, two thousand and
+  forty, and four thousand one hundred and four refused — and it is
+  applied here rather than in `crypto-rsa`. A chain verifies under each of
+  the six schemes and a modified body under none of them; the widest key
+  is built and verified once, which is what took `MAX_CERTIFICATE` past a
+  kibibyte.
 - Property: mutating any byte of a valid certificate, in either of two
   ways, makes parsing or verification fail; mutating any byte of an
   intermediate makes the chain fail. The fuzz target `x509` parses
@@ -945,17 +963,32 @@ done until every applicable item has a test. Items are added, never removed.
   finished key of each side, the verify data of both `Finished` messages,
   and the client's own record opened under the keys the document names.
   Each message of the trace is read by this crate's reader and says what
-  the document says it says. The replay does not run the state machine and
-  does not check the server's signature, and the test file names both
-  reasons: matching the document byte for byte would mean writing another
-  implementation's `ClientHello`, which enters the transcript every later
-  secret depends on, and the trace signs with RSA-PSS, which this client
-  does not verify.
+  the document says it says. The replay does not run the state machine,
+  and the test file names the reason: matching the document byte for byte
+  would mean writing another implementation's `ClientHello`, which enters
+  the transcript every later secret depends on. It does check the server's
+  signature — the `CertificateVerify` of the trace is a real
+  `rsa_pss_rsae_sha256` signature under the key section 2 of that document
+  prints, and it verifies through `crypto-rsa` against the transcript this
+  crate computes, and fails against a transcript one bit different. That
+  key is a thousand and twenty-four bits, so no chain is walked with it
+  (D-79); the signature inside the chain is checked, the chain around it
+  is not.
 - The state machine driven end to end against a server built in the test
   file, which uses the same pieces from the other side: handshake, data
   in both directions, a key update, and a close. Once with an Ed25519
-  chain and once with a P-256 chain, so that both signature paths carry a
+  chain, once with P-256, once with P-384, and twice with RSA — at two
+  thousand and forty-eight bits and at four thousand and ninety-six, the
+  width `MAX_SPKI` is sized for — so that every signature path carries a
   whole handshake, with certificate verification on in each.
+- The two lists of signature schemes are not the same list, and the RSA
+  code points make the difference visible (D-82). The `ClientHello`
+  offers all nine, the three `rsa_pkcs1_*` among them, which the written
+  hello is checked against byte for byte; a `CertificateVerify` naming any
+  of those three is refused as an illegal parameter, and the PSS code
+  point over the same key is accepted. Both directions have a test, and
+  they do not contradict each other: the offer is about the chain, the
+  refusal is about the handshake signature.
 - `HelloRetryRequest` is recognised, must name a group, and replaces the
   transcript with the hash of it — and is then refused, because D-56
   leaves one group and a retry can only ask for a group that was already
@@ -1547,16 +1580,17 @@ boundary the list above does not name.
 
 ### 6.6.55 Wide arithmetic and RSA (`crypto-bignum`, `crypto-rsa`)
 
-Planned with steps R1 to R3 of document 11, section 11.15. The number
+Built with steps R1 to R3 of document 11, section 11.15. The number
 follows the catalog rather than the layer, as 6.6.54 records.
 
 - The modulus: a value that is even, one that is zero, one wider than
   `MAX_LIMBS`, and one whose top limb is zero are each refused by
   `Modulus::new`; an accepted one has zero in every limb at or above its
   used count, which is the invariant the rest of the crate rests on.
-- The derived constants: `n0inv` multiplied by the low limb of the
-  modulus is one modulo `2^64`; `R2` agrees with the value computed by
-  repeated doubling, for a modulus of each of the four widths.
+- The derived constants: `n0inv` is the *negative* inverse the reduction
+  step wants, so `n0inv` multiplied by the low limb of the modulus is
+  minus one modulo `2^64`; `R2` agrees with `2^(128*used)` reduced by the
+  reference, for a modulus of each of the four widths.
 - Montgomery multiplication and squaring agree with a schoolbook
   reference in the test module on random inputs at 1024, 2048, 3072, and
   4096 bits (property), in the form 6.6.33 uses for `fe25519`. The
@@ -1567,8 +1601,12 @@ follows the catalog rather than the layer, as 6.6.54 records.
   trip that signs with a wide exponent and verifies with a small one over
   the key of RFC 8448, section 2.
 - The key: the bounds of D-79 at each edge — an exponent of one, of two,
-  of three; a modulus one bit below the lower bound and one bit above the
-  upper — refused where the rule says and accepted where it does not.
+  of four, and of three; a modulus above the upper bound, and one whose
+  top bit is clear — refused where the rule says and accepted where it
+  does not. The lower bound is not among them, and a test says so by
+  name: the thousand-and-twenty-four-bit key of RFC 8448 is accepted
+  here, because that bound belongs to `audhsos-x509` and is checked in
+  6.6.36.
 - PKCS #1 v1.5, the positive direction: a signature this crate made
   verifies, for SHA-256, SHA-384, and SHA-512, and the encoded message it
   builds matches the `DigestInfo` prefixes of RFC 8017, section 9.2
@@ -1589,11 +1627,19 @@ follows the catalog rather than the layer, as 6.6.54 records.
 - The one vector from outside: the `CertificateVerify` of the simple
   1-RTT handshake of RFC 8448 verifies as `rsa_pss_rsae_sha256` under the
   key that document's section 2 prints. It is 1024 bits and therefore
-  never reaches a chain (D-79); it reaches the primitive.
-- Fuzz target `rsa`: a subject public key and a signature from the same
-  input, parsed and verified, must not panic and must not loop. The
-  corpus holds a valid signature of each kind and the malformed encodings
-  above.
+  never reaches a chain (D-79); it reaches the primitive. The test lives
+  in the replay of 6.6.38, because that is where the transcript the
+  signature was made over is computed.
+- Fuzz target `rsa`: a key and a signature from the same input, parsed
+  and verified, must not panic and must not loop. Everything it reaches is
+  bounded before it runs — the modulus by `MAX_LIMBS`, the exponent by the
+  sixty-four bits it is read into, the encodings by the width of the key —
+  so a verification that took a long time would be a bound that is
+  missing, and the engine would find it as a timeout. The one thing
+  asserted of a key that parses is that it reads back as the key it was
+  built from. The corpus holds a valid signature under each of the six
+  schemes, the eight malformed encodings above, and two inputs that are
+  not a key at all.
 
 ## 6.7 CI pipeline
 

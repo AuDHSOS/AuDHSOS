@@ -104,6 +104,7 @@ dependencies = [
  "audhsos-time",
  "crypto-ec",
  "crypto-hash",
+ "crypto-rsa",
  "test-support",
 ]
 
@@ -128,6 +129,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto-bignum"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
 name = "crypto-ct"
 version = "0.1.0"
 dependencies = [
@@ -138,6 +146,7 @@ dependencies = [
 name = "crypto-ec"
 version = "0.1.0"
 dependencies = [
+ "crypto-bignum",
  "crypto-ct",
  "crypto-hash",
  "test-support",
@@ -157,6 +166,16 @@ version = "0.1.0"
 dependencies = [
  "crypto-aead",
  "crypto-ct",
+ "test-support",
+]
+
+[[package]]
+name = "crypto-rsa"
+version = "0.1.0"
+dependencies = [
+ "crypto-bignum",
+ "crypto-ct",
+ "crypto-hash",
  "test-support",
 ]
 

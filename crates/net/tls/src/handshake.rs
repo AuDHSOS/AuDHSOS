@@ -38,6 +38,31 @@ pub const ECDSA_SECP256R1_SHA256: u16 = 0x0403;
 pub const ECDSA_SECP384R1_SHA384: u16 = 0x0503;
 /// `ed25519`.
 pub const ED25519: u16 = 0x0807;
+/// `rsa_pss_rsae_sha256`: PSS over a key an `rsaEncryption` certificate
+/// carries, with MGF1 over SHA-256 and a salt of thirty-two bytes.
+pub const RSA_PSS_RSAE_SHA256: u16 = 0x0804;
+/// `rsa_pss_rsae_sha384`.
+pub const RSA_PSS_RSAE_SHA384: u16 = 0x0805;
+/// `rsa_pss_rsae_sha512`.
+pub const RSA_PSS_RSAE_SHA512: u16 = 0x0806;
+/// `rsa_pkcs1_sha256`.
+///
+/// RFC 8446 section 4.2.3 gives this code point and its two siblings
+/// exactly one meaning: the client can verify a *certificate* signed that
+/// way. The same section forbids them in a `CertificateVerify`. So the
+/// three are offered in the `ClientHello` and refused in the handshake
+/// signature, and that is not a contradiction — the offer is about the
+/// chain, the refusal is about the signature the server makes itself
+/// (D-82). A client that stayed silent about them would be telling a
+/// server its chain may not be signed the way nearly every chain is
+/// signed.
+pub const RSA_PKCS1_SHA256: u16 = 0x0401;
+/// `rsa_pkcs1_sha384`. Offered for a chain, refused in a
+/// `CertificateVerify`; see [`RSA_PKCS1_SHA256`].
+pub const RSA_PKCS1_SHA384: u16 = 0x0501;
+/// `rsa_pkcs1_sha512`. Offered for a chain, refused in a
+/// `CertificateVerify`; see [`RSA_PKCS1_SHA256`].
+pub const RSA_PKCS1_SHA512: u16 = 0x0601;
 
 /// The random a server sends when it means to retry rather than agree.
 pub const RETRY_RANDOM: [u8; 32] = [
@@ -221,7 +246,13 @@ fn write_client_extensions(
         body.vector16(|schemes| {
             schemes.u16(ECDSA_SECP256R1_SHA256)?;
             schemes.u16(ECDSA_SECP384R1_SHA384)?;
-            schemes.u16(ED25519)
+            schemes.u16(ED25519)?;
+            schemes.u16(RSA_PSS_RSAE_SHA256)?;
+            schemes.u16(RSA_PSS_RSAE_SHA384)?;
+            schemes.u16(RSA_PSS_RSAE_SHA512)?;
+            schemes.u16(RSA_PKCS1_SHA256)?;
+            schemes.u16(RSA_PKCS1_SHA384)?;
+            schemes.u16(RSA_PKCS1_SHA512)
         })
     })?;
 

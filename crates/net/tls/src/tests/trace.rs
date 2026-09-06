@@ -79,12 +79,20 @@ pub(crate) const NEW_SESSION_TICKET: &str = "040000c90000001efad6aac502000000b22
      e4d3570008002a000400000400";
 
 /// The `ClientHello` this client writes for the parameters the test fixes, built from RFC 8446 by an implementation outside this repository.
-pub(crate) const OUR_CLIENT_HELLO: &str = "010000ac0303000102030405060708090a0b0c0d0e0f10111213141516171819\
+///
+/// The six RSA schemes of D-82 were added to it by arithmetic on the
+/// value that implementation produced, not by taking what this client now
+/// emits: the `signature_algorithms` list grows from three code points to
+/// nine, so its list length goes from six to eighteen, the extension from
+/// eight to twenty, the extension block from `0x5d` to `0x69`, and the
+/// message from `0xac` to `0xb8` — twelve bytes in four places, and the
+/// six code points appended in the order the writer emits them.
+pub(crate) const OUR_CLIENT_HELLO: &str = "010000b80303000102030405060708090a0b0c0d0e0f10111213141516171819\
      1a1b1c1d1e1f20404142434445464748494a4b4c4d4e4f505152535455565758\
-     595a5b5c5d5e5f00061301130213030100005d0000000b000900000673657276\
-     6572000a00040002001d000d0008000604030503080700100005000302683200\
-     2b0003020304003300260024001d002099381de560e4bd43d23d8e435a7dbafe\
-     b3c06e51c13cae4d5413691e529aaf2c";
+     595a5b5c5d5e5f0006130113021303010000690000000b000900000673657276\
+     6572000a00040002001d000d0014001204030503080708040805080604010501\
+     0601001000050003026832002b0003020304003300260024001d002099381de5\
+     60e4bd43d23d8e435a7dbafeb3c06e51c13cae4d5413691e529aaf2c";
 
 /// The value the two key shares agree on.
 pub(crate) const SHARED_SECRET: &str =

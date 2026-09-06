@@ -83,7 +83,7 @@ fn the_certificate_of_the_trace_holds_one_certificate() {
 }
 
 #[test]
-fn the_certificate_verify_of_the_trace_names_a_scheme_this_client_cannot_check() {
+fn the_certificate_verify_of_the_trace_names_the_scheme_the_document_says() {
     let bytes = unhex(trace::CERTIFICATE_VERIFY);
     let (kind, body, _) = read_message(&bytes)
         .expect("a well formed message")
@@ -92,8 +92,9 @@ fn the_certificate_verify_of_the_trace_names_a_scheme_this_client_cannot_check()
 
     let verify = CertificateVerify::parse(body).expect("well formed");
     // 0x0804 is rsa_pss_rsae_sha256. The reader is neutral about schemes;
-    // refusing one is the business of the state machine, and this is the
-    // reason the trace cannot check a signature here.
+    // refusing one is the business of the state machine. The signature
+    // itself is checked in `super::replay`, where the transcript it was
+    // made over exists.
     assert_eq!(verify.scheme, 0x0804);
     assert_eq!(verify.signature.len(), 128);
 }
@@ -617,4 +618,42 @@ fn the_client_hello_of_the_trace_offers_the_key_the_document_names() {
         hex(&share.expect("the client offered a share")),
         trace::CLIENT_PUBLIC_KEY
     );
+}
+
+/// D-82, the half of it that offers. The `ClientHello` carries all nine
+/// code points, the three `rsa_pkcs1_*` among them, because RFC 8446
+/// section 4.2.3 gives those three exactly one meaning — that the client
+/// can verify a certificate signed that way — and nearly every chain on
+/// the public web is signed that way. The same section forbids them in a
+/// `CertificateVerify`, which `super::machine` checks.
+#[test]
+fn the_client_hello_offers_the_nine_schemes_this_client_can_verify() {
+    let random = [0u8; 32];
+    let share = [0u8; 32];
+    let params = ClientHelloParams {
+        random: &random,
+        session_id: &[],
+        suites: &[CipherSuite::Aes128GcmSha256],
+        key_share: &share,
+        server_name: None,
+        alpn: &[],
+    };
+    let mut out = [0u8; 512];
+    let length = write_client_hello(&params, &mut out).expect("the buffer is big enough");
+    let written = hex(out.get(..length).unwrap_or(&[]));
+
+    // The extension: `000d`, a length of twenty, a list of eighteen, and
+    // the nine code points in the order the writer emits them.
+    assert!(
+        written.contains("000d00140012040305030807080408050806040105010601"),
+        "the signature_algorithms extension is not the nine schemes: {written}"
+    );
+    for scheme in [
+        "0403", "0503", "0807", "0804", "0805", "0806", "0401", "0501", "0601",
+    ] {
+        assert!(
+            written.contains(scheme),
+            "the scheme {scheme} is not offered"
+        );
+    }
 }

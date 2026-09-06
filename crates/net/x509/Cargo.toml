@@ -11,19 +11,21 @@ authors.workspace = true
 rust-version.workspace = true
 
 [features]
-test-certificates = ["crypto-ec/test-signing"]
+test-certificates = ["crypto-ec/test-signing", "crypto-rsa/test-signing"]
 
 [dependencies]
 audhsos-der.workspace = true
 audhsos-time.workspace = true
 crypto-ec.workspace = true
 crypto-hash.workspace = true
+crypto-rsa.workspace = true
 
 [dev-dependencies]
 # The builder signs, and signing lives behind a feature of `crypto-ec`.
 # Enabling it here makes it available to this crate's own tests without
 # putting it into any product build.
 crypto-ec = { workspace = true, features = ["test-signing"] }
+crypto-rsa = { workspace = true, features = ["test-signing"] }
 test-support.workspace = true
 
 [lints]

@@ -26,15 +26,22 @@ In scope for the first version:
   `TLS_CHACHA20_POLY1305_SHA256`.
 - Key exchange `x25519` (D-56).
 - Certificate signature verification with ECDSA over P-256 and over
-  P-384, with SHA-256 or SHA-384, and with `ed25519`. A chain that ends at
-  a P-384 root is therefore walked to the end; `GTS Root R4` is one such
-  root, and `tools/tls-probe` reaches it.
+  P-384, with SHA-256 or SHA-384, with `ed25519`, and with RSA — PKCS #1
+  v1.5 and PSS, each over SHA-256, SHA-384, or SHA-512, for a key of two
+  thousand and forty-eight to four thousand and ninety-six bits (D-79).
+  A chain that ends at a P-384 root is therefore walked to the end, and so
+  is one that ends at an RSA root; `ISRG Root X2` is one of the first and
+  `ISRG Root X1` one of the second, and `tools/tls-probe` reaches both.
 - Handshake signature verification with `ecdsa_secp256r1_sha256`,
-  `ecdsa_secp384r1_sha384`, and `ed25519`. These are the schemes the
-  `ClientHello` offers, and the two lists are not the same list: a scheme
-  names one curve, while `ecdsa-with-SHA384` in a certificate names none,
-  so the `CertificateVerify` is held to a stricter rule than the chain
-  below it (D-61).
+  `ecdsa_secp384r1_sha384`, `ed25519`, and the three `rsa_pss_rsae_*`
+  schemes. The `ClientHello` offers those six and three more — the
+  `rsa_pkcs1_*` code points, which RFC 8446 section 4.2.3 gives one
+  meaning, that a certificate may be signed that way, and forbids in a
+  `CertificateVerify`. The two lists are not the same list: a scheme names
+  one curve, while `ecdsa-with-SHA384` in a certificate names none, so the
+  `CertificateVerify` is held to a stricter rule than the chain below it
+  (D-61), and the three PKCS #1 code points are offered and refused
+  (D-82).
 - Server certificate validation against caller-supplied trust anchors,
   RFC 5280 path rules, RFC 6125 name matching.
 - ALPN, server name indication, key update, close notify.
@@ -46,11 +53,13 @@ exchange; hybrid post-quantum key
 exchange; certificate revocation (CRL, OCSP, stapling); name constraints;
 renegotiation; compression; `record_size_limit`; DTLS.
 
-RSA verification was on that list and is now section 11.15, planned and
-not yet built. It is the one omission that costs interoperability: many
+RSA verification was on that list until steps R1 to R6 of section 11.15
+took it off. It was the one omission that cost interoperability: many
 public chains are RSA to the root, and `www.ietf.org`,
-`www.rust-lang.org`, and `www.bbc.co.uk` are three that this client
-cannot reach for that reason alone.
+`www.rust-lang.org`, and `www.bbc.co.uk` were three this client could not
+reach for that reason alone. All three are reached now, and so is
+`google.de`, whose chain moved from a P-384 root to an RSA one while this
+work was going on — which is the plainest argument for it there is.
 
 An earlier version of this section said the arithmetic was nearly there —
 that `crypto-ec::montgomery` is generic over the number of limbs, so a
@@ -89,7 +98,7 @@ server.
 | `crypto-rsa` | `crates/crypto/rsa` | c2 | `crypto-ct`, `crypto-hash`, `crypto-bignum` |
 | `audhsos-der` | `crates/net/der` | c0 | - (`audhsos-time` when it exists, D-46 and 11.14) |
 | `audhsos-x509` | `crates/net/x509` | c3 | `audhsos-der`, `crypto-hash`, `crypto-ec`, `crypto-rsa` |
-| `audhsos-tls` | `crates/net/tls` | c4 | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `crypto-rsa`, `audhsos-der`, `audhsos-x509` |
+| `audhsos-tls` | `crates/net/tls` | c4 | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-x509` |
 
 All ten are logic crates: `no_std`, `#![forbid(unsafe_code)]`, no
 allocation, `Target::Host` in the policy table, coverage gate on. Each
@@ -499,13 +508,13 @@ the tests instead, and the two checks cover different halves: the replay
 that the arithmetic matches the world, the machine test that the state
 machine does what the arithmetic allows.
 
-The trace cannot yet check a signature: it signs with RSA-PSS, which this
-client does not verify, so the replay runs with certificate verification
-stubbed out and tests the transcript, the key schedule, record protection,
-and `Finished`. Certificate validation is tested separately against
+The trace could not check a signature while this client did not verify
+RSA-PSS: the replay ran with certificate verification stubbed out and
+tested the transcript, the key schedule, record protection, and
+`Finished`, and certificate validation was tested separately against
 project-generated ECDSA and Ed25519 chains.
 
-Step R5 of 11.15 closes that seam, and closes it further than was
+Step R5 of 11.15 closed that seam, and closed it further than was
 expected when this paragraph was first written. RFC 8448 section 2 prints
 the whole private key the traces sign with, so the trace is not only a
 handshake to reproduce but a signature vector: the `CertificateVerify` of
@@ -514,13 +523,18 @@ a key this repository holds. It verifies through `crypto-rsa` directly.
 It does not verify through the client, and not because anything is
 missing: the modulus is 1024 bits, which D-79 puts below what a
 certificate may carry. The chain around it stays stubbed, the signature
-inside it stops being.
+inside it has stopped being.
+
+The whole path is walked elsewhere, and it is walked twice: the state
+machine of `super::machine` is driven end to end against a server whose
+chain is RSA, once at two thousand and forty-eight bits and once at four
+thousand and ninety-six, which is the width `MAX_SPKI` is sized for.
 
 Beyond that: the vector tests of each primitive, property tests for
 round trips and for parsers that must not panic, model tests for path
 validation, negative tests for every rejection rule in 11.9 and 11.10,
-and the four fuzz targets `der`, `x509`, `tls_record`, and
-`tls_handshake`. Coverage thresholds apply to all eight crates.
+and the five fuzz targets `der`, `x509`, `rsa`, `tls_record`, and
+`tls_handshake`. Coverage thresholds apply to all ten crates.
 
 Every crate whose code touches secrets carries a constant-time review
 section in its crate documentation: which functions see secret input, and
@@ -540,12 +554,12 @@ checklist in 4.9.
 | T6 | `audhsos-x509` with the test certificate builder | L | implemented |
 | T7 | `audhsos-tls` | XL | implemented |
 | T8 | Integration, jointly with step D9 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M | |
-| R1 | `crypto-bignum`: the limb core out of `crypto-ec`, a runtime `Modulus`, and exponentiation (11.15) | M-L | |
-| R2 | `crypto-rsa`: the key with its bounds, and PKCS #1 v1.5 | M | |
-| R3 | `crypto-rsa`: MGF1 and EMSA-PSS-VERIFY | M | |
-| R4 | `audhsos-x509`: identifiers, parameters, the key, the pairs, and the builder | L | |
-| R5 | `audhsos-tls`: code points, the hello, `MAX_SPKI`, the `CertificateVerify` rule, the trace | M | |
-| R6 | The fuzz target, `tools/tls-probe` against three hosts, and the documents | S-M | |
+| R1 | `crypto-bignum`: the limb core out of `crypto-ec`, a runtime `Modulus`, and exponentiation (11.15) | M-L | implemented |
+| R2 | `crypto-rsa`: the key with its bounds, and PKCS #1 v1.5 | M | implemented |
+| R3 | `crypto-rsa`: MGF1 and EMSA-PSS-VERIFY | M | implemented |
+| R4 | `audhsos-x509`: identifiers, parameters, the key, the pairs, and the builder | L | implemented |
+| R5 | `audhsos-tls`: code points, the hello, `MAX_SPKI`, the `CertificateVerify` rule, the trace | M | implemented |
+| R6 | The fuzz target, `tools/tls-probe` against three hosts, and the documents | S-M | implemented |
 
 T1 to T7 touch nothing outside their own crates and the policy table, so
 they can be built between kernel phases without disturbing them. T5 and
@@ -567,7 +581,7 @@ separate workspace and no part of the checks.
 |------|--------|------------|
 | Self-written cryptography has flaws that tests do not find | a connection that looks encrypted but is not | vector tests from the standards, the RFC 8448 trace, negative tests for every rejection rule, fuzzing, the constant-time review section per crate, verification-only asymmetric surface |
 | Constant-time properties are lost to compiler optimization | timing side channels | no tables, no secret-dependent control flow at the source level; `black_box` where the source must not be folded away; the discipline is documented per function |
-| No RSA verification yet | many real chains cannot be validated | scoped as steps R1 to R6 (11.15) against documents this repository now holds; until they are done it is a stated limit, and the interfaces already leave room for the algorithm |
+| Self-written RSA has flaws the tests do not find | a chain that looks verified and is not | the construction of D-80 rather than a decoder, a negative test for each rejection rule of both encodings, the `CertificateVerify` of RFC 8448 as a vector from outside, the fuzz target `rsa`, and three real chains through `tools/tls-probe` |
 | Wide arithmetic is written for one purpose and used for another | a bignum that is safe for public values used where values are secret | `crypto-bignum` serves verification only: no secret ever reaches it, its module documentation says so in the form `montgomery.rs` already uses, and nothing in the track signs outside `test-signing` |
 | No revocation checking | a revoked certificate is accepted | stated as a known limit; short-lived anchors and operator-chosen trust stores are the only mitigation in this version |
 | The track grows past its estimate | kernel phases slip | the track is independent; work on it happens between phases, never instead of one |
@@ -600,9 +614,11 @@ program, which is what the regression step uses.
 
 ## 11.15 RSA verification
 
-Planned, not built. This section is the design and the order of work for
-the one omission of 11.2 that costs interoperability, in the form the
-rest of this document uses. The decisions it rests on are D-77 to D-83.
+Built, in the six steps R1 to R6 of 11.12. This section was the design and
+the order of work for the one omission of 11.2 that cost
+interoperability, and it is kept in that shape, in the tense it was
+written in, with what the building changed said where it changed it. The
+decisions it rests on are D-77 to D-83.
 
 ### 11.15.1 What the reference documents settle
 
@@ -641,9 +657,23 @@ pub const MAX_LIMBS: usize = 64;                       // 4096 bits
 
 impl Modulus {
     pub fn new(big_endian: &[u8]) -> Result<Modulus, BignumError>;
+    pub fn bits(&self) -> usize;
     pub fn pow(&self, base: &[u8], exponent: u64, out: &mut [u8]) -> Result<(), BignumError>;
+    pub fn pow_wide(&self, base: &[u8], exponent: &[u8], out: &mut [u8])
+        -> Result<(), BignumError>;
 }
 ```
+
+The exponentiation is written down twice because it is asked for twice.
+`pow` is the verification direction, where the exponent is three or
+sixty-five thousand five hundred and thirty-seven and a `u64` is more
+than enough. `pow_wide` takes the exponent as bytes, and it exists for
+the one sentence of 11.15.3 that says signing is one call into the
+exponentiation the verification already has: a private exponent is as
+wide as the modulus and does not fit in a `u64`. The narrow one forwards
+to the wide one, so there is one algorithm and two doors to it. `bits`
+reports the bit length of the modulus, which is what an encoding rule
+that speaks of `modBits` needs.
 
 `new` derives what `Params` used to carry as constants. `n0inv` is
 `-m^-1` modulo `2^64` by Hensel doubling, five steps from the low limb of
@@ -679,12 +709,24 @@ pub struct PublicKey { modulus: Modulus, exponent: u64, size: usize }
 
 impl PublicKey {
     pub fn new(modulus: &[u8], exponent: &[u8]) -> Result<PublicKey, RsaError>;
+    pub fn size(&self) -> usize;      // k, the width every signature has
+    pub fn bits(&self) -> usize;      // modBits
+    pub fn exponent(&self) -> u64;
     pub fn verify_pkcs1(&self, hash: HashId, message: &[u8], signature: &[u8])
         -> Result<(), RsaError>;
     pub fn verify_pss(&self, hash: HashId, message: &[u8], signature: &[u8])
         -> Result<(), RsaError>;
 }
 ```
+
+`HashId` is this crate's, not `crypto-hash`'s: the two encodings hash the
+message more than once, so a caller that passed a digest could not do the
+second hashing, and naming the function is the only interface that works
+for both. `RsaError` has three variants and verification uses one of
+them. A signature of the wrong length, one that is not below the modulus,
+one whose padding is short, and one whose digest does not match are the
+same refusal, because telling them apart tells whoever sent the signature
+which of them it was.
 
 `new` takes the shape rules of D-79 that are the primitive's own: the
 modulus odd with its top bit set and no wider than `MAX_LIMBS`, the
@@ -707,7 +749,19 @@ from MGF1 over the chosen hash, the leftmost bits checked against that
 width, the `0x01` separator, the trailer `0xBC`, and `H'` recomputed over
 eight zero bytes, the message hash, and the recovered salt. The salt is
 as long as the hash output and is not read from the encoding, because the
-three schemes this client offers fix it (D-81).
+three schemes this client offers fix it (D-81). A verifier that took the
+length from the position of the separator would accept a signature made
+with a salt of any length, which is a wider rule than the schemes state.
+
+A modulus with its top bit set has `modBits = 8k`, so `emBits` is
+`8k - 1`, the encoded message is `k` bytes, and exactly one bit at the
+top of it must be zero. That is why the size rule and the encoding rule
+are the same rule read twice: the thousand-and-twenty-four-bit key of
+RFC 8448 carries PSS with SHA-256 and SHA-384 and cannot carry SHA-512,
+whose `hLen + sLen + 2` is a hundred and thirty bytes. The test suite has
+a two-thousand-and-forty-eight-bit pair for that one case, generated once
+outside this repository with `openssl genrsa 2048` and recorded with the
+command that made it, as D-83 requires.
 
 Signing exists behind `test-signing` and is one call into `pow` with a
 wide exponent. No key is generated (D-83).
@@ -734,6 +788,21 @@ D-83, and two constants stop fitting: `MAX_CERTIFICATE` is 1024 where a
 4096-bit leaf under a 4096-bit issuer is about 1450 bytes, and
 `TestKey::public_key` returns a 97-byte array where an RSA key body is up
 to 526.
+
+The pair itself is borrowed rather than copied. A modulus and a private
+exponent are half a kibibyte each at the widest and `TestKey` is passed
+by value through every builder call, so the RSA variant carries an
+`RsaTestKey` of two `&'static [u8]` and a scheme, and the numbers stay
+constants in test source where D-83 puts them. The salt of a PSS
+signature is the digest of the body, which is as long as the scheme wants
+and is a number this repository computed: every certificate the tests
+build is the same bytes every time.
+
+`audhsos-tls` gains no dependency for any of this, which the crate table
+of 11.3 first said it would. A handshake signature is verified the way a
+certificate signature is, through `SubjectPublicKey::verify`, so the edge
+that carries RSA into the client is the one to `audhsos-x509` that was
+already there. The table is corrected.
 
 `audhsos-tls` is a smaller change with one number in it. `MAX_SPKI` is
 128 today, computed for P-384 at 120; an RSA-4096 subject public key
@@ -780,4 +849,9 @@ ninety percent of lines and eighty-five of branches for both new crates.
 The end of it is `tools/tls-probe` against `www.ietf.org`,
 `www.rust-lang.org`, and `www.bbc.co.uk`. That is the only check that says
 the chains this omission cost are reachable, and it is the one the whole
-step is for.
+step is for. All three complete, and they do not exercise the same thing:
+`www.rust-lang.org` is RSA the whole way, `www.bbc.co.uk` puts a
+`sha384WithRSAEncryption` link on a real path, and `www.ietf.org` serves
+an ECDSA chain whose root is cross-signed with RSA — so the same host
+verifies through RSA under one anchor and through P-384 under another.
+The probe's own README carries the anchors and their provenance.
