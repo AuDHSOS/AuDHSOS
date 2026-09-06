@@ -17,6 +17,8 @@ prüfen ob das RFC-Dokument geladen wurde. Wenn nicht lesen sie
 
 # Build- und Check-Kommandos
 
+Der Check muss laufen, bevor ein `git commit` erstellt wird.
+
 Alle Cargo-Aufrufe dieses Projekts laufen über die Wrapper in `tools/`, nie
 über ein blankes `cargo`:
 
