@@ -53,7 +53,7 @@ AuDHSOS/
 │   │   ├── rt/                user-rt: typed handles, heap, message area, startup message, report lines
 │   │   ├── sys-x86_64/        user-sys-x86_64: _start, trap instruction, the gate and its wrappers (unsafe allowed)
 │   │   ├── proto/             user-proto: protocol encodings
-│   │   ├── loader/            user-loader: tar reader, process creation from ELF
+│   │   ├── loader/            user-loader: tar reader, the segments a user ELF asks for
 │   │   ├── servers/
 │   │   │   ├── init/          server-init: the root task
 │   │   │   ├── name/          server-name
@@ -129,7 +129,7 @@ AuDHSOS/
 | `user-sys-x86_64` | u1 | `x86_64-unknown-none` | allowlisted | through the programs of `user-test-programs` in QEMU | `audhsos-abi`, `user-rt` |
 | `user-test-programs` | u1 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-sys-x86_64` |
 | `user-proto` | u1 | all | no | yes | `audhsos-abi`, `user-rt` |
-| `user-loader` | u2 | `x86_64-unknown-none` | no | yes, fuzz | `user-rt`, `user-proto`, `audhsos-elf` |
+| `user-loader` | u2 | all | no | yes, fuzz | `audhsos-abi`, `audhsos-elf`; `test-support` behind the feature `test-strategies` |
 | servers and apps | u3 | `x86_64-unknown-none` | no | logic on host, e2e in QEMU | `user-rt`, `user-proto`, `user-loader`, `driver-uart16550`, `driver-i8042`, `gfx` |
 | `crypto-ct` | c0 | all | no | yes | - |
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |

@@ -2249,14 +2249,25 @@ constants, versions in the label's high 16 bits.
 
 ### 10.7.4 `user-loader` (`crates/user/loader`)
 
-`tar.rs`: ustar reader over `&[u8]`: 512-byte headers, octal size field,
-checksum (sum of the header with the checksum field as spaces), `ustar\0`
-magic, prefix field for long names, reject `..` components and absolute
-paths, iterate entries; `process.rs`: create a process from an ELF using
-`audhsos-elf` with user constraints and the memory server: for each
-segment allocate, map into the loader, copy, unmap, map into the child;
-allocate stack (16 pages) and IPC buffer; install handles; write the
-startup message; start.
+`tar.rs`: a ustar reader and a ustar writer over `&[u8]`. The reader takes
+512-byte headers, the octal size field, the checksum (the sum of the header
+with the checksum field as spaces), the `ustar\0` magic, and the prefix
+field for long names; it refuses `..` components and absolute paths, and it
+ends the walk at the end marker whatever follows it. The writer is there so
+that the archive of the boot image and the archives the tests read are made
+by one piece of code, and so that what the crate reads can be checked
+against what it writes.
+
+`program.rs`: `plan(bytes)`, which reads a user ELF through `audhsos-elf`
+under the constraints of user space — above the lowest mappable page, below
+the buffers of the process — and answers with the whole pages that have to
+be mapped, the entry point, and where the stack of sixteen pages goes, with
+one unmapped page between the stack and the program.
+
+It is a plan and not an action. Carrying it out — allocate, map into the
+loader, copy, unmap, map into the child, then the stack, the buffer, the
+handles, the startup message, and the start — needs capabilities, and that
+is the wiring of the root task in `user-programs`.
 
 ### 10.7.5 Servers and the application
 

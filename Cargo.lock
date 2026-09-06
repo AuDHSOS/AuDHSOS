@@ -397,6 +397,15 @@ name = "test-support"
 version = "0.1.0"
 
 [[package]]
+name = "user-loader"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-elf",
+ "test-support",
+]
+
+[[package]]
 name = "user-proto"
 version = "0.1.0"
 dependencies = [

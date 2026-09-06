@@ -497,6 +497,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "user-loader",
+        path: "crates/user/loader",
+        kind: Kind::Logic,
+        deps: &["audhsos-abi", "audhsos-elf", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "user-sys-x86_64",
         path: "crates/user/sys-x86_64",
         kind: Kind::Adapter {
@@ -725,6 +733,7 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "madt" },
     FuzzTarget { name: "pem" },
     FuzzTarget { name: "rsa" },
+    FuzzTarget { name: "tar" },
     FuzzTarget {
         name: "tcp_segment",
     },

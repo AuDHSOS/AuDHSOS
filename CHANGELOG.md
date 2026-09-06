@@ -74,6 +74,28 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `user-loader`: the ustar reader for the boot archive, a ustar writer
+  beside it, and `plan`, which says what of a user ELF has to be mapped
+  where. Both are parsers over borrowed bytes with no system call in them,
+  so both run on the host and under the fuzzer.
+
+  The reader is strict where a loader has to be: an archive is input the
+  root task did not write, so a name that is absolute or that walks upwards
+  through `..` is refused where it is read; a header whose checksum does not
+  match is refused; and the walk ends at the first entry that does not read,
+  because the next header is found by the size field of this one.
+
+  `plan` adds to the ELF reader only what is about user space — the bounds,
+  and two segments that share a page once rounded, which the format allows
+  and a loader that maps pages cannot. It answers with a plan and not an
+  action, so all of it is testable without a capability in sight.
+
+  New fuzz target `tar`, with its own seed corpus. It found one thing on its
+  first run, in the target rather than in the reader: a search stops at its
+  match, so it can succeed over an archive whose later headers are broken,
+  and the assertion that the two must agree was wrong. That input is in the
+  corpus as `find-stops-before-a-broken-header`.
+
 - `user-proto`, the messages the servers speak: the name protocol, the
   console protocol, and the memory protocol, each a type with `encode` and
   `decode` and no system call in it. A label carries the version in its high
