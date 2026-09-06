@@ -25,6 +25,21 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   an implementation to accept them absent as well, so the parser has to
   take both forms and not, as first written down, only the present one.
 
+- RFC 2313, PKCS #1 version 1.5, joins the reference documents, fetched
+  twice and recorded with its checksum. It was listed as not needed, and
+  as an implementation reference it still is not: RFC 8017 delegates
+  nothing to it and names it only informatively. It is here because D-77
+  refuses a `DigestInfo` that is BER but not DER, and that refusal is a
+  claim about this document. From the source the claim is sharper than
+  from RFC 8017's summary of it. Version 1.5 does not merely permit the
+  looser encoding: its sections 10.2.3 and 10.2.4 define verification as a
+  BER decode followed by a digest comparison, so the two specifications
+  describe two different operations. The refusal is a deliberate
+  incompatibility and section 11.15.1 now says so. The document also
+  settles what could until now only be inferred — it carries no table of
+  `DigestInfo` prefixes, indeed no byte string at all, so the constants of
+  RFC 8017 section 9.2 note 1 have one source and not two.
+
 - RSA verification is planned rather than deferred: section 11.15 of
   document 11, decisions D-74 to D-80, catalog section 6.6.55, and steps
   R1 to R6 in the roadmap and in the order of work. Nothing is

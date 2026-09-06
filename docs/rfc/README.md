@@ -20,6 +20,7 @@ arrangement.
 | `rfc894.txt` | RFC 894, *A Standard for the Transmission of IP Datagrams over Ethernet Networks*, C. Hornig, April 1984 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc894.txt` | 5697 | `be88b9301e53f986aca3a0e55e488d1d79bae3f88fe3f257640397bc089e7035` |
 | `rfc1071.txt` | RFC 1071, *Computing the Internet Checksum*, R. Braden, D. Borman, C. Partridge, September 1988 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1071.txt` | 53524 | `e10dfd6816447843d47a7f1b990eba756a791a6308fd5b698a6276075a8e4f9b` |
 | `rfc1122.txt` | RFC 1122, *Requirements for Internet Hosts — Communication Layers*, R. Braden (ed.), October 1989 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1122.txt` | 289148 | `9f526e6bebc868324fedb90aebbcf6e5b15c53fd373ca5d5ce1c2cdcd264e04f` |
+| `rfc2313.txt` | RFC 2313, *PKCS #1: RSA Encryption Version 1.5*, B. Kaliski, March 1998 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2313.txt` | 37777 | `2d93e9f0f02343a29a8f64ad507e1779f65377319ed4945b6ac3dcb1f74fd69c` |
 | `rfc2464.txt` | RFC 2464, *Transmission of IPv6 Packets over Ethernet Networks*, M. Crawford, December 1998 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc2464.txt` | 12725 | `f9554329ef1f4e093513e5b6f7af00bb5d206710e0c61d08bd578fa5f00aee9a` |
 | `rfc3279.txt` | RFC 3279, *Algorithms and Identifiers for the Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile*, W. Polk, R. Housley, L. Bassham, April 2002 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc3279.txt` | 53833 | `6d3f19f18e17fa1c68da5aaf4021327748fabca840d7300443b77357a1fc1614` |
 | `rfc4055.txt` | RFC 4055, *Additional Algorithms and Identifiers for RSA Cryptography for use in the Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile*, J. Schaad, B. Kaliski, R. Housley, June 2005 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc4055.txt` | 57479 | `b8a1ef3fb135c32aed4eee121264f3ec83a46def746c8fe68e05bd1b60324e9a` |
@@ -41,9 +42,10 @@ arrangement.
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
-including the page breaks: 2887, 1218, 470, 171, 1417, 6844, 395, 1515,
-1403, 1403, 1347, 5435, 1683, 1123, 339, 451, 899, 787, 4427, 4371, 1067,
-2355, 1067, and 3811 lines respectively, in the order of the table.
+including the page breaks: 2887, 1218, 470, 171, 1417, 6844, 1067, 395,
+1515, 1403, 1403, 1347, 5435, 1683, 1123, 339, 451, 899, 787, 4427, 4371,
+1067, 2355, 1067, and 3811 lines respectively, in the order of the
+table.
 Every one was fetched twice and the two fetches agreed.
 
 ## Terms
@@ -65,12 +67,13 @@ Society and the year 2005, and then refers the reader to BCP 78 in the
 same words the later ones use, so it is read here as the group above
 rather than the group below.
 
-The twelve older ones carry the notice of their time, each in a full
+The thirteen older ones carry the notice of their time, each in a full
 copyright statement at the end that permits reproduction in whole
 provided the notice travels with it. RFC 4862 and RFC 4861 have the IETF
 Trust's of 2007; RFC 4443 and RFC 4291 the Internet Society's of 2006;
-RFC 3279 the Internet Society's of 2002; RFC 2464 the Internet Society's
-of 1998; and RFC 1122 carries that statement in the form of 1989. RFC 1071, RFC 894, RFC 826, RFC 792, and
+RFC 3279 the Internet Society's of 2002; RFC 2464 and RFC 2313 the
+Internet Society's of 1998; and RFC 1122 carries that statement in the
+form of 1989. RFC 1071, RFC 894, RFC 826, RFC 792, and
 RFC 791 carry no notice at all: RFC 1071 states unlimited distribution in
 its own Status of This Memo section, and the four from the early eighties
 predate even that form, under the practice the RFC Editor states for the
@@ -320,9 +323,9 @@ not repeat the search.
   `x25519` alone. Whether the TLS 1.3 specification itself belongs in this
   directory is a separate question from this one.
 
-## The four documents of RSA
+## The five documents of RSA
 
-These four are what RSA verification takes. They were gathered for the
+These five are what RSA verification takes. They were gathered for the
 reason the P-384 set was gathered: a real chain stops without them.
 Document 11 names RSA as the one omission that costs interoperability, and
 it costs it in the same place as before — `SubjectPublicKey::parse` meets
@@ -376,31 +379,46 @@ RFC 4055 adds identifiers to this profile but does not restate the key, so
 this is the only document here that says what an RSA
 `SubjectPublicKey` parses.
 
+**RFC 2313** — the shape this project does not implement. It is not
+needed to write the code, and that is worth saying plainly: nothing in
+RFC 8017 is delegated to it. Its normative references are three, and none
+of them is a PKCS #1 document; RFC 2313, RFC 2437, and RFC 3447 are all
+informative. Section 9.2 of RFC 8017 writes the encoding operation out in
+six steps and appendix A.2.4 carries the ASN.1.
+
+What this document holds is the source for a decision. RFC 8017's note 2
+after section 9.2 says version 1.5 defined `T` as the BER encoding rather
+than the DER encoding, and offers a BER-decoding verifier to anyone who
+wants compatibility with it. D-77 declines that offer, and declining it
+means refusing signatures another specification calls valid — which is a
+claim about a document, and a claim about a document is checked against
+the document.
+
+It reads stronger from the source than from the summary. Section 10.1.2
+has the `DigestInfo` "BER-encoded to give an octet string D"; section
+10.2.3 has that data "BER-decoded to give an ASN.1 value of type
+DigestInfo, which shall be separated into a message digest MD and a
+message-digest algorithm identifier"; section 10.2.4 then compares the
+digests. So version 1.5 does not merely permit a laxer encoding — its
+verification *is* the decoder, in its own sections, and the two documents
+describe two different operations rather than one operation with a
+tolerance. Refusing a `DigestInfo` that is BER but not DER is therefore a
+deliberate incompatibility with PKCS #1 v1.5, and 11.15 says so.
+
+Two things the document does not have, which is why the choice costs
+nothing else. It carries no table of `DigestInfo` prefixes — no byte
+string appears anywhere in it — so the constants of RFC 8017 section 9.2
+note 1 have exactly one source. And section 10.2.3 makes it an error if
+the digest algorithm is not MD2, MD4, or MD5: version 1.5 predates SHA,
+so nothing this system verifies could be read out of it in the first
+place.
+
 ## What RSA does not need, and why it is not here
 
 These were read and left out, in the form of the section above.
 
 - **RFC 3447**, PKCS #1 version 2.1, is obsoleted by RFC 8017, which says
   so in its header.
-- **RFC 2313**, PKCS #1 version 1.5, is where RFC 4055 section 5 points
-  for the padding of the older signature algorithm rather than restating
-  it. The pointer does not have to be followed. RFC 8017 section 9.2
-  writes the encoding operation out in six steps —
-  `EM = 0x00 || 0x01 || PS || 0x00 || T`, with `PS` at least eight octets
-  of `0xff` — and appendix A.2.4 carries the ASN.1. Nothing in it is
-  delegated: the normative references of RFC 8017 are three, and none of
-  them is a PKCS #1 document; RFC 2313, RFC 2437, and RFC 3447 are all
-  informative.
-
-  The one place where version 1.5 genuinely differs is recorded in
-  RFC 8017 as well, in note 2 after section 9.2: version 1.5 defined `T`
-  as the BER encoding of `DigestInfo` rather than the DER encoding, so a
-  signature that is valid under version 1.5 — an indefinite length on the
-  `SEQUENCE`, say — is rejected by the operation this repository
-  implements. The note offers a BER-decoding verifier to those who want
-  that compatibility. This project declines it: a decoder is the thing
-  construct-and-compare exists to avoid, and the note itself calls the
-  case unlikely in practice.
 - **RFC 2437**, PKCS #1 version 2.0, is on no path at all. RFC 4055 never
   names it, and the version brought OAEP encryption; PSS arrived one
   version later, in RFC 3447, which RFC 8017 obsoletes.

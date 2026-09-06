@@ -606,7 +606,7 @@ rest of this document uses. The decisions it rests on are D-74 to D-80.
 
 ### 11.15.1 What the reference documents settle
 
-Four documents are kept under `docs/rfc/` for this track, and their
+Five documents are kept under `docs/rfc/` for this track, and their
 README says what each is for. Three rules out of them shape the code and
 are stated here so that no reader has to rediscover them.
 
@@ -617,6 +617,18 @@ siblings to be NULL and requires an implementation to accept them absent
 as well, which no other algorithm in this crate allows. And RFC 8446
 section 4.2.3 gives the `rsa_pkcs1_*` code points one meaning in the
 `ClientHello` and forbids them in the `CertificateVerify` (D-79).
+
+The fifth document is what the first of those three costs. RFC 2313 is
+PKCS #1 version 1.5 itself, and its verification is not the construction
+of RFC 8017 with a looser encoding — it is the other operation, written
+out as its own sections: 10.2.3 BER-decodes the recovered data into a
+`DigestInfo` and separates it into a digest and an algorithm identifier,
+and 10.2.4 compares that digest against a fresh one. D-77 declines that
+operation, so a signature whose `DigestInfo` is BER but not DER is refused
+here and valid there. That is a deliberate incompatibility with a
+published specification, not a tolerance this client happens not to have,
+and it is stated as one. RFC 8017's own note calls the case unlikely in
+practice, and the certificates on the public web are DER.
 
 ### 11.15.2 `crypto-bignum`
 
