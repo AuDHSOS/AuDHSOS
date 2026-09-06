@@ -26,6 +26,7 @@
 
 use audhsos_abi::ipc_buffer;
 use audhsos_abi::{Rights, Syscall};
+use user_rt as _;
 use user_sys_x86_64 as sys;
 
 sys::entry!(main);

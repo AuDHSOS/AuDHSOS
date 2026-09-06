@@ -1780,6 +1780,25 @@ item is what 12.9 asked for before the encodings could be written
   message number the protocol does not have is refused, and a report
   without its status word is refused rather than read as a zero.
 
+### 6.6.57 The wrappers of the gate against the table (`user-sys-x86_64`, QEMU)
+
+The constant assertion beside the wrappers holds a list of values to the
+system call table; it cannot see the methods themselves (D-92). This item
+is the other half, and it needs a machine: the numbers a wrapper writes are
+what the kernel dispatches on, so the check is what the kernel saw.
+
+- `every_wrapper` calls all forty-two methods of `Gate` in the order of the
+  table, each with a handle that names nothing, so that every call is
+  refused and none of them waits for a partner or ends the thread;
+  `thread_exit` is last, because it does not come back.
+- The kernel writes down the number each call arrived under and the image
+  holds the sequence against `Syscall::ALL`, with `thread_exit` moved to
+  the end: as many calls as the table has entries, each entry in its place,
+  and no entry without one.
+- Each of the three failures is checked against the code it names: two
+  wrappers whose calls are swapped, a wrapper the program does not call,
+  and a call of the table with no wrapper that reached the kernel.
+
 ## 6.7 CI pipeline
 
 Jobs run in this order; a failure stops the pipeline.

@@ -121,7 +121,8 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   three logic crates beneath them do not already buy; 05 5.1 still drew the
   old shape.
 
-- Three unsafe budgets rise and a fourth opens (D-96): `kernel-hal-x86_64`
+- `user-test-programs` rises from 65 to 66 unsafe sites for the one of
+  `every_wrapper` (D-98), and three budgets rise and a fourth opens (D-96): `kernel-hal-x86_64`
   to 144 for the read of the root task out of the boot image,
   `audhsos-kernel` to 31 for the bring-up of that task, `user-sys-x86_64`
   to 21 for the gate over a thread's IPC buffer, and `user-programs` at 18
@@ -149,8 +150,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   a build fails when the two differ in length or in order. It caught the
   missing wrapper for `memory_merge` the hour that call was added. It does
   not prove that a method exists for each entry or that each passes the
-  entry it belongs to; the kernel's argument-count check and the end-to-end
-  run cover what is left.
+  entry it belongs to; that half is proved by running them (D-98).
 
 - The kernel owns COM1 until the userland drives it, and the handover and
   not a feature flag decides who writes. The first read or write of one of
@@ -211,6 +211,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   therefore carries both kinds of news about a child, told apart by the
   label, and a parent hears of a program that finished and of one that broke
   in the same place.
+
+- The test image `wrappers` runs every wrapper of the gate against the
+  table it claims to cover (D-98). `every_wrapper` calls all forty-two
+  methods in table order with a handle that names nothing, so every call is
+  refused and none waits for a partner; the kernel writes down the number
+  each arrived under, which is the number the wrapper wrote. A swapped
+  pair, a wrapper the program forgot, and a call added to the table without
+  one all fail there. Nothing in the system could find any of the three
+  before: the constant assertion beside the wrappers holds a list of values
+  to the table and cannot see the methods, and the kernel's argument-count
+  check passes two calls of the same arity.
 
 - `sh tools/xtask.sh test --e2e` boots the real system, waits for each
   server to say it started, types a line into the machine while it runs, and

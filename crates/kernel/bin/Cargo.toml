@@ -50,6 +50,9 @@ name = "preemption"
 name = "syscalls"
 
 [[test]]
+name = "wrappers"
+
+[[test]]
 name = "console"
 
 [[test]]

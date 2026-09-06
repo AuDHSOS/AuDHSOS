@@ -17,6 +17,7 @@
 
 // This program makes no system call, so it names nothing of the interface.
 use audhsos_abi as _;
+use user_rt as _;
 use user_sys_x86_64 as sys;
 
 sys::entry!(main);

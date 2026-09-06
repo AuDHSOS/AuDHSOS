@@ -84,19 +84,21 @@ pub struct Received {
 /// Every call the gate has a method for, in the order of the system call
 /// table.
 ///
-/// What this proves and what it does not, exactly. A call added to
-/// `syscalls!` and forgotten here fails the build, because the lengths
-/// differ; a call removed from the table takes its variant with it, so an
-/// entry here for it stops compiling. The order has to match too, which
-/// makes the two lists readable side by side. What it cannot prove is that
-/// a method exists for each entry and that each method passes the entry it
-/// belongs to: this is a list of values, and Rust gives no way to
-/// enumerate the methods of a type without a macro, which
-/// [D-92](../../../../docs/09-decisions.md) rules out for this seam. A
-/// wrapper that passed the wrong call would be caught by the kernel, which
-/// checks the argument count of every call it dispatches, and by the
-/// end-to-end run for the calls that run there; a wrapper simply missing
-/// would be caught by the first program that wanted it.
+/// What this proves. A call added to `syscalls!` and forgotten here fails
+/// the build, because the lengths differ; a call removed from the table
+/// takes its variant with it, so an entry here for it stops compiling. The
+/// order has to match too, which makes the two lists readable side by
+/// side.
+///
+/// What it cannot prove is that a method exists for each entry and that
+/// each method passes the entry it belongs to: this is a list of values,
+/// and Rust gives no way to enumerate the methods of a type without a
+/// macro, which [D-92](../../../../docs/09-decisions.md) rules out for
+/// this seam. That half is proved by running them: the `wrappers` test
+/// image calls all forty-two in the order of this list and holds the
+/// numbers the kernel saw against the table, so a method missing from the
+/// run, or one passing another call of the same shape, fails there
+/// (D-98).
 const COVERED: [Syscall; 42] = [
     Syscall::ProcessCreate,
     Syscall::ProcessInstallHandle,

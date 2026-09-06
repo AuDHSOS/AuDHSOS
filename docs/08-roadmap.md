@@ -163,7 +163,7 @@ COM1 up when the userland takes it, so the handover and not a feature
 flag decides who writes.
 
 Tests: catalog 6.6.12, 6.6.13 (tar items) with fuzz targets, 6.6.22,
-6.6.23, 6.6.56.
+6.6.23, 6.6.56, 6.6.57.
 
 Acceptance: `sh tools/xtask.sh run --release` prints the greeting through
 the userland console driver; `sh tools/xtask.sh test --e2e` passes and the

@@ -133,11 +133,13 @@ macro_rules! program {
     ($main:path) => {
         /// The address the kernel starts the thread at.
         ///
-        /// The section is what puts it at the front of the program. The
-        /// entry point of an ELF is named by its header, so this is no
-        /// longer needed to be found; it is kept because it puts the one
-        /// function the kernel jumps to where a reader of a disassembly
-        /// looks for it first.
+        /// The section is what puts it at the front of the program. An
+        /// ELF names its entry in its header, so this is not what finds
+        /// it — but the kernel insists that the entry of the root task is
+        /// the first byte of the image it maps at `ROOT_TASK_BASE`, and
+        /// this is what makes that true. For the programs of the archive
+        /// it is readability: the one function the kernel jumps to stands
+        /// where a reader of a disassembly looks for it first.
         ///
         /// # Safety
         ///

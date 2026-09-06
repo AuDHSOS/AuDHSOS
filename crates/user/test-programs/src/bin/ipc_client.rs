@@ -19,6 +19,7 @@
 
 use audhsos_abi::Syscall;
 use audhsos_abi::layout::{MAX_MESSAGE_WORDS, PAGE_SIZE};
+use user_rt as _;
 use user_sys_x86_64 as sys;
 
 sys::entry!(main);

@@ -527,6 +527,7 @@ name = "user-test-programs"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "user-rt",
  "user-sys-x86_64",
 ]
 

@@ -10,6 +10,7 @@
 #![allow(unsafe_code)]
 
 use audhsos_abi::layout::KERNEL_BASE;
+use user_rt as _;
 use user_sys_x86_64 as sys;
 
 sys::entry!(main);

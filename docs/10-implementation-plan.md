@@ -2238,8 +2238,9 @@ call number and its arguments into the buffer, executes `int 0x80`, and
 turns the status word into a `Result`. A constant assertion holds the list of
 them to the table: `COVERED` names every call the gate is meant to cover,
 `Syscall::ALL` names every call there is, and a build fails when the two
-differ in length or in order. It does not prove that a method exists for
-each entry or that each passes the entry it belongs to (D-92). The panic handler formats a `user_rt::Line` and
+differ in length or in order (D-92). What a list of values cannot see —
+whether a method exists for each entry and passes the entry it belongs
+to — the test image `wrappers` sees by running them (D-98). The panic handler formats a `user_rt::Line` and
 sends it to the log endpoint.
 
 ### 10.7.3 `user-proto` (`crates/user/proto`)
@@ -2389,7 +2390,7 @@ parser's crate and its input a file in the corpus. Register the targets in
 `check` green — it runs `test --e2e` as its tenth step, so the end-to-end
 run is part of it — with the userland programs reporting through the
 console driver and the root task ending the machine; catalog 6.6.12,
-6.6.13 tar items, 6.6.22, 6.6.23, 6.6.56; fuzz targets run for 60 seconds
+6.6.13 tar items, 6.6.22, 6.6.23, 6.6.56, 6.6.57; fuzz targets run for 60 seconds
 each without findings.
 
 ## 10.8 Phase 8: Consolidation and release 0.1.0

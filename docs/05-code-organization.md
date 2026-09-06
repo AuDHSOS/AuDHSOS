@@ -133,7 +133,7 @@ AuDHSOS/
 | `boot-uefi-x86_64` | b | `x86_64-unknown-uefi` | allowlisted | pure sub-modules | `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `kernel-types`, `kernel-mm`, `kernel-hal-api` |
 | `user-rt` | u0 | all | no | yes | `audhsos-abi`, `audhsos-collections`; `test-support` as a dev-dependency |
 | `user-sys-x86_64` | u1 | `x86_64-unknown-none` | allowlisted | through the programs of `user-test-programs` in QEMU | `audhsos-abi`, `user-rt` |
-| `user-test-programs` | u1 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-sys-x86_64` |
+| `user-test-programs` | u1 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-rt`, `user-sys-x86_64` |
 | `user-proto` | u1 | all | no | yes | `audhsos-abi`, `user-rt` |
 | `user-loader` | u2 | all | no | yes, fuzz | `audhsos-abi`, `audhsos-elf`; `test-support` behind the feature `test-strategies` |
 | `server-name` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `user-proto` |
