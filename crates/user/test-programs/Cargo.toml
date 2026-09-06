@@ -52,6 +52,36 @@ path = "src/bin/every_syscall.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "ipc_client"
+path = "src/bin/ipc_client.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "ipc_server"
+path = "src/bin/ipc_server.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fault_handler"
+path = "src/bin/fault_handler.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "write_unmapped"
+path = "src/bin/write_unmapped.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "notification_waiter"
+path = "src/bin/notification_waiter.rs"
+test = false
+bench = false
+
 [dependencies]
 audhsos-abi.workspace = true
 user-sys-x86_64.workspace = true

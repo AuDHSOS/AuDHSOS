@@ -35,6 +35,9 @@ name = "interrupts"
 name = "user"
 
 [[test]]
+name = "ipc"
+
+[[test]]
 name = "isolation"
 
 [[test]]

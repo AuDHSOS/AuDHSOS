@@ -43,7 +43,8 @@ use kernel_hal_x86_64::{context, descriptors, instructions, interrupts, testing,
 use kernel_mm::page_table::{CachePolicy, PageTable, Permissions};
 use kernel_objects::handle_table::{Entry, HandleList};
 use kernel_objects::object::{
-    AnyObjectId, MemoryKind, MemoryObject, MemoryObjectId, Process, ProcessId, Thread, ThreadId,
+    AnyObjectId, Endpoint, EndpointId, MemoryKind, MemoryObject, MemoryObjectId, Process,
+    ProcessId, Thread, ThreadId,
 };
 use kernel_objects::quota::Quota;
 use kernel_syscall::environment::{Environment, KernelStack};
@@ -455,6 +456,155 @@ pub(crate) fn install(process: ProcessId, object: AnyObjectId, rights: Rights) -
         handle
     })
     .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")))
+}
+
+/// An endpoint of the machine, which the root task will make with
+/// `endpoint_create` once it runs.
+pub(crate) fn endpoint() -> EndpointId {
+    with_machine(|machine| {
+        machine
+            .objects
+            .endpoints
+            .allocate(Endpoint::new())
+            .unwrap_or_else(|_| testing::fail(format_args!("no slot for the endpoint")))
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")))
+}
+
+/// Installs a handle to `object` with `rights` and `badge` in the table of
+/// `process`, which is what `endpoint_badge` makes of a capability.
+pub(crate) fn install_badged(
+    process: ProcessId,
+    object: AnyObjectId,
+    rights: Rights,
+    badge: u64,
+) -> Handle {
+    let handle = install(process, object, rights);
+    with_machine(|machine| {
+        if let Ok(entry) = machine.objects.handles.lookup_mut(process, handle) {
+            entry.badge = badge;
+        }
+    });
+    handle
+}
+
+/// Maps every frame of `object` read and write at `address` of `process`,
+/// which is what the root task does for a program it hands memory to.
+pub(crate) fn map_memory(process: &UserProcess, object: MemoryObjectId, address: u64) {
+    let frames = with_machine(|machine| {
+        machine
+            .objects
+            .memory
+            .get(object)
+            .map(|held| held.frames)
+            .unwrap_or_else(|_| testing::fail(format_args!("the memory object is gone")))
+    })
+    .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")));
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    with_memory(|memory| {
+        let mut environment = environment(memory, &mut tables, &mut tlb);
+        for index in 0..frames.count() {
+            let frame = frames
+                .start()
+                .checked_add(index)
+                .unwrap_or_else(|| testing::fail(format_args!("the object runs past memory")));
+            let at = VirtAddr::new(address.saturating_add(index.saturating_mul(PAGE_SIZE)))
+                .unwrap_or_else(|_| {
+                    testing::fail(format_args!("the mapping is outside user space"))
+                });
+            let page = Page::from_start(at)
+                .unwrap_or_else(|_| testing::fail(format_args!("the mapping is not aligned")));
+            environment
+                .map(
+                    process.root,
+                    page,
+                    frame,
+                    Permissions::READ_WRITE.for_user(),
+                    CachePolicy::WriteBack,
+                )
+                .unwrap_or_else(|error| {
+                    testing::fail(format_args!("the object is not mapped: {error}"))
+                });
+        }
+    });
+}
+
+/// Names `endpoint` as the endpoint the faults of `process` are reported on,
+/// which `process_set_fault_handler` does once a program runs.
+pub(crate) fn set_fault_handler(process: ProcessId, endpoint: EndpointId) {
+    with_machine(|machine| {
+        machine
+            .objects
+            .retain(AnyObjectId::of(endpoint))
+            .unwrap_or_else(|error| testing::fail(format_args!("no reference: {error}")));
+        machine
+            .objects
+            .processes
+            .with(process, |held| held.fault_handler = Some(endpoint));
+    });
+}
+
+/// Drops one reference to `object` and wakes whoever waited on it if that
+/// was the last one, which is what the close of a handle does.
+pub(crate) fn release(object: AnyObjectId) -> bool {
+    let mut tables = window();
+    let mut tlb = LocalTlb;
+    with_memory(|memory| {
+        with_machine(|machine| {
+            let mut environment = environment(memory, &mut tables, &mut tlb);
+            let mut syscall = kernel_syscall::dispatch::Machine {
+                objects: &mut machine.objects,
+                scheduler: &mut machine.scheduler,
+                environment: &mut environment,
+            };
+            kernel_syscall::lifetime::release(&mut syscall, object).unwrap_or(false)
+        })
+    })
+    .flatten()
+    .unwrap_or(false)
+}
+
+/// Ends `thread` wherever it is, taking it out of whatever it waits on
+/// first, which is what `thread_kill` does.
+pub(crate) fn kill(thread: ThreadId) -> bool {
+    with_machine(|machine| {
+        kernel_ipc::cancel(&mut machine.objects, thread);
+        machine
+            .scheduler
+            .exit(&mut machine.objects.threads, thread)
+            .is_ok_and(|outcome| outcome.reschedule)
+    })
+    .unwrap_or(false)
+}
+
+/// Gives the processor to whoever can run, over and over, until `done` says
+/// the run is over. An image without a timer comes back here every time a
+/// thread blocks or ends.
+pub(crate) fn run_until(done: impl Fn() -> bool) {
+    for _ in 0..RUN_LIMIT {
+        if done() {
+            return;
+        }
+        run_threads(None);
+    }
+    if !done() {
+        testing::fail(format_args!(
+            "the run did not end in {RUN_LIMIT} turns of the processor"
+        ));
+    }
+}
+
+/// How many turns of the processor a run of [`run_until`] may take.
+const RUN_LIMIT: usize = 64;
+
+/// The status word a thread found in its buffer.
+pub(crate) fn thread_status(frame: PhysFrame) -> u64 {
+    let mut window = window();
+    window
+        .frame_bytes_mut(frame)
+        .and_then(|bytes| ipc_buffer::Buffer::new(bytes).status().ok())
+        .map_or(u64::MAX, audhsos_abi::Status::raw)
 }
 
 /// A memory object over `frames` contiguous frames of the reserve, the way

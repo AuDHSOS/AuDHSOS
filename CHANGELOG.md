@@ -29,6 +29,41 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Two user threads that meet, and a driver at ring three. Five new programs
+  under `user-test-programs`: `ipc_client` and `ipc_server`, which are a call
+  and a reply with a badge, four words, and a handle to a memory object both
+  processes end up mapping; `fault_handler`, which receives the fault messages
+  of another process and either answers, repairs, or ends it;
+  `write_unmapped`, whose fault a handler can do something about; and
+  `notification_waiter`, which takes ISA line zero, binds it to a bit of a
+  notification, programs the interval timer through a range of I/O ports, and
+  waits for the bit.
+
+  The interval timer and not the local APIC timer: that one is the kernel's
+  own, it carries a vector of its own, and the vector plan gives it no global
+  system interrupt, so no interrupt object can name it. ISA line zero reaches
+  the I/O APIC through the interrupt source override the tables carry, and
+  programming it is three port writes — which makes the one program cover the
+  interrupt path, the port path, and the notification path from ring three.
+
+  `tests/ipc.rs` reads what the pair left: the badge, the words, the handle
+  that names the same memory in both processes, a message of no words, one of
+  the widest payload, one word too many, a receive that refuses to wait, a
+  sender killed while it waited, and an endpoint destroyed under a waiter. The
+  two queues of one endpoint cannot both hold a waiter at once — whichever
+  side arrives second meets the first — so the QEMU test shows them one at a
+  time and the host test of `kernel-ipc` shows them together.
+  `tests/isolation.rs` gains the fault handler: the message with the reserved
+  label, the kind, and the address; a reply that resumes the thread into the
+  instruction it faulted on, where it faults again; a handler that gives up
+  and ends the process; and one that maps a page at the address the fault
+  named, answers, and lets the thread run on.
+
+  A program that has more to report than two return words hold writes into a
+  page the kernel shares with it: its own message area is where the messages
+  of the test are, and a log kept there would be overwritten by the very
+  message it is about.
+
 - The twenty-one calls the system call table was still missing, which
   completes it: `process_set_fault_handler`, `endpoint_create`,
   `endpoint_badge`, the six endpoint operations, the four notification
