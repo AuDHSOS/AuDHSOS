@@ -74,6 +74,32 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The gate, in `user-sys-x86_64`: the address of a thread's IPC buffer and
+  the forty-one system calls as methods with names, types, and `Result`. A
+  wrapper writes the call number and its arguments into the buffer, executes
+  `int 0x80`, and turns the status word into an error or a value; a handle
+  comes back as the typed handle of its object kind. The assembly is
+  unchanged — one `int 0x80`, as it has been since Phase 5.
+
+  The address belongs to the thread and not to the process: the buffer of
+  the thread in slot `n` lies `n` pages below `IPC_BUFFER_TOP`, so a process
+  with two threads has two of them. A gate is therefore a value a thread
+  carries, and never a global — there is no thread-local storage in this
+  system to put one in, and a single global would be a silent corruption the
+  moment `server-console` starts its second thread.
+
+  The wrappers are written out one by one rather than expanded from the call
+  table. What holds them to it is `COVERED`, a list of the calls the gate
+  has a method for, checked against `Syscall::ALL` in a const assertion: a
+  call added to the table and forgotten here fails the build, and so does a
+  wrapper for a call the table no longer has.
+
+  `program!` is the entry point that goes with it. It builds the gate,
+  reads the startup message out of the buffer before the first call
+  overwrites it, and hands `main` both. The older `entry!` stays for the
+  programs of the kernel test images, which make calls on purpose that no
+  typed wrapper would let them make.
+
 - `user-rt`, the part of a user program that needs no machine: the nine
   typed handles the system calls take, the heap, the message area of the IPC
   buffer, the startup message as named fields, and a line of text in a fixed

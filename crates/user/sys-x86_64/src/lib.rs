@@ -6,10 +6,17 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![doc = include_str!("../README.md")]
 
+pub mod gate;
+pub mod log;
+
 use core::arch::asm;
 
 use audhsos_abi::Syscall;
 use audhsos_abi::ipc_buffer::{BufferMut, SIZE};
+
+pub use gate::{Gate, MemoryInfo, Received, SYSTEM_INFO_WORDS, SystemInfo, ThreadInfo};
+pub use log::write_line;
+pub use user_rt::Startup;
 
 /// Makes the system call the IPC buffer describes and returns when the
 /// kernel has written its answer into the same buffer.
@@ -94,11 +101,73 @@ pub unsafe fn returning(address: u64, number: Syscall, arguments: &[u64]) -> (u6
     )
 }
 
-/// Declares the entry point of a user program.
+/// The startup message that stands in the buffer of `gate`.
+///
+/// A message that is none, or one whose pairs do not read, gives a startup
+/// that was given nothing — which is what a program started without one was
+/// in fact given. The distinction between an empty message and a broken one
+/// has no consequence a program could act on.
+///
+/// It must be read before the first system call, because a call writes its
+/// own arguments over the message.
+#[must_use]
+pub fn startup(gate: &Gate) -> Startup {
+    Startup::read(gate.reader()).unwrap_or_default()
+}
+
+/// Declares the entry point of a user program that works through a gate.
+///
+/// The function it names is called once with the gate of the thread and
+/// with what the process was given at its start, and never returns; a
+/// program that has nothing left to do ends its thread with
+/// [`Gate::thread_exit`].
+///
+/// The macro writes the panic handler too. It halts: the workspace lint set
+/// denies `panic!`, `unwrap`, `expect`, indexing, and unchecked arithmetic
+/// in product code, so nothing of a program of this system reaches it, and
+/// a handler that made a system call would need the buffer of the thread
+/// that panicked, which the language hands it no way of naming.
+#[macro_export]
+macro_rules! program {
+    ($main:path) => {
+        /// The address the kernel starts the thread at.
+        ///
+        /// The section is what puts it at the front of the program: the
+        /// kernel maps a flat binary and jumps at its base, so the entry
+        /// point has to be the first byte and not wherever the linker
+        /// would otherwise have put it.
+        ///
+        /// # Safety
+        ///
+        /// The kernel calls this once per thread, in user mode, with the
+        /// address of the thread's IPC buffer in the first argument.
+        #[unsafe(no_mangle)]
+        #[unsafe(link_section = ".text.entry")]
+        pub unsafe extern "sysv64" fn _start(ipc_buffer: u64) -> ! {
+            // SAFETY: the kernel starts this thread once and puts the
+            // address of its buffer in the first argument register; this
+            // is the only gate over it, because it is the only one built.
+            let mut gate = unsafe { $crate::Gate::adopt(ipc_buffer) };
+            let startup = $crate::startup(&gate);
+            let main: fn(&mut $crate::Gate, &$crate::Startup) -> ! = $main;
+            main(&mut gate, &startup)
+        }
+
+        #[panic_handler]
+        const fn panic(_info: &core::panic::PanicInfo) -> ! {
+            loop {}
+        }
+    };
+}
+
+/// Declares the entry point of a user program that works the buffer
+/// directly.
 ///
 /// The function it names receives the address of the IPC buffer of the
-/// thread and never returns; a program that has nothing left to do ends
-/// its thread with `thread_exit`.
+/// thread and never returns. This is what the programs of the kernel test
+/// images use: they make calls the gate has no method for on purpose —
+/// numbers that name nothing, arguments the kernel has to refuse — and a
+/// typed wrapper is the wrong tool for that.
 #[macro_export]
 macro_rules! entry {
     ($main:path) => {

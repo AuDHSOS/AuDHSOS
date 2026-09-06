@@ -492,10 +492,10 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-sys-x86_64",
         path: "crates/user/sys-x86_64",
         kind: Kind::Adapter {
-            unsafe_budget: 13,
+            unsafe_budget: 21,
             asm_budget: 1,
         },
-        deps: &["audhsos-abi"],
+        deps: &["audhsos-abi", "user-rt"],
         coverage_gate: false,
         target: Target::X86_64None,
     },
