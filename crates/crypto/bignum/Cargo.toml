@@ -2,21 +2,15 @@
 # Copyright (C) 2026 Manuel Baesler and contributors
 
 [package]
-name = "crypto-ec"
-description = "X25519, Ed25519 verification, and ECDSA over P-256 and P-384 verification"
+name = "crypto-bignum"
+description = "Limb arithmetic and modular exponentiation for a modulus that is known at run time"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
-[features]
-test-signing = []
-
 [dependencies]
-crypto-bignum.workspace = true
-crypto-ct.workspace = true
-crypto-hash.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true

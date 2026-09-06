@@ -11,6 +11,7 @@ members = [
     "crates/crypto/ct",
     "crates/crypto/hash",
     "crates/crypto/aead",
+    "crates/crypto/bignum",
     "crates/crypto/ec",
     "crates/crypto/rng",
     "crates/net/der",
@@ -65,6 +66,7 @@ audhsos-collections = { path = "crates/collections" }
 crypto-ct = { path = "crates/crypto/ct" }
 crypto-hash = { path = "crates/crypto/hash" }
 crypto-aead = { path = "crates/crypto/aead" }
+crypto-bignum = { path = "crates/crypto/bignum" }
 crypto-ec = { path = "crates/crypto/ec" }
 crypto-rng = { path = "crates/crypto/rng" }
 audhsos-der = { path = "crates/net/der" }

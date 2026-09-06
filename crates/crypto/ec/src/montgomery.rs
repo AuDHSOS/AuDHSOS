@@ -9,6 +9,14 @@
 //! four moduli, parameterized by [`Params`]. A value is held as
 //! `x * 2^(64*N)` modulo the parameter, and only the encodings convert.
 //!
+//! The limb arithmetic itself is `crypto-bignum` and no longer lives
+//! here. What stays is what the curves need and RSA does not: a modulus
+//! whose three constants are known when the code is compiled, and a type
+//! that carries which of the four a value belongs to. D-77 records the
+//! split and the reason for it — an RSA modulus arrives in a certificate,
+//! so it cannot be an associated constant, and everything below the
+//! constants already took its modulus as an argument.
+//!
 //! Everything here serves signature verification, where the values are
 //! public: a key, a digest, and a signature are all on the wire. Its
 //! branches may therefore depend on values, and they do, in the final
@@ -16,6 +24,8 @@
 //! work of this crate is [`mod@crate::x25519`].
 
 use core::marker::PhantomData;
+
+use crypto_bignum::{add_limbs, is_less, montgomery, subtract};
 
 /// The parameters of one modulus, over `N` limbs of sixty-four bits.
 pub trait Params<const N: usize>: Copy {
@@ -112,13 +122,14 @@ impl<P: Params<N>, const N: usize, const BYTES: usize> Element<P, N, BYTES> {
     #[must_use]
     pub fn from_canonical(bytes: &[u8; BYTES]) -> Option<Element<P, N, BYTES>> {
         let () = Self::WIDTH_MATCHES_LIMBS;
-        let value = limbs_of(bytes);
-        let (_, borrow) = subtract(value, P::MODULUS);
-        if borrow == 0 {
+        let value: [u64; N] = limbs_of(bytes);
+        if !is_less(&value, &P::MODULUS) {
             return None;
         }
+        let mut limbs = [0u64; N];
+        montgomery(&value, &P::R2, &P::MODULUS, P::N0INV, &mut limbs);
         Some(Element {
-            limbs: montgomery(value, P::R2, P::MODULUS, P::N0INV),
+            limbs,
             marker: PhantomData,
         })
     }
@@ -129,11 +140,14 @@ impl<P: Params<N>, const N: usize, const BYTES: usize> Element<P, N, BYTES> {
     #[must_use]
     pub fn from_bytes_reduced(bytes: &[u8; BYTES]) -> Element<P, N, BYTES> {
         let () = Self::WIDTH_MATCHES_LIMBS;
-        let value = limbs_of(bytes);
-        let (difference, borrow) = subtract(value, P::MODULUS);
-        let reduced = if borrow == 0 { difference } else { value };
+        let mut reduced: [u64; N] = limbs_of(bytes);
+        if !is_less(&reduced, &P::MODULUS) {
+            let _ = subtract(&mut reduced, &P::MODULUS);
+        }
+        let mut limbs = [0u64; N];
+        montgomery(&reduced, &P::R2, &P::MODULUS, P::N0INV, &mut limbs);
         Element {
-            limbs: montgomery(reduced, P::R2, P::MODULUS, P::N0INV),
+            limbs,
             marker: PhantomData,
         }
     }
@@ -142,11 +156,9 @@ impl<P: Params<N>, const N: usize, const BYTES: usize> Element<P, N, BYTES> {
     #[must_use]
     pub fn to_bytes(self) -> [u8; BYTES] {
         let () = Self::WIDTH_MATCHES_LIMBS;
-        let mut one = [0u64; N];
-        if let Some(slot) = one.first_mut() {
-            *slot = 1;
-        }
-        let value = montgomery(self.limbs, one, P::MODULUS, P::N0INV);
+        let one: [u64; N] = core::array::from_fn(|index| u64::from(index == 0));
+        let mut value = [0u64; N];
+        montgomery(&self.limbs, &one, &P::MODULUS, P::N0INV, &mut value);
         let mut bytes = [0u8; BYTES];
         let (chunks, _) = bytes.as_chunks_mut::<8>();
         for (chunk, limb) in chunks.iter_mut().rev().zip(value) {
@@ -163,8 +175,10 @@ impl<P: Params<N>, const N: usize, const BYTES: usize> Element<P, N, BYTES> {
                   denies unchecked arithmetic; field operations are named after what they are"
     )]
     pub fn add(self, other: Element<P, N, BYTES>) -> Element<P, N, BYTES> {
-        let (sum, carry) = add_limbs(self.limbs, other.limbs);
-        let (difference, borrow) = subtract(sum, P::MODULUS);
+        let mut sum = self.limbs;
+        let carry = add_limbs(&mut sum, &other.limbs);
+        let mut difference = sum;
+        let borrow = subtract(&mut difference, &P::MODULUS);
         let limbs = if carry == 1 || borrow == 0 {
             difference
         } else {
@@ -184,13 +198,11 @@ impl<P: Params<N>, const N: usize, const BYTES: usize> Element<P, N, BYTES> {
                   denies unchecked arithmetic; field operations are named after what they are"
     )]
     pub fn sub(self, other: Element<P, N, BYTES>) -> Element<P, N, BYTES> {
-        let (difference, borrow) = subtract(self.limbs, other.limbs);
-        let limbs = if borrow == 1 {
-            let (wrapped, _) = add_limbs(difference, P::MODULUS);
-            wrapped
-        } else {
-            difference
-        };
+        let mut limbs = self.limbs;
+        let borrow = subtract(&mut limbs, &other.limbs);
+        if borrow == 1 {
+            let _ = add_limbs(&mut limbs, &P::MODULUS);
+        }
         Element {
             limbs,
             marker: PhantomData,
@@ -222,8 +234,10 @@ impl<P: Params<N>, const N: usize, const BYTES: usize> Element<P, N, BYTES> {
                   denies unchecked arithmetic; field operations are named after what they are"
     )]
     pub fn mul(self, other: Element<P, N, BYTES>) -> Element<P, N, BYTES> {
+        let mut limbs = [0u64; N];
+        montgomery(&self.limbs, &other.limbs, &P::MODULUS, P::N0INV, &mut limbs);
         Element {
-            limbs: montgomery(self.limbs, other.limbs, P::MODULUS, P::N0INV),
+            limbs,
             marker: PhantomData,
         }
     }
@@ -238,11 +252,9 @@ impl<P: Params<N>, const N: usize, const BYTES: usize> Element<P, N, BYTES> {
     /// of zero is zero, which every caller checks for separately.
     #[must_use]
     pub fn invert(self) -> Element<P, N, BYTES> {
-        let mut two = [0u64; N];
-        if let Some(slot) = two.first_mut() {
-            *slot = 2;
-        }
-        let (exponent, _) = subtract(P::MODULUS, two);
+        let two: [u64; N] = core::array::from_fn(|index| u64::from(index == 0).wrapping_mul(2));
+        let mut exponent = P::MODULUS;
+        let _ = subtract(&mut exponent, &two);
         let bits = u32::try_from(N).unwrap_or(0).wrapping_mul(64);
         let mut result = Element::one();
         for position in (0..bits).rev() {
@@ -282,98 +294,4 @@ fn bit_of<const N: usize>(value: [u64; N], position: u32) -> u64 {
         }
     }
     limb.wrapping_shr(within) & 1
-}
-
-/// The sum with the carry out.
-fn add_limbs<const N: usize>(a: [u64; N], b: [u64; N]) -> ([u64; N], u64) {
-    let mut result = [0u64; N];
-    let mut carry = 0u64;
-    for (slot, (left, right)) in result.iter_mut().zip(a.iter().zip(b)) {
-        let sum = u128::from(*left)
-            .wrapping_add(u128::from(right))
-            .wrapping_add(u128::from(carry));
-        *slot = low(sum);
-        carry = high(sum);
-    }
-    (result, carry)
-}
-
-/// The difference with the borrow out.
-fn subtract<const N: usize>(a: [u64; N], b: [u64; N]) -> ([u64; N], u64) {
-    let mut result = [0u64; N];
-    let mut borrow = 0u64;
-    for (slot, (left, right)) in result.iter_mut().zip(a.iter().zip(b)) {
-        let (partial, first) = left.overflowing_sub(right);
-        let (value, second) = partial.overflowing_sub(borrow);
-        *slot = value;
-        borrow = u64::from(first || second);
-    }
-    (result, borrow)
-}
-
-/// The Montgomery product: `a * b * 2^(-64*N)` modulo `modulus`, by the
-/// coarsely integrated operand scanning method.
-///
-/// The running total is `N + 2` limbs wide. The lowest `N` are the array;
-/// the two above it are named, because an array of `N + 2` cannot be
-/// spelled while `N` is a parameter.
-fn montgomery<const N: usize>(a: [u64; N], b: [u64; N], modulus: [u64; N], n0inv: u64) -> [u64; N] {
-    let mut t = [0u64; N];
-    let mut above = 0u64;
-
-    for factor in b {
-        // t += a * factor
-        let mut carry = 0u64;
-        for (slot, limb) in t.iter_mut().zip(a) {
-            let sum = u128::from(*slot)
-                .wrapping_add(u128::from(limb).wrapping_mul(u128::from(factor)))
-                .wrapping_add(u128::from(carry));
-            *slot = low(sum);
-            carry = high(sum);
-        }
-        let sum = u128::from(above).wrapping_add(u128::from(carry));
-        above = low(sum);
-        let mut carry_out = high(sum);
-
-        // t += m * modulus, chosen so that the lowest limb becomes zero
-        let m = t.first().copied().unwrap_or(0).wrapping_mul(n0inv);
-        let mut carry = 0u64;
-        for (slot, limb) in t.iter_mut().zip(modulus) {
-            let sum = u128::from(*slot)
-                .wrapping_add(u128::from(m).wrapping_mul(u128::from(limb)))
-                .wrapping_add(u128::from(carry));
-            *slot = low(sum);
-            carry = high(sum);
-        }
-        let sum = u128::from(above).wrapping_add(u128::from(carry));
-        above = low(sum);
-        carry_out = carry_out.wrapping_add(high(sum));
-
-        // Divide by 2^64: the lowest limb is zero, so every limb moves
-        // down one place and the two named limbs follow it.
-        t.rotate_left(1);
-        if let Some(slot) = t.last_mut() {
-            *slot = above;
-        }
-        above = carry_out;
-    }
-
-    let (difference, borrow) = subtract(t, modulus);
-    if above != 0 || borrow == 0 {
-        difference
-    } else {
-        t
-    }
-}
-
-/// The low sixty-four bits of a wide value.
-#[expect(clippy::as_conversions, reason = "the mask keeps only the low 64 bits")]
-const fn low(value: u128) -> u64 {
-    (value & 0xFFFF_FFFF_FFFF_FFFF) as u64
-}
-
-/// The high sixty-four bits of a wide value.
-#[expect(clippy::as_conversions, reason = "the shift leaves 64 bits")]
-const fn high(value: u128) -> u64 {
-    (value >> 64) as u64
 }

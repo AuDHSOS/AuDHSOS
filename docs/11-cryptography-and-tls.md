@@ -540,7 +540,7 @@ checklist in 4.9.
 | T6 | `audhsos-x509` with the test certificate builder | L | implemented |
 | T7 | `audhsos-tls` | XL | implemented |
 | T8 | Integration, jointly with step D9 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M | |
-| R1 | `crypto-bignum`: the limb core out of `crypto-ec`, a runtime `Modulus`, and exponentiation (11.15) | M-L | |
+| R1 | `crypto-bignum`: the limb core out of `crypto-ec`, a runtime `Modulus`, and exponentiation (11.15) | M-L | implemented |
 | R2 | `crypto-rsa`: the key with its bounds, and PKCS #1 v1.5 | M | |
 | R3 | `crypto-rsa`: MGF1 and EMSA-PSS-VERIFY | M | |
 | R4 | `audhsos-x509`: identifiers, parameters, the key, the pairs, and the builder | L | |
@@ -641,9 +641,23 @@ pub const MAX_LIMBS: usize = 64;                       // 4096 bits
 
 impl Modulus {
     pub fn new(big_endian: &[u8]) -> Result<Modulus, BignumError>;
+    pub fn bits(&self) -> usize;
     pub fn pow(&self, base: &[u8], exponent: u64, out: &mut [u8]) -> Result<(), BignumError>;
+    pub fn pow_wide(&self, base: &[u8], exponent: &[u8], out: &mut [u8])
+        -> Result<(), BignumError>;
 }
 ```
+
+The exponentiation is written down twice because it is asked for twice.
+`pow` is the verification direction, where the exponent is three or
+sixty-five thousand five hundred and thirty-seven and a `u64` is more
+than enough. `pow_wide` takes the exponent as bytes, and it exists for
+the one sentence of 11.15.3 that says signing is one call into the
+exponentiation the verification already has: a private exponent is as
+wide as the modulus and does not fit in a `u64`. The narrow one forwards
+to the wide one, so there is one algorithm and two doors to it. `bits`
+reports the bit length of the modulus, which is what an encoding rule
+that speaks of `modBits` needs.
 
 `new` derives what `Params` used to carry as constants. `n0inv` is
 `-m^-1` modulo `2^64` by Hensel doubling, five steps from the low limb of

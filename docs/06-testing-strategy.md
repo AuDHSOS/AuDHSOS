@@ -1554,9 +1554,10 @@ follows the catalog rather than the layer, as 6.6.54 records.
   `MAX_LIMBS`, and one whose top limb is zero are each refused by
   `Modulus::new`; an accepted one has zero in every limb at or above its
   used count, which is the invariant the rest of the crate rests on.
-- The derived constants: `n0inv` multiplied by the low limb of the
-  modulus is one modulo `2^64`; `R2` agrees with the value computed by
-  repeated doubling, for a modulus of each of the four widths.
+- The derived constants: `n0inv` is the *negative* inverse the reduction
+  step wants, so `n0inv` multiplied by the low limb of the modulus is
+  minus one modulo `2^64`; `R2` agrees with `2^(128*used)` reduced by the
+  reference, for a modulus of each of the four widths.
 - Montgomery multiplication and squaring agree with a schoolbook
   reference in the test module on random inputs at 1024, 2048, 3072, and
   4096 bits (property), in the form 6.6.33 uses for `fe25519`. The

@@ -29,6 +29,45 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `crypto-bignum`, step R1 of the RSA track: limb arithmetic over slices,
+  and a `Modulus` that arrives at run time. `crypto-ec` kept its four
+  `Params` implementations, whose modulus, inverse, and conversion
+  constant are known when the code is compiled, and gave up the three
+  operations underneath them — `montgomery`, `add_limbs`, and `subtract`,
+  which already took their modulus as an argument. Those now live in the
+  new crate over `&[u64]` rather than `[u64; N]`, together with the
+  comparison the in-place shape of the other two needs, and `crypto-ec`
+  imports them. Its P-256 and P-384 suites are what says the move changed
+  nothing: they pass unaltered.
+
+  What is new above them is `Modulus`, which derives at run time what
+  `Params` writes down. `n0inv` is `-m^-1` modulo `2^64` by Hensel
+  doubling — an odd modulus is its own inverse modulo eight, so five steps
+  carry three correct bits past sixty-four — and `R2` is `2^(128*used)` by
+  that many modular doublings, eight thousand one hundred and ninety-two
+  of them for a four-thousand-and-ninety-six-bit key, paid once. One width
+  is held and the used count decides every loop bound (D-78), so a
+  two-thousand-and-forty-eight-bit key costs a
+  two-thousand-and-forty-eight-bit multiplication and a
+  four-thousand-and-ninety-six-bit frame.
+
+  `pow` is left-to-right square-and-multiply and is not constant time; the
+  crate documentation states that as the design and says what holds it up,
+  which is the boundary rather than the code — no secret enters this
+  crate. The exponentiation has two doors: `pow` takes the exponent as a
+  `u64`, which is what verification needs, and `pow_wide` takes it as
+  bytes, which is what signing a test certificate with a private exponent
+  needs. Section 11.15.2 records the second one, which the plan implied in
+  prose and left out of its sketch.
+
+  The tests are a schoolbook reference in the test module — quadratic
+  multiplication, binary long division, no Montgomery form anywhere — and
+  properties against it at one thousand and twenty-four,
+  two thousand and forty-eight, three thousand and seventy-two, and four
+  thousand and ninety-six bits. The round trip of catalog 6.6.55 signs
+  with the private exponent of the key RFC 8448, section 2 prints and
+  verifies with its public one.
+
 - RFC 8017, RFC 4055, RFC 5756, and RFC 3279 join the reference documents
   under `docs/rfc/`, each fetched twice and recorded with its checksum.
   They are what RSA verification reads: PKCS #1 for the primitive and both
