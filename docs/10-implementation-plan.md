@@ -2235,9 +2235,11 @@ program's `main` together with the startup message it read from the
 buffer. `Gate { buffer: u64 }` holds that address and carries the
 forty-two system call wrappers, written out one by one; each writes the
 call number and its arguments into the buffer, executes `int 0x80`, and
-turns the status word into a `Result`. A constant assertion holds them to
-the table: `COVERED` lists what exists, `Syscall::ALL` lists what must, and
-a build fails when they differ (D-92). The panic handler formats a `user_rt::Line` and
+turns the status word into a `Result`. A constant assertion holds the list of
+them to the table: `COVERED` names every call the gate is meant to cover,
+`Syscall::ALL` names every call there is, and a build fails when the two
+differ in length or in order. It does not prove that a method exists for
+each entry or that each passes the entry it belongs to (D-92). The panic handler formats a `user_rt::Line` and
 sends it to the log endpoint.
 
 ### 10.7.3 `user-proto` (`crates/user/proto`)

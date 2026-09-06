@@ -144,10 +144,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   one by one rather than generated from the table (D-92). What a wrapper
   does with the buffer is the whole of the seam between a program and the
   kernel, and a reader who cannot see it cannot check it. A constant
-  assertion holds them to the table: `COVERED` lists what exists,
-  `Syscall::ALL` lists what must, and a build fails when they differ. It
-  caught the missing wrapper for `memory_merge` the hour that call was
-  added.
+  assertion holds the list of them to the table: `COVERED` names every call
+  the gate is meant to cover, `Syscall::ALL` names every call there is, and
+  a build fails when the two differ in length or in order. It caught the
+  missing wrapper for `memory_merge` the hour that call was added. It does
+  not prove that a method exists for each entry or that each passes the
+  entry it belongs to; the kernel's argument-count check and the end-to-end
+  run cover what is left.
 
 - The kernel owns COM1 until the userland drives it, and the handover and
   not a feature flag decides who writes. The first read or write of one of
