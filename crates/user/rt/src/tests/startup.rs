@@ -67,6 +67,7 @@ fn every_role_lands_in_the_field_it_names() {
         (Role::Log, handle(7)),
         (Role::IoPorts, handle(8)),
         (Role::Interrupt, handle(9)),
+        (Role::Parent, handle(10)),
     ])
     .unwrap();
     assert_eq!(startup.own_process.unwrap().handle(), handle(1));
@@ -78,6 +79,15 @@ fn every_role_lands_in_the_field_it_names() {
     assert_eq!(startup.log.unwrap().handle(), handle(7));
     assert_eq!(startup.io_ports.unwrap().handle(), handle(8));
     assert_eq!(startup.interrupt.unwrap().handle(), handle(9));
+    assert_eq!(startup.parent.unwrap().handle(), handle(10));
+    // The name of this test is a promise, and a role added later would
+    // break it silently otherwise: every role but `Ram`, which is a list
+    // and has a test of its own, is one field above.
+    assert_eq!(
+        Role::ALL.len(),
+        11,
+        "a role was added; give it a field and a line here"
+    );
 }
 
 #[test]

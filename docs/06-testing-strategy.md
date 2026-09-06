@@ -589,7 +589,10 @@ done until every applicable item has a test. Items are added, never removed.
   appears on the serial port through the userland driver, which owns COM1
   from the moment it created the `IoPortRange` over it.
 - Name lookup of a missing name returns `NotFound`.
-- Two clients write interleaved lines; no line is torn.
+- Two clients write interleaved lines; no line is torn: every line the
+  second client writes carries its own number and has to stand whole and
+  exactly once in the output, so a line that lost bytes to the other writer
+  is a violation and not a line the run happened not to look at.
 - A client that faults is reported by the root task and the system keeps
   running.
 - Console input: the runner sends bytes over the serial port and a test

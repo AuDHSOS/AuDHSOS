@@ -169,7 +169,7 @@ const E2E_LINES: [(&str, &str); 11] = [
     ),
     (
         "[checks] line 7 of 8, and the whole of it",
-        "a line of the second client did not arrive whole",
+        "the last line of the second client did not arrive",
     ),
     (
         "[faulter] about to write to nowhere",
@@ -180,6 +180,30 @@ const E2E_LINES: [(&str, &str); 11] = [
         "the root task did not report the fault of its child",
     ),
 ];
+
+/// How many lines the second client writes while the first writes its own.
+///
+/// It repeats the number of the run in the text, so a line that lost bytes
+/// to another writer cannot be mistaken for one that kept them. `LINES` in
+/// `app-checks` says the same number; a disagreement makes this run fail
+/// with the line it could not find.
+const E2E_INTERLEAVED: usize = 8;
+
+/// Every line of the second client that did not arrive whole and exactly
+/// once.
+fn torn_lines(output: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    for index in 0..E2E_INTERLEAVED {
+        let wanted = format!("[checks] line {index} of {E2E_INTERLEAVED}, and the whole of it");
+        let seen = output.lines().filter(|line| line.trim() == wanted).count();
+        if seen != 1 {
+            violations.push(format!(
+                "the line `{wanted}` stands {seen} times, not once: two writers tore it"
+            ));
+        }
+    }
+    violations
+}
 
 /// The end-to-end tests: the whole system, from the loader to a line an
 /// application wrote through a driver that runs at ring three.
@@ -214,6 +238,12 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
         } else {
             violations.push("the application never said it was ready".to_owned());
         }
+    }
+    // Two clients wrote at once and no line of either may be torn: every
+    // line the second one wrote has to stand whole and once, which the
+    // last one arriving does not by itself say.
+    if violations.is_empty() {
+        violations.extend(torn_lines(&session.output()));
     }
     // The run ends itself: the application reports to the root task, and
     // the root task writes to the exit device through its `SystemControl`.

@@ -49,6 +49,10 @@ const MISSING: &[u8] = b"nothing-is-here";
 const TOO_MUCH: u64 = 1 << 42;
 
 /// How many lines the interleaving check writes.
+///
+/// The end-to-end run looks for each of them by number and insists each
+/// stands whole and once, so its `E2E_INTERLEAVED` says the same number;
+/// a disagreement makes the run fail with the line it could not find.
 const LINES: usize = 8;
 
 /// Asks, says, and ends.
