@@ -5,6 +5,28 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- The scheduler asks the transition table before it takes a thread out of
+  its run queue. It did it the other way round in the four operations that
+  take a thread off the processor, and for two of them that was wrong: the
+  table has a row out of `Ready` for `Suspend` and for `Exit`, but none for
+  `Fault` and none for the four block events, because only a running thread
+  can fault or block. A ready thread handed to `fault` was therefore taken
+  out of its queue and then refused — left `Ready` and in no queue, which
+  is the one thing the scheduler says can never be true of a thread, and
+  which `pick_next` can never find again. The caller saw an error and had
+  every reason to believe nothing had happened.
+
+  The four bodies were identical and are now one, `leaves_the_processor`,
+  which applies the event first and dequeues afterwards. Nothing can be
+  left half done that way: `dequeue` fails only for a thread the pool does
+  not hold, and the apply has just held it. An operation the table refuses
+  now changes nothing at all — not the state, not a queue, not the time
+  slice. `kernel_syscall::fault::stop` no longer has to check the state
+  itself.
+
+
 ### Added
 
 - RFC 8017, RFC 4055, RFC 5756, and RFC 3279 join the reference documents
@@ -59,30 +81,6 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   chain. Section 11.2, section 11.11, and the reference README are
   corrected accordingly.
 
-### Fixed
-
-- The scheduler asks the transition table before it takes a thread out of
-  its run queue. It did it the other way round in the four operations that
-  take a thread off the processor, and for two of them that was wrong: the
-  table has a row out of `Ready` for `Suspend` and for `Exit`, but none for
-  `Fault` and none for the four block events, because only a running thread
-  can fault or block. A ready thread handed to `fault` was therefore taken
-  out of its queue and then refused — left `Ready` and in no queue, which
-  is the one thing the scheduler says can never be true of a thread, and
-  which `pick_next` can never find again. The caller saw an error and had
-  every reason to believe nothing had happened.
-
-  The four bodies were identical and are now one, `leaves_the_processor`,
-  which applies the event first and dequeues afterwards. Nothing can be
-  left half done that way: `dequeue` fails only for a thread the pool does
-  not hold, and the apply has just held it. An operation the table refuses
-  now changes nothing at all — not the state, not a queue, not the time
-  slice. `kernel_syscall::fault::stop` no longer has to check the state
-  itself.
-
-
-### Added
-
 - The model-test runner refuses a run that reached nothing.
   `ModelTest::required` names the states a run's sequences have to arrive
   at and `ModelTest::reached` reads back what the model arrived at; a run
@@ -116,6 +114,25 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   all.
 
 ### Changed
+
+- Miri runs the tests of the modules that hold `unsafe`, not every test of
+  the crates around them (D-76). `MIRI_TARGETS` carries a test-name filter
+  per crate: `audhsos-sync` runs whole, being two `unsafe` sites and the
+  cell around them, and `fuzz-support` runs `tests::counters` and
+  `tests::sancov`, which test its two files that hold `unsafe`. Everything
+  else in that crate — the mutators, the corpus, the pool, the dictionary,
+  the options, the generator — is safe Rust that `test --host` and the
+  coverage gate already cover, and interpreting it bought nothing.
+
+  What it cost was the check. `tests::mutate` reached the same global as
+  `tests::sancov` through `sancov::with_trace`, over sixty thousand
+  mutation rounds, and that one module was nearly the whole of the step:
+  `miri` went from 243 seconds to 4, and the full check from just over six
+  minutes to two. The filters are held to the code by
+  `unsafe_budget::miri_gaps`, which reads every product file of a filtered
+  crate and fails the step when one holds `unsafe` and no filter names its
+  module, naming the filter that would close it — so `unsafe` cannot
+  appear in a new module and quietly leave Miri's reach.
 
 - A kernel stack is eight pages, not four, and `Pool::release` no longer
   hands the object back (D-73). Both come out of one measurement, taken

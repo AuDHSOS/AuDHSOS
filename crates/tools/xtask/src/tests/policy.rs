@@ -3,7 +3,7 @@
 
 //! Tests of `crate::policy`.
 
-use crate::policy::{CRATES, DEV_DEPENDENCIES, Kind, MIRI_CRATES, find};
+use crate::policy::{CRATES, DEV_DEPENDENCIES, Kind, MIRI_TARGETS, find};
 use std::collections::HashSet;
 
 #[test]
@@ -25,8 +25,11 @@ fn every_dependency_names_a_known_crate() {
             );
         }
     }
-    for dep in DEV_DEPENDENCIES.iter().chain(MIRI_CRATES) {
+    for dep in DEV_DEPENDENCIES {
         assert!(find(dep).is_some());
+    }
+    for target in MIRI_TARGETS {
+        assert!(find(target.name).is_some());
     }
 }
 

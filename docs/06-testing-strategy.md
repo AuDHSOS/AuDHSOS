@@ -15,7 +15,7 @@ is project code on top of the Rust toolchain.
 | L4 Fuzz | parsers and decoders | host | `-Zsanitizer=fuzzer` from the toolchain with `fuzz-support` | nightly schedule; regressions on every push |
 | L5 Loader and kernel integration | loader, HAL adapter, and kernel core in QEMU | QEMU | custom test framework, serial protocol, exit device | every push |
 | L6 End-to-end | the full system with userland test programs | QEMU | same runner | every push |
-| L7 Miri | host-executable `unsafe` in adapter crates | host | `cargo miri test` | every push |
+| L7 Miri | host-executable `unsafe` in adapter crates: the tests of the modules that hold it | host | `cargo xtask miri` | every push |
 | L8 Static | lints, layering, external code, unsafe budget, documentation | host | `cargo xtask check` | every push |
 
 Locally every one of these levels is started through the wrapper scripts of
@@ -298,6 +298,13 @@ done until every applicable item has a test. Items are added, never removed.
 - Fault message: has the reserved label range, carries fault kind, address,
   instruction pointer, and error code; the reply resumes the thread; the
   handler killing the process ends the wait cleanly.
+- A message whose label lies in the range the kernel reserves for its own
+  messages is refused before anything is copied.
+- A thread suspended while it waits leaves the queue it waited in, finds
+  `Cancelled` in its status word, and is in no queue when it resumes.
+- The last handle to an endpoint closes while threads wait on both queues:
+  the endpoint is destroyed and everyone wakes with `ObjectDestroyed`
+  (D-75).
 
 ### 6.6.9 System call decoding and dispatch (`kernel-syscall`)
 
@@ -315,6 +322,12 @@ done until every applicable item has a test. Items are added, never removed.
   `WrongObjectType`.
 - Round-trip encode/decode of every request and result layout, including
   maximum values of every field.
+- A result that does not fit into two return words is written as message
+  words of the caller's buffer with label zero and handle count zero, and
+  the first return word says how many: `thread_info` reports the kind,
+  address, instruction pointer, and error code of a thread that faulted and
+  a word count of zero for one that did not, and `system_info` reports the
+  capacity and the live count of every pool.
 
 ### 6.6.10 Boot image header and boot information (`audhsos-abi`, `kernel-core`)
 
@@ -503,6 +516,10 @@ done until every applicable item has a test. Items are added, never removed.
 - Unsafe counter: `unsafe` inside comments and strings is not counted;
   `unsafe fn`, `unsafe impl`, `unsafe {` and `asm!` are counted; a budget
   exactly met passes, one above fails.
+- Miri coverage: a module holding `unsafe` that a filter of `MIRI_TARGETS`
+  names is no gap; one that no filter names is reported, and the report
+  names both the file and the filter that would close it; a crate that runs
+  whole has no gaps (D-76).
 - `cargo tree` parser: nested depth prefixes; a crate appearing twice;
   workspace members versus the toolchain's own crates.
 - `check-deps`: a lock file with a non-workspace package fails; a manifest
@@ -1407,7 +1424,8 @@ done until every applicable item has a test. Items are added, never removed.
 
 - `fuzz-support`: the entry glue passes the input slice through
   unchanged, including the empty slice; the regression list replays every
-  stored corpus file; Miri covers the glue.
+  stored corpus file; Miri covers the counter registry and the sanitizer
+  callbacks, which is where the crate's `unsafe` is (D-76).
 - Symbol table: an address inside a function, at its first byte, at its
   last byte, and one past it; an address in no function; a symbol that is
   not a function; the narrowest of two functions that enclose each other;

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::error::Error;
 use crate::image::{boot_image, disk};
 use crate::out::{self, note, note_raw};
-use crate::policy::{FUZZ_TARGETS, MIRI_CRATES, Target, crates_for};
+use crate::policy::{FUZZ_TARGETS, MIRI_TARGETS, Target, crates_for};
 use crate::process::Cmd;
 use crate::qemu::{self, Machine, Run};
 use crate::symbolize;
@@ -413,13 +413,35 @@ pub(crate) fn coverage(root: &Path) -> Result<(), Error> {
     Error::from_violations(violations)
 }
 
-/// Miri over the host-executable adapter crates.
+/// Miri over the host-executable `unsafe` of the adapter crates and the
+/// tests that reach it, which is what `MIRI_TARGETS` names.
+///
+/// One run per crate rather than one run over all of them, because each
+/// carries its own test-name filters. A crate whose filters are empty runs
+/// whole.
+///
+/// # Errors
+///
+/// The errors of the runs; the violations of
+/// [`unsafe_budget::miri_gaps`], which are checked first, because a run
+/// that skipped an `unsafe` site would pass and mean nothing.
 pub(crate) fn miri(root: &Path) -> Result<(), Error> {
-    let mut cmd = Cmd::cargo_plain().cwd(root).args(["miri", "test"]);
-    for krate in MIRI_CRATES {
-        cmd = cmd.arg("-p").arg(*krate);
+    let gaps = unsafe_budget::miri_gaps(root)?;
+    report("miri coverage", &gaps);
+    Error::from_violations(gaps)?;
+    for target in MIRI_TARGETS {
+        let mut cmd = Cmd::cargo_plain()
+            .cwd(root)
+            .args(["miri", "test", "-p", target.name]);
+        if !target.filters.is_empty() {
+            cmd = cmd.arg("--");
+            for filter in target.filters {
+                cmd = cmd.arg(*filter);
+            }
+        }
+        cmd.run()?;
     }
-    cmd.run()
+    Ok(())
 }
 
 /// Documentation with warnings as errors, per target group.
