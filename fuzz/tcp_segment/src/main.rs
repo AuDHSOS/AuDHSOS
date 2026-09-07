@@ -143,11 +143,22 @@ fn machine(bytes: &[u8]) {
             sent += 1;
             assert!(sent <= 8, "one instant produced a segment without end");
         }
-        // A connection with nothing to do says so.
-        if connection.poll_at(now).is_none() {
+        // What `poll_at` promises is that it names no instant at which
+        // `poll` would produce nothing
+        // ([06-testing-strategy.md 6.6.46](../../../docs/06-testing-strategy.md)),
+        // and not that an open connection always names one. The converse
+        // does not hold and was never meant to: this crate has no
+        // keepalive (D-50) and no user timeout, so a connection in
+        // `ESTABLISHED` with nothing outstanding, no acknowledgment held
+        // back and no closed window has no timer running and owes none —
+        // and neither do `LISTEN`, `CLOSE-WAIT` and `FIN-WAIT-2`. What is
+        // checked here is therefore the promise itself: `poll` has just
+        // been drained at `now`, so an instant of `now` or earlier is a
+        // wake-up that would find no work.
+        if let Some(at) = connection.poll_at(now) {
             assert!(
-                !connection.state().is_open(),
-                "an open connection with no work and no timer"
+                at > now,
+                "a wake-up at an instant the connection had nothing to say at"
             );
         }
     }

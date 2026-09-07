@@ -19,6 +19,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   instant either. Found by the `tcp_segment` fuzz target once its
   assertion said what the design promises.
 
+- The `tcp_segment` fuzz target asserts the invariant `net-tcp` has rather
+  than one it never made. It required every open connection to name an
+  instant, which is the converse of what 6.6.46 states and is false for
+  four states: `LISTEN`, an idle `ESTABLISHED`, `CLOSE-WAIT` and
+  `FIN-WAIT-2` have no timer running and owe none, since this crate has no
+  keepalive (D-50) and no user timeout. What the target checks now is the
+  promise itself — that `poll_at` names no instant at which `poll` would
+  produce nothing — and that assertion found a real defect in its first
+  minute.
+
 - A cut line carries the mark it was documented to carry. `user_rt::Line`
   said a line that does not fit "is cut and says so", and `ELLIPSIS` stood
   public beside it as "the mark a cut line ends with" — and nothing ever
