@@ -219,9 +219,17 @@ fn create(
     let made = display.create(badge, width, height)?;
     let slot = free_slot(held).ok_or(Error::QuotaExceeded);
     let outcome = slot.and_then(|index| {
-        let memory = allocate(gate, server, made.bytes(), PAGE_SIZE)?;
-        let address = window_of(index);
-        let mapping = Mapping::new(gate, process, memory, address, made.bytes())?;
+        // A mapping covers whole pages, so the window is the pixels rounded
+        // up; the memory server rounds the object up the same way.
+        let bytes = whole_pages(made.bytes());
+        let memory = allocate(gate, server, bytes, PAGE_SIZE)?;
+        let mapping = match Mapping::new(gate, process, memory, window_of(index), bytes) {
+            Ok(mapping) => mapping,
+            Err(error) => {
+                let _released = user_programs::client::release(gate, server, memory);
+                return Err(error);
+            }
+        };
         put(
             held,
             index,
@@ -255,6 +263,9 @@ fn present(
 ) -> Result<(), Error> {
     let screen = screen.ok_or(Error::NotFound)?;
     let format = display.format()?;
+    // Whose surface it is comes first: a client that names another's is
+    // refused before this program touches the pixels of it.
+    display.holding(badge, id)?;
     let slot = held
         .iter_mut()
         .flatten()
@@ -297,6 +308,14 @@ fn destroy(
         let _released = user_programs::client::release(gate, server, slot.memory);
     }
     Ok(())
+}
+
+/// `bytes` rounded up to whole pages, which is what a mapping covers.
+const fn whole_pages(bytes: u64) -> u64 {
+    bytes
+        .saturating_add(PAGE_SIZE.saturating_sub(1))
+        .wrapping_div(PAGE_SIZE)
+        .saturating_mul(PAGE_SIZE)
 }
 
 /// The window of the address space slot `index` maps its surface in.
