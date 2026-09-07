@@ -1,4 +1,4 @@
-# 10. Implementation Plan for Phases 1 to 11
+# 10. Implementation Plan for Phases 1 to 15
 
 This document tells an implementer, human or agent, exactly what to build in
 each remaining phase of the [roadmap](08-roadmap.md): crates, modules,
@@ -2500,7 +2500,7 @@ gains the `[info]` line.
 region of the boot information, beside the check against usable memory it
 already makes. The kernel therefore keeps those regions: a bounded array
 of at most `MAX_BOOT_REGIONS` frame ranges filled at bring-up, and
-`Environment::inside_device_memory(frames)` answered from it.
+`Environment::is_device_memory(frames)` answered from it.
 
 `server-init` calls `memory_create_device(start, len)` for the framebuffer
 of `system_info` and grants the handle and the description to the display
@@ -2842,3 +2842,379 @@ targets run for 60 seconds without findings.
 
 Acceptance: `check` green; catalog 6.6.29 combined items; the three e2e
 tests pass in CI without a display window.
+
+## 10.12 Phase 12: Time, randomness, and message interrupts
+
+The design is [document 13](13-the-network-on-the-machine.md), sections
+13.3 to 13.5. Nothing in this phase is about networking; all of it is
+what a driver needs before it can be written.
+
+### 10.12.1 `audhsos-abi` additions
+
+Four system call numbers on the existing table in `syscall.rs`:
+
+```
+ClockNow             = 44 => "clock_now" (0, Nothing),
+NotificationWaitUntil = 45 => "notification_wait_until" (2, Notification),
+RandomBytes          = 46 => "random_bytes" (0, Nothing),
+InterruptCreateMsi   = 47 => "interrupt_create_msi" (1, SystemControl),
+```
+
+The error table of `audhsos-abi` ends at `OutOfMemory = 26` and gains two
+codes: `Unavailable = 27`, which `random_bytes` answers when the hardware
+would not deliver inside its retry bound, and `NoVector = 28`, which
+`interrupt_create_msi` answers when the vector space has nothing left.
+Neither can be folded into an existing code without saying that a
+different resource ran out. The generated wrapper names, argument counts
+and dispatcher arms follow from the syscall table, as they do for every
+other call.
+
+### 10.12.2 `kernel-sched`: a thread that waits until
+
+`ThreadState::BlockedNotification` gains a companion field rather than a
+new state, so the transition table of `transition.rs` is unchanged: a
+thread control block carries `deadline: Option<u64>` — microseconds since
+boot, the scale `clock_now` answers in — and the scheduler carries one
+`IndexList` of `audhsos-collections` over the thread slots, ordered by
+that number, and therefore no allocation and no pool of its own. The
+deadline is a plain word and not an `Instant`: `kernel-sched` depends on
+`audhsos-abi` and `kernel-objects` and on nothing else today, no kernel
+crate uses `audhsos-time`, and a comparison of two integers needs no type
+to be borrowed across that line. `Instant` stays what it is, a userland
+type `user-rt` builds from the word the call returns.
+
+`IndexList` first gains one operation, because it has `push_front`,
+`push_back`, `pop_front`, `pop_back` and `unlink` and nothing that inserts
+in the middle, and its `Link` fields are not writable from outside the
+crate, so no caller can splice for it:
+`insert_after(&mut self, links: &mut [Link], node: u32, after: Option<u32>) -> Result<(), CollectionError>`,
+where `None` means the front. Its errors and its ownership checks are
+those of `push_back`. Catalog 6.6.41 gains the item, and this is the only
+change Phase 12 makes to a finished crate.
+
+- `block_until(thread, deadline)` inserts into the list at its place. The
+  insert walks from the front; the list is bounded by the thread count,
+  and the common case is a deadline later than every other, so the walk
+  is from the back when the new deadline is past the tail.
+- `expire(now) -> impl Iterator<Item = ThreadId>` removes and yields
+  every entry whose deadline is at or before `now`, stopping at the first
+  that is not. Each yielded thread becomes `Ready` through the ordinary
+  `Event::Wake`, with no bits set.
+- A thread signalled before its deadline leaves the list in the same call
+  that changes its state, so an entry never outlives the wait it belongs
+  to.
+
+Tested against a model that keeps the same deadlines in a sorted `Vec`:
+the same sequence of inserts, removals and expiries yields the same
+threads in the same order.
+
+### 10.12.3 `kernel-core` and the HAL
+
+`KernelState::ticks` is already counted, and `tick.rs` already converts it
+with `seconds` and `milliseconds`. It gains `micros(ticks) -> u64` in the
+same form — `saturating_mul(1_000_000).wrapping_div(RATE)` — so a machine
+left running saturates rather than travelling backwards.
+`TICKS_PER_SECOND` is 1000, so the clock's resolution is one millisecond
+and the microseconds it answers in are the unit `Instant` takes, not a
+precision the timer has.
+
+The tick reaction calls `expire(now)` and wakes what it yields, before it
+does what it does today for the time slice. A tick that wakes nothing
+costs one comparison against the front of the list.
+
+`kernel-hal-api` gains `trait Random { fn seed(&mut self) -> Result<[u64; 4], RandomError>; }`
+with a `ScriptedRandom` double, and `kernel-hal-x86_64` implements it with
+`RDSEED` — one `unsafe` site with an `asm!`, the carry flag read back,
+`MAX_RETRIES` attempts per word, `RandomError::Unavailable` when a word
+does not fill. The budget of `kernel-hal-x86_64` grows by one site and
+one `asm!`.
+
+`kernel-hal-api::interrupt` gains
+`fn allocate_msi(&mut self) -> Result<(Vector, u64, u32), InterruptError>`,
+which answers the vector, the message address and the message data. The
+`x86_64` adapter builds the address from the local APIC's message region
+and the destination it already knows, and the data from the vector with
+fixed delivery and edge trigger. `FakeInterruptController` answers a
+scripted triple, so `kernel-syscall` is tested without hardware.
+
+### 10.12.4 `kernel-syscall` additions
+
+- `clock_now`: no handle, no argument, one result word — the microseconds
+  of `tick::micros`.
+- `notification_wait_until(handle, deadline)`: `Rights::WAIT`, as
+  `notification_wait` has. Takes what is present; otherwise blocks with a
+  deadline. Answers the bits, or zero when the deadline came first.
+- `random_bytes`: no handle, four result words. `Unavailable` passes
+  through from the HAL.
+- `interrupt_create_msi(control)`: `Rights::MANAGE` on `SystemControl`,
+  as `interrupt_create` requires. Allocates a vector, creates the
+  `Interrupt` object with no line behind it, and answers the handle, the
+  message address and the message data. `NoVector` when the vector space
+  is exhausted, and `QuotaExceeded`, `PoolExhausted` or `OutOfHandles` as
+  `interrupt_create` answers them, through the same `charge_object` and
+  `install_handle` path.
+- `interrupt_ack` learns that an interrupt object may have no line: for
+  such an object it clears the outstanding flag and calls no controller.
+
+The recording `Environment` of the syscall tests grows the two HAL calls,
+and every new call gets its argument-count and rights test in the
+existing generated tables.
+
+### 10.12.5 The reference machine and the test programs
+
+`-cpu qemu64` becomes `-cpu qemu64,+rdrand,+rdseed` in the xtask's QEMU
+command line and in 3.1.1. The user test programs gain `clock_and_wait`
+(reads the clock, waits fifty milliseconds on a notification nothing
+signals, reads it again, reports both and the difference), `entropy`
+(draws two seeds and reports whether they differ), and `msi_vector` (the
+root task creates an MSI interrupt, binds it, and a test kernel raises the
+vector; the program reports the bit).
+
+Acceptance: `check` green; catalog 6.6.59 and 6.6.60; the three programs
+report as specified under TCG.
+
+## 10.13 Phase 13: PCI and the bus
+
+The design is section 13.6 and section 13.7.
+
+### 10.13.1 `kernel-acpi` addition
+
+`mcfg.rs`, of the same shape as `madt.rs`: `Mcfg::parse(bytes)` validates
+the signature `MCFG`, the length and the checksum through the existing
+`SdtHeader`, skips the eight reserved bytes, and reads the allocation
+structures — base address, segment group, first bus, last bus, four
+reserved bytes — into a bounded array `MAX_ECAM_ALLOCATIONS`. A structure
+whose last bus is below its first, or whose base address is not page
+aligned, is an error. `RootTable` gains nothing: the table is found the
+way the MADT is found.
+
+Fuzz target `mcfg` beside the existing ACPI targets.
+
+### 10.13.2 The kernel reports the window
+
+`Platform` gains `fn ecam(&self) -> Option<Ecam>` where
+`Ecam { base: PhysAddr, segment: u16, first_bus: u8, last_bus: u8 }`;
+`ScriptedPlatform` gains it; the `x86_64` adapter fills it from
+`kernel-acpi::mcfg` beside the MADT it already reads.
+
+`system_info` gains four result words, 26 to 29 — base address, segment,
+first bus, last bus — zero throughout on a machine with no `MCFG`.
+`MAX_RESULT_WORDS` and `SYSTEM_INFO_WORDS` become 30, `SystemInfo` gains
+`ecam: Option<Ecam>`, and the offsets the `every_syscall` program reads
+follow.
+
+`Environment::is_device_memory` answers from the `MmioReserved` regions
+**and** from the ECAM range, because the firmware's memory map does not
+reliably mark it and `memory_create_device` would otherwise refuse the one
+window that makes the bus reachable. The range is kept the way
+`kernel-core::memory` keeps the device ranges it collects from
+`Platform::memory_regions`: one more entry, filled at bring-up.
+
+`boot::run` reports `[info] ecam=<base> segment=<n> buses=<first>..=<last>`
+or `[info] ecam=absent`, and 03 3.1.7 gains the line. No base address is
+written into the documents: it is whatever the `MCFG` table says.
+
+### 10.13.3 Crate `pci` (`crates/pci`)
+
+Layer-1 logic crate, `no_std`, `#![forbid(unsafe_code)]`, no allocation,
+no workspace dependency, `test-support` as a dev-dependency. Modules
+`address.rs`, `header.rs`, `enumerate.rs`, `bar.rs`, `capability.rs`,
+`msix.rs`, `virtio.rs`, exactly as 13.6.2 specifies them, over
+
+```rust
+pub trait ConfigSpace {
+    fn read_u32(&self, address: Address, offset: u16) -> Option<u32>;
+    fn write_u32(&mut self, address: Address, offset: u16, value: u32);
+}
+```
+
+with `RecordedConfigSpace` behind the feature `test-doubles`: the
+configuration space of a `q35` machine with a virtio-net device, captured
+once and kept as a byte fixture of the crate.
+
+Four rules the implementer must not soften:
+
+1. Size probing clears the memory decode bit of the command register
+   before it writes all ones and restores it afterwards, and both halves
+   are in one function so a caller cannot do the first without the
+   second.
+2. The capability walk is bounded by the number of capabilities that fit
+   in configuration space, so a list that points at itself is an error
+   and never a hang.
+3. A 64-bit base address register consumes the next index, and an index
+   that a previous register consumed is not read again.
+4. `virtio.rs` reports every structure it found, in the order the
+   capability list had them, and chooses none: virtio 4.1.4 allows a
+   device to publish more than one structure of a type and makes the list
+   order its order of preference, so the choice is the driver's.
+
+Fuzz target `pci_config`: arbitrary bytes as a configuration space; the
+enumeration must terminate with devices or with an error, and must never
+read outside the fixture buffer.
+
+### 10.13.4 `user-sys-x86_64` addition
+
+`mmio.rs`: `Mmio<'a>` over a mapped region, made from the base pointer
+and the length the mapping has, with `read_u8/u16/u32/u64` and
+`write_u8/u16/u32/u64` at an offset checked against the length. Each is
+one `read_volatile` or `write_volatile`; an out-of-range offset answers
+`None` and writes nothing. The `unsafe` budget of the crate grows by eight
+sites, one per accessor, and the `SAFETY:` comment on each names the
+bound that makes it sound.
+
+`pci::ConfigSpace` is implemented over `Mmio` in the program that
+enumerates, with the ECAM arithmetic taken from `pci::address`, so the
+adapter contains no layout knowledge of its own.
+
+### 10.13.5 The program that enumerates
+
+`app-lspci`, a program of the archive: asks `system_info` for the ECAM
+window, has the root task make it a `Device` memory object, maps it,
+enumerates, and reports one line per function — address, vendor and
+device id, class, the base address registers it decoded, the
+capabilities it found, and for a virtio device the four structures and
+the size of the MSI-X table. On a machine with no `MCFG`, or an empty
+bus, it reports that and exits.
+
+The QEMU command line gains
+`-netdev user,id=n0,hostfwd=tcp:127.0.0.1:<port>-:7` and
+`-device virtio-net-pci,netdev=n0,disable-legacy=on,mq=off`, with the host
+port chosen free by the runner and reported in the test log, and a
+`--no-network` flag that drops both. Nothing in this phase drives the
+device; it is here so that the bus walk has something to find that the
+next phase will use.
+
+`policy::CRATES` entries `pci` (Logic, deps none) and `app-lspci` inside
+`user-programs`.
+
+Acceptance: `check` green; catalog 6.6.61; `app-lspci` reports the
+virtio-net device of the reference machine with its four virtio
+capabilities and its MSI-X table size, and on a run with `--no-network`
+reports the rest of the bus and no virtio device.
+
+## 10.14 Phase 14: The network on the machine
+
+The design is sections 13.8 to 13.12.
+
+### 10.14.1 Crate `driver-virtio-net` (`crates/drivers/virtio-net`)
+
+Layer-2 logic crate, `no_std`, `#![forbid(unsafe_code)]`, no allocation,
+depending on `pci` and `virtio-queue` and on nothing of the network
+track. Modules `common.rs`, `features.rs`, `init.rs`, `rx.rs`, `tx.rs`,
+`net.rs` as 13.9 specifies, over
+
+```rust
+pub trait Registers {
+    fn read(&self, structure: Structure, offset: u16, width: Width) -> u64;
+    fn write(&mut self, structure: Structure, offset: u16, width: Width, value: u64);
+}
+```
+
+with `ScriptedRegisters` behind `test-doubles`: a device that answers a
+scripted sequence and records every write.
+
+Feature negotiation accepts `VIRTIO_F_VERSION_1` (bit 32) and
+`VIRTIO_NET_F_MAC` (bit 5) and refuses every other offered bit by name,
+in a table that pairs the bit number with the name, so that a refusal
+reads as a decision and a log line names it. `VIRTIO_NET_F_MRG_RXBUF` is
+among them, which is what makes one receive buffer hold one whole frame,
+and `VIRTIO_NET_F_CTRL_VQ` is among them, which is what makes the device
+two queues.
+
+MAC address from the device configuration of virtio section 5.1.4, as
+`[u8; 6]`.
+
+Fuzz target `virtio_net_rx`: a used element and a buffer of arbitrary
+bytes; the driver must yield a frame or refuse and must never read
+outside the buffer.
+
+### 10.14.2 The DMA region
+
+`server-init` creates one `Ram` memory object for the network driver,
+maps it into the driver's process and installs the handle with
+`READ | WRITE | MAP | INFO`. The driver calls `memory_info` once, and its
+`QueueMemory` implementation is the offset arithmetic between the mapping
+and the physical start — nothing else.
+
+Layout, in this order and each with a named constant: the descriptor
+table, available ring and used ring of the receive queue; the same three
+for the transmit queue; `RX_BUFFERS` receive buffers of 2048 bytes;
+`TX_BUFFERS` transmit buffers of 2048 bytes. The region's length follows
+from the constants and is asserted at compile time against the page size.
+
+### 10.14.3 `server-net` (`crates/user/servers/net`)
+
+Layer-u2 logic crate, host-tested, no system call in it; the process
+around it is a binary of `user-programs`.
+
+Startup message: the endpoint of the name server, the ECAM device memory
+object, the DMA memory object, the MSI-X `Interrupt` and the notification
+it is bound to. It enumerates with `pci`, finds the virtio-net function,
+maps its structures, brings the device up with `driver-virtio-net`,
+configures the MSI-X table entry from the address and data the
+`Interrupt` was created with, seeds a `ChaChaRng` from one `random_bytes`,
+builds the `Stack` from the MAC address, starts DHCP, and registers as
+`net`.
+
+The three threads and the loop are 13.10, step for step: a serving thread
+on the endpoint, an interrupt thread that forwards the MSI-X notification
+to it under a badge, and a timer thread that sends a tick under a third
+badge when the deadline the serving thread wrote passes. `state.rs` holds
+the logic and is tested on the host with the network double of
+`net-stack`, a scripted device, and a clock a test advances; the threads
+themselves are the binary's, as the console driver's are.
+
+The unsafe budget of `user-programs` grows for the two extra thread entry
+points and their IPC buffers, the same two sites per thread D-106 counted
+for the display server's watcher thread, plus the mapping of the deadline
+word.
+
+### 10.14.4 Socket protocol (`user-proto`)
+
+The messages of the table in 13.11, each a type with `encode` and
+`decode` and no system call, in `socket.rs` beside `display.rs` and
+`input.rs`. One ring per socket in its own memory object, with the header
+`{ write_seq: u64, read_seq: u64, capacity: u32, flags: u32 }` and the
+payload behind it; a client that stops reading fills its ring and the
+stack stops advancing the window, which is the back pressure TCP already
+has. `Socket` on the client side wraps the ring and the notification.
+
+### 10.14.5 `xtask` and the reference machine
+
+The two network lines are already on the machine: Phase 13 put them there
+so that its bus walk had a device to find, with the host port chosen free
+by the runner and reported in the test log, and `--no-network` to drop
+them. `policy::CRATES` entries
+`driver-virtio-net` (Logic, deps `pci`, `virtio-queue`) and `server-net`
+(Logic, `X86_64None` in its binary form, deps `audhsos-abi`,
+`audhsos-collections`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`,
+`net-stack`, `pci`, `user-proto`).
+
+The client of the end-to-end tests is `app-net`, a program of the
+archive: it looks up `net`, waits for a lease, reports it, resolves a
+name, opens a TCP connection to the forwarded port, echoes a payload,
+performs an HTTP `GET`, reports each result as a line, and exits.
+
+Acceptance: `check` green; catalog 6.6.62 to 6.6.64; the seven e2e
+assertions of 13.13 pass, and the run without the two network lines ends
+by itself.
+
+## 10.15 Phase 15: TLS over the network
+
+Step T8 of [document 11](11-cryptography-and-tls.md), which section 11.14
+specifies and which has waited for a transport.
+
+- `user-proto` gains nothing: TLS is a client of the socket protocol, not
+  a peer of it.
+- The transport glue lives beside `app-net` as a module of
+  `user-programs`: it moves record bytes between `audhsos-tls` and a
+  socket ring, drives the handshake against a deadline of `clock_now`,
+  and sends and expects `close_notify`.
+- The trust anchors the image carries are the ones the test certificate
+  builder of `audhsos-x509` wrote, placed in the archive as one file.
+- `app-tls` performs an HTTPS `GET` against a server the test starts on
+  the development machine and reports the status line.
+
+Acceptance: `check` green; catalog 6.6.65; the `GET` succeeds, and an
+expired chain, a name that does not match, and an unknown anchor are each
+refused with the alert the standard names.

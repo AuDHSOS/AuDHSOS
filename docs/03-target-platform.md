@@ -56,6 +56,40 @@ on macOS and `-display gtk` on Linux. The run without a graphics adapter
 keeps `-vga none` and drops the three lines that follow it, which leaves
 the firmware without a Graphics Output Protocol.
 
+From Phase 12 on the CPU model is `qemu64,+rdrand,+rdseed`. `random_bytes`
+draws from `RDSEED`, which D-43 decided and Phase 12 builds, and the model
+`qemu64` carries neither flag — asked of QEMU 11.1 through
+`query-cpu-model-expansion`, not assumed. TCG provides both instructions
+once they are named, and the line starts without a warning under
+`enforce`. Without them the call would fail on the one machine this system
+is developed on (D-110).
+
+From Phase 13 on the runner adds two more lines:
+
+```
+-netdev user,id=n0,hostfwd=tcp:127.0.0.1:<free port>-:7 \
+-device virtio-net-pci,netdev=n0,disable-legacy=on,mq=off
+```
+
+The device arrives one phase before anything drives it, because what
+Phase 13 has to show is that the bus walk finds a real device with real
+base address registers and a real MSI-X table, and this is that device.
+The network behind it is QEMU's own, and that is what makes the
+end-to-end tests of Phase 14 need no host network, no bridge, and no
+privileges: `-netdev user` is a DHCP server, a gateway at `10.0.2.2`, and
+a DNS forwarder at `10.0.2.3` inside the QEMU process, and `hostfwd` gives
+the runner a port on the loopback of the development machine that reaches
+a listener in the guest. The runner picks the host port free and records it in the test log.
+`disable-legacy=on` makes the adapter a non-transitional virtio 1.0
+device, which is the only kind `virtio-queue` and `driver-virtio-net`
+implement, so its PCI device id is `0x1041` and not the transitional
+`0x1000`; `mq=off` is the default and is written down because the driver
+depends on it. Dropping the two lines is the run Phases 13 and 14 are also
+accepted on, as `-vga none` is the second run Phase 9 is accepted on.
+Before Phase 13 the machine has no network device at all: a device that
+neither a driver nor a bus walk looks at is one more thing for an
+unrelated test to trip over.
+
 ### 3.1.2 Devices
 
 | Device | Access path | Used by | Phase |
@@ -68,8 +102,11 @@ the firmware without a Graphics Output Protocol.
 | PIT channel 2 | port I/O | one-time calibration of the local APIC timer frequency | 4 |
 | ACPI RSDP (from the UEFI configuration table), RSDT/XSDT, MADT | bytes read through the physical window, parsed in safe Rust by `kernel-acpi` | APIC discovery | 4 |
 | `isa-debug-exit` (I/O port `0xF4`) | port I/O | test exit codes from loader and kernel | 2 |
-| PCI configuration space via ECAM (`MCFG`) | MMIO via `Device` memory objects | userland virtio drivers | later |
-| virtio-blk, virtio-net over PCI | MMIO, interrupts | userland drivers | later |
+| PCI configuration space via ECAM (`MCFG`) | the kernel reads the `MCFG` table and reports the window through `system_info`; userland maps it as a `Device` memory object and walks the bus with the crate `pci` (D-112) | userland virtio drivers | 13 |
+| MSI-X on a PCI device | `interrupt_create_msi` allocates the vector; the driver writes the address and data into the device's own table (D-111) | userland virtio drivers | 12 |
+| virtio-net over PCI (`virtio-net-pci`, non-transitional) | MMIO through the volatile accessor, DMA through a `Ram` memory object with `INFO`, interrupts through MSI-X | on the machine from 13, so that the bus walk has a device to find; driven by `driver-virtio-net` and `server-net` from 14 | 13, 14 |
+| virtio-blk over PCI | the same three paths | later work | later |
+| `RDSEED` | the `random_bytes` system call | `crypto-rng` seeding in every process that needs randomness | 12 |
 | Standard VGA device (`q35` default) with a linear framebuffer exposed by the UEFI Graphics Output Protocol | loader: mode query through `EFI_GRAPHICS_OUTPUT_PROTOCOL`; userland: MMIO via a `Device` memory object | boot information; userland display server | 2, 9 |
 | i8042 PS/2 controller (I/O ports `0x60` and `0x64`, IRQ 1 keyboard, IRQ 12 mouse) | port I/O via `IoPortRange`, `Interrupt` | userland input driver | 10 |
 

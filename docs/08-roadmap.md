@@ -20,6 +20,10 @@ XL) and describe effort, not calendar time.
 | 9 | Framebuffer output | L | the userland display server draws through the framebuffer; the runner verifies pixels through QMP |
 | 10 | PS/2 input | L | keyboard and pointer events reach a userland client; the runner injects them through QMP |
 | 11 | Graphical demonstration | M | cursor, drawing, and typed text in `app-canvas`, verified end to end |
+| 12 | Time, randomness, and message interrupts | L | a userland thread reads a clock, waits until a deadline, draws entropy, and receives an MSI-X vector |
+| 13 | PCI and the bus | M | a userland program enumerates the PCI bus and reports the virtio-net device and its registers |
+| 14 | The network on the machine | XL | the system leases an address, resolves a name, and completes an HTTP request over a real device |
+| 15 | TLS over the network | M | an HTTPS request from a program of the archive, with the certificate path validated |
 
 Every phase has the same definition of done: all catalog items for the
 components in the phase have tests, `sh tools/xtask-check.sh` is green, the
@@ -28,11 +32,14 @@ design documents reflect the code, the changelog is updated. The
 each phase down to crates, types, algorithms, and tests.
 
 Beside the phases run tracks that depend on none of them: the
-cryptography and TLS crates of section 8.17, specified in
+cryptography and TLS crates of section 8.21, specified in
 [document 11](11-cryptography-and-tls.md), and the tracks of sections
-8.18 to 8.21, specified in [document 12](12-parallel-work.md). Section
-8.22 states how many of them may be active at once and which phase work
-may be pulled forward.
+8.22 to 8.25, specified in [document 12](12-parallel-work.md). Section
+8.26 states how many of them may be active at once and which phase work
+may be pulled forward. Every track but the two integration steps is
+finished, and those two are Phases 14 and 15; what the four phases from
+12 on need beyond them is specified in
+[document 13](13-the-network-on-the-machine.md).
 
 ## 8.2 Phase 0: Project foundation
 
@@ -284,20 +291,150 @@ Acceptance: `sh tools/xtask.sh run --display` shows the canvas;
 `sh tools/xtask.sh test --e2e` verifies cursor movement, a drawn stroke,
 and typed text in screendumps.
 
-## 8.14 Later work, not scheduled
+## 8.14 Phase 12: Time, randomness, and message interrupts
+
+Three capabilities the kernel does not have and that everything above it
+wants — time, randomness, and message interrupts. None of them is about
+networking; all three are what
+[document 13](13-the-network-on-the-machine.md) has to have before a
+driver can be written.
+
+Deliverables: `clock_now`, which answers with the microseconds since the
+kernel started, computed from the tick count it already keeps and the
+frequency it already reports, at tick resolution and documented as such;
+`notification_wait_until`, which is `notification_wait` with a deadline
+and answers zero bits when the deadline passed first, the existing call
+left as it is; in `kernel-sched` a deadline on the `BlockedNotification`
+state — a plain word of microseconds, so that no kernel crate has to
+depend on `audhsos-time` — and one list ordered by that deadline, which
+the tick handler walks from the front and stops at the first that has not
+passed; `IndexList` of `audhsos-collections` gains the `insert_after` it
+needs for that list and that it does not have today, which is the only
+change this phase makes to a finished crate; `random_bytes`, which answers
+with the four words a `ChaChaRng` seed is, each drawn from `RDSEED` with a
+bounded number of retries and `Unavailable` rather than a word the
+hardware did not give;
+`interrupt_create_msi` on `SystemControl`, which allocates one vector out
+of the same space the lines are allocated from and answers with the
+`Interrupt` handle, the message address, and the message data, so that a
+driver can program a device's MSI-X table itself; `interrupt_bind` and
+`interrupt_ack` unchanged, with `interrupt_ack` on an MSI interrupt
+clearing the outstanding flag and touching no hardware; two error codes
+the table does not have, `Unavailable` for a source that would not deliver
+and `NoVector` for a vector space with nothing left; the reference machine
+gains `+rdrand,+rdseed` on its CPU model, as it gained its QMP socket in
+Phase 9.
+
+Tests: catalog 6.6.59, 6.6.60, and the `insert_after` item of 6.6.41.
+
+Acceptance: a user program reads the clock twice around a wait of fifty
+milliseconds and the difference is that wait to within a tick; a second
+program waits on a notification nothing signals and returns at its
+deadline; a third draws two seeds and they differ; an MSI vector created
+by the root task and raised by a test device arrives as a signalled bit.
+
+## 8.15 Phase 13: PCI and the bus
+
+Deliverables: `kernel-acpi` gains `mcfg.rs`, which reads the `MCFG` table
+the way `madt.rs` reads the MADT — signature, length and checksum first,
+then the allocation structures with their base address, segment group and
+bus range; `system_info` reports the first allocation as four further
+result words and four zero words on a machine whose firmware published no
+`MCFG`; `Platform::ecam()` and its double; the kernel records the ECAM
+range beside the `MmioReserved` regions, so that `memory_create_device`
+admits the window whether or not the firmware's memory map marked it;
+`boot::run` reports the window or its absence; the crate `pci` with the
+`ConfigSpace` trait, the ECAM address arithmetic as a pure function, the
+type-0 header, the enumeration bounded by the bus range, base address
+register decoding with size probing that clears and restores the memory
+decode bit in one call, the capability list bounded against a loop, the
+MSI-X capability, and the vendor-specific capabilities of virtio 1.x from
+section 4.1.4 of the OASIS specification; a volatile accessor over a
+mapped region in `user-sys-x86_64`, checked against the region's length,
+so that everything above it keeps `forbid(unsafe_code)`;
+`docs/pcisig/README.md` and the provenance rule that takes the place of a
+specification the repository may not hold; the reference machine gains
+`-netdev user` with a forwarded port and
+`-device virtio-net-pci,disable-legacy=on,mq=off`, because the proof that
+the bus works is finding the device the next phase will drive.
+
+Tests: catalog 6.6.61, and the fuzz targets `pci_config` and `mcfg`.
+
+Acceptance: a program of the archive enumerates the bus and reports the
+virtio-net device with its vendor and device id, the base address
+registers it decoded, the four virtio capabilities it found, and the size
+of its MSI-X table; on a machine started without the two network lines it
+reports the rest of the bus, finds no virtio device, and ends by itself.
+
+## 8.16 Phase 14: The network on the machine
+
+Deliverables: `driver-virtio-net` over a register trait with a scripted
+double, negotiating `VIRTIO_F_VERSION_1` and `VIRTIO_NET_F_MAC` and
+refusing every other offered bit by name — mergeable receive buffers, the
+control queue, multiqueue and every offload among them — with the
+initialization sequence over the state machine of `virtio-queue`, the
+twelve-byte header of virtio 1.x, a receive path that returns every
+buffer to the available ring in the call that took it, and a transmit
+path that drains completions before it sends; one `Ram` memory object
+with the `INFO` right as the driver's DMA region, granted whole by the
+root task, holding both queues' rings and the frame buffers, whose
+physical address `memory_info` answers; `server-net` around
+`net-stack`, driving `poll` with the frames the driver hands it and
+sleeping until `poll_at` on the notification that carries the MSI-X
+vector and its clients; the socket protocol in `user-proto` with one ring
+per socket in a shared memory object, as the input protocol of Phase 10
+has one; `server-init` creates the ECAM device object, the DMA object and
+the MSI vector and grants them; a client program that uses the protocol.
+The reference machine needs nothing further: Phase 13 already put the
+device on it.
+
+Tests: catalog 6.6.62, 6.6.63, 6.6.64, and the fuzz target
+`virtio_net_rx`.
+
+Acceptance: `sh tools/xtask.sh test --e2e` verifies, in one run of the
+whole system, that the driver reports the MAC address the command line
+gave the device, that DHCP reaches a lease, that ARP resolves the
+gateway, that a DNS query is answered, that a TCP connection through the
+forwarded port carries a payload both ways and closes cleanly, and that
+an HTTP `GET` over it returns a response the client parses; and then runs
+the same image without the two network lines, where the server reports no
+interface and the run ends by itself.
+
+## 8.17 Phase 15: TLS over the network
+
+This is step T8 of [document 11](11-cryptography-and-tls.md), which has
+waited for a transport since the client was finished.
+
+Deliverables: the transport glue that joins `audhsos-tls` to a TCP
+connection of `server-net` — the record layer's bytes in and out of the
+socket's ring, the handshake driven to completion against a deadline of
+the clock of Phase 12, and the close notify in both directions; the
+certificate path validated against the trust anchors the image carries;
+`tools/tls-probe` keeps its host role and gains a counterpart that runs
+on the target.
+
+Tests: catalog 6.6.65.
+
+Acceptance: an HTTPS `GET` from a program of the archive against a server
+the test starts on the development machine, with a chain the test
+certificate builder of `audhsos-x509` wrote, returns a response the
+client parses; a chain with an expired certificate, one with a name that
+does not match, and one signed by an anchor the image does not carry are
+each refused with the alert the standard names.
+
+## 8.18 Later work, not scheduled
 
 virtio-blk driver and a file system server on top of the FAT32 logic of
-8.20; virtio-net and a network server on top of the stack of 8.18, which
-is what the TLS track of 8.17 is waiting for; RSA signature
-verification with the bignum crate it needs, and certificate revocation
-checking; virtio-gpu; virtio-input or `usb-tablet` for absolute pointer
-coordinates; a compositor with several windows; the `aarch64` port under
-HVF without a loader; SMP with per-CPU run queues; hardware port
-permission bitmaps; kernel-object memory donation; an interface
-definition language for protocols; recursive capability revocation; a
-tickless timer; long file names in the disk image writer.
+8.24, which Phase 13 brings within reach because the bus it needs is the
+one PCI gives it; certificate revocation checking; virtio-gpu;
+virtio-input or `usb-tablet` for absolute pointer coordinates; a
+compositor with several windows; the `aarch64` port under HVF without a
+loader; SMP with per-CPU run queues; hardware port permission bitmaps;
+kernel-object memory donation; an interface definition language for
+protocols; recursive capability revocation; a tickless timer; long file
+names in the disk image writer.
 
-## 8.15 Risks
+## 8.19 Risks
 
 | Risk | Effect | Mitigation |
 |------|--------|------------|
@@ -316,9 +453,13 @@ tickless timer; long file names in the disk image writer.
 | Cryptography written from scratch has flaws that tests do not find | a connection that appears encrypted but is not | standards vectors, the RFC 8448 trace, negative tests for every rejection rule, fuzzing, a constant-time review section per crate, a verification-only asymmetric surface |
 | The TLS track competes with the kernel phases for attention | phases slip | the track touches no kernel crate and has no phase dependency; it is worked on between phases, never instead of one |
 | More than one side track is active at once | phases slip and no track finishes | at most one side track beside the cryptography track (D-45); document 12 fixes the order |
-| The shared foundations of 8.19 arrive after their consumers | the same containers and time arithmetic are written twice | track E is scheduled before the tracks and phases that need it, and is small |
+| The shared foundations of 8.23 arrive after their consumers | the same containers and time arithmetic are written twice | track E is scheduled before the tracks and phases that need it, and is small |
+| Phase 14 is XL and the network stalls in it | the release slips while three crates are half-finished | the driver, the server, and the protocol are separate crates with separate catalog items; the driver and the crate `pci` are logic over a trait and can be finished before the phase that integrates them |
+| The kernel grows a deadline queue in the tick handler | every interrupt costs more | the list is ordered by instant, the walk stops at the first deadline that has not passed, and its length is bounded by the thread count |
+| MSI-X cannot be masked by the kernel | a device that raises interrupts faster than its driver services them keeps a core busy | the driver suppresses through the used ring flag `virtio-queue` implements; the limit is written down in 13.5 rather than discovered |
+| PCI-SIG specifications may not be kept beside the code | a layout constant is wrong and D-59's check does not exist for it | every constant names its document and revision; a configuration space captured from a real machine is a fixture of the crate's tests (D-117) |
 
-## 8.16 Resolved decisions
+## 8.20 Resolved decisions
 
 The two questions that were open before Phase 0 are decided in the
 decision register: the project name and crate prefix (D-34) and the build
@@ -326,14 +467,15 @@ entry point on the development machine (D-35, amended by D-64, which puts
 the wrapper scripts of `tools/` in front of the proxy). No open decisions
 remain.
 
-## 8.17 Track C: cryptography and TLS
+## 8.21 Track C: cryptography and TLS
 
 Status: specified in [document 11](11-cryptography-and-tls.md); steps T1
 to T7 and R1 to R6 are implemented and reviewed as a whole. T8 is the
-integration and is not scheduled: it needs a transport from track D, the
+integration and is Phase 15: it needs a transport from track D, the
 `random_bytes` system call, and the driver and server that carry the
-bytes. What the track is still waiting on, and who owns each piece, is
-section 11.14.
+bytes, and all three of those are Phases 12 to 14. What the track is
+still waiting on, and who owns each piece, is section 11.14; what has to
+exist under it is [document 13](13-the-network-on-the-machine.md).
 
 R1 to R6 are RSA verification, specified in section 11.15 and
 implemented. They are the one thing on this track that changed what the
@@ -356,7 +498,7 @@ phase order and is built between phases.
 | T5 | `audhsos-der` | M | implemented: a strict DER reader with its fuzz target; its time conversion waits on document 12 (11.14) |
 | T6 | `audhsos-x509` | L | implemented: certificate parsing, path validation, name matching, the test certificate builder |
 | T7 | `audhsos-tls` | XL | implemented: the client reproduces the RFC 8448 trace and completes a handshake against project-generated chains |
-| T8 | integration | M | not scheduled: transport, the `random_bytes` system call, an HTTP client |
+| T8 | integration | M | Phase 15: the transport over a TCP connection of `server-net`, the `random_bytes` system call of Phase 12, and the HTTP client that `net-http` already is |
 | R1 | `crypto-bignum` | M-L | implemented: the limb arithmetic moved out of `crypto-ec`, with a modulus known at run time and Montgomery exponentiation in a narrow and a wide form |
 | R2 | `crypto-rsa` | M | implemented: the key with its bounds, and PKCS #1 v1.5 verified by construction (D-80) |
 | R3 | `crypto-rsa` | M | implemented: MGF1 and EMSA-PSS-VERIFY |
@@ -369,16 +511,16 @@ Definition of done per step, as for every phase: the catalog items of
 `sh tools/xtask-check.sh` is green, the documents reflect the code, the
 changelog is updated.
 
-## 8.18 Track D: the network stack
+## 8.22 Track D: the network stack
 
 Status: D1 to D9 implemented, which is every step but the integration.
-D10 is specified in [document 12](12-parallel-work.md) and is not
-scheduled.
+D10 is Phase 14, specified in
+[document 13](13-the-network-on-the-machine.md).
 
 Sans-I/O logic crates that consume and produce frames, take time and
 randomness as parameters, allocate nothing, and depend on no kernel,
-loader, or userland crate. The driver and the server that will carry
-their bytes are later work (8.14).
+loader, or userland crate. The driver and the server that carry their
+bytes are Phase 14.
 
 | Step | Crates | Size | Ends with |
 |------|--------|------|-----------|
@@ -391,7 +533,7 @@ their bytes are later work (8.14).
 | D7 | `net-dns`, `net-dhcp` | M | implemented: the RFC 1035 message format with name compression bounded three ways, a stub resolver that asks `A` and `AAAA` at once over `net-udp` with retry, server rotation and a deadline, alias chains followed across messages under one budget of eight; and the RFC 2131 client with the four-message exchange, the strict option walk of RFC 2132, and the lease timers with T1 renewal, T2 rebinding and expiry |
 | D8 | `net-http` | S | implemented: the request writer with every field checked before a byte of it goes down, and an incremental response decoder that takes one line of the head per call, decides its framing once under RFC 9112 section 6.3, and refuses every message that two parsers could read differently |
 | D9 | `net-stack` | L | implemented: one interface, one `poll`, one `poll_at`, generation-checked handles, an outgoing frame queue in the caller's memory, the demultiplexer down both families, DHCP and router advertisements wired to the address table and the routes, duplicate address detection, the resolver, and the address selection of RFC 6724 |
-| D10 | integration | - | not scheduled: virtio-net driver, network server, socket protocol, entropy system call, TLS transport (jointly with T8 of 8.17) |
+| D10 | integration | XL | Phase 14 and Phase 15: the virtio-net driver, the network server, the socket protocol, and the `random_bytes` system call, and then the TLS transport jointly with T8 of 8.21; what has to exist under all of it is [document 13](13-the-network-on-the-machine.md) |
 
 The stack carries IPv4 and IPv6 together (D-69), which supersedes the
 first clause of D-50. An address is an `IpAddr` above `net-wire`, so the
@@ -402,7 +544,7 @@ configuration, not a second copy of everything above it.
 Tests: catalog 6.6.42 to 6.6.50 and 6.6.54. Fuzz targets `ipv4`, `ipv6`,
 `tcp_segment`, `dns_message`, `http_response`.
 
-## 8.19 Track E: shared foundations
+## 8.23 Track E: shared foundations
 
 Status: implemented.
 
@@ -412,13 +554,13 @@ Status: implemented.
 | E2 | `audhsos-encoding` | S | implemented: strict Base64, hex, and PEM without allocation, with the fuzz target `pem` |
 | E3 | `audhsos-collections` | M | implemented: `ArrayVec`, `RingBuffer`, `BitSet`, `IndexList` with `Link`, and `IndexMap`, each against a reference model |
 
-Track E was scheduled first among the side tracks: step T5 of 8.17 needed
+Track E was scheduled first among the side tracks: step T5 of 8.21 needed
 `UnixTime`, T6 needed PEM, track D needs all three, and phases 5 and 6
 need `IndexList`. Track D is therefore unblocked from D1.
 
 Tests: catalog 6.6.39 to 6.6.41. Fuzz target `pem`.
 
-## 8.20 Track F: device logic without devices
+## 8.24 Track F: device logic without devices
 
 Status: implemented.
 
@@ -429,7 +571,7 @@ Status: implemented.
 
 Tests: catalog 6.6.51 and 6.6.52.
 
-## 8.21 Track G: tooling
+## 8.25 Track G: tooling
 
 Status: implemented.
 
@@ -447,7 +589,7 @@ beyond the host tests and the coverage gate every host crate has.
 
 Tests: catalog 6.6.53 and 6.6.58.
 
-## 8.22 Capacity for parallel work
+## 8.26 Capacity for parallel work
 
 - At most one side track besides the cryptography track is active at a
   time (D-45).
@@ -460,3 +602,9 @@ Tests: catalog 6.6.53 and 6.6.58.
   acceptance criteria: `gfx` (Phase 9), `driver-i8042` (Phase 10), the
   QMP client and PPM reader (Phase 9), the allocator logic of `user-rt`
   and the encodings of `user-proto` (Phase 7). Section 12.9 lists them.
+  Phases 12 to 15 add two more of that kind, and section 13.14 marks
+  them: the crate `pci` of step N5 and the crate `driver-virtio-net` of
+  step N7 are logic over a trait with a double and need no kernel, so
+  either may be written before the phase that integrates it. Every other
+  step of those phases changes the kernel, the reference machine, or the
+  root task and is therefore phase work throughout.
