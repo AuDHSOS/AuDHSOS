@@ -3,14 +3,30 @@
 
 //! The fonts, their metrics, and the encoding of text into bytes.
 //!
-//! Only the standard fourteen fonts are used, and only five of them. A
+//! Only the standard fourteen fonts are used, and only six of them. A
 //! viewer carries those itself, so nothing has to be embedded: a document
 //! this crate writes needs no font file, no font parser, and no licence
-//! beyond its own. The price is the character set. Every font here is
-//! encoded in `WinAnsiEncoding`, so a document can say anything Latin-1
-//! can say, plus the dashes, the quotation marks, and the ellipsis that
-//! prose in this repository actually uses. Anything else becomes a
-//! question mark rather than a hole in the page.
+//! beyond its own. Five of the six are encoded in `WinAnsiEncoding`, so a
+//! document can say anything Latin-1 can say, plus the dashes, the
+//! quotation marks, and the ellipsis that prose in this repository
+//! actually uses.
+//!
+//! The sixth is Symbol, and it is there for what the other five cannot
+//! say. A character outside `WinAnsiEncoding` is written three ways, in
+//! this order: in Symbol, if Symbol has it — which covers the infinity
+//! sign, the mathematical relations, the arrows, and the Greek alphabet;
+//! as the letters it is read as, if it has such a reading — which is how
+//! the double-struck letters of a specification's numeric operations come
+//! out as `F`, `R`, and `Z`; and as a question mark if it has neither,
+//! because a document that says `?` where it meant a Hangul syllable is
+//! wrong in one glyph, and a document with a missing byte is wrong in
+//! every line after it. A combining mark is dropped rather than written,
+//! since a mark on nothing is worse than the letter without it.
+//!
+//! Text therefore does not go onto a page as one string. It goes as the
+//! runs its characters need, each in its own font, and the width of the
+//! run before it is what puts the next one in the right place — which is
+//! why [`runs`] is here beside the metrics rather than in the writer.
 //!
 //! The width tables are the ones from the Adobe font metrics, in
 //! thousandths of the point size. They are here because the line breaker
@@ -33,16 +49,20 @@ pub enum Font {
     Mono,
     /// Courier-Bold: a heading inside code.
     MonoBold,
+    /// Symbol: the characters the other five have no place for. Nothing
+    /// asks for it; it is reached through [`runs`].
+    Symbol,
 }
 
 impl Font {
     /// Every font, in the order of their resource names.
-    pub const ALL: [Font; 5] = [
+    pub const ALL: [Font; 6] = [
         Font::Regular,
         Font::Bold,
         Font::Italic,
         Font::Mono,
         Font::MonoBold,
+        Font::Symbol,
     ];
 
     /// The `BaseFont` name of the font dictionary.
@@ -54,6 +74,7 @@ impl Font {
             Font::Italic => "Helvetica-Oblique",
             Font::Mono => "Courier",
             Font::MonoBold => "Courier-Bold",
+            Font::Symbol => "Symbol",
         }
     }
 
@@ -66,7 +87,17 @@ impl Font {
             Font::Italic => "F3",
             Font::Mono => "F4",
             Font::MonoBold => "F5",
+            Font::Symbol => "F6",
         }
+    }
+
+    /// Whether the font is encoded in `WinAnsiEncoding`. Symbol is not:
+    /// it carries an encoding of its own, and a font dictionary that
+    /// overrode it would ask a viewer for glyphs the font does not have
+    /// under those codes.
+    #[must_use]
+    pub const fn is_winansi(self) -> bool {
+        !matches!(self, Font::Symbol)
     }
 
     /// Whether the font is a fixed-pitch one.
@@ -75,28 +106,35 @@ impl Font {
         matches!(self, Font::Mono | Font::MonoBold)
     }
 
-    /// The bold face of the same family.
+    /// The bold face of the same family. Symbol has none, and is its
+    /// own.
     #[must_use]
     pub const fn bold(self) -> Self {
         match self {
             Font::Regular | Font::Bold | Font::Italic => Font::Bold,
             Font::Mono | Font::MonoBold => Font::MonoBold,
-        }
-    }
-
-    /// The width table of the font.
-    const fn widths(self) -> &'static [u16; 256] {
-        match self {
-            Font::Regular | Font::Italic => &HELVETICA,
-            Font::Bold => &HELVETICA_BOLD,
-            Font::Mono | Font::MonoBold => &COURIER,
+            Font::Symbol => Font::Symbol,
         }
     }
 
     /// The advance of one encoded byte, in thousandths of the point size.
     #[must_use]
     pub fn advance(self, byte: u8) -> u16 {
-        self.widths()
+        let table = match self {
+            Font::Regular | Font::Italic => &HELVETICA,
+            Font::Bold => &HELVETICA_BOLD,
+            Font::Mono | Font::MonoBold => &COURIER,
+            // Symbol is not a table of 256: only the codes this crate
+            // writes have a width here, and they stand beside the
+            // characters they are reached by.
+            Font::Symbol => {
+                return SYMBOLS
+                    .iter()
+                    .find(|(_, code, _)| *code == byte)
+                    .map_or(SPACE_FALLBACK, |(_, _, width)| *width);
+            }
+        };
+        table
             .get(usize::from(byte))
             .copied()
             .unwrap_or(SPACE_FALLBACK)
@@ -112,14 +150,16 @@ impl Font {
         total.saturating_mul(size).wrapping_div(1000)
     }
 
-    /// The width of `text` set at `size`, encoding it on the way.
+    /// The width of `text` set at `size`, in the fonts its characters
+    /// need. A line breaker measuring with this gets the width the page
+    /// will actually have, Symbol runs and all.
     #[must_use]
     pub fn width_of_str(self, text: &str, size: Mils) -> Mils {
         let mut total: Mils = 0;
-        for byte in encode(text) {
-            total = total.saturating_add(Mils::from(self.advance(byte)));
+        for run in runs(self, text) {
+            total = total.saturating_add(run.font.width_of(&run.bytes, size));
         }
-        total.saturating_mul(size).wrapping_div(1000)
+        total
     }
 }
 
@@ -134,9 +174,11 @@ const REPLACEMENT: u8 = b'?';
 ///
 /// The lower half is ASCII, the range from `0xA0` up is Latin-1, and the
 /// range between the two holds the punctuation Windows put there. A
-/// character that is in none of them becomes a question mark: a document
-/// that says `?` where it meant `→` is wrong in one glyph, and a document
-/// with a missing byte is wrong in every line after it.
+/// character that is in none of them becomes a question mark here. Text
+/// on a page does not come through this function but through [`runs`],
+/// which offers such a character the Symbol font and a reading in Latin-1
+/// first; this is the encoder for text that has to be one string, such as
+/// the title in the catalogue.
 #[must_use]
 pub fn encode(text: &str) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(text.len());
@@ -146,14 +188,81 @@ pub fn encode(text: &str) -> Vec<u8> {
     bytes
 }
 
+/// One piece of text as it will be set: the font it needs, and the bytes
+/// to set in that font.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Run {
+    /// The font the piece is set in.
+    pub font: Font,
+    /// The bytes, encoded for that font.
+    pub bytes: Vec<u8>,
+}
+
+/// Splits `text` into the runs its characters need.
+///
+/// Everything `WinAnsiEncoding` can say stays in `font`. A character it
+/// cannot say is written in Symbol if Symbol has it, as the letters it is
+/// read as if it has such a reading, as nothing at all if it is a
+/// combining mark, and as a question mark if it is none of those. Runs
+/// that need the same font are one run: the fewer pieces a line is set
+/// in, the fewer places a width can be got wrong.
+#[must_use]
+pub fn runs(font: Font, text: &str) -> Vec<Run> {
+    let mut out: Vec<Run> = Vec::new();
+    for character in text.chars() {
+        if let Some(byte) = winansi(character) {
+            push(&mut out, font, &[byte]);
+        } else if let Some((_, code, _)) = SYMBOLS.iter().find(|(known, _, _)| *known == character)
+        {
+            push(&mut out, Font::Symbol, &[*code]);
+        } else if let Some(reading) = reading(character) {
+            push(&mut out, font, &encode(reading));
+        } else if !is_combining(character) {
+            push(&mut out, font, &[REPLACEMENT]);
+        }
+    }
+    out
+}
+
+/// Adds bytes to the run at the end, or begins one.
+fn push(out: &mut Vec<Run>, font: Font, bytes: &[u8]) {
+    match out.last_mut() {
+        Some(run) if run.font == font => run.bytes.extend_from_slice(bytes),
+        _ => out.push(Run {
+            font,
+            bytes: bytes.to_vec(),
+        }),
+    }
+}
+
+/// What a character is read as when no font here has it.
+fn reading(character: char) -> Option<&'static str> {
+    READINGS
+        .iter()
+        .find(|(known, _)| *known == character)
+        .map(|(_, reading)| *reading)
+}
+
+/// Whether the character is a mark that would sit on the letter before
+/// it. Nothing here can place one, and a mark set beside a letter reads
+/// worse than the letter alone.
+fn is_combining(character: char) -> bool {
+    matches!(u32::from(character), 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x20D0..=0x20FF)
+}
+
 /// The `WinAnsiEncoding` byte of one character.
 #[must_use]
 pub fn encode_char(character: char) -> u8 {
+    winansi(character).unwrap_or(REPLACEMENT)
+}
+
+/// The `WinAnsiEncoding` byte of one character, if the encoding has it.
+fn winansi(character: char) -> Option<u8> {
     let point = u32::from(character);
     if (0x20..0x7F).contains(&point) || (0xA0..=0xFF).contains(&point) {
-        return u8::try_from(point).unwrap_or(REPLACEMENT);
+        return u8::try_from(point).ok();
     }
-    match character {
+    let byte = match character {
         '\u{20AC}' => 0x80, // euro
         '\u{201A}' => 0x82, // single low quotation mark
         '\u{0192}' => 0x83, // florin
@@ -181,13 +290,75 @@ pub fn encode_char(character: char) -> u8 {
         '\u{0153}' => 0x9C, // oe
         '\u{017E}' => 0x9E, // z with caron
         '\u{0178}' => 0x9F, // Y with diaeresis
-        // Three arrows and two comparisons that WinAnsi has no glyph
-        // for, written as the ASCII they are read as anyway.
-        '\u{2192}' | '\u{2265}' => b'>',
-        '\u{2190}' | '\u{2264}' => b'<',
-        _ => REPLACEMENT,
-    }
+        _ => return None,
+    };
+    Some(byte)
 }
+
+/// The characters `WinAnsiEncoding` has no place for that the Symbol font
+/// has: the character, its code in that font, and its advance in
+/// thousandths of the point size, from the Adobe metrics.
+const SYMBOLS: [(char, u8, u16); 40] = [
+    ('∀', 0x22, 713),
+    ('∃', 0x24, 549),
+    ('≅', 0x40, 549),
+    ('Δ', 0x44, 612),
+    ('Ω', 0x57, 768),
+    ('\u{2126}', 0x57, 768), // the ohm sign, which is that letter
+    ('∴', 0x5C, 863),
+    ('α', 0x61, 631),
+    ('β', 0x62, 549),
+    ('δ', 0x64, 494),
+    ('ε', 0x65, 439),
+    ('γ', 0x67, 411),
+    ('λ', 0x6C, 549),
+    ('μ', 0x6D, 576),
+    ('π', 0x70, 549),
+    ('θ', 0x71, 521),
+    ('ρ', 0x72, 549),
+    ('σ', 0x73, 603),
+    ('τ', 0x74, 439),
+    ('ω', 0x77, 686),
+    ('≤', 0xA3, 549),
+    ('∞', 0xA5, 713),
+    ('↔', 0xAB, 1042),
+    ('←', 0xAC, 987),
+    ('↑', 0xAD, 603),
+    ('→', 0xAE, 987),
+    ('↓', 0xAF, 603),
+    ('≥', 0xB3, 549),
+    ('∝', 0xB5, 713),
+    ('∂', 0xB6, 494),
+    ('≠', 0xB9, 549),
+    ('≡', 0xBA, 549),
+    ('≈', 0xBB, 549),
+    ('∅', 0xC6, 823),
+    ('∩', 0xC7, 768),
+    ('∪', 0xC8, 768),
+    ('⊂', 0xCC, 713),
+    ('⊆', 0xCD, 713),
+    ('∈', 0xCE, 713),
+    ('∉', 0xCF, 713),
+];
+
+/// The characters no font here has that are read as letters that are in
+/// it. The double-struck ones are the numeric operations of a language
+/// specification, and `F`, `R`, and `Z` are what everybody says when they
+/// read them aloud.
+const READINGS: [(char, &str); 12] = [
+    ('\u{1D53D}', "F"), // double-struck F
+    ('\u{1D539}', "B"), // double-struck B
+    ('ℝ', "R"),
+    ('ℤ', "Z"),
+    ('ℕ', "N"),
+    ('ℚ', "Q"),
+    ('ℂ', "C"),
+    ('ℍ', "H"),
+    ('\u{212A}', "K"), // the kelvin sign, which is that letter
+    ('\u{212B}', "Å"), // the angstrom sign, which is that letter
+    ('ſ', "s"),        // the long s
+    ('\u{0100}', "A"), // A with a macron, which Latin-1 has no place for
+];
 
 /// Helvetica, and Helvetica-Oblique, which has the same advances.
 const HELVETICA: [u16; 256] = [

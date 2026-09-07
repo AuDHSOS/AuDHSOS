@@ -1,7 +1,7 @@
 # docpdf
 
-Turns every Markdown document and every RFC of this repository into a PDF,
-several at a time, and writes an index beside them.
+Turns every Markdown document, every RFC, and every HTML standard of this
+repository into a PDF, several at a time, and writes an index beside them.
 
 ```sh
 sh tools/xtask.sh pdf
@@ -21,6 +21,7 @@ target/pdf/
 ├── crates/       one file per workspace crate, named after the package
 ├── tools/        one file per tool that is not a workspace crate
 ├── rfc/          the requests for comments the network stack answers to
+├── spec/         the standards kept as HTML rather than as plain text
 └── other/        anything Markdown that none of the above claimed
 ```
 
@@ -52,20 +53,64 @@ writes the files it wrote before, byte for byte.
 
 ## What it is made of
 
-Three crates, none of which depends on anything outside this workspace:
+Five crates, none of which depends on anything outside this workspace:
 
-- `doc-markdown` parses the documents.
+- `doc-markdown` parses the Markdown documents.
+- `doc-html` parses the HTML ones into the same blocks, so that everything
+  below this line is the same code for both.
+- `doc-svg` reads the figures a document points at into paths and text.
 - `doc-pdf` writes the format: pages, the standard fourteen fonts, links,
   and an outline.
 - `docpdf`, this crate, finds the documents, decides where they go, lays
   them out, and runs the pool.
 
-An RFC skips the first of those. It arrives as fixed-pitch text already
+An RFC skips the first two. It arrives as fixed-pitch text already
 divided into pages by form feeds, so there is nothing to lay out: each of
 its pages goes onto a page, in the face it was written for, with every
 column where the author put it. What is added is the outline, taken from
 the numbered section headings, so that section 3.2 of RFC 8200 is one click
 away instead of ninety pages of scrolling.
+
+## Figures
+
+A picture standing alone on its line is drawn. `doc-svg` reads the file
+the document points at into paths and lines of text, and the layout puts
+it where it stands: as wide as the measure and never wider than the
+picture was made, centred, with the space of a paragraph above and below
+it. A picture inside a sentence is not drawn — a figure needs a line of
+its own — and one whose file is missing, or holds something `doc-svg`
+cannot draw, is said instead, in the `[image: …]` form the Markdown
+parser writes for the same thing.
+
+## What an HTML document costs
+
+The ECMAScript specification under `docs/ecma/` is seven megabytes of
+markup, and it comes out as a thousand pages in about a third of a second,
+which is the same rate as everything else. Its seven figures are drawn from
+the SVG files beside it, arrowheads and all, and of the 1656 characters
+that Latin-1 has no place for, all but a handful are set in Symbol or
+read as the letters they stand for: the double-struck `F` of the numeric
+operations comes out as `F`, and the infinity sign comes out as one. Seven
+characters of the whole document are left as question marks: two Hangul
+syllables and a syllable block from the clause on canonical
+normalization, and four Latin letters carrying marks Latin-1 has no place
+for.
+
+## Two sizes
+
+By default a stream goes into the file as the operators it was built
+from, which is what makes a page readable with `less` when something has
+gone wrong with it. `--compress` deflates them instead:
+
+```text
+                       plain     compressed
+ecma262.pdf            6.62 MB      2.50 MB
+target/pdf/ altogether 13.1 MB      6.2 MB
+```
+
+Nothing else about the file changes — the same pages, the same links, the
+same outline — and both are written without recording the time, so either
+one rebuilds byte for byte.
 
 ## Options
 
@@ -75,5 +120,6 @@ away instead of ninety pages of scrolling.
 --jobs <n>       how many documents at a time (default: the machine's)
 --only <text>    convert only what matches, for instance --only rfc/
 --list           say what would be converted and write nothing
+--compress       deflate the content streams
 --quiet          report only the summary line
 ```

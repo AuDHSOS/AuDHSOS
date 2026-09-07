@@ -21,6 +21,8 @@ arrangement.
 | `rfc1035.txt` | RFC 1035, *Domain Names — Implementation and Specification*, P. Mockapetris, November 1987 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc1035.txt` | 122549 | `d14ae809fc9b41bbcae26bb38c937c9515808b944f3252b00de9fe0e95f4fdfb` |
 | `rfc1071.txt` | RFC 1071, *Computing the Internet Checksum*, R. Braden, D. Borman, C. Partridge, September 1988 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1071.txt` | 53524 | `e10dfd6816447843d47a7f1b990eba756a791a6308fd5b698a6276075a8e4f9b` |
 | `rfc1122.txt` | RFC 1122, *Requirements for Internet Hosts — Communication Layers*, R. Braden (ed.), October 1989 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1122.txt` | 289148 | `9f526e6bebc868324fedb90aebbcf6e5b15c53fd373ca5d5ce1c2cdcd264e04f` |
+| `rfc1950.txt` | RFC 1950, *ZLIB Compressed Data Format Specification version 3.3*, P. Deutsch, J-L. Gailly, May 1996 | 2026-09-07 from `https://www.rfc-editor.org/rfc/rfc1950.txt` | 20502 | `8f0475a5c984657bf26277f73df9456c9b97f175084f0c1748f1eb1f0b9b10b9` |
+| `rfc1951.txt` | RFC 1951, *DEFLATE Compressed Data Format Specification version 1.3*, P. Deutsch, May 1996 | 2026-09-07 from `https://www.rfc-editor.org/rfc/rfc1951.txt` | 36944 | `5ebf4b5b7fe1c3a0c0ab9aa3ac8c0f3853a7dc484905e76e03b0b0f301350009` |
 | `rfc2131.txt` | RFC 2131, *Dynamic Host Configuration Protocol*, R. Droms, March 1997 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2131.txt` | 113738 | `a043b705785b81762505ded4cf71d61392b2b1da2b4ce1e32c13bc984de5f4a5` |
 | `rfc2132.txt` | RFC 2132, *DHCP Options and BOOTP Vendor Extensions*, S. Alexander, R. Droms, March 1997 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2132.txt` | 63670 | `0cfbedab7cfe859624ae78c07a722bc51bf8ea123a7b43b099fc546ddcf00b90` |
 | `rfc2313.txt` | RFC 2313, *PKCS #1: RSA Encryption Version 1.5*, B. Kaliski, March 1998 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2313.txt` | 37777 | `2d93e9f0f02343a29a8f64ad507e1779f65377319ed4945b6ac3dcb1f74fd69c` |
@@ -50,10 +52,10 @@ arrangement.
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
-including the page breaks: 2887, 1218, 470, 171, 3077, 1417, 6844, 2523,
-1907, 1067, 395, 1515, 451, 1403, 1403, 1347, 5435, 1683, 1123, 339, 451,
-899, 787, 1795, 4427, 4371, 1067, 2355, 1067, 3811, 10785, 2461, and 5576
-lines respectively, in the order of the table.
+including the page breaks: 2887, 1218, 470, 171, 3077, 1417, 6844, 619,
+955, 2523, 1907, 1067, 395, 1515, 451, 1403, 1403, 1347, 5435, 1683, 1123,
+339, 451, 899, 787, 1795, 4427, 4371, 1067, 2355, 1067, 3811, 10785, 2461,
+and 5576 lines respectively, in the order of the table.
 Every one was fetched twice and the two fetches agreed.
 
 ## Terms
@@ -84,7 +86,11 @@ RFC 3596 the Internet Society's of 2003; RFC 3279 the Internet Society's
 of 2002; RFC 2464 and RFC 2313 the Internet Society's of 1998; and
 RFC 1122 carries that statement in the form of 1989. RFC 1071, RFC 1035,
 RFC 2131, RFC 2132, RFC 894, RFC 826, RFC 792, and RFC 791 carry no notice
-at all. Each of the first four states unlimited distribution in its own
+at all. RFC 1950 and RFC 1951 carry one of a third kind: a notice of their
+authors' own, dated 1996, which grants the right to copy and distribute
+the document in any medium provided it is not modified and the notice
+travels with it; both also state unlimited distribution in their Status of
+This Memo. Each of the first four states unlimited distribution in its own
 Status of This Memo section, and the four from the early eighties predate
 even that form, under the practice the RFC Editor states for the series as
 a whole.
@@ -93,6 +99,29 @@ Code components extracted from an RFC carry the Simplified BSD Licence;
 this project extracts test vectors, which it transcribes into Rust source
 with the document and section named at each table, as decision D-40
 requires.
+
+## The two documents of DEFLATE
+
+These arrived with the compression of the written documents, and they are
+what `audhsos-deflate` implements.
+
+**RFC 1951** is the format itself: a stream of blocks, each one stored,
+coded with a table the format fixes, or coded with a table the block
+carries; and, inside a coded block, literal bytes and back-references into
+what has already been decoded. What makes the document worth having in
+the house rather than summarised is section 3.2: the rule that turns a set
+of code lengths into the one canonical code they stand for, and the three
+tables — the lengths, the distances, and the order the code lengths of a
+dynamic block are written in — where every number is load-bearing and none
+of them can be derived from anything else.
+
+**RFC 1950** is the wrapper: two header bytes that say which method and
+what window, and an Adler-32 of the uncompressed data at the end. It is
+six pages, and the reason it is here is the checksum, which is stated as
+the algorithm it is rather than by reference to anywhere else.
+
+The pair is what a PDF calls `FlateDecode` and what a PNG carries in its
+image chunks, which is why the third document below sits beside them.
 
 ## Why RFC 1071
 

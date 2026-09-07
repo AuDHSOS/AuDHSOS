@@ -17,6 +17,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "audhsos-deflate"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
 name = "audhsos-der"
 version = "0.1.0"
 dependencies = [
@@ -180,6 +187,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "doc-html"
+version = "0.1.0"
+dependencies = [
+ "doc-markdown",
+]
+
+[[package]]
 name = "doc-markdown"
 version = "0.1.0"
 dependencies = [
@@ -190,15 +204,26 @@ dependencies = [
 name = "doc-pdf"
 version = "0.1.0"
 dependencies = [
+ "audhsos-deflate",
  "test-support",
+]
+
+[[package]]
+name = "doc-svg"
+version = "0.1.0"
+dependencies = [
+ "doc-html",
+ "doc-pdf",
 ]
 
 [[package]]
 name = "docpdf"
 version = "0.1.0"
 dependencies = [
+ "doc-html",
  "doc-markdown",
  "doc-pdf",
+ "doc-svg",
  "test-support",
 ]
 

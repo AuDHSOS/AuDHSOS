@@ -7,7 +7,7 @@ use test_support::generators::range;
 use test_support::generators::vec as gen_vec;
 use test_support::property::check;
 
-use crate::font::{Font, encode, encode_char};
+use crate::font::{self, Font, encode, encode_char};
 use crate::units::pt;
 
 #[test]
@@ -112,11 +112,9 @@ fn every_character_the_upper_half_names_has_its_own_byte() {
 }
 
 #[test]
-fn the_arrows_and_comparisons_become_what_they_are_read_as() {
-    assert_eq!(encode_char('\u{2192}'), b'>');
-    assert_eq!(encode_char('\u{2265}'), b'>');
-    assert_eq!(encode_char('\u{2190}'), b'<');
-    assert_eq!(encode_char('\u{2264}'), b'<');
+fn a_character_the_encoding_has_no_place_for_is_a_question_mark_here() {
+    assert_eq!(encode_char('\u{2192}'), b'?');
+    assert_eq!(encode_char('\u{2264}'), b'?');
 }
 
 #[test]
@@ -130,6 +128,70 @@ fn a_control_character_has_no_width_and_no_byte_of_its_own() {
     assert_eq!(Font::Regular.advance(0), 0);
     assert_eq!(Font::Mono.advance(0x7F), 0);
     assert_eq!(encode_char('\u{7}'), b'?');
+}
+
+#[test]
+fn what_the_encoding_cannot_say_is_offered_the_symbol_font_first() {
+    let runs = font::runs(Font::Regular, "x \u{2264} \u{221E}");
+    assert_eq!(
+        runs.iter().map(|run| run.font).collect::<Vec<Font>>(),
+        [Font::Regular, Font::Symbol, Font::Regular, Font::Symbol]
+    );
+    assert_eq!(runs.get(1).map(|run| run.bytes.clone()), Some(vec![0xA3]));
+    assert_eq!(runs.get(3).map(|run| run.bytes.clone()), Some(vec![0xA5]));
+}
+
+#[test]
+fn what_neither_font_has_is_written_as_what_it_is_read_as() {
+    let runs = font::runs(Font::Regular, "\u{1D53D}(x) is in \u{2124}");
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(
+        runs.first().map(|run| run.bytes.clone()),
+        Some(b"F(x) is in Z".to_vec())
+    );
+}
+
+#[test]
+fn a_combining_mark_is_dropped_and_anything_else_is_a_question_mark() {
+    assert_eq!(
+        font::runs(Font::Regular, "s\u{0323}"),
+        vec![font::Run {
+            font: Font::Regular,
+            bytes: b"s".to_vec(),
+        }]
+    );
+    assert_eq!(
+        font::runs(Font::Regular, "\u{AC00}"),
+        vec![font::Run {
+            font: Font::Regular,
+            bytes: b"?".to_vec(),
+        }]
+    );
+}
+
+#[test]
+fn a_run_of_one_font_is_one_run() {
+    let runs = font::runs(Font::Bold, "\u{2264}\u{2265} ok");
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert_eq!(runs.first().map(|run| run.bytes.len()), Some(2));
+}
+
+#[test]
+fn a_measured_width_counts_what_the_symbol_font_sets() {
+    let with = Font::Regular.width_of_str("\u{221E}", pt(10));
+    let without = Font::Regular.width_of_str("?", pt(10));
+    assert!(with > without, "{with} is not wider than {without}");
+    assert_eq!(with, Font::Symbol.width_of(&[0xA5], pt(10)));
+}
+
+#[test]
+fn only_symbol_carries_an_encoding_of_its_own() {
+    assert!(!Font::Symbol.is_winansi());
+    assert!(Font::Regular.is_winansi());
+    assert_eq!(Font::Symbol.bold(), Font::Symbol);
+    assert!(!Font::Symbol.is_mono());
+    assert_eq!(Font::Symbol.advance(0xA5), 713);
+    assert_eq!(Font::Symbol.advance(0x01), 278);
 }
 
 #[test]
@@ -160,7 +222,8 @@ fn every_font_names_the_standard_face_it_is() {
             "Helvetica-Bold",
             "Helvetica-Oblique",
             "Courier",
-            "Courier-Bold"
+            "Courier-Bold",
+            "Symbol"
         ]
     );
 }

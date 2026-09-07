@@ -28,12 +28,13 @@ use crate::theme;
 const COLUMNS: i64 = 72;
 
 /// Converts the text of an RFC.
-pub(crate) fn render(source: &Source, text: &str) -> (Vec<u8>, usize) {
+pub(crate) fn render(source: &Source, text: &str, compress: bool) -> (Vec<u8>, usize) {
     let style = Style::new(Font::Mono, theme::RFC.size, theme::INK);
     let width = style.width(&" ".repeat(usize::try_from(COLUMNS).unwrap_or(72)));
     let left =
         theme::SIDE.saturating_add(theme::MEASURE.saturating_sub(width).max(0).wrapping_div(2));
     let mut document = Document::new(source.title.clone());
+    document.compress(compress);
     let mut pages: Vec<Page> = Vec::new();
     let mut marks: Vec<(usize, String, usize, Mils)> = Vec::new();
     let mut page = Page::new(theme::PAGE);

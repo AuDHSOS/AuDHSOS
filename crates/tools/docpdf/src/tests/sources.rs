@@ -64,6 +64,10 @@ fn repository(name: &str) -> Scratch {
     scratch.write("crates/net/ip/Cargo.toml", "[package]\nname = \"net-ip\"\n");
     scratch.write("crates/net/ip/README.md", "# net-ip\n\nIPv4.\n");
     scratch.write("tools/probe/README.md", "# probe\n");
+    scratch.write(
+        "docs/ecma/spec.html",
+        "<html><head><title>A Standard</title></head><body><h1>Clause</h1></body></html>",
+    );
     scratch
 }
 
@@ -80,6 +84,7 @@ fn a_document_is_filed_by_what_it_is() {
         "tools/probe.pdf",
         "rfc/00-index.pdf",
         "rfc/rfc791.pdf",
+        "spec/spec.pdf",
     ] {
         assert!(
             found.iter().any(|target| target == wanted),
@@ -180,6 +185,34 @@ fn an_rfc_is_called_by_its_number_and_laid_out_as_one() {
         Some("RFC 791".to_owned())
     );
     assert_eq!(rfc.map(|source| source.kind), Some(Kind::Rfc));
+}
+
+#[test]
+fn an_html_document_is_called_by_its_title_and_read_as_html() {
+    let scratch = repository("standards");
+    let sources = collect(&scratch.path).unwrap_or_default();
+    let spec = sources
+        .iter()
+        .find(|source| source.target.ends_with("spec.pdf"));
+    assert_eq!(
+        spec.map(|source| source.title.clone()),
+        Some("A Standard".to_owned())
+    );
+    assert_eq!(spec.map(|source| source.kind), Some(Kind::Html));
+}
+
+#[test]
+fn an_html_document_with_no_title_is_called_by_its_file_name() {
+    let scratch = repository("untitled");
+    scratch.write("docs/ecma/loose.html", "<body><p>text</p></body>");
+    let sources = collect(&scratch.path).unwrap_or_default();
+    let spec = sources
+        .iter()
+        .find(|source| source.target.ends_with("loose.pdf"));
+    assert_eq!(
+        spec.map(|source| source.title.clone()),
+        Some("loose".to_owned())
+    );
 }
 
 #[test]

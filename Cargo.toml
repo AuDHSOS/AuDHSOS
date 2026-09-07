@@ -7,6 +7,7 @@ members = [
     "crates/abi",
     "crates/time",
     "crates/encoding",
+    "crates/deflate",
     "crates/collections",
     "crates/crypto/ct",
     "crates/crypto/hash",
@@ -52,6 +53,8 @@ members = [
     "crates/support/fuzz",
     "crates/support/testing",
     "crates/tools/markdown",
+    "crates/tools/html",
+    "crates/tools/svg",
     "crates/tools/pdf",
     "crates/tools/docpdf",
     "crates/tools/xtask",
@@ -70,6 +73,7 @@ exclude = ["fuzz"]
 audhsos-abi = { path = "crates/abi" }
 audhsos-time = { path = "crates/time" }
 audhsos-encoding = { path = "crates/encoding" }
+audhsos-deflate = { path = "crates/deflate" }
 audhsos-collections = { path = "crates/collections" }
 crypto-ct = { path = "crates/crypto/ct" }
 crypto-hash = { path = "crates/crypto/hash" }
@@ -115,6 +119,8 @@ kernel-mm = { path = "crates/kernel/mm" }
 fuzz-support = { path = "crates/support/fuzz" }
 test-support = { path = "crates/support/testing" }
 doc-markdown = { path = "crates/tools/markdown" }
+doc-html = { path = "crates/tools/html" }
+doc-svg = { path = "crates/tools/svg" }
 doc-pdf = { path = "crates/tools/pdf" }
 
 [workspace.lints.rust]

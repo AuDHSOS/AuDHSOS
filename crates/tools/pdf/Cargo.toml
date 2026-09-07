@@ -11,6 +11,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+audhsos-deflate.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true

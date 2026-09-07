@@ -91,6 +91,21 @@ impl Color {
         }
     }
 
+    /// Whether the three channels are one number: a grey is written with
+    /// the operator that takes one, which is two thirds shorter than the
+    /// one that takes three and says the same thing.
+    #[must_use]
+    pub const fn is_gray(self) -> bool {
+        self.red == self.green && self.green == self.blue
+    }
+
+    /// The one channel of a grey, as a PDF number in the range zero to
+    /// one.
+    #[must_use]
+    pub fn level(self) -> String {
+        number(channel(self.red))
+    }
+
     /// The three channels as PDF numbers in the range zero to one.
     #[must_use]
     pub fn components(self) -> [String; 3] {

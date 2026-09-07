@@ -20,8 +20,13 @@ use crate::sources::{SECTIONS, Source};
 use crate::theme;
 
 /// Writes the index over the documents that were produced.
-pub(crate) fn render(sources: &[Source], written: &[(PathBuf, usize)]) -> (Vec<u8>, usize) {
+pub(crate) fn render(
+    sources: &[Source],
+    written: &[(PathBuf, usize)],
+    compress: bool,
+) -> (Vec<u8>, usize) {
     let mut document = Document::new("AuDHSOS documentation");
+    document.compress(compress);
     let mut pages: Vec<Page> = Vec::new();
     let mut marks: Vec<(usize, String, usize, Mils)> = Vec::new();
     let mut page = Page::new(theme::PAGE);
