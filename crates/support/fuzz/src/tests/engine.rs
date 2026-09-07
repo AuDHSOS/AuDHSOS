@@ -18,7 +18,7 @@ use std::process::ExitCode;
 
 use crate::engine::{name_of, outran, run, tick};
 
-use super::{GLOBALS, region_at, register_counters};
+use super::{GLOBALS, region_at, register_counters, scratch_path};
 
 /// How many counters the body below writes into.
 const COUNTERS: usize = 32;
@@ -31,7 +31,7 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("fuzz-engine-{name}"));
+        let path = scratch_path(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         Self { path }
@@ -57,6 +57,38 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// The body above, panicking on every input that starts with `first`
+/// instead of on one input in particular. A run finds such an input by
+/// mutating, not by reading it out of the corpus.
+fn body_panicking_on(address: usize, first: u8) -> impl FnMut(&[u8]) {
+    let mut inner = body(address);
+    move |input: &[u8]| {
+        inner(input);
+        assert!(
+            input.first() != Some(&first),
+            "an input that starts with {first}"
+        );
+    }
+}
+
+/// The body above, with a flag that is set as soon as an input carries
+/// `word`. A run that read its dictionary pastes the words it was given
+/// into the inputs it tries; a run whose dictionary file was not there
+/// never can, so the flag tells the two apart.
+fn body_watching<'a>(
+    address: usize,
+    word: &'static [u8],
+    seen: &'a mut bool,
+) -> impl FnMut(&[u8]) + 'a {
+    let mut inner = body(address);
+    move |input: &[u8]| {
+        if input.windows(word.len()).any(|part| part == word) {
+            *seen = true;
+        }
+        inner(input);
     }
 }
 
@@ -266,17 +298,31 @@ fn a_dictionary_is_read_and_a_missing_one_is_reported_rather_than_fatal() {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let address = register_counters(COUNTERS);
     let scratch = Scratch::new("dict");
-    let words = scratch.write("words.txt", b"kw1=\"BEGIN\"\nkw2=\"END\"\n");
-    let mut target = body(address);
+    // One word short enough to fit into an input this run reaches, and
+    // one longer than the length limit it grows to, so that a word which
+    // does not fit is exercised as well.
+    let words = scratch.write("words.txt", b"kw1=\"BEGIN\"\nkw2=\"AB\"\n");
+    // The seed is fixed. What the assertion below asks — did a word from
+    // the file reach the target — is a coin toss under a seed drawn from
+    // the clock, and this is the test that has to notice when the file is
+    // not there at all.
+    let mut pasted = false;
+    let mut target = body_watching(address, b"AB", &mut pasted);
     let code = run(
         line(&[
             "-runs=200",
+            "-seed=23",
             &format!("-dict={}", words.display()),
             &format!("-artifact_prefix={}/", scratch.path.display()),
         ]),
         &mut target,
     );
+    drop(target);
     assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::SUCCESS));
+    assert!(
+        pasted,
+        "no input carried a word of the dictionary, so the file was not read"
+    );
     let mut again = body(address);
     let code = run(line(&["-runs=10", "-dict=/nowhere/at/all.txt"]), &mut again);
     assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::SUCCESS));
@@ -513,4 +559,146 @@ fn outran_past_the_limit_is_true() {
 #[test]
 fn a_watchdog_tick_inside_the_limit_lets_the_process_run_on() {
     tick(10, 100, 110);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn a_merge_and_a_shrink_without_the_paths_they_need_say_so() {
+    let guard = GLOBALS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let address = register_counters(COUNTERS);
+    let mut target = body(address);
+    let code = run(line(&["-merge=1"]), &mut target);
+    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::FAILURE));
+    let code = run(line(&["-minimize_crash=1"]), &mut target);
+    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::FAILURE));
+    drop(guard);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn a_corpus_file_that_reaches_what_an_earlier_one_reached_is_read_and_dropped() {
+    let guard = GLOBALS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let address = register_counters(COUNTERS);
+    let scratch = Scratch::new("twice");
+    // The body reaches one counter per leading byte, so the second file
+    // reaches exactly what the first one did and is worth nothing.
+    scratch.write("a", b"\x01one");
+    scratch.write("b", b"\x01two");
+    let mut target = body(address);
+    let code = run(
+        line(&[
+            &scratch.path.to_string_lossy(),
+            "-runs=1",
+            "-seed=31",
+            &format!("-artifact_prefix={}/", scratch.path.display()),
+        ]),
+        &mut target,
+    );
+    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::SUCCESS));
+    drop(guard);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn a_run_that_finds_a_panic_while_mutating_stops_and_writes_the_input_out() {
+    let guard = GLOBALS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let address = register_counters(COUNTERS);
+    let scratch = Scratch::new("found");
+    // Nothing in the corpus panics — the corpus is empty. The input that
+    // does is one the mutator builds, so the run has to notice it in the
+    // fuzzing loop and not while it reads its seeds.
+    let mut target = body_panicking_on(address, 0xff);
+    let code = run(
+        line(&[
+            &scratch.path.to_string_lossy(),
+            "-runs=20000",
+            "-seed=37",
+            &format!("-artifact_prefix={}/", scratch.path.display()),
+        ]),
+        &mut target,
+    );
+    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::FAILURE));
+    let crashes: Vec<String> = scratch
+        .files()
+        .into_iter()
+        .filter(|name| name.starts_with("crash-"))
+        .collect();
+    assert_eq!(crashes.len(), 1, "{crashes:?}");
+    drop(guard);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn a_run_told_not_to_grow_its_inputs_keeps_the_smallest_limit() {
+    let guard = GLOBALS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let address = register_counters(COUNTERS);
+    let scratch = Scratch::new("no-len-control");
+    let mut target = body(address);
+    let code = run(
+        line(&[
+            &scratch.path.to_string_lossy(),
+            "-runs=300",
+            "-seed=41",
+            "-len_control=0",
+            &format!("-artifact_prefix={}/", scratch.path.display()),
+        ]),
+        &mut target,
+    );
+    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::SUCCESS));
+    drop(guard);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn a_merge_into_a_destination_it_cannot_write_still_reports_what_it_read() {
+    let guard = GLOBALS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let address = register_counters(COUNTERS);
+    let source = Scratch::new("merge-ro-src");
+    source.write("a", b"\x01one");
+    let mut target = body(address);
+    let code = run(
+        line(&[
+            "-merge=1",
+            "/nowhere/at/all",
+            &source.path.to_string_lossy(),
+            "-artifact_prefix=/nowhere/at/all/",
+        ]),
+        &mut target,
+    );
+    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::SUCCESS));
+    drop(guard);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn a_shrink_that_cannot_write_what_it_shrank_fails() {
+    let guard = GLOBALS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let address = register_counters(COUNTERS);
+    let scratch = Scratch::new("minimize-unwritable");
+    let file = scratch.write("big", b"\x07padding-padding-padding");
+    let mut target = body_panicking_on(address, 7);
+    let code = run(
+        line(&[
+            "-minimize_crash=1",
+            &file.to_string_lossy(),
+            "-runs=200",
+            "-seed=43",
+            "-artifact_prefix=/nowhere/at/all/",
+        ]),
+        &mut target,
+    );
+    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::FAILURE));
+    drop(guard);
 }

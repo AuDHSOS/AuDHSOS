@@ -99,3 +99,45 @@ fn a_shuffle_keeps_the_elements_and_moves_them() {
     let mut none: [u8; 0] = [];
     rng.shuffle(&mut none);
 }
+
+#[test]
+fn a_slot_is_drawn_from_a_slice_and_an_empty_one_has_none() {
+    let mut rng = Rng::new(23);
+    let mut items = [0u8, 1, 2, 3];
+    let mut seen = [false; 4];
+    for _ in 0..10_000 {
+        let slot = rng.choose_mut(&mut items).expect("the slice is not empty");
+        let at = usize::from(*slot);
+        seen[at] = true;
+    }
+    assert_eq!(seen, [true; 4]);
+    let mut none: [u8; 0] = [];
+    assert!(rng.choose_mut(&mut none).is_none());
+    assert!(rng.choose(&items).is_some());
+    assert!(rng.choose::<u8>(&[]).is_none());
+}
+
+#[test]
+fn a_stretch_lies_inside_the_slice_and_one_too_long_is_not_there() {
+    let mut rng = Rng::new(29);
+    let mut items = [0u8, 1, 2, 3, 4, 5, 6, 7];
+    let mut starts = [false; 6];
+    for _ in 0..10_000 {
+        let stretch = rng.stretch(&items, 3).expect("three of eight fit");
+        assert_eq!(stretch.len(), 3);
+        assert!(
+            stretch
+                .windows(2)
+                .all(|pair| pair.last().copied() == pair.first().map(|b| b.saturating_add(1))),
+            "the stretch is not one run of the slice: {stretch:?}"
+        );
+        let start = usize::from(*stretch.first().expect("the stretch is not empty"));
+        starts[start] = true;
+    }
+    assert_eq!(starts, [true; 6]);
+    assert_eq!(rng.stretch(&items, 8).map(<[u8]>::len), Some(8));
+    assert!(rng.stretch(&items, 9).is_none());
+    assert!(rng.stretch::<u8>(&[], 1).is_none());
+    assert_eq!(rng.stretch_mut(&mut items, 2).map(|s| s.len()), Some(2));
+    assert!(rng.stretch_mut(&mut items, 9).is_none());
+}

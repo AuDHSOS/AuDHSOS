@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::corpus::{Outcome, files_under, replay_args, replay_paths};
+use crate::tests::scratch_path;
 
 /// A directory of its own for one test, removed when the test ends.
 struct Scratch {
@@ -19,7 +20,7 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("audhsos-fuzz-support-{name}"));
+        let path = scratch_path(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("the scratch directory is creatable");
         Scratch { path }
@@ -122,7 +123,7 @@ fn an_empty_corpus_directory_replays_nothing() {
 #[test]
 #[cfg_attr(miri, ignore = "Miri runs without a file system")]
 fn a_path_that_is_not_there_is_an_error_that_names_it() {
-    let missing = std::env::temp_dir().join("audhsos-fuzz-support-missing-corpus");
+    let missing = scratch_path("missing-corpus");
     let _ = std::fs::remove_dir_all(&missing);
     assert_eq!(files_under(&missing), vec![missing.clone()]);
     let mut calls = 0u32;
@@ -132,10 +133,7 @@ fn a_path_that_is_not_there_is_an_error_that_names_it() {
     .expect_err("the path is not there");
     assert_eq!(error.path, missing);
     let text = format!("{error}");
-    assert!(
-        text.contains("audhsos-fuzz-support-missing-corpus"),
-        "{text}"
-    );
+    assert!(text.contains(&missing.display().to_string()), "{text}");
     assert!(!format!("{error:?}").is_empty());
     assert_eq!(calls, 0);
 }
@@ -144,7 +142,7 @@ fn a_path_that_is_not_there_is_an_error_that_names_it() {
 #[cfg_attr(miri, ignore = "Miri runs without a file system")]
 fn the_error_carries_the_reason_the_file_system_gave() {
     use std::error::Error;
-    let missing = std::env::temp_dir().join("audhsos-fuzz-support-missing-source");
+    let missing = scratch_path("missing-source");
     let _ = std::fs::remove_dir_all(&missing);
     let error =
         replay_paths(std::slice::from_ref(&missing), |_| {}).expect_err("the path is not there");
@@ -168,7 +166,7 @@ fn the_command_line_replay_reports_what_it_did() {
 #[test]
 #[cfg_attr(miri, ignore = "Miri runs without a file system")]
 fn the_command_line_replay_fails_on_a_path_that_is_not_there() {
-    let missing = std::env::temp_dir().join("audhsos-fuzz-support-missing-argument");
+    let missing = scratch_path("missing-argument");
     let _ = std::fs::remove_dir_all(&missing);
     let code = replay_args([OsString::from(missing.as_os_str())], |_| {});
     assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::FAILURE));
