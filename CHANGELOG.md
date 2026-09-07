@@ -7,6 +7,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- A connection that owes its `SYN` with `ACK` again sends it instead of
+  waking its caller for ever. `poll_at` reported the mark
+  `on_repeated_syn` sets, but `decide` read the mark only while this end's
+  own `SYN` was still unacknowledged — and `SND.UNA` moves off `ISS` on an
+  acknowledgment that reaches `SYN-RECEIVED` without completing the open.
+  The caller was then told at every instant that there was work and handed
+  nothing, which is a poll loop that never sleeps. `decide` asks about the
+  mark beside that condition now, and a connection that has ended clears
+  the marks it was carrying, so `poll_at` on a closed connection names no
+  instant either. Found by the `tcp_segment` fuzz target once its
+  assertion said what the design promises.
+
 - A cut line carries the mark it was documented to carry. `user_rt::Line`
   said a line that does not fit "is cut and says so", and `ELLIPSIS` stood
   public beside it as "the mark a cut line ends with" — and nothing ever

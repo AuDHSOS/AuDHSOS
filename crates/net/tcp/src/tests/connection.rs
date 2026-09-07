@@ -852,3 +852,97 @@ fn nagle_holds_a_short_segment_back_while_something_is_outstanding() {
     assert_eq!(segments.len(), 1);
     assert_eq!(read(&segments[0], CLIENT, SERVER).payload, b"9");
 }
+
+/// An acknowledgment exactly half the sequence circle past `ISS`.
+///
+/// It is the one pair of numbers the comparison of RFC 9293 cannot place:
+/// `seq.rs` says so itself, and a window of at most 65535 bytes cannot
+/// produce it — but an acknowledgment field is not bounded by a window,
+/// so a peer can write it. Before the `SYN` has gone out `SND.MAX` is
+/// still `ISS`, and such an acknowledgment is then neither at or before
+/// `ISS` nor after `SND.MAX`: it passes the test of RFC 9293,
+/// section 3.10.7.3 without acknowledging anything.
+fn unplaceable_ack(iss: u32) -> SeqNumber {
+    SeqNumber::new(iss.wrapping_add(0x8000_0000))
+}
+
+#[test]
+fn a_syn_received_connection_that_owes_its_answer_sends_it_instead_of_waking_for_nothing() {
+    let now = start();
+    let (mut s, mut r) = (vec![0u8; 512], vec![0u8; 512]);
+    let mut client = Connection::new(CLIENT_END, config(1460), &mut s, &mut r);
+    let script = sequence(5000);
+    let mut rng = ScriptedRng::new(&script);
+    client.connect(SERVER_END, &mut rng).expect("an open");
+
+    // The segment arrives before the `SYN` has been fetched, which is a
+    // caller's own business: nothing here reads a clock, so when `poll`
+    // runs is up to whoever drives it. `SND.UNA` moves to the
+    // acknowledgment and the connection goes to `SYN-RECEIVED` the way a
+    // simultaneous open leaves it — but with `SND.UNA` off `ISS`.
+    let syn_ack = from_server(
+        SeqNumber::new(1000),
+        unplaceable_ack(5000),
+        4096,
+        Flags::SYN.with(Flags::ACK),
+        b"",
+    );
+    feed(&mut client, SERVER, &syn_ack, now);
+    assert_eq!(client.state(), State::SynReceived);
+    drain(&mut client, now);
+
+    // The same segment again is the peer saying it did not hear the
+    // answer, so the answer is owed once more. `poll_at` says there is
+    // work at this instant, and the promise of `poll_at` is that `poll`
+    // then has something: a connection whose `SYN` is no longer
+    // outstanding used to set the mark and never read it again, which
+    // left the caller waking at every instant for ever.
+    feed(&mut client, SERVER, &syn_ack, now);
+    assert_eq!(client.poll_at(now), Some(now));
+    let answer = one(&mut client, now);
+    assert_eq!(
+        read(&answer, CLIENT, SERVER).flags,
+        Flags::SYN.with(Flags::ACK)
+    );
+
+    // And the mark is gone: the answer was given once.
+    assert!(client.poll_at(now).is_none_or(|at| at > now));
+}
+
+#[test]
+fn a_connection_that_ended_carries_no_mark_that_would_wake_its_caller() {
+    let now = start();
+    let (mut s, mut r) = (vec![0u8; 512], vec![0u8; 512]);
+    let mut client = Connection::new(CLIENT_END, config(1460), &mut s, &mut r);
+    let script = sequence(5000);
+    let mut rng = ScriptedRng::new(&script);
+    client.connect(SERVER_END, &mut rng).expect("an open");
+    let syn_ack = from_server(
+        SeqNumber::new(1000),
+        unplaceable_ack(5000),
+        4096,
+        Flags::SYN.with(Flags::ACK),
+        b"",
+    );
+    feed(&mut client, SERVER, &syn_ack, now);
+    drain(&mut client, now);
+    // The answer is owed again, and this time a reset arrives first.
+    feed(&mut client, SERVER, &syn_ack, now);
+
+    let reset = from_server(
+        SeqNumber::new(1001),
+        SeqNumber::new(0),
+        4096,
+        Flags::RST,
+        b"",
+    );
+    feed(&mut client, SERVER, &reset, now);
+    assert_eq!(client.state(), State::Closed);
+    assert!(client.was_reset());
+
+    // A connection that has ended says nothing more, so it names no
+    // instant either. A mark left standing would be a wake-up that finds
+    // no work at every instant from here on.
+    assert_eq!(client.poll_at(now), None);
+    assert!(drain(&mut client, now).is_empty());
+}
