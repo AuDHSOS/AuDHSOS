@@ -637,6 +637,19 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "server-input",
+        path: "crates/user/servers/input",
+        kind: Kind::Logic,
+        deps: &[
+            "audhsos-abi",
+            "audhsos-collections",
+            "driver-i8042",
+            "user-proto",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "user-sys-x86_64",
         path: "crates/user/sys-x86_64",
         kind: Kind::Adapter {

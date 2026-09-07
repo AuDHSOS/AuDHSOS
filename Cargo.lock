@@ -511,6 +511,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "server-input"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-collections",
+ "driver-i8042",
+ "user-proto",
+]
+
+[[package]]
 name = "server-memory"
 version = "0.1.0"
 dependencies = [

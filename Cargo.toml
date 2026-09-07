@@ -43,6 +43,7 @@ members = [
     "crates/user/programs",
     "crates/user/servers/console",
     "crates/user/servers/display",
+    "crates/user/servers/input",
     "crates/user/servers/memory",
     "crates/user/servers/name",
     "crates/user/proto",
@@ -119,6 +120,7 @@ virtio-queue = { path = "crates/virtio/queue" }
 fs-fat = { path = "crates/fs/fat" }
 server-console = { path = "crates/user/servers/console" }
 server-display = { path = "crates/user/servers/display" }
+server-input = { path = "crates/user/servers/input" }
 user-programs = { path = "crates/user/programs" }
 server-memory = { path = "crates/user/servers/memory" }
 server-name = { path = "crates/user/servers/name" }

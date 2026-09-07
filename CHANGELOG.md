@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `driver-i8042`: the PS/2 controller, its initialization sequence, and the
+  decoders of scancode set 2 and of the mouse packet. The crate depends on
+  nothing and reaches the hardware only through a `Ports` trait, so the
+  same logic serves the input server over the port system calls and the
+  tests over a scripted controller.
+- `server-input`: what the input server decides — who is subscribed, which
+  decoder a byte belongs to, what is appended to whose ring, and which
+  subscriber is dropped. A subscriber that cannot be woken is gone, which
+  is how a client that has ended is noticed and why this server needs no
+  watch of its own.
 - The input protocol in `user-proto`: a subscription that hands the server
   a notification and receives a ring of one page, the sixteen-byte record a
   key or a pointer event is, and the two halves of that ring — the writer

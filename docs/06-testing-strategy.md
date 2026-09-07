@@ -758,7 +758,13 @@ done until every applicable item has a test. Items are added, never removed.
 - Input: the modifier state follows press and release; a release without
   a press is delivered as a release; pointer button state is tracked
   across packets; a wheel delta is delivered as its own event; both
-  interrupts are acknowledged after the output buffer is drained.
+  interrupts are acknowledged after the output buffer is drained, whichever
+  of the two woke the thread, and a drain that finds nothing acknowledges
+  them all the same; the `AUX` bit routes a byte to the mouse decoder and
+  every other byte to the keyboard decoder; a request without a badge gets
+  no ring; one badge holds one subscription and a slot that was let go of
+  is given out again; a subscriber that cannot be woken is dropped and its
+  slot freed, while a ring that is full or missing costs the event only.
 - Display: a client that carries no badge — which is what a capability
   found under a name looks like — gets no surface, because a server that
   keeps one per client cannot tell two of nobody apart; `present` with
