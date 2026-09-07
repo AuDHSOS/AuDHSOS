@@ -395,7 +395,6 @@ fn an_endpoint_destroyed_under_a_waiter_wakes_it_with_object_destroyed() {
 #[test_case]
 fn an_interrupt_reaches_a_user_thread_through_a_notification() {
     support::bring_up();
-    support::start_timer(|_ticks| false);
     let mut driver = support::create_process(NOTIFICATION_WAITER);
     let page = support::share_page(&driver);
     let spawned = support::add_thread(&mut driver, support::DEFAULT_PRIORITY);
@@ -406,6 +405,17 @@ fn an_interrupt_reaches_a_user_thread_through_a_notification() {
     );
     support::set_buffer_word(spawned.buffer, 0, control.raw());
     support::start(spawned.thread);
+    // The timer starts last, when the whole run is in place, which is the
+    // rule `preemption.rs` states for the same reason: from the first tick
+    // the scheduler may take the processor away, and the threads the tests
+    // above this one left runnable are what it would give it to. A tick
+    // that lands while this thread is halfway through making a process or
+    // a thread switches away from the image itself, and the image does not
+    // come back — the machine then spins in the user thread that got the
+    // processor and writes nothing more. Marking the driver runnable
+    // starts nothing on its own; the first `idle_until` below is what
+    // gives it the processor.
+    support::start_timer(|_ticks| false);
     say!("a driver takes the interval timer and waits for its line");
     support::idle_until(|| support::page_word(page, DRIVER_DONE) == DRIVER_FINISHED);
 

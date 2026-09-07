@@ -29,6 +29,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   produce nothing — and that assertion found a real defect in its first
   minute.
 
+- The `ipc` test image no longer wedges about one run in five. The
+  interrupt test started the interval timer before it built the driver, so
+  a tick could land while the image was halfway through making a process
+  or a thread and hand the processor to a user thread an earlier test had
+  left runnable. The image never got it back: the machine spun in that
+  thread's system call and wrote nothing further, which reached the runner
+  as a crash with no summary line. The timer starts last now, when the
+  whole run is in place, which is the rule `preemption.rs` already stated
+  for its own run.
+
 - A cut line carries the mark it was documented to carry. `user_rt::Line`
   said a line that does not fit "is cut and says so", and `ELLIPSIS` stood
   public beside it as "the mark a cut line ends with" — and nothing ever
