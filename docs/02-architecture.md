@@ -550,7 +550,7 @@ one runs on is a logic crate of its own, host-tested without a machine
 | `server-console` | 16550 UART driver: `driver-uart16550` register logic over `IoPortRange` system calls plus an `Interrupt`; `write(bytes)`, `read(max)` | no |
 | `server-memory` | allocation policy over memory objects: `allocate(len, alignment)`, `release`; zeroes every object before hand-out and immediately after return | no |
 | `user-programs` | the seven binaries: `server-init`, the root task, which parses the boot image, starts the servers and hands out the capabilities; `server-name`, `server-console` and `server-memory` around the three logic crates above; and `app-hello`, `app-checks` and `app-faulter`, which are what the end-to-end run watches | allowlisted |
-| `gfx` (Phase 9) | framebuffer logic: pixel formats, filling, blitting, clipping, damage rectangles, the project's bitmap font, text rendering | no |
+| `gfx` | framebuffer logic: pixel formats, filling, blitting, clipping, damage rectangles, the project's bitmap font, text rendering | no |
 | `server-display` (Phase 9) | owns the framebuffer `Device` memory object; surfaces backed by shared memory objects, `present` with damage rectangles, cursor | no |
 | `driver-i8042` (Phase 10) | i8042 controller and PS/2 device logic over the port access trait: controller initialization, scancode set 2 decoding, mouse packet parsing | no |
 | `server-input` (Phase 10) | owns the i8042 port range and the interrupts for lines 1 and 12; delivers key and pointer events to subscribers through a ring buffer in a shared memory object plus a notification | no |

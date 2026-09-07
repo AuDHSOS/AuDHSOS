@@ -22,7 +22,7 @@ AuDHSOS/
 │   ├── abi/                   audhsos-abi: syscall table, errors, rights, message layout, boot image header, boot information, address constants
 │   ├── elf/                   audhsos-elf: ELF64 parser producing validated load segments
 │   ├── uefi/                  audhsos-uefi: UEFI structure layouts, GUIDs, constants (no calls)
-│   ├── gfx/                   gfx: framebuffer logic, bitmap font, damage tracking (Phase 9)
+│   ├── gfx/                   gfx: framebuffer logic, bitmap font, damage tracking
 │   ├── sync/                  audhsos-sync: Global<T> and Preset<T> cells (unsafe allowed)
 │   ├── time/                  audhsos-time: UnixTime, CivilTime, Instant, Duration (document 12)
 │   ├── encoding/              audhsos-encoding: Base64, hex, PEM (document 12)
@@ -127,7 +127,7 @@ AuDHSOS/
 | `kernel-hal-api` | 1 | all | no | doubles are tested | `kernel-types`; features `test-doubles`, `port-io` |
 | `driver-uart16550` | 1 | all | no | yes | - (feature `test-doubles`) |
 | `driver-i8042` (Phase 10) | 1 | all | no | yes, fuzz | - (feature `test-doubles`) |
-| `gfx` (Phase 9) | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
+| `gfx` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf`; `test-support` as a dev-dependency |
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
 | `fs-fat` (document 12, not started) | 1 | all | no | yes | `audhsos-time`, `audhsos-collections`; feature `test-doubles` |

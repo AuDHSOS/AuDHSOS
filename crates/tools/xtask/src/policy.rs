@@ -355,6 +355,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "gfx",
+        path: "crates/gfx",
+        kind: Kind::Logic,
+        deps: &["audhsos-abi", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-symbols",
         path: "crates/symbols",
         kind: Kind::Logic,

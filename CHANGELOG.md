@@ -5,6 +5,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `gfx`, the framebuffer logic of the system: the two pixel formats of the
+  Graphics Output Protocol and the colors in them, rectangles and a damage
+  set of sixteen that merges what overlaps and collapses to its bounding
+  rectangle when it is full, a surface over borrowed bytes with fill, blit,
+  and clipping to what it holds, the project's own bitmap font of ninety-
+  five glyphs at eight by sixteen pixels, and the presentation step that
+  copies the damaged rectangles into anything that takes rows of pixels.
+  The crate reaches no hardware: the same code draws into the framebuffer
+  of the machine, into a back buffer, and into an array a host test owns.
+
 ### Fixed
 
 - The coverage gate of `fuzz-support` no longer turns on thread
