@@ -134,7 +134,11 @@ fn the_command_line_is_the_one_the_target_platform_document_prescribes() {
         "-machine q35 -cpu qemu64 -smp 1 -m 256M \
          -drive if=pflash,format=raw,readonly=on,file=/fw/edk2-x86_64-code.fd \
          -drive format=raw,file=/img/audhsos.img \
-         -serial stdio -display none -no-reboot \
+         -serial stdio -display none \
+         -vga none -device VGA,edid=on,xres=1920,yres=1200 \
+         -fw_cfg name=opt/ovmf/PcdVideoHorizontalResolution,string=1920 \
+         -fw_cfg name=opt/ovmf/PcdVideoVerticalResolution,string=1200 \
+         -no-reboot \
          -device isa-debug-exit,iobase=0xf4,iosize=0x04"
     );
     let windowed = arguments(
@@ -155,10 +159,30 @@ fn what_a_run_asks_for_beyond_the_reference_machine_is_appended_to_it() {
     };
     let line = arguments(Path::new("/fw"), Path::new("/img"), &options).join(" ");
     assert!(
-        line.ends_with("-qmp unix:/tmp/qmp.sock,server,nowait -vga none"),
+        line.ends_with("-qmp unix:/tmp/qmp.sock,server,nowait"),
         "{line}"
     );
     assert!(line.contains("-display none"), "{line}");
+    assert!(line.contains("-vga none -no-reboot"), "{line}");
+    assert!(!line.contains("-device VGA,"), "{line}");
+    assert!(!line.contains("-fw_cfg"), "{line}");
+}
+
+#[test]
+fn the_mode_the_firmware_is_to_set_takes_both_the_edid_and_the_firmware_settings() {
+    let line = arguments(Path::new("/fw"), Path::new("/img"), &Options::plain()).join(" ");
+    assert!(
+        line.contains("-device VGA,edid=on,xres=1920,yres=1200"),
+        "{line}"
+    );
+    assert!(
+        line.contains("-fw_cfg name=opt/ovmf/PcdVideoHorizontalResolution,string=1920"),
+        "{line}"
+    );
+    assert!(
+        line.contains("-fw_cfg name=opt/ovmf/PcdVideoVerticalResolution,string=1200"),
+        "{line}"
+    );
 }
 
 #[test]

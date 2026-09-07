@@ -40,6 +40,18 @@ const FIRMWARE_RELATIVE: &str = "../share/qemu/edk2-x86_64-code.fd";
 /// Time limit of one run in seconds.
 const DEFAULT_TIMEOUT: u64 = 60;
 
+/// The width of the mode the firmware is to set.
+const SCREEN_WIDTH: u32 = 1920;
+
+/// The height of the mode the firmware is to set.
+///
+/// The firmware draws its own text console into the mode it sets, and
+/// `GraphicsConsoleDxe` needs the twenty-five rows of nineteen pixels that
+/// a UEFI console has: below four hundred seventy-five pixels the firmware
+/// never reaches its boot manager, and nothing is loaded at all. This is
+/// far above that.
+const SCREEN_HEIGHT: u32 = 1200;
+
 /// How long the runner waits between two checks on the machine.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -371,18 +383,46 @@ pub(crate) fn arguments(firmware: &Path, image: &Path, options: &Options) -> Vec
         } else {
             "none".to_owned()
         },
-        "-no-reboot".to_owned(),
-        "-device".to_owned(),
-        "isa-debug-exit,iobase=0xf4,iosize=0x04".to_owned(),
     ];
+    line.extend(graphics(options.no_vga));
+    line.push("-no-reboot".to_owned());
+    line.push("-device".to_owned());
+    line.push("isa-debug-exit,iobase=0xf4,iosize=0x04".to_owned());
     if let Some(socket) = &options.qmp {
         line.push("-qmp".to_owned());
         line.push(format!("unix:{},server,nowait", socket.display()));
     }
-    if options.no_vga {
-        line.push("-vga".to_owned());
-        line.push("none".to_owned());
+    line
+}
+
+/// The graphics adapter of the reference machine and the mode the firmware
+/// is to set on it, or an empty adapter slot when `none` is asked for.
+///
+/// The default adapter of the `q35` machine is left out and the same device
+/// named instead, because the mode wanted is not the firmware's default and
+/// it takes two halves to get it. The firmware offers a mode through the
+/// Graphics Output Protocol only when the adapter's EDID carries it, which
+/// is what `edid=on` with a size does; and it picks among the modes it is
+/// offered by the two settings the firmware configuration device carries,
+/// which is what the `-fw_cfg` pair does. Either half alone leaves the
+/// firmware on its own default, which is 1280x800.
+fn graphics(none: bool) -> Vec<String> {
+    let mut line = vec!["-vga".to_owned(), "none".to_owned()];
+    if none {
+        return line;
     }
+    line.push("-device".to_owned());
+    line.push(format!(
+        "VGA,edid=on,xres={SCREEN_WIDTH},yres={SCREEN_HEIGHT}"
+    ));
+    line.push("-fw_cfg".to_owned());
+    line.push(format!(
+        "name=opt/ovmf/PcdVideoHorizontalResolution,string={SCREEN_WIDTH}"
+    ));
+    line.push("-fw_cfg".to_owned());
+    line.push(format!(
+        "name=opt/ovmf/PcdVideoVerticalResolution,string={SCREEN_HEIGHT}"
+    ));
     line
 }
 
