@@ -111,9 +111,12 @@ pub fn acknowledge<const NP: usize, const NT: usize, const NM: usize, const NH: 
 /// # Errors
 ///
 /// [`Error::InvalidHandle`] when either object is gone;
-/// [`Error::InvalidArgument`] for a bit index above sixty-three;
-/// [`Error::AlreadyExists`] when the notification is bound to another
-/// interrupt.
+/// [`Error::InvalidArgument`] for a bit index above sixty-three.
+///
+/// A notification another interrupt already signals into is not refused:
+/// several interrupts may name one notification, each on a bit of its own
+/// (D-108). A controller with two lines and one output buffer is drained by
+/// one thread, and that thread waits on one notification.
 pub fn bind<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     objects: &mut Objects<NP, NT, NM, NH>,
     interrupt: InterruptId,
@@ -123,23 +126,14 @@ pub fn bind<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     if bit >= 64 {
         return Err(Error::InvalidArgument);
     }
-    let bound = objects
+    objects
         .notifications
         .get(notification)
-        .map_err(|_| Error::InvalidHandle)?
-        .bound_interrupt;
-    if let Some(other) = bound
-        && other != interrupt
-    {
-        return Err(Error::AlreadyExists);
-    }
+        .map_err(|_| Error::InvalidHandle)?;
     let held = objects
         .interrupts
         .get_mut(interrupt)
         .map_err(|_| Error::InvalidHandle)?;
     held.notification = Some((notification, bit));
-    objects
-        .notifications
-        .with(notification, |slot| slot.bound_interrupt = Some(interrupt));
     Ok(())
 }

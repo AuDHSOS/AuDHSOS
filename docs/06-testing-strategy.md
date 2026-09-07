@@ -321,8 +321,9 @@ done until every applicable item has a test. Items are added, never removed.
 - Notifications: signal without a waiter accumulates; signal zero is a
   success no-op; wait consumes and clears everything present; poll on zero
   returns zero without blocking; two signals before a wait are merged; a
-  second concurrent waiter gets `Busy`; the bound interrupt sets exactly its
-  bit.
+  second concurrent waiter gets `Busy`; an interrupt bound to it sets
+  exactly its bit, and two interrupts bound to one notification each set the
+  bit they were bound on (D-108).
 - Fault message: has the reserved label range, carries fault kind, address,
   instruction pointer, and error code; the reply resumes the thread; the
   handler killing the process ends the wait cleanly.

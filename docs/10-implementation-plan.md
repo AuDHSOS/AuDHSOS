@@ -1805,11 +1805,7 @@ pub struct WaitQueue {
     head: Option<ThreadId>, tail: Option<ThreadId>, len: u32,
 }
 pub struct Reply { pub caller: ThreadId, pub consumed: bool }
-pub struct Notification {
-    pub word: u64,
-    pub waiter: Option<ThreadId>,
-    pub bound_interrupt: Option<InterruptId>,
-}
+pub struct Notification { pub word: u64, pub waiter: Option<ThreadId> }
 pub struct Interrupt {
     pub line: u8,
     pub vector: u8,

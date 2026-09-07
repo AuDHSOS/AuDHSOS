@@ -105,8 +105,8 @@ pub fn interrupt_create<
 ///
 /// [`Error::InvalidHandle`] for either handle; [`Error::AccessDenied`] when
 /// the notification handle lacks `BIND`; [`Error::InvalidArgument`] for a
-/// bit index above sixty-three; [`Error::AlreadyExists`] when the
-/// notification is bound to another interrupt.
+/// bit index above sixty-three. A notification another interrupt already
+/// signals into is bound all the same, on a bit of its own (D-108).
 pub fn interrupt_bind<
     E: Environment,
     const NP: usize,

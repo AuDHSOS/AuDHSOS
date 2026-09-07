@@ -84,6 +84,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- A notification may carry more than one interrupt, each on a bit of its
+  own (D-108). `interrupt_bind` refused a notification another interrupt
+  already named, and `Notification::bound_interrupt` held that rule and
+  nothing else; both are gone. The i8042 has one output buffer and two
+  lines, so a driver that waited on two notifications would need two
+  threads reading one buffer and racing each other for the byte in it.
 - `memory_map` merges a mapping that continues one the process already
   holds instead of adding a region for every call (D-104). A full screen of
   1280 by 800 pixels is a thousand pages and no call maps more than

@@ -530,16 +530,17 @@ impl Reply {
     }
 }
 
-/// Sixty-four signal bits, at most one waiter, and the interrupt bound to
-/// it if one is.
+/// Sixty-four signal bits and at most one waiter.
+///
+/// Which interrupts signal into it is not recorded here: an interrupt
+/// carries the notification and the bit it sets, and several of them may
+/// name one notification, each on a bit of its own (D-108).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Notification {
     /// The bits that have been signalled and not yet consumed.
     pub word: u64,
     /// The one thread that may wait; a second gets `Busy`.
     pub waiter: Option<ThreadId>,
-    /// The interrupt object that signals into this notification.
-    pub bound_interrupt: Option<InterruptId>,
 }
 
 impl Object for Notification {
@@ -551,7 +552,6 @@ impl Notification {
     pub const EMPTY: Notification = Notification {
         word: 0,
         waiter: None,
-        bound_interrupt: None,
     };
 
     /// A notification with nothing signalled and nobody waiting.
