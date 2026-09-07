@@ -2028,6 +2028,208 @@ what the kernel dispatches on, so the check is what the kernel saw.
   with nothing left as markup; every SVG figure comes out as marks that
   stand inside it and keeps its shape when it is placed.
 
+### 6.6.59 The clock and the thread that waits until (`kernel-sched`, `kernel-syscall`, QEMU)
+
+- `IndexList::insert_after` (`audhsos-collections`, and the item belongs to
+  6.6.41 as well): an insert after `None` is a `push_front`; after the tail
+  is a `push_back`; in the middle links both neighbours; a node that is
+  already linked, one outside the slice, and an `after` that belongs to
+  another list are each refused and change nothing; the length and both
+  ends are what a model built from a vector says after the same sequence.
+- Microseconds from ticks: zero ticks is zero; one tick is the frequency's
+  reciprocal rounded as the conversion states; a tick count that would
+  overflow the microsecond saturates rather than wrapping, so a machine
+  left running does not travel backwards.
+- The deadline list: an insert into an empty list, at the front, in the
+  middle, and at the back; two threads with the same deadline both come
+  out and in the order they went in; a thread signalled before its
+  deadline leaves the list in the same call that changes its state and is
+  not woken twice; a thread that exits while it waits leaves no entry
+  behind. Against a model that keeps the same deadlines in a sorted
+  vector, the same sequence of inserts, removals, and expiries yields the
+  same threads in the same order.
+- Expiry: a deadline exactly at `now` expires; one a microsecond later
+  does not; a tick that expires nothing costs one comparison, which is
+  the walk stopping at the front; every thread of a list whose deadlines
+  have all passed comes out in one tick.
+- `notification_wait_until`: bits already present are taken and the
+  deadline is never consulted; a deadline in the past returns at once with
+  no bits; a signal before the deadline returns the bits; a deadline that
+  comes first returns zero; the wrong right on the handle is
+  `AccessDenied`, and a handle of the wrong type is `WrongObjectType`, as
+  `notification_wait` answers them.
+- `clock_now`: takes no handle, takes no argument, and needs no right; two
+  calls with a wait between them differ by that wait to within one tick,
+  which is the QEMU assertion.
+
+### 6.6.60 Randomness and message interrupts (`kernel-hal-x86_64`, `kernel-syscall`, QEMU)
+
+- `RDSEED` through the scripted double: four words filled at the first
+  attempt; a word that fails once and succeeds inside the retry bound;
+  a word that fails through the whole bound is `Unavailable`, a code the
+  phase adds, and no partial result reaches the caller; the retry counter is per word and
+  not per call.
+- `random_bytes`: four result words; two calls in one program differ,
+  which is the QEMU assertion and is a smoke test and not a statement
+  about the distribution.
+- The vector allocator: a vector is handed out once; a vector freed with
+  its interrupt object is handed out again; an exhausted space is
+  `NoVector` and not a reused vector; the message address and data are
+  the ones the fixed-delivery, edge-triggered encoding states for the
+  vector.
+- `interrupt_create_msi`: the right `MANAGE` on `SystemControl` is
+  required; the object it makes has no line, so `interrupt_bind` binds it
+  as it binds any other and `interrupt_ack` on it calls no controller and
+  clears the outstanding flag; an `interrupt_ack` on an object that has no
+  outstanding signal is not an error.
+- In QEMU: an MSI vector created by the root task and raised by a test
+  kernel arrives as the bit it was bound to.
+
+### 6.6.61 The bus (`kernel-acpi`, `pci`, QEMU)
+
+- `MCFG` (`kernel-acpi`): a table with one allocation and one with several;
+  a wrong signature, a length below the header, a length beyond the
+  buffer, and a bad checksum are each refused before any field is read; an
+  allocation whose last bus is below its first, and one whose base is not
+  page aligned, are refused; more allocations than the bounded array holds
+  are refused rather than truncated silently.
+- ECAM arithmetic (`pci`): bus, device and function at their lowest and
+  highest values land at the offsets the mechanism states; an offset
+  beyond the configuration space of a function is refused; the window
+  length follows from the bus range and a function outside that range is
+  never addressed.
+- The header: an absent function reads `0xFFFF` as its vendor and is not
+  an error; a header type this crate does not read is reported and
+  skipped; bit 7 of the header type makes a device multi-function, and
+  without it only function zero is read.
+- Base address registers: a 32-bit memory register, a 64-bit one that
+  consumes the next index, an I/O register, and a register that reads
+  zero; size probing restores the command register it cleared, and
+  restores it also when the probe found nothing; a 64-bit register in the
+  last index is refused rather than read past; an index the previous
+  register consumed is not read again.
+- The capability list: no capabilities; one; several; a pointer that
+  points at itself and a chain that returns to an earlier entry are each
+  refused by the bound and never hang; a pointer below the header, and one
+  beyond configuration space, are refused.
+- MSI-X: the table size is the encoded field plus one; the enable and
+  function-mask bits are read and written where the specification puts
+  them; the table and the pending-bit array may name different base
+  address registers; a table entry the crate writes carries the address,
+  the data, and a clear mask bit at the offsets stated.
+- The virtio capabilities: the four structures the driver needs are found
+  by their type; the notify capability carries its multiplier and the
+  other three do not; the three types the specification defines and this
+  driver does not use are recognized and passed over, and a value the
+  specification reserves is skipped and does not end the walk; a
+  capability whose length is shorter than its type needs is refused, and
+  so is one naming a BAR index outside `0` to `5`. Two structures of the
+  same type both come back, in the order the capability list had them,
+  which is the device's order of preference, and the crate chooses
+  neither.
+- Against the recorded configuration space of a `q35` machine: the
+  virtio-net function is found at its address, its four structures and its
+  MSI-X table are read back, every base address register decodes to the
+  range the machine reports, and the device id is `0x1041`, which is the
+  network device's `0x1040 + 1` of virtio section 4.1.2 and not the
+  transitional `0x1000`.
+- Fuzz target `pci_config`: arbitrary bytes as a configuration space;
+  enumeration terminates with devices or with an error, reads nothing
+  outside the buffer, and never loops.
+- Fuzz target `mcfg`: arbitrary bytes as a table; the parse answers or
+  refuses and reads nothing outside the buffer.
+
+### 6.6.62 The network device (`driver-virtio-net`)
+
+- Negotiation: a device offering exactly the two features the driver wants
+  is accepted; one offering neither `VIRTIO_F_VERSION_1` is refused as a
+  legacy device; each refused feature is refused by name, and the table of
+  names covers every bit the driver reads; a device that does not clear
+  `FEATURES_OK` after the driver set it fails initialization at that step
+  and not later.
+- Initialization: the sequence reaches `DRIVER_OK` over the state machine
+  of `virtio-queue`; a failure at each step leaves the device in `FAILED`
+  and reports which step; a queue whose size the device reports as zero is
+  a device without that queue and is refused; the MSI-X vector is
+  configured per queue and the device's rejection of a vector is read back
+  and reported.
+- Receive: every buffer is in the available ring after initialization; a
+  used element yields the frame behind its twelve-byte header; the buffer
+  is back in the available ring in the call that took it, so the device is
+  never left with fewer buffers than the driver believes; a used element
+  whose length is below the header, one whose length exceeds the buffer,
+  and one naming a descriptor that is free are each refused and the
+  element still consumed.
+- Transmit: a frame goes out behind a zeroed header as one chain; the
+  notify write lands at the queue's own offset with the multiplier
+  applied; completions are drained before the next send; a send with no
+  free buffer is refused and changes nothing, so the caller may retry;
+  a frame longer than a buffer is refused before anything is written.
+- The device configuration: the MAC address is the six bytes at the
+  offset the specification states; a device that did not offer
+  `VIRTIO_NET_F_MAC` yields none rather than six zeroes.
+- Fuzz target `virtio_net_rx`: a used element and a buffer of arbitrary
+  bytes; the driver yields a frame or refuses, and never reads outside the
+  buffer.
+
+### 6.6.63 The network server and the socket protocol (`server-net`, `user-proto`)
+
+- Encodings: every message of the protocol encodes and decodes to itself;
+  a truncated message, one with a length field that disagrees with its
+  buffer, and one with a kind byte the protocol does not have are each
+  refused; a socket handle of a generation that has passed is refused
+  rather than answered for the socket that reused the slot.
+- The ring: a write and a read of one record; a ring exactly full; a
+  reader that stops and a writer that therefore stops; sequence numbers
+  that wrap; a capacity that is not a power of two is refused at creation.
+- The loop: a frame in produces the frames out that the stack produces; a
+  poll that yields nothing does not wake the server again before the
+  deadline `poll_at` gave; a client request and a device interrupt arrive
+  under different badges and are told apart by them; a device that reports
+  no link at startup makes the server report no interface and exit.
+- The deadline word: a deadline written while the timer thread sleeps on a
+  later one wakes it and is the one it then keeps; a deadline written
+  while it sleeps on an earlier one does not move that wake earlier and
+  the tick it sends is answered with a poll that finds nothing to do; a
+  deadline that has already passed makes the tick immediate; `poll_at`
+  answering `None` parks the timer thread with no deadline at all.
+- Against the network double of `net-stack` and a scripted device: a
+  lease is taken and renewed, a name is resolved, a connection is opened,
+  carries bytes both ways and closes, each with the clock advanced by the
+  test rather than by a machine.
+- Back pressure: a client that never reads fills its ring, the window
+  stops advancing, and nothing in the server grows; the same client
+  reading again lets the connection continue.
+
+### 6.6.64 The network end to end (QEMU)
+
+- The driver reports the MAC address the command line gave the device.
+- DHCP reaches a lease, and the address is the first one the built-in
+  server hands out.
+- ARP resolves the gateway before the first datagram leaves for it.
+- A DNS query the forwarder answers comes back with an address.
+- A TCP connection through the forwarded port carries a payload both ways
+  and closes cleanly, with the close seen from both ends.
+- An HTTP `GET` over that connection returns a response the client parses
+  into a status line and a body.
+- With the two network lines dropped, the server reports no interface and
+  the run ends by itself, as the display server ends on a machine with no
+  framebuffer.
+
+### 6.6.65 TLS on the target (QEMU)
+
+- An HTTPS `GET` against a server the test starts on the development
+  machine, with a chain the test certificate builder wrote, returns a
+  status line the client parses.
+- A chain with an expired certificate, one whose name does not match, and
+  one signed by an anchor the image does not carry are each refused, and
+  each with the alert the standard names for it.
+- A connection the peer closes without `close_notify` is reported as a
+  truncation and not as a clean end.
+- The handshake respects a deadline: a peer that stops answering ends the
+  attempt at the deadline rather than blocking the server.
+
+
 ## 6.7 CI pipeline
 
 Jobs run in this order; a failure stops the pipeline.

@@ -52,9 +52,12 @@ prevent them, but no effort is spent on them now.
 - Networking and persistent storage in the first release. The TLS 1.3
   client library of [document 11](11-cryptography-and-tls.md) and the
   network stack, FAT32, and virtqueue logic of
-  [document 12](12-parallel-work.md) are built before them, because they
-  are pure logic and need neither. The drivers and servers that would
-  make them a feature of the running system are not.
+  [document 12](12-parallel-work.md) were built before them, because they
+  are pure logic and need neither. Networking becomes a feature of the
+  running system in Phases 12 to 15, which
+  [document 13](13-the-network-on-the-machine.md) specifies; persistent
+  storage stays later work, and the bus Phase 13 brings is what it will
+  need.
 - Performance tuning beyond what correctness requires.
 - Formal verification or security certification.
 

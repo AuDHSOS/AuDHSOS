@@ -72,9 +72,9 @@ Three properties define the design:
 | `Endpoint` | Synchronous rendezvous point | call, send, recv, reply-recv, badge | `SEND`, `RECV`, `BADGE` |
 | `Reply` | One-shot right to answer a specific caller; created by `recv` | reply | implicit |
 | `Notification` | 64 signal bits | signal, wait, poll, bind interrupt | `SIGNAL`, `WAIT`, `BIND` |
-| `Interrupt` | A bound hardware interrupt line | bind to notification, acknowledge | `MANAGE` |
+| `Interrupt` | A bound hardware interrupt: an ISA line, or an MSI-X vector with no line behind it | bind to notification, acknowledge | `MANAGE` |
 | `IoPortRange` | Permission for a range of x86 I/O ports | read, write | `READ`, `WRITE` |
-| `SystemControl` | Root authority to create interrupts, port ranges, device memory objects | create interrupt, create port range, create device memory object, query system info | `MANAGE` |
+| `SystemControl` | Root authority to create interrupts, port ranges, device memory objects | create interrupt for a line, create interrupt for an MSI-X vector, create port range, create device memory object, query system info | `MANAGE` |
 
 Every object type also carries the generic rights `DUPLICATE` and
 `TRANSFER`.
@@ -413,15 +413,41 @@ through shared memory objects.
 - An interrupt object is created with its line masked and armed when a
   notification is bound to it, because a line nothing names would assert
   into nothing (D-93).
-- Interrupt flow: line asserts → kernel masks the line at the I/O APIC and
-  sends end-of-interrupt to the local APIC → kernel signals the bound
-  notification → driver thread wakes, services the device →
+- Interrupt flow for a line: line asserts → kernel masks the line at the
+  I/O APIC and sends end-of-interrupt to the local APIC → kernel signals
+  the bound notification → driver thread wakes, services the device →
   `interrupt_ack(handle)` unmasks the line.
+- A PCI device raises its interrupt through MSI-X and not through an INTx
+  pin, because the pin's routing lives in the `_PRT` object of the ACPI
+  namespace and reading it would need an AML interpreter this system does
+  not have (D-111). `interrupt_create_msi` allocates one vector out of the
+  same space the lines are allocated from and answers with the `Interrupt`
+  handle, the message address and the message data; the driver writes
+  those into the device's MSI-X table, which lies in the device's own base
+  address register and therefore in the driver's address space.
+  `interrupt_bind` is unchanged. `interrupt_ack` on such an object clears
+  the outstanding flag and touches no hardware, because the mask bit is in
+  memory the kernel does not map: a device that raises interrupts faster
+  than its driver services them is quieted by its driver and not by the
+  kernel.
+- The PCI configuration space is found by the kernel and walked by
+  userland: `kernel-acpi` reads the `MCFG` table, `system_info` reports
+  the ECAM window, the root task makes it a `Device` memory object, and
+  the crate `pci` does the enumeration (D-112). Nothing else about PCI is
+  in the kernel.
 - I/O port access is a system call on an `IoPortRange` handle in the first
   release. Userland drivers contain no inline assembly.
-- DMA: a driver receives a `Ram` memory object with the `INFO` right and
-  programs the physical address into the device. No IOMMU support in the
-  first release.
+- DMA: a driver receives one `Ram` memory object with the `INFO` right,
+  granted whole, and programs the physical address into the device.
+  `memory_info` answers with the physical start, and because a memory
+  object is one contiguous physical range, an offset into the mapping is
+  the same offset into physical memory. No IOMMU support in the first
+  release, so what bounds a driver is that every address it programs is
+  derived from `memory_info` of the one object it holds (D-115).
+- Memory-mapped registers are reached through the volatile accessor of
+  `user-sys-x86_64` and nowhere else, so every driver above it keeps
+  `#![forbid(unsafe_code)]` and reaches its registers through a trait
+  (D-113).
 
 ## 2.8 System call interface
 
@@ -461,10 +487,14 @@ through shared memory objects.
 | `endpoint_create`, `endpoint_badge` | Process / Endpoint | create; derive a badged send-only capability |
 | `ipc_call`, `ipc_send`, `ipc_recv`, `ipc_try_recv`, `ipc_reply`, `ipc_reply_recv` | Endpoint / Reply | messaging |
 | `notification_create`, `notification_signal`, `notification_wait`, `notification_poll` | Notification | signals |
+| `notification_wait_until` | Notification | as `notification_wait`, with a deadline; answers zero bits when the deadline came first |
+| `clock_now` | none | microseconds since the kernel started, at tick resolution |
+| `random_bytes` | none | four words from `RDSEED`; `Unavailable` when the hardware would not deliver inside the retry bound |
 | `interrupt_create`, `interrupt_bind`, `interrupt_ack` | SystemControl / Interrupt | interrupt forwarding |
+| `interrupt_create_msi` | SystemControl | an interrupt object for an MSI-X vector; answers the vector's message address and data |
 | `ioport_create`, `ioport_read`, `ioport_write` | SystemControl / IoPortRange | x86 port I/O |
 | `memory_create_device` | SystemControl | device memory object |
-| `system_info` | SystemControl | pool capacities and usage, tick frequency, the address of the root system description pointer, and the description of the framebuffer, which is six zero words on a machine without one |
+| `system_info` | SystemControl | pool capacities and usage, tick frequency, the address of the root system description pointer, the description of the framebuffer, which is six zero words on a machine without one, and the ECAM window of the `MCFG` table, which is four zero words on a machine whose firmware published none |
 | `process_watch` | Process (`INFO`) | binds the end of a process to one bit of a notification, so a server that holds something of a program gets it back when the program is gone (D-106) |
 | `debug_log` | none | writes the message region to the debug UART; exists only in builds with the `debug-uart` feature |
 
@@ -577,5 +607,14 @@ message where the child will find it (D-91) → `thread_start`.
 - The kernel does not trust message contents. Sender identity is the badge.
 - Kernel-object quotas prevent one process from exhausting the pools of
   another.
+- One limit is accepted rather than closed: there is no IOMMU in the first
+  release, so a driver holding a `Ram` memory object with the `INFO` right
+  can program its physical address into a device and make that device
+  write where the driver could not. A device capability is therefore worth
+  what a memory capability is worth, and the root task hands one out only
+  to a driver it starts itself. What bounds a driver is that every address
+  it programs comes from `memory_info` of the one object it was granted,
+  and the crate that derives them has no other source of an address
+  (D-115).
 - No code outside this repository runs in the loader, the kernel, or the
   userland.

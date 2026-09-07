@@ -229,8 +229,10 @@ written once.
 
 What is *not* in this track: `driver-virtio-net`, `server-net`, the
 socket protocol in `user-proto`, and the entropy system call. They are
-integration, they need the kernel, and section 8.14 keeps them
-unscheduled.
+integration and they need the kernel, so they are phase work: Phase 14,
+specified in [document 13](13-the-network-on-the-machine.md), together
+with the three kernel capabilities of Phase 12 and the bus of Phase 13
+that none of them can do without.
 
 ### 12.6.2 Crate catalog
 
@@ -260,7 +262,7 @@ piece of code and what keeps `net-udp` from depending on `net-ip` at all.
 initial sequence numbers, ephemeral ports, and transaction ids must not
 be guessable (D-51). `audhsos-tls` and the network crates never reference each other;
 the transport glue that joins them is step T8 of document 11 and is
-unscheduled.
+Phase 15.
 
 ### 12.6.3 `net-wire`
 
@@ -986,7 +988,7 @@ Tests: catalog 6.6.42 to 6.6.50 and 6.6.54.
 | D7 | `net-dns` and `net-dhcp` — implemented | M |
 | D8 | `net-http` — implemented | S |
 | D9 | `net-stack`: the facade, with the address selection of RFC 6724 — implemented | L |
-| D10 | integration, jointly with T8 of document 11: `driver-virtio-net`, `server-net`, the socket protocol, the entropy system call, the TLS transport | not scheduled |
+| D10 | integration, jointly with T8 of document 11: `driver-virtio-net`, `server-net`, the socket protocol, the entropy system call, the TLS transport | Phases 14 and 15, specified in [document 13](13-the-network-on-the-machine.md) |
 
 D6 is the one step that must not be started beside an XL phase.
 
@@ -1247,15 +1249,24 @@ the integration.
 
 Phase 7 has since been implemented, which settles the last two rows: the
 allocator is `heap.rs` of `user-rt` and the encodings are `message.rs` of
-`user-proto`, both written inside the phase rather than before it. The
-first three rows are open, and they belong to Phase 9 and Phase 10, which
-is what makes them the work that fills a gap between phases now.
+`user-proto`, both written inside the phase rather than before it. Phase 9
+settles two more: `gfx` is `crates/gfx` with its formats, rectangles,
+surface, font, and presentation step, and the QMP client and the PPM
+reader are `qmp.rs`, `json.rs`, and `ppm.rs` of the xtask. Neither row
+was pulled forward: both were written inside the phase that owns them.
+
+`driver-i8042` is the one open row, and Phase 10 is the next phase. That
+changes what pulling it forward means: it no longer fills a gap between
+two phases, it is the opening crate of the phase that follows, written
+before the integration around it. Its plan is 10.10.1, it depends on no
+other crate of the workspace, and its tests are catalog 6.6.25 with the
+scripted port double.
 
 ## 12.10 Capacity
 
 - At most one side track besides track C is active at a time. Three
   parallel tracks dilute attention, which is the failure mode section
-  8.15 already names for track C (D-45).
+  8.19 already names for track C (D-45).
 - A track is worked on between phases, never instead of one.
 - Recommended order: track E first, because it is small and blocks track
   C at T5 and T6; then track C to T7; then track D from D1; track F when
@@ -1263,7 +1274,9 @@ is what makes them the work that fills a gap between phases now.
   phase 3, because that is where kernel panics start. Tracks E and G are
   done, track C has T1 to T7 and the RSA steps R1 to R6 behind it, and
   track D has D1 to D9 behind it, so what is left of either is T8 and
-  D10, which are one integration and are not scheduled. The document
+  D10, which are one integration and are now Phases 14 and 15 rather than
+  unscheduled work; what has to exist under them is
+  [document 13](13-the-network-on-the-machine.md). The document
   toolchain of 12.8.3 came after Phase 7 and outside this order, which it
   could do because no phase and no track waits on it. A driver became
   foreseeable with Phase 7, which puts a console driver at ring three, so
@@ -1274,8 +1287,12 @@ is what makes them the work that fills a gap between phases now.
   archive that phase adds to the boot image lands in the same directory;
   two hands in one refactoring is the one avoidable collision here. That
   phase landed first, and the move was made after it.
-- The pulled-forward work of 12.9 fills short gaps, because it needs no
-  new design.
+- The pulled-forward work of 12.9 was to fill short gaps, because it
+  needs no new design. It never did: four of the five rows were written
+  inside their own phase, and the fifth, `driver-i8042`, is by the
+  paragraph above phase work in its ordinary position rather than gap
+  work. This document therefore holds nothing left that runs beside a
+  phase.
 
 ## 12.11 Deliberately not started
 

@@ -7,6 +7,33 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Document 13, *The Network on the Machine*, and Phases 12 to 15 in the
+  roadmap and the implementation plan. `driver-virtio-net` was the one
+  thing document 12 left unscheduled that the system visibly lacks, and
+  writing down what it needs turned up seven prerequisites, not one of
+  them about networking: userland has no monotonic clock, no wait
+  with a deadline, no source of entropy, no interrupt that is not an ISA
+  line, and no way to reach a PCI device or to touch a memory-mapped
+  register from safe code. Phase 12 is the three kernel capabilities —
+  `clock_now`, `notification_wait_until` with a deadline list in
+  `kernel-sched`, `random_bytes` over `RDSEED`, and `interrupt_create_msi`
+  — Phase 13 is the `MCFG` table, the ECAM window through `system_info`,
+  the crate `pci`, and the volatile accessor in `user-sys-x86_64`, Phase
+  14 is the driver, the DMA region, `server-net` and the socket protocol
+  with the end-to-end tests over QEMU's own network, and Phase 15 is step
+  T8 of document 11, which has had a client and no transport since the
+  TLS track finished. Decisions D-108 to D-118, catalog items 6.6.59 to
+  6.6.65, and `docs/pcisig/README.md`, which holds no document because
+  PCI-SIG publishes none this repository may keep, and records instead
+  what takes the place of having one.
+
+### Fixed
+
+- 10.9.4 named the kernel's device-memory check `inside_device_memory`;
+  the call Phase 9 built is `Environment::is_device_memory`. A document
+  and the code disagreed, which is a bug by the convention of
+  `docs/README.md`, and the document was the wrong one.
+
 - `server-display` as a process and `app-paint` as its first client. The
   root task makes the framebuffer of `system_info` into a device memory
   object, hands it and the mode to the display server, and starts both; the

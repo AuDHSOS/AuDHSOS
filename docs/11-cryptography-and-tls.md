@@ -565,7 +565,9 @@ T1 to T7 touch nothing outside their own crates and the policy table, so
 they can be built between kernel phases without disturbing them. T5 and
 T6 additionally need steps E1 and E2 of document 12, which are small and
 are scheduled before them. T8 depends on the network stack and on the
-kernel and is not scheduled.
+kernel, which is why it waited: it is Phase 15, and what has to exist
+under it — a clock, entropy, a bus, a device, and a socket — is
+[document 13](13-the-network-on-the-machine.md).
 
 R1 to R6 have the same property and none of T8's: they are logic in logic
 crates, they wait on nothing outside this track, and each one leaves the

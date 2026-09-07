@@ -17,12 +17,14 @@ AuDHSOS/
 │   ├── rfc/                   the RFCs, verbatim, with their checksums (D-59)
 │   ├── oasis/                 what OASIS publishes, the same way (D-100)
 │   ├── w3c/                   what the W3C publishes, the same way
-│   └── ecma/                  what Ecma International publishes, the same way
+│   ├── ecma/                  what Ecma International publishes, the same way
+│   └── pcisig/                what PCI-SIG publishes and this repository may not hold: the provenance rule that takes its place (D-117)
 ├── crates/
 │   ├── abi/                   audhsos-abi: syscall table, errors, rights, message layout, boot image header, boot information, address constants
 │   ├── elf/                   audhsos-elf: ELF64 parser producing validated load segments
 │   ├── uefi/                  audhsos-uefi: UEFI structure layouts, GUIDs, constants (no calls)
 │   ├── gfx/                   gfx: framebuffer logic, bitmap font, damage tracking
+│   ├── pci/                   pci: configuration space, BARs, capabilities, MSI-X, the virtio capabilities (document 13, Phase 13)
 │   ├── sync/                  audhsos-sync: Global<T> and Preset<T> cells (unsafe allowed)
 │   ├── time/                  audhsos-time: UnixTime, CivilTime, Instant, Duration (document 12)
 │   ├── encoding/              audhsos-encoding: Base64, hex, PEM (document 12)
@@ -31,7 +33,8 @@ AuDHSOS/
 │   ├── symbols/               audhsos-symbols: ELF symbol table and DWARF line lookup (document 12)
 │   ├── drivers/
 │   │   ├── uart16550/         driver-uart16550: register logic over a port access trait
-│   │   └── i8042/             driver-i8042: PS/2 controller and decoder logic over a port access trait (Phase 10)
+│   │   ├── i8042/             driver-i8042: PS/2 controller and decoder logic over a port access trait (Phase 10)
+│   │   └── virtio-net/        driver-virtio-net: virtio 1.0 network device logic over a register trait (document 13, Phase 14)
 │   ├── support/
 │   │   ├── testing/           test-support: property-test engine, builders, strategies, model-test runner
 │   │   └── fuzz/              fuzz-support: fuzzer entry glue and corpus replay (unsafe allowed, host only)
@@ -63,7 +66,8 @@ AuDHSOS/
 │   │   │   ├── console/       server-console
 │   │   │   ├── memory/        server-memory
 │   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor
-│   │   │   └── input/         server-input: i8042 driver process, event rings (Phase 10)
+│   │   │   ├── input/         server-input: i8042 driver process, event rings (Phase 10)
+│   │   │   └── net/           server-net: the device, the stack, the sockets (document 13, Phase 14)
 │   │   ├── programs/          user-programs: every program of the system as one
 │   │   │   │                  binary each of one crate, because a program is a
 │   │   │   │                  loop around a logic crate and seven crates of a
@@ -130,6 +134,8 @@ AuDHSOS/
 | `gfx` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf`; `test-support` as a dev-dependency |
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
+| `pci` (Phase 13) | 1 | all | no | yes, fuzz | - (feature `test-doubles`); `test-support` as a dev-dependency |
+| `driver-virtio-net` (Phase 14) | 2 | all | no | yes, fuzz | `pci`, `virtio-queue` (feature `test-doubles`) |
 | `fs-fat` | 1 | all | no | yes | `audhsos-time`; `test-support` as a dev-dependency; feature `test-doubles` |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-objects` | 2 | all | no | yes | `kernel-types`, `kernel-mm`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
@@ -150,6 +156,7 @@ AuDHSOS/
 | `server-memory` | u2 | all | no | yes, against a recording `Pages` | `audhsos-abi`, `audhsos-collections`; feature `test-doubles` |
 | `server-console` | u2 | all | no | yes | `audhsos-collections`, `driver-uart16550` |
 | `server-display` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `gfx`, `user-proto` |
+| `server-net` (Phase 14) | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `net-stack`, `pci`, `user-proto` |
 | `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | the three server logic crates, `audhsos-abi`, `driver-uart16550`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
 | `crypto-ct` | c0 | all | no | yes | - |
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
@@ -213,10 +220,16 @@ AuDHSOS/
     crates. Userland depends on them, not the reverse. `audhsos-tls` and
     the network crates never reference each other; the transport that
     joins them lives in a userland process.
-11. `audhsos-symbols`, `virtio-queue`, and `fs-fat` are logic crates at
-    layer 1. They depend on layer-0 crates only and are used by the
-    xtask and, when the phases reach them, by driver and server
-    processes.
+11. `audhsos-symbols`, `virtio-queue`, `fs-fat`, and `pci` are logic crates
+    at layer 1. They depend on layer-0 crates only — `pci` on nothing at
+    all — and are used by the xtask and, when the phases reach them, by
+    driver and server processes.
+12. `driver-virtio-net` is a logic crate at layer 2, the one driver crate
+    above layer 1, because it needs both `pci` and `virtio-queue`. It
+    depends on those two and on nothing else, and on nothing of the
+    network crates of rule 10: it hands frames out and takes them in as
+    byte slices, and what a frame means belongs to `server-net`
+    (D-114).
 
 ## 5.4 Workspace configuration
 
@@ -327,6 +340,9 @@ still has none.
 | ELF parsing in the loader and in userland | `audhsos-elf`, one parser |
 | UART register handling in the kernel debug console and in the userland console driver | `driver-uart16550` over a port access trait; two adapters (direct port I/O, `IoPortRange` system calls) |
 | i8042 register handling and PS/2 decoding | `driver-i8042` over its own port access trait, following the UART pattern; one adapter over `IoPortRange` system calls |
+| PCI configuration space, for the bus walk and for a driver's own registers | `pci` over a `ConfigSpace` trait; one adapter, the volatile accessor of `user-sys-x86_64` over the mapped ECAM window, and a recorded configuration space as the double (D-112, D-113) |
+| Virtqueue arithmetic in the network driver and in a later block driver | `virtio-queue` over `QueueMemory`; a driver supplies the offset arithmetic of its own DMA region and nothing else (D-115) |
+| Volatile access to a mapped device region | one accessor in `user-sys-x86_64`; every driver above it keeps `forbid(unsafe_code)` and reaches its registers through a trait (D-113) |
 | Pixel operations in the display server and in applications | `gfx`: one surface type, one font, one damage tracker; the display server and applications draw with the same code |
 | System call numbers, names, argument counts, kernel dispatch | one declarative table in `audhsos-abi` (a `syscalls!` macro) consumed by the kernel dispatcher; the wrappers of `user-sys-x86_64` are written out by hand and a constant assertion holds them to the same table (D-92) |
 | Object types, their rights masks, and `TryFrom<u32>` conversions | one declarative table in `audhsos-abi` |
