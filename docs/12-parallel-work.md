@@ -56,7 +56,7 @@ integration around it stays in its phase.
 | D | the network stack, sans-I/O (12.6) | XL | unblocks C's transport; unblocks HTTP |
 | E | shared foundations: time, encodings, collections (12.5) | M | implemented; needed by C at T5 and T6, by D throughout, by phases 5 and 6 |
 | F | device logic without devices: virtqueues, FAT32 (12.7) | M | `virtio-queue` implemented, `fs-fat` open; prepares the network and storage drivers that are later work |
-| G | tooling: fuzz support, symbolization (12.8) | M | serves every track and every phase |
+| G | tooling: fuzz support, symbolization, the document toolchain (12.8) | L | implemented; serves every track and every phase, and no part of the system is built from it |
 
 Track E comes first in this document because tracks C and D both rest on
 it.
@@ -1150,6 +1150,39 @@ fail it a second time.
 
 Tests: catalog 6.6.53.
 
+### 12.8.3 The document toolchain
+
+Implemented. It was written after Phase 7 and was not planned in this
+document; it is recorded here because track G is where it belongs.
+`cargo xtask pdf` turns every Markdown document of the repository,
+every RFC beside them, and every standard kept as HTML into a PDF under
+`target/pdf/`, with an index that links to each. Six crates carry it:
+`doc-markdown` and `doc-html` parse into the same blocks and inline runs,
+so that everything above them is one body of code for both; `doc-svg`
+reads the figures of those documents into the marks a page is made of;
+`doc-pdf` writes PDF 1.7 — pages, text in the six faces of the standard
+fourteen fonts it uses, paths, links, and an outline; `docpdf` decides
+what is filed where, breaks the lines, and runs the conversions several
+at a time; and
+`audhsos-deflate` is the DEFLATE format of RFC 1951 in the zlib wrapper
+of RFC 1950, which is the filter a PDF calls `FlateDecode` and what makes
+a compressed document about a third of the size of a readable one.
+
+`audhsos-deflate` passes the admission test of 12.2 as written: `no_std`,
+`#![forbid(unsafe_code)]`, no allocation — the caller hands over the
+buffer the result is written into and the table the compressor finds runs
+with — and it depends on nothing. It is a layer-0 logic crate that the
+system could use, and today only a tool does. The five above it are host
+tools and pass the test in the sense track G passes it: they hold no
+`unsafe`, they touch no hardware, and nothing of the system is built from
+them, so they compete with a phase for attention and for nothing else.
+
+Both RFCs are kept under [`docs/rfc/`](rfc/README.md) as `rfc1950.txt`
+and `rfc1951.txt`, and every number of the crate names the section it
+comes from, which is what D-59 asks of a standard the code implements.
+
+Tests: catalog 6.6.58.
+
 ## 12.9 Phase work that may be pulled forward
 
 These components belong to phases and stay there: their catalog entries,
@@ -1166,6 +1199,12 @@ the integration.
 | allocator logic in `user-rt` | 7 | 6.6.12 | offsets in a byte region, testable against a reference model |
 | encodings in `user-proto` | 7 | 6.6.56 | each message is a type with `encode` and `decode` and no system call; the catalog item 6.6.56 was written for them, as this row asked (D-89) |
 
+Phase 7 has since been implemented, which settles the last two rows: the
+allocator is `heap.rs` of `user-rt` and the encodings are `message.rs` of
+`user-proto`, both written inside the phase rather than before it. The
+first three rows are open, and they belong to Phase 9 and Phase 10, which
+is what makes them the work that fills a gap between phases now.
+
 ## 12.10 Capacity
 
 - At most one side track besides track C is active at a time. Three
@@ -1178,14 +1217,18 @@ the integration.
   phase 3, because that is where kernel panics start. Tracks E and G are
   done, track C has T1 to T7 and the RSA steps R1 to R6 behind it, and
   track D has D1 to D9 behind it, so what is left of either is T8 and
-  D10, which are one integration and are not scheduled. A driver became
+  D10, which are one integration and are not scheduled. The document
+  toolchain of 12.8.3 came after Phase 7 and outside this order, which it
+  could do because no phase and no track waits on it. A driver became
   foreseeable with Phase 7, which puts a console driver at ring three, so
   track F is the side track that is open: `virtio-queue` is done and
   `fs-fat` is not.
-- `fs-fat` waits for the boot image work of Phase 7. It moves the
-  structural logic out of `crates/tools/xtask/src/image`, and the tar
+- `fs-fat` waited for the boot image work of Phase 7, because it moves
+  the structural logic out of `crates/tools/xtask/src/image` and the tar
   archive that phase adds to the boot image lands in the same directory;
-  two hands in one refactoring is the one avoidable collision here.
+  two hands in one refactoring is the one avoidable collision here. That
+  phase is implemented and `image/archive.rs` is in place, so the wait is
+  over.
 - The pulled-forward work of 12.9 fills short gaps, because it needs no
   new design.
 
@@ -1194,14 +1237,18 @@ the integration.
 Each item below would pass the admission test and has no consumer in the
 current plan. They are listed so that they do not return as ideas.
 
-DEFLATE and gzip; a VT100 terminal emulator and a line editor; a JSON
-parser beyond the QMP subset the xtask needs; the TLS server role; USB;
-compression or encryption of the boot image.
+gzip; a VT100 terminal emulator and a line editor; a JSON parser beyond
+the QMP subset the xtask needs; the TLS server role; USB; compression or
+encryption of the boot image.
 
-Two items left this list rather than returning as ideas. IPv6 gained a
+Three items left this list rather than returning as ideas. IPv6 gained a
 consumer and became step D4 (D-69). The bignum crate that RSA
 verification needs gained one too and became `crypto-bignum` in step R1
-of document 11.
+of document 11. And DEFLATE gained one when the PDF writer needed the
+filter a PDF calls `FlateDecode`: it is `audhsos-deflate` of 12.8.3.
+What stays on the list is gzip, which is the same compressed format under
+a different header and a different checksum, and which nothing here reads
+or writes.
 
 ## 12.12 Risks
 

@@ -437,7 +437,7 @@ Phase 4. G3 came after Phase 7 and has no phase waiting on it: nothing of
 the system is built from it, and nothing of the checks descends into it
 beyond the host tests and the coverage gate every host crate has.
 
-Tests: catalog 6.6.53.
+Tests: catalog 6.6.53 and 6.6.58.
 
 ## 8.22 Capacity for parallel work
 

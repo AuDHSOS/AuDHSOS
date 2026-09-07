@@ -5,6 +5,23 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- The two documents the pass of 0.1.0 did not reach. 12 was written before
+  the documentation tool existed and still said so: the tooling track had
+  no step for it, the inventory of 12.4 counted track G as fuzz support and
+  symbolization alone, and 12.11 kept DEFLATE on the list of what is
+  deliberately not started, three commits after `audhsos-deflate` was
+  written for the filter a PDF calls `FlateDecode`. Track G now has a step
+  12.8.3 for the six crates, and 12.11 records DEFLATE as the third item to
+  have left that list by gaining a consumer, with gzip staying on it. Two
+  further statements of 12 that Phase 7 had overtaken: the allocator of
+  `user-rt` and the encodings of `user-proto` are no longer work that may
+  be pulled forward, because the phase wrote them; and `fs-fat` no longer
+  waits for the boot image work of that phase, which is what left it the
+  one open side track. 06 gained the catalog item 6.6.58 for the toolchain,
+  which the track had been citing 6.6.53 for, and 08 8.21 now names both.
+
 ## [0.1.0] - 2026-09-07
 
 The first release. A capability-based microkernel that boots on QEMU `q35`
