@@ -73,7 +73,7 @@ the sections it points to.
   `test-strategies`. Name tests `<subject>_<condition>_<expected>`. Every
   applicable item of the edge-case catalog gets a test; a phase is not done
   before that.
-- **Coverage thresholds** (90 percent lines, 85 percent branches) apply to
+- **Coverage thresholds** (91 percent lines, 86 percent branches) apply to
   every host-testable crate. Restructure product code to remove
   unreachable branches instead of lowering thresholds.
 - **Target crates** (built for `x86_64-unknown-none` or

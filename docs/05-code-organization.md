@@ -14,7 +14,10 @@ AuDHSOS/
 ├── CHANGELOG.md
 ├── rustfmt.toml
 ├── docs/                      this document set and the decision register
-│   └── rfc/                   the standards, verbatim, with their checksums (D-59)
+│   ├── rfc/                   the RFCs, verbatim, with their checksums (D-59)
+│   ├── oasis/                 what OASIS publishes, the same way (D-100)
+│   ├── w3c/                   what the W3C publishes, the same way
+│   └── ecma/                  what Ecma International publishes, the same way
 ├── crates/
 │   ├── abi/                   audhsos-abi: syscall table, errors, rights, message layout, boot image header, boot information, address constants
 │   ├── elf/                   audhsos-elf: ELF64 parser producing validated load segments
@@ -23,6 +26,7 @@ AuDHSOS/
 │   ├── sync/                  audhsos-sync: Global<T> and Preset<T> cells (unsafe allowed)
 │   ├── time/                  audhsos-time: UnixTime, CivilTime, Instant, Duration (document 12)
 │   ├── encoding/              audhsos-encoding: Base64, hex, PEM (document 12)
+│   ├── deflate/               audhsos-deflate: the DEFLATE format of RFC 1951 in the zlib wrapper of RFC 1950
 │   ├── collections/           audhsos-collections: fixed-capacity containers over indices (document 12)
 │   ├── symbols/               audhsos-symbols: ELF symbol table and DWARF line lookup (document 12)
 │   ├── drivers/
@@ -93,7 +97,12 @@ AuDHSOS/
 │   │   ├── http/              net-http: HTTP/1.1 client encoding and parsing
 │   │   └── stack/             net-stack: interface, demultiplexing, poll
 │   └── tools/
-│       └── xtask/             build, image (GPT + FAT32 writer, CRC32), run, test, lint, check-layering, check-deps, unsafe-budget, fuzz, coverage; policy tables
+│       ├── xtask/             build, image (GPT + FAT32 writer, CRC32), run, test, lint, check-layering, check-deps, unsafe-budget, fuzz, coverage; policy tables
+│       ├── markdown/          doc-markdown: the Markdown parser of this repository's documents
+│       ├── html/              doc-html: the HTML parser of the standards this repository holds
+│       ├── svg/               doc-svg: the SVG figures of those documents, as marks of a page
+│       ├── pdf/               doc-pdf: a PDF 1.7 writer, pages, fonts, outline
+│       └── docpdf/            the tool `xtask pdf` starts: every document as a PDF
 ├── fuzz/                      fuzz target crates and corpora
 ├── research/                  source of other projects, kept to be read; the checks never descend into it
 ├── .claude/                   the coding agent: `settings.json` is tracked, `worktrees/` holds a checkout per worktree session; the checks never descend into it
@@ -111,16 +120,17 @@ AuDHSOS/
 | `audhsos-time` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
 | `audhsos-encoding` | 0 | all | no | yes, fuzz | `test-support` behind the feature `test-strategies` |
 | `audhsos-collections` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
+| `audhsos-deflate` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
 | `kernel-types` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-x86-tables` | 1 | all | no | yes | - |
 | `kernel-acpi` | 1 | all | no | yes, fuzz | `kernel-types`; `test-support` as a dev-dependency |
 | `kernel-hal-api` | 1 | all | no | doubles are tested | `kernel-types`; features `test-doubles`, `port-io` |
 | `driver-uart16550` | 1 | all | no | yes | - (feature `test-doubles`) |
-| `driver-i8042` | 1 | all | no | yes, fuzz | - (feature `test-doubles`) |
-| `gfx` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
+| `driver-i8042` (Phase 10) | 1 | all | no | yes, fuzz | - (feature `test-doubles`) |
+| `gfx` (Phase 9) | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf`; `test-support` as a dev-dependency |
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
-| `fs-fat` | 1 | all | no | yes | `audhsos-time`, `audhsos-collections`; feature `test-doubles` |
+| `fs-fat` (document 12, not started) | 1 | all | no | yes | `audhsos-time`, `audhsos-collections`; feature `test-doubles` |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-objects` | 2 | all | no | yes | `kernel-types`, `kernel-mm`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-sched` | 2 | all | no | yes | `kernel-objects`, `audhsos-abi` |
@@ -162,7 +172,12 @@ AuDHSOS/
 | `net-stack` | n5 | all | no | yes | every `net-` crate, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
 | `fuzz-support` | dev | host | allowlisted | yes, and Miri over `counters` and `sancov`, which hold its `unsafe` | - |
-| `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `fs-fat`, `audhsos-encoding`, `audhsos-symbols` |
+| `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `audhsos-symbols`, `user-loader` |
+| `doc-markdown` | host | host | no | yes | - |
+| `doc-html` | host | host | no | yes | `doc-markdown` |
+| `doc-pdf` | host | host | no | yes | `audhsos-deflate` |
+| `doc-svg` | host | host | no | yes | `doc-html`, `doc-pdf` |
+| `docpdf` | host | host | no | yes, without a coverage gate, as `xtask` | `doc-html`, `doc-markdown`, `doc-pdf`, `doc-svg` |
 
 ## 5.3 Layering rules
 
@@ -340,17 +355,20 @@ binaries (`cargo`, `rustc`, `rustfmt`, `cargo-clippy`, `cargo-miri`,
 |------------|---------|
 | `build [--release]` | build the loader, the kernel, the userland binaries, and the boot image |
 | `image` | assemble the boot image (root task ELF plus tar archive) and the disk image (GPT, FAT32 file system, loader, kernel, boot image) |
-| `run [--display]` | boot the system in QEMU with the serial console on the terminal; `--display` opens QEMU's display window instead of `-display none` |
+| `run [--release] [--display]` | boot the system in QEMU with the serial console on the terminal; `--display` opens QEMU's display window instead of `-display none` |
 | `qemu-runner <elf>` | the Cargo runner for the kernel target: wraps a test kernel into a disk image, runs QEMU with a timeout, parses the serial protocol, maps the exit status |
-| `test [--host] [--qemu] [--e2e]` | run the selected test levels; default runs all |
+| `build-user-tests` | build the user programs the test images run and turn each into a flat binary under `target/user-tests/` |
+| `test [--host] [--qemu] [--e2e] [--release]` | run the selected test levels; default runs the host level; `--release` builds the end-to-end run from the release profile |
 | `lint` | `rustfmt --check`, `clippy` with the workspace lint set, SPDX header check |
 | `check-layering` | verify the layering table against `cargo tree`, verify `forbid(unsafe_code)` in every logic crate, reject assembly files, verify the adapter-function-to-QEMU-test tables |
 | `check-deps` | verify that `Cargo.lock` and all manifests reference workspace members only |
 | `unsafe-budget` | count `unsafe` blocks and `asm!` sites per adapter crate against the policy table |
-| `fuzz [--target <name>] [--time <s>]` | build fuzz targets with `-Zsanitizer=fuzzer` and run them |
+| `fuzz [--target <name>] [--time <s>] [--regression] [--merge <directory>] [--minimize <file>]` | build fuzz targets with `-Zsanitizer=fuzzer` and run them; `--regression` replays the stored corpus instead, which is what `check` runs |
 | `coverage` | build host tests with `-C instrument-coverage`, merge profiles with `llvm-profdata`, export LCOV with `llvm-cov`, enforce thresholds |
 | `miri` | run the tests of the `unsafe` modules of the host-executable adapter crates under Miri, after checking that no module holding `unsafe` is left out |
 | `doc` | build documentation with warnings as errors |
+| `pdf [options]` | every Markdown document of `docs/` and every standard beside them as a PDF under `target/pdf/`; the options go to the tool, which explains them with `--help` |
+| `symbolize <elf> <address>...` | the function, file, and line of every address, which a failing QEMU run is reported through |
 | `check [--quiet]` | everything CI runs, in CI order; `--quiet` leaves one line per step and prints the output of a step only when it fails |
 
 A subcommand refuses an option it does not know, so a mistyped

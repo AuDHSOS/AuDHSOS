@@ -6,10 +6,13 @@ They describe the target design, the rules the code must follow, and the
 order in which the system is built.
 
 Status: every entry of the decision register is decided; no open
-decisions remain. Phases 0 to 3 of the roadmap are implemented; Phase 4
-is next. The cryptography and TLS track of document 11 is specified and
-implemented through step T2. The parallel tracks of document 12 are
-specified and not yet started.
+decisions remain. Phases 0 to 8 of the roadmap are implemented and
+released as 0.1.0; Phase 9 is next. The cryptography and TLS track of
+document 11 is implemented through step T7 and R1 to R6; its integration
+step T8 is not scheduled. Of the tracks of document 12, D1 to D9 of the
+network stack, all of the shared foundations, `virtio-queue`, and the
+tooling are implemented; `fs-fat` and the two integration steps are not
+started.
 
 ## Reading order
 
@@ -27,6 +30,13 @@ specified and not yet started.
 | 10 | [Implementation plan](10-implementation-plan.md) | Exactly what to build in each remaining phase: crates, types, algorithms, tests, acceptance |
 | 11 | [Cryptography and TLS](11-cryptography-and-tls.md) | The TLS 1.3 client track: primitives, certificates, protocol, tests, order of work |
 | 12 | [Work parallel to the kernel phases](12-parallel-work.md) | The admission test for parallel work; the network stack, the shared foundations, the device logic, the tooling; what may be pulled forward |
+
+Beside the documents lie the standards they cite, verbatim and with their
+checksums, one directory per body that publishes them: [rfc/](rfc) for the
+RFCs (D-59), [oasis/](oasis) for what OASIS publishes (D-100),
+[w3c/](w3c), and [ecma/](ecma). Each directory has a `README.md` naming
+what belongs there and how it is fetched. Nothing under them is compiled,
+linked, or read at run time.
 
 ## Conventions for these documents
 

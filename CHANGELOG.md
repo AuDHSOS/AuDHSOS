@@ -35,6 +35,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   that separate `int` from `syscall` on a processor. A second entry path
   with its own stack switch and three model-specific registers is not taken
   on evidence this machine cannot produce.
+- Every document read against the code, and the differences fixed: the
+  crate catalog of 05 5.2, which was missing `audhsos-deflate` and the five
+  crates of the documentation tool and named three crates that do not exist
+  yet without saying so; the repository layout of 05 5.1 and the xtask
+  subcommands of 05 5.7; the allowlist of 04 4.3, which was missing
+  `user-programs`; the HAL trait table of 03 3.2, which named five traits
+  the code does not have and missed six it does; the userland table of
+  02 2.10, which still had five crates that D-97 made binaries of one; the
+  saved context of 02 2.5.1 and the boot step that starts the programs; the
+  coverage thresholds, which stood at 90 and 85 in two documents and at 91
+  and 86 in the policy table; the flat-binary claim of 07 7.2, which D-92
+  had made false; the status lines of the roadmap and of `docs/README.md`;
+  and the tooling track of 08 8.21, which had no step for the documentation
+  tool that exists.
 - The unsafe budgets of `kernel-hal-x86_64` (144 to 145 sites, 27 to 28
   assembly sites) and of `user-test-programs` (66 to 78), which is what the
   measurement costs (D-101). Every other budget is what the crate holds,

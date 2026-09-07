@@ -88,8 +88,7 @@ the disk image writer (GPT, FAT32, files) in the xtask; `kernel-hal-x86_64`
 with the privileged instruction wrappers, GDT, TSS with double-fault stack,
 IDT, exception handlers, `driver-uart16550` over direct port I/O, test
 exit, boot information validation; `kernel-test-harness`;
-`kernel-core::boot` generic over `Platform`, `Traps`, `DebugConsole`,
-`TestExit`; xtask `image`, `run`, `qemu-runner`, `test --qemu`; CI QEMU
+`kernel-core::boot` over `Platform`, `DebugConsole`, and `TestExit`; xtask `image`, `run`, `qemu-runner`, `test --qemu`; CI QEMU
 job.
 
 Tests: catalog 6.6.13 (ELF items), 6.6.14, 6.6.15, 6.6.16 (descriptor
@@ -158,7 +157,7 @@ Phase 6.
 
 ## 8.9 Phase 7: Userland foundation
 
-Status: in progress.
+Status: implemented.
 
 Deliverables: `user-sys-x86_64`, `user-rt` with the safe allocator,
 `user-proto`, `user-loader`, `server-init`, `server-name`,
@@ -430,10 +429,13 @@ Status: implemented.
 |------|-------|------|-----------|
 | G1 | `fuzz-support` | S | implemented: the entry glue, the `fuzz_target!` macro, the corpus replay, the `elf`, `boot_image_header`, and `boot_info` targets, and `fuzz --regression` as a step of `check`. Track C added `der`, `x509`, `tls_record`, `tls_handshake`, and — with the RSA steps R1 to R6 — `rsa` on top of it |
 | G2 | `audhsos-symbols` | M | implemented: the symbol table, the DWARF 4 and 5 line programs, `xtask symbolize`, and the automatic report on a failing QEMU run |
+| G3 | `doc-markdown`, `doc-html`, `doc-svg`, `doc-pdf`, `docpdf`, `audhsos-deflate` | L | implemented: every document of `docs/` and every standard beside them as a PDF under `xtask pdf`, with a Markdown and an HTML parser, an SVG reader, a PDF 1.7 writer, and the DEFLATE compressor of RFC 1951 in the zlib wrapper of RFC 1950 that its streams are written through |
 
 G2 was worth having before Phase 3, because that is where kernel panics
 begin to cost time. It came after it instead, and is in place for
-Phase 4.
+Phase 4. G3 came after Phase 7 and has no phase waiting on it: nothing of
+the system is built from it, and nothing of the checks descends into it
+beyond the host tests and the coverage gate every host crate has.
 
 Tests: catalog 6.6.53.
 

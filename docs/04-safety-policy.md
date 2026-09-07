@@ -37,6 +37,7 @@ device register are operations the Rust language can only express as
 | `audhsos-sync` | `Global<T>` and `Preset<T>`: two `Sync` cells with a runtime borrow flag for kernel and userland global state, the first initialized once at run time, the second `const`-initialized so that a large value reaches the `.bss` without travelling over a stack (D-66) | none |
 | `user-sys-x86_64` | the system call trap instruction, `_start`, the IPC buffer of the thread as a reference | one `asm!` statement: `int 0x80` |
 | `user-test-programs` | what each program does on purpose: a privileged instruction, a read of a kernel address, a write where nothing is mapped, the volatile reads and writes of the page a program shares with the test, and the calls of `user-sys-x86_64` | one `asm!` statement: `hlt`, in the program whose point it is |
+| `user-programs` | the binaries of the userland: the volatile reads and writes of the buffers a program shares with the kernel and with its children, and the calls of `user-sys-x86_64` (D-97) | none |
 | `fuzz-support` (host only) | the fuzzing engine's boundary to the coverage instrumentation: the callbacks the compiler emits calls to, and the blocks that turn the counter ranges the linker placed into slices (D-63) | none |
 
 No other crate may contain `unsafe`. Adding a crate to this list requires a

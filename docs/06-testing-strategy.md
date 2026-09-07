@@ -92,10 +92,11 @@ Locally every one of these levels is started through the wrapper scripts of
   `-C instrument-coverage -Z coverage-options=branch`, merges the profiles
   with `llvm-profdata`, and exports LCOV with `llvm-cov`, both from the
   `llvm-tools-preview` component. Files under `src/tests/` are excluded, so
-  the thresholds apply to product code only. Thresholds: 90 percent of
-  lines and 85 percent of branches per gated crate (every crate except
-  `xtask`, which is reported only). CI fails below the thresholds.
-  Uncovered lines must be justified in review.
+  the thresholds apply to product code only. Thresholds: 91 percent of
+  lines and 86 percent of branches per gated crate. A crate that is built
+  for a target rather than for the host is not gated, and neither are
+  `xtask` and `docpdf`, which are reported only. CI fails below the
+  thresholds. Uncovered lines must be justified in review.
 - QEMU coverage is not measured. Each adapter crate keeps a table that maps
   every public function to at least one QEMU test. `cargo xtask
   check-layering` verifies that every function and every test named in the
