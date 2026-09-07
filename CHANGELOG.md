@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Two roles of the startup message, `AuxInterrupt` and `InputServer`
+  (D-109). A driver of a controller with two lines is given the second
+  interrupt object under `AuxInterrupt` the way it is given the first under
+  `Interrupt`, and a program that listens is given the badged endpoint of
+  the input server the way one that draws is given that of the display
+  server. `user_rt::Startup` gains a field for each.
 - `server-display` as a process and `app-paint` as its first client. The
   root task makes the framebuffer of `system_info` into a device memory
   object, hands it and the mode to the display server, and starts both; the

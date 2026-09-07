@@ -134,6 +134,8 @@ roles! {
     FramebufferGeometry = 13, value => "The width of the framebuffer in the high half of the word and its height in the low half. It comes with `Framebuffer`.",
     FramebufferLine = 14, value => "The pixels from the start of one row of the framebuffer to the start of the next in the high half of the word, and the code of the pixel format in the low half. It comes with `Framebuffer`.",
     DisplayServer = 15, handle => "The endpoint of the display server, badged with what that server is to know this process by. A program that draws receives one; a program that finds the server by name instead receives an endpoint that names nobody, and the server refuses it.",
+    AuxInterrupt = 16, handle => "An interrupt object for the second line of a controller the process serves. The driver of the PS/2 controller receives one for the mouse beside the `Interrupt` of the keyboard; a driver that serves one line receives none (D-109).",
+    InputServer = 17, handle => "The endpoint of the input server, badged with what that server is to know this process by. A program that listens receives one, exactly as a program that draws receives `DisplayServer`, and for the same reason (D-109).",
 }
 
 /// Why a startup message could not be read.
