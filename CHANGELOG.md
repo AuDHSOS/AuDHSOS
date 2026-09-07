@@ -5,6 +5,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- The coverage gate of `fuzz-support` no longer turns on thread
+  scheduling. Whether the input in progress has outrun its limit was
+  decided in the body of the watchdog thread, so whether that thread woke
+  before the test binary ended decided whether the branch was covered: the
+  branch gate of 86 percent was missed in two of seven measured runs
+  (85.93 percent) and met in the other five (86.23 percent). The decision
+  is now `outran` and `tick`, functions of three numbers the tests decide,
+  and the thread only calls them.
+
 ## [0.1.0] - 2026-09-07
 
 The first release. A capability-based microkernel that boots on QEMU `q35`

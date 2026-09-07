@@ -555,6 +555,31 @@ pub fn name_of(bytes: &[u8]) -> String {
     format!("{low:016x}{high:016x}")
 }
 
+/// Whether the input that began at `began` had outrun `limit` by `now`,
+/// all three in milliseconds since the process started. A run that has not
+/// begun and a run without a limit are both written as zero and outrun
+/// nothing.
+pub(crate) const fn outran(began: u64, limit: u64, now: u64) -> bool {
+    began != 0 && limit != 0 && now.saturating_sub(began) > limit
+}
+
+/// One look at the clock: the process ends when the input in progress has
+/// outrun its limit.
+///
+/// It takes the three numbers instead of reading them, so that a test
+/// decides them. The decision used to stand in the body of the watchdog
+/// thread, where whether it ran at all before the process ended was a
+/// matter of scheduling: the branch was covered in some runs of the test
+/// binary and not in others, and the coverage gate of this crate turned on
+/// it.
+pub(crate) fn tick(began: u64, limit: u64, now: u64) {
+    if outran(began, limit, now) {
+        eprintln!("ERROR: an input took longer than {limit} ms");
+        let _ = std::io::stderr().flush();
+        std::process::abort();
+    }
+}
+
 /// Starts the thread that ends a run whose input will not finish.
 fn watchdog() {
     static STARTED: AtomicU64 = AtomicU64::new(0);
@@ -566,16 +591,11 @@ fn watchdog() {
         .spawn(|| {
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(WATCHDOG_INTERVAL_MS));
-                let began = RUN_BEGAN.load(Ordering::Relaxed);
-                let limit = RUN_LIMIT.load(Ordering::Relaxed);
-                if began == 0 || limit == 0 {
-                    continue;
-                }
-                if now().saturating_sub(began) > limit {
-                    eprintln!("ERROR: an input took longer than {limit} ms");
-                    let _ = std::io::stderr().flush();
-                    std::process::abort();
-                }
+                tick(
+                    RUN_BEGAN.load(Ordering::Relaxed),
+                    RUN_LIMIT.load(Ordering::Relaxed),
+                    now(),
+                );
             }
         });
 }

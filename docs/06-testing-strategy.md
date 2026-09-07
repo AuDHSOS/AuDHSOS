@@ -1602,6 +1602,12 @@ done until every applicable item has a test. Items are added, never removed.
   unchanged, including the empty slice; the regression list replays every
   stored corpus file; Miri covers the counter registry and the sanitizer
   callbacks, which is where the crate's `unsafe` is (D-76).
+- The watchdog's decision: a run that has not begun and a run without a
+  limit outrun nothing; an input inside its limit and one past it are told
+  apart; a tick inside the limit lets the process run on. The decision is a
+  function of three numbers and not the body of the watchdog thread, so its
+  coverage does not depend on whether that thread woke before the process
+  ended.
 - Symbol table: an address inside a function, at its first byte, at its
   last byte, and one past it; an address in no function; a symbol that is
   not a function; the narrowest of two functions that enclose each other;

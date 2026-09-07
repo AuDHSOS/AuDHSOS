@@ -16,7 +16,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::engine::{name_of, run};
+use crate::engine::{name_of, outran, run, tick};
 
 use super::{GLOBALS, region_at, register_counters};
 
@@ -488,4 +488,29 @@ fn a_run_that_keeps_the_value_profile_still_finds_what_it_reaches() {
     );
     assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::SUCCESS));
     drop(guard);
+}
+
+#[test]
+fn outran_before_a_run_begins_is_false() {
+    assert!(!outran(0, 100, 1_000));
+}
+
+#[test]
+fn outran_without_a_limit_is_false() {
+    assert!(!outran(10, 0, 1_000));
+}
+
+#[test]
+fn outran_inside_the_limit_is_false() {
+    assert!(!outran(10, 100, 110));
+}
+
+#[test]
+fn outran_past_the_limit_is_true() {
+    assert!(outran(10, 100, 111));
+}
+
+#[test]
+fn a_watchdog_tick_inside_the_limit_lets_the_process_run_on() {
+    tick(10, 100, 110);
 }
