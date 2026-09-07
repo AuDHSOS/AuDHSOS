@@ -166,6 +166,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- Phase 7 is implemented, and the roadmap says so. 8.9 stood at
+  `in progress` while every deliverable it names was in the tree: the
+  userland crates, the three servers and the three applications, the root
+  task the kernel starts from an ELF of the boot image, the boot image with
+  its archive, and the handover of COM1. The full check passes over it,
+  end-to-end run included, and the two parsers the phase adds a target for
+  fuzz for a minute each without a finding. A status line is what a reader
+  goes by, so it is part of the phase and not a note beside it.
+
 - Every program of the userland is a binary of one crate rather than a
   crate of its own (D-97). Five manifests, five policy entries and five
   unsafe budgets for a few hundred lines of loop each buy nothing that the
