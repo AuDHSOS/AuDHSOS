@@ -19,6 +19,10 @@ qemu-system-x86_64 \
   -drive format=raw,file=<disk image> \
   -serial stdio \
   -display none \
+  -vga none \
+  -device VGA,edid=on,xres=1920,yres=1200 \
+  -fw_cfg name=opt/ovmf/PcdVideoHorizontalResolution,string=1920 \
+  -fw_cfg name=opt/ovmf/PcdVideoVerticalResolution,string=1200 \
   -no-reboot \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04
 ```
@@ -26,12 +30,31 @@ qemu-system-x86_64 \
 Accelerator: TCG. `-no-reboot` turns a triple fault into a QEMU exit, which
 the test runner reports as a crash.
 
-The default VGA device of the `q35` machine stays on the command line by
-omission; the firmware exposes it through the Graphics Output Protocol.
+The screen is 1920x1200, and it takes three of the lines above to get it.
+The default VGA device of the `q35` machine would be the same device, but
+its EDID cannot be given a size on the command line, so `-vga none` leaves
+the slot empty and `-device VGA` fills it again with the size named. The
+firmware offers a mode through the Graphics Output Protocol only when the
+adapter's EDID carries it, and it picks among the modes on offer by the two
+settings the firmware configuration device carries. Either half alone
+leaves the firmware on its own default of 1280x800. The mode costs
+1920 x 1200 x 4 = 9.2 MiB of the sixteen the adapter has.
+
+A height matters beyond the picture: the firmware draws its own text
+console into the mode it sets, and it needs the twenty-five rows of
+nineteen pixels a UEFI console has. Below four hundred seventy-five pixels
+the firmware never reaches its boot manager and nothing is loaded at all.
+
+Nothing in this system assumes the size. The loader reads the mode the
+firmware set (D-30), the kernel reports it, and the tests read it from that
+report.
+
 From Phase 9 on the test runner adds `-qmp unix:<socket path>,server,nowait`
 and injects input events and reads the screen through that socket.
 `cargo xtask run --display` replaces `-display none` with `-display cocoa`
-on macOS and `-display gtk` on Linux.
+on macOS and `-display gtk` on Linux. The run without a graphics adapter
+keeps `-vga none` and drops the three lines that follow it, which leaves
+the firmware without a Graphics Output Protocol.
 
 ### 3.1.2 Devices
 
