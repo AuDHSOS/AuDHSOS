@@ -12,6 +12,13 @@
 //! `2^31` apart, is the case a window of at most 65535 bytes can never
 //! produce.
 //!
+//! What a window cannot produce, a peer can write. An acknowledgment
+//! number is bounded by no window, so a segment may carry one exactly
+//! `2^31` past the number it is judged against, and `before` and `after`
+//! are then both false. A test written as two comparisons therefore has
+//! a third outcome, and whoever writes one has to say what happens in it
+//! rather than let a segment fall between the branches.
+//!
 //! This module is separate and table-driven in its tests because every
 //! other decision of the protocol rests on it: whether a segment is
 //! acceptable, whether an acknowledgment is new, and where a segment's

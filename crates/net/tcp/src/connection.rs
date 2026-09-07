@@ -873,7 +873,16 @@ impl Connection<'_> {
         if !self.state.is_open() || self.state == State::Listen {
             return None;
         }
-        if self.syn_outstanding() {
+        // `resend_syn` is asked about beside `syn_outstanding`, and not
+        // folded into it, because the two are different claims. The first
+        // says the peer did not hear this end's `SYN` and the answer is
+        // owed again; the second says this end's own `SYN` has not been
+        // acknowledged yet. A connection can owe the answer without the
+        // second holding — `SND.UNA` moves off `ISS` on an acknowledgment
+        // that reaches `SYN-RECEIVED` without completing the open — and a
+        // flag `poll_at` reports but `decide` never reads is a wake-up
+        // that finds no work, for ever.
+        if self.syn_outstanding() || self.resend_syn {
             return self.decide_syn(now);
         }
         if self.retransmit_at.is_some_and(|at| now >= at) {
@@ -1251,7 +1260,12 @@ impl Connection<'_> {
         self.ack_at = None;
         self.persist_at = None;
         self.time_wait_until = None;
+        // Every mark that would have `poll_at` name an instant goes with
+        // the connection. A connection that has ended says nothing more,
+        // so a mark left standing here is a wake-up nothing answers.
         self.ack_now = false;
+        self.resend_syn = false;
+        self.fast_retransmit = false;
     }
 
     /// Enters `TIME-WAIT` and starts its timer.

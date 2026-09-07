@@ -79,6 +79,9 @@ name = "double_fault"
 [[test]]
 name = "panic"
 
+[[test]]
+name = "tick_window"
+
 [dependencies]
 audhsos-abi.workspace = true
 kernel-core.workspace = true

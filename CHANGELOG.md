@@ -7,6 +7,57 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- A system call made by a user thread of a test image can no longer do
+  nothing at all. `support::answer` read the memory and the machine out of
+  their cells and answered `false` when either was already borrowed — no
+  status in the caller's buffer, no object touched, no thread ended. The
+  image's own thread holds those cells while it builds a process, and it
+  is not inside a gate while it does: after `start_timer` it runs with
+  interrupts on. A tick landing there switched the processor to a runnable
+  user thread and left the cell borrowed by a thread that was no longer
+  running, so that thread's `thread_exit` did nothing, it never gave the
+  processor up, and the image never came back — sixty seconds of silence
+  and no summary line, which is what the `ipc` image did about one run in
+  six. `run_threads` now switches nobody while the thread that would leave
+  holds either cell and lets the next tick try, which is what the tick
+  hook of `preemption.rs` already did for the same reason; and a call that
+  finds a cell borrowed says which one and stops the run rather than
+  vanishing. The new `tick_window` image does the dangerous thing on
+  purpose: without the fix it wedged in about three runs of four, with it
+  none of 150.
+
+- A connection that owes its `SYN` with `ACK` again sends it instead of
+  waking its caller for ever. `poll_at` reported the mark
+  `on_repeated_syn` sets, but `decide` read the mark only while this end's
+  own `SYN` was still unacknowledged — and `SND.UNA` moves off `ISS` on an
+  acknowledgment that reaches `SYN-RECEIVED` without completing the open.
+  The caller was then told at every instant that there was work and handed
+  nothing, which is a poll loop that never sleeps. `decide` asks about the
+  mark beside that condition now, and a connection that has ended clears
+  the marks it was carrying, so `poll_at` on a closed connection names no
+  instant either. Found by the `tcp_segment` fuzz target once its
+  assertion said what the design promises.
+
+- The `tcp_segment` fuzz target asserts the invariant `net-tcp` has rather
+  than one it never made. It required every open connection to name an
+  instant, which is the converse of what 6.6.46 states and is false for
+  four states: `LISTEN`, an idle `ESTABLISHED`, `CLOSE-WAIT` and
+  `FIN-WAIT-2` have no timer running and owe none, since this crate has no
+  keepalive (D-50) and no user timeout. What the target checks now is the
+  promise itself — that `poll_at` names no instant at which `poll` would
+  produce nothing — and that assertion found a real defect in its first
+  minute.
+
+- The `ipc` test image no longer wedges about one run in five. The
+  interrupt test started the interval timer before it built the driver, so
+  a tick could land while the image was halfway through making a process
+  or a thread and hand the processor to a user thread an earlier test had
+  left runnable. The image never got it back: the machine spun in that
+  thread's system call and wrote nothing further, which reached the runner
+  as a crash with no summary line. The timer starts last now, when the
+  whole run is in place, which is the rule `preemption.rs` already stated
+  for its own run.
+
 - A cut line carries the mark it was documented to carry. `user_rt::Line`
   said a line that does not fit "is cut and says so", and `ELLIPSIS` stood
   public beside it as "the mark a cut line ends with" — and nothing ever

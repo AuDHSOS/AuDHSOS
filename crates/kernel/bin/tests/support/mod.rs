@@ -897,6 +897,27 @@ fn stack_frame_below(top: VirtAddr) -> PhysFrame {
     .unwrap_or_else(|| testing::fail(format_args!("the kernel memory is not reachable")))
 }
 
+/// Whether the thread that would leave the processor is holding neither
+/// the memory nor the machine.
+///
+/// This image's own thread is not inside a gate while it works: once
+/// [`start_timer`] has run, it builds processes and threads with
+/// interrupts on, and `create_process`, `share_page` and `add_thread`
+/// take the memory out of its cell for the length of real work. A switch
+/// from there leaves the cell borrowed by a thread that is no longer
+/// running, and the first system call of whoever got the processor finds
+/// it gone — [`answer`] can then do nothing at all, so a `thread_exit`
+/// never ends its thread, the thread never gives the processor up, and
+/// the image never comes back. That is sixty seconds of silence with no
+/// summary line, and it is what the `ipc` image did about one run in six.
+///
+/// A tick that finds a cell held switches nobody and lets the next tick
+/// try, a millisecond later. The tick hook of `preemption.rs` already
+/// leaves work for the next tick on the same grounds.
+fn nothing_is_held() -> bool {
+    with_memory(|_| ()).is_some() && with_machine(|_| ()).is_some()
+}
+
 /// Gives the processor to whichever thread should run, and returns when
 /// the kernel is back on the stack it was called on.
 ///
@@ -908,13 +929,18 @@ fn stack_frame_below(top: VirtAddr) -> PhysFrame {
 /// ever reaching user mode again.
 ///
 /// A call that finds nothing to switch to returns at once, which is how
-/// the idle thread learns that the run is over.
+/// the idle thread learns that the run is over. So does one made while
+/// the thread that would leave holds the memory or the machine — see
+/// [`nothing_is_held`].
 ///
 /// `standing_on` names the thread whose kernel stack the processor stands
 /// on when the scheduler has already let go of it, which is what a thread
 /// that faulted looks like. Its context belongs in its own pool entry all
 /// the same, so that resuming the thread returns here.
 pub(crate) fn run_threads(standing_on: Option<ThreadId>) {
+    if !nothing_is_held() {
+        return;
+    }
     let Some((from, to, top)) = next_switch(standing_on) else {
         return;
     };
@@ -1078,7 +1104,7 @@ fn answer(
     let mut tables = window();
     let mut tlb = LocalTlb;
     let mut devices = devices;
-    with_memory(|memory| {
+    let outcome = with_memory(|memory| {
         with_machine(|machine| {
             let mut environment =
                 KernelEnvironment::<X86Entry, _, _, SerialConsole, DeviceAccess<'_>>::new(
@@ -1105,9 +1131,23 @@ fn answer(
             );
             reschedule
         })
-    })
-    .flatten()
-    .unwrap_or(false)
+    });
+    // A call that found either cell borrowed used to answer `false` and
+    // change nothing whatever: no status in the caller's buffer, no
+    // object touched, no thread ended. Silence is the worst of the
+    // answers a system call can give, and the hang it caused was read as
+    // a crash of the machine. `run_threads` keeps a switch from leaving a
+    // thread that holds either cell, so this cannot arise; if it ever
+    // does, the run says which cell it was and stops there.
+    match outcome {
+        Some(Some(reschedule)) => reschedule,
+        Some(None) => testing::fail(format_args!(
+            "a system call found the machine borrowed and would have done nothing"
+        )),
+        None => testing::fail(format_args!(
+            "a system call found the memory borrowed and would have done nothing"
+        )),
+    }
 }
 
 /// How many system call numbers [`watch_syscalls`] remembers. More than
