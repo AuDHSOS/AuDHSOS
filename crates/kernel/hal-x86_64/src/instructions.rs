@@ -126,6 +126,27 @@ pub fn interrupts_enabled() -> bool {
     read_flags() & (1 << 9) != 0
 }
 
+/// The time-stamp counter, which counts on since the processor was reset.
+///
+/// The instruction is not serializing: the processor may read the counter
+/// before an earlier instruction has retired and after a later one has
+/// begun, so a single difference of two reads is not a measurement. What
+/// this is for is the median of many, where that noise cancels and the
+/// figure that remains is the one
+/// [08-roadmap.md 8.10](../../../../docs/08-roadmap.md) records.
+#[must_use]
+pub fn read_tsc() -> u64 {
+    let low: u32;
+    let high: u32;
+    // SAFETY: reading the counter changes no register the caller holds and
+    // no memory; it is readable at every privilege level this kernel runs
+    // at, because nothing of it sets the time-stamp disable bit of `CR4`.
+    unsafe {
+        asm!("rdtsc", out("eax") low, out("edx") high, options(nomem, nostack, preserves_flags));
+    }
+    u64::from(low) | (u64::from(high) << 32)
+}
+
 /// The address the last page fault named.
 #[must_use]
 pub fn read_fault_address() -> u64 {

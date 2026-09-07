@@ -5,8 +5,9 @@ without external code.
 
 - Kernel mechanisms: address spaces, threads with scheduling, IPC,
   capabilities, interrupt forwarding. Everything else runs in userland.
-- No assembly files. `unsafe` only in five allowlisted adapter crates, each
-  block documented and budgeted.
+- No assembly files. `unsafe` only in the eight allowlisted adapter crates
+  of [the safety policy](docs/04-safety-policy.md), each block documented
+  and budgeted.
 - No dependencies outside this repository. Building needs the pinned Rust
   toolchain from `rust-toolchain.toml` and QEMU with its bundled UEFI
   firmware.

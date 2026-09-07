@@ -36,8 +36,11 @@ xtask check` passes.
 
 The kernel is linked with the static relocation model at `KERNEL_BASE`.
 Userland ELF binaries are linked statically at a fixed base address; the
-loader honors their program headers. The root task is converted to a flat
-binary with `llvm-objcopy` from `llvm-tools-preview`.
+loader honors their program headers, and so does the kernel, which reads
+the root task out of the boot image as an ELF (D-92). What is converted to
+a flat binary with `llvm-objcopy` from `llvm-tools-preview` are the user
+programs of the kernel test images: a test image maps the bytes it embeds
+at one address, with no loader in between.
 
 ## 7.3 Host tools
 

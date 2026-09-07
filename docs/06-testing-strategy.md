@@ -77,6 +77,12 @@ Locally every one of these levels is started through the wrapper scripts of
   success.
 - End-to-end test kernels carry a boot image with userland test programs.
   The programs report through the console driver in the same protocol.
+- A measuring image is a test kernel like every other, with `[bench]` lines
+  beside its test lines: `bench` reports what a system call round trip and
+  an IPC round trip cost in ticks of the time-stamp counter (08 8.10). Its
+  test cases assert that the measurement happened and say nothing about the
+  figures, because a threshold on a number an emulator produces would fail
+  for the load of the host and not for a change of this system.
 - A hang is a failure. There are no retries; a test that fails once without
   a code change is a bug to fix.
 
@@ -86,10 +92,11 @@ Locally every one of these levels is started through the wrapper scripts of
   `-C instrument-coverage -Z coverage-options=branch`, merges the profiles
   with `llvm-profdata`, and exports LCOV with `llvm-cov`, both from the
   `llvm-tools-preview` component. Files under `src/tests/` are excluded, so
-  the thresholds apply to product code only. Thresholds: 90 percent of
-  lines and 85 percent of branches per gated crate (every crate except
-  `xtask`, which is reported only). CI fails below the thresholds.
-  Uncovered lines must be justified in review.
+  the thresholds apply to product code only. Thresholds: 91 percent of
+  lines and 86 percent of branches per gated crate. A crate that is built
+  for a target rather than for the host is not gated, and neither are
+  `xtask` and `docpdf`, which are reported only. CI fails below the
+  thresholds. Uncovered lines must be justified in review.
 - QEMU coverage is not measured. Each adapter crate keeps a table that maps
   every public function to at least one QEMU test. `cargo xtask
   check-layering` verifies that every function and every test named in the

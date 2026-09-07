@@ -191,8 +191,14 @@ The serial output carries a line protocol that the runner parses:
 ```
 [test] <crate>::<name> ... ok
 [test] <crate>::<name> ... FAILED: <message>
+[bench] <crate>::<name> ... <ticks> ticks (n=<count>)
 [summary] passed=<n> failed=<m>
 ```
+
+A `[bench]` line reports a measurement and not a test: `<ticks>` is the
+median of `<count>` round trips, in ticks of the time-stamp counter, and
+the line counts towards neither the passed nor the failed total. An image
+that writes one writes its test lines and its summary like every other.
 
 Userland end-to-end tests use the same protocol through the console driver.
 
@@ -204,18 +210,27 @@ the first release.
 | Trait | Responsibility | `x86_64` adapter |
 |-------|----------------|------------------|
 | `Platform` | boot information: memory regions, boot image location, physical window offset, ACPI root pointer | validated `BootInfo` |
-| `Cpu` | halt, wait for interrupt, interrupt enable/disable with a guard type | `hlt`, `cli`, `sti` as project-defined `asm!` wrappers |
 | `InterruptController` | map a line to a vector, mask, unmask, end-of-interrupt, spurious handling | local APIC and I/O APIC register blocks |
 | `Timer` | start a periodic tick with a frequency, read the tick counter | local APIC timer calibrated with the PIT |
-| `Paging` | constants (levels, page size, canonical range), `FrameAccess`, `TlbControl`, `activate(root)` | page tables through the physical window, `invlpg`, `CR3` |
-| `Context` | build an initial user context, switch between kernel stacks, enter user mode | synthesized interrupt frame, naked context-switch function |
-| `Traps` | install the kernel's exception, interrupt, and system call handlers | project-defined GDT, TSS, IDT types; `lgdt`, `lidt`, `ltr` |
-| `DebugConsole` | write bytes (feature `debug-uart`) | `driver-uart16550` logic over direct port I/O |
-| `TestExit` | exit the machine with success or failure (feature `test-exit`) | `isa-debug-exit` |
-| `PortIo` | read and write 8/16/32-bit ports (feature `port-io`, `x86_64` only) | `in`, `out` wrappers |
+| `FrameAccess<T>` | a physical frame as a `&mut PageTable` of entry type `T` | the physical window |
+| `FrameBytes` | a physical frame as bytes, and a range of frames as a slice | the same window |
+| `TlbControl` | flush one page, flush all | `invlpg`, `CR3` reload |
+| `AddressSpaceControl` | make an address space the one the processor translates through, and name the active one | `CR3` |
+| `FrameSource` | supply and take back frames for page tables | the kernel frame allocator |
+| `DebugConsole` | write bytes | `driver-uart16550` logic over direct port I/O (feature `debug-uart` of the adapter) |
+| `TestExit` | exit the machine with success or failure | `isa-debug-exit` (feature `test-exit` of the adapter) |
+| `PortAccess` | read and write 8/16/32-bit ports (feature `port-io`, `x86_64` only) | `in`, `out` wrappers |
+| `Devices` | what a system call that touches hardware is given: an `InterruptController` and a `PortAccess` at once | the two of them |
+
+What has no trait is what only the adapter can do at all and no logic crate
+ever calls through an interface: the privileged instructions, the
+descriptor tables, the context switch, and the trap entry are modules of
+`kernel-hal-x86_64` — `instructions`, `descriptors`, `context`, `traps` —
+and a second architecture writes its own. A trait exists where a logic
+crate or a test double stands on the other side of it.
 
 The `x86_64` adapter must not leak into the trait crate: no port I/O, no
-segment registers, no APIC concepts appear in the traits. The `PortIo`
+segment registers, no APIC concepts appear in the traits. The `PortAccess`
 trait is feature-gated.
 
 ## 3.3 Later targets

@@ -478,6 +478,17 @@ fn report_tests(
         report.passed(),
         report.failed()
     );
+    // A measurement is written by an image that passed, so it is printed
+    // here and not only in the output of a failure. The numbers of
+    // 08-roadmap.md 8.10 are read off these lines.
+    for measurement in &report.measurements {
+        note!(
+            "bench {}: {} ticks, the median of {}",
+            measurement.name,
+            measurement.ticks,
+            measurement.samples
+        );
+    }
     if run.timed_out {
         eprintln!(
             "the run was killed after {} seconds",

@@ -5,6 +5,66 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-07
+
+The first release. A capability-based microkernel that boots on QEMU `q35`
+through the project's own UEFI loader, and a userland above it: a root task
+that reads its programs out of the boot image, a name server, a memory
+server, and a console driver at ring three that owns COM1 and answers the
+interrupt of it. Nothing outside this repository is compiled into any of
+it. Beside the kernel phases stand a TLS 1.3 client with the primitives it
+needs, a sans-I/O network stack for both address families, and the tooling
+that checks and documents the whole of it.
+
+### Added
+
+- What the two round trips of this system cost (D-101). `bench` is a test
+  kernel like every other, and it measures from the one point a round trip
+  passes through exactly once: the entry of the system call gate. The
+  difference between two entries of the same call, made by a thread that
+  does nothing else in between, is one round trip — a `thread_yield` with
+  one runnable thread for the shorter figure, a call and its answer between
+  two user threads for the longer one. `instructions::read_tsc` is the one
+  `asm!` it needs, the `[bench]` line of 03 3.1.7 is what it writes, and
+  08 8.10 records what it wrote.
+- Three programs of `user-test-programs` for that measurement:
+  `bench_yield`, `bench_caller`, and `bench_replier`, each a loop around
+  one call and nothing else.
+- A call hook in the support module of the kernel test images: what an
+  image does at the entry of every system call a user thread makes. The
+  measuring image is the only one that sets one; every other image pays a
+  cell that is not there.
+
+### Changed
+
+- `int 0x80` stays the way into the kernel (D-102). D-15 left the `syscall`
+  instruction to be decided in Phase 8 by measurement, and the measurement
+  decides against it twice over: a call and its reply cost about eight
+  times a bare entry and return, so the entry instruction is a small part
+  of the work of an IPC; and the reference machine is an emulator whose
+  counter steps by a thousand ticks, which is far above the tens of cycles
+  that separate `int` from `syscall` on a processor. A second entry path
+  with its own stack switch and three model-specific registers is not taken
+  on evidence this machine cannot produce.
+- Every document read against the code, and the differences fixed: the
+  crate catalog of 05 5.2, which was missing `audhsos-deflate` and the five
+  crates of the documentation tool and named three crates that do not exist
+  yet without saying so; the repository layout of 05 5.1 and the xtask
+  subcommands of 05 5.7; the allowlist of 04 4.3, which was missing
+  `user-programs`; the HAL trait table of 03 3.2, which named five traits
+  the code does not have and missed six it does; the userland table of
+  02 2.10, which still had five crates that D-97 made binaries of one; the
+  saved context of 02 2.5.1 and the boot step that starts the programs; the
+  coverage thresholds, which stood at 90 and 85 in two documents and at 91
+  and 86 in the policy table; the flat-binary claim of 07 7.2, which D-92
+  had made false; the status lines of the roadmap and of `docs/README.md`;
+  and the tooling track of 08 8.21, which had no step for the documentation
+  tool that exists.
+- The unsafe budgets of `kernel-hal-x86_64` (144 to 145 sites, 27 to 28
+  assembly sites) and of `user-test-programs` (66 to 78), which is what the
+  measurement costs (D-101). Every other budget is what the crate holds,
+  to the site.
+
 ### Fixed
 
 - A system call made by a user thread of a test image can no longer do

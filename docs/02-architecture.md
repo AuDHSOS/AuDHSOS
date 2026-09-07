@@ -281,8 +281,11 @@ There is one implementation of every algorithm.
 Stored in the thread pool: process id, state, priority, remaining time
 slice, kernel stack id, IPC buffer frame, IPC state, fault information,
 queue links (indices), and the saved context, which is one word: the kernel
-stack pointer of the thread while it is not running, written and read
-through the HAL trait `Context` (D-67).
+stack pointer of the thread while it is not running (D-67). The adapter
+writes and reads that word: `kernel-hal-x86_64::context::prepare_user`
+builds the first one on a fresh kernel stack and `switch_to` exchanges two
+of them. No trait carries it, so no crate that touches a thread carries a
+type parameter for it.
 
 ### 2.5.2 States
 
@@ -436,8 +439,8 @@ through shared memory objects.
 - The system call table is one declarative macro in `audhsos-abi`. It
   generates numbers, names, argument counts, the kernel dispatcher, and the
   userland wrappers.
-- The `syscall` instruction path with register arguments is evaluated in
-  Phase 8 by measurement.
+- The `syscall` instruction path with register arguments was measured
+  against this one in Phase 8 and is not implemented (D-102).
 
 | Call | Object | Purpose |
 |------|--------|---------|
@@ -526,10 +529,16 @@ through shared memory objects.
     the thread.
 14. Idle thread on the boot stack; scheduler starts. From here on the kernel
     only reacts to interrupts and system calls.
-15. The root task parses the tar archive, loads the name server, the console
-    driver, and the memory server, and grants each its capabilities.
+15. The root task parses the tar archive and starts what it holds, in the
+    order the archive has them: the memory server, the name server, the
+    console driver, and then the applications, granting each the
+    capabilities it needs and no others.
 
 ## 2.10 Userland
+
+A program of the userland is a binary of `user-programs`; the policy each
+one runs on is a logic crate of its own, host-tested without a machine
+(D-97).
 
 | Crate | Content | `unsafe` |
 |-------|---------|----------|
@@ -537,11 +546,10 @@ through shared memory objects.
 | `user-rt` | typed handle newtypes with `Drop`, system call wrappers over the IPC buffer, message builder and parser, safe offset-based heap allocator, panic handler that reports over a log endpoint and exits, logging macros | no |
 | `user-proto` | message encodings for the name and console protocols, versioned labels | no |
 | `user-loader` | tar (ustar) reader; process creation from an ELF using `audhsos-elf` | no |
-| `server-init` | the root task: boot image parsing, starting servers, distributing capabilities | no |
 | `server-name` | registry: `register(name, endpoint)`, `lookup(name)`, with badge-based ownership | no |
 | `server-console` | 16550 UART driver: `driver-uart16550` register logic over `IoPortRange` system calls plus an `Interrupt`; `write(bytes)`, `read(max)` | no |
 | `server-memory` | allocation policy over memory objects: `allocate(len, alignment)`, `release`; zeroes every object before hand-out and immediately after return | no |
-| `app-hello` | end-to-end demonstration and test client | no |
+| `user-programs` | the seven binaries: `server-init`, the root task, which parses the boot image, starts the servers and hands out the capabilities; `server-name`, `server-console` and `server-memory` around the three logic crates above; and `app-hello`, `app-checks` and `app-faulter`, which are what the end-to-end run watches | allowlisted |
 | `gfx` (Phase 9) | framebuffer logic: pixel formats, filling, blitting, clipping, damage rectangles, the project's bitmap font, text rendering | no |
 | `server-display` (Phase 9) | owns the framebuffer `Device` memory object; surfaces backed by shared memory objects, `present` with damage rectangles, cursor | no |
 | `driver-i8042` (Phase 10) | i8042 controller and PS/2 device logic over the port access trait: controller initialization, scancode set 2 decoding, mouse packet parsing | no |

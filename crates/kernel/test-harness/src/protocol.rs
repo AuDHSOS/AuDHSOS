@@ -17,6 +17,12 @@ pub const TEST_PREFIX: &str = "[test] ";
 /// The prefix of the line that closes a run.
 pub const SUMMARY_PREFIX: &str = "[summary] ";
 
+/// The prefix of a line that reports one measurement.
+pub const BENCH_PREFIX: &str = "[bench] ";
+
+/// What follows the figure of a measurement.
+pub const TICKS: &str = " ticks";
+
 /// What separates a test name from its outcome.
 pub const SEPARATOR: &str = " ... ";
 
@@ -56,6 +62,24 @@ pub fn passed(console: &mut (impl DebugConsole + ?Sized)) {
 /// Closes a test line with the failing outcome and a message.
 pub fn failed(console: &mut (impl DebugConsole + ?Sized), message: fmt::Arguments<'_>) {
     emit(console, format_args!("{FAILED}{message}\n"));
+}
+
+/// Writes the line of one measurement: how many ticks the median of
+/// `samples` round trips took.
+///
+/// The shape is the one of a test line, so that a reader of the serial
+/// output finds the same grammar in both: a name, the separator, and what
+/// came of it.
+pub fn measurement(
+    console: &mut (impl DebugConsole + ?Sized),
+    name: &str,
+    ticks: u64,
+    samples: u32,
+) {
+    emit(
+        console,
+        format_args!("{BENCH_PREFIX}{name}{SEPARATOR}{ticks}{TICKS} (n={samples})\n"),
+    );
 }
 
 /// Writes the summary line.
