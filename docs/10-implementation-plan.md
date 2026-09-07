@@ -2576,10 +2576,52 @@ apart.
 
 ## 10.10 Phase 10: PS/2 input
 
+### 10.10.0 What the phase settles before the first line
+
+Four things this section asked for cannot be built as it said them, and the
+phase settles them before the first line.
+
+**One notification cannot carry two lines.** `interrupt_bind` refuses a
+notification that another interrupt already names, with
+`Error::AlreadyExists`, and `Notification::bound_interrupt` carries that
+check and nothing else: no other code reads the field, and destroying an
+interrupt does not clear it, so a notification whose interrupt is gone can
+never be bound again. The i8042 has one output buffer and two lines, and a
+driver that drained that buffer from two threads would race itself for the
+byte standing in it. D-108 drops the rule and the field: several interrupts
+may signal one notification, each on a bit of its own, which is what a
+watch already does beside an interrupt (D-106).
+
+**A driver with two lines needs two roles.** `Startup::read` refuses a role
+that appears twice, so `Role::Interrupt` carries the keyboard line and
+nothing further. D-109 adds `Role::AuxInterrupt` for the second device of a
+controller, and `Role::InputServer` for the badged endpoint a program that
+listens is given, as `Role::DisplayServer` is given to one that draws.
+
+**The server runs two threads.** A thread of this kernel waits on exactly
+one thing, and this server waits on its endpoint and on the interrupt
+notification both. It takes the shape of the console driver: the second
+thread owns the ports, drains the controller, and sends what it read to the
+first thread over the same endpoint under a badge of its own; the first
+thread owns the decoders, the subscribers, and the rings. Nothing is held
+by both, so nothing needs a lock.
+
+**The client of the end-to-end tests is a program of the archive**,
+`app-input` beside `app-paint`, and not a binary of `user-test-programs`:
+those carry the kernel's own QEMU tests and reach no userland server.
+
+That QEMU can inject the events is measured and not assumed. Version 11.1.1
+of the reference machine accepts `input-send-event` with `key`, `rel`, and
+`btn` events on a `q35` started with `-display none -vga none`, and `info
+mice` on such a machine names the QEMU PS/2 mouse as the device the pointer
+events reach. The i8042 is part of the machine; the command line needs no
+device for it.
+
 ### 10.10.1 Crate `driver-i8042` (`crates/drivers/i8042`)
 
-Layer 1 logic crate, `no_std`, `forbid(unsafe_code)`, no workspace
-dependencies, following the pattern of `driver-uart16550`: a trait
+Layer 1 logic crate, `Kind::Logic`, `Target::Host`, `no_std`,
+`forbid(unsafe_code)`, no workspace dependency and `test-support` as its
+only dev-dependency, following `driver-uart16550` line for line: a trait
 `Ports { read_data, read_status, write_data, write_command }` that the
 input server implements over `ioport_read` and `ioport_write`, and a
 scripted double `ScriptedPorts` behind the feature `test-doubles` that
@@ -2595,7 +2637,10 @@ replays status and data bytes and records writes. Modules:
   buffer, read the configuration byte, clear the interrupt and translation
   bits, self-test expecting `0x55`, port tests expecting `0x00`, enable the
   ports, reset the devices, set the interrupt bits. Every wait is bounded
-  by `MAX_POLLS` iterations and yields `Error::Timeout`.
+  by `MAX_POLLS` iterations and yields `Error::Timeout`. `Controller` also
+  carries the read side the driver uses afterwards: `take(&mut self) ->
+  Option<(u8, bool)>`, the byte in the output buffer and whether the `AUX`
+  bit routed it to the mouse, `None` for an empty buffer.
 - `keyboard.rs`: `Decoder` for scancode set 2 with the states `Idle`,
   `Extended`, `Release`, `ExtendedRelease`, `Pause(n)`; `feed(byte) ->
   Option<KeyEvent>`; the table from set 2 codes to `KeyCode`.
@@ -2608,48 +2653,173 @@ replays status and data bytes and records writes. Modules:
   `GET_ID` (`0xF2`) selecting the 4-byte packet on id `3`, enable data
   reporting (`0xF4`).
 
+`KeyEvent`, `KeyCode`, and `PointerEvent` are the types of `user-proto`
+(10.10.2) and this crate does not define them; it depends on nothing, so
+the definitions live here and `user-proto` re-exports them. `keyboard.rs`
+therefore holds `KeyCode` and the set 2 table, `mouse.rs` holds
+`PointerEvent`.
+
 Tests: catalog 6.6.25 with `ScriptedPorts`; fuzz targets `scancode` and
-`mouse_packet` registered in `policy::FUZZ_TARGETS`.
+`mouse_packet` registered in `policy::FUZZ_TARGETS`, with a crate each
+under `fuzz/`, an entry each in the `members` of `fuzz/Cargo.toml`, and a
+seed corpus each under `fuzz/corpus/`.
 
 ### 10.10.2 Input protocol (`user-proto`)
 
-`KeyCode`: an exhaustive enum of the keys of a 105-key layout with stable
-numeric codes; `KeyEvent { code, pressed: bool }`; `PointerEvent { dx:
-i16, dy: i16, wheel: i8, buttons: u8 }`; `Event` as a 16-byte record with
-a kind byte; `Ring` header `{ write_seq: u64, read_seq: u64, overflow:
-u32, capacity: u32 }` followed by the records in a shared memory object
-of one page (254 records); `Subscribe { ring memory handle, notification
-handle }` registers a client; `Unsubscribe`. `Keyboard` (client side):
-tracks modifiers, maps `(KeyCode, modifiers)` through the layout tables
-`us` and `de` to a `char`.
+`Protocol::Input = 6` in `user-proto::label`, with `Subscribe = 1` and
+`Unsubscribe = 2` as its message numbers and catalog rows in 6.6.56 for
+the new encodings; the count in the first paragraph of 6.6.56 follows,
+which phase nine left at four protocols.
+
+- `KeyCode`: an exhaustive enum of the keys of a 105-key layout with
+  stable numeric codes, defined in `driver-i8042` and re-exported here.
+  `KeyEvent { code: KeyCode, pressed: bool }`; `PointerEvent { dx: i16,
+  dy: i16, wheel: i8, buttons: u8 }`.
+- `Event`: a 16-byte record, little-endian, byte 0 the kind — `1` a key,
+  `2` a pointer — and byte 1 zero. A key carries `code` in bytes 2 to 3
+  and `pressed` in byte 4; a pointer carries `dx` in bytes 2 to 3, `dy` in
+  4 to 5, `wheel` in 6, and `buttons` in 7. The rest is zero. `to_bytes`
+  and `from_bytes` round-trip on the host, and a record whose kind byte
+  names neither is refused.
+- `Ring`: the header `{ write_seq: u64, read_seq: u64, overflow: u32,
+  capacity: u32 }` and the records behind it, over a byte slice of one
+  page. Twenty-four bytes of header leave 4072, which is 254 records of
+  sixteen bytes and eight bytes over. The writer is the server and the
+  reader is the client, so the type has two halves: `RingWriter::push`,
+  which drops the newest event and raises `overflow` when the ring is
+  full, and `RingReader::pop`, which takes the oldest and clears
+  `overflow` when it reports it. Both are host-tested over a `Vec`.
+- `Subscribe` carries one handle, a capability to the client's own
+  notification reduced to `SIGNAL`, and its reply carries the memory
+  object of the ring, which the server allocates from the memory server
+  and transfers with `READ | MAP`. It is the shape `CreateSurface` of the
+  display protocol already has, and for the same reason: a server that
+  keeps something per client allocates it, rather than trusting an object
+  a client hands it to be a page long and to stay one. `Unsubscribe`
+  carries nothing; the badge says who asks.
+- `Keyboard`, the client side: tracks the modifiers, maps `(KeyCode,
+  modifiers)` through the layout tables `us` and `de` to a `char`, and
+  answers `None` for a key that stands for no character.
 
 ### 10.10.3 `server-input` (`crates/user/servers/input`)
 
-Startup message: the `IoPortRange` for `0x60..=0x64`, the `Interrupt`
-objects for lines 1 and 12, one notification with bits 0 and 1 bound to
-them, the name server endpoint. Loop: wait on the notification; while the
-status register shows a full output buffer, read a byte and route it by
-the `AUX` bit; feed the decoders; append events to every subscriber's
-ring and signal its notification; acknowledge both interrupts. Registers
-as `input`. `server-init` creates the capabilities with `ioport_create`,
-`interrupt_create`, and `interrupt_bind`. The logic lives in `state.rs`
-and is tested on the host with the ring in a `Vec` and a recording
-signal double.
+A logic crate of layer u2, like `server-console`, `server-memory`,
+`server-name`, and `server-display`: `Kind::Logic`, `Target::Host`,
+`forbid(unsafe_code)`, deps `audhsos-abi`, `audhsos-collections`,
+`driver-i8042`, `user-proto`. It holds what the server decides, in
+`state.rs`: the subscriber table keyed by badge, the two decoders, which
+bytes go to which decoder, what is appended to a subscriber's ring, and
+which subscriber is dropped. It is tested on the host with the rings in a
+`Vec` and a recording double for the signal, against the input items of
+6.6.27.
 
-### 10.10.4 `xtask` additions
+The process is `crates/user/programs/src/bin/server_input.rs` in the
+adapter crate `user-programs`, as every other server process of this
+system is. It reads `own_process`, `own_endpoint`, `io_ports`,
+`interrupt`, `aux_interrupt`, `name_server`, and `memory_server` from its
+startup message, registers as `input` with the name server, runs
+`Controller::init` over a `PortRegisters` that reaches `0x60` and `0x64`
+through `ioport_read` and `ioport_write`, and then starts its second
+thread the way `server_console.rs` starts its own: a notification, both
+interrupts bound to it — the keyboard line on bit 0, the mouse line on
+bit 1 — a capability to its own endpoint badged `INTERRUPT_BADGE`, four
+pages of stack from the memory server, and `thread_create` at
+`priority::DRIVER`.
 
-`Qmp::send_key(qcode, pressed)`, `Qmp::move_pointer(dx, dy)`,
-`Qmp::button(index, pressed)` over `input-send-event`. A user test program
-`input_echo` prints `[input] key <code> <pressed>` and `[input] pointer
-<dx> <dy> <wheel> <buttons>` lines through the console driver; the e2e
-tests inject a sequence and compare the lines. `policy::CRATES` entries
-`driver-i8042` (Logic, deps none) and `server-input` (Logic,
-`X86_64None`, deps `user-rt`, `user-proto`, `driver-i8042`).
+The second thread waits on the notification, drains the controller —
+`Controller::take` until the output buffer is empty, at most `MAX_POLLS`
+times — packs each byte and its `AUX` bit into one word of a message,
+sends it to the badged endpoint, and acknowledges both interrupt objects.
+It acknowledges both whichever line woke it, because one drain empties the
+buffer both lines fill.
 
-### 10.10.5 Acceptance
+The first thread receives. A message under `INTERRUPT_BADGE` is bytes: it
+feeds them to the decoders, appends what they produce to every
+subscriber's ring, and signals each subscriber's notification. A message
+under any other badge is a request of the input protocol. A subscriber
+whose `notification_signal` fails is removed and its ring unmapped; that
+is how a client that has ended is noticed, and it is why this server needs
+no watch of its own (D-106). A request that arrives without a badge is
+refused with `PermissionDenied`, as the display server refuses one: a
+capability found under a name names nobody.
 
-`check` green; catalog 6.6.25, 6.6.27 input items, 6.6.29 input items;
-both fuzz targets run for 60 seconds without findings.
+Its `unsafe` counts against the budget of `user-programs`: the entry point
+the second thread is started at and the gate over that thread's IPC
+buffer, as D-105 and D-106 counted them for the two threads before it, and
+`Mapping::bytes` for the ring of a subscriber. Three sites, so the budget
+goes from twenty-three to twenty-six; the number in `policy::CRATES` is
+set to what the phase actually leaves.
+
+### 10.10.4 Kernel and root task
+
+`Notification::bound_interrupt` goes, per D-108, and with it the check in
+`kernel_ipc::interrupt::bind` and the `Error::AlreadyExists` of its
+`# Errors` section and of the `interrupt_bind` documentation in
+`kernel-syscall`. The structure listing of 10.6.2 loses the field. Two
+tests of `crates/kernel/ipc/src/tests/interrupt.rs` follow:
+`a_binding_names_a_bit_of_the_word_and_no_more` no longer reads the field,
+and `a_notification_already_bound_to_another_interrupt_is_refused` becomes
+a test that two interrupts bound to one notification each set the bit they
+were bound on. The notification line of catalog 6.6.8 says the same.
+
+`audhsos_abi::startup` gains `Role::AuxInterrupt = 16, handle` and
+`Role::InputServer = 17, handle`, per D-109, and `user_rt::Startup` gains
+the fields `aux_interrupt: Option<InterruptHandle>` and `input_server:
+Option<EndpointHandle>` beside them.
+
+`server-init` gains `Grant::Input`: `ioport_create(system, 0x60, 5)`,
+`interrupt_create(system, 1)`, and `interrupt_create(system, 12)`, handed
+over under `Role::IoPorts`, `Role::Interrupt`, and `Role::AuxInterrupt`.
+The range is one range and not two because `Role::IoPorts` is given once,
+so `0x61` and `0x62` fall inside it; the kernel reaches `0x61` only while
+it calibrates the timer at bring-up, which is over before the root task
+runs. `Program` gains the flag `listens`, which grants the badged endpoint
+of the input server under `Role::InputServer` exactly as `draws` grants
+that of the display server, `World` gains `input`, and the function that
+notes a server's endpoint learns `server-input`.
+
+The start table grows by two lines. `server-input` follows
+`server-display`: `priority::DRIVER`, `Grant::Input`, `names`, `memory`,
+64 handles, 64 frames, 64 objects, and it does not report. `app-input`
+follows `app-paint`: `priority::APPLICATION`, `Grant::None`, `names`,
+`memory`, `listens`, and it reports. It subscribes, waits on its
+notification, reads its ring, and writes one line per event through the
+console — `[input] key <code> <pressed>` and `[input] pointer <dx> <dy>
+<wheel> <buttons>` — until it has seen what the runner injects, then
+reports and exits. `archive::PROGRAMS` of the xtask grows by both names.
+
+### 10.10.5 `xtask` additions
+
+- `qmp.rs`: `Qmp::send_key(qcode: &str, pressed: bool)`,
+  `Qmp::move_pointer(dx: i32, dy: i32)`, and `Qmp::button(button: Button,
+  pressed: bool)` over `input-send-event`. The button is a small enum and
+  not an index, because QEMU names it: `left`, `middle`, `right`,
+  `wheel-up`, `wheel-down`. `move_pointer` sends the two `rel` events of
+  one motion in one command, so the mouse packetizes them once.
+- `E2E_LINES` grows by `[init] started server-input` and `[init] started
+  app-input`. The injection follows the console step of `test_e2e`, which
+  is the shape it takes: wait for the line `app-input` writes when it is
+  subscribed, inject a key sequence, a pointer path, and a button press
+  and release, then hold the `[input]` lines against what was sent — the
+  key codes in order, the sum of the motion equal to the injected path,
+  the press before the release.
+- The run without a graphics adapter runs the input tests too: the i8042
+  is there whether the machine has a screen or not, which is what the last
+  item of 6.6.29 says.
+- `policy::CRATES` entries `driver-i8042` (Logic, Host, deps none) and
+  `server-input` (Logic, Host, deps `audhsos-abi`, `audhsos-collections`,
+  `driver-i8042`, `user-proto`); `user-programs` gains `driver-i8042` and
+  `server-input` and the raised unsafe budget of 10.10.3;
+  `policy::FUZZ_TARGETS` gains `scancode` and `mouse_packet`; catalog rows
+  in 05 for both crates, and the tree of 5.1 grows by
+  `crates/drivers/i8042/` and `crates/user/servers/input/`.
+
+### 10.10.6 Acceptance
+
+`check` green; catalog 6.6.25, the input items of 6.6.27, the
+`input-send-event` item of 6.6.28, the input items of 6.6.29, the new
+rows of 6.6.56, and the changed notification row of 6.6.8; both fuzz
+targets run for 60 seconds without findings.
 
 ## 10.11 Phase 11: Graphical demonstration
 
