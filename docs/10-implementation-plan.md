@@ -2771,12 +2771,13 @@ Option<EndpointHandle>` beside them.
 `interrupt_create(system, 1)`, and `interrupt_create(system, 12)`, handed
 over under `Role::IoPorts`, `Role::Interrupt`, and `Role::AuxInterrupt`.
 The range is one range and not two because `Role::IoPorts` is given once,
-so `0x61` and `0x62` fall inside it; the kernel reaches `0x61` only while
-it calibrates the timer at bring-up, which is over before the root task
-runs. `Program` gains the flag `listens`, which grants the badged endpoint
-of the input server under `Role::InputServer` exactly as `draws` grants
-that of the display server, `World` gains `input`, and the function that
-notes a server's endpoint learns `server-input`.
+so `0x61`, `0x62`, and `0x63` fall inside it; of those the kernel reaches
+only `0x61`, the gate of the interval timer, and only while it calibrates
+that timer at bring-up, which is over before the root task runs.
+`Program` gains the flag `listens`, which grants the badged endpoint of
+the input server under `Role::InputServer` exactly as `draws` grants that
+of the display server, `World` gains `input`, and the function that notes
+a server's endpoint learns `server-input`.
 
 The start table grows by two lines. `server-input` follows
 `server-display`: `priority::DRIVER`, `Grant::Input`, `names`, `memory`,
