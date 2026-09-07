@@ -646,13 +646,15 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-programs",
         path: "crates/user/programs",
         kind: Kind::Adapter {
-            unsafe_budget: 18,
+            unsafe_budget: 21,
             asm_budget: 0,
         },
         deps: &[
             "audhsos-abi",
             "driver-uart16550",
+            "gfx",
             "server-console",
+            "server-display",
             "server-memory",
             "server-name",
             "user-loader",

@@ -934,7 +934,7 @@ fn check_base(root: &Path, path: &str, name: &str, expected: u64) -> Result<(), 
 }
 
 /// The boot image of the real system: the header, the root task as an ELF,
-/// and the archive of the six programs.
+/// and the archive of the eight programs.
 ///
 /// # Errors
 ///

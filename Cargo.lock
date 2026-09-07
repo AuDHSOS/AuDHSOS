@@ -532,7 +532,9 @@ version = "0.1.0"
 dependencies = [
  "audhsos-abi",
  "driver-uart16550",
+ "gfx",
  "server-console",
+ "server-display",
  "server-memory",
  "server-name",
  "user-loader",

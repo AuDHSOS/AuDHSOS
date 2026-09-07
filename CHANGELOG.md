@@ -7,6 +7,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `server-display` as a process and `app-paint` as its first client. The
+  root task makes the framebuffer of `system_info` into a device memory
+  object, hands it and the mode to the display server, and starts both; the
+  server maps the framebuffer once and gives every client a memory object
+  of its own to draw into. `app-paint` asks what the screen is, fills a
+  rectangle, writes a line with the font of `gfx`, and presents. On the
+  reference machine that is 1280 by 800 pixels in `bgrx8888`, and the
+  picture QEMU takes of the screen carries the rectangle in its color, the
+  text in white, and black around both.
 - The display protocol in `user-proto`: what the screen is, a surface to
   draw into and the memory object that backs it, a presentation of up to
   sixteen damaged rectangles, giving a surface up, and where the cursor is.
