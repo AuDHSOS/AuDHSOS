@@ -7,6 +7,25 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- A system call made by a user thread of a test image can no longer do
+  nothing at all. `support::answer` read the memory and the machine out of
+  their cells and answered `false` when either was already borrowed — no
+  status in the caller's buffer, no object touched, no thread ended. The
+  image's own thread holds those cells while it builds a process, and it
+  is not inside a gate while it does: after `start_timer` it runs with
+  interrupts on. A tick landing there switched the processor to a runnable
+  user thread and left the cell borrowed by a thread that was no longer
+  running, so that thread's `thread_exit` did nothing, it never gave the
+  processor up, and the image never came back — sixty seconds of silence
+  and no summary line, which is what the `ipc` image did about one run in
+  six. `run_threads` now switches nobody while the thread that would leave
+  holds either cell and lets the next tick try, which is what the tick
+  hook of `preemption.rs` already did for the same reason; and a call that
+  finds a cell borrowed says which one and stops the run rather than
+  vanishing. The new `tick_window` image does the dangerous thing on
+  purpose: without the fix it wedged in about three runs of four, with it
+  none of 150.
+
 - A connection that owes its `SYN` with `ACK` again sends it instead of
   waking its caller for ever. `poll_at` reported the mark
   `on_repeated_syn` sets, but `decide` read the mark only while this end's
