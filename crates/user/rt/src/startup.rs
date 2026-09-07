@@ -21,7 +21,7 @@
 //! first system call, because a call overwrites the buffer it stands in.
 
 use audhsos_abi::layout::MAX_BOOT_REGIONS;
-use audhsos_abi::startup::{Role, StartupError};
+use audhsos_abi::startup::{Payload, Role, Screen, StartupError};
 use audhsos_abi::{Buffer, Handle};
 use audhsos_collections::ArrayVec;
 
@@ -89,6 +89,16 @@ pub struct Startup {
     /// The endpoint of the process that started this one, badged with what
     /// that process knows this one by.
     pub parent: Option<EndpointHandle>,
+    /// The endpoint of the display server.
+    pub display_server: Option<EndpointHandle>,
+    /// The device memory over the framebuffer of the machine.
+    pub framebuffer: Option<MemoryHandle>,
+    /// The width and the height of that framebuffer, packed as
+    /// [`Role::FramebufferGeometry`] carries them.
+    pub framebuffer_geometry: Option<u64>,
+    /// The stride and the format of that framebuffer, packed as
+    /// [`Role::FramebufferLine`] carries them.
+    pub framebuffer_line: Option<u64>,
 }
 
 impl Default for Startup {
@@ -113,7 +123,18 @@ impl Startup {
             io_ports: None,
             interrupt: None,
             parent: None,
+            display_server: None,
+            framebuffer: None,
+            framebuffer_geometry: None,
+            framebuffer_line: None,
         }
+    }
+
+    /// The mode of the framebuffer, or `None` when the process was given no
+    /// framebuffer or an incomplete description of one.
+    #[must_use]
+    pub fn screen(&self) -> Option<Screen> {
+        Screen::from_words(self.framebuffer_geometry?, self.framebuffer_line?)
     }
 
     /// Reads the startup message that stands in `buffer`.
@@ -126,9 +147,26 @@ impl Startup {
     pub fn read(buffer: Buffer<'_>) -> Result<Self, ReadError> {
         let mut startup = Startup::new();
         for given in audhsos_abi::startup::read(buffer)? {
-            startup.take(given.role, given.handle)?;
+            match given.payload {
+                Payload::Handle(handle) => startup.take(given.role, handle)?,
+                Payload::Value(value) => startup.learn(given.role, value)?,
+            }
         }
         Ok(startup)
+    }
+
+    /// Puts one number into the field its role names.
+    const fn learn(&mut self, role: Role, value: u64) -> Result<(), ReadError> {
+        let field = match role {
+            Role::FramebufferGeometry => &mut self.framebuffer_geometry,
+            Role::FramebufferLine => &mut self.framebuffer_line,
+            _ => return Ok(()),
+        };
+        if field.is_some() {
+            return Err(ReadError::Duplicate(role));
+        }
+        *field = Some(value);
+        Ok(())
     }
 
     /// Puts one handle into the field its role names.
@@ -144,6 +182,9 @@ impl Startup {
             Role::IoPorts => once(&mut self.io_ports, role, handle),
             Role::Interrupt => once(&mut self.interrupt, role, handle),
             Role::Parent => once(&mut self.parent, role, handle),
+            Role::DisplayServer => once(&mut self.display_server, role, handle),
+            Role::Framebuffer => once(&mut self.framebuffer, role, handle),
+            Role::FramebufferGeometry | Role::FramebufferLine => Ok(()),
             Role::Ram => self
                 .ram
                 .push(MemoryHandle::from_handle(handle))

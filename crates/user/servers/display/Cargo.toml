@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "server-display"
+description = "What the display server decides: surfaces per client, presentation of damaged rectangles, and the cursor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+audhsos-abi.workspace = true
+audhsos-collections.workspace = true
+gfx.workspace = true
+user-proto.workspace = true
+
+[lints]
+workspace = true

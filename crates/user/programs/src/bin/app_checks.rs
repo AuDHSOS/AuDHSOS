@@ -19,10 +19,12 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds seven programs and each uses a different part of what
+// The package holds nine programs and each uses a different part of what
 // it depends on; these are the crates this one does not.
 use driver_uart16550 as _;
+use gfx as _;
 use server_console as _;
+use server_display as _;
 use server_memory as _;
 use server_name as _;
 use user_loader as _;

@@ -31,6 +31,7 @@ members = [
     "crates/net/stack",
     "crates/boot/uefi-x86_64",
     "crates/elf",
+    "crates/gfx",
     "crates/symbols",
     "crates/uefi",
     "crates/sync",
@@ -39,6 +40,7 @@ members = [
     "crates/user/loader",
     "crates/user/programs",
     "crates/user/servers/console",
+    "crates/user/servers/display",
     "crates/user/servers/memory",
     "crates/user/servers/name",
     "crates/user/proto",
@@ -105,12 +107,14 @@ net-http = { path = "crates/net/http" }
 net-stack = { path = "crates/net/stack" }
 boot-uefi-x86_64 = { path = "crates/boot/uefi-x86_64" }
 audhsos-elf = { path = "crates/elf" }
+gfx = { path = "crates/gfx" }
 audhsos-symbols = { path = "crates/symbols" }
 audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
 driver-uart16550 = { path = "crates/drivers/uart16550" }
 virtio-queue = { path = "crates/virtio/queue" }
 server-console = { path = "crates/user/servers/console" }
+server-display = { path = "crates/user/servers/display" }
 user-programs = { path = "crates/user/programs" }
 server-memory = { path = "crates/user/servers/memory" }
 server-name = { path = "crates/user/servers/name" }

@@ -5,6 +5,104 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `server-display` as a process and `app-paint` as its first client. The
+  root task makes the framebuffer of `system_info` into a device memory
+  object, hands it and the mode to the display server, and starts both; the
+  server maps the framebuffer once and gives every client a memory object
+  of its own to draw into. `app-paint` asks what the screen is, fills a
+  rectangle, writes a line with the font of `gfx`, and presents. On the
+  reference machine that is 1280 by 800 pixels in `bgrx8888`, and the
+  picture QEMU takes of the screen carries the rectangle in its color, the
+  text in white, and black around both.
+- The runner looks at the screen. The xtask speaks the QEMU machine
+  protocol over a Unix socket — greeting, `qmp_capabilities`, commands,
+  answers, and the events between them — reads the picture `screendump`
+  writes, and holds it against what `app-paint` said it drew: every pixel
+  of the rectangle in its color, black around it, and the line of text
+  against the glyph table of `gfx`, pixel for pixel. The JSON subset and
+  the PPM reader it needs are its own, and both are tested on the host.
+  `sh tools/xtask.sh test --e2e` also runs the whole system once more
+  without a graphics adapter, where the kernel finds no framebuffer, the
+  display server says there is no screen, and the run still ends by itself.
+- The display protocol in `user-proto`: what the screen is, a surface to
+  draw into and the memory object that backs it, a presentation of up to
+  sixteen damaged rectangles, giving a surface up, and where the cursor is.
+- `server-display`, what the display server decides: one surface per
+  client, kept by the badge its messages arrive through, so a request that
+  names another client's surface is refused before a pixel is read; a
+  presentation that copies exactly the damaged rectangles; and the cursor,
+  which is taken off the screen before a presentation and put back on
+  afterwards, over the pixels it saved when it was drawn. The sprite is one
+  bitmap of this project, and which of its pixels are the white body and
+  which the black edge follows from the shape itself.
+- The kernel keeps the framebuffer the loader described and the apertures
+  the machine reported as device memory. `Platform` reports the first,
+  `boot::run` prints it as an `[info]` line — `[info] framebuffer=absent`
+  on a machine without one — and `system_info` grew from twenty result
+  words to twenty-six, the last six being the physical start, length,
+  width, height, stride, and format code of the framebuffer.
+  `memory_create_device` now also refuses a range that lies in no aperture
+  the machine reported, so the root task can make a memory object over the
+  framebuffer and over nothing else.
+- The startup message carries values as well as handles (D-103). A role
+  now says whether its second word is a handle of the process's table or a
+  number its parent tells it, `Writer::tell` writes one and `Given::value`
+  reads it, and `Screen` packs the width, height, stride, and format of a
+  framebuffer into the two words the roles `FramebufferGeometry` and
+  `FramebufferLine` carry. The display server needs the mode the firmware
+  set, and a mode is numbers: no capability describes it, and the call that
+  reports it needs the root authority a display server must not hold.
+- `gfx`, the framebuffer logic of the system: the two pixel formats of the
+  Graphics Output Protocol and the colors in them, rectangles and a damage
+  set of sixteen that merges what overlaps and collapses to its bounding
+  rectangle when it is full, a surface over borrowed bytes with fill, blit,
+  and clipping to what it holds, the project's own bitmap font of ninety-
+  five glyphs at eight by sixteen pixels, and the presentation step that
+  copies the damaged rectangles into anything that takes rows of pixels.
+  The crate reaches no hardware: the same code draws into the framebuffer
+  of the machine, into a back buffer, and into an array a host test owns.
+
+### Changed
+
+- `memory_map` merges a mapping that continues one the process already
+  holds instead of adding a region for every call (D-104). A full screen of
+  1280 by 800 pixels is a thousand pages and no call maps more than
+  sixty-four, so a mapping of one used to cost sixteen of the sixty-four
+  regions a process may hold. A region is extended when the new range
+  begins where it ends, names the same object, continues its offset, and
+  carries the same permissions.
+- A removal now says what became of the region it took a piece from, and
+  the system call layer gives a reference to the backing object back only
+  when the region is gone. Until now unmapping half a mapping gave back the
+  reference of the whole one.
+
+### Fixed
+
+- An object is held by one reference per region that names it, and now
+  really is. A protection or an unmapping that split a region left two
+  regions where one stood without taking a second reference, so unmapping
+  them one by one gave back more references than were taken: the object
+  could be freed while a mapping of it still stood, and the call that gave
+  back the last one failed with `InvalidHandle`. Both splits now take the
+  reference the new region holds.
+- `memory_unmap` unmaps the pages the region table gave up, and not a
+  fixed count of pages from the start of the request. A request that
+  reaches over a gap between two mappings used to fail on the first page of
+  the gap, and one that spans more mappings than the two pieces a call
+  takes used to report every page as done and leave the regions of the rest
+  behind, mapped nowhere and holding their references for ever.
+
+- The coverage gate of `fuzz-support` no longer turns on thread
+  scheduling. Whether the input in progress has outrun its limit was
+  decided in the body of the watchdog thread, so whether that thread woke
+  before the test binary ended decided whether the branch was covered: the
+  branch gate of 86 percent was missed in two of seven measured runs
+  (85.93 percent) and met in the other five (86.23 percent). The decision
+  is now `outran` and `tick`, functions of three numbers the tests decide,
+  and the thread only calls them.
+
 ## [0.1.0] - 2026-09-07
 
 The first release. A capability-based microkernel that boots on QEMU `q35`

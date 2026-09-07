@@ -3,7 +3,7 @@
 
 [package]
 name = "user-programs"
-description = "The programs of the userland: the root task, the three servers, and the application"
+description = "The programs of the userland: the root task, the four servers, and the applications"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -41,6 +41,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "server-display"
+path = "src/bin/server_display.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "app-hello"
 path = "src/bin/app_hello.rs"
 test = false
@@ -56,10 +62,18 @@ path = "src/bin/app_faulter.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "app-paint"
+path = "src/bin/app_paint.rs"
+test = false
+bench = false
+
 [dependencies]
 audhsos-abi.workspace = true
 driver-uart16550.workspace = true
+gfx.workspace = true
 server-console.workspace = true
+server-display.workspace = true
 server-memory.workspace = true
 server-name.workspace = true
 user-loader.workspace = true

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 #[cfg(feature = "port-io")]
 use std::collections::VecDeque;
 
+use audhsos_abi::Framebuffer;
 use kernel_types::{Page, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
 
 use crate::console::DebugConsole;
@@ -592,6 +593,7 @@ pub struct ScriptedPlatform {
     regions: Vec<MemoryRegion>,
     window_base: VirtAddr,
     rsdp: Option<PhysAddr>,
+    framebuffer: Option<Framebuffer>,
 }
 
 impl ScriptedPlatform {
@@ -602,6 +604,7 @@ impl ScriptedPlatform {
             regions: Vec::new(),
             window_base,
             rsdp: None,
+            framebuffer: None,
         }
     }
 
@@ -618,6 +621,13 @@ impl ScriptedPlatform {
         self.rsdp = Some(rsdp);
         self
     }
+
+    /// Sets the framebuffer the loader is to have found.
+    #[must_use]
+    pub const fn framebuffer(mut self, framebuffer: Framebuffer) -> Self {
+        self.framebuffer = Some(framebuffer);
+        self
+    }
 }
 
 impl Platform for ScriptedPlatform {
@@ -627,6 +637,10 @@ impl Platform for ScriptedPlatform {
 
     fn physical_window_base(&self) -> VirtAddr {
         self.window_base
+    }
+
+    fn framebuffer(&self) -> Option<Framebuffer> {
+        self.framebuffer
     }
 
     fn acpi_rsdp(&self) -> Option<PhysAddr> {

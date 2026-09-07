@@ -193,9 +193,13 @@ The serial output carries a line protocol that the runner parses:
 [test] <crate>::<name> ... FAILED: <message>
 [bench] <crate>::<name> ... <ticks> ticks (n=<count>)
 [summary] passed=<n> failed=<m>
+[info] <subject>=<what>
 ```
 
-A `[bench]` line reports a measurement and not a test: `<ticks>` is the
+An `[info]` line reports what the kernel found on the machine rather than
+what a test made of it, and the runner reads it: `[info] framebuffer=absent`
+is what a machine without a graphics adapter says, and a machine with one
+names its mode. A `[bench]` line reports a measurement and not a test: `<ticks>` is the
 median of `<count>` round trips, in ticks of the time-stamp counter, and
 the line counts towards neither the passed nor the failed total. An image
 that writes one writes its test lines and its summary like every other.

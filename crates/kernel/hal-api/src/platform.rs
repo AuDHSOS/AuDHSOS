@@ -3,6 +3,7 @@
 
 //! The boot platform: what the loader left behind.
 
+use audhsos_abi::Framebuffer;
 use kernel_types::{PhysAddr, VirtAddr};
 
 /// What a physical memory region holds at boot.
@@ -49,6 +50,11 @@ pub trait Platform {
 
     /// Virtual base of the physical memory window.
     fn physical_window_base(&self) -> VirtAddr;
+
+    /// The framebuffer the loader found, if the machine has one. It is
+    /// what `system_info` reports and what the root task builds the device
+    /// memory object of the display server from.
+    fn framebuffer(&self) -> Option<Framebuffer>;
 
     /// Physical address of the ACPI root pointer, if the firmware provided
     /// one.

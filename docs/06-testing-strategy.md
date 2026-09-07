@@ -213,6 +213,24 @@ done until every applicable item has a test. Items are added, never removed.
 - Property: regions are sorted, disjoint, aligned, and inside the user half
   after every operation.
 
+- A mapping that continues one already in the table grows it instead of
+  adding a region (D-104): same object, same permissions, the offset
+  running on, and beginning where the other ends. A range that differs in
+  any of the four is a region of its own, a gap between them included.
+- A removal says what became of the region it took from: one that only
+  shortens a region reports that the region stayed, one that takes the
+  middle out reports that the region was divided, and one that takes the
+  whole region reports that it is gone. A protection says how many regions
+  the table gained by the split it made — none, one, or two. The system
+  call layer holds one reference to the backing object per region: it gives
+  one back for a region that is gone and takes one for every region a split
+  added, so an object is held by every region that names it and by no more.
+- `memory_unmap` unmaps the pages of the pieces the region table gave up
+  and no others: a range that reaches over a gap between two mappings
+  unmaps what is mapped and leaves the gap alone, and a range over more
+  mappings than one call takes comes back as `Partial` at the mapping it
+  did not reach.
+
 ### 6.6.6 Object pools, ids, handles, and rights (`kernel-objects`, `audhsos-abi`)
 
 - Allocating from a full pool returns `PoolExhausted`.
@@ -337,7 +355,24 @@ done until every applicable item has a test. Items are added, never removed.
   the first return word says how many: `thread_info` reports the kind,
   address, instruction pointer, and error code of a thread that faulted and
   a word count of zero for one that did not, and `system_info` reports the
-  capacity and the live count of every pool.
+  capacity and the live count of every pool, the tick rate, the root system
+  description pointer, and the six words of the framebuffer, which are zero
+  throughout on a machine that has none.
+- `memory_create_device` refuses a range that meets memory the machine
+  reported as usable, one that lies in no aperture it reported as device
+  memory — past one, beginning before one, or running past the end of one —
+  and every range at all on a machine that reported no aperture.
+
+- Watching the end of a process: the end signals the bit it was watched
+  on; the last thread of a process taking the process with it signals, and
+  a thread that leaves a process with threads left does not; a process that
+  has already ended signals at once; an end is told once, however often the
+  kernel walks past it afterwards; every watcher of a process hears of it
+  and a fifth is refused; the same watch twice is refused; a watch needs
+  `INFO` on the process and `BIND` on the notification; a bit above
+  sixty-three and a handle that names nothing are refused; a notification
+  destroyed before the end signals nothing and is no error; a thread
+  waiting on the notification wakes with the bit.
 
 ### 6.6.10 Boot image header and boot information (`audhsos-abi`, `kernel-core`)
 
@@ -657,6 +692,14 @@ done until every applicable item has a test. Items are added, never removed.
   `MmioReserved` region is rejected; an unknown format code is rejected;
   the writer produces what the parser accepts, with and without a
   framebuffer (property).
+- Startup message: a role carries either a handle or a value and says
+  which; a value role is read as a number and not as a handle, so a word
+  that is no handle is no error under one; a handle written under a value
+  role and a value written under a handle role are refused and write
+  nothing; the width, height, stride, and format of a mode survive the two
+  words that carry them, the widest one included; a format code that names
+  no format is no mode; half a description is no mode; a value role that
+  appears twice is refused like a handle role that does.
 - Loader in QEMU: booting with `-vga none` reports an absent framebuffer
   and the kernel reaches the harness.
 
@@ -715,7 +758,10 @@ done until every applicable item has a test. Items are added, never removed.
   a press is delivered as a release; pointer button state is tracked
   across packets; a wheel delta is delivered as its own event; both
   interrupts are acknowledged after the output buffer is drained.
-- Display: `present` with damage rectangles copies exactly those pixels
+- Display: a client that carries no badge — which is what a capability
+  found under a name looks like — gets no surface, because a server that
+  keeps one per client cannot tell two of nobody apart; `present` with
+  damage rectangles copies exactly those pixels
   from the surface to the framebuffer (recording double); the cursor
   sprite saves and restores the background; the cursor is clamped to the
   screen; a surface larger than the screen is rejected; a client
@@ -731,27 +777,35 @@ done until every applicable item has a test. Items are added, never removed.
   `null`; nesting depth is bounded; malformed input is an error; the
   writer output parses back to the same value (property).
 - `input-send-event` for a key press and release by `qcode`, for relative
-  pointer motion, and for a button press and release.
+  pointer motion, and for a button press and release (Phase 10).
 - `screendump`: the PPM file is parsed (`P6`, comments, `maxval` 255); a
-  truncated file is an error; a pixel and a rectangle checksum are read at
-  given coordinates; coordinates outside the image are an error.
+  truncated file is an error and not a black pixel; a pixel is read at
+  given coordinates and a color is counted over a rectangle; coordinates
+  outside the image, and a rectangle that reaches past it, are an error.
 - A socket that never answers hits the timeout.
 
 ### 6.6.29 Graphical end-to-end tests in QEMU
 
-- Output: a filled rectangle appears in the screendump with the expected
-  color at its corners and the untouched color outside; a rendered string
+- Output: every pixel of a filled rectangle carries the color it was
+  filled with and the pixels around it are untouched; a rendered string
   matches the glyph table pixel for pixel; the resolution used by the test
-  is read from the boot information, never assumed.
+  is what the display server reported out of the boot information, never
+  one assumed by the runner.
 - Input: a key sequence injected through QMP is echoed as `[input]` lines
   through the console driver; a pointer path produces motion events whose
   sum equals the injected path; a button press and release arrive in
   order.
+- The end of a client: the program that draws exits without giving its
+  surface up, and the display server takes it back — the kernel signals the
+  end on the notification, the watching thread of the server turns it into
+  a message, and the surface and its memory go back.
 - Combined: the cursor pixels move with the pointer; a stroke drawn while
   the button is held changes the pixels along the path; typed text appears
   at the text cursor.
-- Absent hardware: with `-vga none` the input tests still pass and the
-  display server reports `NotFound` to its clients.
+- Absent hardware: with `-vga none` the kernel reports
+  `[info] framebuffer=absent`, the display server reports that there is no
+  screen, the program that draws says it drew nothing, the run still ends
+  by itself, and the input tests still pass (Phase 10).
 
 ### 6.6.30 Constant-time helpers (`crypto-ct`)
 
@@ -1602,6 +1656,12 @@ done until every applicable item has a test. Items are added, never removed.
   unchanged, including the empty slice; the regression list replays every
   stored corpus file; Miri covers the counter registry and the sanitizer
   callbacks, which is where the crate's `unsafe` is (D-76).
+- The watchdog's decision: a run that has not begun and a run without a
+  limit outrun nothing; an input inside its limit and one past it are told
+  apart; a tick inside the limit lets the process run on. The decision is a
+  function of three numbers and not the body of the watchdog thread, so its
+  coverage does not depend on whether that thread woke before the process
+  ended.
 - Symbol table: an address inside a function, at its first byte, at its
   last byte, and one past it; an address in no function; a symbol that is
   not a function; the narrowest of two functions that enclose each other;

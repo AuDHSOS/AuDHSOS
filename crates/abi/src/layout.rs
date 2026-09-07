@@ -118,15 +118,25 @@ pub const MAX_MESSAGE_HANDLES: usize = 4;
 
 /// Maximum number of words a system call result writes into the message
 /// area of the caller's own buffer when it does not fit into
-/// [`MAX_SYSCALL_RETURN_WORDS`] return words. `system_info` writes twenty,
-/// which is the widest result of this interface.
-pub const MAX_RESULT_WORDS: usize = 20;
+/// [`MAX_SYSCALL_RETURN_WORDS`] return words. `system_info` writes
+/// twenty-six, which is the widest result of this interface: twenty about
+/// the kernel and six about the framebuffer.
+pub const MAX_RESULT_WORDS: usize = 26;
 
 /// Number of threads one process may hold.
 pub const THREADS_PER_PROCESS: usize = 64;
 
 /// Number of regions one process may map.
 pub const REGIONS_PER_PROCESS: usize = 64;
+
+/// How many watchers may wait for the end of one process.
+///
+/// A watcher is a server that holds something of a program and wants it
+/// back when the program is gone: the display server holds its surface, and
+/// in a later phase the input server holds its subscription. Four is more
+/// than this system has servers of that kind; a fifth is refused rather
+/// than dropped, so nobody believes it is being watched when it is not.
+pub const WATCHERS_PER_PROCESS: usize = 4;
 
 /// Number of scheduling priorities; the highest priority is
 /// `PRIORITY_COUNT - 1`.

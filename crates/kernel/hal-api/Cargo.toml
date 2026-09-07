@@ -15,6 +15,7 @@ test-doubles = []
 port-io = []
 
 [dependencies]
+audhsos-abi.workspace = true
 kernel-types.workspace = true
 
 [lints]

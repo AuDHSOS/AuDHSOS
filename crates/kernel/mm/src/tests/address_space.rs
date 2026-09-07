@@ -10,7 +10,9 @@ use kernel_types::{Page, PageRange, VirtAddr};
 use test_support::generators::vec;
 use test_support::property::check;
 
-use crate::address_space::{Region, RegionError, RegionTable, remaining_from, user_range};
+use crate::address_space::{
+    Inserted, Region, RegionError, RegionTable, remaining_from, user_range,
+};
 use crate::page_table::Permissions;
 use crate::strategies::{RegionOp, any_region_table_op};
 
@@ -320,7 +322,8 @@ fn protecting_a_sub_range_splits_a_region_into_three() {
     let read_only = Permissions::READ_ONLY.for_user();
     assert_eq!(
         table.protect(pages(BASE + 2 * PAGE_SIZE, 3), read_only),
-        Ok(())
+        Ok(2),
+        "the head and the tail are regions the table did not have"
     );
     assert_eq!(table.len(), 3);
     let perms: Vec<Permissions> = table.iter().map(|r| r.perms).collect();
@@ -619,4 +622,139 @@ fn a_table_with_an_empty_region_fails_its_own_invariant_check() {
         !outside.check_invariants(),
         "a user table must stay in the user half"
     );
+}
+
+/// A region that names `backing` at `offset` inside it.
+fn window(address: u64, count: u64, backing: u32, offset: u64) -> Region<u32> {
+    Region {
+        pages: pages(address, count),
+        backing,
+        offset,
+        perms: Permissions::READ_WRITE.for_user(),
+    }
+}
+
+#[test]
+fn a_mapping_that_continues_one_that_is_there_grows_it_instead() {
+    let mut table: Table<8> = Table::new();
+    assert_eq!(table.insert(window(BASE, 4, 1, 0)), Ok(Inserted::Added));
+    assert_eq!(
+        table.insert(window(BASE + 4 * PAGE_SIZE, 4, 1, 4 * PAGE_SIZE)),
+        Ok(Inserted::Merged)
+    );
+    assert_eq!(table.len(), 1);
+    assert_eq!(layout(&table), vec![(BASE / PAGE_SIZE, 8, 1, 0)]);
+    assert!(table.check_invariants());
+    assert_eq!(
+        table.insert(window(BASE + 8 * PAGE_SIZE, 2, 1, 8 * PAGE_SIZE)),
+        Ok(Inserted::Merged)
+    );
+    assert_eq!(table.len(), 1);
+    assert_eq!(
+        table
+            .find(page(BASE + 9 * PAGE_SIZE))
+            .map(|held| held.offset),
+        Some(0)
+    );
+}
+
+#[test]
+fn a_range_that_continues_nothing_is_a_region_of_its_own() {
+    let base = window(BASE, 4, 1, 0);
+    let cases = [
+        (
+            window(BASE + 4 * PAGE_SIZE, 2, 2, 4 * PAGE_SIZE),
+            "another object",
+        ),
+        (
+            window(BASE + 4 * PAGE_SIZE, 2, 1, 8 * PAGE_SIZE),
+            "an offset that does not continue",
+        ),
+        (
+            Region {
+                perms: Permissions::READ_ONLY.for_user(),
+                ..window(BASE + 4 * PAGE_SIZE, 2, 1, 4 * PAGE_SIZE)
+            },
+            "other permissions",
+        ),
+        (
+            window(BASE + 8 * PAGE_SIZE, 2, 1, 8 * PAGE_SIZE),
+            "a gap between them",
+        ),
+    ];
+    for (next, why) in cases {
+        let mut table: Table<8> = Table::new();
+        table.insert(base).unwrap();
+        assert_eq!(table.insert(next), Ok(Inserted::Added), "{why}");
+        assert_eq!(table.len(), 2, "{why}");
+    }
+}
+
+#[test]
+fn a_removal_says_whether_the_region_it_took_from_is_gone() {
+    let mut table: Table<8> = Table::new();
+    table.insert(window(BASE, 8, 1, 0)).unwrap();
+    let removed = table.remove::<2>(pages(BASE, 2)).unwrap();
+    let taken: Vec<bool> = removed.taken().map(|piece| piece.vanished).collect();
+    assert_eq!(taken, vec![false], "the region only got shorter");
+    assert_eq!(table.len(), 1);
+
+    let removed = table.remove::<2>(pages(BASE + 4 * PAGE_SIZE, 2)).unwrap();
+    assert_eq!(
+        removed
+            .taken()
+            .map(|piece| piece.vanished)
+            .collect::<Vec<_>>(),
+        vec![false],
+        "the region was split in two, so it is still there"
+    );
+    assert_eq!(table.len(), 2);
+
+    let rest: Vec<PageRange> = table.iter().map(|held| held.pages).collect();
+    let mut gone = Vec::new();
+    for range in rest {
+        let removed = table.remove::<2>(range).unwrap();
+        gone.extend(removed.taken().map(|piece| piece.vanished));
+    }
+    assert_eq!(gone, vec![true, true]);
+    assert!(table.is_empty());
+}
+
+#[test]
+fn what_a_removal_took_is_the_piece_it_reports() {
+    let mut table: Table<8> = Table::new();
+    table.insert(window(BASE, 4, 7, 0)).unwrap();
+    let removed = table.remove::<2>(pages(BASE, 4)).unwrap();
+    let piece = removed.taken().next().unwrap();
+    assert!(piece.vanished);
+    assert_eq!(piece.region.backing, 7);
+    assert_eq!(piece.region.pages.count(), 4);
+    assert_eq!(removed.iter().count(), 1);
+}
+
+#[test]
+fn a_protection_says_how_many_regions_the_table_gained() {
+    let read_only = Permissions::READ_ONLY.for_user();
+    let mut table: Table<8> = Table::new();
+    table.insert(region(BASE, 4, 1)).unwrap();
+    assert_eq!(table.protect(pages(BASE, 4), read_only), Ok(0), "all of it");
+    assert_eq!(table.len(), 1);
+
+    let mut table: Table<8> = Table::new();
+    table.insert(region(BASE, 4, 1)).unwrap();
+    assert_eq!(
+        table.protect(pages(BASE, 2), read_only),
+        Ok(1),
+        "at the front of it"
+    );
+    assert_eq!(table.len(), 2);
+
+    let mut table: Table<8> = Table::new();
+    table.insert(region(BASE, 4, 1)).unwrap();
+    assert_eq!(
+        table.protect(pages(BASE + 2 * PAGE_SIZE, 2), read_only),
+        Ok(1),
+        "at the end of it"
+    );
+    assert_eq!(table.len(), 2);
 }

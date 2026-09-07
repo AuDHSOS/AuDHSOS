@@ -10,8 +10,10 @@ use crate::error::Error;
 use crate::image::{archive, boot_image, disk};
 use crate::out::{self, note, note_raw};
 use crate::policy::{FUZZ_TARGETS, MIRI_TARGETS, Target, crates_for};
+use crate::ppm;
 use crate::process::Cmd;
 use crate::qemu::{self, Machine, Run};
+use crate::qmp::Qmp;
 use crate::session::Session;
 use crate::symbolize;
 use crate::{coverage, deps, fs, layering, linker, spdx, unsafe_budget};
@@ -137,7 +139,7 @@ const E2E_TIMEOUT: Duration = Duration::from_secs(60);
 /// archive, the memory server answered, the name server answered, the
 /// console driver took the port, and the application found it and said
 /// something through it.
-const E2E_LINES: [(&str, &str); 11] = [
+const E2E_LINES: [(&str, &str); 14] = [
     (
         "[init] started server-memory",
         "the memory server did not start",
@@ -149,6 +151,10 @@ const E2E_LINES: [(&str, &str); 11] = [
     (
         "[init] started server-console",
         "the console driver did not start",
+    ),
+    (
+        "[init] started server-display",
+        "the display server did not start",
     ),
     ("[init] started app-hello", "the application did not start"),
     (
@@ -170,6 +176,14 @@ const E2E_LINES: [(&str, &str); 11] = [
     (
         "[checks] line 7 of 8, and the whole of it",
         "the last line of the second client did not arrive",
+    ),
+    (
+        "[paint] drawn on ",
+        "the program that draws never presented anything",
+    ),
+    (
+        "is gone: surface ",
+        "the display server did not take back the surface of the program that ended",
     ),
     (
         "[faulter] about to write to nowhere",
@@ -217,13 +231,32 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     image(root, options)?;
     let machine = Machine::locate()?;
     let path = root.join("target").join("audhsos.img");
-    let mut session = Session::start(&machine, &path)?;
+    let socket = qemu::socket_path("audhsos-qmp")?;
+    let _ = std::fs::remove_file(&socket);
+    let mut session = Session::start(
+        &machine,
+        &path,
+        &qemu::Options {
+            qmp: Some(socket.clone()),
+            ..qemu::Options::plain()
+        },
+    )?;
 
     let mut violations = Vec::new();
     for (needle, complaint) in E2E_LINES {
         if !session.wait_for(needle, E2E_TIMEOUT) {
             violations.push((*complaint).to_owned());
             break;
+        }
+    }
+    // The picture, while the machine still runs: `app-hello` is waiting to
+    // be typed at, so nothing has ended yet. What is on the screen is
+    // checked against what `app-paint` says it drew and against the font
+    // this system carries, never against a resolution assumed here.
+    if violations.is_empty() {
+        match screen_of(&socket, root) {
+            Ok(image) => violations.extend(drawn_lines(&image, &session.output())),
+            Err(error) => violations.push(format!("no picture of the screen: {error}")),
         }
     }
     // Console input: the bytes go the other way, through the same port, and
@@ -260,6 +293,7 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
         }
     }
     let output = session.finish();
+    let _ = std::fs::remove_file(&socket);
     note!(
         "qemu end-to-end: {} line(s) of output",
         output.lines().count()
@@ -270,8 +304,178 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
         eprintln!("{output}");
         eprintln!("--- end ---");
     }
+    Error::from_violations(violations)?;
+    test_without_a_framebuffer(&machine, &path)
+}
+
+/// Where `app-paint` fills its rectangle and what it fills it with. It says
+/// so itself in `app_paint.rs`; a disagreement makes this run fail with the
+/// pixel it did not find.
+const PAINT_BOX: (u32, u32, u32, u32) = (64, 64, 96, 48);
+const PAINT_COLOR: (u8, u8, u8) = (0x20, 0xC0, 0x40);
+
+/// Where it writes its line, and what it writes.
+const PAINT_TEXT: (u32, u32) = (64, 128);
+const PAINT_STRING: &str = "AuDHSOS";
+
+/// Takes a picture of the screen of the running machine.
+fn screen_of(socket: &Path, root: &Path) -> Result<ppm::Image, Error> {
+    let mut qmp = Qmp::connect(socket, E2E_TIMEOUT)?;
+    qmp.screendump(&root.join("target").join("screen.ppm"))
+}
+
+/// What the picture does not show of what `app-paint` said it drew.
+fn drawn_lines(image: &ppm::Image, output: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    let Some((width, height)) = screen_size(output) else {
+        violations.push("the display server never said what the screen is".to_owned());
+        return violations;
+    };
+    if (image.width(), image.height()) != (width, height) {
+        violations.push(format!(
+            "the picture is {}x{} and the display server said {width}x{height}",
+            image.width(),
+            image.height()
+        ));
+        return violations;
+    }
+    let (x, y, box_width, box_height) = PAINT_BOX;
+    match image.count_of(x, y, box_width, box_height, PAINT_COLOR) {
+        Ok(count) if count == box_width.saturating_mul(box_height) => {}
+        Ok(count) => violations.push(format!(
+            "{count} of {} pixels of the rectangle carry its color",
+            box_width.saturating_mul(box_height)
+        )),
+        Err(error) => violations.push(format!("the rectangle is not on the screen: {error}")),
+    }
+    for (at_x, at_y) in [
+        (x.saturating_sub(1), y),
+        (x, y.saturating_sub(1)),
+        (x.saturating_add(box_width), y),
+    ] {
+        match image.pixel(at_x, at_y) {
+            Ok((0, 0, 0)) => {}
+            Ok(color) => violations.push(format!(
+                "the pixel at {at_x},{at_y} is {color:?} and should be black"
+            )),
+            Err(error) => violations.push(format!("the pixel at {at_x},{at_y}: {error}")),
+        }
+    }
+    violations.extend(text_lines(image));
+    violations
+}
+
+/// What the picture does not show of the line `app-paint` wrote, glyph by
+/// glyph against the font this system carries.
+fn text_lines(image: &ppm::Image) -> Vec<String> {
+    let (left, top) = PAINT_TEXT;
+    for (index, character) in PAINT_STRING.chars().enumerate() {
+        let rows = gfx::glyph(character);
+        let cell = u32::try_from(index)
+            .unwrap_or(0)
+            .saturating_mul(gfx::GLYPH_WIDTH);
+        for (row, bits) in rows.iter().enumerate() {
+            for column in 0..gfx::GLYPH_WIDTH {
+                let bit = 1_u8
+                    .checked_shl(gfx::GLYPH_WIDTH.saturating_sub(1).saturating_sub(column))
+                    .unwrap_or(0);
+                let wanted = if bits & bit == 0 {
+                    (0, 0, 0)
+                } else {
+                    (0xFF, 0xFF, 0xFF)
+                };
+                let at_x = left.saturating_add(cell).saturating_add(column);
+                let at_y = top.saturating_add(u32::try_from(row).unwrap_or(0));
+                match image.pixel(at_x, at_y) {
+                    Ok(color) if color == wanted => {}
+                    Ok(color) => {
+                        return vec![format!(
+                            "the pixel at {at_x},{at_y} of the glyph {character:?} is {color:?}, not {wanted:?}"
+                        )];
+                    }
+                    Err(error) => return vec![format!("the text is not on the screen: {error}")],
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// The resolution the display server reported, out of the serial output.
+fn screen_size(output: &str) -> Option<(u32, u32)> {
+    let line = output
+        .lines()
+        .find_map(|line| line.split("[display] screen=").nth(1))?;
+    let mode = line.split_whitespace().next()?;
+    let (width, height) = mode.split_once('x')?;
+    Some((width.parse().ok()?, height.trim().parse().ok()?))
+}
+
+/// The same system on a machine with no graphics adapter: the firmware
+/// reports no Graphics Output Protocol, so the kernel finds no framebuffer,
+/// the display server answers that there is no screen, and the program that
+/// draws says it drew nothing — and the run still ends by itself.
+fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Error> {
+    let mut session = Session::start(
+        machine,
+        path,
+        &qemu::Options {
+            no_vga: true,
+            ..qemu::Options::plain()
+        },
+    )?;
+    let mut violations = Vec::new();
+    for (needle, complaint) in NO_VGA_LINES {
+        if !session.wait_for(needle, E2E_TIMEOUT) {
+            violations.push((*complaint).to_owned());
+            break;
+        }
+    }
+    if violations.is_empty() && session.wait_for("[hello] ready", E2E_TIMEOUT) {
+        session.send(b"typed\n")?;
+    }
+    if violations.is_empty() {
+        match session.wait_for_end(E2E_TIMEOUT) {
+            None => {
+                violations.push("the machine without a screen did not end by itself".to_owned());
+            }
+            status => {
+                let outcome = qemu::outcome_of(status, false);
+                if outcome != qemu::Outcome::Success {
+                    violations.push(format!("the machine reported a {}", outcome.name()));
+                }
+            }
+        }
+    }
+    let output = session.finish();
+    note!(
+        "qemu without a graphics adapter: {} line(s)",
+        output.lines().count()
+    );
+    report("no framebuffer", &violations);
+    if !violations.is_empty() {
+        eprintln!("--- serial output of the run without a graphics adapter ---");
+        eprintln!("{output}");
+        eprintln!("--- end ---");
+    }
     Error::from_violations(violations)
 }
+
+/// What a machine without a graphics adapter has to say.
+const NO_VGA_LINES: [(&str, &str); 3] = [
+    (
+        "[info] framebuffer=absent",
+        "the kernel did not report that the machine has no framebuffer",
+    ),
+    (
+        "[display] no framebuffer",
+        "the display server did not report that there is no screen",
+    ),
+    (
+        "[paint] nothing drawn: ",
+        "the program that draws did not say that it drew nothing",
+    ),
+];
 
 /// Every test kernel in QEMU, then the three images that must make the
 /// loader report a failure.
@@ -340,7 +544,7 @@ pub(crate) fn qemu_runner(root: &Path, options: &[String]) -> Result<(), Error> 
     let name = fs::file_name(kernel).to_owned();
     let path = write_run_image(root, &name, &image)?;
     let machine = Machine::locate()?;
-    let run = machine.run_captured(&path)?;
+    let run = machine.run_captured(&path, &qemu::Options::plain())?;
     report_tests(&name, &run, &machine, Some(kernel))
 }
 
@@ -371,7 +575,7 @@ fn loader_images(root: &Path) -> Result<(), Error> {
     for (name, kernel, boot) in cases {
         let image = disk_image(loader.clone(), kernel, boot)?;
         let path = write_run_image(root, name, &image)?;
-        let run = machine.run_captured(&path)?;
+        let run = machine.run_captured(&path, &qemu::Options::plain())?;
         let outcome = run.outcome();
         note!("qemu {name}: {}", outcome.name());
         if outcome != qemu::Outcome::LoaderFailure {
@@ -536,7 +740,7 @@ pub(crate) fn run(root: &Path, options: &[String]) -> Result<(), Error> {
     image(root, &build_options)?;
     let machine = Machine::locate()?;
     let path = root.join("target").join("audhsos.img");
-    let status = machine.run_attached(&path, display)?;
+    let status = machine.run_attached(&path, &qemu::Options::windowed(display))?;
     match qemu::outcome_of(status, false) {
         qemu::Outcome::Success => Ok(()),
         outcome => Err(Error::Usage(format!(
@@ -934,7 +1138,7 @@ fn check_base(root: &Path, path: &str, name: &str, expected: u64) -> Result<(), 
 }
 
 /// The boot image of the real system: the header, the root task as an ELF,
-/// and the archive of the six programs.
+/// and the archive of the eight programs.
 ///
 /// # Errors
 ///

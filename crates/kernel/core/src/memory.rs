@@ -14,10 +14,11 @@
 
 use core::fmt;
 
+use audhsos_abi::Framebuffer;
 use audhsos_abi::boot_image::BootImageHeader;
 use audhsos_abi::layout::{
-    BOOT_INFO_VADDR, BOOT_STACK_PAGES, BOOT_STACK_TOP, KERNEL_BASE, MAX_PAGES_PER_CALL,
-    MAX_PHYS_WINDOW_BYTES, PAGE_SIZE, PHYS_WINDOW_BASE, USER_SPACE_END,
+    BOOT_INFO_VADDR, BOOT_STACK_PAGES, BOOT_STACK_TOP, KERNEL_BASE, MAX_BOOT_REGIONS,
+    MAX_PAGES_PER_CALL, MAX_PHYS_WINDOW_BYTES, PAGE_SIZE, PHYS_WINDOW_BASE, USER_SPACE_END,
 };
 use audhsos_sync::{Global, UncontendedToken};
 use kernel_hal_api::console::DebugConsole;
@@ -122,6 +123,10 @@ impl From<MapError> for MemoryError {
     }
 }
 
+/// The device apertures of the machine, as the boot information reported
+/// them: at most one per region it can hold.
+type DeviceRanges = [PhysFrameRange; MAX_BOOT_REGIONS];
+
 /// What the kernel owns after the bring-up.
 #[derive(Debug)]
 pub struct KernelMemory {
@@ -132,6 +137,9 @@ pub struct KernelMemory {
     stacks: KernelStacks,
     boot_info: PhysFrame,
     identity_pages: u64,
+    framebuffer: Option<Framebuffer>,
+    devices: DeviceRanges,
+    device_count: usize,
 }
 
 impl KernelMemory {
@@ -157,6 +165,32 @@ impl KernelMemory {
     #[must_use]
     pub const fn free(&self) -> &NormalizedMap {
         &self.free
+    }
+
+    /// The framebuffer the loader described, if the machine has one. The
+    /// kernel does not draw: it keeps the description so that `system_info`
+    /// can report it to the root task, which makes the device memory object
+    /// of the display server out of it.
+    #[must_use]
+    pub const fn framebuffer(&self) -> Option<Framebuffer> {
+        self.framebuffer
+    }
+
+    /// The device apertures the machine reported.
+    #[must_use]
+    pub fn devices(&self) -> &[PhysFrameRange] {
+        self.devices.get(..self.device_count).unwrap_or(&[])
+    }
+
+    /// `true` when `frames` lies wholly inside one aperture the machine
+    /// reported as device memory. A range that does not is no device: the
+    /// root task may not turn an arbitrary physical range into a memory
+    /// object with it.
+    #[must_use]
+    pub fn is_device_memory(&self, frames: PhysFrameRange) -> bool {
+        self.devices()
+            .iter()
+            .any(|aperture| encloses(*aperture, frames))
     }
 
     /// The regions of the kernel address space.
@@ -636,6 +670,7 @@ where
         Mapper::<'_, F, A, T, BitmapFrameAllocator>::new(root, access, tlb, &mut frames);
     let Adopted { regions, boot_info } = adopt(&mapper, window_pages)?;
     let identity_pages = drop_identity(&mut mapper, identity)?;
+    let (devices, device_count) = device_ranges(platform);
     Ok(KernelMemory {
         root,
         frames,
@@ -644,7 +679,50 @@ where
         stacks: KernelStacks::new(),
         boot_info,
         identity_pages,
+        framebuffer: platform.framebuffer(),
+        devices,
+        device_count,
     })
+}
+
+/// The apertures the machine reported as device memory, rounded outward to
+/// whole frames. A region that is no range of frames of this machine is
+/// left out: nothing can be mapped from it anyway.
+fn device_ranges(platform: &impl Platform) -> (DeviceRanges, usize) {
+    let mut ranges = [PhysFrameRange::EMPTY; MAX_BOOT_REGIONS];
+    let mut count = 0usize;
+    for region in platform.memory_regions() {
+        if region.kind != MemoryRegionKind::MmioReserved {
+            continue;
+        }
+        let Some(range) = frames_of(region.start.as_u64(), region.len) else {
+            continue;
+        };
+        if let Some(slot) = ranges.get_mut(count) {
+            *slot = range;
+            count = count.saturating_add(1);
+        }
+    }
+    (ranges, count)
+}
+
+/// The frames a byte range covers, its ends rounded outward.
+fn frames_of(start: u64, len: u64) -> Option<PhysFrameRange> {
+    let end = start.checked_add(len)?;
+    let first = start.wrapping_div(PAGE_SIZE);
+    let last = end
+        .checked_add(PAGE_SIZE.saturating_sub(1))?
+        .wrapping_div(PAGE_SIZE);
+    let frame = PhysFrame::from_number(first).ok()?;
+    PhysFrameRange::new(frame, last.saturating_sub(first)).ok()
+}
+
+/// `true` when `inner` lies wholly inside `outer`.
+const fn encloses(outer: PhysFrameRange, inner: PhysFrameRange) -> bool {
+    !inner.is_empty()
+        && !outer.is_empty()
+        && inner.start().number() >= outer.start().number()
+        && inner.end_number() <= outer.end_number()
 }
 
 /// Runs the bring-up and stores the result in [`MEMORY`].

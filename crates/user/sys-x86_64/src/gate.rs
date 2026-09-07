@@ -32,7 +32,9 @@
 
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status};
 use audhsos_abi::layout::MAX_SYSCALL_ARGUMENTS;
-use audhsos_abi::{Error, Fault, FaultKind, Handle, Rights, Syscall, ThreadState};
+use audhsos_abi::{
+    Error, Fault, FaultKind, Framebuffer, FramebufferFormat, Handle, Rights, Syscall, ThreadState,
+};
 use user_rt::handle::{
     EndpointHandle, InterruptHandle, IoPortHandle, MemoryHandle, NotificationHandle, ProcessHandle,
     ReplyHandle, SystemControlHandle, ThreadHandle, Typed,
@@ -59,7 +61,10 @@ pub struct MemoryInfo {
 }
 
 /// How many words `system_info` writes into the message area.
-pub const SYSTEM_INFO_WORDS: usize = 20;
+pub const SYSTEM_INFO_WORDS: usize = 26;
+
+/// Where the six words about the framebuffer begin.
+const FRAMEBUFFER_WORD: usize = 20;
 
 /// What `system_info` says about the machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -70,6 +75,8 @@ pub struct SystemInfo {
     pub ticks_per_second: u64,
     /// The physical address of the root system description pointer.
     pub acpi: u64,
+    /// The framebuffer of the machine, if it has one.
+    pub framebuffer: Option<Framebuffer>,
 }
 
 /// What a message says of its sender and of the answer it expects.
@@ -99,7 +106,7 @@ pub struct Received {
 /// numbers the kernel saw against the table, so a method missing from the
 /// run, or one passing another call of the same shape, fails there
 /// (D-98).
-const COVERED: [Syscall; 42] = [
+const COVERED: [Syscall; 43] = [
     Syscall::ProcessCreate,
     Syscall::ProcessInstallHandle,
     Syscall::ProcessSetFaultHandler,
@@ -142,6 +149,7 @@ const COVERED: [Syscall; 42] = [
     Syscall::SystemInfo,
     Syscall::DebugLog,
     Syscall::MemoryMerge,
+    Syscall::ProcessWatch,
 ];
 
 /// `true` when [`COVERED`] is the system call table, in its order.
@@ -364,6 +372,29 @@ impl Gate {
     /// Whatever the kernel answered.
     pub fn process_kill(&mut self, process: ProcessHandle) -> Result<(), Error> {
         self.done(Syscall::ProcessKill, &[process.raw()])
+    }
+
+    /// `process_watch`: bit `bit` of `notification` is signalled when
+    /// `process` ends, and at once when it has already ended.
+    ///
+    /// It is what a server holding something of a program uses to learn
+    /// that the program is gone. The handle to the process needs no more
+    /// than `INFO`, which is a capability that says who ended and allows
+    /// nothing else.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn process_watch(
+        &mut self,
+        process: ProcessHandle,
+        notification: NotificationHandle,
+        bit: u64,
+    ) -> Result<(), Error> {
+        self.done(
+            Syscall::ProcessWatch,
+            &[process.raw(), notification.raw(), bit],
+        )
     }
 
     // --- threads ---------------------------------------------------------
@@ -874,7 +905,8 @@ impl Gate {
     }
 
     /// `system_info`: the capacity and the live count of every object pool,
-    /// the tick rate, and the root system description pointer.
+    /// the tick rate, the root system description pointer, and the
+    /// framebuffer of the machine when it has one.
     ///
     /// # Errors
     ///
@@ -890,10 +922,22 @@ impl Gate {
                 view.word(at.wrapping_add(1)).unwrap_or(0),
             );
         }
+        let described = |offset: usize| view.word(FRAMEBUFFER_WORD.saturating_add(offset));
+        let framebuffer =
+            FramebufferFormat::from_code(u32::try_from(described(5).unwrap_or(0)).unwrap_or(0))
+                .map(|format| Framebuffer {
+                    phys_start: described(0).unwrap_or(0),
+                    len: described(1).unwrap_or(0),
+                    width: u32::try_from(described(2).unwrap_or(0)).unwrap_or(0),
+                    height: u32::try_from(described(3).unwrap_or(0)).unwrap_or(0),
+                    stride: u32::try_from(described(4).unwrap_or(0)).unwrap_or(0),
+                    format,
+                });
         Ok(SystemInfo {
             pools,
             ticks_per_second: view.word(18).unwrap_or(0),
             acpi: view.word(19).unwrap_or(0),
+            framebuffer,
         })
     }
 

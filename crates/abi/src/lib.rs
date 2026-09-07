@@ -29,7 +29,7 @@ pub use handle::Handle;
 pub use ipc_buffer::{Buffer, BufferMut, Message, MessageError, Status};
 pub use object::ObjectType;
 pub use rights::Rights;
-pub use startup::{Given, Role, STARTUP_LABEL, StartupError};
+pub use startup::{Given, Payload, Role, STARTUP_LABEL, Screen, StartupError};
 pub use syscall::{FirstArgument, Syscall};
 pub use thread::{Fault, FaultKind, ThreadState};
 

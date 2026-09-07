@@ -239,6 +239,14 @@ name = "fuzz-support"
 version = "0.1.0"
 
 [[package]]
+name = "gfx"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "test-support",
+]
+
+[[package]]
 name = "kernel-acpi"
 version = "0.1.0"
 dependencies = [
@@ -266,6 +274,7 @@ dependencies = [
 name = "kernel-hal-api"
 version = "0.1.0"
 dependencies = [
+ "audhsos-abi",
  "kernel-types",
 ]
 
@@ -477,6 +486,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "server-display"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-collections",
+ "gfx",
+ "user-proto",
+]
+
+[[package]]
 name = "server-memory"
 version = "0.1.0"
 dependencies = [
@@ -513,7 +532,9 @@ version = "0.1.0"
 dependencies = [
  "audhsos-abi",
  "driver-uart16550",
+ "gfx",
  "server-console",
+ "server-display",
  "server-memory",
  "server-name",
  "user-loader",
@@ -527,6 +548,7 @@ name = "user-proto"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "gfx",
  "user-rt",
 ]
 
@@ -570,6 +592,7 @@ version = "0.1.0"
 dependencies = [
  "audhsos-abi",
  "audhsos-symbols",
+ "gfx",
  "kernel-test-harness",
  "user-loader",
 ]

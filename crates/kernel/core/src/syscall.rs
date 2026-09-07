@@ -13,9 +13,9 @@
 
 use core::marker::PhantomData;
 
-use audhsos_abi::Error;
 use audhsos_abi::ipc_buffer::SIZE;
 use audhsos_abi::layout::PAGE_SIZE;
+use audhsos_abi::{Error, Framebuffer};
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::device::Devices;
 use kernel_hal_api::interrupt::{InterruptError, InterruptLine, Vector};
@@ -311,6 +311,14 @@ where
     fn meets_ram(&self, frames: PhysFrameRange) -> bool {
         let reserve = self.memory.frames().range();
         overlaps(frames, reserve) || self.memory.free().iter().any(|ram| overlaps(frames, ram))
+    }
+
+    fn is_device_memory(&self, frames: PhysFrameRange) -> bool {
+        self.memory.is_device_memory(frames)
+    }
+
+    fn framebuffer(&self) -> Option<Framebuffer> {
+        self.memory.framebuffer()
     }
 
     fn acpi_pointer(&self) -> u64 {

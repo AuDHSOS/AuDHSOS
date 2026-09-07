@@ -64,7 +64,7 @@ macro_rules! object_types {
 }
 
 object_types! {
-    Process = 1 => [MANAGE, MAP, INSTALL],
+    Process = 1 => [MANAGE, MAP, INSTALL, INFO],
     Thread = 2 => [MANAGE],
     MemoryObject = 3 => [READ, WRITE, EXECUTE, MAP, INFO],
     Endpoint = 4 => [SEND, RECV, BADGE],

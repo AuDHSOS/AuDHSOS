@@ -239,7 +239,7 @@ fn the_root_task_is_given_itself_the_system_and_the_boot_image() {
         vec![Role::OwnProcess, Role::SystemControl, Role::BootImage]
     );
     for pair in &given {
-        let entry = objects.entry(task.process, pair.handle).unwrap();
+        let entry = objects.entry(task.process, pair.handle().unwrap()).unwrap();
         let kind = entry.object.object_type();
         let expected = match pair.role {
             Role::OwnProcess => ObjectType::Process,
@@ -262,7 +262,7 @@ fn every_free_region_becomes_a_memory_object_of_the_root_task() {
         .iter()
         .filter(|pair| pair.role == Role::Ram)
         .map(|pair| {
-            let entry = objects.entry(task.process, pair.handle).unwrap();
+            let entry = objects.entry(task.process, pair.handle().unwrap()).unwrap();
             let id = entry
                 .object
                 .typed::<kernel_objects::object::MemoryObject>()
@@ -283,7 +283,7 @@ fn the_boot_image_object_covers_the_frames_it_was_given() {
         .iter()
         .find(|pair| pair.role == Role::BootImage)
         .unwrap();
-    let entry = objects.entry(task.process, pair.handle).unwrap();
+    let entry = objects.entry(task.process, pair.handle().unwrap()).unwrap();
     let id = entry
         .object
         .typed::<kernel_objects::object::MemoryObject>()

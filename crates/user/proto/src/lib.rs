@@ -7,6 +7,7 @@
 
 pub mod bytes;
 pub mod console;
+pub mod display;
 pub mod label;
 pub mod memory;
 pub mod name;
@@ -14,6 +15,7 @@ pub mod parent;
 
 pub use bytes::Bytes;
 pub use console::{Chunk, MAX_CHUNK};
+pub use display::{Mode, Surface};
 pub use label::{Label, ProtoError, Protocol, VERSION};
 pub use name::{MAX_NAME, Name};
 

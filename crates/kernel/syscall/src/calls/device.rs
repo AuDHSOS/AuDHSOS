@@ -10,7 +10,7 @@
 //! because those belong to the memory server; a port access outside the
 //! range of the capability it was made through never reaches the hardware.
 
-use audhsos_abi::layout::TICKS_PER_SECOND;
+use audhsos_abi::layout::{MAX_RESULT_WORDS, TICKS_PER_SECOND};
 use audhsos_abi::{Error, Rights};
 use kernel_ipc::interrupt;
 use kernel_objects::handle_table::Entry;
@@ -24,6 +24,10 @@ use crate::environment::Environment;
 
 /// The widths a port access may have, in bytes.
 const WIDTHS: [u8; 3] = [1, 2, 4];
+
+/// Where the six words of the framebuffer begin in the result of
+/// [`system_info`].
+const FRAMEBUFFER_WORD: usize = 20;
 
 /// `interrupt_create`: an interrupt object for an ISA line.
 ///
@@ -285,8 +289,9 @@ fn port_of<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
 /// # Errors
 ///
 /// [`Error::InvalidArgument`] for a count of zero, for a frame number or a
-/// count the address space cannot hold, and for a range that meets memory
-/// the machine reported as usable; [`Error::QuotaExceeded`],
+/// count the address space cannot hold, for a range that meets memory the
+/// machine reported as usable, and for one that lies in no aperture it
+/// reported as device memory; [`Error::QuotaExceeded`],
 /// [`Error::PoolExhausted`], or [`Error::OutOfHandles`] as the other
 /// creating calls.
 pub fn memory_create_device<
@@ -308,6 +313,9 @@ pub fn memory_create_device<
     let start = PhysFrame::from_number(first).map_err(|_| Error::InvalidArgument)?;
     let frames = PhysFrameRange::new(start, count).map_err(|_| Error::InvalidArgument)?;
     if machine.environment.meets_ram(frames) {
+        return Err(Error::InvalidArgument);
+    }
+    if !machine.environment.is_device_memory(frames) {
         return Err(Error::InvalidArgument);
     }
     super::charge_object(machine, process)?;
@@ -338,15 +346,18 @@ pub fn memory_create_device<
     }
 }
 
-/// `system_info`: twenty words about the machine, in the message area of the
-/// caller's own buffer.
+/// `system_info`: twenty-six words about the machine, in the message area of
+/// the caller's own buffer.
 ///
 /// For each of the eight pools its capacity and its live count, in the order
 /// processes, threads, memory objects, endpoints, notifications, replies,
 /// interrupts, port ranges, then the capacity and the live count of the
 /// handle arena, then the tick frequency, then the physical address of the
 /// root system description pointer, which is zero when the platform named
-/// none.
+/// none, and last the framebuffer: its physical start, its length, its
+/// width, its height, its stride, and the code of its pixel format, all six
+/// zero when the machine has none. The root task makes the device memory
+/// object of the display server out of those six words.
 ///
 /// # Errors
 ///
@@ -362,7 +373,7 @@ pub fn system_info<
 ) -> Result<Reply, Error> {
     let capacities = machine.objects.capacities();
     let counts = machine.objects.counts();
-    let mut words = [0_u64; 20];
+    let mut words = [0_u64; MAX_RESULT_WORDS];
     for (index, (capacity, live)) in capacities.iter().zip(counts.iter()).enumerate() {
         let at = index.saturating_mul(2);
         if let Some(slot) = words.get_mut(at) {
@@ -377,6 +388,21 @@ pub fn system_info<
     }
     if let Some(slot) = words.get_mut(19) {
         *slot = machine.environment.acpi_pointer();
+    }
+    if let Some(framebuffer) = machine.environment.framebuffer() {
+        let described = [
+            framebuffer.phys_start,
+            framebuffer.len,
+            u64::from(framebuffer.width),
+            u64::from(framebuffer.height),
+            u64::from(framebuffer.stride),
+            u64::from(framebuffer.format.code()),
+        ];
+        for (index, value) in described.iter().enumerate() {
+            if let Some(slot) = words.get_mut(index.saturating_add(FRAMEBUFFER_WORD)) {
+                *slot = *value;
+            }
+        }
     }
     Ok(Reply::message(&words))
 }

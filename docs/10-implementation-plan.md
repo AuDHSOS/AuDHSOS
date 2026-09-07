@@ -2425,7 +2425,8 @@ Layer 1 logic crate, `no_std`, `forbid(unsafe_code)`, deps `audhsos-abi`
   `is_empty`; `Damage`: a fixed array of 16 rectangles that collapses to
   the bounding rectangle when full.
 - `surface.rs`: `Surface<'a> { bytes: &'a mut [u8], width, height, stride,
-  format }`; `new` validates `bytes.len() >= height * stride * 4`;
+  format }`, `stride` in pixels as `Framebuffer::stride` is; `new`
+  validates `bytes.len() >= height * stride * 4`;
   `fill(rect, color)`, `blit(&Surface, src: Rect, dst_x, dst_y)`, both
   clipping to the surface and recording damage; every byte access goes
   through `get`/`get_mut` with checked arithmetic.
@@ -2443,7 +2444,8 @@ against a checksum table in the test file.
 
 ### 10.9.2 Display protocol (`user-proto`)
 
-Label range `DISPLAY`. Messages: `Info -> { width, height, format }`;
+`Protocol::Display = 5` in `user-proto::label`, with catalog rows in
+6.6.56 for the new encodings. Messages: `Info -> { width, height, format }`;
 `CreateSurface { width, height } -> { surface id, memory handle }` (the
 display server allocates the backing store from the memory server and
 transfers a handle with `READ | WRITE | MAP`); `Present { surface id,
@@ -2455,46 +2457,122 @@ the screen, `PermissionDenied` for a surface of another badge.
 
 ### 10.9.3 `server-display` (`crates/user/servers/display`)
 
-Startup message: the framebuffer `Device` memory handle and its
-description, the memory server endpoint, the name server endpoint. Maps
-the framebuffer read/write, no-execute, `Uncached`. Keeps one `Surface`
-per client keyed by badge; `present` goes through `gfx::present`; the
-cursor sprite (16 by 16 pixels, project data) is drawn after each present
-and the background restored before the next. Registers as `display`. The
-logic lives in `state.rs` and is tested on the host with the recording
-double; the process loop in `main.rs` only moves messages.
+A logic crate of layer u2, like `server-console`, `server-memory`, and
+`server-name`: `Kind::Logic`, `Target::Host`, `forbid(unsafe_code)`, deps
+`audhsos-abi`, `audhsos-collections`, `gfx`, `user-proto`. It holds what
+the server decides: one `Surface` per client keyed by badge, the cursor,
+what `present` copies, and which requests are refused. It is tested on the
+host against a recording `PixelSink`.
+
+The process is `crates/user/programs/src/bin/server_display.rs` in the
+adapter crate `user-programs`, as every other server process of this
+system is. It maps the framebuffer, turns the mapping into bytes, and
+moves messages; its `unsafe` counts against that crate's budget.
+
+Startup: the handle of the framebuffer `Device` memory object under the
+role `Framebuffer`, and the description of the mode under the value roles
+`FramebufferGeometry` (width in the high half of the word, height in the
+low half) and `FramebufferLine` (stride in the high half, format code in
+the low half), which D-103 adds to `audhsos_abi::startup`. The memory
+object carries `CachePolicy::Uncached`, so the mapping does; it is mapped
+readable, writable, and not executable. Registers as `display`. A process
+that is started without the framebuffer roles answers `NotFound` to every
+request and runs on.
 
 ### 10.9.4 Root task and kernel
 
-`system_info` returns the framebuffer description as six result words
-(`0` throughout when absent). `server-init` calls
-`memory_create_device(start, len, Uncached)` for it and hands the handle
-to the display server; without a framebuffer the display server starts
-and answers `NotFound`. The kernel accepts a device range that overlaps
-no `Usable` region and lies inside an `MmioReserved` region of the boot
-information.
+`system_info` gains six result words, 20 to 25: the physical start of the
+framebuffer, its length, width, height, stride, and format code, zero
+throughout when the machine has none. `MAX_RESULT_WORDS` in
+`audhsos-abi::layout` and `SYSTEM_INFO_WORDS` in `user-sys-x86_64` become
+26, `SystemInfo` gains `framebuffer: Option<Framebuffer>`, and the offsets
+the `every_syscall` test program reads follow.
+
+The kernel keeps the framebuffer description, which until now it did not:
+`Platform` gains `fn framebuffer(&self) -> Option<Framebuffer>`,
+`ScriptedPlatform` in `kernel-hal-api::doubles` gains it, the bring-up
+reads it beside the ACPI pointer, and `Environment` hands it to
+`system_info`. `boot::run` reports it: `[info] framebuffer=1280x800
+stride=1280 format=bgrx8888` or `[info] framebuffer=absent`, and 03 3.1.7
+gains the `[info]` line.
+
+`memory_create_device` refuses a range that lies in no `MmioReserved`
+region of the boot information, beside the check against usable memory it
+already makes. The kernel therefore keeps those regions: a bounded array
+of at most `MAX_BOOT_REGIONS` frame ranges filled at bring-up, and
+`Environment::inside_device_memory(frames)` answered from it.
+
+`server-init` calls `memory_create_device(start, len)` for the framebuffer
+of `system_info` and grants the handle and the description to the display
+server (`Grant::Framebuffer`). Without a framebuffer it grants nothing and
+the display server answers `NotFound`.
+
+`memory_map` merges a mapping that continues one the process already
+holds, per D-104: without it a full screen of 1280 by 800 pixels costs
+sixteen of the sixty-four regions of a process, because a call maps at
+most `MAX_PAGES_PER_CALL` pages and inserted one region each. The catalog
+items go into 6.6.5.
+
+The client of the end-to-end test is `app-paint`, a program of the
+archive: it looks up `display`, asks for the mode, creates a full-screen
+surface, fills a rectangle, draws one line of text, presents with damage
+rectangles, reports to the root task, and exits. The archive `PROGRAMS` of
+the xtask and the start table of `server_init.rs` grow by `server-display`
+and `app-paint`.
 
 ### 10.9.5 `xtask` additions
 
 - `qmp.rs`: `Qmp::connect(socket path, timeout)` reads the greeting and
   negotiates `qmp_capabilities`; `execute(command, arguments) ->
   Result<Value, QmpError>`; `screendump(path) -> Result<Image, QmpError>`.
+  QEMU 11 answers `screendump` with `format=ppm`.
 - `json.rs`: `Value` with a parser and a writer for the subset of catalog
   6.6.28. `ppm.rs`: `Image { width, height, rgb: Vec<u8> }`, `pixel(x, y)`,
   `checksum(rect)`.
-- The QEMU command line for `test --e2e` gets `-qmp unix:<scratch
-  dir>/qmp.sock,server,nowait`; `run --display` replaces `-display none`
-  with `-display cocoa` on macOS and `-display gtk` elsewhere.
-- Loader test image `no_vga`: run with `-vga none`; expected: the kernel
-  reaches the harness and prints `[info] framebuffer=absent`.
-- `policy::CRATES` entries `gfx` (Logic, deps `audhsos-abi`) and
-  `server-display` (Logic, `X86_64None`, deps `user-rt`, `user-proto`,
-  `gfx`); loader budget updated; catalog rows in 05.
+- The QEMU command line for `test --e2e` gets `-qmp unix:<socket
+  path>,server,nowait`. A Unix socket path holds at most 104 bytes and
+  QEMU refuses a longer one before it starts, and the path of a worktree
+  of this project already spends 95 of them on `target/qmp.sock`, so the
+  socket goes into a short directory of its own and the runner says so
+  plainly when even that does not fit.
+- `run --display` is implemented: it replaces `-display none` with
+  `-display cocoa` on macOS and `-display gtk` elsewhere.
+- The whole system runs a second time with `-vga none`, where the firmware
+  reports no Graphics Output Protocol: the kernel prints
+  `[info] framebuffer=absent`, the display server prints
+  `[display] no framebuffer`, `app-paint` prints `[paint] nothing drawn`,
+  and the run ends by itself. It is the same image and not one of its own,
+  because what is being tested is this system on a machine without a
+  screen.
+- `policy::CRATES` entries `gfx` (Logic, Host, deps `audhsos-abi`,
+  `test-support`) and `server-display` (Logic, Host, deps `audhsos-abi`,
+  `audhsos-collections`, `gfx`, `user-proto`); `user-programs` gains `gfx`
+  and `server-display` and a raised unsafe budget; catalog rows in 05 for
+  both crates.
 
 ### 10.9.6 Acceptance
 
 `check` green; catalog 6.6.24, 6.6.26, 6.6.27 display items, 6.6.28,
-6.6.29 output items; the e2e test `display_fill_and_text` passes.
+6.6.29 output items; `sh tools/xtask.sh test --e2e` holds a picture of the
+running machine against what `app-paint` says it drew, and runs the same
+image once more without a graphics adapter.
+
+Done: `gfx`, the display protocol, `server-display` and its process,
+`app-paint`, the framebuffer in `system_info` and in the startup message
+(D-103), the merging of mappings (D-104), the QMP client with its JSON
+subset and PPM reader, and the run without a graphics adapter. The unsafe
+budget of `user-programs` rose to twenty-one for the three mappings the two
+new programs read (D-105).
+
+Beyond the plan, and asked for after the phase: a server learns that a
+client is gone. `process_watch` binds the end of a process to a bit of a
+notification (D-106), a client hands the display server a capability to
+itself that carries `INFO` and nothing else, and a second thread of the
+server turns the signal into a message to the first. A program that draws
+is also given a badged capability to the display server, as it is given one
+to every other server: a capability found under a name carries no badge,
+and a server that keeps a surface per client cannot tell two of nobody
+apart.
 
 ## 10.10 Phase 10: PS/2 input
 

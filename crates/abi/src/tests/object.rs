@@ -39,7 +39,7 @@ fn masks_match_the_object_table() {
     let expected = [
         (
             ObjectType::Process,
-            Rights::MANAGE | Rights::MAP | Rights::INSTALL,
+            Rights::MANAGE | Rights::MAP | Rights::INSTALL | Rights::INFO,
         ),
         (ObjectType::Thread, Rights::MANAGE),
         (

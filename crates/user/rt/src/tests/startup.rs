@@ -3,9 +3,10 @@
 
 //! Tests of `crate::startup`.
 
+use audhsos_abi::FramebufferFormat;
 use audhsos_abi::Handle;
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE};
-use audhsos_abi::startup::{Role, StartupError, Writer};
+use audhsos_abi::startup::{Role, Screen, StartupError, Writer};
 
 use crate::handle::Typed;
 use crate::startup::{MAX_RAM_OBJECTS, ReadError, Startup};
@@ -68,6 +69,8 @@ fn every_role_lands_in_the_field_it_names() {
         (Role::IoPorts, handle(8)),
         (Role::Interrupt, handle(9)),
         (Role::Parent, handle(10)),
+        (Role::Framebuffer, handle(11)),
+        (Role::DisplayServer, handle(12)),
     ])
     .unwrap();
     assert_eq!(startup.own_process.unwrap().handle(), handle(1));
@@ -80,12 +83,16 @@ fn every_role_lands_in_the_field_it_names() {
     assert_eq!(startup.io_ports.unwrap().handle(), handle(8));
     assert_eq!(startup.interrupt.unwrap().handle(), handle(9));
     assert_eq!(startup.parent.unwrap().handle(), handle(10));
+    assert_eq!(startup.framebuffer.unwrap().handle(), handle(11));
+    assert_eq!(startup.display_server.unwrap().handle(), handle(12));
     // The name of this test is a promise, and a role added later would
     // break it silently otherwise: every role but `Ram`, which is a list
-    // and has a test of its own, is one field above.
+    // and has a test of its own, and the two value roles, which carry no
+    // handle and are read in `the_mode_of_the_framebuffer_comes_as_two_words`,
+    // is one field above.
     assert_eq!(
         Role::ALL.len(),
-        11,
+        15,
         "a role was added; give it a field and a line here"
     );
 }
@@ -154,4 +161,66 @@ fn every_error_renders_a_message() {
     for case in cases {
         assert!(!format!("{case}").is_empty(), "{case:?} has no message");
     }
+}
+
+/// A buffer carrying a startup message of handles and values.
+fn mixed_message(handles: &[(Role, Handle)], values: &[(Role, u64)]) -> [u8; SIZE] {
+    let mut bytes = [0u8; SIZE];
+    let mut view = BufferMut::new(&mut bytes);
+    let mut writer = Writer::new();
+    for (role, handle) in handles {
+        writer.give(&mut view, *role, *handle).unwrap();
+    }
+    for (role, value) in values {
+        writer.tell(&mut view, *role, *value).unwrap();
+    }
+    writer.finish(&mut view).unwrap();
+    bytes
+}
+
+/// What a program reads out of such a message.
+fn read_mixed(handles: &[(Role, Handle)], values: &[(Role, u64)]) -> Result<Startup, ReadError> {
+    let bytes = mixed_message(handles, values);
+    Startup::read(Buffer::new(&bytes))
+}
+
+#[test]
+fn the_mode_of_the_framebuffer_comes_as_two_words() {
+    let screen = Screen {
+        width: 1280,
+        height: 800,
+        stride: 1280,
+        format: FramebufferFormat::Bgrx8888,
+    };
+    let startup = read_mixed(
+        &[(Role::Framebuffer, handle(3))],
+        &[
+            (Role::FramebufferGeometry, screen.geometry()),
+            (Role::FramebufferLine, screen.line()),
+        ],
+    )
+    .unwrap();
+    assert_eq!(startup.framebuffer.unwrap().handle(), handle(3));
+    assert_eq!(startup.screen(), Some(screen));
+}
+
+#[test]
+fn half_a_description_of_the_framebuffer_is_no_mode() {
+    let startup = read_mixed(&[], &[(Role::FramebufferGeometry, 1)]).unwrap();
+    assert_eq!(startup.screen(), None);
+    let startup = read_mixed(&[], &[(Role::FramebufferLine, 1)]).unwrap();
+    assert_eq!(startup.screen(), None);
+    assert_eq!(read_mixed(&[], &[]).unwrap().screen(), None);
+}
+
+#[test]
+fn a_value_role_may_not_appear_twice_either() {
+    let outcome = read_mixed(
+        &[],
+        &[(Role::FramebufferLine, 1), (Role::FramebufferLine, 2)],
+    );
+    assert_eq!(
+        outcome.unwrap_err(),
+        ReadError::Duplicate(Role::FramebufferLine)
+    );
 }

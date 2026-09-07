@@ -464,7 +464,8 @@ through shared memory objects.
 | `interrupt_create`, `interrupt_bind`, `interrupt_ack` | SystemControl / Interrupt | interrupt forwarding |
 | `ioport_create`, `ioport_read`, `ioport_write` | SystemControl / IoPortRange | x86 port I/O |
 | `memory_create_device` | SystemControl | device memory object |
-| `system_info` | SystemControl | pool capacities and usage, tick frequency, and the address of the root system description pointer; the framebuffer description joins it in Phase 9 |
+| `system_info` | SystemControl | pool capacities and usage, tick frequency, the address of the root system description pointer, and the description of the framebuffer, which is six zero words on a machine without one |
+| `process_watch` | Process (`INFO`) | binds the end of a process to one bit of a notification, so a server that holds something of a program gets it back when the program is gone (D-106) |
 | `debug_log` | none | writes the message region to the debug UART; exists only in builds with the `debug-uart` feature |
 
 ## 2.9 Boot sequence
@@ -550,8 +551,8 @@ one runs on is a logic crate of its own, host-tested without a machine
 | `server-console` | 16550 UART driver: `driver-uart16550` register logic over `IoPortRange` system calls plus an `Interrupt`; `write(bytes)`, `read(max)` | no |
 | `server-memory` | allocation policy over memory objects: `allocate(len, alignment)`, `release`; zeroes every object before hand-out and immediately after return | no |
 | `user-programs` | the seven binaries: `server-init`, the root task, which parses the boot image, starts the servers and hands out the capabilities; `server-name`, `server-console` and `server-memory` around the three logic crates above; and `app-hello`, `app-checks` and `app-faulter`, which are what the end-to-end run watches | allowlisted |
-| `gfx` (Phase 9) | framebuffer logic: pixel formats, filling, blitting, clipping, damage rectangles, the project's bitmap font, text rendering | no |
-| `server-display` (Phase 9) | owns the framebuffer `Device` memory object; surfaces backed by shared memory objects, `present` with damage rectangles, cursor | no |
+| `gfx` | framebuffer logic: pixel formats, filling, blitting, clipping, damage rectangles, the project's bitmap font, text rendering | no |
+| `server-display` | owns the framebuffer `Device` memory object; surfaces backed by shared memory objects, `present` with damage rectangles, cursor | no |
 | `driver-i8042` (Phase 10) | i8042 controller and PS/2 device logic over the port access trait: controller initialization, scancode set 2 decoding, mouse packet parsing | no |
 | `server-input` (Phase 10) | owns the i8042 port range and the interrupts for lines 1 and 12; delivers key and pointer events to subscribers through a ring buffer in a shared memory object plus a notification | no |
 | `app-canvas` (Phase 11) | graphical demonstration and end-to-end test client: cursor, drawing, typed text | no |

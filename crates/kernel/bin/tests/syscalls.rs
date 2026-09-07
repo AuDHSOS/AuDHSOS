@@ -57,9 +57,9 @@ const MEMORY_WORD: usize = 2;
 const BAD_WORD: usize = 3;
 const CONTROL_WORD: usize = 4;
 
-/// The payload word the first pair is in. Above the twenty words
+/// The payload word the first pair is in. Above the twenty-six words
 /// `system_info` writes into the message area of the caller's own buffer.
-const FIRST_RESULT: usize = 24;
+const FIRST_RESULT: usize = 28;
 
 /// The payload word past the last pair.
 const RESULTS_END: usize = 400;
@@ -144,7 +144,12 @@ fn run_once() {
     let own_process = support::install(
         process.id,
         AnyObjectId::of(process.id),
-        Rights::MANAGE | Rights::MAP | Rights::INSTALL | Rights::DUPLICATE | Rights::TRANSFER,
+        Rights::MANAGE
+            | Rights::MAP
+            | Rights::INSTALL
+            | Rights::INFO
+            | Rights::DUPLICATE
+            | Rights::TRANSFER,
     );
     let own_thread = support::install(
         process.id,
@@ -506,12 +511,16 @@ const REFUSALS: &[(Syscall, Error, &str)] = &[
         Error::InvalidHandle,
         "a handle that names nothing",
     ),
+    (
+        Syscall::ProcessWatch,
+        Error::InvalidArgument,
+        "a bit index above the sixty-four a notification has",
+    ),
 ];
 
 /// Every call this phase implements answered exactly one error, and it is
-/// the one its failure case asks for. A table of twenty, against the
-/// twenty of the phase: nothing is refused for the wrong reason, and
-/// nothing is missing.
+/// the one its failure case asks for. A table as long as the table of
+/// calls: nothing is refused for the wrong reason, and nothing is missing.
 #[test_case]
 fn every_call_of_the_table_fails_from_user_mode_for_a_reason_of_its_own() {
     with_log(|log| {

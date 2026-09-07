@@ -346,6 +346,9 @@ fn forget_thread<
         holder.remove_thread(id);
     });
     machine.objects.threads.force_release(id);
+    // A process whose last thread has gone is a program that has ended, and
+    // whoever asked to hear of it hears of it here.
+    let _switch = crate::watch::thread_left(machine, process);
 }
 
 /// An address a user thread may run at or stand on.
@@ -523,6 +526,12 @@ fn end<E: Environment, const NP: usize, const NT: usize, const NM: usize, const 
         holder.remove_thread(id);
         holder.kernel_object_quota.refund(1);
     });
+    // The last thread of a process is the end of the program, and the
+    // watchers hear of it before the caller returns to user mode.
+    let mut outcome = outcome;
+    if crate::watch::thread_left(machine, process)? {
+        outcome.reschedule = true;
+    }
     Ok(outcome)
 }
 

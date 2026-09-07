@@ -23,16 +23,18 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds seven programs and each uses a different part of
+// The package holds nine programs and each uses a different part of
 // what it depends on; these are the crates this one does not.
 use driver_uart16550 as _;
+use gfx as _;
 use server_console as _;
+use server_display as _;
 use server_memory as _;
 use server_name as _;
 use user_proto::parent;
 
 use audhsos_abi::layout::{MAX_MESSAGE_HANDLES, PAGE_SIZE};
-use audhsos_abi::startup::{Role, Writer};
+use audhsos_abi::startup::{Payload, Role, Screen, Writer};
 use audhsos_abi::{Error, Handle, Rights};
 use user_loader::tar::{Archive, Kind};
 use user_loader::{Plan, STACK_PAGES};
@@ -57,9 +59,15 @@ enum Grant {
     Ram,
     /// The serial port and the line it interrupts on.
     Serial,
+    /// The framebuffer of the machine and the mode the firmware set.
+    Framebuffer,
 }
 
 /// One line of the start table: what to start, how, and with what.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per thing a program may reach, which is what a table of who gets what is"
+)]
 #[derive(Clone, Copy, Debug)]
 struct Program {
     /// The name of the file in the archive.
@@ -79,6 +87,10 @@ struct Program {
     names: bool,
     /// Whether it may ask the memory server.
     memory: bool,
+    /// Whether it may draw, which is a badged capability to the display
+    /// server. A program that finds the server by name instead is refused
+    /// by it: an unbadged request names nobody.
+    draws: bool,
     /// Whether it reports to this program when it is done. The machine
     /// ends when every program that reports has reported.
     reports: bool,
@@ -89,7 +101,7 @@ struct Program {
 /// The quotas are what the programs measured out at need with room over
 /// them; a program that asks for more than its line says is refused by the
 /// kernel and not by this table.
-const PROGRAMS: [Program; 6] = [
+const PROGRAMS: [Program; 8] = [
     Program {
         name: b"server-memory",
         priority: priority::SERVER,
@@ -99,6 +111,7 @@ const PROGRAMS: [Program; 6] = [
         grant: Grant::Ram,
         names: false,
         memory: false,
+        draws: false,
         reports: false,
     },
     Program {
@@ -110,6 +123,7 @@ const PROGRAMS: [Program; 6] = [
         grant: Grant::None,
         names: false,
         memory: true,
+        draws: false,
         reports: false,
     },
     Program {
@@ -121,6 +135,22 @@ const PROGRAMS: [Program; 6] = [
         grant: Grant::Serial,
         names: true,
         memory: true,
+        draws: false,
+        reports: false,
+    },
+    // The display server maps the framebuffer, which is four mebibytes on
+    // the reference machine, and one surface per client beside it, so its
+    // quota of frames is the largest of any program here.
+    Program {
+        name: b"server-display",
+        priority: priority::DRIVER,
+        handles: 64,
+        frames: 256,
+        objects: 64,
+        grant: Grant::Framebuffer,
+        names: true,
+        memory: true,
+        draws: false,
         reports: false,
     },
     Program {
@@ -132,6 +162,7 @@ const PROGRAMS: [Program; 6] = [
         grant: Grant::None,
         names: true,
         memory: true,
+        draws: false,
         reports: true,
     },
     Program {
@@ -143,6 +174,19 @@ const PROGRAMS: [Program; 6] = [
         grant: Grant::None,
         names: true,
         memory: true,
+        draws: false,
+        reports: true,
+    },
+    Program {
+        name: b"app-paint",
+        priority: priority::APPLICATION,
+        handles: 32,
+        frames: 256,
+        objects: 32,
+        grant: Grant::None,
+        names: true,
+        memory: true,
+        draws: true,
         reports: true,
     },
     // It faults and its thread stops there, so it never reports and the
@@ -156,6 +200,7 @@ const PROGRAMS: [Program; 6] = [
         grant: Grant::None,
         names: true,
         memory: true,
+        draws: false,
         reports: false,
     },
 ];
@@ -210,6 +255,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         memory: None,
         memory_for_self: None,
         console: None,
+        display: None,
         console_for_self: None,
         next_badge: 1,
     };
@@ -242,6 +288,8 @@ struct World {
     memory_for_self: Option<EndpointHandle>,
     /// The endpoint of the console driver.
     console: Option<EndpointHandle>,
+    /// The endpoint of the display server.
+    display: Option<EndpointHandle>,
     /// The same, badged for the root task's own lines.
     console_for_self: Option<EndpointHandle>,
     /// What the next child reports its faults under.
@@ -405,7 +453,8 @@ fn install_all(
     unsafe {
         mapping.zero();
     }
-    let mut given: [(Role, Handle); MAX_GIVEN] = [(Role::OwnProcess, Handle::MAX); MAX_GIVEN];
+    let mut given: [(Role, Payload); MAX_GIVEN] =
+        [(Role::OwnProcess, Payload::Handle(Handle::MAX)); MAX_GIVEN];
     let mut count = 0usize;
 
     let own = gate.process_install_handle(child, child.handle(), ObjectRights::PROCESS)?;
@@ -429,6 +478,16 @@ fn install_all(
         let marked = gate.endpoint_badge(memory, badge)?;
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
         push(&mut given, &mut count, Role::MemoryServer, handle)?;
+    }
+    // A program that draws is known to the display server by the badge its
+    // parent puts on: a capability found under a name carries none, and a
+    // server that keeps something per client cannot tell two of those apart.
+    if program.draws
+        && let Some(display) = world.display
+    {
+        let marked = gate.endpoint_badge(display, badge)?;
+        let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
+        push(&mut given, &mut count, Role::DisplayServer, handle)?;
     }
     // Everyone but the console driver gets the console as its log. The
     // driver is the console: a line it sent itself would be a call on the
@@ -464,6 +523,22 @@ fn install_all(
             let handle = gate.process_install_handle(child, line.handle(), ObjectRights::MANAGE)?;
             push(&mut given, &mut count, Role::Interrupt, handle)?;
         }
+        // A machine without a framebuffer grants nothing here: the display
+        // server starts all the same and answers that there is no screen.
+        Grant::Framebuffer => {
+            if let Some((memory, screen)) = framebuffer(gate, world)? {
+                let handle =
+                    gate.process_install_handle(child, memory.handle(), ObjectRights::DEVICE)?;
+                push(&mut given, &mut count, Role::Framebuffer, handle)?;
+                tell(
+                    &mut given,
+                    &mut count,
+                    Role::FramebufferGeometry,
+                    screen.geometry(),
+                )?;
+                tell(&mut given, &mut count, Role::FramebufferLine, screen.line())?;
+            }
+        }
     }
 
     let mut writer = Writer::new();
@@ -474,8 +549,11 @@ fn install_all(
             return Err(Error::BufferTooSmall);
         };
         let mut buffer = audhsos_abi::BufferMut::new(page);
-        for (role, handle) in given.iter().take(count) {
-            writer.give(&mut buffer, *role, *handle)?;
+        for (role, payload) in given.iter().take(count) {
+            match payload {
+                Payload::Handle(handle) => writer.give(&mut buffer, *role, *handle)?,
+                Payload::Value(value) => writer.tell(&mut buffer, *role, *value)?,
+            }
         }
         writer.finish(&mut buffer)?;
     }
@@ -492,13 +570,33 @@ const MAX_GIVEN: usize = audhsos_abi::layout::MAX_MESSAGE_WORDS / 2;
 /// silently received fewer capabilities than its parent meant to give it
 /// would fail somewhere else, for a reason nothing names.
 fn push(
-    given: &mut [(Role, Handle); MAX_GIVEN],
+    given: &mut [(Role, Payload); MAX_GIVEN],
     count: &mut usize,
     role: Role,
     handle: Handle,
 ) -> Result<(), Error> {
+    record(given, count, role, Payload::Handle(handle))
+}
+
+/// Records one pair that carries a number instead of a handle (D-103).
+fn tell(
+    given: &mut [(Role, Payload); MAX_GIVEN],
+    count: &mut usize,
+    role: Role,
+    value: u64,
+) -> Result<(), Error> {
+    record(given, count, role, Payload::Value(value))
+}
+
+/// Records one pair, whatever its second word means.
+fn record(
+    given: &mut [(Role, Payload); MAX_GIVEN],
+    count: &mut usize,
+    role: Role,
+    payload: Payload,
+) -> Result<(), Error> {
     let slot = given.get_mut(*count).ok_or(Error::BufferTooSmall)?;
-    *slot = (role, handle);
+    *slot = (role, payload);
     *count = count.wrapping_add(1);
     Ok(())
 }
@@ -507,7 +605,15 @@ fn push(
 struct ObjectRights;
 
 impl ObjectRights {
-    const PROCESS: Rights = Rights::MAP.union(Rights::MANAGE);
+    /// A program's own process: it maps memory into itself, manages its
+    /// own threads, and may hand a capability to itself to a server that
+    /// gives something back when it ends — which is `INFO` and, to be able
+    /// to give it away at all, `DUPLICATE` and `TRANSFER` (D-106).
+    const PROCESS: Rights = Rights::MAP
+        .union(Rights::MANAGE)
+        .union(Rights::INFO)
+        .union(Rights::DUPLICATE)
+        .union(Rights::TRANSFER);
     /// A program's own endpoint: it receives on it, badges it for the
     /// clients it hands it to, and passes it on — which is what registering
     /// a name is, and what needs `TRANSFER`.
@@ -528,7 +634,37 @@ impl ObjectRights {
         .union(Rights::INFO)
         .union(Rights::TRANSFER);
     const PORTS: Rights = Rights::READ.union(Rights::WRITE);
+    /// The framebuffer: it is written to and mapped, and it is not code.
+    const DEVICE: Rights = Rights::READ
+        .union(Rights::WRITE)
+        .union(Rights::MAP)
+        .union(Rights::INFO);
     const MANAGE: Rights = Rights::MANAGE;
+}
+
+/// The framebuffer of the machine as a memory object, with the mode the
+/// firmware set, or nothing when the machine has no framebuffer.
+///
+/// `system_info` is what says where it is: the kernel keeps the description
+/// the loader left and reports it, and this is the only program that may
+/// ask, because the object is made with the root authority.
+fn framebuffer(gate: &mut Gate, world: &World) -> Result<Option<(MemoryHandle, Screen)>, Error> {
+    let system = world.system.ok_or(Error::AccessDenied)?;
+    let Some(described) = gate.system_info(system)?.framebuffer else {
+        return Ok(None);
+    };
+    let first = described.phys_start.wrapping_div(PAGE_SIZE);
+    let frames = described.len.wrapping_div(PAGE_SIZE);
+    let memory = gate.memory_create_device(system, first, frames)?;
+    Ok(Some((
+        memory,
+        Screen {
+            width: described.width,
+            height: described.height,
+            stride: described.stride,
+            format: described.format,
+        },
+    )))
 }
 
 /// The port range and the interrupt of the serial controller, made once.
@@ -642,6 +778,7 @@ fn remember(
             world.console = Some(endpoint);
             world.console_for_self = Some(gate.endpoint_badge(endpoint, INIT_BADGE)?);
         }
+        b"server-display" => world.display = Some(endpoint),
         _ => {}
     }
     Ok(())

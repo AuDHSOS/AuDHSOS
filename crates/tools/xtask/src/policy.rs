@@ -355,6 +355,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "gfx",
+        path: "crates/gfx",
+        kind: Kind::Logic,
+        deps: &["audhsos-abi", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-symbols",
         path: "crates/symbols",
         kind: Kind::Logic,
@@ -432,7 +440,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "kernel-hal-api",
         path: "crates/kernel/hal-api",
         kind: Kind::Logic,
-        deps: &["kernel-types"],
+        deps: &["audhsos-abi", "kernel-types"],
         coverage_gate: true,
         target: Target::Host,
     },
@@ -568,7 +576,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-proto",
         path: "crates/user/proto",
         kind: Kind::Logic,
-        deps: &["audhsos-abi", "user-rt"],
+        deps: &["audhsos-abi", "gfx", "user-rt"],
         coverage_gate: true,
         target: Target::Host,
     },
@@ -605,6 +613,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "server-display",
+        path: "crates/user/servers/display",
+        kind: Kind::Logic,
+        deps: &["audhsos-abi", "audhsos-collections", "gfx", "user-proto"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "user-sys-x86_64",
         path: "crates/user/sys-x86_64",
         kind: Kind::Adapter {
@@ -630,13 +646,15 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-programs",
         path: "crates/user/programs",
         kind: Kind::Adapter {
-            unsafe_budget: 18,
+            unsafe_budget: 23,
             asm_budget: 0,
         },
         deps: &[
             "audhsos-abi",
             "driver-uart16550",
+            "gfx",
             "server-console",
+            "server-display",
             "server-memory",
             "server-name",
             "user-loader",
@@ -729,6 +747,7 @@ pub(crate) const CRATES: &[Crate] = &[
         deps: &[
             "audhsos-abi",
             "audhsos-symbols",
+            "gfx",
             "kernel-test-harness",
             "user-loader",
         ],

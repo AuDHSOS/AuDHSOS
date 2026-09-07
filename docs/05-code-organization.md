@@ -22,7 +22,7 @@ AuDHSOS/
 │   ├── abi/                   audhsos-abi: syscall table, errors, rights, message layout, boot image header, boot information, address constants
 │   ├── elf/                   audhsos-elf: ELF64 parser producing validated load segments
 │   ├── uefi/                  audhsos-uefi: UEFI structure layouts, GUIDs, constants (no calls)
-│   ├── gfx/                   gfx: framebuffer logic, bitmap font, damage tracking (Phase 9)
+│   ├── gfx/                   gfx: framebuffer logic, bitmap font, damage tracking
 │   ├── sync/                  audhsos-sync: Global<T> and Preset<T> cells (unsafe allowed)
 │   ├── time/                  audhsos-time: UnixTime, CivilTime, Instant, Duration (document 12)
 │   ├── encoding/              audhsos-encoding: Base64, hex, PEM (document 12)
@@ -62,7 +62,7 @@ AuDHSOS/
 │   │   │   ├── name/          server-name
 │   │   │   ├── console/       server-console
 │   │   │   ├── memory/        server-memory
-│   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor (Phase 9)
+│   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor
 │   │   │   └── input/         server-input: i8042 driver process, event rings (Phase 10)
 │   │   ├── programs/          user-programs: every program of the system as one
 │   │   │   │                  binary each of one crate, because a program is a
@@ -127,7 +127,7 @@ AuDHSOS/
 | `kernel-hal-api` | 1 | all | no | doubles are tested | `kernel-types`; features `test-doubles`, `port-io` |
 | `driver-uart16550` | 1 | all | no | yes | - (feature `test-doubles`) |
 | `driver-i8042` (Phase 10) | 1 | all | no | yes, fuzz | - (feature `test-doubles`) |
-| `gfx` (Phase 9) | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
+| `gfx` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf`; `test-support` as a dev-dependency |
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
 | `fs-fat` (document 12, not started) | 1 | all | no | yes | `audhsos-time`, `audhsos-collections`; feature `test-doubles` |
@@ -149,6 +149,7 @@ AuDHSOS/
 | `server-name` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `user-proto` |
 | `server-memory` | u2 | all | no | yes, against a recording `Pages` | `audhsos-abi`, `audhsos-collections`; feature `test-doubles` |
 | `server-console` | u2 | all | no | yes | `audhsos-collections`, `driver-uart16550` |
+| `server-display` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `gfx`, `user-proto` |
 | `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | the three server logic crates, `audhsos-abi`, `driver-uart16550`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
 | `crypto-ct` | c0 | all | no | yes | - |
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
@@ -358,7 +359,7 @@ binaries (`cargo`, `rustc`, `rustfmt`, `cargo-clippy`, `cargo-miri`,
 | `run [--release] [--display]` | boot the system in QEMU with the serial console on the terminal; `--display` opens QEMU's display window instead of `-display none` |
 | `qemu-runner <elf>` | the Cargo runner for the kernel target: wraps a test kernel into a disk image, runs QEMU with a timeout, parses the serial protocol, maps the exit status |
 | `build-user-tests` | build the user programs the test images run and turn each into a flat binary under `target/user-tests/` |
-| `test [--host] [--qemu] [--e2e] [--release]` | run the selected test levels; default runs the host level; `--release` builds the end-to-end run from the release profile |
+| `test [--host] [--qemu] [--e2e] [--release]` | run the selected test levels; default runs the host level; `--release` builds the end-to-end run from the release profile. `--e2e` runs the whole system twice: once with a graphics adapter, where it takes a picture of the screen through the machine protocol and holds it against what the program that draws said it drew, and once with `-vga none`, where the machine has no framebuffer and the run still has to end by itself |
 | `lint` | `rustfmt --check`, `clippy` with the workspace lint set, SPDX header check |
 | `check-layering` | verify the layering table against `cargo tree`, verify `forbid(unsafe_code)` in every logic crate, reject assembly files, verify the adapter-function-to-QEMU-test tables |
 | `check-deps` | verify that `Cargo.lock` and all manifests reference workspace members only |

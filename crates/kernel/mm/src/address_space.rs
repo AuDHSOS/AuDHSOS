@@ -101,6 +101,20 @@ pub struct Region<B: Copy> {
     pub perms: Permissions,
 }
 
+impl<B: Copy + PartialEq> Region<B> {
+    /// `true` when `next` continues this region: it begins where this one
+    /// ends, names the same object at the offset this one runs on to, and
+    /// allows the same. Such a pair is one region and not two (D-104):
+    /// without that, a mapping of a full screen, which no call can make in
+    /// one step, would cost one region per call.
+    pub(crate) fn continues_into(self, next: Region<B>) -> bool {
+        self.pages.end_number() == next.pages.start().number()
+            && self.backing == next.backing
+            && self.perms == next.perms
+            && self.offset.checked_add(self.pages.bytes()) == Some(next.offset)
+    }
+}
+
 impl<B: Copy> Region<B> {
     /// The part of the region below `page`, or `None` if nothing is left.
     pub(crate) fn head(self, page: Page) -> Option<Region<B>> {
@@ -150,10 +164,38 @@ impl<B: Copy> Region<B> {
     }
 }
 
+/// One piece a removal took out, and what became of the region it came
+/// from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Taken<B: Copy> {
+    /// The pages that were removed, with what backed them.
+    pub region: Region<B>,
+    /// `true` when the region the piece came from is gone from the table.
+    /// A caller that holds one reference to the backing object per region
+    /// gives that reference back exactly then: a removal that only shortens
+    /// a region leaves the region, and the reference, standing.
+    pub vanished: bool,
+    /// `true` when the piece came out of the middle of a region, which
+    /// leaves the part before it and the part after it: the table holds one
+    /// region more than it did, and a caller that counts a reference per
+    /// region takes one more.
+    pub divided: bool,
+}
+
+/// What [`RegionTable::insert`] did with the range it was given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Inserted {
+    /// A region of its own was added.
+    Added,
+    /// The range continued a region that was already there, and that
+    /// region grew by it instead (D-104).
+    Merged,
+}
+
 /// The regions one operation removed, and what is left of the request.
 #[derive(Clone, Copy, Debug)]
 pub struct Removed<B: Copy, const M: usize> {
-    items: [Option<Region<B>>; M],
+    items: [Option<Taken<B>>; M],
     len: usize,
     remaining: Option<PageRange>,
 }
@@ -167,10 +209,14 @@ impl<B: Copy, const M: usize> Removed<B, M> {
         }
     }
 
-    fn push(&mut self, region: Region<B>) -> bool {
+    fn push(&mut self, region: Region<B>, vanished: bool, divided: bool) -> bool {
         match self.items.get_mut(self.len) {
             Some(slot) => {
-                *slot = Some(region);
+                *slot = Some(Taken {
+                    region,
+                    vanished,
+                    divided,
+                });
                 self.len = self.len.saturating_add(1);
                 true
             }
@@ -180,6 +226,17 @@ impl<B: Copy, const M: usize> Removed<B, M> {
 
     /// The removed regions, lowest first.
     pub fn iter(&self) -> impl Iterator<Item = &Region<B>> {
+        self.taken_pieces().map(|taken| &taken.region)
+    }
+
+    /// The removed pieces, each with what became of the region it came
+    /// from, lowest first.
+    pub fn taken(&self) -> impl Iterator<Item = Taken<B>> + '_ {
+        self.taken_pieces().copied()
+    }
+
+    /// The pieces as they stand in the array.
+    fn taken_pieces(&self) -> impl Iterator<Item = &Taken<B>> {
         self.items.iter().take(self.len).flatten()
     }
 
@@ -211,6 +268,54 @@ pub struct RegionTable<B: Copy, const N: usize> {
     // `false` for a user table, so that an empty user table is all zeros
     // and an array of them reaches the `.bss` (D-66).
     kernel: bool,
+}
+
+impl<B: Copy + PartialEq, const N: usize> RegionTable<B, N> {
+    /// Adds `region` to the table, or lets the region it continues grow by
+    /// it, and says which of the two it did.
+    ///
+    /// # Errors
+    ///
+    /// [`RegionError::Empty`] for an empty range;
+    /// [`RegionError::OutsideUserSpace`] for a range outside the mappable
+    /// user half; [`RegionError::AddressInUse`] if it overlaps an existing
+    /// region; [`RegionError::QuotaExceeded`] if the table is full.
+    pub fn insert(&mut self, region: Region<B>) -> Result<Inserted, RegionError> {
+        self.check_range(region.pages)?;
+        if self
+            .iter()
+            .any(|existing| existing.pages.overlaps(region.pages))
+        {
+            return Err(RegionError::AddressInUse);
+        }
+        if let Some((index, held)) = self.continuation_of(region) {
+            // Two ranges that lie one behind the other and are each inside
+            // the address space make one that is, so the range below is
+            // the range of the two; a `PageRange` that could not be built
+            // would leave the region as it stands.
+            let count = held.pages.count().saturating_add(region.pages.count());
+            let grown = PageRange::new(held.pages.start(), count).unwrap_or(held.pages);
+            self.set(
+                index,
+                Region {
+                    pages: grown,
+                    ..held
+                },
+            );
+            return Ok(Inserted::Merged);
+        }
+        let index = self.position_for(region.pages.start());
+        self.insert_at(index, region)?;
+        Ok(Inserted::Added)
+    }
+
+    /// The region `region` continues, with its index, if the table holds
+    /// one.
+    fn continuation_of(&self, region: Region<B>) -> Option<(usize, Region<B>)> {
+        (0..self.len)
+            .filter_map(|index| self.get(index).map(|held| (index, held)))
+            .find(|(_, held)| held.continues_into(region))
+    }
 }
 
 impl<B: Copy, const N: usize> Default for RegionTable<B, N> {
@@ -358,26 +463,6 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
         Ok(())
     }
 
-    /// Adds `region` to the table.
-    ///
-    /// # Errors
-    ///
-    /// [`RegionError::Empty`] for an empty range;
-    /// [`RegionError::OutsideUserSpace`] for a range outside the mappable
-    /// user half; [`RegionError::AddressInUse`] if it overlaps an existing
-    /// region; [`RegionError::QuotaExceeded`] if the table is full.
-    pub fn insert(&mut self, region: Region<B>) -> Result<(), RegionError> {
-        self.check_range(region.pages)?;
-        if self
-            .iter()
-            .any(|existing| existing.pages.overlaps(region.pages))
-        {
-            return Err(RegionError::AddressInUse);
-        }
-        let index = self.position_for(region.pages.start());
-        self.insert_at(index, region)
-    }
-
     /// Removes the pages of `pages` from the table and returns what was
     /// removed. At most `M` pieces are removed per call; the rest of the
     /// request comes back in [`Removed::remaining`].
@@ -419,15 +504,20 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
                 .last()
                 .and_then(|last| last.checked_add(1))
                 .and_then(|next| region.tail(next));
-            match (head, tail) {
-                (None, None) => self.remove_at(index),
+            let (vanished, divided) = match (head, tail) {
+                (None, None) => {
+                    self.remove_at(index);
+                    (true, false)
+                }
                 (Some(head), None) => {
                     self.set(index, head);
                     index = index.saturating_add(1);
+                    (false, false)
                 }
                 (None, Some(tail)) => {
                     self.set(index, tail);
                     index = index.saturating_add(1);
+                    (false, false)
                 }
                 (Some(head), Some(tail)) => {
                     if self.len >= N {
@@ -436,9 +526,10 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
                     self.set(index, head);
                     self.insert_at(index.saturating_add(1), tail)?;
                     index = index.saturating_add(2);
+                    (false, true)
                 }
-            }
-            removed.push(piece);
+            };
+            removed.push(piece, vanished, divided);
         }
         Ok(removed)
     }
@@ -453,7 +544,12 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
     /// user half; [`RegionError::NotMapped`] if the range is not covered by
     /// one region; [`RegionError::QuotaExceeded`] if the table has no room
     /// for the split.
-    pub fn protect(&mut self, pages: PageRange, perms: Permissions) -> Result<(), RegionError> {
+    ///
+    /// Answers with how many regions the table gained, which is none when
+    /// the range is the whole region, one when it lies at either end of it,
+    /// and two when it lies in the middle. A caller that holds one
+    /// reference to the backing object per region takes that many more.
+    pub fn protect(&mut self, pages: PageRange, perms: Permissions) -> Result<usize, RegionError> {
         self.check_range(pages)?;
         let index = self.index_of(pages.start()).ok_or(RegionError::NotMapped)?;
         let region = self.get(index).ok_or(RegionError::NotMapped)?;
@@ -484,7 +580,7 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
         if let Some(tail) = tail {
             self.insert_at(next, tail)?;
         }
-        Ok(())
+        Ok(extra)
     }
 
     /// `true` if the regions are sorted, non-empty, disjoint, and, for a
