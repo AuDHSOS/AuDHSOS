@@ -5,7 +5,36 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `fs-fat`, which is step F2 of document 12 and the last open step of any
+  of its tracks (D-53, D-103). The FAT32 structural logic that was in the
+  xtask now sits over a `BlockDevice` trait — one sector in, one sector
+  out, nothing in the trait about where the bytes are — and holds the
+  boot parameter block, the cluster chains, the directories in 8.3 form,
+  and reading and writing a file at an offset. Nothing allocates; the
+  largest thing on the stack is one sector. Every walk of a chain is
+  bounded by the number of clusters the volume has, so a chain that
+  points back into itself is an error and not a hang, and only the
+  end-of-chain marker ends a walk successfully: a free cluster, the
+  bad-cluster marker, and a number outside the table are each refused.
+  Every write of a table entry reaches every copy of the table in the one
+  call. The free count is counted from the table at `mount` rather than
+  believed from the file system information sector, which `flush` writes
+  back. A file carries a cursor, without which writing an eighty-megabyte
+  image would be quadratic. Catalog 6.6.52, 60 tests, coverage 94.7
+  percent of lines and 91.3 percent of branches.
+
 ### Changed
+
+- The image writer of the xtask keeps no FAT32 structure of its own. What
+  is left in `image/fat32.rs` is what belongs to the image rather than to
+  the format: the partition as a block device, the choices a boot volume
+  is made with, and the fixed moment every entry is stamped with, so that
+  two runs with the same files still produce the same bytes. The reader
+  its tests use is `fs-fat` reading back what `fs-fat` wrote, which is
+  what catalog 6.6.52 asks for in place of the ad-hoc check 6.6.15 had;
+  every other case of 6.6.15 is unchanged and still passes.
 
 - The two documents the pass of 0.1.0 did not reach. 12 was written before
   the documentation tool existed and still said so: the tooling track had

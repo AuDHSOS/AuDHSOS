@@ -55,7 +55,7 @@ integration around it stays in its phase.
 | C | cryptography and TLS ([document 11](11-cryptography-and-tls.md)) | XL | implemented but for step T8, which is the integration D10 also waits for |
 | D | the network stack, sans-I/O (12.6) | XL | unblocks C's transport; unblocks HTTP |
 | E | shared foundations: time, encodings, collections (12.5) | M | implemented; needed by C at T5 and T6, by D throughout, by phases 5 and 6 |
-| F | device logic without devices: virtqueues, FAT32 (12.7) | M | `virtio-queue` implemented, `fs-fat` open; prepares the network and storage drivers that are later work |
+| F | device logic without devices: virtqueues, FAT32 (12.7) | M | implemented; prepares the network and storage drivers that are later work |
 | G | tooling: fuzz support, symbolization, the document toolchain (12.8) | L | implemented; serves every track and every phase, and no part of the system is built from it |
 
 Track E comes first in this document because tracks C and D both rest on
@@ -1072,18 +1072,64 @@ branches.
 
 ### 12.7.2 `fs-fat`
 
-The xtask already contains a FAT32 writer (D-09, catalog 6.6.15). Its
-structural logic moves into `fs-fat` over a `BlockDevice` trait with a
-RAM-disk double: boot parameter block validation, FAT chain traversal,
-cluster allocation, directory entries in 8.3 form, and file read and
-write. The xtask image writer becomes a user of the crate, and the file
-system server that section 8.14 leaves unscheduled becomes a second one.
-This removes the only duplication the tooling has planned for itself.
+Implemented. The FAT32 structural logic that was in the xtask (D-09,
+catalog 6.6.15) now lives here over a `BlockDevice` trait: one sector in,
+one sector out, and nothing in the trait about where the bytes are. A
+byte vector in a test, a partition inside a disk image, and a driver in a
+file system server are the same thing to every chain and every directory
+above it. Nothing allocates; the largest thing on the stack is one
+sector.
 
-FAT32 only, no FAT12 or FAT16, no long file names (D-09 unchanged),
-timestamps through `audhsos-time` (D-53).
+What it holds is the boot parameter block as numbers, the cluster chains,
+the directories in 8.3 form, and reading and writing a file at an offset.
+FAT32 only and no long file names, which D-09 fixed and D-53 kept: a
+FAT12 or a FAT16 volume is refused at the boot sector rather than read
+badly, because the two use the root directory and the table width
+differently and a reader that guessed between them would be three file
+systems in one.
 
-Tests: catalog 6.6.52.
+A name has two senses and they are not the same rule. `Name::new` takes
+what a caller writes, in either case, and keeps it upper-cased, because
+that is the only case the form has room for and because the image writer
+hands it paths as they stand. `Name::from_entry` takes the eleven bytes a
+directory holds and refuses anything this crate would not have written, a
+lower-case letter included: the byte that would say what a lower-case
+letter meant belongs to the long file name entries, which this crate
+skips rather than reads, so a lower-case name in an entry is a name whose
+meaning is not there to read.
+
+Every walk of a chain is bounded by the number of clusters the volume
+has, so a chain that points back into itself is an error and not a hang —
+the same trick as the free set of `virtio-queue`, and for the same
+reason. Four things end a walk and only one of them is success: the
+end-of-chain marker; a free cluster, which means the table and the entry
+that named the chain disagree about what is in use; the bad-cluster
+marker; and a number outside the table. Every write of a table entry goes
+into every copy of the table in the same call, so the copies cannot drift
+apart, and the four bits of an entry that are not this crate's are read
+back and written through untouched.
+
+Two decisions are about what to believe. The free count is counted from
+the table when a volume is mounted rather than read out of the file
+system information sector, because that sector is a note the last writer
+left and the table is what the volume is; `flush` writes the note back.
+And a file carries a cursor, which is what keeps writing a large file
+linear: a chain has no way back, so a write that found its place from the
+first cluster every time would walk the whole file again for every
+cluster it added, and an eighty-megabyte image would take quadratic time
+to write.
+
+The xtask keeps only what is the image's rather than the format's: the
+partition as a block device, the choices a boot volume is made with — one
+sector per cluster, two tables, the volume label and the serial number —
+and the fixed moment every entry is stamped with, so that two runs with
+the same files still produce the same bytes. Its own FAT32 code is gone,
+and the reader its tests use is this crate reading back what this crate
+wrote, which is what catalog 6.6.52 asks for in place of the ad-hoc check
+6.6.15 had.
+
+Tests: catalog 6.6.52. Coverage 94.7 percent of lines and 91.3 percent of
+branches.
 
 ## 12.8 Track G: tooling
 
@@ -1221,14 +1267,13 @@ is what makes them the work that fills a gap between phases now.
   toolchain of 12.8.3 came after Phase 7 and outside this order, which it
   could do because no phase and no track waits on it. A driver became
   foreseeable with Phase 7, which puts a console driver at ring three, so
-  track F is the side track that is open: `virtio-queue` is done and
-  `fs-fat` is not.
+  track F was the side track that was open; both its steps are behind it
+  now, which leaves no side track running beside the phases.
 - `fs-fat` waited for the boot image work of Phase 7, because it moves
   the structural logic out of `crates/tools/xtask/src/image` and the tar
   archive that phase adds to the boot image lands in the same directory;
   two hands in one refactoring is the one avoidable collision here. That
-  phase is implemented and `image/archive.rs` is in place, so the wait is
-  over.
+  phase landed first, and the move was made after it.
 - The pulled-forward work of 12.9 fills short gaps, because it needs no
   new design.
 

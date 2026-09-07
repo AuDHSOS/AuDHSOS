@@ -411,13 +411,12 @@ Tests: catalog 6.6.39 to 6.6.41. Fuzz target `pem`.
 
 ## 8.20 Track F: device logic without devices
 
-Status: F1 implemented, F2 specified in
-[document 12](12-parallel-work.md) and not started.
+Status: implemented.
 
 | Step | Crate | Size | Ends with |
 |------|-------|------|-----------|
 | F1 | `virtio-queue` | M | implemented: the descriptor table, the two rings and the chain arithmetic over a memory access trait, with the free set in the queue's own memory rather than in the table the device can see; the initialization state machine with its two failure paths; no packed ring, no indirect descriptor and no `EVENT_IDX`, each refused by name at negotiation (D-52, D-99) |
-| F2 | `fs-fat` | M | FAT32 read and write over a block device trait; the xtask image writer uses it |
+| F2 | `fs-fat` | M | implemented: the boot parameter block against FAT12 and FAT16, cluster chains with every walk bounded by the cluster count, allocation and release with the free count counted at mount, directories in 8.3 form, and file read and write over a cursor; the xtask image writer is a user of it and keeps no FAT32 structure of its own (D-53, D-103) |
 
 Tests: catalog 6.6.51 and 6.6.52.
 

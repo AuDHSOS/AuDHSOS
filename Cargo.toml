@@ -36,6 +36,7 @@ members = [
     "crates/sync",
     "crates/drivers/uart16550",
     "crates/virtio/queue",
+    "crates/fs/fat",
     "crates/user/loader",
     "crates/user/programs",
     "crates/user/servers/console",
@@ -110,6 +111,7 @@ audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
 driver-uart16550 = { path = "crates/drivers/uart16550" }
 virtio-queue = { path = "crates/virtio/queue" }
+fs-fat = { path = "crates/fs/fat" }
 server-console = { path = "crates/user/servers/console" }
 user-programs = { path = "crates/user/programs" }
 server-memory = { path = "crates/user/servers/memory" }

@@ -2,21 +2,22 @@
 # Copyright (C) 2026 Manuel Baesler and contributors
 
 [package]
-name = "xtask"
-description = "Build automation of AuDHSOS: builds, checks, tests, coverage, and the policy tables"
+name = "fs-fat"
+description = "FAT32 structural logic over a block device trait: boot parameter block, cluster chains, directories in 8.3 form, and file read and write"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
+[features]
+test-doubles = []
+
 [dependencies]
-audhsos-abi.workspace = true
-audhsos-symbols.workspace = true
 audhsos-time.workspace = true
-fs-fat.workspace = true
-kernel-test-harness.workspace = true
-user-loader.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true
 
 [lints]
 workspace = true

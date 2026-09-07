@@ -10,9 +10,9 @@ decisions remain. Phases 0 to 8 of the roadmap are implemented and
 released as 0.1.0; Phase 9 is next. The cryptography and TLS track of
 document 11 is implemented through step T7 and R1 to R6; its integration
 step T8 is not scheduled. Of the tracks of document 12, D1 to D9 of the
-network stack, all of the shared foundations, `virtio-queue`, and the
-tooling are implemented; `fs-fat` and the two integration steps are not
-started.
+network stack, all of the shared foundations, the whole of track F, and
+the tooling are implemented; what is left of document 12 is the two
+integration steps, which are not scheduled.
 
 ## Reading order
 
