@@ -322,7 +322,8 @@ fn protecting_a_sub_range_splits_a_region_into_three() {
     let read_only = Permissions::READ_ONLY.for_user();
     assert_eq!(
         table.protect(pages(BASE + 2 * PAGE_SIZE, 3), read_only),
-        Ok(())
+        Ok(2),
+        "the head and the tail are regions the table did not have"
     );
     assert_eq!(table.len(), 3);
     let perms: Vec<Permissions> = table.iter().map(|r| r.perms).collect();
@@ -729,4 +730,31 @@ fn what_a_removal_took_is_the_piece_it_reports() {
     assert_eq!(piece.region.backing, 7);
     assert_eq!(piece.region.pages.count(), 4);
     assert_eq!(removed.iter().count(), 1);
+}
+
+#[test]
+fn a_protection_says_how_many_regions_the_table_gained() {
+    let read_only = Permissions::READ_ONLY.for_user();
+    let mut table: Table<8> = Table::new();
+    table.insert(region(BASE, 4, 1)).unwrap();
+    assert_eq!(table.protect(pages(BASE, 4), read_only), Ok(0), "all of it");
+    assert_eq!(table.len(), 1);
+
+    let mut table: Table<8> = Table::new();
+    table.insert(region(BASE, 4, 1)).unwrap();
+    assert_eq!(
+        table.protect(pages(BASE, 2), read_only),
+        Ok(1),
+        "at the front of it"
+    );
+    assert_eq!(table.len(), 2);
+
+    let mut table: Table<8> = Table::new();
+    table.insert(region(BASE, 4, 1)).unwrap();
+    assert_eq!(
+        table.protect(pages(BASE + 2 * PAGE_SIZE, 2), read_only),
+        Ok(1),
+        "at the end of it"
+    );
+    assert_eq!(table.len(), 2);
 }

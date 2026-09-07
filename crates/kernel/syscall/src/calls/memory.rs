@@ -210,25 +210,38 @@ pub fn unmap<E: Environment, const NP: usize, const NT: usize, const NM: usize, 
     if holder.regions.find(pages.start()).is_none() {
         return Err(Error::NotMapped);
     }
+    // What goes first is the region table, because it is what says which
+    // pages of the request are mapped at all: a range may reach over a gap
+    // between two mappings, and the pages of the pieces that were taken out
+    // are exactly the pages to unmap. A removal takes at most two pieces,
+    // so a request that spans more mappings than that comes back with the
+    // rest of itself and the caller asks again.
     let budget = pages.count().min(MAX_PAGES_PER_CALL);
-    let mut done = 0_u64;
-    for page in pages.into_iter().take(count_of(budget)) {
-        machine.environment.unmap(root, page)?;
-        done = done.saturating_add(1);
-    }
+    let taken = PageRange::new(pages.start(), budget).map_err(|_| Error::InvalidArgument)?;
     let removed = machine
         .objects
         .processes
         .get_mut(target)?
         .regions
-        .remove::<2>(PageRange::new(pages.start(), done).map_err(|_| Error::InvalidArgument)?)?;
-    // One reference per region, so a removal that only shortened a region
-    // gives none back: the region, and what it holds, is still there.
+        .remove::<2>(taken)?;
+    // One reference per region: a removal that took a whole region gives
+    // its reference back, one that only shortened a region gives none, and
+    // one that took the middle out left two regions where one stood and
+    // therefore takes one more.
     for piece in removed.taken() {
+        for page in piece.region.pages {
+            machine.environment.unmap(root, page)?;
+        }
         if piece.vanished {
             machine.objects.memory.release(piece.region.backing)?;
+        } else if piece.divided {
+            machine.objects.memory.retain(piece.region.backing)?;
         }
     }
+    let done = match removed.remaining() {
+        Some(rest) => rest.start().number().saturating_sub(pages.start().number()),
+        None => budget,
+    };
     if done < pages.count() {
         return Ok(Reply::partial(done));
     }
@@ -269,10 +282,24 @@ pub fn protect<
         machine.environment.protect(root, page, perms)?;
         done = done.saturating_add(1);
     }
-    machine.objects.processes.get_mut(target)?.regions.protect(
+    let region = machine
+        .objects
+        .processes
+        .get(target)?
+        .regions
+        .find(pages.start())
+        .map(|held| held.backing);
+    let gained = machine.objects.processes.get_mut(target)?.regions.protect(
         PageRange::new(pages.start(), done).map_err(|_| Error::InvalidArgument)?,
         perms,
     )?;
+    // A protection that split a region left more regions than it found, and
+    // the backing object is held by one reference per region.
+    if let Some(backing) = region {
+        for _ in 0..gained {
+            machine.objects.memory.retain(backing)?;
+        }
+    }
     if done < pages.count() {
         return Ok(Reply::partial(done));
     }

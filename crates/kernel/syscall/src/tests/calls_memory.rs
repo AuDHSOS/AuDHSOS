@@ -942,3 +942,184 @@ fn unmapping_part_of_a_region_keeps_the_reference_the_rest_of_it_holds() {
         "the region is gone and so is its reference"
     );
 }
+
+#[test]
+fn protecting_the_middle_of_a_mapping_and_unmapping_all_of_it_holds_the_count() {
+    let mut fixture = Fixture::new();
+    let (object, handle) = fixture.memory(0x100, 4, Rights::READ | Rights::WRITE | Rights::MAP);
+    let own = fixture.own_process.raw();
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[own, handle.raw(), ADDRESS, 0, 4 * PAGE_SIZE, WRITABLE],
+        ),
+    );
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryProtect,
+            &[own, ADDRESS + PAGE_SIZE, 2 * PAGE_SIZE, READ_ONLY],
+        ),
+    );
+    let holder = fixture.objects.processes.get(fixture.process).unwrap();
+    assert_eq!(holder.regions.len(), 3, "head, middle, and tail");
+    assert_eq!(
+        fixture.objects.memory.references(object).unwrap(),
+        4,
+        "one reference per region, and one for the handle"
+    );
+    let mut left = 4 * PAGE_SIZE;
+    let mut at = ADDRESS;
+    while left > 0 {
+        let done = value_of(
+            &mut fixture,
+            request(Syscall::MemoryUnmap, &[own, at, left]),
+        );
+        assert!(done > 0, "the unmap made no progress");
+        at += done * PAGE_SIZE;
+        left -= done * PAGE_SIZE;
+    }
+    assert_eq!(
+        fixture.objects.memory.references(object).unwrap(),
+        1,
+        "every region gave its reference back, and the handle kept its own"
+    );
+}
+
+#[test]
+fn unmapping_the_middle_of_a_mapping_and_then_the_rest_holds_the_count() {
+    let mut fixture = Fixture::new();
+    let (object, handle) = fixture.memory(0x100, 4, Rights::READ | Rights::WRITE | Rights::MAP);
+    let own = fixture.own_process.raw();
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[own, handle.raw(), ADDRESS, 0, 4 * PAGE_SIZE, WRITABLE],
+        ),
+    );
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryUnmap,
+            &[own, ADDRESS + PAGE_SIZE, 2 * PAGE_SIZE],
+        ),
+    );
+    let holder = fixture.objects.processes.get(fixture.process).unwrap();
+    assert_eq!(holder.regions.len(), 2, "the region was divided in two");
+    assert_eq!(
+        fixture.objects.memory.references(object).unwrap(),
+        3,
+        "two regions and the handle"
+    );
+    value_of(
+        &mut fixture,
+        request(Syscall::MemoryUnmap, &[own, ADDRESS, PAGE_SIZE]),
+    );
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryUnmap,
+            &[own, ADDRESS + 3 * PAGE_SIZE, PAGE_SIZE],
+        ),
+    );
+    assert_eq!(fixture.objects.memory.references(object).unwrap(), 1);
+}
+
+#[test]
+fn unmapping_a_range_that_reaches_over_a_gap_takes_what_is_mapped_and_nothing_else() {
+    let mut fixture = Fixture::new();
+    let (object, handle) = fixture.memory(0x100, 4, Rights::READ | Rights::WRITE | Rights::MAP);
+    let own = fixture.own_process.raw();
+    // Two mappings of two pages each, with two unmapped pages between them.
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[own, handle.raw(), ADDRESS, 0, 2 * PAGE_SIZE, WRITABLE],
+        ),
+    );
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[
+                own,
+                handle.raw(),
+                ADDRESS + 4 * PAGE_SIZE,
+                2 * PAGE_SIZE,
+                2 * PAGE_SIZE,
+                WRITABLE,
+            ],
+        ),
+    );
+    assert_eq!(fixture.objects.memory.references(object).unwrap(), 3);
+    let done = value_of(
+        &mut fixture,
+        request(Syscall::MemoryUnmap, &[own, ADDRESS, 6 * PAGE_SIZE]),
+    );
+    assert_eq!(done, 6, "the whole request was answered");
+    assert!(
+        fixture
+            .objects
+            .processes
+            .get(fixture.process)
+            .unwrap()
+            .regions
+            .is_empty()
+    );
+    assert_eq!(
+        fixture.objects.memory.references(object).unwrap(),
+        1,
+        "both mappings gave their reference back"
+    );
+    let unmapped = fixture
+        .environment
+        .calls
+        .iter()
+        .filter(|call| matches!(call, Call::Unmap(_, _)))
+        .count();
+    assert_eq!(unmapped, 4, "the pages of the gap were never unmapped");
+}
+
+#[test]
+fn a_range_over_more_mappings_than_one_call_takes_comes_back_with_the_rest() {
+    let mut fixture = Fixture::new();
+    let (_object, handle) = fixture.memory(0x100, 4, Rights::READ | Rights::WRITE | Rights::MAP);
+    let own = fixture.own_process.raw();
+    for index in 0..3 {
+        value_of(
+            &mut fixture,
+            request(
+                Syscall::MemoryMap,
+                &[
+                    own,
+                    handle.raw(),
+                    ADDRESS + index * 2 * PAGE_SIZE,
+                    index * PAGE_SIZE,
+                    PAGE_SIZE,
+                    WRITABLE,
+                ],
+            ),
+        );
+    }
+    let mut buffer = request(Syscall::MemoryUnmap, &[own, ADDRESS, 6 * PAGE_SIZE]);
+    let (status, values, _) = call(&mut fixture, &mut buffer);
+    assert_eq!(status.error(), None);
+    assert!(status.is_partial(), "two of the three mappings were taken");
+    assert_eq!(
+        values[0], 4,
+        "up to the page the mapping it did not reach begins at"
+    );
+    assert_eq!(
+        fixture
+            .objects
+            .processes
+            .get(fixture.process)
+            .unwrap()
+            .regions
+            .len(),
+        1
+    );
+}

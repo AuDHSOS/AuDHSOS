@@ -175,6 +175,11 @@ pub struct Taken<B: Copy> {
     /// gives that reference back exactly then: a removal that only shortens
     /// a region leaves the region, and the reference, standing.
     pub vanished: bool,
+    /// `true` when the piece came out of the middle of a region, which
+    /// leaves the part before it and the part after it: the table holds one
+    /// region more than it did, and a caller that counts a reference per
+    /// region takes one more.
+    pub divided: bool,
 }
 
 /// What [`RegionTable::insert`] did with the range it was given.
@@ -204,10 +209,14 @@ impl<B: Copy, const M: usize> Removed<B, M> {
         }
     }
 
-    fn push(&mut self, region: Region<B>, vanished: bool) -> bool {
+    fn push(&mut self, region: Region<B>, vanished: bool, divided: bool) -> bool {
         match self.items.get_mut(self.len) {
             Some(slot) => {
-                *slot = Some(Taken { region, vanished });
+                *slot = Some(Taken {
+                    region,
+                    vanished,
+                    divided,
+                });
                 self.len = self.len.saturating_add(1);
                 true
             }
@@ -495,20 +504,20 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
                 .last()
                 .and_then(|last| last.checked_add(1))
                 .and_then(|next| region.tail(next));
-            let vanished = match (head, tail) {
+            let (vanished, divided) = match (head, tail) {
                 (None, None) => {
                     self.remove_at(index);
-                    true
+                    (true, false)
                 }
                 (Some(head), None) => {
                     self.set(index, head);
                     index = index.saturating_add(1);
-                    false
+                    (false, false)
                 }
                 (None, Some(tail)) => {
                     self.set(index, tail);
                     index = index.saturating_add(1);
-                    false
+                    (false, false)
                 }
                 (Some(head), Some(tail)) => {
                     if self.len >= N {
@@ -517,10 +526,10 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
                     self.set(index, head);
                     self.insert_at(index.saturating_add(1), tail)?;
                     index = index.saturating_add(2);
-                    false
+                    (false, true)
                 }
             };
-            removed.push(piece, vanished);
+            removed.push(piece, vanished, divided);
         }
         Ok(removed)
     }
@@ -535,7 +544,12 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
     /// user half; [`RegionError::NotMapped`] if the range is not covered by
     /// one region; [`RegionError::QuotaExceeded`] if the table has no room
     /// for the split.
-    pub fn protect(&mut self, pages: PageRange, perms: Permissions) -> Result<(), RegionError> {
+    ///
+    /// Answers with how many regions the table gained, which is none when
+    /// the range is the whole region, one when it lies at either end of it,
+    /// and two when it lies in the middle. A caller that holds one
+    /// reference to the backing object per region takes that many more.
+    pub fn protect(&mut self, pages: PageRange, perms: Permissions) -> Result<usize, RegionError> {
         self.check_range(pages)?;
         let index = self.index_of(pages.start()).ok_or(RegionError::NotMapped)?;
         let region = self.get(index).ok_or(RegionError::NotMapped)?;
@@ -566,7 +580,7 @@ impl<B: Copy, const N: usize> RegionTable<B, N> {
         if let Some(tail) = tail {
             self.insert_at(next, tail)?;
         }
-        Ok(())
+        Ok(extra)
     }
 
     /// `true` if the regions are sorted, non-empty, disjoint, and, for a

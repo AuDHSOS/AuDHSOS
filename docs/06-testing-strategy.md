@@ -218,11 +218,18 @@ done until every applicable item has a test. Items are added, never removed.
   running on, and beginning where the other ends. A range that differs in
   any of the four is a region of its own, a gap between them included.
 - A removal says what became of the region it took from: one that only
-  shortens a region reports that the region stayed, one that splits it
-  reports the same, and one that takes the whole region reports that it is
-  gone. The system call layer gives a reference to the backing object back
-  exactly for the last of the three, so an object is held by every region
-  that names it and by no more.
+  shortens a region reports that the region stayed, one that takes the
+  middle out reports that the region was divided, and one that takes the
+  whole region reports that it is gone. A protection says how many regions
+  the table gained by the split it made — none, one, or two. The system
+  call layer holds one reference to the backing object per region: it gives
+  one back for a region that is gone and takes one for every region a split
+  added, so an object is held by every region that names it and by no more.
+- `memory_unmap` unmaps the pages of the pieces the region table gave up
+  and no others: a range that reaches over a gap between two mappings
+  unmaps what is mapped and leaves the gap alone, and a range over more
+  mappings than one call takes comes back as `Partial` at the mapping it
+  did not reach.
 
 ### 6.6.6 Object pools, ids, handles, and rights (`kernel-objects`, `audhsos-abi`)
 

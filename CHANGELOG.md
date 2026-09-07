@@ -80,6 +80,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- An object is held by one reference per region that names it, and now
+  really is. A protection or an unmapping that split a region left two
+  regions where one stood without taking a second reference, so unmapping
+  them one by one gave back more references than were taken: the object
+  could be freed while a mapping of it still stood, and the call that gave
+  back the last one failed with `InvalidHandle`. Both splits now take the
+  reference the new region holds.
+- `memory_unmap` unmaps the pages the region table gave up, and not a
+  fixed count of pages from the start of the request. A request that
+  reaches over a gap between two mappings used to fail on the first page of
+  the gap, and one that spans more mappings than the two pieces a call
+  takes used to report every page as done and leave the regions of the rest
+  behind, mapped nowhere and holding their references for ever.
+
 - The coverage gate of `fuzz-support` no longer turns on thread
   scheduling. Whether the input in progress has outrun its limit was
   decided in the body of the watchdog thread, so whether that thread woke
