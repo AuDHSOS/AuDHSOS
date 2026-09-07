@@ -60,6 +60,24 @@ impl Drop for Scratch {
     }
 }
 
+/// The body above, with a flag that is set as soon as an input carries
+/// `word`. A run that read its dictionary pastes the words it was given
+/// into the inputs it tries; a run whose dictionary file was not there
+/// never can, so the flag tells the two apart.
+fn body_watching<'a>(
+    address: usize,
+    word: &'static [u8],
+    seen: &'a mut bool,
+) -> impl FnMut(&[u8]) + 'a {
+    let mut inner = body(address);
+    move |input: &[u8]| {
+        if input.windows(word.len()).any(|part| part == word) {
+            *seen = true;
+        }
+        inner(input);
+    }
+}
+
 /// The command line of `words`.
 fn line(words: &[&str]) -> Vec<OsString> {
     words.iter().map(OsString::from).collect()
@@ -266,17 +284,31 @@ fn a_dictionary_is_read_and_a_missing_one_is_reported_rather_than_fatal() {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let address = register_counters(COUNTERS);
     let scratch = Scratch::new("dict");
-    let words = scratch.write("words.txt", b"kw1=\"BEGIN\"\nkw2=\"END\"\n");
-    let mut target = body(address);
+    // One word short enough to fit into an input this run reaches, and
+    // one longer than the length limit it grows to, so that a word which
+    // does not fit is exercised as well.
+    let words = scratch.write("words.txt", b"kw1=\"BEGIN\"\nkw2=\"AB\"\n");
+    // The seed is fixed. What the assertion below asks — did a word from
+    // the file reach the target — is a coin toss under a seed drawn from
+    // the clock, and this is the test that has to notice when the file is
+    // not there at all.
+    let mut pasted = false;
+    let mut target = body_watching(address, b"AB", &mut pasted);
     let code = run(
         line(&[
             "-runs=200",
+            "-seed=23",
             &format!("-dict={}", words.display()),
             &format!("-artifact_prefix={}/", scratch.path.display()),
         ]),
         &mut target,
     );
+    drop(target);
     assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::SUCCESS));
+    assert!(
+        pasted,
+        "no input carried a word of the dictionary, so the file was not read"
+    );
     let mut again = body(address);
     let code = run(line(&["-runs=10", "-dict=/nowhere/at/all.txt"]), &mut again);
     assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::SUCCESS));
