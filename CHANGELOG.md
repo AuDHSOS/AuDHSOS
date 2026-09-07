@@ -5,6 +5,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-07
+
+The first release. A capability-based microkernel that boots on QEMU `q35`
+through the project's own UEFI loader, and a userland above it: a root task
+that reads its programs out of the boot image, a name server, a memory
+server, and a console driver at ring three that owns COM1 and answers the
+interrupt of it. Nothing outside this repository is compiled into any of
+it. Beside the kernel phases stand a TLS 1.3 client with the primitives it
+needs, a sans-I/O network stack for both address families, and the tooling
+that checks and documents the whole of it.
+
 ### Added
 
 - What the two round trips of this system cost (D-101). `bench` is a test
