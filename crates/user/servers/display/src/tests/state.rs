@@ -215,6 +215,28 @@ fn presenting_into_a_screen_of_another_format_is_refused() {
 }
 
 #[test]
+fn a_presentation_that_could_not_be_copied_leaves_the_cursor_on_the_screen() {
+    let mut display = display();
+    let held = display.create(CLIENT, 8, 6).unwrap();
+    let mut client_bytes = buffer(8, 6);
+    let client = surface(&mut client_bytes, 8, 6);
+    let mut screen_bytes = buffer(8, 6);
+    let mut screen = Surface::new(&mut screen_bytes, 8, 6, 8, PixelFormat::Bgrx8888).unwrap();
+    display.set_cursor(2, 2, true, &mut screen).unwrap();
+    assert!(
+        display
+            .present(CLIENT, held.id, &Damage::new(), &client, &mut screen)
+            .is_err()
+    );
+    assert!(display.cursor().is_drawn(), "the pointer is still there");
+    assert_eq!(
+        screen.pixel(2, 2),
+        Some(Color::BLACK),
+        "and its tip with it"
+    );
+}
+
+#[test]
 fn a_presentation_of_a_surface_nobody_holds_is_refused() {
     let mut display = display();
     let mut client_bytes = buffer(8, 6);

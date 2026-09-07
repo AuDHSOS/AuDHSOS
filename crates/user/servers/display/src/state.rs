@@ -223,9 +223,12 @@ impl<const N: usize> Display<N> {
             return Err(Error::InvalidArgument);
         }
         self.cursor.erase(screen);
-        let written = present(pixels, screen, damage).map_err(|_| Error::InvalidArgument)?;
+        // The sprite goes back on whether the copy worked or not: a screen
+        // that keeps the cursor only when a client presents something the
+        // server can copy would lose the pointer to a client's mistake.
+        let written = present(pixels, screen, damage);
         self.cursor.draw(screen);
-        Ok(written)
+        written.map_err(|_| Error::InvalidArgument)
     }
 
     /// Moves the pointer, clamped to the screen, and draws it where it now
