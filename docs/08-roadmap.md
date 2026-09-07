@@ -229,21 +229,30 @@ image with `--release`.
 
 ## 8.11 Phase 9: Framebuffer output
 
+Status: implemented.
+
 Deliverables: `gfx` with pixel formats, fill, blit, clipping, damage
 rectangles, double buffering, the project's bitmap font, and text
 rendering; the display protocol in `user-proto` (info, surface creation
 over shared memory objects, present with damage rectangles, cursor);
-`server-display`; `server-init` creates the framebuffer `Device` memory
-object from `system_info` and starts the display server; the xtask QMP
-client with `screendump` and a PPM reader; `run --display`; the loader
-test image without a VGA device.
+`server-display` and `app-paint`; `server-init` creates the framebuffer
+`Device` memory object from `system_info` and starts the display server;
+the xtask QMP client with `screendump`, a JSON subset, and a PPM reader;
+`run --display`; the run of the whole system without a graphics adapter.
 
 Tests: catalog 6.6.24, 6.6.26, 6.6.27 (display items), 6.6.28, 6.6.29
 (output items).
 
 Acceptance: `sh tools/xtask.sh test --e2e` verifies a filled rectangle and
-a rendered string in a screendump; the test kernels boot with `-vga none`
-and report an absent framebuffer.
+a rendered string in a screendump of the running machine, and then runs the
+same image with `-vga none`, where the kernel reports an absent
+framebuffer, the display server reports no screen, and the run ends by
+itself.
+
+Done: the mode the firmware set reaches the display server as the value
+roles of the startup message (D-103); a mapping of a full screen stays one
+region (D-104); the reference machine draws on 1280 by 800 pixels in
+`bgrx8888`.
 
 ## 8.12 Phase 10: PS/2 input
 

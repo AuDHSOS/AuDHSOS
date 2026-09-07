@@ -2537,10 +2537,13 @@ and `app-paint`.
   plainly when even that does not fit.
 - `run --display` is implemented: it replaces `-display none` with
   `-display cocoa` on macOS and `-display gtk` elsewhere.
-- Loader test image `no_vga`: run with `-vga none`; expected: the kernel
-  reaches the harness and prints `[info] framebuffer=absent`. The firmware
-  reports no Graphics Output Protocol on that machine, which is what makes
-  the framebuffer absent.
+- The whole system runs a second time with `-vga none`, where the firmware
+  reports no Graphics Output Protocol: the kernel prints
+  `[info] framebuffer=absent`, the display server prints
+  `[display] no framebuffer`, `app-paint` prints `[paint] nothing drawn`,
+  and the run ends by itself. It is the same image and not one of its own,
+  because what is being tested is this system on a machine without a
+  screen.
 - `policy::CRATES` entries `gfx` (Logic, Host, deps `audhsos-abi`,
   `test-support`) and `server-display` (Logic, Host, deps `audhsos-abi`,
   `audhsos-collections`, `gfx`, `user-proto`); `user-programs` gains `gfx`
@@ -2550,7 +2553,16 @@ and `app-paint`.
 ### 10.9.6 Acceptance
 
 `check` green; catalog 6.6.24, 6.6.26, 6.6.27 display items, 6.6.28,
-6.6.29 output items; the e2e test `display_fill_and_text` passes.
+6.6.29 output items; `sh tools/xtask.sh test --e2e` holds a picture of the
+running machine against what `app-paint` says it drew, and runs the same
+image once more without a graphics adapter.
+
+Done: `gfx`, the display protocol, `server-display` and its process,
+`app-paint`, the framebuffer in `system_info` and in the startup message
+(D-103), the merging of mappings (D-104), the QMP client with its JSON
+subset and PPM reader, and the run without a graphics adapter. The unsafe
+budget of `user-programs` rose to twenty-one for the three mappings the two
+new programs read (D-105).
 
 ## 10.10 Phase 10: PS/2 input
 
