@@ -21,7 +21,7 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use crate::error::Error;
-use crate::qemu::Machine;
+use crate::qemu::{Machine, Options};
 
 /// How long a wait sleeps between two looks at what has arrived.
 const POLL: Duration = Duration::from_millis(20);
@@ -40,10 +40,10 @@ impl Session {
     /// # Errors
     ///
     /// [`Error::Io`] when QEMU cannot be started.
-    pub(crate) fn start(machine: &Machine, image: &Path) -> Result<Self, Error> {
+    pub(crate) fn start(machine: &Machine, image: &Path, options: &Options) -> Result<Self, Error> {
         let mut command = Command::new(machine.qemu());
         command
-            .args(machine.arguments(image, false))
+            .args(machine.arguments(image, options))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());

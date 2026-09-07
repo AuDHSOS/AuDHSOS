@@ -144,6 +144,62 @@ impl Run {
     }
 }
 
+/// What a run of the machine is to have besides the reference command line.
+///
+/// The reference machine of
+/// [03-target-platform.md 3.1.1](../../../docs/03-target-platform.md) is
+/// what a run has when nothing is asked for; each of these adds one thing
+/// to it, and each is asked for by exactly one caller.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Options {
+    /// Open QEMU's own window instead of running headless.
+    pub(crate) display: bool,
+    /// Where the machine protocol listens, for a run the runner talks to.
+    pub(crate) qmp: Option<PathBuf>,
+    /// Run without a graphics adapter, which leaves the firmware without a
+    /// Graphics Output Protocol and the kernel without a framebuffer.
+    pub(crate) no_vga: bool,
+}
+
+impl Options {
+    /// A headless run of the reference machine.
+    pub(crate) fn plain() -> Self {
+        Options::default()
+    }
+
+    /// The same, with QEMU's own window.
+    pub(crate) fn windowed(display: bool) -> Self {
+        Options {
+            display,
+            ..Options::default()
+        }
+    }
+}
+
+/// A socket path for the machine protocol, short enough for a Unix socket.
+///
+/// A Unix socket path holds 104 bytes at most and QEMU refuses a longer one
+/// before it starts. The scratch directory of a worktree of this project
+/// already spends most of that, so the socket goes into the shortest
+/// directory that exists on every machine this runs on.
+pub(crate) fn socket_path(name: &str) -> Result<PathBuf, Error> {
+    let candidates = [
+        std::env::temp_dir().join(format!("{name}-{}.sock", std::process::id())),
+        PathBuf::from(format!("/tmp/{name}-{}.sock", std::process::id())),
+    ];
+    for candidate in candidates {
+        if candidate.as_os_str().len() < MAX_SOCKET_PATH {
+            return Ok(candidate);
+        }
+    }
+    Err(Error::Usage(format!(
+        "no directory holds a socket path for `{name}` below {MAX_SOCKET_PATH} bytes"
+    )))
+}
+
+/// How long a Unix socket path may be, the terminating byte included.
+const MAX_SOCKET_PATH: usize = 104;
+
 /// The machine the tests run on.
 #[derive(Clone, Debug)]
 pub(crate) struct Machine {
@@ -192,8 +248,8 @@ impl Machine {
 
     /// The command line of the reference machine for `image`. `display`
     /// opens QEMU's own window instead of running headless.
-    pub(crate) fn arguments(&self, image: &Path, display: bool) -> Vec<String> {
-        arguments(&self.firmware, image, display)
+    pub(crate) fn arguments(&self, image: &Path, options: &Options) -> Vec<String> {
+        arguments(&self.firmware, image, options)
     }
 
     /// The QEMU binary of the reference machine.
@@ -202,9 +258,9 @@ impl Machine {
     }
 
     /// The command line for messages.
-    pub(crate) fn display(&self, image: &Path, display: bool) -> String {
+    pub(crate) fn display(&self, image: &Path, options: &Options) -> String {
         let mut text = self.qemu.display().to_string();
-        for argument in self.arguments(image, display) {
+        for argument in self.arguments(image, options) {
             text.push(' ');
             text.push_str(&argument);
         }
@@ -217,10 +273,10 @@ impl Machine {
     /// # Errors
     ///
     /// [`Error::Io`] if QEMU cannot be started or waited for.
-    pub(crate) fn run_captured(&self, image: &Path) -> Result<Run, Error> {
+    pub(crate) fn run_captured(&self, image: &Path, options: &Options) -> Result<Run, Error> {
         let mut command = Command::new(&self.qemu);
         command
-            .args(self.arguments(image, false))
+            .args(self.arguments(image, options))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -248,10 +304,14 @@ impl Machine {
     /// # Errors
     ///
     /// [`Error::Io`] if QEMU cannot be started or waited for.
-    pub(crate) fn run_attached(&self, image: &Path, display: bool) -> Result<Option<i32>, Error> {
-        eprintln!("$ {}", self.display(image, display));
+    pub(crate) fn run_attached(
+        &self,
+        image: &Path,
+        options: &Options,
+    ) -> Result<Option<i32>, Error> {
+        eprintln!("$ {}", self.display(image, options));
         let status = Command::new(&self.qemu)
-            .args(self.arguments(image, display))
+            .args(self.arguments(image, options))
             .status()
             .map_err(|source| Error::io(format!("running {}", self.qemu.display()), source))?;
         Ok(status.code())
@@ -286,8 +346,8 @@ impl Machine {
 /// The command line of the reference machine, as
 /// [03-target-platform.md 3.1.1](../../../docs/03-target-platform.md)
 /// prescribes it.
-pub(crate) fn arguments(firmware: &Path, image: &Path, display: bool) -> Vec<String> {
-    vec![
+pub(crate) fn arguments(firmware: &Path, image: &Path, options: &Options) -> Vec<String> {
+    let mut line = vec![
         "-machine".to_owned(),
         "q35".to_owned(),
         "-cpu".to_owned(),
@@ -306,7 +366,7 @@ pub(crate) fn arguments(firmware: &Path, image: &Path, display: bool) -> Vec<Str
         "-serial".to_owned(),
         "stdio".to_owned(),
         "-display".to_owned(),
-        if display {
+        if options.display {
             display_backend().to_owned()
         } else {
             "none".to_owned()
@@ -314,7 +374,16 @@ pub(crate) fn arguments(firmware: &Path, image: &Path, display: bool) -> Vec<Str
         "-no-reboot".to_owned(),
         "-device".to_owned(),
         "isa-debug-exit,iobase=0xf4,iosize=0x04".to_owned(),
-    ]
+    ];
+    if let Some(socket) = &options.qmp {
+        line.push("-qmp".to_owned());
+        line.push(format!("unix:{},server,nowait", socket.display()));
+    }
+    if options.no_vga {
+        line.push("-vga".to_owned());
+        line.push("none".to_owned());
+    }
+    line
 }
 
 /// Reads a pipe to its end; a pipe that cannot be read yields what came

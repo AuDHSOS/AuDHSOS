@@ -756,18 +756,20 @@ done until every applicable item has a test. Items are added, never removed.
   `null`; nesting depth is bounded; malformed input is an error; the
   writer output parses back to the same value (property).
 - `input-send-event` for a key press and release by `qcode`, for relative
-  pointer motion, and for a button press and release.
+  pointer motion, and for a button press and release (Phase 10).
 - `screendump`: the PPM file is parsed (`P6`, comments, `maxval` 255); a
-  truncated file is an error; a pixel and a rectangle checksum are read at
-  given coordinates; coordinates outside the image are an error.
+  truncated file is an error and not a black pixel; a pixel is read at
+  given coordinates and a color is counted over a rectangle; coordinates
+  outside the image, and a rectangle that reaches past it, are an error.
 - A socket that never answers hits the timeout.
 
 ### 6.6.29 Graphical end-to-end tests in QEMU
 
-- Output: a filled rectangle appears in the screendump with the expected
-  color at its corners and the untouched color outside; a rendered string
+- Output: every pixel of a filled rectangle carries the color it was
+  filled with and the pixels around it are untouched; a rendered string
   matches the glyph table pixel for pixel; the resolution used by the test
-  is read from the boot information, never assumed.
+  is what the display server reported out of the boot information, never
+  one assumed by the runner.
 - Input: a key sequence injected through QMP is echoed as `[input]` lines
   through the console driver; a pointer path produces motion events whose
   sum equals the injected path; a button press and release arrive in
@@ -775,8 +777,10 @@ done until every applicable item has a test. Items are added, never removed.
 - Combined: the cursor pixels move with the pointer; a stroke drawn while
   the button is held changes the pixels along the path; typed text appears
   at the text cursor.
-- Absent hardware: with `-vga none` the input tests still pass and the
-  display server reports `NotFound` to its clients.
+- Absent hardware: with `-vga none` the kernel reports
+  `[info] framebuffer=absent`, the display server reports that there is no
+  screen, the program that draws says it drew nothing, the run still ends
+  by itself, and the input tests still pass (Phase 10).
 
 ### 6.6.30 Constant-time helpers (`crypto-ct`)
 

@@ -7,8 +7,9 @@
 use std::path::Path;
 
 use crate::qemu::{
-    EXIT_LOADER_FAILURE, EXIT_SUCCESS, EXIT_TEST_FAILURE, Measurement, Outcome, Report, Run,
-    TestOutcome, arguments, check, firmware_next_to, outcome_of, parse, strip_escapes,
+    EXIT_LOADER_FAILURE, EXIT_SUCCESS, EXIT_TEST_FAILURE, Measurement, Options, Outcome, Report,
+    Run, TestOutcome, arguments, check, firmware_next_to, outcome_of, parse, socket_path,
+    strip_escapes,
 };
 
 /// A run whose lines are all well formed.
@@ -125,7 +126,7 @@ fn the_command_line_is_the_one_the_target_platform_document_prescribes() {
     let line = arguments(
         Path::new("/fw/edk2-x86_64-code.fd"),
         Path::new("/img/audhsos.img"),
-        false,
+        &Options::plain(),
     )
     .join(" ");
     assert_eq!(
@@ -136,8 +137,39 @@ fn the_command_line_is_the_one_the_target_platform_document_prescribes() {
          -serial stdio -display none -no-reboot \
          -device isa-debug-exit,iobase=0xf4,iosize=0x04"
     );
-    let windowed = arguments(Path::new("/fw"), Path::new("/img"), true).join(" ");
+    let windowed = arguments(
+        Path::new("/fw"),
+        Path::new("/img"),
+        &Options::windowed(true),
+    )
+    .join(" ");
     assert!(!windowed.contains("-display none"));
+}
+
+#[test]
+fn what_a_run_asks_for_beyond_the_reference_machine_is_appended_to_it() {
+    let options = Options {
+        display: false,
+        qmp: Some(std::path::PathBuf::from("/tmp/qmp.sock")),
+        no_vga: true,
+    };
+    let line = arguments(Path::new("/fw"), Path::new("/img"), &options).join(" ");
+    assert!(
+        line.ends_with("-qmp unix:/tmp/qmp.sock,server,nowait -vga none"),
+        "{line}"
+    );
+    assert!(line.contains("-display none"), "{line}");
+}
+
+#[test]
+fn a_socket_path_of_a_run_fits_a_unix_socket() {
+    let path = socket_path("audhsos-qmp").unwrap();
+    assert!(path.as_os_str().len() < 104, "{}", path.display());
+    assert!(
+        path.to_string_lossy().contains("audhsos-qmp"),
+        "{}",
+        path.display()
+    );
 }
 
 #[test]

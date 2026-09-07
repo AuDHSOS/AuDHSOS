@@ -747,6 +747,7 @@ pub(crate) const CRATES: &[Crate] = &[
         deps: &[
             "audhsos-abi",
             "audhsos-symbols",
+            "gfx",
             "kernel-test-harness",
             "user-loader",
         ],

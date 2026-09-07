@@ -16,6 +16,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   reference machine that is 1280 by 800 pixels in `bgrx8888`, and the
   picture QEMU takes of the screen carries the rectangle in its color, the
   text in white, and black around both.
+- The runner looks at the screen. The xtask speaks the QEMU machine
+  protocol over a Unix socket — greeting, `qmp_capabilities`, commands,
+  answers, and the events between them — reads the picture `screendump`
+  writes, and holds it against what `app-paint` said it drew: every pixel
+  of the rectangle in its color, black around it, and the line of text
+  against the glyph table of `gfx`, pixel for pixel. The JSON subset and
+  the PPM reader it needs are its own, and both are tested on the host.
+  `sh tools/xtask.sh test --e2e` also runs the whole system once more
+  without a graphics adapter, where the kernel finds no framebuffer, the
+  display server says there is no screen, and the run still ends by itself.
 - The display protocol in `user-proto`: what the screen is, a surface to
   draw into and the memory object that backs it, a presentation of up to
   sixteen damaged rectangles, giving a surface up, and where the cursor is.

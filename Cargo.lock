@@ -592,6 +592,7 @@ version = "0.1.0"
 dependencies = [
  "audhsos-abi",
  "audhsos-symbols",
+ "gfx",
  "kernel-test-harness",
  "user-loader",
 ]
