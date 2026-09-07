@@ -264,41 +264,31 @@ impl Mutator {
 
     /// Overwrites one byte.
     fn change_byte(&mut self, input: &mut [u8]) -> bool {
-        if input.is_empty() {
-            return false;
-        }
-        let at = self.rng.below(input.len());
         let byte = self.rng.byte();
-        if let Some(slot) = input.get_mut(at) {
-            *slot = byte;
-        }
+        let Some(slot) = self.rng.choose_mut(input) else {
+            return false;
+        };
+        *slot = byte;
         true
     }
 
     /// Flips one bit.
     fn change_bit(&mut self, input: &mut [u8]) -> bool {
-        if input.is_empty() {
-            return false;
-        }
-        let at = self.rng.below(input.len());
         let bit = u32::try_from(self.rng.below(8)).unwrap_or(0);
-        if let Some(slot) = input.get_mut(at) {
-            *slot ^= 1u8.wrapping_shl(bit);
-        }
+        let Some(slot) = self.rng.choose_mut(input) else {
+            return false;
+        };
+        *slot ^= 1u8.wrapping_shl(bit);
         true
     }
 
     /// Shuffles a stretch of at most eight bytes.
     fn shuffle_bytes(&mut self, input: &mut [u8]) -> bool {
-        if input.is_empty() {
-            return false;
-        }
         let count = self.rng.below(input.len().min(8)).saturating_add(1);
-        let at = self.rng.below(input.len().saturating_sub(count));
-        let end = at.saturating_add(count).min(input.len());
-        if let Some(stretch) = input.get_mut(at..end) {
-            self.rng.shuffle(stretch);
-        }
+        let Some(stretch) = self.rng.stretch_mut(input, count) else {
+            return false;
+        };
+        self.rng.shuffle(stretch);
         true
     }
 
@@ -465,10 +455,7 @@ impl Mutator {
         }
         let room = limit.saturating_sub(into.len()).min(from.len());
         let count = self.rng.below(room).saturating_add(1);
-        let from_start = self
-            .rng
-            .below(from.len().saturating_sub(count).saturating_add(1));
-        let Some(source) = from.get(from_start..from_start.saturating_add(count)) else {
+        let Some(source) = self.rng.stretch(from, count) else {
             return false;
         };
         let at = self.rng.below(into.len().saturating_add(1));
@@ -494,9 +481,7 @@ impl Mutator {
             if left > 0 {
                 let room = limit.saturating_sub(out.len());
                 let count = self.rng.below(left).saturating_add(1).min(room);
-                if let Some(stretch) = source.get(*at..at.saturating_add(count)) {
-                    out.extend_from_slice(stretch);
-                }
+                out.extend(source.iter().skip(*at).take(count));
                 *at = at.saturating_add(count);
             }
             take_first = !take_first;
@@ -510,10 +495,7 @@ impl Mutator {
             Source::Manual => &self.manual,
             Source::Persistent => &self.persistent,
         };
-        if words.is_empty() {
-            return false;
-        }
-        let Some(word) = words.get(self.rng.below(words.len())).copied() else {
+        let Some(word) = self.rng.choose(words) else {
             return false;
         };
         self.paste(

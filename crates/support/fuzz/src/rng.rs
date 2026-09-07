@@ -82,6 +82,38 @@ impl Rng {
         }
     }
 
+    /// A slot of `slice`, drawn at random, or `None` when the slice is
+    /// empty. The caller needs no case of its own for that: a bound of
+    /// zero draws zero, and an empty slice has no slot zero to hand back.
+    pub fn choose_mut<'a, T>(&mut self, slice: &'a mut [T]) -> Option<&'a mut T> {
+        let at = self.below(slice.len());
+        slice.get_mut(at)
+    }
+
+    /// A copy of one slot of `slice`, drawn at random, or `None` when the
+    /// slice is empty.
+    pub fn choose<T: Copy>(&mut self, slice: &[T]) -> Option<T> {
+        let at = self.below(slice.len());
+        slice.get(at).copied()
+    }
+
+    /// A stretch of `length` slots of `slice`, starting at a place drawn
+    /// at random, or `None` when the slice is shorter than that. The
+    /// caller needs no length check of its own: a stretch that does not
+    /// fit is looked for at zero and is not there either.
+    pub fn stretch<'a, T>(&mut self, slice: &'a [T], length: usize) -> Option<&'a [T]> {
+        let start = self.below(slice.len().saturating_sub(length).saturating_add(1));
+        slice.get(start..start.saturating_add(length))
+    }
+
+    /// A stretch of `length` slots of `slice` to write into, starting at a
+    /// place drawn at random, or `None` when the slice is shorter than
+    /// that.
+    pub fn stretch_mut<'a, T>(&mut self, slice: &'a mut [T], length: usize) -> Option<&'a mut [T]> {
+        let start = self.below(slice.len().saturating_sub(length).saturating_add(1));
+        slice.get_mut(start..start.saturating_add(length))
+    }
+
     /// Shuffles `slice` in place.
     pub fn shuffle<T>(&mut self, slice: &mut [T]) {
         let mut remaining = slice.len();
