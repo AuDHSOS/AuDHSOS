@@ -592,7 +592,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-proto",
         path: "crates/user/proto",
         kind: Kind::Logic,
-        deps: &["audhsos-abi", "gfx", "user-rt"],
+        deps: &["audhsos-abi", "driver-i8042", "gfx", "user-rt"],
         coverage_gate: true,
         target: Target::Host,
     },

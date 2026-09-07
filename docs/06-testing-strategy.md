@@ -1860,7 +1860,7 @@ item is what 12.9 asked for before the encodings could be written
   that a client of a later release is told which of the two it is; a
   protocol code and a message number the release does not have are each
   refused.
-- Round trip, per message of each of the four protocols: what was encoded
+- Round trip, per message of each of the six protocols: what was encoded
   decodes to what it was. The names and the chunks are tested at zero
   bytes and at the full width of their field.
 - Replies: every reply carries a status word first, and the payload only
@@ -1884,6 +1884,24 @@ item is what 12.9 asked for before the encodings could be written
   sends it exits behind it (D-94): the status it carries comes back, a
   message number the protocol does not have is refused, and a report
   without its status word is refused rather than read as a zero.
+- The input protocol carries two messages and its records live in shared
+  memory rather than in a message. An event record is sixteen bytes, its
+  key and pointer forms round-trip, the bytes the kind does not use are
+  zero, and a record whose kind byte names neither, whose reserved byte is
+  not zero, or whose key code names no key is refused. A ring over one page
+  holds 254 records: what the writer pushes the reader pops in order, the
+  sequence numbers stay contiguous across the wrap, a full ring drops the
+  newest event and counts it, the reader clears that count when it reports
+  it, and a record somebody wrote nonsense into is stepped over rather than
+  read for ever. A subscription carries one handle and its reply carries
+  the memory object only behind a status that says it succeeded.
+- The layouts of the client side: a word typed on `us` comes out as that
+  word, the German layout swaps the two letters the United States layout
+  calls `Y` and `Z` and carries the umlauts, shift picks the other
+  character of a pair, the lock turns over on the press and changes the
+  letters only, the modifier state follows press and release, a release
+  without a press changes nothing, and a key that stands for no character
+  answers nothing.
 
 ### 6.6.57 The wrappers of the gate against the table (`user-sys-x86_64`, QEMU)
 

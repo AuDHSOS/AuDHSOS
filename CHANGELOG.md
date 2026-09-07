@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The input protocol in `user-proto`: a subscription that hands the server
+  a notification and receives a ring of one page, the sixteen-byte record a
+  key or a pointer event is, and the two halves of that ring — the writer
+  is the server and drops the newest event when the ring is full, the
+  reader is the client and hears about a gap once. Beside it the client
+  side of the keyboard: the modifier state, and the layouts `us` and `de`
+  that turn a key code into a character.
 - Two roles of the startup message, `AuxInterrupt` and `InputServer`
   (D-109). A driver of a controller with two lines is given the second
   interrupt object under `AuxInterrupt` the way it is given the first under

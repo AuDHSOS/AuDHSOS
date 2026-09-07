@@ -7,6 +7,8 @@
 mod bytes;
 mod console;
 mod display;
+mod input;
+mod keyboard;
 mod label;
 mod memory;
 mod name;

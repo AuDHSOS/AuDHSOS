@@ -563,6 +563,7 @@ name = "user-proto"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "driver-i8042",
  "gfx",
  "user-rt",
 ]
