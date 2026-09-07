@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use kernel_test_harness::protocol::{FAILED, OK, SEPARATOR, SUMMARY_PREFIX, TEST_PREFIX};
+use kernel_test_harness::protocol::{
+    BENCH_PREFIX, FAILED, OK, SEPARATOR, SUMMARY_PREFIX, TEST_PREFIX, TICKS,
+};
 
 use crate::error::Error;
 
@@ -368,11 +370,25 @@ pub(crate) enum TestOutcome {
     Failed(String),
 }
 
+/// One measurement the machine reported: what was measured, the median in
+/// ticks, and how many round trips it is the median of.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Measurement {
+    /// The name of the measurement.
+    pub(crate) name: String,
+    /// The median, in ticks of the time-stamp counter.
+    pub(crate) ticks: u64,
+    /// How many round trips it stands for.
+    pub(crate) samples: u32,
+}
+
 /// Everything the serial protocol carried.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Report {
     /// One entry per `[test]` line, in the order they arrived.
     pub(crate) tests: Vec<(String, TestOutcome)>,
+    /// One entry per `[bench]` line, in the order they arrived.
+    pub(crate) measurements: Vec<Measurement>,
     /// The counts of the `[summary]` line, if one arrived.
     pub(crate) summary: Option<(u32, u32)>,
 }
@@ -428,6 +444,10 @@ pub(crate) fn parse(output: &str) -> Report {
             if let Some(test) = parse_test(rest) {
                 report.tests.push(test);
             }
+        } else if let Some(rest) = line.strip_prefix(BENCH_PREFIX) {
+            if let Some(measurement) = parse_measurement(rest) {
+                report.measurements.push(measurement);
+            }
         } else if let Some(rest) = line.strip_prefix(SUMMARY_PREFIX) {
             report.summary = parse_summary(rest).or(report.summary);
         }
@@ -445,6 +465,26 @@ fn parse_test(rest: &str) -> Option<(String, TestOutcome)> {
     }
     let message = outcome.strip_prefix(FAILED)?;
     Some((name, TestOutcome::Failed(message.to_owned())))
+}
+
+/// One `[bench]` line without its prefix: a name, the separator, the
+/// median in ticks, and how many round trips it is the median of.
+fn parse_measurement(rest: &str) -> Option<Measurement> {
+    let position = rest.find(SEPARATOR)?;
+    let name = rest.get(..position)?.to_owned();
+    let figure = rest.get(position.checked_add(SEPARATOR.len())?..)?;
+    let (ticks, count) = figure.split_once(TICKS)?;
+    let samples = count
+        .trim()
+        .strip_prefix("(n=")?
+        .strip_suffix(')')?
+        .parse()
+        .ok()?;
+    Some(Measurement {
+        name,
+        ticks: ticks.parse().ok()?,
+        samples,
+    })
 }
 
 /// One `[summary]` line without its prefix.

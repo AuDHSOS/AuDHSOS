@@ -2398,15 +2398,19 @@ each without findings.
 1. Measurement: add `read_tsc` (`rdtsc`, one `asm!`) to the adapter and
    a QEMU test kernel `bench.rs` that measures the median of 10 000 system
    call round trips (`thread_yield`) and IPC round trips (call/reply)
-   in TSC ticks, printed in the `[bench]` line format; record the numbers
-   in `docs/08-roadmap.md` 8.10.
+   in TSC ticks, printed in the `[bench]` line format of 03 3.1.7; record
+   the numbers in `docs/08-roadmap.md` 8.10.
 2. Decide the `syscall` instruction path from the numbers with a decision
-   register entry D-29 (either "kept as `int 0x80`" or "implemented").
+   register entry (either "kept as `int 0x80`" or "implemented").
 3. Unsafe budget review: every site listed in 04 4.5 with its crate,
    counts equal to the budgets.
 4. Documents: read every document against the code and fix every
    difference.
 5. `CHANGELOG.md` section `[0.1.0]`, tag `v0.1.0`.
+
+Done: the measurement is `crates/kernel/bin/tests/bench.rs` over the call
+hook of its support module and `read_tsc` of the adapter (D-101); the
+numbers stand in 08 8.10; `int 0x80` is kept (D-102).
 
 ## 10.9 Phase 9: Framebuffer output
 

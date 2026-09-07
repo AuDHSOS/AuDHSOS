@@ -5,7 +5,7 @@
 
 use kernel_hal_api::doubles::RecordingConsole;
 
-use crate::protocol::{failed, passed, start, summary};
+use crate::protocol::{failed, measurement, passed, start, summary};
 
 #[test]
 fn a_passing_test_writes_one_line_in_the_documented_shape() {
@@ -40,4 +40,21 @@ fn the_summary_names_both_counts() {
         console.text(),
         "[summary] passed=7 failed=0\n[summary] passed=0 failed=3\n"
     );
+}
+
+#[test]
+fn a_measurement_names_the_median_and_how_many_it_is_of() {
+    let mut console = RecordingConsole::new();
+    measurement(&mut console, "bench::syscall_round_trip", 4_231, 10_000);
+    assert_eq!(
+        console.text(),
+        "[bench] bench::syscall_round_trip ... 4231 ticks (n=10000)\n"
+    );
+}
+
+#[test]
+fn a_measurement_of_nothing_still_writes_a_line() {
+    let mut console = RecordingConsole::new();
+    measurement(&mut console, "bench::empty", 0, 0);
+    assert_eq!(console.text(), "[bench] bench::empty ... 0 ticks (n=0)\n");
 }

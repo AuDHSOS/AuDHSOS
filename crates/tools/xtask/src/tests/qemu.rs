@@ -7,8 +7,8 @@
 use std::path::Path;
 
 use crate::qemu::{
-    EXIT_LOADER_FAILURE, EXIT_SUCCESS, EXIT_TEST_FAILURE, Outcome, Report, Run, TestOutcome,
-    arguments, check, firmware_next_to, outcome_of, parse, strip_escapes,
+    EXIT_LOADER_FAILURE, EXIT_SUCCESS, EXIT_TEST_FAILURE, Measurement, Outcome, Report, Run,
+    TestOutcome, arguments, check, firmware_next_to, outcome_of, parse, strip_escapes,
 };
 
 /// A run whose lines are all well formed.
@@ -178,4 +178,54 @@ fn the_violation_of_a_crash_carries_the_reason() {
         text.contains("signal 9"),
         "the reason is not in the report: {text}"
     );
+}
+
+#[test]
+fn a_bench_line_is_read_with_its_name_its_figure_and_its_count() {
+    let report = parse(
+        "[bench] bench::syscall_round_trip ... 4231 ticks (n=10000)\n\
+         [bench] bench::ipc_round_trip ... 19004 ticks (n=10000)\n\
+         [summary] passed=0 failed=0\n",
+    );
+    assert_eq!(
+        report.measurements,
+        vec![
+            Measurement {
+                name: "bench::syscall_round_trip".to_owned(),
+                ticks: 4231,
+                samples: 10_000,
+            },
+            Measurement {
+                name: "bench::ipc_round_trip".to_owned(),
+                ticks: 19_004,
+                samples: 10_000,
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_bench_line_that_is_not_the_grammar_is_ignored() {
+    for line in [
+        "[bench] no separator 12 ticks (n=1)",
+        "[bench] name ... ticks (n=1)",
+        "[bench] name ... 12 (n=1)",
+        "[bench] name ... 12 ticks",
+        "[bench] name ... 12 ticks (n=)",
+        "[bench] name ... 12 ticks (n=1",
+    ] {
+        let report = parse(&format!("{line}\n[summary] passed=0 failed=0\n"));
+        assert!(
+            report.measurements.is_empty(),
+            "`{line}` was read as a measurement"
+        );
+    }
+}
+
+#[test]
+fn a_bench_line_does_not_count_as_a_test() {
+    let report = parse("[bench] b ... 1 ticks (n=1)\n[summary] passed=0 failed=0\n");
+    assert_eq!(report.passed(), 0);
+    assert_eq!(report.failed(), 0);
+    assert!(check(&report, &ended_with(EXIT_SUCCESS)).is_ok());
 }

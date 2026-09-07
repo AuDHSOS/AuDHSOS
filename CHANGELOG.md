@@ -5,6 +5,41 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- What the two round trips of this system cost (D-101). `bench` is a test
+  kernel like every other, and it measures from the one point a round trip
+  passes through exactly once: the entry of the system call gate. The
+  difference between two entries of the same call, made by a thread that
+  does nothing else in between, is one round trip — a `thread_yield` with
+  one runnable thread for the shorter figure, a call and its answer between
+  two user threads for the longer one. `instructions::read_tsc` is the one
+  `asm!` it needs, the `[bench]` line of 03 3.1.7 is what it writes, and
+  08 8.10 records what it wrote.
+- Three programs of `user-test-programs` for that measurement:
+  `bench_yield`, `bench_caller`, and `bench_replier`, each a loop around
+  one call and nothing else.
+- A call hook in the support module of the kernel test images: what an
+  image does at the entry of every system call a user thread makes. The
+  measuring image is the only one that sets one; every other image pays a
+  cell that is not there.
+
+### Changed
+
+- `int 0x80` stays the way into the kernel (D-102). D-15 left the `syscall`
+  instruction to be decided in Phase 8 by measurement, and the measurement
+  decides against it twice over: a call and its reply cost about eight
+  times a bare entry and return, so the entry instruction is a small part
+  of the work of an IPC; and the reference machine is an emulator whose
+  counter steps by a thousand ticks, which is far above the tens of cycles
+  that separate `int` from `syscall` on a processor. A second entry path
+  with its own stack switch and three model-specific registers is not taken
+  on evidence this machine cannot produce.
+- The unsafe budgets of `kernel-hal-x86_64` (144 to 145 sites, 27 to 28
+  assembly sites) and of `user-test-programs` (66 to 78), which is what the
+  measurement costs (D-101). Every other budget is what the crate holds,
+  to the site.
+
 ### Fixed
 
 - A cut line carries the mark it was documented to carry. `user_rt::Line`

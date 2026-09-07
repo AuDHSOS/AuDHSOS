@@ -87,6 +87,24 @@ path = "src/bin/notification_waiter.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "bench_yield"
+path = "src/bin/bench_yield.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "bench_caller"
+path = "src/bin/bench_caller.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "bench_replier"
+path = "src/bin/bench_replier.rs"
+test = false
+bench = false
+
 [dependencies]
 audhsos-abi.workspace = true
 user-rt.workspace = true

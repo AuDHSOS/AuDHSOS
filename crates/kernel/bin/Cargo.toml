@@ -38,6 +38,9 @@ name = "user"
 name = "ipc"
 
 [[test]]
+name = "bench"
+
+[[test]]
 name = "isolation"
 
 [[test]]

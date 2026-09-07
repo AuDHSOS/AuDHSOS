@@ -191,8 +191,14 @@ The serial output carries a line protocol that the runner parses:
 ```
 [test] <crate>::<name> ... ok
 [test] <crate>::<name> ... FAILED: <message>
+[bench] <crate>::<name> ... <ticks> ticks (n=<count>)
 [summary] passed=<n> failed=<m>
 ```
+
+A `[bench]` line reports a measurement and not a test: `<ticks>` is the
+median of `<count>` round trips, in ticks of the time-stamp counter, and
+the line counts towards neither the passed nor the failed total. An image
+that writes one writes its test lines and its summary like every other.
 
 Userland end-to-end tests use the same protocol through the console driver.
 

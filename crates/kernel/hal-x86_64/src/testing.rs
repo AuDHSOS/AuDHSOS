@@ -138,6 +138,17 @@ pub fn print(bytes: &[u8]) {
     let _ = with_harness(|harness| harness.console().write_bytes(bytes));
 }
 
+/// Writes the line of one measurement: the median of `samples` round
+/// trips, in ticks of the time-stamp counter.
+///
+/// It goes on the same console as the test lines and carries a prefix of
+/// its own, so the runner reads it without mistaking it for a test.
+pub fn measure(name: &str, ticks: u64, samples: u32) {
+    let _ = with_harness(|harness| {
+        kernel_test_harness::protocol::measurement(harness.console(), name, ticks, samples);
+    });
+}
+
 /// Reports that the running test failed and ends the machine. An image
 /// that expects a panic reports a pass instead.
 pub fn fail(arguments: fmt::Arguments<'_>) -> ! {

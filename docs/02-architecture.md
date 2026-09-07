@@ -436,8 +436,8 @@ through shared memory objects.
 - The system call table is one declarative macro in `audhsos-abi`. It
   generates numbers, names, argument counts, the kernel dispatcher, and the
   userland wrappers.
-- The `syscall` instruction path with register arguments is evaluated in
-  Phase 8 by measurement.
+- The `syscall` instruction path with register arguments was measured
+  against this one in Phase 8 and is not implemented (D-102).
 
 | Call | Object | Purpose |
 |------|--------|---------|

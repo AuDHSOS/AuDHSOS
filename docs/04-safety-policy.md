@@ -71,6 +71,7 @@ The xtask policy table holds the machine-readable form.
 | `kernel-hal-x86_64` | segment register reload after `lgdt` | `mov` to data segment registers, far return for `CS` |
 | `kernel-hal-x86_64` | flags register | `pushfq`, `pop` |
 | `kernel-hal-x86_64` | model-specific registers | `rdmsr`, `wrmsr` |
+| `kernel-hal-x86_64` | time-stamp counter | `rdtsc` |
 | `kernel-hal-x86_64` | port I/O, byte, word, and double word | `in`, `out` |
 | `kernel-hal-x86_64` | context switch (naked function) | save callee-saved registers, swap stack pointer, restore, return |
 | `kernel-hal-x86_64` | entry into user mode (naked function) | `iretq` through the frame the kernel wrote onto a fresh kernel stack |

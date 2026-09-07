@@ -177,10 +177,56 @@ root task ends the machine itself (D-94); `check` runs it.
 
 ## 8.10 Phase 8: Consolidation
 
+Status: implemented.
+
 Measure the system call round trip and the IPC round trip; decide the
 `syscall` instruction path from the numbers. Review the `unsafe` budget.
 Refresh every design document against the code. Write the 0.1.0 changelog
 entry and tag.
+
+### 8.10.1 The measurements
+
+The `bench` test kernel measures both round trips. It hangs a hook on the
+entry of the system call gate, which a round trip passes through exactly
+once, and takes the difference between two entries of the same call made
+by a thread that does nothing in between. The shorter round trip is a
+`thread_yield` with one runnable thread: the trap, the dispatch of the
+shortest call of the table, and the return to ring three. The longer one
+is a call and its answer between two user threads over an endpoint, with
+an empty message: the rendezvous and the two switches it takes.
+
+The figures below are ticks of the time-stamp counter, from the reference
+machine of 3.1.1 — QEMU without hardware virtualization, one processor,
+`-cpu qemu64` — on the development machine of 7.5. The `[bench]` line
+carries the median; the mean is the whole span of the run divided by the
+round trips in it.
+
+| Round trip | Profile | Median | Mean | Shortest | Longest |
+|------------|---------|--------|------|----------|---------|
+| system call (`thread_yield`) | release | 8 000 | 7 829 | 7 000 | 943 000 |
+| call and reply (`ipc_call`) | release | 65 000 | 65 708 | 62 000 | 2 056 000 |
+| system call (`thread_yield`) | debug | 72 000 | 74 468 | 70 000 | 4 219 000 |
+| call and reply (`ipc_call`) | debug | 524 000 | 534 071 | 488 000 | 5 731 000 |
+
+Three things these numbers are not. They are not a figure of hardware:
+every instruction of the measured path is translated by the emulator, and
+the ratio between two instructions there is not the ratio between them on
+a processor. They are not repeatable to the digit: successive runs differ
+by a few percent with the load of the host. And a single difference is
+quantized: under this emulator the counter advances in steps of a thousand
+ticks, which is an eighth of the shorter round trip in the release
+profile — which is why the mean over the whole run is reported beside the
+median, its error being the step divided by ten thousand.
+
+What the numbers are good for is the comparison of the two with each
+other, and of either with itself after a change of this kernel. The call
+and reply costs about eight times a bare entry and return; whatever the
+entry instruction is, it is a small part of the work of an IPC. [D-102](09-decisions.md)
+decides the `syscall` instruction path from that.
+
+`sh tools/xtask.sh test --qemu` runs the image in the debug profile and
+prints both lines. The release figures were taken by building the same
+image with `--release`.
 
 ## 8.11 Phase 9: Framebuffer output
 

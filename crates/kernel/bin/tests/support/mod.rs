@@ -133,6 +133,25 @@ pub(crate) type TickHook = fn(u64) -> bool;
 /// switches threads leaves no borrow alive on the stack it leaves.
 static TICK_HOOK: Global<TickHook> = Global::new();
 
+/// What an image does at the entry of every system call a user thread
+/// makes, before the kernel answers it. The argument is the call number
+/// the thread wrote into its buffer.
+///
+/// This is what a measuring image is: the entry of a call is the one point
+/// of the kernel that a round trip passes through exactly once, so the
+/// difference between two entries of the same call is one round trip, and
+/// nothing else of the kernel has to know that anybody is counting.
+pub(crate) type CallHook = fn(u64);
+
+/// The call hook of the running image, if it has one.
+static CALL_HOOK: Global<CallHook> = Global::new();
+
+/// Registers what the image does at the entry of every system call. An
+/// image sets it once; a second call leaves the first hook in place.
+pub(crate) fn set_call_hook(hook: CallHook) {
+    let _ = CALL_HOOK.init(hook);
+}
+
 /// The window over physical memory. The tables the loader built stay
 /// active for the whole run, so the window maps every physical frame read
 /// and write, and this image is the only writer.
@@ -1040,7 +1059,14 @@ fn on_syscall() {
     let Some(bytes) = buffer_window.frame_bytes_mut(frame) else {
         return;
     };
-    watch(bytes);
+    let number = ipc_buffer::Buffer::new(bytes).syscall_number();
+    watch(number);
+    // The hook is copied out before it runs, as every other hook of this
+    // image is, so that no borrow of the cell is alive while it works.
+    let hook = CALL_HOOK.borrow(&UncontendedToken).ok().map(|hook| *hook);
+    if let Some(hook) = hook {
+        hook(number);
+    }
     // The interrupt controller and the ports, in an image that brought them
     // up. Holding the controller turns interrupts off for the length of the
     // call, which is what the calls that touch it need.
@@ -1145,12 +1171,11 @@ pub(crate) fn watched_syscalls(into: &mut [u32]) -> usize {
     len
 }
 
-/// Remembers the number of the call standing in `bytes`.
-fn watch(bytes: &[u8; ipc_buffer::SIZE]) {
+/// Remembers `number`, the call the buffer of the caller stands on.
+fn watch(number: u64) {
     if WATCHING.load(Ordering::SeqCst) == 0 {
         return;
     }
-    let number = ipc_buffer::Buffer::new(bytes).syscall_number();
     let at = usize::try_from(WATCHED_LEN.load(Ordering::SeqCst)).unwrap_or(usize::MAX);
     if let Some(slot) = WATCHED.get(at) {
         slot.store(u32::try_from(number).unwrap_or(u32::MAX), Ordering::SeqCst);
