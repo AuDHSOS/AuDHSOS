@@ -235,6 +235,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs-fat"
+version = "0.1.0"
+dependencies = [
+ "audhsos-time",
+ "test-support",
+]
+
+[[package]]
 name = "fuzz-support"
 version = "0.1.0"
 
@@ -592,6 +600,8 @@ version = "0.1.0"
 dependencies = [
  "audhsos-abi",
  "audhsos-symbols",
+ "audhsos-time",
+ "fs-fat",
  "gfx",
  "kernel-test-harness",
  "user-loader",

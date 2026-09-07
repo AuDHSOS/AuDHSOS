@@ -130,7 +130,7 @@ AuDHSOS/
 | `gfx` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf`; `test-support` as a dev-dependency |
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
-| `fs-fat` (document 12, not started) | 1 | all | no | yes | `audhsos-time`, `audhsos-collections`; feature `test-doubles` |
+| `fs-fat` | 1 | all | no | yes | `audhsos-time`; `test-support` as a dev-dependency; feature `test-doubles` |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-objects` | 2 | all | no | yes | `kernel-types`, `kernel-mm`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-sched` | 2 | all | no | yes | `kernel-objects`, `audhsos-abi` |
@@ -173,7 +173,7 @@ AuDHSOS/
 | `net-stack` | n5 | all | no | yes | every `net-` crate, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
 | `fuzz-support` | dev | host | allowlisted | yes, and Miri over `counters` and `sancov`, which hold its `unsafe` | - |
-| `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `audhsos-symbols`, `user-loader` |
+| `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `audhsos-symbols`, `audhsos-time`, `fs-fat`, `user-loader` |
 | `doc-markdown` | host | host | no | yes | - |
 | `doc-html` | host | host | no | yes | `doc-markdown` |
 | `doc-pdf` | host | host | no | yes | `audhsos-deflate` |
@@ -332,7 +332,7 @@ still has none.
 | Object types, their rights masks, and `TryFrom<u32>` conversions | one declarative table in `audhsos-abi` |
 | Error mapping | one `From` implementation per crate pair, tested by a table |
 | Test doubles | one implementation in `kernel-hal-api` behind `test-doubles` |
-| FAT32 structures in the image writer and in a later file system server | `fs-fat` over a block device trait; the xtask and the server use one implementation |
+| FAT32 structures in the image writer and in a later file system server | `fs-fat` over a block device trait; the image writer of the xtask is its first user and a file system server will be the second |
 | Calendar arithmetic in certificate validity, file timestamps, and network timers | `audhsos-time`; every interface takes time as a parameter, no crate reads a clock |
 | Fixed-capacity containers in kernel queues, the network stack, and userland | `audhsos-collections`; one model-tested implementation per container |
 | Base64 and PEM in the trust-anchor tool and in generated test data | `audhsos-encoding` |

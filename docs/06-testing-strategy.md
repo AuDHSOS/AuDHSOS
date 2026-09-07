@@ -1903,6 +1903,131 @@ what the kernel dispatches on, so the check is what the kernel saw.
   wrappers whose calls are swapped, a wrapper the program does not call,
   and a call of the table with no wrapper that reached the kernel.
 
+### 6.6.58 The document toolchain (`audhsos-deflate`, `doc-markdown`, `doc-html`, `doc-svg`, `doc-pdf`, `docpdf`)
+
+- Bits and codes (`audhsos-deflate`): a bit written is the bit read, and a
+  Huffman code goes out with its first bit first; a writer with no room and
+  a reader that runs out say so instead of wrapping; what is aligned is
+  written whole; the fixed code is the one RFC 1951 states, and every
+  length and every distance is written as a code that means it again; a
+  tree of no symbols reads nothing and a tree of one symbol is still a
+  code; more symbols than a tree holds are dropped and not written past; a
+  code length the format does not have is ignored; `bound` counts the
+  blocks a result can take.
+- Streams (`audhsos-deflate`): nothing, one byte, a run of one byte, and a
+  run that reaches back into itself all come out again; text that repeats
+  gets smaller, and what will not compress is carried unchanged, in more
+  than one stored block when it is long; a zlib stream carries its wrapper
+  and its Adler checksum; a wrong checksum, a wrapper the crate does not
+  know, a buffer with no room, and a stream of nonsense are each refused,
+  the last of them without running away. Property: whatever goes in comes
+  back out, whether it repeats or not. Vectors from outside the crate: a
+  block with a table of its own, a block that carries its bytes, and a
+  zlib stream made elsewhere all read back as the sentence they were made
+  from.
+- Blocks (`doc-markdown`): an empty document has no block; an ATX heading
+  carries its level and a hash without a space is not one; a setext
+  underline makes the line above a heading; a fence keeps its lines
+  exactly, may contain the other fence character, and ends with the
+  document when it never closes; four spaces and a tab indent alike; a
+  quotation holds blocks of its own and ends where a block of its own
+  begins; a list keeps the number it starts at, may hold a list or a code
+  block in an item, becomes two lists when its kind changes, and ends
+  after two blank lines; a table reads its alignments, pads a short row,
+  and stays a paragraph without its delimiter row; an escaped pipe does not
+  split a cell. Property: the parser never invents text.
+- Inline runs (`doc-markdown`): strong and emphasis are told apart and
+  nest; an underscore inside a word is a character, so `saturating_add`
+  stays an identifier; a code span keeps what is inside it, may contain a
+  backtick, may run over a line break, and drops one space at each end; a
+  link keeps its text and its target and neither loses the brackets it
+  balances; an autolink and a mail address are links and a generic in angle
+  brackets is not; a backslash hides the mark behind it and stays itself
+  before anything else.
+- Syntax (`doc-html`): character references by name, by both bases, and in
+  the legacy forms that need no semicolon, with an unknown one left as it
+  was; attributes quoted, single-quoted, bare, and alone, with the name
+  lower-cased and the value not; comments, doctypes, and instructions read
+  and dropped; the content of a script or a style is text and not markup,
+  and an unterminated comment, tag, or script ends the document; an element
+  left open is closed at the end, an end tag that names nothing open is
+  dropped, and the implied end tags of paragraphs, items, cells, rows, and
+  terms fire where real documents rely on them.
+- Blocks (`doc-html`): text outside any element is still a paragraph and
+  the whitespace of the markup becomes one space; a heading counts the
+  sections around it and never goes deeper than six; lists, tables,
+  quotations, notes, terms, captions, and rules come out as the blocks the
+  Markdown parser produces; preformatted text is kept line for line and a
+  grammar gets a line per production; what carries no prose is dropped with
+  everything in it, and an element the tables do not name is read for its
+  children; a link out of the document keeps its address and one into it
+  keeps only its text.
+- Parts (`doc-svg`): numbers as thousandths, with an exponent, as a list
+  however it is separated, and a length in a unit other than pixels
+  refused; the transforms `translate`, `scale`, `matrix`, and `rotate`,
+  applied left to right, with an unknown one changing nothing; colours by
+  word, by digits, and by components; the stylesheet cascade, where the
+  stronger selector stands last and a selector the crate does not read is
+  dropped; every path command except the elliptical arc, which is the
+  straight line to where it ends, with a smooth curve mirroring its
+  control and a quadratic becoming the cubic it is; a path of nonsense
+  stops where the nonsense starts; rectangles with and without round
+  corners, circles, and polygons, each of no size yielding nothing.
+- Drawings (`doc-svg`): a figure is as large as its view box says, is
+  moved to the origin when the box does not start there, and is turned over
+  so that y grows upwards; a group hands its transform and its colours
+  down; a `use` draws what it points at where it stands and nothing when it
+  points at nothing; a figure that points at itself does not run for ever;
+  an anchor moves a line of text back by what it measures; a marker is
+  drawn at the end of the stroke it belongs to and grows with the stroke
+  when it is measured in stroke widths; a placed figure keeps its text and
+  its curves at every point they bend through.
+- Text and paths (`doc-pdf`): a page of prose is one text object; a run
+  that begins where the last one ended says nothing about its place and one
+  a hair away still does; a face is named again only when it changes and a
+  colour is set once for as long as it stands; the delimiters of a string
+  are escaped and a high byte is written as an octal escape; a rectangle
+  with no area, a rule of no thickness, and a path that is neither filled
+  nor stroked are not drawn. Fonts: every face has its own resource name;
+  the fixed-pitch faces advance by the same amount everywhere; bold is
+  never narrower than regular; a character the encoding has no place for is
+  offered the symbol font first and is a question mark when neither font
+  has it; width grows with the point size.
+- Files (`doc-pdf`): a file starts with the header and ends with the
+  marker; the page tree names every page, every stream declares the length
+  it has, the cross-reference table points at every object, and no two
+  objects carry the same number; the outline is a tree the catalogue points
+  at, a heading that skips a level is lifted, and a document with no
+  heading has none; both kinds of link reach the page and a page with no
+  link carries no annotation array; a compressed document says so, reads
+  back, is smaller, and changes nothing else, and a page with nothing on it
+  is not compressed. Property: two runs over the same document write the
+  same bytes.
+- Filing and rendering (`docpdf`): a document is filed by what it is, a
+  crate is named after its package and falls back to its directory without
+  a manifest, what a build wrote is not a document, a document no rule
+  claims is still converted, and none is converted twice; the title is the
+  first heading, or the file name where there is none; an RFC is called by
+  its number, laid out one page per sheet, keeps every column where it was,
+  and gives up its sections as an outline while a table-of-contents line
+  does not; a picture alone on its line is drawn and one inside a sentence,
+  one whose file is missing, and one the crate cannot draw are said
+  instead; a link between two documents becomes a link between two files
+  and one to something that was not converted is left alone.
+- Breaking and the pool (`docpdf`): a line that does not fit is broken at a
+  space, a word wider than the measure is cut rather than left hanging, and
+  a break the author asked for is kept; a code span is measured in the face
+  it will be set in; a link carries its target down to the piece and strong
+  inside a link is both. Property: breaking never loses a character and
+  never overruns the measure. The worker pool does every job exactly once
+  and returns the results in the order the jobs were given, and one worker
+  gives the same answer as many.
+- Against the repository itself, as the corpus that is at hand: every
+  Markdown document of the repository parses into blocks without losing a
+  fence or emptying a heading; the HTML standards come out as documents
+  with nothing left as markup; every SVG figure comes out as marks that
+  stand inside it and keeps its shape when it is placed.
+
 ## 6.7 CI pipeline
 
 Jobs run in this order; a failure stops the pipeline.

@@ -413,6 +413,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "fs-fat",
+        path: "crates/fs/fat",
+        kind: Kind::Logic,
+        deps: &["audhsos-time", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "kernel-x86-tables",
         path: "crates/kernel/x86-tables",
         kind: Kind::Logic,
@@ -747,6 +755,8 @@ pub(crate) const CRATES: &[Crate] = &[
         deps: &[
             "audhsos-abi",
             "audhsos-symbols",
+            "audhsos-time",
+            "fs-fat",
             "gfx",
             "kernel-test-harness",
             "user-loader",

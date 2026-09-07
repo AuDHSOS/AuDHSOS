@@ -55,8 +55,8 @@ integration around it stays in its phase.
 | C | cryptography and TLS ([document 11](11-cryptography-and-tls.md)) | XL | implemented but for step T8, which is the integration D10 also waits for |
 | D | the network stack, sans-I/O (12.6) | XL | unblocks C's transport; unblocks HTTP |
 | E | shared foundations: time, encodings, collections (12.5) | M | implemented; needed by C at T5 and T6, by D throughout, by phases 5 and 6 |
-| F | device logic without devices: virtqueues, FAT32 (12.7) | M | `virtio-queue` implemented, `fs-fat` open; prepares the network and storage drivers that are later work |
-| G | tooling: fuzz support, symbolization (12.8) | M | serves every track and every phase |
+| F | device logic without devices: virtqueues, FAT32 (12.7) | M | implemented; prepares the network and storage drivers that are later work |
+| G | tooling: fuzz support, symbolization, the document toolchain (12.8) | L | implemented; serves every track and every phase, and no part of the system is built from it |
 
 Track E comes first in this document because tracks C and D both rest on
 it.
@@ -1072,18 +1072,64 @@ branches.
 
 ### 12.7.2 `fs-fat`
 
-The xtask already contains a FAT32 writer (D-09, catalog 6.6.15). Its
-structural logic moves into `fs-fat` over a `BlockDevice` trait with a
-RAM-disk double: boot parameter block validation, FAT chain traversal,
-cluster allocation, directory entries in 8.3 form, and file read and
-write. The xtask image writer becomes a user of the crate, and the file
-system server that section 8.14 leaves unscheduled becomes a second one.
-This removes the only duplication the tooling has planned for itself.
+Implemented. The FAT32 structural logic that was in the xtask (D-09,
+catalog 6.6.15) now lives here over a `BlockDevice` trait: one sector in,
+one sector out, and nothing in the trait about where the bytes are. A
+byte vector in a test, a partition inside a disk image, and a driver in a
+file system server are the same thing to every chain and every directory
+above it. Nothing allocates; the largest thing on the stack is one
+sector.
 
-FAT32 only, no FAT12 or FAT16, no long file names (D-09 unchanged),
-timestamps through `audhsos-time` (D-53).
+What it holds is the boot parameter block as numbers, the cluster chains,
+the directories in 8.3 form, and reading and writing a file at an offset.
+FAT32 only and no long file names, which D-09 fixed and D-53 kept: a
+FAT12 or a FAT16 volume is refused at the boot sector rather than read
+badly, because the two use the root directory and the table width
+differently and a reader that guessed between them would be three file
+systems in one.
 
-Tests: catalog 6.6.52.
+A name has two senses and they are not the same rule. `Name::new` takes
+what a caller writes, in either case, and keeps it upper-cased, because
+that is the only case the form has room for and because the image writer
+hands it paths as they stand. `Name::from_entry` takes the eleven bytes a
+directory holds and refuses anything this crate would not have written, a
+lower-case letter included: the byte that would say what a lower-case
+letter meant belongs to the long file name entries, which this crate
+skips rather than reads, so a lower-case name in an entry is a name whose
+meaning is not there to read.
+
+Every walk of a chain is bounded by the number of clusters the volume
+has, so a chain that points back into itself is an error and not a hang —
+the same trick as the free set of `virtio-queue`, and for the same
+reason. Four things end a walk and only one of them is success: the
+end-of-chain marker; a free cluster, which means the table and the entry
+that named the chain disagree about what is in use; the bad-cluster
+marker; and a number outside the table. Every write of a table entry goes
+into every copy of the table in the same call, so the copies cannot drift
+apart, and the four bits of an entry that are not this crate's are read
+back and written through untouched.
+
+Two decisions are about what to believe. The free count is counted from
+the table when a volume is mounted rather than read out of the file
+system information sector, because that sector is a note the last writer
+left and the table is what the volume is; `flush` writes the note back.
+And a file carries a cursor, which is what keeps writing a large file
+linear: a chain has no way back, so a write that found its place from the
+first cluster every time would walk the whole file again for every
+cluster it added, and an eighty-megabyte image would take quadratic time
+to write.
+
+The xtask keeps only what is the image's rather than the format's: the
+partition as a block device, the choices a boot volume is made with — one
+sector per cluster, two tables, the volume label and the serial number —
+and the fixed moment every entry is stamped with, so that two runs with
+the same files still produce the same bytes. Its own FAT32 code is gone,
+and the reader its tests use is this crate reading back what this crate
+wrote, which is what catalog 6.6.52 asks for in place of the ad-hoc check
+6.6.15 had.
+
+Tests: catalog 6.6.52. Coverage 94.7 percent of lines and 91.3 percent of
+branches.
 
 ## 12.8 Track G: tooling
 
@@ -1150,6 +1196,39 @@ fail it a second time.
 
 Tests: catalog 6.6.53.
 
+### 12.8.3 The document toolchain
+
+Implemented. It was written after Phase 7 and was not planned in this
+document; it is recorded here because track G is where it belongs.
+`cargo xtask pdf` turns every Markdown document of the repository,
+every RFC beside them, and every standard kept as HTML into a PDF under
+`target/pdf/`, with an index that links to each. Six crates carry it:
+`doc-markdown` and `doc-html` parse into the same blocks and inline runs,
+so that everything above them is one body of code for both; `doc-svg`
+reads the figures of those documents into the marks a page is made of;
+`doc-pdf` writes PDF 1.7 — pages, text in the six faces of the standard
+fourteen fonts it uses, paths, links, and an outline; `docpdf` decides
+what is filed where, breaks the lines, and runs the conversions several
+at a time; and
+`audhsos-deflate` is the DEFLATE format of RFC 1951 in the zlib wrapper
+of RFC 1950, which is the filter a PDF calls `FlateDecode` and what makes
+a compressed document about a third of the size of a readable one.
+
+`audhsos-deflate` passes the admission test of 12.2 as written: `no_std`,
+`#![forbid(unsafe_code)]`, no allocation — the caller hands over the
+buffer the result is written into and the table the compressor finds runs
+with — and it depends on nothing. It is a layer-0 logic crate that the
+system could use, and today only a tool does. The five above it are host
+tools and pass the test in the sense track G passes it: they hold no
+`unsafe`, they touch no hardware, and nothing of the system is built from
+them, so they compete with a phase for attention and for nothing else.
+
+Both RFCs are kept under [`docs/rfc/`](rfc/README.md) as `rfc1950.txt`
+and `rfc1951.txt`, and every number of the crate names the section it
+comes from, which is what D-59 asks of a standard the code implements.
+
+Tests: catalog 6.6.58.
+
 ## 12.9 Phase work that may be pulled forward
 
 These components belong to phases and stay there: their catalog entries,
@@ -1166,6 +1245,12 @@ the integration.
 | allocator logic in `user-rt` | 7 | 6.6.12 | offsets in a byte region, testable against a reference model |
 | encodings in `user-proto` | 7 | 6.6.56 | each message is a type with `encode` and `decode` and no system call; the catalog item 6.6.56 was written for them, as this row asked (D-89) |
 
+Phase 7 has since been implemented, which settles the last two rows: the
+allocator is `heap.rs` of `user-rt` and the encodings are `message.rs` of
+`user-proto`, both written inside the phase rather than before it. The
+first three rows are open, and they belong to Phase 9 and Phase 10, which
+is what makes them the work that fills a gap between phases now.
+
 ## 12.10 Capacity
 
 - At most one side track besides track C is active at a time. Three
@@ -1178,14 +1263,17 @@ the integration.
   phase 3, because that is where kernel panics start. Tracks E and G are
   done, track C has T1 to T7 and the RSA steps R1 to R6 behind it, and
   track D has D1 to D9 behind it, so what is left of either is T8 and
-  D10, which are one integration and are not scheduled. A driver became
+  D10, which are one integration and are not scheduled. The document
+  toolchain of 12.8.3 came after Phase 7 and outside this order, which it
+  could do because no phase and no track waits on it. A driver became
   foreseeable with Phase 7, which puts a console driver at ring three, so
-  track F is the side track that is open: `virtio-queue` is done and
-  `fs-fat` is not.
-- `fs-fat` waits for the boot image work of Phase 7. It moves the
-  structural logic out of `crates/tools/xtask/src/image`, and the tar
+  track F was the side track that was open; both its steps are behind it
+  now, which leaves no side track running beside the phases.
+- `fs-fat` waited for the boot image work of Phase 7, because it moves
+  the structural logic out of `crates/tools/xtask/src/image` and the tar
   archive that phase adds to the boot image lands in the same directory;
-  two hands in one refactoring is the one avoidable collision here.
+  two hands in one refactoring is the one avoidable collision here. That
+  phase landed first, and the move was made after it.
 - The pulled-forward work of 12.9 fills short gaps, because it needs no
   new design.
 
@@ -1194,14 +1282,18 @@ the integration.
 Each item below would pass the admission test and has no consumer in the
 current plan. They are listed so that they do not return as ideas.
 
-DEFLATE and gzip; a VT100 terminal emulator and a line editor; a JSON
-parser beyond the QMP subset the xtask needs; the TLS server role; USB;
-compression or encryption of the boot image.
+gzip; a VT100 terminal emulator and a line editor; a JSON parser beyond
+the QMP subset the xtask needs; the TLS server role; USB; compression or
+encryption of the boot image.
 
-Two items left this list rather than returning as ideas. IPv6 gained a
+Three items left this list rather than returning as ideas. IPv6 gained a
 consumer and became step D4 (D-69). The bignum crate that RSA
 verification needs gained one too and became `crypto-bignum` in step R1
-of document 11.
+of document 11. And DEFLATE gained one when the PDF writer needed the
+filter a PDF calls `FlateDecode`: it is `audhsos-deflate` of 12.8.3.
+What stays on the list is gzip, which is the same compressed format under
+a different header and a different checksum, and which nothing here reads
+or writes.
 
 ## 12.12 Risks
 
