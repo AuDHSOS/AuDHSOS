@@ -129,6 +129,15 @@ pub const THREADS_PER_PROCESS: usize = 64;
 /// Number of regions one process may map.
 pub const REGIONS_PER_PROCESS: usize = 64;
 
+/// How many watchers may wait for the end of one process.
+///
+/// A watcher is a server that holds something of a program and wants it
+/// back when the program is gone: the display server holds its surface, and
+/// in a later phase the input server holds its subscription. Four is more
+/// than this system has servers of that kind; a fifth is refused rather
+/// than dropped, so nobody believes it is being watched when it is not.
+pub const WATCHERS_PER_PROCESS: usize = 4;
+
 /// Number of scheduling priorities; the highest priority is
 /// `PRIORITY_COUNT - 1`.
 pub const PRIORITY_COUNT: u8 = 32;

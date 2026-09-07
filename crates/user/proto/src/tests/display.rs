@@ -53,6 +53,7 @@ fn every_request_comes_back_as_it_was_sent() {
         Request::CreateSurface {
             width: 1280,
             height: 800,
+            process: handle(5),
         },
         Request::Present {
             id: 7,
@@ -108,6 +109,7 @@ fn the_widest_fields_survive_the_wire() {
     let request = Request::CreateSurface {
         width: u32::MAX,
         height: u32::MAX,
+        process: handle(1),
     };
     assert_eq!(round_trip(&request), Ok(request));
     let request = Request::DestroySurface { id: u32::MAX };
@@ -249,7 +251,8 @@ fn every_request_and_reply_names_its_own_message() {
     assert_eq!(
         Request::CreateSurface {
             width: 1,
-            height: 1
+            height: 1,
+            process: handle(1)
         }
         .label()
         .message,

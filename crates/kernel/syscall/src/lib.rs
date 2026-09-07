@@ -11,6 +11,7 @@ pub mod environment;
 pub mod fault;
 pub mod lifetime;
 pub mod reaper;
+pub mod watch;
 
 pub use dispatch::{Machine, Reply, Request, decode, dispatch, required_rights};
 pub use environment::{Environment, KernelStack};

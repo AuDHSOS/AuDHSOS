@@ -133,6 +133,7 @@ roles! {
     Framebuffer = 12, handle => "A device memory object over the framebuffer of the machine. Only the display server receives it.",
     FramebufferGeometry = 13, value => "The width of the framebuffer in the high half of the word and its height in the low half. It comes with `Framebuffer`.",
     FramebufferLine = 14, value => "The pixels from the start of one row of the framebuffer to the start of the next in the high half of the word, and the code of the pixel format in the low half. It comes with `Framebuffer`.",
+    DisplayServer = 15, handle => "The endpoint of the display server, badged with what that server is to know this process by. A program that draws receives one; a program that finds the server by name instead receives an endpoint that names nobody, and the server refuses it.",
 }
 
 /// Why a startup message could not be read.

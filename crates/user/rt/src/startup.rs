@@ -89,6 +89,8 @@ pub struct Startup {
     /// The endpoint of the process that started this one, badged with what
     /// that process knows this one by.
     pub parent: Option<EndpointHandle>,
+    /// The endpoint of the display server.
+    pub display_server: Option<EndpointHandle>,
     /// The device memory over the framebuffer of the machine.
     pub framebuffer: Option<MemoryHandle>,
     /// The width and the height of that framebuffer, packed as
@@ -121,6 +123,7 @@ impl Startup {
             io_ports: None,
             interrupt: None,
             parent: None,
+            display_server: None,
             framebuffer: None,
             framebuffer_geometry: None,
             framebuffer_line: None,
@@ -179,6 +182,7 @@ impl Startup {
             Role::IoPorts => once(&mut self.io_ports, role, handle),
             Role::Interrupt => once(&mut self.interrupt, role, handle),
             Role::Parent => once(&mut self.parent, role, handle),
+            Role::DisplayServer => once(&mut self.display_server, role, handle),
             Role::Framebuffer => once(&mut self.framebuffer, role, handle),
             Role::FramebufferGeometry | Role::FramebufferLine => Ok(()),
             Role::Ram => self

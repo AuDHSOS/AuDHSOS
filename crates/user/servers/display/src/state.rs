@@ -25,6 +25,15 @@ use crate::cursor::Cursor;
 /// How many clients the server holds surfaces for.
 pub const MAX_CLIENTS: usize = 8;
 
+/// The badge of a capability that carries none.
+///
+/// A client reaches this server through a capability its parent badged, and
+/// a surface belongs to a badge. A request that arrives without one names
+/// nobody — that is what a capability found under a name looks like — and
+/// two of nobody are one client to a server that keeps something per
+/// client, which is why such a request gets no surface at all.
+pub const NOBODY: u64 = 0;
+
 /// One surface and who holds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Held {
@@ -127,11 +136,15 @@ impl<const N: usize> Display<N> {
     ///
     /// # Errors
     ///
+    /// [`Error::AccessDenied`] for a request that carries no badge;
     /// [`Error::NotFound`] without a screen; [`Error::InvalidArgument`] for
     /// a surface of no pixels or one larger than the screen;
     /// [`Error::AlreadyExists`] when the client holds one already;
     /// [`Error::QuotaExceeded`] when the server holds as many as it can.
     pub fn create(&mut self, badge: u64, width: u32, height: u32) -> Result<Held, Error> {
+        if badge == NOBODY {
+            return Err(Error::AccessDenied);
+        }
         let mode = self.screen()?;
         if width == 0 || height == 0 || width > mode.width || height > mode.height {
             return Err(Error::InvalidArgument);

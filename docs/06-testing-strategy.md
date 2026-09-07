@@ -363,6 +363,17 @@ done until every applicable item has a test. Items are added, never removed.
   memory — past one, beginning before one, or running past the end of one —
   and every range at all on a machine that reported no aperture.
 
+- Watching the end of a process: the end signals the bit it was watched
+  on; the last thread of a process taking the process with it signals, and
+  a thread that leaves a process with threads left does not; a process that
+  has already ended signals at once; an end is told once, however often the
+  kernel walks past it afterwards; every watcher of a process hears of it
+  and a fifth is refused; the same watch twice is refused; a watch needs
+  `INFO` on the process and `BIND` on the notification; a bit above
+  sixty-three and a handle that names nothing are refused; a notification
+  destroyed before the end signals nothing and is no error; a thread
+  waiting on the notification wakes with the bit.
+
 ### 6.6.10 Boot image header and boot information (`audhsos-abi`, `kernel-core`)
 
 - Boot image: wrong magic; wrong version; header length shorter than the
@@ -747,7 +758,10 @@ done until every applicable item has a test. Items are added, never removed.
   a press is delivered as a release; pointer button state is tracked
   across packets; a wheel delta is delivered as its own event; both
   interrupts are acknowledged after the output buffer is drained.
-- Display: `present` with damage rectangles copies exactly those pixels
+- Display: a client that carries no badge — which is what a capability
+  found under a name looks like — gets no surface, because a server that
+  keeps one per client cannot tell two of nobody apart; `present` with
+  damage rectangles copies exactly those pixels
   from the surface to the framebuffer (recording double); the cursor
   sprite saves and restores the background; the cursor is clamped to the
   screen; a surface larger than the screen is rejected; a client
@@ -781,6 +795,10 @@ done until every applicable item has a test. Items are added, never removed.
   through the console driver; a pointer path produces motion events whose
   sum equals the injected path; a button press and release arrive in
   order.
+- The end of a client: the program that draws exits without giving its
+  surface up, and the display server takes it back — the kernel signals the
+  end on the notification, the watching thread of the server turns it into
+  a message, and the surface and its memory go back.
 - Combined: the cursor pixels move with the pointer; a stroke drawn while
   the button is held changes the pixels along the path; typed text appears
   at the text cursor.

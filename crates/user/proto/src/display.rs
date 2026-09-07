@@ -10,6 +10,12 @@
 //! What a client may do to a surface is decided by the badge its messages
 //! carry, so a surface belongs to whoever created it and to nobody else.
 //!
+//! Asking for a surface means handing over a capability to oneself: the
+//! client sends a handle to its own process that carries `INFO` and no
+//! other right, and the server watches the end of it (D-106). A client that
+//! exits, or that is killed for faulting, therefore gives its surface back
+//! without having to say anything.
+//!
 //! Invariants: a reply carries the memory object in the handle area only
 //! when its status word says the surface was created; a `Present` carries
 //! at most [`gfx::DAMAGE_CAPACITY`] rectangles, because that is what the
@@ -72,12 +78,17 @@ pub struct Surface {
 pub enum Request {
     /// What is the screen?
     Info,
-    /// A surface of this size, please.
+    /// A surface of this size, please. The handle travels in the handle
+    /// area: it is a capability to the process of the client, carrying
+    /// `INFO` and nothing else, and the server watches it so that a client
+    /// that is gone does not leave its surface behind for ever.
     CreateSurface {
         /// Visible columns.
         width: u32,
         /// Visible rows.
         height: u32,
+        /// The client, as something the server may watch the end of.
+        process: Handle,
     },
     /// These rectangles of this surface changed.
     Present {
@@ -191,8 +202,13 @@ impl Request {
         let mut writer = Writer::new();
         match self {
             Request::Info => {}
-            Request::CreateSurface { width, height } => {
+            Request::CreateSurface {
+                width,
+                height,
+                process,
+            } => {
                 writer.word(buffer, pack(*width, *height))?;
+                writer.handle(buffer, *process)?;
             }
             Request::Present { id, damage } => {
                 writer.word(buffer, u64::from(*id))?;
@@ -223,7 +239,11 @@ impl Request {
             INFO => Ok(Request::Info),
             CREATE_SURFACE => {
                 let (width, height) = unpack(reader.word()?);
-                Ok(Request::CreateSurface { width, height })
+                Ok(Request::CreateSurface {
+                    width,
+                    height,
+                    process: reader.handle()?,
+                })
             }
             PRESENT => {
                 let id = surface_id(reader.word()?)?;

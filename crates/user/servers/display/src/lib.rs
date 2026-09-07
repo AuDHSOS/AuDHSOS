@@ -9,7 +9,7 @@ pub mod cursor;
 pub mod state;
 
 pub use cursor::{CURSOR_HEIGHT, CURSOR_SHAPE, CURSOR_WIDTH, Cursor};
-pub use state::{Display, Held, MAX_CLIENTS};
+pub use state::{Display, Held, MAX_CLIENTS, NOBODY};
 
 #[cfg(test)]
 mod tests;

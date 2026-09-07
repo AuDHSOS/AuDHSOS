@@ -13,6 +13,13 @@
 //! asking the memory server for the pixels of a surface, and giving the
 //! client the handle to them.
 //!
+//! A client that goes away gives its surface back without saying anything:
+//! it hands over a capability to its own process when it asks for the
+//! surface, the kernel signals a bit of a notification when that process
+//! ends (D-106), and a second thread of this program turns that signal into
+//! a message to the first one. So a client that exits and a client that
+//! faults are the same thing here.
+//!
 //! A machine without a framebuffer starts this program all the same: it
 //! answers `NotFound` to everything and stays where it is, because a client
 //! that asks for a screen has to hear that there is none.
@@ -30,15 +37,17 @@ use server_memory as _;
 use server_name as _;
 use user_loader as _;
 
-use audhsos_abi::Error;
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use audhsos_abi::layout::PAGE_SIZE;
+use audhsos_abi::{Error, Handle};
 use gfx::{Damage, PixelFormat, Surface};
 use server_display::Display;
 use user_programs::client::{allocate, register, write_line};
 use user_programs::mapping::Mapping;
 use user_programs::serve::{Serving, receive};
 use user_proto::display::{Mode, Reply, Request, Surface as Given};
-use user_rt::{EndpointHandle, MemoryHandle, Startup, Typed};
+use user_rt::{EndpointHandle, MemoryHandle, NotificationHandle, ProcessHandle, Startup, Typed};
 use user_sys_x86_64::{self as sys, Gate};
 
 sys::program!(main);
@@ -60,13 +69,76 @@ const SURFACES: u64 = 0x2000_0000;
 /// largest screen this system drives.
 const SURFACE_SLOT: u64 = 0x0100_0000;
 
+/// The badge the watcher thread sends under, which is how the serving
+/// thread tells its message from a client's request.
+const GONE_BADGE: u64 = 0x60_4E;
+
+/// The label it sends the word of the notification under.
+const GONE_LABEL: u64 = 1;
+
+/// The top of the stack of the watcher thread, and how many pages it gets.
+const WATCH_STACK_TOP: u64 = 0x0080_0000;
+const WATCH_STACK_PAGES: u64 = 4;
+
+/// What the watcher thread has to be told, in a place it can reach: it
+/// starts with nothing but the address of its own IPC buffer, and this is a
+/// process without a heap.
+static SHARED: Shared = Shared::new();
+
+/// The endpoint the watcher thread sends to and the notification it waits
+/// on.
+struct Shared {
+    /// The endpoint of this server, badged as [`GONE_BADGE`].
+    endpoint: AtomicU64,
+    /// The notification the kernel signals the end of a client on.
+    notification: AtomicU64,
+}
+
+impl Shared {
+    const fn new() -> Self {
+        Shared {
+            endpoint: AtomicU64::new(0),
+            notification: AtomicU64::new(0),
+        }
+    }
+
+    fn set(&self, endpoint: EndpointHandle, notification: NotificationHandle) {
+        self.endpoint.store(endpoint.raw(), Ordering::SeqCst);
+        self.notification
+            .store(notification.raw(), Ordering::SeqCst);
+    }
+
+    fn get(&self) -> Option<(EndpointHandle, NotificationHandle)> {
+        let endpoint = EndpointHandle::from_raw(self.endpoint.load(Ordering::SeqCst))?;
+        let notification = NotificationHandle::from_raw(self.notification.load(Ordering::SeqCst))?;
+        Some((endpoint, notification))
+    }
+}
+
+/// What the serving thread holds between two messages.
+struct Server<'a> {
+    /// What the server decides, which is `server-display`.
+    display: &'a mut Display<CLIENTS>,
+    /// The mappings behind the surfaces it decides about.
+    held: &'a mut [Option<Held>; CLIENTS],
+    /// The notification the end of a client is signalled on, when there is
+    /// a thread waiting for it.
+    watcher: Option<NotificationHandle>,
+}
+
 /// The mapping of one client's pixels, and which surface it belongs to.
 struct Held {
     /// The surface number the client knows it by.
     id: u32,
+    /// The badge of the client that holds it.
+    badge: u64,
     /// The memory object of its pixels.
     memory: MemoryHandle,
-    /// Where they are mapped in this process.
+    /// The client itself, which this program watches the end of. The slot
+    /// this entry stands in is the bit of the notification that end
+    /// signals.
+    process: ProcessHandle,
+    /// Where the pixels are mapped in this process.
     mapping: Mapping,
     /// Visible columns.
     width: u32,
@@ -117,6 +189,15 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         None => say_line(&mut gate, startup.log, b"[display] no framebuffer\n"),
     }
 
+    let watcher = start_watcher(&mut gate, &startup, endpoint);
+    if watcher.is_none() {
+        say_line(
+            &mut gate,
+            startup.log,
+            b"[display] nobody watches the clients\n",
+        );
+    }
+
     let mut display: Display<CLIENTS> = Display::new(mode);
     let mut held: [Option<Held>; CLIENTS] = [const { None }; CLIENTS];
     let mut serving = Serving::default();
@@ -124,16 +205,30 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         if receive(&mut gate, endpoint, &mut serving).is_err() {
             gate.thread_exit()
         }
+        // The watcher thread says which clients are gone; their surfaces go
+        // back before anything else is answered, and the message is a send,
+        // so there is nothing to reply to.
+        if serving.badge == GONE_BADGE {
+            let gone = gate.reader().word(0).unwrap_or(0);
+            release_gone(&mut gate, &startup, &mut display, &mut held, gone);
+            continue;
+        }
         let answer = match Request::decode(gate.reader()) {
-            Ok(request) => handle(
-                &mut gate,
-                &startup,
-                &mut display,
-                &mut held,
-                screen.as_mut(),
-                serving.badge,
-                &request,
-            ),
+            Ok(request) => {
+                let mut server = Server {
+                    display: &mut display,
+                    held: &mut held,
+                    watcher,
+                };
+                handle(
+                    &mut gate,
+                    &startup,
+                    &mut server,
+                    screen.as_mut(),
+                    serving.badge,
+                    &request,
+                )
+            }
             Err(error) => Reply::Presented(Err(Error::from(error))),
         };
         let _written = answer.encode(&mut gate.writer());
@@ -178,17 +273,26 @@ fn say_line(gate: &mut Gate, log: Option<EndpointHandle>, line: &[u8]) {
 fn handle(
     gate: &mut Gate,
     startup: &Startup,
-    display: &mut Display<CLIENTS>,
-    held: &mut [Option<Held>; CLIENTS],
+    server: &mut Server<'_>,
     screen: Option<&mut Surface<'_>>,
     badge: u64,
     request: &Request,
 ) -> Reply {
+    let Server {
+        display,
+        held,
+        watcher,
+    } = server;
+    let watcher = *watcher;
     match request {
         Request::Info => Reply::Screen(display.screen()),
-        Request::CreateSurface { width, height } => {
-            Reply::Created(create(gate, startup, display, held, badge, *width, *height))
-        }
+        Request::CreateSurface {
+            width,
+            height,
+            process,
+        } => Reply::Created(create(
+            gate, startup, display, held, watcher, badge, *width, *height, *process,
+        )),
         Request::Present { id, damage } => {
             Reply::Presented(present(display, held, screen, badge, *id, damage))
         }
@@ -204,14 +308,20 @@ fn handle(
 
 /// Makes a surface for a client: memory out of the memory server, mapped
 /// here so the pixels can be read, and the handle to it in the answer.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "making a surface needs the client, its size, where it goes, and everything the server holds; a structure for them would be the argument list under another name"
+)]
 fn create(
     gate: &mut Gate,
     startup: &Startup,
     display: &mut Display<CLIENTS>,
     held: &mut [Option<Held>; CLIENTS],
+    watcher: Option<NotificationHandle>,
     badge: u64,
     width: u32,
     height: u32,
+    client: Handle,
 ) -> Result<Given, Error> {
     let (Some(process), Some(server)) = (startup.own_process, startup.memory_server) else {
         return Err(Error::NotFound);
@@ -230,12 +340,21 @@ fn create(
                 return Err(error);
             }
         };
+        // The slot is the bit: whichever client of the four ends, the word
+        // of the notification says which surface goes back.
+        let client = ProcessHandle::from_handle(client);
+        if let Some(notification) = watcher {
+            let bit = u64::try_from(index).unwrap_or(0);
+            let _watched = gate.process_watch(client, notification, bit);
+        }
         put(
             held,
             index,
             Held {
                 id: made.id,
+                badge,
                 memory,
+                process: client,
                 mapping,
                 width,
                 height,
@@ -250,6 +369,119 @@ fn create(
         let _gone = display.destroy(badge, made.id);
     }
     outcome
+}
+
+/// Starts the thread that waits for the end of a client, and answers with
+/// the notification the kernel signals those ends on.
+fn start_watcher(
+    gate: &mut Gate,
+    startup: &Startup,
+    endpoint: EndpointHandle,
+) -> Option<NotificationHandle> {
+    let own = startup.own_process?;
+    let server = startup.memory_server?;
+    let notification = gate.notification_create().ok()?;
+    let badged = gate.endpoint_badge(endpoint, GONE_BADGE).ok()?;
+    let bytes = WATCH_STACK_PAGES.wrapping_mul(PAGE_SIZE);
+    let object = allocate(gate, server, bytes, PAGE_SIZE).ok()?;
+    let base = WATCH_STACK_TOP.wrapping_sub(bytes);
+    // The mapping stays: the stack of a thread that never ends is never
+    // taken back.
+    let _stack = Mapping::new(gate, own, object, base, bytes).ok()?;
+    SHARED.set(badged, notification);
+    let thread = gate
+        .thread_create(
+            own,
+            watcher_address(),
+            WATCH_STACK_TOP,
+            u64::from(user_programs::priority::DRIVER),
+            u64::from(user_programs::priority::DRIVER),
+            None,
+        )
+        .ok()?;
+    gate.thread_start(thread).ok()?;
+    Some(notification)
+}
+
+/// Where the watcher thread begins.
+#[expect(
+    clippy::as_conversions,
+    reason = "a function has to become an address for `thread_create`, and there is no other way to write it"
+)]
+fn watcher_address() -> u64 {
+    let pointer: unsafe extern "sysv64" fn(u64) -> ! = watcher;
+    pointer as usize as u64
+}
+
+/// The watcher thread: wait for the kernel to say that a client has ended,
+/// and hand the word to the thread that holds the surfaces.
+///
+/// # Safety
+///
+/// The kernel starts this once, with the address of the thread's IPC buffer
+/// in the first argument register.
+unsafe extern "sysv64" fn watcher(ipc_buffer: u64) -> ! {
+    // SAFETY: the kernel started this thread with the address of its own
+    // buffer, and this is the only gate over it.
+    let mut gate = unsafe { Gate::adopt(ipc_buffer) };
+    let Some((endpoint, notification)) = SHARED.get() else {
+        gate.thread_exit()
+    };
+    loop {
+        let Ok(word) = gate.notification_wait(notification) else {
+            gate.thread_exit()
+        };
+        let mut writer = user_rt::message::Writer::new();
+        {
+            let mut buffer = gate.writer();
+            let _written = writer.word(&mut buffer, word);
+            let _finished = writer.finish(&mut buffer, GONE_LABEL);
+        }
+        let _sent = gate.ipc_send(endpoint);
+    }
+}
+
+/// Gives back the surfaces of the clients whose bits stand in `gone`.
+fn release_gone(
+    gate: &mut Gate,
+    startup: &Startup,
+    display: &mut Display<CLIENTS>,
+    held: &mut [Option<Held>; CLIENTS],
+    gone: u64,
+) {
+    for index in 0..CLIENTS {
+        let bit = 1_u64
+            .checked_shl(u32::try_from(index).unwrap_or(0))
+            .unwrap_or(0);
+        if gone & bit == 0 {
+            continue;
+        }
+        let Some(slot) = take(held, index) else {
+            continue;
+        };
+        let _forgotten = display.forget(slot.badge);
+        say_line(
+            gate,
+            startup.log,
+            user_rt::Line::<96>::of(format_args!(
+                "[display] client {} is gone: surface {} released\n",
+                slot.badge, slot.id
+            ))
+            .as_bytes(),
+        );
+        give_back(gate, startup, slot);
+    }
+}
+
+/// Unmaps a surface, gives its memory back, and lets go of the client.
+fn give_back(gate: &mut Gate, startup: &Startup, slot: Held) {
+    if let Some(process) = startup.own_process {
+        let _unmapped = slot.mapping.unmap(gate, process);
+    }
+    if let Some(server) = startup.memory_server {
+        let _released = user_programs::client::release(gate, server, slot.memory);
+    }
+    let _closed = gate.handle_close(slot.process.handle());
 }
 
 /// Copies what the client drew onto the screen.
@@ -291,9 +523,6 @@ fn destroy(
     id: u32,
 ) -> Result<(), Error> {
     display.destroy(badge, id)?;
-    let Some(process) = startup.own_process else {
-        return Ok(());
-    };
     let Some(index) = held
         .iter()
         .position(|entry| entry.as_ref().is_some_and(|slot| slot.id == id))
@@ -303,10 +532,7 @@ fn destroy(
     let Some(slot) = take(held, index) else {
         return Ok(());
     };
-    let _unmapped = slot.mapping.unmap(gate, process);
-    if let Some(server) = startup.memory_server {
-        let _released = user_programs::client::release(gate, server, slot.memory);
-    }
+    give_back(gate, startup, slot);
     Ok(())
 }
 

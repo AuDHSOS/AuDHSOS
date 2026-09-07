@@ -139,7 +139,7 @@ const E2E_TIMEOUT: Duration = Duration::from_secs(60);
 /// archive, the memory server answered, the name server answered, the
 /// console driver took the port, and the application found it and said
 /// something through it.
-const E2E_LINES: [(&str, &str); 13] = [
+const E2E_LINES: [(&str, &str); 14] = [
     (
         "[init] started server-memory",
         "the memory server did not start",
@@ -180,6 +180,10 @@ const E2E_LINES: [(&str, &str); 13] = [
     (
         "[paint] drawn on ",
         "the program that draws never presented anything",
+    ),
+    (
+        "is gone: surface ",
+        "the display server did not take back the surface of the program that ended",
     ),
     (
         "[faulter] about to write to nowhere",

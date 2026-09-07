@@ -64,6 +64,10 @@ enum Grant {
 }
 
 /// One line of the start table: what to start, how, and with what.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one flag per thing a program may reach, which is what a table of who gets what is"
+)]
 #[derive(Clone, Copy, Debug)]
 struct Program {
     /// The name of the file in the archive.
@@ -83,6 +87,10 @@ struct Program {
     names: bool,
     /// Whether it may ask the memory server.
     memory: bool,
+    /// Whether it may draw, which is a badged capability to the display
+    /// server. A program that finds the server by name instead is refused
+    /// by it: an unbadged request names nobody.
+    draws: bool,
     /// Whether it reports to this program when it is done. The machine
     /// ends when every program that reports has reported.
     reports: bool,
@@ -103,6 +111,7 @@ const PROGRAMS: [Program; 8] = [
         grant: Grant::Ram,
         names: false,
         memory: false,
+        draws: false,
         reports: false,
     },
     Program {
@@ -114,6 +123,7 @@ const PROGRAMS: [Program; 8] = [
         grant: Grant::None,
         names: false,
         memory: true,
+        draws: false,
         reports: false,
     },
     Program {
@@ -125,6 +135,7 @@ const PROGRAMS: [Program; 8] = [
         grant: Grant::Serial,
         names: true,
         memory: true,
+        draws: false,
         reports: false,
     },
     // The display server maps the framebuffer, which is four mebibytes on
@@ -139,6 +150,7 @@ const PROGRAMS: [Program; 8] = [
         grant: Grant::Framebuffer,
         names: true,
         memory: true,
+        draws: false,
         reports: false,
     },
     Program {
@@ -150,6 +162,7 @@ const PROGRAMS: [Program; 8] = [
         grant: Grant::None,
         names: true,
         memory: true,
+        draws: false,
         reports: true,
     },
     Program {
@@ -161,6 +174,7 @@ const PROGRAMS: [Program; 8] = [
         grant: Grant::None,
         names: true,
         memory: true,
+        draws: false,
         reports: true,
     },
     Program {
@@ -172,6 +186,7 @@ const PROGRAMS: [Program; 8] = [
         grant: Grant::None,
         names: true,
         memory: true,
+        draws: true,
         reports: true,
     },
     // It faults and its thread stops there, so it never reports and the
@@ -185,6 +200,7 @@ const PROGRAMS: [Program; 8] = [
         grant: Grant::None,
         names: true,
         memory: true,
+        draws: false,
         reports: false,
     },
 ];
@@ -239,6 +255,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         memory: None,
         memory_for_self: None,
         console: None,
+        display: None,
         console_for_self: None,
         next_badge: 1,
     };
@@ -271,6 +288,8 @@ struct World {
     memory_for_self: Option<EndpointHandle>,
     /// The endpoint of the console driver.
     console: Option<EndpointHandle>,
+    /// The endpoint of the display server.
+    display: Option<EndpointHandle>,
     /// The same, badged for the root task's own lines.
     console_for_self: Option<EndpointHandle>,
     /// What the next child reports its faults under.
@@ -460,6 +479,16 @@ fn install_all(
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
         push(&mut given, &mut count, Role::MemoryServer, handle)?;
     }
+    // A program that draws is known to the display server by the badge its
+    // parent puts on: a capability found under a name carries none, and a
+    // server that keeps something per client cannot tell two of those apart.
+    if program.draws
+        && let Some(display) = world.display
+    {
+        let marked = gate.endpoint_badge(display, badge)?;
+        let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
+        push(&mut given, &mut count, Role::DisplayServer, handle)?;
+    }
     // Everyone but the console driver gets the console as its log. The
     // driver is the console: a line it sent itself would be a call on the
     // endpoint it is the only receiver of, and it would wait for itself.
@@ -576,7 +605,15 @@ fn record(
 struct ObjectRights;
 
 impl ObjectRights {
-    const PROCESS: Rights = Rights::MAP.union(Rights::MANAGE);
+    /// A program's own process: it maps memory into itself, manages its
+    /// own threads, and may hand a capability to itself to a server that
+    /// gives something back when it ends — which is `INFO` and, to be able
+    /// to give it away at all, `DUPLICATE` and `TRANSFER` (D-106).
+    const PROCESS: Rights = Rights::MAP
+        .union(Rights::MANAGE)
+        .union(Rights::INFO)
+        .union(Rights::DUPLICATE)
+        .union(Rights::TRANSFER);
     /// A program's own endpoint: it receives on it, badges it for the
     /// clients it hands it to, and passes it on — which is what registering
     /// a name is, and what needs `TRANSFER`.
@@ -741,6 +778,7 @@ fn remember(
             world.console = Some(endpoint);
             world.console_for_self = Some(gate.endpoint_badge(endpoint, INIT_BADGE)?);
         }
+        b"server-display" => world.display = Some(endpoint),
         _ => {}
     }
     Ok(())

@@ -79,6 +79,7 @@ pub fn run<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
         Syscall::ProcessInstallHandle => process::install_handle(machine, process, request),
         Syscall::ProcessSetFaultHandler => process::set_fault_handler(machine, process, request),
         Syscall::ProcessKill => process::kill(machine, process, request),
+        Syscall::ProcessWatch => process::watch(machine, process, request),
         Syscall::ThreadCreate => thread::create(machine, caller, process, request),
         Syscall::ThreadStart => thread::start(machine, process, request),
         Syscall::ThreadSuspend => thread::suspend(machine, process, request),

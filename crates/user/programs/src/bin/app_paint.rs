@@ -24,8 +24,8 @@ use server_memory as _;
 use server_name as _;
 use user_loader as _;
 
-use audhsos_abi::Error;
 use audhsos_abi::layout::PAGE_SIZE;
+use audhsos_abi::{Error, Handle, Rights};
 use gfx::{Color, Damage, PixelFormat, Rect, Surface, draw_text};
 use user_programs::client::{lookup, write_line};
 use user_programs::mapping::Mapping;
@@ -86,11 +86,21 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
 /// The whole of the drawing, from the name of the server to the
 /// presentation.
 fn draw(gate: &mut Gate, startup: &Startup) -> Result<Mode, Error> {
-    let names = startup.name_server.ok_or(Error::NotFound)?;
     let process = startup.own_process.ok_or(Error::NotFound)?;
-    let display = lookup(gate, names, DISPLAY)?;
+    // The capability the root task gave this program carries the badge the
+    // display server knows it by. Looking the server up under its name
+    // would give one that carries none, and the server refuses those: it
+    // keeps a surface per client and cannot tell two of nobody apart.
+    let display = match startup.display_server {
+        Some(given) => given,
+        None => lookup(gate, startup.name_server.ok_or(Error::NotFound)?, DISPLAY)?,
+    };
     let mode = ask_mode(gate, display)?;
-    let given = ask_surface(gate, display, mode)?;
+    // What the server needs to give the surface back when this program is
+    // gone: a capability to this process that says who ended and allows
+    // nothing else (D-106).
+    let watched = gate.handle_duplicate(process.handle(), Rights::INFO | Rights::TRANSFER)?;
+    let given = ask_surface(gate, display, mode, watched)?;
     let memory = MemoryHandle::from_handle(given.memory);
     let bytes = u64::from(mode.width)
         .saturating_mul(u64::from(mode.height))
@@ -121,11 +131,18 @@ fn ask_mode(gate: &mut Gate, display: EndpointHandle) -> Result<Mode, Error> {
     }
 }
 
-/// Asks for a surface of the size of the screen.
-fn ask_surface(gate: &mut Gate, display: EndpointHandle, mode: Mode) -> Result<Given, Error> {
+/// Asks for a surface of the size of the screen, handing over the
+/// capability the server watches this program's end through.
+fn ask_surface(
+    gate: &mut Gate,
+    display: EndpointHandle,
+    mode: Mode,
+    watched: Handle,
+) -> Result<Given, Error> {
     let request = Request::CreateSurface {
         width: mode.width,
         height: mode.height,
+        process: watched,
     };
     request.encode(&mut gate.writer())?;
     gate.ipc_call(display)?;

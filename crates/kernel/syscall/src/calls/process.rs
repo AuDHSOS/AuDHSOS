@@ -11,7 +11,7 @@
 use audhsos_abi::{Error, Handle, Rights};
 use kernel_objects::config::HANDLES_PER_PROCESS;
 use kernel_objects::handle_table::{Entry, HandleList};
-use kernel_objects::object::{AnyObjectId, Endpoint, Process, ProcessId};
+use kernel_objects::object::{AnyObjectId, Endpoint, Notification, Process, ProcessId, Watch};
 use kernel_objects::quota::Quota;
 
 use crate::dispatch::{Machine, Reply, Request};
@@ -34,6 +34,59 @@ fn process_of<
         .objects
         .resolve::<Process>(caller, handle, Rights::EMPTY)?;
     Ok(id)
+}
+
+/// `process_watch`: the end of a process signals one bit of a notification.
+///
+/// It is what a server holding something of a program needs: the display
+/// server holds a surface for a client, and a client that is gone will not
+/// give it back. The right the process handle must carry is `INFO`, which
+/// is the least a capability to a process can carry: a watcher learns that
+/// the program ended and nothing else about it, and can do nothing to it.
+///
+/// A process that has already ended signals at once. Otherwise there would
+/// be a window between the end and the watch in which the end is lost, and
+/// a watcher cannot close it: it does not know when the program ends —
+/// that is the whole point of asking.
+///
+/// # Errors
+///
+/// [`Error::InvalidHandle`] for either handle; [`Error::AccessDenied`]
+/// without `INFO` on the process or `BIND` on the notification;
+/// [`Error::InvalidArgument`] for a bit index above sixty-three;
+/// [`Error::AlreadyExists`] when that notification already watches this
+/// process on that bit; [`Error::QuotaExceeded`] when the process is
+/// watched by as many as it can be.
+pub fn watch<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    caller: ProcessId,
+    request: &Request,
+) -> Result<Reply, Error> {
+    let target = process_of(machine, caller, request)?;
+    let handle = Handle::from_raw(request.argument(1)).ok_or(Error::InvalidHandle)?;
+    let (notification, _rights) =
+        machine
+            .objects
+            .resolve::<Notification>(caller, handle, Rights::BIND)?;
+    let bit = u8::try_from(request.argument(2)).map_err(|_| Error::InvalidArgument)?;
+    if bit >= 64 {
+        return Err(Error::InvalidArgument);
+    }
+    let watch = Watch { notification, bit };
+    if machine.objects.processes.get(target)?.has_ended() {
+        let switch = crate::watch::signal_one(machine, watch)?;
+        return Ok(if switch {
+            Reply::DONE.reschedule()
+        } else {
+            Reply::DONE
+        });
+    }
+    machine
+        .objects
+        .processes
+        .get_mut(target)?
+        .add_watcher(watch)?;
+    Ok(Reply::DONE)
 }
 
 /// `process_create`: a process with an address space of its own, a handle
@@ -108,7 +161,12 @@ pub fn create<
     };
     let entry = Entry::new(
         AnyObjectId::of(id),
-        Rights::MANAGE | Rights::MAP | Rights::INSTALL | Rights::DUPLICATE | Rights::TRANSFER,
+        Rights::MANAGE
+            | Rights::MAP
+            | Rights::INSTALL
+            | Rights::INFO
+            | Rights::DUPLICATE
+            | Rights::TRANSFER,
     );
     match machine.objects.install_handle(caller, entry) {
         Ok(handle) => {
@@ -272,6 +330,10 @@ pub fn kill<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
     if let Some((handler, _badge)) = holder.fault_handler {
         reschedule |= crate::lifetime::release(machine, AnyObjectId::of(handler))?;
     }
+    // The watchers hear of it here and not when the last thread left: a
+    // kill takes every thread at once, and what they are told is that the
+    // process is gone.
+    reschedule |= crate::watch::ended(machine, target)?;
     machine.objects.processes.force_release(target);
     let reply = Reply::DONE;
     Ok(if reschedule {

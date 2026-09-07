@@ -2564,6 +2564,16 @@ subset and PPM reader, and the run without a graphics adapter. The unsafe
 budget of `user-programs` rose to twenty-one for the three mappings the two
 new programs read (D-105).
 
+Beyond the plan, and asked for after the phase: a server learns that a
+client is gone. `process_watch` binds the end of a process to a bit of a
+notification (D-106), a client hands the display server a capability to
+itself that carries `INFO` and nothing else, and a second thread of the
+server turns the signal into a message to the first. A program that draws
+is also given a badged capability to the display server, as it is given one
+to every other server: a capability found under a name carries no badge,
+and a server that keeps a surface per client cannot tell two of nobody
+apart.
+
 ## 10.10 Phase 10: PS/2 input
 
 ### 10.10.1 Crate `driver-i8042` (`crates/drivers/i8042`)

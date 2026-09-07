@@ -11,6 +11,7 @@ mod calls_memory;
 mod calls_notify;
 mod calls_process;
 mod calls_thread;
+mod calls_watch;
 mod double;
 mod fault;
 mod reaper;

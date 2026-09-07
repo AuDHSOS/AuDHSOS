@@ -8,7 +8,9 @@
 //! and a type always agree; an [`AnyObjectId`] carries the type of the
 //! object it names, and turning one back into a typed id checks that type.
 
-use audhsos_abi::layout::{PRIORITY_COUNT, REGIONS_PER_PROCESS, THREADS_PER_PROCESS};
+use audhsos_abi::layout::{
+    PRIORITY_COUNT, REGIONS_PER_PROCESS, THREADS_PER_PROCESS, WATCHERS_PER_PROCESS,
+};
 use audhsos_abi::{Error, Fault, ObjectType, ThreadState};
 use kernel_mm::address_space::RegionTable;
 use kernel_types::{CachePolicy, PhysFrame, PhysFrameRange, VirtAddr};
@@ -161,6 +163,22 @@ impl MemoryObject {
     }
 }
 
+/// Somebody waiting for the end of a process: which notification is
+/// signalled, and which of its sixty-four bits.
+///
+/// A watch holds no reference to the notification. A notification that is
+/// destroyed before the process ends cannot be signalled, and the watch
+/// goes with the process it stands on; a watcher that wants its
+/// notification to outlive the process keeps its own handle to it, which is
+/// what it needs anyway to wait on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Watch {
+    /// The notification the end signals.
+    pub notification: NotificationId,
+    /// Which of its bits.
+    pub bit: u8,
+}
+
 /// An address space, a handle list, threads, and quotas.
 ///
 /// The address space is the page-table root and the region table, both
@@ -189,6 +207,12 @@ pub struct Process {
     /// it is the only thing in the message that says whose fault this is,
     /// exactly as it is for every other message a server receives.
     pub fault_handler: Option<(EndpointId, u64)>,
+    /// Who is to be told when the process ends.
+    watchers: [Option<Watch>; WATCHERS_PER_PROCESS],
+    /// Whether the end has already been told. A process ends once, so the
+    /// watchers are signalled once, however often the kernel walks past
+    /// the fact afterwards.
+    ended: bool,
 }
 
 impl Object for Process {
@@ -213,7 +237,45 @@ impl Process {
             quota,
             kernel_object_quota,
             fault_handler: None,
+            watchers: [None; WATCHERS_PER_PROCESS],
+            ended: false,
         }
+    }
+
+    /// Records that `watch` is to be told when the process ends.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AlreadyExists`] when that notification already watches this
+    /// process on that bit; [`Error::QuotaExceeded`] when
+    /// [`WATCHERS_PER_PROCESS`] of them do.
+    pub fn add_watcher(&mut self, watch: Watch) -> Result<(), Error> {
+        if self.watchers().any(|held| held == watch) {
+            return Err(Error::AlreadyExists);
+        }
+        let slot = self
+            .watchers
+            .iter_mut()
+            .find(|slot| slot.is_none())
+            .ok_or(Error::QuotaExceeded)?;
+        *slot = Some(watch);
+        Ok(())
+    }
+
+    /// Everyone waiting for the end of this process.
+    pub fn watchers(&self) -> impl Iterator<Item = Watch> + '_ {
+        self.watchers.iter().flatten().copied()
+    }
+
+    /// Whether the end of this process has been told.
+    #[must_use]
+    pub const fn has_ended(&self) -> bool {
+        self.ended
+    }
+
+    /// Records that the end has been told, so that it is told once.
+    pub const fn mark_ended(&mut self) {
+        self.ended = true;
     }
 
     /// Records `thread` as a thread of this process and returns the slot

@@ -106,7 +106,7 @@ pub struct Received {
 /// numbers the kernel saw against the table, so a method missing from the
 /// run, or one passing another call of the same shape, fails there
 /// (D-98).
-const COVERED: [Syscall; 42] = [
+const COVERED: [Syscall; 43] = [
     Syscall::ProcessCreate,
     Syscall::ProcessInstallHandle,
     Syscall::ProcessSetFaultHandler,
@@ -149,6 +149,7 @@ const COVERED: [Syscall; 42] = [
     Syscall::SystemInfo,
     Syscall::DebugLog,
     Syscall::MemoryMerge,
+    Syscall::ProcessWatch,
 ];
 
 /// `true` when [`COVERED`] is the system call table, in its order.
@@ -371,6 +372,29 @@ impl Gate {
     /// Whatever the kernel answered.
     pub fn process_kill(&mut self, process: ProcessHandle) -> Result<(), Error> {
         self.done(Syscall::ProcessKill, &[process.raw()])
+    }
+
+    /// `process_watch`: bit `bit` of `notification` is signalled when
+    /// `process` ends, and at once when it has already ended.
+    ///
+    /// It is what a server holding something of a program uses to learn
+    /// that the program is gone. The handle to the process needs no more
+    /// than `INFO`, which is a capability that says who ended and allows
+    /// nothing else.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn process_watch(
+        &mut self,
+        process: ProcessHandle,
+        notification: NotificationHandle,
+        bit: u64,
+    ) -> Result<(), Error> {
+        self.done(
+            Syscall::ProcessWatch,
+            &[process.raw(), notification.raw(), bit],
+        )
     }
 
     // --- threads ---------------------------------------------------------

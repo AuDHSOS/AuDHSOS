@@ -8,7 +8,7 @@ use audhsos_abi::{Error, FramebufferFormat};
 use gfx::{Color, Damage, PixelFormat, Rect, Surface};
 use user_proto::display::Mode;
 
-use crate::state::Display;
+use crate::state::{Display, NOBODY};
 
 /// The screen of these tests.
 const SCREEN: Mode = Mode {
@@ -284,4 +284,15 @@ fn a_cursor_that_is_not_shown_leaves_the_screen_alone() {
             assert_eq!(screen.pixel(x, y), Some(Color::new(4, 5, 6)), "at {x},{y}");
         }
     }
+}
+
+#[test]
+fn a_client_that_carries_no_badge_gets_no_surface() {
+    let mut display = display();
+    assert_eq!(
+        display.create(NOBODY, 4, 4),
+        Err(Error::AccessDenied),
+        "a capability found under a name names nobody"
+    );
+    assert!(display.is_empty());
 }

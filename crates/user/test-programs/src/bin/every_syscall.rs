@@ -325,6 +325,13 @@ fn implemented(log: &mut Log, process: u64, thread: u64, memory: u64, bad: u64) 
     log.run(Syscall::ThreadSetPriority, &[born, 3]);
     log.run(Syscall::ThreadSetPriority, &[born, 200]);
     log.run(Syscall::ThreadKill, &[born]);
+
+    // Somebody watching the end of that process: the child holds no thread
+    // any more once the one above was killed, so this watch is answered by
+    // the end that has already happened.
+    let watcher = log.run(Syscall::NotificationCreate, &[]);
+    log.run(Syscall::ProcessWatch, &[child, watcher, BOUND_BIT]);
+    log.run(Syscall::ProcessWatch, &[child, watcher, NO_SUCH_BIT]);
     log.run(Syscall::ThreadKill, &[bad]);
 
     // Memory: one object asked about, mapped, protected, unmapped, and
