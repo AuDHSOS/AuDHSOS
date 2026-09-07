@@ -4,12 +4,30 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 /// The lock that the tests which touch the engine's global state hold, one
 /// at a time: the counter registry, the trace, and the recording flag are
 /// one set for the whole process, exactly as they are in a fuzz target.
 pub(crate) static GLOBALS: Mutex<()> = Mutex::new(());
+
+/// The scratch directory of one test, under the system temporary
+/// directory and named after the process as well as the test.
+///
+/// The process id belongs in the name: a test deletes its directory
+/// before and after it runs, so two test binaries of this crate started
+/// at the same time — a second session, a second coverage pass — would
+/// delete each other's files under a name fixed at compile time. Most of
+/// those collisions fail a test, but not all of them: a run where the
+/// dictionary file disappeared still ends in `SUCCESS`, and then the
+/// coverage report is a branch or two short of what the sources say.
+pub(crate) fn scratch_path(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "audhsos-fuzz-support-{name}-{}",
+        std::process::id()
+    ))
+}
 
 /// Leaks `length` bytes and registers them as a range of counters, as the
 /// compiler's constructor would. Answers the address, from which a test

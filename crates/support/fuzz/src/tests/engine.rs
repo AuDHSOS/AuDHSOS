@@ -18,7 +18,7 @@ use std::process::ExitCode;
 
 use crate::engine::{name_of, outran, run, tick};
 
-use super::{GLOBALS, region_at, register_counters};
+use super::{GLOBALS, region_at, register_counters, scratch_path};
 
 /// How many counters the body below writes into.
 const COUNTERS: usize = 32;
@@ -31,7 +31,7 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("fuzz-engine-{name}"));
+        let path = scratch_path(name);
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         Self { path }
