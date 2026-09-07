@@ -2,8 +2,8 @@
 # Copyright (C) 2026 Manuel Baesler and contributors
 
 [package]
-name = "user-proto"
-description = "The messages the servers of AuDHSOS speak: names, console, memory, display"
+name = "server-display"
+description = "What the display server decides: surfaces per client, presentation of damaged rectangles, and the cursor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,8 +12,9 @@ rust-version.workspace = true
 
 [dependencies]
 audhsos-abi.workspace = true
+audhsos-collections.workspace = true
 gfx.workspace = true
-user-rt.workspace = true
+user-proto.workspace = true
 
 [lints]
 workspace = true

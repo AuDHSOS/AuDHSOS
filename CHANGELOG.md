@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The display protocol in `user-proto`: what the screen is, a surface to
+  draw into and the memory object that backs it, a presentation of up to
+  sixteen damaged rectangles, giving a surface up, and where the cursor is.
+- `server-display`, what the display server decides: one surface per
+  client, kept by the badge its messages arrive through, so a request that
+  names another client's surface is refused before a pixel is read; a
+  presentation that copies exactly the damaged rectangles; and the cursor,
+  which is taken off the screen before a presentation and put back on
+  afterwards, over the pixels it saved when it was drawn. The sprite is one
+  bitmap of this project, and which of its pixels are the white body and
+  which the black edge follows from the shape itself.
 - The kernel keeps the framebuffer the loader described and the apertures
   the machine reported as device memory. `Platform` reports the first,
   `boot::run` prints it as an `[info]` line — `[info] framebuffer=absent`

@@ -6,6 +6,7 @@
 
 mod bytes;
 mod console;
+mod display;
 mod label;
 mod memory;
 mod name;

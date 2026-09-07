@@ -486,6 +486,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "server-display"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-collections",
+ "gfx",
+ "user-proto",
+]
+
+[[package]]
 name = "server-memory"
 version = "0.1.0"
 dependencies = [
@@ -536,6 +546,7 @@ name = "user-proto"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "gfx",
  "user-rt",
 ]
 

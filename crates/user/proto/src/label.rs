@@ -52,6 +52,8 @@ pub enum Protocol {
     Memory = 3,
     /// The process that started this one.
     Parent = 4,
+    /// The display server.
+    Display = 5,
 }
 
 impl Protocol {
@@ -61,6 +63,7 @@ impl Protocol {
         Protocol::Console,
         Protocol::Memory,
         Protocol::Parent,
+        Protocol::Display,
     ];
 
     /// The stable code of the protocol.
@@ -81,6 +84,7 @@ impl Protocol {
             2 => Some(Protocol::Console),
             3 => Some(Protocol::Memory),
             4 => Some(Protocol::Parent),
+            5 => Some(Protocol::Display),
             _ => None,
         }
     }
@@ -93,6 +97,7 @@ impl Protocol {
             Protocol::Console => "console",
             Protocol::Memory => "memory",
             Protocol::Parent => "parent",
+            Protocol::Display => "display",
         }
     }
 }

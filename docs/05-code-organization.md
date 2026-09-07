@@ -62,7 +62,7 @@ AuDHSOS/
 │   │   │   ├── name/          server-name
 │   │   │   ├── console/       server-console
 │   │   │   ├── memory/        server-memory
-│   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor (Phase 9)
+│   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor
 │   │   │   └── input/         server-input: i8042 driver process, event rings (Phase 10)
 │   │   ├── programs/          user-programs: every program of the system as one
 │   │   │   │                  binary each of one crate, because a program is a
@@ -149,6 +149,7 @@ AuDHSOS/
 | `server-name` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `user-proto` |
 | `server-memory` | u2 | all | no | yes, against a recording `Pages` | `audhsos-abi`, `audhsos-collections`; feature `test-doubles` |
 | `server-console` | u2 | all | no | yes | `audhsos-collections`, `driver-uart16550` |
+| `server-display` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `gfx`, `user-proto` |
 | `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | the three server logic crates, `audhsos-abi`, `driver-uart16550`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
 | `crypto-ct` | c0 | all | no | yes | - |
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
