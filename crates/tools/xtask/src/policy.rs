@@ -405,6 +405,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "driver-i8042",
+        path: "crates/drivers/i8042",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "virtio-queue",
         path: "crates/virtio/queue",
         kind: Kind::Logic,

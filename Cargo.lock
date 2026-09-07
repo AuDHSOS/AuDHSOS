@@ -228,6 +228,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "driver-i8042"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
 name = "driver-uart16550"
 version = "0.1.0"
 dependencies = [

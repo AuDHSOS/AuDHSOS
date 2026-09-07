@@ -31,7 +31,7 @@ AuDHSOS/
 │   ├── symbols/               audhsos-symbols: ELF symbol table and DWARF line lookup (document 12)
 │   ├── drivers/
 │   │   ├── uart16550/         driver-uart16550: register logic over a port access trait
-│   │   └── i8042/             driver-i8042: PS/2 controller and decoder logic over a port access trait (Phase 10)
+│   │   └── i8042/             driver-i8042: PS/2 controller and decoder logic over a port access trait
 │   ├── support/
 │   │   ├── testing/           test-support: property-test engine, builders, strategies, model-test runner
 │   │   └── fuzz/              fuzz-support: fuzzer entry glue and corpus replay (unsafe allowed, host only)
@@ -126,7 +126,7 @@ AuDHSOS/
 | `kernel-acpi` | 1 | all | no | yes, fuzz | `kernel-types`; `test-support` as a dev-dependency |
 | `kernel-hal-api` | 1 | all | no | doubles are tested | `kernel-types`; features `test-doubles`, `port-io` |
 | `driver-uart16550` | 1 | all | no | yes | - (feature `test-doubles`) |
-| `driver-i8042` (Phase 10) | 1 | all | no | yes, fuzz | - (feature `test-doubles`) |
+| `driver-i8042` | 1 | all | no | yes, fuzz | - (feature `test-doubles`) |
 | `gfx` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf`; `test-support` as a dev-dependency |
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
