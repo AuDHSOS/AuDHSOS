@@ -25,6 +25,7 @@
 #![allow(unsafe_code)]
 
 use audhsos_abi::ipc_buffer;
+use audhsos_abi::layout::PAGE_SIZE;
 use audhsos_abi::{Rights, Syscall};
 use user_rt as _;
 use user_sys_x86_64 as sys;
@@ -49,10 +50,10 @@ pub const CONTROL_WORD: usize = 4;
 /// The payload word the first pair goes into. The kernel reads the pairs
 /// from here to [`RESULTS_END`].
 ///
-/// Above the twenty words `system_info` writes into the message area of the
-/// caller's own buffer, which is what the convention for a result that does
-/// not fit into two return words does with it.
-pub const FIRST_RESULT: usize = 24;
+/// Above the twenty-six words `system_info` writes into the message area of
+/// the caller's own buffer, which is what the convention for a result that
+/// does not fit into two return words does with it.
+pub const FIRST_RESULT: usize = 28;
 
 /// The payload word past the last pair the program may write.
 pub const RESULTS_END: usize = 400;
@@ -90,9 +91,9 @@ const FIRST_PORT: u64 = 0x80;
 /// How many ports that range covers.
 const PORT_COUNT: u64 = 4;
 
-/// The first frame of the device aperture the program makes: four gibibytes
-/// up, which is above every region the machine reports.
-const DEVICE_FRAME: u64 = 0x10_0000;
+/// The word of the `system_info` result the physical address of the
+/// framebuffer stands in.
+const FRAMEBUFFER_START_WORD: usize = 20;
 
 /// The bit of a notification the interrupt is bound to.
 const BOUND_BIT: u64 = 3;
@@ -272,12 +273,15 @@ fn devices(log: &mut Log, control: u64, bad: u64) {
     log.run(Syscall::IoPortWrite, &[ports, FIRST_PORT, 1, 0]);
     log.run(Syscall::IoPortWrite, &[ports, FIRST_PORT, 3, 0]);
 
-    log.run(Syscall::MemoryCreateDevice, &[control, DEVICE_FRAME, 1]);
-    log.run(Syscall::MemoryCreateDevice, &[control, DEVICE_FRAME, 0]);
+    // The framebuffer first: it is the one aperture this program knows the
+    // address of, and `system_info` is what tells it.
     log.run(Syscall::SystemInfo, &[control]);
+    let framebuffer = given(log.buffer, FRAMEBUFFER_START_WORD).wrapping_div(PAGE_SIZE);
+    log.run(Syscall::MemoryCreateDevice, &[control, framebuffer, 1]);
+    log.run(Syscall::MemoryCreateDevice, &[control, framebuffer, 0]);
     log.run(Syscall::SystemInfo, &[bad]);
-    // The twenty words `system_info` wrote sit below the log; the header it
-    // left says nothing the calls after it read.
+    // The twenty-six words `system_info` wrote sit below the log; the header
+    // it left says nothing the calls after it read.
     log.set_message(0, 0);
 }
 

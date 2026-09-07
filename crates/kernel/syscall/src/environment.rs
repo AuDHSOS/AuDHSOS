@@ -8,8 +8,8 @@
 //! names and from no other, apart from the kernel half that every address
 //! space shares; a kernel stack slot it hands out is mapped and guarded.
 
-use audhsos_abi::Error;
 use audhsos_abi::ipc_buffer::SIZE;
+use audhsos_abi::{Error, Framebuffer};
 use kernel_mm::page_table::Permissions;
 use kernel_types::{CachePolicy, Page, PhysFrame, PhysFrameRange, VirtAddr};
 
@@ -179,6 +179,15 @@ pub trait Environment {
     /// usable. A device object is an aperture, and the frames of the memory
     /// map belong to the memory server.
     fn meets_ram(&self, frames: PhysFrameRange) -> bool;
+
+    /// `true` when `frames` lies wholly inside one aperture the machine
+    /// reported as device memory. `memory_create_device` makes an object
+    /// only over such a range: everything else is either memory of the
+    /// machine, which belongs to the memory server, or nothing at all.
+    fn is_device_memory(&self, frames: PhysFrameRange) -> bool;
+
+    /// The framebuffer the loader described, if the machine has one.
+    fn framebuffer(&self) -> Option<Framebuffer>;
 
     /// The physical address of the root system description pointer, or zero
     /// when the platform named none. It is the only thing of the firmware

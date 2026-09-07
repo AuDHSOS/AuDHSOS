@@ -13,6 +13,7 @@ use audhsos_abi::layout::{
     KERNEL_STACK_SLOTS, KERNEL_STACKS_BASE, MAX_PHYS_WINDOW_BYTES, PAGE_SIZE, PHYS_WINDOW_BASE,
     USER_SPACE_END,
 };
+use audhsos_abi::{Framebuffer, FramebufferFormat};
 use kernel_hal_api::doubles::{
     CountingFrameSource, MemoryFrameAccess, RecordingConsole, RecordingTlb, ScriptedPlatform,
 };
@@ -22,6 +23,7 @@ use kernel_mm::frame_allocator::FrameError;
 use kernel_mm::mapper::{MapError, Mapper};
 use kernel_mm::memory_map::MapError as MemoryMapError;
 use kernel_mm::page_table::{CachePolicy, PageTable, Permissions, X86Entry};
+use kernel_types::phys::MAX_PHYS_ADDR;
 use kernel_types::{Page, PageRange, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
 
 use crate::config::KERNEL_REGIONS;
@@ -639,4 +641,70 @@ fn a_device_window_that_is_already_mapped_is_refused() {
 #[test]
 fn a_device_window_is_reported_under_its_own_name() {
     assert_eq!(backing_name(KernelBacking::Device), "device");
+}
+
+#[test]
+fn the_bring_up_keeps_the_framebuffer_and_the_apertures_of_the_machine() {
+    let described = Framebuffer {
+        phys_start: 0xE000_0000,
+        len: 0x0040_0000,
+        width: 1280,
+        height: 800,
+        stride: 1280,
+        format: FramebufferFormat::Bgrx8888,
+    };
+    let platform = platform()
+        .framebuffer(described)
+        .region(
+            address(0xE000_0000),
+            0x0040_0000,
+            MemoryRegionKind::MmioReserved,
+        )
+        .region(address(0xFE00_0000), 0x1000, MemoryRegionKind::MmioReserved);
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let memory =
+        bring_up::<X86Entry, _, _, _>(&platform, machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    assert_eq!(memory.framebuffer(), Some(described));
+    assert_eq!(memory.devices().len(), 2);
+    let inside = PhysFrameRange::from_numbers(0xE0000, 0xE0010).unwrap();
+    assert!(memory.is_device_memory(inside));
+    let across = PhysFrameRange::from_numbers(0xE0000, 0xE0500).unwrap();
+    assert!(
+        !memory.is_device_memory(across),
+        "it runs past the aperture"
+    );
+    let elsewhere = PhysFrameRange::from_numbers(0x5_0000, 0x5_0001).unwrap();
+    assert!(!memory.is_device_memory(elsewhere), "no aperture holds it");
+    let nothing = PhysFrameRange::new(frame(0xE0000), 0).unwrap();
+    assert!(!memory.is_device_memory(nothing), "an empty range is none");
+}
+
+#[test]
+fn a_machine_that_reported_no_aperture_has_no_device_memory() {
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let memory =
+        bring_up::<X86Entry, _, _, _>(&platform(), machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    assert_eq!(memory.framebuffer(), None);
+    assert!(memory.devices().is_empty());
+    let range = PhysFrameRange::from_numbers(0xE0000, 0xE0001).unwrap();
+    assert!(!memory.is_device_memory(range));
+}
+
+#[test]
+fn an_aperture_the_address_space_cannot_hold_is_left_out() {
+    let platform = platform().region(
+        address(MAX_PHYS_ADDR - PAGE_SIZE + 1),
+        PAGE_SIZE * 4,
+        MemoryRegionKind::MmioReserved,
+    );
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let memory =
+        bring_up::<X86Entry, _, _, _>(&platform, machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    assert!(memory.devices().is_empty());
 }

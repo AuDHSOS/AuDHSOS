@@ -274,6 +274,7 @@ dependencies = [
 name = "kernel-hal-api"
 version = "0.1.0"
 dependencies = [
+ "audhsos-abi",
  "kernel-types",
 ]
 

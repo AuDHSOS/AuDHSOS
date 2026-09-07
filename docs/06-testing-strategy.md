@@ -213,6 +213,17 @@ done until every applicable item has a test. Items are added, never removed.
 - Property: regions are sorted, disjoint, aligned, and inside the user half
   after every operation.
 
+- A mapping that continues one already in the table grows it instead of
+  adding a region (D-104): same object, same permissions, the offset
+  running on, and beginning where the other ends. A range that differs in
+  any of the four is a region of its own, a gap between them included.
+- A removal says what became of the region it took from: one that only
+  shortens a region reports that the region stayed, one that splits it
+  reports the same, and one that takes the whole region reports that it is
+  gone. The system call layer gives a reference to the backing object back
+  exactly for the last of the three, so an object is held by every region
+  that names it and by no more.
+
 ### 6.6.6 Object pools, ids, handles, and rights (`kernel-objects`, `audhsos-abi`)
 
 - Allocating from a full pool returns `PoolExhausted`.
@@ -337,7 +348,13 @@ done until every applicable item has a test. Items are added, never removed.
   the first return word says how many: `thread_info` reports the kind,
   address, instruction pointer, and error code of a thread that faulted and
   a word count of zero for one that did not, and `system_info` reports the
-  capacity and the live count of every pool.
+  capacity and the live count of every pool, the tick rate, the root system
+  description pointer, and the six words of the framebuffer, which are zero
+  throughout on a machine that has none.
+- `memory_create_device` refuses a range that meets memory the machine
+  reported as usable, one that lies in no aperture it reported as device
+  memory — past one, beginning before one, or running past the end of one —
+  and every range at all on a machine that reported no aperture.
 
 ### 6.6.10 Boot image header and boot information (`audhsos-abi`, `kernel-core`)
 

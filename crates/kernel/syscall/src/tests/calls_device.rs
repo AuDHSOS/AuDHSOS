@@ -85,6 +85,7 @@ fn a_line_an_interrupt_object_already_names_is_refused() {
 fn an_interrupt_that_has_nowhere_to_go_gives_its_quota_back() {
     let mut fixture = Fixture::new();
     let system = control(&mut fixture);
+    aperture(&mut fixture);
     fixture.fill_handles();
     assert_eq!(
         error_of(
@@ -353,6 +354,7 @@ fn a_port_access_needs_the_right_for_its_direction() {
 fn a_device_memory_object_is_an_aperture_and_meets_no_memory() {
     let mut fixture = Fixture::new();
     let system = control(&mut fixture);
+    aperture(&mut fixture);
     fixture.environment.ram = Some(
         kernel_types::PhysFrameRange::new(
             kernel_types::PhysFrame::from_number(0x100).unwrap(),
@@ -387,6 +389,53 @@ fn a_device_memory_object_is_an_aperture_and_meets_no_memory() {
     assert_eq!(held.frames.count(), 2);
 }
 
+/// Tells the environment that the frames `0x1000` to `0x1010` are an
+/// aperture of the machine, which is what a device object may cover.
+fn aperture(fixture: &mut Fixture) {
+    fixture.environment.device = Some(
+        kernel_types::PhysFrameRange::new(
+            kernel_types::PhysFrame::from_number(0x1000).unwrap(),
+            0x10,
+        )
+        .unwrap(),
+    );
+}
+
+#[test]
+fn a_range_in_no_aperture_of_the_machine_is_no_device() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    aperture(&mut fixture);
+    for (first, count, why) in [
+        (0x2000, 1, "it lies past the aperture"),
+        (0x0FFF, 2, "it begins before the aperture"),
+        (0x100F, 2, "it ends past the aperture"),
+    ] {
+        assert_eq!(
+            error_of(
+                &mut fixture,
+                request(Syscall::MemoryCreateDevice, &[system, first, count])
+            ),
+            Some(Error::InvalidArgument),
+            "{why}"
+        );
+    }
+    assert_eq!(fixture.objects.memory.live(), 0);
+}
+
+#[test]
+fn a_machine_that_reported_no_aperture_makes_no_device_object() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryCreateDevice, &[system, 0x1000, 1])
+        ),
+        Some(Error::InvalidArgument)
+    );
+}
+
 #[test]
 fn a_device_range_of_no_frames_or_beyond_the_address_space_is_refused() {
     let mut fixture = Fixture::new();
@@ -407,6 +456,7 @@ fn a_device_range_of_no_frames_or_beyond_the_address_space_is_refused() {
 fn a_creating_call_that_finds_no_handle_slot_leaves_nothing_behind() {
     let mut fixture = Fixture::new();
     let system = control(&mut fixture);
+    aperture(&mut fixture);
     fixture.fill_handles();
     for arguments in [
         (Syscall::IoPortCreate, vec![system, 0x40, 4]),
@@ -437,15 +487,23 @@ fn a_creating_call_that_finds_no_handle_slot_leaves_nothing_behind() {
 fn the_system_information_reports_every_pool_the_ticks_and_the_firmware() {
     let mut fixture = Fixture::new();
     fixture.environment.rsdp = 0x000F_2340;
+    fixture.environment.framebuffer = Some(audhsos_abi::Framebuffer {
+        phys_start: 0x8000_0000,
+        len: 0x0040_0000,
+        width: 1280,
+        height: 800,
+        stride: 1280,
+        format: audhsos_abi::FramebufferFormat::Bgrx8888,
+    });
     let system = control(&mut fixture);
     let mut buffer = request(Syscall::SystemInfo, &[system]);
     let (status, values, _) = call(&mut fixture, &mut buffer);
     assert_eq!(status.error(), None);
-    assert_eq!(values[0], 20, "twenty words, as the convention says");
+    assert_eq!(values[0], 26, "twenty-six words, as the convention says");
     let view = Buffer::new(&buffer);
     let header = view.message().unwrap();
     assert_eq!(header.label, 0);
-    assert_eq!(header.word_count, 20);
+    assert_eq!(header.word_count, 26);
     assert_eq!(header.handle_count, 0);
     let capacities = fixture.objects.capacities();
     let counts = fixture.objects.counts();
@@ -464,6 +522,26 @@ fn the_system_information_reports_every_pool_the_ticks_and_the_firmware() {
     }
     assert_eq!(view.word(18), Some(u64::from(TICKS_PER_SECOND)));
     assert_eq!(view.word(19), Some(0x000F_2340));
+    assert_eq!(view.word(20), Some(0x8000_0000));
+    assert_eq!(view.word(21), Some(0x0040_0000));
+    assert_eq!(view.word(22), Some(1280));
+    assert_eq!(view.word(23), Some(800));
+    assert_eq!(view.word(24), Some(1280));
+    assert_eq!(view.word(25), Some(2));
+}
+
+#[test]
+fn a_machine_without_a_framebuffer_reports_six_zeros() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let mut buffer = request(Syscall::SystemInfo, &[system]);
+    let (status, values, _) = call(&mut fixture, &mut buffer);
+    assert_eq!(status.error(), None);
+    assert_eq!(values[0], 26);
+    let view = Buffer::new(&buffer);
+    for word in 20..26 {
+        assert_eq!(view.word(word), Some(0), "word {word}");
+    }
 }
 
 #[test]

@@ -6,7 +6,7 @@
 
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status};
 use audhsos_abi::layout::PAGE_SIZE;
-use audhsos_abi::{Error, Handle, Rights, Syscall};
+use audhsos_abi::{Error, Framebuffer, Handle, Rights, Syscall};
 use kernel_mm::page_table::Permissions;
 use kernel_objects::handle_table::{Entry, HandleList};
 use kernel_objects::object::{
@@ -93,6 +93,10 @@ pub(super) struct Recorder {
     routed: Vec<u8>,
     /// The frames the machine reported as usable.
     pub(super) ram: Option<PhysFrameRange>,
+    /// The frames the machine reported as device memory.
+    pub(super) device: Option<PhysFrameRange>,
+    /// The framebuffer the loader is to have described.
+    pub(super) framebuffer: Option<Framebuffer>,
     /// The address of the root system description pointer.
     pub(super) rsdp: u64,
 }
@@ -299,6 +303,20 @@ impl Environment for Recorder {
             let ram_ends = ram.start().number().saturating_add(ram.count());
             frames.start().number() < ram_ends && ram.start().number() < ends
         })
+    }
+
+    fn is_device_memory(&self, frames: PhysFrameRange) -> bool {
+        self.device.is_some_and(|device| {
+            let ends = frames.start().number().saturating_add(frames.count());
+            let device_ends = device.start().number().saturating_add(device.count());
+            !frames.is_empty()
+                && frames.start().number() >= device.start().number()
+                && ends <= device_ends
+        })
+    }
+
+    fn framebuffer(&self) -> Option<Framebuffer> {
+        self.framebuffer
     }
 
     fn acpi_pointer(&self) -> u64 {

@@ -105,12 +105,6 @@ impl X86Platform {
         })
     }
 
-    /// The framebuffer the loader found, if the machine has one.
-    #[must_use]
-    pub const fn framebuffer(&self) -> Option<Framebuffer> {
-        self.framebuffer
-    }
-
     /// Appends the boot information page as a region of its own.
     ///
     /// The boot information names its own physical address in no field,
@@ -178,6 +172,10 @@ impl Platform for X86Platform {
 
     fn physical_window_base(&self) -> VirtAddr {
         VirtAddr::new(self.window).unwrap_or(VirtAddr::ZERO)
+    }
+
+    fn framebuffer(&self) -> Option<Framebuffer> {
+        self.framebuffer
     }
 
     fn acpi_rsdp(&self) -> Option<PhysAddr> {

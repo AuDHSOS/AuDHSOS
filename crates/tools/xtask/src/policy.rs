@@ -440,7 +440,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "kernel-hal-api",
         path: "crates/kernel/hal-api",
         kind: Kind::Logic,
-        deps: &["kernel-types"],
+        deps: &["audhsos-abi", "kernel-types"],
         coverage_gate: true,
         target: Target::Host,
     },

@@ -16,7 +16,7 @@ pub mod stack;
 #[cfg(any(test, feature = "test-strategies"))]
 pub mod strategies;
 
-pub use address_space::{Region, RegionError, RegionTable, Removed};
+pub use address_space::{Inserted, Region, RegionError, RegionTable, Removed, Taken};
 pub use frame_allocator::{BitmapFrameAllocator, FrameError, NoFrames};
 pub use kernel_half::{ShareError, free_user_half, share as share_kernel_half};
 pub use mapper::{MapError, Mapper, Progress};

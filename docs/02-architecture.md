@@ -464,7 +464,7 @@ through shared memory objects.
 | `interrupt_create`, `interrupt_bind`, `interrupt_ack` | SystemControl / Interrupt | interrupt forwarding |
 | `ioport_create`, `ioport_read`, `ioport_write` | SystemControl / IoPortRange | x86 port I/O |
 | `memory_create_device` | SystemControl | device memory object |
-| `system_info` | SystemControl | pool capacities and usage, tick frequency, and the address of the root system description pointer; the framebuffer description joins it in Phase 9 |
+| `system_info` | SystemControl | pool capacities and usage, tick frequency, the address of the root system description pointer, and the description of the framebuffer, which is six zero words on a machine without one |
 | `debug_log` | none | writes the message region to the debug UART; exists only in builds with the `debug-uart` feature |
 
 ## 2.9 Boot sequence

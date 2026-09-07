@@ -867,3 +867,78 @@ fn a_merge_gives_the_kernel_object_back_to_the_quota() {
         "the split charged one and the merge gave it back"
     );
 }
+
+#[test]
+fn a_second_mapping_that_continues_the_first_is_one_region_and_one_reference() {
+    let mut fixture = Fixture::new();
+    let (object, handle) = fixture.memory(0x100, 8, Rights::READ | Rights::WRITE | Rights::MAP);
+    let own = fixture.own_process.raw();
+    let mapped = value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[own, handle.raw(), ADDRESS, 0, 4 * PAGE_SIZE, WRITABLE],
+        ),
+    );
+    assert_eq!(mapped, 4);
+    let mapped = value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[
+                own,
+                handle.raw(),
+                ADDRESS + 4 * PAGE_SIZE,
+                4 * PAGE_SIZE,
+                4 * PAGE_SIZE,
+                WRITABLE,
+            ],
+        ),
+    );
+    assert_eq!(mapped, 4);
+    let holder = fixture.objects.processes.get(fixture.process).unwrap();
+    assert_eq!(holder.regions.len(), 1, "the two calls made one region");
+    let region = holder.regions.iter().next().unwrap();
+    assert_eq!(region.pages.count(), 8);
+    assert_eq!(
+        fixture.objects.memory.references(object).unwrap(),
+        2,
+        "one reference for the region, one for the handle"
+    );
+}
+
+#[test]
+fn unmapping_part_of_a_region_keeps_the_reference_the_rest_of_it_holds() {
+    let mut fixture = Fixture::new();
+    let (object, handle) = fixture.memory(0x100, 4, Rights::READ | Rights::WRITE | Rights::MAP);
+    let own = fixture.own_process.raw();
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[own, handle.raw(), ADDRESS, 0, 4 * PAGE_SIZE, WRITABLE],
+        ),
+    );
+    assert_eq!(fixture.objects.memory.references(object).unwrap(), 2);
+    value_of(
+        &mut fixture,
+        request(Syscall::MemoryUnmap, &[own, ADDRESS, 2 * PAGE_SIZE]),
+    );
+    assert_eq!(
+        fixture.objects.memory.references(object).unwrap(),
+        2,
+        "half the region is still mapped"
+    );
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryUnmap,
+            &[own, ADDRESS + 2 * PAGE_SIZE, 2 * PAGE_SIZE],
+        ),
+    );
+    assert_eq!(
+        fixture.objects.memory.references(object).unwrap(),
+        1,
+        "the region is gone and so is its reference"
+    );
+}

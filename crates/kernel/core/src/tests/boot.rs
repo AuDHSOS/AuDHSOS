@@ -6,6 +6,7 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 use audhsos_abi::layout::PHYS_WINDOW_BASE;
+use audhsos_abi::{Framebuffer, FramebufferFormat};
 use kernel_hal_api::doubles::{RecordingConsole, RecordingExit, ScriptedPlatform};
 use kernel_hal_api::exit::ExitStatus;
 use kernel_hal_api::platform::{MemoryRegionKind, Platform};
@@ -185,4 +186,36 @@ fn property_the_report_never_panics_and_counts_the_usable_memory() {
             other => Err(format!("{other:?} for {expected} KiB: {text}")),
         }
     });
+}
+
+#[test]
+fn a_machine_without_a_framebuffer_says_so() {
+    let (_, text) = boot(&machine());
+    assert!(text.contains("[info] framebuffer=absent"), "{text}");
+}
+
+#[test]
+fn the_framebuffer_is_reported_with_its_mode_and_its_address() {
+    for (format, name) in [
+        (FramebufferFormat::Bgrx8888, "bgrx8888"),
+        (FramebufferFormat::Rgbx8888, "rgbx8888"),
+    ] {
+        let platform = machine().framebuffer(Framebuffer {
+            phys_start: 0x8000_0000,
+            len: 0x0040_0000,
+            width: 1280,
+            height: 800,
+            stride: 1360,
+            format,
+        });
+        let (_, text) = boot(&platform);
+        assert!(
+            text.contains("[info] framebuffer=1280x800 stride=1360"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("format={name} at 0x80000000")),
+            "{text}"
+        );
+    }
 }

@@ -10,7 +10,7 @@
 
 use audhsos_abi::layout::{MAX_PAGES_PER_CALL, PAGE_SIZE};
 use audhsos_abi::{Error, Handle, Rights};
-use kernel_mm::address_space::{Region, user_range};
+use kernel_mm::address_space::{Inserted, Region, user_range};
 use kernel_mm::page_table::Permissions;
 use kernel_objects::handle_table::Entry;
 use kernel_objects::object::{AnyObjectId, MemoryObject, MemoryObjectId, Process, ProcessId};
@@ -134,17 +134,24 @@ pub fn map<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
         offset,
         perms,
     };
-    if let Err(error) = machine
+    let inserted = machine
         .objects
         .processes
         .get_mut(target)
         .map_err(Error::from)
-        .and_then(|holder| holder.regions.insert(region).map_err(Error::from))
-    {
-        unwind(machine, root, pages, mapped);
-        return Err(error);
+        .and_then(|holder| holder.regions.insert(region).map_err(Error::from));
+    match inserted {
+        Err(error) => {
+            unwind(machine, root, pages, mapped);
+            return Err(error);
+        }
+        // The object is held by the regions that name it, one reference
+        // each, and a call that continued a region made no new one (D-104).
+        Ok(Inserted::Merged) => {}
+        Ok(Inserted::Added) => {
+            machine.objects.memory.retain(object_id)?;
+        }
     }
-    machine.objects.memory.retain(object_id)?;
     if mapped < pages.count() {
         return Ok(Reply::partial(mapped));
     }
@@ -215,8 +222,12 @@ pub fn unmap<E: Environment, const NP: usize, const NT: usize, const NM: usize, 
         .get_mut(target)?
         .regions
         .remove::<2>(PageRange::new(pages.start(), done).map_err(|_| Error::InvalidArgument)?)?;
-    for region in removed.iter() {
-        machine.objects.memory.release(region.backing)?;
+    // One reference per region, so a removal that only shortened a region
+    // gives none back: the region, and what it holds, is still there.
+    for piece in removed.taken() {
+        if piece.vanished {
+            machine.objects.memory.release(piece.region.backing)?;
+        }
     }
     if done < pages.count() {
         return Ok(Reply::partial(done));

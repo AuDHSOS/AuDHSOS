@@ -7,6 +7,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The kernel keeps the framebuffer the loader described and the apertures
+  the machine reported as device memory. `Platform` reports the first,
+  `boot::run` prints it as an `[info]` line — `[info] framebuffer=absent`
+  on a machine without one — and `system_info` grew from twenty result
+  words to twenty-six, the last six being the physical start, length,
+  width, height, stride, and format code of the framebuffer.
+  `memory_create_device` now also refuses a range that lies in no aperture
+  the machine reported, so the root task can make a memory object over the
+  framebuffer and over nothing else.
 - The startup message carries values as well as handles (D-103). A role
   now says whether its second word is a handle of the process's table or a
   number its parent tells it, `Writer::tell` writes one and `Given::value`
@@ -24,6 +33,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   copies the damaged rectangles into anything that takes rows of pixels.
   The crate reaches no hardware: the same code draws into the framebuffer
   of the machine, into a back buffer, and into an array a host test owns.
+
+### Changed
+
+- `memory_map` merges a mapping that continues one the process already
+  holds instead of adding a region for every call (D-104). A full screen of
+  1280 by 800 pixels is a thousand pages and no call maps more than
+  sixty-four, so a mapping of one used to cost sixteen of the sixty-four
+  regions a process may hold. A region is extended when the new range
+  begins where it ends, names the same object, continues its offset, and
+  carries the same permissions.
+- A removal now says what became of the region it took a piece from, and
+  the system call layer gives a reference to the backing object back only
+  when the region is gone. Until now unmapping half a mapping gave back the
+  reference of the whole one.
 
 ### Fixed
 

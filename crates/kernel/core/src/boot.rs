@@ -8,6 +8,7 @@
 //! is given, so that it runs unchanged on the host and in QEMU.
 
 use audhsos_abi::layout::PHYS_WINDOW_BASE;
+use audhsos_abi::{Framebuffer, FramebufferFormat};
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::exit::{ExitStatus, TestExit};
 use kernel_hal_api::platform::{MemoryRegion, MemoryRegionKind, Platform};
@@ -73,6 +74,7 @@ pub fn run(platform: &impl Platform, console: &mut impl DebugConsole) -> Result<
         print_region(console, region);
     }
     println!(console, "usable {} KiB", usable_kib(regions));
+    print_framebuffer(console, platform.framebuffer());
     let window = platform.physical_window_base().as_u64();
     if window != PHYS_WINDOW_BASE {
         return Err(BootError::WindowBase(window));
@@ -82,6 +84,35 @@ pub fn run(platform: &impl Platform, console: &mut impl DebugConsole) -> Result<
     }
     let _ = KERNEL.init(KernelState::new());
     Ok(())
+}
+
+/// Reports the framebuffer the loader described, or that there is none.
+///
+/// The line carries the `[info]` prefix of
+/// [03 3.1.7](../../../../docs/03-target-platform.md#317-test-exit-protocol),
+/// because the runner reads it: the image that boots without a graphics
+/// adapter is a test of exactly this line.
+fn print_framebuffer(console: &mut impl DebugConsole, framebuffer: Option<Framebuffer>) {
+    match framebuffer {
+        Some(screen) => println!(
+            console,
+            "[info] framebuffer={}x{} stride={} format={} at {:#x}",
+            screen.width,
+            screen.height,
+            screen.stride,
+            format_name(screen.format),
+            screen.phys_start
+        ),
+        None => println!(console, "[info] framebuffer=absent"),
+    }
+}
+
+/// The name of a pixel format, as the line above spells it.
+const fn format_name(format: FramebufferFormat) -> &'static str {
+    match format {
+        FramebufferFormat::Rgbx8888 => "rgbx8888",
+        FramebufferFormat::Bgrx8888 => "bgrx8888",
+    }
 }
 
 /// Reports one region as `start-end kind`.
