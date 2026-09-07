@@ -280,11 +280,8 @@ fn copy_page(
     let room = page.saturating_sub(target_from);
     let source = content.get(source_from..).unwrap_or(&[]);
     let take = source.len().min(room);
-    if let (Some(slot), Some(from)) = (
-        bytes.get_mut(target_from..target_from.saturating_add(take)),
-        source.get(..take),
-    ) {
-        slot.copy_from_slice(from);
+    for (slot, byte) in bytes.iter_mut().skip(target_from).zip(source).take(take) {
+        *slot = *byte;
     }
 }
 

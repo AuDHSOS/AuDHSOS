@@ -55,16 +55,24 @@ pub enum Verdict {
     Reduced,
 }
 
+/// What one slot of the ownership table holds.
+#[derive(Clone, Copy, Debug, Default)]
+struct Owned {
+    /// The size of the smallest input that reaches the feature, or zero
+    /// for a feature nothing reaches.
+    smallest: u32,
+    /// The input that owns the feature.
+    owner: u32,
+}
+
 /// The inputs of a run.
 #[derive(Debug)]
 pub struct Pool {
     /// The inputs, including the slots of dropped ones.
     inputs: Vec<Input>,
-    /// For each feature, the size of the smallest input that reaches it,
-    /// or zero for a feature nothing reaches.
-    smallest: Box<[u32]>,
-    /// For each feature, the input that owns it.
-    owner: Box<[u32]>,
+    /// For each feature, the smallest input that reaches it and which
+    /// input that is.
+    slots: Box<[Owned]>,
     /// The running sum of the weight of each input, for drawing one.
     weights: Vec<u64>,
     /// How many features the pool covers.
@@ -83,8 +91,7 @@ impl Pool {
     pub fn new() -> Self {
         Self {
             inputs: Vec::new(),
-            smallest: vec![0; FEATURE_SLOTS].into_boxed_slice(),
-            owner: vec![0; FEATURE_SLOTS].into_boxed_slice(),
+            slots: vec![Owned::default(); FEATURE_SLOTS].into_boxed_slice(),
             weights: Vec::new(),
             covered: 0,
         }
@@ -132,7 +139,10 @@ impl Pool {
     /// Whether `feature` is reached by an input no larger than `size`.
     #[must_use]
     pub fn covers(&self, feature: u32, size: usize) -> bool {
-        let known = self.smallest.get(slot_of(feature)).copied().unwrap_or(0);
+        let known = self
+            .slots
+            .get(slot_of(feature))
+            .map_or(0, |slot| slot.smallest);
         known != 0 && usize::try_from(known).unwrap_or(usize::MAX) <= size
     }
 
@@ -189,24 +199,23 @@ impl Pool {
     /// Gives `feature` to the input that is about to take slot `next`, if
     /// it deserves it.
     fn claim(&mut self, feature: u32, size: u32, next: usize, shrink: bool) -> Claim {
-        let slot = slot_of(feature);
-        let known = self.smallest.get(slot).copied().unwrap_or(0);
-        let fresh = known == 0;
-        let smaller = shrink && known > size;
+        let index = slot_of(feature);
+        let held = self.slots.get(index).copied().unwrap_or_default();
+        let fresh = held.smallest == 0;
+        let smaller = shrink && held.smallest > size;
         if !fresh && !smaller {
             return Claim::Refused;
         }
         if fresh {
             self.covered = self.covered.saturating_add(1);
         } else {
-            let previous = usize::try_from(self.owner.get(slot).copied().unwrap_or(0)).unwrap_or(0);
-            self.release(previous);
+            self.release(usize::try_from(held.owner).unwrap_or(0));
         }
-        if let Some(entry) = self.smallest.get_mut(slot) {
-            *entry = size;
-        }
-        if let Some(entry) = self.owner.get_mut(slot) {
-            *entry = u32::try_from(next).unwrap_or(u32::MAX);
+        if let Some(slot) = self.slots.get_mut(index) {
+            *slot = Owned {
+                smallest: size,
+                owner: u32::try_from(next).unwrap_or(u32::MAX),
+            };
         }
         if fresh {
             Claim::Fresh

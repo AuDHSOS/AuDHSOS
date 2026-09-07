@@ -47,8 +47,8 @@ impl Word {
             bytes: [0; MAX_WORD],
             len,
         };
-        if let (Some(into), Some(from)) = (word.bytes.get_mut(..len), bytes.get(..len)) {
-            into.copy_from_slice(from);
+        for (slot, byte) in word.bytes.iter_mut().zip(bytes).take(len) {
+            *slot = *byte;
         }
         word
     }
@@ -189,20 +189,15 @@ pub fn entry_from_compare(rng: &mut Rng, compare: Compare, width: usize, data: &
     } else {
         compare.right
     };
-    let wanted = [
-        left.wrapping_add(nudge(rng)),
-        right.wrapping_add(nudge(rng)),
+    let readings = [
+        (left.wrapping_add(nudge(rng)), right),
+        (right.wrapping_add(nudge(rng)), left),
     ];
-    let existing = [right, left];
     let first = usize::from(rng.coin());
     let mut word = Word::new(&[]);
-    for step in 0..2 {
-        let which = (first ^ step) & 1;
-        let (Some(wanted), Some(existing)) = (wanted.get(which), existing.get(which)) else {
-            continue;
-        };
-        word = to_bytes(*wanted, width);
-        let places = positions_of(data, to_bytes(*existing, width).as_slice());
+    for (wanted, existing) in readings.into_iter().cycle().skip(first).take(2) {
+        word = to_bytes(wanted, width);
+        let places = positions_of(data, to_bytes(existing, width).as_slice());
         if let Some(position) = places.get(rng.below(places.len())).copied() {
             return Entry {
                 word,

@@ -826,8 +826,8 @@ pub(crate) struct Thresholds {
 
 /// The thresholds for every gated crate.
 pub(crate) const COVERAGE: Thresholds = Thresholds {
-    lines: 90.0,
-    branches: 85.0,
+    lines: 91.0,
+    branches: 86.0,
 };
 
 /// A fuzz target.

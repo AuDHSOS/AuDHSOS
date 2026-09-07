@@ -527,17 +527,11 @@ where
     T: TlbControl,
     S: FrameSource,
 {
-    let mut length = 0u64;
-    while length < limit {
-        let Some(page) = start.checked_add(length) else {
-            break;
-        };
-        if mapper.translate(page).is_none() {
-            break;
-        }
-        length = length.saturating_add(1);
-    }
-    length
+    let run = (0..limit)
+        .map_while(|offset| start.checked_add(offset))
+        .take_while(|page| mapper.translate(*page).is_some())
+        .count();
+    u64::try_from(run).unwrap_or(limit)
 }
 
 /// The highest page the identity mapping can reach: everything below the

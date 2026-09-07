@@ -114,14 +114,13 @@ impl<R: Registers> Console<R> {
     /// not a failure: a client that wants to wait asks again.
     pub fn read(&mut self, max: usize, into: &mut [u8]) -> usize {
         let bound = max.min(into.len()).min(self.received.len());
+        let ring = &mut self.received;
         let mut taken = 0usize;
-        while taken < bound {
-            let Some(byte) = self.received.pop() else {
-                break;
-            };
-            let Some(slot) = into.get_mut(taken) else {
-                break;
-            };
+        for (slot, byte) in into
+            .iter_mut()
+            .zip(core::iter::from_fn(|| ring.pop()))
+            .take(bound)
+        {
             *slot = byte;
             taken = taken.wrapping_add(1);
         }
