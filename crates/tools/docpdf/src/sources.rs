@@ -17,6 +17,7 @@
 //! ├── crates/       one file per workspace crate, named after the package
 //! ├── tools/        one file per tool that is not a workspace crate
 //! ├── rfc/          the requests for comments the network stack answers to
+//! ├── spec/         the standards kept as HTML rather than as plain text
 //! └── other/        anything Markdown that none of the above claimed
 //! ```
 //!
@@ -35,6 +36,8 @@ pub(crate) enum Kind {
     Markdown,
     /// The plain text of an RFC, laid out as the fixed-pitch pages it is.
     Rfc,
+    /// HTML, read into the same blocks Markdown is read into.
+    Html,
 }
 
 /// One document to convert.
@@ -55,7 +58,9 @@ pub(crate) struct Source {
 }
 
 /// The directories a converted document can land in.
-pub(crate) const SECTIONS: [&str; 6] = ["project", "handbook", "crates", "tools", "rfc", "other"];
+pub(crate) const SECTIONS: [&str; 7] = [
+    "project", "handbook", "crates", "tools", "rfc", "spec", "other",
+];
 
 /// Finds every document under `root`.
 pub(crate) fn collect(root: &Path) -> Result<Vec<Source>, Error> {
@@ -63,6 +68,7 @@ pub(crate) fn collect(root: &Path) -> Result<Vec<Source>, Error> {
     project(root, &mut sources)?;
     handbook(root, &mut sources)?;
     rfcs(root, &mut sources)?;
+    specifications(root, &mut sources)?;
     crates(root, &mut sources)?;
     tools(root, &mut sources)?;
     other(root, &mut sources)?;
@@ -135,12 +141,27 @@ fn rfcs(root: &Path, out: &mut Vec<Source>) -> Result<(), Error> {
     Ok(())
 }
 
+/// The standards kept as HTML. They live under `docs/` beside the RFCs,
+/// they are read with the HTML parser rather than the Markdown one, and
+/// they are filed by their file name: `docs/ecma/ecma262.html` becomes
+/// `spec/ecma262.pdf`.
+fn specifications(root: &Path, out: &mut Vec<Source>) -> Result<(), Error> {
+    let mut found = Vec::new();
+    walk(&root.join("docs"), "html", &mut found)?;
+    for path in found {
+        let stem = stem(&path);
+        let target = PathBuf::from("spec").join(format!("{stem}.pdf"));
+        out.push(html(root, &path, target)?);
+    }
+    Ok(())
+}
+
 /// One document per workspace crate, named after the package rather than
 /// after the directory: `crates/net/ip/README.md` becomes `net-ip.pdf`,
 /// which is the name the rest of the repository calls it by.
 fn crates(root: &Path, out: &mut Vec<Source>) -> Result<(), Error> {
     let mut readmes = Vec::new();
-    walk(&root.join("crates"), &mut readmes)?;
+    walk(&root.join("crates"), "md", &mut readmes)?;
     for path in readmes {
         if !is_readme(&path) {
             continue;
@@ -156,7 +177,7 @@ fn crates(root: &Path, out: &mut Vec<Source>) -> Result<(), Error> {
 /// The tools that live outside the workspace.
 fn tools(root: &Path, out: &mut Vec<Source>) -> Result<(), Error> {
     let mut readmes = Vec::new();
-    walk(&root.join("tools"), &mut readmes)?;
+    walk(&root.join("tools"), "md", &mut readmes)?;
     for path in readmes {
         if !is_readme(&path) {
             continue;
@@ -174,7 +195,7 @@ fn tools(root: &Path, out: &mut Vec<Source>) -> Result<(), Error> {
 /// which keeps two files of the same name apart.
 fn other(root: &Path, out: &mut Vec<Source>) -> Result<(), Error> {
     let mut found = Vec::new();
-    walk(root, &mut found)?;
+    walk(root, "md", &mut found)?;
     let claimed: Vec<PathBuf> = out.iter().map(|source| source.path.clone()).collect();
     for path in found {
         if claimed.contains(&path) {
@@ -199,6 +220,21 @@ fn markdown(root: &Path, path: &Path, target: PathBuf) -> Result<Source, Error> 
         path: path.to_path_buf(),
         target,
         kind: Kind::Markdown,
+        title,
+        size: u64::try_from(text.len()).unwrap_or(0),
+    })
+}
+
+/// An HTML source, with its title read from the `title` the document
+/// gives itself.
+fn html(root: &Path, path: &Path, target: PathBuf) -> Result<Source, Error> {
+    let text = std::fs::read_to_string(path).map_err(|e| Error::path("reading", path, e))?;
+    let title = doc_html::title(&text).unwrap_or_else(|| stem(path));
+    Ok(Source {
+        origin: relative(root, path),
+        path: path.to_path_buf(),
+        target,
+        kind: Kind::Html,
         title,
         size: u64::try_from(text.len()).unwrap_or(0),
     })
@@ -232,9 +268,9 @@ fn list(dir: &Path, extension: &str) -> Result<Vec<PathBuf>, Error> {
     Ok(found)
 }
 
-/// Every Markdown file below `dir`, skipping what a build or an agent
-/// wrote and what is only kept to be read.
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Error> {
+/// Every file below `dir` with the given extension, skipping what a build
+/// or an agent wrote and what is only kept to be read.
+fn walk(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) -> Result<(), Error> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -247,9 +283,9 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Error> {
         let name = entry.file_name();
         if path.is_dir() {
             if !SKIPPED.iter().any(|skip| name == *skip) {
-                walk(&path, out)?;
+                walk(&path, extension, out)?;
             }
-        } else if path.extension().is_some_and(|ext| ext == "md") {
+        } else if path.extension().is_some_and(|ext| ext == extension) {
             found.push(path);
         }
     }

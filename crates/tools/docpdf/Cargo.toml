@@ -3,7 +3,7 @@
 
 [package]
 name = "docpdf"
-description = "Turns every Markdown document and every RFC of this repository into a PDF, several at a time"
+description = "Turns every Markdown document, every RFC, and every HTML standard of this repository into a PDF, several at a time"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,8 +11,10 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+doc-html.workspace = true
 doc-markdown.workspace = true
 doc-pdf.workspace = true
+doc-svg.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true

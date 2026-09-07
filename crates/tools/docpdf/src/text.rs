@@ -127,8 +127,7 @@ fn push_inlines(content: &[Inline], style: &Style, out: &mut Vec<Token>) {
             Inline::Emphasis(inner) => {
                 let mut italic = style.clone();
                 italic.font = match style.font {
-                    Font::Bold | Font::MonoBold => style.font,
-                    Font::Mono => Font::Mono,
+                    Font::Bold | Font::MonoBold | Font::Mono | Font::Symbol => style.font,
                     Font::Regular | Font::Italic => Font::Italic,
                 };
                 push_inlines(inner, &italic, out);
@@ -145,6 +144,14 @@ fn push_inlines(content: &[Inline], style: &Style, out: &mut Vec<Token>) {
                 push_inlines(content, &link, out);
             }
             Inline::Break => out.push(Token::Break),
+            // A picture inside a sentence is said rather than drawn: a
+            // figure needs a line of its own, and the layout draws one
+            // only where it stands alone.
+            Inline::Image { source, alt } => {
+                let mut quiet = style.clone();
+                quiet.color = theme::QUIET;
+                push_words(&doc_markdown::inline::described(source, alt), &quiet, out);
+            }
         }
     }
 }

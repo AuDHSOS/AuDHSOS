@@ -233,3 +233,23 @@ fn a_code_span_may_run_over_a_line_break() {
         vec![Inline::Code("one two".to_owned())]
     );
 }
+
+#[test]
+fn an_image_carries_the_file_it_is_in_and_what_it_shows() {
+    assert_eq!(
+        parse("![a diagram](d.png)"),
+        vec![Inline::Image {
+            source: "d.png".to_owned(),
+            alt: "a diagram".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn an_image_is_described_by_what_it_shows_or_by_where_it_is() {
+    assert_eq!(
+        crate::inline::described("d.png", "a diagram"),
+        "[image: a diagram]"
+    );
+    assert_eq!(crate::inline::described("d.png", "  "), "[image: d.png]");
+}

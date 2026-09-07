@@ -30,6 +30,16 @@ pub enum Inline {
     },
     /// A line break the author asked for.
     Break,
+    /// A picture, by the file it is in and what it says it shows. What
+    /// becomes of it is the renderer's to decide: a picture on a line of
+    /// its own can be drawn, and one in the middle of a sentence has to be
+    /// said rather than drawn.
+    Image {
+        /// Where the picture is, as the document wrote it.
+        source: String,
+        /// What the document says it shows.
+        alt: String,
+    },
 }
 
 /// The text of a run of inlines, with the marks dropped.
@@ -42,9 +52,20 @@ pub fn plain(content: &[Inline]) -> String {
             Inline::Emphasis(inner) | Inline::Strong(inner) => text.push_str(&plain(inner)),
             Inline::Link { content, .. } => text.push_str(&plain(content)),
             Inline::Break => text.push(' '),
+            Inline::Image { source, alt } => {
+                text.push_str(&described(source, alt));
+            }
         }
     }
     text
+}
+
+/// What a picture is called where it cannot be drawn: what it says it
+/// shows, or the file it is in when it says nothing.
+#[must_use]
+pub fn described(source: &str, alt: &str) -> String {
+    let shown = if alt.trim().is_empty() { source } else { alt };
+    format!("[image: {shown}]")
 }
 
 /// Parses the inline content of a block.
@@ -301,18 +322,10 @@ fn link(text: &str, at: usize) -> Option<(Inline, usize)> {
 /// An image renders as the link it is, showing its description.
 fn image(inline: Inline) -> Inline {
     match inline {
-        Inline::Link { content, href } => {
-            let description = plain(&content);
-            let shown = if description.is_empty() {
-                href.clone()
-            } else {
-                description
-            };
-            Inline::Link {
-                content: vec![Inline::Text(format!("[image: {shown}]"))],
-                href,
-            }
-        }
+        Inline::Link { content, href } => Inline::Image {
+            source: href,
+            alt: plain(&content),
+        },
         other => other,
     }
 }

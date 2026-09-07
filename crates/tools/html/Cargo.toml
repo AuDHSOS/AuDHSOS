@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "doc-html"
+description = "An HTML parser for the documents this repository holds, producing the blocks the Markdown parser produces"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+doc-markdown.workspace = true
+
+[lints]
+workspace = true

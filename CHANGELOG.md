@@ -169,6 +169,74 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   in both profiles: there is no silent window while the first servers come
   up, and no interleaving once the driver runs.
 
+- A page writes what has changed and not what is already true, which takes
+  two fifths off every document. It was one text object per run of text —
+  `BT`, the face, a matrix, the text, `ET` — for runs whose middle is three
+  characters long: fifty bytes of operators for thirteen of prose. A page
+  now keeps what the stream is set to and writes the difference:
+
+  - One text object holds a page of prose, closed by whatever needs the pen
+    back — a path, a rule, or the end of the page, which `Document::push`
+    sees to.
+  - The face is named only when it changes.
+  - A run that begins exactly where the last one ended says nothing about
+    its place: showing text moves the pen by the width of what was shown,
+    and that is the width this crate measured the line with. The one
+    exception is a run set in Symbol, whose advances are a table filled in
+    by hand here; what follows one of those names its place outright rather
+    than trusting it.
+  - A run that begins the next line at the distance the stream is already
+    set to is shown by `'`, the operator that means *next line, then this*.
+    A paragraph is therefore one `TL` and then one string per line, which
+    is as close to a paragraph as PDF gets: the format has no operator for
+    one, because line breaking is the layout's decision and the file
+    records where each line came to rest.
+  - Anything else moves by `Td` from the last line, and only the first run
+    of a text object names a matrix.
+  - A grey is written with the operator that takes one number rather than
+    the one that takes three.
+
+  The ECMAScript specification goes from 10.5 to 6.6 megabytes and the
+  whole of `target/pdf/` from 18.4 to 11.9; the content streams of the
+  specification go from 9.8 to 5.9, of which 2.1 is now the text itself.
+  The streams are still uncompressed ASCII a reader can page through —
+  that is the point of them — and they are shorter to read as well: a line
+  of the file is a line of the page.
+
+- `doc-pdf` gains paths and a sixth font, and text stops being one string.
+  A path is a list of moves, lines, and cubic curves, filled by either
+  winding rule, stroked with a width and a dash pattern, or both; that is
+  what a figure needs and no more, and the drawing of one lives in `doc-svg`.
+  The sixth font is Symbol, and it is there for what the other five have no
+  glyph for: a character outside `WinAnsiEncoding` is now written in Symbol
+  if Symbol has it, as the letters it is read as if it has such a reading,
+  and as a question mark only if it is neither. A combining mark is dropped,
+  since nothing here can place one. So a line goes onto a page as the runs
+  its characters need, each in its own font, with the width of the run before
+  it putting the next one in the right place — and the line breaker measures
+  the same way, so what it counts is what the page will hold.
+
+  For the ECMAScript specification that is the difference between 1656
+  question marks and seven. The double-struck `F` of its numeric operations
+  reads as `F`, `ℝ` and `ℤ` as `R` and `Z`, and the infinity sign, the
+  relations, and the Greek letters are set in Symbol. What is left is two
+  Hangul syllables, a syllable block, and four Latin letters carrying marks
+  Latin-1 has no place for.
+
+  The object number the pages start at is now derived from how many fonts
+  there are, with a test holding it to the length of `Font::ALL`. It was a
+  constant, and the sixth font would have taken the number the first page
+  already had — two objects with one number, which a viewer resolves by
+  taking whichever the cross-reference table points at and quietly loses the
+  other. A second test now says that no two objects of a written document
+  share a number.
+
+- A picture is part of the document model: `Inline::Image` carries the file
+  it is in and what it says it shows, rather than a link with `[image: …]`
+  already written into its text. Both parsers produce it, and what becomes of
+  it is the renderer's to decide — which is what lets the same document say
+  a picture in one place and draw it in another.
+
 - D-86: four unsafe budgets rise, and a process and a thread each hold one
   reference to themselves. The budgets are `kernel-hal-x86_64` (129 to 142
   unsafe, 24 to 27 `asm!`, for the three port widths that were missing and
@@ -556,6 +624,136 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   `error_codes!` and `object_types!`, so name, code, and lookup come from one
   place. The label spells `STARTUP` and lies below the range the kernel keeps
   for itself, which a const assertion holds to.
+
+- `audhsos-deflate`, the compressed data format of RFC 1951 in the wrapper
+  of RFC 1950 — what a PDF calls `FlateDecode` and what a PNG carries in its
+  image chunks. It compresses, and it reads back what it or anybody else
+  wrote. Nothing allocates: the caller gives the buffer the result goes into
+  and the table the compressor finds runs with, and the functions answer how
+  many bytes they wrote.
+
+  Compressing is one pass and one decision per position: is there a run of at
+  least three bytes seen before within the last thirty-two kilobytes? The
+  longest one found is written as a length and a distance, and everything
+  else is written as the byte it is. What makes that quick is the one table
+  kept — for every three bytes, where they were last seen, and a chain back
+  through every earlier place with the same three, walked a hundred and
+  twenty-eight steps at most. The codes are the fixed ones the format names,
+  so no table goes into the stream; a block carrying its own would be perhaps
+  a third smaller again and is a second algorithm, for another day. An input
+  that will not compress is carried unchanged in blocks that say so, so the
+  result is never more than a few bytes longer than what went in.
+
+  Reading is the whole format, including the block kind this crate never
+  writes. That is what makes the tests worth something: streams from another
+  compressor — one with a code table of its own, one that carries its bytes,
+  one in the zlib wrapper — must read back as the sentence they were made
+  from, and everything this crate writes must read back as what went in,
+  which two property tests say over six hundred bytes of anything and over
+  eight hundred bytes of what actually repeats.
+
+  `docpdf --compress` turns it on for the written documents. The
+  specification goes from 6.62 to 2.50 megabytes and the whole of
+  `target/pdf/` from 13.1 to 6.2; without the flag the streams stay the plain
+  operators they were, which is what makes a page readable with `less` when
+  something has gone wrong with it.
+
+- RFC 1950 and RFC 1951 under `docs/rfc/`, and the *Portable Network Graphics
+  (PNG) Specification (Third Edition)* under a new `docs/w3c/`, each fetched
+  twice and recorded with its checksum. The first two are what the compressor
+  implements; the third states the part PNG adds and they do not — the
+  filters that replace a row of pixels by its differences from a neighbour,
+  which is also where the predictors of a PDF Flate stream come from. The new
+  directory is the same arrangement as `docs/ecma/`, and `docpdf` files what
+  is in it under `spec/` like the rest: 116 pages of it.
+
+- `doc-svg`, and with it the figures of a document, drawn. It reads an SVG
+  into the marks a PDF page is made of: paths — the shapes, every command of
+  a path but the elliptical arc, the transforms, the fills and strokes with
+  their widths, dashes, and winding rule — and lines of text in the standard
+  fourteen fonts, with their family, size, weight, and anchor. The stylesheet
+  an SVG carries is read too, because a diagram written with `class="box"`
+  says nothing about its own colour otherwise; so is the marker at the end of
+  a stroke, which is what makes an arrow an arrow. `docpdf` draws a picture
+  that stands alone on its line, as wide as the measure and never wider than
+  the picture was made, centred; a picture inside a sentence is said instead,
+  and so is one whose file is missing or holds something the crate cannot
+  draw.
+
+  Two things it does without. There is no floating-point number: a length is
+  a whole number of thousandths of a user unit, the way a length in `doc-pdf`
+  is a whole number of thousandths of a point, so two runs on two machines
+  draw the same figure to the same thousandth. And there is no trigonometry:
+  a `rotate` by name is read as the nearest quarter turn, and the rotation
+  that points a marker along its line needs no angle at all, because the
+  direction of the line is the rotation — for a unit vector `(dx, dy)` the
+  matrix `[dx dy -dy dx]` turns the marker exactly that far. The unit vector
+  needs one square root, and that one is an integer square root of an
+  integer.
+
+  The markup comes from `doc-html`, whose tokenizer and tree are now public
+  for it: an SVG is XML, and tags, attributes, text, and a tree are all an
+  SVG reader needs of a parser. What stayed private is everything that knows
+  what an element *means*, which is HTML's alone. The seven figures of the
+  ECMAScript specification come out as 1055 pages of PDF still does, with the
+  prototype diagrams and the module graphs drawn in place of the lines that
+  named them.
+
+- `doc-html`, and with it a third kind of document this repository can turn
+  into a PDF. It is an HTML parser that produces the blocks and inline
+  runs `doc-markdown` produces, so everything below it — the layout, the page
+  breaking, the outline, the link table — is the same code for both. `docpdf`
+  gains a `spec/` section for what comes out, and every HTML document under
+  `docs/` is filed there: `docs/ecma/ecma262.html` becomes
+  `target/pdf/spec/ecma262.pdf`, a thousand pages written in a third of a
+  second.
+
+  One rule carries the crate: an element the tables do not name is read as
+  though it were not there, and its children take its place. A page made of
+  custom elements therefore comes out as a document rather than as a list of
+  tags nobody wrote a case for, and the tables stay short enough to read.
+  What they say is that an element is dropped with everything in it, stands
+  on its own line, is set in a face of its own inside a line, or is none of
+  those. An element that carries the class `inline` is read in a line
+  whatever its name would otherwise mean, which is how an equation written
+  between two halves of a sentence stops cutting the sentence in three.
+
+  The `emu-` elements of ecmarkup are named in those tables, because a custom
+  element has no display of its own once its stylesheet is gone and this
+  repository holds a seven-megabyte document written in them. Without the
+  names, a grammar production, its `::`, and each of its right-hand sides
+  would come out as one paragraph with everything in it. With them, a
+  production is a block of fixed-pitch lines and `emu-alg` is the ordered
+  list it already was.
+
+  An `img` becomes an image run carrying the file it names and what it says
+  it shows. What becomes of that is the renderer's: `docpdf` draws a picture
+  that stands alone on its line and says `[image: …]` for one inside a
+  sentence.
+
+- ECMA-262 under `docs/ecma/`, the ECMAScript language specification as
+  `https://tc39.es/ecma262/` served it on 2026-09-07, with the seven images it
+  names beside it under `docs/ecma/img/`. Everything was fetched twice and is
+  recorded with its checksum. That URL is the editor's draft rather than a
+  numbered edition — the most recent yearly snapshot plus every finished
+  proposal, moving whenever one lands — so the file is the citable thing and
+  the link is not: these bytes are the draft of 2 September 2026, the
+  eighteenth edition in progress.
+
+  What is kept is the contents of the page's `<div id="spec-container">`: the
+  specification from its title to the last line of the copyright annex, and
+  none of the website around it — no menu, no search box, no shortcut help,
+  no stylesheets, no scripts. Three things are added and nothing else is
+  changed: a minimal `html`, `head`, and `body` so the fragment is a document
+  with its encoding declared, a `title`, and a comment stating the source and
+  these changes, which is the notice Ecma's licence asks for. The image links
+  are the relative `img/…` paths the document already carries, so they now
+  resolve to the copies stored here and the file reaches no network at all.
+
+  The directory is new because the document is not an RFC, and it is the same
+  arrangement D-59 records for `docs/rfc/`: nothing compiled, linked, or read
+  at run time, rule R8 untouched. Nothing in the workspace implements the
+  standard yet.
 
 - Two user threads that meet, and a driver at ring three. Five new programs
   under `user-test-programs`: `ipc_client` and `ipc_server`, which are a call

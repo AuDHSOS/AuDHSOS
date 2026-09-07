@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "doc-svg"
+description = "Reads the SVG figures of this repository's documents into the marks a PDF page is made of"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+doc-html.workspace = true
+doc-pdf.workspace = true
+
+[lints]
+workspace = true

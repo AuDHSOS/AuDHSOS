@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! Every Markdown document and every RFC of this repository, as PDF.
+//! Every Markdown document, every RFC, and every HTML standard of this
+//! repository, as PDF.
 //!
 //! The work is one document at a time and nothing is shared between two of
 //! them, so the tool reads, parses, lays out, and writes each document on
@@ -38,8 +39,9 @@ use crate::sources::{Kind, Source};
 const USAGE: &str = "\
 usage: docpdf [options]
 
-Converts every Markdown document and every RFC of the repository into a
-PDF, several at a time, and writes an index beside them.
+Converts every Markdown document, every RFC, and every HTML standard of
+the repository into a PDF, several at a time, and writes an index beside
+them.
 
 options:
   --root <dir>     the repository to read (default: the one this was built
@@ -50,6 +52,9 @@ options:
   --only <text>    convert only the documents whose output path contains
                    this text, for instance `--only rfc/`
   --list           say what would be converted and write nothing
+  --compress       deflate the content streams, which makes the files
+                   about a third of the size and no longer readable as
+                   the operators they are built from
   --quiet          report only the summary line
   --help           this text
 ";
@@ -92,6 +97,8 @@ struct Options {
     only: Option<String>,
     /// Say what would happen and stop.
     list: bool,
+    /// Deflate the content streams.
+    compress: bool,
     /// Report only the summary.
     quiet: bool,
 }
@@ -129,7 +136,9 @@ fn run() -> Result<(), Error> {
     let jobs = options.jobs.min(queue.len()).max(1);
 
     let started = Instant::now();
-    let mut outcomes = pool::map(&queue, jobs, |source| convert(source, &links, &options.out));
+    let mut outcomes = pool::map(&queue, jobs, |source| {
+        convert(source, &links, &options.out, options.compress)
+    });
     let elapsed = started.elapsed();
 
     outcomes.sort_by(|a, b| a.target.cmp(&b.target));
@@ -155,7 +164,8 @@ fn run() -> Result<(), Error> {
 
     let written = outcomes.len().saturating_sub(failures.len());
     if written > 0 {
-        let (index, count) = index::render(&sources, &outcomes_by_target(&outcomes));
+        let (index, count) =
+            index::render(&sources, &outcomes_by_target(&outcomes), options.compress);
         let path = options.out.join("index.pdf");
         write(&path, &index)?;
         pages = pages.saturating_add(count);
@@ -182,7 +192,7 @@ fn run() -> Result<(), Error> {
 }
 
 /// Converts one document and writes it.
-fn convert(source: &Source, links: &Links, out: &Path) -> Outcome {
+fn convert(source: &Source, links: &Links, out: &Path, compress: bool) -> Outcome {
     let path = out.join(&source.target);
     let mut outcome = Outcome {
         target: source.target.clone(),
@@ -198,14 +208,18 @@ fn convert(source: &Source, links: &Links, out: &Path) -> Outcome {
         }
     };
     let (bytes, pages) = match source.kind {
-        Kind::Markdown => {
-            let blocks = doc_markdown::parse(&text);
-            let mut layout = layout::Layout::new(source, links);
+        Kind::Markdown | Kind::Html => {
+            let blocks = if source.kind == Kind::Html {
+                doc_html::parse(&text)
+            } else {
+                doc_markdown::parse(&text)
+            };
+            let mut layout = layout::Layout::new(source, links, compress);
             layout.document(&blocks);
             let pages = layout.pages();
             (layout.finish(), pages)
         }
-        Kind::Rfc => rfc::render(source, &text),
+        Kind::Rfc => rfc::render(source, &text, compress),
     };
     if let Err(error) = write(&path, &bytes) {
         outcome.failure = Some(error.to_string());
@@ -259,6 +273,7 @@ fn parse(arguments: &[String]) -> Result<Option<Options>, Error> {
         jobs: pool::parallelism(),
         only: None,
         list: false,
+        compress: false,
         quiet: false,
     };
     let mut out = None;
@@ -295,6 +310,10 @@ fn parse(arguments: &[String]) -> Result<Option<Options>, Error> {
             }
             "--list" => {
                 options.list = true;
+                at = at.saturating_add(1);
+            }
+            "--compress" => {
+                options.compress = true;
                 at = at.saturating_add(1);
             }
             "--quiet" => {

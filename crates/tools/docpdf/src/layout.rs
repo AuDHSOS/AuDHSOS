@@ -11,11 +11,14 @@
 //! block, so a quotation that runs over a page break gets a bar on both
 //! pages instead of one bar off the bottom of the first.
 
+use std::path::PathBuf;
+
 use doc_markdown::{Align, Block, Inline, plain};
 use doc_pdf::Document;
 use doc_pdf::font::Font;
 use doc_pdf::page::{Link, LinkTarget, Page};
 use doc_pdf::units::{Color, Mils, pt};
+use doc_svg::{Drawing, Item};
 
 use crate::links::Links;
 use crate::sources::Source;
@@ -72,11 +75,13 @@ pub(crate) struct Layout<'a> {
     source: &'a Source,
     /// The table that rewrites a link between two documents.
     links: &'a Links,
+    /// Whether the content streams are deflated on the way out.
+    compress: bool,
 }
 
 impl<'a> Layout<'a> {
     /// Starts a document with its title block.
-    pub(crate) fn new(source: &'a Source, links: &'a Links) -> Self {
+    pub(crate) fn new(source: &'a Source, links: &'a Links, compress: bool) -> Self {
         let mut layout = Self {
             pages: Vec::new(),
             bookmarks: Vec::new(),
@@ -85,6 +90,7 @@ impl<'a> Layout<'a> {
             spacing: theme::PARAGRAPH,
             source,
             links,
+            compress,
         };
         layout.start_page();
         layout.title_block(&source.title, &source.origin);
@@ -106,6 +112,7 @@ impl<'a> Layout<'a> {
     /// The finished document.
     pub(crate) fn finish(self) -> Vec<u8> {
         let mut document = Document::new(self.source.title.clone());
+        document.compress(self.compress);
         for page in self.pages {
             document.push(page);
         }
@@ -131,7 +138,13 @@ impl<'a> Layout<'a> {
     fn block(&mut self, block: &Block, indent: Mils) {
         match block {
             Block::Heading { level, content } => self.heading(*level, content, indent),
-            Block::Paragraph(content) => self.paragraph(content, indent),
+            // A picture standing alone on its line is a figure, and a
+            // figure is drawn. One inside a sentence is said instead,
+            // which is what the paragraph does with it.
+            Block::Paragraph(content) => match alone(content) {
+                Some((source, alt)) => self.figure(source, alt, indent),
+                None => self.paragraph(content, indent),
+            },
             Block::Code { lines, .. } => self.code(lines, indent),
             Block::Quote(inner) => self.quote(inner, indent),
             Block::List {
@@ -171,6 +184,90 @@ impl<'a> Layout<'a> {
         let broken = lines(content, &style, measure);
         self.draw(&broken, indent, size.leading);
         self.advance(theme::space_after(level));
+    }
+
+    /// A figure, drawn as wide as it fits and no wider than it is, with
+    /// its own space above and below it. A figure that cannot be read —
+    /// there is no file, or nothing in it this crate can draw — is said
+    /// instead, which is what a page without pictures did with every one
+    /// of them before.
+    fn figure(&mut self, source: &str, alt: &str, indent: Mils) {
+        let Some(drawing) = self.drawing(source) else {
+            self.paragraph(
+                &[Inline::Image {
+                    source: source.to_owned(),
+                    alt: alt.to_owned(),
+                }],
+                indent,
+            );
+            return;
+        };
+        let measure = theme::MEASURE.saturating_sub(indent);
+        // A user unit of an SVG is a pixel, and a pixel is three quarters
+        // of a point. A figure is never drawn larger than it was made.
+        let natural = drawing.width.saturating_mul(3).wrapping_div(4);
+        let mut width = measure.min(natural).max(1);
+        let tallest = theme::PAGE
+            .height
+            .saturating_sub(theme::TOP)
+            .saturating_sub(theme::BOTTOM);
+        let height = drawing.height_at(width);
+        if height > tallest
+            && let Some(fitted) = width.saturating_mul(tallest).checked_div(height)
+        {
+            width = fitted;
+        }
+        let height = drawing.height_at(width);
+        self.ensure(height.saturating_add(theme::PARAGRAPH));
+        let left = theme::SIDE
+            .saturating_add(indent)
+            .saturating_add(measure.saturating_sub(width).wrapping_div(2));
+        let bottom = self.y.saturating_sub(height);
+        let items = drawing.placed(left, bottom, width);
+        if let Some(page) = self.pages.last_mut() {
+            for item in items {
+                match item {
+                    Item::Path {
+                        segments,
+                        fill,
+                        stroke,
+                    } => page.path(&segments, fill, stroke.as_ref()),
+                    Item::Text {
+                        x,
+                        y,
+                        size,
+                        font,
+                        color,
+                        text,
+                    } => page.text(font, size, x, y, color, &text),
+                }
+            }
+        }
+        self.advance(height.saturating_add(self.spacing));
+    }
+
+    /// The drawing a figure names, if it names a file this crate can read
+    /// and draw.
+    fn drawing(&self, source: &str) -> Option<Drawing> {
+        if source.contains("://") || source.starts_with('/') {
+            return None;
+        }
+        let mut path = PathBuf::from(&self.source.path);
+        path.pop();
+        for part in source.split('/') {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    path.pop();
+                }
+                other => path.push(other),
+            }
+        }
+        if path.extension().is_none_or(|kind| kind != "svg") {
+            return None;
+        }
+        let text = std::fs::read_to_string(&path).ok()?;
+        doc_svg::parse(&text)
     }
 
     /// A paragraph.
@@ -605,6 +702,21 @@ fn furniture(page: &mut Page, title: &str, number: usize) {
         theme::QUIET,
         &label,
     );
+}
+
+/// The picture a block of nothing but one picture holds.
+fn alone(content: &[Inline]) -> Option<(&str, &str)> {
+    let mut found = None;
+    for item in content {
+        match item {
+            Inline::Image { source, alt } if found.is_none() => {
+                found = Some((source.as_str(), alt.as_str()));
+            }
+            Inline::Text(text) if text.trim().is_empty() => {}
+            _ => return None,
+        }
+    }
+    found
 }
 
 /// The size of the largest run on a line, for the baseline it sits on.

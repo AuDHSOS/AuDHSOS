@@ -27,10 +27,15 @@ const PAGES: u32 = 2;
 const INFO: u32 = 3;
 /// The root of the outline.
 const OUTLINE_ROOT: u32 = 4;
-/// The first of the five font dictionaries.
+/// The first of the font dictionaries.
 const FIRST_FONT: u32 = 5;
-/// The first object of the first page.
-const FIRST_PAGE: u32 = 10;
+/// How many font dictionaries there are. It is the length of
+/// [`crate::font::Font::ALL`], which a test holds it to: the pages are
+/// numbered from after the fonts, so a font added without this number
+/// would take an object number a page already has.
+pub(crate) const FONTS: u32 = 6;
+/// The first object of the first page, which follows the fonts.
+const FIRST_PAGE: u32 = FIRST_FONT.saturating_add(FONTS);
 
 /// A document under construction.
 #[derive(Clone, Debug)]
@@ -41,6 +46,8 @@ pub struct Document {
     pages: Vec<Page>,
     /// The outline, flat, each entry carrying its level.
     outline: Vec<Entry>,
+    /// Whether a content stream is deflated on the way into the file.
+    compressed: bool,
 }
 
 impl Document {
@@ -51,11 +58,26 @@ impl Document {
             title: title.into(),
             pages: Vec::new(),
             outline: Vec::new(),
+            compressed: false,
         }
     }
 
+    /// Says whether the content streams are deflated on the way into the
+    /// file.
+    ///
+    /// A file written without it can be read in a text editor, operator
+    /// by operator, which is what these streams are written plainly for.
+    /// A file written with it is about a third of the size, and what a
+    /// reader sees instead is `FlateDecode` and a page of bytes.
+    pub const fn compress(&mut self, compressed: bool) {
+        self.compressed = compressed;
+    }
+
     /// Appends a page and returns its index.
-    pub fn push(&mut self, page: Page) -> usize {
+    /// Adds a page, and closes whatever it left open: a page that ended
+    /// in the middle of a text object would be a stream no viewer accepts.
+    pub fn push(&mut self, mut page: Page) -> usize {
+        page.end_text();
         self.pages.push(page);
         self.pages.len().saturating_sub(1)
     }
@@ -113,7 +135,7 @@ impl Document {
         Self::outline_root(&mut file, &nodes, outline_base);
         fonts(&mut file);
         for (index, page) in self.pages.iter().enumerate() {
-            Self::page(&mut file, index, page);
+            Self::page(&mut file, index, page, self.compressed);
         }
         for (index, node) in nodes.iter().enumerate() {
             Self::outline_item(&mut file, index, node, outline_base);
@@ -188,7 +210,7 @@ impl Document {
     }
 
     /// One page: its dictionary, its annotations, and its content stream.
-    fn page(file: &mut File, index: usize, page: &Page) {
+    fn page(file: &mut File, index: usize, page: &Page, compressed: bool) {
         let size = page.size();
         file.object(page_object(index));
         file.push("<< /Type /Page /Parent ");
@@ -241,11 +263,20 @@ impl Document {
         file.end_object();
 
         file.object(content_object(index));
+        let stream = if compressed {
+            deflate(page.content())
+        } else {
+            None
+        };
+        let bytes = stream.as_deref().unwrap_or_else(|| page.content());
         file.push("<< /Length ");
-        file.push(&page.content().len().to_string());
+        file.push(&bytes.len().to_string());
+        if stream.is_some() {
+            file.push(" /Filter /FlateDecode");
+        }
         file.push(" >>\nstream\n");
-        file.bytes.extend_from_slice(page.content());
-        file.push("endstream\n");
+        file.bytes.extend_from_slice(bytes);
+        file.push("\nendstream\n");
         file.end_object();
     }
 
@@ -285,13 +316,18 @@ impl Document {
     }
 }
 
-/// The five font dictionaries.
+/// The font dictionaries. Symbol is the one without an `/Encoding`: it
+/// carries its own, and overriding it would ask a viewer for glyphs the
+/// font does not have under those codes.
 fn fonts(file: &mut File) {
     for (offset, font) in crate::font::Font::ALL.iter().enumerate() {
         file.object(FIRST_FONT.saturating_add(count(offset)));
         file.push("<< /Type /Font /Subtype /Type1 /BaseFont /");
         file.push(font.base_name());
-        file.push(" /Encoding /WinAnsiEncoding >>\n");
+        if font.is_winansi() {
+            file.push(" /Encoding /WinAnsiEncoding");
+        }
+        file.push(" >>\n");
         file.end_object();
     }
 }
@@ -299,6 +335,28 @@ fn fonts(file: &mut File) {
 /// The object number of the page at `index`.
 fn page_object(index: usize) -> u32 {
     FIRST_PAGE.saturating_add(count(index).saturating_mul(2))
+}
+
+/// A content stream, deflated, or nothing when deflating it would not
+/// make it smaller — an empty page, or one whose operators are already
+/// shorter than a stream that carries them.
+///
+/// What `FlateDecode` names is the format of RFC 1951 in the wrapper of
+/// RFC 1950, not the bare stream: a viewer reads the two header bytes and
+/// checks the four at the end, and a stream without them is one it
+/// refuses.
+fn deflate(content: &[u8]) -> Option<Vec<u8>> {
+    if content.is_empty() {
+        return None;
+    }
+    let mut scratch = Box::new(audhsos_deflate::Scratch::new());
+    let mut out = vec![0u8; audhsos_deflate::bound_zlib(content.len())];
+    let written = audhsos_deflate::compress_zlib(content, &mut out, &mut scratch).ok()?;
+    if written >= content.len() {
+        return None;
+    }
+    out.truncate(written);
+    Some(out)
 }
 
 /// The object number of the content stream of the page at `index`.
