@@ -657,6 +657,14 @@ done until every applicable item has a test. Items are added, never removed.
   `MmioReserved` region is rejected; an unknown format code is rejected;
   the writer produces what the parser accepts, with and without a
   framebuffer (property).
+- Startup message: a role carries either a handle or a value and says
+  which; a value role is read as a number and not as a handle, so a word
+  that is no handle is no error under one; a handle written under a value
+  role and a value written under a handle role are refused and write
+  nothing; the width, height, stride, and format of a mode survive the two
+  words that carry them, the widest one included; a format code that names
+  no format is no mode; half a description is no mode; a value role that
+  appears twice is refused like a handle role that does.
 - Loader in QEMU: booting with `-vga none` reports an absent framebuffer
   and the kernel reaches the harness.
 

@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The startup message carries values as well as handles (D-103). A role
+  now says whether its second word is a handle of the process's table or a
+  number its parent tells it, `Writer::tell` writes one and `Given::value`
+  reads it, and `Screen` packs the width, height, stride, and format of a
+  framebuffer into the two words the roles `FramebufferGeometry` and
+  `FramebufferLine` carry. The display server needs the mode the firmware
+  set, and a mode is numbers: no capability describes it, and the call that
+  reports it needs the root authority a display server must not hold.
 - `gfx`, the framebuffer logic of the system: the two pixel formats of the
   Graphics Output Protocol and the colors in them, rectangles and a damage
   set of sixteen that merges what overlaps and collapses to its bounding

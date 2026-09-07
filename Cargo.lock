@@ -239,6 +239,14 @@ name = "fuzz-support"
 version = "0.1.0"
 
 [[package]]
+name = "gfx"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "test-support",
+]
+
+[[package]]
 name = "kernel-acpi"
 version = "0.1.0"
 dependencies = [

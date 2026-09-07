@@ -5,8 +5,8 @@
 
 use crate::ipc_buffer::{Buffer, BufferMut, KERNEL_LABEL_BASE, SIZE, WORD, WORDS};
 use crate::layout::MAX_MESSAGE_WORDS;
-use crate::startup::{Given, Role, STARTUP_LABEL, StartupError, Writer, read};
-use crate::{Error, Handle};
+use crate::startup::{Given, Role, STARTUP_LABEL, Screen, StartupError, Writer, read};
+use crate::{Error, FramebufferFormat, Handle};
 
 /// A buffer of zeros to work on.
 fn buffer() -> [u8; SIZE] {
@@ -103,7 +103,7 @@ fn the_pairs_come_back_in_the_order_they_were_given() {
     assert_eq!(read.len(), 3);
     for (slot, (role, handle)) in read.iter().zip(given) {
         assert_eq!(slot.role, role);
-        assert_eq!(slot.handle, handle);
+        assert_eq!(slot.handle(), Some(handle));
     }
 }
 
@@ -121,7 +121,7 @@ fn one_role_may_appear_more_than_once() {
     let read = pairs(&bytes).unwrap();
     assert_eq!(read.len(), 3);
     assert!(read.iter().all(|given| given.role == Role::Ram));
-    let handles: Vec<Handle> = read.iter().map(|given| given.handle).collect();
+    let handles: Vec<Handle> = read.iter().filter_map(|given| given.handle()).collect();
     assert_eq!(handles, vec![handle(7), handle(8), handle(9)]);
 }
 
@@ -246,5 +246,104 @@ fn a_header_with_too_many_words_is_reported_as_a_message_error() {
     assert_eq!(
         pairs(&bytes),
         Err(StartupError::Message(crate::MessageError::TooManyWords))
+    );
+}
+
+#[test]
+fn a_role_carries_a_handle_or_a_value_and_says_which() {
+    let values: Vec<&str> = Role::ALL
+        .iter()
+        .filter(|role| role.carries_value())
+        .map(|role| role.name())
+        .collect();
+    assert_eq!(values, vec!["FramebufferGeometry", "FramebufferLine"]);
+    assert!(!Role::Framebuffer.carries_value());
+}
+
+#[test]
+fn a_value_role_is_read_as_a_number_and_not_as_a_handle() {
+    let mut bytes = buffer();
+    let mut view = BufferMut::new(&mut bytes);
+    let mut writer = Writer::new();
+    writer
+        .give(&mut view, Role::Framebuffer, handle(7))
+        .unwrap();
+    writer
+        .tell(&mut view, Role::FramebufferGeometry, 0)
+        .unwrap();
+    writer.finish(&mut view).unwrap();
+    let read = pairs(&bytes).unwrap();
+    assert_eq!(read.len(), 2);
+    assert_eq!(read.first().unwrap().handle(), Some(handle(7)));
+    assert_eq!(read.first().unwrap().value(), None);
+    assert_eq!(read.get(1).unwrap().value(), Some(0));
+    assert_eq!(read.get(1).unwrap().handle(), None);
+}
+
+#[test]
+fn a_word_that_is_no_handle_is_a_value_under_a_value_role() {
+    let mut bytes = buffer();
+    let mut view = BufferMut::new(&mut bytes);
+    let mut writer = Writer::new();
+    writer
+        .tell(&mut view, Role::FramebufferLine, u64::MAX)
+        .unwrap();
+    writer.finish(&mut view).unwrap();
+    assert_eq!(
+        pairs(&bytes).unwrap().first().unwrap().value(),
+        Some(u64::MAX)
+    );
+}
+
+#[test]
+fn a_handle_under_a_value_role_and_a_value_under_a_handle_role_are_refused() {
+    let mut bytes = buffer();
+    let mut view = BufferMut::new(&mut bytes);
+    let mut writer = Writer::new();
+    let error = writer
+        .give(&mut view, Role::FramebufferGeometry, handle(1))
+        .unwrap_err();
+    assert_eq!(error, StartupError::WrongKind(Role::FramebufferGeometry));
+    assert!(format!("{error}").contains("a value"));
+    let error = writer.tell(&mut view, Role::Framebuffer, 4).unwrap_err();
+    assert_eq!(error, StartupError::WrongKind(Role::Framebuffer));
+    assert!(format!("{error}").contains("a handle"));
+    assert_eq!(Error::from(error), Error::InvalidArgument);
+    assert!(writer.is_empty());
+}
+
+#[test]
+fn the_mode_of_a_framebuffer_survives_the_two_words() {
+    let screen = Screen {
+        width: 1280,
+        height: 800,
+        stride: 1360,
+        format: FramebufferFormat::Bgrx8888,
+    };
+    assert_eq!(
+        Screen::from_words(screen.geometry(), screen.line()),
+        Some(screen)
+    );
+    assert_eq!(screen.geometry(), (1280 << 32) | 0x0320);
+    assert_eq!(screen.line(), (1360 << 32) | 0x02);
+}
+
+#[test]
+fn a_mode_of_an_unknown_format_is_no_mode() {
+    assert_eq!(Screen::from_words((4 << 32) | 0x04, (4 << 32) | 0x09), None);
+    assert_eq!(Screen::from_words(0, 0), None);
+}
+
+#[test]
+fn the_widest_mode_the_words_hold_reads_back() {
+    let screen = Screen {
+        width: u32::MAX,
+        height: u32::MAX,
+        stride: u32::MAX,
+        format: FramebufferFormat::Rgbx8888,
+    };
+    assert_eq!(
+        Screen::from_words(screen.geometry(), screen.line()),
+        Some(screen)
     );
 }
