@@ -158,7 +158,7 @@ Phase 6.
 
 ## 8.9 Phase 7: Userland foundation
 
-Status: in progress.
+Status: implemented.
 
 Deliverables: `user-sys-x86_64`, `user-rt` with the safe allocator,
 `user-proto`, `user-loader`, `server-init`, `server-name`,
