@@ -5,7 +5,7 @@
 
 use user_proto::input::{Event, KeyCode, KeyEvent, RingWriter};
 
-use crate::doubles::{RecordingClients, RecordingLines};
+use crate::doubles::{RecordingClients, ScriptedDevice};
 use crate::service::{Line, Lines as _};
 use crate::state::Clients as _;
 
@@ -41,9 +41,11 @@ fn a_client_that_has_ended_cannot_be_woken_and_the_others_still_can() {
 }
 
 #[test]
-fn the_lines_record_every_acknowledgement_in_order() {
-    let mut lines = RecordingLines::new();
-    lines.acknowledge(Line::Mouse);
-    lines.acknowledge(Line::Keyboard);
-    assert_eq!(lines.acknowledged(), [Line::Mouse, Line::Keyboard]);
+fn the_device_records_every_acknowledgement_in_order_and_answers_its_script() {
+    let mut device = ScriptedDevice::new();
+    device.ports().push(0x76);
+    device.acknowledge(Line::Mouse);
+    device.acknowledge(Line::Keyboard);
+    assert_eq!(device.acknowledged(), [Line::Mouse, Line::Keyboard]);
+    assert_eq!(device.ports().remaining(), 1);
 }

@@ -11,7 +11,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [features]
-test-doubles = []
+test-doubles = ["driver-i8042/test-doubles"]
 
 [dependencies]
 audhsos-abi.workspace = true

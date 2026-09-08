@@ -75,29 +75,49 @@ pub const fn unpack(word: u64) -> (u8, bool) {
 /// Empties the output buffer into `into` and lets both lines assert again,
 /// and answers with how many words it wrote.
 ///
+/// The thing that owns the ports is the thing that owns the two interrupt
+/// objects, because letting a line go is a call on the same gate that reads
+/// the port; that is why one type carries both traits.
+///
+/// The buffer is looked at once more after the lines have been let go. A
+/// byte that arrives while a line is still masked raises that line into the
+/// mask, and a line of this machine is edge-triggered: the raise is lost and
+/// the device goes quiet for good. So a buffer that is not empty after the
+/// acknowledgement is drained again, and only an empty one ends the round.
+///
 /// The drain stops when the buffer is empty, when `into` is full, or after
 /// [`MAX_POLLS`] bytes: a controller that keeps handing bytes out is a
 /// controller this thread stops reading rather than one it serves for ever.
-pub fn service<P: Ports, L: Lines>(
-    controller: &mut Controller<P>,
-    lines: &mut L,
-    into: &mut [u64],
-) -> usize {
+pub fn service<P: Ports + Lines>(controller: &mut Controller<P>, into: &mut [u64]) -> usize {
     let mut written = 0usize;
+    loop {
+        written = drain(controller, into, written);
+        for line in Line::ALL {
+            controller.ports().acknowledge(line);
+        }
+        // Every round either takes a byte or ends here, and `into` is
+        // finite, so the loop stops.
+        if written >= into.len() || !controller.pending() {
+            return written;
+        }
+    }
+}
+
+/// Reads what stands in the buffer into `into` from `written` on, and
+/// answers with how far it came.
+fn drain<P: Ports>(controller: &mut Controller<P>, into: &mut [u64], written: usize) -> usize {
+    let mut at = written;
     let mut polls = 0u32;
     while polls < MAX_POLLS {
         polls = polls.saturating_add(1);
-        let Some(slot) = into.get_mut(written) else {
+        let Some(slot) = into.get_mut(at) else {
             break;
         };
         let Some((byte, aux)) = controller.take() else {
             break;
         };
         *slot = pack(byte, aux);
-        written = written.saturating_add(1);
+        at = at.saturating_add(1);
     }
-    for line in Line::ALL {
-        lines.acknowledge(line);
-    }
-    written
+    at
 }

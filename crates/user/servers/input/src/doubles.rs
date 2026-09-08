@@ -5,7 +5,12 @@
 //! vectors, wake-ups that are recorded, and clients that can be made to be
 //! gone.
 
+use std::collections::VecDeque;
+
 use user_proto::input::{Event, RING_PAGE_LEN, RingReader, RingWriter};
+
+use driver_i8042::controller::Ports;
+use driver_i8042::doubles::ScriptedPorts;
 
 use crate::service::{Line, Lines};
 use crate::state::Clients;
@@ -96,18 +101,40 @@ impl Clients for RecordingClients {
     }
 }
 
-/// The interrupt objects of the two lines, as a test holds them.
+/// A controller a test scripts, together with the two interrupt objects the
+/// thread that drains it lets go.
+///
+/// The process holds both in one place — the ports and the interrupts are
+/// reached through the same gate — and so does this.
 #[derive(Debug, Default)]
-pub struct RecordingLines {
+pub struct ScriptedDevice {
+    /// What the controller answers.
+    ports: ScriptedPorts,
     /// Every acknowledgement, in order.
     acknowledged: Vec<Line>,
+    /// Bytes that stand in the buffer only once the lines have been let
+    /// go, one per round. That is the race a driver of an edge-triggered
+    /// line has to survive, and this is how a test makes it happen.
+    late: VecDeque<u8>,
 }
 
-impl RecordingLines {
-    /// Two lines nobody has acknowledged.
+impl ScriptedDevice {
+    /// A controller whose output buffer is empty.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The controller, for a test that writes its script.
+    pub const fn ports(&mut self) -> &mut ScriptedPorts {
+        &mut self.ports
+    }
+
+    /// Puts one byte into the buffer at the moment the lines of a round are
+    /// let go, which is when a device that raised its line into the mask
+    /// would have put it there.
+    pub fn push_late(&mut self, byte: u8) {
+        self.late.push_back(byte);
     }
 
     /// Every acknowledgement, in order.
@@ -117,8 +144,32 @@ impl RecordingLines {
     }
 }
 
-impl Lines for RecordingLines {
+impl Ports for ScriptedDevice {
+    fn read_data(&mut self) -> u8 {
+        self.ports.read_data()
+    }
+
+    fn read_status(&mut self) -> u8 {
+        self.ports.read_status()
+    }
+
+    fn write_data(&mut self, value: u8) {
+        self.ports.write_data(value);
+    }
+
+    fn write_command(&mut self, value: u8) {
+        self.ports.write_command(value);
+    }
+}
+
+impl Lines for ScriptedDevice {
     fn acknowledge(&mut self, line: Line) {
         self.acknowledged.push(line);
+        // One late byte per round, and a round ends with the last line.
+        if Line::ALL.last() == Some(&line)
+            && let Some(byte) = self.late.pop_front()
+        {
+            self.ports.push(byte);
+        }
     }
 }

@@ -250,6 +250,15 @@ impl<P: Ports> Controller<P> {
         Some((self.ports.read_data(), status & AUX != 0))
     }
 
+    /// `true` when a byte stands in the output buffer.
+    ///
+    /// This is [`take`](Self::take) without taking: a driver that has just
+    /// let its lines go asks it, because a byte that arrived while the mask
+    /// was still on raised a line that will not raise it again.
+    pub fn pending(&mut self) -> bool {
+        self.ports.read_status() & OUTPUT_FULL != 0
+    }
+
     /// Empties the output buffer of whatever stands in it.
     ///
     /// Bounded like every other loop here: a controller whose output buffer
