@@ -33,7 +33,7 @@ AuDHSOS/
 │   ├── symbols/               audhsos-symbols: ELF symbol table and DWARF line lookup (document 12)
 │   ├── drivers/
 │   │   ├── uart16550/         driver-uart16550: register logic over a port access trait
-│   │   ├── i8042/             driver-i8042: PS/2 controller and decoder logic over a port access trait (Phase 10)
+│   │   ├── i8042/             driver-i8042: PS/2 controller and decoder logic over a port access trait
 │   │   └── virtio-net/        driver-virtio-net: virtio 1.0 network device logic over a register trait (document 13, Phase 14)
 │   ├── support/
 │   │   ├── testing/           test-support: property-test engine, builders, strategies, model-test runner
@@ -66,7 +66,7 @@ AuDHSOS/
 │   │   │   ├── console/       server-console
 │   │   │   ├── memory/        server-memory
 │   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor
-│   │   │   ├── input/         server-input: i8042 driver process, event rings (Phase 10)
+│   │   │   ├── input/         server-input: subscribers, the two decoders, event rings
 │   │   │   └── net/           server-net: the device, the stack, the sockets (document 13, Phase 14)
 │   │   ├── programs/          user-programs: every program of the system as one
 │   │   │   │                  binary each of one crate, because a program is a
@@ -74,8 +74,9 @@ AuDHSOS/
 │   │   │   │                  loop each are seven manifests saying the same
 │   │   │   │                  thing (D-97)
 │   │   │   └── src/bin/       server-init (the root task), server-memory,
-│   │   │                      server-name, server-console, app-hello,
-│   │   │                      app-checks, app-faulter
+│   │   │                      server-name, server-console, server-display,
+│   │   │                      server-input, app-hello, app-checks,
+│   │   │                      app-paint, app-input, app-faulter
 │   │   └── apps/
 │   │       └── canvas/        app-canvas: graphical demonstration and e2e client (Phase 11)
 │   ├── crypto/                (document 11)
@@ -130,7 +131,7 @@ AuDHSOS/
 | `kernel-acpi` | 1 | all | no | yes, fuzz | `kernel-types`; `test-support` as a dev-dependency |
 | `kernel-hal-api` | 1 | all | no | doubles are tested | `kernel-types`; features `test-doubles`, `port-io` |
 | `driver-uart16550` | 1 | all | no | yes | - (feature `test-doubles`) |
-| `driver-i8042` (Phase 10) | 1 | all | no | yes, fuzz | - (feature `test-doubles`) |
+| `driver-i8042` | 1 | all | no | yes, fuzz | - (feature `test-doubles`) |
 | `gfx` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf`; `test-support` as a dev-dependency |
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
@@ -150,12 +151,13 @@ AuDHSOS/
 | `user-rt` | u0 | all | no | yes | `audhsos-abi`, `audhsos-collections`; `test-support` as a dev-dependency |
 | `user-sys-x86_64` | u1 | `x86_64-unknown-none` | allowlisted | through the programs of `user-test-programs` in QEMU | `audhsos-abi`, `user-rt` |
 | `user-test-programs` | u1 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-rt`, `user-sys-x86_64` |
-| `user-proto` | u1 | all | no | yes | `audhsos-abi`, `user-rt` |
+| `user-proto` | u1 | all | no | yes | `audhsos-abi`, `driver-i8042`, `gfx`, `user-rt` |
 | `user-loader` | u2 | all | no | yes, fuzz | `audhsos-abi`, `audhsos-elf`; `test-support` behind the feature `test-strategies` |
 | `server-name` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `user-proto` |
 | `server-memory` | u2 | all | no | yes, against a recording `Pages` | `audhsos-abi`, `audhsos-collections`; feature `test-doubles` |
 | `server-console` | u2 | all | no | yes | `audhsos-collections`, `driver-uart16550` |
 | `server-display` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `gfx`, `user-proto` |
+| `server-input` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `driver-i8042`, `user-proto`; feature `test-doubles` |
 | `server-net` (Phase 14) | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `net-stack`, `pci`, `user-proto` |
 | `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | the three server logic crates, `audhsos-abi`, `driver-uart16550`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
 | `crypto-ct` | c0 | all | no | yes | - |

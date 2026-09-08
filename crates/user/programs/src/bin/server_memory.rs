@@ -13,12 +13,14 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds nine programs and each uses a different part of
+// The package holds eleven programs and each uses a different part of
 // what it depends on; these are the crates this one does not.
+use driver_i8042 as _;
 use driver_uart16550 as _;
 use gfx as _;
 use server_console as _;
 use server_display as _;
+use server_input as _;
 use server_name as _;
 use user_loader as _;
 
@@ -114,6 +116,10 @@ struct GatePages<'a> {
 }
 
 impl Pages for GatePages<'_> {
+    fn references(&mut self, object: audhsos_abi::Handle) -> Result<u64, Error> {
+        self.gate
+            .memory_references(MemoryHandle::from_handle(object))
+    }
     fn map(&mut self, object: audhsos_abi::Handle, offset: u64, len: u64) -> Result<u64, Error> {
         // The window is always at the same address: it is used by one
         // operation at a time, and the page tables under it are built once

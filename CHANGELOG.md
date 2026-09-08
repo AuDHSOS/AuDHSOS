@@ -26,6 +26,42 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   6.6.65, and `docs/pcisig/README.md`, which holds no document because
   PCI-SIG publishes none this repository may keep, and records instead
   what takes the place of having one.
+- Two fuzz targets, `scancode` and `mouse_packet`: no stream of bytes may
+  panic either decoder, make it grow, or make it hand out a key the table
+  does not have or a delta outside the nine bits a packet carries. Both ran
+  for a minute without a finding.
+- `driver-i8042`: the PS/2 controller, its initialization sequence, and the
+  decoders of scancode set 2 and of the mouse packet. The crate depends on
+  nothing and reaches the hardware only through a `Ports` trait, so the
+  same logic serves the input server over the port system calls and the
+  tests over a scripted controller.
+- `server-input`: what the input server decides — who is subscribed, which
+  decoder a byte belongs to, what is appended to whose ring, and which
+  subscriber is dropped. Process watches detect client ends independently
+  of the retained notification, which remains signalable after its client exits.
+- The input server as a process, `app-input` as its first client, and the
+  runner that types at the machine. The root task makes the ports of the
+  PS/2 controller and the interrupt objects of its two lines and hands them
+  to `server-input`, which brings the controller up, starts a second thread
+  that drains it, and gives every client a ring of one page. `app-input`
+  subscribes, waits on the notification the server signals, and writes one
+  line per event; the end-to-end run injects a key sequence, a pointer path,
+  and a button through the machine protocol and holds the lines against
+  what it sent. The run without a graphics adapter does the same, because
+  the i8042 is part of the machine whether it has a screen or not.
+- The input protocol in `user-proto`: a subscription that hands the server
+  a notification and receives a ring of one page, the sixteen-byte record a
+  key or a pointer event is, and the two halves of that ring — the writer
+  is the server and drops the newest event when the ring is full, the
+  reader is the client and hears about a gap once. Beside it the client
+  side of the keyboard: the modifier state, and the layouts `us` and `de`
+  that turn a key code into a character.
+- Two roles of the startup message, `AuxInterrupt` and `InputServer`
+  (D-109). A driver of a controller with two lines is given the second
+  interrupt object under `AuxInterrupt` the way it is given the first under
+  `Interrupt`, and a program that listens is given the badged endpoint of
+  the input server the way one that draws is given that of the display
+  server. `user_rt::Startup` gains a field for each.
 
 ### Fixed
 
@@ -111,6 +147,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- A notification may carry more than one interrupt, each on a bit of its
+  own (D-108). `interrupt_bind` refused a notification another interrupt
+  already named, and `Notification::bound_interrupt` held that rule and
+  nothing else; both are gone. The i8042 has one output buffer and two
+  lines, so a driver that waited on two notifications would need two
+  threads reading one buffer and racing each other for the byte in it.
 - `memory_map` merges a mapping that continues one the process already
   holds instead of adding a region for every call (D-104). A full screen of
   1280 by 800 pixels is a thousand pages and no call maps more than
@@ -148,6 +190,34 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   which the track had been citing 6.6.53 for, and 08 8.21 now names both.
 
 ### Fixed
+
+- Phase 10 review: shared input rings use atomic records and acquire/release
+  sequence publication, with atomic overflow exchange. The memory server
+  retires returned objects while foreign handles or mappings remain, using
+  `memory_references` (45) before reclamation. Input subscriptions carry an
+  INFO process handle and use process watches; `process_unwatch` (44) cancels
+  watches and distinguishes delayed signals from the exit of a replacement
+  subscriber. Every rejected request closes its received capabilities.
+- Keyboard regression fixes: separate left/right modifier state, caps-lock
+  repeat suppression, German AltGr characters, and validated Pause tails with
+  recovery at the first mismatching byte. Host concurrency tests and QEMU
+  lifecycle/isolation/handle-exhaustion regressions cover the fixes.
+
+- The kernel no longer drops a device interrupt that arrives while the idle
+  thread is choosing what to run next. The borrow of the machine is only
+  ever held with interrupts off — every other holder is a trap handler, and
+  an interrupt gate clears the flag for it — and the idle loop was the one
+  place that held it otherwise. An interrupt that found the machine busy was
+  dropped, and a device whose line is edge-triggered never raised that edge
+  again: the keyboard or the mouse went quiet for the rest of the run.
+- The kernel no longer stops the machine when the idle thread is entered
+  from a trap. A switch saves the callee-saved registers and nothing else,
+  so a thread that gives the processor up inside a system call hands it on
+  with interrupts off; every thread but the idle one turns them back on by
+  returning to user mode, and the idle one halts. It now turns them on
+  before it halts. The console driver never showed it because one line of
+  input needs one interrupt; the input server, which needs one per byte,
+  stopped after the first.
 
 - An object is held by one reference per region that names it, and now
   really is. A protection or an unmapping that split a region left two

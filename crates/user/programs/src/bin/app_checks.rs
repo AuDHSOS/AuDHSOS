@@ -19,12 +19,14 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds nine programs and each uses a different part of what
+// The package holds eleven programs and each uses a different part of what
 // it depends on; these are the crates this one does not.
+use driver_i8042 as _;
 use driver_uart16550 as _;
 use gfx as _;
 use server_console as _;
 use server_display as _;
+use server_input as _;
 use server_memory as _;
 use server_name as _;
 use user_loader as _;
@@ -34,7 +36,7 @@ use audhsos_abi::layout::PAGE_SIZE;
 use user_programs::client::{allocate, lookup, release, write_line};
 use user_programs::mapping::{Mapping, SCRATCH};
 use user_proto::parent;
-use user_rt::{EndpointHandle, Line, MemoryHandle, ProcessHandle, Startup};
+use user_rt::{EndpointHandle, Line, MemoryHandle, ProcessHandle, Startup, Typed};
 use user_sys_x86_64::{self as sys, Gate};
 
 sys::program!(main);
@@ -78,9 +80,103 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
     zeroed_again(&mut gate, memory, own, console);
     too_much(&mut gate, memory, console);
     interleaved(&mut gate, console);
+    let outcome = input_checks(&mut gate, &startup);
+    let line = Line::<128>::of(format_args!(
+        "[checks] input lifecycle and isolation: {}\n",
+        answer(outcome)
+    ));
+    let _said = write_line(&mut gate, console, line.as_bytes());
 
     report(&mut gate, &startup);
     gate.thread_exit()
+}
+
+/// Exercises the actual kernel handle tables, page mappings and server
+/// cleanup. Ends with a live subscription, so the runner must see its watch
+/// cleanup even when it injects no subsequent input event.
+fn input_checks(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
+    use audhsos_abi::Rights;
+    use user_proto::input::{Reply, Request};
+    let input = startup.input_server.ok_or(Error::NotFound)?;
+    let own = startup.own_process.ok_or(Error::NotFound)?;
+    let notification = gate.notification_create()?;
+    let signal = gate.handle_duplicate(notification.handle(), Rights::SIGNAL | Rights::TRANSFER)?;
+    let process = gate.handle_duplicate(own.handle(), Rights::INFO | Rights::TRANSFER)?;
+    // More rejected handles than the input server's entire handle table.
+    for _ in 0..80 {
+        Request::Unsubscribe.encode(&mut gate.writer())?;
+        let mut buffer = gate.writer();
+        buffer.set_handle(0, signal);
+        buffer.set_counts(0, 1).map_err(Error::from)?;
+        gate.ipc_call(input)?;
+        if Reply::decode(gate.reader())? != Reply::Unsubscribed(Err(Error::InvalidArgument)) {
+            return Err(Error::InvalidState);
+        }
+    }
+    let subscribe = Request::Subscribe {
+        notification: signal,
+        process,
+    };
+    let first = input_ring(gate, input, subscribe)?;
+    let mapping = Mapping::new(gate, own, first, SCRATCH, PAGE_SIZE)?;
+    // Repeated subscription attempts must close both received handles.
+    for _ in 0..40 {
+        subscribe.encode(&mut gate.writer())?;
+        gate.ipc_call(input)?;
+        if Reply::decode(gate.reader())? != Reply::Subscribed(Err(Error::AlreadyExists)) {
+            return Err(Error::InvalidState);
+        }
+    }
+    input_unsubscribe(gate, input)?;
+    let second = input_ring(gate, input, subscribe)?;
+    if gate.memory_info(first)?.start == gate.memory_info(second)?.start {
+        return Err(Error::InvalidState);
+    }
+    input_unsubscribe(gate, input)?;
+    gate.handle_close(second.handle())?;
+    // Leave only the old mapping: handle-count-only reclamation is unsafe.
+    gate.handle_close(first.handle())?;
+    // SAFETY: this is still the live ring mapping; all ring access is atomic.
+    let page = unsafe { mapping.ring() }.ok_or(Error::InvalidState)?;
+    page.overflow
+        .store(123, core::sync::atomic::Ordering::Relaxed);
+    for _ in 0..8 {
+        let ring = input_ring(gate, input, subscribe)?;
+        if page.overflow.load(core::sync::atomic::Ordering::Relaxed) != 123 {
+            return Err(Error::InvalidState);
+        }
+        input_unsubscribe(gate, input)?;
+        gate.handle_close(ring.handle())?;
+    }
+    mapping.unmap(gate, own)?;
+    let _last = input_ring(gate, input, subscribe)?;
+    gate.handle_close(signal)?;
+    gate.handle_close(process)?;
+    Ok(())
+}
+
+/// Subscribes and extracts the ring handle.
+fn input_ring(
+    gate: &mut Gate,
+    input: EndpointHandle,
+    request: user_proto::input::Request,
+) -> Result<MemoryHandle, Error> {
+    request.encode(&mut gate.writer())?;
+    gate.ipc_call(input)?;
+    match user_proto::input::Reply::decode(gate.reader())? {
+        user_proto::input::Reply::Subscribed(result) => result.map(MemoryHandle::from_handle),
+        user_proto::input::Reply::Unsubscribed(_) => Err(Error::InvalidState),
+    }
+}
+
+/// Ends the current subscription without closing the client's ring handle.
+fn input_unsubscribe(gate: &mut Gate, input: EndpointHandle) -> Result<(), Error> {
+    user_proto::input::Request::Unsubscribe.encode(&mut gate.writer())?;
+    gate.ipc_call(input)?;
+    match user_proto::input::Reply::decode(gate.reader())? {
+        user_proto::input::Reply::Unsubscribed(result) => result,
+        user_proto::input::Reply::Subscribed(_) => Err(Error::InvalidState),
+    }
 }
 
 /// What the name server says about a name nobody registered.

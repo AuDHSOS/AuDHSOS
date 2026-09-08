@@ -321,8 +321,9 @@ done until every applicable item has a test. Items are added, never removed.
 - Notifications: signal without a waiter accumulates; signal zero is a
   success no-op; wait consumes and clears everything present; poll on zero
   returns zero without blocking; two signals before a wait are merged; a
-  second concurrent waiter gets `Busy`; the bound interrupt sets exactly its
-  bit.
+  second concurrent waiter gets `Busy`; an interrupt bound to it sets
+  exactly its bit, and two interrupts bound to one notification each set the
+  bit they were bound on (D-108).
 - Fault message: has the reserved label range, carries fault kind, address,
   instruction pointer, and error code; the reply resumes the thread; the
   handler killing the process ends the wait cleanly.
@@ -705,6 +706,9 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.25 i8042 controller and PS/2 decoding (`driver-i8042`)
 
+- Regression: corrupt every position of the Pause tail; reject bogus Pause
+  events and reconsider a mismatching byte as the start of the next key.
+
 - Controller: a failed self-test returns an error; an output buffer that
   never fills or an input buffer that never empties hits the poll limit
   and returns an error instead of spinning; a missing keyboard or a
@@ -750,6 +754,18 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.27 Display and input servers (`server-display`, `server-input`, host-tested logic with doubles)
 
+- Regression: concurrent ring reader/writer preserve whole records and FIFO
+  order; overflow exchange accounts for concurrent increments. Invalid shared
+  capacity is rejected. Left/right modifiers remain independent, caps-lock
+  repeat does not toggle, and the German AltGr level produces its characters.
+- Regression: received handle snapshots survive nested IPC; invalid labels,
+  counts, extra handles and failed subscriptions close all unadopted handles.
+- Lifecycle: retained notifications still signal after a client exits; its
+  process watch reports that exit independently. Unwatch frees watcher capacity
+  and delayed bits cannot remove a new live subscriber in the reused slot.
+- Memory: returned pages with foreign handles or mappings are retired, not
+  zeroed or reallocated; only exclusive ownership permits reclamation.
+
 - Event ring: a full ring drops the newest event and sets the overflow
   flag; the reader clears the flag; sequence numbers are contiguous
   otherwise; a subscriber whose notification cannot be signalled is
@@ -757,7 +773,13 @@ done until every applicable item has a test. Items are added, never removed.
 - Input: the modifier state follows press and release; a release without
   a press is delivered as a release; pointer button state is tracked
   across packets; a wheel delta is delivered as its own event; both
-  interrupts are acknowledged after the output buffer is drained.
+  interrupts are acknowledged after the output buffer is drained, whichever
+  of the two woke the thread, and a drain that finds nothing acknowledges
+  them all the same; the `AUX` bit routes a byte to the mouse decoder and
+  every other byte to the keyboard decoder; a request without a badge gets
+  no ring; one badge holds one subscription and a slot that was let go of
+  is given out again; a subscriber that cannot be woken is dropped and its
+  slot freed, while a ring that is full or missing costs the event only.
 - Display: a client that carries no badge — which is what a capability
   found under a name looks like — gets no surface, because a server that
   keeps one per client cannot tell two of nobody apart; `present` with
@@ -785,6 +807,12 @@ done until every applicable item has a test. Items are added, never removed.
 - A socket that never answers hits the timeout.
 
 ### 6.6.29 Graphical end-to-end tests in QEMU
+
+- Input regression: more malformed/duplicate requests than the input server's
+  handle capacity do not exhaust it; a ring retained across unsubscribe is
+  not reused, including when only its mapping remains; repeated subscriptions
+  do not exhaust watch slots. A client exits subscribed and its ring is
+  released before the runner injects any input. Run with and without VGA.
 
 - Output: every pixel of a filled rectangle carries the color it was
   filled with and the pixels around it are untouched; a rendered string
@@ -1859,7 +1887,7 @@ item is what 12.9 asked for before the encodings could be written
   that a client of a later release is told which of the two it is; a
   protocol code and a message number the release does not have are each
   refused.
-- Round trip, per message of each of the four protocols: what was encoded
+- Round trip, per message of each of the six protocols: what was encoded
   decodes to what it was. The names and the chunks are tested at zero
   bytes and at the full width of their field.
 - Replies: every reply carries a status word first, and the payload only
@@ -1883,6 +1911,24 @@ item is what 12.9 asked for before the encodings could be written
   sends it exits behind it (D-94): the status it carries comes back, a
   message number the protocol does not have is refused, and a report
   without its status word is refused rather than read as a zero.
+- The input protocol carries two messages and its records live in shared
+  memory rather than in a message. An event record is sixteen bytes, its
+  key and pointer forms round-trip, the bytes the kind does not use are
+  zero, and a record whose kind byte names neither, whose reserved byte is
+  not zero, or whose key code names no key is refused. A ring over one page
+  holds 254 records: what the writer pushes the reader pops in order, the
+  sequence numbers stay contiguous across the wrap, a full ring drops the
+  newest event and counts it, the reader clears that count when it reports
+  it, and a record somebody wrote nonsense into is stepped over rather than
+  read for ever. A subscription carries a notification and a process handle and its reply carries
+  the memory object only behind a status that says it succeeded.
+- The layouts of the client side: a word typed on `us` comes out as that
+  word, the German layout swaps the two letters the United States layout
+  calls `Y` and `Z` and carries the umlauts, shift picks the other
+  character of a pair, the lock turns over on the press and changes the
+  letters only, the modifier state follows press and release, a release
+  without a press changes nothing, and a key that stands for no character
+  answers nothing.
 
 ### 6.6.57 The wrappers of the gate against the table (`user-sys-x86_64`, QEMU)
 

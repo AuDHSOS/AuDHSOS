@@ -152,7 +152,7 @@ fn a_binding_arms_the_line_names_one_bit_and_an_acknowledgement_unmasks_it_again
 }
 
 #[test]
-fn a_binding_needs_a_bit_of_the_word_and_a_notification_of_its_own() {
+fn a_binding_needs_a_bit_of_the_word_and_a_notification_it_may_bind() {
     let mut fixture = Fixture::new();
     let system = control(&mut fixture);
     let interrupt = value_of(
@@ -190,7 +190,9 @@ fn a_binding_needs_a_bit_of_the_word_and_a_notification_of_its_own() {
         ),
         Some(Error::AccessDenied)
     );
-    // And a second interrupt cannot take a notification that is bound.
+    // A second interrupt may name the same notification, on a bit of its
+    // own: a controller with two lines and one output buffer is drained by
+    // one thread, and that thread waits on one notification (D-108).
     let second = value_of(
         &mut fixture,
         request(Syscall::InterruptCreate, &[system, 1]),
@@ -202,12 +204,12 @@ fn a_binding_needs_a_bit_of_the_word_and_a_notification_of_its_own() {
         )
         .is_none()
     );
-    assert_eq!(
+    assert!(
         error_of(
             &mut fixture,
             request(Syscall::InterruptBind, &[second, notification, 1])
-        ),
-        Some(Error::AlreadyExists)
+        )
+        .is_none()
     );
     assert_eq!(
         error_of(

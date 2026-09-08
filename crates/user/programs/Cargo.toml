@@ -3,7 +3,7 @@
 
 [package]
 name = "user-programs"
-description = "The programs of the userland: the root task, the four servers, and the applications"
+description = "The programs of the userland: the root task, the five servers, and the applications"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -47,6 +47,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "server-input"
+path = "src/bin/server_input.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "app-hello"
 path = "src/bin/app_hello.rs"
 test = false
@@ -55,6 +61,12 @@ test = false
 name = "app-checks"
 path = "src/bin/app_checks.rs"
 test = false
+
+[[bin]]
+name = "app-input"
+path = "src/bin/app_input.rs"
+test = false
+bench = false
 
 [[bin]]
 name = "app-faulter"
@@ -70,10 +82,12 @@ bench = false
 
 [dependencies]
 audhsos-abi.workspace = true
+driver-i8042.workspace = true
 driver-uart16550.workspace = true
 gfx.workspace = true
 server-console.workspace = true
 server-display.workspace = true
+server-input.workspace = true
 server-memory.workspace = true
 server-name.workspace = true
 user-loader.workspace = true

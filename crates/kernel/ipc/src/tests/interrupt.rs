@@ -168,11 +168,12 @@ fn a_binding_names_a_bit_of_the_word_and_no_more() {
     assert_eq!(
         fixture
             .objects
-            .notifications
-            .get(notification)
+            .interrupts
+            .get(interrupt)
             .unwrap()
-            .bound_interrupt,
-        Some(interrupt)
+            .notification,
+        Some((notification, 63)),
+        "the interrupt carries the notification and the bit, and nothing else does"
     );
     assert!(
         bind(&mut fixture.objects, interrupt, notification, 2).is_ok(),
@@ -181,7 +182,7 @@ fn a_binding_names_a_bit_of_the_word_and_no_more() {
 }
 
 #[test]
-fn a_notification_already_bound_to_another_interrupt_is_refused() {
+fn two_interrupts_bound_to_one_notification_each_set_their_own_bit() {
     let mut fixture = Fixture::new();
     let notification = fixture.notification();
     let first = fixture
@@ -195,9 +196,19 @@ fn a_notification_already_bound_to_another_interrupt_is_refused() {
         .allocate(Interrupt::new(1, 0x41))
         .unwrap();
     bind(&mut fixture.objects, first, notification, 0).unwrap();
+    bind(&mut fixture.objects, second, notification, 1).unwrap();
+
+    deliver(&mut fixture.objects, &mut fixture.scheduler, VECTOR).unwrap();
+    deliver(&mut fixture.objects, &mut fixture.scheduler, 0x41).unwrap();
     assert_eq!(
-        bind(&mut fixture.objects, second, notification, 1),
-        Err(Error::AlreadyExists)
+        fixture
+            .objects
+            .notifications
+            .get(notification)
+            .unwrap()
+            .word,
+        0b11,
+        "the controller with two lines wakes one thread, and the word says which line"
     );
 }
 

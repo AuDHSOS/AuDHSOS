@@ -165,6 +165,8 @@ syscalls! {
     DebugLog = 41 => "debug_log" (0, Nothing),
     MemoryMerge = 42 => "memory_merge" (2, MemoryObject),
     ProcessWatch = 43 => "process_watch" (3, Process),
+    ProcessUnwatch = 44 => "process_unwatch" (3, Process),
+    MemoryReferences = 45 => "memory_references" (1, MemoryObject),
 }
 
 impl Syscall {

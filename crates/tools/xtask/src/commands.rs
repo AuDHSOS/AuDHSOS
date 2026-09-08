@@ -13,7 +13,7 @@ use crate::policy::{FUZZ_TARGETS, MIRI_TARGETS, Target, crates_for};
 use crate::ppm;
 use crate::process::Cmd;
 use crate::qemu::{self, Machine, Run};
-use crate::qmp::Qmp;
+use crate::qmp::{Button, Qmp};
 use crate::session::Session;
 use crate::symbolize;
 use crate::{coverage, deps, fs, layering, linker, spdx, unsafe_budget};
@@ -139,7 +139,7 @@ const E2E_TIMEOUT: Duration = Duration::from_secs(60);
 /// archive, the memory server answered, the name server answered, the
 /// console driver took the port, and the application found it and said
 /// something through it.
-const E2E_LINES: [(&str, &str); 14] = [
+const E2E_LINES: [(&str, &str); 16] = [
     (
         "[init] started server-memory",
         "the memory server did not start",
@@ -155,6 +155,10 @@ const E2E_LINES: [(&str, &str); 14] = [
     (
         "[init] started server-display",
         "the display server did not start",
+    ),
+    (
+        "[init] started server-input",
+        "the input server did not start",
     ),
     ("[init] started app-hello", "the application did not start"),
     (
@@ -184,6 +188,10 @@ const E2E_LINES: [(&str, &str); 14] = [
     (
         "is gone: surface ",
         "the display server did not take back the surface of the program that ended",
+    ),
+    (
+        "[init] started app-input",
+        "the program that listens did not start",
     ),
     (
         "[faulter] about to write to nowhere",
@@ -270,6 +278,16 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
             }
         } else {
             violations.push("the application never said it was ready".to_owned());
+        }
+    }
+    // Input: the keyboard and the mouse of the machine, driven through the
+    // machine protocol. Nothing is injected before the program that listens
+    // says it is subscribed — an event sent earlier would reach a server
+    // whose client has no ring yet.
+    if violations.is_empty() {
+        match inject_input(&socket, &mut session) {
+            Ok(()) => violations.extend(input_lines(&session.output())),
+            Err(error) => violations.push(format!("nothing could be injected: {error}")),
         }
     }
     // Two clients wrote at once and no line of either may be torn: every
@@ -411,16 +429,204 @@ fn screen_size(output: &str) -> Option<(u32, u32)> {
     Some((width.parse().ok()?, height.trim().parse().ok()?))
 }
 
+/// The keys the runner injects, by the name QEMU knows them under and the
+/// key this system reports for each.
+const INPUT_KEYS: [(&str, driver_i8042::KeyCode); 3] = [
+    ("a", driver_i8042::KeyCode::A),
+    ("b", driver_i8042::KeyCode::B),
+    ("c", driver_i8042::KeyCode::C),
+];
+
+/// The key that ends the program that listens, which is the last thing
+/// injected.
+const INPUT_END: (&str, driver_i8042::KeyCode) = ("esc", driver_i8042::KeyCode::Escape);
+
+/// The steps of the pointer path, in pixels. Each goes out as one command,
+/// so each is one packet of the mouse.
+const INPUT_PATH: [(i32, i32); 3] = [(5, 0), (0, 7), (-3, -2)];
+
+/// One more step, injected after the button has come back up.
+const INPUT_LAST: (i32, i32) = (2, -4);
+
+/// The line the program that listens writes for [`INPUT_LAST`]: the last
+/// thing the pointer does, and the first packet after the button that says
+/// the button is up. A mouse of this machine reports a button coming up in
+/// the next packet it sends and not in one of its own, which is why the
+/// path has a step behind the button rather than ending at it.
+fn last_motion_line() -> String {
+    let (dx, dy) = INPUT_LAST;
+    format!("[input] pointer {dx} {dy} 0 0")
+}
+
+/// The line the program writes when the button goes down.
+const BUTTON_PRESSED: &str = "[input] pointer 0 0 0 1";
+
+/// Types at the machine and moves its pointer, once the program that
+/// listens says it is subscribed.
+///
+/// Every event waits for the line the program writes for it before the next
+/// one goes out. The controller of this machine holds sixteen bytes and
+/// drops what does not fit, which a run that sent everything at once found:
+/// six packets of the mouse are twenty-four bytes and the last two of them
+/// were never seen.
+fn inject_input(socket: &Path, session: &mut Session) -> Result<(), Error> {
+    for line in [
+        "[checks] input lifecycle and isolation: ok",
+        "is gone: ring released",
+    ] {
+        if !session.wait_for(line, E2E_TIMEOUT) {
+            return Err(Error::Usage(format!(
+                "input regression did not complete: `{line}`"
+            )));
+        }
+    }
+    if !session.wait_for("[input] ready", E2E_TIMEOUT) {
+        return Err(Error::Usage(
+            "the program that listens never subscribed".to_owned(),
+        ));
+    }
+    let mut qmp = Qmp::connect(socket, E2E_TIMEOUT)?;
+    for (qcode, code) in INPUT_KEYS {
+        for pressed in [true, false] {
+            qmp.send_key(qcode, pressed)?;
+            let line = format!("[input] key {} {}", code.code(), u8::from(pressed));
+            if !session.wait_for(&line, E2E_TIMEOUT) {
+                return Err(Error::Usage(format!("the machine never said `{line}`")));
+            }
+        }
+    }
+    for (dx, dy) in INPUT_PATH {
+        qmp.move_pointer(dx, dy)?;
+        let line = format!("[input] pointer {dx} {dy} 0 0");
+        if !session.wait_for(&line, E2E_TIMEOUT) {
+            return Err(Error::Usage(format!("the machine never said `{line}`")));
+        }
+    }
+    qmp.button(Button::Left, true)?;
+    if !session.wait_for(BUTTON_PRESSED, E2E_TIMEOUT) {
+        return Err(Error::Usage(
+            "the button of the pointer never went down".to_owned(),
+        ));
+    }
+    // A mouse of this machine reports a button coming up in the next packet
+    // it sends and not in one of its own, so the release and the step after
+    // it go out together and the step is what is waited for.
+    qmp.button(Button::Left, false)?;
+    let (dx, dy) = INPUT_LAST;
+    qmp.move_pointer(dx, dy)?;
+    if !session.wait_for(&last_motion_line(), E2E_TIMEOUT) {
+        return Err(Error::Usage(
+            "the button of the pointer never came back up".to_owned(),
+        ));
+    }
+    let (qcode, _code) = INPUT_END;
+    qmp.send_key(qcode, true)?;
+    qmp.send_key(qcode, false)?;
+    if !session.wait_for("[input] done", E2E_TIMEOUT) {
+        return Err(Error::Usage(
+            "the program that listens never saw the key that ends it".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// The numbers of the `[input]` lines of one kind, one row per line.
+fn input_events(output: &str, kind: &str) -> Vec<Vec<i64>> {
+    let head = format!("[input] {kind} ");
+    output
+        .lines()
+        .filter_map(|line| line.split(&head).nth(1))
+        .map(|rest| {
+            rest.split_whitespace()
+                .filter_map(|word| word.parse().ok())
+                .collect()
+        })
+        .collect()
+}
+
+/// What the `[input]` lines do not say about what was injected.
+///
+/// The two devices are checked apart from each other. The controller has one
+/// output buffer and two queues behind it, and which of them it hands out
+/// first is its own business, so a key and a packet of the mouse may arrive
+/// in either order; what each device says on its own is in the order it said
+/// it.
+fn input_lines(output: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    let keys: Vec<Vec<i64>> = input_events(output, "key");
+    let wanted: Vec<Vec<i64>> = INPUT_KEYS
+        .into_iter()
+        .chain(core::iter::once(INPUT_END))
+        .flat_map(|(_qcode, code)| {
+            [
+                vec![i64::from(code.code()), 1],
+                vec![i64::from(code.code()), 0],
+            ]
+        })
+        .collect();
+    if keys != wanted {
+        violations.push(format!(
+            "the keys came back as {keys:?} and were injected as {wanted:?}"
+        ));
+    }
+    let pointer = input_events(output, "pointer");
+    if pointer.is_empty() {
+        violations.push("the pointer never moved".to_owned());
+        return violations;
+    }
+    let moved = |index: usize| -> i64 {
+        pointer
+            .iter()
+            .filter_map(|row| row.get(index).copied())
+            .sum()
+    };
+    let path: Vec<(i32, i32)> = INPUT_PATH
+        .into_iter()
+        .chain(core::iter::once(INPUT_LAST))
+        .collect();
+    let sent = (
+        path.iter().map(|(dx, _dy)| i64::from(*dx)).sum::<i64>(),
+        path.iter().map(|(_dx, dy)| i64::from(*dy)).sum::<i64>(),
+    );
+    if (moved(0), moved(1)) != sent {
+        violations.push(format!(
+            "the pointer moved by {:?} and was moved by {sent:?}",
+            (moved(0), moved(1))
+        ));
+    }
+    // The button: it goes down in one packet and comes up in a later one.
+    let down = pointer
+        .iter()
+        .position(|row| row.get(3).copied().unwrap_or(0) != 0);
+    let up = down.and_then(|first| {
+        pointer
+            .iter()
+            .skip(first)
+            .position(|row| row.get(3).copied().unwrap_or(0) == 0)
+            .map(|later| first.saturating_add(later))
+    });
+    match (down, up) {
+        (Some(down), Some(up)) if down < up => {}
+        _other => violations.push(format!(
+            "the button was pressed at {down:?} and released at {up:?}"
+        )),
+    }
+    violations
+}
+
 /// The same system on a machine with no graphics adapter: the firmware
 /// reports no Graphics Output Protocol, so the kernel finds no framebuffer,
 /// the display server answers that there is no screen, and the program that
 /// draws says it drew nothing — and the run still ends by itself.
 fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Error> {
+    let socket = qemu::socket_path("audhsos-qmp-novga")?;
+    let _ = std::fs::remove_file(&socket);
     let mut session = Session::start(
         machine,
         path,
         &qemu::Options {
             no_vga: true,
+            qmp: Some(socket.clone()),
             ..qemu::Options::plain()
         },
     )?;
@@ -433,6 +639,14 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Erro
     }
     if violations.is_empty() && session.wait_for("[hello] ready", E2E_TIMEOUT) {
         session.send(b"typed\n")?;
+    }
+    // The i8042 is part of the machine whether it has a screen or not, so
+    // the input tests run here as well.
+    if violations.is_empty() {
+        match inject_input(&socket, &mut session) {
+            Ok(()) => violations.extend(input_lines(&session.output())),
+            Err(error) => violations.push(format!("nothing could be injected: {error}")),
+        }
     }
     if violations.is_empty() {
         match session.wait_for_end(E2E_TIMEOUT) {
@@ -448,6 +662,7 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Erro
         }
     }
     let output = session.finish();
+    let _ = std::fs::remove_file(&socket);
     note!(
         "qemu without a graphics adapter: {} line(s)",
         output.lines().count()

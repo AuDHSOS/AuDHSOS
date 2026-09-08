@@ -53,6 +53,153 @@ fn the_end_of_a_watched_process_signals_the_bit_it_was_watched_on() {
 }
 
 #[test]
+fn unwatch_frees_capacity_and_a_later_exit_does_not_signal_the_reused_bit() {
+    let mut fixture = Fixture::new();
+    let (id, note) = notification(&mut fixture);
+    let (process, handle) = watched(&mut fixture, Rights::INFO);
+    for _ in 0..20 {
+        value_of(
+            &mut fixture,
+            request(Syscall::ProcessWatch, &[handle.raw(), note.raw(), 2]),
+        );
+        assert_eq!(
+            value_of(
+                &mut fixture,
+                request(Syscall::ProcessUnwatch, &[handle.raw(), note.raw(), 2])
+            ),
+            0
+        );
+    }
+    assert_eq!(
+        fixture
+            .objects
+            .processes
+            .get(process)
+            .unwrap()
+            .watchers()
+            .count(),
+        0
+    );
+    let end = killer(&mut fixture, process);
+    value_of(&mut fixture, request(Syscall::ProcessKill, &[end.raw()]));
+    assert_eq!(word(&fixture, id), 0);
+}
+
+#[test]
+fn a_process_watch_detects_exit_while_the_client_notification_still_signals() {
+    let mut fixture = Fixture::new();
+    let (watch_id, note) = notification(&mut fixture);
+    let (event_id, event) = notification(&mut fixture);
+    let (process, handle) = watched(&mut fixture, Rights::INFO);
+    value_of(
+        &mut fixture,
+        request(Syscall::ProcessWatch, &[handle.raw(), note.raw(), 2]),
+    );
+    let end = killer(&mut fixture, process);
+    value_of(&mut fixture, request(Syscall::ProcessKill, &[end.raw()]));
+    value_of(
+        &mut fixture,
+        request(Syscall::NotificationSignal, &[event.raw(), 1]),
+    );
+    assert_eq!(word(&fixture, event_id), 1);
+    assert_eq!(word(&fixture, watch_id), 4);
+}
+
+#[test]
+fn unwatch_reports_already_ended_and_validates_capabilities_and_bits() {
+    let mut fixture = Fixture::new();
+    let (_id, note) = notification(&mut fixture);
+    let (process, handle) = watched(&mut fixture, Rights::INFO);
+    for bit in [64, 256, u64::MAX] {
+        assert_eq!(
+            error_of(
+                &mut fixture,
+                request(Syscall::ProcessUnwatch, &[handle.raw(), note.raw(), bit])
+            ),
+            Some(Error::InvalidArgument)
+        );
+    }
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::ProcessUnwatch, &[handle.raw(), 0, 0])
+        ),
+        Some(Error::InvalidHandle)
+    );
+    let without = fixture.install(AnyObjectId::of(process), Rights::MANAGE);
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::ProcessUnwatch, &[without.raw(), note.raw(), 0])
+        ),
+        Some(Error::AccessDenied)
+    );
+    let thread = fixture
+        .objects
+        .processes
+        .get(process)
+        .unwrap()
+        .threads()
+        .next()
+        .unwrap();
+    let thread = fixture.install(AnyObjectId::of(thread), Rights::MANAGE);
+    value_of(&mut fixture, request(Syscall::ThreadKill, &[thread.raw()]));
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(Syscall::ProcessUnwatch, &[handle.raw(), note.raw(), 0])
+        ),
+        1
+    );
+}
+
+#[test]
+fn a_queued_old_watch_bit_cannot_identify_the_new_live_subscriber() {
+    let mut fixture = Fixture::new();
+    let (id, note) = notification(&mut fixture);
+    let (old, old_handle) = watched(&mut fixture, Rights::INFO);
+    value_of(
+        &mut fixture,
+        request(Syscall::ProcessWatch, &[old_handle.raw(), note.raw(), 2]),
+    );
+    let end = killer(&mut fixture, old);
+    value_of(&mut fixture, request(Syscall::ProcessKill, &[end.raw()]));
+    // The adapter has not yet consumed or forwarded this old bit.
+    assert_eq!(word(&fixture, id), 4);
+    let (new, new_handle) = watched(&mut fixture, Rights::INFO);
+    value_of(
+        &mut fixture,
+        request(Syscall::ProcessWatch, &[new_handle.raw(), note.raw(), 2]),
+    );
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(Syscall::NotificationPoll, &[note.raw()])
+        ),
+        4
+    );
+    // The server validates against the current process, then rearms it.
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(Syscall::ProcessUnwatch, &[new_handle.raw(), note.raw(), 2])
+        ),
+        0
+    );
+    value_of(
+        &mut fixture,
+        request(Syscall::ProcessWatch, &[new_handle.raw(), note.raw(), 2]),
+    );
+    let end = killer(&mut fixture, new);
+    value_of(&mut fixture, request(Syscall::ProcessKill, &[end.raw()]));
+    assert_eq!(
+        word(&fixture, id),
+        4,
+        "the replacement's eventual exit is still delivered"
+    );
+}
+
+#[test]
 fn the_last_thread_of_a_process_that_ends_signals_the_watchers() {
     let mut fixture = Fixture::new();
     let (id, note) = notification(&mut fixture);

@@ -263,6 +263,8 @@ region (D-104); the reference machine draws on 1280 by 800 pixels in
 
 ## 8.12 Phase 10: PS/2 input
 
+Status: implemented.
+
 Deliverables: `driver-i8042` over the port access trait; the input
 protocol in `user-proto` (key codes, key and pointer events, layout
 tables `us` and `de`, subscription with a ring buffer and a

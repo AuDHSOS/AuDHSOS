@@ -228,6 +228,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "driver-i8042"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
 name = "driver-uart16550"
 version = "0.1.0"
 dependencies = [
@@ -504,6 +511,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "server-input"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-collections",
+ "driver-i8042",
+ "user-proto",
+]
+
+[[package]]
 name = "server-memory"
 version = "0.1.0"
 dependencies = [
@@ -539,10 +556,12 @@ name = "user-programs"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "driver-i8042",
  "driver-uart16550",
  "gfx",
  "server-console",
  "server-display",
+ "server-input",
  "server-memory",
  "server-name",
  "user-loader",
@@ -556,6 +575,7 @@ name = "user-proto"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "driver-i8042",
  "gfx",
  "user-rt",
 ]
@@ -601,6 +621,7 @@ dependencies = [
  "audhsos-abi",
  "audhsos-symbols",
  "audhsos-time",
+ "driver-i8042",
  "fs-fat",
  "gfx",
  "kernel-test-harness",

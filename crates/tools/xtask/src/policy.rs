@@ -405,6 +405,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "driver-i8042",
+        path: "crates/drivers/i8042",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "virtio-queue",
         path: "crates/virtio/queue",
         kind: Kind::Logic,
@@ -553,7 +561,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-kernel",
         path: "crates/kernel/bin",
         kind: Kind::Adapter {
-            unsafe_budget: 31,
+            unsafe_budget: 33,
             asm_budget: 0,
         },
         deps: &[
@@ -584,7 +592,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-proto",
         path: "crates/user/proto",
         kind: Kind::Logic,
-        deps: &["audhsos-abi", "gfx", "user-rt"],
+        deps: &["audhsos-abi", "driver-i8042", "gfx", "user-rt"],
         coverage_gate: true,
         target: Target::Host,
     },
@@ -629,6 +637,19 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "server-input",
+        path: "crates/user/servers/input",
+        kind: Kind::Logic,
+        deps: &[
+            "audhsos-abi",
+            "audhsos-collections",
+            "driver-i8042",
+            "user-proto",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "user-sys-x86_64",
         path: "crates/user/sys-x86_64",
         kind: Kind::Adapter {
@@ -654,15 +675,17 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-programs",
         path: "crates/user/programs",
         kind: Kind::Adapter {
-            unsafe_budget: 23,
+            unsafe_budget: 31,
             asm_budget: 0,
         },
         deps: &[
             "audhsos-abi",
+            "driver-i8042",
             "driver-uart16550",
             "gfx",
             "server-console",
             "server-display",
+            "server-input",
             "server-memory",
             "server-name",
             "user-loader",
@@ -756,6 +779,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "audhsos-abi",
             "audhsos-symbols",
             "audhsos-time",
+            "driver-i8042",
             "fs-fat",
             "gfx",
             "kernel-test-harness",
@@ -905,8 +929,12 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "ipv4" },
     FuzzTarget { name: "ipv6" },
     FuzzTarget { name: "madt" },
+    FuzzTarget {
+        name: "mouse_packet",
+    },
     FuzzTarget { name: "pem" },
     FuzzTarget { name: "rsa" },
+    FuzzTarget { name: "scancode" },
     FuzzTarget { name: "tar" },
     FuzzTarget {
         name: "dns_message",

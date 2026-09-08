@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "server-input"
+description = "What the input server decides: who is subscribed, which decoder a byte goes to, and what is appended to whose ring"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[features]
+test-doubles = ["driver-i8042/test-doubles"]
+
+[dependencies]
+audhsos-abi.workspace = true
+audhsos-collections.workspace = true
+driver-i8042.workspace = true
+user-proto.workspace = true
+
+[dev-dependencies]
+driver-i8042 = { workspace = true, features = ["test-doubles"] }
+
+[lints]
+workspace = true

@@ -75,6 +75,8 @@ pub enum Call {
 /// The kernel as the tests play it.
 #[derive(Debug, Default)]
 pub struct RecordingPages {
+    /// Objects still reachable outside the memory server.
+    pub shared: Vec<Handle>,
     calls: Vec<Call>,
     next_handle: u32,
     next_address: u64,
@@ -103,6 +105,7 @@ impl RecordingPages {
     #[must_use]
     pub const fn new() -> Self {
         RecordingPages {
+            shared: Vec::new(),
             calls: Vec::new(),
             next_handle: 1000,
             next_address: FIRST_ADDRESS,
@@ -153,6 +156,9 @@ impl RecordingPages {
 }
 
 impl Pages for RecordingPages {
+    fn references(&mut self, object: Handle) -> Result<u64, Error> {
+        Ok(if self.shared.contains(&object) { 2 } else { 1 })
+    }
     fn map(&mut self, object: Handle, offset: u64, len: u64) -> Result<u64, Error> {
         let address = self.next_address;
         self.next_address = self.next_address.saturating_add(len).next_multiple_of(4096);

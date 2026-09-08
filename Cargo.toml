@@ -36,12 +36,14 @@ members = [
     "crates/uefi",
     "crates/sync",
     "crates/drivers/uart16550",
+    "crates/drivers/i8042",
     "crates/virtio/queue",
     "crates/fs/fat",
     "crates/user/loader",
     "crates/user/programs",
     "crates/user/servers/console",
     "crates/user/servers/display",
+    "crates/user/servers/input",
     "crates/user/servers/memory",
     "crates/user/servers/name",
     "crates/user/proto",
@@ -113,10 +115,12 @@ audhsos-symbols = { path = "crates/symbols" }
 audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
 driver-uart16550 = { path = "crates/drivers/uart16550" }
+driver-i8042 = { path = "crates/drivers/i8042" }
 virtio-queue = { path = "crates/virtio/queue" }
 fs-fat = { path = "crates/fs/fat" }
 server-console = { path = "crates/user/servers/console" }
 server-display = { path = "crates/user/servers/display" }
+server-input = { path = "crates/user/servers/input" }
 user-programs = { path = "crates/user/programs" }
 server-memory = { path = "crates/user/servers/memory" }
 server-name = { path = "crates/user/servers/name" }

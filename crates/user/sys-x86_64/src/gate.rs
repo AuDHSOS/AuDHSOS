@@ -106,7 +106,7 @@ pub struct Received {
 /// numbers the kernel saw against the table, so a method missing from the
 /// run, or one passing another call of the same shape, fails there
 /// (D-98).
-const COVERED: [Syscall; 43] = [
+const COVERED: [Syscall; 45] = [
     Syscall::ProcessCreate,
     Syscall::ProcessInstallHandle,
     Syscall::ProcessSetFaultHandler,
@@ -150,6 +150,8 @@ const COVERED: [Syscall; 43] = [
     Syscall::DebugLog,
     Syscall::MemoryMerge,
     Syscall::ProcessWatch,
+    Syscall::ProcessUnwatch,
+    Syscall::MemoryReferences,
 ];
 
 /// `true` when [`COVERED`] is the system call table, in its order.
@@ -639,6 +641,34 @@ impl Gate {
     pub fn memory_info(&mut self, memory: MemoryHandle) -> Result<MemoryInfo, Error> {
         let (start, length) = self.values(Syscall::MemoryInfo, &[memory.raw()])?;
         Ok(MemoryInfo { start, length })
+    }
+
+    /// Counts all handles and mappings of a memory object.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn memory_references(&mut self, memory: MemoryHandle) -> Result<u64, Error> {
+        self.value(Syscall::MemoryReferences, &[memory.raw()])
+    }
+
+    /// Removes a process watch and reports whether the process has ended.
+    /// Already delivered bits remain pending.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn process_unwatch(
+        &mut self,
+        process: ProcessHandle,
+        notification: NotificationHandle,
+        bit: u64,
+    ) -> Result<bool, Error> {
+        self.value(
+            Syscall::ProcessUnwatch,
+            &[process.raw(), notification.raw(), bit],
+        )
+        .map(|ended| ended != 0)
     }
 
     // --- handles ---------------------------------------------------------

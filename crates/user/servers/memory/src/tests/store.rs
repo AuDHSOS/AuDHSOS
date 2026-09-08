@@ -86,6 +86,49 @@ fn a_new_store_holds_nothing() {
 }
 
 #[test]
+fn returned_shared_pages_are_neither_zeroed_nor_reallocated_until_exclusive() {
+    let (mut store, mut pages) = adopted(1);
+    let ring = store.allocate(&mut pages, 5, PAGE_SIZE, PAGE_SIZE).unwrap();
+    pages.shared.push(ring.handle);
+    pages.forget();
+    store.release(&mut pages, 5, ring).unwrap();
+    assert!(
+        pages.zeroed().is_empty(),
+        "the previous client can still be reading its page"
+    );
+    assert_eq!(store.free_bytes(), 0);
+    assert_eq!(
+        store.allocate(&mut pages, 6, PAGE_SIZE, PAGE_SIZE),
+        Err(Error::OutOfMemory)
+    );
+    pages.shared.clear();
+    let next = store.allocate(&mut pages, 6, PAGE_SIZE, PAGE_SIZE).unwrap();
+    assert_eq!(next.start, ring.start);
+    assert_eq!(
+        pages.zeroed().len(),
+        2,
+        "zero on reclaim and again on allocation"
+    );
+}
+
+#[test]
+fn client_end_does_not_recycle_memory_transferred_to_another_process() {
+    let (mut store, mut pages) = adopted(1);
+    let ring = store.allocate(&mut pages, 5, PAGE_SIZE, PAGE_SIZE).unwrap();
+    pages.shared.push(ring.handle);
+    pages.forget();
+    assert_eq!(store.forget_client(&mut pages, 5), Ok(1));
+    assert!(pages.zeroed().is_empty());
+    assert_eq!(
+        store.allocate(&mut pages, 6, PAGE_SIZE, PAGE_SIZE),
+        Err(Error::OutOfMemory)
+    );
+    pages.shared.clear();
+    store.reclaim(&mut pages).unwrap();
+    assert_eq!(store.free_bytes(), PAGE_SIZE);
+}
+
+#[test]
 fn memory_taken_over_is_zeroed_before_it_is_free() {
     let mut store = Memory::new();
     let mut kernel = RecordingPages::new();

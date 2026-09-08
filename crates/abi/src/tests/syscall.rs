@@ -30,7 +30,7 @@ fn numbers_are_unique_dense_and_non_zero() {
 
 #[test]
 fn the_table_holds_every_call_of_the_interface() {
-    assert_eq!(Syscall::ALL.len(), 43);
+    assert_eq!(Syscall::ALL.len(), 45);
     assert_eq!(Syscall::ProcessCreate.number(), 1);
     assert_eq!(Syscall::DebugLog.number(), 41);
     assert_eq!(Syscall::MemoryMerge.number(), 42);

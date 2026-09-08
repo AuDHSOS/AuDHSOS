@@ -195,7 +195,10 @@ pub const fn required_rights(call: Syscall) -> Rights {
         | Syscall::MemoryMerge => Rights::MAP,
         // Reading what an object is, and hearing that a process ended, are
         // both learning something about it and nothing more.
-        Syscall::MemoryInfo | Syscall::ProcessWatch => Rights::INFO,
+        Syscall::MemoryInfo
+        | Syscall::ProcessWatch
+        | Syscall::ProcessUnwatch
+        | Syscall::MemoryReferences => Rights::INFO,
         Syscall::EndpointBadge => Rights::BADGE,
         Syscall::IpcSend | Syscall::IpcCall => Rights::SEND,
         Syscall::IpcRecv | Syscall::IpcTryRecv => Rights::RECV,
