@@ -215,23 +215,44 @@ fn subscribe(
     badge: u64,
     notification: NotificationHandle,
 ) -> Result<Handle, Error> {
-    let (Some(process), Some(server)) = (startup.own_process, startup.memory_server) else {
-        return Err(Error::NotFound);
-    };
-    let slot = input.subscribe(badge)?;
-    let outcome = make_ring(gate, process, server, notification, held, slot);
+    let outcome = take_on(gate, startup, input, held, badge, notification);
     match outcome {
         Ok(_given) => say_line(
             gate,
             startup,
             user_rt::Line::<96>::of(format_args!("[input] client {badge} listens\n")).as_bytes(),
         ),
+        // The notification arrived in the handle table of this process and
+        // stays there until somebody closes it. A subscription that failed
+        // holds nothing, so it holds that handle either: a client that asks
+        // twice and is refused twice would otherwise cost this server a
+        // handle each time until it has none left.
         Err(_error) => {
-            let _gone = input.unsubscribe(badge);
             let _closed = gate.handle_close(notification.handle());
         }
     }
     outcome
+}
+
+/// The subscription itself, whose every failure leaves the server holding
+/// nothing of the client.
+fn take_on(
+    gate: &mut Gate,
+    startup: &Startup,
+    input: &mut Input<CLIENTS>,
+    held: &mut [Option<Held>; CLIENTS],
+    badge: u64,
+    notification: NotificationHandle,
+) -> Result<Handle, Error> {
+    let (Some(process), Some(server)) = (startup.own_process, startup.memory_server) else {
+        return Err(Error::NotFound);
+    };
+    let slot = input.subscribe(badge)?;
+    let made = make_ring(gate, process, server, notification, held, slot);
+    if made.is_err() {
+        let _gone = input.unsubscribe(badge);
+    }
+    made
 }
 
 /// The memory, the mapping, and the header of one ring.
@@ -251,11 +272,16 @@ fn make_ring(
             return Err(error);
         }
     };
-    {
+    let made = {
         // SAFETY: the mapping was made just now, it is still standing, and
         // nothing else in this program holds a reference to it.
         let bytes = unsafe { mapping.bytes() };
-        RingWriter::create(bytes).ok_or(Error::InvalidArgument)?;
+        RingWriter::create(bytes).is_some()
+    };
+    if !made {
+        let _unmapped = mapping.unmap(gate, process);
+        let _released = release(gate, server, memory);
+        return Err(Error::InvalidArgument);
     }
     // The handle goes to the client as it stands. A memory object of this
     // system carries no `DUPLICATE` — the root task withholds it and every

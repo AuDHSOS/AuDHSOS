@@ -81,15 +81,27 @@ fn run(platform: &X86Platform) {
 /// something can.
 fn idle() -> ! {
     loop {
+        // The borrow of the machine is only ever held with interrupts off,
+        // and this is the one place that would hold it otherwise: every
+        // other holder is a trap handler, and an interrupt gate clears the
+        // flag for it. An interrupt that arrived while the borrow stood
+        // would find the machine busy and be dropped, and a device whose
+        // line is edge-triggered never raises that edge again.
+        //
+        // SAFETY: the flag goes back on below, before anything can wait for
+        // it: the only path out of here that does not reach the `sti` is a
+        // switch into another thread, and that thread returns to user mode
+        // through `iretq`, which restores the flag from its own frame.
+        unsafe {
+            instructions::disable_interrupts();
+        }
         task::run(None);
-        // A switch carries no interrupt flag: the six words it saves are
-        // the callee-saved registers and nothing else. So a thread that
-        // gives the processor up inside a trap — every system call is one,
-        // and an interrupt gate clears the flag — hands the processor on
-        // with interrupts off, and every thread but this one turns them
-        // back on by returning to user mode through `iretq`. This one
-        // returns nowhere; it halts. Halting with interrupts off stops the
-        // machine for good, so they go back on here first.
+        // A switch carries no interrupt flag either: the six words it saves
+        // are the callee-saved registers and nothing else. So this thread
+        // comes back from a switch with interrupts off, and every thread
+        // but this one turns them back on by returning to user mode. This
+        // one returns nowhere; it halts. Halting with interrupts off stops
+        // the machine for good, so they go back on here first.
         //
         // SAFETY: nothing of the machine is borrowed here — `task::run`
         // gave every borrow back — and this is the boot processor, whose

@@ -2740,7 +2740,7 @@ under any other badge is a request of the input protocol. A subscriber
 whose `notification_signal` fails is removed and its ring unmapped; that
 is how a client that has ended is noticed, and it is why this server needs
 no watch of its own (D-106). A request that arrives without a badge is
-refused with `PermissionDenied`, as the display server refuses one: a
+refused with `AccessDenied`, as the display server refuses one: a
 capability found under a name names nobody.
 
 Its `unsafe` counts against the budget of `user-programs`: the entry point

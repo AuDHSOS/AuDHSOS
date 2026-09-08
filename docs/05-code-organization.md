@@ -70,8 +70,9 @@ AuDHSOS/
 │   │   │   │                  loop each are seven manifests saying the same
 │   │   │   │                  thing (D-97)
 │   │   │   └── src/bin/       server-init (the root task), server-memory,
-│   │   │                      server-name, server-console, app-hello,
-│   │   │                      app-checks, app-faulter
+│   │   │                      server-name, server-console, server-display,
+│   │   │                      server-input, app-hello, app-checks,
+│   │   │                      app-paint, app-input, app-faulter
 │   │   └── apps/
 │   │       └── canvas/        app-canvas: graphical demonstration and e2e client (Phase 11)
 │   ├── crypto/                (document 11)

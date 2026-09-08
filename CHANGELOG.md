@@ -165,6 +165,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The kernel no longer drops a device interrupt that arrives while the idle
+  thread is choosing what to run next. The borrow of the machine is only
+  ever held with interrupts off — every other holder is a trap handler, and
+  an interrupt gate clears the flag for it — and the idle loop was the one
+  place that held it otherwise. An interrupt that found the machine busy was
+  dropped, and a device whose line is edge-triggered never raised that edge
+  again: the keyboard or the mouse went quiet for the rest of the run.
 - The kernel no longer stops the machine when the idle thread is entered
   from a trap. A switch saves the callee-saved registers and nothing else,
   so a thread that gives the processor up inside a system call hands it on

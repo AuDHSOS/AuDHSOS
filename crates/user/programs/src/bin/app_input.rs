@@ -82,38 +82,53 @@ fn listen(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
     let mut mapping = Mapping::new(gate, process, memory, RING, PAGE_SIZE)?;
     say(gate, startup, b"[input] ready\n");
 
-    loop {
+    let mut done = false;
+    while !done {
         gate.notification_wait(notification)?;
-        // SAFETY: the mapping was made just now, it is still standing, and
-        // nothing else in this program holds a reference to it.
-        let bytes = unsafe { mapping.bytes() };
-        let mut reader = RingReader::new(bytes).ok_or(Error::InvalidArgument)?;
-        let mut lines = Lines::new();
-        let lost = reader.take_overflow();
-        let mut done = false;
-        while let Some(event) = reader.pop() {
-            done |= ends(event);
-            lines.put(event);
-        }
-        // The ring is read out before anything is said, because saying it
-        // is a call on the console driver and the server keeps writing
-        // while that call runs.
-        if lost != 0 {
-            say(
-                gate,
-                startup,
-                user_rt::Line::<64>::of(format_args!("[input] lost {lost}\n")).as_bytes(),
-            );
-        }
-        lines.say(gate, startup);
-        if done {
-            return Ok(());
+        // A wake-up says that something is waiting and not how much, so the
+        // ring is read until it is empty. What one turn takes is bounded,
+        // because saying it is a call on the console driver and the server
+        // keeps writing while that call runs: the events are taken out
+        // first and said afterwards, a handful at a time.
+        loop {
+            let mut lines = Lines::new();
+            let lost;
+            let emptied;
+            {
+                // SAFETY: the mapping was made just now, it is still
+                // standing, and nothing else in this program holds a
+                // reference to it.
+                let bytes = unsafe { mapping.bytes() };
+                let mut reader = RingReader::new(bytes).ok_or(Error::InvalidArgument)?;
+                lost = reader.take_overflow();
+                while !lines.is_full() {
+                    let Some(event) = reader.pop() else {
+                        break;
+                    };
+                    done |= ends(event);
+                    lines.put(event);
+                }
+                emptied = reader.is_empty();
+            }
+            if lost != 0 {
+                say(
+                    gate,
+                    startup,
+                    user_rt::Line::<64>::of(format_args!("[input] lost {lost}\n")).as_bytes(),
+                );
+            }
+            lines.say(gate, startup);
+            if emptied {
+                break;
+            }
         }
     }
+    Ok(())
 }
 
-/// How many events one wake-up may carry into the lines below. A ring holds
-/// more, and what does not fit is read on the next turn round the loop.
+/// How many events one turn of the loop says. A ring holds more, and what
+/// does not fit is said on the next turn: nothing is taken out of the ring
+/// that is not said.
 const HELD: usize = 32;
 
 /// The events of one wake-up, kept until the ring has been read out.
@@ -129,6 +144,12 @@ impl Lines {
             events: [None; HELD],
             len: 0,
         }
+    }
+
+    /// `true` when this many have arrived and the rest wait for the next
+    /// turn.
+    const fn is_full(&self) -> bool {
+        self.len >= HELD
     }
 
     /// Notes one event, or drops it when this many have already arrived.
