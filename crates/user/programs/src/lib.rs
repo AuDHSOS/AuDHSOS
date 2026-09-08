@@ -6,13 +6,15 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![doc = include_str!("../README.md")]
 
-// The library holds what the programs share; each of the nine uses a
+// The library holds what the programs share; each of the eleven uses a
 // different part of the crates below, and the binaries are what reach
 // them. Naming them here is what the unused-dependency check asks for.
+use driver_i8042 as _;
 use driver_uart16550 as _;
 use gfx as _;
 use server_console as _;
 use server_display as _;
+use server_input as _;
 use server_memory as _;
 use server_name as _;
 use user_loader as _;

@@ -17,6 +17,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   subscriber is dropped. A subscriber that cannot be woken is gone, which
   is how a client that has ended is noticed and why this server needs no
   watch of its own.
+- The input server as a process, `app-input` as its first client, and the
+  runner that types at the machine. The root task makes the ports of the
+  PS/2 controller and the interrupt objects of its two lines and hands them
+  to `server-input`, which brings the controller up, starts a second thread
+  that drains it, and gives every client a ring of one page. `app-input`
+  subscribes, waits on the notification the server signals, and writes one
+  line per event; the end-to-end run injects a key sequence, a pointer path,
+  and a button through the machine protocol and holds the lines against
+  what it sent. The run without a graphics adapter does the same, because
+  the i8042 is part of the machine whether it has a screen or not.
 - The input protocol in `user-proto`: a subscription that hands the server
   a notification and receives a ring of one page, the sixteen-byte record a
   key or a pointer event is, and the two halves of that ring — the writer

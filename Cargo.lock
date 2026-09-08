@@ -556,10 +556,12 @@ name = "user-programs"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "driver-i8042",
  "driver-uart16550",
  "gfx",
  "server-console",
  "server-display",
+ "server-input",
  "server-memory",
  "server-name",
  "user-loader",
@@ -619,6 +621,7 @@ dependencies = [
  "audhsos-abi",
  "audhsos-symbols",
  "audhsos-time",
+ "driver-i8042",
  "fs-fat",
  "gfx",
  "kernel-test-harness",

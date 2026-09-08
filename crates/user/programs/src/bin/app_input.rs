@@ -1,0 +1,211 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+
+//! The program that listens: it subscribes to the input server, waits on
+//! the notification the server signals, reads its ring, and writes one line
+//! per event through the console.
+//!
+//! It is the client side of the input protocol end to end: a notification of
+//! its own reduced to `SIGNAL`, a ring of one page it never allocated, and a
+//! loop that costs one system call per wake-up however many events arrived.
+//!
+//! It ends when the escape key comes up, which is the last thing the runner
+//! injects. A machine on which nothing is injected therefore keeps it
+//! waiting, which is what a program that listens does.
+
+#![no_std]
+#![no_main]
+#![allow(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
+
+// The package holds eleven programs and each uses a different part of what
+// it depends on; these are the crates this one does not.
+use driver_i8042 as _;
+use driver_uart16550 as _;
+use gfx as _;
+use server_console as _;
+use server_display as _;
+use server_input as _;
+use server_memory as _;
+use server_name as _;
+use user_loader as _;
+
+use audhsos_abi::layout::PAGE_SIZE;
+use audhsos_abi::{Error, Rights};
+use user_programs::client::{lookup, write_line};
+use user_programs::mapping::Mapping;
+use user_proto::input::{Event, KeyCode, Reply, Request, RingReader};
+use user_proto::parent;
+use user_rt::{EndpointHandle, MemoryHandle, Startup, Typed};
+use user_sys_x86_64::{self as sys, Gate};
+
+sys::program!(main);
+
+/// The name the input server registered itself under.
+const INPUT: &[u8] = b"input";
+
+/// Where the ring is mapped in this program.
+const RING: u64 = 0x3000_0000;
+
+/// What a notification handed to a server may be used for: signalling it,
+/// and being handed over at all.
+const SIGNAL_ONLY: Rights = Rights::SIGNAL.union(Rights::TRANSFER);
+
+/// Listens until the escape key comes up, then reports and ends.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the shape of `main` is what `program!` calls; the gate and the startup message belong to the program"
+)]
+fn main(mut gate: Gate, startup: Startup) -> ! {
+    match listen(&mut gate, &startup) {
+        Ok(()) => say(&mut gate, &startup, b"[input] done\n"),
+        Err(error) => say_error(&mut gate, &startup, error),
+    }
+    report(&mut gate, &startup);
+    gate.thread_exit()
+}
+
+/// Subscribes, then reads until the escape key comes up.
+fn listen(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
+    let process = startup.own_process.ok_or(Error::NotFound)?;
+    // The capability the root task gave this program carries the badge the
+    // input server knows it by. Looking the server up under its name would
+    // give one that carries none, and the server refuses those: it keeps a
+    // ring per client and cannot tell two of nobody apart.
+    let input = match startup.input_server {
+        Some(given) => given,
+        None => lookup(gate, startup.name_server.ok_or(Error::NotFound)?, INPUT)?,
+    };
+    let notification = gate.notification_create()?;
+    let given = gate.handle_duplicate(notification.handle(), SIGNAL_ONLY)?;
+    let memory = MemoryHandle::from_handle(subscribe(gate, input, given)?);
+    let mut mapping = Mapping::new(gate, process, memory, RING, PAGE_SIZE)?;
+    say(gate, startup, b"[input] ready\n");
+
+    loop {
+        gate.notification_wait(notification)?;
+        // SAFETY: the mapping was made just now, it is still standing, and
+        // nothing else in this program holds a reference to it.
+        let bytes = unsafe { mapping.bytes() };
+        let mut reader = RingReader::new(bytes).ok_or(Error::InvalidArgument)?;
+        let mut lines = Lines::new();
+        let lost = reader.take_overflow();
+        let mut done = false;
+        while let Some(event) = reader.pop() {
+            done |= ends(event);
+            lines.put(event);
+        }
+        // The ring is read out before anything is said, because saying it
+        // is a call on the console driver and the server keeps writing
+        // while that call runs.
+        if lost != 0 {
+            say(
+                gate,
+                startup,
+                user_rt::Line::<64>::of(format_args!("[input] lost {lost}\n")).as_bytes(),
+            );
+        }
+        lines.say(gate, startup);
+        if done {
+            return Ok(());
+        }
+    }
+}
+
+/// How many events one wake-up may carry into the lines below. A ring holds
+/// more, and what does not fit is read on the next turn round the loop.
+const HELD: usize = 32;
+
+/// The events of one wake-up, kept until the ring has been read out.
+struct Lines {
+    events: [Option<Event>; HELD],
+    len: usize,
+}
+
+impl Lines {
+    /// Nothing said yet.
+    const fn new() -> Self {
+        Lines {
+            events: [None; HELD],
+            len: 0,
+        }
+    }
+
+    /// Notes one event, or drops it when this many have already arrived.
+    fn put(&mut self, event: Event) {
+        if let Some(slot) = self.events.get_mut(self.len) {
+            *slot = Some(event);
+            self.len = self.len.saturating_add(1);
+        }
+    }
+
+    /// Writes one line per event.
+    fn say(&self, gate: &mut Gate, startup: &Startup) {
+        for event in self.events.iter().take(self.len).flatten() {
+            let line = match event {
+                Event::Key(key) => user_rt::Line::<96>::of(format_args!(
+                    "[input] key {} {}\n",
+                    key.code.code(),
+                    u8::from(key.pressed)
+                )),
+                Event::Pointer(pointer) => user_rt::Line::<96>::of(format_args!(
+                    "[input] pointer {} {} {} {}\n",
+                    pointer.dx, pointer.dy, pointer.wheel, pointer.buttons
+                )),
+            };
+            say(gate, startup, line.as_bytes());
+        }
+    }
+}
+
+/// `true` for the event that ends the run, which is the escape key coming
+/// up.
+const fn ends(event: Event) -> bool {
+    match event {
+        Event::Key(key) => matches!(key.code, KeyCode::Escape) && !key.pressed,
+        Event::Pointer(_) => false,
+    }
+}
+
+/// Asks the input server for a ring, handing over the notification it is to
+/// signal.
+fn subscribe(
+    gate: &mut Gate,
+    input: EndpointHandle,
+    notification: audhsos_abi::Handle,
+) -> Result<audhsos_abi::Handle, Error> {
+    let request = Request::Subscribe { notification };
+    request.encode(&mut gate.writer())?;
+    gate.ipc_call(input)?;
+    match Reply::decode(gate.reader())? {
+        Reply::Subscribed(outcome) => outcome,
+        Reply::Unsubscribed(_) => Err(Error::InvalidArgument),
+    }
+}
+
+/// Says why it stopped listening.
+fn say_error(gate: &mut Gate, startup: &Startup, error: Error) {
+    let line =
+        user_rt::Line::<128>::of(format_args!("[input] nothing heard: {}\n", error.message()));
+    say(gate, startup, line.as_bytes());
+}
+
+/// Says one line on the console the root task gave this program.
+fn say(gate: &mut Gate, startup: &Startup, line: &[u8]) {
+    if let Some(log) = startup.log {
+        let _said = write_line(gate, log, line);
+    }
+}
+
+/// Tells the process that started this one that the work is done.
+fn report(gate: &mut Gate, startup: &Startup) {
+    let Some(parent) = startup.parent else {
+        return;
+    };
+    let finished = parent::Request::Finished {
+        status: parent::SUCCESS,
+    };
+    if finished.encode(&mut gate.writer()).is_ok() {
+        let _reported = gate.ipc_send(parent);
+    }
+}
