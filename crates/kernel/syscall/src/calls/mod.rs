@@ -16,6 +16,7 @@
 //! | `process_install_handle` | target process handle, handle of the caller, rights |
 //! | `process_set_fault_handler` | process handle, endpoint handle (zero clears it) |
 //! | `process_kill` | process handle |
+//! | `process_watch`, `process_unwatch` | process handle, notification handle, bit index |
 //! | `thread_create` | process handle, entry, user stack, priority, maximum priority, memory object for the IPC buffer (zero for one out of the kernel reserve) |
 //! | `thread_start`, `thread_suspend`, `thread_resume`, `thread_kill` | thread handle |
 //! | `thread_set_priority` | thread handle, priority |
@@ -27,6 +28,7 @@
 //! | `memory_unmap` | process handle, virtual address, length |
 //! | `memory_protect` | process handle, virtual address, length, permissions |
 //! | `memory_info` | memory handle |
+//! | `memory_references` | memory handle |
 //! | `handle_duplicate` | handle, rights |
 //! | `handle_close` | handle |
 //! | `endpoint_create`, `notification_create` | none |
@@ -80,6 +82,8 @@ pub fn run<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
         Syscall::ProcessSetFaultHandler => process::set_fault_handler(machine, process, request),
         Syscall::ProcessKill => process::kill(machine, process, request),
         Syscall::ProcessWatch => process::watch(machine, process, request),
+        Syscall::ProcessUnwatch => process::unwatch(machine, process, request),
+        Syscall::MemoryReferences => memory::references(machine, process, request),
         Syscall::ThreadCreate => thread::create(machine, caller, process, request),
         Syscall::ThreadStart => thread::start(machine, process, request),
         Syscall::ThreadSuspend => thread::suspend(machine, process, request),

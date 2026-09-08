@@ -675,7 +675,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-programs",
         path: "crates/user/programs",
         kind: Kind::Adapter {
-            unsafe_budget: 28,
+            unsafe_budget: 31,
             asm_budget: 0,
         },
         deps: &[

@@ -332,6 +332,8 @@ fn implemented(log: &mut Log, process: u64, thread: u64, memory: u64, bad: u64) 
     let watcher = log.run(Syscall::NotificationCreate, &[]);
     log.run(Syscall::ProcessWatch, &[child, watcher, BOUND_BIT]);
     log.run(Syscall::ProcessWatch, &[child, watcher, NO_SUCH_BIT]);
+    log.run(Syscall::ProcessUnwatch, &[child, watcher, BOUND_BIT]);
+    log.run(Syscall::ProcessUnwatch, &[child, watcher, NO_SUCH_BIT]);
     log.run(Syscall::ThreadKill, &[bad]);
 
     // Memory: one object asked about, mapped, protected, unmapped, and
@@ -339,6 +341,8 @@ fn implemented(log: &mut Log, process: u64, thread: u64, memory: u64, bad: u64) 
     // the handle calls work on.
     log.run(Syscall::MemoryInfo, &[memory]);
     log.run(Syscall::MemoryInfo, &[bad]);
+    log.run(Syscall::MemoryReferences, &[memory]);
+    log.run(Syscall::MemoryReferences, &[bad]);
     log.run(
         Syscall::MemoryMap,
         &[process, memory, MAPPING, 0, PAGE, READ_WRITE],

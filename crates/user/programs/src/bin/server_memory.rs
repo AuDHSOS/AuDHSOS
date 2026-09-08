@@ -116,6 +116,10 @@ struct GatePages<'a> {
 }
 
 impl Pages for GatePages<'_> {
+    fn references(&mut self, object: audhsos_abi::Handle) -> Result<u64, Error> {
+        self.gate
+            .memory_references(MemoryHandle::from_handle(object))
+    }
     fn map(&mut self, object: audhsos_abi::Handle, offset: u64, len: u64) -> Result<u64, Error> {
         // The window is always at the same address: it is used by one
         // operation at a time, and the page tables under it are built once

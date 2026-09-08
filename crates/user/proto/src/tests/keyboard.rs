@@ -188,3 +188,65 @@ fn both_layouts_name_themselves_and_carry_the_same_keys() {
         assert_eq!(sorted.len(), count, "{} names a key twice", layout.name());
     }
 }
+
+#[test]
+fn releasing_one_physical_modifier_preserves_the_other() {
+    for (left, right) in [
+        (KeyCode::LeftShift, KeyCode::RightShift),
+        (KeyCode::LeftControl, KeyCode::RightControl),
+        (KeyCode::LeftMeta, KeyCode::RightMeta),
+    ] {
+        for (first, second) in [(left, right), (right, left)] {
+            let mut keyboard = Keyboard::new(Layout::Us);
+            keyboard.feed(KeyEvent::down(first));
+            let expected = keyboard.modifiers();
+            keyboard.feed(KeyEvent::down(second));
+            keyboard.feed(KeyEvent::down(second));
+            keyboard.feed(KeyEvent::up(first));
+            keyboard.feed(KeyEvent::up(first));
+            assert_eq!(keyboard.modifiers(), expected);
+            if first == KeyCode::LeftShift || first == KeyCode::RightShift {
+                assert_eq!(keyboard.feed(KeyEvent::down(KeyCode::A)), Some('A'));
+            }
+            keyboard.feed(KeyEvent::up(second));
+            assert_eq!(keyboard.modifiers(), Modifiers::default());
+        }
+    }
+}
+
+#[test]
+fn caps_lock_repeat_does_not_toggle_the_lock_again() {
+    let mut keyboard = Keyboard::new(Layout::Us);
+    keyboard.feed(KeyEvent::down(KeyCode::CapsLock));
+    keyboard.feed(KeyEvent::down(KeyCode::CapsLock));
+    assert_eq!(keyboard.feed(KeyEvent::down(KeyCode::A)), Some('A'));
+    keyboard.feed(KeyEvent::up(KeyCode::CapsLock));
+    keyboard.feed(KeyEvent::down(KeyCode::CapsLock));
+    assert_eq!(keyboard.feed(KeyEvent::down(KeyCode::A)), Some('a'));
+}
+
+#[test]
+fn german_altgr_selects_the_third_level_and_release_restores_the_first() {
+    let mut keyboard = Keyboard::new(Layout::De);
+    keyboard.feed(KeyEvent::down(KeyCode::RightAlt));
+    for (code, character) in [
+        (KeyCode::Q, '@'),
+        (KeyCode::E, '€'),
+        (KeyCode::Digit2, '²'),
+        (KeyCode::Digit3, '³'),
+        (KeyCode::Digit7, '{'),
+        (KeyCode::Digit8, '['),
+        (KeyCode::Digit9, ']'),
+        (KeyCode::Digit0, '}'),
+        (KeyCode::Minus, '\\'),
+        (KeyCode::RightBracket, '~'),
+        (KeyCode::IntlBackslash, '|'),
+        (KeyCode::M, 'µ'),
+    ] {
+        assert_eq!(keyboard.feed(KeyEvent::down(code)), Some(character));
+        assert_eq!(keyboard.feed(KeyEvent::up(code)), None);
+    }
+    assert_eq!(keyboard.feed(KeyEvent::down(KeyCode::A)), None);
+    keyboard.feed(KeyEvent::up(KeyCode::RightAlt));
+    assert_eq!(keyboard.feed(KeyEvent::down(KeyCode::Q)), Some('q'));
+}

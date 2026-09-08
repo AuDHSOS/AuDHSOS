@@ -9,10 +9,9 @@
 //! and what the decoder makes of it goes to every subscriber: a ring is not
 //! addressed to anybody, everyone who listens hears everything.
 //!
-//! A subscriber that cannot be woken is gone. That is how a client that has
-//! ended is noticed, and it is why this server needs no watch of its own:
-//! the first event after the end of a client fails to reach it and the
-//! subscription goes with it.
+//! A failed signal cancels a subscription. It is not a liveness check:
+//! the server's notification handle keeps the object alive after the client
+//! exits. The process adapter uses process watches to call `forget` on exit.
 //!
 //! Invariants: one subscription per badge, and no badge is [`NOBODY`]; a
 //! slot belongs to exactly one subscriber while that subscriber is
@@ -23,7 +22,7 @@ use audhsos_abi::Error;
 use audhsos_collections::ArrayVec;
 use driver_i8042::keyboard::Decoder as KeyDecoder;
 use driver_i8042::mouse::{Decoder as MouseDecoder, PointerEvent};
-use user_proto::input::{Event, RingWriter};
+use user_proto::input::{Event, RingPage, RingWriter};
 
 /// The badge of a capability that carries none.
 ///
@@ -51,11 +50,10 @@ pub struct Subscriber {
 pub trait Clients {
     /// The bytes of the ring of the subscriber in `slot`, or `None` when
     /// the process holds none.
-    fn ring(&mut self, slot: usize) -> Option<&mut [u8]>;
+    fn ring(&mut self, slot: usize) -> Option<&RingPage>;
 
-    /// Wakes the subscriber in `slot`, and answers whether it could be
-    /// woken. A client that has ended cannot, which is how its end is
-    /// noticed.
+    /// Signals the subscriber in `slot`. Success does not prove that any
+    /// client remains alive or is waiting.
     fn wake(&mut self, slot: usize) -> bool;
 }
 

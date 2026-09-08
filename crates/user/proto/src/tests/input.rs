@@ -3,8 +3,10 @@
 
 //! Tests of `crate::input`.
 
+use crate::input::RingPage;
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE};
 use audhsos_abi::{Error, Handle};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::input::{
     EVENT_LEN, Event, KIND_KEY, KIND_POINTER, KeyCode, KeyEvent, PointerEvent, RING_CAPACITY,
@@ -43,8 +45,8 @@ fn key(code: KeyCode, pressed: bool) -> Event {
 }
 
 /// A page for a ring.
-fn page() -> Vec<u8> {
-    vec![0u8; RING_PAGE_LEN]
+fn page() -> RingPage {
+    RingPage::new()
 }
 
 #[test]
@@ -52,6 +54,7 @@ fn every_request_comes_back_as_it_was_sent() {
     let requests = [
         Request::Subscribe {
             notification: handle(9),
+            process: handle(10),
         },
         Request::Unsubscribe,
     ];
@@ -188,8 +191,8 @@ fn a_ring_over_one_page_holds_the_records_that_fit_into_it() {
     assert_eq!(capacity_for(RING_HEADER_LEN), 0);
     assert_eq!(capacity_for(0), 0);
     assert_eq!(capacity_for(RING_HEADER_LEN + EVENT_LEN), 1);
-    let mut bytes = page();
-    let writer = RingWriter::create(&mut bytes).unwrap();
+    let bytes = page();
+    let writer = RingWriter::create(&bytes).unwrap();
     assert_eq!(writer.header().capacity, RING_CAPACITY);
     assert_eq!(writer.header().write_seq, 0);
     assert_eq!(writer.header().read_seq, 0);
@@ -198,15 +201,17 @@ fn a_ring_over_one_page_holds_the_records_that_fit_into_it() {
 
 #[test]
 fn a_ring_that_holds_no_record_is_no_ring() {
-    let mut nothing = vec![0u8; RING_HEADER_LEN];
-    assert!(RingWriter::create(&mut nothing).is_none());
-    assert!(RingWriter::adopt(&mut nothing).is_none());
-    assert!(RingReader::new(&mut nothing).is_none());
+    let nothing = page();
+    for capacity in [0, 1, RING_CAPACITY + 1, u32::MAX] {
+        nothing.capacity.store(capacity, Ordering::Relaxed);
+        assert!(RingWriter::adopt(&nothing).is_none());
+        assert!(RingReader::new(&nothing).is_none());
+    }
 }
 
 #[test]
 fn what_the_writer_pushes_the_reader_pops_in_the_order_it_was_pushed() {
-    let mut bytes = page();
+    let bytes = page();
     let events = [
         key(KeyCode::A, true),
         key(KeyCode::A, false),
@@ -218,13 +223,13 @@ fn what_the_writer_pushes_the_reader_pops_in_the_order_it_was_pushed() {
         }),
     ];
     {
-        let mut writer = RingWriter::create(&mut bytes).unwrap();
+        let mut writer = RingWriter::create(&bytes).unwrap();
         for event in events {
             assert!(writer.push(event));
         }
         assert_eq!(writer.header().write_seq, 3);
     }
-    let mut reader = RingReader::new(&mut bytes).unwrap();
+    let mut reader = RingReader::new(&bytes).unwrap();
     assert!(!reader.is_empty());
     for event in events {
         assert_eq!(reader.pop(), Some(event));
@@ -237,10 +242,10 @@ fn what_the_writer_pushes_the_reader_pops_in_the_order_it_was_pushed() {
 
 #[test]
 fn a_full_ring_drops_the_newest_event_and_counts_it_and_the_reader_clears_that() {
-    let mut bytes = page();
+    let bytes = page();
     let capacity = usize::try_from(RING_CAPACITY).unwrap();
     {
-        let mut writer = RingWriter::create(&mut bytes).unwrap();
+        let mut writer = RingWriter::create(&bytes).unwrap();
         for _ in 0..capacity {
             assert!(writer.push(key(KeyCode::A, true)));
         }
@@ -252,7 +257,7 @@ fn a_full_ring_drops_the_newest_event_and_counts_it_and_the_reader_clears_that()
         assert_eq!(writer.header().overflow, 2);
         assert_eq!(writer.header().write_seq, u64::from(RING_CAPACITY));
     }
-    let mut reader = RingReader::new(&mut bytes).unwrap();
+    let mut reader = RingReader::new(&bytes).unwrap();
     assert_eq!(reader.take_overflow(), 2);
     assert_eq!(reader.take_overflow(), 0, "a gap is reported once");
     assert_eq!(
@@ -264,9 +269,9 @@ fn a_full_ring_drops_the_newest_event_and_counts_it_and_the_reader_clears_that()
 
 #[test]
 fn the_records_wrap_and_the_sequence_numbers_stay_contiguous() {
-    let mut bytes = page();
+    let bytes = page();
     let capacity = u64::from(RING_CAPACITY);
-    RingWriter::create(&mut bytes).unwrap();
+    RingWriter::create(&bytes).unwrap();
     let mut written = 0u64;
     let mut read = 0u64;
     for round in 0..(capacity.saturating_mul(2)) {
@@ -276,11 +281,11 @@ fn the_records_wrap_and_the_sequence_numbers_stay_contiguous() {
             KeyCode::B
         };
         {
-            let mut writer = RingWriter::adopt(&mut bytes).unwrap();
+            let mut writer = RingWriter::adopt(&bytes).unwrap();
             assert!(writer.push(key(code, true)));
             written = written.saturating_add(1);
         }
-        let mut reader = RingReader::new(&mut bytes).unwrap();
+        let mut reader = RingReader::new(&bytes).unwrap();
         assert_eq!(reader.pop(), Some(key(code, true)));
         read = read.saturating_add(1);
         assert_eq!(reader.header().write_seq, written);
@@ -290,21 +295,139 @@ fn the_records_wrap_and_the_sequence_numbers_stay_contiguous() {
 
 #[test]
 fn a_ring_whose_record_is_nonsense_gives_nothing_and_still_moves_on() {
-    let mut bytes = page();
+    let bytes = page();
     {
-        let mut writer = RingWriter::create(&mut bytes).unwrap();
+        let mut writer = RingWriter::create(&bytes).unwrap();
         assert!(writer.push(key(KeyCode::A, true)));
     }
     // Whoever holds the page can write into it, and the reader has to
     // survive that: it is shared memory and not a message.
-    if let Some(slot) = bytes.get_mut(RING_HEADER_LEN) {
-        *slot = 0xFF;
+    if let Some(slot) = bytes.records.first().and_then(|record| record.first()) {
+        slot.store(0xFF, Ordering::Relaxed);
     }
-    let mut reader = RingReader::new(&mut bytes).unwrap();
+    let mut reader = RingReader::new(&bytes).unwrap();
     assert_eq!(reader.pop(), None, "the record names no kind");
     assert_eq!(
         reader.header().read_seq,
         1,
         "and it is stepped over rather than read for ever"
     );
+}
+
+#[test]
+fn reader_and_writer_run_concurrently_without_torn_or_reordered_records() {
+    const EVENTS: i16 = 10_000;
+    let page = page();
+    let done = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut writer = RingWriter::adopt(&page).unwrap();
+            for index in 0..EVENTS {
+                let event = Event::Pointer(PointerEvent {
+                    dx: index,
+                    dy: -index,
+                    wheel: 1,
+                    buttons: 3,
+                });
+                while !writer.push(event) {
+                    std::thread::yield_now();
+                }
+            }
+            done.store(true, Ordering::Release);
+        });
+        let mut reader = RingReader::new(&page).unwrap();
+        let mut next = 0;
+        while next < EVENTS {
+            if let Some(event) = reader.pop() {
+                assert_eq!(
+                    event,
+                    Event::Pointer(PointerEvent {
+                        dx: next,
+                        dy: -next,
+                        wheel: 1,
+                        buttons: 3
+                    })
+                );
+                next += 1;
+            } else {
+                assert!(!done.load(Ordering::Acquire) || !reader.is_empty() || next == EVENTS);
+                std::thread::yield_now();
+            }
+        }
+    });
+}
+
+#[test]
+fn overflow_exchange_does_not_erase_concurrent_increments() {
+    let page = page();
+    let mut writer = RingWriter::adopt(&page).unwrap();
+    for _ in 0..RING_CAPACITY {
+        assert!(writer.push(key(KeyCode::A, true)));
+    }
+    let done = AtomicBool::new(false);
+    let mut reported = 0;
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut writer = RingWriter::adopt(&page).unwrap();
+            for _ in 0..100_000 {
+                assert!(!writer.push(key(KeyCode::B, true)));
+            }
+            done.store(true, Ordering::Release);
+        });
+        let mut reader = RingReader::new(&page).unwrap();
+        while !done.load(Ordering::Acquire) {
+            reported += reader.take_overflow();
+        }
+        reported += reader.take_overflow();
+    });
+    assert_eq!(reported, 100_000);
+}
+
+#[test]
+fn input_requests_reject_missing_extra_and_unexpected_handles_and_words() {
+    for request in [
+        Request::Unsubscribe,
+        Request::Subscribe {
+            notification: handle(1),
+            process: handle(2),
+        },
+    ] {
+        let expected = if matches!(request, Request::Unsubscribe) {
+            0
+        } else {
+            2
+        };
+        for count in 0..=4 {
+            let mut bytes = buffer();
+            let mut writer = BufferMut::new(&mut bytes);
+            request.encode(&mut writer).unwrap();
+            for index in 0..count {
+                writer.set_handle(index, handle(u32::try_from(index).unwrap() + 1));
+            }
+            writer.set_counts(0, count).unwrap();
+            assert_eq!(
+                Request::decode(Buffer::new(&bytes)).is_ok(),
+                count == expected
+            );
+        }
+        let mut bytes = buffer();
+        let mut writer = BufferMut::new(&mut bytes);
+        request.encode(&mut writer).unwrap();
+        writer.set_counts(1, expected).unwrap();
+        assert!(Request::decode(Buffer::new(&bytes)).is_err());
+    }
+}
+
+#[test]
+fn ring_capacity_changes_after_adoption_cannot_escape_the_page() {
+    let page = page();
+    let mut writer = RingWriter::adopt(&page).unwrap();
+    let mut reader = RingReader::new(&page).unwrap();
+    assert!(writer.push(key(KeyCode::A, true)));
+    page.capacity.store(u32::MAX, Ordering::Relaxed);
+    assert!(!writer.push(key(KeyCode::B, true)));
+    assert_eq!(reader.pop(), None);
+    assert_eq!(reader.take_overflow(), 1);
+    page.capacity.store(RING_CAPACITY, Ordering::Relaxed);
+    assert_eq!(reader.pop(), Some(key(KeyCode::A, true)));
 }

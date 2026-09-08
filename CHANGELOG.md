@@ -18,9 +18,8 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   tests over a scripted controller.
 - `server-input`: what the input server decides — who is subscribed, which
   decoder a byte belongs to, what is appended to whose ring, and which
-  subscriber is dropped. A subscriber that cannot be woken is gone, which
-  is how a client that has ended is noticed and why this server needs no
-  watch of its own.
+  subscriber is dropped. Process watches detect client ends independently
+  of the retained notification, which remains signalable after its client exits.
 - The input server as a process, `app-input` as its first client, and the
   runner that types at the machine. The root task makes the ports of the
   PS/2 controller and the interrupt objects of its two lines and hands them
@@ -164,6 +163,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   which the track had been citing 6.6.53 for, and 08 8.21 now names both.
 
 ### Fixed
+
+- Phase 10 review: shared input rings use atomic records and acquire/release
+  sequence publication, with atomic overflow exchange. The memory server
+  retires returned objects while foreign handles or mappings remain, using
+  `memory_references` (45) before reclamation. Input subscriptions carry an
+  INFO process handle and use process watches; `process_unwatch` (44) cancels
+  watches and distinguishes delayed signals from the exit of a replacement
+  subscriber. Every rejected request closes its received capabilities.
+- Keyboard regression fixes: separate left/right modifier state, caps-lock
+  repeat suppression, German AltGr characters, and validated Pause tails with
+  recovery at the first mismatching byte. Host concurrency tests and QEMU
+  lifecycle/isolation/handle-exhaustion regressions cover the fixes.
 
 - The kernel no longer drops a device interrupt that arrives while the idle
   thread is choosing what to run next. The borrow of the machine is only

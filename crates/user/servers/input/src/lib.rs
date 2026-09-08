@@ -7,6 +7,7 @@
 
 #[cfg(any(test, feature = "test-doubles"))]
 pub mod doubles;
+pub mod request;
 pub mod service;
 pub mod state;
 

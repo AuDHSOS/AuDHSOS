@@ -516,6 +516,16 @@ const REFUSALS: &[(Syscall, Error, &str)] = &[
         Error::InvalidArgument,
         "a bit index above the sixty-four a notification has",
     ),
+    (
+        Syscall::ProcessUnwatch,
+        Error::InvalidArgument,
+        "an invalid watch bit",
+    ),
+    (
+        Syscall::MemoryReferences,
+        Error::InvalidHandle,
+        "an invalid memory handle",
+    ),
 ];
 
 /// Every call this phase implements answered exactly one error, and it is

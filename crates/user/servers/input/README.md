@@ -9,7 +9,8 @@ through, so a ring belongs to whoever subscribed and a request that carries
 no badge names nobody and is refused.
 
 Nothing here maps memory, makes a system call, or touches a port. The
-process around it hands in the bytes of each subscriber's ring and a way to
+process around it hands in the atomic page of each subscriber's ring and a way to
 wake it, and this crate says what goes into which ring and who has gone
-away. That is why it is tested on the host, over byte vectors that stand in
-for the rings and a recording double for the wake-up.
+away. It is tested on the host with atomic ring pages and a recording
+double for signalling. Process watches report exits independently of
+signalling success; a retained notification remains signalable after exit.

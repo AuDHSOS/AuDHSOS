@@ -267,6 +267,16 @@ impl Process {
         self.watchers.iter().flatten().copied()
     }
 
+    /// Removes exactly this watch. Already delivered notification bits
+    /// are not affected; the owner must validate a delayed delivery.
+    pub fn remove_watcher(&mut self, watch: Watch) {
+        for slot in &mut self.watchers {
+            if *slot == Some(watch) {
+                *slot = None;
+            }
+        }
+    }
+
     /// Whether the end of this process has been told.
     #[must_use]
     pub const fn has_ended(&self) -> bool {

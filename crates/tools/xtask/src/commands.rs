@@ -470,6 +470,16 @@ const BUTTON_PRESSED: &str = "[input] pointer 0 0 0 1";
 /// six packets of the mouse are twenty-four bytes and the last two of them
 /// were never seen.
 fn inject_input(socket: &Path, session: &mut Session) -> Result<(), Error> {
+    for line in [
+        "[checks] input lifecycle and isolation: ok",
+        "is gone: ring released",
+    ] {
+        if !session.wait_for(line, E2E_TIMEOUT) {
+            return Err(Error::Usage(format!(
+                "input regression did not complete: `{line}`"
+            )));
+        }
+    }
     if !session.wait_for("[input] ready", E2E_TIMEOUT) {
         return Err(Error::Usage(
             "the program that listens never subscribed".to_owned(),

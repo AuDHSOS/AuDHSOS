@@ -225,6 +225,8 @@ pub struct Modifiers {
 pub struct Keyboard {
     layout: Layout,
     modifiers: Modifiers,
+    /// One bit per physical modifier, including the caps-lock key itself.
+    held: u16,
 }
 
 impl Keyboard {
@@ -233,6 +235,7 @@ impl Keyboard {
     pub const fn new(layout: Layout) -> Self {
         Keyboard {
             layout,
+            held: 0,
             modifiers: Modifiers {
                 shift: false,
                 control: false,
@@ -274,6 +277,23 @@ impl Keyboard {
     /// Which character `code` stands for under the modifiers that are held.
     #[must_use]
     pub fn character(&self, code: KeyCode) -> Option<char> {
+        if self.layout == Layout::De && self.modifiers.alt_graph {
+            return match code {
+                KeyCode::Q => Some('@'),
+                KeyCode::E => Some('€'),
+                KeyCode::Digit2 => Some('²'),
+                KeyCode::Digit3 => Some('³'),
+                KeyCode::Digit7 => Some('{'),
+                KeyCode::Digit8 => Some('['),
+                KeyCode::Digit9 => Some(']'),
+                KeyCode::Digit0 => Some('}'),
+                KeyCode::Minus => Some('\\'),
+                KeyCode::RightBracket => Some('~'),
+                KeyCode::IntlBackslash => Some('|'),
+                KeyCode::M => Some('µ'),
+                _ => None,
+            };
+        }
         let (low, high) = self
             .layout
             .table()
@@ -294,22 +314,31 @@ impl Keyboard {
 
     /// Notes a modifier, and says whether the event was one.
     const fn remember(&mut self, event: KeyEvent) -> bool {
-        let down = event.pressed;
-        match event.code {
-            KeyCode::LeftShift | KeyCode::RightShift => self.modifiers.shift = down,
-            KeyCode::LeftControl | KeyCode::RightControl => self.modifiers.control = down,
-            KeyCode::LeftAlt => self.modifiers.alt = down,
-            KeyCode::RightAlt => self.modifiers.alt_graph = down,
-            KeyCode::LeftMeta | KeyCode::RightMeta => self.modifiers.meta = down,
-            // The lock turns over when the key goes down and stays where it
-            // is when the key comes up.
-            KeyCode::CapsLock => {
-                if down {
-                    self.modifiers.caps = !self.modifiers.caps;
-                }
-            }
+        let bit = match event.code {
+            KeyCode::LeftShift => 1,
+            KeyCode::RightShift => 2,
+            KeyCode::LeftControl => 4,
+            KeyCode::RightControl => 8,
+            KeyCode::LeftAlt => 16,
+            KeyCode::RightAlt => 32,
+            KeyCode::LeftMeta => 64,
+            KeyCode::RightMeta => 128,
+            KeyCode::CapsLock => 256,
             _other => return false,
+        };
+        if bit == 256 && event.pressed && self.held & bit == 0 {
+            self.modifiers.caps = !self.modifiers.caps;
         }
+        if event.pressed {
+            self.held |= bit;
+        } else {
+            self.held &= !bit;
+        }
+        self.modifiers.shift = self.held & 3 != 0;
+        self.modifiers.control = self.held & 0b1100 != 0;
+        self.modifiers.alt = self.held & 16 != 0;
+        self.modifiers.alt_graph = self.held & 32 != 0;
+        self.modifiers.meta = self.held & 0b1100_0000 != 0;
         true
     }
 }

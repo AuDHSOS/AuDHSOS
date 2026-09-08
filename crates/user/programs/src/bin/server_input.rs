@@ -18,9 +18,9 @@
 //!
 //! A client subscribes once and is given a ring of one page. Everything
 //! after that is shared memory and a signal, so a keystroke costs no message
-//! at all. A client whose notification can no longer be signalled has ended,
-//! and its subscription and its ring go with it, which is why this server
-//! watches nobody.
+//! at all. Process watches report client ends on the drain notification's
+//! other bits. Returned ring pages remain retired in the memory server
+//! until no foreign handles or mappings can reach them.
 
 #![no_std]
 #![no_main]
@@ -42,14 +42,16 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use audhsos_abi::layout::{MAX_MESSAGE_WORDS, PAGE_SIZE};
 use audhsos_abi::{Error, Handle};
 use driver_i8042::controller::{COMMAND_PORT, Controller, DATA_PORT, Devices, Ports};
+use server_input::request::ReceivedHandles;
 use server_input::service::{Line, Lines, service, unpack};
 use server_input::state::{Clients, Input};
 use user_programs::client::{allocate, register, release, write_line};
 use user_programs::mapping::Mapping;
 use user_programs::serve::{Serving, receive};
-use user_proto::input::{Event, Reply, Request, RingWriter};
+use user_proto::input::{Event, Reply, Request, RingPage, RingWriter};
 use user_rt::{
-    EndpointHandle, InterruptHandle, IoPortHandle, MemoryHandle, NotificationHandle, Startup, Typed,
+    EndpointHandle, InterruptHandle, IoPortHandle, MemoryHandle, NotificationHandle, ProcessHandle,
+    Startup, Typed,
 };
 use user_sys_x86_64::{self as sys, Gate};
 
@@ -70,6 +72,8 @@ const INTERRUPT_BADGE: u64 = 0x1_4042;
 
 /// The label it sends them under.
 const BYTES_LABEL: u64 = 1;
+/// A drain-thread message carrying process-watch bits instead of bytes.
+const GONE_LABEL: u64 = 2;
 
 /// The bit of the notification the keyboard line signals.
 const KEYBOARD_BIT: u64 = 0;
@@ -114,9 +118,13 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
     let mut gate = controller.into_ports().gate;
     say_devices(&mut gate, &startup, devices);
 
-    if let Err(error) = start_drain_thread(&mut gate, &startup, endpoint) {
-        say(&mut gate, &startup, "no draining thread", error);
-    }
+    let watcher = match start_drain_thread(&mut gate, &startup, endpoint) {
+        Ok(notification) => notification,
+        Err(error) => {
+            say(&mut gate, &startup, "no draining thread", error);
+            gate.thread_exit()
+        }
+    };
 
     let mut input: Input<CLIENTS> = Input::new(devices.mouse_id);
     let mut held: [Option<Held>; CLIENTS] = [const { None }; CLIENTS];
@@ -128,10 +136,21 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         // The draining thread sends bytes, not requests, and it sends them
         // with `ipc_send`, so there is nothing to reply to.
         if serving.badge == INTERRUPT_BADGE {
-            arrived(&mut gate, &startup, &mut input, &mut held);
+            if gate
+                .reader()
+                .message()
+                .is_ok_and(|message| message.label == GONE_LABEL)
+            {
+                let bits = gate.reader().word(0).unwrap_or(0);
+                release_gone(&mut gate, &startup, &mut input, &mut held, bits);
+            } else {
+                arrived(&mut gate, &startup, &mut input, &mut held);
+            }
             continue;
         }
-        let answer = match Request::decode(gate.reader()) {
+        let handles = ReceivedHandles::read(gate.reader());
+        let decoded = Request::decode(gate.reader());
+        let answer = match decoded {
             Ok(request) => handle(
                 &mut gate,
                 &startup,
@@ -139,21 +158,39 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
                 &mut held,
                 serving.badge,
                 request,
+                watcher,
             ),
             Err(error) => Reply::Unsubscribed(Err(Error::from(error))),
         };
+        handles.finish(decoded.ok(), answer, |handle| {
+            let _closed = gate.handle_close(handle);
+        });
         let _written = answer.encode(&mut gate.writer());
     }
 }
 
 /// The ring of one client, and what the server holds of that client.
 struct Held {
+    /// The process whose lifetime this subscription follows.
+    process: ProcessHandle,
+    /// The shared notification and this subscription's watch bit.
+    watcher: NotificationHandle,
+    /// Its bit, above the two device interrupt bits.
+    bit: u64,
     /// The memory object of its ring.
     memory: MemoryHandle,
     /// The notification the client waits on.
     notification: NotificationHandle,
     /// Where the ring is mapped in this process.
     mapping: Mapping,
+}
+
+/// The two received capabilities and the notification their watch uses.
+#[derive(Clone, Copy)]
+struct Client {
+    process: ProcessHandle,
+    notification: NotificationHandle,
+    watcher: NotificationHandle,
 }
 
 /// The rings, and the way to wake the clients that hold them.
@@ -163,12 +200,11 @@ struct Rings<'a> {
 }
 
 impl Clients for Rings<'_> {
-    fn ring(&mut self, slot: usize) -> Option<&mut [u8]> {
+    fn ring(&mut self, slot: usize) -> Option<&RingPage> {
         let held = self.held.get_mut(slot)?.as_mut()?;
-        // SAFETY: the mapping was made when the client subscribed, nothing
-        // has unmapped it, and this is the only reference to it while the
-        // event is appended.
-        Some(unsafe { held.mapping.bytes() })
+        // SAFETY: the live mapping contains a RingPage. This process and
+        // the client use atomic accesses only; no exclusive slice exists.
+        unsafe { held.mapping.ring() }
     }
 
     fn wake(&mut self, slot: usize) -> bool {
@@ -190,15 +226,23 @@ fn handle(
     held: &mut [Option<Held>; CLIENTS],
     badge: u64,
     request: Request,
+    watcher: NotificationHandle,
 ) -> Reply {
     match request {
-        Request::Subscribe { notification } => Reply::Subscribed(subscribe(
+        Request::Subscribe {
+            notification,
+            process,
+        } => Reply::Subscribed(subscribe(
             gate,
             startup,
             input,
             held,
             badge,
-            NotificationHandle::from_handle(notification),
+            Client {
+                process: ProcessHandle::from_handle(process),
+                notification: NotificationHandle::from_handle(notification),
+                watcher,
+            },
         )),
         Request::Unsubscribe => Reply::Unsubscribed(unsubscribe(gate, startup, input, held, badge)),
     }
@@ -213,23 +257,17 @@ fn subscribe(
     input: &mut Input<CLIENTS>,
     held: &mut [Option<Held>; CLIENTS],
     badge: u64,
-    notification: NotificationHandle,
+    client: Client,
 ) -> Result<Handle, Error> {
-    let outcome = take_on(gate, startup, input, held, badge, notification);
+    let outcome = take_on(gate, startup, input, held, badge, client);
     match outcome {
         Ok(_given) => say_line(
             gate,
             startup,
             user_rt::Line::<96>::of(format_args!("[input] client {badge} listens\n")).as_bytes(),
         ),
-        // The notification arrived in the handle table of this process and
-        // stays there until somebody closes it. A subscription that failed
-        // holds nothing, so it holds that handle either: a client that asks
-        // twice and is refused twice would otherwise cost this server a
-        // handle each time until it has none left.
-        Err(_error) => {
-            let _closed = gate.handle_close(notification.handle());
-        }
+        // ReceivedHandles closes both capabilities on every failure.
+        Err(_error) => {}
     }
     outcome
 }
@@ -242,14 +280,19 @@ fn take_on(
     input: &mut Input<CLIENTS>,
     held: &mut [Option<Held>; CLIENTS],
     badge: u64,
-    notification: NotificationHandle,
+    client: Client,
 ) -> Result<Handle, Error> {
     let (Some(process), Some(server)) = (startup.own_process, startup.memory_server) else {
         return Err(Error::NotFound);
     };
     let slot = input.subscribe(badge)?;
-    let made = make_ring(gate, process, server, notification, held, slot);
+    let bit = u64::try_from(slot).unwrap_or(0).saturating_add(2);
+    let made = gate
+        .notification_signal(client.notification, 0)
+        .and_then(|()| gate.process_watch(client.process, client.watcher, bit))
+        .and_then(|()| make_ring(gate, process, server, held, slot, client));
     if made.is_err() {
+        let _unwatched = gate.process_unwatch(client.process, client.watcher, bit);
         let _gone = input.unsubscribe(badge);
     }
     made
@@ -260,12 +303,12 @@ fn make_ring(
     gate: &mut Gate,
     process: user_rt::ProcessHandle,
     server: EndpointHandle,
-    notification: NotificationHandle,
     held: &mut [Option<Held>; CLIENTS],
     slot: usize,
+    client: Client,
 ) -> Result<Handle, Error> {
     let memory = allocate(gate, server, PAGE_SIZE, PAGE_SIZE)?;
-    let mut mapping = match Mapping::new(gate, process, memory, window_of(slot), PAGE_SIZE) {
+    let mapping = match Mapping::new(gate, process, memory, window_of(slot), PAGE_SIZE) {
         Ok(mapping) => mapping,
         Err(error) => {
             let _released = release(gate, server, memory);
@@ -275,8 +318,8 @@ fn make_ring(
     let made = {
         // SAFETY: the mapping was made just now, it is still standing, and
         // nothing else in this program holds a reference to it.
-        let bytes = unsafe { mapping.bytes() };
-        RingWriter::create(bytes).is_some()
+        let page = unsafe { mapping.ring() };
+        page.and_then(RingWriter::create).is_some()
     };
     if !made {
         let _unmapped = mapping.unmap(gate, process);
@@ -293,8 +336,11 @@ fn make_ring(
     let given = memory.handle();
     if let Some(place) = held.get_mut(slot) {
         *place = Some(Held {
+            process: client.process,
+            watcher: client.watcher,
+            bit: u64::try_from(slot).unwrap_or(0).saturating_add(2),
             memory,
-            notification,
+            notification: client.notification,
             mapping,
         });
     }
@@ -319,6 +365,7 @@ fn give_back(gate: &mut Gate, startup: &Startup, held: &mut [Option<Held>; CLIEN
     let Some(taken) = held.get_mut(slot).and_then(Option::take) else {
         return;
     };
+    let _unwatched = gate.process_unwatch(taken.process, taken.watcher, taken.bit);
     if let Some(process) = startup.own_process {
         let _unmapped = taken.mapping.unmap(gate, process);
     }
@@ -326,6 +373,51 @@ fn give_back(gate: &mut Gate, startup: &Startup, held: &mut [Option<Held>; CLIEN
         let _released = release(gate, server, taken.memory);
     }
     let _closed = gate.handle_close(taken.notification.handle());
+    let _closed = gate.handle_close(taken.process.handle());
+}
+
+/// Confirms the current slot's process has ended, not just an earlier
+/// subscriber that used the same bit. A stale message merely rearms the
+/// live process's watch; the kernel reports an intervening exit at once.
+fn release_gone(
+    gate: &mut Gate,
+    startup: &Startup,
+    input: &mut Input<CLIENTS>,
+    held: &mut [Option<Held>; CLIENTS],
+    bits: u64,
+) {
+    for slot in 0..CLIENTS {
+        let Some(Some(client)) = held.get(slot) else {
+            continue;
+        };
+        if bits & (1u64 << client.bit) == 0 {
+            continue;
+        }
+        let ended = gate.process_unwatch(client.process, client.watcher, client.bit);
+        match ended {
+            Ok(true) | Err(Error::InvalidHandle) => {}
+            _ => {
+                let _watched = gate.process_watch(client.process, client.watcher, client.bit);
+                continue;
+            }
+        }
+        let badge = input
+            .iter()
+            .find(|subscriber| subscriber.slot == slot)
+            .map(|subscriber| subscriber.badge);
+        if let Some(badge) = badge {
+            input.forget(badge);
+            give_back(gate, startup, held, slot);
+            say_line(
+                gate,
+                startup,
+                user_rt::Line::<96>::of(format_args!(
+                    "[input] client {badge} is gone: ring released\n"
+                ))
+                .as_bytes(),
+            );
+        }
+    }
 }
 
 /// Takes the bytes the draining thread sent, decodes them, and hands what
@@ -395,7 +487,7 @@ fn start_drain_thread(
     gate: &mut Gate,
     startup: &Startup,
     endpoint: EndpointHandle,
-) -> Result<(), Error> {
+) -> Result<NotificationHandle, Error> {
     let (Some(own), Some(memory), Some(ports)) =
         (startup.own_process, startup.memory_server, startup.io_ports)
     else {
@@ -432,7 +524,8 @@ fn start_drain_thread(
         u64::from(user_programs::priority::DRIVER),
         None,
     )?;
-    gate.thread_start(thread)
+    gate.thread_start(thread)?;
+    Ok(notification)
 }
 
 /// Where the draining thread begins.
@@ -467,13 +560,18 @@ unsafe extern "sysv64" fn drain(ipc_buffer: u64) -> ! {
         mouse: SHARED.mouse(),
     });
     loop {
-        if controller
-            .ports()
-            .gate
-            .notification_wait(notification)
-            .is_err()
-        {
+        let Ok(bits) = controller.ports().gate.notification_wait(notification) else {
             controller.ports().gate.thread_exit()
+        };
+        if bits & !3 != 0 {
+            let mut writer = user_rt::message::Writer::new();
+            let mut buffer = controller.ports().gate.writer();
+            let _written = writer.word(&mut buffer, bits & !3);
+            let _finished = writer.finish(&mut buffer, GONE_LABEL);
+            let _sent = controller.ports().gate.ipc_send(endpoint);
+        }
+        if bits.trailing_zeros() >= 2 {
+            continue;
         }
         let mut words = [0u64; MAX_MESSAGE_WORDS];
         let taken = service(&mut controller, &mut words);

@@ -466,6 +466,8 @@ through shared memory objects.
 | `memory_create_device` | SystemControl | device memory object |
 | `system_info` | SystemControl | pool capacities and usage, tick frequency, the address of the root system description pointer, and the description of the framebuffer, which is six zero words on a machine without one |
 | `process_watch` | Process (`INFO`) | binds the end of a process to one bit of a notification, so a server that holds something of a program gets it back when the program is gone (D-106) |
+| `process_unwatch` | Process (`INFO`) | removes the watch for the supplied notification (`BIND`) and bit; returns whether the process has ended; does not clear queued bits |
+| `memory_references` | MemoryObject (`INFO`) | counts all handles and mappings; a returned object may be recycled only when its sole reference belongs to the memory server |
 | `debug_log` | none | writes the message region to the debug UART; exists only in builds with the `debug-uart` feature |
 
 ## 2.9 Boot sequence

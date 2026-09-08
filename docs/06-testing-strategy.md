@@ -706,6 +706,9 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.25 i8042 controller and PS/2 decoding (`driver-i8042`)
 
+- Regression: corrupt every position of the Pause tail; reject bogus Pause
+  events and reconsider a mismatching byte as the start of the next key.
+
 - Controller: a failed self-test returns an error; an output buffer that
   never fills or an input buffer that never empties hits the poll limit
   and returns an error instead of spinning; a missing keyboard or a
@@ -751,6 +754,18 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.27 Display and input servers (`server-display`, `server-input`, host-tested logic with doubles)
 
+- Regression: concurrent ring reader/writer preserve whole records and FIFO
+  order; overflow exchange accounts for concurrent increments. Invalid shared
+  capacity is rejected. Left/right modifiers remain independent, caps-lock
+  repeat does not toggle, and the German AltGr level produces its characters.
+- Regression: received handle snapshots survive nested IPC; invalid labels,
+  counts, extra handles and failed subscriptions close all unadopted handles.
+- Lifecycle: retained notifications still signal after a client exits; its
+  process watch reports that exit independently. Unwatch frees watcher capacity
+  and delayed bits cannot remove a new live subscriber in the reused slot.
+- Memory: returned pages with foreign handles or mappings are retired, not
+  zeroed or reallocated; only exclusive ownership permits reclamation.
+
 - Event ring: a full ring drops the newest event and sets the overflow
   flag; the reader clears the flag; sequence numbers are contiguous
   otherwise; a subscriber whose notification cannot be signalled is
@@ -792,6 +807,12 @@ done until every applicable item has a test. Items are added, never removed.
 - A socket that never answers hits the timeout.
 
 ### 6.6.29 Graphical end-to-end tests in QEMU
+
+- Input regression: more malformed/duplicate requests than the input server's
+  handle capacity do not exhaust it; a ring retained across unsubscribe is
+  not reused, including when only its mapping remains; repeated subscriptions
+  do not exhaust watch slots. A client exits subscribed and its ring is
+  released before the runner injects any input. Run with and without VGA.
 
 - Output: every pixel of a filled rectangle carries the color it was
   filled with and the pixels around it are untouched; a rendered string
@@ -1899,7 +1920,7 @@ item is what 12.9 asked for before the encodings could be written
   sequence numbers stay contiguous across the wrap, a full ring drops the
   newest event and counts it, the reader clears that count when it reports
   it, and a record somebody wrote nonsense into is stepped over rather than
-  read for ever. A subscription carries one handle and its reply carries
+  read for ever. A subscription carries a notification and a process handle and its reply carries
   the memory object only behind a status that says it succeeded.
 - The layouts of the client side: a word typed on `us` comes out as that
   word, the German layout swaps the two letters the United States layout

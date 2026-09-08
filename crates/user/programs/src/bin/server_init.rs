@@ -204,7 +204,7 @@ const PROGRAMS: [Program; 10] = [
         names: true,
         memory: true,
         draws: false,
-        listens: false,
+        listens: true,
         reports: true,
     },
     Program {

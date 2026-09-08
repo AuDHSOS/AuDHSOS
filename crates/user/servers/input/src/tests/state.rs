@@ -229,7 +229,7 @@ fn a_ring_the_process_does_not_hold_costs_the_event_and_not_the_subscription() {
     assert!(input.deliver(event, &mut clients).is_empty());
     assert_eq!(input.len(), 1);
     assert_eq!(clients.woken(), [0]);
-    assert_eq!(clients.ring(0), None);
+    assert!(clients.ring(0).is_none());
 }
 
 #[test]

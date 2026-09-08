@@ -5,7 +5,8 @@
 //! the record one of those is, and the ring the server writes them into.
 //!
 //! A client subscribes once. It hands over a capability to a notification
-//! of its own, reduced to `SIGNAL`, and receives a memory object of one
+//! of its own, reduced to `SIGNAL`, and its process reduced to `INFO`,
+//! both with `TRANSFER`, and receives a memory object of one
 //! page: the ring. From then on the server appends every event to that ring
 //! and signals the notification, and the client reads the ring whenever it
 //! wakes. Nothing after the subscription is a message, which is why a
@@ -25,6 +26,7 @@
 
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut};
 use audhsos_abi::{Error, Handle};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use user_rt::message::{Reader, Writer};
 
 use crate::label::{Label, ProtoError, Protocol, status_of, status_word};
@@ -140,42 +142,76 @@ pub struct RingHeader {
     pub capacity: u32,
 }
 
-/// Reads the header out of the first bytes of a ring.
-fn header_of(bytes: &[u8]) -> RingHeader {
-    let word = |at: usize| {
-        bytes
-            .get(at..at.saturating_add(8))
-            .and_then(|slice| slice.first_chunk::<8>())
-            .map_or(0, |eight| u64::from_le_bytes(*eight))
-    };
-    let half = |at: usize| {
-        bytes
-            .get(at..at.saturating_add(4))
-            .and_then(|slice| slice.first_chunk::<4>())
-            .map_or(0, |four| u32::from_le_bytes(*four))
-    };
-    RingHeader {
-        write_seq: word(0),
-        read_seq: word(8),
-        overflow: half(16),
-        capacity: half(20),
+/// One shared page. Only atomic accesses are permitted after publication.
+///
+/// The header and records retain their little-endian x86 wire offsets.
+/// Records use atomic bytes as well: a faulty client changing its sequence
+/// or records must not introduce a Rust data race in the server. Exactly
+/// one cooperating writer and reader provide FIFO semantics. There is no
+/// spinlock a preempted client could hold against the higher-priority driver.
+#[derive(Debug)]
+#[repr(C, align(8))]
+pub struct RingPage {
+    /// Published record count; stored with release ordering after the record.
+    pub write_seq: AtomicU64,
+    /// Consumed record count; stored with release ordering after the read.
+    pub read_seq: AtomicU64,
+    /// Lost records, cleared by an atomic exchange.
+    pub overflow: AtomicU32,
+    /// The fixed capacity; changed values make the ring invalid.
+    pub capacity: AtomicU32,
+    /// Event records in wire format.
+    pub records: [[AtomicU8; EVENT_LEN]; 254],
+    /// The unused tail of the page.
+    reserved: [u8; 8],
+}
+
+const _: () = assert!(core::mem::size_of::<RingPage>() == RING_PAGE_LEN);
+const _: () = assert!(core::mem::offset_of!(RingPage, records) == RING_HEADER_LEN);
+
+impl Default for RingPage {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-/// Writes one field of the header.
-fn put_bytes(bytes: &mut [u8], at: usize, from: &[u8]) {
-    if let Some(slot) = bytes.get_mut(at..at.saturating_add(from.len())) {
-        slot.copy_from_slice(from);
+impl RingPage {
+    /// An empty ring, ready to share.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            write_seq: AtomicU64::new(0),
+            read_seq: AtomicU64::new(0),
+            overflow: AtomicU32::new(0),
+            capacity: AtomicU32::new(RING_CAPACITY),
+            records: [const { [const { AtomicU8::new(0) }; EVENT_LEN] }; 254],
+            reserved: [0; 8],
+        }
     }
-}
 
-/// Where the record with sequence number `seq` stands.
-fn slot_at(capacity: u32, seq: u64) -> Option<usize> {
-    if capacity == 0 {
-        return None;
+    /// A snapshot of the independently owned header fields.
+    #[must_use]
+    pub fn header(&self) -> RingHeader {
+        RingHeader {
+            write_seq: self.write_seq.load(Ordering::Acquire),
+            read_seq: self.read_seq.load(Ordering::Acquire),
+            overflow: self.overflow.load(Ordering::Relaxed),
+            capacity: self.capacity.load(Ordering::Relaxed),
+        }
     }
-    let index = usize::try_from(seq.checked_rem(u64::from(capacity))?).ok()?;
-    RING_HEADER_LEN.checked_add(index.checked_mul(EVENT_LEN)?)
+
+    /// Initializes a private, zero-filled page before its handle is shared.
+    pub fn initialize(&self) {
+        self.write_seq.store(0, Ordering::Relaxed);
+        self.read_seq.store(0, Ordering::Relaxed);
+        self.overflow.store(0, Ordering::Relaxed);
+        self.capacity.store(RING_CAPACITY, Ordering::Release);
+    }
+
+    fn record(&self, seq: u64) -> Option<&[AtomicU8; EVENT_LEN]> {
+        let index = usize::try_from(seq.checked_rem(u64::from(RING_CAPACITY))?).ok()?;
+        self.records.get(index)
+    }
 }
 
 /// How many records fit into `len` bytes, which is what a ring over them
@@ -198,42 +234,35 @@ pub const fn capacity_for(len: usize) -> u32 {
 /// The writing half of a ring, which is the server's.
 #[derive(Debug)]
 pub struct RingWriter<'a> {
-    bytes: &'a mut [u8],
+    page: &'a RingPage,
 }
 
 impl<'a> RingWriter<'a> {
-    /// Makes a ring over `bytes`: the header is written and the records are
+    /// Makes a ring over a private page: the header is written and the records are
     /// whatever stood there, which nothing reads until they are written.
     ///
-    /// `None` when the bytes hold no record at all.
+    /// The page must not be in use by another reader or writer yet.
     #[must_use]
-    pub fn create(bytes: &'a mut [u8]) -> Option<Self> {
-        let capacity = capacity_for(bytes.len());
-        if capacity == 0 {
-            return None;
-        }
-        put_bytes(bytes, 0, &0u64.to_le_bytes());
-        put_bytes(bytes, 8, &0u64.to_le_bytes());
-        put_bytes(bytes, 16, &0u32.to_le_bytes());
-        put_bytes(bytes, 20, &capacity.to_le_bytes());
-        Some(RingWriter { bytes })
+    pub fn create(page: &'a RingPage) -> Option<Self> {
+        page.initialize();
+        Self::adopt(page)
     }
 
     /// Takes up a ring somebody has already made.
     ///
-    /// `None` when the header says the ring holds no record.
+    /// `None` when the header does not carry the fixed capacity.
     #[must_use]
-    pub fn adopt(bytes: &'a mut [u8]) -> Option<Self> {
-        if header_of(bytes).capacity == 0 {
+    pub fn adopt(page: &'a RingPage) -> Option<Self> {
+        if page.capacity.load(Ordering::Acquire) != RING_CAPACITY {
             return None;
         }
-        Some(RingWriter { bytes })
+        Some(RingWriter { page })
     }
 
     /// The header as it stands.
     #[must_use]
     pub fn header(&self) -> RingHeader {
-        header_of(self.bytes)
+        self.page.header()
     }
 
     /// Appends `event`, or counts it as lost when the ring is full.
@@ -245,20 +274,24 @@ impl<'a> RingWriter<'a> {
     pub fn push(&mut self, event: Event) -> bool {
         let header = self.header();
         let held = header.write_seq.wrapping_sub(header.read_seq);
-        if held >= u64::from(header.capacity) {
-            let lost = header.overflow.saturating_add(1);
-            put_bytes(self.bytes, 16, &lost.to_le_bytes());
+        if header.capacity != RING_CAPACITY || held >= u64::from(RING_CAPACITY) {
+            let _previous =
+                self.page
+                    .overflow
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |lost| {
+                        Some(lost.saturating_add(1))
+                    });
             return false;
         }
-        let Some(at) = slot_at(header.capacity, header.write_seq) else {
+        let Some(record) = self.page.record(header.write_seq) else {
             return false;
         };
-        put_bytes(self.bytes, at, &event.to_bytes());
-        put_bytes(
-            self.bytes,
-            0,
-            &header.write_seq.wrapping_add(1).to_le_bytes(),
-        );
+        for (slot, byte) in record.iter().zip(event.to_bytes()) {
+            slot.store(byte, Ordering::Relaxed);
+        }
+        self.page
+            .write_seq
+            .store(header.write_seq.wrapping_add(1), Ordering::Release);
         true
     }
 }
@@ -266,25 +299,25 @@ impl<'a> RingWriter<'a> {
 /// The reading half of a ring, which is the client's.
 #[derive(Debug)]
 pub struct RingReader<'a> {
-    bytes: &'a mut [u8],
+    page: &'a RingPage,
 }
 
 impl<'a> RingReader<'a> {
     /// Takes up the ring the server made.
     ///
-    /// `None` when the header says the ring holds no record.
+    /// `None` when the header does not carry the fixed capacity.
     #[must_use]
-    pub fn new(bytes: &'a mut [u8]) -> Option<Self> {
-        if header_of(bytes).capacity == 0 {
+    pub fn new(page: &'a RingPage) -> Option<Self> {
+        if page.capacity.load(Ordering::Acquire) != RING_CAPACITY {
             return None;
         }
-        Some(RingReader { bytes })
+        Some(RingReader { page })
     }
 
     /// The header as it stands.
     #[must_use]
     pub fn header(&self) -> RingHeader {
-        header_of(self.bytes)
+        self.page.header()
     }
 
     /// `true` when nothing is waiting.
@@ -297,27 +330,23 @@ impl<'a> RingReader<'a> {
     /// How many events were dropped since this was last asked, which also
     /// forgets them: a client hears about a gap once.
     pub fn take_overflow(&mut self) -> u32 {
-        let lost = self.header().overflow;
-        if lost != 0 {
-            put_bytes(self.bytes, 16, &0u32.to_le_bytes());
-        }
-        lost
+        self.page.overflow.swap(0, Ordering::Relaxed)
     }
 
     /// Takes the oldest event, or `None` when nothing is waiting.
     pub fn pop(&mut self) -> Option<Event> {
         let header = self.header();
-        if header.write_seq == header.read_seq {
+        if header.capacity != RING_CAPACITY || header.write_seq == header.read_seq {
             return None;
         }
-        let at = slot_at(header.capacity, header.read_seq)?;
-        let record = self.bytes.get(at..at.checked_add(EVENT_LEN)?)?;
-        let event = Event::from_bytes(record.first_chunk::<EVENT_LEN>()?);
-        put_bytes(
-            self.bytes,
-            8,
-            &header.read_seq.wrapping_add(1).to_le_bytes(),
-        );
+        let record = self.page.record(header.read_seq)?;
+        let bytes = core::array::from_fn(|index| {
+            record.get(index).map_or(0, |b| b.load(Ordering::Relaxed))
+        });
+        let event = Event::from_bytes(&bytes);
+        self.page
+            .read_seq
+            .store(header.read_seq.wrapping_add(1), Ordering::Release);
         event
     }
 }
@@ -332,6 +361,8 @@ pub enum Request {
     Subscribe {
         /// The notification the client waits on.
         notification: Handle,
+        /// The client's process, reduced to INFO and TRANSFER, for its watch.
+        process: Handle,
     },
     /// Stop sending me anything. The badge says who asks.
     Unsubscribe,
@@ -365,7 +396,13 @@ impl Request {
     pub fn encode(&self, buffer: &mut BufferMut<'_>) -> Result<(), ProtoError> {
         let mut writer = Writer::new();
         match self {
-            Request::Subscribe { notification } => writer.handle(buffer, *notification)?,
+            Request::Subscribe {
+                notification,
+                process,
+            } => {
+                writer.handle(buffer, *notification)?;
+                writer.handle(buffer, *process)?;
+            }
             Request::Unsubscribe => {}
         }
         writer.finish(buffer, self.label().raw())?;
@@ -382,13 +419,26 @@ impl Request {
     pub fn decode(buffer: Buffer<'_>) -> Result<Self, ProtoError> {
         let mut reader = Reader::new(buffer)?;
         let label = expect(reader.label())?;
-        match label.message {
+        let request = match label.message {
             SUBSCRIBE => Ok(Request::Subscribe {
                 notification: reader.handle()?,
+                process: reader.handle()?,
             }),
             UNSUBSCRIBE => Ok(Request::Unsubscribe),
             other => Err(ProtoError::Message(Protocol::Input, other)),
+        }?;
+        if reader.remaining_words() != 0 || reader.remaining_handles() != 0 {
+            return Err(user_rt::message::CodecError::BadLength(
+                u64::try_from(
+                    reader
+                        .remaining_words()
+                        .saturating_add(reader.remaining_handles()),
+                )
+                .unwrap_or(u64::MAX),
+            )
+            .into());
         }
+        Ok(request)
     }
 }
 

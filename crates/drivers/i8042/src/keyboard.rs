@@ -44,6 +44,9 @@ pub const PAUSE_PREFIX: u8 = 0xE1;
 /// How many bytes follow [`PAUSE_PREFIX`]: `14 77 E1 F0 14 F0 77`.
 pub const PAUSE_TAIL: u8 = 7;
 
+/// The bytes following the pause prefix, in wire order.
+pub const PAUSE_BYTES: [u8; 7] = [0x14, 0x77, 0xE1, 0xF0, 0x14, 0xF0, 0x77];
+
 /// Declares the key table once and derives the enum, the codes, the names,
 /// and the encodings from it.
 macro_rules! key_codes {
@@ -311,7 +314,7 @@ impl Decoder {
             State::Extended => self.extended(byte),
             State::Release => self.settle(KeyCode::from_set2(byte), false),
             State::ExtendedRelease => self.settle(KeyCode::from_set2_extended(byte), false),
-            State::Pause(seen) => self.pause(seen),
+            State::Pause(seen) => self.pause(seen, byte),
         }
     }
 
@@ -351,9 +354,13 @@ impl Decoder {
         code.map(|code| KeyEvent { code, pressed })
     }
 
-    /// One byte of the pause sequence, whose bytes carry nothing: the key
-    /// is the sequence, so the last of them is the event.
-    const fn pause(&mut self, seen: u8) -> Option<KeyEvent> {
+    /// Validates the pause tail. A mismatch is reconsidered as the start
+    /// of a new sequence, so a damaged prefix does not eat the next key.
+    fn pause(&mut self, seen: u8, byte: u8) -> Option<KeyEvent> {
+        if PAUSE_BYTES.get(usize::from(seen)) != Some(&byte) {
+            self.state = State::Idle;
+            return self.idle(byte);
+        }
         let next = seen.saturating_add(1);
         if next < PAUSE_TAIL {
             self.state = State::Pause(next);

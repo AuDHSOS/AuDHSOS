@@ -78,8 +78,11 @@ fn listen(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
     };
     let notification = gate.notification_create()?;
     let given = gate.handle_duplicate(notification.handle(), SIGNAL_ONLY)?;
-    let memory = MemoryHandle::from_handle(subscribe(gate, input, given)?);
-    let mut mapping = Mapping::new(gate, process, memory, RING, PAGE_SIZE)?;
+    let watched = gate.handle_duplicate(process.handle(), Rights::INFO.union(Rights::TRANSFER))?;
+    let memory = MemoryHandle::from_handle(subscribe(gate, input, given, watched)?);
+    gate.handle_close(given)?;
+    gate.handle_close(watched)?;
+    let mapping = Mapping::new(gate, process, memory, RING, PAGE_SIZE)?;
     say(gate, startup, b"[input] ready\n");
 
     let mut done = false;
@@ -95,11 +98,10 @@ fn listen(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
             let lost;
             let emptied;
             {
-                // SAFETY: the mapping was made just now, it is still
-                // standing, and nothing else in this program holds a
-                // reference to it.
-                let bytes = unsafe { mapping.bytes() };
-                let mut reader = RingReader::new(bytes).ok_or(Error::InvalidArgument)?;
+                // SAFETY: the mapping remains live and the server published
+                // an initialized RingPage. Both processes use atomic access.
+                let page = unsafe { mapping.ring() }.ok_or(Error::InvalidArgument)?;
+                let mut reader = RingReader::new(page).ok_or(Error::InvalidArgument)?;
                 lost = reader.take_overflow();
                 while !lines.is_full() {
                     let Some(event) = reader.pop() else {
@@ -194,8 +196,12 @@ fn subscribe(
     gate: &mut Gate,
     input: EndpointHandle,
     notification: audhsos_abi::Handle,
+    process: audhsos_abi::Handle,
 ) -> Result<audhsos_abi::Handle, Error> {
-    let request = Request::Subscribe { notification };
+    let request = Request::Subscribe {
+        notification,
+        process,
+    };
     request.encode(&mut gate.writer())?;
     gate.ipc_call(input)?;
     match Reply::decode(gate.reader())? {

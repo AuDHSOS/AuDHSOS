@@ -4,5 +4,6 @@
 //! The host tests of the crate, one module per product module.
 
 mod doubles;
+mod request;
 mod service;
 mod state;

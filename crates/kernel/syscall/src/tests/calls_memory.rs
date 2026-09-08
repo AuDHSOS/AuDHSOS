@@ -486,6 +486,73 @@ fn memory_info_reports_where_the_object_lies() {
 }
 
 #[test]
+fn memory_reference_count_includes_mappings_and_transferred_handles() {
+    let mut fixture = Fixture::new();
+    let (object, handle) = fixture.memory(0x100, 1, full() | Rights::DUPLICATE | Rights::TRANSFER);
+    let own = fixture.own_process.raw();
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(Syscall::MemoryReferences, &[handle.raw()])
+        ),
+        1
+    );
+    value_of(
+        &mut fixture,
+        request(
+            Syscall::MemoryMap,
+            &[own, handle.raw(), ADDRESS, 0, PAGE_SIZE, WRITABLE],
+        ),
+    );
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(Syscall::MemoryReferences, &[handle.raw()])
+        ),
+        2
+    );
+    let duplicate = value_of(
+        &mut fixture,
+        request(
+            Syscall::HandleDuplicate,
+            &[handle.raw(), u64::from(Rights::INFO.bits())],
+        ),
+    );
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(Syscall::MemoryReferences, &[handle.raw()])
+        ),
+        3
+    );
+    value_of(&mut fixture, request(Syscall::HandleClose, &[duplicate]));
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(Syscall::MemoryReferences, &[handle.raw()])
+        ),
+        2
+    );
+    value_of(
+        &mut fixture,
+        request(Syscall::MemoryUnmap, &[own, ADDRESS, PAGE_SIZE]),
+    );
+    assert_eq!(fixture.objects.memory.references(object), Ok(1));
+    let without = fixture.install(AnyObjectId::of(object), Rights::READ);
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::MemoryReferences, &[without.raw()])
+        ),
+        Some(Error::AccessDenied)
+    );
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::MemoryReferences, &[0])),
+        Some(Error::InvalidHandle)
+    );
+}
+
+#[test]
 fn memory_info_without_the_info_right_is_refused() {
     let mut fixture = Fixture::new();
     let (_, handle) = fixture.memory(0x100, 3, Rights::READ | Rights::MAP);

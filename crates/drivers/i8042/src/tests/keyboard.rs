@@ -149,6 +149,22 @@ fn the_pause_sequence_is_counted_out_and_ends_in_one_event() {
 }
 
 #[test]
+fn a_corrupt_pause_tail_never_produces_a_pause_and_preserves_the_next_key() {
+    assert!(decode(&[0xE1, 0, 0, 0, 0, 0, 0, 0]).is_empty());
+    for cut in 1..PAUSE.len() {
+        let mut stream = PAUSE[..cut].to_vec();
+        stream.extend_from_slice(&[0x1C, 0xF0, 0x1C]);
+        assert_eq!(
+            decode(&stream),
+            [KeyEvent::down(KeyCode::A), KeyEvent::up(KeyCode::A)]
+        );
+        let mut stream = PAUSE[..cut].to_vec();
+        stream.extend_from_slice(&[0xE0, 0x75]);
+        assert_eq!(decode(&stream), [KeyEvent::down(KeyCode::ArrowUp)]);
+    }
+}
+
+#[test]
 fn an_unknown_code_is_dropped_without_losing_the_decoder_state() {
     let mut decoder = Decoder::new();
     assert_eq!(decoder.feed(0x00), None, "no key spells zero");

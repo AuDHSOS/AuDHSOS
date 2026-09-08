@@ -2678,15 +2678,19 @@ which phase nine left at four protocols.
   and `from_bytes` round-trip on the host, and a record whose kind byte
   names neither is refused.
 - `Ring`: the header `{ write_seq: u64, read_seq: u64, overflow: u32,
-  capacity: u32 }` and the records behind it, over a byte slice of one
+  capacity: u32 }` and the records behind it, in an atomic `RingPage` of one
   page. Twenty-four bytes of header leave 4072, which is 254 records of
   sixteen bytes and eight bytes over. The writer is the server and the
   reader is the client, so the type has two halves: `RingWriter::push`,
   which drops the newest event and raises `overflow` when the ring is
   full, and `RingReader::pop`, which takes the oldest and clears
-  `overflow` when it reports it. Both are host-tested over a `Vec`.
-- `Subscribe` carries one handle, a capability to the client's own
-  notification reduced to `SIGNAL`, and its reply carries the memory
+  `overflow` with an atomic exchange when it reports it. Sequence publication
+  uses release/acquire ordering, and event bytes are atomic too. Neither
+  process creates an exclusive byte slice of the shared page. Host tests run
+  reader and writer concurrently and account for concurrent overflow updates.
+- `Subscribe` carries two handles: the client's own notification reduced to
+  `SIGNAL` and its process reduced to `INFO`, both with `TRANSFER`.
+  Its reply carries the memory
   object of the ring, which the server allocates from the memory server
   and hands on as it stands: a memory object of this system carries no
   `DUPLICATE`, so a handle with fewer rights cannot be made from one, and
@@ -2697,9 +2701,13 @@ which phase nine left at four protocols.
   keeps something per client allocates it, rather than trusting an object
   a client hands it to be a page long and to stay one. `Unsubscribe`
   carries nothing; the badge says who asks.
+  Extra handles or words are rejected; every received handle not adopted by
+  a successful subscription is closed, including on decode failure.
 - `Keyboard`, the client side: tracks the modifiers, maps `(KeyCode,
   modifiers)` through the layout tables `us` and `de` to a `char`, and
   answers `None` for a key that stands for no character.
+  Left and right modifiers are tracked separately, caps-lock repeats do not
+  toggle the lock, and `de` includes the AltGr level.
 
 ### 10.10.3 `server-input` (`crates/user/servers/input`)
 
@@ -2733,24 +2741,40 @@ sends it to the badged endpoint, and acknowledges both interrupt objects.
 It acknowledges both whichever line woke it, because one drain empties the
 buffer both lines fill.
 
+Bits 2 through 5 of the same notification carry process watches. The second
+thread forwards those under a separate label, without needing a third thread.
+
 The first thread receives. A message under `INTERRUPT_BADGE` is bytes: it
 feeds them to the decoders, appends what they produce to every
 subscriber's ring, and signals each subscriber's notification. A message
 under any other badge is a request of the input protocol. A subscriber
-whose `notification_signal` fails is removed and its ring unmapped; that
-is how a client that has ended is noticed, and it is why this server needs
-no watch of its own (D-106). A request that arrives without a badge is
+whose `notification_signal` fails is removed and its ring unmapped, but a
+successful signal does not prove the client is alive: the retained handle
+keeps the notification alive. Process watches detect client ends (D-106).
+`process_unwatch` cancels the watch on unsubscribe and reports whether the
+current process has ended, so an old queued bit cannot remove a new subscriber
+in the same slot. A request that arrives without a badge is
 refused with `AccessDenied`, as the display server refuses one: a
 capability found under a name names nobody.
 
 Its `unsafe` counts against the budget of `user-programs`: the entry point
 the second thread is started at and the gate over that thread's IPC
 buffer, as D-105 and D-106 counted them for the two threads before it, and
-`Mapping::bytes` for the ring of a subscriber, and the same again in the
-program that listens. The budget goes from twenty-three to twenty-eight;
+`Mapping::ring` for the ring of a subscriber, and the same again in the
+program that listens. The budget is thirty-one after review: the atomic
+mapping accessor has two sites and the E2E isolation check has one additional
+call site, beside the original twenty-eight;
 the number in `policy::CRATES` is what the phase actually leaves.
 
 ### 10.10.4 Kernel and root task
+
+Review adds `ProcessUnwatch = 44` and `MemoryReferences = 45`. The former
+requires `INFO` on the process and `BIND` on the notification, cancels exactly
+one watch, and returns the process's ended state; already queued bits remain.
+The latter requires `INFO` and counts all handles and mappings of the memory
+object. The memory server retires returned objects until the count is one,
+then zeroes and reclaims them before another allocation. Closing the server's
+mapping alone never authorizes recycling a page a client can still reach.
 
 `Notification::bound_interrupt` goes, per D-108, and with it the check in
 `kernel_ipc::interrupt::bind` and the `Error::AlreadyExists` of its

@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 
-use user_proto::input::{Event, RING_PAGE_LEN, RingReader, RingWriter};
+use user_proto::input::{Event, RingPage, RingReader};
 
 use driver_i8042::controller::Ports;
 use driver_i8042::doubles::ScriptedPorts;
@@ -19,8 +19,8 @@ use crate::state::Clients;
 #[derive(Debug, Default)]
 pub struct RecordingClients {
     /// One page per slot.
-    rings: Vec<Vec<u8>>,
-    /// The slots whose client has ended and can no longer be woken.
+    rings: Vec<RingPage>,
+    /// The slots configured to fail signalling, independently of lifecycle.
     gone: Vec<usize>,
     /// Every slot that was woken, in order.
     woken: Vec<usize>,
@@ -36,15 +36,13 @@ impl RecordingClients {
             woken: Vec::new(),
         };
         for _ in 0..slots {
-            let mut page = vec![0u8; RING_PAGE_LEN];
-            let _made = RingWriter::create(&mut page);
-            clients.rings.push(page);
+            clients.rings.push(RingPage::new());
         }
         clients
     }
 
-    /// Says that the client in `slot` has ended, so that the next wake-up
-    /// of it fails the way one of a process that is gone does.
+    /// Makes signalling fail. Real process exits are delivered by a watch,
+    /// not by failure of a retained notification handle.
     pub fn end(&mut self, slot: usize) {
         self.gone.push(slot);
     }
@@ -88,8 +86,8 @@ impl RecordingClients {
 }
 
 impl Clients for RecordingClients {
-    fn ring(&mut self, slot: usize) -> Option<&mut [u8]> {
-        self.rings.get_mut(slot).map(Vec::as_mut_slice)
+    fn ring(&mut self, slot: usize) -> Option<&RingPage> {
+        self.rings.get(slot)
     }
 
     fn wake(&mut self, slot: usize) -> bool {

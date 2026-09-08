@@ -111,6 +111,8 @@ fn main(ipc_buffer: u64) -> ! {
     let _ = gate.debug_log();
     let _ = gate.memory_merge(memory, memory);
     let _ = gate.process_watch(process, notification, 0);
+    let _ = gate.process_unwatch(process, notification, 0);
+    let _ = gate.memory_references(memory);
 
     gate.thread_exit()
 }

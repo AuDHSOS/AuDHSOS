@@ -7,8 +7,8 @@
 //! The free list holds whole memory objects, sorted by the physical address
 //! they begin at. A request is served from the first object that can hold
 //! it at the alignment it asks for; what lies before and behind the piece
-//! that goes out is split off and stays free. A release puts the object
-//! back and joins it to the neighbours it touches, which is what keeps the
+//! that goes out is split off and stays free. A release retires the object
+//! until it is exclusively owned, then joins it to neighbours, which keeps the
 //! store from grinding its objects down to single pages (D-90).
 //!
 //! Zeroing happens twice over the same bytes and both are meant. The pass
@@ -65,6 +65,8 @@ pub struct Held {
 pub struct Store<const FREE: usize, const LIVE: usize> {
     free: ArrayVec<Object, FREE>,
     live: ArrayVec<Held, LIVE>,
+    /// Returned objects still reachable through another handle or mapping.
+    retired: ArrayVec<Object, LIVE>,
 }
 
 impl<const FREE: usize, const LIVE: usize> Default for Store<FREE, LIVE> {
@@ -80,6 +82,7 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         Store {
             free: ArrayVec::new(),
             live: ArrayVec::new(),
+            retired: ArrayVec::new(),
         }
     }
 
@@ -160,6 +163,7 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         if owner == 0 || len == 0 || align == 0 || !align.is_power_of_two() {
             return Err(Error::InvalidArgument);
         }
+        self.reclaim(pages)?;
         let wanted = len
             .checked_next_multiple_of(PAGE_SIZE)
             .ok_or(Error::InvalidArgument)?;
@@ -229,7 +233,8 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     /// [`Error::NotFound`] for memory this store did not hand out, a second
     /// release of the same object included; [`Error::AccessDenied`] when
     /// another client holds it; the errors of the zeroing pass and of a
-    /// join. Nothing is zeroed in the two cases that are refused.
+    /// join. Nothing is zeroed in the two cases that are refused. Accepted
+    /// objects remain retired while foreign handles or mappings exist.
     pub fn release(
         &mut self,
         pages: &mut impl Pages,
@@ -244,13 +249,39 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         if held.object.len != returned.len {
             return Err(Error::InvalidArgument);
         }
+        if self.retired.is_full() {
+            return Err(Error::PoolExhausted);
+        }
         let _returned = self.live.remove(index);
         if returned.handle != held.object.handle {
             pages.close(returned.handle)?;
         }
-        wipe(pages, held.object)?;
-        self.put_free(pages, held.object)?;
+        self.retired
+            .push(held.object)
+            .map_err(|_| Error::PoolExhausted)?;
+        self.reclaim(pages)?;
         Ok(held.object)
+    }
+
+    /// Reclaims only exclusively owned objects. A caller returning a page
+    /// still holds its handle until the reply arrives, so this is also run
+    /// before allocations. Unknown reference counts leave pages retired.
+    ///
+    /// # Errors
+    ///
+    /// Errors of zeroing or inserting an exclusively owned object.
+    pub fn reclaim(&mut self, pages: &mut impl Pages) -> Result<(), Error> {
+        let mut index = 0;
+        while let Some(object) = self.retired.get(index).copied() {
+            if !self.free.is_full() && pages.references(object.handle) == Ok(1) {
+                wipe(pages, object)?;
+                self.put_free(pages, object)?;
+                let _removed = self.retired.remove(index);
+            } else {
+                index = index.saturating_add(1);
+            }
+        }
+        Ok(())
     }
 
     /// Takes back everything `owner` holds and answers with how many
@@ -267,9 +298,14 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         let mut taken = 0usize;
         while let Some(index) = self.live.iter().position(|held| held.owner == owner) {
             let held = *self.live.get(index).ok_or(Error::NotFound)?;
+            if self.retired.is_full() {
+                return Err(Error::PoolExhausted);
+            }
             let _returned = self.live.remove(index);
-            wipe(pages, held.object)?;
-            self.put_free(pages, held.object)?;
+            self.retired
+                .push(held.object)
+                .map_err(|_| Error::PoolExhausted)?;
+            self.reclaim(pages)?;
             taken = taken.wrapping_add(1);
         }
         Ok(taken)
