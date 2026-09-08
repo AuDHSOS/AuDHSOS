@@ -62,14 +62,6 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   `Interrupt`, and a program that listens is given the badged endpoint of
   the input server the way one that draws is given that of the display
   server. `user_rt::Startup` gains a field for each.
-
-### Fixed
-
-- 10.9.4 named the kernel's device-memory check `inside_device_memory`;
-  the call Phase 9 built is `Environment::is_device_memory`. A document
-  and the code disagreed, which is a bug by the convention of
-  `docs/README.md`, and the document was the wrong one.
-
 - `server-display` as a process and `app-paint` as its first client. The
   root task makes the framebuffer of `system_info` into a device memory
   object, hands it and the mode to the display server, and starts both; the
@@ -191,6 +183,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- 10.9.4 named the kernel's device-memory check `inside_device_memory`;
+  the call Phase 9 built is `Environment::is_device_memory`. A document
+  and the code disagreed, which is a bug by the convention of
+  `docs/README.md`, and the document was the wrong one.
 - Phase 10 review: shared input rings use atomic records and acquire/release
   sequence publication, with atomic overflow exchange. The memory server
   retires returned objects while foreign handles or mappings remain, using
