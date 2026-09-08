@@ -124,6 +124,45 @@ impl<R: BufRead, W: Write> Session<R, W> {
         self.answer(command)
     }
 
+    /// Presses or releases the key QEMU names `qcode`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::execute`].
+    pub(crate) fn send_key(&mut self, qcode: &str, pressed: bool) -> Result<(), Error> {
+        self.input_send_event(vec![key_event(qcode, pressed)])
+    }
+
+    /// Moves the pointer by `dx` and `dy`.
+    ///
+    /// Both go out in one command, so the mouse packetizes the motion once
+    /// and a test that injects a path sees one event per step and not two.
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::execute`].
+    pub(crate) fn move_pointer(&mut self, dx: i32, dy: i32) -> Result<(), Error> {
+        self.input_send_event(vec![relative_event("x", dx), relative_event("y", dy)])
+    }
+
+    /// Presses or releases a button of the pointer.
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::execute`].
+    pub(crate) fn button(&mut self, button: Button, pressed: bool) -> Result<(), Error> {
+        self.input_send_event(vec![button_event(button, pressed)])
+    }
+
+    /// Sends the events of one `input-send-event`.
+    fn input_send_event(&mut self, events: Vec<Value>) -> Result<(), Error> {
+        self.execute(
+            "input-send-event",
+            Value::object([("events".to_owned(), Value::Array(events))]),
+        )?;
+        Ok(())
+    }
+
     /// Reads lines until one is an answer rather than an event.
     fn answer(&mut self, command: &str) -> Result<Value, Error> {
         loop {
@@ -215,6 +254,33 @@ impl Qmp {
         self.session.execute(command, arguments)
     }
 
+    /// Presses or releases the key QEMU names `qcode`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::execute`].
+    pub(crate) fn send_key(&mut self, qcode: &str, pressed: bool) -> Result<(), Error> {
+        self.session.send_key(qcode, pressed)
+    }
+
+    /// Moves the pointer by `dx` and `dy`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::execute`].
+    pub(crate) fn move_pointer(&mut self, dx: i32, dy: i32) -> Result<(), Error> {
+        self.session.move_pointer(dx, dy)
+    }
+
+    /// Presses or releases a button of the pointer.
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::execute`].
+    pub(crate) fn button(&mut self, button: Button, pressed: bool) -> Result<(), Error> {
+        self.session.button(button, pressed)
+    }
+
     /// Takes a picture of the screen and reads it.
     ///
     /// # Errors
@@ -240,4 +306,91 @@ impl Qmp {
         let bytes = crate::fs::read_bytes(path)?;
         Image::parse(&bytes).map_err(|error| Error::Parse(format!("{error}")))
     }
+}
+
+/// A button of the pointer, as QEMU names it.
+///
+/// The table is the machine's vocabulary and not the runner's: the runner
+/// presses the left button and turns nothing, and the other four stand here
+/// so that a test which needs one names it rather than counting.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the five buttons the machine protocol names; the runner presses one of them and the tests name them all"
+    )
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Button {
+    /// The left button.
+    Left,
+    /// The middle button.
+    Middle,
+    /// The right button.
+    Right,
+    /// The wheel, turned away from the hand.
+    WheelUp,
+    /// The wheel, turned towards it.
+    WheelDown,
+}
+
+impl Button {
+    /// The name QEMU knows the button by. It is a name and not an index,
+    /// because that is what the machine protocol takes.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Button::Left => "left",
+            Button::Middle => "middle",
+            Button::Right => "right",
+            Button::WheelUp => "wheel-up",
+            Button::WheelDown => "wheel-down",
+        }
+    }
+}
+
+/// One event of `input-send-event`, with its type and its data.
+fn event(kind: &str, data: Vec<(String, Value)>) -> Value {
+    Value::object([
+        ("type".to_owned(), Value::Text(kind.to_owned())),
+        ("data".to_owned(), Value::object(data)),
+    ])
+}
+
+/// A key going down or coming up, named by its `qcode`.
+fn key_event(qcode: &str, pressed: bool) -> Value {
+    event(
+        "key",
+        vec![
+            ("down".to_owned(), Value::Bool(pressed)),
+            (
+                "key".to_owned(),
+                Value::object([
+                    ("type".to_owned(), Value::Text("qcode".to_owned())),
+                    ("data".to_owned(), Value::Text(qcode.to_owned())),
+                ]),
+            ),
+        ],
+    )
+}
+
+/// A movement along one axis.
+fn relative_event(axis: &str, value: i32) -> Value {
+    event(
+        "rel",
+        vec![
+            ("axis".to_owned(), Value::Text(axis.to_owned())),
+            ("value".to_owned(), Value::Int(i64::from(value))),
+        ],
+    )
+}
+
+/// A button going down or coming up.
+fn button_event(button: Button, pressed: bool) -> Value {
+    event(
+        "btn",
+        vec![
+            ("down".to_owned(), Value::Bool(pressed)),
+            ("button".to_owned(), Value::Text(button.name().to_owned())),
+        ],
+    )
 }

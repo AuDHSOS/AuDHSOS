@@ -2688,7 +2688,11 @@ which phase nine left at four protocols.
 - `Subscribe` carries one handle, a capability to the client's own
   notification reduced to `SIGNAL`, and its reply carries the memory
   object of the ring, which the server allocates from the memory server
-  and transfers with `READ | MAP`. It is the shape `CreateSurface` of the
+  and hands on as it stands: a memory object of this system carries no
+  `DUPLICATE`, so a handle with fewer rights cannot be made from one, and
+  the client needs `READ` and `WRITE` in any case — the reader advances the
+  read sequence and clears the count of what was dropped, and both of those
+  are writes into the page. It is the shape `CreateSurface` of the
   display protocol already has, and for the same reason: a server that
   keeps something per client allocates it, rather than trusting an object
   a client hands it to be a page long and to stay one. `Unsubscribe`
@@ -2742,9 +2746,9 @@ capability found under a name names nobody.
 Its `unsafe` counts against the budget of `user-programs`: the entry point
 the second thread is started at and the gate over that thread's IPC
 buffer, as D-105 and D-106 counted them for the two threads before it, and
-`Mapping::bytes` for the ring of a subscriber. Three sites, so the budget
-goes from twenty-three to twenty-six; the number in `policy::CRATES` is
-set to what the phase actually leaves.
+`Mapping::bytes` for the ring of a subscriber, and the same again in the
+program that listens. The budget goes from twenty-three to twenty-eight;
+the number in `policy::CRATES` is what the phase actually leaves.
 
 ### 10.10.4 Kernel and root task
 
@@ -2799,7 +2803,9 @@ reports and exits. `archive::PROGRAMS` of the xtask grows by both names.
   subscribed, inject a key sequence, a pointer path, and a button press
   and release, then hold the `[input]` lines against what was sent — the
   key codes in order, the sum of the motion equal to the injected path,
-  the press before the release.
+  the press before the release. Every event waits for the line the program
+  writes for it before the next goes out: the controller holds sixteen
+  bytes and drops what does not fit.
 - The run without a graphics adapter runs the input tests too: the i8042
   is there whether the machine has a screen or not, which is what the last
   item of 6.6.29 says.
