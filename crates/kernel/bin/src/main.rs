@@ -82,6 +82,21 @@ fn run(platform: &X86Platform) {
 fn idle() -> ! {
     loop {
         task::run(None);
+        // A switch carries no interrupt flag: the six words it saves are
+        // the callee-saved registers and nothing else. So a thread that
+        // gives the processor up inside a trap — every system call is one,
+        // and an interrupt gate clears the flag — hands the processor on
+        // with interrupts off, and every thread but this one turns them
+        // back on by returning to user mode through `iretq`. This one
+        // returns nowhere; it halts. Halting with interrupts off stops the
+        // machine for good, so they go back on here first.
+        //
+        // SAFETY: nothing of the machine is borrowed here — `task::run`
+        // gave every borrow back — and this is the boot processor, whose
+        // descriptor tables carry a handler for every vector.
+        unsafe {
+            instructions::enable_interrupts();
+        }
         instructions::halt();
     }
 }

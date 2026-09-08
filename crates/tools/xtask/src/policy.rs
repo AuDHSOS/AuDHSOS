@@ -561,7 +561,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-kernel",
         path: "crates/kernel/bin",
         kind: Kind::Adapter {
-            unsafe_budget: 31,
+            unsafe_budget: 32,
             asm_budget: 0,
         },
         deps: &[
@@ -675,15 +675,17 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-programs",
         path: "crates/user/programs",
         kind: Kind::Adapter {
-            unsafe_budget: 23,
+            unsafe_budget: 28,
             asm_budget: 0,
         },
         deps: &[
             "audhsos-abi",
+            "driver-i8042",
             "driver-uart16550",
             "gfx",
             "server-console",
             "server-display",
+            "server-input",
             "server-memory",
             "server-name",
             "user-loader",
@@ -777,6 +779,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "audhsos-abi",
             "audhsos-symbols",
             "audhsos-time",
+            "driver-i8042",
             "fs-fat",
             "gfx",
             "kernel-test-harness",

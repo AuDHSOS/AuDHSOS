@@ -151,6 +151,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The kernel no longer stops the machine when the idle thread is entered
+  from a trap. A switch saves the callee-saved registers and nothing else,
+  so a thread that gives the processor up inside a system call hands it on
+  with interrupts off; every thread but the idle one turns them back on by
+  returning to user mode, and the idle one halts. It now turns them on
+  before it halts. The console driver never showed it because one line of
+  input needs one interrupt; the input server, which needs one per byte,
+  stopped after the first.
+
 - An object is held by one reference per region that names it, and now
   really is. A protection or an unmapping that split a region left two
   regions where one stood without taking a second reference, so unmapping
