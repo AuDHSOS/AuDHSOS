@@ -27,39 +27,62 @@ same rule and for the same reason (D-100).
 | `rfc1122.txt` | RFC 1122, *Requirements for Internet Hosts — Communication Layers*, R. Braden (ed.), October 1989 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc1122.txt` | 289148 | `9f526e6bebc868324fedb90aebbcf6e5b15c53fd373ca5d5ce1c2cdcd264e04f` |
 | `rfc1950.txt` | RFC 1950, *ZLIB Compressed Data Format Specification version 3.3*, P. Deutsch, J-L. Gailly, May 1996 | 2026-09-07 from `https://www.rfc-editor.org/rfc/rfc1950.txt` | 20502 | `8f0475a5c984657bf26277f73df9456c9b97f175084f0c1748f1eb1f0b9b10b9` |
 | `rfc1951.txt` | RFC 1951, *DEFLATE Compressed Data Format Specification version 1.3*, P. Deutsch, May 1996 | 2026-09-07 from `https://www.rfc-editor.org/rfc/rfc1951.txt` | 36944 | `5ebf4b5b7fe1c3a0c0ab9aa3ac8c0f3853a7dc484905e76e03b0b0f301350009` |
+| `rfc2104.txt` | RFC 2104, *HMAC: Keyed-Hashing for Message Authentication*, H. Krawczyk, M. Bellare, R. Canetti, February 1997 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc2104.txt` | 22297 | `64d5245a9101929025336e470e3737f118704001249d503c85a86e19fe9fbb01` |
 | `rfc2131.txt` | RFC 2131, *Dynamic Host Configuration Protocol*, R. Droms, March 1997 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2131.txt` | 113738 | `a043b705785b81762505ded4cf71d61392b2b1da2b4ce1e32c13bc984de5f4a5` |
 | `rfc2132.txt` | RFC 2132, *DHCP Options and BOOTP Vendor Extensions*, S. Alexander, R. Droms, March 1997 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2132.txt` | 63670 | `0cfbedab7cfe859624ae78c07a722bc51bf8ea123a7b43b099fc546ddcf00b90` |
 | `rfc2313.txt` | RFC 2313, *PKCS #1: RSA Encryption Version 1.5*, B. Kaliski, March 1998 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc2313.txt` | 37777 | `2d93e9f0f02343a29a8f64ad507e1779f65377319ed4945b6ac3dcb1f74fd69c` |
 | `rfc2464.txt` | RFC 2464, *Transmission of IPv6 Packets over Ethernet Networks*, M. Crawford, December 1998 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc2464.txt` | 12725 | `f9554329ef1f4e093513e5b6f7af00bb5d206710e0c61d08bd578fa5f00aee9a` |
 | `rfc3279.txt` | RFC 3279, *Algorithms and Identifiers for the Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile*, W. Polk, R. Housley, L. Bassham, April 2002 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc3279.txt` | 53833 | `6d3f19f18e17fa1c68da5aaf4021327748fabca840d7300443b77357a1fc1614` |
+| `rfc3526.txt` | RFC 3526, *More Modular Exponential (MODP) Diffie-Hellman groups for Internet Key Exchange (IKE)*, T. Kivinen, M. Kojo, May 2003 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc3526.txt` | 19166 | `6c95b231eb1c2d9ffa480efbe3ae53477231271f3438570a3af370b2aa4a968b` |
 | `rfc3596.txt` | RFC 3596, *DNS Extensions to Support IP Version 6*, S. Thomson, C. Huitema, V. Ksinant, M. Souissi, October 2003 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc3596.txt` | 14093 | `2a3d44744086f66a7ba00e7d282dc1f740a3e0b63b4b6f7c763ffc0e61ee1dbb` |
 | `rfc4055.txt` | RFC 4055, *Additional Algorithms and Identifiers for RSA Cryptography for use in the Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile*, J. Schaad, B. Kaliski, R. Housley, June 2005 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc4055.txt` | 57479 | `b8a1ef3fb135c32aed4eee121264f3ec83a46def746c8fe68e05bd1b60324e9a` |
+| `rfc4231.txt` | RFC 4231, *Identifiers and Test Vectors for HMAC-SHA-224, HMAC-SHA-256, HMAC-SHA-384, and HMAC-SHA-512*, M. Nystrom, December 2005 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc4231.txt` | 17725 | `72178527ce93500e730bc8eb182b857e583096d652b64ece0879c52ba1df973b` |
+| `rfc4250.txt` | RFC 4250, *The Secure Shell (SSH) Protocol Assigned Numbers*, S. Lehtinen, C. Lonvick, Ed., January 2006 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc4250.txt` | 44010 | `eb3a9d7c3e1fae53c038d5ae62a73e62280d1dde8b246129969c95e4d0909341` |
+| `rfc4251.txt` | RFC 4251, *The Secure Shell (SSH) Protocol Architecture*, T. Ylonen, C. Lonvick, Ed., January 2006 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc4251.txt` | 71750 | `23a5052796d29edc2f0ff4f5be557df244544d129cfc26ed51971a6485eff4ef` |
+| `rfc4252.txt` | RFC 4252, *The Secure Shell (SSH) Authentication Protocol*, T. Ylonen, C. Lonvick, Ed., January 2006 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc4252.txt` | 34268 | `a36b882cf77b107335d49921b5e955b4ba78e253205dfbce5096ebc0e78bdf14` |
+| `rfc4253.txt` | RFC 4253, *The Secure Shell (SSH) Transport Layer Protocol*, T. Ylonen, C. Lonvick, Ed., January 2006 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc4253.txt` | 68263 | `b471173305154f6c66facffcf7a4a25fc5c32765cb30542120be6c20a88f1ed3` |
+| `rfc4254.txt` | RFC 4254, *The Secure Shell (SSH) Connection Protocol*, T. Ylonen, C. Lonvick, Ed., January 2006 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc4254.txt` | 50338 | `bfc727e9350067eaa49edeecc3d32f1e3518dd57cf3c36ceed02177156c5703f` |
 | `rfc4291.txt` | RFC 4291, *IP Version 6 Addressing Architecture*, R. Hinden, S. Deering, February 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4291.txt` | 52897 | `4d58dff6b432d5d524bf3a3b7f0337a4177fa65f92ed72f2a92e97b471de48b2` |
 | `rfc4443.txt` | RFC 4443, *Internet Control Message Protocol (ICMPv6) for the Internet Protocol Version 6 (IPv6) Specification*, A. Conta, S. Deering, M. Gupta (ed.), March 2006 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4443.txt` | 48969 | `f20d1de8878e1142000bfeaa3ad1b0540fab7653a395cf7b07e81d2da2f650bf` |
 | `rfc4861.txt` | RFC 4861, *Neighbor Discovery for IP version 6 (IPv6)*, T. Narten, E. Nordmark, W. Simpson, H. Soliman, September 2007 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4861.txt` | 235106 | `1a4309c117d765a7c0edfcb2297fc90c3c09f0fcae255f15e53b20748bcc09fb` |
 | `rfc4862.txt` | RFC 4862, *IPv6 Stateless Address Autoconfiguration*, S. Thomson, T. Narten, T. Jinmei, September 2007 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc4862.txt` | 72482 | `6d3d2af5d2f6c9109b4ebd038ff7a6cec56771bbb0b5d8bd520357e03f097aa2` |
 | `rfc5480.txt` | RFC 5480, *Elliptic Curve Cryptography Subject Public Key Information*, S. Turner, D. Brown, K. Yiu, R. Housley, T. Polk, March 2009 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5480.txt` | 36209 | `593bf29fd0da2ff8b903c3ebf1c9d189a770039159e2ba46a0c3b91355037f26` |
+| `rfc5656.txt` | RFC 5656, *Elliptic Curve Algorithm Integration in the Secure Shell Transport Layer*, D. Stebila, J. Green, December 2009 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc5656.txt` | 44259 | `0cc84636afaf4860f97271b5b411be0393f71544d3c219f25df2d78201a4949a` |
 | `rfc5756.txt` | RFC 5756, *Updates for RSAES-OAEP and RSASSA-PSS Algorithm Parameters*, S. Turner, D. Brown, K. Yiu, R. Housley, T. Polk, January 2010 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc5756.txt` | 12017 | `304a0b826bf211028209db48bd1419c1088127f33e1689d62028378c739e67f5` |
 | `rfc5758.txt` | RFC 5758, *Internet X.509 Public Key Infrastructure: Additional Algorithms and Identifiers for DSA and ECDSA*, Q. Dang, S. Santesson, K. Moriarty, D. Brown, T. Polk, January 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5758.txt` | 15834 | `4d02628ff0875a1960d34be584a68f88528b96242bdc5a05a40a29ef01cf1532` |
+| `rfc5869.txt` | RFC 5869, *HMAC-based Extract-and-Expand Key Derivation Function (HKDF)*, H. Krawczyk, P. Eronen, May 2010 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc5869.txt` | 25854 | `7a40eb3835b35fc947eb12a2ed614db079d43b26e50dbc537c31fba16397089c` |
 | `rfc5903.txt` | RFC 5903, *Elliptic Curve Groups modulo a Prime (ECP Groups) for IKE and IKEv2*, D. Fu, J. Solinas, June 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5903.txt` | 29175 | `939fab548a6e6bb49a5b3c4dd24a3c5df54a46645447b2d6f4df4fd88ff2d69f` |
 | `rfc5952.txt` | RFC 5952, *A Recommendation for IPv6 Address Text Representation*, S. Kawamura, M. Kawashima, August 2010 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc5952.txt` | 26570 | `c75e82c5f53bcec8148820fadf0d65935336ee2031fa6ce10504797ed4c1979d` |
+| `rfc6668.txt` | RFC 6668, *SHA-2 Data Integrity Verification for the Secure Shell (SSH) Transport Layer Protocol*, D. Bider, M. Baushke, July 2012 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc6668.txt` | 8710 | `a7a05b87ea5dcb16c33f368de8776a194bc35d7fc9d0baea600f3083dbc857b9` |
 | `rfc6724.txt` | RFC 6724, *Default Address Selection for Internet Protocol Version 6 (IPv6)*, D. Thaler (ed.), R. Draves, A. Matsumoto, T. Chown, September 2012 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc6724.txt` | 74407 | `deab574626b2bc886748401617f29a33cf97927f3690dba2fb183d31315741f6` |
 | `rfc6979.txt` | RFC 6979, *Deterministic Usage of the Digital Signature Algorithm (DSA) and Elliptic Curve Digital Signature Algorithm (ECDSA)*, T. Pornin, August 2013 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc6979.txt` | 140386 | `456e8f17558fdbd206f968b96fc6f1b4a71ea331ab30ad17f711ab3adaa7d701` |
+| `rfc7748.txt` | RFC 7748, *Elliptic Curves for Security*, A. Langley, M. Hamburg, S. Turner, January 2016 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc7748.txt` | 39298 | `279ca0ecc5e92e2962e27b846986aeb74729d9dd34bd4a04a362f80dcb596ad3` |
 | `rfc8017.txt` | RFC 8017, *PKCS #1: RSA Cryptography Specifications Version 2.2*, K. Moriarty (ed.), B. Kaliski, J. Jonsson, A. Rusch, November 2016 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc8017.txt` | 154696 | `1e72dc473d18df3fc5598cdc12795a9f18f36f1aef15abc23a55eb0d58151d11` |
+| `rfc8032.txt` | RFC 8032, *Edwards-Curve Digital Signature Algorithm (EdDSA)*, S. Josefsson, I. Liusvaara, January 2017 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8032.txt` | 103210 | `ed63657ff389301282b169b0abde9b5dd2c7e4d524fdfa5da6ff3094fc93c4c3` |
 | `rfc8106.txt` | RFC 8106, *IPv6 Router Advertisement Options for DNS Configuration*, J. Jeong, S. Park, L. Beloeil, S. Madanapalli, March 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8106.txt` | 43092 | `9a44a5e06d36506da358fa0d62d02f484dd76b4e6ca75920ebda2cfed315ef2f` |
 | `rfc8200.txt` | RFC 8200, *Internet Protocol, Version 6 (IPv6) Specification*, S. Deering, R. Hinden, July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8200.txt` | 93162 | `371ae3f133d562db5d6385e6def4ca9914c4f831be228ea7779fd28799c2f490` |
 | `rfc8201.txt` | RFC 8201, *Path MTU Discovery for IP version 6*, J. McCann, S. Deering, J. Mogul, R. Hinden (ed.), July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8201.txt` | 42751 | `96c2ea7ac1bf5810f6b817d4ac372a35f68231d2bd0e2675740f1268eb9ac752` |
+| `rfc8268.txt` | RFC 8268, *More Modular Exponentiation (MODP) Diffie-Hellman (DH) Key Exchange (KEX) Groups for Secure Shell (SSH)*, M. Baushke, December 2017 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8268.txt` | 16318 | `1525b5f3e84f48381fc3be2e5353794f3d5ee2d354fa4e8b0349da25d5b8e208` |
+| `rfc8308.txt` | RFC 8308, *Extension Negotiation in the Secure Shell (SSH) Protocol*, D. Bider, March 2018 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8308.txt` | 29204 | `c7d36121bcd0f242af19d660a3bbafb3c829d78df6f32fbd3e5c71a408e0ce8c` |
+| `rfc8332.txt` | RFC 8332, *Use of RSA Keys with SHA-256 and SHA-512 in the Secure Shell (SSH) Protocol*, D. Bider, March 2018 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8332.txt` | 17873 | `b194d8da7a5b07cf6763954b687fb2380565c8277d52c105a8eacdf00ffc44d9` |
+| `rfc8439.txt` | RFC 8439, *ChaCha20 and Poly1305 for IETF Protocols*, Y. Nir, A. Langley, June 2018 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8439.txt` | 88847 | `25bef70fbf7a07ff45c2fe4cb7c6ce954eac687413d8610603268b4e4415324c` |
+| `rfc8446.txt` | RFC 8446, *The Transport Layer Security (TLS) Protocol Version 1.3*, E. Rescorla, August 2018 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8446.txt` | 337736 | `47871bc8820a2c3b6ea89f061055577058862cf543686b82d10131239702b3bd` |
 | `rfc8448.txt` | RFC 8448, *Example Handshake Traces for TLS 1.3*, M. Thomson, January 2019 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8448.txt` | 159343 | `6564d1376d1ec744fc7a9993da15ebc1b9be361908b166091f47ef605c537fba` |
+| `rfc8709.txt` | RFC 8709, *Ed25519 and Ed448 Public Key Algorithms for the Secure Shell (SSH) Protocol*, B. Harris, L. Velvindron, February 2020 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8709.txt` | 11255 | `ea4aa3a8feec6bd5b1cc7847a6d08cd0afae49d12220cac1e2c39bc72c29fd3d` |
+| `rfc8731.txt` | RFC 8731, *Secure Shell (SSH) Key Exchange Method Using Curve25519 and Curve448*, A. Adamantiadis, S. Josefsson, M. Baushke, February 2020 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8731.txt` | 12460 | `26dcf1e8481d83e0b2403e41df47df3fb08cae154d1e464631a23b3cd025f9d1` |
 | `rfc9110.txt` | RFC 9110, *HTTP Semantics*, R. Fielding (ed.), M. Nottingham (ed.), J. Reschke (ed.), June 2022 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc9110.txt` | 502941 | `21c1cdce6ab0e5509b04d84a28000836c7a087cf786efe6f04877ebfff47232a` |
 | `rfc9112.txt` | RFC 9112, *HTTP/1.1*, R. Fielding (ed.), M. Nottingham (ed.), J. Reschke (ed.), June 2022 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc9112.txt` | 109913 | `e4f426bac6206b67fdf9e0da826154f70588db2133a0a86b15cde4ff725d8937` |
+| `rfc9142.txt` | RFC 9142, *Key Exchange (KEX) Method Updates and Recommendations for Secure Shell (SSH)*, M. Baushke, January 2022 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc9142.txt` | 52250 | `68226c742986b83511fbc958cfa8bf5b51a8fdefdcae146d7ea41f2e4be79026` |
 | `rfc9293.txt` | RFC 9293, *Transmission Control Protocol (TCP)*, W. Eddy, Ed., August 2022 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc9293.txt` | 263696 | `6d9ac8be4b0286f8c3d337addf442b2eb6a9b14e1366594ea7fbc273f93dc2d9` |
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
 including the page breaks: 2887, 1218, 470, 171, 3077, 1417, 6844, 619,
-955, 2523, 1907, 1067, 395, 1515, 451, 1403, 1403, 1347, 5435, 1683, 1123,
-339, 451, 899, 787, 1795, 4427, 4371, 1067, 2355, 1067, 3811, 10785, 2461,
-and 5576 lines respectively, in the order of the table.
+955, 619, 2523, 1907, 1067, 395, 1515, 563, 451, 1403, 507, 1123, 1683,
+955, 1795, 1347, 1403, 1347, 5435, 1683, 1123, 1123, 339, 451, 787, 899,
+787, 283, 1795, 4427, 1235, 4371, 3363, 1067, 2355, 1067, 451, 787, 507,
+2579, 8963, 3811, 317, 287, 10785, 2461, 1028, and 5576 lines
+respectively, in the order of the table.
 Every one was fetched twice and the two fetches agreed.
 
 ## Terms
@@ -70,34 +93,38 @@ carries a notice of the form
 > Copyright (c) YEAR IETF Trust and the persons identified as the
 > document authors. All rights reserved.
 
-with the year 2009 for RFC 5480, 2010 for RFC 5756, RFC 5758, RFC 5903,
-and RFC 5952, 2012 for RFC 6724, 2013 for RFC 6979, 2016 for RFC 8017,
-2017 for RFC 8106, RFC 8200, and RFC 8201, 2019 for RFC 8448, and 2022 for
-RFC 9110, RFC 9112, and RFC 9293. Those fifteen are subject to BCP 78 and
-the IETF Trust's Legal Provisions relating to IETF Documents, which permit
-reproduction in full.
+with the year 2009 for RFC 5480 and RFC 5656, 2010 for RFC 5756,
+RFC 5758, RFC 5869, RFC 5903, and RFC 5952, 2012 for RFC 6668 and
+RFC 6724, 2013 for RFC 6979, 2016 for RFC 7748 and RFC 8017, 2017 for
+RFC 8032, RFC 8106, RFC 8200, RFC 8201, and RFC 8268, 2018 for RFC 8308,
+RFC 8332, RFC 8439, and RFC 8446, 2019 for RFC 8448, 2020 for RFC 8709
+and RFC 8731, and 2022 for RFC 9110, RFC 9112, RFC 9142, and RFC 9293.
+Those twenty-eight are subject to BCP 78 and the IETF Trust's Legal
+Provisions relating to IETF Documents, which permit reproduction in
+full.
 
-RFC 4055 stands between the two forms. Its statement names the Internet
-Society and the year 2005, and then refers the reader to BCP 78 in the
-same words the later ones use, so it is read here as the group above
-rather than the group below.
+RFC 4055 and RFC 4231 stand between the two forms. Each names the
+Internet Society and the year 2005, and then refers the reader to BCP 78
+in the same words the later ones use, so both are read here as the group
+above rather than the group below.
 
-The seventeen older ones carry the notice of their time, each in a full
-copyright statement at the end that permits reproduction in whole
+The twenty-four older ones carry the notice of their time, each in a
+full copyright statement at the end that permits reproduction in whole
 provided the notice travels with it. RFC 4862 and RFC 4861 have the IETF
-Trust's of 2007; RFC 4443 and RFC 4291 the Internet Society's of 2006;
-RFC 3596 the Internet Society's of 2003; RFC 3279 the Internet Society's
-of 2002; RFC 2464 and RFC 2313 the Internet Society's of 1998; and
-RFC 1122 carries that statement in the form of 1989. RFC 1071, RFC 1035,
-RFC 2131, RFC 2132, RFC 894, RFC 826, RFC 792, and RFC 791 carry no notice
-at all. RFC 1950 and RFC 1951 carry one of a third kind: a notice of their
+Trust's of 2007; RFC 4443, RFC 4291, and the five Secure Shell documents
+the Internet Society's of 2006; RFC 3596 and RFC 3526 the Internet
+Society's of 2003; RFC 3279 the Internet Society's of 2002; RFC 2464 and
+RFC 2313 the Internet Society's of 1998; and RFC 1122 carries that
+statement in the form of 1989. RFC 1071, RFC 1035, RFC 2104, RFC 2131,
+RFC 2132, RFC 894, RFC 826, RFC 792, and RFC 791 carry no notice at all.
+RFC 1950 and RFC 1951 carry one of a third kind: a notice of their
 authors' own, dated 1996, which grants the right to copy and distribute
 the document in any medium provided it is not modified and the notice
-travels with it; both also state unlimited distribution in their Status of
-This Memo. Each of the first four states unlimited distribution in its own
-Status of This Memo section, and the four from the early eighties predate
-even that form, under the practice the RFC Editor states for the series as
-a whole.
+travels with it; both also state unlimited distribution in their Status
+of This Memo. Each of the first five states unlimited distribution in
+its own Status of This Memo section, and the four from the early
+eighties predate even that form, under the practice the RFC Editor
+states for the series as a whole.
 
 Code components extracted from an RFC carry the Simplified BSD Licence;
 this project extracts test vectors, which it transcribes into Rust source
@@ -496,8 +523,9 @@ not repeat the search.
 - **RFC 8446** assigns `secp384r1` the group `0x0018` and
   `ecdsa_secp384r1_sha384` the scheme `0x0503`. P-384 here is for reading
   a chain, not for the key exchange, which decision D-56 settles on
-  `x25519` alone. Whether the TLS 1.3 specification itself belongs in this
-  directory is a separate question from this one.
+  `x25519` alone. The TLS 1.3 specification itself was a separate
+  question from this one; it has since been answered, and RFC 8446 is in
+  the table.
 
 ## The five documents of RSA
 
@@ -603,8 +631,9 @@ These were read and left out, in the form of the section above.
   `sha384`, `sha512` — and states that the `rsa_pkcs1_*` schemes stand for
   certificate signatures and MUST NOT appear in a `CertificateVerify`.
   That asymmetry is the whole of what the protocol adds here. Whether the
-  TLS 1.3 specification belongs in this directory is the same open
-  question the P-384 section left open, and adding RSA does not answer it.
+  TLS 1.3 specification belonged in this directory was the open question
+  the P-384 section left, and adding RSA did not answer it; it is
+  answered now, and the document is here.
 - **NIST CAVP** signature verification vectors and **FIPS 186-4** are not
   RFCs. This project cites NIST publications by section where it uses
   them — FIPS 197 for AES, SP 800-38D for GCM — and keeps no copies. The
@@ -617,3 +646,301 @@ These were read and left out, in the form of the section above.
   which is below what this system will accept from a certificate, so the
   key is a vector for the primitive and not a chain anything would trust.
   That is what it is wanted for.
+
+## The five documents of Secure Shell
+
+These five were published together in January 2006 and are one
+specification cut into five files: each of the other four is written in
+the types RFC 4251 defines and uses the constants RFC 4250 assigns.
+Nothing in this repository implements them yet; they are here so that the
+work can be written against the text rather than against a recollection
+of it.
+
+**RFC 4251** is the architecture, and section 5 is the reason it is read
+first: the wire types the whole protocol family is spelled in — `byte`,
+`boolean`, `uint32`, `uint64`, `string`, `mpint`, and `name-list`. A
+`string` is a `uint32` length and that many bytes, which may be arbitrary
+binary and are not null-terminated. An `mpint` is that same string
+holding a two's complement integer, most significant byte first, with a
+zero byte prefixed when a positive number's top bit would otherwise be
+set, no unnecessary leading `00` or `ff`, and zero encoded as a string of
+no bytes at all. The section works five of those encodings out in hex,
+and a `name-list` in three more, which is what makes the file worth
+keeping: the rule can be paraphrased, the table checks an encoder.
+Section 6 fixes how algorithm names are spelled — a name with no `@` is
+one IANA assigns, a name with one is the local namespace of whoever owns
+the domain after it.
+
+**RFC 4253** is the transport layer, and its load-bearing passages have
+to be read rather than recalled. Section 4.2 is the identification string,
+`SSH-2.0-softwareversion` with an optional comment, terminated by CR LF,
+at most 255 characters including those two — and the part *before* the CR
+LF is what goes into the exchange hash, which is why it has to be kept
+after it has been parsed. Section 6 is the binary packet: a `uint32`
+packet length, a padding length byte, the payload, at least four bytes of
+random padding, and the MAC, with the length of everything but the MAC a
+multiple of the cipher block size or eight, whichever is larger — a
+constraint the document requires even of a stream cipher — and with the
+packet length field itself encrypted, which is the whole reason a reader
+has to decrypt one block before it knows how much more to read. Section
+6.4 computes the MAC over `sequence_number || unencrypted_packet`, where
+the sequence number is a `uint32` that never appears on the wire, starts
+at zero, is never reset by a re-exchange, and wraps at 2^32. And section
+7.2 derives six keys — two IVs, two encryption keys, two integrity keys —
+as `HASH(K || H || X || session_id)` for the single letters `A` through
+`F`, with the extension rule that appends `HASH(K || H || <key so far>)`
+until enough bytes exist. Section 8 gives the exchange hash those rest
+on: `H` over `V_C || V_S || I_C || I_S || K_S || e || f || K`, and states
+that `H` from the *first* exchange becomes the session identifier and
+does not change afterwards, however often the keys do.
+
+Two smaller rules of it are the kind that are wrong when guessed. Section
+6.1 sets the sizes every implementation must be able to receive: an
+uncompressed payload of 32768 bytes and a total packet of 35000. And
+section 7.1 defines the negotiation, including the guessed packet: a peer
+may send its first key exchange packet before it knows the answer, and if
+the guess was wrong that packet is *silently ignored* rather than
+treated as an error.
+
+**RFC 4252** is authentication. The framework of section 4 is a request
+naming a user, a service, and a method, answered by a failure that lists
+what may still be tried and carries a partial-success flag, or by a
+success that ends authentication for the connection. What matters most is
+the signature of section 7: it is computed over the session identifier
+followed by the request fields, so a signature captured from one
+connection proves nothing on another. Section 5 also settles what a
+server does with a user name it does not know: it may disconnect, or it
+may send back a bogus list of methods that can continue, so that the
+answer does not say which accounts exist — but it must never accept the
+request.
+
+**RFC 4254** is the connection protocol, and it is where a single
+encrypted stream becomes many. A channel is opened by either side with
+its own number, an initial window, and a maximum packet size; section 5.2
+makes the window a credit the sender spends and the receiver grants back
+with `SSH_MSG_CHANNEL_WINDOW_ADJUST`, up to 2^32 - 1 and never beyond it.
+Extended data — stderr is type 1 — spends the same window as ordinary
+data, which is the detail a second buffer would get wrong. On top of that
+sit the session channel of section 6 with its pty request, environment,
+shell, command, and subsystem requests and its exit status, and the TCP
+port forwarding of section 7. Section 8 is the encoded terminal modes: an
+opcode byte, and for opcodes 1 to 159 a `uint32` argument, ended by
+opcode zero.
+
+**RFC 4250** is the numbers: the disconnect reason codes, the channel
+open failure codes, the extended data type codes, the terminal mode
+opcodes of section 4.5, and the name registries for services,
+authentication methods, channel types, global and channel requests,
+signals, subsystems, key exchange methods, and the four algorithm
+classes. Some of these tables also appear in the document that uses
+them — the terminal modes are in RFC 4254, section 8 as well, and RFC
+4253, section 12 summarises the message numbers — but section 4.1.1 is
+only here, and it is what makes the numbers readable: 1 to 19 transport
+generic, 20 to 29 algorithm negotiation, 30 to 49 specific to a key
+exchange method, 50 to 59 authentication generic, 60 to 79 specific to
+an authentication method, 80 to 89 connection generic, 90 to 127
+channels, 128 to 191 reserved, 192 to 255 local. The two method-specific
+ranges are reused by every method, so a byte in them means nothing until
+one knows which method is running.
+
+## The seven documents of the algorithms Secure Shell is run with
+
+The five above are the framework and a set of algorithms that has been
+replaced almost entirely. RFC 4253 makes `ssh-dss` REQUIRED, `3des-cbc`
+REQUIRED and `hmac-sha1` REQUIRED, and offers `diffie-hellman-group1-sha1`
+and `diffie-hellman-group14-sha1` as its two key exchanges. None of that
+is implemented here, and `crates/crypto` holds none of the primitives it
+would take: no SHA-1, no 3DES, no CBC mode, no DSA. These seven are what
+stands in its place.
+
+**RFC 9142** is why that is a smaller departure than it reads. It is
+Standards Track, it updates RFC 4250 and RFC 4253, and its table 12
+restates the requirement level of every key exchange method named in any
+of them: `diffie-hellman-group1-sha1` goes from MUST to SHOULD NOT,
+`diffie-hellman-group14-sha1` from MUST to MAY, `ecdh-sha2-nistp256` and
+its siblings from MUST to SHOULD, and `curve25519-sha256` — which had no
+recommendation at all — to SHOULD. The two SHA-1 exchanges this system
+refuses are the two the IETF itself has withdrawn. What the same table
+puts in their place is `diffie-hellman-group14-sha256`, which it makes
+the one MUST, and that one this system does not implement either; the
+document is kept so that the departure can be stated as what it is
+rather than as a list of things that were skipped. Section 3.5 also
+makes `ext-info-c` and `ext-info-s` SHOULD, which is why RFC 8308 is
+here. Keeping RFC 4253 without this document would be keeping a text
+whose requirement levels no longer hold, which is the reason RFC 9293 is
+here instead of RFC 793.
+
+**RFC 8731** is `curve25519-sha256`, and section 3.1 is the passage that
+makes it worth a file. X25519 produces 32 bytes, which RFC 7748 defines
+as a little-endian encoding; SSH reinterprets those same bytes as a
+big-endian unsigned integer and then encodes that integer as an `mpint`
+under section 5 of RFC 4251. So the shared secret enters the exchange
+hash with a leading zero byte, or without one, according to the top bit
+of a value that is uniform. An implementation that feeds the 32 bytes in
+as a fixed-length string instead computes a different hash from its peer
+on about half of its connections, and the handshake fails on those and
+succeeds on the rest. Section 3 adds the two aborts: a shared
+secret of all zeros, and a received public key that is not 32 bytes, each
+a disconnect with `SSH_DISCONNECT_KEY_EXCHANGE_FAILED`.
+
+**RFC 8709** is `ssh-ed25519`, and of its eleven kilobytes four lines are
+what this system needs: the public key is `string "ssh-ed25519"` followed
+by a `string` holding 32 octets, and the signature is `string
+"ssh-ed25519"` followed by a `string` holding 64. Everything else —
+generation, signing, verification — it defers to RFC 8032. Those two
+encodings are stated nowhere else, which is the whole reason for the
+copy.
+
+**RFC 8332** is `rsa-sha2-256` and `rsa-sha2-512`, and it is kept for the
+asymmetry that catches every first implementation: the *key* blob keeps
+the string `"ssh-rsa"`, so a stored key and its fingerprint do not
+change, while the *signature* blob names `"rsa-sha2-256"`. The algorithm
+name in a `SSH_MSG_USERAUTH_REQUEST` and the name inside the key it
+carries are therefore deliberately different. Signing is RSASSA-PKCS1-v1_5
+of RFC 8017 with SHA-256 or SHA-512, and section 3.3 states why this
+document does not stand alone: servers penalise clients that offer a
+signature algorithm they do not accept, so a client that cannot ask first
+should not guess.
+
+**RFC 8308** is how it asks. A client puts `ext-info-c` into the
+`kex_algorithms` name-list and a server puts `ext-info-s` — into that
+list because it is one of the two in `SSH_MSG_KEXINIT` with no separate
+copy per direction, and with different spellings for the two roles
+precisely so that they can never match each other and so can never be
+chosen as the key exchange. What comes back is `SSH_MSG_EXT_INFO` with
+`server-sig-algs`, the list of signature algorithms the server will
+accept for authentication.
+
+**RFC 6668** is `hmac-sha2-256` and `hmac-sha2-512` with their digest and
+key lengths, and it is here for a path this system does not currently
+take. With an AEAD cipher there is no separate MAC to negotiate; the
+document is the standing alternative if that ever changes, and it is five
+pages.
+
+**RFC 5656** is the NIST-curve family, `ecdh-sha2-*` and `ecdsa-sha2-*`:
+names formed by appending a curve identifier, a key blob that nests the
+identifier and the point `Q` inside a blob of its own, a signature blob
+holding `mpint r` and `mpint s`, and a hash chosen by the size of the
+curve. It is the one of the seven that does not stand alone. Point
+encoding, public key validation, cofactor ECDH and the conversion from a
+field element to an integer are all in SEC 1, which is a SECG document
+and is not in this directory.
+
+## What Secure Shell still needs, and why it is not here
+
+- **`chacha20-poly1305@openssh.com`** is the cipher this work will use,
+  and it has no RFC. It is specified in `PROTOCOL.chacha20poly1305` in
+  the OpenSSH source, which is a document but not a standards body's.
+  Whether it is kept the way D-100 added `docs/oasis/` for a second
+  body, or cited the way D-117 cites what PCI-SIG will not let this
+  repository hold, is an open decision. The same applies to
+  `aes128-gcm@openssh.com` and `zlib@openssh.com`.
+- **RFC 5647** is AES-GCM for Secure Shell, and it was read and left out.
+  Its section 7.3 is worth knowing — the packet length field becomes
+  additional authenticated data rather than plaintext, because a tag
+  cannot be verified before the packet is parsed and the packet cannot be
+  parsed before the length is decrypted — but its algorithm names are
+  `AEAD_AES_128_GCM` and `AEAD_AES_256_GCM`, which the OpenSSH this
+  system is tested against does not offer under those names.
+- **RFC 4344** is the CTR modes, `aes128-ctr` and its siblings. It is the
+  only cipher document whose names both an RFC and OpenSSH agree on, and
+  it is left out because CTR carries a separate MAC, which means the
+  construction of RFC 4253, section 6: MAC-then-encrypt over an encrypted
+  length. The encrypt-then-MAC variants that repair it are OpenSSH names
+  without a document either.
+- **`diffie-hellman-group14-sha256`** is the one MUST of RFC 9142's
+  table, and the two documents it needs — RFC 8268 for the name and
+  RFC 3526 for the group — are now here, with a section of their own
+  below. What is not here is a modular exponentiation with a secret
+  exponent: `Modulus::pow` in `crypto-bignum` takes an exponent of 64
+  bits, and `pow_wide` says of itself that nothing in the product calls
+  it and that it exists so a test can sign a certificate. That is the
+  work the method waits on, not a document.
+- **RFC 4419** is Diffie-Hellman group exchange, which RFC 9142 puts at
+  SHOULD NOT in its SHA-1 form and MAY in its SHA-256 form. Nothing here
+  negotiates a group.
+- **RFC 7748 and RFC 8032** are Curve25519 and Ed25519, which RFC 8731
+  and RFC 8709 defer to by name for the encodings, the aborts and the
+  signing procedure. Both are now here, with the four other documents
+  the cryptography of this repository was already written against, in
+  the section below.
+
+## The two documents of finite-field Diffie-Hellman
+
+**RFC 3526** is six groups and nothing else: for each, the prime written
+out in hexadecimal, the closed form it was derived from, the generator,
+and the group's assigned id. Section 3 is group 14 — 2048 bits, generator
+2, the prime `2^2048 - 2^1984 - 1 + 2^64 * { [2^1918 pi] + 124476 }` — and
+it is the reason this file is kept rather than a constant with a comment.
+Two thousand and forty-eight bits is sixty-four lines of hexadecimal that
+no reader can check by eye and no derivation in this repository produces.
+
+**RFC 8268** gives the group SSH names, and it does one more thing that
+matters more than the names. Section 4 states that section 8 of RFC 4253
+— which is in this directory, and which the Secure Shell section above
+cites — contains an error. RFC 4253 writes the check on the peer's public
+value as the closed interval `[1, p-1]`; RFC 8268 amends it to the open
+one, `1 < e < p-1` and `1 < f < p-1`, and says why: the closed form
+admits the values that force the shared secret into the two-element
+subgroup. An implementation written from the text this repository holds,
+without this one beside it, would accept a public value that makes the
+key exchange meaningless. That is the case D-59 exists for: the document
+is here so the correction cannot be missed, and RFC 4253 is kept as
+published rather than quietly edited.
+
+## The six documents the cryptography was already written against
+
+These arrived together, and not because of any one protocol. Every one is
+implemented in `crates/crypto` and cited there by section; none of them
+had a copy in this directory, which meant a test could name a vector
+whose source was not in the house. Loading Secure Shell's algorithm
+documents made that visible: RFC 8731 and RFC 8709 defer to the first two
+below by name, so the gap stopped being theoretical.
+
+**RFC 7748** is Curve25519 and Curve448. Section 4.1 gives the curve,
+section 5 the X25519 function with the clamping of the scalar, section
+5.2 the test vectors `crypto-ec` is checked against, and section 6.1 the
+Diffie-Hellman protocol built on it — including the all-zero check, with
+the reason (a peer value of small order produces exactly that) and the
+way to perform it without a side channel (or the bytes together). RFC
+8731 makes that check a MUST for `curve25519-sha256`, and points here for
+it.
+
+**RFC 8032** is EdDSA. Sections 5.1.5, 5.1.6 and 5.1.7 are Ed25519's key
+generation, signing and verification written as procedures, section 5.1.2
+and 5.1.3 the encoding and decoding of a point, and section 7.1 the test
+vectors. RFC 8709 is four lines of SSH framing around this document;
+everything a signature actually is, is here.
+
+**RFC 8439** is ChaCha20 and Poly1305, and it is kept for the density of
+its vectors: a test vector for the quarter round, for the quarter round
+on the state, for the block function, for the cipher, for Poly1305, and
+for the key generation, each beside the algorithm it checks. Section 2.8
+is the AEAD construction `crypto-aead` implements.
+
+**RFC 2104** is HMAC: the construction with the two pads, and section 3,
+which is the part that is got wrong — a key longer than the block is
+hashed first, a shorter one is padded with zeros, and the block is the
+hash function's block and not its output length.
+
+**RFC 4231** is seven test cases for HMAC with the SHA-2 family, and it
+is here for the three that are not the obvious one: a key longer than the
+block, a key of one byte, and data longer than a block, which are the
+cases where an implementation that skipped section 3 of RFC 2104 fails.
+
+**RFC 5869** is HKDF: extract in section 2.2, expand in section 2.3, and
+seven test cases in appendix A covering both hash functions and the
+salt-less case. Sections 3.1 and 3.3 are the ones worth reading rather
+than skipping — when a salt earns its place, and when the extract step
+may be left out at all.
+
+## Why RFC 8446
+
+The P-384 and RSA sections above each left the same question open:
+whether the TLS 1.3 specification belongs in this directory when only
+pieces of it are cited. It does, and it is here now. `audhsos-tls`
+implements this document, not a summary of it, and D-59 admits no
+distinction between a standard that is implemented in part and one
+implemented in whole. RFC 8448, which has been here from the beginning,
+is a trace of *this* protocol; keeping the trace and not the
+specification meant keeping the answers without the question.
