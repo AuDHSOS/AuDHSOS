@@ -138,6 +138,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "driver-i8042"
+version = "0.1.0"
+
+[[package]]
 name = "elf"
 version = "0.1.0"
 dependencies = [
@@ -198,6 +202,14 @@ version = "0.1.0"
 dependencies = [
  "fuzz-support",
  "kernel-acpi",
+]
+
+[[package]]
+name = "mouse_packet"
+version = "0.1.0"
+dependencies = [
+ "driver-i8042",
+ "fuzz-support",
 ]
 
 [[package]]
@@ -283,6 +295,14 @@ name = "rsa"
 version = "0.1.0"
 dependencies = [
  "crypto-rsa",
+ "fuzz-support",
+]
+
+[[package]]
+name = "scancode"
+version = "0.1.0"
+dependencies = [
+ "driver-i8042",
  "fuzz-support",
 ]
 

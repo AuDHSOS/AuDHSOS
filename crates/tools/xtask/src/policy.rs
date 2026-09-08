@@ -929,8 +929,12 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "ipv4" },
     FuzzTarget { name: "ipv6" },
     FuzzTarget { name: "madt" },
+    FuzzTarget {
+        name: "mouse_packet",
+    },
     FuzzTarget { name: "pem" },
     FuzzTarget { name: "rsa" },
+    FuzzTarget { name: "scancode" },
     FuzzTarget { name: "tar" },
     FuzzTarget {
         name: "dns_message",

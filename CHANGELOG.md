@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Two fuzz targets, `scancode` and `mouse_packet`: no stream of bytes may
+  panic either decoder, make it grow, or make it hand out a key the table
+  does not have or a delta outside the nine bits a packet carries. Both ran
+  for a minute without a finding.
 - `driver-i8042`: the PS/2 controller, its initialization sequence, and the
   decoders of scancode set 2 and of the mouse packet. The crate depends on
   nothing and reaches the hardware only through a `Ports` trait, so the
