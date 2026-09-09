@@ -80,6 +80,9 @@ dependencies = [
 [[package]]
 name = "crypto-bignum"
 version = "0.1.0"
+dependencies = [
+ "crypto-ct",
+]
 
 [[package]]
 name = "crypto-ct"

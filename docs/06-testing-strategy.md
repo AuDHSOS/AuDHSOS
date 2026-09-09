@@ -1831,6 +1831,21 @@ follows the catalog rather than the layer, as 6.6.54 records.
   65537, and for an exponent with its top and bottom bits set; a round
   trip that signs with a wide exponent and verifies with a small one over
   the key of RFC 8448, section 2.
+- The secret exponentiation, which is the half of the crate written for
+  a value that must not be observable: `pow_secret` against the same
+  schoolbook reference on exponents the generator chooses, at each of the
+  four widths (property), and against `pow` on the exponents that one
+  takes. An exponent of zero gives one however many bytes it is written
+  in, and leading zero bytes change the rounds and not the value — the
+  two properties that say the ladder runs over the buffer rather than
+  over the value. A base that is not below the modulus, one wider than
+  the arithmetic, and an output buffer narrower than the modulus are each
+  refused; the last is refused before the ladder starts, because
+  refusing afterwards would be a decision about the value.
+- The masked product: `montgomery_secret` against `montgomery` over every
+  case of the final subtraction, the one it happens in and the one it
+  does not, and separately against the definition, so that the two
+  variants agreeing is not the only thing checked.
 - The key: the bounds of D-79 at each edge — an exponent of one, of two,
   of four, and of three; a modulus above the upper bound, and one whose
   top bit is clear — refused where the rule says and accepted where it
@@ -2275,6 +2290,48 @@ what the kernel dispatches on, so the check is what the kernel saw.
 - The handshake respects a deadline: a peer that stops answering ends the
   attempt at the deadline rather than blocking the server.
 
+
+### 6.6.66 Finite-field Diffie-Hellman (`crypto-dh`)
+
+Step S2 of 8.26, the half of it that is built (D-122, D-123). The
+constant-time exponentiation this rests on is in `crypto-bignum` and is
+covered by 6.6.55.
+
+- The group of RFC 3526, section 3: the prime is the value the document
+  prints, checked against a second transcription of the same rows so that
+  the constant and the test do not share one slip; it is 2048 bits wide,
+  its two ends are the ones the closed form of that section gives it, and
+  the generator is the two the document states. The exponent length the
+  crate recommends is 256 bits, which is above the 112 bits of security
+  RFC 9142, table 4, gives the group.
+- The generator raised to a small exponent is that power of two, for
+  exponents whose result stays below the prime and is therefore
+  expressible without a second exponentiation; raised to the width of the
+  prime it is that power reduced exactly once, which the test computes by
+  subtracting the prime rather than by exponentiating again.
+- An exchange between two sides reaches one secret, and does so for
+  exponents the generator chooses (property). The same exchange runs over
+  the 1536-bit group of section 2 of the same document, so that nothing
+  in the code is tied to one width.
+- The range check of RFC 8268, section 4, which corrects RFC 4253,
+  section 8: a value inside the open interval is accepted, and zero, one,
+  `p-1`, `p`, `p+1`, and a value wider than the arithmetic are each
+  refused. A value carrying leading zero bytes is accepted, because that
+  is the shape an SSH `mpint` has once its length prefix is gone.
+- An exponent of zero produces a public value that must not be sent and a
+  shared secret that must not be used, and both are refused where they
+  are produced rather than passed to a caller.
+- Both operations refuse an output buffer narrower than the group, and a
+  public value may be written into one wider than it.
+- A group whose generator is below two, and one whose prime the
+  arithmetic cannot hold, are refused by the constructor.
+- Every refusal renders a sentence of its own.
+
+What is not here, and belongs to step S8: a handshake against an
+implementation this project did not write. No document publishes a
+complete SSH key exchange with the values that made it, so the arithmetic
+is checked against a reference inside the repository (6.6.55) and the
+protocol above it is checked against a live OpenSSH.
 
 ## 6.7 CI pipeline
 

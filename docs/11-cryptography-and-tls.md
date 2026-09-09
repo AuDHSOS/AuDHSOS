@@ -584,7 +584,7 @@ separate workspace and no part of the checks.
 | Self-written cryptography has flaws that tests do not find | a connection that looks encrypted but is not | vector tests from the standards, the RFC 8448 trace, negative tests for every rejection rule, fuzzing, the constant-time review section per crate, verification-only asymmetric surface |
 | Constant-time properties are lost to compiler optimization | timing side channels | no tables, no secret-dependent control flow at the source level; `black_box` where the source must not be folded away; the discipline is documented per function |
 | Self-written RSA has flaws the tests do not find | a chain that looks verified and is not | the construction of D-80 rather than a decoder, a negative test for each rejection rule of both encodings, the `CertificateVerify` of RFC 8448 as a vector from outside, the fuzz target `rsa`, and three real chains through `tools/tls-probe` |
-| Wide arithmetic is written for one purpose and used for another | a bignum that is safe for public values used where values are secret | `crypto-bignum` serves verification only: no secret ever reaches it, its module documentation says so in the form `montgomery.rs` already uses, and nothing in the track signs outside `test-signing` |
+| Wide arithmetic is written for one purpose and used for another | a bignum that is safe for public values used where values are secret | `crypto-bignum` holds two arithmetics and names them apart: `montgomery` and `pow` for values that are on the wire, `montgomery_secret` and `pow_secret` for an exponent that is not. Its README states which is which and what each protects; `crypto-rsa` uses only the first pair and signs only behind `test-signing`, and `crypto-dh` is the one caller with a secret exponent and uses only the second |
 | No revocation checking | a revoked certificate is accepted | stated as a known limit; short-lived anchors and operator-chosen trust stores are the only mitigation in this version |
 | The track grows past its estimate | kernel phases slip | the track is independent; work on it happens between phases, never instead of one |
 | Zeroization is best effort without `unsafe` | key material may remain in freed memory | keys live in `Secret<N>` with the shortest possible lifetime; the limit is documented rather than hidden |
@@ -685,12 +685,23 @@ doublings: at four thousand ninety-six bits it is eight thousand one
 hundred and ninety-two doublings of sixty-four limbs, once per key.
 
 `pow` is left-to-right square-and-multiply, and it is not constant time.
-The argument is the one `montgomery.rs` already makes for the curves and
-it is stronger here: a modulus, an exponent, and a signature are all on
-the wire, and nothing secret ever enters this crate. The module
-documentation says so, in the form of the constant-time review sections
-of 11.11 — with the opposite conclusion, and the same obligation to state
-it.
+The argument is the one `montgomery.rs` already makes for the curves: a
+modulus, an RSA public exponent, and a signature are all on the wire, so
+branching on them costs nothing. The module documentation says so, in the
+form of the constant-time review sections of 11.11 — with the opposite
+conclusion, and the same obligation to state it.
+
+That argument held for the whole crate until finite-field Diffie-Hellman
+arrived, whose private exponent is the one value here that must not be
+observable. `pow_secret` is the answer: a Montgomery ladder over the full
+length of the exponent buffer, one squaring and one multiplication per
+bit whatever the bit is, the two working values exchanged by a mask
+rather than by a branch, and products from `montgomery_secret`, which
+subtracts the modulus always and masks whether the subtraction counts.
+What stays public is what a length is — the width of the modulus and the
+length of the exponent buffer, both of which set loop counts. The
+boundary is the function name, and the caller is the one who knows which
+side of it a call is on.
 
 The invariant that pays for the single width of D-78: limbs at or above
 `used` are zero, in every value the crate holds. The loops run over

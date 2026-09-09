@@ -4,7 +4,9 @@
 use test_support::generators::{bytes, vec};
 use test_support::property::check;
 
-use crate::{Choice, ct_copy, ct_eq, ct_select_u8, ct_select_u32, ct_select_u64, ct_swap};
+use crate::{
+    Choice, ct_copy, ct_eq, ct_select_u8, ct_select_u32, ct_select_u64, ct_swap, ct_swap_u64,
+};
 
 #[test]
 fn equal_slices_compare_equal() {
@@ -108,4 +110,24 @@ fn property_selection_picks_one_of_its_arguments() {
         }
         Ok(())
     });
+}
+
+#[test]
+fn the_word_wide_swap_exchanges_only_on_yes() {
+    let mut a = [1u64, 2, 3, u64::MAX];
+    let mut b = [9u64, 8, 7, 0];
+    ct_swap_u64(Choice::NO, &mut a, &mut b);
+    assert_eq!(a, [1, 2, 3, u64::MAX]);
+    assert_eq!(b, [9, 8, 7, 0]);
+    ct_swap_u64(Choice::YES, &mut a, &mut b);
+    assert_eq!(a, [9, 8, 7, 0]);
+    assert_eq!(b, [1, 2, 3, u64::MAX]);
+}
+
+#[test]
+fn the_word_wide_swap_of_an_empty_pair_is_a_no_op() {
+    let mut a: [u64; 0] = [];
+    let mut b: [u64; 0] = [];
+    ct_swap_u64(Choice::YES, &mut a, &mut b);
+    assert_eq!(a, b);
 }

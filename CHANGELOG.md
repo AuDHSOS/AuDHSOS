@@ -7,6 +7,53 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Document 14, *Secure Shell as a Client*, and D-123, which admits it:
+  Secure Shell enters this project as a client, document 14 is its
+  design, and it is track S of the roadmap with steps S1 to S8. It is a
+  client and not a server, because a server needs a process server, a
+  file system, user accounts and a pseudo-terminal, and this system has
+  none of the four. The algorithm set it offers needs no cryptographic
+  primitive that does not already exist: `curve25519-sha256` and
+  `diffie-hellman-group14-sha256` for the key exchange, `ssh-ed25519` for
+  the host key and for `publickey` authentication, and
+  `chacha20-poly1305@openssh.com` as the cipher, which carries its own
+  integrity so that no MAC is negotiated. What it refuses is written out
+  with a reason each, in the form D-114 uses, and three of the refusals
+  — `ssh-dss`, `3des-cbc` and `hmac-sha1` — are REQUIRED by RFC 4253 and
+  are a deliberate departure that the interop test is what measures. Three
+  things D-123 does not settle and says so: where the specification of a
+  cipher that has no RFC is kept, how a host key is trusted on a system
+  with no writable storage, and where the client's private key comes
+  from. Each is a precondition of one step rather than of the track. And
+  one difference from the TLS track decides the shape of its testing: no
+  document publishes a complete SSH handshake with the keys that made it,
+  so there is no RFC 8448 to replay and the only check from outside is a
+  live OpenSSH.
+
+- `crypto-dh`, finite-field Diffie-Hellman over a MODP group, and the
+  constant-time modular exponentiation in `crypto-bignum` it stands on.
+  RFC 9142, table 12, makes `diffie-hellman-group14-sha256` the single
+  MUST of SSH key exchange, and it is the 2048-bit MODP group of
+  RFC 3526, section 3, with SHA-256. What was missing was not the
+  arithmetic but a place to put a secret exponent: `Modulus::pow` and
+  `Modulus::pow_wide` are left-to-right square-and-multiply and branch on
+  every bit of the exponent, which for a Diffie-Hellman private value is
+  the whole secret. `Modulus::pow_secret` is a Montgomery ladder over the
+  full length of the exponent buffer — eight rounds per byte whatever the
+  bytes are, one squaring and one multiplication in each, and a masked
+  exchange of the two working values rather than a branch — and
+  `limbs::montgomery_secret` gives it products whose final subtraction is
+  masked rather than conditional. Measured on the 2048-bit group at 256
+  bits of exponent, the old path runs between five microseconds and eight
+  hundred depending on the exponent; the new one runs at eight hundred
+  for all of them. `ModpGroup` above it holds the prime and the
+  generator, derives a public value, derives a shared secret, and refuses
+  a peer value outside the open interval `1 < v < p-1` that RFC 8268,
+  section 4, prescribes after correcting RFC 4253, section 8. The prime
+  is transcribed from RFC 3526 and checked in the tests against a second
+  transcription of the same rows. What is not here is the SSH method:
+  the two messages, the exchange hash, and the negotiation.
+
 - Document 13, *The Network on the Machine*, and Phases 12 to 15 in the
   roadmap and the implementation plan. `driver-virtio-net` was the one
   thing document 12 left unscheduled that the system visibly lacks, and
