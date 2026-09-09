@@ -237,6 +237,24 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   specifications for building or training commercially available
   artificial-intelligence systems without prior written consent.
 
+  It also records two vendor product guides that are free of charge and
+  free of registration, and what each is good for. AMD's PG054 carries
+  the type-0 and type-1 configuration space headers with every offset and
+  the position of the MSI-X capability; Altera's document 683093 carries
+  the sixteen-byte MSI-X table entry, the address arithmetic of the table
+  and of the pending bit array, and the four-kilobyte alignment of the
+  table base. What makes them worth recording is not the layouts but the
+  citation: the Altera guide names the clause the layouts come from,
+  section 6.8.2 of the PCI Local Bus Specification 3.0. D-40 requires a
+  transcribed constant to name its document, revision and section, and
+  this project does not cite a standard from memory; a document that
+  prints the number turns a section number that could only have been
+  guessed into one with a source behind it. They rank below the
+  provenance rule and the captured `q35` configuration space and the
+  README says so: they describe two implementations rather than the
+  standard, two cores can agree and both depart from it, and PG054 states
+  its compliance against revision 2.1 where the crate cites 6.0.
+
 - A notification may carry more than one interrupt, each on a bit of its
   own (D-108). `interrupt_bind` refused a notification another interrupt
   already named, and `Notification::bound_interrupt` held that rule and
