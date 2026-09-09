@@ -4,12 +4,12 @@
 //! Tests of `crate::qemu`: the serial protocol parser, the exit status
 //! mapping, and the command line of the reference machine.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::qemu::{
     EXIT_LOADER_FAILURE, EXIT_SUCCESS, EXIT_TEST_FAILURE, Measurement, Options, Outcome, Report,
-    Run, TestOutcome, arguments, check, firmware_next_to, outcome_of, parse, socket_path,
-    strip_escapes,
+    Run, TestOutcome, arguments, check, choose_accelerator, firmware_candidates, outcome_of, parse,
+    socket_path, strip_escapes,
 };
 
 /// A run whose lines are all well formed.
@@ -126,12 +126,13 @@ fn the_command_line_is_the_one_the_target_platform_document_prescribes() {
     let line = arguments(
         Path::new("/fw/edk2-x86_64-code.fd"),
         Path::new("/img/audhsos.img"),
+        "tcg",
         &Options::plain(),
     )
     .join(" ");
     assert_eq!(
         line,
-        "-machine q35 -cpu qemu64 -smp 1 -m 256M \
+        "-machine q35 -accel tcg -cpu qemu64 -smp 1 -m 256M \
          -drive if=pflash,format=raw,readonly=on,file=/fw/edk2-x86_64-code.fd \
          -drive format=raw,file=/img/audhsos.img \
          -serial stdio -display none \
@@ -144,6 +145,7 @@ fn the_command_line_is_the_one_the_target_platform_document_prescribes() {
     let windowed = arguments(
         Path::new("/fw"),
         Path::new("/img"),
+        "tcg",
         &Options::windowed(true),
     )
     .join(" ");
@@ -157,7 +159,7 @@ fn what_a_run_asks_for_beyond_the_reference_machine_is_appended_to_it() {
         qmp: Some(std::path::PathBuf::from("/tmp/qmp.sock")),
         no_vga: true,
     };
-    let line = arguments(Path::new("/fw"), Path::new("/img"), &options).join(" ");
+    let line = arguments(Path::new("/fw"), Path::new("/img"), "tcg", &options).join(" ");
     assert!(
         line.ends_with("-qmp unix:/tmp/qmp.sock,server,nowait"),
         "{line}"
@@ -170,7 +172,13 @@ fn what_a_run_asks_for_beyond_the_reference_machine_is_appended_to_it() {
 
 #[test]
 fn the_mode_the_firmware_is_to_set_takes_both_the_edid_and_the_firmware_settings() {
-    let line = arguments(Path::new("/fw"), Path::new("/img"), &Options::plain()).join(" ");
+    let line = arguments(
+        Path::new("/fw"),
+        Path::new("/img"),
+        "tcg",
+        &Options::plain(),
+    )
+    .join(" ");
     assert!(
         line.contains("-device VGA,edid=on,xres=1920,yres=1200"),
         "{line}"
@@ -197,15 +205,37 @@ fn a_socket_path_of_a_run_fits_a_unix_socket() {
 }
 
 #[test]
-fn the_firmware_lies_next_to_the_qemu_binary() {
+fn the_firmware_search_covers_macports_and_debian() {
+    let macports = firmware_candidates(Path::new("/opt/local/bin/qemu-system-x86_64"));
     assert_eq!(
-        firmware_next_to(Path::new("/opt/local/bin/qemu-system-x86_64")),
-        Path::new("/opt/local/bin/../share/qemu/edk2-x86_64-code.fd")
+        macports.first().map(PathBuf::as_path),
+        Some(Path::new(
+            "/opt/local/bin/../share/qemu/edk2-x86_64-code.fd"
+        ))
     );
-    assert_eq!(
-        firmware_next_to(Path::new("qemu-system-x86_64")),
-        Path::new("../share/qemu/edk2-x86_64-code.fd")
-    );
+
+    let debian = firmware_candidates(Path::new("/usr/bin/qemu-system-x86_64"));
+    assert!(debian.contains(&PathBuf::from("/usr/bin/../share/OVMF/OVMF_CODE_4M.fd")));
+}
+
+#[test]
+fn linux_prefers_kvm_and_falls_back_to_tcg() {
+    let mut tried = Vec::new();
+    let selected = choose_accelerator(|name| {
+        tried.push(name.to_owned());
+        name == "kvm"
+    });
+    assert_eq!(selected, Some("kvm"));
+    assert_eq!(tried, ["kvm"]);
+
+    tried.clear();
+    let selected = choose_accelerator(|name| {
+        tried.push(name.to_owned());
+        name == "tcg"
+    });
+    assert_eq!(selected, Some("tcg"));
+    assert_eq!(tried, ["kvm", "tcg"]);
+    assert_eq!(choose_accelerator(|_| false), None);
 }
 
 #[test]

@@ -12,6 +12,7 @@ The build automation owns this command line; nobody types it by hand.
 ```
 qemu-system-x86_64 \
   -machine q35 \
+  -accel <kvm or tcg> \
   -cpu qemu64 \
   -smp 1 \
   -m 256M \
@@ -27,8 +28,10 @@ qemu-system-x86_64 \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04
 ```
 
-Accelerator: TCG. `-no-reboot` turns a triple fault into a QEMU exit, which
-the test runner reports as a crash.
+On Linux the xtask starts a short probe machine once, prefers KVM, falls
+back to TCG, and passes that choice to every runner Cargo starts. Other
+hosts use TCG. `-no-reboot` turns a triple fault into a QEMU exit, which the
+test runner reports as a crash.
 
 The screen is 1920x1200, and it takes three of the lines above to get it.
 The default VGA device of the `q35` machine would be the same device, but

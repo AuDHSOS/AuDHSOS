@@ -12,8 +12,12 @@
 //! drift apart.
 
 use std::io::Read;
+#[cfg(target_os = "linux")]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use kernel_test_harness::protocol::{
@@ -21,6 +25,8 @@ use kernel_test_harness::protocol::{
 };
 
 use crate::error::Error;
+#[cfg(target_os = "linux")]
+use crate::out::note;
 
 /// The QEMU binary the reference machine runs on.
 const QEMU_BINARY: &str = "qemu-system-x86_64";
@@ -31,11 +37,20 @@ const QEMU_VARIABLE: &str = "AUDHSOS_QEMU";
 /// Names the firmware image, instead of looking next to QEMU.
 const FIRMWARE_VARIABLE: &str = "AUDHSOS_OVMF";
 
+/// The accelerator selected by the parent xtask for every QEMU runner.
+pub(crate) const ACCELERATOR_VARIABLE: &str = "AUDHSOS_QEMU_ACCELERATOR";
+
 /// Names the time limit of one run in seconds.
 const TIMEOUT_VARIABLE: &str = "AUDHSOS_QEMU_TIMEOUT";
 
-/// Where the firmware lives, relative to the directory holding QEMU.
-const FIRMWARE_RELATIVE: &str = "../share/qemu/edk2-x86_64-code.fd";
+/// Places distributions install the firmware, relative to the directory
+/// holding QEMU. `MacPorts` uses the first one; Debian uses the second one.
+const FIRMWARE_RELATIVES: [&str; 4] = [
+    "../share/qemu/edk2-x86_64-code.fd",
+    "../share/OVMF/OVMF_CODE_4M.fd",
+    "../share/OVMF/OVMF_CODE.fd",
+    "../share/qemu/OVMF.fd",
+];
 
 /// Time limit of one run in seconds.
 const DEFAULT_TIMEOUT: u64 = 60;
@@ -54,6 +69,10 @@ const SCREEN_HEIGHT: u32 = 1200;
 
 /// How long the runner waits between two checks on the machine.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// The Linux accelerator probe is shared by every QEMU use of one xtask.
+#[cfg(target_os = "linux")]
+static LINUX_ACCELERATOR: OnceLock<Result<String, String>> = OnceLock::new();
 
 /// The exit status of a machine that reported success.
 pub(crate) const EXIT_SUCCESS: i32 = 33;
@@ -217,6 +236,7 @@ const MAX_SOCKET_PATH: usize = 104;
 pub(crate) struct Machine {
     qemu: PathBuf,
     firmware: PathBuf,
+    accelerator: String,
     timeout: Duration,
 }
 
@@ -241,9 +261,19 @@ impl Machine {
                 qemu.display()
             )));
         }
+        let accelerator = accelerator(&qemu)?;
         let firmware = match std::env::var_os(FIRMWARE_VARIABLE) {
             Some(value) => PathBuf::from(value),
-            None => firmware_next_to(&qemu),
+            None => firmware_next_to(&qemu).ok_or_else(|| {
+                let tried = firmware_candidates(&qemu)
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Error::Usage(format!(
+                    "no firmware image was found; tried {tried}; set {FIRMWARE_VARIABLE} to it"
+                ))
+            })?,
         };
         if !firmware.is_file() {
             return Err(Error::Usage(format!(
@@ -254,6 +284,7 @@ impl Machine {
         Ok(Machine {
             qemu,
             firmware,
+            accelerator,
             timeout: Duration::from_secs(timeout_seconds()),
         })
     }
@@ -261,12 +292,17 @@ impl Machine {
     /// The command line of the reference machine for `image`. `display`
     /// opens QEMU's own window instead of running headless.
     pub(crate) fn arguments(&self, image: &Path, options: &Options) -> Vec<String> {
-        arguments(&self.firmware, image, options)
+        arguments(&self.firmware, image, &self.accelerator, options)
     }
 
     /// The QEMU binary of the reference machine.
     pub(crate) fn qemu(&self) -> &Path {
         &self.qemu
+    }
+
+    /// The accelerator every run of this machine uses.
+    pub(crate) fn accelerator(&self) -> &str {
+        &self.accelerator
     }
 
     /// The command line for messages.
@@ -358,10 +394,17 @@ impl Machine {
 /// The command line of the reference machine, as
 /// [03-target-platform.md 3.1.1](../../../docs/03-target-platform.md)
 /// prescribes it.
-pub(crate) fn arguments(firmware: &Path, image: &Path, options: &Options) -> Vec<String> {
+pub(crate) fn arguments(
+    firmware: &Path,
+    image: &Path,
+    accelerator: &str,
+    options: &Options,
+) -> Vec<String> {
     let mut line = vec![
         "-machine".to_owned(),
         "q35".to_owned(),
+        "-accel".to_owned(),
+        accelerator.to_owned(),
         "-cpu".to_owned(),
         "qemu64".to_owned(),
         "-smp".to_owned(),
@@ -454,12 +497,122 @@ fn timeout_seconds() -> u64 {
         .unwrap_or(DEFAULT_TIMEOUT)
 }
 
-/// The firmware image next to a QEMU binary.
-pub(crate) fn firmware_next_to(qemu: &Path) -> PathBuf {
-    match qemu.parent() {
-        Some(directory) => directory.join(FIRMWARE_RELATIVE),
-        None => PathBuf::from(FIRMWARE_RELATIVE),
+/// The configured accelerator, or the first one the host can start.
+fn accelerator(qemu: &Path) -> Result<String, Error> {
+    if let Some(value) = std::env::var_os(ACCELERATOR_VARIABLE) {
+        let name = value
+            .to_str()
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| {
+                Error::Usage(format!(
+                    "{ACCELERATOR_VARIABLE} must name a QEMU accelerator"
+                ))
+            })?;
+        return Ok(name.to_owned());
     }
+
+    #[cfg(target_os = "linux")]
+    {
+        LINUX_ACCELERATOR
+            .get_or_init(|| detect_linux_accelerator(qemu))
+            .clone()
+            .map_err(Error::Usage)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = qemu;
+        Ok("tcg".to_owned())
+    }
+}
+
+/// Tries KVM before TCG and returns the first accelerator that works.
+pub(crate) fn choose_accelerator(mut works: impl FnMut(&str) -> bool) -> Option<&'static str> {
+    ["kvm", "tcg"].into_iter().find(|name| works(name))
+}
+
+/// Starts QEMU once per candidate and records the choice for this process.
+#[cfg(target_os = "linux")]
+fn detect_linux_accelerator(qemu: &Path) -> Result<String, String> {
+    let mut failures = Vec::new();
+    let selected = choose_accelerator(|name| match probe_accelerator(qemu, name) {
+        Ok(()) => true,
+        Err(problem) => {
+            failures.push(format!("{name}: {problem}"));
+            false
+        }
+    });
+    match selected {
+        Some(name) => {
+            note!("QEMU accelerator: {name}");
+            Ok(name.to_owned())
+        }
+        None => Err(format!(
+            "QEMU can start neither KVM nor TCG: {}",
+            failures.join("; ")
+        )),
+    }
+}
+
+/// Starts and immediately stops the reference machine with one accelerator.
+#[cfg(target_os = "linux")]
+fn probe_accelerator(qemu: &Path, accelerator: &str) -> Result<(), String> {
+    let mut child = Command::new(qemu)
+        .args([
+            "-machine",
+            "q35",
+            "-accel",
+            accelerator,
+            "-cpu",
+            "qemu64",
+            "-display",
+            "none",
+            "-nodefaults",
+            "-S",
+            "-monitor",
+            "stdio",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|source| format!("could not start {}: {source}", qemu.display()))?;
+    if let Some(mut input) = child.stdin.take() {
+        let _ = input.write_all(b"quit\n");
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|source| format!("could not wait for {}: {source}", qemu.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let diagnostic = String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if diagnostic.is_empty() {
+        Err(format!("exited with {}", output.status))
+    } else {
+        Err(diagnostic)
+    }
+}
+
+/// The first installed firmware image next to a QEMU binary.
+fn firmware_next_to(qemu: &Path) -> Option<PathBuf> {
+    firmware_candidates(qemu)
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+}
+
+/// The firmware locations used by `MacPorts` and Linux distributions.
+pub(crate) fn firmware_candidates(qemu: &Path) -> Vec<PathBuf> {
+    let directory = qemu.parent().unwrap_or_else(|| Path::new(""));
+    FIRMWARE_RELATIVES
+        .iter()
+        .map(|relative| directory.join(relative))
+        .collect()
 }
 
 /// The first entry of the `PATH` that holds an executable file `name`.
