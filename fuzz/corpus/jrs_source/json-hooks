@@ -1,0 +1,1 @@
+let a={toJSON(){return {a:JSON.rawJSON('1e400'),b:'\ud800'}}};JSON.stringify(a,function(k,v){return k==='b'?undefined:v},['x'])

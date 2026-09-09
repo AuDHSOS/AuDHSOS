@@ -1,0 +1,12 @@
+<!doctype html>
+<script src="/resources/testharness.js"></script>
+<script>
+var log = 'first';
+Promise.resolve().then(() => log += ',job');
+var seen = typeof later;
+</script>
+<script>
+function later() {}
+result_callback({status: log === 'first,job' && seen === 'undefined' ? 0 : 1,
+                 name:'separate scripts and checkpoint', message:log});
+</script>

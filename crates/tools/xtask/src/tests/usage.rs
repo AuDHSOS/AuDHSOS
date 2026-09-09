@@ -33,3 +33,17 @@ fn check_refuses_an_unknown_option_before_it_runs_anything() {
     ));
     assert_eq!(message, "unknown option `--nonsense` for check");
 }
+
+#[test]
+fn jrs_check_refuses_unknown_or_extra_options_before_running_tools() {
+    for options in [
+        vec!["--typo".to_owned()],
+        vec!["--fix-format".to_owned(), "extra".to_owned()],
+    ] {
+        let message = usage_message(commands::jrs_check(
+            Path::new("/definitely/missing"),
+            &options,
+        ));
+        assert_eq!(message, "jrs-check accepts only --fix-format");
+    }
+}

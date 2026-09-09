@@ -1,0 +1,1 @@
+class Q extends Promise{}class P extends Promise{static get [Symbol.species](){return Q}}let p=P.resolve(3);p.then(v=>v+1).finally(()=>7);P.all([1,2]);P.race([3]);P.allSettled([4]);P.withResolvers();

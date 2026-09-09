@@ -68,6 +68,86 @@ pub(crate) struct Crate {
 /// Every workspace crate, in layer order.
 pub(crate) const CRATES: &[Crate] = &[
     Crate {
+        name: "audhsos-timer-queue",
+        path: "crates/timer-queue",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-regex-bt",
+        path: "crates/regex-bt",
+        kind: Kind::Logic,
+        deps: &["audhsos-regex"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-utf16",
+        path: "crates/utf16",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-math",
+        path: "crates/math",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-json",
+        path: "crates/json",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-event-target",
+        path: "crates/event-target",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-regex",
+        path: "crates/regex",
+        kind: Kind::Logic,
+        deps: &["test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "jrs",
+        path: "crates/jrs",
+        kind: Kind::Logic,
+        deps: &[
+            "test-support",
+            "audhsos-regex",
+            "audhsos-event-target",
+            "audhsos-timer-queue",
+            "audhsos-json",
+            "audhsos-math",
+            "audhsos-utf16",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "jrs-cli",
+        path: "crates/tools/jrs",
+        kind: Kind::Host,
+        deps: &["jrs", "doc-html"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-abi",
         path: "crates/abi",
         kind: Kind::Logic,
@@ -926,6 +1006,20 @@ pub(crate) struct FuzzTarget {
 /// directory of its corpus under `fuzz/corpus/`.
 pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget {
+        name: "timer_queue",
+    },
+    FuzzTarget {
+        name: "event_target",
+    },
+    FuzzTarget { name: "regex_nfa" },
+    FuzzTarget { name: "regex_bt" },
+    FuzzTarget { name: "jrs_source" },
+    FuzzTarget { name: "json_codec" },
+    FuzzTarget { name: "math_pow" },
+    FuzzTarget {
+        name: "utf16_search",
+    },
+    FuzzTarget {
         name: "boot_image_header",
     },
     FuzzTarget { name: "boot_info" },
@@ -957,6 +1051,33 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "x509" },
 ];
 
+/// An external conformance suite: a checkout this project measures itself
+/// against, pinned to one revision. It is not a dependency — nothing in it
+/// is compiled or linked, rule R8 is untouched — and it is not part of
+/// this repository, so a run that needs it fetches it first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExternalSuite {
+    /// The name on the command line.
+    pub(crate) name: &'static str,
+    /// Where the checkout lives, relative to the workspace root.
+    pub(crate) path: &'static str,
+    /// The repository it comes from.
+    pub(crate) url: &'static str,
+    /// The revision that is pinned, as a full commit hash.
+    pub(crate) revision: &'static str,
+}
+
+/// Every external suite. The revision here is the one
+/// `docs/test-ext/README.md`, document 6 section 6.7 and the README of the
+/// crate `jrs` name; moving it is a change to all four and to the numbers
+/// that were measured under the old one.
+pub(crate) const EXTERNAL_SUITES: &[ExternalSuite] = &[ExternalSuite {
+    name: "test262",
+    path: "docs/test-ext/test262",
+    url: "https://github.com/tc39/test262",
+    revision: "419d3e0a2273ba01a3bfcbec423f2801425b8e93",
+}];
+
 /// Extensions of assembly files, which must not exist.
 pub(crate) const ASSEMBLY_EXTENSIONS: &[&str] = &["S", "s", "asm"];
 
@@ -983,4 +1104,9 @@ pub(crate) fn crates_for(target: Target) -> Vec<&'static str> {
 /// The crate with the given name.
 pub(crate) fn find(name: &str) -> Option<&'static Crate> {
     CRATES.iter().find(|c| c.name == name)
+}
+
+/// The external suite with the given name.
+pub(crate) fn find_suite(name: &str) -> Option<&'static ExternalSuite> {
+    EXTERNAL_SUITES.iter().find(|suite| suite.name == name)
 }

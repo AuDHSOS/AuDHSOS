@@ -1,0 +1,1 @@
+async function f(){let i={[Symbol.iterator](){let n=0;return {next(){return n++?{done:true}:{value:{n:7}}}}}};function g(...a){return a}g(...i,await 3,...[4]);[,...i,await 5,,];}f();

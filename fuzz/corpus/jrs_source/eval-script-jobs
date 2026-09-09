@@ -1,0 +1,1 @@
+evalScript('async function f(){await 0;gc();return 7}f().then(print)');try{evalScript('throw 7')}catch(e){print(e)}

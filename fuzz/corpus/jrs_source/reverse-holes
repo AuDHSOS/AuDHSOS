@@ -1,0 +1,1 @@
+let a=[{n:1},,,{n:2}];Object.defineProperty(a,0,{get(){gc();a.length=2;return {n:3}},configurable:true});try{a.reverse()}catch(e){}a.lastIndexOf(undefined);Object.entries(a)

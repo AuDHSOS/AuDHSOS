@@ -1,0 +1,1 @@
+let key=Symbol('key');let o={[key]:hostEcho};hostEcho(o);try{hostThrow({n:3})}catch(e){hostEcho(e)}hostEcho.call(7,()=>9);Promise.resolve(1).then(hostEcho);()=>hostEcho(o);

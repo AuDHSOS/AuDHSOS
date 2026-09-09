@@ -1,0 +1,1 @@
+let x=JSON.parse('{"a":1,"b":[-0,1e400]}',function(k,v,c){if(k==='a')this.b[0]=0;return c.source===undefined?v:v});JSON.stringify(x,null,2)

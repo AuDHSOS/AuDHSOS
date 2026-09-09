@@ -1,0 +1,1 @@
+let r=/([\ud800-\udbff]+)(?![\udc00-\udfff])|(^|[^\ud800-\udbff])([\udc00-\udfff]+)/g;'\ud800\ud800\udc00'.replace(r,(m,a,b,c)=>a||c);

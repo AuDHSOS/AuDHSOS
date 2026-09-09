@@ -2358,8 +2358,317 @@ implementation this project did not write. No document publishes a
 complete SSH key exchange with the values that made it, so the arithmetic
 is checked against a reference inside the repository (6.6.55) and the
 protocol above it is checked against a live OpenSSH.
+### 6.6.67 JavaScript core (`jrs`, `jrs-cli`)
+
+- Lexical boundaries: all implemented radix literals and separators; malformed
+  digits, exponents and escapes; comments and ASI line terminators; legacy
+  literals and unsupported syntax rejected before host effects occur.
+- Primitive semantics: NaN, both signed zeroes and infinities; primitive
+  conversions and strict/loose equality; UTF-16 surrogate preservation and
+  code-unit ordering; short-circuiting and conditional evaluation order.
+  Bitwise operations truncate modulo 2^32, shifts mask the count modulo 32,
+  signed shifts propagate the sign and unsigned shifts fill with zeroes.
+  Property tests compare loop sums and integer conversions with integer models
+  and escaped strings with arbitrary UTF-16 code-unit sequences.
+- Bindings and control: duplicate declarations, lexical shadowing, TDZ before
+  initialization (including `typeof`), const assignment, re-entered scopes,
+  nested loops, break and continue, and a fresh environment on every run.
+- Budgets: exact source/stack/string/token/bytecode/depth boundaries and
+  infinite loops stopped by fuel; a failed host or exhausted run does not
+  poison the next execution. Fuzz target `jrs_source` compiles arbitrary
+  UTF-8 and executes accepted programs under small explicit limits.
+- CLI: expression, stdin and file inputs, usage errors, invalid UTF-8, bounded
+  reads, output failures, exit failure paths, and compile-once timing options.
+- Functions: declaration hoisting, recursion, named self-bindings, first-class
+  native calls, arrow parameter uniqueness and inherited strict directives;
+  `return` ASI and missing return values; shared captures, independent calls,
+  multi-level captures, lexical versus var loop bindings, nested call errors,
+  and per-run function identity. Heap collection preserves roots and frees
+  unreachable cycles, rejects stale generations, and reports exhaustion;
+  recursive calls stop at the frame or fuel limit without using Rust recursion.
+- Objects: UTF-16 keys and lone surrogates, computed keys evaluated once,
+  shorthand and duplicate data keys, duplicate literal prototype setters,
+  inheritance versus own writes, non-writable/non-configurable data properties,
+  integrity levels, `SameValue` for NaN and signed zero, method receivers,
+  lexical arrow receivers, property/capture/prototype cycles and live GC roots;
+  numeric key order before string creation order, deletion/reinsertion order,
+  property quotas and bounded nesting of object literals.
+- Exceptions: exact thrown identity, cross-frame throws, catch scope, strict
+  throw line terminators, finally on normal/return/throw/break/continue,
+  overriding completions and pending-value GC roots. Embedding resource
+  and host failures cannot be swallowed by JavaScript catch clauses.
+- Accessors/coercion: original receivers, descriptor field getter order,
+  data/accessor conversion and non-configurable validation, frozen setters,
+  valueOf/toString hint ordering, double array-length conversion, Math extrema
+  coercing all arguments even after NaN, signed-zero selection, real host
+  effects through getters, native exception boundaries and intermediate GC
+  roots. Recursive native reentry returns a resource error before stack overflow.
+- Regular expression engine: the dedicated `crates/regex/` contract requires
+  Thompson NFA/DFA operation bounds and dedicated fuzzing; no backtracking
+  implementation or fallback is permitted inside the automaton crate. Memory, states and compile expansion
+  need independent quotas even with linear text-length matching.
+- Arrays: holes versus undefined, uint32 length limits and property indices,
+  length shrink rollback at non-configurable elements, frozen length, generic
+  methods, callback validation/order/mutation/early exit, receiver forwarding,
+  inherited elements, private callback helpers unaffected by script overrides,
+  GC and shared quotas, and vector/sparse property models. Constructors cover
+  prototype inheritance, primitive versus object returns, exceptions/finally,
+  optional argument lists, property constructors, and non-constructible arrows
+  and methods.
+- Templates/control/parameters: nested template braces, comments and RegExp
+  literals within substitutions, UTF-16 escapes, CRLF normalization, immediate
+  string-hint conversion before later substitutions; default/rest TDZ, earlier
+  parameter access, default closures isolated from body vars, omitted versus
+  undefined versus null arguments, strict parameter restrictions and function
+  length; switch selector short-circuiting/fallthrough/default placement,
+  break/continue across switches and finally; enumerable-key order, shadowing,
+  deletion and prototype traversal, for-of array mutation/string code points,
+  nested array loop binding patterns, per-iteration cells and temporary GC roots.
+- Promise/async: synchronous executors and delayed FIFO reactions, repeated
+  resolve/reject calls, then getters versus queued then calls, self-resolution,
+  adoption and chaining, finally pass-through and override, combinator order,
+  empty inputs, await of values/pending promises/rejections, suspension inside
+  loops/catch/finally, host effects, pending-frame GC roots, reclamation of
+  unreachable pending cycles, and non-catchable job/frame/operand/fuel limits.
+  Unhandled rejections must reach the host checkpoint policy.
+- WPT/Test262 acceptance is separate from local regression coverage. A parse
+  error in the original harness is a failure, never a passed or skipped test.
+  No claim of browser compatibility follows from host-core execution.
+- WPT shell integration: use `jrs --wpt ROOT FILE...` with the original checkout
+  harness and scripts. Require exactly one successful completion, nonzero
+  subtest results, matching result totals, and no failing assertions. Extraction
+  and reporting fixtures test transport only, not conformance. Modules, URL
+  variants and async/defer HTML scripts fail explicitly; no browser scheduler
+  or DOM is claimed. The core README records pinned results and failures.
+- Builtin progression: stable sort/hole preservation, comparator exceptions and
+  GC during mutation; complete descriptor collection before definitions;
+  mapped/unmapped arguments and freeze detachment; apply/bind forwarding;
+  Error prototype identity/cause; UTF-16 split/replace/substitution and bounded
+  class lookahead. Regex complexity tests still require one visit per state
+  and input position, including failed assertions and greedy captures.
+- Boxing: distinct wrapper/prototype identity and brands, sloppy versus strict
+  this receivers, inherited primitive accessors, virtual immutable UTF-16 string
+  properties and key ordering, generic array methods boxing once, GC roots and
+  enumeration quotas. Regex split adds capture/empty-match/limit/lastIndex and
+  flags-getter ordering cases; differential probes use isolated reference realms.
+- Weak associations: identity-keyed WeakMap updates/deletions and constructor
+  getter order; native/resolving-function keys; getOrInsertComputed mutation;
+  dead maps, live keys, unrooted key/value cycles, long dependency chains and
+  reused heap generations. Generated ephemeron graphs are compared with an
+  independent least-fixed-point reachability model. Entry and collector-work
+  quotas must fail explicitly; live associations survive callback-triggered GC.
+- Symbols: identity versus description, registered/well-known identities,
+  string/Symbol property separation, symbol descriptor and accessor ordering,
+  freeze/seal/delete, hidden symbols in string-key enumeration, conversion hints,
+  tag getters and thrown values, property-key GC roots and ephemeron collection.
+  Registry/property/string/heap quotas must still terminate hostile inputs.
+- Iterators: cached next methods and ordered done/value getters; live-array
+  mutation, string code points, next reentry, iterator brands and completion;
+  return on break/return/throw and binding patterns, elisions without value
+  access, nested finally order, original-throw precedence and non-catchable host
+  failure. Custom iterables feed Promise combinators and WeakMap; suspended
+  frames keep iterator/next/source roots alive across GC. Infinite iterators
+  are fuel-bounded and are not run unbounded in reference-engine comparisons.
+- Classes: strict method grammar, class-name TDZ and immutable inner binding,
+  computed/static methods and accessor descriptors, default constructor argument
+  forwarding without iterator hooks, derived this TDZ/duplicate initialization,
+  constructor return rules/new.target, lexical arrow this/super, dynamic home
+  prototype lookup, native-subclass prototype visibility and explicit constructor
+  frame limits. Unsupported fields/private/static blocks remain explicit errors.
+- Promise capabilities/species: custom constructors receive an executor that is
+  callable but not constructible; repeated calls and invalid resolver pairs are
+  rejected. Test species getter order, identity preservation, generic resolve,
+  reject and combinators, cached resolver functions, reentrant thenables, finally
+  without public resolve lookup, callback GC, resolver exceptions and shared
+  resource limits. Original WPT Promise-subclassing must run without rewriting.
+- Persistent realms: independent script parsing and strict directives, global
+  declaration conflicts before publication, var/property synchronization,
+  lexical TDZ across failed scripts, closures resolving later declarations,
+  prior-code GC roots, pending await resumed by a later script, per-script jobs,
+  cumulative quotas and realm poisoning on embedding failure. Runner fixtures
+  assert no cross-script hoisting and a checkpoint before the next script.
+  The jrs_source fuzz target exercises isolated and multi-script realm execution.
+- Embedding boundary: host function identity/attributes and non-constructibility,
+  exact receivers, delayed JavaScript callbacks/checkpoints, descriptor accessors,
+  fallible conversions, callback GC roots, release/stale handles and independent
+  realm ownership. Wrong-kind/foreign host returns and thrown values are fatal;
+  ordinary language errors remain catchable. Fuzzing installs echo/throw host
+  functions and invokes returned callbacks/property access through the Rust API.
+- Microtasks: opt-in installation, callback conversion, no arguments, strict/sloppy
+  receivers, ignored return values, Promise/thenable FIFO interleaving, recursive
+  enqueue, GC after host release, distinct exception versus rejection reporting,
+  drain-after-reported-error and immediate fatal-host failure. Original
+  queue-microtask.any.js runs unchanged. ErrorEvent/MutationObserver/cross-realm
+  tests still fail and must not be counted as successful window/worker runs.
+- Concat: holes and inherited elements, isConcatSpreadable getters before length,
+  species construction before spreading, ordinary-object result descriptors,
+  final length setter, mutations during getters, GC, u32 index and fuel quotas.
+- Standalone events: listener type/callback/capture identity, per-phase snapshots,
+  once removal before recursion, removal/re-addition, passive cancellation,
+  propagation flags, composedPath cleanup, Event/CustomEvent initialization,
+  callback receiver/handleEvent lookup, exception reporting and GC roots. The
+  independent event-target crate's fuzz target compares registration/snapshot
+  mutations to a sequential model. Adapter fuzzing runs through jrs_source.
+  DOMException brands/legacy codes and invalid redispatch are tested. Missing
+  tree/Window behavior is not inferred from standalone target passes.
+- Abort: stable signal/DOMException identity, reason brands, synchronous trusted
+  event dispatch, repeated aborts, onabort listener positioning and conversion,
+  cancellation, exception reporting, removals before abort callbacks, duplicate
+  and replacement listener identity. Any-composition validates all sequence values,
+  flattens dependencies, deduplicates sources and sets all reasons before callbacks.
+  Test reentrant aborts, pending-event GC roots, weak sources/dependents, observed
+  dependent retention and generation reuse. Independent heap tests check collection
+  of unobserved or aborted dependents and weak source backedges. Extend event-target
+  fuzzing with ID removal; run adapter seeds through jrs_source. With the optional
+  timer host, three original Abort timer files pass (19 subtests); iframe/realm
+  behavior remains incomplete and is not inferred from those shell passes.
+- Timers: independent `timer-queue` model/fuzzing checks stable equal-deadline
+  ordering, cancellation, capacity and token exhaustion. VM tests use a controlled
+  monotonic host clock and explicit one-task pumping, including interval self-cancel,
+  microtask ordering/nesting clamps, global Script string handlers, policy rejection,
+  reported exceptions, exact Web IDL conversions, huge deadlines and GC roots.
+  Real WPT uses wall-clock waits, never simulated elapsed time or changed assertions.
+  Promise/queueMicrotask callbacks do not inherit timer-task nesting. Original
+  timer tests exposed an incorrect inherited clamp and premature single-file
+  completion; local regressions now reject missing/late-failing done and exercise
+  delayed test creation. Nine pinned JavaScript timer files pass; four HTML timer
+  files remain blocked by missing Window/DOM/performance/cross-realm features.
+  Missing completion remains failure, with a wall-time cap. Active-document and
+  worker suspension, CSP/Trusted Types and cross-realm details remain separate gaps.
+- Spread: call/construct/super/array evaluation order, actual iterator overrides,
+  cached next/done/value processing, errors without spurious iterator closing,
+  literal elisions versus iterated holes, data-property creation without inherited
+  setters, nesting, UTF-16 code points and Symbol values. Expanded argument counts
+  share operand quotas and survive async suspension; saved super constructors are
+  rooted before argument-side prototype mutation. Compare terminating cases with
+  a reference engine; infinite iterators remain local fuel-exhaustion tests.
+- JSON: strict grammar (no JavaScript fallback), duplicate names and own
+  `__proto__` data properties, number overflow/signed zero, all 65536 individual
+  UTF-16 units and paired/lone surrogate quoting. Flat parse ranges drive
+  reviver context.source; test postorder, snapshot invalidation by mutations,
+  ignored failed deletion/redefinition and fresh contexts. Stringify tests
+  getters/toJSON/replacer order, wrapper conversions, property-list deduplication,
+  gap truncation, array length snapshots, inherited indices, omitted values,
+  rawJSON branding/integrity, cycles, callback GC and shared nesting/fuel limits.
+  `json_codec` fuzzes parsing/range validity/quoting without the VM; `jrs_source`
+  exercises hooks and realm use. The original passive-listener WPT stays unchanged.
 
 ## 6.7 CI pipeline
+
+Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
+(checkout `419d3e0a2273ba01a3bfcbec423f2801425b8e93`) under that checkout's
+INTERPRETING.md execution rules. The checkout is not part of this repository:
+`cargo xtask test-ext` brings it to that revision and `cargo xtask test-ext
+--status` reports where it stands without the network. The revision is the
+table `EXTERNAL_SUITES` of the xtask policy, and that subcommand is the only
+one that uses the network, so it is never a step of `cargo xtask check`. A Test262 runner must preserve harness files,
+flags/variants, negative phase/type semantics, module fixtures, async completion
+and `$262` capabilities; an unsupported feature is not a passing test. Existing
+ad hoc realm probes do not establish suite acceptance. Full backreference tests
+also expose the explicit finite-automaton-only RegExp compatibility conflict.
+
+The Test262 CLI diagnostic runner now tests selection/discovery, root confinement,
+fixture exclusion, cache isolation, strict/non-strict/raw/module flags, CR metadata,
+ordered original includes, harness errors, runtime-negative constructor names,
+unsupported parse negatives, first-argument ToString print, missing/duplicate async
+completion and fatal unsupported host APIs. Fixtures test runner transport only;
+they are not conformance tests. Reusable compiled Script APIs have separate tests
+for realm isolation, compilation/instantiation phases, limit equality, poisoning
+and explicit GC. `jrs_source` fuzzes compiled persistent scripts with GC installed.
+The optional evalScript callback now adds global Script execution from a running
+VM callback: check strictness/this isolation, lexical and var publication, early
+error atomicity, collision-before-definability order, exact thrown identities,
+finally order, pending outer operands/locals through GC, nested compilation,
+callback-created closures, async job deferral and combined frame/binding/fuel limits.
+It is not direct/indirect eval. NewTarget in global arrows is rejected even when
+the caller is a constructor. Object predicates cover Symbol keys, wrapper own
+properties, omitted getters, error precedence, real prototype inheritance and
+native Function property mutability. Original test directories remain unmodified.
+Power tests cover NaN/zero ordering, negative zero/infinity parity, overflow and
+subnormals, right associativity, unary-base grammar restrictions, compound
+assignment references, super setters, await, GC and left-to-right numeric errors.
+`crates/math` tests exact powers of two and bounded ULP differences against host
+math; independent math_pow fuzzing uses raw bit pairs plus normalized and
+near-one large-exponent inputs. Production uses no libm. Comma tests ensure
+GetValue effects, receiver/reference loss and separation from list delimiters.
+Basic String tests cover negative/NaN/infinite positions, UTF-16 versus code points,
+overlapping forward/reverse matches, empty needles, Symbol.match overrides,
+getter/conversion order, padding early exit, truncation of surrogate pairs,
+repeat overflow, exact ECMAScript whitespace, lone-surrogate replacement,
+arguments branding, mutable method metadata and GC inside hooks. Independent
+`utf16_search` fuzzing and exhaustive small binary-alphabet tests compare KMP to
+a naive search oracle. Repeated-prefix split/replace/indexOf regressions enforce
+linear work budgets. The Unicode case/normalization/Intl features remain separate.
+Dynamic Function tests validate separate parameter/body grammars (including
+cross-fragment comments and delimiter injection), strict duplicate/lexical early
+errors, conversion-before-policy ordering, global environment rather than caller
+locals, anonymous name without self-binding, retained exact synthetic source,
+Function subclasses, newTarget and ordinary metadata. Reflect apply/construct
+tests preserve target validation order, array-like getter order without iteration,
+throw identity and GC roots. Restricted Function accessors share ThrowTypeError
+with strict arguments and cannot resurrect deleted properties. Fuzzing invokes
+the real Function constructor on arbitrary body/parameter fragments separately.
+Bound construction tests exercise bound-this exclusion, nested argument order,
+newTarget identity substitution, distinct Reflect newTarget prototypes, super
+constructors, native/script targets, nonconstructible arrows, explicit frame limits,
+metadata getter order and GC during prototype/constructor callbacks. Long bound
+chains are checked without Rust recursion or repeated prefix copies. hasInstance
+tests distinguish the ordinary builtin from custom handlers, object targets,
+primitive instances, inherited/null/noncallable handlers, bound target delegation,
+non-writable descriptors and exception/GC behavior. Fuzz seeds cover both paths.
+Function source tests compare exact text (not a native fallback) for declarations,
+expressions, concise/block/async arrows, object/class methods and accessors,
+computed keys, class constructors, comments and line endings. Source slices end
+at the last grammar token, excluding trailing trivia. Test shared Rc backing,
+later realm use, dynamic fragments, async closures, name changes, native metadata,
+noncallable errors and output limits. Fuzzing invokes toString on resulting
+functions and dynamically constructed values without invoking the generated code.
+Numeric stack fast paths are checked directly against the generic binary
+implementation for every optimized operator over IEEE special-value matrices
+and 10,000 generated binary64 pairs. Non-NaN results must agree bitwise (including
+signed zero); NaN payloads need not. Fallback tests assert no stack mutation,
+and VM tests check instruction fuel, stack capacity, user conversion ordering and
+async continuation. `tools/jrs-bench.sh` records seven sequential release samples
+for three fixed workloads; performance reports must retain raw samples and avoid
+claiming whole-engine competitiveness from these microbenchmarks alone.
+AsyncFunction intrinsic tests check constructor/prototype identities across all
+async forms, lack of a global binding, descriptors, mutable metadata, non-callable
+prototype, nonconstructible instances, exact dynamic source, global environments,
+bound/subclass/Reflect newTarget paths, conversion and prototype-getter order,
+policy denial, default-parameter rejections, body/finally rejections, job ordering,
+GC and compilation/reentry quotas. Dynamic-source fuzzing invokes both the normal
+and async constructors; generated code still runs only under ordinary VM limits.
+Reverse/lastIndexOf tests cover four hole-presence combinations, inherited indices,
+lower-getter deletion before upper existence checks, partial writes before errors,
+nonwritable/nonconfigurable elements, boxing, length snapshots, zero-length early
+return, omitted versus undefined fromIndex and 53-bit generic indices. A sparse
+vector model checks reverse and backward search together. Enumeration tests retain
+key snapshots while getters delete or change later descriptors, skip Symbol keys,
+and retain values across GC. Object constructor storage tests assignment/deletion,
+integrity, prototype changes, Symbol properties and persistent-realm roots. Number
+constant tests distinguish smallest subnormal from smallest normal binary64.
+Fill/copyWithin tests cover relative/clamped 53-bit indices, fractional and
+infinite arguments, boxed primitive receivers, length snapshots, empty-range
+conversion order, overlapping copy direction, inherited getters/setters, source
+holes deleting targets, immutable descriptors and partial mutation on failure.
+Value/receiver roots survive GC inside callbacks; neither method touches species
+or writes length directly. A sparse vector snapshot model validates both copy
+directions and fill with per-statement assertions. Infinite scans are tested only
+in jrs with fuel limits, never in unbounded reference-engine comparisons.
+Unscopables tests verify the complete draft-required record, descriptor attributes,
+null prototype, identity across realm turns/GC and non-recreation after deletion.
+
+The independent regex-bt crate is explicitly allowed to backtrack and must not
+be tested as if it had the NFA's linear bound. Regular-subset matches and capture
+priority are compared against regex for all offsets/sticky/options combinations.
+Dedicated cases check unmatched/forward backreferences, reverse-order lookbehind
+captures, atomic lookaround, empty mandatory versus optional iterations and capture
+clearing. Exact work limits, choice/assertion stack limits and register workspace
+limits must return typed errors, not non-matches. `regex_bt` fuzzing checks arbitrary
+UTF-16, bounds, capture ranges and differential results without external software.
+Both engines are included in regex-check and the full project pipeline.
+JSON native functions exercise extensibility, prototype/name/length mutation,
+freeze, WeakMap identity and unchanged native behavior after property mutation.
 
 Jobs run in this order; a failure stops the pipeline.
 

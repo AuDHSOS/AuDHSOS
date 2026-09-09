@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "jrs_source"
+description = "Fuzz target: bounded JavaScript compilation and execution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "jrs_source"
+path = "src/main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+jrs.workspace = true
+fuzz-support.workspace = true
+
+[lints]
+workspace = true

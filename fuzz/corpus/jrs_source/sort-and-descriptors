@@ -1,0 +1,1 @@
+let a=Object.create(null,{length:{value:4},0:{value:2,writable:true},1:{value:1,writable:true}});Array.prototype.sort.call(a,(x,y)=>x-y);function f(x){Object.defineProperty(arguments,'0',{value:7,writable:false});x=9;return arguments[0];}f(1);

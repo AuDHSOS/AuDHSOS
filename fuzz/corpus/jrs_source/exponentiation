@@ -1,0 +1,1 @@
+let x={valueOf(){gc();return 2}},y={valueOf(){gc();return 3}};x**y**2;Math.pow(-0,-3);let o={x:2};o.x**=3

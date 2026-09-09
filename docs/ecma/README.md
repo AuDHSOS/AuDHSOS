@@ -96,8 +96,9 @@ clause is named at the point of transcription, as decision D-40 requires.
 
 ## Why it is here
 
-Nothing in the workspace implements ECMA-262 today. The file is kept
-ahead of that, on the same reasoning as the RFCs: the moment a test or a
-comment cites a clause number, the clause it cited has to be readable
-from the repository, at the wording that was read, without asking a
-server that has moved on.
+The `jrs` crate now implements an initial, non-conforming subset of
+ECMA-262. Its README records the clauses consulted and the remaining
+language and host-environment gaps. The file follows the same reasoning
+as the RFCs: when a test or comment cites a clause number, that clause
+must be readable from the repository at the wording that was read,
+without asking a server that has moved on.

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "jrs-cli"
+description = "Host command-line executable for the jrs JavaScript runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+jrs.workspace = true
+doc-html.workspace = true
+
+[[bin]]
+name = "jrs"
+path = "src/main.rs"
+doc = false
+
+[lints]
+workspace = true

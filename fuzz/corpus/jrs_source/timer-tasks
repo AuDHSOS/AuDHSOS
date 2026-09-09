@@ -1,0 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+let id=setInterval(()=>{clearTimeout(id);Promise.resolve().then(()=>{let a={}})},0);
+let s=AbortSignal.timeout(1);let d=AbortSignal.any([s]);d.onabort=()=>{if(s.reason!==d.reason)throw 1};
+setTimeout('var timerResult=42',0);
+let n=setTimeout(()=>{throw 7},2);clearInterval(n);

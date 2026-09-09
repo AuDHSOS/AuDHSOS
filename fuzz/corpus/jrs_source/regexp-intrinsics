@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+class R extends RegExp {}
+let r=new R('a','g');if(!(r instanceof RegExp)||r.constructor!==R)throw 1;
+let copy=RegExp(r);if(copy===r||RegExp(copy)!==copy)throw 2;
+r.lastIndex={valueOf(){for(let i=0;i<20;i++){let g={}}return 0}};
+r.test('a');
+let getter=Object.getOwnPropertyDescriptor(RegExp.prototype,'flags').get;
+if(getter.call({global:1,sticky:1})!=='gy')throw 3;
+r.exec=()=>({});if(!r.test(''))throw 4;
+if(RegExp.prototype.toString.call({source:'x',flags:'m'})!=='/x/m')throw 5;

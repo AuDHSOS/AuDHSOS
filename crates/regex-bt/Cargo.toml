@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+[package]
+name = "audhsos-regex-bt"
+description = "Explicitly bounded UTF-16 backtracking regex VM"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+[dependencies]
+audhsos-regex.workspace = true
+[lints]
+workspace = true

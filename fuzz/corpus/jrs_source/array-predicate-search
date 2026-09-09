@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+let a=[1,,{n:7}];
+let found=a.findLast((v,k,o)=>{if(k===2){o.length=0;for(let i=0;i<100;i++){let garbage={}}}return v!==undefined});
+if(found.n!==7)throw 1;
+let wide={length:9007199254740991};wide[9007199254740990]=42;
+if(Array.prototype.at.call(wide,-1)!==42)throw 2;
+if(Array.prototype.findLastIndex.call(wide,v=>v===42)!==9007199254740990)throw 3;
+let log='';[1,,3].findIndex((v,k)=>{log+=k;return false});
+if(log!=='012')throw 4;

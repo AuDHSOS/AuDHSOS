@@ -8,6 +8,8 @@
 [workspace]
 resolver = "3"
 members = [
+    "timer_queue",
+    "event_target",
     "boot_image_header",
     "boot_info",
     "der",
@@ -16,6 +18,12 @@ members = [
     "http_response",
     "ipv4",
     "ipv6",
+    "jrs_source",
+    "json_codec",
+    "math_pow",
+    "utf16_search",
+    "regex_nfa",
+    "regex_bt",
     "madt",
     "mouse_packet",
     "pem",
@@ -36,6 +44,11 @@ authors = ["Manuel Baesler and contributors"]
 rust-version = "1.100"
 
 [workspace.dependencies]
+audhsos-timer-queue = { path = "../crates/timer-queue" }
+audhsos-utf16 = { path = "../crates/utf16" }
+audhsos-math = { path = "../crates/math" }
+audhsos-json = { path = "../crates/json" }
+audhsos-event-target = { path = "../crates/event-target" }
 audhsos-abi = { path = "../crates/abi" }
 audhsos-der = { path = "../crates/net/der" }
 audhsos-encoding = { path = "../crates/encoding" }
@@ -55,6 +68,9 @@ net-tcp = { path = "../crates/net/tcp" }
 net-wire = { path = "../crates/net/wire" }
 fuzz-support = { path = "../crates/support/fuzz" }
 user-loader = { path = "../crates/user/loader" }
+jrs = { path = "../crates/jrs" }
+audhsos-regex = { path = "../crates/regex" }
+audhsos-regex-bt = { path = "../crates/regex-bt" }
 
 [workspace.lints.rust]
 # `--cfg fuzzing` is set by `cargo xtask fuzz`, not by a Cargo feature.
@@ -87,6 +103,78 @@ rustflags = [
 
 [profile.release.package.fuzz-support]
 rustflags = []
+
+[profile.release.package.event_target]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
+
+[profile.release.package.timer_queue]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
+
+[profile.release.package.regex_nfa]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
+
+[profile.release.package.regex_bt]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
+
+[profile.release.package.jrs_source]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
+
+[profile.release.package.json_codec]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
+
+[profile.release.package.math_pow]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
+
+[profile.release.package.utf16_search]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
 
 [profile.release.package.boot_image_header]
 rustflags = [

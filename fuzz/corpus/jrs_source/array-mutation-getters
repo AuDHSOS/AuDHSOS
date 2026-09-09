@@ -1,0 +1,1 @@
+let o={length:3,get 0(){gc();delete this[1];return {n:7}},set 1(v){gc();this.saved=v},2:3};Array.prototype.copyWithin.call(o,1,0,2);Array.prototype.fill.call(o,7,2);Object.values(o)

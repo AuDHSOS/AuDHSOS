@@ -16,16 +16,25 @@ use crate::policy::{
 pub(crate) fn check(root: &Path) -> Result<Vec<String>, Error> {
     let mut violations = Vec::new();
     for path in fs::walk_files(root)? {
+        let relative = path.strip_prefix(root).unwrap_or(&path);
+        if upstream_reference(relative) {
+            continue;
+        }
         let Some(prefix) = comment_prefix(&path) else {
             continue;
         };
         let content = fs::read(&path)?;
-        let relative = path.strip_prefix(root).unwrap_or(&path);
         if let Some(problem) = header_problem(&content, prefix, expected_header(relative)) {
             violations.push(format!("{}: {problem}", relative.display()));
         }
     }
     Ok(violations)
+}
+
+/// Verbatim third-party conformance inputs retain upstream copyright/licensing.
+/// This exemption is root-relative and intentionally not a filename wildcard.
+pub(crate) fn upstream_reference(relative: &Path) -> bool {
+    relative.starts_with("docs/test-ext/test262")
 }
 
 /// The comment prefix for a file that needs the header, or `None` if the

@@ -4,11 +4,19 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/regex-bt",
+    "crates/utf16",
+    "crates/math",
+    "crates/json",
+    "crates/event-target",
+    "crates/timer-queue",
+    "crates/regex",
     "crates/abi",
     "crates/time",
     "crates/encoding",
     "crates/deflate",
     "crates/collections",
+    "crates/jrs",
     "crates/crypto/ct",
     "crates/crypto/hash",
     "crates/crypto/aead",
@@ -72,6 +80,7 @@ members = [
     "crates/tools/pdf",
     "crates/tools/docpdf",
     "crates/tools/xtask",
+    "crates/tools/jrs",
 ]
 
 [workspace.package]
@@ -84,11 +93,19 @@ rust-version = "1.100"
 exclude = ["fuzz"]
 
 [workspace.dependencies]
+audhsos-json = { path = "crates/json" }
+audhsos-math = { path = "crates/math" }
+audhsos-utf16 = { path = "crates/utf16" }
+audhsos-event-target = { path = "crates/event-target" }
+audhsos-timer-queue = { path = "crates/timer-queue" }
+audhsos-regex = { path = "crates/regex" }
+audhsos-regex-bt = { path = "crates/regex-bt" }
 audhsos-abi = { path = "crates/abi" }
 audhsos-time = { path = "crates/time" }
 audhsos-encoding = { path = "crates/encoding" }
 audhsos-deflate = { path = "crates/deflate" }
 audhsos-collections = { path = "crates/collections" }
+jrs = { path = "crates/jrs" }
 crypto-ct = { path = "crates/crypto/ct" }
 crypto-hash = { path = "crates/crypto/hash" }
 crypto-aead = { path = "crates/crypto/aead" }

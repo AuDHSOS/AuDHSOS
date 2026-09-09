@@ -1,0 +1,1 @@
+let m=new WeakMap(),n=new WeakMap(),root={};for(let i=0;i<8;i++){let a={},b={};m.set(a,b);n.set(b,a);}m.set(root,{n:7});m.getOrInsertComputed(root,()=>({}));m.delete(root);new WeakMap([[root,1]]).get(root);

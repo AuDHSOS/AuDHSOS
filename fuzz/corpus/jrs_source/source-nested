@@ -1,0 +1,1 @@
+Function('return ()=>class C{get x(){return 7}}')()().toString();(()=>`a${(()=>7)()}b`).toString();(function /*a*/ f(){return /x/}).toString()

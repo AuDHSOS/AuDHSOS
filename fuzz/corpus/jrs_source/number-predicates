@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+let trap={valueOf(){throw 7},[Symbol.toPrimitive](){throw 8}};
+if(Number.isFinite(trap)||Number.isNaN(trap)||Number.isInteger(trap)||Number.isSafeInteger(trap))throw 1;
+if(!Number.isInteger(Number.MAX_VALUE)||Number.isSafeInteger(Number.MAX_VALUE))throw 2;
+if(!Number.isSafeInteger(-0)||!Number.isNaN(NaN)||Number.isFinite(Infinity))throw 3;
+let f=Number.isInteger;delete Number.isInteger;f.saved={n:7};
+for(let i=0;i<100;i++){let g={}}
+if(!f(42)||f.saved.n!==7)throw 4;

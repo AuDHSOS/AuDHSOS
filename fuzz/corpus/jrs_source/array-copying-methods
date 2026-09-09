@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+let a=[1,,{n:7}],b=a.toReversed();if(b[0].n!==7||!(1 in b)||(1 in a))throw 1;
+let o={length:2,get 0(){throw 7},1:8};if(Array.prototype.with.call(o,0,9).join()!=='9,8')throw 2;
+let n=Number.MAX_SAFE_INTEGER,wide={length:n};wide[n-1]=42;
+if(Array.prototype.toSpliced.call(wide,0,n-1)[0]!==42)throw 3;
+let copied=a.toSpliced(1,1,{x:9});for(let i=0;i<30;i++){let g={}}
+if(copied[1].x!==9||copied[2].n!==7)throw 4;

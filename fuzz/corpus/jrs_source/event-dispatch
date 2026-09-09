@@ -1,0 +1,1 @@
+let t=new EventTarget(),e=new Event('x',{cancelable:true});function f(v){v.preventDefault();t.removeEventListener('x',f);t.addEventListener('x',f,{once:true})}t.addEventListener('x',f,{once:true});t.dispatchEvent(e);e.initEvent('x');t.dispatchEvent(e);
