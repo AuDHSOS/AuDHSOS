@@ -10,8 +10,9 @@ a constant can be checked against its source without a network and so that
 the source cannot change under a crate that cites it (D-59, D-100).
 [`docs/rfc/`](../rfc/README.md) holds what the RFC Editor publishes,
 [`docs/oasis/`](../oasis/README.md) what OASIS publishes,
-[`docs/w3c/`](../w3c/README.md) and [`docs/ecma/`](../ecma/README.md) the
-same for those two.
+[`docs/w3c/`](../w3c/README.md), [`docs/ecma/`](../ecma/README.md),
+[`docs/itu/`](../itu/README.md) and [`docs/cipa/`](../cipa/README.md) the
+same for those four.
 
 PCI-SIG does not publish its specifications freely. They are available to
 members, and their terms do not allow a copy to be redistributed in a

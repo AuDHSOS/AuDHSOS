@@ -42,16 +42,23 @@ than of the track; section 14.13 names them.
 | 13 | [The network on the machine](13-the-network-on-the-machine.md) | What has to exist before a network driver can be written: a clock and a deadline, entropy, MSI-X, PCI, DMA; then the driver, the server, and the socket protocol |
 | 14 | [Secure Shell as a client](14-secure-shell-as-a-client.md) | The SSH-2 client: the algorithm set and what is refused, the crate, the three layers of the protocol, trusting a host key, testing against an implementation from outside |
 
-Beside the documents lie the standards they cite, verbatim and with their
-checksums, one directory per body that publishes them: [rfc/](rfc) for the
-RFCs (D-59), [oasis/](oasis) for what OASIS publishes (D-100),
-[w3c/](w3c), and [ecma/](ecma). Each directory has a `README.md` naming
-what belongs there and how it is fetched. Nothing under them is compiled,
-linked, or read at run time. [pcisig/](pcisig) is the exception that
-proves the rule: PCI-SIG does not publish freely and this repository may
-not hold a copy, so that directory holds no document and instead records
-which documents the crate `pci` cites and what takes the place of having
-them at hand (D-117).
+Beside the documents lie the standards they cite, verbatim and with
+their checksums, one directory per body that publishes them:
+[rfc/](rfc) for the RFCs (D-59), [oasis/](oasis) for what OASIS
+publishes (D-100), [w3c/](w3c), [ecma/](ecma), [itu/](itu) for the
+JPEG Recommendations, and [cipa/](cipa) for Exif. Each directory has a
+`README.md` naming what belongs there and how it is fetched. Nothing
+under them is compiled, linked, or read at run time.
+
+Two of them qualify that rule and they qualify it in opposite
+directions. [pcisig/](pcisig) is the exception that proves it: PCI-SIG
+does not publish freely and this repository may not hold a copy, so
+that directory holds no document and instead records which documents
+the crate `pci` cites and what takes the place of having them at hand
+(D-117). `itu/` and `cipa/` are the other case: the ITU and CIPA serve
+their documents to anyone free of charge but grant no permission to
+redistribute them, and copies are kept anyway. Their READMEs say so
+plainly rather than leaving it to be discovered.
 
 ## Conventions for these documents
 
