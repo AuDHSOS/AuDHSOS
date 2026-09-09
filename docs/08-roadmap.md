@@ -462,7 +462,7 @@ names in the disk image writer.
 | Phase 14 is XL and the network stalls in it | the release slips while three crates are half-finished | the driver, the server, and the protocol are separate crates with separate catalog items; the driver and the crate `pci` are logic over a trait and can be finished before the phase that integrates them |
 | The kernel grows a deadline queue in the tick handler | every interrupt costs more | the list is ordered by instant, the walk stops at the first deadline that has not passed, and its length is bounded by the thread count |
 | MSI-X cannot be masked by the kernel | a device that raises interrupts faster than its driver services them keeps a core busy | the driver suppresses through the used ring flag `virtio-queue` implements; the limit is written down in 13.5 rather than discovered |
-| PCI-SIG specifications may not be kept beside the code | a layout constant is wrong and D-59's check does not exist for it | every constant names its document and revision; a configuration space captured from a real machine is a fixture of the crate's tests (D-117) |
+| PCI-SIG specifications cannot be obtained and so are not kept beside the code | a layout constant is wrong and D-59's check does not exist for it | every constant names its document and revision; a configuration space captured from a real machine is a fixture of the crate's tests (D-124) |
 
 ## 8.20 Resolved decisions
 

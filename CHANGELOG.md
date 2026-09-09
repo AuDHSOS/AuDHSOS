@@ -8,52 +8,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 ### Added
 
 - The JPEG standards, under a new `docs/itu/` and a new `docs/cipa/`,
-  each fetched twice and recorded with its checksum. They answer two
-  questions that JPEG keeps in two different documents. What the format
-  is: ITU-T T.81 | ISO/IEC 10918-1, the markers and segments of Annex B,
+  each fetched twice and recorded with its checksum. JPEG answers in two
+  documents what is usually asked as one question. ITU-T T.81 |
+  ISO/IEC 10918-1 is the entropy-coded stream: the markers of Annex B,
   the Huffman and arithmetic coders of Annexes C and D, the four modes of
-  operation, and the example tables of Annex K that nearly every encoder
-  ships. How it is stored: ITU-T T.871 | ISO/IEC 10918-5, eighteen pages
-  that define the `APP0` segment, the density, the thumbnail, and the
-  colour space T.81 never states — so that a decoder implementing T.81
-  alone cannot tell whether the three components it decoded are YCbCr or
-  RGB. Beside them, ITU-T T.84 | ISO/IEC 10918-3 for SPIFF, the file
-  format the JPEG committee intended and JFIF beat, which is here so that
-  its `APP8` marker is not a mystery; and the C-Cube JFIF 1.02 paper of
-  1992 that T.871 was made from, which is what every decoder written
-  before 2011 was written against.
+  operation, the example tables of Annex K. It states nothing that makes
+  a stream a file, so a decoder implementing it alone cannot tell whether
+  the three components it decoded are YCbCr or RGB. ITU-T T.871 |
+  ISO/IEC 10918-5 is the file: eighteen pages for the `APP0` segment, the
+  density, the thumbnail, and the colour space T.81 leaves unstated.
+  Beside them ITU-T T.84 | ISO/IEC 10918-3 for SPIFF, the second file
+  format, which claims the `APP8` marker, and the C-Cube JFIF 1.02 paper
+  the text of T.871 formalizes.
 
   `docs/cipa/` holds Exif 3.0, CIPA DC-008-Translation-2023, because a
   JPEG file on a disk is usually not the file T.871 describes: a camera
-  writes `APP1` with a whole TIFF Rev. 6.0 structure in it rather than
-  the `APP0` of JFIF. The practical consequence is the `Orientation` tag,
-  which lives in neither ITU document, so a decoder that reads only those
-  displays a large share of the world's photographs rotated ninety
-  degrees while being right about every byte it read.
+  writes `APP1` with a TIFF Rev. 6.0 structure in it. `Orientation` is a
+  tag there and appears in neither ITU document, so a decoder reading
+  only those displays a large share of photographs rotated ninety degrees
+  while being right about every byte it read.
 
-  Two things are different from `docs/ecma/` and `docs/w3c/`. The first
-  is that these are PDFs, so `docpdf` does not file them under `spec/` —
-  that section is for the standards kept as HTML — and only the two
-  READMEs are converted, into `other/` like the one under `docs/pcisig/`.
-  The second is the terms, and they are the reason the READMEs say more
-  than the others do. The ITU and CIPA serve these documents to anyone
-  free of charge but grant no permission to redistribute them: T.81,
-  T.871 and T.84 each print that no part may be reproduced without
-  permission in writing from the ITU, and Exif carries CIPA's reservation
-  of all rights. Copies are kept anyway, which is a decision and not an
-  oversight, and each README records it as one, names the alternative —
-  the arrangement of `docs/pcisig/`, which keeps no copy — and says what
-  happens if either body objects. Only JFIF 1.02 is unencumbered; it
-  carries no notice at all, and T.871's own summary says it was widely
-  and freely circulated. T.81 comes from the Consortium's long-standing
-  copy rather than from the ITU, which serves that one Recommendation
-  only behind a TIES account.
-
-  Nothing in the workspace decodes JPEG yet. They are kept ahead of it on
-  the reasoning of D-59: the other filter a PDF names for an image is
-  `DCTDecode`, and a `DCTDecode` stream is T.81 without the JFIF wrapper,
-  so these are the documents for reading a picture out of a PDF and the
-  documents for reading the same picture out of a file.
+  `docpdf` needs nothing: its `spec/` section is for the standards kept
+  as HTML, these are PDFs and are passed over, and the two READMEs land
+  in `other/` beside the one from `docs/pcisig/`.
 
 - Document 14, *Secure Shell as a Client*, and D-123, which admits it:
   Secure Shell enters this project as a client, document 14 is its
@@ -233,6 +210,32 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   percent of lines and 91.3 percent of branches.
 
 ### Changed
+
+- D-124 states what decides whether a reference document is kept in this
+  repository: whether it can be obtained, not whether its licence permits
+  the copy. It supersedes D-117, whose rule for the crate `pci` it
+  carries forward unchanged, and it puts the three cases in one place.
+  Documents that may be redistributed — the RFCs, OASIS, the Consortium,
+  Ecma — are kept and there is nothing further to state. Documents a body
+  serves to anyone at no charge but does not licence for redistribution —
+  the ITU Recommendations, CIPA's Exif — are kept as well, because the
+  copy is what D-59 is for and no licence-respecting arrangement delivers
+  it for those standards; the obligations are stated rather than assumed,
+  so the files stay unmodified with their notices inside them, each such
+  README quotes the restriction it stands against, and a copy goes if the
+  body objects. Documents that cannot be obtained — the PCI Express Base
+  and PCI Firmware specifications, which PCI-SIG releases to members or
+  against payment — leave the provenance rule and the captured `q35`
+  configuration space in their place.
+
+  `docs/pcisig/README.md` now says what an attempt to obtain them found:
+  the one PCI specification free to non-members is the *PCI Code and ID
+  Assignment Specification*, which the crate does not cite and which is
+  released through a form requiring a name, a company and an email
+  address. It also records a condition that binds a reader with lawful
+  access rather than the copy — PCI-SIG forbids the use of its
+  specifications for building or training commercially available
+  artificial-intelligence systems without prior written consent.
 
 - A notification may carry more than one interrupt, each on a bit of its
   own (D-108). `interrupt_bind` refused a notification another interrupt

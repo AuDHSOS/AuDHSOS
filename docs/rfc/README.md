@@ -832,8 +832,8 @@ and is not in this directory.
   and it has no RFC. It is specified in `PROTOCOL.chacha20poly1305` in
   the OpenSSH source, which is a document but not a standards body's.
   Whether it is kept the way D-100 added `docs/oasis/` for a second
-  body, or cited the way D-117 cites what PCI-SIG will not let this
-  repository hold, is an open decision. The same applies to
+  body, or cited the way D-124 cites what PCI-SIG releases only to
+  members, is an open decision. The same applies to
   `aes128-gcm@openssh.com` and `zlib@openssh.com`.
 - **RFC 5647** is AES-GCM for Secure Shell, and it was read and left out.
   Its section 7.3 is worth knowing — the packet length field becomes

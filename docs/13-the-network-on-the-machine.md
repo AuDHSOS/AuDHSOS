@@ -285,7 +285,7 @@ of this crate cannot be checked against a document kept beside the code
 the way D-59 asks. Every constant therefore names the document and the
 revision it comes from in its own doc comment, and
 [`docs/pcisig/README.md`](pcisig/README.md) records which documents those
-are and how to obtain them (D-117).
+are and how to obtain them (D-124).
 
 ## 13.7 MMIO out of safe code
 

@@ -50,15 +50,16 @@ JPEG Recommendations, and [cipa/](cipa) for Exif. Each directory has a
 `README.md` naming what belongs there and how it is fetched. Nothing
 under them is compiled, linked, or read at run time.
 
-Two of them qualify that rule and they qualify it in opposite
-directions. [pcisig/](pcisig) is the exception that proves it: PCI-SIG
-does not publish freely and this repository may not hold a copy, so
-that directory holds no document and instead records which documents
-the crate `pci` cites and what takes the place of having them at hand
-(D-117). `itu/` and `cipa/` are the other case: the ITU and CIPA serve
-their documents to anyone free of charge but grant no permission to
-redistribute them, and copies are kept anyway. Their READMEs say so
-plainly rather than leaving it to be discovered.
+D-124 states what decides whether a document is kept: whether it can be
+obtained, not whether its licence permits the copy. `rfc/`, `oasis/`,
+`w3c/` and `ecma/` hold documents that may be redistributed. `itu/` and
+`cipa/` hold documents that the ITU and CIPA serve to anyone at no
+charge but do not licence for redistribution; the copies are kept
+regardless, and each of those READMEs quotes the restriction it stands
+against and states what follows from it. [pcisig/](pcisig) holds no
+document, because PCI-SIG releases the two specifications the crate
+`pci` cites only to members or against payment; it records instead which
+documents those are and what takes the place of having them at hand.
 
 ## Conventions for these documents
 

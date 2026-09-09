@@ -381,7 +381,7 @@ listed against until that step is reached.
 
 | What is open | Where it is felt | Shape of the answer |
 |--------------|------------------|---------------------|
-| Where `PROTOCOL.chacha20poly1305` is kept | step S3: a cipher whose specification is not in the house | a `docs/openssh/` under the rule D-100 used for OASIS, or the provenance regime of D-117, which PCI-SIG forced |
+| Where `PROTOCOL.chacha20poly1305` is kept | step S3: a cipher whose specification is not in the house | a `docs/openssh/` under the rule D-100 used for OASIS, or the provenance regime D-124 keeps for what cannot be obtained |
 | How a host key is trusted | step S4, and 14.10 | a rule the client is given at construction; the question is what the image can carry |
 | Where the client's private key comes from | step S5 | the boot archive of D-27, or generated per boot, in which case the far side must already know the public half |
 

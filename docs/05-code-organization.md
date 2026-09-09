@@ -18,7 +18,9 @@ AuDHSOS/
 │   ├── oasis/                 what OASIS publishes, the same way (D-100)
 │   ├── w3c/                   what the W3C publishes, the same way
 │   ├── ecma/                  what Ecma International publishes, the same way
-│   └── pcisig/                what PCI-SIG publishes and this repository may not hold: the provenance rule that takes its place (D-117)
+│   ├── itu/                   the JPEG Recommendations, kept although their terms forbid the copy (D-124)
+│   ├── cipa/                  Exif, on the same footing (D-124)
+│   └── pcisig/                what PCI-SIG releases only to members: the provenance rule that takes its place (D-124)
 ├── crates/
 │   ├── abi/                   audhsos-abi: syscall table, errors, rights, message layout, boot image header, boot information, address constants
 │   ├── elf/                   audhsos-elf: ELF64 parser producing validated load segments
