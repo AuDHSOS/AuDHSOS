@@ -2245,6 +2245,48 @@ what the kernel dispatches on, so the check is what the kernel saw.
   attempt at the deadline rather than blocking the server.
 
 
+### 6.6.66 Finite-field Diffie-Hellman (`crypto-dh`)
+
+Step S2 of 8.26, the half of it that is built (D-122, D-123). The
+constant-time exponentiation this rests on is in `crypto-bignum` and is
+covered by 6.6.55.
+
+- The group of RFC 3526, section 3: the prime is the value the document
+  prints, checked against a second transcription of the same rows so that
+  the constant and the test do not share one slip; it is 2048 bits wide,
+  its two ends are the ones the closed form of that section gives it, and
+  the generator is the two the document states. The exponent length the
+  crate recommends is 256 bits, which is above the 112 bits of security
+  RFC 9142, table 4, gives the group.
+- The generator raised to a small exponent is that power of two, for
+  exponents whose result stays below the prime and is therefore
+  expressible without a second exponentiation; raised to the width of the
+  prime it is that power reduced exactly once, which the test computes by
+  subtracting the prime rather than by exponentiating again.
+- An exchange between two sides reaches one secret, and does so for
+  exponents the generator chooses (property). The same exchange runs over
+  the 1536-bit group of section 2 of the same document, so that nothing
+  in the code is tied to one width.
+- The range check of RFC 8268, section 4, which corrects RFC 4253,
+  section 8: a value inside the open interval is accepted, and zero, one,
+  `p-1`, `p`, `p+1`, and a value wider than the arithmetic are each
+  refused. A value carrying leading zero bytes is accepted, because that
+  is the shape an SSH `mpint` has once its length prefix is gone.
+- An exponent of zero produces a public value that must not be sent and a
+  shared secret that must not be used, and both are refused where they
+  are produced rather than passed to a caller.
+- Both operations refuse an output buffer narrower than the group, and a
+  public value may be written into one wider than it.
+- A group whose generator is below two, and one whose prime the
+  arithmetic cannot hold, are refused by the constructor.
+- Every refusal renders a sentence of its own.
+
+What is not here, and belongs to step S8: a handshake against an
+implementation this project did not write. No document publishes a
+complete SSH key exchange with the values that made it, so the arithmetic
+is checked against a reference inside the repository (6.6.55) and the
+protocol above it is checked against a live OpenSSH.
+
 ## 6.7 CI pipeline
 
 Jobs run in this order; a failure stops the pipeline.

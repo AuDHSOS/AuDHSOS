@@ -33,13 +33,16 @@ each phase down to crates, types, algorithms, and tests.
 
 Beside the phases run tracks that depend on none of them: the
 cryptography and TLS crates of section 8.21, specified in
-[document 11](11-cryptography-and-tls.md), and the tracks of sections
-8.22 to 8.25, specified in [document 12](12-parallel-work.md). Section
-8.26 states how many of them may be active at once and which phase work
-may be pulled forward. Every track but the two integration steps is
-finished, and those two are Phases 14 and 15; what the four phases from
-12 on need beyond them is specified in
-[document 13](13-the-network-on-the-machine.md).
+[document 11](11-cryptography-and-tls.md), the tracks of sections 8.22
+to 8.25, specified in [document 12](12-parallel-work.md), and the Secure
+Shell client of section 8.26, specified in
+[document 14](14-secure-shell-as-a-client.md). Section 8.27 states how
+many of them may be active at once and which phase work may be pulled
+forward. Of the tracks of documents 11 and 12 everything but the two
+integration steps is finished, and those two are Phases 14 and 15; what
+the four phases from 12 on need beyond them is specified in
+[document 13](13-the-network-on-the-machine.md). Track S is decided and
+not started (D-123).
 
 ## 8.2 Phase 0: Project foundation
 
@@ -589,7 +592,42 @@ beyond the host tests and the coverage gate every host crate has.
 
 Tests: catalog 6.6.53 and 6.6.58.
 
-## 8.26 Capacity for parallel work
+## 8.26 Track S: Secure Shell as a client
+
+Status: decided in D-123, specified in
+[document 14](14-secure-shell-as-a-client.md), not started. One step of
+it exists already: `crypto-dh` and the constant-time exponentiation under
+it were built before the track and are decided in D-122.
+
+The track is a client for SSH-2 and not a server, for the reason D-123
+gives. It offers `curve25519-sha256` and `diffie-hellman-group14-sha256`
+for the key exchange, `ssh-ed25519` for the host key and for `publickey`
+authentication, and `chacha20-poly1305@openssh.com` as the cipher, and
+needs no cryptographic primitive that the crypto track did not already
+build. What it refuses, and why each name is refused, is section 14.5.
+
+| Step | What | Size | Ends with |
+|------|------|------|-----------|
+| S1 | `audhsos-ssh`: `wire`, `packet` | M | the types of RFC 4251, section 5, against the vectors of that section, and the binary packet with its padding and its sequence numbers |
+| S2 | `kex` | L | `crypto-dh` is built (D-122); what remains is `SSH_MSG_KEXINIT` and the negotiation rule, both key exchange methods, the exchange hash, the six keys of RFC 4253, section 7.2, and the aborts |
+| S3 | the cipher | M | `chacha20-poly1305@openssh.com` over the packet layer; the provenance question of 14.13 is answered before the step, not during it |
+| S4 | host keys | S-M | the `ssh-ed25519` blobs of RFC 8709, the signature over the exchange hash verified, and the trust rule as a parameter |
+| S5 | `auth` | M | `publickey` with the signature of RFC 4252, section 7, and `ext-info-c` with `server-sig-algs` |
+| S6 | `channel` | L | channels, the window, the session channel, `exec` and `shell`, extended data, and `exit-status` |
+| S7 | re-exchange | S-M | a re-exchange from either side, its two thresholds, and the disconnect reason codes of RFC 4250 |
+| S8 | integration | M | the client over a socket of `server-net`, a program in the boot archive, and a handshake against a live OpenSSH; needs Phase 14 |
+
+S1 to S7 depend on no phase and are built between them, as the whole of
+track C was. S8 needs the network on the machine.
+
+Tests: catalog 6.6.66 and following. The first is written, because the
+arithmetic of S2 is built; the rest are written with the step that owns
+each. There is no RFC 8448 for this protocol — no document publishes a
+complete handshake with the keys that made it — so the check from outside
+is the interop test of S8 and not a replay, which is the one way this
+track differs in kind from track C.
+
+## 8.27 Capacity for parallel work
 
 - At most one side track besides the cryptography track is active at a
   time (D-45).
@@ -597,6 +635,10 @@ Tests: catalog 6.6.53 and 6.6.58.
 - Order: track E, then the cryptography track to T7, then track D, with
   step D6 not started beside an XL phase; track F when a driver becomes
   foreseeable; G2 before Phase 3.
+- Track S (8.26) is the one side track that is not finished. The first
+  rule covers it, and where it falls in the order above is not settled:
+  the order is the history of the tracks that are done, and no phase
+  requires track S of anything.
 - Phase work whose logic passes the admission test may be pulled
   forward without changing its phase, its catalog items, or its
   acceptance criteria: `gfx` (Phase 9), `driver-i8042` (Phase 10), the

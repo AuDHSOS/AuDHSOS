@@ -7,14 +7,21 @@ order in which the system is built.
 
 Status: every entry of the decision register is decided; no open
 decisions remain. Phases 0 to 9 of the roadmap are implemented, Phases 0
-to 8 released as 0.1.0, and Phase 10 is under way. Every side track is
-finished: the cryptography and TLS track of document 11 through T7 and
-R1 to R6, and of document 12 the network stack D1 to D9, the shared
+to 8 released as 0.1.0, and Phase 10 is under way. Every side track of
+documents 11 and 12 is finished: the TLS track of document 11 through
+T7 and R1 to R6, and of document 12 the network stack D1 to D9, the shared
 foundations, the whole of track F, and the tooling. What was left of both
 documents is their two integration steps, and those are no longer
 unscheduled: they are Phases 14 and 15, and document 13 specifies them
 together with the two phases of kernel and bus work that has to come
 first.
+
+One track is decided and not started: Secure Shell as a client, which
+D-123 admits and [document 14](14-secure-shell-as-a-client.md)
+specifies, as track S of the roadmap. One step of it exists already, the
+finite-field arithmetic of `crypto-dh` (D-122). Three questions inside
+that track are open and each is a precondition of one of its steps rather
+than of the track; section 14.13 names them.
 
 ## Reading order
 
@@ -33,6 +40,7 @@ first.
 | 11 | [Cryptography and TLS](11-cryptography-and-tls.md) | The TLS 1.3 client track: primitives, certificates, protocol, tests, order of work |
 | 12 | [Work parallel to the kernel phases](12-parallel-work.md) | The admission test for parallel work; the network stack, the shared foundations, the device logic, the tooling; what may be pulled forward |
 | 13 | [The network on the machine](13-the-network-on-the-machine.md) | What has to exist before a network driver can be written: a clock and a deadline, entropy, MSI-X, PCI, DMA; then the driver, the server, and the socket protocol |
+| 14 | [Secure Shell as a client](14-secure-shell-as-a-client.md) | The SSH-2 client: the algorithm set and what is refused, the crate, the three layers of the protocol, trusting a host key, testing against an implementation from outside |
 
 Beside the documents lie the standards they cite, verbatim and with their
 checksums, one directory per body that publishes them: [rfc/](rfc) for the
