@@ -527,6 +527,10 @@ fn accelerator(qemu: &Path) -> Result<String, Error> {
 }
 
 /// Tries KVM before TCG and returns the first accelerator that works.
+///
+/// Only Linux picks an accelerator; the tests exercise the order on every
+/// host.
+#[cfg(any(test, target_os = "linux"))]
 pub(crate) fn choose_accelerator(mut works: impl FnMut(&str) -> bool) -> Option<&'static str> {
     ["kvm", "tcg"].into_iter().find(|name| works(name))
 }
