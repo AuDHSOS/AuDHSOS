@@ -4,10 +4,13 @@
 //! Running child processes.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::thread;
 
 use crate::error::Error;
-use crate::out::{self, note};
+use crate::out;
 
 /// A command line to run.
 #[derive(Clone, Debug)]
@@ -146,6 +149,24 @@ impl Cmd {
         })
     }
 
+    /// Reports one completed parallel job. Only the collecting thread
+    /// writes, so the command and its output stay together.
+    fn report(&self, result: Result<Output, Error>) -> Result<(), Error> {
+        let output = result?;
+        if !out::quiet() || !output.status.success() {
+            eprintln!("$ {}", self.display());
+            Self::report_streams(&output.stdout, &output.stderr);
+        }
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(Error::CommandFailed {
+                command: self.display(),
+                code: output.status.code(),
+            })
+        }
+    }
+
     /// Prints what was read of a failed command's streams. What was
     /// inherited rather than read arrives here empty and prints nothing.
     fn report_streams(stdout: &[u8], stderr: &[u8]) {
@@ -181,30 +202,69 @@ impl Cmd {
             })
         }
     }
+}
 
-    /// Runs and returns standard error; standard output is inherited, or
-    /// read and printed on a failure while the xtask is quiet.
-    pub(crate) fn capture_stderr(&self) -> Result<String, Error> {
-        note!("$ {}", self.display());
-        let output = self
-            .command()
-            .stdout(Self::quiet_stdio())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(|source| Error::io(format!("running `{}`", self.display()), source))?;
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stderr).into_owned())
-        } else {
-            if out::quiet() {
-                eprintln!("$ {}", self.display());
-            }
-            Self::report_streams(&output.stdout, &output.stderr);
-            Err(Error::CommandFailed {
-                command: self.display(),
-                code: output.status.code(),
+/// Maximum concurrent test processes. An explicit setting must be positive.
+pub(crate) fn test_jobs() -> Result<usize, Error> {
+    match std::env::var("AUDHSOS_TEST_JOBS") {
+        Ok(value) => {
+            value.parse().ok().filter(|jobs| *jobs > 0).ok_or_else(|| {
+                Error::Usage("AUDHSOS_TEST_JOBS must be a positive integer".to_owned())
             })
         }
+        Err(std::env::VarError::NotPresent) => {
+            Ok(thread::available_parallelism().map_or(1, std::num::NonZero::get))
+        }
+        Err(error) => Err(Error::Usage(format!("AUDHSOS_TEST_JOBS: {error}"))),
     }
+}
+
+/// Runs at most `jobs` processes at once and prints completed output blocks.
+/// All queued jobs finish, even after a failure; the step then fails.
+pub(crate) fn run_parallel(commands: &[Cmd], jobs: usize) -> Result<(), Error> {
+    run_parallel_report(commands, jobs, Cmd::report)
+}
+
+/// Collects completions on the calling thread, with an injectable reporter.
+pub(crate) fn run_parallel_report(
+    commands: &[Cmd],
+    jobs: usize,
+    mut report: impl FnMut(&Cmd, Result<Output, Error>) -> Result<(), Error>,
+) -> Result<(), Error> {
+    let jobs = jobs.max(1).min(commands.len());
+    let next = AtomicUsize::new(0);
+    let (sender, receiver) = mpsc::sync_channel(jobs);
+    thread::scope(|scope| {
+        let mut failure = None;
+        for _ in 0..jobs {
+            let sender = sender.clone();
+            let next = &next;
+            let worker = thread::Builder::new().spawn_scoped(scope, move || {
+                while let Some(cmd) = commands.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    let result = cmd.command().output().map_err(|source| {
+                        Error::io(format!("running `{}`", cmd.display()), source)
+                    });
+                    if sender.send((cmd, result)).is_err() {
+                        break;
+                    }
+                }
+            });
+            if let Err(source) = worker {
+                failure = Some(Error::io("starting a test worker", source));
+                break;
+            }
+        }
+        drop(sender);
+        for (cmd, result) in receiver {
+            if let Err(error) = report(cmd, result) {
+                eprintln!("error: {error}");
+                if failure.is_none() {
+                    failure = Some(error);
+                }
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    })
 }
 
 /// The Cargo that started the xtask (`$CARGO`, set by Cargo itself).

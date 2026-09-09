@@ -22,6 +22,32 @@ Locally every one of these levels is started through the wrapper scripts of
 [07 section 7.5](07-toolchain-and-environment.md#75-findings-about-the-development-machine),
 `sh tools/xtask.sh <subcommand>` and `sh tools/xtask-check.sh`.
 
+`test --host`, `coverage`, and `fuzz --regression` build their executables
+first, then run them in a bounded worker pool. `AUDHSOS_TEST_JOBS` sets the
+maximum number of concurrent processes; it defaults to the available CPU
+count and must be a positive integer. For example:
+
+```sh
+AUDHSOS_TEST_JOBS=4 sh tools/xtask.sh test --host
+AUDHSOS_TEST_JOBS=4 sh tools/xtask.sh coverage
+AUDHSOS_TEST_JOBS=4 sh tools/xtask.sh fuzz --regression
+```
+
+The host harness thread count divides the available CPUs among the worker
+slots, with at least one thread per process. An explicit `RUST_TEST_THREADS`
+overrides that allocation. Each completed process sends its captured stdout
+and stderr to one reporter, which prints a complete block in completion
+order. The two streams retain their own order; their original interleaving
+is not preserved. Quiet checks show output only for failed processes.
+All queued processes finish even if one fails, and any failure fails the
+step. The full check still runs its steps sequentially.
+
+Host executables run from their package directories. Host doc tests run
+through Cargo after the executable tests pass. Coverage merges profiles
+only after every instrumented test executable passes. Fuzzing regressions
+run selected targets concurrently, preserving sequential corpus replay
+within each target and skipping targets whose corpus directory is absent.
+
 ## 6.2 Host testing of `no_std` crates
 
 - Every logic crate uses `#![cfg_attr(not(test), no_std)]`. Tests use `std`

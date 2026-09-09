@@ -9,14 +9,14 @@ use std::time::Duration;
 use crate::error::Error;
 use crate::image::{archive, boot_image, disk};
 use crate::out::{self, note, note_raw};
-use crate::policy::{FUZZ_TARGETS, MIRI_TARGETS, Target, crates_for};
+use crate::policy::{FUZZ_TARGETS, FuzzTarget, MIRI_TARGETS, Target, crates_for};
 use crate::ppm;
-use crate::process::Cmd;
+use crate::process::{Cmd, run_parallel, test_jobs};
 use crate::qemu::{self, Machine, Run};
 use crate::qmp::{Button, Qmp};
 use crate::session::Session;
 use crate::symbolize;
-use crate::{coverage, deps, fs, layering, linker, spdx, unsafe_budget};
+use crate::{artifacts, coverage, deps, fs, layering, linker, spdx, unsafe_budget};
 
 /// `rustfmt --check`, `clippy -D warnings` per target group, SPDX headers.
 pub(crate) fn lint(root: &Path) -> Result<(), Error> {
@@ -115,10 +115,23 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
         host = true;
     }
     if host {
-        let cmd = Cmd::cargo()
-            .cwd(root)
-            .args(["test", "--workspace", "--all-features"]);
-        exclude_cross(cmd).run()?;
+        let jobs = test_jobs()?;
+        let command =
+            exclude_cross(
+                Cmd::cargo()
+                    .cwd(root)
+                    .args(["test", "--workspace", "--all-features"]),
+            );
+        let executables = artifacts::build_tests(command.clone())?;
+        let jobs = jobs.min(executables.len());
+        let commands: Vec<_> = executables
+            .iter()
+            .map(|exe| exe.test_command(jobs))
+            .collect();
+        run_parallel(&commands, jobs)?;
+        // --no-run does not build or execute doc tests. Keep Cargo in
+        // charge of these so the host command retains its test coverage.
+        command.arg("--doc").run()?;
     }
     if qemu {
         test_qemu(root)?;
@@ -1117,10 +1130,13 @@ pub(crate) fn fuzz(root: &Path, options: &[String]) -> Result<(), Error> {
         note!("no fuzz targets are registered yet (policy::FUZZ_TARGETS); nothing to run");
         return Ok(());
     }
+    if matches!(mode, Job::Regression) {
+        return replay_corpora(root, &targets);
+    }
     for target in targets {
         match &mode {
             Job::Fuzz => run_fuzzer(root, target.name, seconds)?,
-            Job::Regression => replay_corpus(root, target.name)?,
+            Job::Regression => {}
             Job::Merge(from) => merge_corpus(root, target.name, from)?,
             Job::Minimize(file) => minimize_crash(root, target.name, file, seconds)?,
         }
@@ -1210,27 +1226,39 @@ fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
         .run()
 }
 
-/// Replays the stored corpus of one target. A target whose corpus
-/// directory does not exist is reported and skipped, so that a target that
-/// has found nothing yet does not fail the run.
-fn replay_corpus(root: &Path, name: &str) -> Result<(), Error> {
-    let corpus = corpus_of(root, name);
-    if !corpus.is_dir() {
-        note!("`{name}`: no corpus at {}", corpus.display());
+/// Builds selected regression binaries once, then replays their corpora
+/// concurrently. Targets without a corpus directory are reported and skipped.
+fn replay_corpora(root: &Path, targets: &[&FuzzTarget]) -> Result<(), Error> {
+    let jobs = test_jobs()?;
+    let mut selected = Vec::new();
+    let mut build = Cmd::cargo().cwd(&root.join("fuzz")).arg("build");
+    for target in targets {
+        let corpus = corpus_of(root, target.name);
+        if corpus.is_dir() {
+            selected.push((target.name, corpus));
+            build = build.args(["--bin", target.name]);
+        } else {
+            note!("`{}`: no corpus at {}", target.name, corpus.display());
+        }
+    }
+    if selected.is_empty() {
         return Ok(());
     }
-    note!("replaying the corpus of `{name}`");
-    Cmd::cargo()
-        .cwd(&root.join("fuzz"))
-        .args([
-            "run",
-            "--quiet",
-            "--bin",
-            name,
-            "--",
-            &corpus.display().to_string(),
-        ])
-        .run()
+    let executables = artifacts::build(build)?;
+    let mut commands = Vec::new();
+    for (name, corpus) in selected {
+        let executable = executables
+            .iter()
+            .find(|exe| exe.name == name && !exe.test)
+            .ok_or_else(|| Error::Parse(format!("Cargo reported no executable for `{name}`")))?;
+        commands.push(
+            executable
+                .command()
+                .cwd(&root.join("fuzz"))
+                .arg(corpus.display().to_string()),
+        );
+    }
+    run_parallel(&commands, jobs)
 }
 
 /// The corpus directory of one target.

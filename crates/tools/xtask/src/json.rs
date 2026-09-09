@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! The JSON the QEMU machine protocol speaks, and no more of it.
+//! The JSON subset used by the QEMU machine protocol and Cargo artifacts.
 //!
 //! Objects, arrays, strings, integers, `true`, `false`, and `null`: that is
 //! what a QMP greeting, a command, and an answer are made of. Numbers with
@@ -245,14 +245,17 @@ impl Parser<'_> {
     /// Reads a string.
     fn string(&mut self) -> Result<String, JsonError> {
         self.step();
-        let mut text = String::new();
+        let mut text = Vec::new();
         loop {
             let byte = self.peek().ok_or(JsonError::End)?;
             self.step();
             match byte {
-                b'"' => return Ok(text),
-                b'\\' => text.push(self.escape()?),
-                other => text.push(char::from(other)),
+                b'"' => return String::from_utf8(text).map_err(|_| JsonError::Unexpected(self.at)),
+                b'\\' => {
+                    let mut encoded = [0; 4];
+                    text.extend_from_slice(self.escape()?.encode_utf8(&mut encoded).as_bytes());
+                }
+                other => text.push(other),
             }
         }
     }

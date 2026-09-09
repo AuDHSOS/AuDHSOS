@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod artifacts;
 mod commands;
 mod coverage;
 mod deps;
@@ -40,7 +41,7 @@ subcommands:
   check-deps       no dependency outside the workspace
   unsafe-budget    unsafe blocks and asm! sites per adapter crate
   test [--host] [--qemu] [--e2e] [--release]
-                   run the selected test levels (default: all available);
+                   run the selected test levels (default: host);
                    --release builds the end-to-end run from the release
                    profile
   pdf [options]    every Markdown document and every RFC as PDF, under
@@ -68,6 +69,11 @@ subcommands:
   check [--quiet]  everything CI runs, in CI order; --quiet leaves one
                    line per step and prints the output of a step only
                    when it fails
+
+environment:
+  AUDHSOS_TEST_JOBS  maximum parallel host, coverage, and regression
+                    processes (default: available CPU count)
+  RUST_TEST_THREADS override the host test harness threads per process
 ";
 
 fn main() -> ExitCode {
