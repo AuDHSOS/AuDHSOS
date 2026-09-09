@@ -23,6 +23,7 @@ mod qmp;
 mod session;
 mod spdx;
 mod symbolize;
+mod test_ext;
 mod toolchain;
 mod unsafe_budget;
 
@@ -68,6 +69,12 @@ subcommands:
                    into a disk image, run it, and read the serial protocol
   symbolize <elf> <address>...
                    the function, file, and line of every address
+  test-ext [--status] [<suite>...]
+                   bring the external conformance suites under
+                   docs/test-ext/ to the revision this repository pins;
+                   --status only reports where they stand. The one
+                   subcommand that uses the network, and never a step of
+                   check
   run [--release] [--display]
                    boot the system in QEMU with the console on the terminal
   check [--quiet]  everything CI runs, in CI order; --quiet leaves one
@@ -125,6 +132,7 @@ fn run() -> Result<(), Error> {
         "qemu-runner" => commands::qemu_runner(&root, options),
         "run" => commands::run(&root, options),
         "symbolize" => symbolize::command(options),
+        "test-ext" => test_ext::command(&root, options),
         "check" => commands::check(&root, &channel, options),
         other => Err(Error::Usage(format!("unknown subcommand `{other}`"))),
     }

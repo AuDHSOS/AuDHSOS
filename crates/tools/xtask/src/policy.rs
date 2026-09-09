@@ -1015,6 +1015,33 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "x509" },
 ];
 
+/// An external conformance suite: a checkout this project measures itself
+/// against, pinned to one revision. It is not a dependency — nothing in it
+/// is compiled or linked, rule R8 is untouched — and it is not part of
+/// this repository, so a run that needs it fetches it first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ExternalSuite {
+    /// The name on the command line.
+    pub(crate) name: &'static str,
+    /// Where the checkout lives, relative to the workspace root.
+    pub(crate) path: &'static str,
+    /// The repository it comes from.
+    pub(crate) url: &'static str,
+    /// The revision that is pinned, as a full commit hash.
+    pub(crate) revision: &'static str,
+}
+
+/// Every external suite. The revision here is the one
+/// `docs/test-ext/README.md`, document 6 section 6.7 and the README of the
+/// crate `jrs` name; moving it is a change to all four and to the numbers
+/// that were measured under the old one.
+pub(crate) const EXTERNAL_SUITES: &[ExternalSuite] = &[ExternalSuite {
+    name: "test262",
+    path: "docs/test-ext/test262",
+    url: "https://github.com/tc39/test262",
+    revision: "419d3e0a2273ba01a3bfcbec423f2801425b8e93",
+}];
+
 /// Extensions of assembly files, which must not exist.
 pub(crate) const ASSEMBLY_EXTENSIONS: &[&str] = &["S", "s", "asm"];
 
@@ -1041,4 +1068,9 @@ pub(crate) fn crates_for(target: Target) -> Vec<&'static str> {
 /// The crate with the given name.
 pub(crate) fn find(name: &str) -> Option<&'static Crate> {
     CRATES.iter().find(|c| c.name == name)
+}
+
+/// The external suite with the given name.
+pub(crate) fn find_suite(name: &str) -> Option<&'static ExternalSuite> {
+    EXTERNAL_SUITES.iter().find(|suite| suite.name == name)
 }

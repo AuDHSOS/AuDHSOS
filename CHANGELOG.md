@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `cargo xtask test-ext`, which brings the external conformance suites under
+  `docs/test-ext/` to the revision the policy table `EXTERNAL_SUITES` pins:
+  it creates the checkout, fetches that revision without its history where the
+  server allows it, checks it out detached, and reads back what landed. It is
+  idempotent, refuses a foreign directory and a checkout with uncommitted
+  changes instead of discarding either, and `--status` reports the state of
+  every suite without the network. It is the only subcommand that uses the
+  network and is never a step of `check`. `docs/test-ext/README.md` records
+  the suite, its revision, its terms and who runs it.
+
 - Array.flat/flatMap with an explicit depth-first frame stack, same-realm species,
   hole skipping, top-level-only mapping and observable getter mutations. Frames
   share a cumulative nesting quota across reentry; cycles remain fuel/frame bounded

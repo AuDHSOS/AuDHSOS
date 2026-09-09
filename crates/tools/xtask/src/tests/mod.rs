@@ -20,6 +20,7 @@ mod qemu;
 mod qmp;
 mod spdx;
 mod symbolize;
+mod test_ext;
 mod toolchain;
 mod unsafe_budget;
 mod usage;

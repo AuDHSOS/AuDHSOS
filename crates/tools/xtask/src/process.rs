@@ -182,6 +182,24 @@ impl Cmd {
         }
     }
 
+    /// Runs and returns standard output, or `None` when the command exits
+    /// with a failure status. For a command whose failure is an answer:
+    /// `git rev-parse HEAD` in a checkout without a commit fails, and what
+    /// that says is that there is no commit, not that anything went wrong.
+    pub(crate) fn capture_optional(&self) -> Result<Option<String>, Error> {
+        let output = self
+            .command()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|source| Error::io(format!("running `{}`", self.display()), source))?;
+        if output.status.success() {
+            Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Runs and returns standard error; standard output is inherited, or
     /// read and printed on a failure while the xtask is quiet.
     pub(crate) fn capture_stderr(&self) -> Result<String, Error> {

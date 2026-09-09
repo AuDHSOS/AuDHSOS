@@ -2429,7 +2429,11 @@ what the kernel dispatches on, so the check is what the kernel saw.
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
 (checkout `419d3e0a2273ba01a3bfcbec423f2801425b8e93`) under that checkout's
-INTERPRETING.md execution rules. A Test262 runner must preserve harness files,
+INTERPRETING.md execution rules. The checkout is not part of this repository:
+`cargo xtask test-ext` brings it to that revision and `cargo xtask test-ext
+--status` reports where it stands without the network. The revision is the
+table `EXTERNAL_SUITES` of the xtask policy, and that subcommand is the only
+one that uses the network, so it is never a step of `cargo xtask check`. A Test262 runner must preserve harness files,
 flags/variants, negative phase/type semantics, module fixtures, async completion
 and `$262` capabilities; an unsupported feature is not a passing test. Existing
 ad hoc realm probes do not establish suite acceptance. Full backreference tests
