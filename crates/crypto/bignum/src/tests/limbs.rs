@@ -6,7 +6,7 @@
 
 use test_support::generators::{bytes, vec};
 
-use crate::limbs::{add_limbs, is_less, montgomery, subtract};
+use crate::limbs::{add_limbs, is_less, montgomery, montgomery_secret, subtract};
 use crate::modulus::{MAX_LIMBS, Modulus};
 use crate::tests::reference::Big;
 use crate::tests::{WIDTHS, check_cases, hex, modulus_bytes};
@@ -103,6 +103,103 @@ fn property_the_montgomery_product_agrees_with_the_reference() {
             Ok(())
         });
     }
+}
+
+/// The masked product against the branching one. They share the whole
+/// scan and differ only in the final subtraction, which is exactly the
+/// place a mask can be got wrong: the two must agree on every case,
+/// including the ones where the subtraction happens and the ones where
+/// it does not.
+#[test]
+fn property_the_masked_product_agrees_with_the_branching_one() {
+    for bits in WIDTHS {
+        let used = bits / 64;
+        let width = bits / 8;
+        let name = format!("bignum_montgomery_secret_{bits}");
+        let generator = vec(bytes(width..=width), 3..=3);
+        check_cases(cases_for(bits), &name, &generator, |parts| {
+            let (Some(first), Some(second), Some(third)) =
+                (parts.first(), parts.get(1), parts.get(2))
+            else {
+                return Err("the generator produced fewer than three values".to_owned());
+            };
+            let encoded = modulus_bytes(bits, first);
+            let modulus = Modulus::new(&encoded).map_err(|error| error.to_string())?;
+            let reference = Big::from_be_bytes(&encoded);
+            let limbs = limbs_of(&reference, used);
+            let highest = Big::from_be_bytes(&less_one(&encoded));
+
+            let left = Big::from_be_bytes(second).rem(&reference);
+            let right = Big::from_be_bytes(third).rem(&reference);
+
+            for (label, a, b) in [
+                ("product", &left, &right),
+                ("square", &left, &left),
+                ("by one", &left, &Big::from_u64(1)),
+                ("the top of the range squared", &highest, &highest),
+            ] {
+                let mut branching = [0u64; MAX_LIMBS];
+                montgomery(
+                    &limbs_of(a, used)[..used],
+                    &limbs_of(b, used)[..used],
+                    &limbs[..used],
+                    modulus.n0inv,
+                    &mut branching[..used],
+                );
+                let mut masked = [0u64; MAX_LIMBS];
+                montgomery_secret(
+                    &limbs_of(a, used)[..used],
+                    &limbs_of(b, used)[..used],
+                    &limbs[..used],
+                    modulus.n0inv,
+                    &mut masked[..used],
+                );
+                if branching != masked {
+                    return Err(format!(
+                        "{label}: {} against {}",
+                        hex(&be_of(&branching[..used])),
+                        hex(&be_of(&masked[..used]))
+                    ));
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
+/// The masked product against the definition, so that the two variants
+/// agreeing is not the only thing checked.
+#[test]
+fn the_masked_product_is_the_montgomery_product_of_the_definition() {
+    let bits = 1024;
+    let used = bits / 64;
+    let encoded = modulus_bytes(bits, &[0xff; 128]);
+    let modulus = Modulus::new(&encoded).expect("the modulus is well formed");
+    let reference = Big::from_be_bytes(&encoded);
+    let limbs = limbs_of(&reference, used);
+    let highest = Big::from_be_bytes(&less_one(&encoded));
+
+    let mut masked = [0u64; MAX_LIMBS];
+    montgomery_secret(
+        &limbs_of(&highest, used)[..used],
+        &limbs_of(&highest, used)[..used],
+        &limbs[..used],
+        modulus.n0inv,
+        &mut masked[..used],
+    );
+    let lifted = Big::from_be_bytes(&be_of(&masked[..used]))
+        .shl(used.saturating_mul(64))
+        .rem(&reference);
+    assert_eq!(lifted, highest.mul(&highest).rem(&reference));
+}
+
+/// The big-endian encoding one below the odd value `bytes` encodes.
+fn less_one(bytes: &[u8]) -> Vec<u8> {
+    let mut value = bytes.to_vec();
+    for slot in value.iter_mut().rev().take(1) {
+        *slot &= 0xfe;
+    }
+    value
 }
 
 /// How many cases a width is worth. The reference reduces one bit at a

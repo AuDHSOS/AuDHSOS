@@ -1803,6 +1803,21 @@ follows the catalog rather than the layer, as 6.6.54 records.
   65537, and for an exponent with its top and bottom bits set; a round
   trip that signs with a wide exponent and verifies with a small one over
   the key of RFC 8448, section 2.
+- The secret exponentiation, which is the half of the crate written for
+  a value that must not be observable: `pow_secret` against the same
+  schoolbook reference on exponents the generator chooses, at each of the
+  four widths (property), and against `pow` on the exponents that one
+  takes. An exponent of zero gives one however many bytes it is written
+  in, and leading zero bytes change the rounds and not the value — the
+  two properties that say the ladder runs over the buffer rather than
+  over the value. A base that is not below the modulus, one wider than
+  the arithmetic, and an output buffer narrower than the modulus are each
+  refused; the last is refused before the ladder starts, because
+  refusing afterwards would be a decision about the value.
+- The masked product: `montgomery_secret` against `montgomery` over every
+  case of the final subtraction, the one it happens in and the one it
+  does not, and separately against the definition, so that the two
+  variants agreeing is not the only thing checked.
 - The key: the bounds of D-79 at each edge — an exponent of one, of two,
   of four, and of three; a modulus above the upper bound, and one whose
   top bit is clear — refused where the rule says and accepted where it

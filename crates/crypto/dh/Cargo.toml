@@ -2,8 +2,8 @@
 # Copyright (C) 2026 Manuel Baesler and contributors
 
 [package]
-name = "crypto-bignum"
-description = "Limb arithmetic and modular exponentiation for a modulus that is known at run time"
+name = "crypto-dh"
+description = "Finite-field Diffie-Hellman over the MODP groups of RFC 3526"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,6 +11,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+crypto-bignum.workspace = true
 crypto-ct.workspace = true
 
 [dev-dependencies]

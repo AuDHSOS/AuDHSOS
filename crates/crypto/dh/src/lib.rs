@@ -6,12 +6,14 @@
 #![doc = include_str!("../README.md")]
 
 pub mod error;
-pub mod limbs;
-pub mod modulus;
+pub mod group;
+pub mod modp;
 
-pub use error::BignumError;
-pub use limbs::{add_limbs, is_less, montgomery, montgomery_secret, subtract};
-pub use modulus::{MAX_BYTES, MAX_LIMBS, Modulus};
+pub use error::DhError;
+pub use group::{
+    GROUP14_GENERATOR, GROUP14_PRIME, GROUP14_PRIME_BYTES, GROUP14_SECRET_BYTES, group14,
+};
+pub use modp::ModpGroup;
 
 #[cfg(test)]
 mod tests;

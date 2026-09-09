@@ -499,7 +499,7 @@ phase order and is built between phases.
 | T6 | `audhsos-x509` | L | implemented: certificate parsing, path validation, name matching, the test certificate builder |
 | T7 | `audhsos-tls` | XL | implemented: the client reproduces the RFC 8448 trace and completes a handshake against project-generated chains |
 | T8 | integration | M | Phase 15: the transport over a TCP connection of `server-net`, the `random_bytes` system call of Phase 12, and the HTTP client that `net-http` already is |
-| R1 | `crypto-bignum` | M-L | implemented: the limb arithmetic moved out of `crypto-ec`, with a modulus known at run time and Montgomery exponentiation in a narrow and a wide form |
+| R1 | `crypto-bignum` | M-L | implemented: the limb arithmetic moved out of `crypto-ec`, with a modulus known at run time and Montgomery exponentiation in a narrow and a wide form; a third form, the constant-time ladder for a secret exponent, came later with `crypto-dh` and belongs to no step of this track (D-122) |
 | R2 | `crypto-rsa` | M | implemented: the key with its bounds, and PKCS #1 v1.5 verified by construction (D-80) |
 | R3 | `crypto-rsa` | M | implemented: MGF1 and EMSA-PSS-VERIFY |
 | R4 | `audhsos-x509` | L | implemented: the RSA identifiers with the NULL parameter rule of RFC 4055, the key, and the test certificates |

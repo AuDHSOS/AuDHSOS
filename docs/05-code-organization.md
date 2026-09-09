@@ -84,6 +84,7 @@ AuDHSOS/
 │   │   ├── aead/              crypto-aead: ChaCha20-Poly1305, bitsliced AES-GCM, GHASH
 │   │   ├── bignum/            crypto-bignum: limbs, Montgomery arithmetic, a run-time modulus
 │   │   ├── ec/                crypto-ec: fe25519, X25519, Ed25519 verify, P-256 and P-384 ECDSA verify
+│   │   ├── dh/                crypto-dh: finite-field Diffie-Hellman over the MODP groups of RFC 3526
 │   │   ├── rng/               crypto-rng: Entropy and Rng traits, ChaCha20 generator
 │   │   └── rsa/               crypto-rsa: RSA verification, PKCS #1 v1.5 and PSS
 │   ├── net/                   (documents 11 and 12)
@@ -162,8 +163,9 @@ AuDHSOS/
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
 | `crypto-hash` | c1 | all | no | yes | `crypto-ct` |
 | `crypto-aead` | c1 | all | no | yes | `crypto-ct` |
-| `crypto-bignum` | c0 | all | no | yes | `test-support` as a dev-dependency |
+| `crypto-bignum` | c1 | all | no | yes | `crypto-ct`; `test-support` as a dev-dependency |
 | `crypto-ec` | c2 | all | no | yes | `crypto-bignum`, `crypto-ct`, `crypto-hash`; feature `test-signing` |
+| `crypto-dh` | c2 | all | no | yes | `crypto-bignum`, `crypto-ct`; `test-support` as a dev-dependency |
 | `crypto-rng` | c2 | all | no | yes | `crypto-ct`, `crypto-aead`; feature `test-doubles` |
 | `crypto-rsa` | c2 | all | no | yes, fuzz | `crypto-bignum`, `crypto-ct`, `crypto-hash`; feature `test-signing` |
 | `audhsos-x509` | c3 | all | no | yes, fuzz | `audhsos-der`, `audhsos-time`, `crypto-hash`, `crypto-ec`, `crypto-rsa`; feature `test-certificates` |
