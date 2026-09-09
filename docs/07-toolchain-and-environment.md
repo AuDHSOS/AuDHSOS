@@ -49,13 +49,19 @@ None beyond the toolchain. The xtask calls `cargo`, `rustc`, `rustfmt`,
 and `qemu-system-x86_64`. Container software is never used, locally or in
 CI.
 
-## 7.4 QEMU on macOS
+## 7.4 QEMU
 
 QEMU 11.1.1 from MacPorts is installed: `/opt/local/bin/qemu-system-x86_64`
 with the UEFI firmware `/opt/local/share/qemu/edk2-x86_64-code.fd`. The
 xtask finds QEMU on the `PATH` or through `AUDHSOS_QEMU`, and the firmware
 next to the QEMU binary (`../share/qemu/`) or through `AUDHSOS_OVMF`.
 `AUDHSOS_QEMU_TIMEOUT` overrides the per-kernel timeout in seconds.
+
+On Linux the xtask probes KVM once before the first machine, then TCG if
+KVM cannot start. It passes the selected name through
+`AUDHSOS_QEMU_ACCELERATOR` to every Cargo runner, so the many kernel test
+machines do not repeat the probe. Setting the variable explicitly skips
+the probe. macOS keeps using TCG.
 
 Firmware for later targets is present in the same directory:
 `edk2-aarch64-code.fd` and `edk2-riscv-code.fd`.

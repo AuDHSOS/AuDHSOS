@@ -695,6 +695,7 @@ const NO_VGA_LINES: [(&str, &str); 3] = [
 /// Every test kernel in QEMU, then the three images that must make the
 /// loader report a failure.
 fn test_qemu(root: &Path) -> Result<(), Error> {
+    let machine = Machine::locate()?;
     build(root, &[])?;
     build_user_tests(root)?;
     let runner = runner_command()?;
@@ -709,12 +710,13 @@ fn test_qemu(root: &Path) -> Result<(), Error> {
         ])
         .env(RUNNER_VARIABLE, runner)
         .env(ROOT_VARIABLE, root.display().to_string())
+        .env(qemu::ACCELERATOR_VARIABLE, machine.accelerator())
         .env(
             USER_TESTS_VARIABLE,
             root.join(USER_TESTS_DIR).display().to_string(),
         )
         .run()?;
-    loader_images(root)
+    loader_images(root, &machine)
 }
 
 /// The Cargo configuration variable that names the runner of the kernel
@@ -775,7 +777,7 @@ const LOADER_PREFIX: &str = "[loader] ";
 type LoaderCase = (&'static str, Option<Vec<u8>>, Option<Vec<u8>>);
 
 /// The three images the loader has to reject, each run once.
-fn loader_images(root: &Path) -> Result<(), Error> {
+fn loader_images(root: &Path, machine: &Machine) -> Result<(), Error> {
     let profile = "debug";
     let loader = loader_bytes(root, profile)?;
     let kernel = fs::read_bytes(&kernel_binary(root, profile))?;
@@ -785,7 +787,6 @@ fn loader_images(root: &Path) -> Result<(), Error> {
         ("missing-kernel", None, Some(boot)),
         ("missing-boot-image", Some(kernel), None),
     ];
-    let machine = Machine::locate()?;
     let mut violations = Vec::new();
     for (name, kernel, boot) in cases {
         let image = disk_image(loader.clone(), kernel, boot)?;

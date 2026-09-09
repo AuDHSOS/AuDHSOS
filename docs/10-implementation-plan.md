@@ -1092,6 +1092,8 @@ identity mapping afterwards.
   from the built loader and kernel.
 - `qemu.rs`: locate `qemu-system-x86_64` (`AUDHSOS_QEMU` or `PATH`) and the
   firmware (`AUDHSOS_OVMF` or `<qemu dir>/../share/qemu/edk2-x86_64-code.fd`);
+  on Linux probe KVM and then TCG once, pass the selected accelerator to
+  every Cargo runner through `AUDHSOS_QEMU_ACCELERATOR`;
   the command line of
   [03-target-platform.md 3.1.1](03-target-platform.md#311-reference-machine-configuration)
   with `-serial stdio -display none -no-reboot`; timeout 60 s
