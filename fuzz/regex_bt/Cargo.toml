@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+[package]
+name = "regex_bt"
+description = "Bounded backtracking VM, shared syntax and Thompson differential fuzzing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+[[bin]]
+name = "regex_bt"
+path = "src/main.rs"
+test = false
+bench = false
+doc = false
+[dependencies]
+audhsos-regex-bt.workspace = true
+audhsos-regex.workspace = true
+fuzz-support.workspace = true
+[lints]
+workspace = true

@@ -1,0 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+let n=0;function chain(){if(++n<7)Promise.resolve().then(()=>setTimeout(chain,0))}
+setTimeout(chain,0);
+let id=setInterval(()=>queueMicrotask(()=>clearTimeout(id)),0);

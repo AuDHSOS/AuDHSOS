@@ -1,0 +1,1 @@
+let c=new AbortController(),t=new EventTarget();let f=()=>{t.addEventListener('x',f);c.abort()};t.addEventListener('x',f,{signal:c.signal,once:true});t.dispatchEvent(new Event('x'));t.dispatchEvent(new Event('x'))

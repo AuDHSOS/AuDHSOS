@@ -1,0 +1,1 @@
+let out=[];function C(ex){ex(v=>out.push(v),e=>out.push(e))}C.resolve=x=>({then(r,j){r(x);r(8);j(9)}});Promise.all.call(C,[1,2]);let p=Promise.resolve(1);p.constructor={[Symbol.species]:C};p.then(v=>v+1);

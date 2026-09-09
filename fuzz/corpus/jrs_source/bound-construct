@@ -1,0 +1,1 @@
+function C(...a){gc();this.a=a;this.target=new.target}let B=C.bind(null,{x:1}).bind(null,{x:2});let v=new B({x:3});v instanceof B;Reflect.construct(B,[7],C);B.toString()

@@ -1,0 +1,1 @@
+try{Function('/*','*/){throw 7}')}catch(e){}let c=Function('this.x=new.target');Reflect.construct(c,[],Function);Function('a','"use strict";return arguments')(7)

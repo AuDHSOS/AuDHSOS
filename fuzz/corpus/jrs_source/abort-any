@@ -1,0 +1,1 @@
+let a=new AbortController(),b=new AbortController();let s=AbortSignal.any([a.signal,b.signal]),q=AbortSignal.any([s]);a.signal.onabort=()=>b.abort(2);q.onabort=()=>print(q.reason);a.abort(1)

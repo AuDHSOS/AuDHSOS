@@ -1,0 +1,1 @@
+class A{constructor(x=new.target){this.x=x}}class B extends A{}new B().x;class C extends Promise{}new C(r=>r(1)).then(x=>x);class D extends WeakMap{}new D([[{},1]]);

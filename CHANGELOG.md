@@ -7,6 +7,365 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Array.flat/flatMap with an explicit depth-first frame stack, same-realm species,
+  hole skipping, top-level-only mapping and observable getter mutations. Frames
+  share a cumulative nesting quota across reentry; cycles remain fuel/frame bounded
+  without recursive Rust traversal. Model/reference, GC, depth and quota tests plus
+  source fuzz seeds cover the new implementation.
+
+- Array.toReversed/with/toSpliced with ordinary data-property results, dense
+  hole materialization, source-order reads and omitted replacement/removal getters.
+  53-bit generic input arithmetic retains 32-bit Array result limits and normal
+  resource bounds. All 136 focused Test262 variants pass; sparse model/reference,
+  getter mutation, metadata, GC and quota tests plus a source fuzz seed are included.
+
+- Array.toSorted with read-through-hole semantics and ordinary own result
+  properties, sharing stable merge passes with the now 53-bit generic sort path.
+  Comparator/length order, snapshot mutations, partial writes, GC, resource and
+  stable sparse-model tests cover both methods. Mutable method metadata and an
+  alternating before/after performance comparison are included.
+
+- Full 53-bit Array iterator index slots and live array-like length conversion,
+  retaining length/element-error and reentrant-next ordering. Iterator methods
+  have mutable cached intrinsic metadata and stable values/@@iterator aliases.
+  Internal boundary tests, GC/reentrancy cases and generated mutation comparisons
+  cover the implementation; TypedArray and general iterator-helper support is open.
+
+- Mutable Array constructor static properties and Symbol.species, with traced
+  Function metadata. Generic Array.of honors constructor receivers and final
+  length writes. Array.from supports iterable/array-like inputs, ordered mapper
+  validation, cached iterator acquisition, closing on mapper/definition errors,
+  hole materialization and GC-safe bounded execution. Original focused tests and
+  250 generated sparse factory comparisons exercise the shared paths.
+
+- String Symbol.replace dispatch and two-phase RegExp Symbol.replace, retaining
+  actual exec result identities before capture/group conversion and callbacks.
+  Shared substitution handles numeric/named custom captures, dollar/prefix/suffix
+  tokens and malformed named tokens with bounded scans. Tests cover aliasing,
+  overlap, hook order, GC and resource limits; the Thompson matcher is unchanged.
+
+- String Symbol.split dispatch and species-aware RegExp Symbol.split with
+  ordered construction/limit hooks, capture identity and dynamic exec. A guarded
+  Thompson fast path merges only hook-free failed sticky starts; custom and mutated
+  splitters retain observable steps. Tests cover Unicode custom advancement,
+  reentry, GC, quotas, metadata and 400 generated reference cases.
+
+- RegExp Symbol.match/Symbol.search and String match/search hook dispatch, with
+  shared dynamic exec validation, same-value lastIndex restoration, flags-string
+  snapshots and UTF-16 empty-match advancement. RegExpCreate fallback is distinct
+  from the public constructor path. GC, mutation, exception, metadata and resource
+  regression tests preserve the existing bounded Thompson-only matcher policy.
+
+- RegExp constructor/prototype identity, mutable intrinsic metadata, branded
+  source/flag getters, generic flags/toString and test's overridden-exec protocol.
+  Constructor Call/new, IsRegExp hooks, original-slot copying, newTarget order,
+  subclassing and Object.toString branding are implemented without changing the
+  Thompson matcher. LastIndex conversion and quota-bounded source rendering have
+  regression/GC tests; unsupported pattern features remain explicit failures.
+
+- Same-realm Array species support for map/filter/slice and full 53-bit generic
+  indexing for callback iteration, push/pop/join/indexOf/includes/concat. Mutable
+  Function metadata covers these methods; Math has its required toStringTag.
+  Species mutation/aliasing, hole preservation, strict partial writes, wide index,
+  GC and fatal-fuel tests cover the extended paths. Sort/iterator widening and
+  Proxy/cross-realm integration remain open.
+
+- Nine original JavaScript WPT timer files verified at the pinned revision
+  (combined selected run: 34 files / 198 subtests). Timer nesting no longer leaks
+  into Promise/microtask checkpoints, and the shell runner respects single_test
+  and test-requested explicit_done completion. Regression fixtures reject missing
+  and late failing completion instead of accepting premature done calls.
+
+- Optional jrs timeout/interval tasks and AbortSignal.timeout with explicit host
+  active-time clock, one-task Realm pumping, microtask checkpoints, nested timer
+  clamping, cancellation, string compilation policy and resource limits.
+  Reusable `crates/timer-queue` supplies stable bounded deadlines and independent
+  model/fuzz validation. The original WPT Abort timer files now pass (selected
+  run: 25 files / 186 subtests); full browser lifecycle/realm integration is open.
+
+- Noncoercing Number.isFinite/isInteger/isNaN/isSafeInteger with mutable
+  intrinsic metadata. Integer classification uses exponent/fraction bits and
+  preserves signed-zero/large-integer semantics. All 68 focused Test262 variants
+  pass; generated binary64, no-coercion, GC and metadata tests are included.
+
+- Global and Number.parseInt/parseFloat with shared mutable Function identity,
+  ordered hooks, prefix scanning, signed zero and fuel accounting. Number
+  constructor properties have traced mutable storage. `crates/math` gains an
+  allocation-free 1024-bit radix integer accumulator with one final nearest-even
+  binary64 rounding, also used for source literals and Number string conversion.
+  This fixes double-rounding in large nondecimal inputs. Unit/reference tests
+  and expanded math/source fuzzing cover rounding, metadata, hooks and quotas.
+
+- Generic Array.splice with 53-bit receiver indices, shared same-realm
+  ArraySpeciesCreate, hole-preserving deleted results and overlap-safe ordered
+  shifts. Strict writes/deletions retain observable partial mutations on
+  exceptions; loops consume fuel and native temporaries remain GC-rooted.
+  Sparse model, species, property-order, wide-index and quota tests plus a
+  source fuzz seed cover the implementation.
+
+- Generic Array.at/find/findIndex/findLast/findLastIndex with full 53-bit
+  array-like lengths, unconditional hole/getter visits, snapshot iteration
+  ranges and original-value returns. Mutable native Function objects dispatch
+  predicate bodies through bounded VM frames. Conversion, mutation, GC,
+  exception, callback-reentry and fatal resource tests plus a fuzz seed are
+  included; splice, Proxy and TypedArray-dependent cases remain open.
+
+- Generic Array.fill/copyWithin with shared 53-bit length/index helpers,
+  overlap-aware copy direction, hole deletion, observable strict writes and
+  fuel limits. Array.prototype Symbol.unscopables now has the draft-required
+  null-prototype record. Sparse model, getter/setter/GC, mutation-order and
+  quota tests cover both methods; Proxy/TypedArray integration remains open.
+
+- Generic Array.reverse/lastIndexOf with hole/inherited-property semantics,
+  observable mutation order and 53-bit array-like indices under fuel limits.
+  Object.values/entries have mutable native Function metadata; the Object
+  constructor now has traced mutable static-property storage. Eight Number
+  constants are supplied, and empty indexOf/includes skip fromIndex coercion.
+  Sparse model, getter/GC, mutation and resource-limit tests are included.
+
+- Independent `crates/regex-bt` bounded iterative backtracking VM, explicitly
+  authorized separately from the unchanged Thompson engine. Shared regex syntax
+  profiles/classes/assertions avoid a second parser. Decimal backreferences,
+  atomic lookahead/lookbehind and nullable quantifiers use quotas for work,
+  register snapshots and explicit stacks. Dedicated regex_bt fuzzing and
+  differential tests are included; no automatic jrs engine switch is introduced.
+
+- Realm-local AsyncFunction constructor/prototype and dynamic async construction,
+  sharing the existing bounded compiler, Promise jobs and Await machinery.
+  Async forms use the correct prototype; constructor metadata, source text,
+  bound/subclass/Reflect construction and default-parameter rejection are tested.
+  Native Function ancestor enumeration no longer rejects its ordinary metadata.
+  Cross-realm fallback, generators and full conformance remain open.
+
+- In-place Number/Number arithmetic/comparison dispatch, with exact generic-path
+  differential tests and unchanged fuel/stack/hook semantics. A reproducible
+  three-workload benchmark script and raw before/after samples record median
+  execution-time reductions of 9.6–15.3% on the development host. These are local
+  interpreter microbenchmarks, not proof of competitive whole-runtime speed.
+
+- Exact Function.prototype.toString source preservation for implemented function,
+  arrow, method/accessor and class grammar. Shared original-source backing plus
+  token-end ranges preserves comments and line endings without quadratic nested
+  copies; output conversion remains quota/fuel bounded. Dynamic fragment source
+  and closures survive GC/realm turns. toString itself now has mutable native
+  Function metadata. Unsupported generator/private/Proxy syntax remains open.
+
+- Bound function construction with iterative argument-group flattening,
+  newTarget substitution and explicit script-constructor frames. bind captures
+  the target prototype before metadata hooks and uses a mutable native Function.
+  Symbol.hasInstance/default instanceof semantics now include custom handlers
+  and bound delegation with shared fuel and GC roots. Object.prototype.constructor
+  is supplied. Proxy/cross-realm/full conformance and speed acceptance remain open.
+
+- Normal dynamic Function constructor with independently parsed parameter/body
+  fragments, global environments, subclass construction, retained synthetic source
+  and an embedding compilation-policy hook. Reflect.apply/construct use real VM
+  invocation and bounded array-like arguments. Function prototype metadata and
+  shared restricted accessors are added; deleted function properties stay deleted.
+  Generator/async dynamic constructors, other Reflect methods and full conformance
+  remain open; all code remains dependency-free.
+
+- Independent `crates/utf16` bounded KMP search/code-point traversal and
+  utf16_search fuzz target. jrs basic String indexing, searching, slicing,
+  concat, repeat, padding, trimming and well-formed UTF-16 methods now use
+  ordinary mutable Function objects, observable conversions and shared quotas.
+  String split/replace share the linear search core; Arguments toString branding
+  is corrected. Unicode case/normalization/Intl and full conformance remain open.
+
+- Allocation-free `crates/math` binary64 power kernel and independent math_pow
+  fuzz target, without libm or external dependencies. jrs Math.pow, **, **= and
+  comma expressions now follow precedence/coercion rules; numeric left conversion
+  errors precede right conversion hooks. All 56 original Math.pow variants pass;
+  loading the original propertyHelper.js raises JSON passes to 272/330 variants.
+  Transcendental rounding is implementation-approximated, not globally proven
+  correctly rounded; full Test262/WPT and competitive speed remain open.
+
+- jrs same-realm `$262.evalScript` and embedding callback for synchronous global
+  Script execution. Nested Script frames preserve GC roots and completion
+  boundaries, defer jobs and share fuel/frame/binding limits. Global declaration
+  conflict precedence and global-arrow new.target validation are corrected.
+  Object.prototype.propertyIsEnumerable/isPrototypeOf and inherited native
+  constructor property lookup are implemented. Direct/indirect eval, multiple
+  realms and complete Test262/WPT acceptance remain open.
+
+- Dependency-free Test262 diagnostic runner with whole-checkout discovery,
+  original harness caching, fresh realms, strict/non-strict/raw variants,
+  phase-aware runtime negatives and async completion accounting. Missing
+  modules/host capabilities and unproven parse negatives are not passes.
+  Reusable compiled Script API and explicit test-host GC/ToString-print functions
+  support it. RegExp implementation restrictions are fatal Unsupported errors,
+  not SyntaxError. JSON methods now have ordinary mutable native Function
+  identities; focused JSON Test262 results improve from 226 to 234 passing
+  variants out of 330. Complete Test262/WPT and competitive speed remain open.
+
+- jrs AbortController/AbortSignal, reason/throwIfAborted, static abort/any and
+  onabort over the standalone event adapter. Source/dependent links are weak;
+  observed pending dependents, callbacks and reasons are GC-protected. Abort
+  algorithms remove listener IDs before trusted abort events. Two original WPT
+  files add 27 subtests (selected combined run: 22 files / 167 subtests;
+  prior documented total corrected by summing individual file reports).
+  Timer tasks, Date and iframe-dependent abort tests remain failures. Full WPT
+  and the newly required complete local Test262 suite remain unfulfilled.
+
+- Independent dependency-free `crates/json` UTF-16 parser/quoting core, flat
+  source-range arena and `json_codec` fuzz target. jrs now implements JSON
+  parse/stringify with reviver source contexts, replacer/toJSON hooks, rawJSON
+  branding, bounded streaming output and GC-safe traversal. The unchanged
+  passive-listener WPT passes five subtests: selected acceptance is now
+  20 files / 141 subtests, not full WPT. BigInt/Proxy and
+  browser DOM/Window integration remain open.
+
+- `jrs` call/constructor/super argument spread and array literal spread through
+  the iterator protocol. Expanded arguments use the bounded VM operand stack;
+  fixed-arity calls retain their original path. Await/GC, elisions, iterator
+  failures and constructor lookup order have regression tests. The unchanged
+  EventTarget-constructible WPT now passes all three subtests, bringing selected
+  acceptance to 19 files / 135 subtests. Object spread and full WPT remain open.
+
+- Independent `crates/event-target` listener/flag core and event_target fuzz model,
+  plus opt-in jrs Event/CustomEvent/EventTarget/DOMException adapters. Per-phase
+  ID snapshots, once/passive listeners, cancellation, reentry, callback objects,
+  exception reporting and GC roots are tested. Five additional original DOM WPT
+  files pass (21 subtests); selected combined acceptance is 18 files / 133 subtests.
+  Window/tree event tests remain explicit failures; later
+  entries above record spread, JSON and abort progress.
+
+- `jrs` opt-in queueMicrotask host function, shared Promise FIFO scheduling,
+  explicit Rust enqueue/checkpoint and separate host exception reporting.
+  Array.concat supplies species/spreadability/hole semantics needed by the
+  unchanged WPT callback harness. The selected WPT run now passes 13 files /
+  112 subtests; ErrorEvents, MutationObservers and cross-realm microtask reporting
+  remain failures, not acceptance passes. Host references are recorded under
+  docs/whatwg; no external software dependency was introduced.
+
+- `jrs` checked host-function and callback API: Realm can install explicit host
+  capabilities, create/read/write objects and descriptors, perform fallible
+  conversions and call retained JavaScript functions in later host turns.
+  Ownership/generation/kind checks reject foreign or stale values; host-invalid
+  return/throw values fail execution. Retention is bounded and indexed by handle,
+  with explicit release. This is infrastructure for event hosts, not a browser.
+
+- `jrs::Realm` persistent single-realm evaluation and CLI `--realm FILE...`.
+  Independent scripts share globals, lexical bindings, closures, intrinsics and
+  pending async continuations; each has its own compilation/declaration boundary
+  and Promise checkpoint. Cumulative quotas and retained-result GC roots are
+  explicit. The WPT shell runner no longer concatenates sources; the same twelve
+  original files pass with separate script boundaries. Multi-realm browser host
+  facilities and full WPT acceptance remain open.
+
+- `jrs` generic Promise capabilities and Symbol.species selection for then/finally;
+  resolve/reject/withResolvers/combinators support custom constructors and actual
+  capability resolver functions. Resolver exceptions, getter order, repeated
+  executor calls, iteration closing and GC roots are covered. All 12 selected
+  original WPT Builtin tests pass (106 subtests). Expanded frame-document probes
+  still fail on missing onload/document, so full WPT/browser acceptance is open.
+
+- `jrs` class declarations/expressions, strict instance/static/computed methods,
+  accessors, inheritance/default constructors, derived this initialization,
+  new.target and super calls/property receivers. Home objects and shared derived
+  this cells are traced, including arrow closures. Direct constructor calls use
+  VM frames; super/native construction is reentry-bounded. The original WPT
+  Promise-subclassing file now executes and passes its basic constructor test;
+  the seven constructor/species-operation tests remain failures.
+
+- `jrs` synchronous Symbol.iterator protocol, cached next/done/value processing,
+  Array keys/values/entries and String iterators, and iterable arguments objects.
+  Dedicated iterator cleanup handlers integrate IteratorClose with break, return,
+  throw, binding patterns and nested finally. Promise combinators and WeakMap
+  now consume user iterables; iterator records are traced through async suspension.
+  Next failures, getter ordering, reentry, close errors, GC and fuel are tested.
+
+- `jrs` Symbol values, registry, well-known symbols, wrappers, separate traced
+  Symbol properties, descriptors/integrity operations and getOwnPropertySymbols.
+  Symbol.toPrimitive and Symbol.toStringTag execute real inherited hooks;
+  non-registered Symbol WeakMap keys use ephemeron GC. The original WeakMap WPT
+  file now passes all 20 subtests, bringing the selected shell run to 11/12 files
+  and 99 passing subtests. Class/Promise-subclassing and full WPT remain open.
+
+- `jrs` WeakMap storage and methods with O(log n) identity lookup, array-entry
+  construction, getOrInsert/Computed, a global entry quota and ephemeron GC.
+  Key-indexed activation handles cyclic/indirect dependencies without repeated
+  whole-heap scans; collector work consumes VM fuel. Generated reachability
+  tests audit the collector. Original WPT WeakMap.prototype-properties advances
+  to 19/20 passing subtests; Symbol.toStringTag remains an explicit gap.
+
+- `jrs` primitive wrappers/prototypes for Boolean, Number and String; sloppy
+  `this` boxing, primitive accessor receivers, virtual immutable UTF-16 string
+  properties, boxed array-like operations, Math constants and regex split.
+  The unchanged WPT Array.prototype.join-order file now passes 51 subtests;
+  the selected 12-file shell run reaches 10 passing files / 79 passing subtests.
+  Class/Promise-subclassing, WeakMap and full WPT/browser acceptance remain open.
+
+- `jrs` selected WPT shell runner with original harness callbacks and strict
+  failure/completion accounting; internal HTML extraction, no external library.
+  At pinned WPT revision `7926f3ca1cd9f7f1df88db0bb0cee14f278a559b`, nine of
+  twelve selected Builtin files pass; primitive prototypes, class syntax and
+  WeakMap still fail the remaining files. This is not full WPT/browser acceptance.
+  Single-character lookahead compiles to a bounded Thompson predicate without
+  backtracking. Runtime additions include arguments mapping, apply/bind, Error
+  intrinsics, UTF-16 split/replace, stable merge sort, and Object.create descriptor
+  lists/Object.defineProperties. Regression tests cover callbacks, GC, ordering,
+  failures and quotas; runtime compatibility and competitive speed remain open.
+
+- `jrs` Promise jobs and async functions: synchronous executors, FIFO reactions,
+  thenable adoption with a shared resolve/reject latch, explicit await frame
+  suspension, async arrows/methods, rejection propagation and finally across
+  suspension. Promise all/allSettled/race use the supported array/string
+  iteration. Jobs, reactions and suspended memory share explicit quotas;
+  collected suspended cycles release their quota. The host receives unhandled
+  rejections after the checkpoint; the default policy fails the run.
+
+- `jrs` frontend/runtime progression: untagged nested template literals,
+  ordinary `instanceof`, default/rest parameters with parameter TDZ and
+  separate default/body environments, switch/fallthrough, for-in enumeration,
+  array/string for-of with nested array declaration patterns, and
+  Object.entries/values. The original WPT harness now tokenizes and reaches
+  the async-function parser gap; no WPT suite pass is claimed.
+
+- `audhsos-regex` in its dedicated `crates/regex/` directory: prioritized
+  Thompson NFA over UTF-16 code units, no backtracking fallback or external
+  dependencies. Independent compile/match/capture limits, state-visit-bound
+  tests and the `regex_nfa` fuzz target make the core separately auditable.
+  `jrs` uses the core for its initial RegExp literals, exec/test, indices and
+  string match/search adapter. Unsupported constructs fail explicitly;
+  complete ECMAScript and WPT compatibility remain open.
+
+- `jrs` (JavaScript Rust), an initial safe-Rust, dependency-free `no_std`
+  plus `alloc` bytecode core and separate `jrs-cli` host. Bounded parsing,
+  lexical slot resolution, UTF-16 primitive strings, arithmetic/control
+  flow, TDZ and const checks, reusable programs and fuel-limited execution.
+  `xtask jrs` runs the release executable; `xtask jrs-check` runs focused
+  tests, strict lint and a no_std cross-check. Unit and CLI regression
+  tests and the `jrs_source` fuzz target are included. This is not yet
+  ECMA-262 conforming, integrated as an OS process, or WPT-compatible;
+  `crates/jrs/README.md` records the missing features and acceptance status.
+  The next increment adds ordinary/arrow functions, first-class native
+  functions, closures, `var` hoisting and explicit call frames. Captured
+  bindings use generation-checked handles in a safe mark/sweep heap;
+  uncaptured locals remain frame-local. Per-iteration `let` bindings,
+  shared fuel across calls, frame/heap quotas and cycle reclamation are tested.
+  Ordinary object literals, UTF-16 properties, prototype inheritance, method
+  receivers and lexical arrow `this` now use the tracing heap as well. Data
+  descriptors and Object integrity operations have regression tests. The
+  frontend's hard nesting cap is 48 to keep the expanded AST's recursive
+  debug parser inside the host test stack. Arrays, accessors, object coercion,
+  and WPT execution remain incomplete. `throw`/`catch`/`finally` now use
+  explicit completion unwinding, including returns and loop exits, with
+  pending values traced during collection and embedding limits non-catchable.
+  The CLI binary no longer competes with the library for Rustdoc's `jrs/`
+  output directory; its usage remains in its README and `--help`.
+  Arrays now implement holes, exotic length/index handling, basic mutation,
+  search/slice/join, and callback methods through private bytecode on the
+  same fuel-limited VM. Object keys/names return arrays. `new` supports
+  Array, Object and ordinary function constructors with prototype links and
+  object return rules. Array methods still lack species, accessors and
+  complete object coercion; no WPT suite success is claimed.
+  Accessor literals/descriptors and ordinary object coercion now run hooks
+  through a bounded native-reentry bridge with the real host and shared fuel.
+  Descriptor conversion order, GC roots, getter exceptions and Math.max/min
+  coercion/signed-zero cases are covered by regression tests. Symbol-based
+  coercion and full WPT execution remain incomplete.
+
 - Document 13, *The Network on the Machine*, and Phases 12 to 15 in the
   roadmap and the implementation plan. `driver-virtio-net` was the one
   thing document 12 left unscheduled that the system visibly lacks, and

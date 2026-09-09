@@ -1,0 +1,1 @@
+function C(){}let B=C.bind(null);Object.defineProperty(C,Symbol.hasInstance,{get(){gc();return function(v){return v.x===7}}});({x:7}) instanceof B;Function.prototype[Symbol.hasInstance].call(B,{x:7})

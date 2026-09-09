@@ -68,6 +68,86 @@ pub(crate) struct Crate {
 /// Every workspace crate, in layer order.
 pub(crate) const CRATES: &[Crate] = &[
     Crate {
+        name: "audhsos-timer-queue",
+        path: "crates/timer-queue",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-regex-bt",
+        path: "crates/regex-bt",
+        kind: Kind::Logic,
+        deps: &["audhsos-regex"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-utf16",
+        path: "crates/utf16",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-math",
+        path: "crates/math",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-json",
+        path: "crates/json",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-event-target",
+        path: "crates/event-target",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-regex",
+        path: "crates/regex",
+        kind: Kind::Logic,
+        deps: &["test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "jrs",
+        path: "crates/jrs",
+        kind: Kind::Logic,
+        deps: &[
+            "test-support",
+            "audhsos-regex",
+            "audhsos-event-target",
+            "audhsos-timer-queue",
+            "audhsos-json",
+            "audhsos-math",
+            "audhsos-utf16",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "jrs-cli",
+        path: "crates/tools/jrs",
+        kind: Kind::Host,
+        deps: &["jrs", "doc-html"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-abi",
         path: "crates/abi",
         kind: Kind::Logic,
@@ -893,6 +973,20 @@ pub(crate) struct FuzzTarget {
 /// Every fuzz target. The name is the binary under `fuzz/` and the
 /// directory of its corpus under `fuzz/corpus/`.
 pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
+    FuzzTarget {
+        name: "timer_queue",
+    },
+    FuzzTarget {
+        name: "event_target",
+    },
+    FuzzTarget { name: "regex_nfa" },
+    FuzzTarget { name: "regex_bt" },
+    FuzzTarget { name: "jrs_source" },
+    FuzzTarget { name: "json_codec" },
+    FuzzTarget { name: "math_pow" },
+    FuzzTarget {
+        name: "utf16_search",
+    },
     FuzzTarget {
         name: "boot_image_header",
     },

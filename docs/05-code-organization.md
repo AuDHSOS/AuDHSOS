@@ -20,6 +20,9 @@ AuDHSOS/
 │   ├── ecma/                  what Ecma International publishes, the same way
 │   └── pcisig/                what PCI-SIG publishes and this repository may not hold: the provenance rule that takes its place (D-117)
 ├── crates/
+│   ├── regex/                 audhsos-regex: bounded Thompson NFA, no backtracking, independently audited and fuzzed
+│   ├── event-target/          audhsos-event-target: bounded reusable listener registry and event flags, no runtime/DOM dependency
+│   ├── timer-queue/           audhsos-timer-queue: bounded stable deadline queue without a clock or executor
 │   ├── abi/                   audhsos-abi: syscall table, errors, rights, message layout, boot image header, boot information, address constants
 │   ├── elf/                   audhsos-elf: ELF64 parser producing validated load segments
 │   ├── uefi/                  audhsos-uefi: UEFI structure layouts, GUIDs, constants (no calls)
@@ -30,6 +33,7 @@ AuDHSOS/
 │   ├── encoding/              audhsos-encoding: Base64, hex, PEM (document 12)
 │   ├── deflate/               audhsos-deflate: the DEFLATE format of RFC 1951 in the zlib wrapper of RFC 1950
 │   ├── collections/           audhsos-collections: fixed-capacity containers over indices (document 12)
+│   ├── jrs/                   jrs: no_std + alloc JavaScript bytecode core; initial non-conforming subset, no OS process adapter yet
 │   ├── symbols/               audhsos-symbols: ELF symbol table and DWARF line lookup (document 12)
 │   ├── drivers/
 │   │   ├── uart16550/         driver-uart16550: register logic over a port access trait
@@ -104,6 +108,7 @@ AuDHSOS/
 │       ├── xtask/             build, image (GPT + FAT32 writer, CRC32), run, test, lint, check-layering, check-deps, unsafe-budget, fuzz, coverage; policy tables
 │       ├── markdown/          doc-markdown: the Markdown parser of this repository's documents
 │       ├── html/              doc-html: the HTML parser of the standards this repository holds
+│       ├── jrs/               jrs-cli: host executable for the JavaScript core
 │       ├── svg/               doc-svg: the SVG figures of those documents, as marks of a page
 │       ├── pdf/               doc-pdf: a PDF 1.7 writer, pages, fonts, outline
 │       └── docpdf/            the tool `xtask pdf` starts: every document as a PDF
@@ -186,8 +191,40 @@ AuDHSOS/
 | `doc-pdf` | host | host | no | yes | `audhsos-deflate` |
 | `doc-svg` | host | host | no | yes | `doc-html`, `doc-pdf` |
 | `docpdf` | host | host | no | yes, without a coverage gate, as `xtask` | `doc-html`, `doc-markdown`, `doc-pdf`, `doc-svg` |
+| `jrs` | logic | all, with an allocator supplied by the embedding | no | yes, property and fuzz | `audhsos-regex`, `audhsos-event-target`, `audhsos-timer-queue`, `audhsos-json`, `audhsos-math`, `audhsos-utf16`; `test-support` as a dev-dependency |
+| `jrs-cli` | host | host | no | yes | `jrs`, `doc-html` (WPT script extraction) |
+| `audhsos-regex` | logic | all, with an allocator supplied by the embedding | no | yes, property and fuzz | none at run time; `test-support` as a dev-dependency |
+| `audhsos-regex-bt` | logic | all, with an allocator supplied by the embedding | no | yes, differential and fuzz | `audhsos-regex` (shared syntax, classes, assertions, result types) |
+| `audhsos-event-target` | logic | all, with an allocator supplied by the embedding | no | yes, independent model/fuzz | none |
+| `audhsos-timer-queue` | logic | all, with an allocator supplied by the embedding | no | yes, independent model/fuzz | none |
+| `audhsos-json` | logic | all, with an allocator supplied by the embedding | no | yes, UTF-16 roundtrip/fuzz | none |
+| `audhsos-math` | logic | all, allocation-free | no | yes, binary64 differential/fuzz | none |
+| `audhsos-utf16` | logic | all, with an allocator for search preprocessing | no | yes, search-model/fuzz | none |
 
 ## 5.3 Layering rules
+
+The regular expression core is the dedicated `crates/regex/` crate, not under
+support, encoding or the JavaScript VM. Its algorithm and resource contracts
+are in [regex/README.md](../crates/regex/README.md): Thompson NFA/DFA only, no
+backtracking fallback, no external dependency, independent fuzzing and audit.
+`audhsos-regex` implements a bounded, prioritized Thompson NFA over UTF-16
+code units and is registered in workspace policy. Its independent fuzz target
+is `regex_nfa`. Other reusable components likewise remain in appropriately
+named crates under `crates/`.
+
+The separately authorized `crates/regex-bt/` component implements bounded
+backtracking, with no reverse dependency or fallback in `crates/regex/`.
+Its dependency on `audhsos-regex::syntax` reuses parsing and code-unit predicates,
+not the Thompson matcher. Choice frames, assertion frames, register cells,
+input, compile expansion and work are bounded. Unlike the NFA, it can have
+exponential runtime and requires explicit selection; quotas are not a linearity
+guarantee. jrs currently remains connected only to the automaton engine.
+
+`crates/json/` is the independent bounded UTF-16 JSON parser/quoting core.
+Its flat parse arena retains lexical ranges without recursive destruction.
+JavaScript object materialization, reviver/replacer/toJSON hooks and raw JSON
+branding live in `jrs/src/vm/json/`; xtask's narrower integer-only QMP codec
+remains separate. The independent fuzz target is `json_codec`.
 
 1. Dependencies point downward only. A crate may depend on crates of lower
    layers as listed in the catalog, never sideways or upward.
@@ -385,6 +422,9 @@ binaries (`cargo`, `rustc`, `rustfmt`, `cargo-clippy`, `cargo-miri`,
 | `miri` | run the tests of the `unsafe` modules of the host-executable adapter crates under Miri, after checking that no module holding `unsafe` is left out |
 | `doc` | build documentation with warnings as errors |
 | `pdf [options]` | every Markdown document of `docs/` and every standard beside them as a PDF under `target/pdf/`; the options go to the tool, which explains them with `--help` |
+| `jrs [options]` | build and run the release-mode `jrs-cli` host executable; `--help` describes source input, fuel and measurement options |
+| `jrs-check [--fix-format]` | package-scoped formatting, tests, strict Clippy and `jrs` cross-check for `x86_64-unknown-none` |
+| `regex-check [--fix-format]` | the isolated regex core's formatting, tests, strict Clippy and `x86_64-unknown-none` cross-check |
 | `symbolize <elf> <address>...` | the function, file, and line of every address, which a failing QEMU run is reported through |
 | `check [--quiet]` | everything CI runs, in CI order; `--quiet` leaves one line per step and prints the output of a step only when it fails |
 

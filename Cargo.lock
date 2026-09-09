@@ -46,6 +46,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "audhsos-event-target"
+version = "0.1.0"
+
+[[package]]
+name = "audhsos-json"
+version = "0.1.0"
+
+[[package]]
 name = "audhsos-kernel"
 version = "0.1.0"
 dependencies = [
@@ -59,6 +67,24 @@ dependencies = [
  "kernel-objects",
  "kernel-syscall",
  "kernel-types",
+]
+
+[[package]]
+name = "audhsos-math"
+version = "0.1.0"
+
+[[package]]
+name = "audhsos-regex"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
+name = "audhsos-regex-bt"
+version = "0.1.0"
+dependencies = [
+ "audhsos-regex",
 ]
 
 [[package]]
@@ -79,6 +105,10 @@ version = "0.1.0"
 dependencies = [
  "test-support",
 ]
+
+[[package]]
+name = "audhsos-timer-queue"
+version = "0.1.0"
 
 [[package]]
 name = "audhsos-tls"
@@ -102,6 +132,10 @@ dependencies = [
  "audhsos-abi",
  "test-support",
 ]
+
+[[package]]
+name = "audhsos-utf16"
+version = "0.1.0"
 
 [[package]]
 name = "audhsos-x509"
@@ -252,6 +286,27 @@ version = "0.1.0"
 dependencies = [
  "audhsos-abi",
  "test-support",
+]
+
+[[package]]
+name = "jrs"
+version = "0.1.0"
+dependencies = [
+ "audhsos-event-target",
+ "audhsos-json",
+ "audhsos-math",
+ "audhsos-regex",
+ "audhsos-timer-queue",
+ "audhsos-utf16",
+ "test-support",
+]
+
+[[package]]
+name = "jrs-cli"
+version = "0.1.0"
+dependencies = [
+ "doc-html",
+ "jrs",
 ]
 
 [[package]]

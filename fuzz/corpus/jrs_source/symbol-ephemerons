@@ -1,0 +1,1 @@
+let m=new WeakMap();for(let i=0;i<20;i++){let s=Symbol();m.set(s,{s})}m.set(Symbol.iterator,{n:7});m.get(Symbol.iterator);let o={[Symbol.toPrimitive](h){return Symbol(h)}};let p={[o]:1};Object.getOwnPropertySymbols(p);

@@ -1,0 +1,1 @@
+let A=(async()=>{}).constructor;class S extends A{}let f=new S('return await 7');f().then(print);Reflect.construct(A,['return 1'],S)();try{new f()}catch(e){}

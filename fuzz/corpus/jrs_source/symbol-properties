@@ -1,0 +1,1 @@
+let s=Symbol('k'),t=Symbol.for('k'),o={[s]:{n:1},[t]:2};Object.getOwnPropertySymbols(o);Object.defineProperty(o,s,{value:3});Object.freeze(o);delete o[s];Object.prototype.toString.call({[Symbol.toStringTag]:'x'});

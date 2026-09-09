@@ -767,6 +767,159 @@ pub(crate) fn pdf(root: &Path, options: &[String]) -> Result<(), Error> {
     cmd.run()
 }
 
+/// Runs the release-mode JavaScript host with the caller's options.
+pub(crate) fn jrs(root: &Path, options: &[String]) -> Result<(), Error> {
+    Cmd::cargo()
+        .cwd(root)
+        .args(["run", "--release", "-p", "jrs-cli", "--"])
+        .args(options.iter().map(String::as_str))
+        .run()
+}
+
+/// Focused checks for the JavaScript runtime, still using the pinned tools.
+pub(crate) fn jrs_check(root: &Path, options: &[String]) -> Result<(), Error> {
+    let fix_format = match options {
+        [] => false,
+        [option] if option == "--fix-format" => true,
+        _ => {
+            return Err(Error::Usage(
+                "jrs-check accepts only --fix-format".to_owned(),
+            ));
+        }
+    };
+    let mut fmt = Cmd::cargo().cwd(root).args([
+        "fmt",
+        "-p",
+        "jrs",
+        "-p",
+        "jrs-cli",
+        "-p",
+        "audhsos-event-target",
+        "-p",
+        "audhsos-timer-queue",
+        "-p",
+        "audhsos-json",
+        "-p",
+        "audhsos-math",
+        "-p",
+        "audhsos-utf16",
+        "-p",
+        "xtask",
+    ]);
+    if !fix_format {
+        fmt = fmt.args(["--", "--check"]);
+    }
+    fmt.run()?;
+    Cmd::cargo()
+        .cwd(root)
+        .args([
+            "test",
+            "-p",
+            "jrs",
+            "-p",
+            "jrs-cli",
+            "-p",
+            "audhsos-event-target",
+            "-p",
+            "audhsos-timer-queue",
+            "-p",
+            "audhsos-json",
+            "-p",
+            "audhsos-math",
+            "-p",
+            "audhsos-utf16",
+        ])
+        .run()?;
+    Cmd::cargo()
+        .cwd(root)
+        .args([
+            "clippy",
+            "-p",
+            "jrs",
+            "-p",
+            "jrs-cli",
+            "-p",
+            "audhsos-event-target",
+            "-p",
+            "audhsos-timer-queue",
+            "-p",
+            "audhsos-json",
+            "-p",
+            "audhsos-math",
+            "-p",
+            "audhsos-utf16",
+            "-p",
+            "xtask",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ])
+        .run()?;
+    Cmd::cargo()
+        .cwd(root)
+        .args(["check", "-p", "jrs", "--target", "x86_64-unknown-none"])
+        .run()
+}
+
+/// Focused checks for the isolated Thompson automaton.
+pub(crate) fn regex_check(root: &Path, options: &[String]) -> Result<(), Error> {
+    let fix = match options {
+        [] => false,
+        [option] if option == "--fix-format" => true,
+        _ => {
+            return Err(Error::Usage(
+                "regex-check accepts only --fix-format".to_owned(),
+            ));
+        }
+    };
+    let mut fmt = Cmd::cargo().cwd(root).args([
+        "fmt",
+        "-p",
+        "audhsos-regex",
+        "-p",
+        "audhsos-regex-bt",
+        "-p",
+        "xtask",
+    ]);
+    if !fix {
+        fmt = fmt.args(["--", "--check"]);
+    }
+    fmt.run()?;
+    Cmd::cargo()
+        .cwd(root)
+        .args(["test", "-p", "audhsos-regex", "-p", "audhsos-regex-bt"])
+        .run()?;
+    Cmd::cargo()
+        .cwd(root)
+        .args([
+            "clippy",
+            "-p",
+            "audhsos-regex",
+            "-p",
+            "audhsos-regex-bt",
+            "-p",
+            "xtask",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ])
+        .run()?;
+    Cmd::cargo()
+        .cwd(root)
+        .args([
+            "check",
+            "-p",
+            "audhsos-regex",
+            "-p",
+            "audhsos-regex-bt",
+            "--target",
+            "x86_64-unknown-none",
+        ])
+        .run()
+}
+
 /// Host coverage against the thresholds.
 pub(crate) fn coverage(root: &Path) -> Result<(), Error> {
     let totals = coverage::measure(root)?;

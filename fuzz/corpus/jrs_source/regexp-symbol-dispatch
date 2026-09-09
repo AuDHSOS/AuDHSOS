@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+let n=0,o={flags:'gu',exec(){if(n++<3)return {0:''};return null}};
+RegExp.prototype[Symbol.match].call(o,'😀x');
+let index={n:7},s={get lastIndex(){return index},set lastIndex(v){index=v},exec(){return {index:42}}};
+if(RegExp.prototype[Symbol.search].call(s,'a')!==42||index.n!==7)throw 1;
+let raw={};if(String.prototype.match.call(raw,{[Symbol.match](v){return v}})!==raw)throw 2;
+let r=/a/g;r.lastIndex=7;if('ba'.search(r)!==1||r.lastIndex!==7)throw 3;

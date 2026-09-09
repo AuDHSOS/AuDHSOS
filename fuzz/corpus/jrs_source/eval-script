@@ -1,0 +1,1 @@
+let n=0;function f(){let o={x:7};try{n=evalScript('gc();3;')}finally{gc()}return o.x+n}f()

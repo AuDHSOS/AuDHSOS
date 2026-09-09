@@ -1,0 +1,1 @@
+class A{constructor(x){this.x=x}get n(){return this.x}set n(x){this.x=x}static f(){return this.name}}class B extends A{constructor(x){let f=()=>this;super(x);this.f=f}m(){super.n++;return super.n}}let b=new B(7);b.m();b.f()===b;

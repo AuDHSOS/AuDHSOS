@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+let n=0,closed=0,it={next(){return {done:n>2,value:++n}},return(){closed++;return {}}};
+let source={[Symbol.iterator](){return it}},error={n:7};
+try{Array.from(source,v=>{if(v===2)throw error;return v})}catch(e){if(e!==error)throw 1}
+if(closed!==1)throw 2;
+function C(){return {set length(v){this.saved=v}}}
+let a=Array.from.call(C,{length:2,0:7},(v,k)=>k);
+if(a.saved!==2||a[1]!==1)throw 3;

@@ -1,0 +1,1 @@
+let A=(async()=>{}).constructor;let f=A('x','gc();await 0;return x');f(7).then(print);new A('return this')().then(x=>print(typeof x));A.prototype.toString()

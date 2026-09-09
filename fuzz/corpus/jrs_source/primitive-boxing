@@ -1,0 +1,1 @@
+Number.prototype.x={n:1};let s=Object('ab');Object.freeze(s);function f(){return ()=>this}let n=f.call(3)();Object.getOwnPropertyDescriptor(s,'0');Object.keys(s);n.x.n;Array.prototype.map.call('ab',(v,i,o)=>o.valueOf());

@@ -1,0 +1,1 @@
+'abababa'.lastIndexOf('aba',2);'x'.padStart(13,'😀').toWellFormed();'\ud800'.isWellFormed();String.prototype.slice.call({toString(){gc();return 'abc'}},-2)

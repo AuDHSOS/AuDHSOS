@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+if(parseInt('0x200000000000011')!==144115188075855900)throw 1;
+if(Number('0x1000000000000081')!==1152921504606847200)throw 2;
+let log='';parseInt({toString(){log+='s';return '-0x20'}},{valueOf(){log+='r';return 16}});
+if(log!=='sr'||parseFloat('1e+')!==1||!Object.is(parseFloat('-0e9'),-0))throw 3;
+let f=Number.parseInt;delete globalThis.parseInt;f.saved={n:7};
+for(let i=0;i<50;i++){let garbage={}}
+if(f!==Number.parseInt||f.saved.n!==7)throw 4;

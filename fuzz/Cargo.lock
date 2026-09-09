@@ -26,7 +26,34 @@ name = "audhsos-encoding"
 version = "0.1.0"
 
 [[package]]
+name = "audhsos-event-target"
+version = "0.1.0"
+
+[[package]]
+name = "audhsos-json"
+version = "0.1.0"
+
+[[package]]
+name = "audhsos-math"
+version = "0.1.0"
+
+[[package]]
+name = "audhsos-regex"
+version = "0.1.0"
+
+[[package]]
+name = "audhsos-regex-bt"
+version = "0.1.0"
+dependencies = [
+ "audhsos-regex",
+]
+
+[[package]]
 name = "audhsos-time"
+version = "0.1.0"
+
+[[package]]
+name = "audhsos-timer-queue"
 version = "0.1.0"
 
 [[package]]
@@ -42,6 +69,10 @@ dependencies = [
  "crypto-hash",
  "crypto-rng",
 ]
+
+[[package]]
+name = "audhsos-utf16"
+version = "0.1.0"
 
 [[package]]
 name = "audhsos-x509"
@@ -146,6 +177,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "event_target"
+version = "0.1.0"
+dependencies = [
+ "audhsos-event-target",
+ "fuzz-support",
+]
+
+[[package]]
 name = "fuzz-support"
 version = "0.1.0"
 
@@ -179,6 +218,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "jrs"
+version = "0.1.0"
+dependencies = [
+ "audhsos-event-target",
+ "audhsos-json",
+ "audhsos-math",
+ "audhsos-regex",
+ "audhsos-timer-queue",
+ "audhsos-utf16",
+]
+
+[[package]]
+name = "jrs_source"
+version = "0.1.0"
+dependencies = [
+ "fuzz-support",
+ "jrs",
+]
+
+[[package]]
+name = "json_codec"
+version = "0.1.0"
+dependencies = [
+ "audhsos-json",
+ "fuzz-support",
+]
+
+[[package]]
 name = "kernel-acpi"
 version = "0.1.0"
 dependencies = [
@@ -198,6 +265,14 @@ version = "0.1.0"
 dependencies = [
  "fuzz-support",
  "kernel-acpi",
+]
+
+[[package]]
+name = "math_pow"
+version = "0.1.0"
+dependencies = [
+ "audhsos-math",
+ "fuzz-support",
 ]
 
 [[package]]
@@ -279,6 +354,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex_bt"
+version = "0.1.0"
+dependencies = [
+ "audhsos-regex",
+ "audhsos-regex-bt",
+ "fuzz-support",
+]
+
+[[package]]
+name = "regex_nfa"
+version = "0.1.0"
+dependencies = [
+ "audhsos-regex",
+ "fuzz-support",
+]
+
+[[package]]
 name = "rsa"
 version = "0.1.0"
 dependencies = [
@@ -306,6 +398,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "timer_queue"
+version = "0.1.0"
+dependencies = [
+ "audhsos-timer-queue",
+ "fuzz-support",
+]
+
+[[package]]
 name = "tls_handshake"
 version = "0.1.0"
 dependencies = [
@@ -327,6 +427,14 @@ version = "0.1.0"
 dependencies = [
  "audhsos-abi",
  "audhsos-elf",
+]
+
+[[package]]
+name = "utf16_search"
+version = "0.1.0"
+dependencies = [
+ "audhsos-utf16",
+ "fuzz-support",
 ]
 
 [[package]]

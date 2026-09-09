@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+let n=0,it,obj={get length(){if(n++===0)it.next();return Infinity},0:7,1:8};
+it=Array.prototype.values.call(obj);
+if(it.next().value!==7||it.next().value!==8)throw 1;
+let entries=Array.prototype.entries.call({length:4294967297,get 0(){return {n:7}}});
+for(let i=0;i<30;i++){let g={}}
+if(entries.next().value[1].n!==7)throw 2;
+let method=Array.prototype.values;delete Array.prototype.values;
+if(method!==Array.prototype[Symbol.iterator])throw 3;

@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+[package]
+name = "math_pow"
+description = "Binary64 power differential and special-value fuzzing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+[[bin]]
+name = "math_pow"
+path = "src/main.rs"
+test = false
+bench = false
+doc = false
+[dependencies]
+audhsos-math.workspace = true
+fuzz-support.workspace = true
+[lints]
+workspace = true

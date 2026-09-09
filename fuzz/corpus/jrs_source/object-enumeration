@@ -1,0 +1,1 @@
+let f=Object.values;Object.keys=()=>{throw 7};Object.x={n:1};Object[Symbol()]={n:2};gc();let o={get a(){delete this.b;gc();return {n:3}},b:4};f(o);Object.entries(o);Object.freeze(Object)

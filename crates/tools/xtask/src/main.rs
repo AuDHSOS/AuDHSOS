@@ -46,6 +46,11 @@ subcommands:
   pdf [options]    every Markdown document and every RFC as PDF, under
                    target/pdf/; options are passed to the tool, which
                    explains them with --help
+  jrs [options]    build and run the jrs host CLI in release mode
+  jrs-check [--fix-format]
+                   focused jrs formatting, tests, clippy and no_std cross-check
+  regex-check [--fix-format]
+                   focused Thompson regex checks and no_std cross-check
   coverage         host coverage with thresholds
   miri             run the host-executable adapter crates under Miri
   doc              build documentation with warnings as errors
@@ -105,6 +110,9 @@ fn run() -> Result<(), Error> {
         "unsafe-budget" => none(subcommand, options).and_then(|()| commands::unsafe_budget(&root)),
         "test" => commands::test(&root, options),
         "pdf" => commands::pdf(&root, options),
+        "jrs" => commands::jrs(&root, options),
+        "jrs-check" => commands::jrs_check(&root, options),
+        "regex-check" => commands::regex_check(&root, options),
         "coverage" => none(subcommand, options).and_then(|()| commands::coverage(&root)),
         "miri" => none(subcommand, options).and_then(|()| commands::miri(&root)),
         "doc" => none(subcommand, options).and_then(|()| commands::doc(&root)),

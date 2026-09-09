@@ -19,6 +19,22 @@ fn correct_header_passes() {
 }
 
 #[test]
+fn upstream_test262_keeps_its_license_but_other_sources_are_checked() {
+    use crate::spdx::upstream_reference;
+    assert!(upstream_reference(Path::new(
+        "docs/test-ext/test262/harness/features.yml"
+    )));
+    assert!(!upstream_reference(Path::new(
+        "docs/test-ext/test262-other/ci.yml"
+    )));
+    assert!(!upstream_reference(Path::new("crates/test262/src/lib.rs")));
+    assert!(!upstream_reference(Path::new("docs/test-ext/ci.yml")));
+    assert!(!upstream_reference(Path::new(
+        "elsewhere/docs/test-ext/test262/ci.yml"
+    )));
+}
+
+#[test]
 fn missing_moved_and_wrong_headers_are_reported() {
     assert!(
         header_problem("fn main() {}\n", "//", &SPDX_HEADER)

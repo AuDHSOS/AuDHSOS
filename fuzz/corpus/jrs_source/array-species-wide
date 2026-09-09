@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+let a=[1,,{n:7}];a.constructor={[Symbol.species]:function(n){return {size:n}}};
+let out=a.map(v=>{for(let i=0;i<20;i++){let g={}}return v});
+if(out.size!==3||out[2].n!==7||(1 in out))throw 1;
+let filtered=a.filter((v,k)=>{delete a[k];return true});
+let n=Number.MAX_SAFE_INTEGER,o={length:n};o[n-1]=42;
+if(Array.prototype.slice.call(o,-1)[0]!==42)throw 2;
+if(Array.prototype.pop.call(o)!==42||o.length!==n-1)throw 3;
+Array.prototype.push.call(o,7);
+if(Array.prototype.indexOf.call(o,7,-1)!==n-1)throw 4;

@@ -1,0 +1,1 @@
+var counter=0;let shared={n:3};function later(){counter++;return shared.n}globalThis.counter=7;later();for(var [a,b] of [[1,2]])counter+=a+b;

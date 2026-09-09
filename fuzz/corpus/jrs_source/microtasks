@@ -1,0 +1,1 @@
+let out=[];queueMicrotask(()=>{out.push(1);queueMicrotask(()=>out.push(4))});Promise.resolve().then(()=>out.push(2));queueMicrotask(()=>out.push(3));queueMicrotask(()=>{throw {n:7}});queueMicrotask(()=>out.push(5));

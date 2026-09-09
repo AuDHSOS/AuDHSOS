@@ -1,0 +1,1 @@
+let i=[{n:1}].entries();i.next();i.next();let o={get [Symbol.iterator](){return function(){return {next(){return {get done(){return true},get value(){throw 7}}},return(){throw 9}}}}};Promise.all(o);new WeakMap(o);for(let x of o){}

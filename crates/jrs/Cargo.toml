@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "jrs"
+description = "JavaScript Rust: a safe, dependency-free bytecode runtime core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true
+
+[dependencies]
+audhsos-timer-queue.workspace = true
+audhsos-utf16.workspace = true
+audhsos-math.workspace = true
+audhsos-json.workspace = true
+audhsos-event-target.workspace = true
+audhsos-regex.workspace = true
+
+[lints]
+workspace = true

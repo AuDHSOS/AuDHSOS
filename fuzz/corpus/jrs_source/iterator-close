@@ -1,0 +1,1 @@
+let log='';let i={next(){return {value:[1,2]}},return(){log+='r';return {}},[Symbol.iterator](){return this}};try{for(let [a,b] of i){try{break}finally{log+=a}}}finally{log+='f'}log;

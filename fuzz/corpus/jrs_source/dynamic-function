@@ -1,0 +1,1 @@
+let f=Function('a=2','...rest','gc();return ()=>a+rest.length');let g=f(3,4);gc();g();Reflect.construct(Function,['return 7'])()
