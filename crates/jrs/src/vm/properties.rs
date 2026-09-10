@@ -695,7 +695,7 @@ impl Execution<'_> {
         }
         Ok(())
     }
-    fn set_prototype(&mut self, object: &Value, prototype: &Value) -> Result<(), Error> {
+    pub(super) fn set_prototype(&mut self, object: &Value, prototype: &Value) -> Result<(), Error> {
         if matches!(object, Value::Null | Value::Undefined) {
             return Err(Error::Type {
                 message: "prototype target is nullish",
@@ -988,7 +988,7 @@ impl Execution<'_> {
         result
     }
 
-    fn boxed_descriptor(&mut self, target: &Value, key: &Value) -> Result<Value, Error> {
+    pub(super) fn boxed_descriptor(&mut self, target: &Value, key: &Value) -> Result<Value, Error> {
         let target = self.box_value(target)?;
         let roots = self.native_roots.len();
         self.native_roots.push(target.clone());
@@ -1001,7 +1001,7 @@ impl Execution<'_> {
         result
     }
 
-    fn delete_key(&mut self, object: &Value, key: &Value) -> Result<bool, Error> {
+    pub(super) fn delete_key(&mut self, object: &Value, key: &Value) -> Result<bool, Error> {
         if matches!(object, Value::Null | Value::Undefined) {
             return Err(Error::Type {
                 message: "delete on null or undefined",
@@ -1226,7 +1226,12 @@ impl Execution<'_> {
         Ok(())
     }
 
-    fn define_descriptor(&mut self, object: &Value, key: Value, desc: &Value) -> Result<(), Error> {
+    pub(super) fn define_descriptor(
+        &mut self,
+        object: &Value,
+        key: Value,
+        desc: &Value,
+    ) -> Result<(), Error> {
         self.object_ref(object)?;
         self.object_ref(desc)?;
         let roots = self.native_roots.len();

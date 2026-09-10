@@ -1525,7 +1525,22 @@ impl Execution<'_> {
         if let Some(value) = self.timer_call(builtin, receiver, args)? {
             return Ok(value);
         }
-        if matches!(builtin, Builtin::ReflectApply | Builtin::ReflectConstruct) {
+        if matches!(
+            builtin,
+            Builtin::ReflectApply
+                | Builtin::ReflectConstruct
+                | Builtin::ReflectGet
+                | Builtin::ReflectSet
+                | Builtin::ReflectHas
+                | Builtin::ReflectDeleteProperty
+                | Builtin::ReflectGetPrototypeOf
+                | Builtin::ReflectSetPrototypeOf
+                | Builtin::ReflectIsExtensible
+                | Builtin::ReflectPreventExtensions
+                | Builtin::ReflectGetOwnPropertyDescriptor
+                | Builtin::ReflectDefineProperty
+                | Builtin::ReflectOwnKeys
+        ) {
             return self.reflect_call(builtin, args);
         }
         if builtin == Builtin::FunctionHasInstance {
