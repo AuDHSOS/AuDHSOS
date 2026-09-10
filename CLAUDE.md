@@ -7,6 +7,12 @@ While you work report only bugs / critical findings / problems etc. Keep it shor
 
 In your final summary message report your done work.
 Keep it also short. Overall keep your messages short.
+Your final summary message is not only short but shorter.
+Overall keep your messages shorter.
+
+Keep comments in source code also short or shorter.
+
+If you encounter a long source code comment then make it shorter.
 
 # reference documents (RFCs etc.)
 
