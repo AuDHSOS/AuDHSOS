@@ -3,9 +3,9 @@
 Keep everything in US English. Write clear and distinct sentences. Get to the point.
 Do not write rule of thumb sentences. Especially not in headlines.
 
-While you work report only bugs / critical findings / problems. Keep it short.
+While you work report only bugs / critical findings / problems etc. Keep it short.
 
-In your final summary message report your work done.
+In your final summary message report your done work.
 Keep it also short. Overall keep your messages short.
 
 # reference documents (RFCs etc.)
