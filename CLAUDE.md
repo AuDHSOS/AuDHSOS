@@ -16,6 +16,8 @@ If you encounter a long source code comment then make it shorter.
 
 Really do a "reduce to the max" without losing information.
 
+Use `Big O notation` / classify algorithms by their run time. The user understands it.
+
 # reference documents (RFCs etc.)
 
 Cite standards always by lookup in the concrete document.
