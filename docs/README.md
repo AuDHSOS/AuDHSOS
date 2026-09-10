@@ -46,20 +46,28 @@ Beside the documents lie the standards they cite, verbatim and with
 their checksums, one directory per body that publishes them:
 [rfc/](rfc) for the RFCs (D-59), [oasis/](oasis) for what OASIS
 publishes (D-100), [w3c/](w3c), [ecma/](ecma), [itu/](itu) for the
-JPEG Recommendations, and [cipa/](cipa) for Exif. Each directory has a
-`README.md` naming what belongs there and how it is fetched. Nothing
-under them is compiled, linked, or read at run time.
+JPEG Recommendations, [cipa/](cipa) for Exif, and [ti/](ti) for the
+16550 serial controller, which is a datasheet from a manufacturer rather
+than a standard from a standards body. Each directory has a `README.md`
+naming what belongs there and how it is fetched. Nothing under them is
+compiled, linked, or read at run time.
 
 D-124 states what decides whether a document is kept: whether it can be
 obtained, not whether its licence permits the copy. `rfc/`, `oasis/`,
-`w3c/` and `ecma/` hold documents that may be redistributed. `itu/` and
-`cipa/` hold documents that the ITU and CIPA serve to anyone at no
-charge but do not licence for redistribution; the copies are kept
-regardless, and each of those READMEs quotes the restriction it stands
-against and states what follows from it. [pcisig/](pcisig) holds no
-document, because PCI-SIG releases the two specifications the crate
-`pci` cites only to members or against payment; it records instead which
-documents those are and what takes the place of having them at hand.
+`w3c/` and `ecma/` hold documents that may be redistributed. `itu/`,
+`cipa/` and `ti/` hold documents that the ITU, CIPA and Texas
+Instruments serve to anyone at no charge but do not licence for
+redistribution; the copies are kept regardless, and each of those
+READMEs quotes the restriction it stands against and states what follows
+from it. `ti/` records one thing more, because the part the crate is
+named after is the one document of all of these that its publisher no
+longer serves: what is kept is the datasheet of a compatible part that
+TI does serve, and the README says which routes to the original were
+tried and what the substitution does and does not cover.
+[pcisig/](pcisig) holds no document, because PCI-SIG releases the two
+specifications the crate `pci` cites only to members or against payment;
+it records instead which documents those are and what takes the place of
+having them at hand.
 
 ## Conventions for these documents
 

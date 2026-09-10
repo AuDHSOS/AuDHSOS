@@ -14,6 +14,8 @@ Keep comments in source code also short or shorter.
 
 If you encounter a long source code comment then make it shorter.
 
+Really do a "reduce to the max" without losing information.
+
 # reference documents (RFCs etc.)
 
 Cite standards always by lookup in the concrete document.
@@ -24,6 +26,7 @@ Locations:
 - `docs/oasis` virtio specifications
 - `docs/pcisig` some information related to PCI
 - `docs/rfc` RFC documents
+- `docs/ti` the 16550 serial controller
 - `docs/w3c` documents from the web consortium
 - `docs/whatwg` documents from WHATWG
 
