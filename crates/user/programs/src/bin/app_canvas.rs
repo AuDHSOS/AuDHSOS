@@ -11,6 +11,17 @@
 //! where to look in the picture it takes of the screen and never has to
 //! work a position out for itself.
 //!
+//! It says it of every event it is keeping up with. A console line of this
+//! system goes out byte by byte and every byte is two system calls of the
+//! driver, which is more than a pointer moving at a hundred packets a
+//! second leaves room for. So a move or a segment that another event
+//! already follows in the ring is not said: the line would be out of date
+//! before it had gone out, and the event behind it says where the pointer
+//! now is. The last event of every batch is always said, and a machine that
+//! empties the ring on every wake-up — which is every machine the runner
+//! drives, because it injects one event and waits for its line — says all
+//! of them.
+//!
 //! Nothing is presented until the first event arrives (D-126). The program
 //! that draws before this one holds a surface the size of the screen too,
 //! and its picture is checked while the machine still runs; a canvas that
@@ -168,17 +179,15 @@ fn run(gate: &mut Gate, startup: &Startup, ready: &mut bool) -> Result<(), Error
         // and everything it costs — the drawing, the presentation, the
         // sprite, the line on the console — is done before the next, so
         // what the runner reads on the console is in the order it happened.
-        loop {
-            let taken = {
-                // SAFETY: the mapping remains live and the server published
-                // an initialized RingPage. Both processes use atomic access.
-                let page = unsafe { events.ring() }.ok_or(Error::InvalidArgument)?;
-                let mut reader = RingReader::new(page).ok_or(Error::InvalidArgument)?;
-                reader.pop()
-            };
-            let Some(event) = taken else {
-                break;
-            };
+        //
+        // The event after this one is taken out first, so that this one
+        // knows whether another already waits. That is all `say_it` is: a
+        // move whose successor is already in the ring is not said, because
+        // the line costs more than the move did and is out of date before
+        // it has gone out.
+        let mut next = pop(&events)?;
+        while let Some(event) = next {
+            next = pop(&events)?;
             if act(
                 gate,
                 startup,
@@ -189,6 +198,7 @@ fn run(gate: &mut Gate, startup: &Startup, ready: &mut bool) -> Result<(), Error
                 mode,
                 event,
                 &mut painted,
+                next.is_none(),
             )? {
                 return Ok(());
             }
@@ -196,10 +206,22 @@ fn run(gate: &mut Gate, startup: &Startup, ready: &mut bool) -> Result<(), Error
     }
 }
 
+/// Takes the next event out of the ring, if one waits there.
+fn pop(events: &Mapping) -> Result<Option<Event>, Error> {
+    // SAFETY: the mapping remains live and the server published an
+    // initialized RingPage. Both processes use atomic access.
+    let page = unsafe { events.ring() }.ok_or(Error::InvalidArgument)?;
+    let mut reader = RingReader::new(page).ok_or(Error::InvalidArgument)?;
+    Ok(reader.pop())
+}
+
 /// Takes one event and answers whether it ended the program.
+///
+/// `last` says that no further event waits in the ring, which is what
+/// decides whether the step is said on the console.
 #[expect(
     clippy::too_many_arguments,
-    reason = "one event needs the canvas, the pixels, the server, the surface it belongs to, and whether the background is down yet; carrying them in a struct would name the same things once more"
+    reason = "one event needs the canvas, the pixels, the server, the surface it belongs to, whether the background is down yet, and whether it is the last of its batch; carrying them in a struct would name the same things once more"
 )]
 fn act(
     gate: &mut Gate,
@@ -211,6 +233,7 @@ fn act(
     mode: Mode,
     event: Event,
     painted: &mut bool,
+    last: bool,
 ) -> Result<bool, Error> {
     let (step, damage) = {
         // SAFETY: the mapping was made in `run`, it is still standing, and
@@ -241,8 +264,22 @@ fn act(
         let (x, y) = canvas.cursor();
         set_cursor(gate, display, x, y)?;
     }
-    say(gate, startup, told(step, canvas).as_bytes());
+    if say_it(step, last) {
+        say(gate, startup, told(step, canvas).as_bytes());
+    }
     Ok(matches!(step, Step::Ended))
+}
+
+/// Whether the console hears about `step`.
+///
+/// A move and a segment are where the pointer went, and the event behind
+/// them says the same thing about a later position; when one waits in the
+/// ring already, the earlier line is thinned out. Everything else — a
+/// character, a clearing, the end — happened once and is always said. A
+/// machine that keeps up empties the ring every time, so `last` holds and
+/// nothing is thinned; only a backlog is.
+const fn say_it(step: Step, last: bool) -> bool {
+    last || !matches!(step, Step::Moved | Step::Drew { .. })
 }
 
 /// The line the console gets for `step`.

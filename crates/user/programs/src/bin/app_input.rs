@@ -9,6 +9,18 @@
 //! its own reduced to `SIGNAL`, a ring of one page it never allocated, and a
 //! loop that costs one system call per wake-up however many events arrived.
 //!
+//! One line is what an event costs most: a console line of this system goes
+//! out byte by byte, and every byte is two system calls of the driver — one
+//! to see that the transmitter is free, one to hand it the byte. A pointer
+//! that is moving sends a hundred packets a second, and saying every one of
+//! them costs more than the machine has. So a pointer event that another
+//! pointer event of the same buttons already follows is not said: the one
+//! that follows says where the pointer now is, and it says it sooner for
+//! not having waited behind a line that is already out of date. Nothing
+//! else is dropped — every key, every button, and the last event of every
+//! wake-up are said — so a machine that keeps up says everything, and only
+//! a backlog is thinned.
+//!
 //! It ends when the escape key comes up, which is the last thing the runner
 //! injects. A machine on which nothing is injected therefore keeps it
 //! waiting, which is what a program that listens does.
@@ -163,9 +175,34 @@ impl Lines {
         }
     }
 
-    /// Writes one line per event.
+    /// The event at `index`, if this many have arrived.
+    fn at(&self, index: usize) -> Option<Event> {
+        self.events.get(index).copied().flatten()
+    }
+
+    /// `true` for a pointer event the next one makes obsolete: both are
+    /// pointer events, the buttons did not change between them, and this
+    /// one turned no wheel. What is left of it is where the pointer was,
+    /// and the next event says where it is.
+    fn superseded(&self, index: usize) -> bool {
+        let (Some(Event::Pointer(this)), Some(Event::Pointer(next))) =
+            (self.at(index), self.at(index.saturating_add(1)))
+        else {
+            return false;
+        };
+        this.wheel == 0 && this.buttons == next.buttons
+    }
+
+    /// Writes one line per event, except for the pointer events the ones
+    /// behind them already replaced.
     fn say(&self, gate: &mut Gate, startup: &Startup) {
-        for event in self.events.iter().take(self.len).flatten() {
+        for index in 0..self.len {
+            let Some(event) = self.at(index) else {
+                continue;
+            };
+            if self.superseded(index) {
+                continue;
+            }
             let line = match event {
                 Event::Key(key) => user_rt::Line::<96>::of(format_args!(
                     "[input] key {} {}\n",

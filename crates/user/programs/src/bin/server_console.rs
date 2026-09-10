@@ -13,6 +13,14 @@
 //! Nothing is held by both, so nothing needs a lock. What the second thread
 //! touches of the controller is the receive path and what the first touches
 //! is the transmit path, and a 16550 keeps those in different registers.
+//!
+//! A read that finds the ring empty is not answered: the reply object is
+//! kept and the answer goes out when the next byte arrives. A client that
+//! wants to read has nothing else to wait on — this system has no timer a
+//! program can ask for — so a read that answered nothing would leave it
+//! asking again in a loop, and one program asking in a loop is the whole
+//! processor. Only one read is held at a time; a second one is answered
+//! with what the ring has, which is nothing, as it always was.
 
 #![no_std]
 #![no_main]
@@ -38,7 +46,10 @@ use user_programs::client::allocate;
 use user_programs::mapping::Mapping;
 use user_programs::serve::{Serving, receive};
 use user_proto::console::{Chunk, Reply, Request};
-use user_rt::{EndpointHandle, InterruptHandle, IoPortHandle, NotificationHandle, Startup};
+use user_rt::{
+    EndpointHandle, InterruptHandle, IoPortHandle, NotificationHandle, ReplyHandle, Startup,
+    Typed as _,
+};
 use user_sys_x86_64::{self as sys, Gate};
 
 sys::program!(main);
@@ -113,20 +124,70 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
     }
 
     let mut serving = Serving::default();
+    let mut held_read: Option<HeldRead> = None;
     loop {
         if receive(held(&mut console), endpoint, &mut serving).is_err() {
             held(&mut console).thread_exit()
         }
         if serving.badge == INTERRUPT_BADGE {
             take_arrived(&mut console);
+            wake(&mut console, &mut held_read);
             continue;
         }
         let request = Request::decode(held(&mut console).reader());
+        // A read of an empty ring is held instead of answered, and the
+        // reply object goes with it. Taking it out of `serving` is what
+        // makes the next receive a bare one: `receive` answers the call it
+        // still holds, and it no longer holds this one.
+        if let Ok(Request::Read { max }) = request
+            && console.waiting() == 0
+            && held_read.is_none()
+            && let Some(reply) = serving.pending.take()
+        {
+            held_read = Some(HeldRead { reply, max });
+            continue;
+        }
         let answer = match request {
             Ok(request) => handle(&mut console, &request),
             Err(error) => Reply::Written(Err(Error::from(error))),
         };
         let _written = answer.encode(&mut held(&mut console).writer());
+    }
+}
+
+/// The read that is waiting for a byte, and the reply object that answers
+/// it.
+#[derive(Clone, Copy)]
+struct HeldRead {
+    /// The right to answer the client that asked, once.
+    reply: ReplyHandle,
+    /// The upper bound that read carried.
+    max: u64,
+}
+
+/// Answers the read that was held, once the ring has something for it.
+///
+/// A client that ended while its read was held leaves a reply object whose
+/// caller is gone; the kernel refuses the answer and does not consume the
+/// handle, so it is closed here. Nothing else is left behind: the next read
+/// of the next client is held in the same slot.
+fn wake(console: &mut Console<PortRegisters>, held_read: &mut Option<HeldRead>) {
+    if console.waiting() == 0 {
+        return;
+    }
+    let Some(waiting) = held_read.take() else {
+        return;
+    };
+    let answer = read_reply(console, waiting.max);
+    let gate = held(console);
+    if answer.encode(&mut gate.writer()).is_err() {
+        // A client that asked hears something back whatever happens, or it
+        // stands in its call forever. A refusal is a status word and
+        // nothing else, so it fits where the bytes did not.
+        let _refused = Reply::Read(Err(Error::BufferTooSmall)).encode(&mut gate.writer());
+    }
+    if gate.ipc_reply(waiting.reply).is_err() {
+        let _closed = gate.handle_close(waiting.reply.handle());
     }
 }
 
@@ -192,15 +253,18 @@ fn handle(console: &mut Console<PortRegisters>, request: &Request) -> Reply {
                 .map(|written| u64::try_from(written).unwrap_or(0))
                 .map_err(|_| Error::Busy),
         ),
-        Request::Read { max } => {
-            let mut into = [0u8; user_proto::console::MAX_CHUNK];
-            let bound = usize::try_from(*max).unwrap_or(into.len());
-            let taken = console.read(bound, &mut into);
-            Reply::Read(
-                Chunk::new(into.get(..taken).unwrap_or(&[])).map_err(|_| Error::BufferTooSmall),
-            )
-        }
+        Request::Read { max } => read_reply(console, *max),
     }
+}
+
+/// Takes at most `max` bytes out of the ring and makes the reply that
+/// carries them. It is the answer of a read that was served at once and of
+/// one that was held, so both give a client the same thing.
+fn read_reply(console: &mut Console<PortRegisters>, max: u64) -> Reply {
+    let mut into = [0u8; user_proto::console::MAX_CHUNK];
+    let bound = usize::try_from(max).unwrap_or(into.len());
+    let taken = console.read(bound, &mut into);
+    Reply::Read(Chunk::new(into.get(..taken).unwrap_or(&[])).map_err(|_| Error::BufferTooSmall))
 }
 
 /// Puts the bytes the interrupt thread sent into the ring.
