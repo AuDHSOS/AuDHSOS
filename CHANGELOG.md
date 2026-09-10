@@ -620,6 +620,21 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The kernel's sweep for ended threads is O(1) where it was O(N) in the
+  capacity of the thread pool, and it ran after every system call and
+  every context switch. `Scheduler` counts the threads that have entered
+  `Exited` — raised in the one place a thread's state changes, lowered
+  when `reaper::clear` gives one back — and `reap` returns on that
+  comparison when there is nothing to find, which is every call on a
+  running machine. Beside it `Pool::iter` stops at the high-water mark,
+  taking every walk of every pool in the kernel from O(N) in the capacity
+  to O(H) in the number of objects ever allocated. The walk was some
+  twenty-nine per cent of what the machine did under a moving pointer; a
+  pointer packet now costs four to five milliseconds where it cost six to
+  seven, and under an injected packet every ten milliseconds the machine
+  is halted in nineteen samples of twenty, where it was halted in none
+  (D-130).
+
 - `driver-uart16550` sends in bursts. The transmitter is asked for THRE
   once per burst and not once per byte, because SLLS597E page 41 says the
   holding register "is actually a 16-byte FIFO" and page 37 says THRE is

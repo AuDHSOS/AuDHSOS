@@ -16,6 +16,13 @@
 //! same breath. Reading `current` instead was enough to make the kernel
 //! unmap the stack it was standing on, which the machine answered with a
 //! double fault.
+//!
+//! What the scheduler does keep is how many threads have ended, because
+//! this runs after every system call and after every switch and the search
+//! is a walk of the thread pool. The count is not a second record of what
+//! is left to do — `Exited` is still that — but the answer to whether
+//! there is anything to look for, and it has two writers: the one place a
+//! thread enters `Exited`, and `clear` below (D-130).
 
 use audhsos_abi::ThreadState;
 use kernel_objects::object::ThreadId;
@@ -32,6 +39,9 @@ pub fn reap<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
     machine: &mut Machine<'_, E, NP, NT, NM, NH>,
     running: Option<ThreadId>,
 ) -> u32 {
+    if machine.scheduler.ended() == 0 {
+        return 0;
+    }
     let mut cleared: u32 = 0;
     // One at a time and looked up again each round: the kernel keeps no
     // second list of what has ended, so there is none to hold across a
@@ -97,6 +107,7 @@ fn clear<E: Environment, const NP: usize, const NT: usize, const NM: usize, cons
     // The slot goes whatever handle still names it: a thread that has
     // been cleared away holds nothing, and there is nothing left to name.
     machine.objects.threads.force_release(id);
+    machine.scheduler.cleared();
     1
 }
 
@@ -113,5 +124,5 @@ pub fn has_work<
     machine: &Machine<'_, E, NP, NT, NM, NH>,
     running: Option<ThreadId>,
 ) -> bool {
-    next_ended(machine, running).is_some()
+    machine.scheduler.ended() != 0 && next_ended(machine, running).is_some()
 }

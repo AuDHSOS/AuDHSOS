@@ -362,12 +362,24 @@ impl<T, const N: usize> Pool<T, N> {
     }
 
     /// Every live object with its id, in slot order.
+    ///
+    /// Stops at the high-water mark: a slot is handed out either from
+    /// the free list or at the mark itself, so no slot above it was ever
+    /// occupied. A pool of two hundred fifty-six slots holding
+    /// sixteen objects is walked sixteen times and not two hundred
+    /// fifty-six, which is what the kernel's sweep for ended threads pays
+    /// after every system call.
     pub fn iter(&self) -> impl Iterator<Item = (ObjectId<T>, &T)> {
-        self.slots.iter().enumerate().filter_map(|(index, slot)| {
-            let occupant = slot.occupant.as_ref()?;
-            let index = u32::try_from(index).ok()?;
-            Some((ObjectId::new(index, slot.generation), &occupant.value))
-        })
+        let used = usize::try_from(self.high_water).unwrap_or(N);
+        self.slots
+            .iter()
+            .take(used)
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                let occupant = slot.occupant.as_ref()?;
+                let index = u32::try_from(index).ok()?;
+                Some((ObjectId::new(index, slot.generation), &occupant.value))
+            })
     }
 
     /// The id of every live object, in slot order.

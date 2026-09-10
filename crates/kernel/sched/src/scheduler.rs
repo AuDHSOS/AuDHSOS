@@ -78,6 +78,7 @@ pub struct Scheduler {
     ready: u32,
     current: Option<ThreadId>,
     idle: Option<ThreadId>,
+    ended: u32,
 }
 
 impl Default for Scheduler {
@@ -97,7 +98,25 @@ impl Scheduler {
             ready: 0,
             current: None,
             idle: None,
+            ended: 0,
         }
+    }
+
+    /// How many threads have ended and have not been cleared away.
+    ///
+    /// This is what lets the kernel's sweep answer without looking: it
+    /// runs after every system call and after every switch, and on a
+    /// machine where nothing ended it has nothing to find. The count is
+    /// raised here, where a thread enters [`ThreadState::Exited`], and
+    /// lowered by [`Scheduler::cleared`]; those two are its only writers.
+    #[must_use]
+    pub const fn ended(&self) -> u32 {
+        self.ended
+    }
+
+    /// Says that one ended thread has been cleared away.
+    pub const fn cleared(&mut self) {
+        self.ended = self.ended.saturating_sub(1);
     }
 
     /// Names the thread that runs when nothing else can. It is never
@@ -295,7 +314,7 @@ impl Scheduler {
             && thread.state == ThreadState::Running
             && Some(current) != self.idle
         {
-            let outgoing = Self::apply(threads, current, Event::Preempt);
+            let outgoing = self.apply(threads, current, Event::Preempt);
             if outgoing.is_ok() {
                 self.enqueue(threads, current)?;
             }
@@ -325,13 +344,18 @@ impl Scheduler {
     /// [`Error::InvalidState`] when the transition table does not allow the
     /// event in the thread's state.
     fn apply<const N: usize>(
+        &mut self,
         threads: &mut Pool<Thread, N>,
         id: ThreadId,
         event: Event,
     ) -> Result<ThreadState, Error> {
         let thread = threads.get_mut(id).map_err(|_| Error::InvalidHandle)?;
         let state = next(thread.state, event)?;
+        let was = thread.state;
         thread.state = state;
+        if state == ThreadState::Exited && was != ThreadState::Exited {
+            self.ended = self.ended.saturating_add(1);
+        }
         Ok(state)
     }
 
@@ -345,7 +369,7 @@ impl Scheduler {
         threads: &mut Pool<Thread, N>,
         id: ThreadId,
     ) -> Result<Outcome, Error> {
-        Self::apply(threads, id, Event::Start)?;
+        self.apply(threads, id, Event::Start)?;
         self.enqueue(threads, id)?;
         Ok(self.preempts_current(threads, id))
     }
@@ -366,7 +390,7 @@ impl Scheduler {
         if state == ThreadState::Ready {
             return Ok(Outcome::NOTHING);
         }
-        Self::apply(threads, id, Event::Wake)?;
+        self.apply(threads, id, Event::Wake)?;
         self.enqueue(threads, id)?;
         Ok(self.preempts_current(threads, id))
     }
@@ -399,7 +423,7 @@ impl Scheduler {
         id: ThreadId,
         event: Event,
     ) -> Result<Outcome, Error> {
-        Self::apply(threads, id, event)?;
+        self.apply(threads, id, event)?;
         self.dequeue(threads, id)?;
         Self::spend_slice(threads, id);
         Ok(self.left_the_processor(id))
@@ -452,7 +476,7 @@ impl Scheduler {
         threads: &mut Pool<Thread, N>,
         id: ThreadId,
     ) -> Result<Outcome, Error> {
-        Self::apply(threads, id, Event::Resume)?;
+        self.apply(threads, id, Event::Resume)?;
         self.enqueue(threads, id)?;
         Ok(self.preempts_current(threads, id))
     }
@@ -507,7 +531,7 @@ impl Scheduler {
         threads: &mut Pool<Thread, N>,
         id: ThreadId,
     ) -> Result<Outcome, Error> {
-        Self::apply(threads, id, Event::Yield)?;
+        self.apply(threads, id, Event::Yield)?;
         let thread = threads.get_mut(id).map_err(|_| Error::InvalidHandle)?;
         thread.time_slice = 0;
         self.enqueue(threads, id)?;

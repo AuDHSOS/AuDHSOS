@@ -16,8 +16,45 @@ fn creation(fixture: &Fixture) -> [u64; 6] {
 #[test]
 fn a_machine_where_nothing_ended_has_nothing_to_clear_away() {
     let mut fixture = Fixture::new();
+    assert_eq!(fixture.scheduler.ended(), 0);
     assert!(!has_work(&fixture.machine(), None));
     assert_eq!(reap(&mut fixture.machine(), None), 0);
+}
+
+#[test]
+fn the_count_of_what_is_left_to_clear_follows_the_sweep() {
+    let mut fixture = Fixture::new();
+    let creation = request(Syscall::ThreadCreate, &creation(&fixture));
+    let raw = value_of(&mut fixture, creation);
+    assert!(error_of(&mut fixture, request(Syscall::ThreadKill, &[raw])).is_none());
+    assert_eq!(fixture.scheduler.ended(), 1, "the kill raised it");
+
+    assert_eq!(reap(&mut fixture.machine(), None), 1);
+    assert_eq!(
+        fixture.scheduler.ended(),
+        0,
+        "clearing it away lowered it again"
+    );
+}
+
+#[test]
+fn a_thread_that_is_spared_leaves_the_count_standing() {
+    let mut fixture = Fixture::new();
+    let running = fixture.thread;
+    fixture
+        .scheduler
+        .exit(&mut fixture.objects.threads, running)
+        .unwrap();
+    assert_eq!(fixture.scheduler.ended(), 1);
+
+    // Named as the thread the kernel stands on, it is not cleared, and the
+    // count still says there is something to come back for.
+    assert_eq!(reap(&mut fixture.machine(), Some(running)), 0);
+    assert_eq!(fixture.scheduler.ended(), 1);
+    assert!(fixture.objects.threads.get(running).is_ok());
+
+    assert_eq!(reap(&mut fixture.machine(), None), 1);
+    assert_eq!(fixture.scheduler.ended(), 0);
 }
 
 #[test]
@@ -117,9 +154,14 @@ fn the_caller_says_which_stack_the_kernel_is_standing_on() {
         .typed::<kernel_objects::object::Thread>()
         .unwrap();
 
-    // Both threads end, and the scheduler forgets the one that was on the
-    // processor, which is what `thread_exit` does.
-    fixture.objects.threads.get_mut(other).unwrap().state = ThreadState::Exited;
+    // Both threads end through the scheduler, which is the one place a
+    // thread enters `Exited` and therefore the one place the count of what
+    // is left to clear is raised. The scheduler forgets the one that was
+    // on the processor, which is what `thread_exit` does.
+    fixture
+        .scheduler
+        .exit(&mut fixture.objects.threads, other)
+        .unwrap();
     fixture
         .scheduler
         .exit(&mut fixture.objects.threads, running)
