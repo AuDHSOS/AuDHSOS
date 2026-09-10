@@ -8,6 +8,8 @@
 extern crate alloc;
 
 mod bytecode;
+/// State-of-the-Art Pure ECMAScript Engine Core.
+pub mod engine;
 mod error;
 mod event;
 mod heap;

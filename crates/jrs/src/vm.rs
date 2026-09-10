@@ -224,6 +224,7 @@ struct Execution<'host> {
     object_constructor_storage: Option<Value>,
     array_constructor_storage: Option<Value>,
     number_constructor_storage: Option<Value>,
+    boolean_constructor_storage: Option<Value>,
     regexp_constructor_storage: Option<Value>,
     regexp_proto: Option<Value>,
     number_parsers: Option<(Value, Value)>,
@@ -318,6 +319,7 @@ impl<'host> Execution<'host> {
             object_constructor_storage: None,
             array_constructor_storage: None,
             number_constructor_storage: None,
+            boolean_constructor_storage: None,
             regexp_constructor_storage: None,
             regexp_proto: None,
             number_parsers: None,
@@ -943,6 +945,9 @@ impl Execution<'_> {
             self.heap.mark_value(value);
         }
         if let Some(value) = &self.number_constructor_storage {
+            self.heap.mark_value(value);
+        }
+        if let Some(value) = &self.boolean_constructor_storage {
             self.heap.mark_value(value);
         }
         if let Some((integer, float)) = &self.number_parsers {

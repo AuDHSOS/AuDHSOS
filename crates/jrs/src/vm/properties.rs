@@ -33,6 +33,11 @@ impl Execution<'_> {
             Value::Function(FunctionValue(Callable::Native(Builtin::Number)))
         ) {
             self.number_constructor()
+        } else if matches!(
+            value,
+            Value::Function(FunctionValue(Callable::Native(Builtin::Boolean)))
+        ) {
+            self.boolean_constructor()
         } else {
             self.object_constructor()
         }
@@ -176,6 +181,11 @@ impl Execution<'_> {
                 Value::Function(FunctionValue(Callable::Native(Builtin::RegExp)))
             ) {
                 &self.regexp_constructor_storage
+            } else if matches!(
+                value,
+                Value::Function(FunctionValue(Callable::Native(Builtin::Boolean)))
+            ) {
+                &self.boolean_constructor_storage
             } else if matches!(
                 value,
                 Value::Function(FunctionValue(Callable::Native(Builtin::Number)))
@@ -1351,7 +1361,7 @@ pub(super) const fn has_constructor_storage(value: &Value) -> bool {
     matches!(
         value,
         Value::Function(FunctionValue(Callable::Native(
-            Builtin::Object | Builtin::Number | Builtin::RegExp | Builtin::Array
+            Builtin::Object | Builtin::Number | Builtin::Boolean | Builtin::RegExp | Builtin::Array
         )))
     )
 }

@@ -24,6 +24,37 @@ pub(super) const fn kind(value: &Value) -> Option<Builtin> {
 }
 
 impl Execution<'_> {
+    pub(super) fn boolean_constructor(&mut self) -> Result<Value, Error> {
+        if let Some(value) = &self.boolean_constructor_storage {
+            return Ok(value.clone());
+        }
+        let proto = self.function_prototype()?;
+        let value = self.allocate_object(proto)?;
+        self.boolean_constructor_storage = Some(value.clone());
+        for (name, item, configurable) in [
+            ("length", Value::Number(1.0), true),
+            ("name", Value::string("Boolean"), true),
+            (
+                "prototype",
+                self.primitive_prototype(Builtin::Boolean)?,
+                false,
+            ),
+        ] {
+            self.define(
+                &value,
+                Value::string(name).units(),
+                Property {
+                    value: item,
+                    writable: false,
+                    enumerable: false,
+                    configurable,
+                    accessor: None,
+                },
+            )?;
+        }
+        Ok(value)
+    }
+
     pub(super) fn primitive_prototype(&mut self, kind: Builtin) -> Result<Value, Error> {
         if kind == Builtin::Symbol {
             return self.symbol_prototype();
@@ -53,17 +84,23 @@ impl Execution<'_> {
         let value = self.allocate_object(parent)?;
         self.primitive_protos.push((kind, value.clone()));
         self.initialize_wrapper(&value, primitive)?;
-        for (name, builtin) in [
-            ("constructor", kind),
-            ("valueOf", value_of),
-            ("toString", to_string),
-        ] {
+        self.define(
+            &value,
+            Value::string("constructor").units(),
+            Property {
+                enumerable: false,
+                ..Property::data(Value::Function(FunctionValue::native(kind)))
+            },
+        )?;
+        for (name, builtin) in [("valueOf", value_of), ("toString", to_string)] {
+            let f =
+                self.new_host_behavior(crate::heap::HostBehavior::Intrinsic(builtin), name, 0)?;
             self.define(
                 &value,
                 Value::string(name).units(),
                 Property {
                     enumerable: false,
-                    ..Property::data(Value::Function(FunctionValue::native(builtin)))
+                    ..Property::data(f)
                 },
             )?;
         }
