@@ -673,11 +673,14 @@ fn inject_canvas(socket: &Path, session: &mut Session, root: &Path) -> Vec<Strin
     };
     // The escape key first: it puts the background down over whatever the
     // program that paints left on the screen, so every pixel looked at
-    // below is one the canvas itself wrote.
+    // below is one the canvas itself wrote. The canvas has cleared itself
+    // once already, for the escape that ended the program that listens, so
+    // what is counted is the line before this one goes out.
+    let cleared = session.count_seen("[canvas] cleared");
     if let Err(error) = press(&mut qmp, "esc") {
         return vec![format!("the escape key: {error}")];
     }
-    if !session.wait_for_another("[canvas] cleared", E2E_TIMEOUT) {
+    if !session.wait_for_more("[canvas] cleared", cleared, E2E_TIMEOUT) {
         return vec!["the canvas did not clear itself".to_owned()];
     }
     violations.extend(canvas_cursor(&mut qmp, session, root));
@@ -687,9 +690,10 @@ fn inject_canvas(socket: &Path, session: &mut Session, root: &Path) -> Vec<Strin
     if violations.is_empty() {
         violations.extend(canvas_text(&mut qmp, session, root));
     }
+    let done = session.count_seen("[canvas] done");
     if let Err(error) = press(&mut qmp, ENDS_QCODE) {
         violations.push(format!("the key that ends the canvas: {error}"));
-    } else if !session.wait_for_another("[canvas] done", E2E_TIMEOUT) {
+    } else if !session.wait_for_more("[canvas] done", done, E2E_TIMEOUT) {
         violations.push("the canvas never ended".to_owned());
     }
     violations
@@ -754,8 +758,9 @@ fn canvas_cursor(qmp: &mut Qmp, session: &mut Session, root: &Path) -> Vec<Strin
 
 /// Moves the pointer and answers with where the canvas says it now is.
 fn moved_to(qmp: &mut Qmp, session: &mut Session, dx: i32, dy: i32) -> Option<(u32, u32)> {
+    let already = session.count_seen("[canvas] cursor ");
     qmp.move_pointer(dx, dy).ok()?;
-    if !session.wait_for_another("[canvas] cursor ", E2E_TIMEOUT) {
+    if !session.wait_for_more("[canvas] cursor ", already, E2E_TIMEOUT) {
         return None;
     }
     last_pair(&session.output(), "[canvas] cursor ")
@@ -764,17 +769,19 @@ fn moved_to(qmp: &mut Qmp, session: &mut Session, dx: i32, dy: i32) -> Option<(u
 /// `canvas_stroke`: the button goes down, the pointer moves, and the pixels
 /// along the segment the canvas says it drew carry the pen.
 fn canvas_stroke(qmp: &mut Qmp, session: &mut Session, root: &Path) -> Vec<String> {
+    let pressed = session.count_seen("[canvas] stroke ");
     if qmp.button(Button::Left, true).is_err() {
         return vec!["the button of the pointer could not be pressed".to_owned()];
     }
-    if !session.wait_for_another("[canvas] stroke ", E2E_TIMEOUT) {
+    if !session.wait_for_more("[canvas] stroke ", pressed, E2E_TIMEOUT) {
         return vec!["the canvas did not start a stroke when the button went down".to_owned()];
     }
+    let held = session.count_seen("[canvas] stroke ");
     let (dx, dy) = CANVAS_STROKE;
     if qmp.move_pointer(dx, dy).is_err() {
         return vec!["the pointer could not be moved with the button down".to_owned()];
     }
-    if !session.wait_for_another("[canvas] stroke ", E2E_TIMEOUT) {
+    if !session.wait_for_more("[canvas] stroke ", held, E2E_TIMEOUT) {
         return vec!["the canvas drew no segment while the button was held".to_owned()];
     }
     let Some((from, to)) = last_four(&session.output(), "[canvas] stroke ") else {
@@ -839,10 +846,11 @@ fn pen_along(image: &ppm::Image, from: (u32, u32), to: (u32, u32)) -> Vec<String
 fn canvas_text(qmp: &mut Qmp, session: &mut Session, root: &Path) -> Vec<String> {
     let mut cells = Vec::new();
     for (qcode, character) in CANVAS_TYPING {
+        let written = session.count_seen("[canvas] text ");
         if let Err(error) = press(qmp, qcode) {
             return vec![format!("the key `{qcode}`: {error}")];
         }
-        if !session.wait_for_another("[canvas] text ", E2E_TIMEOUT) {
+        if !session.wait_for_more("[canvas] text ", written, E2E_TIMEOUT) {
             return vec![format!("the canvas never wrote `{character}`")];
         }
         let Some(at) = last_pair(&session.output(), "[canvas] text ") else {

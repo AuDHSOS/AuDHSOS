@@ -135,6 +135,21 @@ fn a_held_button_joins_one_position_to_the_next() {
 }
 
 #[test]
+fn a_packet_that_presses_the_button_while_moving_starts_the_stroke_where_it_landed() {
+    let mut canvas = Canvas::new(WIDTH, HEIGHT);
+    let mut bytes = buffer(WIDTH, HEIGHT);
+    let mut screen = surface(&mut bytes, &mut canvas);
+    // One packet of the mouse carries the buttons and both deltas, so this
+    // is the packet a hand that was already moving when it pressed sends.
+    let before = canvas.cursor();
+    let step = canvas.feed(moved(9, 6, BUTTON_LEFT), &mut screen);
+    let at = canvas.cursor();
+    assert_eq!(step, Step::Drew { from: at, to: at });
+    assert_eq!(screen.pixel(at.0, at.1), Some(PEN));
+    assert_eq!(screen.pixel(before.0, before.1), Some(BACKGROUND));
+}
+
+#[test]
 fn a_stroke_upwards_and_to_the_left_is_drawn_the_same_way() {
     let mut canvas = Canvas::new(WIDTH, HEIGHT);
     let mut bytes = buffer(WIDTH, HEIGHT);
@@ -407,6 +422,31 @@ fn nothing_a_stroke_draws_leaves_the_surface() {
         .iter()
         .find(|rect| rect.right() > WIDTH || rect.bottom() > HEIGHT);
     assert!(outside.is_none(), "damage left the surface: {outside:?}");
+}
+
+#[test]
+fn a_surface_with_no_room_at_the_origin_starts_the_text_at_its_corner() {
+    // One row of cells and no more: the origin of a wider screen would put
+    // the cell half off the bottom, so the corner is where it goes.
+    let short = GLYPH_HEIGHT;
+    let mut canvas = Canvas::new(WIDTH, short);
+    assert_eq!(canvas.text_cursor(), (TEXT_ORIGIN.0, 0));
+    let mut bytes = buffer(WIDTH, short);
+    let mut screen = Surface::new(&mut bytes, WIDTH, short, WIDTH, PixelFormat::Rgbx8888).unwrap();
+    canvas.clear(&mut screen);
+    assert_eq!(canvas.text_cursor(), (TEXT_ORIGIN.0, 0));
+    // Wrapping finds no next row either, and comes back to the same corner
+    // rather than to a row that does not fit.
+    canvas.feed(key(KeyCode::Enter, true), &mut screen);
+    let (_x, y) = canvas.text_cursor();
+    assert_eq!(y, 0);
+    assert!(y + GLYPH_HEIGHT <= short);
+}
+
+#[test]
+fn a_surface_narrower_than_a_cell_starts_the_text_at_its_left_edge() {
+    let canvas = Canvas::new(GLYPH_WIDTH / 2, HEIGHT);
+    assert_eq!(canvas.text_cursor(), (0, TEXT_ORIGIN.1));
 }
 
 #[test]

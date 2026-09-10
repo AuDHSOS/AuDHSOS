@@ -17,8 +17,9 @@
 //!
 //! Invariants: the pointer is always a pixel of the screen, so every
 //! position this answers with can be drawn at; the text cursor is always a
-//! cell that fits, so a character is never half off the edge; what a step
-//! reports as changed is inside the damage the surface collected.
+//! cell that fits on a surface with room for one, so a character is never
+//! half off the edge; what a step reports as changed is inside the damage
+//! the surface collected.
 
 use gfx::{Color, GLYPH_HEIGHT, GLYPH_WIDTH, Rect, Surface, draw_text};
 use user_proto::input::{Event, KeyCode};
@@ -44,7 +45,9 @@ const DRAWING_BUTTON: u8 = user_proto::input::BUTTON_LEFT;
 /// character in either layout, so ending cannot be typed by accident.
 pub const ENDS: KeyCode = KeyCode::F10;
 
-/// Where the first character of a line goes.
+/// Where the first character of a line goes on a surface with room for a
+/// cell there. A surface too small for that starts the text at its corner
+/// instead.
 pub const TEXT_ORIGIN: (u32, u32) = (8, 8);
 
 /// What one event changed.
@@ -103,7 +106,8 @@ pub struct Canvas {
 
 impl Canvas {
     /// A canvas over a surface of this size, with the pointer in the middle
-    /// of it and the text cursor at [`TEXT_ORIGIN`].
+    /// of it and the text cursor at [`TEXT_ORIGIN`], or at the corner when
+    /// a cell does not fit there.
     #[must_use]
     pub const fn new(width: u32, height: u32) -> Self {
         Canvas {
@@ -112,8 +116,8 @@ impl Canvas {
             x: clamp(width.wrapping_div(2), width),
             y: clamp(height.wrapping_div(2), height),
             drawing: false,
-            text_x: TEXT_ORIGIN.0,
-            text_y: TEXT_ORIGIN.1,
+            text_x: origin_of(TEXT_ORIGIN.0, GLYPH_WIDTH, width),
+            text_y: origin_of(TEXT_ORIGIN.1, GLYPH_HEIGHT, height),
             keyboard: Keyboard::new(Layout::Us),
         }
     }
@@ -142,8 +146,8 @@ impl Canvas {
     /// presents for the first time.
     pub fn clear(&mut self, surface: &mut Surface<'_>) {
         surface.fill(surface.bounds(), BACKGROUND);
-        self.text_x = TEXT_ORIGIN.0;
-        self.text_y = TEXT_ORIGIN.1;
+        self.text_x = origin_of(TEXT_ORIGIN.0, GLYPH_WIDTH, self.width);
+        self.text_y = origin_of(TEXT_ORIGIN.1, GLYPH_HEIGHT, self.height);
     }
 
     /// Takes one event and answers with what it changed.
@@ -168,15 +172,23 @@ impl Canvas {
                 }
             }
             Event::Pointer(pointer) => {
-                let from = (self.x, self.y);
+                let held = self.drawing;
+                let was = (self.x, self.y);
                 self.x = step(self.x, pointer.dx, self.width);
                 self.y = step(self.y, pointer.dy, self.height);
                 let to = (self.x, self.y);
                 self.drawing = pointer.buttons & DRAWING_BUTTON != 0;
                 if self.drawing {
+                    // One packet of this mouse carries the buttons and both
+                    // deltas, so the packet that presses the button may
+                    // have moved as well. A stroke begins where the pointer
+                    // is when the button goes down and not where it was
+                    // while the button was still up, which would draw a
+                    // segment across everything the hand passed over.
+                    let from = if held { was } else { to };
                     Self::stroke(surface, from, to);
                     Step::Drew { from, to }
-                } else if from == to {
+                } else if was == to {
                     Step::Nothing
                 } else {
                     Step::Moved
@@ -238,10 +250,10 @@ impl Canvas {
     /// Moves the text cursor to the start of the next row, and to the top
     /// again when there is no next row.
     const fn next_line(&mut self) {
-        self.text_x = TEXT_ORIGIN.0;
+        self.text_x = origin_of(TEXT_ORIGIN.0, GLYPH_WIDTH, self.width);
         self.text_y = self.text_y.saturating_add(GLYPH_HEIGHT);
         if self.text_y.saturating_add(GLYPH_HEIGHT) > self.height {
-            self.text_y = TEXT_ORIGIN.1;
+            self.text_y = origin_of(TEXT_ORIGIN.1, GLYPH_HEIGHT, self.height);
         }
     }
 }
@@ -265,6 +277,17 @@ pub const fn span(from: (u32, u32), to: (u32, u32)) -> Rect {
         right.saturating_sub(left).saturating_add(1),
         bottom.saturating_sub(top).saturating_add(1),
     )
+}
+
+/// Where a cell of `len` pixels starts along an axis of `total` pixels:
+/// `origin` when a whole cell fits there, and the corner otherwise, which is
+/// as close as a surface with no room for a cell at `origin` comes.
+const fn origin_of(origin: u32, len: u32, total: u32) -> u32 {
+    if origin.saturating_add(len) <= total {
+        origin
+    } else {
+        0
+    }
 }
 
 /// `value` brought inside a screen of this many pixels along the axis.

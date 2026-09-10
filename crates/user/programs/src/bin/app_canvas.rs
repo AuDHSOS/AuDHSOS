@@ -16,6 +16,9 @@
 //! and its picture is checked while the machine still runs; a canvas that
 //! laid its background down at startup would decide by a race which of the
 //! two the screen holds. Waiting for an event decides it by what happened.
+//! The first event is what lays the background down, whatever else it does,
+//! so from that event on the screen holds the canvas and no drawing stands
+//! on pixels this program never wrote.
 //!
 //! It ends when the key [`app_canvas::ENDS`] comes up, which is the last
 //! thing the runner injects. The escape key does not end it: that clears
@@ -78,8 +81,20 @@ const WATCHED: Rights = Rights::INFO.union(Rights::TRANSFER);
     reason = "the shape of `main` is what `program!` calls; the gate and the startup message belong to the program"
 )]
 fn main(mut gate: Gate, startup: Startup) -> ! {
-    match run(&mut gate, &startup) {
+    // Everything up to the surface and the ring may fail because the
+    // machine has no screen, which is a thing to say and not a fault. A
+    // failure after that is one, and `no screen` would name a cause that is
+    // not there: the machine the runner checks that line on is the one with
+    // no graphics adapter at all.
+    let mut ready = false;
+    match run(&mut gate, &startup, &mut ready) {
         Ok(()) => say(&mut gate, &startup, b"[canvas] done\n"),
+        Err(error) if ready => say(
+            &mut gate,
+            &startup,
+            user_rt::Line::<128>::of(format_args!("[canvas] stopped: {}\n", error.message()))
+                .as_bytes(),
+        ),
         Err(error) => say(
             &mut gate,
             &startup,
@@ -92,7 +107,10 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
 }
 
 /// Takes the surface and the ring, then draws until the end key comes up.
-fn run(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
+///
+/// `ready` is set once both are in hand, which is what tells the caller
+/// apart a machine that has no screen from a failure while drawing on one.
+fn run(gate: &mut Gate, startup: &Startup, ready: &mut bool) -> Result<(), Error> {
     let process = startup.own_process.ok_or(Error::NotFound)?;
     // Both capabilities the root task gave this program carry the badge the
     // servers know it by. Looking a server up under its name would give one
@@ -126,6 +144,13 @@ fn run(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
     let events = Mapping::new(gate, process, ring, RING, PAGE_SIZE)?;
 
     let mut canvas = Canvas::new(mode.width, mode.height);
+    *ready = true;
+    // The surface holds whatever the memory server handed over, which is no
+    // picture at all. The first event puts the background down over all of
+    // it before anything else is drawn, so that event presents the whole
+    // screen and the canvas takes it (D-126); every event after it presents
+    // only what it changed.
+    let mut painted = false;
     say(
         gate,
         startup,
@@ -163,6 +188,7 @@ fn run(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
                 given.id,
                 mode,
                 event,
+                &mut painted,
             )? {
                 return Ok(());
             }
@@ -173,7 +199,7 @@ fn run(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
 /// Takes one event and answers whether it ended the program.
 #[expect(
     clippy::too_many_arguments,
-    reason = "one event needs the canvas, the pixels, the server, and the surface it belongs to; carrying them in a struct would name the same things once more"
+    reason = "one event needs the canvas, the pixels, the server, the surface it belongs to, and whether the background is down yet; carrying them in a struct would name the same things once more"
 )]
 fn act(
     gate: &mut Gate,
@@ -184,6 +210,7 @@ fn act(
     id: u32,
     mode: Mode,
     event: Event,
+    painted: &mut bool,
 ) -> Result<bool, Error> {
     let (step, damage) = {
         // SAFETY: the mapping was made in `run`, it is still standing, and
@@ -200,6 +227,10 @@ fn act(
         // The surface is made again for every event, so it carries the
         // damage of this one alone and a presentation copies no rectangle
         // twice.
+        if !*painted {
+            canvas.clear(&mut surface);
+            *painted = true;
+        }
         let step = canvas.feed(event, &mut surface);
         (step, *surface.damage())
     };
