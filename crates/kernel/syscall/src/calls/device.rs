@@ -10,7 +10,8 @@
 //! because those belong to the memory server; a port access outside the
 //! range of the capability it was made through never reaches the hardware.
 
-use audhsos_abi::layout::{MAX_RESULT_WORDS, TICKS_PER_SECOND};
+use audhsos_abi::ipc_buffer::{SIZE, WORDS};
+use audhsos_abi::layout::{MAX_MESSAGE_BYTES, MAX_RESULT_WORDS, TICKS_PER_SECOND};
 use audhsos_abi::{Error, Rights};
 use kernel_ipc::interrupt;
 use kernel_objects::handle_table::Entry;
@@ -24,6 +25,9 @@ use crate::environment::Environment;
 
 /// The widths a port access may have, in bytes.
 const WIDTHS: [u8; 3] = [1, 2, 4];
+
+/// The width of a string port access, which moves one byte at a time.
+const BYTE: u8 = 1;
 
 /// Where the six words of the framebuffer begin in the result of
 /// [`system_info`].
@@ -260,6 +264,41 @@ pub fn ioport_write<
     Ok(Reply::DONE)
 }
 
+/// `ioport_write_string`: the bytes of the message area to one port.
+///
+/// The third argument says how many bytes there are; they are the payload
+/// words of the message, which the buffer holds little-endian, so the area
+/// read as bytes is the run in the order it was written. One call carries
+/// a whole burst, which is what makes a console line cost two calls
+/// instead of two a byte.
+///
+/// # Errors
+///
+/// As [`ioport_write`], with the width fixed at one byte, and
+/// [`Error::InvalidArgument`] for a count above [`MAX_MESSAGE_BYTES`].
+pub fn ioport_write_string<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    process: ProcessId,
+    request: &Request,
+    buffer: &[u8; SIZE],
+) -> Result<Reply, Error> {
+    let port = port_at(machine, process, request, Rights::WRITE, BYTE)?;
+    let count = usize::try_from(request.argument(2)).map_err(|_| Error::InvalidArgument)?;
+    if count > MAX_MESSAGE_BYTES {
+        return Err(Error::InvalidArgument);
+    }
+    let end = WORDS.checked_add(count).ok_or(Error::InvalidArgument)?;
+    let bytes = buffer.get(WORDS..end).ok_or(Error::InvalidArgument)?;
+    machine.environment.write_port_string(port, bytes)?;
+    Ok(Reply::value(u64::try_from(count).unwrap_or(0)))
+}
+
 /// The port and the width an access names, checked against the range the
 /// handle carries.
 fn port_of<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
@@ -268,12 +307,25 @@ fn port_of<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
     request: &Request,
     required: Rights,
 ) -> Result<(u16, u8), Error> {
+    let width = u8::try_from(request.argument(2)).map_err(|_| Error::InvalidArgument)?;
+    let port = port_at(machine, process, request, required, width)?;
+    Ok((port, width))
+}
+
+/// The port an access names, checked against the range the handle carries
+/// for a width the caller fixes.
+fn port_at<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    machine: &Machine<'_, E, NP, NT, NM, NH>,
+    process: ProcessId,
+    request: &Request,
+    required: Rights,
+    width: u8,
+) -> Result<u16, Error> {
     let handle = request.handle.ok_or(Error::InvalidHandle)?;
     let (id, _rights) = machine
         .objects
         .resolve::<IoPortRange>(process, handle, required)?;
     let port = u16::try_from(request.argument(1)).map_err(|_| Error::InvalidArgument)?;
-    let width = u8::try_from(request.argument(2)).map_err(|_| Error::InvalidArgument)?;
     if !WIDTHS.contains(&width) {
         return Err(Error::InvalidArgument);
     }
@@ -281,7 +333,7 @@ fn port_of<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
     if !range.holds(port, width) {
         return Err(Error::InvalidArgument);
     }
-    Ok((port, width))
+    Ok(port)
 }
 
 /// `memory_create_device`: a memory object over an aperture of the machine.

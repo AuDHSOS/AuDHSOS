@@ -283,6 +283,14 @@ where
         Ok(())
     }
 
+    fn write_port_string(&mut self, port: u16, bytes: &[u8]) -> Result<(), Error> {
+        let devices = self.devices.as_mut().ok_or(Error::Unsupported)?;
+        for byte in bytes {
+            devices.write_u8(port, *byte);
+        }
+        Ok(())
+    }
+
     fn interrupt_vector(&self, line: u8) -> Option<u8> {
         let devices = self.devices.as_ref()?;
         Some(devices.vector_of(InterruptLine::new(line))?.number())

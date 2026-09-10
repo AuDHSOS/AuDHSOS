@@ -167,6 +167,7 @@ syscalls! {
     ProcessWatch = 43 => "process_watch" (3, Process),
     ProcessUnwatch = 44 => "process_unwatch" (3, Process),
     MemoryReferences = 45 => "memory_references" (1, MemoryObject),
+    IoPortWriteString = 46 => "ioport_write_string" (3, IoPortRange),
 }
 
 impl Syscall {

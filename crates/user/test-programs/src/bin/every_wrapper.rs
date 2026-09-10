@@ -113,6 +113,7 @@ fn main(ipc_buffer: u64) -> ! {
     let _ = gate.process_watch(process, notification, 0);
     let _ = gate.process_unwatch(process, notification, 0);
     let _ = gate.memory_references(memory);
+    let _ = gate.ioport_write_string(ports, 0x40, b"x");
 
     gate.thread_exit()
 }

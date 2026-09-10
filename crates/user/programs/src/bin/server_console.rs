@@ -400,6 +400,24 @@ impl Registers for PortRegisters {
             .gate
             .ioport_write(self.ports, port, 1, u64::from(value));
     }
+
+    /// A whole run in one call. Every register access here is a system
+    /// call, so a run written a byte at a time costs one call a byte; this
+    /// costs one call, whatever the burst holds.
+    fn write_all(&mut self, register: Register, bytes: &[u8]) {
+        let port = COM1.wrapping_add(u64::try_from(register.index()).unwrap_or(0));
+        let mut rest = bytes;
+        while !rest.is_empty() {
+            let Ok(written) = self.gate.ioport_write_string(self.ports, port, rest) else {
+                return;
+            };
+            let taken = usize::try_from(written).unwrap_or(0);
+            if taken == 0 {
+                return;
+            }
+            rest = rest.get(taken..).unwrap_or(&[]);
+        }
+    }
 }
 
 /// What the second thread has to be told, in a place it can reach: it

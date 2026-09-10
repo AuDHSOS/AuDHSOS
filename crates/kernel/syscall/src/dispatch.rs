@@ -205,7 +205,7 @@ pub const fn required_rights(call: Syscall) -> Rights {
         Syscall::NotificationSignal => Rights::SIGNAL,
         Syscall::NotificationWait | Syscall::NotificationPoll => Rights::WAIT,
         Syscall::IoPortRead => Rights::READ,
-        Syscall::IoPortWrite => Rights::WRITE,
+        Syscall::IoPortWrite | Syscall::IoPortWriteString => Rights::WRITE,
         // `handle_duplicate` checks `DUPLICATE` against the rights it is
         // asked for, `handle_close` needs nothing, a reply object carries
         // no rights, and the rest takes no handle.

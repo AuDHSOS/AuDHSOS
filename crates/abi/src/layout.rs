@@ -116,6 +116,10 @@ pub const MAX_MESSAGE_WORDS: usize = 480;
 /// Maximum number of handles in a message.
 pub const MAX_MESSAGE_HANDLES: usize = 4;
 
+/// Maximum number of bytes the payload words of a message hold, for a call
+/// that carries a run of bytes rather than words.
+pub const MAX_MESSAGE_BYTES: usize = MAX_MESSAGE_WORDS * 8;
+
 /// Maximum number of words a system call result writes into the message
 /// area of the caller's own buffer when it does not fit into
 /// [`MAX_SYSCALL_RETURN_WORDS`] return words. `system_info` writes

@@ -119,6 +119,9 @@ pub fn run<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
         Syscall::IoPortCreate => device::ioport_create(machine, process, request),
         Syscall::IoPortRead => device::ioport_read(machine, process, request),
         Syscall::IoPortWrite => device::ioport_write(machine, process, request),
+        Syscall::IoPortWriteString => {
+            device::ioport_write_string(machine, process, request, buffer)
+        }
         Syscall::MemoryCreateDevice => device::memory_create_device(machine, process, request),
         Syscall::SystemInfo => device::system_info(machine),
         Syscall::DebugLog => debug::log(machine, buffer),

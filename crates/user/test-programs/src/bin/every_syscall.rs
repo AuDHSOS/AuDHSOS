@@ -272,6 +272,11 @@ fn devices(log: &mut Log, control: u64, bad: u64) {
     );
     log.run(Syscall::IoPortWrite, &[ports, FIRST_PORT, 1, 0]);
     log.run(Syscall::IoPortWrite, &[ports, FIRST_PORT, 3, 0]);
+    // A run of no bytes: the message area of this thread holds the handles
+    // the kernel left and the pairs written so far, and none of it is meant
+    // for a port.
+    log.run(Syscall::IoPortWriteString, &[ports, FIRST_PORT, 0]);
+    log.run(Syscall::IoPortWriteString, &[bad, FIRST_PORT, 0]);
 
     // The framebuffer first: it is the one aperture this program knows the
     // address of, and `system_info` is what tells it.

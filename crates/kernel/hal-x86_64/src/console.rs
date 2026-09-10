@@ -115,11 +115,19 @@ impl DebugConsole for SerialConsole {
         if !is_ours() {
             return;
         }
-        for byte in bytes {
-            if *byte == b'\n' {
-                let _ = self.uart.write_byte(b'\r');
+        // The runs between the newlines go out in bursts; a newline takes
+        // the return with it, which is what a terminal needs and what the
+        // bytes handed in do not carry.
+        for part in bytes.split_inclusive(|byte| *byte == b'\n') {
+            match part.split_last() {
+                Some((b'\n', line)) => {
+                    let _ = self.uart.write_bytes(line);
+                    let _ = self.uart.write_bytes(b"\r\n");
+                }
+                _ => {
+                    let _ = self.uart.write_bytes(part);
+                }
             }
-            let _ = self.uart.write_byte(*byte);
         }
     }
 }

@@ -4,8 +4,8 @@
 //! Tests of `crate::calls::device`: interrupts, port ranges, device memory,
 //! and the information about the machine.
 
-use audhsos_abi::ipc_buffer::Buffer;
-use audhsos_abi::layout::TICKS_PER_SECOND;
+use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE};
+use audhsos_abi::layout::{MAX_MESSAGE_BYTES, TICKS_PER_SECOND};
 use audhsos_abi::{Error, Handle, ObjectType, Rights, Syscall};
 use kernel_objects::object::{
     AnyObjectId, Interrupt, IoPortRange, MemoryKind, Notification, SystemControl,
@@ -319,6 +319,86 @@ fn a_port_is_read_and_written_only_inside_the_range_of_its_capability() {
     }
 }
 
+/// A request that carries `bytes` in the message area, as the wrapper of
+/// `ioport_write_string` puts them there: the payload words little-endian,
+/// which is the run in order.
+fn string_request(range: u64, port: u64, bytes: &[u8], count: u64) -> [u8; SIZE] {
+    let mut buffer = request(Syscall::IoPortWriteString, &[range, port, count]);
+    let mut writer = BufferMut::new(&mut buffer);
+    for (index, chunk) in bytes.chunks(8).enumerate() {
+        let mut word = [0u8; 8];
+        word[..chunk.len()].copy_from_slice(chunk);
+        assert!(writer.set_word(index, u64::from_le_bytes(word)));
+    }
+    buffer
+}
+
+#[test]
+fn a_string_write_moves_the_message_area_to_one_port() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let range = value_of(
+        &mut fixture,
+        request(Syscall::IoPortCreate, &[system, 0x3F8, 8]),
+    );
+    let line = b"[canvas] cursor 993 600\n";
+    let count = u64::try_from(line.len()).unwrap();
+    assert_eq!(
+        value_of(&mut fixture, string_request(range, 0x3F8, line, count)),
+        count,
+        "the call answers how many bytes went out"
+    );
+    assert_eq!(fixture.environment.port_string, line.to_vec());
+    assert_eq!(
+        fixture
+            .environment
+            .count(&Call::WritePortString(0x3F8, line.len())),
+        1,
+        "one call, whatever the run holds"
+    );
+}
+
+#[test]
+fn a_string_write_is_refused_outside_the_range_and_above_the_message_area() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let range = value_of(
+        &mut fixture,
+        request(Syscall::IoPortCreate, &[system, 0x40, 4]),
+    );
+    for (port, count) in [
+        (0x44, 1),
+        (0x3F, 1),
+        (0x1_0000, 1),
+        (
+            0x40,
+            u64::try_from(MAX_MESSAGE_BYTES).unwrap().saturating_add(1),
+        ),
+    ] {
+        assert_eq!(
+            error_of(&mut fixture, string_request(range, port, b"x", count)),
+            Some(Error::InvalidArgument),
+            "port {port:#x} count {count}"
+        );
+    }
+    assert!(fixture.environment.port_string.is_empty());
+}
+
+#[test]
+fn a_string_write_of_nothing_touches_no_port() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let range = value_of(
+        &mut fixture,
+        request(Syscall::IoPortCreate, &[system, 0x40, 4]),
+    );
+    assert_eq!(
+        value_of(&mut fixture, string_request(range, 0x40, b"", 0)),
+        0
+    );
+    assert!(fixture.environment.port_string.is_empty());
+}
+
 #[test]
 fn a_port_access_needs_the_right_for_its_direction() {
     let mut fixture = Fixture::new();
@@ -342,6 +422,11 @@ fn a_port_access_needs_the_right_for_its_direction() {
             request(Syscall::IoPortWrite, &[readable, 0x60, 1, 0])
         ),
         Some(Error::AccessDenied)
+    );
+    assert_eq!(
+        error_of(&mut fixture, string_request(readable, 0x60, b"x", 1)),
+        Some(Error::AccessDenied),
+        "a string write is a write"
     );
     assert_eq!(
         error_of(

@@ -153,6 +153,15 @@ pub trait Environment {
     /// As [`Environment::read_port`].
     fn write_port(&mut self, port: u16, width: u8, value: u64) -> Result<(), Error>;
 
+    /// Writes every byte of `bytes` to `port`, one after another.
+    ///
+    /// The range check is the caller's, as for [`Environment::read_port`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] on a machine without port access.
+    fn write_port_string(&mut self, port: u16, bytes: &[u8]) -> Result<(), Error>;
+
     /// The vector the plan of this machine routes `line` to, or `None` for a
     /// line it reserves no vector for.
     ///

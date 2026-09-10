@@ -493,6 +493,7 @@ through shared memory objects.
 | `interrupt_create`, `interrupt_bind`, `interrupt_ack` | SystemControl / Interrupt | interrupt forwarding |
 | `interrupt_create_msi` | SystemControl | an interrupt object for an MSI-X vector; answers the vector's message address and data |
 | `ioport_create`, `ioport_read`, `ioport_write` | SystemControl / IoPortRange | x86 port I/O |
+| `ioport_write_string` | IoPortRange (`WRITE`) | the message area to one port, a byte at a time; one call carries a whole burst, which is what a driver over a FIFO needs (D-129) |
 | `memory_create_device` | SystemControl | device memory object |
 | `system_info` | SystemControl | pool capacities and usage, tick frequency, the address of the root system description pointer, the description of the framebuffer, which is six zero words on a machine without one, and the ECAM window of the `MCFG` table, which is four zero words on a machine whose firmware published none |
 | `process_watch` | Process (`INFO`) | binds the end of a process to one bit of a notification, so a server that holds something of a program gets it back when the program is gone (D-106) |

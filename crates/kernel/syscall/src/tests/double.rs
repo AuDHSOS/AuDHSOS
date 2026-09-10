@@ -51,6 +51,8 @@ pub(super) enum Call {
     ReadPort(u16, u8),
     /// A port was written, with the width in bytes and the value.
     WritePort(u16, u8, u64),
+    /// A run of bytes was written to one port, with how many.
+    WritePortString(u16, usize),
     /// An interrupt line was routed to a vector.
     Route(u8, u8),
     /// An interrupt line was masked.
@@ -87,6 +89,8 @@ pub(super) struct Recorder {
     pub(super) buffers: std::collections::HashMap<PhysFrame, Box<[u8; SIZE]>>,
     /// What the next port read answers, per port.
     pub(super) port_reads: std::collections::HashMap<u16, u64>,
+    /// Every byte a string port write moved, in order.
+    pub(super) port_string: Vec<u8>,
     /// The lines the plan of this machine reserves no vector for.
     pub(super) unroutable: Vec<u8>,
     /// The lines the controller has already routed.
@@ -270,6 +274,12 @@ impl Environment for Recorder {
             return Err(Error::InvalidArgument);
         }
         self.calls.push(Call::WritePort(port, width, value));
+        Ok(())
+    }
+
+    fn write_port_string(&mut self, port: u16, bytes: &[u8]) -> Result<(), Error> {
+        self.calls.push(Call::WritePortString(port, bytes.len()));
+        self.port_string.extend_from_slice(bytes);
         Ok(())
     }
 

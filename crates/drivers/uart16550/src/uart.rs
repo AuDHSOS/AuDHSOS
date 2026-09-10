@@ -43,6 +43,24 @@ pub const LINE_CONTROL_8N1: u8 = 0x03;
 /// FIFO control value: enable, clear both FIFOs, trigger at 14 bytes.
 pub const FIFO_CONTROL_ENABLE: u8 = 0xC7;
 
+/// Interrupt identification bits that stand for a working FIFO. SLLS597E
+/// page 33 says of them: "These bits are always cleared in TL16C450 mode.
+/// They are set when bit 0 of the FIFO control register is set." So a part
+/// that answers with both set has the FIFOs the same register just asked
+/// for, and a 16C450 answers with neither.
+pub const INTERRUPT_FIFO_ENABLED: u8 = 0xC0;
+
+/// How many bytes one THRE licenses on a part with the FIFO. SLLS597E page
+/// 41: "The THR is actually a 16-byte FIFO"; page 37, of LSR bit 5: "In the
+/// FIFO mode, THRE is set when the transmit FIFO is empty". So one THRE
+/// says the whole FIFO is free, and page 34 spends it: "1 to 16 characters
+/// may be written to the transmit FIFO".
+pub const FIFO_DEPTH: u8 = 16;
+
+/// How many bytes one THRE licenses on a part without the FIFO: the
+/// holding register, and nothing behind it.
+pub const NO_FIFO_DEPTH: u8 = 1;
+
 /// Modem control value: data terminal ready, request to send, and the
 /// auxiliary output that gates the interrupt line.
 pub const MODEM_CONTROL_READY: u8 = 0x0B;
@@ -116,6 +134,16 @@ pub trait Registers {
 
     /// Writes one register.
     fn write(&mut self, register: Register, value: u8);
+
+    /// Writes every byte of `bytes` to one register, in order.
+    ///
+    /// A block that can hand a whole run over in one operation overrides
+    /// this; the default is the run written a byte at a time.
+    fn write_all(&mut self, register: Register, bytes: &[u8]) {
+        for byte in bytes {
+            self.write(register, *byte);
+        }
+    }
 }
 
 /// Why an operation on the controller failed.
@@ -140,19 +168,28 @@ impl fmt::Display for UartError {
 #[derive(Clone, Copy, Debug)]
 pub struct Uart16550<R: Registers> {
     registers: R,
+    depth: u8,
 }
 
 impl<R: Registers> Uart16550<R> {
-    /// Takes the register block over without touching it.
+    /// Takes the register block over without touching it. Nothing is
+    /// asked of the part, so nothing is assumed of it either: one byte a
+    /// THRE, which every part licenses.
     pub const fn new(registers: R) -> Self {
-        Uart16550 { registers }
+        Uart16550 {
+            registers,
+            depth: NO_FIFO_DEPTH,
+        }
     }
 
     /// Takes the register block over and programs it for 115200 baud,
     /// eight data bits, one stop bit, no parity, with the FIFOs enabled
     /// and the interrupts off.
     pub fn init(registers: R) -> Self {
-        let mut uart = Uart16550 { registers };
+        let mut uart = Uart16550 {
+            registers,
+            depth: NO_FIFO_DEPTH,
+        };
         uart.registers.write(Register::InterruptEnable, 0);
         uart.registers
             .write(Register::LineControl, LINE_CONTROL_DIVISOR_LATCH);
@@ -166,7 +203,20 @@ impl<R: Registers> Uart16550<R> {
             .write(Register::FifoControl, FIFO_CONTROL_ENABLE);
         uart.registers
             .write(Register::ModemControl, MODEM_CONTROL_READY);
+        // The part is asked whether it took the FIFOs, and the answer, not
+        // the request, decides how many bytes a THRE is worth.
+        if uart.registers.read(Register::FifoControl) & INTERRUPT_FIFO_ENABLED
+            == INTERRUPT_FIFO_ENABLED
+        {
+            uart.depth = FIFO_DEPTH;
+        }
         uart
+    }
+
+    /// How many bytes one THRE licenses on this part.
+    #[must_use]
+    pub const fn depth(&self) -> u8 {
+        self.depth
     }
 
     /// The register block, for a caller that has to reach it directly: a
@@ -188,27 +238,59 @@ impl<R: Registers> Uart16550<R> {
     ///
     /// [`UartError::Timeout`] if the holding register stays full.
     pub fn write_byte(&mut self, byte: u8) -> Result<(), UartError> {
+        self.wait_for_transmitter()?;
+        self.registers.write(Register::Data, byte);
+        Ok(())
+    }
+
+    /// Sends every byte in bursts of [`Uart16550::depth`] and answers with
+    /// how many the controller took.
+    ///
+    /// One wait covers a whole burst: THRE says the transmit FIFO is empty,
+    /// which licenses as many bytes as it holds. A burst that finds the
+    /// transmitter still busy ends the write, and the count says how far it
+    /// came; a byte the controller took is a byte sent, whether the line
+    /// has carried it yet or not.
+    ///
+    /// # Errors
+    ///
+    /// [`UartError::Timeout`] when the first burst found the transmitter
+    /// busy, so that a write which moved nothing is an error and not a
+    /// count of zero.
+    pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<usize, UartError> {
+        let mut written = 0usize;
+        for burst in bytes.chunks(self.burst()) {
+            if self.wait_for_transmitter().is_err() {
+                break;
+            }
+            self.registers.write_all(Register::Data, burst);
+            written = written.saturating_add(burst.len());
+        }
+        if written == 0 && !bytes.is_empty() {
+            return Err(UartError::Timeout);
+        }
+        Ok(written)
+    }
+
+    /// The burst length, never zero, because a chunk of zero has no end.
+    fn burst(&self) -> usize {
+        usize::from(self.depth).max(usize::from(NO_FIFO_DEPTH))
+    }
+
+    /// Waits at most [`POLL_LIMIT`] polls for the transmitter to empty.
+    ///
+    /// # Errors
+    ///
+    /// [`UartError::Timeout`] if it stays full.
+    fn wait_for_transmitter(&mut self) -> Result<(), UartError> {
         let mut polls = 0u32;
         while polls < POLL_LIMIT {
             if self.registers.read(Register::LineStatus) & LINE_STATUS_TRANSMIT_EMPTY != 0 {
-                self.registers.write(Register::Data, byte);
                 return Ok(());
             }
             polls = polls.saturating_add(1);
         }
         Err(UartError::Timeout)
-    }
-
-    /// Sends every byte, stopping at the first timeout.
-    ///
-    /// # Errors
-    ///
-    /// The errors of [`Uart16550::write_byte`].
-    pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), UartError> {
-        for byte in bytes {
-            self.write_byte(*byte)?;
-        }
-        Ok(())
     }
 
     /// Takes the waiting byte.

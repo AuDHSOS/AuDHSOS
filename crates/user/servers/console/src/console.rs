@@ -3,9 +3,9 @@
 
 //! Bytes out on the line, and the bytes that came in on it.
 //!
-//! Sending is direct: the controller is asked to take each byte, and it
-//! either takes it or the transmitter never becomes ready, which is the one
-//! failure a write has. Receiving is a ring, because the bytes arrive when
+//! Sending is direct: the controller is asked to take a burst of bytes,
+//! and it either takes them or the transmitter never becomes ready, which
+//! is the one failure a write has. Receiving is a ring, because the bytes arrive when
 //! they arrive and a client asks for them when it asks.
 //!
 //! The ring drops the oldest byte when it is full and counts what it
@@ -62,26 +62,16 @@ impl<R: Registers> Console<R> {
 
     /// Puts `bytes` on the line and answers with how many went out.
     ///
-    /// A byte the controller would not take ends the write; the count says
+    /// A burst the controller would not take ends the write; the count says
     /// how far it came, and the client decides whether to try the rest.
     ///
     /// # Errors
     ///
-    /// [`UartError::Timeout`] when the very first byte found the
-    /// transmitter busy, so that a write which moved nothing is an error
-    /// and not a count of zero.
+    /// [`UartError::Timeout`] when the first burst found the transmitter
+    /// busy, so that a write which moved nothing is an error and not a
+    /// count of zero.
     pub fn write(&mut self, bytes: &[u8]) -> Result<usize, UartError> {
-        let mut written = 0usize;
-        for byte in bytes {
-            if self.uart.write_byte(*byte).is_err() {
-                break;
-            }
-            written = written.wrapping_add(1);
-        }
-        if written == 0 && !bytes.is_empty() {
-            return Err(UartError::Timeout);
-        }
-        Ok(written)
+        self.uart.write_bytes(bytes)
     }
 
     /// Takes the byte the controller has, for the thread the interrupt

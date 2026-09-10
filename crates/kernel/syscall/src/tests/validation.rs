@@ -173,8 +173,8 @@ fn handle_for(fixture: &mut Fixture, call: Syscall) -> u64 {
 fn every_call_of_the_table_is_implemented() {
     assert_eq!(
         Syscall::ALL.len() - UNIMPLEMENTED.len(),
-        45,
-        "the whole table, including process_unwatch and memory_references"
+        46,
+        "the whole table, including memory_references and ioport_write_string"
     );
     assert!(UNIMPLEMENTED.is_empty());
 }

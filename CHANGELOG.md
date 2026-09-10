@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `ioport_write_string`, the forty-sixth system call: a run of bytes in the
+  message area to one I/O port, checked against the same `IoPortRange`
+  capability at width one that `ioport_write` is checked against. The
+  payload words are little-endian, so the area read as bytes is the run in
+  order and the kernel copies nothing. It exists because every register
+  access of a userland driver is a system call, so a console line written a
+  byte at a time cost one call a byte whatever else was done (D-129).
+
 - Phase 11, the graphical demonstration: `app-canvas`, which is a
   host-tested logic crate under `crates/user/apps/canvas` and a binary of
   `user-programs` around it, as D-97 has every program of the userland
@@ -611,6 +619,19 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   percent of lines and 91.3 percent of branches.
 
 ### Changed
+
+- `driver-uart16550` sends in bursts. The transmitter is asked for THRE
+  once per burst and not once per byte, because SLLS597E page 41 says the
+  holding register "is actually a 16-byte FIFO" and page 37 says THRE is
+  set when that FIFO is empty, which page 34 spends as "1 to 16 characters
+  may be written". Whether the part has the FIFO is asked and not assumed:
+  `init` reads the identification register after enabling it, and a part
+  whose bits 6 and 7 stay clear gets one byte a THRE. `write_bytes` now
+  answers how many bytes the controller took, and hands each burst to the
+  register block as one run, which is what lets `server-console` spend one
+  `ioport_write_string` on it. One pointer event on the reference machine
+  fell from a hundred twenty-one system calls and sixteen milliseconds to
+  thirty-one and six (D-129).
 
 - D-124 states what decides whether a reference document is kept in this
   repository: whether it can be obtained, not whether its licence permits

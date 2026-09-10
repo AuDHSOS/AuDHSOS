@@ -526,6 +526,11 @@ const REFUSALS: &[(Syscall, Error, &str)] = &[
         Error::InvalidHandle,
         "an invalid memory handle",
     ),
+    (
+        Syscall::IoPortWriteString,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
 ];
 
 /// Every call this phase implements answered exactly one error, and it is

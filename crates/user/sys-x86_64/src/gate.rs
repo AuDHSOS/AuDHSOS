@@ -30,8 +30,8 @@
 //! this one; a method that returns an error has read the status word and
 //! nothing else.
 
-use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status};
-use audhsos_abi::layout::MAX_SYSCALL_ARGUMENTS;
+use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status, WORD};
+use audhsos_abi::layout::{MAX_MESSAGE_BYTES, MAX_SYSCALL_ARGUMENTS};
 use audhsos_abi::{
     Error, Fault, FaultKind, Framebuffer, FramebufferFormat, Handle, Rights, Syscall, ThreadState,
 };
@@ -106,7 +106,7 @@ pub struct Received {
 /// numbers the kernel saw against the table, so a method missing from the
 /// run, or one passing another call of the same shape, fails there
 /// (D-98).
-const COVERED: [Syscall; 45] = [
+const COVERED: [Syscall; 46] = [
     Syscall::ProcessCreate,
     Syscall::ProcessInstallHandle,
     Syscall::ProcessSetFaultHandler,
@@ -152,6 +152,7 @@ const COVERED: [Syscall; 45] = [
     Syscall::ProcessWatch,
     Syscall::ProcessUnwatch,
     Syscall::MemoryReferences,
+    Syscall::IoPortWriteString,
 ];
 
 /// `true` when [`COVERED`] is the system call table, in its order.
@@ -914,6 +915,40 @@ impl Gate {
         value: u64,
     ) -> Result<(), Error> {
         self.done(Syscall::IoPortWrite, &[ports.raw(), port, width, value])
+    }
+
+    /// `ioport_write_string`: writes every byte of `bytes` to `port`, one
+    /// after another, and answers how many went out.
+    ///
+    /// The bytes travel in the message area, so a run longer than
+    /// [`MAX_MESSAGE_BYTES`] is written as far as that and the count says
+    /// how far it came.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn ioport_write_string(
+        &mut self,
+        ports: IoPortHandle,
+        port: u64,
+        bytes: &[u8],
+    ) -> Result<u64, Error> {
+        let count = bytes.len().min(MAX_MESSAGE_BYTES);
+        let taken = bytes.get(..count).unwrap_or(&[]);
+        {
+            let mut writer = self.writer();
+            for (index, chunk) in taken.chunks(WORD).enumerate() {
+                let mut word = [0u8; WORD];
+                if let Some(slot) = word.get_mut(..chunk.len()) {
+                    slot.copy_from_slice(chunk);
+                }
+                if !writer.set_word(index, u64::from_le_bytes(word)) {
+                    return Err(Error::InvalidArgument);
+                }
+            }
+        }
+        let count = u64::try_from(count).unwrap_or(0);
+        self.value(Syscall::IoPortWriteString, &[ports.raw(), port, count])
     }
 
     /// `memory_create_device`: a memory object over frames that are not
