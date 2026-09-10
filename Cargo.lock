@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "app-canvas"
+version = "0.1.0"
+dependencies = [
+ "gfx",
+ "user-proto",
+]
+
+[[package]]
 name = "audhsos-abi"
 version = "0.1.0"
 dependencies = [
@@ -620,6 +628,7 @@ dependencies = [
 name = "user-programs"
 version = "0.1.0"
 dependencies = [
+ "app-canvas",
  "audhsos-abi",
  "driver-i8042",
  "driver-uart16550",
@@ -683,6 +692,7 @@ dependencies = [
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "app-canvas",
  "audhsos-abi",
  "audhsos-symbols",
  "audhsos-time",
@@ -690,5 +700,6 @@ dependencies = [
  "fs-fat",
  "gfx",
  "kernel-test-harness",
+ "server-display",
  "user-loader",
 ]

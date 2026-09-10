@@ -2871,14 +2871,30 @@ targets run for 60 seconds without findings.
   the pixels along the path carry the pen color), `canvas_text` (a typed
   string appears at the text cursor pixel for pixel).
 - `cargo xtask run --display` starts the canvas; the root task starts it
-  after the servers when the boot image contains it.
+  after the servers when the boot image contains it. It presents nothing
+  until an event reaches it (D-126), so the picture of `app-paint` stands
+  until the pointer first moves.
 - `policy::CRATES` entry `app-canvas` (Logic, `Host`, coverage gate,
-  deps `audhsos-abi`, `gfx`, `user-proto`), as every logic crate of this
-  workspace is host-tested and none is built for `X86_64None`; the target
-  and the unsafe budget stay with `user-programs`, which gains the
-  dependency. Because `unused_crate_dependencies` is denied, every other
-  binary of that package gains a `use app_canvas as _;` line in the same
-  commit.
+  deps `gfx`, `user-proto`), as every logic crate of this workspace is
+  host-tested and none is built for `X86_64None`; the target and the
+  unsafe budget stay with `user-programs`, which gains the dependency.
+  Because `unused_crate_dependencies` is denied, every other binary of
+  that package gains a `use app_canvas as _;` line in the same commit.
+- `user-proto` re-exports the button constants of `driver-i8042` beside
+  the event types it already re-exports, so the driver, the server, and
+  every client name the button that draws by one constant.
+- `server-display` makes `cursor::pixel_of` public. The end-to-end run
+  checks a picture of the screen against the sprite that should stand in
+  it, and asking the server which of its pixels are body and which edge
+  is the one way to do that without a second copy of that rule in the
+  runner.
+- `Session::wait_for_another` in the xtask: `wait_for` is satisfied by a
+  line that arrived before the wait began, which for a line like
+  `[canvas] cursor ...` is every earlier move of the pointer. The three
+  tests below each wait for the next one.
+- The three tests drive the machine over the monitor connection that is
+  already open. A second connection beside it reads nothing: the machine
+  serves one monitor client at a time.
 
 Acceptance: `check` green; catalog 6.6.29 combined items; the three e2e
 tests pass in CI without a display window.

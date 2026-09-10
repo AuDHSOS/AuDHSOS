@@ -80,7 +80,14 @@ path = "src/bin/app_paint.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "app-canvas"
+path = "src/bin/app_canvas.rs"
+test = false
+bench = false
+
 [dependencies]
+app-canvas.workspace = true
 audhsos-abi.workspace = true
 driver-i8042.workspace = true
 driver-uart16550.workspace = true

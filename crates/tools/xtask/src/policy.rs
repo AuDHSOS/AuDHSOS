@@ -738,6 +738,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "app-canvas",
+        path: "crates/user/apps/canvas",
+        kind: Kind::Logic,
+        deps: &["gfx", "user-proto"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "user-sys-x86_64",
         path: "crates/user/sys-x86_64",
         kind: Kind::Adapter {
@@ -763,10 +771,11 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-programs",
         path: "crates/user/programs",
         kind: Kind::Adapter {
-            unsafe_budget: 31,
+            unsafe_budget: 33,
             asm_budget: 0,
         },
         deps: &[
+            "app-canvas",
             "audhsos-abi",
             "driver-i8042",
             "driver-uart16550",
@@ -864,6 +873,7 @@ pub(crate) const CRATES: &[Crate] = &[
         path: "crates/tools/xtask",
         kind: Kind::Host,
         deps: &[
+            "app-canvas",
             "audhsos-abi",
             "audhsos-symbols",
             "audhsos-time",
@@ -871,6 +881,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "fs-fat",
             "gfx",
             "kernel-test-harness",
+            "server-display",
             "user-loader",
         ],
         coverage_gate: false,

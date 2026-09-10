@@ -81,7 +81,12 @@ fn body_of(row: usize) -> u16 {
 
 /// The color of the pixel at `column` of `row`, or `None` where the sprite
 /// shows what is behind it.
-fn pixel_of(row: usize, column: u32) -> Option<Color> {
+///
+/// It is public because the end-to-end run checks a picture of the screen
+/// against the sprite it should hold, and asking this is the one way to do
+/// that without a second copy of the rule that decides body from edge.
+#[must_use]
+pub fn pixel_of(row: usize, column: u32) -> Option<Color> {
     let bit = 1_u16.checked_shl(CURSOR_WIDTH.saturating_sub(1).saturating_sub(column))?;
     let bits = CURSOR_SHAPE.get(row).copied().unwrap_or(0);
     if bits & bit == 0 {

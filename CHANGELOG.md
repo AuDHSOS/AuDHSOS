@@ -7,6 +7,39 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Phase 11, the graphical demonstration: `app-canvas`, which is a
+  host-tested logic crate under `crates/user/apps/canvas` and a binary of
+  `user-programs` around it, as D-97 has every program of the userland
+  be. The logic keeps a pointer position clamped to the screen, joins one
+  position to the next with a Bresenham segment while button 0 is held,
+  writes the characters of the `us` layout at a text cursor that wraps at
+  both edges, and puts the background back on the escape key; the binary
+  is the loop that maps the surface and the ring, presents the damage of
+  each event, and sends `SetCursor` after every pointer event. The root
+  task starts it with both badged capabilities, and it is the eleventh
+  program of the boot archive.
+- The three end-to-end tests of catalog 6.6.29's combined item.
+  `canvas_cursor` moves the pointer twice and checks, in a picture of the
+  screen taken after each step, that every pixel of the sprite is what
+  `server-display::cursor::pixel_of` says it should be and that the place
+  the sprite left carries the background again. `canvas_stroke` holds the
+  button down over a segment and checks that the pen stands somewhere
+  across every step of its longer axis. `canvas_text` types three
+  characters and checks each against the glyph table pixel for pixel.
+  Each looks only where the canvas said on the console that it drew, so
+  the runner assumes no position and no resolution. All three run after
+  the program that listens has ended, so what they inject is no part of
+  what that one is checked against, and they drive the machine over the
+  monitor connection that is already open, because it serves one client
+  at a time.
+- `Session::wait_for_another` in the xtask: `wait_for` is satisfied by a
+  line that arrived before the wait began, which for a line the canvas
+  repeats is every earlier event. The three tests wait for the next one.
+- `user-proto` re-exports the button constants of `driver-i8042` beside
+  the event types, so the driver, the server, and every client name the
+  button that draws by one constant. `server-display` makes
+  `cursor::pixel_of` public for the reason the tests above give.
+
 - The JPEG standards, under a new `docs/itu/` and a new `docs/cipa/`,
   each fetched twice and recorded with its checksum. JPEG answers in two
   documents what is usually asked as one question. ITU-T T.81 |

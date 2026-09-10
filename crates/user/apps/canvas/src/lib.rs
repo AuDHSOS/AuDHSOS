@@ -5,11 +5,9 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
-pub mod cursor;
 pub mod state;
 
-pub use cursor::{CURSOR_HEIGHT, CURSOR_SHAPE, CURSOR_WIDTH, Cursor, pixel_of};
-pub use state::{Display, Held, MAX_CLIENTS, NOBODY};
+pub use state::{BACKGROUND, Canvas, ENDS, INK, PEN, Step, TEXT_ORIGIN, span};
 
 #[cfg(test)]
 mod tests;

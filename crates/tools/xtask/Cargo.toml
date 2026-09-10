@@ -11,6 +11,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+app-canvas.workspace = true
 audhsos-abi.workspace = true
 audhsos-symbols.workspace = true
 audhsos-time.workspace = true
@@ -18,6 +19,7 @@ driver-i8042.workspace = true
 fs-fat.workspace = true
 gfx.workspace = true
 kernel-test-harness.workspace = true
+server-display.workspace = true
 user-loader.workspace = true
 
 [lints]

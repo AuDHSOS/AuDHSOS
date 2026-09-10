@@ -284,6 +284,8 @@ the console driver.
 
 ## 8.13 Phase 11: Graphical demonstration
 
+Status: implemented.
+
 Deliverables: `app-canvas` with a full-screen surface, a cursor that
 follows the pointer, drawing while a button is held, and typed text
 rendered with the bitmap font; the display server draws the cursor;
@@ -292,9 +294,16 @@ end-to-end tests that combine injected input with screendumps.
 
 Tests: catalog 6.6.29 (combined items).
 
-Acceptance: `sh tools/xtask.sh run --display` shows the canvas;
-`sh tools/xtask.sh test --e2e` verifies cursor movement, a drawn stroke,
-and typed text in screendumps.
+Acceptance: `sh tools/xtask.sh run --display` shows the canvas, which it
+takes the screen for at the first event — the first movement of the mouse
+in an interactive run; `sh tools/xtask.sh test --e2e` verifies cursor
+movement, a drawn stroke, and typed text in screendumps.
+
+Done: two programs cannot both hold a screen the size of the screen and
+both be looked at, so the canvas presents nothing until an event reaches
+it (D-126). That leaves the picture of `app-paint` standing to be checked
+while the machine runs, and makes which of the two is on the screen a
+matter of what happened rather than of which started last.
 
 ## 8.14 Phase 12: Time, randomness, and message interrupts
 

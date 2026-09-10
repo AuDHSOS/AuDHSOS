@@ -853,13 +853,20 @@ done until every applicable item has a test. Items are added, never removed.
   surface up, and the display server takes it back — the kernel signals the
   end on the notification, the watching thread of the server turns it into
   a message, and the surface and its memory go back.
-- Combined: the cursor pixels move with the pointer; a stroke drawn while
-  the button is held changes the pixels along the path; typed text appears
-  at the text cursor.
+- Combined: the cursor pixels move with the pointer, and every pixel of
+  the sprite is what the display server's own shape says it is, while the
+  place it left carries the background again; a stroke drawn while the
+  button is held carries the pen at every step along its longer axis;
+  typed text stands at the text cursor pixel for pixel against the glyph
+  table. Each of the three is checked against a position the canvas said
+  on the console, never one the runner worked out for itself, and the
+  three run after the program that listens has ended, so what is injected
+  for them is no part of what that one was checked against.
 - Absent hardware: with `-vga none` the kernel reports
   `[info] framebuffer=absent`, the display server reports that there is no
-  screen, the program that draws says it drew nothing, the run still ends
-  by itself, and the input tests still pass (Phase 10).
+  screen, the program that draws says it drew nothing, the canvas says it
+  has no screen and ends without waiting for input, the run still ends by
+  itself, and the input tests still pass (Phase 10).
 
 ### 6.6.30 Constant-time helpers (`crypto-ct`)
 

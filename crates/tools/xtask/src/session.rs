@@ -106,6 +106,43 @@ impl Session {
         }
     }
 
+    /// Waits until one more line holding `needle` has arrived than had
+    /// arrived when the wait began, or until `timeout` is up.
+    ///
+    /// This is what a caller wants when the same line comes more than once
+    /// and only the next one is meant. [`Session::wait_for`] is satisfied
+    /// by one that came before the wait began, which for a line like
+    /// `[canvas] cursor ...` is every earlier move of the pointer.
+    pub(crate) fn wait_for_another(&mut self, needle: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now().checked_add(timeout);
+        let already = self.count_of(needle);
+        loop {
+            if self.count_of(needle) > already {
+                return true;
+            }
+            match self.lines.try_recv() {
+                Ok(line) => {
+                    self.seen.push(line);
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => return false,
+                Err(TryRecvError::Empty) => {}
+            }
+            if deadline.is_none_or(|deadline| Instant::now() >= deadline) {
+                return false;
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+
+    /// How many lines that have arrived hold `needle`.
+    fn count_of(&self, needle: &str) -> usize {
+        self.seen
+            .iter()
+            .filter(|line| line.contains(needle))
+            .count()
+    }
+
     /// Writes `bytes` to the serial port of the machine.
     ///
     /// # Errors

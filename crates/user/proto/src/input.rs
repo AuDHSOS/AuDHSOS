@@ -18,7 +18,8 @@
 //! page long and to stay one.
 //!
 //! The event types are those of `driver-i8042` and are re-exported here, so
-//! that the driver, the server, and every client speak of one `KeyCode`.
+//! that the driver, the server, and every client speak of one `KeyCode` and
+//! name the buttons of the pointer by one set of constants.
 //!
 //! Invariants: a record is sixteen bytes and the kind byte names a kind the
 //! reader knows, or the record is refused; the writer never passes the
@@ -32,7 +33,9 @@ use user_rt::message::{Reader, Writer};
 use crate::label::{Label, ProtoError, Protocol, status_of, status_word};
 
 pub use driver_i8042::keyboard::{KeyCode, KeyEvent};
-pub use driver_i8042::mouse::PointerEvent;
+pub use driver_i8042::mouse::{
+    BUTTON_LEFT, BUTTON_MASK, BUTTON_MIDDLE, BUTTON_RIGHT, PointerEvent,
+};
 
 /// `subscribe`: send me what the keyboard and the mouse do.
 pub const SUBSCRIBE: u16 = 1;

@@ -303,6 +303,14 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
             Err(error) => violations.push(format!("nothing could be injected: {error}")),
         }
     }
+    // The canvas, which is the two protocols in one program: the sprite
+    // follows the pointer, a held button leaves a stroke, and what is typed
+    // stands on the screen. It runs after the program that listens has
+    // ended, so nothing injected here is part of what that one was checked
+    // against.
+    if violations.is_empty() {
+        violations.extend(inject_canvas(&socket, &mut session, root));
+    }
     // Two clients wrote at once and no line of either may be torn: every
     // line the second one wrote has to stand whole and once, which the
     // last one arriving does not by itself say.
@@ -627,6 +635,328 @@ fn input_lines(output: &str) -> Vec<String> {
     violations
 }
 
+/// How far the pointer is moved for each of the two steps that show the
+/// cursor sprite moving. Both are larger than the sprite, so the place it
+/// came from and the place it went to do not overlap and each can be looked
+/// at on its own.
+const CANVAS_CURSOR_STEPS: [(i32, i32); 2] = [(40, 24), (-30, 40)];
+
+/// The stroke: the button goes down, the pointer moves by this, and the
+/// button comes up again. It is long enough that its middle lies well clear
+/// of the sprite at either end.
+const CANVAS_STROKE: (i32, i32) = (120, 60);
+
+/// Where the pointer goes after the stroke, so that the sprite stands clear
+/// of the segment when the picture of it is taken.
+const CANVAS_ASIDE: (i32, i32) = (-200, 150);
+
+/// What is typed at the canvas, by the name QEMU knows each key under and
+/// the character this system types for it.
+const CANVAS_TYPING: [(&str, char); 3] = [("h", 'h'), ("i", 'i'), ("1", '1')];
+
+/// Drives the canvas: the escape key, two steps of the pointer, a stroke,
+/// a typed string, and the key that ends it, with a picture of the screen
+/// taken after each of the three.
+///
+/// It runs only on the machine that has a screen, and only after the
+/// program that listens has ended: that one echoes every event to the
+/// console, and what is injected here is not part of what it was checked
+/// against.
+fn inject_canvas(socket: &Path, session: &mut Session, root: &Path) -> Vec<String> {
+    let mut violations = Vec::new();
+    if !session.wait_for("[canvas] ready ", E2E_TIMEOUT) {
+        return vec!["the canvas never said it was ready".to_owned()];
+    }
+    let mut qmp = match Qmp::connect(socket, E2E_TIMEOUT) {
+        Ok(qmp) => qmp,
+        Err(error) => return vec![format!("the canvas could not be driven: {error}")],
+    };
+    // The escape key first: it puts the background down over whatever the
+    // program that paints left on the screen, so every pixel looked at
+    // below is one the canvas itself wrote.
+    if let Err(error) = press(&mut qmp, "esc") {
+        return vec![format!("the escape key: {error}")];
+    }
+    if !session.wait_for_another("[canvas] cleared", E2E_TIMEOUT) {
+        return vec!["the canvas did not clear itself".to_owned()];
+    }
+    violations.extend(canvas_cursor(&mut qmp, session, root));
+    if violations.is_empty() {
+        violations.extend(canvas_stroke(&mut qmp, session, root));
+    }
+    if violations.is_empty() {
+        violations.extend(canvas_text(&mut qmp, session, root));
+    }
+    if let Err(error) = press(&mut qmp, ENDS_QCODE) {
+        violations.push(format!("the key that ends the canvas: {error}"));
+    } else if !session.wait_for_another("[canvas] done", E2E_TIMEOUT) {
+        violations.push("the canvas never ended".to_owned());
+    }
+    violations
+}
+
+/// A picture of the screen, taken over a connection that is already open.
+///
+/// The machine serves one monitor client at a time, so a second connection
+/// beside the one that is driving the pointer reads nothing: the picture
+/// goes through the same session as the events it is meant to show.
+fn picture_of(qmp: &mut Qmp, root: &Path) -> Result<ppm::Image, Error> {
+    qmp.screendump(&root.join("target").join("screen.ppm"))
+}
+
+/// The name QEMU knows [`app_canvas::ENDS`] under.
+const ENDS_QCODE: &str = "f10";
+
+/// Presses a key and lets it come up again.
+fn press(qmp: &mut Qmp, qcode: &str) -> Result<(), Error> {
+    qmp.send_key(qcode, true)?;
+    qmp.send_key(qcode, false)
+}
+
+/// `canvas_cursor`: a pointer path moves the sprite, and the picture before
+/// a step and the picture after it differ in exactly that way — the sprite
+/// stands where the canvas said the pointer now is, and where it stood
+/// before carries the background again.
+fn canvas_cursor(qmp: &mut Qmp, session: &mut Session, root: &Path) -> Vec<String> {
+    let mut violations = Vec::new();
+    let mut before: Option<(u32, u32)> = None;
+    for (dx, dy) in CANVAS_CURSOR_STEPS {
+        let Some(at) = moved_to(qmp, session, dx, dy) else {
+            return vec![format!(
+                "the canvas never said where the pointer went after {dx},{dy}"
+            )];
+        };
+        let image = match picture_of(qmp, root) {
+            Ok(image) => image,
+            Err(error) => return vec![format!("no picture of the canvas: {error}")],
+        };
+        violations.extend(sprite_at(&image, at));
+        if let Some(gone) = before {
+            // The sprite is drawn by the display server and taken off by
+            // it, so the place it left has to hold what stood under it,
+            // which here is the background of the canvas.
+            let corner = (gone.0.saturating_add(1), gone.1.saturating_add(5));
+            match image.pixel(corner.0, corner.1) {
+                Ok(color) if color == rgb(app_canvas::BACKGROUND) => {}
+                Ok(color) => violations.push(format!(
+                    "the sprite left {corner:?} showing {color:?} and not the background"
+                )),
+                Err(error) => violations.push(format!("the pixel at {corner:?}: {error}")),
+            }
+        }
+        before = Some(at);
+        if !violations.is_empty() {
+            break;
+        }
+    }
+    violations
+}
+
+/// Moves the pointer and answers with where the canvas says it now is.
+fn moved_to(qmp: &mut Qmp, session: &mut Session, dx: i32, dy: i32) -> Option<(u32, u32)> {
+    qmp.move_pointer(dx, dy).ok()?;
+    if !session.wait_for_another("[canvas] cursor ", E2E_TIMEOUT) {
+        return None;
+    }
+    last_pair(&session.output(), "[canvas] cursor ")
+}
+
+/// `canvas_stroke`: the button goes down, the pointer moves, and the pixels
+/// along the segment the canvas says it drew carry the pen.
+fn canvas_stroke(qmp: &mut Qmp, session: &mut Session, root: &Path) -> Vec<String> {
+    if qmp.button(Button::Left, true).is_err() {
+        return vec!["the button of the pointer could not be pressed".to_owned()];
+    }
+    if !session.wait_for_another("[canvas] stroke ", E2E_TIMEOUT) {
+        return vec!["the canvas did not start a stroke when the button went down".to_owned()];
+    }
+    let (dx, dy) = CANVAS_STROKE;
+    if qmp.move_pointer(dx, dy).is_err() {
+        return vec!["the pointer could not be moved with the button down".to_owned()];
+    }
+    if !session.wait_for_another("[canvas] stroke ", E2E_TIMEOUT) {
+        return vec!["the canvas drew no segment while the button was held".to_owned()];
+    }
+    let Some((from, to)) = last_four(&session.output(), "[canvas] stroke ") else {
+        return vec!["the canvas said nothing about the segment it drew".to_owned()];
+    };
+    // The button comes up in the next packet the mouse sends, so the
+    // release and the step that carries the pointer clear of the segment go
+    // out together.
+    if qmp.button(Button::Left, false).is_err() {
+        return vec!["the button of the pointer could not be released".to_owned()];
+    }
+    let (aside_x, aside_y) = CANVAS_ASIDE;
+    if moved_to(qmp, session, aside_x, aside_y).is_none() {
+        return vec!["the pointer never moved clear of the stroke".to_owned()];
+    }
+    let image = match picture_of(qmp, root) {
+        Ok(image) => image,
+        Err(error) => return vec![format!("no picture of the stroke: {error}")],
+    };
+    pen_along(&image, from, to)
+}
+
+/// What the picture does not show of the segment the canvas said it drew.
+///
+/// The segment is walked along its longer axis, and every step of that walk
+/// has to find the pen somewhere across the shorter one: a line drawn a
+/// pixel at a time is continuous in the axis it advances fastest in, and
+/// checking it that way needs no second copy of the algorithm that drew it.
+fn pen_along(image: &ppm::Image, from: (u32, u32), to: (u32, u32)) -> Vec<String> {
+    let pen = rgb(app_canvas::PEN);
+    let wide = from.0.abs_diff(to.0) >= from.1.abs_diff(to.1);
+    let (first, last) = if wide {
+        (from.0.min(to.0), from.0.max(to.0))
+    } else {
+        (from.1.min(to.1), from.1.max(to.1))
+    };
+    let (across_first, across_last) = if wide {
+        (from.1.min(to.1), from.1.max(to.1))
+    } else {
+        (from.0.min(to.0), from.0.max(to.0))
+    };
+    for along in first..=last {
+        let found = (across_first..=across_last).any(|across| {
+            let (x, y) = if wide {
+                (along, across)
+            } else {
+                (across, along)
+            };
+            image.pixel(x, y) == Ok(pen)
+        });
+        if !found {
+            return vec![format!(
+                "the stroke from {from:?} to {to:?} carries no pen at {along} of {first}..={last}"
+            )];
+        }
+    }
+    Vec::new()
+}
+
+/// `canvas_text`: what is typed appears at the text cursor the canvas
+/// named, pixel for pixel against the font this system carries.
+fn canvas_text(qmp: &mut Qmp, session: &mut Session, root: &Path) -> Vec<String> {
+    let mut cells = Vec::new();
+    for (qcode, character) in CANVAS_TYPING {
+        if let Err(error) = press(qmp, qcode) {
+            return vec![format!("the key `{qcode}`: {error}")];
+        }
+        if !session.wait_for_another("[canvas] text ", E2E_TIMEOUT) {
+            return vec![format!("the canvas never wrote `{character}`")];
+        }
+        let Some(at) = last_pair(&session.output(), "[canvas] text ") else {
+            return vec![format!(
+                "the canvas said nothing about where `{character}` went"
+            )];
+        };
+        cells.push((at, character));
+    }
+    let image = match picture_of(qmp, root) {
+        Ok(image) => image,
+        Err(error) => return vec![format!("no picture of the typed text: {error}")],
+    };
+    let mut violations = Vec::new();
+    for (at, character) in cells {
+        violations.extend(glyph_at(&image, at, character));
+        if !violations.is_empty() {
+            break;
+        }
+    }
+    violations
+}
+
+/// What the picture does not show of one glyph at one cell.
+fn glyph_at(image: &ppm::Image, at: (u32, u32), character: char) -> Vec<String> {
+    let rows = gfx::glyph(character);
+    let ink = rgb(app_canvas::INK);
+    let ground = rgb(app_canvas::BACKGROUND);
+    for (row, bits) in rows.iter().enumerate() {
+        for column in 0..gfx::GLYPH_WIDTH {
+            let bit = 1_u8
+                .checked_shl(gfx::GLYPH_WIDTH.saturating_sub(1).saturating_sub(column))
+                .unwrap_or(0);
+            let wanted = if bits & bit == 0 { ground } else { ink };
+            let x = at.0.saturating_add(column);
+            let y = at.1.saturating_add(u32::try_from(row).unwrap_or(0));
+            match image.pixel(x, y) {
+                Ok(color) if color == wanted => {}
+                Ok(color) => {
+                    return vec![format!(
+                        "the pixel at {x},{y} of the typed {character:?} is {color:?}, not {wanted:?}"
+                    )];
+                }
+                Err(error) => return vec![format!("the typed text is not on the screen: {error}")],
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// What the picture does not show of the sprite standing at `at`.
+///
+/// Every pixel the sprite covers is checked, and what each should be is
+/// asked of the display server itself rather than written out again here:
+/// which pixels are the body and which the edge follows from the one shape
+/// table, and a test that carried its own copy of that rule would agree
+/// with a wrong one just as readily.
+fn sprite_at(image: &ppm::Image, at: (u32, u32)) -> Vec<String> {
+    for row in 0..server_display::CURSOR_HEIGHT {
+        for column in 0..server_display::CURSOR_WIDTH {
+            let index = usize::try_from(row).unwrap_or(0);
+            let Some(color) = server_display::pixel_of(index, column) else {
+                continue;
+            };
+            let x = at.0.saturating_add(column);
+            let y = at.1.saturating_add(row);
+            match image.pixel(x, y) {
+                Ok(seen) if seen == rgb(color) => {}
+                Ok(seen) => {
+                    return vec![format!(
+                        "the pointer is at {at:?} and the pixel at {x},{y} of its sprite is {seen:?}, not {:?}",
+                        rgb(color)
+                    )];
+                }
+                Err(error) => return vec![format!("the sprite is not on the screen: {error}")],
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// A color of this system as a picture of the screen reports it.
+const fn rgb(color: gfx::Color) -> (u8, u8, u8) {
+    (color.r, color.g, color.b)
+}
+
+/// The two numbers of the last line beginning with `head`.
+fn last_pair(output: &str, head: &str) -> Option<(u32, u32)> {
+    let numbers = last_numbers(output, head)?;
+    Some((*numbers.first()?, *numbers.get(1)?))
+}
+
+/// The two points of the last line beginning with `head`.
+fn last_four(output: &str, head: &str) -> Option<((u32, u32), (u32, u32))> {
+    let numbers = last_numbers(output, head)?;
+    Some((
+        (*numbers.first()?, *numbers.get(1)?),
+        (*numbers.get(2)?, *numbers.get(3)?),
+    ))
+}
+
+/// The numbers of the last line beginning with `head`.
+fn last_numbers(output: &str, head: &str) -> Option<Vec<u32>> {
+    let rest = output
+        .lines()
+        .filter_map(|line| line.split(head).nth(1))
+        .next_back()?;
+    Some(
+        rest.split_whitespace()
+            .filter_map(|word| word.parse().ok())
+            .collect(),
+    )
+}
+
 /// The same system on a machine with no graphics adapter: the firmware
 /// reports no Graphics Output Protocol, so the kernel finds no framebuffer,
 /// the display server answers that there is no screen, and the program that
@@ -690,7 +1020,7 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Erro
 }
 
 /// What a machine without a graphics adapter has to say.
-const NO_VGA_LINES: [(&str, &str); 3] = [
+const NO_VGA_LINES: [(&str, &str); 4] = [
     (
         "[info] framebuffer=absent",
         "the kernel did not report that the machine has no framebuffer",
@@ -702,6 +1032,10 @@ const NO_VGA_LINES: [(&str, &str); 3] = [
     (
         "[paint] nothing drawn: ",
         "the program that draws did not say that it drew nothing",
+    ),
+    (
+        "[canvas] no screen: ",
+        "the canvas did not say that it has no screen",
     ),
 ];
 
