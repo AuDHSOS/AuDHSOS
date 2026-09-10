@@ -82,9 +82,12 @@ AuDHSOS/
 │   │   │   └── src/bin/       server-init (the root task), server-memory,
 │   │   │                      server-name, server-console, server-display,
 │   │   │                      server-input, app-hello, app-checks,
-│   │   │                      app-paint, app-input, app-faulter
-│   │   └── apps/
-│   │       └── canvas/        app-canvas: graphical demonstration and e2e client (Phase 11)
+│   │   │                      app-paint, app-input, app-faulter,
+│   │   │                      app-canvas (Phase 11)
+│   │   └── apps/              the logic of the applications, as servers/ is
+│   │                          for the servers: host-tested, no system call
+│   │       └── canvas/        app-canvas: the drawing state of the graphical
+│   │                          demonstration and e2e client (Phase 11)
 │   ├── crypto/                (document 11)
 │   │   ├── ct/                crypto-ct: Choice, constant-time selection and comparison, Secret<N>
 │   │   ├── hash/              crypto-hash: SHA-256, SHA-384/512, HMAC, HKDF

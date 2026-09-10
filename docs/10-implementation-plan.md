@@ -2852,21 +2852,33 @@ targets run for 60 seconds without findings.
 
 ## 10.11 Phase 11: Graphical demonstration
 
-- `app-canvas` (`crates/user/apps/canvas`): subscribes to `input`,
-  creates a full-screen surface on `display`, keeps a cursor position
+- `app-canvas` (`crates/user/apps/canvas`): the drawing state, which is a
+  host-tested module over `gfx::Surface`. It keeps a cursor position
   clamped to the screen, draws a line segment for every pointer event
-  while button 0 is held, renders typed characters from the `us` layout at
-  a text cursor with the bitmap font, clears the screen on `Escape`, and
-  presents with damage rectangles. It sends `SetCursor` on every pointer
-  event. The drawing state is a host-tested module over `gfx::Surface`.
+  while button 0 is held, advances a text cursor over the characters typed
+  from the `us` layout and renders them with the bitmap font, clears the
+  screen on `Escape`, and accumulates the damage rectangles. Surface in,
+  damage out; it makes no system call.
+- `app_canvas` (`crates/user/programs/src/bin/app_canvas.rs`): the loop
+  around it, as D-97 has every program of the userland be a binary of
+  `user-programs` around a logic crate. It subscribes to `input`, creates
+  a full-screen surface on `display`, feeds the events to the drawing
+  state, sends `SetCursor` on every pointer event, and presents with the
+  damage rectangles it gets back. `server-display` and `server_display.rs`
+  are the split this follows.
 - e2e tests: `canvas_cursor` (a pointer path moves the cursor sprite;
   screendump before and after), `canvas_stroke` (press, move, release;
   the pixels along the path carry the pen color), `canvas_text` (a typed
   string appears at the text cursor pixel for pixel).
 - `cargo xtask run --display` starts the canvas; the root task starts it
   after the servers when the boot image contains it.
-- `policy::CRATES` entry `app-canvas` (Logic, `X86_64None`, deps
-  `user-rt`, `user-proto`, `gfx`).
+- `policy::CRATES` entry `app-canvas` (Logic, `Host`, coverage gate,
+  deps `audhsos-abi`, `gfx`, `user-proto`), as every logic crate of this
+  workspace is host-tested and none is built for `X86_64None`; the target
+  and the unsafe budget stay with `user-programs`, which gains the
+  dependency. Because `unused_crate_dependencies` is denied, every other
+  binary of that package gains a `use app_canvas as _;` line in the same
+  commit.
 
 Acceptance: `check` green; catalog 6.6.29 combined items; the three e2e
 tests pass in CI without a display window.
