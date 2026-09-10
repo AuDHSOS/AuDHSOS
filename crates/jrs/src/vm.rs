@@ -1512,6 +1512,10 @@ impl Execution<'_> {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "dispatch table for all native builtins"
+    )]
     fn native_call(
         &mut self,
         builtin: Builtin,
@@ -1587,6 +1591,14 @@ impl Execution<'_> {
             }
             Builtin::MathMax | Builtin::MathMin => return self.math_extreme(builtin, args),
             Builtin::MathPow => return self.math_pow(args),
+            Builtin::MathAbs => return self.math_unary(args, f64::abs),
+            Builtin::MathFloor => return self.math_unary(args, Self::math_floor_val),
+            Builtin::MathCeil => return self.math_unary(args, Self::math_ceil_val),
+            Builtin::MathRound => return self.math_round(args),
+            Builtin::MathTrunc => return self.math_unary(args, Self::math_trunc_val),
+            Builtin::MathSqrt => return self.math_unary(args, Self::math_sqrt_val),
+            Builtin::MathSign => return self.math_sign(args),
+            Builtin::MathClz32 => return Ok(Self::math_clz32(args)),
             Builtin::String if !args.is_empty() => {
                 return Ok(Value::String(self.string_units(&first)?));
             }

@@ -125,13 +125,29 @@ impl Execution<'_> {
                 ..Property::data(pow)
             },
         )?;
-        for (name, builtin) in [("max", Builtin::MathMax), ("min", Builtin::MathMin)] {
+        for (name, builtin, length) in [
+            ("max", Builtin::MathMax, 2),
+            ("min", Builtin::MathMin, 2),
+            ("abs", Builtin::MathAbs, 1),
+            ("floor", Builtin::MathFloor, 1),
+            ("ceil", Builtin::MathCeil, 1),
+            ("round", Builtin::MathRound, 1),
+            ("trunc", Builtin::MathTrunc, 1),
+            ("sqrt", Builtin::MathSqrt, 1),
+            ("sign", Builtin::MathSign, 1),
+            ("clz32", Builtin::MathClz32, 1),
+        ] {
+            let f = self.new_host_behavior(
+                crate::heap::HostBehavior::Intrinsic(builtin),
+                name,
+                length,
+            )?;
             self.define(
                 &value,
                 Value::string(name).units(),
                 Property {
                     enumerable: false,
-                    ..Property::data(native(builtin))
+                    ..Property::data(f)
                 },
             )?;
         }
