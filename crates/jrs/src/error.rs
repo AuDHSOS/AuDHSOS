@@ -17,6 +17,14 @@ pub enum Error {
         /// The grammar condition that failed.
         message: &'static str,
     },
+    /// The current parser rejected source whose validity has not been proven.
+    /// Conformance runners must not treat this as a verified `SyntaxError`.
+    UnverifiedSyntax {
+        /// Zero-based UTF-8 byte offset in the source.
+        offset: usize,
+        /// The parser expectation that failed.
+        message: &'static str,
+    },
     /// An unresolved or uninitialized binding.
     Reference {
         /// The binding name.
@@ -60,6 +68,9 @@ impl fmt::Display for Error {
         match self {
             Self::Syntax { offset, message } => {
                 write!(f, "SyntaxError at byte {offset}: {message}")
+            }
+            Self::UnverifiedSyntax { offset, message } => {
+                write!(f, "unverified syntax rejection at byte {offset}: {message}")
             }
             Self::Reference { name } => {
                 write!(f, "ReferenceError: {name} is not initialized or defined")

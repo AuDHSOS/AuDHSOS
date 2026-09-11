@@ -560,8 +560,9 @@ createRealm/detachArrayBuffer,
 `AbstractModuleSource` and agents are explicit fatal unsupported host callbacks;
 modules are counted as unsupported. No browser events are installed for Test262.
 These host gaps mean this is still a diagnostic runner, not complete Test262 support.
-Parse-negative rejections are conservatively unsupported while the parser still
-combines invalid syntax with unsupported grammar. Runtime-negative errors must
+Parse-negative tests pass only for an explicitly classified `SyntaxError`.
+Recognized unavailable features and unverified parser rejections remain
+unsupported. Runtime-negative errors must
 occur at runtime with the expected constructor name; harness/resource failures
 cannot satisfy them. Regex implementation restrictions now use fatal
 `Error::Unsupported`, not catchable `SyntaxError`, so they cannot produce false

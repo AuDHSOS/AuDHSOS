@@ -80,6 +80,21 @@ struct Runner {
     harness_bytes: usize,
 }
 
+fn parse_negative_outcome(compiled: Result<Script, Error>, expected: &str) -> Outcome {
+    match compiled {
+        Ok(_) => Outcome::Fail("parse-negative test compiled successfully".into()),
+        Err(Error::Syntax { .. }) if expected == "SyntaxError" => Outcome::Pass,
+        Err(Error::Syntax { .. }) => {
+            Outcome::Fail("parse phase produced SyntaxError of the wrong expected type".into())
+        }
+        Err(Error::Unsupported { feature }) => Outcome::Unsupported(format!("compile: {feature}")),
+        Err(Error::UnverifiedSyntax { .. }) => {
+            Outcome::Unsupported("parse rejection is not yet verified".into())
+        }
+        Err(error) => Outcome::Fail(format!("compile: {error}")),
+    }
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "sequential per-file reporting keeps every selected variant accounted for"
@@ -320,12 +335,10 @@ impl Runner {
             source.to_owned()
         };
         let compiled = compile_script(&source, self.limits);
-        if meta
-            .negative
-            .as_ref()
-            .is_some_and(|(phase, _)| phase == "parse")
+        if let Some((phase, expected)) = &meta.negative
+            && phase == "parse"
         {
-            return match compiled {Ok(_)=>Outcome::Fail("parse-negative test compiled successfully".into()),Err(Error::Syntax{..})=>Outcome::Unsupported("parse rejection unverified: compiler still combines unsupported grammar with SyntaxError".into()),Err(e)=>Outcome::Fail(format!("compile: {e}"))};
+            return parse_negative_outcome(compiled, expected);
         }
         let script = match compiled {
             Ok(s) => s,
@@ -413,7 +426,7 @@ impl Runner {
 }
 fn error_name(realm: &mut Realm<'_>, error: &Error) -> Option<String> {
     match error {
-        Error::Syntax { .. } => Some("SyntaxError".into()),
+        Error::Syntax { .. } | Error::UnverifiedSyntax { .. } => Some("SyntaxError".into()),
         Error::Type { .. } => Some("TypeError".into()),
         Error::Reference { .. } => Some("ReferenceError".into()),
         Error::Range { .. } => Some("RangeError".into()),

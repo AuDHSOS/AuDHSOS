@@ -341,6 +341,12 @@ impl Parser {
             message,
         }
     }
+    fn unverified_error(&self, message: &'static str) -> Error {
+        Error::UnverifiedSyntax {
+            offset: self.tokens.get(self.at).map_or(0, |t| t.offset),
+            message,
+        }
+    }
     const fn unsupported(feature: &'static str) -> Error {
         Error::Unsupported { feature }
     }
@@ -363,7 +369,7 @@ impl Parser {
         if self.eat(text) {
             Ok(())
         } else {
-            Err(self.error("expected delimiter or keyword"))
+            Err(self.unverified_error("expected delimiter or keyword"))
         }
     }
     fn enter(&mut self) -> Result<(), Error> {
@@ -1100,7 +1106,7 @@ impl Parser {
                 let depth = expr.depth.saturating_add(1);
                 self.make(ExprKind::Group(Box::new(expr)), depth, token.offset)?
             }
-            _ => return Err(self.error("expected expression")),
+            _ => return Err(self.unverified_error("expected expression")),
         };
         loop {
             if self.is("?.") {
@@ -1298,7 +1304,7 @@ impl Parser {
         let value = match &self.token()?.kind {
             Kind::Word(name) => Value::string(name),
             Kind::Literal(value) => Value::String(value.units()),
-            _ => return Err(self.error("expected property name")),
+            _ => return Err(self.unverified_error("expected property name")),
         };
         self.at = self.at.saturating_add(1);
         Ok(value)

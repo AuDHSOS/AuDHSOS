@@ -127,7 +127,8 @@ fn negative_phase_types_cannot_mask_harness_resource_or_unsupported_errors() {
             "UNSUPPORTED",
         ),
         ("parse", "SyntaxError", "0", "FAIL"),
-        ("parse", "SyntaxError", "let =", "UNSUPPORTED"),
+        ("parse", "SyntaxError", "let =", "PASS"),
+        ("parse", "TypeError", "return 1", "FAIL"),
         ("resolution", "Error", "0", "FAIL"),
     ];
     for (phase, ty, body, expected) in cases {
@@ -140,6 +141,12 @@ fn negative_phase_types_cannot_mask_harness_resource_or_unsupported_errors() {
         let (_, out) = f.run(&["test/a.js"]);
         assert!(out.contains(&format!("[non-strict]: {expected}")), "{out}");
     }
+    f.write(
+        "test/a.js",
+        "/*---\nflags: [noStrict]\nnegative:\n  phase: parse\n  type: SyntaxError\n---*/\nclass C{x=1}",
+    );
+    let (r, out) = f.run(&["test/a.js"]);
+    assert!(r.is_err() && out.contains(": UNSUPPORTED"), "{out}");
     f.write(
         "test/a.js",
         "/*---\nnegative:\n  phase: runtime\n  type: TypeError\n---*/\nthrow new TypeError()",

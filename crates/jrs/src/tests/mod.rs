@@ -615,6 +615,10 @@ fn error_variants_render_useful_messages() {
             offset: 4,
             message: "bad token",
         },
+        Error::UnverifiedSyntax {
+            offset: 4,
+            message: "unknown grammar",
+        },
         Error::Reference {
             name: "x".to_owned(),
         },
@@ -659,12 +663,11 @@ fn unsupported_syntax_is_distinct_from_syntax_errors() {
             "{source}"
         );
     }
-    for source in [
-        "let =",
-        "1 +",
-        "({x})={x:1}",
-        "for(true?0:'x' in {};false;);",
-    ] {
+    assert!(matches!(
+        compile("1 +", Limits::default()),
+        Err(Error::UnverifiedSyntax { .. })
+    ));
+    for source in ["let =", "({x})={x:1}", "for(true?0:'x' in {};false;);"] {
         assert!(
             matches!(
                 compile(source, Limits::default()),

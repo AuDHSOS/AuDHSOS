@@ -180,7 +180,7 @@ impl Execution<'_> {
             Error::Type { .. } => Builtin::TypeError,
             Error::Reference { .. } => Builtin::ReferenceError,
             Error::Range { .. } => Builtin::RangeError,
-            Error::Syntax { .. } => Builtin::SyntaxError,
+            Error::Syntax { .. } | Error::UnverifiedSyntax { .. } => Builtin::SyntaxError,
             _ => Builtin::Error,
         };
         self.new_error(kind, &[Value::string(&alloc::format!("{error}"))])

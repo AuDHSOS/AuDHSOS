@@ -403,6 +403,7 @@ pub(super) const fn language_error(error: &Error) -> bool {
             | Error::Range { .. }
             | Error::Reference { .. }
             | Error::Syntax { .. }
+            | Error::UnverifiedSyntax { .. }
     )
 }
 #[cfg(test)]
