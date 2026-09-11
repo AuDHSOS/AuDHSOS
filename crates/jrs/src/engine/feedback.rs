@@ -133,6 +133,20 @@ pub enum BinaryOpFeedback {
     Generic,
 }
 
+impl BinaryOpFeedback {
+    /// Monotonically records one observed operand pair.
+    pub const fn record(&mut self, observed: Self) {
+        *self = match (*self, observed) {
+            (Self::None, observed) => observed,
+            (Self::SignedSmallInteger, Self::SignedSmallInteger) => Self::SignedSmallInteger,
+            (Self::SignedSmallInteger | Self::Number, Self::SignedSmallInteger | Self::Number) => {
+                Self::Number
+            }
+            _ => Self::Generic,
+        };
+    }
+}
+
 /// Monomorphic or bounded polymorphic bytecode-function targets observed at a call site.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub enum CallIC {
@@ -292,8 +306,31 @@ impl FeedbackVector {
         }
     }
 
+    /// Records a binary operand profile in a statically typed slot.
+    pub fn record_binary(&mut self, slot: u16, observed: BinaryOpFeedback) -> Option<()> {
+        let FeedbackSlot::BinaryOp(feedback) = self.slots.get_mut(slot as usize)? else {
+            return None;
+        };
+        feedback.record(observed);
+        Some(())
+    }
+
+    /// Returns immutable binary operand feedback for one slot.
+    #[must_use]
+    pub fn get_binary(&self, slot: u16) -> Option<BinaryOpFeedback> {
+        match self.slots.get(slot as usize) {
+            Some(FeedbackSlot::BinaryOp(feedback)) => Some(*feedback),
+            _ => None,
+        }
+    }
+
     pub(crate) fn function_mut(&mut self, code_id: u32) -> Option<&mut Self> {
         self.functions.get_mut(code_id as usize)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn function(&self, code_id: u32) -> Option<&Self> {
+        self.functions.get(code_id as usize)
     }
 
     pub(crate) fn matches_code(&self, code: &super::bytecode::BytecodeFunction) -> bool {

@@ -33,6 +33,16 @@ fn primitive_expressions_run_through_register_bytecode_and_match_legacy() -> Res
         "true === false",
         "null === null",
         "null === false",
+        "'1'+2",
+        "1+'2'",
+        "true+2",
+        "null+2",
+        "undefined+2",
+        "'x'+true",
+        "'x'+null",
+        "'x'+undefined",
+        "'4'-2",
+        "true*7",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -304,7 +314,12 @@ fn register_string_concatenation_preserves_string_unit_limit() -> Result<(), Err
 
 #[test]
 fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<(), Error> {
-    for source in ["'1'+2", "typeof 1", "{let x=1;x+2}", "Number(1)"] {
+    for source in [
+        "typeof 1",
+        "{let x=1;x+2}",
+        "Number(1)",
+        "({valueOf(){return 1}})+2",
+    ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
             "{source}"
@@ -350,6 +365,13 @@ fn simple_functions_use_contiguous_register_call_frames() -> Result<(), Error> {
         "function f(a){return a}f(42,7)",
         "function f(a){if(a)return 1;return 2}f(true)",
         "function f(a){return a===42}f(42)",
+        "function add(a,b){return a+b}add(20,22)",
+        "function add(a,b){return a+b}add('a','b')",
+        "function add(a,b){return a+b}add('a',2)",
+        "function sub(a,b){return a-b}sub('44',2)",
+        "function mul(a,b){return a*b}mul(true,42)",
+        "function div(a,b){return a/b}div(null,0)",
+        "function rem(a,b){return a%b}rem(7,3)",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -368,7 +390,6 @@ fn simple_functions_use_contiguous_register_call_frames() -> Result<(), Error> {
 #[test]
 fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> Result<(), Error> {
     for source in [
-        "function add(a,b){return a+b}add(20,22)",
         "function f(){return this}f()",
         "function f(){return arguments.length}f()",
         "let x=42;function f(){return x}f()",

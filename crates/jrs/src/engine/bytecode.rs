@@ -25,6 +25,21 @@ pub enum FeedbackKind {
     Call,
 }
 
+/// Arithmetic operation executed through a typed feedback slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinaryOp {
+    /// ECMAScript addition or string concatenation.
+    Add,
+    /// Numeric subtraction.
+    Sub,
+    /// Numeric multiplication.
+    Mul,
+    /// Numeric division.
+    Div,
+    /// Numeric remainder.
+    Mod,
+}
+
 /// Structural verification failure in register bytecode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VerificationError {
@@ -153,6 +168,15 @@ pub enum Instruction {
     Div(Reg),
     /// `acc = acc % reg`
     Mod(Reg),
+    /// Primitive arithmetic/string operation with runtime type feedback.
+    Binary {
+        /// Operation to execute.
+        op: BinaryOp,
+        /// Right-hand operand register.
+        rhs: Reg,
+        /// `BinaryOp` feedback slot.
+        slot: u16,
+    },
     /// `acc = acc & reg`
     BitAnd(Reg),
     /// `acc = acc | reg`
@@ -425,6 +449,10 @@ impl BytecodeFunction {
             Instruction::Mov { src, dst } => {
                 self.verify_register(pc, src)?;
                 Some(dst)
+            }
+            Instruction::Binary { rhs, slot, .. } => {
+                self.verify_feedback(pc, slot, FeedbackKind::BinaryOp)?;
+                Some(rhs)
             }
             Instruction::GetNamed { obj, name, slot }
             | Instruction::SetNamed { obj, name, slot } => {

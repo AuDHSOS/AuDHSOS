@@ -1714,6 +1714,31 @@ impl RegisterLowerer {
             {
                 (Instruction::Add(right_register), RegisterType::String)
             }
+            Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
+                if left_type.is_primitive() && right_type.is_primitive() =>
+            {
+                let op = match operator {
+                    Binary::Add => crate::engine::bytecode::BinaryOp::Add,
+                    Binary::Sub => crate::engine::bytecode::BinaryOp::Sub,
+                    Binary::Mul => crate::engine::bytecode::BinaryOp::Mul,
+                    Binary::Div => crate::engine::bytecode::BinaryOp::Div,
+                    Binary::Rem => crate::engine::bytecode::BinaryOp::Mod,
+                    _ => return None,
+                };
+                let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::BinaryOp)?;
+                (
+                    Instruction::Binary {
+                        op,
+                        rhs: right_register,
+                        slot,
+                    },
+                    if operator == Binary::Add {
+                        RegisterType::Primitive
+                    } else {
+                        RegisterType::Number
+                    },
+                )
+            }
             Binary::Lt | Binary::Le | Binary::Gt | Binary::Ge
                 if left_type == RegisterType::Number && right_type == RegisterType::Number =>
             {

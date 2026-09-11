@@ -288,7 +288,7 @@ pub(crate) fn integer_or_infinity(n: f64) -> f64 {
     }
 }
 
-fn string_number(text: &str) -> f64 {
+pub(crate) fn string_number(text: &str) -> f64 {
     let text = text.trim_matches(|c| whitespace(c) || line_terminator(c));
     if text.is_empty() {
         return 0.0;

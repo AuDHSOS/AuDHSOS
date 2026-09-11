@@ -16,8 +16,8 @@
 //! Smi arithmetic and inline cache property access.
 
 use super::{
-    bytecode::{BytecodeFunction, Instruction, Reg, VerificationError},
-    feedback::{FeedbackVector, NamedAccessCase},
+    bytecode::{BinaryOp, BytecodeFunction, Instruction, Reg, VerificationError},
+    feedback::{BinaryOpFeedback, FeedbackVector, NamedAccessCase},
     heap::{GenerationalHeap, HeapError},
     shape::{PropertyFlags, ShapeId},
     string::StringError,
@@ -315,6 +315,65 @@ impl RegisterVM {
         Ok(())
     }
 
+    fn primitive_binary(
+        &mut self,
+        op: BinaryOp,
+        rhs: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<BinaryOpFeedback, VMError> {
+        let observed = if self.acc.as_smi().is_some() && rhs.as_smi().is_some() {
+            BinaryOpFeedback::SignedSmallInteger
+        } else if self.acc.is_number() && rhs.is_number() {
+            BinaryOpFeedback::Number
+        } else {
+            BinaryOpFeedback::Generic
+        };
+        if op == BinaryOp::Add && (self.acc.is_string() || rhs.is_string()) {
+            let left = self.primitive_string(self.acc, heap)?;
+            let right = self.primitive_string(rhs, heap)?;
+            self.acc = left;
+            self.add(right, heap)?;
+            return Ok(observed);
+        }
+        let left = primitive_number(self.acc, heap)?;
+        let right = primitive_number(rhs, heap)?;
+        self.acc = match op {
+            BinaryOp::Add => Value::from_f64(left + right),
+            BinaryOp::Sub => Value::from_f64(left - right),
+            BinaryOp::Mul => Value::from_f64(left * right),
+            BinaryOp::Div => Value::from_f64(left / right),
+            BinaryOp::Mod => Value::from_f64(left % right),
+        };
+        if observed == BinaryOpFeedback::SignedSmallInteger
+            && let Some(integer) = exact_smi(self.acc.as_f64().unwrap_or(f64::NAN))
+        {
+            self.acc = Value::from_smi(integer);
+        }
+        Ok(observed)
+    }
+
+    fn primitive_string(
+        &self,
+        value: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        if value.is_string() {
+            return Ok(value);
+        }
+        let text = if let Some(number) = value.as_f64() {
+            crate::number::decimal_string(number)
+        } else if let Some(boolean) = value.as_boolean() {
+            alloc::string::String::from(if boolean { "true" } else { "false" })
+        } else if value.is_null() {
+            alloc::string::String::from("null")
+        } else if value.is_undefined() {
+            alloc::string::String::from("undefined")
+        } else {
+            return Err(VMError::TypeError);
+        };
+        self.allocate_string(heap, &text.encode_utf16().collect::<Vec<_>>())
+    }
+
     fn strictly_equals(
         left: Value,
         right: Value,
@@ -524,6 +583,13 @@ impl RegisterVM {
                     } else {
                         return Err(VMError::TypeError);
                     }
+                }
+                Instruction::Binary { op, rhs, slot } => {
+                    let rhs = self.read_reg(rhs)?;
+                    let observed = self.primitive_binary(op, rhs, heap)?;
+                    active_feedback
+                        .record_binary(slot, observed)
+                        .ok_or(VMError::InvalidFeedbackVector)?;
                 }
                 Instruction::BitAnd(reg) => {
                     let rhs = self.read_reg(reg)?;
@@ -1026,6 +1092,43 @@ fn numeric_value(value: Value) -> Option<f64> {
         .or_else(|| value.is_undefined().then_some(f64::NAN))
 }
 
+fn primitive_number(value: Value, heap: &GenerationalHeap) -> Result<f64, VMError> {
+    if let Some(number) = value.as_f64() {
+        return Ok(number);
+    }
+    if value.is_undefined() {
+        return Ok(f64::NAN);
+    }
+    if value.is_null() {
+        return Ok(0.0);
+    }
+    if let Some(boolean) = value.as_boolean() {
+        return Ok(f64::from(u8::from(boolean)));
+    }
+    if value.is_string() {
+        let text = heap
+            .strings
+            .to_rust_string(value)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        return Ok(crate::value::string_number(&text));
+    }
+    Err(VMError::TypeError)
+}
+
+fn exact_smi(number: f64) -> Option<i32> {
+    if !number.is_finite() || number < f64::from(i32::MIN) || number > f64::from(i32::MAX) {
+        return None;
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "finite Number was bounded to the signed 32-bit range"
+    )]
+    let integer = number as i32;
+    #[expect(clippy::float_cmp, reason = "Smi conversion requires exact integers")]
+    (f64::from(integer) == number && !(number == 0.0 && number.is_sign_negative()))
+        .then_some(integer)
+}
+
 fn array_index(value: Value, heap: &GenerationalHeap) -> Result<Option<u32>, VMError> {
     if let Some(index) = value.as_smi() {
         return Ok(u32::try_from(index).ok());
@@ -1494,5 +1597,68 @@ mod tests {
         assert!(heap.get_object(result.as_object().unwrap()).is_some());
         assert_eq!(feedback.get_call_ic(0), Some(&CallIC::Monomorphic(0)));
         assert_eq!(feedback.get_call_ic(1), Some(&CallIC::Monomorphic(0)));
+    }
+
+    #[test]
+    fn binary_feedback_widens_from_smi_to_number_to_generic() {
+        let mut binary = BytecodeFunction::new(2, 2);
+        let binary_slot = binary.allocate_feedback_slot(FeedbackKind::BinaryOp);
+        binary.emit(Instruction::Ldar(Reg(0)));
+        binary.emit(Instruction::Binary {
+            op: BinaryOp::Add,
+            rhs: Reg(1),
+            slot: binary_slot,
+        });
+        binary.emit(Instruction::Return);
+
+        let mut root = BytecodeFunction::new(3, 0);
+        root.functions.push(binary);
+        let call_slot = root.allocate_feedback_slot(FeedbackKind::Call);
+        root.emit(Instruction::CreateClosure(0));
+        root.emit(Instruction::Star(Reg(0)));
+        root.emit(Instruction::LdaSmi(20));
+        root.emit(Instruction::Star(Reg(1)));
+        root.emit(Instruction::LdaSmi(22));
+        root.emit(Instruction::Star(Reg(2)));
+        root.emit(Instruction::Call {
+            func: Reg(0),
+            arg_start: Reg(1),
+            arg_count: 2,
+            slot: call_slot,
+        });
+        root.emit(Instruction::Return);
+
+        let mut heap = GenerationalHeap::new();
+        let mut feedback = FeedbackVector::for_code(&root);
+        let mut vm = RegisterVM::new(100);
+        assert_eq!(
+            vm.run(&root, &mut feedback, &mut heap),
+            Ok(Value::from_smi(42))
+        );
+        assert_eq!(
+            feedback.function(0).and_then(|vector| vector.get_binary(0)),
+            Some(BinaryOpFeedback::SignedSmallInteger)
+        );
+
+        root.instructions[2] = Instruction::LdaConstant(root.add_constant(Value::from_f64(0.5)));
+        vm.fuel = 100;
+        assert_eq!(
+            vm.run(&root, &mut feedback, &mut heap),
+            Ok(Value::from_f64(22.5))
+        );
+        assert_eq!(
+            feedback.function(0).and_then(|vector| vector.get_binary(0)),
+            Some(BinaryOpFeedback::Number)
+        );
+
+        root.string_constants.push("x".encode_utf16().collect());
+        root.instructions[2] = Instruction::LdaString(0);
+        vm.fuel = 100;
+        let value = vm.run(&root, &mut feedback, &mut heap).unwrap();
+        assert_eq!(heap.strings.to_rust_string(value).as_deref(), Some("x22"));
+        assert_eq!(
+            feedback.function(0).and_then(|vector| vector.get_binary(0)),
+            Some(BinaryOpFeedback::Generic)
+        );
     }
 }
