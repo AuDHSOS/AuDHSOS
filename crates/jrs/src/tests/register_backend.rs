@@ -403,6 +403,31 @@ fn closures_share_captured_context_bindings_in_register_bytecode() -> Result<(),
     for source in [
         "let x=40;let f=function(){return x+2};f()",
         "let x=1;let f=function(){return x};x=2;f()",
+        "let x=42;function f(){return x}f()",
+        "let x=undefined;function f(){return x}f()",
+        "let x=NaN;function f(){return x}f()",
+        "let x=Infinity;function f(){return x}f()",
+        "let x=(1,42);function f(){return x}f()",
+        "let y=1;let x=(y=42);function f(){return x}f()",
+        "let x=!0;function f(){return x}f()",
+        "let x=void 0;function f(){return x}f()",
+        "let x=-1;function f(){return x}f()",
+        "let x=+1;function f(){return x}f()",
+        "let x=~1;function f(){return x}f()",
+        "let x='a'+'b';function f(){return x}f()",
+        "let x=40+2;function f(){return x}f()",
+        "let x=44-2;function f(){return x}f()",
+        "let x=21*2;function f(){return x}f()",
+        "let x=84/2;function f(){return x}f()",
+        "let x=86%44;function f(){return x}f()",
+        "let x=1<2;function f(){return x}f()",
+        "let x=1<=2;function f(){return x}f()",
+        "let x=2>1;function f(){return x}f()",
+        "let x=2>=1;function f(){return x}f()",
+        "let x=1===1;function f(){return x}f()",
+        "let x=1!==2;function f(){return x}f()",
+        "let x=true?42:0;function f(){return x}f()",
+        "let flag=true;let x=flag?42:0;function f(){return x}f()",
         "let x=40;let f=function(){x++;return x};f();f()",
         "let x='a';let f=function(){x+='b';return x};f();f()",
         "let x=1;let f=function(){return x};let g=function(){x++;return x};f()+g()+f()",
@@ -439,19 +464,54 @@ fn closures_share_captured_context_bindings_in_register_bytecode() -> Result<(),
 }
 
 #[test]
+fn nested_functions_use_flat_code_and_lexical_context_tables() -> Result<(), Error> {
+    for source in [
+        "function f(){function g(){return 1}return g()}f()",
+        "function f(){let x=40;function g(){return x+2}return g()}f()",
+        "let x=40;function f(){let y=1;function g(){return x+y+1}return g()}f()",
+        "function f(){let x=1;function g(){x++;return x}return g()+g()}f()",
+        "function f(a){let x=40;if(a){x++}else{x+=2}function g(){return x}return g()}f(true)",
+        "function f(){function g(){return 40}function h(){return g()+2}return h()}f()",
+        "let x=39;function f(){let y=1;function g(){let z=1;function h(){return x+y+z+1}return h()}return g()}f()",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let code = program
+            .register_code
+            .as_ref()
+            .ok_or(Error::InvalidBytecode)?;
+        assert!(code.functions.len() >= 2, "{source}");
+        assert!(
+            code.functions
+                .iter()
+                .all(|function| function.functions.is_empty())
+        );
+
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> Result<(), Error> {
     for source in [
         "function f(){return this}f()",
         "function f(){return arguments.length}f()",
-        "let x=42;function f(){return x}f()",
         "function f(){return {x:1}}f()",
         "async function f(){return 1}f()",
-        "function f(){function g(){return 1}return g()}f()",
         "function f(a,a){return a}f(1,2)",
         "function f(a={}){return a}f()",
         "function f(...a){return a.length}f(1)",
         "let f=function inner(){return inner===f};f()",
         "let f=function inner(inner){return inner};f(42)",
+        "function outer(){function f(){return x}f();let x=1}outer()",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),

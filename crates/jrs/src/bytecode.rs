@@ -571,6 +571,7 @@ enum RegisterBindingStorage {
 
 struct RegisterLowerer {
     code: crate::engine::bytecode::BytecodeFunction,
+    function_table_base: u32,
     next_register: u16,
     register_count: u16,
     local_count: u16,
@@ -582,6 +583,8 @@ struct RegisterLowerer {
     property_limit: usize,
     function_returns: BTreeMap<u32, RegisterType>,
     function_parameters: BTreeMap<u32, Vec<RegisterType>>,
+    function_capture_effects: BTreeMap<u32, BTreeMap<String, RegisterType>>,
+    binding_type_hints: BTreeMap<String, RegisterType>,
     allow_return: bool,
     return_type: Option<RegisterType>,
 }
@@ -617,6 +620,8 @@ struct RegisterSnapshot {
     outer_context_slot_counts: Vec<u16>,
     function_returns: BTreeMap<u32, RegisterType>,
     function_parameters: BTreeMap<u32, Vec<RegisterType>>,
+    function_capture_effects: BTreeMap<u32, BTreeMap<String, RegisterType>>,
+    binding_type_hints: BTreeMap<String, RegisterType>,
     return_type: Option<RegisterType>,
 }
 
@@ -625,12 +630,14 @@ impl RegisterLowerer {
         entry_fuel_cost: u64,
         entry_stack_requirement: usize,
         property_limit: usize,
+        function_table_base: u32,
     ) -> Self {
         let mut code = crate::engine::bytecode::BytecodeFunction::new(0, 0);
         code.entry_fuel_cost = entry_fuel_cost;
         code.entry_stack_requirement = entry_stack_requirement;
         Self {
             code,
+            function_table_base,
             next_register: 0,
             register_count: 0,
             local_count: 0,
@@ -642,6 +649,8 @@ impl RegisterLowerer {
             property_limit,
             function_returns: BTreeMap::new(),
             function_parameters: BTreeMap::new(),
+            function_capture_effects: BTreeMap::new(),
+            binding_type_hints: BTreeMap::new(),
             allow_return: false,
             return_type: None,
         }
@@ -744,6 +753,8 @@ impl RegisterLowerer {
             outer_context_slot_counts: self.code.outer_context_slot_counts.clone(),
             function_returns: self.function_returns.clone(),
             function_parameters: self.function_parameters.clone(),
+            function_capture_effects: self.function_capture_effects.clone(),
+            binding_type_hints: self.binding_type_hints.clone(),
             return_type: self.return_type,
         }
     }
@@ -764,6 +775,8 @@ impl RegisterLowerer {
         self.code.outer_context_slot_counts = snapshot.outer_context_slot_counts;
         self.function_returns = snapshot.function_returns;
         self.function_parameters = snapshot.function_parameters;
+        self.function_capture_effects = snapshot.function_capture_effects;
+        self.binding_type_hints = snapshot.binding_type_hints;
         self.return_type = snapshot.return_type;
     }
 
@@ -1022,43 +1035,49 @@ impl RegisterLowerer {
         if !Self::register_function_supported(function) {
             return None;
         }
-        let code_id = u32::try_from(self.code.functions.len()).ok()?;
-        let local_names = register_function_local_names(function)?;
-        let mut referenced_names = BTreeSet::new();
-        for statement in &function.body {
-            register_statement_references(statement, &mut referenced_names)?;
-        }
+        let code_id = u32::try_from(self.code.functions.len())
+            .ok()?
+            .checked_add(self.function_table_base)?;
+        let scope = register_function_scope(function)?;
         let mut captures = BTreeMap::new();
-        for name in referenced_names.difference(&local_names) {
+        for name in &scope.free_names {
             if self.bindings.contains_key(name) {
                 captures.insert(name.clone(), self.capture_binding(name)?);
             }
         }
         let (mut child, self_register) =
-            self.register_function_child(function, code_id, &captures)?;
+            self.register_function_child(function, code_id, &captures, &scope.captured_names)?;
         if !captures.is_empty() {
             child.code.outer_context_slot_counts = self.context_slot_counts()?;
         }
         let return_type = Self::lower_function_body(&mut child, &function.body)?;
-        for (name, captured) in &captures {
-            let initial_type = captured.value_type?;
-            let final_type = child.bindings.get(name)?.value_type?;
-            self.bindings.get_mut(name)?.value_type = Some(initial_type.merge(final_type));
-        }
-        if !return_type.is_primitive() || !child.code.functions.is_empty() {
+        let capture_effects = captures
+            .iter()
+            .map(|(name, captured)| {
+                let initial_type = captured
+                    .value_type
+                    .or_else(|| self.binding_type_hints.get(name).copied())?;
+                let final_type = child.bindings.get(name)?.value_type?;
+                Some((name.clone(), initial_type.merge(final_type)))
+            })
+            .collect::<Option<BTreeMap<_, _>>>()?;
+        if !return_type.is_primitive() {
             return None;
         }
         child.code.register_count = child.register_count;
         child.code.parameter_count = u16::try_from(function.parameters.len()).ok()?;
         child.code.binding_count = child.local_count;
         child.code.self_register = self_register;
-        child.code.verify().ok()?;
+        let nested_functions = core::mem::take(&mut child.code.functions);
         self.code.functions.push(child.code);
+        self.code.functions.extend(nested_functions);
         self.function_returns.insert(code_id, return_type);
         self.function_parameters.insert(
             code_id,
             alloc::vec![RegisterType::Primitive; function.parameters.len()],
         );
+        self.function_capture_effects
+            .insert(code_id, capture_effects);
         self.code.emit(Instruction::CreateClosure(code_id));
         Some(RegisterType::Function(code_id))
     }
@@ -1085,6 +1104,7 @@ impl RegisterLowerer {
         function: &Function,
         code_id: u32,
         captures: &BTreeMap<String, RegisterBinding>,
+        captured_names: &BTreeSet<String>,
     ) -> Option<(Self, Option<crate::engine::bytecode::Reg>)> {
         let mut child = Self::new(
             0,
@@ -1092,8 +1112,13 @@ impl RegisterLowerer {
                 maximum.max(register_statement_stack_requirement(statement))
             }),
             self.property_limit,
+            code_id.checked_add(1)?,
         );
         child.allow_return = true;
+        child.function_returns = self.function_returns.clone();
+        child.function_parameters = self.function_parameters.clone();
+        child.function_capture_effects = self.function_capture_effects.clone();
+        let depth_shift = u16::from(!captured_names.is_empty());
         for (name, binding) in captures {
             let RegisterBindingStorage::Context { depth, slot } = binding.storage else {
                 return None;
@@ -1101,7 +1126,13 @@ impl RegisterLowerer {
             child.bindings.insert(
                 name.clone(),
                 RegisterBinding {
-                    storage: RegisterBindingStorage::Context { depth, slot },
+                    storage: RegisterBindingStorage::Context {
+                        depth: depth.checked_add(depth_shift)?,
+                        slot,
+                    },
+                    value_type: binding
+                        .value_type
+                        .or_else(|| self.binding_type_hints.get(name).copied()),
                     ..*binding
                 },
             );
@@ -1142,11 +1173,38 @@ impl RegisterLowerer {
                         child.declare(name, *mutable)?;
                     }
                 }
-                Stmt::Function(_, _) | Stmt::Var(_) => return None,
+                Stmt::Function(name, _) => child.declare(name, true)?,
+                Stmt::Var(_) => return None,
                 _ => {}
             }
         }
+        child.infer_binding_type_hints(&function.body)?;
+        for name in captured_names {
+            child.capture_binding(name)?;
+        }
         Some((child, self_register))
+    }
+
+    fn infer_binding_type_hints(&mut self, body: &[Stmt]) -> Option<()> {
+        let mut bindings = self.bindings.clone();
+        for statement in body {
+            let Stmt::Declare(declarations) = statement else {
+                continue;
+            };
+            for (name, _, initializer) in declarations {
+                let value_type = if let Some(initializer) = initializer {
+                    let Some(value_type) = register_expression_type(initializer, &bindings) else {
+                        continue;
+                    };
+                    value_type
+                } else {
+                    RegisterType::Undefined
+                };
+                bindings.get_mut(name)?.value_type = Some(value_type);
+                self.binding_type_hints.insert(name.clone(), value_type);
+            }
+        }
+        Some(())
     }
 
     fn context_slot_counts(&self) -> Option<Vec<u16>> {
@@ -1160,6 +1218,14 @@ impl RegisterLowerer {
 
     fn lower_function_body(child: &mut Self, body: &[Stmt]) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        for statement in body {
+            if let Stmt::Function(name, function) = statement {
+                let value_type = child.lower_function(function)?;
+                let binding = *child.bindings.get(name)?;
+                child.store_binding(binding);
+                child.bindings.get_mut(name)?.value_type = Some(value_type);
+            }
+        }
         let mut flow = RegisterFlow::Empty;
         for statement in body {
             flow = match statement {
@@ -1169,6 +1235,7 @@ impl RegisterLowerer {
                     }
                     RegisterFlow::Empty
                 }
+                Stmt::Function(_, _) => RegisterFlow::Empty,
                 _ => child.lower_statement(statement)?,
             };
             if flow == RegisterFlow::Abrupt {
@@ -1194,6 +1261,19 @@ impl RegisterLowerer {
         let RegisterType::Function(code_id) = self.lower(callee)? else {
             return None;
         };
+        if self
+            .function_capture_effects
+            .get(&code_id)
+            .is_some_and(|effects| {
+                effects.keys().any(|name| {
+                    self.bindings
+                        .get(name)
+                        .is_none_or(|binding| binding.value_type.is_none())
+                })
+            })
+        {
+            return None;
+        }
         let function = self.allocate_register()?;
         self.code.emit(Instruction::Star(function));
         let parameter_types = self.function_parameters.get(&code_id)?.clone();
@@ -1235,6 +1315,12 @@ impl RegisterLowerer {
             self.release_register(register)?;
         }
         self.release_register(function)?;
+        if let Some(effects) = self.function_capture_effects.get(&code_id).cloned() {
+            for (name, effect) in effects {
+                let binding = self.bindings.get_mut(&name)?;
+                binding.value_type = Some(binding.value_type?.merge(effect));
+            }
+        }
         self.function_returns.get(&code_id).copied()
     }
 
@@ -2097,6 +2183,76 @@ fn parse_array_index(units: &[u16]) -> Option<u32> {
     (index != u32::MAX).then_some(index)
 }
 
+fn register_expression_type(
+    expression: &Expr,
+    bindings: &BTreeMap<String, RegisterBinding>,
+) -> Option<RegisterType> {
+    let value_type = match &expression.kind {
+        ExprKind::Literal(Value::Number(_)) => RegisterType::Number,
+        ExprKind::Literal(Value::Boolean(_)) => RegisterType::Boolean,
+        ExprKind::Literal(Value::Null) => RegisterType::Null,
+        ExprKind::Literal(Value::Undefined) => RegisterType::Undefined,
+        ExprKind::Literal(Value::String(_)) => RegisterType::String,
+        ExprKind::Name(name) => bindings
+            .get(name)
+            .and_then(|binding| binding.value_type)
+            .or(match name.as_str() {
+                "undefined" => Some(RegisterType::Undefined),
+                "NaN" | "Infinity" => Some(RegisterType::Number),
+                _ => None,
+            })?,
+        ExprKind::Update(name, _, _) => bindings.get(name)?.value_type?,
+        ExprKind::Group(inner) => register_expression_type(inner, bindings)?,
+        ExprKind::Sequence(_, right) | ExprKind::Assign(_, _, right) => {
+            register_expression_type(right, bindings)?
+        }
+        ExprKind::Unary(operator, inner) => {
+            let inner = register_expression_type(inner, bindings)?;
+            match operator {
+                Unary::Plus | Unary::Minus | Unary::BitNot if inner.is_numeric_primitive() => {
+                    RegisterType::Number
+                }
+                Unary::Not => RegisterType::Boolean,
+                Unary::Void => RegisterType::Undefined,
+                Unary::Plus | Unary::Minus | Unary::BitNot | Unary::Typeof | Unary::Delete => {
+                    return None;
+                }
+            }
+        }
+        ExprKind::Binary(operator, left, right) => {
+            let left = register_expression_type(left, bindings)?;
+            let right = register_expression_type(right, bindings)?;
+            match operator {
+                Binary::Add if left == RegisterType::String && right == RegisterType::String => {
+                    RegisterType::String
+                }
+                Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
+                    if left.is_numeric_primitive() && right.is_numeric_primitive() =>
+                {
+                    RegisterType::Number
+                }
+                Binary::Lt
+                | Binary::Le
+                | Binary::Gt
+                | Binary::Ge
+                | Binary::StrictEq
+                | Binary::StrictNe => RegisterType::Boolean,
+                _ => return None,
+            }
+        }
+        ExprKind::Conditional(_, yes, no) => {
+            register_expression_type(yes, bindings)?.merge(register_expression_type(no, bindings)?)
+        }
+        _ => return None,
+    };
+    Some(value_type)
+}
+
+struct RegisterFunctionScope {
+    free_names: BTreeSet<String>,
+    captured_names: BTreeSet<String>,
+}
+
 fn register_function_local_names(function: &Function) -> Option<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     for parameter in &function.parameters {
@@ -2112,11 +2268,44 @@ fn register_function_local_names(function: &Function) -> Option<BTreeSet<String>
                     names.insert(name.clone());
                 }
             }
-            Stmt::Function(_, _) | Stmt::Var(_) => return None,
+            Stmt::Function(name, _) => {
+                names.insert(name.clone());
+            }
+            Stmt::Var(_) => return None,
             _ => {}
         }
     }
     Some(names)
+}
+
+fn register_function_scope(function: &Function) -> Option<RegisterFunctionScope> {
+    let local_names = register_function_local_names(function)?;
+    let mut direct_references = BTreeSet::new();
+    for statement in &function.body {
+        register_statement_references(statement, &mut direct_references)?;
+    }
+    let mut free_names: BTreeSet<_> = direct_references
+        .difference(&local_names)
+        .cloned()
+        .collect();
+    let mut captured_names = BTreeSet::new();
+    for statement in &function.body {
+        let Stmt::Function(_, nested) = statement else {
+            continue;
+        };
+        let nested_scope = register_function_scope(nested)?;
+        for name in nested_scope.free_names {
+            if local_names.contains(&name) {
+                captured_names.insert(name);
+            } else {
+                free_names.insert(name);
+            }
+        }
+    }
+    Some(RegisterFunctionScope {
+        free_names,
+        captured_names,
+    })
 }
 
 fn register_expression_references(expression: &Expr, names: &mut BTreeSet<String>) -> Option<()> {
@@ -2221,12 +2410,11 @@ fn register_statement_references(statement: &Stmt, names: &mut BTreeSet<String>)
                 register_expression_references(value, names)?;
             }
         }
-        Stmt::Empty | Stmt::Break | Stmt::Continue => {}
+        Stmt::Empty | Stmt::Break | Stmt::Continue | Stmt::Function(_, _) => {}
         Stmt::Var(_)
         | Stmt::Switch(_, _)
         | Stmt::ForIn { .. }
         | Stmt::ForOf { .. }
-        | Stmt::Function(_, _)
         | Stmt::Throw(_)
         | Stmt::Try { .. } => return None,
     }
@@ -2282,6 +2470,7 @@ fn prepare_register_bindings(
             }
         }
     }
+    lowerer.infer_binding_type_hints(body)?;
     if saw_function {
         for statement in body {
             if let Stmt::Function(name, function) = statement {
@@ -2305,7 +2494,7 @@ fn lower_register_script(
     let stack_requirement = body.iter().fold(1usize, |maximum, statement| {
         maximum.max(register_statement_stack_requirement(statement))
     });
-    let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement, property_limit);
+    let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement, property_limit, 0);
     prepare_register_bindings(&mut lowerer, body, saw_declaration, saw_function)?;
     let result_register = lowerer.allocate_register()?;
     lowerer
