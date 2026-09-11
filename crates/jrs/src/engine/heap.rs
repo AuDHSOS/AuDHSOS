@@ -11,7 +11,8 @@
 //! Objects and elements are bump-allocated in the active Nursery semispace.
 //! A minor collection copies the complete reachable Young graph into a fresh
 //! semispace and promotes entries that survived two collections. Old-to-Young
-//! stores pass through central APIs which maintain Remembered Sets.
+//! stores pass through central APIs which maintain Remembered Sets. A precise
+//! major mark-sweep collector reclaims unreachable promoted graphs.
 
 use super::{
     elements::{ElementsKind, ElementsRef},
@@ -130,6 +131,19 @@ pub struct ScavengeStats {
     pub copied_elements: usize,
     /// Young elements stores promoted to the Old Generation.
     pub promoted_elements: usize,
+}
+
+/// Statistics for one completed Old Generation mark-sweep collection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MajorCollectionStats {
+    /// Reachable Old Generation objects retained by marking.
+    pub marked_objects: usize,
+    /// Unreachable Old Generation objects reclaimed by sweeping.
+    pub reclaimed_objects: usize,
+    /// Reachable Old Generation elements stores retained by marking.
+    pub marked_elements: usize,
+    /// Unreachable Old Generation elements stores reclaimed by sweeping.
+    pub reclaimed_elements: usize,
 }
 
 /// Generational execution heap.
@@ -423,6 +437,66 @@ impl GenerationalHeap {
         Ok(stats)
     }
 
+    /// Runs a precise Old Generation mark-sweep collection using native roots.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] if the reachable graph contains
+    /// an invalid generation-tagged reference.
+    pub fn collect_old(&mut self) -> Result<MajorCollectionStats, HeapError> {
+        self.collect_old_with_roots(&[], VALUE_NULL)
+    }
+
+    /// Runs a precise Old Generation mark-sweep collection with VM roots.
+    ///
+    /// The marker traverses reachable Young entries as bridges into the Old
+    /// Generation, but only Old entries are swept. Old references are stable,
+    /// so register and root values do not require forwarding updates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] if the reachable graph contains
+    /// an invalid generation-tagged reference.
+    pub fn collect_old_with_roots(
+        &mut self,
+        registers: &[Value],
+        accumulator: Value,
+    ) -> Result<MajorCollectionStats, HeapError> {
+        let (marked_objects, marked_elements) = {
+            let mut marker = MajorMarker::new(&self.nursery, &self.old_gen);
+            for value in self.roots.iter().chain(registers) {
+                marker.mark_value(*value);
+            }
+            marker.mark_value(accumulator);
+            marker.drain()?;
+            (marker.marked_objects, marker.marked_elements)
+        };
+
+        let mut stats = MajorCollectionStats {
+            marked_objects: marked_objects.len(),
+            marked_elements: marked_elements.len(),
+            ..MajorCollectionStats::default()
+        };
+        for (index, entry) in self.old_gen.objects.iter_mut().enumerate() {
+            let index_u32 = generation_index(index)?;
+            if entry.is_some() && !marked_objects.contains(&index_u32) {
+                *entry = None;
+                self.old_gen.free_objects.push(index);
+                stats.reclaimed_objects = stats.reclaimed_objects.saturating_add(1);
+            }
+        }
+        for (index, entry) in self.old_gen.elements.iter_mut().enumerate() {
+            let index_u32 = generation_index(index)?;
+            if entry.is_some() && !marked_elements.contains(&index_u32) {
+                *entry = None;
+                self.old_gen.free_elements.push(index);
+                stats.reclaimed_elements = stats.reclaimed_elements.saturating_add(1);
+            }
+        }
+        self.rebuild_remembered_sets();
+        Ok(stats)
+    }
+
     fn object_mut(&mut self, reference: ObjectRef) -> Result<&mut JSObject, HeapError> {
         let index = reference.index() as usize;
         if reference.is_old() {
@@ -470,6 +544,8 @@ impl GenerationalHeap {
     }
 
     fn rebuild_remembered_sets(&mut self) {
+        self.remembered_objects.clear();
+        self.remembered_elements.clear();
         for (index, object) in self.old_gen.objects.iter().enumerate() {
             if object.as_ref().is_some_and(object_contains_young)
                 && let Ok(index) = generation_index(index)
@@ -484,6 +560,99 @@ impl GenerationalHeap {
                 self.remembered_elements.insert(index);
             }
         }
+    }
+}
+
+struct MajorMarker<'heap> {
+    nursery: &'heap Nursery,
+    old: &'heap OldGeneration,
+    marked_objects: BTreeSet<u32>,
+    marked_elements: BTreeSet<u32>,
+    visited_young_objects: BTreeSet<u32>,
+    visited_young_elements: BTreeSet<u32>,
+    work: Vec<Work>,
+}
+
+impl<'heap> MajorMarker<'heap> {
+    const fn new(nursery: &'heap Nursery, old: &'heap OldGeneration) -> Self {
+        Self {
+            nursery,
+            old,
+            marked_objects: BTreeSet::new(),
+            marked_elements: BTreeSet::new(),
+            visited_young_objects: BTreeSet::new(),
+            visited_young_elements: BTreeSet::new(),
+            work: Vec::new(),
+        }
+    }
+
+    fn mark_value(&mut self, value: Value) {
+        if let Some(reference) = value.as_object() {
+            self.work.push(Work::Object(reference));
+        }
+    }
+
+    fn drain(&mut self) -> Result<(), HeapError> {
+        while let Some(work) = self.work.pop() {
+            match work {
+                Work::Object(reference) => self.mark_object(reference)?,
+                Work::Elements(reference) => self.mark_elements(reference)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn mark_object(&mut self, reference: ObjectRef) -> Result<(), HeapError> {
+        let first_visit = if reference.is_old() {
+            self.marked_objects.insert(reference.index())
+        } else {
+            self.visited_young_objects.insert(reference.index())
+        };
+        if !first_visit {
+            return Ok(());
+        }
+        let object = if reference.is_old() {
+            self.old
+                .objects
+                .get(reference.index() as usize)
+                .and_then(Option::as_ref)
+                .ok_or(HeapError::InvalidReference)?
+        } else {
+            &self
+                .nursery
+                .objects
+                .get(reference.index() as usize)
+                .ok_or(HeapError::InvalidReference)?
+                .value
+        };
+        trace_object_work(object, &mut self.work);
+        Ok(())
+    }
+
+    fn mark_elements(&mut self, reference: ElementsRef) -> Result<(), HeapError> {
+        let first_visit = if reference.is_old() {
+            self.marked_elements.insert(reference.index())
+        } else {
+            self.visited_young_elements.insert(reference.index())
+        };
+        if !first_visit {
+            return Ok(());
+        }
+        let elements = if reference.is_old() {
+            self.old
+                .elements
+                .get(reference.index() as usize)
+                .and_then(Option::as_ref)
+                .ok_or(HeapError::InvalidReference)
+        } else {
+            self.nursery
+                .elements
+                .get(reference.index() as usize)
+                .map(|entry| &entry.value)
+                .ok_or(HeapError::InvalidReference)
+        }?;
+        trace_elements_work(elements, &mut self.work);
+        Ok(())
     }
 }
 
@@ -758,6 +927,51 @@ fn visit_elements_values_mut(
     Ok(())
 }
 
+fn trace_object_work(object: &JSObject, work: &mut Vec<Work>) {
+    push_value_work(work, object.prototype);
+    for value in object.in_object_slots {
+        push_value_work(work, value);
+    }
+    if let Some(slots) = &object.out_of_line_slots {
+        for value in slots {
+            push_value_work(work, *value);
+        }
+    }
+    if let ObjectKind::StringWrapper(value) = &object.kind {
+        push_value_work(work, *value);
+    }
+    if let Some(elements) = object.elements {
+        work.push(Work::Elements(elements));
+    }
+}
+
+fn trace_elements_work(elements: &ElementsKind, work: &mut Vec<Work>) {
+    match elements {
+        ElementsKind::PackedValues(values) => {
+            for value in values {
+                push_value_work(work, *value);
+            }
+        }
+        ElementsKind::Holey(values) => {
+            for value in values.iter().flatten() {
+                push_value_work(work, *value);
+            }
+        }
+        ElementsKind::Dictionary(values) => {
+            for value in values.values() {
+                push_value_work(work, *value);
+            }
+        }
+        ElementsKind::PackedSmi(_) | ElementsKind::PackedDouble(_) => {}
+    }
+}
+
+fn push_value_work(work: &mut Vec<Work>, value: Value) {
+    if let Some(reference) = value.as_object() {
+        work.push(Work::Object(reference));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -891,5 +1105,111 @@ mod tests {
 
         let forwarded = registers[0].as_object().unwrap();
         assert!(heap.get_object(forwarded).is_some());
+    }
+
+    #[test]
+    fn major_collection_reclaims_unreachable_promoted_cycles() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(4);
+        let shape = heap.shapes.root_shape();
+        heap.enter_scope();
+        let first = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        let second = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        heap.set_object_slot(first, 0, Value::from_object(second))
+            .unwrap();
+        heap.set_object_slot(second, 0, Value::from_object(first))
+            .unwrap();
+        let root = heap.push_root(Value::from_object(first)).unwrap();
+        heap.scavenge().unwrap();
+        heap.scavenge().unwrap();
+        let promoted_first = rooted_object(&heap, root);
+        let promoted_second = heap
+            .get_object(promoted_first)
+            .and_then(|object| object.get_slot(0))
+            .and_then(Value::as_object)
+            .unwrap();
+        heap.exit_scope();
+
+        let stats = heap.collect_old().unwrap();
+
+        assert_eq!(stats.reclaimed_objects, 2);
+        assert!(heap.get_object(promoted_first).is_none());
+        assert!(heap.get_object(promoted_second).is_none());
+    }
+
+    #[test]
+    fn major_collection_traces_young_bridges_into_old_generation() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(4);
+        let shape = heap.shapes.root_shape();
+        heap.enter_scope();
+        heap.enter_scope();
+        let target = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        let target_root = heap.push_root(Value::from_object(target)).unwrap();
+        heap.scavenge().unwrap();
+        heap.scavenge().unwrap();
+        let target = rooted_object(&heap, target_root);
+        assert!(target.is_old());
+        heap.exit_scope();
+
+        let bridge = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        heap.set_object_slot(bridge, 0, Value::from_object(target))
+            .unwrap();
+        heap.push_root(Value::from_object(bridge)).unwrap();
+
+        let stats = heap.collect_old().unwrap();
+
+        assert_eq!(stats.marked_objects, 1);
+        assert_eq!(stats.reclaimed_objects, 0);
+        assert!(heap.get_object(target).is_some());
+    }
+
+    #[test]
+    fn major_collection_does_not_trace_unreachable_young_garbage() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(4);
+        let shape = heap.shapes.root_shape();
+        heap.enter_scope();
+        let target = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        heap.push_root(Value::from_object(target)).unwrap();
+        heap.scavenge().unwrap();
+        heap.scavenge().unwrap();
+        let target = heap.root_value(Root(0)).unwrap().as_object().unwrap();
+        heap.exit_scope();
+
+        let garbage = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        heap.set_object_slot(garbage, 0, Value::from_object(target))
+            .unwrap();
+        let stats = heap.collect_old().unwrap();
+
+        assert_eq!(stats.reclaimed_objects, 1);
+        assert!(heap.get_object(target).is_none());
+    }
+
+    #[test]
+    fn major_collection_marks_elements_and_reuses_swept_storage() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(3);
+        heap.enter_scope();
+        let array = heap.allocate_array(0).unwrap();
+        let root = heap.push_root(Value::from_object(array)).unwrap();
+        heap.scavenge().unwrap();
+        heap.scavenge().unwrap();
+        let old_array = rooted_object(&heap, root);
+        let old_elements = heap.get_object(old_array).unwrap().elements.unwrap();
+
+        let retained = heap.collect_old().unwrap();
+        assert_eq!(retained.marked_objects, 1);
+        assert_eq!(retained.marked_elements, 1);
+        heap.exit_scope();
+        let reclaimed = heap.collect_old().unwrap();
+        assert_eq!(reclaimed.reclaimed_objects, 1);
+        assert_eq!(reclaimed.reclaimed_elements, 1);
+
+        heap.enter_scope();
+        let replacement = heap.allocate_array(0).unwrap();
+        heap.push_root(Value::from_object(replacement)).unwrap();
+        heap.scavenge().unwrap();
+        heap.scavenge().unwrap();
+        let replacement = heap.root_value(Root(0)).unwrap().as_object().unwrap();
+        let replacement_elements = heap.get_object(replacement).unwrap().elements.unwrap();
+        assert_eq!(replacement, old_array);
+        assert_eq!(replacement_elements, old_elements);
     }
 }
