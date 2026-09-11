@@ -238,6 +238,60 @@ fn prototype_updates_reject_cycles_and_non_objects() {
 }
 
 #[test]
+fn inherited_cache_checks_the_holder_shape_for_equal_receiver_shapes() {
+    let mut heap = GenerationalHeap::new();
+    let root_shape = heap.shapes.root_shape();
+    let wanted = heap.strings.intern("wanted").unwrap();
+    let other = heap.strings.intern("other").unwrap();
+    let (wanted_shape, wanted_slot) =
+        heap.shapes
+            .transition(root_shape, wanted, PropertyFlags::ordinary_data());
+    let (other_shape, other_slot) =
+        heap.shapes
+            .transition(root_shape, other, PropertyFlags::ordinary_data());
+    let wanted_prototype = heap.allocate_object(root_shape, VALUE_NULL).unwrap();
+    heap.set_object_shape(wanted_prototype, wanted_shape)
+        .unwrap();
+    heap.set_object_slot(wanted_prototype, wanted_slot, Value::from_smi(1))
+        .unwrap();
+    let other_prototype = heap.allocate_object(root_shape, VALUE_NULL).unwrap();
+    heap.set_object_shape(other_prototype, other_shape).unwrap();
+    heap.set_object_slot(other_prototype, other_slot, Value::from_smi(99))
+        .unwrap();
+    let first = heap
+        .allocate_object(root_shape, Value::from_object(wanted_prototype))
+        .unwrap();
+    let second = heap
+        .allocate_object(root_shape, Value::from_object(other_prototype))
+        .unwrap();
+
+    let mut code = BytecodeFunction::new(1, 0);
+    let feedback_slot = code.allocate_feedback_slot();
+    code.constants.push(Value::from_object(first));
+    code.emit(Instruction::LdaConstant(0));
+    code.emit(Instruction::Star(Reg(0)));
+    code.emit(Instruction::GetNamed {
+        obj: Reg(0),
+        name: wanted,
+        slot: feedback_slot,
+    });
+    code.emit(Instruction::Return);
+    let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+    let mut vm = RegisterVM::new(100);
+    assert_eq!(
+        vm.run(&code, &mut feedback, &mut heap).unwrap().as_smi(),
+        Some(1)
+    );
+
+    code.constants[0] = Value::from_object(second);
+    assert!(
+        vm.run(&code, &mut feedback, &mut heap)
+            .unwrap()
+            .is_undefined()
+    );
+}
+
+#[test]
 fn end_to_end_loop_sum_100k_with_smi_to_double_overflow() {
     let mut code = BytecodeFunction::new(4, 0);
     let r_sum = Reg(0);

@@ -16,7 +16,7 @@
 //! Smi arithmetic and inline cache property access.
 
 use super::{
-    bytecode::{BytecodeFunction, Instruction, Reg},
+    bytecode::{BytecodeFunction, Instruction, Reg, VerificationError},
     feedback::{FeedbackVector, NamedAccessCase},
     heap::{GenerationalHeap, HeapError},
     shape::{PropertyFlags, ShapeId},
@@ -27,6 +27,10 @@ use alloc::vec::Vec;
 /// Virtual machine execution errors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VMError {
+    /// Bytecode failed structural verification before execution.
+    InvalidBytecode(VerificationError),
+    /// The supplied feedback vector does not match the compiled function.
+    InvalidFeedbackVector,
     /// Fuel exhausted.
     OutOfFuel,
     /// Invalid register access.
@@ -161,6 +165,10 @@ impl RegisterVM {
         feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
     ) -> Result<Value, VMError> {
+        code.verify().map_err(VMError::InvalidBytecode)?;
+        if feedback.len() != usize::from(code.feedback_slot_count) {
+            return Err(VMError::InvalidFeedbackVector);
+        }
         let mut pc: usize = 0;
         let instructions = &code.instructions;
         let frame_end = self
@@ -388,6 +396,7 @@ impl RegisterVM {
                             oref,
                             case.receiver_shape,
                             case.holder_depth,
+                            case.holder_shape,
                             case.slot,
                             case.prototype_epoch,
                         )?
@@ -403,6 +412,7 @@ impl RegisterVM {
                             ic.record(NamedAccessCase {
                                 receiver_shape: property.receiver_shape,
                                 holder_depth: property.holder_depth,
+                                holder_shape: property.holder_shape,
                                 slot: property.slot,
                                 prototype_epoch,
                             });
@@ -437,6 +447,7 @@ impl RegisterVM {
                             ic.record(NamedAccessCase {
                                 receiver_shape: new_shape,
                                 holder_depth: 0,
+                                holder_shape: new_shape,
                                 slot: slot_idx,
                                 prototype_epoch,
                             });
@@ -616,5 +627,32 @@ mod tests {
         let first = result.as_object().unwrap();
         assert!(first.is_old());
         assert!(heap.get_object(first).is_some());
+    }
+
+    #[test]
+    fn run_rejects_unverified_code_and_mismatched_feedback() {
+        let mut heap = GenerationalHeap::new();
+        let mut vm = RegisterVM::new(100);
+        let mut malformed = BytecodeFunction::new(0, 0);
+        malformed.emit(Instruction::Ldar(Reg(0)));
+        malformed.emit(Instruction::Return);
+        let mut feedback = FeedbackVector::new(0);
+        assert_eq!(
+            vm.run(&malformed, &mut feedback, &mut heap),
+            Err(VMError::InvalidBytecode(
+                VerificationError::RegisterOutOfBounds {
+                    pc: 0,
+                    register: Reg(0)
+                }
+            ))
+        );
+
+        let mut valid = BytecodeFunction::new(0, 0);
+        valid.feedback_slot_count = 1;
+        valid.emit(Instruction::Return);
+        assert_eq!(
+            vm.run(&valid, &mut feedback, &mut heap),
+            Err(VMError::InvalidFeedbackVector)
+        );
     }
 }

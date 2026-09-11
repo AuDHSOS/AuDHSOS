@@ -22,6 +22,8 @@ pub struct NamedAccessCase {
     pub receiver_shape: ShapeId,
     /// Number of `[[Prototype]]` edges from receiver to the property holder.
     pub holder_depth: u16,
+    /// Shape expected on the property holder after following the cached depth.
+    pub holder_shape: ShapeId,
     /// Property slot in the holder object.
     pub slot: u32,
     /// Prototype-validity epoch at resolution time.
@@ -145,6 +147,18 @@ impl FeedbackVector {
         Self { slots }
     }
 
+    /// Returns the number of allocated feedback slots.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Returns `true` when the vector has no feedback slots.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+
     /// Retrieves a mutable reference to a named access IC slot.
     pub fn get_named_ic_mut(&mut self, slot: u16) -> Option<&mut NamedAccessIC> {
         match self.slots.get_mut(slot as usize) {
@@ -177,6 +191,7 @@ mod tests {
         let first = NamedAccessCase {
             receiver_shape: ShapeId(1),
             holder_depth: 0,
+            holder_shape: ShapeId(1),
             slot: 0,
             prototype_epoch: 0,
         };
@@ -198,6 +213,7 @@ mod tests {
         let second = NamedAccessCase {
             receiver_shape: ShapeId(2),
             holder_depth: 1,
+            holder_shape: ShapeId(3),
             slot: 1,
             prototype_epoch: 0,
         };

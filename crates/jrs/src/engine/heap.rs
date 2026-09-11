@@ -185,6 +185,8 @@ pub struct NamedProperty {
     pub receiver_shape: ShapeId,
     /// Number of Prototype Chain edges from receiver to holder.
     pub holder_depth: u16,
+    /// Shape observed on the property holder.
+    pub holder_shape: ShapeId,
     /// Property slot in the holder.
     pub slot: u32,
     /// Property value at lookup time.
@@ -407,6 +409,7 @@ impl GenerationalHeap {
                 return Ok(Some(NamedProperty {
                     receiver_shape,
                     holder_depth: depth,
+                    holder_shape: object.shape_id,
                     slot: location.slot_offset,
                     value: object
                         .get_slot(location.slot_offset)
@@ -440,6 +443,7 @@ impl GenerationalHeap {
         receiver: ObjectRef,
         receiver_shape: ShapeId,
         holder_depth: u16,
+        holder_shape: ShapeId,
         slot: u32,
         prototype_epoch: u64,
     ) -> Result<Option<Value>, HeapError> {
@@ -459,9 +463,13 @@ impl GenerationalHeap {
                 .prototype;
             current = prototype.as_object().ok_or(HeapError::InvalidPrototype)?;
         }
-        Ok(self
+        let holder = self
             .get_object(current)
-            .and_then(|holder| holder.get_slot(slot)))
+            .ok_or(HeapError::InvalidReference)?;
+        if holder.shape_id != holder_shape {
+            return Ok(None);
+        }
+        Ok(holder.get_slot(slot))
     }
 
     /// Stores a named-property slot and records an Old-to-Young edge.
