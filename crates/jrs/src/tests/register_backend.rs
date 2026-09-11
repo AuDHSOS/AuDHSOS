@@ -330,6 +330,100 @@ fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<
 }
 
 #[test]
+fn simple_functions_use_contiguous_register_call_frames() -> Result<(), Error> {
+    for source in [
+        "(function(){return 42})()",
+        "let f=function(){return 42};f()",
+        "function f(){return 42}f()",
+        "let x=f();function f(){return 42}x",
+        "function f(){let x=40;return x+2}f()",
+        "function f(){if(true)return 42;return 0}f()",
+        "function f(){42}f()",
+        "function f(){return}f()",
+        "function f(){return 'a'+'b'}f()",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> Result<(), Error> {
+    for source in [
+        "function f(a){return a}f(42)",
+        "function f(){return this}f()",
+        "function f(){return arguments.length}f()",
+        "let x=42;function f(){return x}f()",
+        "function f(){return {x:1}}f()",
+        "async function f(){return 1}f()",
+        "function f(){function g(){return 1}return g()}f()",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+
+    let limits = Limits {
+        call_frames: 0,
+        ..Limits::default()
+    };
+    let program = compile("function f(){return 42}f()", limits)?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::new(limits).run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "call frames"
+        })
+    );
+
+    let limits = Limits {
+        feedback_vectors: 1,
+        ..Limits::default()
+    };
+    let program = compile("function f(){return 42}f()", limits)?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::new(limits).run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "feedback vectors"
+        })
+    );
+
+    let base = Limits::default();
+    let program = compile("function f(){return 42}f()", base)?;
+    let exact = u64::try_from(program.instruction_count()).unwrap();
+    assert_eq!(
+        Runtime::new(Limits {
+            fuel: exact,
+            ..base
+        })
+        .run(&program, &mut SilentHost)?,
+        Value::Number(42.0)
+    );
+    assert_eq!(
+        Runtime::new(Limits {
+            fuel: exact.saturating_sub(1),
+            ..base
+        })
+        .run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "execution fuel"
+        })
+    );
+    Ok(())
+}
+
+#[test]
 fn register_backend_preserves_public_fuel_and_stack_limits() -> Result<(), Error> {
     let base = Limits::default();
     let program = compile("1+2", base)?;

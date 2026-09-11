@@ -291,6 +291,12 @@ impl FeedbackVector {
                         && feedback.functions.is_empty()
                 })
     }
+
+    /// Number of feedback vectors represented by this root and its function table.
+    #[must_use]
+    pub const fn vector_count(&self) -> usize {
+        1usize.saturating_add(self.functions.len())
+    }
 }
 
 #[cfg(test)]

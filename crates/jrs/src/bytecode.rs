@@ -488,6 +488,7 @@ fn compile_mode(source: &str, limits: Limits, realm: bool) -> Result<Program, Er
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RegisterType {
     Array(u32),
+    Function(u32),
     Number,
     NumberOrUndefined,
     Boolean,
@@ -501,11 +502,14 @@ enum RegisterType {
 
 impl RegisterType {
     const fn is_primitive(self) -> bool {
-        !matches!(self, Self::Array(_) | Self::Object(_) | Self::Unknown)
+        !matches!(
+            self,
+            Self::Array(_) | Self::Function(_) | Self::Object(_) | Self::Unknown
+        )
     }
 
     const fn is_object(self) -> bool {
-        matches!(self, Self::Array(_) | Self::Object(_))
+        matches!(self, Self::Array(_) | Self::Function(_) | Self::Object(_))
     }
 
     const fn is_numeric_primitive(self) -> bool {
@@ -558,6 +562,9 @@ struct RegisterLowerer {
     next_object_id: u32,
     object_layouts: BTreeMap<u32, RegisterObjectLayout>,
     property_limit: usize,
+    function_returns: BTreeMap<u32, RegisterType>,
+    allow_return: bool,
+    return_type: Option<RegisterType>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -586,6 +593,9 @@ struct RegisterSnapshot {
     bindings: BTreeMap<String, RegisterBinding>,
     next_object_id: u32,
     object_layouts: BTreeMap<u32, RegisterObjectLayout>,
+    functions: usize,
+    function_returns: BTreeMap<u32, RegisterType>,
+    return_type: Option<RegisterType>,
 }
 
 impl RegisterLowerer {
@@ -608,6 +618,9 @@ impl RegisterLowerer {
             next_object_id: 0,
             object_layouts: BTreeMap::new(),
             property_limit,
+            function_returns: BTreeMap::new(),
+            allow_return: false,
+            return_type: None,
         }
     }
 
@@ -655,6 +668,9 @@ impl RegisterLowerer {
             bindings: self.bindings.clone(),
             next_object_id: self.next_object_id,
             object_layouts: self.object_layouts.clone(),
+            functions: self.code.functions.len(),
+            function_returns: self.function_returns.clone(),
+            return_type: self.return_type,
         }
     }
 
@@ -669,6 +685,9 @@ impl RegisterLowerer {
         self.bindings = snapshot.bindings;
         self.next_object_id = snapshot.next_object_id;
         self.object_layouts = snapshot.object_layouts;
+        self.code.functions.truncate(snapshot.functions);
+        self.function_returns = snapshot.function_returns;
+        self.return_type = snapshot.return_type;
     }
 
     #[expect(
@@ -776,6 +795,8 @@ impl RegisterLowerer {
             }
             ExprKind::Object(properties) => self.lower_object(properties)?,
             ExprKind::Array(items) => self.lower_array(items)?,
+            ExprKind::Function(function) => self.lower_function(function)?,
+            ExprKind::Call(callee, arguments) => self.lower_call(callee, arguments)?,
             ExprKind::Member(base, key) => self.lower_member(base, key)?,
             ExprKind::SetMember(target, operator, value, _) => {
                 self.lower_member_assignment(target, *operator, value)?
@@ -917,6 +938,98 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Ldar(array));
         self.release_register(array)?;
         Some(RegisterType::Array(object_id))
+    }
+
+    fn lower_function(&mut self, function: &Function) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        if function.async_kind != parser::AsyncKind::Sync
+            || !function.parameters.is_empty()
+            || function.constructor_kind != parser::ConstructorKind::Ordinary
+        {
+            return None;
+        }
+        let mut child = Self::new(
+            0,
+            function.body.iter().fold(1usize, |maximum, statement| {
+                maximum.max(register_statement_stack_requirement(statement))
+            }),
+            self.property_limit,
+        );
+        child.allow_return = true;
+        for statement in &function.body {
+            match statement {
+                Stmt::Declare(bindings) => {
+                    for (name, mutable, _) in bindings {
+                        child.declare(name, *mutable)?;
+                    }
+                }
+                Stmt::Function(_, _) | Stmt::Var(_) => return None,
+                _ => {}
+            }
+        }
+        let mut flow = RegisterFlow::Empty;
+        for statement in &function.body {
+            flow = match statement {
+                Stmt::Declare(bindings) => {
+                    for (name, _, initializer) in bindings {
+                        child.initialize(name, initializer.as_ref())?;
+                    }
+                    RegisterFlow::Empty
+                }
+                _ => child.lower_statement(statement)?,
+            };
+            if flow == RegisterFlow::Abrupt {
+                break;
+            }
+        }
+        if flow != RegisterFlow::Abrupt {
+            child.code.emit(Instruction::LdaUndefined);
+            child.code.emit(Instruction::Return);
+            child.return_type = Some(
+                child
+                    .return_type
+                    .map_or(RegisterType::Undefined, |current| {
+                        current.merge(RegisterType::Undefined)
+                    }),
+            );
+        }
+        let return_type = child.return_type.unwrap_or(RegisterType::Undefined);
+        if !return_type.is_primitive() || !child.code.functions.is_empty() {
+            return None;
+        }
+        child.code.register_count = child.register_count;
+        child.code.parameter_count = 0;
+        child.code.verify().ok()?;
+        let code_id = u32::try_from(self.code.functions.len()).ok()?;
+        self.code.functions.push(child.code);
+        self.function_returns.insert(code_id, return_type);
+        self.code.emit(Instruction::CreateClosure(code_id));
+        Some(RegisterType::Function(code_id))
+    }
+
+    fn lower_call(&mut self, callee: &Expr, arguments: &[Expr]) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        if !arguments.is_empty() {
+            return None;
+        }
+        let RegisterType::Function(code_id) = self.lower(callee)? else {
+            return None;
+        };
+        let function = self.allocate_register()?;
+        self.code.emit(Instruction::Star(function));
+        let argument_start = self.allocate_register()?;
+        self.code.emit(Instruction::LdaUndefined);
+        self.code.emit(Instruction::Star(argument_start));
+        let slot = self.feedback_slot()?;
+        self.code.emit(Instruction::Call {
+            func: function,
+            arg_start: argument_start,
+            arg_count: 0,
+            slot,
+        });
+        self.release_register(argument_start)?;
+        self.release_register(function)?;
+        self.function_returns.get(&code_id).copied()
     }
 
     fn lower_member(&mut self, base: &Expr, key: &Expr) -> Option<RegisterType> {
@@ -1193,6 +1306,24 @@ impl RegisterLowerer {
             }
             Stmt::Continue => {
                 self.lower_loop_jump(false)?;
+                RegisterFlow::Abrupt
+            }
+            Stmt::Return(value) if self.allow_return => {
+                let return_type = if let Some(value) = value {
+                    self.lower(value)?
+                } else {
+                    self.code
+                        .emit(crate::engine::bytecode::Instruction::LdaUndefined);
+                    RegisterType::Undefined
+                };
+                if !return_type.is_primitive() {
+                    return None;
+                }
+                self.return_type = Some(
+                    self.return_type
+                        .map_or(return_type, |current| current.merge(return_type)),
+                );
+                self.code.emit(crate::engine::bytecode::Instruction::Return);
                 RegisterFlow::Abrupt
             }
             Stmt::Empty => RegisterFlow::Empty,
@@ -1725,20 +1856,15 @@ fn parse_array_index(units: &[u16]) -> Option<u32> {
     (index != u32::MAX).then_some(index)
 }
 
-fn lower_register_script(
-    body: &[Stmt],
-    realm: bool,
-    entry_fuel_cost: u64,
-    property_limit: usize,
-) -> Option<crate::engine::bytecode::BytecodeFunction> {
+fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> {
     let mut saw_expression = false;
     let mut saw_declaration = false;
+    let mut saw_function = false;
     for statement in body {
         match statement {
             Stmt::Declare(bindings) if !saw_expression && !realm => {
                 saw_declaration = true;
                 for (name, _, _) in bindings {
-                    // Allocate all lexical slots before any initializer, matching TDZ setup.
                     if bindings
                         .iter()
                         .filter(|(candidate, _, _)| candidate == name)
@@ -1749,33 +1875,63 @@ fn lower_register_script(
                     }
                 }
             }
+            Stmt::Function(_, _) if !realm => saw_function = true,
             Stmt::Expr(_)
             | Stmt::Block(_)
             | Stmt::If(_, _, _)
             | Stmt::While(_, _)
-            | Stmt::For(_, _, _, _) => {
-                saw_expression = true;
-            }
+            | Stmt::For(_, _, _, _) => saw_expression = true,
             Stmt::Empty => {}
             _ => return None,
         }
     }
-    if !saw_expression {
-        return None;
-    }
-    let stack_requirement = body.iter().fold(1usize, |maximum, statement| {
-        maximum.max(register_statement_stack_requirement(statement))
-    });
-    let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement, property_limit);
-    if saw_declaration {
+    saw_expression.then_some((saw_declaration, saw_function))
+}
+
+fn prepare_register_bindings(
+    lowerer: &mut RegisterLowerer,
+    body: &[Stmt],
+    saw_declaration: bool,
+    saw_function: bool,
+) -> Option<()> {
+    if saw_declaration || saw_function {
         for statement in body {
             if let Stmt::Declare(bindings) = statement {
                 for (name, mutable, _) in bindings {
                     lowerer.declare(name, *mutable)?;
                 }
+            } else if let Stmt::Function(name, _) = statement {
+                lowerer.declare(name, true)?;
             }
         }
     }
+    if saw_function {
+        for statement in body {
+            if let Stmt::Function(name, function) = statement {
+                let value_type = lowerer.lower_function(function)?;
+                let binding = lowerer.bindings.get(name)?;
+                lowerer
+                    .code
+                    .emit(crate::engine::bytecode::Instruction::Star(binding.register));
+                lowerer.bindings.get_mut(name)?.value_type = Some(value_type);
+            }
+        }
+    }
+    Some(())
+}
+
+fn lower_register_script(
+    body: &[Stmt],
+    realm: bool,
+    entry_fuel_cost: u64,
+    property_limit: usize,
+) -> Option<crate::engine::bytecode::BytecodeFunction> {
+    let (saw_declaration, saw_function) = register_script_features(body, realm)?;
+    let stack_requirement = body.iter().fold(1usize, |maximum, statement| {
+        maximum.max(register_statement_stack_requirement(statement))
+    });
+    let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement, property_limit);
+    prepare_register_bindings(&mut lowerer, body, saw_declaration, saw_function)?;
     let result_register = lowerer.allocate_register()?;
     lowerer
         .code
@@ -1790,6 +1946,11 @@ fn lower_register_script(
             .code
             .emit(crate::engine::bytecode::Instruction::Ldar(result_register));
         match statement {
+            Stmt::Function(_, _) => {
+                lowerer
+                    .code
+                    .emit(crate::engine::bytecode::Instruction::Ldar(result_register));
+            }
             Stmt::Declare(bindings) => {
                 for (name, _, initializer) in bindings {
                     lowerer.initialize(name, initializer.as_ref())?;

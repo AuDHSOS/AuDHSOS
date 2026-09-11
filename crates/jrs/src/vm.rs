@@ -434,7 +434,11 @@ impl Execution<'_> {
         {
             index
         } else {
-            if self.register_feedback.len() >= self.limits.feedback_vectors {
+            let required = code.functions.len().saturating_add(1);
+            let used = self.register_feedback.iter().fold(0usize, |used, state| {
+                used.saturating_add(state.vector.vector_count())
+            });
+            if used.saturating_add(required) > self.limits.feedback_vectors {
                 self.register_vm = Some(vm);
                 self.register_heap = Some(heap);
                 return Err(Error::Limit {
