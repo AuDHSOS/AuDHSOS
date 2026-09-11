@@ -169,6 +169,42 @@ fn primitive_bitwise_operations_run_through_register_bytecode() -> Result<(), Er
 }
 
 #[test]
+fn short_circuit_expressions_run_through_register_bytecode() -> Result<(), Error> {
+    for source in [
+        "0 || 4",
+        "0 && 4",
+        "true || 4",
+        "true && 4",
+        "null ?? 3",
+        "undefined ?? 4",
+        "0 ?? 4",
+        "false ?? 4",
+        "let x=0;false&&(x=1);x",
+        "let x=0;true||(x=1);x",
+        "let x=0;null??(x=1);x",
+        "let x=0;0??(x=1);x",
+        "let x=1;true||(x='a');x+1",
+        "let x=1;false&&(x='a');x+1",
+        "(null??false)||4",
+        "null??(false||4)",
+        "function f(a,b){return a&&b}f('left','right')",
+        "function f(a,b){return a??b}f(undefined,'right')",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn string_expressions_run_through_heap_independent_register_bytecode() -> Result<(), Error> {
     for source in [
         "'hello'",
@@ -479,6 +515,8 @@ fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<
         "let o={};let x=o^1;0",
         "let x={};x<<=1;0",
         "let x=1;x>>={};0",
+        "let o={};false&&(o.x=1);0",
+        "let x=1;false&&(function(){return x});x",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),

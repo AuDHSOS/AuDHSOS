@@ -249,6 +249,8 @@ pub enum Instruction {
     JumpIfTrue(i32),
     /// Jump if `acc` is falsy.
     JumpIfFalse(i32),
+    /// Jump if `acc` is neither `undefined` nor `null`.
+    JumpIfNotNullish(i32),
     /// Load named property: `acc = obj_reg[name]` (uses feedback slot).
     GetNamed {
         /// Object register.
@@ -467,7 +469,9 @@ impl BytecodeFunction {
                 Instruction::Jump(offset) => {
                     work.push_back(self.jump_target(pc, offset)?);
                 }
-                Instruction::JumpIfTrue(offset) | Instruction::JumpIfFalse(offset) => {
+                Instruction::JumpIfTrue(offset)
+                | Instruction::JumpIfFalse(offset)
+                | Instruction::JumpIfNotNullish(offset) => {
                     work.push_back(self.jump_target(pc, offset)?);
                     work.push_back(self.fallthrough(pc)?);
                 }
@@ -566,7 +570,8 @@ impl BytecodeFunction {
             }
             Instruction::Jump(offset)
             | Instruction::JumpIfTrue(offset)
-            | Instruction::JumpIfFalse(offset) => {
+            | Instruction::JumpIfFalse(offset)
+            | Instruction::JumpIfNotNullish(offset) => {
                 self.jump_target(pc, offset)?;
                 None
             }

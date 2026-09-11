@@ -893,6 +893,11 @@ impl RegisterLowerer {
                     Unary::Delete => return None,
                 }
             }
+            ExprKind::Binary(
+                operator @ (Binary::And | Binary::Or | Binary::Nullish),
+                left,
+                right,
+            ) => self.lower_short_circuit(*operator, left, right)?,
             ExprKind::Binary(operator, left, right) => self.lower_binary(*operator, left, right)?,
             ExprKind::Assign(name, operator, right) => {
                 self.lower_assignment(name, *operator, right)?
@@ -1963,6 +1968,33 @@ impl RegisterLowerer {
         })
     }
 
+    fn lower_short_circuit(
+        &mut self,
+        operator: Binary,
+        left: &Expr,
+        right: &Expr,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let left_type = self.lower(left)?;
+        let branch = self.code.emit(match operator {
+            Binary::And => Instruction::JumpIfFalse(0),
+            Binary::Or => Instruction::JumpIfTrue(0),
+            Binary::Nullish => Instruction::JumpIfNotNullish(0),
+            _ => return None,
+        });
+        let bindings_after_left = self.bindings.clone();
+        let object_layouts_after_left = self.object_layouts.clone();
+        let right_type = self.lower(right)?;
+        let bindings_after_right = self.bindings.clone();
+        if self.object_layouts != object_layouts_after_left {
+            return None;
+        }
+        self.bindings = merge_register_bindings(&bindings_after_left, &bindings_after_right)?;
+        let end = self.code.instructions.len();
+        self.patch_jump(branch, end)?;
+        Some(left_type.merge(right_type))
+    }
+
     fn lower_binary(
         &mut self,
         operator: Binary,
@@ -2236,7 +2268,8 @@ impl RegisterLowerer {
         match self.code.instructions.get_mut(at)? {
             crate::engine::bytecode::Instruction::Jump(value)
             | crate::engine::bytecode::Instruction::JumpIfFalse(value)
-            | crate::engine::bytecode::Instruction::JumpIfTrue(value) => *value = offset,
+            | crate::engine::bytecode::Instruction::JumpIfTrue(value)
+            | crate::engine::bytecode::Instruction::JumpIfNotNullish(value) => *value = offset,
             _ => return None,
         }
         Some(())
@@ -2322,6 +2355,7 @@ fn register_expression_type(
             let left = register_expression_type(left, bindings)?;
             let right = register_expression_type(right, bindings)?;
             match operator {
+                Binary::And | Binary::Or | Binary::Nullish => left.merge(right),
                 Binary::Add if left == RegisterType::String && right == RegisterType::String => {
                     RegisterType::String
                 }
@@ -2358,6 +2392,38 @@ fn register_expression_type(
         _ => return None,
     };
     Some(value_type)
+}
+
+fn merge_register_bindings(
+    left: &BTreeMap<String, RegisterBinding>,
+    right: &BTreeMap<String, RegisterBinding>,
+) -> Option<BTreeMap<String, RegisterBinding>> {
+    if left.len() != right.len() {
+        return None;
+    }
+    left.iter()
+        .map(|(name, left)| {
+            let right = right.get(name)?;
+            if left.storage != right.storage
+                || left.mutable != right.mutable
+                || left.stable_function_identity != right.stable_function_identity
+            {
+                return None;
+            }
+            let value_type = match (left.value_type, right.value_type) {
+                (Some(left), Some(right)) => Some(left.merge(right)),
+                (None, None) => None,
+                (Some(_), None) | (None, Some(_)) => return None,
+            };
+            Some((
+                name.clone(),
+                RegisterBinding {
+                    value_type,
+                    ..*left
+                },
+            ))
+        })
+        .collect()
 }
 
 struct RegisterFunctionScope {

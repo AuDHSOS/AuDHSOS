@@ -879,6 +879,14 @@ impl RegisterVM {
                         pc = (pc as isize + offset as isize) as usize;
                     }
                 }
+                Instruction::JumpIfNotNullish(offset) => {
+                    if !self.acc.is_null_or_undefined() {
+                        if offset < 0 {
+                            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                        }
+                        pc = (pc as isize + offset as isize) as usize;
+                    }
+                }
                 Instruction::GetNamed { obj, name, slot } => {
                     let name = active_code
                         .string_constants
