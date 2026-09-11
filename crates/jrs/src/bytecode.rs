@@ -566,6 +566,7 @@ struct RegisterBinding {
     storage: RegisterBindingStorage,
     value_type: Option<RegisterType>,
     mutable: bool,
+    stable_function_identity: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -675,6 +676,7 @@ impl RegisterLowerer {
                 storage: RegisterBindingStorage::Register(register),
                 value_type: None,
                 mutable,
+                stable_function_identity: false,
             },
         );
         Some(())
@@ -1093,6 +1095,32 @@ impl RegisterLowerer {
         Some(RegisterType::Function(code_id))
     }
 
+    fn lower_function_declaration(
+        &mut self,
+        name: &str,
+        function: &Function,
+    ) -> Option<RegisterType> {
+        let code_id = u32::try_from(self.code.functions.len())
+            .ok()?
+            .checked_add(self.function_table_base)?;
+        let scope = register_function_scope(function)?;
+        if scope.free_names.contains(name) {
+            let binding = self.bindings.get_mut(name)?;
+            if binding.value_type.is_some() {
+                return None;
+            }
+            binding.value_type = Some(RegisterType::Function(code_id));
+            binding.stable_function_identity = true;
+            self.function_returns
+                .insert(code_id, RegisterType::Primitive);
+            self.function_parameters.insert(
+                code_id,
+                alloc::vec![RegisterType::Primitive; function.parameters.len()],
+            );
+        }
+        self.lower_function(function)
+    }
+
     fn register_function_supported(function: &Function) -> bool {
         function.async_kind == parser::AsyncKind::Sync
             && function.constructor_kind == parser::ConstructorKind::Ordinary
@@ -1231,7 +1259,7 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         for statement in body {
             if let Stmt::Function(name, function) = statement {
-                let value_type = child.lower_function(function)?;
+                let value_type = child.lower_function_declaration(name, function)?;
                 let binding = *child.bindings.get(name)?;
                 child.store_binding(binding);
                 child.bindings.get_mut(name)?.value_type = Some(value_type);
@@ -1751,6 +1779,7 @@ impl RegisterLowerer {
                             storage: RegisterBindingStorage::Register(register),
                             value_type: None,
                             mutable: *mutable,
+                            stable_function_identity: false,
                         },
                     );
                     scoped_registers.push((name, register));
@@ -2032,7 +2061,7 @@ impl RegisterLowerer {
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let binding = *self.bindings.get(name)?;
-        if !binding.mutable || binding.value_type.is_none() {
+        if !binding.mutable || binding.value_type.is_none() || binding.stable_function_identity {
             return None;
         }
         let result_type = if let Some(operator) = operator {
@@ -2487,7 +2516,7 @@ fn prepare_register_bindings(
     if saw_function {
         for statement in body {
             if let Stmt::Function(name, function) = statement {
-                let value_type = lowerer.lower_function(function)?;
+                let value_type = lowerer.lower_function_declaration(name, function)?;
                 let binding = *lowerer.bindings.get(name)?;
                 lowerer.store_binding(binding);
                 lowerer.bindings.get_mut(name)?.value_type = Some(value_type);

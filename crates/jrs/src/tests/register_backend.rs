@@ -426,6 +426,11 @@ fn simple_functions_use_contiguous_register_call_frames() -> Result<(), Error> {
         "let f=function fact(x){return x<2?1:x*fact(x-1)};f(6)",
         "let f=function fib(x){return x<2?x:fib(x-1)+fib(x-2)};f(8)",
         "let f=function inner(){return inner===inner};f()",
+        "function f(x){return x<2?1:x*f(x-1)}f(6)",
+        "function f(x){return x<2?x:f(x-1)+f(x-2)}f(8)",
+        "let x=f(6);function f(x){return x<2?1:x*f(x-1)}x",
+        "function f(){return typeof f}f()",
+        "function f(x){let a=[];return x<2?1:x*f(x-1)}let i=0;while(i<300){f(6);i++}f(6)",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -438,6 +443,27 @@ fn simple_functions_use_contiguous_register_call_frames() -> Result<(), Error> {
             "{source}: {actual:?} != {expected:?}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn recursive_function_declarations_capture_the_hoisted_binding() -> Result<(), Error> {
+    let program = compile(
+        "function f(x){return x<2?1:x*f(x-1)}f(6)",
+        Limits::default(),
+    )?;
+    let code = program
+        .register_code
+        .as_ref()
+        .ok_or(Error::InvalidBytecode)?;
+    assert_eq!(code.own_context_slot_count, Some(1));
+    let function = code.functions.first().ok_or(Error::InvalidBytecode)?;
+    assert_eq!(function.self_register, None);
+    assert_eq!(function.outer_context_slot_counts, [1]);
+    assert!(function.instructions.iter().any(|instruction| matches!(
+        instruction,
+        crate::engine::bytecode::Instruction::LoadContext { depth: 0, slot: 0 }
+    )));
     Ok(())
 }
 
@@ -579,6 +605,8 @@ fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> R
         "let f=function inner(){return inner===f};f()",
         "let f=function inner(inner){return inner};f(42)",
         "function outer(){function f(){return x}f();let x=1}outer()",
+        "function f(){return f()}let g=f;f=0;g()",
+        "function f(){f=0;return typeof f}f()",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
