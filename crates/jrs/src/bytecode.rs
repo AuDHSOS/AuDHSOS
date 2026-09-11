@@ -954,27 +954,52 @@ impl RegisterLowerer {
 
     fn lower_function(&mut self, function: &Function) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        if function.async_kind != parser::AsyncKind::Sync
-            || function.constructor_kind != parser::ConstructorKind::Ordinary
-            || function.name.is_some()
-            || function
-                .parameters
-                .iter()
-                .any(|parameter| parameter.rest || parameter.default.is_some())
-        {
+        if !Self::register_function_supported(function) {
             return None;
         }
-        for parameter in &function.parameters {
-            if function
+        let code_id = u32::try_from(self.code.functions.len()).ok()?;
+        let (mut child, self_register) = self.register_function_child(function, code_id)?;
+        let return_type = Self::lower_function_body(&mut child, &function.body)?;
+        if !return_type.is_primitive() || !child.code.functions.is_empty() {
+            return None;
+        }
+        child.code.register_count = child.register_count;
+        child.code.parameter_count = u16::try_from(function.parameters.len()).ok()?;
+        child.code.binding_count = child.local_count;
+        child.code.self_register = self_register;
+        child.code.verify().ok()?;
+        self.code.functions.push(child.code);
+        self.function_returns.insert(code_id, return_type);
+        self.function_parameters.insert(
+            code_id,
+            alloc::vec![RegisterType::Primitive; function.parameters.len()],
+        );
+        self.code.emit(Instruction::CreateClosure(code_id));
+        Some(RegisterType::Function(code_id))
+    }
+
+    fn register_function_supported(function: &Function) -> bool {
+        function.async_kind == parser::AsyncKind::Sync
+            && function.constructor_kind == parser::ConstructorKind::Ordinary
+            && function
                 .parameters
                 .iter()
-                .filter(|candidate| candidate.name == parameter.name)
-                .count()
-                != 1
-            {
-                return None;
-            }
-        }
+                .all(|parameter| !parameter.rest && parameter.default.is_none())
+            && function.parameters.iter().all(|parameter| {
+                function
+                    .parameters
+                    .iter()
+                    .filter(|candidate| candidate.name == parameter.name)
+                    .count()
+                    == 1
+            })
+    }
+
+    fn register_function_child(
+        &self,
+        function: &Function,
+        code_id: u32,
+    ) -> Option<(Self, Option<crate::engine::bytecode::Reg>)> {
         let mut child = Self::new(
             0,
             function.body.iter().fold(1usize, |maximum, statement| {
@@ -987,6 +1012,28 @@ impl RegisterLowerer {
             child.declare(&parameter.name, true)?;
             child.bindings.get_mut(&parameter.name)?.value_type = Some(RegisterType::Primitive);
         }
+        let self_register = if let Some(name) = &function.name {
+            if function
+                .parameters
+                .iter()
+                .any(|parameter| parameter.name == *name)
+            {
+                return None;
+            }
+            child.declare(name, false)?;
+            let register = child.bindings.get(name)?.register;
+            child.bindings.get_mut(name)?.value_type = Some(RegisterType::Function(code_id));
+            child
+                .function_returns
+                .insert(code_id, RegisterType::Primitive);
+            child.function_parameters.insert(
+                code_id,
+                alloc::vec![RegisterType::Primitive; function.parameters.len()],
+            );
+            Some(register)
+        } else {
+            None
+        };
         for statement in &function.body {
             match statement {
                 Stmt::Declare(bindings) => {
@@ -998,8 +1045,13 @@ impl RegisterLowerer {
                 _ => {}
             }
         }
+        Some((child, self_register))
+    }
+
+    fn lower_function_body(child: &mut Self, body: &[Stmt]) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
         let mut flow = RegisterFlow::Empty;
-        for statement in &function.body {
+        for statement in body {
             flow = match statement {
                 Stmt::Declare(bindings) => {
                     for (name, _, initializer) in bindings {
@@ -1024,23 +1076,7 @@ impl RegisterLowerer {
                     }),
             );
         }
-        let return_type = child.return_type.unwrap_or(RegisterType::Undefined);
-        if !return_type.is_primitive() || !child.code.functions.is_empty() {
-            return None;
-        }
-        child.code.register_count = child.register_count;
-        child.code.parameter_count = u16::try_from(function.parameters.len()).ok()?;
-        child.code.binding_count = child.local_count;
-        child.code.verify().ok()?;
-        let code_id = u32::try_from(self.code.functions.len()).ok()?;
-        self.code.functions.push(child.code);
-        self.function_returns.insert(code_id, return_type);
-        self.function_parameters.insert(
-            code_id,
-            alloc::vec![RegisterType::Primitive; function.parameters.len()],
-        );
-        self.code.emit(Instruction::CreateClosure(code_id));
-        Some(RegisterType::Function(code_id))
+        Some(child.return_type.unwrap_or(RegisterType::Undefined))
     }
 
     fn lower_call(&mut self, callee: &Expr, arguments: &[Expr]) -> Option<RegisterType> {
@@ -1714,31 +1750,6 @@ impl RegisterLowerer {
             {
                 (Instruction::Add(right_register), RegisterType::String)
             }
-            Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
-                if left_type.is_primitive() && right_type.is_primitive() =>
-            {
-                let op = match operator {
-                    Binary::Add => crate::engine::bytecode::BinaryOp::Add,
-                    Binary::Sub => crate::engine::bytecode::BinaryOp::Sub,
-                    Binary::Mul => crate::engine::bytecode::BinaryOp::Mul,
-                    Binary::Div => crate::engine::bytecode::BinaryOp::Div,
-                    Binary::Rem => crate::engine::bytecode::BinaryOp::Mod,
-                    _ => return None,
-                };
-                let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::BinaryOp)?;
-                (
-                    Instruction::Binary {
-                        op,
-                        rhs: right_register,
-                        slot,
-                    },
-                    if operator == Binary::Add {
-                        RegisterType::Primitive
-                    } else {
-                        RegisterType::Number
-                    },
-                )
-            }
             Binary::Lt | Binary::Le | Binary::Gt | Binary::Ge
                 if left_type == RegisterType::Number && right_type == RegisterType::Number =>
             {
@@ -1750,6 +1761,19 @@ impl RegisterLowerer {
                     _ => return None,
                 };
                 (instruction, RegisterType::Boolean)
+            }
+            Binary::Add
+            | Binary::Sub
+            | Binary::Mul
+            | Binary::Div
+            | Binary::Rem
+            | Binary::Lt
+            | Binary::Le
+            | Binary::Gt
+            | Binary::Ge
+                if left_type.is_primitive() && right_type.is_primitive() =>
+            {
+                self.feedback_binary(operator, right_register)?
             }
             Binary::StrictEq => (
                 Instruction::TestStrictEqual(right_register),
@@ -1768,6 +1792,28 @@ impl RegisterLowerer {
         self.release_register(right_register)?;
         self.release_register(left_register)?;
         Some(result_type)
+    }
+
+    fn feedback_binary(
+        &mut self,
+        operator: Binary,
+        rhs: crate::engine::bytecode::Reg,
+    ) -> Option<(crate::engine::bytecode::Instruction, RegisterType)> {
+        use crate::engine::bytecode::{BinaryOp, FeedbackKind, Instruction};
+        let (op, result_type) = match operator {
+            Binary::Add => (BinaryOp::Add, RegisterType::Primitive),
+            Binary::Sub => (BinaryOp::Sub, RegisterType::Number),
+            Binary::Mul => (BinaryOp::Mul, RegisterType::Number),
+            Binary::Div => (BinaryOp::Div, RegisterType::Number),
+            Binary::Rem => (BinaryOp::Mod, RegisterType::Number),
+            Binary::Lt => (BinaryOp::LessThan, RegisterType::Boolean),
+            Binary::Le => (BinaryOp::LessThanOrEqual, RegisterType::Boolean),
+            Binary::Gt => (BinaryOp::GreaterThan, RegisterType::Boolean),
+            Binary::Ge => (BinaryOp::GreaterThanOrEqual, RegisterType::Boolean),
+            _ => return None,
+        };
+        let slot = self.feedback_slot(FeedbackKind::BinaryOp)?;
+        Some((Instruction::Binary { op, rhs, slot }, result_type))
     }
 
     fn lower_assignment(

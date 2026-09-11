@@ -335,6 +335,32 @@ impl RegisterVM {
             self.add(right, heap)?;
             return Ok(observed);
         }
+        if matches!(
+            op,
+            BinaryOp::LessThan
+                | BinaryOp::LessThanOrEqual
+                | BinaryOp::GreaterThan
+                | BinaryOp::GreaterThanOrEqual
+        ) && self.acc.is_string()
+            && rhs.is_string()
+        {
+            let left = heap
+                .strings
+                .to_utf16(self.acc)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            let right = heap
+                .strings
+                .to_utf16(rhs)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            self.acc = Value::from_bool(match op {
+                BinaryOp::LessThan => left < right,
+                BinaryOp::LessThanOrEqual => left <= right,
+                BinaryOp::GreaterThan => left > right,
+                BinaryOp::GreaterThanOrEqual => left >= right,
+                _ => return Err(VMError::TypeError),
+            });
+            return Ok(observed);
+        }
         let left = primitive_number(self.acc, heap)?;
         let right = primitive_number(rhs, heap)?;
         self.acc = match op {
@@ -343,8 +369,18 @@ impl RegisterVM {
             BinaryOp::Mul => Value::from_f64(left * right),
             BinaryOp::Div => Value::from_f64(left / right),
             BinaryOp::Mod => Value::from_f64(left % right),
+            BinaryOp::LessThan => Value::from_bool(left < right),
+            BinaryOp::LessThanOrEqual => Value::from_bool(left <= right),
+            BinaryOp::GreaterThan => Value::from_bool(left > right),
+            BinaryOp::GreaterThanOrEqual => Value::from_bool(left >= right),
         };
-        if observed == BinaryOpFeedback::SignedSmallInteger
+        if !matches!(
+            op,
+            BinaryOp::LessThan
+                | BinaryOp::LessThanOrEqual
+                | BinaryOp::GreaterThan
+                | BinaryOp::GreaterThanOrEqual
+        ) && observed == BinaryOpFeedback::SignedSmallInteger
             && let Some(integer) = exact_smi(self.acc.as_f64().unwrap_or(f64::NAN))
         {
             self.acc = Value::from_smi(integer);
@@ -977,8 +1013,8 @@ impl RegisterVM {
                     slot,
                 } => {
                     let function = self.read_reg(func)?;
-                    let function = function.as_object().ok_or(VMError::TypeError)?;
-                    let function = heap.get_object(function).ok_or(VMError::TypeError)?;
+                    let function_ref = function.as_object().ok_or(VMError::TypeError)?;
+                    let function = heap.get_object(function_ref).ok_or(VMError::TypeError)?;
                     let super::object::ObjectKind::Function { code_id, .. } = function.kind else {
                         return Err(VMError::TypeError);
                     };
@@ -1034,6 +1070,12 @@ impl RegisterVM {
                             .stack
                             .get_mut(next_frame.saturating_add(index))
                             .ok_or(VMError::StackOverflow)? = argument;
+                    }
+                    if let Some(self_register) = callee.self_register {
+                        *self
+                            .stack
+                            .get_mut(next_frame.saturating_add(self_register.0 as usize))
+                            .ok_or(VMError::StackOverflow)? = Value::from_object(function_ref);
                     }
                     active_feedback
                         .record_call(slot, code_id)

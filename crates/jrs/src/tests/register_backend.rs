@@ -43,6 +43,12 @@ fn primitive_expressions_run_through_register_bytecode_and_match_legacy() -> Res
         "'x'+undefined",
         "'4'-2",
         "true*7",
+        "'a'<'b'",
+        "'a'<='a'",
+        "'b'>'a'",
+        "'b'>='b'",
+        "'2'<10",
+        "true>=1",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -372,6 +378,11 @@ fn simple_functions_use_contiguous_register_call_frames() -> Result<(), Error> {
         "function mul(a,b){return a*b}mul(true,42)",
         "function div(a,b){return a/b}div(null,0)",
         "function rem(a,b){return a%b}rem(7,3)",
+        "function compare(a,b){return a<=b}compare('a','b')",
+        "function compare(a,b){return a>b}compare('2',1)",
+        "let f=function fact(x){return x<2?1:x*fact(x-1)};f(6)",
+        "let f=function fib(x){return x<2?x:fib(x-1)+fib(x-2)};f(8)",
+        "let f=function inner(){return inner===inner};f()",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -396,10 +407,11 @@ fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> R
         "function f(){return {x:1}}f()",
         "async function f(){return 1}f()",
         "function f(){function g(){return 1}return g()}f()",
-        "let f=function inner(a){return a};f(42)",
         "function f(a,a){return a}f(1,2)",
         "function f(a={}){return a}f()",
         "function f(...a){return a.length}f(1)",
+        "let f=function inner(){return inner===f};f()",
+        "let f=function inner(inner){return inner};f(42)",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
@@ -412,6 +424,22 @@ fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> R
         ..Limits::default()
     };
     let program = compile("function f(){return 42}f()", limits)?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::new(limits).run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "call frames"
+        })
+    );
+
+    let limits = Limits {
+        call_frames: 3,
+        ..Limits::default()
+    };
+    let program = compile(
+        "let f=function fact(x){return x<2?1:x*fact(x-1)};f(6)",
+        limits,
+    )?;
     assert!(program.uses_register_backend());
     assert_eq!(
         Runtime::new(limits).run(&program, &mut SilentHost),

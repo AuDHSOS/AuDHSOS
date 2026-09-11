@@ -38,6 +38,14 @@ pub enum BinaryOp {
     Div,
     /// Numeric remainder.
     Mod,
+    /// Abstract relational less-than comparison.
+    LessThan,
+    /// Abstract relational less-than-or-equal comparison.
+    LessThanOrEqual,
+    /// Abstract relational greater-than comparison.
+    GreaterThan,
+    /// Abstract relational greater-than-or-equal comparison.
+    GreaterThanOrEqual,
 }
 
 /// Structural verification failure in register bytecode.
@@ -284,6 +292,8 @@ pub struct BytecodeFunction {
     pub parameter_count: u16,
     /// Number of parameter/local binding registers charged to the active binding budget.
     pub binding_count: u16,
+    /// Register initialized with the currently called Function object.
+    pub self_register: Option<Reg>,
     /// Static category of every feedback vector slot.
     pub feedback_slots: Vec<FeedbackKind>,
     /// Fuel charged once in the function prologue.
@@ -304,6 +314,7 @@ impl BytecodeFunction {
             register_count,
             parameter_count,
             binding_count: parameter_count,
+            self_register: None,
             feedback_slots: Vec::new(),
             entry_fuel_cost: 1,
             entry_stack_requirement: 0,
@@ -379,6 +390,9 @@ impl BytecodeFunction {
         }
         if self.binding_count > self.register_count || self.parameter_count > self.binding_count {
             return Err(VerificationError::BindingsExceedRegisters);
+        }
+        if let Some(register) = self.self_register {
+            self.verify_register(0, register)?;
         }
         for (index, constant) in self.constants.iter().enumerate() {
             if constant.is_object()
@@ -637,6 +651,23 @@ mod tests {
                 register: Reg(1)
             })
         );
+
+        let mut self_register = BytecodeFunction::new(1, 0);
+        self_register.self_register = Some(Reg(1));
+        self_register.emit(Instruction::Return);
+        assert_eq!(
+            self_register.verify(),
+            Err(VerificationError::RegisterOutOfBounds {
+                pc: 0,
+                register: Reg(1)
+            })
+        );
+
+        let mut self_binding = BytecodeFunction::new(1, 0);
+        self_binding.self_register = Some(Reg(0));
+        self_binding.binding_count = 1;
+        self_binding.emit(Instruction::Return);
+        assert_eq!(self_binding.verify(), Ok(()));
 
         let mut constant = BytecodeFunction::new(0, 0);
         constant.emit(Instruction::LdaConstant(0));
