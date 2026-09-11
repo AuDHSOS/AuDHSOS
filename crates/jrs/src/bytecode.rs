@@ -534,7 +534,10 @@ impl RegisterType {
 #[derive(Clone, PartialEq, Eq)]
 enum RegisterObjectLayout {
     Ordinary(BTreeMap<Vec<u16>, RegisterType>),
-    Array(BTreeMap<u32, RegisterType>),
+    Array {
+        elements: BTreeMap<u32, RegisterType>,
+        dynamic: Option<RegisterType>,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -863,8 +866,13 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         let object_id = self.next_object_id;
         self.next_object_id = self.next_object_id.checked_add(1)?;
-        self.object_layouts
-            .insert(object_id, RegisterObjectLayout::Array(BTreeMap::new()));
+        self.object_layouts.insert(
+            object_id,
+            RegisterObjectLayout::Array {
+                elements: BTreeMap::new(),
+                dynamic: None,
+            },
+        );
         let property_count = items
             .iter()
             .filter(|item| item.is_some())
@@ -898,7 +906,8 @@ impl RegisterLowerer {
                 key,
                 slot,
             });
-            let RegisterObjectLayout::Array(elements) = self.object_layouts.get_mut(&object_id)?
+            let RegisterObjectLayout::Array { elements, .. } =
+                self.object_layouts.get_mut(&object_id)?
             else {
                 return None;
             };
@@ -926,19 +935,23 @@ impl RegisterLowerer {
             let RegisterType::Array(object_id) = base_type else {
                 return None;
             };
-            let RegisterObjectLayout::Array(elements) = self.object_layouts.get(&object_id)? else {
+            let RegisterObjectLayout::Array { elements, dynamic } =
+                self.object_layouts.get(&object_id)?
+            else {
                 return None;
             };
             let static_index = Self::static_array_index(key);
             let result_type = if let Some(index) = static_index {
-                elements
+                let static_type = elements
                     .get(&index)
                     .copied()
-                    .unwrap_or(RegisterType::Undefined)
+                    .unwrap_or(RegisterType::Undefined);
+                dynamic.map_or(static_type, |dynamic| static_type.merge(dynamic))
             } else {
                 elements
                     .values()
                     .copied()
+                    .chain(dynamic.iter().copied())
                     .reduce(RegisterType::merge)
                     .unwrap_or(RegisterType::Undefined)
                     .merge(RegisterType::Number)
@@ -1005,22 +1018,26 @@ impl RegisterLowerer {
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
         let array_index = if matches!(base_type, RegisterType::Array(_)) {
-            Some(Self::static_array_index(key)?)
+            Self::static_array_index(key)
         } else {
             None
         };
         let key_register = if matches!(base_type, RegisterType::Array(_)) {
-            self.emit_array_index(array_index?)?;
+            if let Some(index) = array_index {
+                self.emit_array_index(index)?;
+            } else if self.lower(key)? != RegisterType::Number {
+                return None;
+            }
             let key = self.allocate_register()?;
             self.code.emit(Instruction::Star(key));
             Some(key)
         } else {
             None
         };
-        let name = if array_index.is_none() {
-            Some(self.string_constant(Self::static_property_name(key)?)?)
-        } else {
+        let name = if matches!(base_type, RegisterType::Array(_)) {
             None
+        } else {
+            Some(self.string_constant(Self::static_property_name(key)?)?)
         };
         let value_type = self.lower(value)?;
         if !value_type.is_primitive() {
@@ -1037,15 +1054,20 @@ impl RegisterLowerer {
             let RegisterType::Array(object_id) = base_type else {
                 return None;
             };
-            let RegisterObjectLayout::Array(elements) = self.object_layouts.get_mut(&object_id)?
+            let RegisterObjectLayout::Array { elements, dynamic } =
+                self.object_layouts.get_mut(&object_id)?
             else {
                 return None;
             };
-            let is_new = !elements.contains_key(&array_index?);
-            if is_new && elements.len().saturating_add(1) >= self.property_limit {
-                return None;
+            if let Some(index) = array_index {
+                let is_new = !elements.contains_key(&index);
+                if is_new && elements.len().saturating_add(1) >= self.property_limit {
+                    return None;
+                }
+                elements.insert(index, value_type);
+            } else {
+                *dynamic = Some(dynamic.map_or(value_type, |current| current.merge(value_type)));
             }
-            elements.insert(array_index?, value_type);
         } else {
             self.code.emit(Instruction::SetNamed {
                 obj: object,
@@ -1445,9 +1467,27 @@ impl RegisterLowerer {
     }
 
     fn loop_layouts_match(&self, expected: &BTreeMap<u32, RegisterObjectLayout>) -> bool {
-        expected
-            .iter()
-            .all(|(id, layout)| self.object_layouts.get(id) == Some(layout))
+        expected.iter().all(|(id, expected)| {
+            self.object_layouts
+                .get(id)
+                .is_some_and(|actual| match (expected, actual) {
+                    (
+                        RegisterObjectLayout::Array {
+                            elements: expected_elements,
+                            dynamic: expected_dynamic,
+                        },
+                        RegisterObjectLayout::Array {
+                            elements: actual_elements,
+                            dynamic: actual_dynamic,
+                        },
+                    ) => {
+                        expected_elements == actual_elements
+                            && (expected_dynamic == actual_dynamic
+                                || expected_dynamic.is_none() && actual_dynamic.is_some())
+                    }
+                    _ => expected == actual,
+                })
+        })
     }
 
     fn lower_binary(

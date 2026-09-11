@@ -140,6 +140,12 @@ fn array_literals_and_indices_run_through_dense_elements() -> Result<(), Error> 
         "let a=[2,3,5];let i=null;a[i]===undefined",
         "let a=[2,3,5];let i=9;a[i]+1",
         "let a=[2,3,5];let sum=0;for(let i=0;i<a.length;i++){sum+=a[i]}sum",
+        "let a=[];for(let i=0;i<3;i++){a[i]=i+1}a[2]",
+        "let a=[1,2];let i=0;while(i<2){a[i]=a[i]+1;i++}a[0]+a[1]",
+        "let a=[];let i=-1;a[i]=7;a[i]",
+        "let a=[];let i=4294967295;a[i]=9;a[i]",
+        "let a=[];let i=4294967295;a[i]=9;a.length",
+        "let a=[];a[4294967295]=9;a.length",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -182,12 +188,7 @@ fn numeric_array_indices_do_not_enter_the_property_name_pool() -> Result<(), Err
 
 #[test]
 fn non_indices_and_object_results_remain_on_the_full_property_path() -> Result<(), Error> {
-    for source in [
-        "let a=[];a[4294967295]=9;a.length",
-        "({0:1})[0]",
-        "let o={x:1};o.missing===undefined",
-        "[1,2]",
-    ] {
+    for source in ["({0:1})[0]", "let o={x:1};o.missing===undefined", "[1,2]"] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
             "{source}"
@@ -212,6 +213,19 @@ fn register_array_elements_preserve_property_limits() -> Result<(), Error> {
     assert!(
         !compile("let a=[];a[0]=1;0", limits)?.uses_register_backend(),
         "the compiler must retain the full property-limit semantics"
+    );
+
+    let limits = Limits {
+        properties: 2,
+        ..Limits::default()
+    };
+    let program = compile("let a=[];let i=0;while(i<2){a[i]=i;i++}0", limits)?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::new(limits).run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "object properties"
+        })
     );
     Ok(())
 }
