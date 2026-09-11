@@ -92,6 +92,49 @@ fn string_expressions_run_through_heap_independent_register_bytecode() -> Result
 }
 
 #[test]
+fn typeof_runs_through_register_bytecode_and_matches_legacy() -> Result<(), Error> {
+    for source in [
+        "typeof undefined",
+        "typeof null",
+        "typeof 1",
+        "typeof -0",
+        "typeof NaN",
+        "typeof true",
+        "typeof ''",
+        "typeof 'hello world'",
+        "typeof ({})",
+        "typeof []",
+        "typeof function(){}",
+        "let x=1;typeof x",
+        "let x='a';typeof (x+='b')",
+        "let f=function(){};typeof f",
+        "function f(a){return typeof a}f(null)",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert_eq!(actual, expected, "{source}");
+    }
+
+    let limits = Limits {
+        string_units: 5,
+        ..Limits::default()
+    };
+    let program = compile("typeof 1", limits)?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::new(limits).run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "string units"
+        })
+    );
+    Ok(())
+}
+
+#[test]
 fn string_constants_are_reusable_across_independent_agent_heaps() -> Result<(), Error> {
     let mut program = compile("'hello' + ' 世界'", Limits::default())?;
     assert!(program.uses_register_backend());
@@ -321,7 +364,7 @@ fn register_string_concatenation_preserves_string_unit_limit() -> Result<(), Err
 #[test]
 fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<(), Error> {
     for source in [
-        "typeof 1",
+        "typeof absent",
         "{let x=1;x+2}",
         "Number(1)",
         "({valueOf(){return 1}})+2",

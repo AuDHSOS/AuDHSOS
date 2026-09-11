@@ -869,7 +869,8 @@ impl RegisterLowerer {
                     Unary::Not => Instruction::LogicalNot,
                     Unary::Void => Instruction::ToUndefined,
                     Unary::BitNot if inner_type == RegisterType::Number => Instruction::BitNot,
-                    Unary::Plus | Unary::Minus | Unary::BitNot | Unary::Typeof | Unary::Delete => {
+                    Unary::Typeof => Instruction::TypeOf,
+                    Unary::Plus | Unary::Minus | Unary::BitNot | Unary::Delete => {
                         return None;
                     }
                 });
@@ -877,7 +878,8 @@ impl RegisterLowerer {
                     Unary::Minus | Unary::BitNot => RegisterType::Number,
                     Unary::Not => RegisterType::Boolean,
                     Unary::Void => RegisterType::Undefined,
-                    Unary::Plus | Unary::Typeof | Unary::Delete => return None,
+                    Unary::Typeof => RegisterType::String,
+                    Unary::Plus | Unary::Delete => return None,
                 }
             }
             ExprKind::Binary(operator, left, right) => self.lower_binary(*operator, left, right)?,
@@ -2224,7 +2226,8 @@ fn register_expression_type(
                 }
                 Unary::Not => RegisterType::Boolean,
                 Unary::Void => RegisterType::Undefined,
-                Unary::Plus | Unary::Minus | Unary::BitNot | Unary::Typeof | Unary::Delete => {
+                Unary::Typeof => RegisterType::String,
+                Unary::Plus | Unary::Minus | Unary::BitNot | Unary::Delete => {
                     return None;
                 }
             }

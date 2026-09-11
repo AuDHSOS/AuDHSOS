@@ -171,6 +171,8 @@ pub enum Instruction {
     ToUndefined,
     /// `acc = ~ToInt32(acc)` for an already numeric primitive.
     BitNot,
+    /// `acc = typeof acc`, materialized as an Agent-local String.
+    TypeOf,
     /// `acc = reg`
     Ldar(Reg),
     /// `reg = acc`
@@ -564,6 +566,7 @@ impl BytecodeFunction {
             | Instruction::LogicalNot
             | Instruction::ToUndefined
             | Instruction::BitNot
+            | Instruction::TypeOf
             | Instruction::LdaUndefined
             | Instruction::LdaNull
             | Instruction::LdaTrue

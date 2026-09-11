@@ -20,6 +20,7 @@ use super::{
     context::ContextRef,
     feedback::{BinaryOpFeedback, FeedbackVector, NamedAccessCase},
     heap::{GenerationalHeap, HeapError},
+    object::ObjectKind,
     shape::{PropertyFlags, ShapeId},
     string::StringError,
     value::{ObjectRef, VALUE_FALSE, VALUE_NULL, VALUE_TRUE, VALUE_UNDEFINED, Value},
@@ -306,13 +307,64 @@ impl RegisterVM {
             .collect::<Result<Vec<_>, _>>()
             .ok();
         if let Some(bytes) = latin1 {
-            if units.len() <= 5 {
-                return Value::from_sso(&bytes).ok_or(VMError::StringLimit);
-            }
-            return Ok(Value::from_string(heap.strings.allocate_latin1(bytes)?));
+            return self.allocate_latin1(heap, &bytes);
         }
         let reference = heap.strings.allocate_utf16(units.to_vec())?;
         Ok(Value::from_string(reference))
+    }
+
+    fn allocate_latin1(&self, heap: &mut GenerationalHeap, bytes: &[u8]) -> Result<Value, VMError> {
+        if bytes.len() > self.string_units_limit {
+            return Err(VMError::StringLimit);
+        }
+        if bytes.len() <= 5 {
+            return Value::from_sso(bytes).ok_or(VMError::StringLimit);
+        }
+        Ok(Value::from_string(
+            heap.strings.allocate_latin1(bytes.to_vec())?,
+        ))
+    }
+
+    fn type_of(&self, heap: &mut GenerationalHeap) -> Result<Value, VMError> {
+        let name: &[u8] = if self.acc.is_undefined() {
+            b"undefined"
+        } else if self.acc.is_null() {
+            b"object"
+        } else if self.acc.is_heap_string() {
+            heap.strings
+                .length_of(self.acc)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            b"string"
+        } else if self.acc.is_sso_string() {
+            let mut bytes = [0u8; 5];
+            self.acc
+                .as_sso_string(&mut bytes)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            b"string"
+        } else if self.acc.is_symbol() {
+            b"symbol"
+        } else if self.acc.is_boolean() {
+            b"boolean"
+        } else if self.acc.is_number() {
+            b"number"
+        } else if self.acc.is_bigint() {
+            b"bigint"
+        } else if let Some(reference) = self.acc.as_object() {
+            let object = heap
+                .get_object(reference)
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            if matches!(
+                object.kind,
+                ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. }
+            ) {
+                b"function"
+            } else {
+                b"object"
+            }
+        } else {
+            return Err(VMError::Heap(HeapError::InvalidReference));
+        };
+        self.allocate_latin1(heap, name)
     }
 
     fn add(&mut self, rhs: Value, heap: &mut GenerationalHeap) -> Result<(), VMError> {
@@ -613,6 +665,9 @@ impl RegisterVM {
                 Instruction::BitNot => {
                     let number = self.acc.as_f64().ok_or(VMError::TypeError)?;
                     self.acc = Value::from_smi(!number_to_i32(number));
+                }
+                Instruction::TypeOf => {
+                    self.acc = self.type_of(heap)?;
                 }
                 Instruction::Ldar(reg) => {
                     self.acc = self.read_reg(reg)?;
