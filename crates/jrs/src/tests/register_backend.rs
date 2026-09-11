@@ -399,6 +399,46 @@ fn simple_functions_use_contiguous_register_call_frames() -> Result<(), Error> {
 }
 
 #[test]
+fn closures_share_captured_context_bindings_in_register_bytecode() -> Result<(), Error> {
+    for source in [
+        "let x=40;let f=function(){return x+2};f()",
+        "let x=1;let f=function(){return x};x=2;f()",
+        "let x=40;let f=function(){x++;return x};f();f()",
+        "let x='a';let f=function(){x+='b';return x};f();f()",
+        "let x=1;let f=function(){return x};let g=function(){x++;return x};f()+g()+f()",
+        "let x=1;let f=function(){x='a';return x};f();x+1",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let code = program
+            .register_code
+            .as_ref()
+            .ok_or(Error::InvalidBytecode)?;
+        assert!(code.own_context_slot_count.is_some(), "{source}");
+        assert!(code.functions.iter().any(|function| {
+            !function.outer_context_slot_counts.is_empty()
+                && function.instructions.iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        crate::engine::bytecode::Instruction::LoadContext { .. }
+                            | crate::engine::bytecode::Instruction::StoreContext { .. }
+                    )
+                })
+        }));
+
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> Result<(), Error> {
     for source in [
         "function f(){return this}f()",
