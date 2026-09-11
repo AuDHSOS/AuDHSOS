@@ -329,6 +329,7 @@ pub(crate) enum Builtin {
     MathTrunc,
     MathSqrt,
     MathSign,
+    MathSin,
     MathClz32,
     RegExp,
     RegExpExec,

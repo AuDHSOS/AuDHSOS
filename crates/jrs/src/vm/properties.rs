@@ -135,6 +135,7 @@ impl Execution<'_> {
             ("trunc", Builtin::MathTrunc, 1),
             ("sqrt", Builtin::MathSqrt, 1),
             ("sign", Builtin::MathSign, 1),
+            ("sin", Builtin::MathSin, 1),
             ("clz32", Builtin::MathClz32, 1),
         ] {
             let f = self.new_host_behavior(

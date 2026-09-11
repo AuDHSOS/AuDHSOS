@@ -3,6 +3,17 @@
 Safe, allocation-free `no_std` numerical kernels without external dependencies,
 platform libm, FFI or architecture-specific instructions.
 
+`sin` implements the special values of local ECMA-262 §21.3.2.31 and a
+bounded implementation-approximated finite result. Moderate arguments use
+split-constant Cody-Waite reduction. Large arguments multiply the complete
+binary64 significand by 1,584 fixed bits of `2 / pi` in 24-bit limbs, providing
+Payne-Hanek quadrant and remainder reduction through the maximum binary64
+exponent. Fixed Taylor kernels evaluate sine or cosine on `[-pi/4, pi/4]`.
+The loops have constant bounds; there is no allocation, data-dependent
+convergence, platform math call, or loss of the low argument bits before range
+reduction. Tests compare special values, reduction boundaries and 20,000
+deterministic binary64 values against the host implementation as an oracle.
+
 `pow` implements the binary64 special cases of local ECMA-262 §6.1.6.1.3,
 including NaN-to-zero, signed zeros, infinite exponents and odd integer signs.
 Finite positive magnitudes use normalized mantissa/exponent decomposition,

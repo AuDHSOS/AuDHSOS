@@ -1753,6 +1753,7 @@ impl Execution<'_> {
             Builtin::MathTrunc => return self.math_unary(args, Self::math_trunc_val),
             Builtin::MathSqrt => return self.math_unary(args, Self::math_sqrt_val),
             Builtin::MathSign => return self.math_sign(args),
+            Builtin::MathSin => return self.math_unary(args, audhsos_math::sin),
             Builtin::MathClz32 => return Ok(Self::math_clz32(args)),
             Builtin::String if !args.is_empty() => {
                 return Ok(Value::String(self.string_units(&first)?));

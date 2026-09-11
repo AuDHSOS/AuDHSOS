@@ -29,6 +29,7 @@ mod functions;
 mod heap;
 mod iterators;
 mod json;
+mod math;
 mod microtasks;
 mod number_parsing;
 mod objects;
