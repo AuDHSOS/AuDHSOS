@@ -294,3 +294,48 @@ fn register_loop_lowering_rejects_unstable_or_abrupt_bodies() -> Result<(), Erro
     }
     Ok(())
 }
+
+#[test]
+fn classic_for_loops_match_legacy_execution() -> Result<(), Error> {
+    for source in [
+        "let sum=0;for(let i=0;i<10;i++){sum+=i;}sum",
+        "let i=0;for(i=0;i<4;i++)i;i",
+        "for(let i=0;i<3;i++)i",
+        "1;for(let i=0;i<0;i++)2",
+        "let i=0;for(;i<3;)i++;i",
+        "let i=0;for(;;i++){if(i<2)i+=1;else i+=1}",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost);
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost);
+        match (&actual, &expected) {
+            (Ok(actual), Ok(expected)) => assert!(
+                same_value(actual, expected),
+                "{source}: {actual:?} != {expected:?}"
+            ),
+            _ => assert_eq!(actual, expected, "{source}"),
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn register_for_lowering_rejects_unstable_or_observable_lexical_cases() -> Result<(), Error> {
+    for source in [
+        "let i=1;for(let i=0;i<2;i++){}i",
+        "for(const i=0;i<2;i++){}",
+        "for(var i=0;i<2;i++){}i",
+        "for(let i=0;i<2;i++){let x=i;}i",
+        "for(let i=0;i<2;i++){(()=>i)}",
+        "for(let i=0;i<2;i++){break}",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    Ok(())
+}

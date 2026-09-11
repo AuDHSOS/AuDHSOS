@@ -722,6 +722,10 @@ impl RegisterLowerer {
                 self.lower_while(condition, body)?;
                 true
             }
+            Stmt::For(initializer, condition, step, body) => {
+                self.lower_for(initializer, condition.as_ref(), step.as_ref(), body)?;
+                true
+            }
             Stmt::Empty => false,
             _ => return None,
         };
@@ -752,6 +756,90 @@ impl RegisterLowerer {
         self.patch_jump(branch, done)?;
         self.patch_jump(back_edge, head)?;
         self.release_register(result_register)?;
+        Some(())
+    }
+
+    fn lower_for(
+        &mut self,
+        initializer: &Stmt,
+        condition: Option<&Expr>,
+        step: Option<&Expr>,
+        body: &Stmt,
+    ) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        let mut scoped_registers = Vec::new();
+        match initializer {
+            Stmt::Declare(bindings) => {
+                for (name, mutable, _) in bindings {
+                    if self.bindings.contains_key(name)
+                        || bindings
+                            .iter()
+                            .filter(|(candidate, _, _)| candidate == name)
+                            .count()
+                            != 1
+                    {
+                        return None;
+                    }
+                    let register = self.allocate_register()?;
+                    self.bindings.insert(
+                        name.clone(),
+                        RegisterBinding {
+                            register,
+                            value_type: None,
+                            mutable: *mutable,
+                        },
+                    );
+                    scoped_registers.push((name, register));
+                }
+                for (name, _, expression) in bindings {
+                    self.initialize(name, expression.as_ref())?;
+                }
+            }
+            Stmt::Expr(expression) => {
+                self.lower(expression)?;
+            }
+            Stmt::Empty => {}
+            _ => return None,
+        }
+
+        self.code.emit(Instruction::LdaUndefined);
+        let result_register = self.allocate_register()?;
+        self.code.emit(Instruction::Star(result_register));
+        let head = self.code.instructions.len();
+        let bindings_at_head = self.bindings.clone();
+        let branch = if let Some(condition) = condition {
+            self.lower(condition)?;
+            if self.bindings != bindings_at_head {
+                return None;
+            }
+            Some(self.code.emit(Instruction::JumpIfFalse(0)))
+        } else {
+            None
+        };
+        self.code.emit(Instruction::Ldar(result_register));
+        self.lower_statement(body)?;
+        if self.bindings != bindings_at_head {
+            return None;
+        }
+        self.code.emit(Instruction::Star(result_register));
+        if let Some(step) = step {
+            self.lower(step)?;
+            if self.bindings != bindings_at_head {
+                return None;
+            }
+        }
+        let back_edge = self.code.emit(Instruction::Jump(0));
+        let done = self.code.instructions.len();
+        self.code.emit(Instruction::Ldar(result_register));
+        if let Some(branch) = branch {
+            self.patch_jump(branch, done)?;
+        }
+        self.patch_jump(back_edge, head)?;
+        self.release_register(result_register)?;
+        for (name, register) in scoped_registers.into_iter().rev() {
+            self.bindings.remove(name)?;
+            self.release_register(register)?;
+        }
         Some(())
     }
 
@@ -966,7 +1054,11 @@ fn lower_register_script(
                     }
                 }
             }
-            Stmt::Expr(_) | Stmt::Block(_) | Stmt::If(_, _, _) | Stmt::While(_, _) => {
+            Stmt::Expr(_)
+            | Stmt::Block(_)
+            | Stmt::If(_, _, _)
+            | Stmt::While(_, _)
+            | Stmt::For(_, _, _, _) => {
                 saw_expression = true;
             }
             Stmt::Empty => {}
@@ -1078,6 +1170,19 @@ fn register_statement_stack_requirement(statement: &Stmt) -> usize {
         }),
         Stmt::While(condition, body) => register_expression_stack_requirement(condition)
             .max(register_statement_stack_requirement(body)),
+        Stmt::For(initializer, condition, step, body) => {
+            register_statement_stack_requirement(initializer)
+                .max(
+                    condition
+                        .as_ref()
+                        .map_or(1, register_expression_stack_requirement),
+                )
+                .max(
+                    step.as_ref()
+                        .map_or(1, register_expression_stack_requirement),
+                )
+                .max(register_statement_stack_requirement(body))
+        }
         _ => 1,
     }
 }
