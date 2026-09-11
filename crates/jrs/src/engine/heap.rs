@@ -26,6 +26,9 @@ use alloc::{collections::BTreeMap, collections::BTreeSet, vec::Vec};
 /// Default capacity of the Nursery in number of objects.
 pub const NURSERY_OBJECT_CAPACITY: usize = 1024;
 
+/// Maximum number of entries representable in one Nursery semispace.
+pub const MAX_NURSERY_ENTRIES: usize = 1 << 11;
+
 /// Number of survived minor collections before promotion.
 pub const PROMOTION_AGE: u8 = 2;
 
@@ -36,7 +39,7 @@ pub enum HeapError {
     NurseryFull,
     /// A generation-tagged reference does not address a live entry.
     InvalidReference,
-    /// A generation-local index cannot be represented in the 31-bit payload.
+    /// A generation-local index cannot be represented in the handle payload.
     ReferenceSpaceExhausted,
 }
 
@@ -57,14 +60,16 @@ struct Nursery {
     objects: Vec<YoungObject>,
     elements: Vec<YoungElements>,
     object_capacity: usize,
+    generation: u32,
 }
 
 impl Nursery {
-    fn new(capacity: usize) -> Self {
+    fn new(capacity: usize, generation: u32) -> Self {
         Self {
             objects: Vec::with_capacity(capacity),
             elements: Vec::with_capacity(capacity),
             object_capacity: capacity,
+            generation,
         }
     }
 
@@ -73,46 +78,57 @@ impl Nursery {
     }
 }
 
+struct OldEntry<T> {
+    generation: u8,
+    value: Option<T>,
+}
+
 /// Long-lived Old Generation heap space.
 #[derive(Default)]
 struct OldGeneration {
-    objects: Vec<Option<JSObject>>,
-    elements: Vec<Option<ElementsKind>>,
+    objects: Vec<OldEntry<JSObject>>,
+    elements: Vec<OldEntry<ElementsKind>>,
     free_objects: Vec<usize>,
     free_elements: Vec<usize>,
 }
 
 impl OldGeneration {
     fn allocate_object(&mut self, object: JSObject) -> Result<ObjectRef, HeapError> {
-        let index = if let Some(index) = self.free_objects.pop() {
-            let slot = self
+        let (index, generation) = if let Some(index) = self.free_objects.pop() {
+            let entry = self
                 .objects
                 .get_mut(index)
                 .ok_or(HeapError::InvalidReference)?;
-            *slot = Some(object);
-            index
+            entry.value = Some(object);
+            (index, entry.generation)
         } else {
             let index = self.objects.len();
-            self.objects.push(Some(object));
-            index
+            self.objects.push(OldEntry {
+                generation: 0,
+                value: Some(object),
+            });
+            (index, 0)
         };
-        generation_index(index).map(ObjectRef::old)
+        generation_index(index).map(|index| ObjectRef::old(index, generation))
     }
 
     fn allocate_elements(&mut self, elements: ElementsKind) -> Result<ElementsRef, HeapError> {
-        let index = if let Some(index) = self.free_elements.pop() {
-            let slot = self
+        let (index, generation) = if let Some(index) = self.free_elements.pop() {
+            let entry = self
                 .elements
                 .get_mut(index)
                 .ok_or(HeapError::InvalidReference)?;
-            *slot = Some(elements);
-            index
+            entry.value = Some(elements);
+            (index, entry.generation)
         } else {
             let index = self.elements.len();
-            self.elements.push(Some(elements));
-            index
+            self.elements.push(OldEntry {
+                generation: 0,
+                value: Some(elements),
+            });
+            (index, 0)
         };
-        generation_index(index).map(ElementsRef::old)
+        generation_index(index).map(|index| ElementsRef::old(index, generation))
     }
 }
 
@@ -156,8 +172,8 @@ pub struct GenerationalHeap {
     old_gen: OldGeneration,
     roots: Vec<Value>,
     scope_markers: Vec<usize>,
-    remembered_objects: BTreeSet<u32>,
-    remembered_elements: BTreeSet<u32>,
+    remembered_objects: BTreeSet<ObjectRef>,
+    remembered_elements: BTreeSet<ElementsRef>,
 }
 
 impl Default for GenerationalHeap {
@@ -181,7 +197,7 @@ impl GenerationalHeap {
         Self {
             shapes: ShapeTable::new(),
             strings: StringArena::new(),
-            nursery: Nursery::new(capacity.max(1)),
+            nursery: Nursery::new(capacity.clamp(1, MAX_NURSERY_ENTRIES), 0),
             old_gen: OldGeneration::default(),
             roots: Vec::with_capacity(128),
             scope_markers: Vec::with_capacity(16),
@@ -214,12 +230,12 @@ impl GenerationalHeap {
         if self.nursery.is_full() {
             return Err(HeapError::NurseryFull);
         }
-        let index = generation_index(self.nursery.objects.len())?;
+        let index = young_index(self.nursery.objects.len())?;
         self.nursery.objects.push(YoungObject {
             value: JSObject::new(shape_id, prototype),
             age: 0,
         });
-        Ok(ObjectRef::young(index))
+        Ok(ObjectRef::young(index, self.nursery.generation))
     }
 
     /// Allocates an Array and its dedicated elements store in the Nursery.
@@ -232,19 +248,19 @@ impl GenerationalHeap {
         if self.nursery.is_full() {
             return Err(HeapError::NurseryFull);
         }
-        let elements_index = generation_index(self.nursery.elements.len())?;
+        let elements_index = young_index(self.nursery.elements.len())?;
         self.nursery.elements.push(YoungElements {
             value: ElementsKind::new_packed_smi(16.min(length as usize)),
             age: 0,
         });
-        let elements = ElementsRef::young(elements_index);
+        let elements = ElementsRef::young(elements_index, self.nursery.generation);
 
-        let object_index = generation_index(self.nursery.objects.len())?;
+        let object_index = young_index(self.nursery.objects.len())?;
         self.nursery.objects.push(YoungObject {
             value: JSObject::new_array(self.shapes.root_shape(), VALUE_NULL, elements, length),
             age: 0,
         });
-        Ok(ObjectRef::young(object_index))
+        Ok(ObjectRef::young(object_index, self.nursery.generation))
     }
 
     /// Reads an immutable object reference from its tagged generation.
@@ -252,9 +268,14 @@ impl GenerationalHeap {
     pub fn get_object(&self, reference: ObjectRef) -> Option<&JSObject> {
         let index = reference.index() as usize;
         if reference.is_old() {
-            self.old_gen.objects.get(index)?.as_ref()
+            let entry = self.old_gen.objects.get(index)?;
+            (u32::from(entry.generation) == reference.generation())
+                .then_some(entry.value.as_ref())
+                .flatten()
         } else {
-            self.nursery.objects.get(index).map(|entry| &entry.value)
+            (self.nursery.generation == reference.generation())
+                .then(|| self.nursery.objects.get(index).map(|entry| &entry.value))
+                .flatten()
         }
     }
 
@@ -263,9 +284,14 @@ impl GenerationalHeap {
     pub fn get_elements(&self, reference: ElementsRef) -> Option<&ElementsKind> {
         let index = reference.index() as usize;
         if reference.is_old() {
-            self.old_gen.elements.get(index)?.as_ref()
+            let entry = self.old_gen.elements.get(index)?;
+            (u32::from(entry.generation) == reference.generation())
+                .then_some(entry.value.as_ref())
+                .flatten()
         } else {
-            self.nursery.elements.get(index).map(|entry| &entry.value)
+            (self.nursery.generation == reference.generation())
+                .then(|| self.nursery.elements.get(index).map(|entry| &entry.value))
+                .flatten()
         }
     }
 
@@ -410,7 +436,13 @@ impl GenerationalHeap {
         accumulator: &mut Value,
     ) -> Result<ScavengeStats, HeapError> {
         let capacity = self.nursery.object_capacity;
-        let from = core::mem::replace(&mut self.nursery, Nursery::new(capacity));
+        let next_generation = self
+            .nursery
+            .generation
+            .checked_add(1)
+            .filter(|generation| *generation < (1 << 20))
+            .ok_or(HeapError::ReferenceSpaceExhausted)?;
+        let from = core::mem::replace(&mut self.nursery, Nursery::new(capacity, next_generation));
         let remembered_objects = core::mem::take(&mut self.remembered_objects);
         let remembered_elements = core::mem::take(&mut self.remembered_elements);
         let mut evacuator = Evacuator::new(from, &mut self.old_gen, &mut self.nursery);
@@ -479,18 +511,24 @@ impl GenerationalHeap {
         };
         for (index, entry) in self.old_gen.objects.iter_mut().enumerate() {
             let index_u32 = generation_index(index)?;
-            if entry.is_some() && !marked_objects.contains(&index_u32) {
-                *entry = None;
-                self.old_gen.free_objects.push(index);
+            if entry.value.is_some() && !marked_objects.contains(&index_u32) {
+                entry.value = None;
                 stats.reclaimed_objects = stats.reclaimed_objects.saturating_add(1);
+                if let Some(generation) = entry.generation.checked_add(1) {
+                    entry.generation = generation;
+                    self.old_gen.free_objects.push(index);
+                }
             }
         }
         for (index, entry) in self.old_gen.elements.iter_mut().enumerate() {
             let index_u32 = generation_index(index)?;
-            if entry.is_some() && !marked_elements.contains(&index_u32) {
-                *entry = None;
-                self.old_gen.free_elements.push(index);
+            if entry.value.is_some() && !marked_elements.contains(&index_u32) {
+                entry.value = None;
                 stats.reclaimed_elements = stats.reclaimed_elements.saturating_add(1);
+                if let Some(generation) = entry.generation.checked_add(1) {
+                    entry.generation = generation;
+                    self.old_gen.free_elements.push(index);
+                }
             }
         }
         self.rebuild_remembered_sets();
@@ -500,12 +538,19 @@ impl GenerationalHeap {
     fn object_mut(&mut self, reference: ObjectRef) -> Result<&mut JSObject, HeapError> {
         let index = reference.index() as usize;
         if reference.is_old() {
-            self.old_gen
+            let entry = self
+                .old_gen
                 .objects
                 .get_mut(index)
-                .and_then(Option::as_mut)
-                .ok_or(HeapError::InvalidReference)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_mut().ok_or(HeapError::InvalidReference)
         } else {
+            if self.nursery.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
             self.nursery
                 .objects
                 .get_mut(index)
@@ -517,12 +562,19 @@ impl GenerationalHeap {
     fn elements_mut(&mut self, reference: ElementsRef) -> Result<&mut ElementsKind, HeapError> {
         let index = reference.index() as usize;
         if reference.is_old() {
-            self.old_gen
+            let entry = self
+                .old_gen
                 .elements
                 .get_mut(index)
-                .and_then(Option::as_mut)
-                .ok_or(HeapError::InvalidReference)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_mut().ok_or(HeapError::InvalidReference)
         } else {
+            if self.nursery.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
             self.nursery
                 .elements
                 .get_mut(index)
@@ -533,13 +585,13 @@ impl GenerationalHeap {
 
     fn remember_object_store(&mut self, owner: ObjectRef, value: Value) {
         if owner.is_old() && value.as_object().is_some_and(ObjectRef::is_young) {
-            self.remembered_objects.insert(owner.index());
+            self.remembered_objects.insert(owner);
         }
     }
 
     fn remember_elements_store(&mut self, owner: ElementsRef, value: Value) {
         if owner.is_old() && value.as_object().is_some_and(ObjectRef::is_young) {
-            self.remembered_elements.insert(owner.index());
+            self.remembered_elements.insert(owner);
         }
     }
 
@@ -547,17 +599,19 @@ impl GenerationalHeap {
         self.remembered_objects.clear();
         self.remembered_elements.clear();
         for (index, object) in self.old_gen.objects.iter().enumerate() {
-            if object.as_ref().is_some_and(object_contains_young)
+            if object.value.as_ref().is_some_and(object_contains_young)
                 && let Ok(index) = generation_index(index)
             {
-                self.remembered_objects.insert(index);
+                self.remembered_objects
+                    .insert(ObjectRef::old(index, object.generation));
             }
         }
         for (index, elements) in self.old_gen.elements.iter().enumerate() {
-            if elements.as_ref().is_some_and(elements_contain_young)
+            if elements.value.as_ref().is_some_and(elements_contain_young)
                 && let Ok(index) = generation_index(index)
             {
-                self.remembered_elements.insert(index);
+                self.remembered_elements
+                    .insert(ElementsRef::old(index, elements.generation));
             }
         }
     }
@@ -603,6 +657,24 @@ impl<'heap> MajorMarker<'heap> {
     }
 
     fn mark_object(&mut self, reference: ObjectRef) -> Result<(), HeapError> {
+        if reference.is_old() {
+            let entry = self
+                .old
+                .objects
+                .get(reference.index() as usize)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() || entry.value.is_none() {
+                return Err(HeapError::InvalidReference);
+            }
+        } else if self.nursery.generation != reference.generation()
+            || self
+                .nursery
+                .objects
+                .get(reference.index() as usize)
+                .is_none()
+        {
+            return Err(HeapError::InvalidReference);
+        }
         let first_visit = if reference.is_old() {
             self.marked_objects.insert(reference.index())
         } else {
@@ -612,12 +684,19 @@ impl<'heap> MajorMarker<'heap> {
             return Ok(());
         }
         let object = if reference.is_old() {
-            self.old
+            let entry = self
+                .old
                 .objects
                 .get(reference.index() as usize)
-                .and_then(Option::as_ref)
-                .ok_or(HeapError::InvalidReference)?
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_ref().ok_or(HeapError::InvalidReference)?
         } else {
+            if self.nursery.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
             &self
                 .nursery
                 .objects
@@ -630,6 +709,24 @@ impl<'heap> MajorMarker<'heap> {
     }
 
     fn mark_elements(&mut self, reference: ElementsRef) -> Result<(), HeapError> {
+        if reference.is_old() {
+            let entry = self
+                .old
+                .elements
+                .get(reference.index() as usize)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() || entry.value.is_none() {
+                return Err(HeapError::InvalidReference);
+            }
+        } else if self.nursery.generation != reference.generation()
+            || self
+                .nursery
+                .elements
+                .get(reference.index() as usize)
+                .is_none()
+        {
+            return Err(HeapError::InvalidReference);
+        }
         let first_visit = if reference.is_old() {
             self.marked_elements.insert(reference.index())
         } else {
@@ -639,12 +736,19 @@ impl<'heap> MajorMarker<'heap> {
             return Ok(());
         }
         let elements = if reference.is_old() {
-            self.old
+            let entry = self
+                .old
                 .elements
                 .get(reference.index() as usize)
-                .and_then(Option::as_ref)
-                .ok_or(HeapError::InvalidReference)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_ref().ok_or(HeapError::InvalidReference)
         } else {
+            if self.nursery.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
             self.nursery
                 .elements
                 .get(reference.index() as usize)
@@ -666,8 +770,8 @@ struct Evacuator<'heap> {
     from: Nursery,
     old: &'heap mut OldGeneration,
     to: &'heap mut Nursery,
-    object_forwarding: BTreeMap<u32, ObjectRef>,
-    elements_forwarding: BTreeMap<u32, ElementsRef>,
+    object_forwarding: BTreeMap<ObjectRef, ObjectRef>,
+    elements_forwarding: BTreeMap<ElementsRef, ElementsRef>,
     work: Vec<Work>,
     stats: ScavengeStats,
 }
@@ -695,9 +799,13 @@ impl<'heap> Evacuator<'heap> {
 
     fn evacuate_object(&mut self, reference: ObjectRef) -> Result<ObjectRef, HeapError> {
         if reference.is_old() {
+            self.object(reference)?;
             return Ok(reference);
         }
-        if let Some(forwarded) = self.object_forwarding.get(&reference.index()) {
+        if reference.generation() != self.from.generation {
+            return Err(HeapError::InvalidReference);
+        }
+        if let Some(forwarded) = self.object_forwarding.get(&reference) {
             return Ok(*forwarded);
         }
         let entry = self
@@ -717,18 +825,22 @@ impl<'heap> Evacuator<'heap> {
                 age,
             });
             self.stats.copied_objects = self.stats.copied_objects.saturating_add(1);
-            ObjectRef::young(index)
+            ObjectRef::young(index, self.to.generation)
         };
-        self.object_forwarding.insert(reference.index(), forwarded);
+        self.object_forwarding.insert(reference, forwarded);
         self.work.push(Work::Object(forwarded));
         Ok(forwarded)
     }
 
     fn evacuate_elements(&mut self, reference: ElementsRef) -> Result<ElementsRef, HeapError> {
         if reference.is_old() {
+            self.elements(reference)?;
             return Ok(reference);
         }
-        if let Some(forwarded) = self.elements_forwarding.get(&reference.index()) {
+        if reference.generation() != self.from.generation {
+            return Err(HeapError::InvalidReference);
+        }
+        if let Some(forwarded) = self.elements_forwarding.get(&reference) {
             return Ok(*forwarded);
         }
         let entry = self
@@ -748,20 +860,19 @@ impl<'heap> Evacuator<'heap> {
                 age,
             });
             self.stats.copied_elements = self.stats.copied_elements.saturating_add(1);
-            ElementsRef::young(index)
+            ElementsRef::young(index, self.to.generation)
         };
-        self.elements_forwarding
-            .insert(reference.index(), forwarded);
+        self.elements_forwarding.insert(reference, forwarded);
         self.work.push(Work::Elements(forwarded));
         Ok(forwarded)
     }
 
-    fn enqueue_old_object(&mut self, index: u32) {
-        self.work.push(Work::Object(ObjectRef::old(index)));
+    fn enqueue_old_object(&mut self, reference: ObjectRef) {
+        self.work.push(Work::Object(reference));
     }
 
-    fn enqueue_old_elements(&mut self, index: u32) {
-        self.work.push(Work::Elements(ElementsRef::old(index)));
+    fn enqueue_old_elements(&mut self, reference: ElementsRef) {
+        self.work.push(Work::Elements(reference));
     }
 
     fn drain(&mut self) -> Result<(), HeapError> {
@@ -805,12 +916,19 @@ impl<'heap> Evacuator<'heap> {
     fn object(&self, reference: ObjectRef) -> Result<&JSObject, HeapError> {
         let index = reference.index() as usize;
         if reference.is_old() {
-            self.old
+            let entry = self
+                .old
                 .objects
                 .get(index)
-                .and_then(Option::as_ref)
-                .ok_or(HeapError::InvalidReference)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_ref().ok_or(HeapError::InvalidReference)
         } else {
+            if self.to.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
             self.to
                 .objects
                 .get(index)
@@ -822,12 +940,19 @@ impl<'heap> Evacuator<'heap> {
     fn object_mut(&mut self, reference: ObjectRef) -> Result<&mut JSObject, HeapError> {
         let index = reference.index() as usize;
         if reference.is_old() {
-            self.old
+            let entry = self
+                .old
                 .objects
                 .get_mut(index)
-                .and_then(Option::as_mut)
-                .ok_or(HeapError::InvalidReference)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_mut().ok_or(HeapError::InvalidReference)
         } else {
+            if self.to.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
             self.to
                 .objects
                 .get_mut(index)
@@ -839,12 +964,19 @@ impl<'heap> Evacuator<'heap> {
     fn elements(&self, reference: ElementsRef) -> Result<&ElementsKind, HeapError> {
         let index = reference.index() as usize;
         if reference.is_old() {
-            self.old
+            let entry = self
+                .old
                 .elements
                 .get(index)
-                .and_then(Option::as_ref)
-                .ok_or(HeapError::InvalidReference)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_ref().ok_or(HeapError::InvalidReference)
         } else {
+            if self.to.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
             self.to
                 .elements
                 .get(index)
@@ -856,12 +988,19 @@ impl<'heap> Evacuator<'heap> {
     fn elements_mut(&mut self, reference: ElementsRef) -> Result<&mut ElementsKind, HeapError> {
         let index = reference.index() as usize;
         if reference.is_old() {
-            self.old
+            let entry = self
+                .old
                 .elements
                 .get_mut(index)
-                .and_then(Option::as_mut)
-                .ok_or(HeapError::InvalidReference)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_mut().ok_or(HeapError::InvalidReference)
         } else {
+            if self.to.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
             self.to
                 .elements
                 .get_mut(index)
@@ -874,7 +1013,14 @@ impl<'heap> Evacuator<'heap> {
 fn generation_index(index: usize) -> Result<u32, HeapError> {
     u32::try_from(index)
         .ok()
-        .filter(|index| *index < (1 << 31))
+        .filter(|index| *index < (1 << 23))
+        .ok_or(HeapError::ReferenceSpaceExhausted)
+}
+
+fn young_index(index: usize) -> Result<u32, HeapError> {
+    u32::try_from(index)
+        .ok()
+        .filter(|index| *index < (1 << 11))
         .ok_or(HeapError::ReferenceSpaceExhausted)
 }
 
@@ -1105,6 +1251,45 @@ mod tests {
 
         let forwarded = registers[0].as_object().unwrap();
         assert!(heap.get_object(forwarded).is_some());
+        assert!(heap.get_object(object).is_none());
+    }
+
+    #[test]
+    fn stale_young_references_are_rejected_by_all_store_paths() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(2);
+        let object = heap
+            .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
+            .unwrap();
+        let array = heap.allocate_array(0).unwrap();
+        let elements = heap.get_object(array).unwrap().elements.unwrap();
+        heap.scavenge().unwrap();
+
+        assert!(heap.get_object(object).is_none());
+        assert!(heap.get_elements(elements).is_none());
+        assert_eq!(
+            heap.set_object_shape(object, heap.shapes.root_shape()),
+            Err(HeapError::InvalidReference)
+        );
+        assert_eq!(
+            heap.set_object_prototype(object, VALUE_NULL),
+            Err(HeapError::InvalidReference)
+        );
+        assert_eq!(
+            heap.set_object_slot(object, 0, VALUE_NULL),
+            Err(HeapError::InvalidReference)
+        );
+        assert_eq!(
+            heap.set_element(elements, 0, VALUE_NULL),
+            Err(HeapError::InvalidReference)
+        );
+        assert_eq!(
+            heap.push_element(elements, VALUE_NULL),
+            Err(HeapError::InvalidReference)
+        );
+        assert_eq!(
+            heap.delete_element(elements, 0),
+            Err(HeapError::InvalidReference)
+        );
     }
 
     #[test]
@@ -1209,7 +1394,27 @@ mod tests {
         heap.scavenge().unwrap();
         let replacement = heap.root_value(Root(0)).unwrap().as_object().unwrap();
         let replacement_elements = heap.get_object(replacement).unwrap().elements.unwrap();
-        assert_eq!(replacement, old_array);
-        assert_eq!(replacement_elements, old_elements);
+        assert_eq!(replacement.index(), old_array.index());
+        assert_ne!(replacement.generation(), old_array.generation());
+        assert_eq!(replacement_elements.index(), old_elements.index());
+        assert_ne!(replacement_elements.generation(), old_elements.generation());
+        assert!(heap.get_object(old_array).is_none());
+        assert!(heap.get_elements(old_elements).is_none());
+        assert_eq!(
+            heap.set_object_slot(old_array, 0, VALUE_NULL),
+            Err(HeapError::InvalidReference)
+        );
+        assert_eq!(
+            heap.push_element(old_elements, VALUE_NULL),
+            Err(HeapError::InvalidReference)
+        );
+    }
+
+    #[test]
+    fn nursery_capacity_is_clamped_to_the_handle_index_space() {
+        let minimum = GenerationalHeap::with_nursery_capacity(0);
+        assert_eq!(minimum.nursery.object_capacity, 1);
+        let maximum = GenerationalHeap::with_nursery_capacity(usize::MAX);
+        assert_eq!(maximum.nursery.object_capacity, MAX_NURSERY_ENTRIES);
     }
 }

@@ -18,21 +18,29 @@ use alloc::{collections::BTreeMap, vec::Vec};
 
 /// Reference to an elements backing store in the arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ElementsRef(pub u32);
+pub struct ElementsRef(u32);
 
 const OLD_GENERATION_BIT: u32 = 1 << 31;
+const YOUNG_GENERATION_SHIFT: u32 = 11;
+const YOUNG_INDEX_MASK: u32 = (1 << YOUNG_GENERATION_SHIFT) - 1;
+const OLD_GENERATION_SHIFT: u32 = 23;
+const OLD_INDEX_MASK: u32 = (1 << OLD_GENERATION_SHIFT) - 1;
 
 impl ElementsRef {
     /// Creates a reference into the active Nursery semispace.
     #[must_use]
-    pub const fn young(index: u32) -> Self {
-        Self(index & !OLD_GENERATION_BIT)
+    pub(crate) const fn young(index: u32, generation: u32) -> Self {
+        Self((index & YOUNG_INDEX_MASK) | (generation << YOUNG_GENERATION_SHIFT))
     }
 
     /// Creates a reference into the Old Generation.
     #[must_use]
-    pub const fn old(index: u32) -> Self {
-        Self(OLD_GENERATION_BIT | (index & !OLD_GENERATION_BIT))
+    pub(crate) const fn old(index: u32, generation: u8) -> Self {
+        Self(
+            OLD_GENERATION_BIT
+                | (index & OLD_INDEX_MASK)
+                | ((generation as u32) << OLD_GENERATION_SHIFT),
+        )
     }
 
     /// Returns `true` when this reference addresses the Old Generation.
@@ -50,7 +58,21 @@ impl ElementsRef {
     /// Returns the generation-local backing-store index.
     #[must_use]
     pub const fn index(self) -> u32 {
-        self.0 & !OLD_GENERATION_BIT
+        if self.is_old() {
+            self.0 & OLD_INDEX_MASK
+        } else {
+            self.0 & YOUNG_INDEX_MASK
+        }
+    }
+
+    /// Returns the generation used to reject stale reused references.
+    #[must_use]
+    pub const fn generation(self) -> u32 {
+        if self.is_old() {
+            (self.0 & !OLD_GENERATION_BIT) >> OLD_GENERATION_SHIFT
+        } else {
+            self.0 >> YOUNG_GENERATION_SHIFT
+        }
     }
 }
 
@@ -329,5 +351,109 @@ mod tests {
         assert!(matches!(elements, ElementsKind::Holey(_)));
         assert_eq!(elements.get(1), None);
         assert_eq!(elements.get(0), Some(Value::from_f64(10.0)));
+    }
+
+    #[test]
+    fn elements_references_preserve_space_index_and_generation() {
+        let young = ElementsRef::young(1023, 0xF_FFFF);
+        assert!(young.is_young());
+        assert_eq!(young.index(), 1023);
+        assert_eq!(young.generation(), 0xF_FFFF);
+
+        let old = ElementsRef::old(0x7F_FFFF, 0xFF);
+        assert!(old.is_old());
+        assert_eq!(old.index(), 0x7F_FFFF);
+        assert_eq!(old.generation(), 0xFF);
+        assert_ne!(young, old);
+    }
+
+    #[test]
+    fn dense_element_updates_preserve_or_widen_their_representation() {
+        let mut smi = ElementsKind::new_packed_smi(4);
+        assert!(smi.is_empty());
+        smi.push(Value::from_smi(1));
+        smi.set(0, Value::from_smi(2));
+        assert_eq!(smi.get(0), Some(Value::from_smi(2)));
+
+        let mut smi_to_double = smi.clone();
+        smi_to_double.set(0, Value::from_f64(2.5));
+        assert!(matches!(smi_to_double, ElementsKind::PackedDouble(_)));
+        smi_to_double.push(Value::from_f64(3.5));
+        smi_to_double.set(1, Value::from_f64(4.5));
+        assert_eq!(smi_to_double.get(1), Some(Value::from_f64(4.5)));
+
+        let mut smi_to_values = smi.clone();
+        smi_to_values.set(0, VALUE_UNDEFINED);
+        assert!(matches!(smi_to_values, ElementsKind::PackedValues(_)));
+        smi_to_values.push(Value::from_bool(true));
+        smi_to_values.set(1, Value::from_bool(false));
+        assert_eq!(smi_to_values.get(1), Some(Value::from_bool(false)));
+
+        let mut double_to_values = smi_to_double;
+        double_to_values.set(0, VALUE_UNDEFINED);
+        assert!(matches!(double_to_values, ElementsKind::PackedValues(_)));
+        assert_eq!(double_to_values.get(0), Some(VALUE_UNDEFINED));
+    }
+
+    #[test]
+    fn sparse_writes_follow_the_holey_and_dictionary_lattice() {
+        let mut smi_double_gap = ElementsKind::new_packed_smi(1);
+        smi_double_gap.push(Value::from_smi(1));
+        smi_double_gap.set(3, Value::from_f64(4.5));
+        assert!(matches!(smi_double_gap, ElementsKind::Holey(_)));
+        assert_eq!(smi_double_gap.get(1), None);
+
+        let mut smi_value_gap = ElementsKind::new_packed_smi(1);
+        smi_value_gap.push(Value::from_smi(1));
+        smi_value_gap.set(3, VALUE_UNDEFINED);
+        assert!(matches!(smi_value_gap, ElementsKind::Holey(_)));
+
+        let mut double_gap = ElementsKind::PackedDouble(vec![1.0]);
+        double_gap.set(3, Value::from_f64(4.0));
+        assert!(matches!(double_gap, ElementsKind::Holey(_)));
+
+        let mut values = ElementsKind::PackedValues(vec![Value::from_smi(1)]);
+        values.set(1, Value::from_smi(2));
+        values.set(0, Value::from_smi(3));
+        values.set(4, Value::from_smi(5));
+        assert!(matches!(values, ElementsKind::Holey(_)));
+
+        values.set(5, Value::from_smi(6));
+        values.set(2, Value::from_smi(3));
+        values.set(8, Value::from_smi(9));
+        assert_eq!(values.get(2), Some(Value::from_smi(3)));
+        assert_eq!(values.get(7), None);
+
+        let mut dictionary = ElementsKind::PackedValues(vec![Value::from_smi(1)]);
+        dictionary.set(2048, Value::from_smi(2));
+        assert!(matches!(dictionary, ElementsKind::Dictionary(_)));
+        assert_eq!(dictionary.len(), 2049);
+        assert_eq!(dictionary.get(2048), Some(Value::from_smi(2)));
+        dictionary.set(2048, Value::from_smi(3));
+        assert_eq!(dictionary.get(2048), Some(Value::from_smi(3)));
+    }
+
+    #[test]
+    fn deletion_covers_every_elements_representation() {
+        let mut smi = ElementsKind::PackedSmi(vec![1, 2]);
+        assert!(smi.delete(0));
+        assert!(matches!(smi, ElementsKind::Holey(_)));
+        assert_eq!(smi.get(0), None);
+
+        let mut double = ElementsKind::PackedDouble(vec![1.0, 2.0]);
+        assert!(double.delete(1));
+        assert!(matches!(double, ElementsKind::Holey(_)));
+        assert_eq!(double.get(1), None);
+
+        let mut holey = ElementsKind::Holey(vec![Some(Value::from_smi(1))]);
+        assert!(holey.delete(0));
+        assert_eq!(holey.get(0), None);
+        assert!(holey.delete(8));
+
+        let mut dictionary = BTreeMap::new();
+        dictionary.insert(4, Value::from_smi(4));
+        let mut dictionary = ElementsKind::Dictionary(dictionary);
+        assert!(dictionary.delete(4));
+        assert!(dictionary.is_empty());
     }
 }

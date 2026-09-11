@@ -19,21 +19,37 @@ use core::fmt;
 
 /// Opaque index reference to an object in the heap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ObjectRef(pub u32);
+pub struct ObjectRef(u32);
 
 const OLD_GENERATION_BIT: u32 = 1 << 31;
+const YOUNG_GENERATION_SHIFT: u32 = 11;
+const YOUNG_INDEX_MASK: u32 = (1 << YOUNG_GENERATION_SHIFT) - 1;
+const OLD_GENERATION_SHIFT: u32 = 23;
+const OLD_INDEX_MASK: u32 = (1 << OLD_GENERATION_SHIFT) - 1;
 
 impl ObjectRef {
+    const fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+
     /// Creates a reference into the active Nursery semispace.
     #[must_use]
-    pub const fn young(index: u32) -> Self {
-        Self(index & !OLD_GENERATION_BIT)
+    pub(crate) const fn young(index: u32, generation: u32) -> Self {
+        Self((index & YOUNG_INDEX_MASK) | (generation << YOUNG_GENERATION_SHIFT))
     }
 
     /// Creates a reference into the Old Generation.
     #[must_use]
-    pub const fn old(index: u32) -> Self {
-        Self(OLD_GENERATION_BIT | (index & !OLD_GENERATION_BIT))
+    #[expect(
+        clippy::as_conversions,
+        reason = "widening the u8 handle generation to u32 is lossless"
+    )]
+    pub(crate) const fn old(index: u32, generation: u8) -> Self {
+        Self(
+            OLD_GENERATION_BIT
+                | (index & OLD_INDEX_MASK)
+                | ((generation as u32) << OLD_GENERATION_SHIFT),
+        )
     }
 
     /// Returns `true` when this reference addresses the Old Generation.
@@ -51,7 +67,21 @@ impl ObjectRef {
     /// Returns the generation-local object index.
     #[must_use]
     pub const fn index(self) -> u32 {
-        self.0 & !OLD_GENERATION_BIT
+        if self.is_old() {
+            self.0 & OLD_INDEX_MASK
+        } else {
+            self.0 & YOUNG_INDEX_MASK
+        }
+    }
+
+    /// Returns the generation used to reject stale reused references.
+    #[must_use]
+    pub const fn generation(self) -> u32 {
+        if self.is_old() {
+            (self.0 & !OLD_GENERATION_BIT) >> OLD_GENERATION_SHIFT
+        } else {
+            self.0 >> YOUNG_GENERATION_SHIFT
+        }
     }
 }
 
@@ -288,7 +318,7 @@ impl Value {
                 clippy::as_conversions,
                 reason = "payload mask ensures truncation fits u32 index"
             )]
-            Some(ObjectRef((self.0 & PAYLOAD_MASK) as u32))
+            Some(ObjectRef::from_raw((self.0 & PAYLOAD_MASK) as u32))
         } else {
             None
         }
@@ -512,9 +542,9 @@ mod tests {
 
     #[test]
     fn handles_and_sso_encoding() {
-        let obj = Value::from_object(ObjectRef(1234));
+        let obj = Value::from_object(ObjectRef::young(1234, 0));
         assert!(obj.is_object());
-        assert_eq!(obj.as_object(), Some(ObjectRef(1234)));
+        assert_eq!(obj.as_object(), Some(ObjectRef::young(1234, 0)));
 
         let str_ref = Value::from_string(StringRef(5678));
         assert!(str_ref.is_heap_string());
@@ -532,6 +562,20 @@ mod tests {
         let empty_sso = Value::from_sso(b"").unwrap();
         assert!(empty_sso.is_sso_string());
         assert!(!empty_sso.to_boolean());
+    }
+
+    #[test]
+    fn object_references_preserve_space_index_and_generation() {
+        let young = ObjectRef::young(1023, 0xA_BCDE);
+        assert!(young.is_young());
+        assert_eq!(young.index(), 1023);
+        assert_eq!(young.generation(), 0xA_BCDE);
+
+        let old = ObjectRef::old(0x65_4321, 0xAB);
+        assert!(old.is_old());
+        assert_eq!(old.index(), 0x65_4321);
+        assert_eq!(old.generation(), 0xAB);
+        assert_ne!(young, old);
     }
 
     #[test]
