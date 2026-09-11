@@ -500,6 +500,30 @@ fn nested_functions_use_flat_code_and_lexical_context_tables() -> Result<(), Err
 }
 
 #[test]
+fn returned_closures_outlive_register_frames_and_keep_distinct_contexts() -> Result<(), Error> {
+    for source in [
+        "function f(){function g(){return 42}return g}let g=f();g()",
+        "function counter(){let n=0;function next(){n++;return n}return next}let c=counter();c();c()",
+        "function counter(){let n=0;function next(){n++;return n}return next}let a=counter();let b=counter();a();a();b()",
+        "function make(x){function get(){return x}return get}let a=make(20);let b=make(22);a()+b()",
+        "function outer(x){function middle(){function inner(){return x}return inner}return middle}outer(42)()()",
+        "function make(x){function get(){return x}return get}let keep=make(42);let i=0;while(i<3000){make(i);i++}keep()",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> Result<(), Error> {
     for source in [
         "function f(){return this}f()",

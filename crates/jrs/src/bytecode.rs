@@ -517,6 +517,10 @@ impl RegisterType {
         matches!(self, Self::Array(_) | Self::Function(_) | Self::Object(_))
     }
 
+    const fn is_returnable(self) -> bool {
+        self.is_primitive() || matches!(self, Self::Function(_))
+    }
+
     const fn is_numeric_primitive(self) -> bool {
         matches!(self, Self::Number | Self::NumberOrUndefined)
     }
@@ -1061,7 +1065,7 @@ impl RegisterLowerer {
                 Some((name.clone(), initial_type.merge(final_type)))
             })
             .collect::<Option<BTreeMap<_, _>>>()?;
-        if !return_type.is_primitive() {
+        if !return_type.is_returnable() {
             return None;
         }
         child.code.register_count = child.register_count;
@@ -1071,6 +1075,10 @@ impl RegisterLowerer {
         let nested_functions = core::mem::take(&mut child.code.functions);
         self.code.functions.push(child.code);
         self.code.functions.extend(nested_functions);
+        self.function_returns.extend(child.function_returns);
+        self.function_parameters.extend(child.function_parameters);
+        self.function_capture_effects
+            .extend(child.function_capture_effects);
         self.function_returns.insert(code_id, return_type);
         self.function_parameters.insert(
             code_id,
@@ -1268,7 +1276,7 @@ impl RegisterLowerer {
                 effects.keys().any(|name| {
                     self.bindings
                         .get(name)
-                        .is_none_or(|binding| binding.value_type.is_none())
+                        .is_some_and(|binding| binding.value_type.is_none())
                 })
             })
         {
@@ -1317,8 +1325,9 @@ impl RegisterLowerer {
         self.release_register(function)?;
         if let Some(effects) = self.function_capture_effects.get(&code_id).cloned() {
             for (name, effect) in effects {
-                let binding = self.bindings.get_mut(&name)?;
-                binding.value_type = Some(binding.value_type?.merge(effect));
+                if let Some(binding) = self.bindings.get_mut(&name) {
+                    binding.value_type = Some(binding.value_type?.merge(effect));
+                }
             }
         }
         self.function_returns.get(&code_id).copied()
@@ -1608,7 +1617,7 @@ impl RegisterLowerer {
                         .emit(crate::engine::bytecode::Instruction::LdaUndefined);
                     RegisterType::Undefined
                 };
-                if !return_type.is_primitive() {
+                if !return_type.is_returnable() {
                     return None;
                 }
                 self.return_type = Some(
