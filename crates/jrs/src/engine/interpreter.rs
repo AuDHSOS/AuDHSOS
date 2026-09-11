@@ -82,8 +82,14 @@ impl RegisterVM {
     /// Creates a VM with a preallocated contiguous register stack.
     #[must_use]
     pub fn new(fuel: u64) -> Self {
+        Self::with_stack_capacity(fuel, 4096)
+    }
+
+    /// Creates a VM whose contiguous register stack has an explicit capacity.
+    #[must_use]
+    pub fn with_stack_capacity(fuel: u64, stack_capacity: usize) -> Self {
         Self {
-            stack: alloc::vec![VALUE_UNDEFINED; 4096],
+            stack: alloc::vec![VALUE_UNDEFINED; stack_capacity],
             fp: 0,
             acc: VALUE_UNDEFINED,
             fuel,
@@ -169,6 +175,13 @@ impl RegisterVM {
         if feedback.len() != usize::from(code.feedback_slot_count) {
             return Err(VMError::InvalidFeedbackVector);
         }
+        if code.entry_stack_requirement > self.stack.len() {
+            return Err(VMError::StackOverflow);
+        }
+        self.fuel = self
+            .fuel
+            .checked_sub(code.entry_fuel_cost)
+            .ok_or(VMError::OutOfFuel)?;
         let mut pc: usize = 0;
         let instructions = &code.instructions;
         let frame_end = self
@@ -198,7 +211,7 @@ impl RegisterVM {
                         .copied()
                         .ok_or(VMError::InvalidRegister)?;
                 }
-                Instruction::LdaUndefined => {
+                Instruction::LdaUndefined | Instruction::ToUndefined => {
                     self.acc = VALUE_UNDEFINED;
                 }
                 Instruction::LdaNull => {
@@ -209,6 +222,17 @@ impl RegisterVM {
                 }
                 Instruction::LdaFalse => {
                     self.acc = VALUE_FALSE;
+                }
+                Instruction::Negate => {
+                    let number = self.acc.as_f64().ok_or(VMError::TypeError)?;
+                    self.acc = Value::from_f64(-number);
+                }
+                Instruction::LogicalNot => {
+                    self.acc = Value::from_bool(!self.acc.to_boolean());
+                }
+                Instruction::BitNot => {
+                    let number = self.acc.as_f64().ok_or(VMError::TypeError)?;
+                    self.acc = Value::from_smi(!number_to_i32(number));
                 }
                 Instruction::Ldar(reg) => {
                     self.acc = self.read_reg(reg)?;
@@ -504,6 +528,10 @@ impl RegisterVM {
             }
         }
     }
+}
+
+fn number_to_i32(number: f64) -> i32 {
+    i32::from_ne_bytes(crate::value::number_uint32(number).to_ne_bytes())
 }
 
 #[cfg(test)]

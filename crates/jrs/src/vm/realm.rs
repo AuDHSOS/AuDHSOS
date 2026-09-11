@@ -469,6 +469,9 @@ impl Execution<'_> {
         result
     }
     fn execute_nested_script(&mut self, program: Program) -> Result<Value, Error> {
+        if program.register_code.is_some() {
+            return self.execute_program_body(&program, self.frames.len());
+        }
         self.check_frame_limit()?;
         self.instantiate_globals(&program)?;
         self.reserve_bindings(program.slots.len())?;
@@ -666,8 +669,12 @@ impl Execution<'_> {
     }
     fn evaluate_script(&mut self, program: &Program) -> Result<Value, Error> {
         self.instantiate_globals(program)?;
-        self.start_script_frame(program)?;
-        let result = self.execute(program, 0);
+        let result = if program.register_code.is_some() {
+            self.execute_program_body(program, 0)
+        } else {
+            self.start_script_frame(program)?;
+            self.execute_program_body(program, 0)
+        };
         self.finish_script_turn(program, result)
     }
     fn start_script_frame(&mut self, program: &Program) -> Result<(), Error> {

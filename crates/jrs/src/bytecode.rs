@@ -376,6 +376,7 @@ pub struct Program {
     pub(crate) functions: Vec<Rc<FunctionCode>>,
     total_instructions: usize,
     pub(crate) globals: Vec<GlobalDecl>,
+    pub(crate) register_code: Option<Rc<crate::engine::bytecode::BytecodeFunction>>,
 }
 
 #[derive(Clone, Debug)]
@@ -397,6 +398,7 @@ impl Program {
             slots: Vec::new(),
             functions: Vec::new(),
             globals: Vec::new(),
+            register_code: None,
             total_instructions: 0,
         }
     }
@@ -409,6 +411,12 @@ impl Program {
     #[must_use]
     pub const fn binding_count(&self) -> usize {
         self.slots.len()
+    }
+
+    /// Returns whether this Program executes through verified Register bytecode.
+    #[must_use]
+    pub const fn uses_register_backend(&self) -> bool {
+        self.register_code.is_some()
     }
 }
 
@@ -441,6 +449,7 @@ pub fn compile_script(source: &str, limits: Limits) -> Result<Script, Error> {
 }
 fn compile_mode(source: &str, limits: Limits, realm: bool) -> Result<Program, Error> {
     let body = parser::parse(source, limits)?;
+    let register_candidate = register_candidate(&body);
     let mut compiler = Compiler {
         program: Program {
             code: Vec::new(),
@@ -448,6 +457,7 @@ fn compile_mode(source: &str, limits: Limits, realm: bool) -> Result<Program, Er
             functions: Vec::new(),
             total_instructions: 0,
             globals: Vec::new(),
+            register_code: None,
         },
         scopes: Vec::new(),
         loops: Vec::new(),
@@ -465,7 +475,208 @@ fn compile_mode(source: &str, limits: Limits, realm: bool) -> Result<Program, Er
         compiler.root_body(&body)?;
     }
     compiler.finish();
+    if let Some(expression) = register_candidate {
+        compiler.program.register_code = Some(Rc::new(lower_register_expression(
+            expression,
+            u64::try_from(compiler.program.total_instructions).unwrap_or(u64::MAX),
+        )?));
+    }
     Ok(compiler.program)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RegisterType {
+    Number,
+    Boolean,
+    Null,
+    Undefined,
+}
+
+fn register_candidate(body: &[Stmt]) -> Option<&Expr> {
+    let [Stmt::Expr(expression)] = body else {
+        return None;
+    };
+    register_type(expression).map(|_| expression)
+}
+
+fn register_type(expression: &Expr) -> Option<RegisterType> {
+    match &expression.kind {
+        ExprKind::Literal(Value::Number(_)) => Some(RegisterType::Number),
+        ExprKind::Literal(Value::Boolean(_)) => Some(RegisterType::Boolean),
+        ExprKind::Literal(Value::Null) => Some(RegisterType::Null),
+        ExprKind::Literal(Value::Undefined) => Some(RegisterType::Undefined),
+        ExprKind::Group(inner) => register_type(inner),
+        ExprKind::Unary(operator, inner) => {
+            let inner = register_type(inner)?;
+            match operator {
+                Unary::Plus | Unary::Minus | Unary::BitNot if inner == RegisterType::Number => {
+                    Some(RegisterType::Number)
+                }
+                Unary::Not => Some(RegisterType::Boolean),
+                Unary::Void => Some(RegisterType::Undefined),
+                _ => None,
+            }
+        }
+        ExprKind::Binary(operator, left, right) => {
+            let left = register_type(left)?;
+            let right = register_type(right)?;
+            match operator {
+                Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
+                    if left == RegisterType::Number && right == RegisterType::Number =>
+                {
+                    Some(RegisterType::Number)
+                }
+                Binary::Lt | Binary::Le | Binary::Gt | Binary::Ge
+                    if left == RegisterType::Number && right == RegisterType::Number =>
+                {
+                    Some(RegisterType::Boolean)
+                }
+                Binary::StrictEq => Some(RegisterType::Boolean),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+struct RegisterLowerer {
+    code: crate::engine::bytecode::BytecodeFunction,
+    next_register: u16,
+    register_count: u16,
+}
+
+impl RegisterLowerer {
+    const fn new(entry_fuel_cost: u64, entry_stack_requirement: usize) -> Self {
+        let mut code = crate::engine::bytecode::BytecodeFunction::new(0, 0);
+        code.entry_fuel_cost = entry_fuel_cost;
+        code.entry_stack_requirement = entry_stack_requirement;
+        Self {
+            code,
+            next_register: 0,
+            register_count: 0,
+        }
+    }
+
+    fn lower(&mut self, expression: &Expr) -> Result<(), Error> {
+        use crate::engine::bytecode::Instruction;
+        match &expression.kind {
+            ExprKind::Literal(value) => match value {
+                Value::Number(number) => {
+                    let index = self.constant(crate::engine::value::Value::from_f64(*number))?;
+                    self.code.emit(Instruction::LdaConstant(index));
+                }
+                Value::Boolean(true) => {
+                    self.code.emit(Instruction::LdaTrue);
+                }
+                Value::Boolean(false) => {
+                    self.code.emit(Instruction::LdaFalse);
+                }
+                Value::Null => {
+                    self.code.emit(Instruction::LdaNull);
+                }
+                Value::Undefined => {
+                    self.code.emit(Instruction::LdaUndefined);
+                }
+                Value::String(_) | Value::Symbol(_) | Value::Function(_) | Value::Object(_) => {
+                    return Err(Error::InvalidBytecode);
+                }
+            },
+            ExprKind::Group(inner) => self.lower(inner)?,
+            ExprKind::Unary(operator, inner) => {
+                self.lower(inner)?;
+                self.code.emit(match operator {
+                    Unary::Plus => return Ok(()),
+                    Unary::Minus => Instruction::Negate,
+                    Unary::Not => Instruction::LogicalNot,
+                    Unary::Void => Instruction::ToUndefined,
+                    Unary::BitNot => Instruction::BitNot,
+                    Unary::Typeof | Unary::Delete => return Err(Error::InvalidBytecode),
+                });
+            }
+            ExprKind::Binary(operator, left, right) => {
+                self.lower(left)?;
+                let left_register = self.allocate_register()?;
+                self.code.emit(Instruction::Star(left_register));
+                self.lower(right)?;
+                let right_register = self.allocate_register()?;
+                self.code.emit(Instruction::Star(right_register));
+                self.code.emit(Instruction::Ldar(left_register));
+                self.code.emit(match operator {
+                    Binary::Add => Instruction::Add(right_register),
+                    Binary::Sub => Instruction::Sub(right_register),
+                    Binary::Mul => Instruction::Mul(right_register),
+                    Binary::Div => Instruction::Div(right_register),
+                    Binary::Rem => Instruction::Mod(right_register),
+                    Binary::Lt => Instruction::TestLessThan(right_register),
+                    Binary::Le => Instruction::TestLessThanOrEqual(right_register),
+                    Binary::Gt => Instruction::TestGreaterThan(right_register),
+                    Binary::Ge => Instruction::TestGreaterThanOrEqual(right_register),
+                    Binary::StrictEq => Instruction::TestStrictEqual(right_register),
+                    _ => return Err(Error::InvalidBytecode),
+                });
+                self.release_register(right_register)?;
+                self.release_register(left_register)?;
+            }
+            _ => return Err(Error::InvalidBytecode),
+        }
+        Ok(())
+    }
+
+    fn allocate_register(&mut self) -> Result<crate::engine::bytecode::Reg, Error> {
+        let register = crate::engine::bytecode::Reg(self.next_register);
+        self.next_register = self.next_register.checked_add(1).ok_or(Error::Limit {
+            resource: "register bytecode frame",
+        })?;
+        self.register_count = self.register_count.max(self.next_register);
+        Ok(register)
+    }
+
+    fn release_register(&mut self, register: crate::engine::bytecode::Reg) -> Result<(), Error> {
+        self.next_register = self
+            .next_register
+            .checked_sub(1)
+            .ok_or(Error::InvalidBytecode)?;
+        if register.0 != self.next_register {
+            return Err(Error::InvalidBytecode);
+        }
+        Ok(())
+    }
+
+    fn constant(&mut self, value: crate::engine::value::Value) -> Result<u16, Error> {
+        let index = u16::try_from(self.code.constants.len()).map_err(|_| Error::Limit {
+            resource: "register constant pool",
+        })?;
+        self.code.constants.push(value);
+        Ok(index)
+    }
+}
+
+fn lower_register_expression(
+    expression: &Expr,
+    entry_fuel_cost: u64,
+) -> Result<crate::engine::bytecode::BytecodeFunction, Error> {
+    let mut lowerer = RegisterLowerer::new(
+        entry_fuel_cost,
+        register_expression_stack_requirement(expression),
+    );
+    lowerer.lower(expression)?;
+    lowerer
+        .code
+        .emit(crate::engine::bytecode::Instruction::Return);
+    lowerer.code.register_count = lowerer.register_count;
+    lowerer.code.verify().map_err(|_| Error::InvalidBytecode)?;
+    Ok(lowerer.code)
+}
+
+fn register_expression_stack_requirement(expression: &Expr) -> usize {
+    match &expression.kind {
+        ExprKind::Group(inner) | ExprKind::Unary(_, inner) => {
+            register_expression_stack_requirement(inner)
+        }
+        ExprKind::Binary(_, left, right) => register_expression_stack_requirement(left)
+            .max(1usize.saturating_add(register_expression_stack_requirement(right))),
+        _ => 1,
+    }
 }
 
 pub(crate) fn compile_dynamic(
@@ -1677,6 +1888,7 @@ impl Compiler {
                 functions: Vec::new(),
                 total_instructions: 0,
                 globals: Vec::new(),
+                register_code: None,
             },
             scopes: Vec::new(),
             loops: Vec::new(),

@@ -42,6 +42,7 @@ mod regexp_dispatch;
 mod regexp_intrinsics;
 mod regexp_replace;
 mod regexp_split;
+mod register_backend;
 mod reverse;
 mod scripts;
 mod sorting;

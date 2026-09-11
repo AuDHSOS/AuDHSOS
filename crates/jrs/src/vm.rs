@@ -196,6 +196,8 @@ pub struct Runtime {
     limits: Limits,
     stack: Vec<Value>,
     intrinsic_code: Vec<(Builtin, Rc<FunctionCode>)>,
+    register_vm: Option<crate::engine::interpreter::RegisterVM>,
+    register_heap: Option<crate::engine::heap::GenerationalHeap>,
 }
 
 struct Execution<'host> {
@@ -261,6 +263,8 @@ struct Execution<'host> {
     abort_controller_proto: Option<Value>,
     abort_signal_proto: Option<Value>,
     reported_exceptions: Vec<Error>,
+    register_vm: Option<crate::engine::interpreter::RegisterVM>,
+    register_heap: Option<crate::engine::heap::GenerationalHeap>,
 }
 
 impl Runtime {
@@ -271,6 +275,8 @@ impl Runtime {
             limits,
             stack: Vec::new(),
             intrinsic_code: Vec::new(),
+            register_vm: None,
+            register_heap: None,
         }
     }
 
@@ -284,9 +290,13 @@ impl Runtime {
         let mut execution = Execution::new(host, self.limits);
         execution.stack = core::mem::take(&mut self.stack);
         execution.intrinsic_code = core::mem::take(&mut self.intrinsic_code);
+        execution.register_vm = self.register_vm.take();
+        execution.register_heap = self.register_heap.take();
         let result = execution.run(program);
         self.stack = execution.stack;
         self.intrinsic_code = execution.intrinsic_code;
+        self.register_vm = execution.register_vm;
+        self.register_heap = execution.register_heap;
         result
     }
 }
@@ -355,11 +365,67 @@ impl<'host> Execution<'host> {
             abort_controller_proto: None,
             abort_signal_proto: None,
             reported_exceptions: Vec::new(),
+            register_vm: None,
+            register_heap: None,
         }
     }
 }
 
 impl Execution<'_> {
+    fn execute_register_program(
+        &mut self,
+        code: &crate::engine::bytecode::BytecodeFunction,
+    ) -> Result<Value, Error> {
+        let mut vm = self.register_vm.take().unwrap_or_else(|| {
+            crate::engine::interpreter::RegisterVM::with_stack_capacity(
+                self.fuel,
+                self.limits.stack,
+            )
+        });
+        vm.fuel = self.fuel;
+        let mut heap = self.register_heap.take().unwrap_or_default();
+        let mut feedback = crate::engine::feedback::FeedbackVector::new(code.feedback_slot_count);
+        let result = vm.run(code, &mut feedback, &mut heap);
+        self.fuel = vm.fuel;
+        self.register_vm = Some(vm);
+        self.register_heap = Some(heap);
+        match result {
+            Ok(value) if value.is_undefined() => Ok(Value::Undefined),
+            Ok(value) if value.is_null() => Ok(Value::Null),
+            Ok(value) if value.is_boolean() => value
+                .as_boolean()
+                .map(Value::Boolean)
+                .ok_or(Error::InvalidBytecode),
+            Ok(value) if value.is_number() => value
+                .as_f64()
+                .map(Value::Number)
+                .ok_or(Error::InvalidBytecode),
+            Ok(_)
+            | Err(
+                crate::engine::interpreter::VMError::InvalidBytecode(_)
+                | crate::engine::interpreter::VMError::InvalidFeedbackVector
+                | crate::engine::interpreter::VMError::InvalidRegister
+                | crate::engine::interpreter::VMError::TypeError
+                | crate::engine::interpreter::VMError::UnexpectedEnd
+                | crate::engine::interpreter::VMError::Heap(_),
+            ) => Err(Error::InvalidBytecode),
+            Err(crate::engine::interpreter::VMError::OutOfFuel) => Err(Error::Limit {
+                resource: "execution fuel",
+            }),
+            Err(crate::engine::interpreter::VMError::StackOverflow) => Err(Error::Limit {
+                resource: "operand stack",
+            }),
+        }
+    }
+
+    fn execute_program_body(&mut self, program: &Program, boundary: usize) -> Result<Value, Error> {
+        if let Some(code) = &program.register_code {
+            self.execute_register_program(code)
+        } else {
+            self.execute(program, boundary)
+        }
+    }
+
     fn run(&mut self, program: &Program) -> Result<Value, Error> {
         self.stack.clear();
         self.frames.clear();
@@ -380,25 +446,11 @@ impl Execution<'_> {
                 resource: "bytecode instructions",
             });
         }
-        self.frames.push(Frame {
-            code: None,
-            pc: 0,
-            locals: alloc::vec![Binding::Direct(None); program.slots.len()],
-            captures: Vec::new(),
-            base: 0,
-            result: Value::Undefined,
-            callee: Value::Undefined,
-            this_value: Value::Undefined,
-            handlers: Vec::new(),
-            constructing: false,
-            arguments: Vec::new(),
-            enumerations: Vec::new(),
-            async_promise: None,
-            new_target: Value::Undefined,
-            this_cell: None,
-        });
-        self.top_program = Some(Rc::new(program.clone()));
-        let result = self.execute(program, 0).and_then(|value| {
+        if program.register_code.is_none() {
+            self.frames.push(Frame::script(program, 0));
+            self.top_program = Some(Rc::new(program.clone()));
+        }
+        let result = self.execute_program_body(program, 0).and_then(|value| {
             self.native_roots.push(value.clone());
             self.drain_jobs()?;
             Ok(value)

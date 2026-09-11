@@ -74,6 +74,14 @@ pub enum Instruction {
     LdaTrue,
     /// `acc = false`
     LdaFalse,
+    /// `acc = -acc`
+    Negate,
+    /// `acc = !ToBoolean(acc)`
+    LogicalNot,
+    /// `acc = undefined`, after evaluating its operand.
+    ToUndefined,
+    /// `acc = ~ToInt32(acc)` for an already numeric primitive.
+    BitNot,
     /// `acc = reg`
     Ldar(Reg),
     /// `reg = acc`
@@ -191,6 +199,10 @@ pub struct BytecodeFunction {
     pub parameter_count: u16,
     /// Number of feedback vector slots allocated for inline caches.
     pub feedback_slot_count: u16,
+    /// Fuel charged once in the function prologue.
+    pub entry_fuel_cost: u64,
+    /// Legacy operand-stack capacity required by the selected source program.
+    pub entry_stack_requirement: usize,
 }
 
 impl BytecodeFunction {
@@ -203,6 +215,8 @@ impl BytecodeFunction {
             register_count,
             parameter_count,
             feedback_slot_count: 0,
+            entry_fuel_cost: 1,
+            entry_stack_requirement: 0,
         }
     }
 
@@ -344,6 +358,10 @@ impl BytecodeFunction {
                 None
             }
             Instruction::LdaSmi(_)
+            | Instruction::Negate
+            | Instruction::LogicalNot
+            | Instruction::ToUndefined
+            | Instruction::BitNot
             | Instruction::LdaUndefined
             | Instruction::LdaNull
             | Instruction::LdaTrue
