@@ -1098,6 +1098,18 @@ impl Gate {
     pub fn random_bytes(&mut self) -> Result<[u64; SEED_WORDS], Error> {
         self.request(Syscall::RandomBytes, &[])?;
         let view = self.reader();
+        // The count in the first return word is the convention's own
+        // statement of how much was written, and it is what has to be
+        // believed: `word` bounds against the message area and not against
+        // the count, so it answers a word for every index of a seed whether
+        // the kernel wrote one or not. Without this a short answer would be
+        // read as whatever this thread's own buffer held from the call
+        // before — words the program itself may have written — and handed
+        // back as a seed with no error anywhere.
+        let expected = u64::try_from(SEED_WORDS).unwrap_or(u64::MAX);
+        if view.return_word(0) != Some(expected) {
+            return Err(Error::BufferTooSmall);
+        }
         let mut seed = [0_u64; SEED_WORDS];
         for (index, word) in seed.iter_mut().enumerate() {
             *word = view.word(index).ok_or(Error::BufferTooSmall)?;

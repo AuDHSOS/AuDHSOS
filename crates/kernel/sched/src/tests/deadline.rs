@@ -207,6 +207,25 @@ fn every_thread_of_a_list_whose_deadlines_have_passed_comes_out_at_once() {
 }
 
 #[test]
+fn a_torn_entry_that_is_the_only_one_empties_the_list() {
+    // The same as the test above with nothing behind it: both ends of the
+    // list have to let go, or the tail would go on naming a thread that is
+    // in no list.
+    let (mut scheduler, mut threads) = machine();
+    let torn = running(&mut scheduler, &mut threads);
+    block_until(&mut scheduler, &mut threads, torn, 100);
+    threads.get_mut(torn).unwrap().deadline = None;
+
+    assert_eq!(scheduler.expired(&mut threads, 1_000), None);
+    assert_eq!(scheduler.waiting_until(), 0);
+    assert_eq!(scheduler.next_deadline(), None);
+    let after = running(&mut scheduler, &mut threads);
+    block_until(&mut scheduler, &mut threads, after, 200);
+    assert_eq!(scheduler.next_deadline(), Some(after));
+    assert_eq!(expire(&mut scheduler, &mut threads, 1_000), vec![after]);
+}
+
+#[test]
 fn a_refused_block_leaves_the_thread_out_of_the_list() {
     let (mut scheduler, mut threads) = machine();
     let id = running(&mut scheduler, &mut threads);
@@ -221,25 +240,46 @@ fn a_refused_block_leaves_the_thread_out_of_the_list() {
 }
 
 #[test]
-fn a_thread_the_pool_has_dropped_stops_the_walk() {
-    // The invariant says a thread in the list is a thread of the pool. If
-    // it is not, the walk ends rather than looping over a torn link.
+fn a_head_the_pool_has_dropped_lets_the_whole_list_go() {
+    // The invariant says a thread in the list is a thread of the pool. A
+    // head that is not cannot be followed to what stands behind it, so the
+    // list is let go of whole: what must not happen is that it stays and
+    // answers "nothing is due" for ever, because that would stop every
+    // deadline made after it as well.
     let (mut scheduler, mut threads) = machine();
-    let id = running(&mut scheduler, &mut threads);
-    block_until(&mut scheduler, &mut threads, id, 100);
-    threads.force_release(id);
+    let gone = running(&mut scheduler, &mut threads);
+    block_until(&mut scheduler, &mut threads, gone, 100);
+    let behind = running(&mut scheduler, &mut threads);
+    block_until(&mut scheduler, &mut threads, behind, 200);
+    threads.force_release(gone);
+
     assert_eq!(scheduler.expired(&mut threads, 1_000), None);
+    assert_eq!(scheduler.waiting_until(), 0);
+    assert_eq!(scheduler.next_deadline(), None);
+    // And the list takes waiters again, which is what a head left in place
+    // would have denied every one of them.
+    let after = running(&mut scheduler, &mut threads);
+    block_until(&mut scheduler, &mut threads, after, 300);
+    assert_eq!(expire(&mut scheduler, &mut threads, 1_000), vec![after]);
 }
 
 #[test]
-fn an_entry_without_a_deadline_stops_the_walk() {
+fn an_entry_without_a_deadline_comes_out_and_the_walk_goes_on() {
     // The same invariant from the other side: the deadline is what says
-    // the thread is in the list, so an entry without one is not expired.
+    // the thread is in the list, so an entry without one cannot be woken
+    // by one. It leaves the list rather than standing at the front of it,
+    // where it would stop every deadline behind it.
     let (mut scheduler, mut threads) = machine();
-    let id = running(&mut scheduler, &mut threads);
-    block_until(&mut scheduler, &mut threads, id, 100);
-    threads.get_mut(id).unwrap().deadline = None;
-    assert_eq!(scheduler.expired(&mut threads, 1_000), None);
+    let torn = running(&mut scheduler, &mut threads);
+    block_until(&mut scheduler, &mut threads, torn, 100);
+    let behind = running(&mut scheduler, &mut threads);
+    block_until(&mut scheduler, &mut threads, behind, 200);
+    threads.get_mut(torn).unwrap().deadline = None;
+
+    assert_eq!(scheduler.expired(&mut threads, 1_000), Some(behind));
+    assert_eq!(scheduler.waiting_until(), 0);
+    assert_eq!(scheduler.next_deadline(), None);
+    assert_eq!(threads.get(torn).unwrap().deadline, None);
 }
 
 /// The list against a sorted vector of the same deadlines.

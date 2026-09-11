@@ -14,6 +14,7 @@ use kernel_x86_tables::idt::{
     DOUBLE_FAULT_IST, GATE_INTERRUPT_DPL0, GATE_INTERRUPT_DPL3, IDT_ENTRIES, MISSING,
     SYSCALL_VECTOR, gate,
 };
+use kernel_x86_tables::vectors;
 
 use crate::instructions::read_fault_address;
 
@@ -254,6 +255,46 @@ device_handlers! {
     device_7c = 0x7C, device_7d = 0x7D, device_7e = 0x7E, device_7f = 0x7F,
     device_ff = 0xFF,
 }
+
+/// `true` when every vector of the message space has a gate above.
+///
+/// The list is written out by hand and the space is derived — `MSI_BASE`
+/// follows the I/O APIC lines and `MSI_VECTORS` runs to the system call
+/// vector — so a change to either end of the plan would move the space and
+/// leave the literals where they are. Nothing routes a message: the device
+/// writes the vector itself, so a vector of that space without a gate
+/// reaches the processor as a general protection fault and not as an
+/// interrupt, which is a fault in a driver's first interrupt and nowhere
+/// near the plan that caused it. This holds the two together at build time,
+/// as `user_sys_x86_64::gate` holds its wrappers to the system call table.
+#[expect(
+    clippy::indexing_slicing,
+    reason = "a const fn cannot call `slice::get`, and an index out of range here fails the build"
+)]
+const fn covers_the_message_space() -> bool {
+    let mut vector = vectors::MSI_BASE;
+    let end = vectors::MSI_BASE.wrapping_add(vectors::MSI_VECTORS);
+    while vector < end {
+        let mut index = 0;
+        let mut found = false;
+        while index < DEVICE_VECTORS.len() {
+            if DEVICE_VECTORS[index].0 == vector {
+                found = true;
+            }
+            index = index.wrapping_add(1);
+        }
+        if !found {
+            return false;
+        }
+        vector = vector.wrapping_add(1);
+    }
+    true
+}
+
+const _: () = assert!(
+    covers_the_message_space(),
+    "a vector of the message space has no gate in the interrupt descriptor table"
+);
 
 handlers_with_code! {
     double_fault = 8,

@@ -196,6 +196,17 @@ pub fn expire<const NP: usize, const NT: usize, const NM: usize, const NH: usize
 ) -> Option<Outcome> {
     let waiter = scheduler.expired(&mut objects.threads, now)?;
     let waited_on = objects.threads.get(waiter).ok().map(|thread| thread.wait);
+    // Making the thread ready is the step that can fail, so it happens
+    // before anything is given up. A wake that did not happen leaves the
+    // notification still naming its waiter and the thread still recording
+    // what it waits on, which is the only state from which a signal can
+    // still reach it; and it answers an outcome rather than `None`, because
+    // `None` is how the caller learns that nothing more is due, and one
+    // entry it could not use is no reason to leave the rest for the next
+    // tick.
+    let Some(reschedule) = wake(&mut objects.threads, scheduler, waiter) else {
+        return Some(Outcome::DONE);
+    };
     if let Some(Wait::Notification { notification }) = waited_on {
         objects
             .notifications
@@ -204,7 +215,6 @@ pub fn expire<const NP: usize, const NT: usize, const NM: usize, const NH: usize
     objects
         .threads
         .with(waiter, |thread| thread.wait = Wait::Nothing);
-    let reschedule = wake(&mut objects.threads, scheduler, waiter)?;
     Some(
         Outcome::DONE
             .waking(Wakeup::ok(waiter, [0, 0]))

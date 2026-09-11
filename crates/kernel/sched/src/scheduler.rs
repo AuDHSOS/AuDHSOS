@@ -384,13 +384,56 @@ impl Scheduler {
         threads: &mut Pool<Thread, N>,
         now: u64,
     ) -> Option<ThreadId> {
-        let head = self.deadlines.head?;
-        let deadline = threads.get(head).ok()?.deadline?;
-        if deadline > now {
-            return None;
+        loop {
+            let head = self.deadlines.head?;
+            let Ok(thread) = threads.get_mut(head) else {
+                // The pool no longer holds the head, so nothing can follow
+                // its links to what stands behind it. The list is let go of
+                // whole rather than left with a head that answers `None`
+                // for ever: `None` is how the caller learns that nothing is
+                // due, so an entry that cannot be read would stop every
+                // deadline behind it and every one made after it. The
+                // threads keep the signals they wait for; only the
+                // deadlines are lost.
+                self.deadlines = Queue::EMPTY;
+                self.waiting = 0;
+                return None;
+            };
+            let Some(deadline) = thread.deadline else {
+                // An entry that has lost the deadline that put it here
+                // cannot be woken by one, and `remove_deadline` reads that
+                // deadline to decide whether the thread is in a list at
+                // all, so it would leave the entry where it is. It comes
+                // out here, and the walk goes on to the next.
+                let next = thread.deadline_links.next;
+                thread.deadline_links = Links::UNLINKED;
+                self.detach_head(threads, next);
+                continue;
+            };
+            if deadline > now {
+                return None;
+            }
+            self.remove_deadline(threads, head);
+            return Some(head);
         }
-        self.remove_deadline(threads, head);
-        Some(head)
+    }
+
+    /// Points the list past a head that has just been taken out of it.
+    fn detach_head<const N: usize>(
+        &mut self,
+        threads: &mut Pool<Thread, N>,
+        next: Option<ThreadId>,
+    ) {
+        self.deadlines.head = next;
+        match next {
+            Some(next) => {
+                if let Ok(entry) = threads.get_mut(next) {
+                    entry.deadline_links.previous = None;
+                }
+            }
+            None => self.deadlines.tail = None,
+        }
+        self.waiting = self.waiting.saturating_sub(1);
     }
 
     /// Puts `id` into the deadline list at its place: behind everyone whose
@@ -407,9 +450,12 @@ impl Scheduler {
         id: ThreadId,
         deadline: u64,
     ) -> Result<(), Error> {
-        let thread = threads.get_mut(id).map_err(|_| Error::InvalidHandle)?;
-        thread.deadline = Some(deadline);
-        thread.deadline_links = Links::UNLINKED;
+        // The place comes first and the thread is marked second. Writing
+        // the deadline before the splice was known would leave, on a
+        // refused insert, a thread the list does not hold but that says it
+        // is in one — and the next removal of it reads its empty links as
+        // both ends of the list and clears the head and the tail, every
+        // other waiter with them.
         let after = self.place_for(threads, deadline);
         let before = match after {
             Some(after) => {
@@ -422,6 +468,7 @@ impl Scheduler {
             None => self.deadlines.head,
         };
         let thread = threads.get_mut(id).map_err(|_| Error::InvalidHandle)?;
+        thread.deadline = Some(deadline);
         thread.deadline_links = Links {
             next: before,
             previous: after,
