@@ -169,6 +169,8 @@ pub enum Instruction {
     LogicalNot,
     /// `acc = undefined`, after evaluating its operand.
     ToUndefined,
+    /// `acc = ToNumber(acc)` for an already primitive operand.
+    ToNumber,
     /// `acc = ~ToInt32(acc)` for an already numeric primitive.
     BitNot,
     /// `acc = typeof acc`, materialized as an Agent-local String.
@@ -473,6 +475,10 @@ impl BytecodeFunction {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive instruction verifier keeps every operand contract visible"
+    )]
     fn verify_instruction(
         &self,
         pc: usize,
@@ -565,6 +571,7 @@ impl BytecodeFunction {
             | Instruction::Negate
             | Instruction::LogicalNot
             | Instruction::ToUndefined
+            | Instruction::ToNumber
             | Instruction::BitNot
             | Instruction::TypeOf
             | Instruction::LdaUndefined

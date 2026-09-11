@@ -662,6 +662,9 @@ impl RegisterVM {
                 Instruction::LogicalNot => {
                     self.acc = Value::from_bool(!Self::to_boolean(self.acc, heap)?);
                 }
+                Instruction::ToNumber => {
+                    self.acc = Value::from_f64(primitive_number(self.acc, heap)?);
+                }
                 Instruction::BitNot => {
                     let number = self.acc.as_f64().ok_or(VMError::TypeError)?;
                     self.acc = Value::from_smi(!number_to_i32(number));
@@ -1563,6 +1566,31 @@ mod tests {
             vm.run(&valid, &mut feedback, &mut heap),
             Err(VMError::InvalidFeedbackVector)
         );
+    }
+
+    #[test]
+    fn primitive_to_number_rejects_symbols_bigints_and_objects() {
+        let mut code = BytecodeFunction::new(1, 1);
+        code.emit(Instruction::Ldar(Reg(0)));
+        code.emit(Instruction::ToNumber);
+        code.emit(Instruction::Return);
+        let mut heap = GenerationalHeap::new();
+        let object = heap
+            .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
+            .unwrap();
+
+        for value in [
+            Value::from_symbol(super::super::value::SymbolRef(0)),
+            Value::from_bigint(super::super::value::BigIntRef(0)),
+            Value::from_object(object),
+        ] {
+            let mut feedback = FeedbackVector::for_code(&code);
+            let mut vm = RegisterVM::new(100);
+            assert_eq!(
+                vm.run_with_arguments(&code, &[value], &mut feedback, &mut heap),
+                Err(VMError::TypeError)
+            );
+        }
     }
 
     #[test]

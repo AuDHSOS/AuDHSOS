@@ -863,25 +863,34 @@ impl RegisterLowerer {
             }
             ExprKind::Unary(operator, inner) => {
                 let inner_type = self.lower(inner)?;
-                self.code.emit(match operator {
-                    Unary::Plus if inner_type == RegisterType::Number => {
-                        return Some(RegisterType::Number);
-                    }
-                    Unary::Minus if inner_type == RegisterType::Number => Instruction::Negate,
-                    Unary::Not => Instruction::LogicalNot,
-                    Unary::Void => Instruction::ToUndefined,
-                    Unary::BitNot if inner_type == RegisterType::Number => Instruction::BitNot,
-                    Unary::Typeof => Instruction::TypeOf,
-                    Unary::Plus | Unary::Minus | Unary::BitNot | Unary::Delete => {
-                        return None;
-                    }
-                });
                 match operator {
-                    Unary::Minus | Unary::BitNot => RegisterType::Number,
+                    Unary::Plus | Unary::Minus | Unary::BitNot if inner_type.is_primitive() => {
+                        if inner_type != RegisterType::Number {
+                            self.code.emit(Instruction::ToNumber);
+                        }
+                        if matches!(operator, Unary::Minus) {
+                            self.code.emit(Instruction::Negate);
+                        } else if matches!(operator, Unary::BitNot) {
+                            self.code.emit(Instruction::BitNot);
+                        }
+                    }
+                    Unary::Not => {
+                        self.code.emit(Instruction::LogicalNot);
+                    }
+                    Unary::Void => {
+                        self.code.emit(Instruction::ToUndefined);
+                    }
+                    Unary::Typeof => {
+                        self.code.emit(Instruction::TypeOf);
+                    }
+                    Unary::Plus | Unary::Minus | Unary::BitNot | Unary::Delete => return None,
+                }
+                match operator {
+                    Unary::Plus | Unary::Minus | Unary::BitNot => RegisterType::Number,
                     Unary::Not => RegisterType::Boolean,
                     Unary::Void => RegisterType::Undefined,
                     Unary::Typeof => RegisterType::String,
-                    Unary::Plus | Unary::Delete => return None,
+                    Unary::Delete => return None,
                 }
             }
             ExprKind::Binary(operator, left, right) => self.lower_binary(*operator, left, right)?,
@@ -2250,7 +2259,7 @@ fn register_expression_type(
         ExprKind::Unary(operator, inner) => {
             let inner = register_expression_type(inner, bindings)?;
             match operator {
-                Unary::Plus | Unary::Minus | Unary::BitNot if inner.is_numeric_primitive() => {
+                Unary::Plus | Unary::Minus | Unary::BitNot if inner.is_primitive() => {
                     RegisterType::Number
                 }
                 Unary::Not => RegisterType::Boolean,

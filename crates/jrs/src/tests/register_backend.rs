@@ -65,6 +65,44 @@ fn primitive_expressions_run_through_register_bytecode_and_match_legacy() -> Res
 }
 
 #[test]
+fn primitive_unary_numeric_conversion_runs_through_register_bytecode() -> Result<(), Error> {
+    for source in [
+        "+true",
+        "+false",
+        "+null",
+        "+undefined",
+        "+''",
+        "+'  42 '",
+        "+'0x10'",
+        "+'x'",
+        "+'-0'",
+        "-true",
+        "-null",
+        "-undefined",
+        "-'2'",
+        "~true",
+        "~null",
+        "~undefined",
+        "~'2'",
+        "function f(x){return +x}f('42')",
+        "function f(x){return -x}f(true)",
+        "function f(x){return ~x}f('2')",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn string_expressions_run_through_heap_independent_register_bytecode() -> Result<(), Error> {
     for source in [
         "'hello'",
@@ -368,6 +406,8 @@ fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<
         "{let x=1;x+2}",
         "Number(1)",
         "({valueOf(){return 1}})+2",
+        "+({valueOf(){return 1}})",
+        "-function(){}",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
