@@ -523,6 +523,31 @@ impl RegisterVM {
         Ok(left.strictly_equals(right))
     }
 
+    fn loosely_equals(
+        mut left: Value,
+        mut right: Value,
+        heap: &GenerationalHeap,
+    ) -> Result<bool, VMError> {
+        if left.is_object() || right.is_object() || left.is_bigint() || right.is_bigint() {
+            return Err(VMError::TypeError);
+        }
+        if left.is_boolean() {
+            left = Value::from_f64(primitive_number(left, heap)?);
+        }
+        if right.is_boolean() {
+            right = Value::from_f64(primitive_number(right, heap)?);
+        }
+        if left.is_number() && right.is_string() {
+            right = Value::from_f64(primitive_number(right, heap)?);
+        } else if left.is_string() && right.is_number() {
+            left = Value::from_f64(primitive_number(left, heap)?);
+        }
+        if left.is_null() && right.is_undefined() || left.is_undefined() && right.is_null() {
+            return Ok(true);
+        }
+        Self::strictly_equals(left, right, heap)
+    }
+
     fn to_boolean(value: Value, heap: &GenerationalHeap) -> Result<bool, VMError> {
         if value.is_heap_string() {
             return heap
@@ -800,7 +825,11 @@ impl RegisterVM {
                         return Err(VMError::TypeError);
                     }
                 }
-                Instruction::TestEqual(reg) | Instruction::TestStrictEqual(reg) => {
+                Instruction::TestEqual(reg) => {
+                    let rhs = self.read_reg(reg)?;
+                    self.acc = Value::from_bool(Self::loosely_equals(self.acc, rhs, heap)?);
+                }
+                Instruction::TestStrictEqual(reg) => {
                     let rhs = self.read_reg(reg)?;
                     self.acc = Value::from_bool(Self::strictly_equals(self.acc, rhs, heap)?);
                 }
@@ -1589,6 +1618,41 @@ mod tests {
             assert_eq!(
                 vm.run_with_arguments(&code, &[value], &mut feedback, &mut heap),
                 Err(VMError::TypeError)
+            );
+        }
+    }
+
+    #[test]
+    fn primitive_loose_equality_rejects_objects_and_bigints() {
+        let mut code = BytecodeFunction::new(2, 2);
+        code.emit(Instruction::Ldar(Reg(0)));
+        code.emit(Instruction::TestEqual(Reg(1)));
+        code.emit(Instruction::Return);
+        let mut heap = GenerationalHeap::new();
+        let object = heap
+            .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
+            .unwrap();
+
+        for value in [
+            Value::from_bigint(super::super::value::BigIntRef(0)),
+            Value::from_object(object),
+        ] {
+            let mut feedback = FeedbackVector::for_code(&code);
+            let mut vm = RegisterVM::new(100);
+            assert_eq!(
+                vm.run_with_arguments(&code, &[VALUE_UNDEFINED, value], &mut feedback, &mut heap),
+                Err(VMError::TypeError)
+            );
+        }
+
+        let first = Value::from_symbol(super::super::value::SymbolRef(1));
+        let second = Value::from_symbol(super::super::value::SymbolRef(2));
+        for (right, expected) in [(first, true), (second, false)] {
+            let mut feedback = FeedbackVector::for_code(&code);
+            let mut vm = RegisterVM::new(100);
+            assert_eq!(
+                vm.run_with_arguments(&code, &[first, right], &mut feedback, &mut heap),
+                Ok(Value::from_bool(expected))
             );
         }
     }

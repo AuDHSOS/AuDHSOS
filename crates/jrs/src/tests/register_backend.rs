@@ -103,6 +103,37 @@ fn primitive_unary_numeric_conversion_runs_through_register_bytecode() -> Result
 }
 
 #[test]
+fn primitive_loose_equality_runs_through_register_bytecode() -> Result<(), Error> {
+    for source in [
+        "null == undefined",
+        "undefined == null",
+        "null != undefined",
+        "null == false",
+        "'2' == 2",
+        "2 == '2'",
+        "'x' == 0",
+        "false == ''",
+        "true == 1",
+        "1 == true",
+        "NaN == NaN",
+        "0 == -0",
+        "1 != 2",
+        "function f(a,b){return a==b}f('42',42)",
+        "function f(a,b){return a!=b}f(null,undefined)",
+        "let i=0;while(i!=3)i++;i",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert_eq!(actual, expected, "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn string_expressions_run_through_heap_independent_register_bytecode() -> Result<(), Error> {
     for source in [
         "'hello'",

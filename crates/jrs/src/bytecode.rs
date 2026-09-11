@@ -2025,6 +2025,17 @@ impl RegisterLowerer {
                 Instruction::TestStrictEqual(right_register),
                 RegisterType::Boolean,
             ),
+            Binary::Eq if left_type.is_primitive() && right_type.is_primitive() => (
+                Instruction::TestEqual(right_register),
+                RegisterType::Boolean,
+            ),
+            Binary::Ne if left_type.is_primitive() && right_type.is_primitive() => {
+                self.code.emit(Instruction::TestEqual(right_register));
+                self.code.emit(Instruction::LogicalNot);
+                self.release_register(right_register)?;
+                self.release_register(left_register)?;
+                return Some(RegisterType::Boolean);
+            }
             Binary::StrictNe => {
                 self.code.emit(Instruction::TestStrictEqual(right_register));
                 self.code.emit(Instruction::LogicalNot);
@@ -2286,6 +2297,8 @@ fn register_expression_type(
                 | Binary::Le
                 | Binary::Gt
                 | Binary::Ge
+                | Binary::Eq
+                | Binary::Ne
                 | Binary::StrictEq
                 | Binary::StrictNe => RegisterType::Boolean,
                 _ => return None,
