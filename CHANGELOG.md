@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The timer takes the processor in the kernel that ships. Time-slice
+  preemption was built and proved in Phase 5 and wired into the test
+  harness only: `Scheduler::tick` charges the running thread its tick and
+  asks for a switch when the slice runs out, and `crates/kernel/bin` never
+  called it, so the one kernel that boots handed the processor over only
+  when a thread asked it to. Every program of the boot archive blocks on
+  IPC or a notification, which is why nothing had shown it (D-133).
+
 - Phase 12, the three capabilities everything above the kernel wants and
   the kernel did not have: time, randomness, and message interrupts. Four
   system calls, numbers forty-seven to fifty. `clock_now` answers the
@@ -72,6 +80,23 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   whether they differ, and `msi_vector` takes a message interrupt, binds
   it, and reports the bit it woke with when the image raises the vector.
   Catalog 6.6.59 and 6.6.60.
+
+### Fixed
+
+- A switch out of a thread that holds one of the kernel's cells leaves that
+  cell borrowed by a thread that is no longer running, and nothing gets it
+  back. `task::run` refuses to switch from there now, as the test harness
+  has refused since the `ipc` image wedged on it about one run in six: a
+  tick that finds a cell held switches nobody, and the next one tries a
+  millisecond later. The kernel checks three cells where the harness checks
+  two, and the console is the one this found. `task::start` writes
+  `root task at ...` once the root task is ready, so a tick between the
+  borrow of the console and the end of that line switched into the root
+  task and left the console held for good: the machine ran on, and every
+  line it had left to say — the servers' own, a fault, a panic — went
+  nowhere. Four of nine end-to-end runs stopped saying anything at that
+  line, which from outside is indistinguishable from a machine that has
+  stopped (D-133).
 
 ### Changed
 
@@ -809,8 +834,6 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   waits for the boot image work of that phase, which is what left it the
   one open side track. 06 gained the catalog item 6.6.58 for the toolchain,
   which the track had been citing 6.6.53 for, and 08 8.21 now names both.
-
-### Fixed
 
 - 10.9.4 named the kernel's device-memory check `inside_device_memory`;
   the call Phase 9 built is `Environment::is_device_memory`. A document

@@ -328,6 +328,15 @@ runs. Every system call is bounded: operations over ranges process at most
 a fixed number of pages per call and return `Partial` with a progress count
 so that userland loops.
 
+The kernel's own bring-up is the exception, and it is why the switch has a
+guard. The timer starts before the root task is built, so the kernel
+finishes its bring-up with interrupts on and with its cells — the memory,
+the objects and the scheduler, the console — taken out for the length of
+real work. A switch from there would leave a cell borrowed by a thread that
+is no longer running, and nothing would give it back. A tick that finds one
+held therefore switches nobody and lets the next tick try, a millisecond
+later (D-133).
+
 ### 2.5.5 Context switch and entry paths
 
 - Every thread has a kernel stack. An interrupt or system call from user mode

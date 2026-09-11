@@ -231,12 +231,13 @@ fn on_interrupt(vector: u8) {
 }
 
 /// What a timer tick does for the threads: wake everyone whose deadline has
-/// passed, and give the processor to one of them when it wants it.
+/// passed, charge the running thread one tick of its time slice, and switch
+/// when either asks for it.
 ///
 /// The walk stops at the first entry that has not passed, so a tick that
 /// wakes nobody costs one comparison. A tick that arrives while the kernel
-/// holds the machine finds it busy and changes nothing; the next one is a
-/// millisecond later.
+/// holds a cell of its own finds it busy and changes nothing; the next one
+/// is a millisecond later.
 fn on_timer_tick() {
     let now = kernel_core::tick::micros(interrupts::ticks());
     let mut switch = false;
@@ -252,7 +253,14 @@ fn on_timer_tick() {
         }
         switch |= outcome.reschedule;
     }
-    if switch {
+    let spent = kernel_core::with_machine(|machine| {
+        machine
+            .scheduler
+            .tick(&mut machine.objects.threads)
+            .reschedule
+    })
+    .unwrap_or(false);
+    if switch || spent {
         task::run(None);
     }
 }

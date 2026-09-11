@@ -180,13 +180,48 @@ fn idle_thread() {
     });
 }
 
+/// Whether the thread that would leave the processor holds none of the
+/// kernel's cells: not the memory, not the machine, not the console.
+///
+/// The kernel is not inside a gate for the whole of its own bring-up. The
+/// timer runs from [`take_interrupts`](crate::take_interrupts) on, and
+/// `task::start` builds the root task after that, with interrupts on: it
+/// takes the memory and the machine out of their cells for the length of
+/// real work, and it writes its last line with the console out of its own.
+/// A switch from any of those leaves the cell borrowed by a thread that is
+/// no longer running, and nothing gets it back.
+///
+/// The console is the one this cost a morning on. `root task at ...` is
+/// printed after the root task is ready, so a tick between the borrow and
+/// the end of the line switched into it and left the console held for
+/// good: the machine ran on, and every line it had left to say — the
+/// servers' own, a fault, a panic — went nowhere. A run that has stopped
+/// saying anything and a run that has stopped look the same from outside.
+///
+/// A tick that finds a cell held switches nobody and lets the next tick
+/// try, a millisecond later. The test harness has carried the first two of
+/// these since the `ipc` image wedged on them about one run in six; it has
+/// no third to check, because its commentary builds a console value rather
+/// than borrowing one (D-133).
+fn nothing_is_held() -> bool {
+    with_memory(|_| ()).is_some()
+        && with_machine(|_| ()).is_some()
+        && entry::with_console(|_| ()).is_some()
+}
+
 /// Runs whichever thread the scheduler picks, and comes back when the
 /// processor is standing on this stack again.
+///
+/// A call made while the thread that would leave holds a cell of the
+/// kernel returns at once and switches nobody — see [`nothing_is_held`].
 ///
 /// `standing_on` names the thread whose kernel stack the processor stands
 /// on after the scheduler has let go of it, which is what a thread that
 /// faulted looks like.
 pub(crate) fn run(standing_on: Option<kernel_objects::object::ThreadId>) {
+    if !nothing_is_held() {
+        return;
+    }
     let Some((from, to, top)) = next_switch(standing_on) else {
         return;
     };
