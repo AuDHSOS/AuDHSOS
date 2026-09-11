@@ -13,6 +13,7 @@
 //! 6. Fast contiguous register interpreter (`interpreter`)
 
 pub mod bytecode;
+pub mod context;
 pub mod elements;
 pub mod feedback;
 pub mod heap;

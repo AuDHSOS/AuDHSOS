@@ -14,6 +14,7 @@
 //! `[[DefineOwnProperty]]`) route through Shapes and Elements.
 
 use super::{
+    context::ContextRef,
     elements::ElementsRef,
     shape::ShapeId,
     value::{VALUE_UNDEFINED, Value},
@@ -38,7 +39,7 @@ pub enum ObjectKind {
         /// Bytecode function index.
         code_id: u32,
         /// Heap context for captured variables.
-        context: Option<u32>,
+        context: Option<ContextRef>,
     },
     /// Native Rust host/intrinsic callable.
     NativeFunction {

@@ -15,6 +15,7 @@
 //! major mark-sweep collector reclaims unreachable promoted graphs.
 
 use super::{
+    context::{Context, ContextRef},
     elements::{ElementsKind, ElementsRef},
     object::{JSObject, ObjectKind},
     shape::{ShapeId, ShapeTable},
@@ -67,10 +68,17 @@ struct YoungElements {
     age: u8,
 }
 
+#[derive(Clone)]
+struct YoungContext {
+    value: Context,
+    age: u8,
+}
+
 /// Active Nursery semispace where Young entries are bump-allocated.
 struct Nursery {
     objects: Vec<YoungObject>,
     elements: Vec<YoungElements>,
+    contexts: Vec<YoungContext>,
     object_capacity: usize,
     generation: u32,
 }
@@ -80,6 +88,7 @@ impl Nursery {
         Self {
             objects: Vec::with_capacity(capacity),
             elements: Vec::with_capacity(capacity),
+            contexts: Vec::with_capacity(capacity),
             object_capacity: capacity,
             generation,
         }
@@ -87,6 +96,10 @@ impl Nursery {
 
     const fn is_full(&self) -> bool {
         self.objects.len() >= self.object_capacity
+    }
+
+    const fn contexts_full(&self) -> bool {
+        self.contexts.len() >= self.object_capacity
     }
 }
 
@@ -100,8 +113,10 @@ struct OldEntry<T> {
 struct OldGeneration {
     objects: Vec<OldEntry<JSObject>>,
     elements: Vec<OldEntry<ElementsKind>>,
+    contexts: Vec<OldEntry<Context>>,
     free_objects: Vec<usize>,
     free_elements: Vec<usize>,
+    free_contexts: Vec<usize>,
 }
 
 impl OldGeneration {
@@ -142,6 +157,25 @@ impl OldGeneration {
         };
         generation_index(index).map(|index| ElementsRef::old(index, generation))
     }
+
+    fn allocate_context(&mut self, context: Context) -> Result<ContextRef, HeapError> {
+        let (index, generation) = if let Some(index) = self.free_contexts.pop() {
+            let entry = self
+                .contexts
+                .get_mut(index)
+                .ok_or(HeapError::InvalidReference)?;
+            entry.value = Some(context);
+            (index, entry.generation)
+        } else {
+            let index = self.contexts.len();
+            self.contexts.push(OldEntry {
+                generation: 0,
+                value: Some(context),
+            });
+            (index, 0)
+        };
+        generation_index(index).map(|index| ContextRef::old(index, generation))
+    }
 }
 
 /// Stable index into the heap's native root stack.
@@ -159,6 +193,10 @@ pub struct ScavengeStats {
     pub copied_elements: usize,
     /// Young elements stores promoted to the Old Generation.
     pub promoted_elements: usize,
+    /// Young contexts copied to the next Nursery semispace.
+    pub copied_contexts: usize,
+    /// Young contexts promoted to the Old Generation.
+    pub promoted_contexts: usize,
 }
 
 /// Statistics for one completed Old Generation mark-sweep collection.
@@ -172,6 +210,10 @@ pub struct MajorCollectionStats {
     pub marked_elements: usize,
     /// Unreachable Old Generation elements stores reclaimed by sweeping.
     pub reclaimed_elements: usize,
+    /// Reachable Old Generation contexts retained by marking.
+    pub marked_contexts: usize,
+    /// Unreachable Old Generation contexts reclaimed by sweeping.
+    pub reclaimed_contexts: usize,
     /// Reachable or interned heap strings retained by marking.
     pub marked_strings: usize,
     /// Unreachable heap strings reclaimed by sweeping.
@@ -207,6 +249,7 @@ pub struct GenerationalHeap {
     scope_markers: Vec<usize>,
     remembered_objects: BTreeSet<ObjectRef>,
     remembered_elements: BTreeSet<ElementsRef>,
+    remembered_contexts: BTreeSet<ContextRef>,
 }
 
 impl Default for GenerationalHeap {
@@ -236,6 +279,7 @@ impl GenerationalHeap {
             scope_markers: Vec::with_capacity(16),
             remembered_objects: BTreeSet::new(),
             remembered_elements: BTreeSet::new(),
+            remembered_contexts: BTreeSet::new(),
         }
     }
 
@@ -302,13 +346,42 @@ impl GenerationalHeap {
     ///
     /// Returns [`HeapError::NurseryFull`] when a Safe Point is required, or
     /// [`HeapError::ReferenceSpaceExhausted`] when no tagged index remains.
-    pub fn allocate_function(&mut self, code_id: u32) -> Result<ObjectRef, HeapError> {
+    pub fn allocate_function(
+        &mut self,
+        code_id: u32,
+        context: Option<ContextRef>,
+    ) -> Result<ObjectRef, HeapError> {
+        if context.is_some_and(|context| self.get_context(context).is_none()) {
+            return Err(HeapError::InvalidReference);
+        }
         let reference = self.allocate_object(self.shapes.root_shape(), VALUE_NULL)?;
-        self.object_mut(reference)?.kind = ObjectKind::Function {
-            code_id,
-            context: None,
-        };
+        self.object_mut(reference)?.kind = ObjectKind::Function { code_id, context };
         Ok(reference)
+    }
+
+    /// Bump-allocates a captured lexical context in the Nursery.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::NurseryFull`] when a Safe Point is required, or
+    /// [`HeapError::ReferenceSpaceExhausted`] when no tagged index remains.
+    pub fn allocate_context(
+        &mut self,
+        parent: Option<ContextRef>,
+        slot_count: usize,
+    ) -> Result<ContextRef, HeapError> {
+        if parent.is_some_and(|parent| self.get_context(parent).is_none()) {
+            return Err(HeapError::InvalidReference);
+        }
+        if self.nursery.contexts_full() {
+            return Err(HeapError::NurseryFull);
+        }
+        let index = young_index(self.nursery.contexts.len())?;
+        self.nursery.contexts.push(YoungContext {
+            value: Context::new(parent, slot_count),
+            age: 0,
+        });
+        Ok(ContextRef::young(index, self.nursery.generation))
     }
 
     /// Reads an immutable object reference from its tagged generation.
@@ -341,6 +414,61 @@ impl GenerationalHeap {
                 .then(|| self.nursery.elements.get(index).map(|entry| &entry.value))
                 .flatten()
         }
+    }
+
+    /// Reads an immutable lexical context from its tagged generation.
+    #[must_use]
+    pub fn get_context(&self, reference: ContextRef) -> Option<&Context> {
+        let index = reference.index() as usize;
+        if reference.is_old() {
+            let entry = self.old_gen.contexts.get(index)?;
+            (u32::from(entry.generation) == reference.generation())
+                .then_some(entry.value.as_ref())
+                .flatten()
+        } else {
+            (self.nursery.generation == reference.generation())
+                .then(|| self.nursery.contexts.get(index).map(|entry| &entry.value))
+                .flatten()
+        }
+    }
+
+    /// Reads one context slot by following `depth` outer links.
+    #[must_use]
+    pub fn context_slot(&self, mut context: ContextRef, depth: u16, slot: u16) -> Option<Value> {
+        for _ in 0..depth {
+            context = self.get_context(context)?.parent?;
+        }
+        self.get_context(context)?
+            .slots
+            .get(usize::from(slot))
+            .copied()
+    }
+
+    /// Stores one context slot and records any Old-to-Young edge.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for an invalid context chain or slot.
+    pub fn set_context_slot(
+        &mut self,
+        mut context: ContextRef,
+        depth: u16,
+        slot: u16,
+        value: Value,
+    ) -> Result<(), HeapError> {
+        for _ in 0..depth {
+            context = self
+                .get_context(context)
+                .and_then(|context| context.parent)
+                .ok_or(HeapError::InvalidReference)?;
+        }
+        self.remember_context_store(context, value);
+        *self
+            .context_mut(context)?
+            .slots
+            .get_mut(usize::from(slot))
+            .ok_or(HeapError::InvalidReference)? = value;
+        Ok(())
     }
 
     /// Returns an Array exotic object's logical `length`.
@@ -666,6 +794,7 @@ impl GenerationalHeap {
         let from = core::mem::replace(&mut self.nursery, Nursery::new(capacity, next_generation));
         let remembered_objects = core::mem::take(&mut self.remembered_objects);
         let remembered_elements = core::mem::take(&mut self.remembered_elements);
+        let remembered_contexts = core::mem::take(&mut self.remembered_contexts);
         let mut evacuator = Evacuator::new(from, &mut self.old_gen, &mut self.nursery);
 
         for root in &mut self.roots {
@@ -681,6 +810,9 @@ impl GenerationalHeap {
         }
         for index in remembered_elements {
             evacuator.enqueue_old_elements(index);
+        }
+        for index in remembered_contexts {
+            evacuator.enqueue_old_context(index);
         }
         evacuator.drain()?;
 
@@ -715,7 +847,7 @@ impl GenerationalHeap {
         registers: &[Value],
         accumulator: Value,
     ) -> Result<MajorCollectionStats, HeapError> {
-        let (marked_objects, marked_elements, marked_strings) = {
+        let (marked_objects, marked_elements, marked_contexts, marked_strings) = {
             let mut marker = MajorMarker::new(&self.nursery, &self.old_gen);
             for value in self.roots.iter().chain(registers) {
                 marker.mark_value(*value);
@@ -725,6 +857,7 @@ impl GenerationalHeap {
             (
                 marker.marked_objects,
                 marker.marked_elements,
+                marker.marked_contexts,
                 marker.marked_strings,
             )
         };
@@ -732,6 +865,7 @@ impl GenerationalHeap {
         let mut stats = MajorCollectionStats {
             marked_objects: marked_objects.len(),
             marked_elements: marked_elements.len(),
+            marked_contexts: marked_contexts.len(),
             ..MajorCollectionStats::default()
         };
         for (index, entry) in self.old_gen.objects.iter_mut().enumerate() {
@@ -753,6 +887,17 @@ impl GenerationalHeap {
                 if let Some(generation) = entry.generation.checked_add(1) {
                     entry.generation = generation;
                     self.old_gen.free_elements.push(index);
+                }
+            }
+        }
+        for (index, entry) in self.old_gen.contexts.iter_mut().enumerate() {
+            let index_u32 = generation_index(index)?;
+            if entry.value.is_some() && !marked_contexts.contains(&index_u32) {
+                entry.value = None;
+                stats.reclaimed_contexts = stats.reclaimed_contexts.saturating_add(1);
+                if let Some(generation) = entry.generation.checked_add(1) {
+                    entry.generation = generation;
+                    self.old_gen.free_contexts.push(index);
                 }
             }
         }
@@ -816,6 +961,30 @@ impl GenerationalHeap {
         }
     }
 
+    fn context_mut(&mut self, reference: ContextRef) -> Result<&mut Context, HeapError> {
+        let index = reference.index() as usize;
+        if reference.is_old() {
+            let entry = self
+                .old_gen
+                .contexts
+                .get_mut(index)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_mut().ok_or(HeapError::InvalidReference)
+        } else {
+            if self.nursery.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            self.nursery
+                .contexts
+                .get_mut(index)
+                .map(|entry| &mut entry.value)
+                .ok_or(HeapError::InvalidReference)
+        }
+    }
+
     fn remember_object_store(&mut self, owner: ObjectRef, value: Value) {
         if owner.is_old() && value.as_object().is_some_and(ObjectRef::is_young) {
             self.remembered_objects.insert(owner);
@@ -828,9 +997,16 @@ impl GenerationalHeap {
         }
     }
 
+    fn remember_context_store(&mut self, owner: ContextRef, value: Value) {
+        if owner.is_old() && value.as_object().is_some_and(ObjectRef::is_young) {
+            self.remembered_contexts.insert(owner);
+        }
+    }
+
     fn rebuild_remembered_sets(&mut self) {
         self.remembered_objects.clear();
         self.remembered_elements.clear();
+        self.remembered_contexts.clear();
         for (index, object) in self.old_gen.objects.iter().enumerate() {
             if object.value.as_ref().is_some_and(object_contains_young)
                 && let Ok(index) = generation_index(index)
@@ -847,6 +1023,14 @@ impl GenerationalHeap {
                     .insert(ElementsRef::old(index, elements.generation));
             }
         }
+        for (index, context) in self.old_gen.contexts.iter().enumerate() {
+            if context.value.as_ref().is_some_and(context_contains_young)
+                && let Ok(index) = generation_index(index)
+            {
+                self.remembered_contexts
+                    .insert(ContextRef::old(index, context.generation));
+            }
+        }
     }
 }
 
@@ -855,9 +1039,11 @@ struct MajorMarker<'heap> {
     old: &'heap OldGeneration,
     marked_objects: BTreeSet<u32>,
     marked_elements: BTreeSet<u32>,
+    marked_contexts: BTreeSet<u32>,
     marked_strings: BTreeSet<StringRef>,
     visited_young_objects: BTreeSet<u32>,
     visited_young_elements: BTreeSet<u32>,
+    visited_young_contexts: BTreeSet<u32>,
     work: Vec<Work>,
 }
 
@@ -868,9 +1054,11 @@ impl<'heap> MajorMarker<'heap> {
             old,
             marked_objects: BTreeSet::new(),
             marked_elements: BTreeSet::new(),
+            marked_contexts: BTreeSet::new(),
             marked_strings: BTreeSet::new(),
             visited_young_objects: BTreeSet::new(),
             visited_young_elements: BTreeSet::new(),
+            visited_young_contexts: BTreeSet::new(),
             work: Vec::new(),
         }
     }
@@ -889,6 +1077,7 @@ impl<'heap> MajorMarker<'heap> {
             match work {
                 Work::Object(reference) => self.mark_object(reference)?,
                 Work::Elements(reference) => self.mark_elements(reference)?,
+                Work::Context(reference) => self.mark_context(reference)?,
                 Work::String(reference) => {
                     self.marked_strings.insert(reference);
                 }
@@ -999,12 +1188,65 @@ impl<'heap> MajorMarker<'heap> {
         trace_elements_work(elements, &mut self.work);
         Ok(())
     }
+
+    fn mark_context(&mut self, reference: ContextRef) -> Result<(), HeapError> {
+        if reference.is_old() {
+            let entry = self
+                .old
+                .contexts
+                .get(reference.index() as usize)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() || entry.value.is_none() {
+                return Err(HeapError::InvalidReference);
+            }
+        } else if self.nursery.generation != reference.generation()
+            || self
+                .nursery
+                .contexts
+                .get(reference.index() as usize)
+                .is_none()
+        {
+            return Err(HeapError::InvalidReference);
+        }
+        let first_visit = if reference.is_old() {
+            self.marked_contexts.insert(reference.index())
+        } else {
+            self.visited_young_contexts.insert(reference.index())
+        };
+        if !first_visit {
+            return Ok(());
+        }
+        let context = if reference.is_old() {
+            let entry = self
+                .old
+                .contexts
+                .get(reference.index() as usize)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_ref().ok_or(HeapError::InvalidReference)?
+        } else {
+            if self.nursery.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            &self
+                .nursery
+                .contexts
+                .get(reference.index() as usize)
+                .ok_or(HeapError::InvalidReference)?
+                .value
+        };
+        trace_context_work(context, &mut self.work);
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
 enum Work {
     Object(ObjectRef),
     Elements(ElementsRef),
+    Context(ContextRef),
     String(StringRef),
 }
 
@@ -1014,6 +1256,7 @@ struct Evacuator<'heap> {
     to: &'heap mut Nursery,
     object_forwarding: BTreeMap<ObjectRef, ObjectRef>,
     elements_forwarding: BTreeMap<ElementsRef, ElementsRef>,
+    context_forwarding: BTreeMap<ContextRef, ContextRef>,
     work: Vec<Work>,
     stats: ScavengeStats,
 }
@@ -1026,6 +1269,7 @@ impl<'heap> Evacuator<'heap> {
             to,
             object_forwarding: BTreeMap::new(),
             elements_forwarding: BTreeMap::new(),
+            context_forwarding: BTreeMap::new(),
             work: Vec::new(),
             stats: ScavengeStats::default(),
         }
@@ -1109,6 +1353,41 @@ impl<'heap> Evacuator<'heap> {
         Ok(forwarded)
     }
 
+    fn evacuate_context(&mut self, reference: ContextRef) -> Result<ContextRef, HeapError> {
+        if reference.is_old() {
+            self.context(reference)?;
+            return Ok(reference);
+        }
+        if reference.generation() != self.from.generation {
+            return Err(HeapError::InvalidReference);
+        }
+        if let Some(forwarded) = self.context_forwarding.get(&reference) {
+            return Ok(*forwarded);
+        }
+        let entry = self
+            .from
+            .contexts
+            .get(reference.index() as usize)
+            .cloned()
+            .ok_or(HeapError::InvalidReference)?;
+        let age = entry.age.saturating_add(1);
+        let forwarded = if age >= PROMOTION_AGE {
+            self.stats.promoted_contexts = self.stats.promoted_contexts.saturating_add(1);
+            self.old.allocate_context(entry.value)?
+        } else {
+            let index = generation_index(self.to.contexts.len())?;
+            self.to.contexts.push(YoungContext {
+                value: entry.value,
+                age,
+            });
+            self.stats.copied_contexts = self.stats.copied_contexts.saturating_add(1);
+            ContextRef::young(index, self.to.generation)
+        };
+        self.context_forwarding.insert(reference, forwarded);
+        self.work.push(Work::Context(forwarded));
+        Ok(forwarded)
+    }
+
     fn enqueue_old_object(&mut self, reference: ObjectRef) {
         self.work.push(Work::Object(reference));
     }
@@ -1117,11 +1396,16 @@ impl<'heap> Evacuator<'heap> {
         self.work.push(Work::Elements(reference));
     }
 
+    fn enqueue_old_context(&mut self, reference: ContextRef) {
+        self.work.push(Work::Context(reference));
+    }
+
     fn drain(&mut self) -> Result<(), HeapError> {
         while let Some(work) = self.work.pop() {
             match work {
                 Work::Object(reference) => self.scan_object(reference)?,
                 Work::Elements(reference) => self.scan_elements(reference)?,
+                Work::Context(reference) => self.scan_context(reference)?,
                 Work::String(_) => {}
             }
         }
@@ -1142,6 +1426,11 @@ impl<'heap> Evacuator<'heap> {
         if let ObjectKind::StringWrapper(value) = &mut object.kind {
             self.evacuate_value(value)?;
         }
+        if let ObjectKind::Function { context, .. } = &mut object.kind
+            && let Some(reference) = context
+        {
+            *reference = self.evacuate_context(*reference)?;
+        }
         if let Some(elements) = &mut object.elements {
             *elements = self.evacuate_elements(*elements)?;
         }
@@ -1153,6 +1442,18 @@ impl<'heap> Evacuator<'heap> {
         let mut elements = self.elements(reference)?.clone();
         visit_elements_values_mut(&mut elements, |value| self.evacuate_value(value))?;
         *self.elements_mut(reference)? = elements;
+        Ok(())
+    }
+
+    fn scan_context(&mut self, reference: ContextRef) -> Result<(), HeapError> {
+        let mut context = self.context(reference)?.clone();
+        if let Some(parent) = &mut context.parent {
+            *parent = self.evacuate_context(*parent)?;
+        }
+        for value in &mut context.slots {
+            self.evacuate_value(value)?;
+        }
+        *self.context_mut(reference)? = context;
         Ok(())
     }
 
@@ -1251,6 +1552,54 @@ impl<'heap> Evacuator<'heap> {
                 .ok_or(HeapError::InvalidReference)
         }
     }
+
+    fn context(&self, reference: ContextRef) -> Result<&Context, HeapError> {
+        let index = reference.index() as usize;
+        if reference.is_old() {
+            let entry = self
+                .old
+                .contexts
+                .get(index)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_ref().ok_or(HeapError::InvalidReference)
+        } else {
+            if self.to.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            self.to
+                .contexts
+                .get(index)
+                .map(|entry| &entry.value)
+                .ok_or(HeapError::InvalidReference)
+        }
+    }
+
+    fn context_mut(&mut self, reference: ContextRef) -> Result<&mut Context, HeapError> {
+        let index = reference.index() as usize;
+        if reference.is_old() {
+            let entry = self
+                .old
+                .contexts
+                .get_mut(index)
+                .ok_or(HeapError::InvalidReference)?;
+            if u32::from(entry.generation) != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            entry.value.as_mut().ok_or(HeapError::InvalidReference)
+        } else {
+            if self.to.generation != reference.generation() {
+                return Err(HeapError::InvalidReference);
+            }
+            self.to
+                .contexts
+                .get_mut(index)
+                .map(|entry| &mut entry.value)
+                .ok_or(HeapError::InvalidReference)
+        }
+    }
 }
 
 fn generation_index(index: usize) -> Result<u32, HeapError> {
@@ -1279,6 +1628,7 @@ fn object_contains_young(object: &JSObject) -> bool {
             .as_ref()
             .is_some_and(|slots| slots.iter().copied().any(value_is_young))
         || matches!(&object.kind, ObjectKind::StringWrapper(value) if value_is_young(*value))
+        || matches!(&object.kind, ObjectKind::Function { context: Some(context), .. } if context.is_young())
         || object.elements.is_some_and(ElementsRef::is_young)
 }
 
@@ -1289,6 +1639,11 @@ fn elements_contain_young(elements: &ElementsKind) -> bool {
         ElementsKind::Dictionary(values) => values.values().copied().any(value_is_young),
         ElementsKind::PackedSmi(_) | ElementsKind::PackedDouble(_) => false,
     }
+}
+
+fn context_contains_young(context: &Context) -> bool {
+    context.parent.is_some_and(ContextRef::is_young)
+        || context.slots.iter().copied().any(value_is_young)
 }
 
 fn visit_elements_values_mut(
@@ -1329,8 +1684,24 @@ fn trace_object_work(object: &JSObject, work: &mut Vec<Work>) {
     if let ObjectKind::StringWrapper(value) = &object.kind {
         push_value_work(work, *value);
     }
+    if let ObjectKind::Function {
+        context: Some(context),
+        ..
+    } = &object.kind
+    {
+        work.push(Work::Context(*context));
+    }
     if let Some(elements) = object.elements {
         work.push(Work::Elements(elements));
+    }
+}
+
+fn trace_context_work(context: &Context, work: &mut Vec<Work>) {
+    if let Some(parent) = context.parent {
+        work.push(Work::Context(parent));
+    }
+    for value in &context.slots {
+        push_value_work(work, *value);
     }
 }
 
@@ -1481,6 +1852,297 @@ mod tests {
             .unwrap();
         assert!(child.is_young());
         assert!(heap.get_object(child).is_some());
+    }
+
+    #[test]
+    fn contexts_forward_parent_slots_and_function_edges() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(4);
+        let parent = heap.allocate_context(None, 1).unwrap();
+        let child = heap.allocate_context(Some(parent), 1).unwrap();
+        heap.set_context_slot(parent, 0, 0, Value::from_smi(41))
+            .unwrap();
+        let function = heap.allocate_function(7, Some(child)).unwrap();
+        heap.enter_scope();
+        let root = heap.push_root(Value::from_object(function)).unwrap();
+
+        let first = heap.scavenge().unwrap();
+        assert_eq!(first.copied_contexts, 2);
+        let function = rooted_object(&heap, root);
+        let ObjectKind::Function {
+            context: Some(child),
+            ..
+        } = heap.get_object(function).unwrap().kind
+        else {
+            panic!("function context");
+        };
+        assert_eq!(heap.context_slot(child, 1, 0), Some(Value::from_smi(41)));
+
+        let second = heap.scavenge().unwrap();
+        assert_eq!(second.promoted_contexts, 2);
+        let function = rooted_object(&heap, root);
+        let ObjectKind::Function {
+            context: Some(context),
+            ..
+        } = heap.get_object(function).unwrap().kind
+        else {
+            panic!("function context");
+        };
+        assert!(context.is_old());
+        assert_eq!(heap.context_slot(context, 1, 0), Some(Value::from_smi(41)));
+    }
+
+    #[test]
+    fn context_write_barrier_and_major_collection_preserve_only_live_graphs() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(3);
+        heap.enter_scope();
+        let context = heap.allocate_context(None, 1).unwrap();
+        let function = heap.allocate_function(0, Some(context)).unwrap();
+        let root = heap.push_root(Value::from_object(function)).unwrap();
+        heap.scavenge().unwrap();
+        heap.scavenge().unwrap();
+        let function = rooted_object(&heap, root);
+        let ObjectKind::Function {
+            context: Some(context),
+            ..
+        } = heap.get_object(function).unwrap().kind
+        else {
+            panic!("function context");
+        };
+        assert!(context.is_old());
+
+        let object = heap
+            .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
+            .unwrap();
+        heap.set_context_slot(context, 0, 0, Value::from_object(object))
+            .unwrap();
+        heap.scavenge().unwrap();
+        let object = heap
+            .context_slot(context, 0, 0)
+            .unwrap()
+            .as_object()
+            .unwrap();
+        assert!(heap.get_object(object).is_some());
+
+        let retained = heap.collect_old().unwrap();
+        assert_eq!(retained.marked_contexts, 1);
+        heap.exit_scope();
+        let reclaimed = heap.collect_old().unwrap();
+        assert!(reclaimed.reclaimed_contexts >= 1);
+        assert!(heap.get_context(context).is_none());
+    }
+
+    #[test]
+    fn context_limits_stale_handles_and_invalid_accesses_are_rejected() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(1);
+        let context = heap.allocate_context(None, 1).unwrap();
+        assert_eq!(heap.allocate_context(None, 0), Err(HeapError::NurseryFull));
+        assert_eq!(heap.context_slot(context, 0, 1), None);
+        assert_eq!(heap.context_slot(context, 1, 0), None);
+        assert_eq!(
+            heap.set_context_slot(context, 0, 1, VALUE_NULL),
+            Err(HeapError::InvalidReference)
+        );
+        assert_eq!(
+            heap.set_context_slot(context, 1, 0, VALUE_NULL),
+            Err(HeapError::InvalidReference)
+        );
+
+        heap.scavenge().unwrap();
+        assert!(heap.get_context(context).is_none());
+        assert_eq!(
+            heap.allocate_context(Some(context), 0),
+            Err(HeapError::InvalidReference)
+        );
+        assert_eq!(
+            heap.allocate_function(0, Some(context)),
+            Err(HeapError::InvalidReference)
+        );
+        assert_eq!(heap.context_slot(context, 0, 0), None);
+        assert_eq!(
+            heap.set_context_slot(context, 0, 0, VALUE_NULL),
+            Err(HeapError::InvalidReference)
+        );
+    }
+
+    #[test]
+    fn swept_old_context_storage_rejects_stale_generation_and_is_reused() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(2);
+        heap.enter_scope();
+        let context = heap.allocate_context(None, 1).unwrap();
+        let function = heap.allocate_function(0, Some(context)).unwrap();
+        heap.push_root(Value::from_object(function)).unwrap();
+        heap.scavenge().unwrap();
+        heap.scavenge().unwrap();
+        let function = heap.root_value(Root(0)).unwrap().as_object().unwrap();
+        let ObjectKind::Function {
+            context: Some(old), ..
+        } = heap.get_object(function).unwrap().kind
+        else {
+            panic!("function context");
+        };
+        heap.exit_scope();
+        assert_eq!(heap.collect_old().unwrap().reclaimed_contexts, 1);
+        assert!(heap.get_context(old).is_none());
+
+        heap.enter_scope();
+        let replacement = heap.allocate_context(None, 1).unwrap();
+        let replacement_function = heap.allocate_function(1, Some(replacement)).unwrap();
+        heap.push_root(Value::from_object(replacement_function))
+            .unwrap();
+        heap.scavenge().unwrap();
+        heap.scavenge().unwrap();
+        let replacement_function = heap.root_value(Root(0)).unwrap().as_object().unwrap();
+        let ObjectKind::Function {
+            context: Some(replacement),
+            ..
+        } = heap.get_object(replacement_function).unwrap().kind
+        else {
+            panic!("replacement context");
+        };
+        assert_eq!(replacement.index(), old.index());
+        assert_ne!(replacement.generation(), old.generation());
+        assert!(heap.get_context(replacement).is_some());
+        assert!(heap.get_context(old).is_none());
+        assert_eq!(
+            heap.set_context_slot(old, 0, 0, VALUE_NULL),
+            Err(HeapError::InvalidReference)
+        );
+    }
+
+    #[test]
+    fn young_context_is_a_major_collection_bridge_to_old_objects() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(3);
+        heap.enter_scope();
+        let object = heap
+            .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
+            .unwrap();
+        heap.push_root(Value::from_object(object)).unwrap();
+        heap.scavenge().unwrap();
+        heap.scavenge().unwrap();
+        let object = heap.root_value(Root(0)).unwrap().as_object().unwrap();
+        heap.exit_scope();
+        assert!(object.is_old());
+
+        heap.enter_scope();
+        let context = heap.allocate_context(None, 1).unwrap();
+        heap.set_context_slot(context, 0, 0, Value::from_object(object))
+            .unwrap();
+        let function = heap.allocate_function(0, Some(context)).unwrap();
+        heap.push_root(Value::from_object(function)).unwrap();
+        let stats = heap.collect_old().unwrap();
+        assert_eq!(stats.marked_objects, 1);
+        assert!(heap.get_object(object).is_some());
+    }
+
+    #[test]
+    fn collectors_reject_corrupted_stale_function_context_edges() {
+        let mut minor = GenerationalHeap::with_nursery_capacity(2);
+        let stale = minor.allocate_context(None, 0).unwrap();
+        minor.scavenge().unwrap();
+        let function = minor
+            .allocate_function(0, None)
+            .expect("valid function without context");
+        minor.object_mut(function).unwrap().kind = ObjectKind::Function {
+            code_id: 0,
+            context: Some(stale),
+        };
+        minor.enter_scope();
+        minor.push_root(Value::from_object(function)).unwrap();
+        assert_eq!(minor.scavenge(), Err(HeapError::InvalidReference));
+
+        let mut major = GenerationalHeap::with_nursery_capacity(2);
+        let stale = major.allocate_context(None, 0).unwrap();
+        major.scavenge().unwrap();
+        let function = major.allocate_function(0, None).unwrap();
+        major.object_mut(function).unwrap().kind = ObjectKind::Function {
+            code_id: 0,
+            context: Some(stale),
+        };
+        major.enter_scope();
+        major.push_root(Value::from_object(function)).unwrap();
+        assert_eq!(major.collect_old(), Err(HeapError::InvalidReference));
+    }
+
+    #[test]
+    fn shared_context_edges_are_copied_and_marked_once() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(3);
+        heap.enter_scope();
+        let context = heap.allocate_context(None, 1).unwrap();
+        let first = heap.allocate_function(0, Some(context)).unwrap();
+        let second = heap.allocate_function(1, Some(context)).unwrap();
+        heap.push_root(Value::from_object(first)).unwrap();
+        heap.push_root(Value::from_object(second)).unwrap();
+
+        let copied = heap.scavenge().unwrap();
+        assert_eq!(copied.copied_objects, 2);
+        assert_eq!(copied.copied_contexts, 1);
+        let promoted = heap.scavenge().unwrap();
+        assert_eq!(promoted.promoted_objects, 2);
+        assert_eq!(promoted.promoted_contexts, 1);
+        let marked = heap.collect_old().unwrap();
+        assert_eq!(marked.marked_objects, 2);
+        assert_eq!(marked.marked_contexts, 1);
+    }
+
+    #[test]
+    fn collectors_reject_corrupted_stale_context_parent_edges() {
+        let mut minor = GenerationalHeap::with_nursery_capacity(2);
+        let stale = minor.allocate_context(None, 0).unwrap();
+        minor.scavenge().unwrap();
+        let live = minor.allocate_context(None, 0).unwrap();
+        minor.context_mut(live).unwrap().parent = Some(stale);
+        let function = minor.allocate_function(0, Some(live)).unwrap();
+        minor.enter_scope();
+        minor.push_root(Value::from_object(function)).unwrap();
+        assert_eq!(minor.scavenge(), Err(HeapError::InvalidReference));
+
+        let mut major = GenerationalHeap::with_nursery_capacity(2);
+        let stale = major.allocate_context(None, 0).unwrap();
+        major.scavenge().unwrap();
+        let live = major.allocate_context(None, 0).unwrap();
+        major.context_mut(live).unwrap().parent = Some(stale);
+        let function = major.allocate_function(0, Some(live)).unwrap();
+        major.enter_scope();
+        major.push_root(Value::from_object(function)).unwrap();
+        assert_eq!(major.collect_old(), Err(HeapError::InvalidReference));
+    }
+
+    #[test]
+    fn allocation_array_and_cached_property_boundaries_are_explicit() {
+        let mut full = GenerationalHeap::with_nursery_capacity(1);
+        let ordinary = full
+            .allocate_object(full.shapes.root_shape(), VALUE_NULL)
+            .unwrap();
+        assert_eq!(full.allocate_array(0), Err(HeapError::NurseryFull));
+        assert_eq!(full.allocate_function(0, None), Err(HeapError::NurseryFull));
+        assert_eq!(
+            full.set_array_element(ordinary, 0, VALUE_NULL),
+            Err(HeapError::InvalidReference)
+        );
+        assert_eq!(
+            full.set_array_element(ordinary, u32::MAX, VALUE_NULL),
+            Err(HeapError::InvalidReference)
+        );
+
+        let mut heap = GenerationalHeap::new();
+        let object = heap
+            .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
+            .unwrap();
+        assert_eq!(
+            heap.load_cached_named(object, ShapeId(1), 0, ShapeId(1), 0, None),
+            Ok(None)
+        );
+        assert_eq!(
+            heap.load_cached_named(
+                object,
+                heap.shapes.root_shape(),
+                0,
+                heap.shapes.root_shape(),
+                99,
+                None
+            ),
+            Ok(None)
+        );
     }
 
     #[test]

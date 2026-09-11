@@ -231,9 +231,10 @@ impl RegisterVM {
         code: &BytecodeFunction,
         heap: &mut GenerationalHeap,
         code_id: u32,
+        context: Option<super::context::ContextRef>,
     ) -> Result<ObjectRef, VMError> {
         loop {
-            match heap.allocate_function(code_id) {
+            match heap.allocate_function(code_id, context) {
                 Ok(reference) => return Ok(reference),
                 Err(HeapError::NurseryFull) => self.collect_young(code, heap)?,
                 Err(error) => return Err(error.into()),
@@ -1003,7 +1004,7 @@ impl RegisterVM {
                     self.acc = Value::from_object(oref);
                 }
                 Instruction::CreateClosure(code_id) => {
-                    let function = self.allocate_function(active_code, heap, code_id)?;
+                    let function = self.allocate_function(active_code, heap, code_id, None)?;
                     self.acc = Value::from_object(function);
                 }
                 Instruction::Call {
