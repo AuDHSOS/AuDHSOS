@@ -19,7 +19,7 @@ use super::{
     object::{JSObject, ObjectKind},
     shape::{ShapeId, ShapeTable},
     string::{StringArena, StringError},
-    value::{ObjectRef, StringRef, VALUE_NULL, Value},
+    value::{ObjectRef, StringRef, VALUE_NULL, VALUE_UNDEFINED, Value},
 };
 use alloc::{collections::BTreeMap, collections::BTreeSet, vec::Vec};
 
@@ -39,6 +39,10 @@ pub enum HeapError {
     NurseryFull,
     /// A generation-tagged reference does not address a live entry.
     InvalidReference,
+    /// An object's `[[Prototype]]` must be another object or null.
+    InvalidPrototype,
+    /// A `[[Prototype]]` update would create or preserve a cycle.
+    PrototypeCycle,
     /// A generation-local index cannot be represented in the handle payload.
     ReferenceSpaceExhausted,
     /// String arena operation failed.
@@ -172,6 +176,21 @@ pub struct MajorCollectionStats {
     pub marked_strings: usize,
     /// Unreachable heap strings reclaimed by sweeping.
     pub reclaimed_strings: usize,
+}
+
+/// Resolved named-property location and value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NamedProperty {
+    /// Shape observed on the original receiver.
+    pub receiver_shape: ShapeId,
+    /// Number of Prototype Chain edges from receiver to holder.
+    pub holder_depth: u16,
+    /// Property slot in the holder.
+    pub slot: u32,
+    /// Property value at lookup time.
+    pub value: Value,
+    /// Prototype-validity epoch at lookup time.
+    pub prototype_epoch: Option<u64>,
 }
 
 /// Generational execution heap.
@@ -318,6 +337,7 @@ impl GenerationalHeap {
         shape_id: ShapeId,
     ) -> Result<(), HeapError> {
         self.object_mut(reference)?.shape_id = shape_id;
+        self.shapes.invalidate_prototypes();
         Ok(())
     }
 
@@ -331,9 +351,117 @@ impl GenerationalHeap {
         reference: ObjectRef,
         prototype: Value,
     ) -> Result<(), HeapError> {
+        if !prototype.is_null() && !prototype.is_object() {
+            return Err(HeapError::InvalidPrototype);
+        }
+        self.get_object(reference)
+            .ok_or(HeapError::InvalidReference)?;
+        if let Some(mut current) = prototype.as_object() {
+            let mut visited = BTreeSet::new();
+            loop {
+                if current == reference || !visited.insert(current) {
+                    return Err(HeapError::PrototypeCycle);
+                }
+                let next = self
+                    .get_object(current)
+                    .ok_or(HeapError::InvalidReference)?
+                    .prototype;
+                if next.is_null() {
+                    break;
+                }
+                current = next.as_object().ok_or(HeapError::InvalidPrototype)?;
+            }
+        }
         self.remember_object_store(reference, prototype);
         self.object_mut(reference)?.prototype = prototype;
+        self.shapes.invalidate_prototypes();
         Ok(())
+    }
+
+    /// Resolves a named property through the Prototype Chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for stale references, malformed Prototype values, a
+    /// cycle, or a chain deeper than the cache representation.
+    pub fn lookup_named(
+        &self,
+        receiver: ObjectRef,
+        name: StringRef,
+    ) -> Result<Option<NamedProperty>, HeapError> {
+        let receiver_shape = self
+            .get_object(receiver)
+            .ok_or(HeapError::InvalidReference)?
+            .shape_id;
+        let mut current = receiver;
+        let mut depth = 0u16;
+        let mut visited = BTreeSet::new();
+        loop {
+            if !visited.insert(current) {
+                return Err(HeapError::PrototypeCycle);
+            }
+            let object = self
+                .get_object(current)
+                .ok_or(HeapError::InvalidReference)?;
+            if let Some(location) = self.shapes.lookup(object.shape_id, name) {
+                return Ok(Some(NamedProperty {
+                    receiver_shape,
+                    holder_depth: depth,
+                    slot: location.slot_offset,
+                    value: object
+                        .get_slot(location.slot_offset)
+                        .unwrap_or(VALUE_UNDEFINED),
+                    prototype_epoch: self.shapes.prototype_epoch(),
+                }));
+            }
+            if object.prototype.is_null() {
+                return Ok(None);
+            }
+            current = object
+                .prototype
+                .as_object()
+                .ok_or(HeapError::InvalidPrototype)?;
+            depth = depth
+                .checked_add(1)
+                .ok_or(HeapError::ReferenceSpaceExhausted)?;
+        }
+    }
+
+    /// Loads a previously resolved named-property cache case.
+    ///
+    /// A mismatching receiver Shape or Prototype epoch is a normal cache miss.
+    /// Invalid references along an otherwise matching chain are heap errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a stale object or malformed Prototype value.
+    pub fn load_cached_named(
+        &self,
+        receiver: ObjectRef,
+        receiver_shape: ShapeId,
+        holder_depth: u16,
+        slot: u32,
+        prototype_epoch: u64,
+    ) -> Result<Option<Value>, HeapError> {
+        let object = self
+            .get_object(receiver)
+            .ok_or(HeapError::InvalidReference)?;
+        if object.shape_id != receiver_shape
+            || self.shapes.prototype_epoch() != Some(prototype_epoch)
+        {
+            return Ok(None);
+        }
+        let mut current = receiver;
+        for _ in 0..holder_depth {
+            let prototype = self
+                .get_object(current)
+                .ok_or(HeapError::InvalidReference)?
+                .prototype;
+            current = prototype.as_object().ok_or(HeapError::InvalidPrototype)?;
+        }
+        Ok(self
+            .get_object(current)
+            .and_then(|holder| holder.get_slot(slot)))
     }
 
     /// Stores a named-property slot and records an Old-to-Young edge.

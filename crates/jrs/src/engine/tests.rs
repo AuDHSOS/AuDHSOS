@@ -157,10 +157,84 @@ fn end_to_end_vm_execution_with_inline_caches() {
 
     // Verify that both getter ICs became monomorphic
     let ic_x = feedback.get_named_ic(slot_get_x).unwrap();
-    assert!(matches!(ic_x, NamedAccessIC::Monomorphic { .. }));
+    assert!(matches!(ic_x, NamedAccessIC::Monomorphic(_)));
 
     let ic_y = feedback.get_named_ic(slot_get_y).unwrap();
-    assert!(matches!(ic_y, NamedAccessIC::Monomorphic { .. }));
+    assert!(matches!(ic_y, NamedAccessIC::Monomorphic(_)));
+}
+
+#[test]
+fn inherited_named_access_uses_depth_cache_and_invalidates_on_mutation() {
+    let mut heap = GenerationalHeap::new();
+    let root_shape = heap.shapes.root_shape();
+    let name = heap.strings.intern("answer").unwrap();
+    let (prototype_shape, slot) =
+        heap.shapes
+            .transition(root_shape, name, PropertyFlags::ordinary_data());
+    let first_prototype = heap.allocate_object(root_shape, VALUE_NULL).unwrap();
+    heap.set_object_shape(first_prototype, prototype_shape)
+        .unwrap();
+    heap.set_object_slot(first_prototype, slot, Value::from_smi(41))
+        .unwrap();
+    let receiver = heap
+        .allocate_object(root_shape, Value::from_object(first_prototype))
+        .unwrap();
+
+    let mut code = BytecodeFunction::new(1, 0);
+    let feedback_slot = code.allocate_feedback_slot();
+    code.constants.push(Value::from_object(receiver));
+    code.emit(Instruction::LdaConstant(0));
+    code.emit(Instruction::Star(Reg(0)));
+    code.emit(Instruction::GetNamed {
+        obj: Reg(0),
+        name,
+        slot: feedback_slot,
+    });
+    code.emit(Instruction::Return);
+    let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+    let mut vm = RegisterVM::new(100);
+
+    assert_eq!(
+        vm.run(&code, &mut feedback, &mut heap).unwrap().as_smi(),
+        Some(41)
+    );
+    assert!(matches!(
+        feedback.get_named_ic(feedback_slot),
+        Some(NamedAccessIC::Monomorphic(case)) if case.holder_depth == 1
+    ));
+
+    let second_prototype = heap.allocate_object(root_shape, VALUE_NULL).unwrap();
+    heap.set_object_shape(second_prototype, prototype_shape)
+        .unwrap();
+    heap.set_object_slot(second_prototype, slot, Value::from_smi(42))
+        .unwrap();
+    heap.set_object_prototype(receiver, Value::from_object(second_prototype))
+        .unwrap();
+
+    assert_eq!(
+        vm.run(&code, &mut feedback, &mut heap).unwrap().as_smi(),
+        Some(42)
+    );
+}
+
+#[test]
+fn prototype_updates_reject_cycles_and_non_objects() {
+    let mut heap = GenerationalHeap::new();
+    let root_shape = heap.shapes.root_shape();
+    let parent = heap.allocate_object(root_shape, VALUE_NULL).unwrap();
+    let child = heap
+        .allocate_object(root_shape, Value::from_object(parent))
+        .unwrap();
+
+    assert_eq!(
+        heap.set_object_prototype(parent, Value::from_object(child)),
+        Err(super::heap::HeapError::PrototypeCycle)
+    );
+    assert_eq!(
+        heap.set_object_prototype(parent, Value::from_smi(1)),
+        Err(super::heap::HeapError::InvalidPrototype)
+    );
+    assert_eq!(heap.get_object(parent).unwrap().prototype, VALUE_NULL);
 }
 
 #[test]

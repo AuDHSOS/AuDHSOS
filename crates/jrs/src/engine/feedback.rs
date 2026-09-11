@@ -15,6 +15,19 @@ use alloc::vec::Vec;
 /// Maximum number of shapes handled inline in a polymorphic cache before degrading.
 pub const POLYMORPHIC_LIMIT: usize = 4;
 
+/// Cacheable resolution of one named property for one receiver Shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NamedAccessCase {
+    /// Shape observed on the receiver object.
+    pub receiver_shape: ShapeId,
+    /// Number of `[[Prototype]]` edges from receiver to the property holder.
+    pub holder_depth: u16,
+    /// Property slot in the holder object.
+    pub slot: u32,
+    /// Prototype-validity epoch at resolution time.
+    pub prototype_epoch: u64,
+}
+
 /// State machine for a named property access Inline Cache site (`o.x` / `o.x = v`).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub enum NamedAccessIC {
@@ -22,14 +35,9 @@ pub enum NamedAccessIC {
     #[default]
     Uninitialized,
     /// Exactly one shape observed. Property load is two instructions: check shape + read slot.
-    Monomorphic {
-        /// Cached `ShapeId`.
-        shape: ShapeId,
-        /// Cached slot offset.
-        slot: u32,
-    },
+    Monomorphic(NamedAccessCase),
     /// A small sequence of shapes observed.
-    Polymorphic(Vec<(ShapeId, u32)>),
+    Polymorphic(Vec<NamedAccessCase>),
     /// Too many shapes observed; fall back to general lookup.
     Megamorphic,
 }
@@ -37,19 +45,26 @@ pub enum NamedAccessIC {
 impl NamedAccessIC {
     /// Fast path: attempts to read the cached slot for `actual_shape`.
     #[must_use]
-    pub fn try_get_slot(&self, actual_shape: ShapeId) -> Option<u32> {
+    pub fn try_get(
+        &self,
+        actual_shape: ShapeId,
+        prototype_epoch: Option<u64>,
+    ) -> Option<NamedAccessCase> {
+        let prototype_epoch = prototype_epoch?;
         match self {
-            Self::Monomorphic { shape, slot } => {
-                if *shape == actual_shape {
-                    Some(*slot)
+            Self::Monomorphic(case) => {
+                if case.receiver_shape == actual_shape && case.prototype_epoch == prototype_epoch {
+                    Some(*case)
                 } else {
                     None
                 }
             }
             Self::Polymorphic(entries) => {
-                for &(shape, slot) in entries {
-                    if shape == actual_shape {
-                        return Some(slot);
+                for case in entries {
+                    if case.receiver_shape == actual_shape
+                        && case.prototype_epoch == prototype_epoch
+                    {
+                        return Some(*case);
                     }
                 }
                 None
@@ -59,29 +74,28 @@ impl NamedAccessIC {
     }
 
     /// Updates the IC state after a successful slow-path property resolution.
-    pub fn record_shape(&mut self, shape: ShapeId, slot: u32) {
+    pub fn record(&mut self, case: NamedAccessCase) {
         match self {
             Self::Uninitialized => {
-                *self = Self::Monomorphic { shape, slot };
+                *self = Self::Monomorphic(case);
             }
-            Self::Monomorphic {
-                shape: old_shape,
-                slot: old_slot,
-            } => {
-                if *old_shape == shape {
+            Self::Monomorphic(old) => {
+                if old.receiver_shape == case.receiver_shape {
+                    *old = case;
                     return;
                 }
-                let entries = alloc::vec![(*old_shape, *old_slot), (shape, slot)];
+                let entries = alloc::vec![*old, case];
                 *self = Self::Polymorphic(entries);
             }
             Self::Polymorphic(entries) => {
-                for &(s, _) in entries.iter() {
-                    if s == shape {
+                for old in entries.iter_mut() {
+                    if old.receiver_shape == case.receiver_shape {
+                        *old = case;
                         return;
                     }
                 }
                 if entries.len() < POLYMORPHIC_LIMIT {
-                    entries.push((shape, slot));
+                    entries.push(case);
                 } else {
                     *self = Self::Megamorphic;
                 }
@@ -157,25 +171,40 @@ mod tests {
     fn named_ic_monomorphic_to_polymorphic_transition() {
         let mut ic = NamedAccessIC::default();
         assert_eq!(ic, NamedAccessIC::Uninitialized);
-        assert_eq!(ic.try_get_slot(ShapeId(1)), None);
+        assert_eq!(ic.try_get(ShapeId(1), Some(0)), None);
 
         // First execution -> Monomorphic
-        ic.record_shape(ShapeId(1), 0);
-        assert!(matches!(
-            ic,
-            NamedAccessIC::Monomorphic {
-                shape: ShapeId(1),
-                slot: 0
-            }
-        ));
-        assert_eq!(ic.try_get_slot(ShapeId(1)), Some(0));
-        assert_eq!(ic.try_get_slot(ShapeId(2)), None);
+        let first = NamedAccessCase {
+            receiver_shape: ShapeId(1),
+            holder_depth: 0,
+            slot: 0,
+            prototype_epoch: 0,
+        };
+        ic.record(first);
+        assert_eq!(ic, NamedAccessIC::Monomorphic(first));
+        assert_eq!(ic.try_get(ShapeId(1), Some(0)), Some(first));
+        assert_eq!(ic.try_get(ShapeId(1), Some(1)), None);
+        assert_eq!(ic.try_get(ShapeId(1), None), None);
+        assert_eq!(ic.try_get(ShapeId(2), Some(0)), None);
+
+        let refreshed = NamedAccessCase {
+            prototype_epoch: 1,
+            ..first
+        };
+        ic.record(refreshed);
+        assert_eq!(ic, NamedAccessIC::Monomorphic(refreshed));
 
         // Second shape -> Polymorphic
-        ic.record_shape(ShapeId(2), 1);
+        let second = NamedAccessCase {
+            receiver_shape: ShapeId(2),
+            holder_depth: 1,
+            slot: 1,
+            prototype_epoch: 0,
+        };
+        ic.record(second);
         assert!(matches!(ic, NamedAccessIC::Polymorphic(_)));
-        assert_eq!(ic.try_get_slot(ShapeId(1)), Some(0));
-        assert_eq!(ic.try_get_slot(ShapeId(2)), Some(1));
-        assert_eq!(ic.try_get_slot(ShapeId(3)), None);
+        assert_eq!(ic.try_get(ShapeId(1), Some(1)), Some(refreshed));
+        assert_eq!(ic.try_get(ShapeId(2), Some(0)), Some(second));
+        assert_eq!(ic.try_get(ShapeId(3), Some(0)), None);
     }
 }

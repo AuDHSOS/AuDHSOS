@@ -75,14 +75,14 @@ pub struct Shape {
     /// Outgoing transitions: property name -> next shape.
     pub transitions: BTreeMap<StringRef, ShapeId>,
     /// Validity cell counter for prototype invalidation.
-    pub validity_epoch: u32,
+    pub validity_epoch: u64,
 }
 
 /// Shape storage, transition tree and validity manager.
 pub struct ShapeTable {
     shapes: Vec<Shape>,
     root_shape: ShapeId,
-    global_validity_epoch: u32,
+    global_validity_epoch: Option<u64>,
 }
 
 impl Default for ShapeTable {
@@ -108,7 +108,7 @@ impl ShapeTable {
         Self {
             shapes,
             root_shape: ShapeId(0),
-            global_validity_epoch: 0,
+            global_validity_epoch: Some(0),
         }
     }
 
@@ -150,7 +150,7 @@ impl ShapeTable {
             slot_offset,
             property_count,
             transitions: BTreeMap::new(),
-            validity_epoch: self.global_validity_epoch,
+            validity_epoch: self.global_validity_epoch.unwrap_or(u64::MAX),
         });
 
         if let Some(parent_shape) = self.shapes.get_mut(current.0 as usize) {
@@ -184,9 +184,18 @@ impl ShapeTable {
             .map_or(0, |s| s.property_count)
     }
 
+    /// Returns the current global Prototype Chain validity epoch.
+    #[must_use]
+    pub const fn prototype_epoch(&self) -> Option<u64> {
+        self.global_validity_epoch
+    }
+
     /// Invalidates all cached prototype assumptions by incrementing the epoch.
     pub const fn invalidate_prototypes(&mut self) {
-        self.global_validity_epoch = self.global_validity_epoch.saturating_add(1);
+        self.global_validity_epoch = match self.global_validity_epoch {
+            Some(epoch) => epoch.checked_add(1),
+            None => None,
+        };
     }
 }
 
@@ -227,5 +236,15 @@ mod tests {
 
         let loc_z = table.lookup(shape2, StringRef::from_parts(3, 0));
         assert!(loc_z.is_none());
+    }
+
+    #[test]
+    fn prototype_epoch_exhaustion_permanently_disables_caching() {
+        let mut table = ShapeTable::new();
+        table.global_validity_epoch = Some(u64::MAX);
+        table.invalidate_prototypes();
+        assert_eq!(table.prototype_epoch(), None);
+        table.invalidate_prototypes();
+        assert_eq!(table.prototype_epoch(), None);
     }
 }

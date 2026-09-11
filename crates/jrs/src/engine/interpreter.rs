@@ -17,7 +17,7 @@
 
 use super::{
     bytecode::{BytecodeFunction, Instruction, Reg},
-    feedback::FeedbackVector,
+    feedback::{FeedbackVector, NamedAccessCase},
     heap::{GenerationalHeap, HeapError},
     shape::{PropertyFlags, ShapeId},
     value::{ObjectRef, VALUE_FALSE, VALUE_NULL, VALUE_TRUE, VALUE_UNDEFINED, Value},
@@ -375,26 +375,41 @@ impl RegisterVM {
                 Instruction::GetNamed { obj, name, slot } => {
                     let target = self.read_reg(obj)?;
                     let oref = target.as_object().ok_or(VMError::TypeError)?;
-                    let js_obj = heap.get_object(oref).ok_or(VMError::TypeError)?;
-                    let shape_id = js_obj.shape_id;
+                    let shape_id = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
+                    let prototype_epoch = heap.shapes.prototype_epoch();
 
                     // Inline cache check
-                    let cached_slot = feedback
+                    let cached = feedback
                         .get_named_ic(slot)
-                        .and_then(|ic| ic.try_get_slot(shape_id));
+                        .and_then(|ic| ic.try_get(shape_id, prototype_epoch));
 
-                    if let Some(slot_idx) = cached_slot {
-                        self.acc = js_obj.get_slot(slot_idx).unwrap_or(VALUE_UNDEFINED);
-                    } else {
-                        // Slow path lookup along Shape chain
-                        if let Some(loc) = heap.shapes.lookup(shape_id, name) {
-                            if let Some(ic) = feedback.get_named_ic_mut(slot) {
-                                ic.record_shape(shape_id, loc.slot_offset);
-                            }
-                            self.acc = js_obj.get_slot(loc.slot_offset).unwrap_or(VALUE_UNDEFINED);
-                        } else {
-                            self.acc = VALUE_UNDEFINED;
+                    if let Some(case) = cached
+                        && let Some(value) = heap.load_cached_named(
+                            oref,
+                            case.receiver_shape,
+                            case.holder_depth,
+                            case.slot,
+                            case.prototype_epoch,
+                        )?
+                    {
+                        self.acc = value;
+                        continue;
+                    }
+
+                    if let Some(property) = heap.lookup_named(oref, name)? {
+                        if let Some(prototype_epoch) = property.prototype_epoch
+                            && let Some(ic) = feedback.get_named_ic_mut(slot)
+                        {
+                            ic.record(NamedAccessCase {
+                                receiver_shape: property.receiver_shape,
+                                holder_depth: property.holder_depth,
+                                slot: property.slot,
+                                prototype_epoch,
+                            });
                         }
+                        self.acc = property.value;
+                    } else {
+                        self.acc = VALUE_UNDEFINED;
                     }
                 }
                 Instruction::SetNamed { obj, name, slot } => {
@@ -416,8 +431,15 @@ impl RegisterVM {
                         let val = self.acc;
                         heap.set_object_shape(oref, new_shape)?;
                         heap.set_object_slot(oref, slot_idx, val)?;
-                        if let Some(ic) = feedback.get_named_ic_mut(slot) {
-                            ic.record_shape(new_shape, slot_idx);
+                        if let Some(prototype_epoch) = heap.shapes.prototype_epoch()
+                            && let Some(ic) = feedback.get_named_ic_mut(slot)
+                        {
+                            ic.record(NamedAccessCase {
+                                receiver_shape: new_shape,
+                                holder_depth: 0,
+                                slot: slot_idx,
+                                prototype_epoch,
+                            });
                         }
                     }
                 }
@@ -572,7 +594,7 @@ mod tests {
         let ic = feedback.get_named_ic(g_slot).unwrap();
         assert!(matches!(
             ic,
-            super::super::feedback::NamedAccessIC::Monomorphic { .. }
+            super::super::feedback::NamedAccessIC::Monomorphic(_)
         ));
     }
 
