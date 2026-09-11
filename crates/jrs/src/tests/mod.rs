@@ -247,6 +247,47 @@ fn loops_control_flow_and_slot_reset() {
 }
 
 #[test]
+fn for_initializer_conditional_honors_the_in_grammar_parameter() {
+    assert_eq!(
+        eval("let a={x:1},n=0;for(true?'x' in a:false;n<1;n++){}n"),
+        Ok(Value::Number(1.0))
+    );
+    assert_eq!(
+        eval("let n=0;for((('x' in {}));n<1;n++){}n"),
+        Ok(Value::Number(1.0))
+    );
+    assert_eq!(
+        eval("let a={x:1},n=0;for(true?(false?0:'x' in a):false;n<1;n++){}n"),
+        Ok(Value::Number(1.0))
+    );
+    assert_eq!(
+        eval("let of=0;for(of;of<1;of++){}of"),
+        Ok(Value::Number(1.0))
+    );
+    assert_eq!(
+        eval("let obj={of:0};for(obj.of;obj.of<1;obj.of++){}obj.of"),
+        Ok(Value::Number(1.0))
+    );
+    assert_eq!(
+        eval("let n=0;for(let of=0;of<1;of++)n++;n"),
+        Ok(Value::Number(1.0))
+    );
+    for source in [
+        "for('x' in {}?0:0;false;);",
+        "for(true?0:'x' in {};false;);",
+        "for(true?0:false?0:'x' in {};false;);",
+    ] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn logical_operators_return_values_and_skip_effects() {
     for (source, expected) in [
         ("0 || 4", Value::Number(4.0)),

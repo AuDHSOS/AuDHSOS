@@ -21,7 +21,7 @@ pub(crate) enum Unary {
     Delete,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Binary {
     Pow,
     Add,
@@ -221,6 +221,11 @@ pub(crate) enum Stmt {
     },
 }
 
+enum ForDeclaration {
+    Classic(Box<Stmt>),
+    InOf(BindingPattern, Option<bool>),
+}
+
 pub(crate) fn parse(source: &str, limits: Limits) -> Result<Vec<Stmt>, Error> {
     let tokens = lexer::lex(source, limits)?;
     let mut parser = Parser {
@@ -236,6 +241,7 @@ pub(crate) fn parse(source: &str, limits: Limits) -> Result<Vec<Stmt>, Error> {
         strict: false,
         async_context: false,
         super_context: SuperContext::None,
+        allow_in: true,
     };
     parser.strict = parser.strict_prologue();
     parser.statements(false)
@@ -293,6 +299,7 @@ struct Parser {
     strict: bool,
     async_context: bool,
     super_context: SuperContext,
+    allow_in: bool,
 }
 
 impl Parser {
@@ -310,6 +317,7 @@ impl Parser {
             strict: false,
             async_context: false,
             super_context: SuperContext::None,
+            allow_in: true,
         })
     }
     fn source_since(&self, start: usize) -> Result<Source, Error> {
@@ -466,15 +474,22 @@ impl Parser {
         }
         if self.eat("for") {
             self.need("(")?;
-            if self.for_in_head() {
-                return self.for_in();
-            }
-            let init = if self.is("let") || self.is("const") || self.is("var") {
-                self.declaration()?
+            let declaration = self.is("let") || self.is("const") || self.is("var");
+            let init = if declaration {
+                match self.with_in(false, Self::for_declaration)? {
+                    ForDeclaration::Classic(statement) => *statement,
+                    ForDeclaration::InOf(pattern, kind) => {
+                        return self.for_in(Some((pattern, kind)), None);
+                    }
+                }
             } else if self.is(";") {
                 Stmt::Empty
             } else {
-                Stmt::Expr(self.sequence()?)
+                let target = self.with_in(false, Self::sequence)?;
+                if self.is("in") || self.is("of") {
+                    return self.for_in(None, Some(target));
+                }
+                Stmt::Expr(target)
             };
             self.need(";")?;
             let cond = if self.is(";") {
@@ -550,42 +565,29 @@ impl Parser {
         Ok(Stmt::Switch(value, clauses))
     }
 
-    fn for_in_head(&self) -> bool {
-        let mut depth = 0usize;
-        for token in self.tokens.iter().skip(self.at) {
-            match &token.kind {
-                Kind::Punct("(" | "[" | "{") => depth = depth.saturating_add(1),
-                Kind::Punct(")" | ";") if depth == 0 => return false,
-                Kind::Punct(")" | "]" | "}") => depth = depth.saturating_sub(1),
-                Kind::Word(name) if depth == 0 && matches!(name.as_str(), "in" | "of") => {
-                    return true;
-                }
-                _ => {}
-            }
-        }
-        false
+    fn with_in<T>(
+        &mut self,
+        allow_in: bool,
+        parse: impl FnOnce(&mut Self) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let outer = core::mem::replace(&mut self.allow_in, allow_in);
+        let result = parse(self);
+        self.allow_in = outer;
+        result
     }
 
-    fn for_in(&mut self) -> Result<Stmt, Error> {
-        let (binding, target) = if self.is("var") || self.is("let") || self.is("const") {
-            let kind = if self.eat("var") {
-                None
-            } else {
-                Some(self.eat("let"))
-            };
-            if kind == Some(false) {
-                self.need("const")?;
-            }
-            (Some((self.binding_pattern()?, kind)), None)
-        } else {
-            let target = self.expression(8)?;
+    fn for_in(
+        &mut self,
+        binding: Option<(BindingPattern, Option<bool>)>,
+        target: Option<Expr>,
+    ) -> Result<Stmt, Error> {
+        if let Some(target) = &target {
             if let Some(name) = target.reference_name() {
                 self.assignment_name(name)?;
             } else if target.member().is_none() {
                 return Err(self.error("invalid for-in assignment target"));
             }
-            (None, Some(target))
-        };
+        }
         let of = self.eat("of");
         if !of {
             self.need("in")?;
@@ -621,6 +623,53 @@ impl Parser {
             object,
             body: Box::new(body),
         })
+    }
+
+    fn for_declaration(&mut self) -> Result<ForDeclaration, Error> {
+        let var = self.eat("var");
+        let mutable = var || self.eat("let");
+        if !mutable {
+            self.need("const")?;
+        }
+        let kind = if var { None } else { Some(mutable) };
+        let pattern = self.binding_pattern()?;
+        if self.is("in") || self.is("of") {
+            return Ok(ForDeclaration::InOf(pattern, kind));
+        }
+        let BindingPattern::Name(name) = pattern else {
+            return Err(self.error("destructuring declaration is not implemented yet"));
+        };
+        let initializer = if self.eat("=") {
+            Some(self.expression(0)?)
+        } else {
+            None
+        };
+        if !mutable && initializer.is_none() {
+            return Err(self.error("const requires an initializer"));
+        }
+        let mut bindings = alloc::vec![(name, mutable, initializer)];
+        while self.eat(",") {
+            let name = self.name()?;
+            let initializer = if self.eat("=") {
+                Some(self.expression(0)?)
+            } else {
+                None
+            };
+            if !mutable && initializer.is_none() {
+                return Err(self.error("const requires an initializer"));
+            }
+            bindings.push((name, mutable, initializer));
+        }
+        Ok(ForDeclaration::Classic(Box::new(if var {
+            Stmt::Var(
+                bindings
+                    .into_iter()
+                    .map(|(name, _, initializer)| (name, initializer))
+                    .collect(),
+            )
+        } else {
+            Stmt::Declare(bindings)
+        })))
     }
 
     fn binding_pattern(&mut self) -> Result<BindingPattern, Error> {
@@ -797,7 +846,7 @@ impl Parser {
             let offset = left.offset;
             if min == 0 && self.is("?") {
                 self.need("?")?;
-                let yes = self.expression(0)?;
+                let yes = self.with_in(true, |parser| parser.expression(0))?;
                 self.need(":")?;
                 let no = self.expression(0)?;
                 let depth = left.depth.max(yes.depth).max(no.depth).saturating_add(1);
@@ -847,6 +896,9 @@ impl Parser {
             let Some((op, precedence)) = binary(&self.token()?.kind) else {
                 break;
             };
+            if op == Binary::In && !self.allow_in {
+                break;
+            }
             if precedence < min {
                 break;
             }
@@ -991,7 +1043,7 @@ impl Parser {
                 self.make(ExprKind::Name(name), 1, token.offset)?
             }
             Kind::Punct("(") => {
-                let expr = self.sequence()?;
+                let expr = self.with_in(true, Self::sequence)?;
                 self.need(")")?;
                 let depth = expr.depth.saturating_add(1);
                 self.make(ExprKind::Group(Box::new(expr)), depth, token.offset)?
@@ -1429,7 +1481,7 @@ impl Parser {
 
     fn parameters_without_await(&mut self) -> Result<Vec<Parameter>, Error> {
         let outer = core::mem::replace(&mut self.async_context, false);
-        let result = self.parameters();
+        let result = self.with_in(true, Self::parameters);
         self.async_context = outer;
         result
     }
@@ -1461,7 +1513,7 @@ impl Parser {
             core::mem::replace(&mut self.async_context, async_kind == AsyncKind::Async);
         let body = if self.eat("{") {
             self.strict |= self.strict_prologue();
-            self.statements(true)
+            self.with_in(true, |parser| parser.statements(true))
         } else if concise {
             self.expression(0)
                 .map(|expr| alloc::vec![Stmt::Return(Some(expr))])
