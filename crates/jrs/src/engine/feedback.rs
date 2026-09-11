@@ -133,19 +133,57 @@ pub enum BinaryOpFeedback {
     Generic,
 }
 
+/// Monomorphic or bounded polymorphic bytecode-function targets observed at a call site.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum CallIC {
+    /// The call site has not executed yet.
+    #[default]
+    Uninitialized,
+    /// Exactly one bytecode function has been observed.
+    Monomorphic(u32),
+    /// A bounded set of bytecode functions has been observed.
+    Polymorphic(Vec<u32>),
+    /// More targets were observed than the bounded cache retains.
+    Megamorphic,
+}
+
+impl CallIC {
+    /// Records one bytecode-function target.
+    pub fn record(&mut self, code_id: u32) {
+        match self {
+            Self::Uninitialized => *self = Self::Monomorphic(code_id),
+            Self::Monomorphic(current) if *current == code_id => {}
+            Self::Monomorphic(current) => {
+                *self = Self::Polymorphic(alloc::vec![*current, code_id]);
+            }
+            Self::Polymorphic(targets) if targets.contains(&code_id) => {}
+            Self::Polymorphic(targets) if targets.len() < POLYMORPHIC_LIMIT => {
+                targets.push(code_id);
+            }
+            Self::Polymorphic(_) => *self = Self::Megamorphic,
+            Self::Megamorphic => {}
+        }
+    }
+}
+
 /// Dedicated feedback slot in a function's `FeedbackVector`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FeedbackSlot {
+    /// Slot kind has not yet been selected by its first executing bytecode site.
+    Uninitialized,
     /// Named property access IC.
     NamedAccess(NamedAccessIC),
     /// Binary operator type feedback.
     BinaryOp(BinaryOpFeedback),
+    /// Call target feedback.
+    Call(CallIC),
 }
 
 /// Mutable runtime feedback vector associated with a compiled function.
 #[derive(Clone, Debug, Default)]
 pub struct FeedbackVector {
     slots: Vec<FeedbackSlot>,
+    functions: Vec<FeedbackVector>,
 }
 
 impl FeedbackVector {
@@ -154,9 +192,24 @@ impl FeedbackVector {
     pub fn new(count: u16) -> Self {
         let mut slots = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            slots.push(FeedbackSlot::NamedAccess(NamedAccessIC::Uninitialized));
+            slots.push(FeedbackSlot::Uninitialized);
         }
-        Self { slots }
+        Self {
+            slots,
+            functions: Vec::new(),
+        }
+    }
+
+    /// Allocates feedback for a root bytecode unit and its flat function table.
+    #[must_use]
+    pub fn for_code(code: &super::bytecode::BytecodeFunction) -> Self {
+        let mut vector = Self::new(code.feedback_slot_count);
+        vector.functions = code
+            .functions
+            .iter()
+            .map(|function| Self::new(function.feedback_slot_count))
+            .collect();
+        vector
     }
 
     /// Returns the number of allocated feedback slots.
@@ -173,8 +226,12 @@ impl FeedbackVector {
 
     /// Retrieves a mutable reference to a named access IC slot.
     pub fn get_named_ic_mut(&mut self, slot: u16) -> Option<&mut NamedAccessIC> {
-        match self.slots.get_mut(slot as usize) {
-            Some(FeedbackSlot::NamedAccess(ic)) => Some(ic),
+        let slot = self.slots.get_mut(slot as usize)?;
+        if matches!(slot, FeedbackSlot::Uninitialized) {
+            *slot = FeedbackSlot::NamedAccess(NamedAccessIC::Uninitialized);
+        }
+        match slot {
+            FeedbackSlot::NamedAccess(ic) => Some(ic),
             _ => None,
         }
     }
@@ -184,8 +241,55 @@ impl FeedbackVector {
     pub fn get_named_ic(&self, slot: u16) -> Option<&NamedAccessIC> {
         match self.slots.get(slot as usize) {
             Some(FeedbackSlot::NamedAccess(ic)) => Some(ic),
-            _ => None,
+            Some(
+                FeedbackSlot::Uninitialized | FeedbackSlot::BinaryOp(_) | FeedbackSlot::Call(_),
+            )
+            | None => None,
         }
+    }
+
+    /// Records a bytecode-function target in a call feedback slot.
+    pub fn record_call(&mut self, slot: u16, code_id: u32) -> Option<()> {
+        let slot = self.slots.get_mut(slot as usize)?;
+        if matches!(slot, FeedbackSlot::Uninitialized) {
+            *slot = FeedbackSlot::Call(CallIC::Uninitialized);
+        }
+        let FeedbackSlot::Call(call) = slot else {
+            return None;
+        };
+        call.record(code_id);
+        Some(())
+    }
+
+    /// Returns immutable call feedback for one slot.
+    #[must_use]
+    pub fn get_call_ic(&self, slot: u16) -> Option<&CallIC> {
+        match self.slots.get(slot as usize) {
+            Some(FeedbackSlot::Call(call)) => Some(call),
+            Some(
+                FeedbackSlot::Uninitialized
+                | FeedbackSlot::NamedAccess(_)
+                | FeedbackSlot::BinaryOp(_),
+            )
+            | None => None,
+        }
+    }
+
+    pub(crate) fn function_mut(&mut self, code_id: u32) -> Option<&mut Self> {
+        self.functions.get_mut(code_id as usize)
+    }
+
+    pub(crate) fn matches_code(&self, code: &super::bytecode::BytecodeFunction) -> bool {
+        self.slots.len() == usize::from(code.feedback_slot_count)
+            && self.functions.len() == code.functions.len()
+            && self
+                .functions
+                .iter()
+                .zip(&code.functions)
+                .all(|(feedback, function)| {
+                    feedback.slots.len() == usize::from(function.feedback_slot_count)
+                        && feedback.functions.is_empty()
+                })
     }
 }
 

@@ -59,6 +59,18 @@ pub enum VerificationError {
         /// Instruction offset.
         pc: usize,
     },
+    /// A closure creation references a function outside the shared code table.
+    FunctionOutOfBounds {
+        /// Instruction offset.
+        pc: usize,
+        /// Invalid function index.
+        index: u32,
+    },
+    /// An entry in the shared flat function table carries an unreachable nested table.
+    NestedFunctionTable {
+        /// Invalid top-level function index.
+        index: u32,
+    },
     /// A relative branch target is outside the instruction array.
     JumpOutOfBounds {
         /// Instruction offset.
@@ -190,6 +202,8 @@ pub enum Instruction {
     CreateObject,
     /// Creates an empty array `[]` in `acc` with initial capacity.
     CreateArray(u32),
+    /// Creates a callable closure for one entry in the shared function table.
+    CreateClosure(u32),
     /// Call function: `acc = func(arg_start..arg_start + count)` (uses feedback slot).
     Call {
         /// Callable function register.
@@ -214,6 +228,8 @@ pub struct BytecodeFunction {
     pub constants: Vec<Value>,
     /// Heap-independent UTF-16 constants referenced by `LdaString`.
     pub string_constants: Vec<Vec<u16>>,
+    /// Heap-independent nested function code addressed by `CreateClosure`.
+    pub functions: Vec<BytecodeFunction>,
     /// Number of local registers required in the stack frame.
     pub register_count: u16,
     /// Number of formal parameters expected.
@@ -234,6 +250,7 @@ impl BytecodeFunction {
             instructions: Vec::new(),
             constants: Vec::new(),
             string_constants: Vec::new(),
+            functions: Vec::new(),
             register_count,
             parameter_count,
             feedback_slot_count: 0,
@@ -288,6 +305,19 @@ impl BytecodeFunction {
     /// is checked, including unreachable instructions, before the control-flow
     /// traversal begins.
     pub fn verify(&self) -> Result<(), VerificationError> {
+        self.verify_unit(&self.functions)?;
+        for (index, function) in self.functions.iter().enumerate() {
+            if !function.functions.is_empty() {
+                return Err(VerificationError::NestedFunctionTable {
+                    index: u32::try_from(index).unwrap_or(u32::MAX),
+                });
+            }
+            function.verify_unit(&self.functions)?;
+        }
+        Ok(())
+    }
+
+    fn verify_unit(&self, functions: &[Self]) -> Result<(), VerificationError> {
         if self.instructions.is_empty() {
             return Err(VerificationError::EmptyFunction);
         }
@@ -304,7 +334,7 @@ impl BytecodeFunction {
             }
         }
         for (pc, instruction) in self.instructions.iter().enumerate() {
-            self.verify_instruction(pc, *instruction)?;
+            self.verify_instruction(pc, *instruction, functions)?;
         }
 
         let mut seen = alloc::vec![false; self.instructions.len()];
@@ -339,6 +369,7 @@ impl BytecodeFunction {
         &self,
         pc: usize,
         instruction: Instruction,
+        functions: &[Self],
     ) -> Result<(), VerificationError> {
         let register = match instruction {
             Instruction::Ldar(register)
@@ -400,6 +431,16 @@ impl BytecodeFunction {
             Instruction::LdaString(index) => {
                 if usize::from(index) >= self.string_constants.len() {
                     return Err(VerificationError::StringConstantOutOfBounds { pc, index });
+                }
+                None
+            }
+            Instruction::CreateClosure(index) => {
+                if usize::try_from(index)
+                    .ok()
+                    .as_ref()
+                    .is_none_or(|index| *index >= functions.len())
+                {
+                    return Err(VerificationError::FunctionOutOfBounds { pc, index });
                 }
                 None
             }
@@ -578,6 +619,27 @@ mod tests {
         assert_eq!(
             jump.verify(),
             Err(VerificationError::JumpOutOfBounds { pc: 0 })
+        );
+
+        let mut closure = BytecodeFunction::new(0, 0);
+        closure.emit(Instruction::CreateClosure(0));
+        closure.emit(Instruction::Return);
+        assert_eq!(
+            closure.verify(),
+            Err(VerificationError::FunctionOutOfBounds { pc: 0, index: 0 })
+        );
+
+        let mut root = BytecodeFunction::new(0, 0);
+        root.emit(Instruction::Return);
+        let mut nested = BytecodeFunction::new(0, 0);
+        nested.emit(Instruction::Return);
+        let mut unreachable = BytecodeFunction::new(0, 0);
+        unreachable.emit(Instruction::Return);
+        nested.functions.push(unreachable);
+        root.functions.push(nested);
+        assert_eq!(
+            root.verify(),
+            Err(VerificationError::NestedFunctionTable { index: 0 })
         );
     }
 

@@ -36,6 +36,8 @@ pub enum VMError {
     OutOfFuel,
     /// Invalid register access.
     InvalidRegister,
+    /// Active bytecode calls exceed the configured frame limit.
+    CallStackOverflow,
     /// Operand stack limit exceeded.
     StackOverflow,
     /// A string result exceeds the configured UTF-16 code-unit limit.
@@ -69,6 +71,8 @@ pub struct FrameHeader {
     pub caller_fp: usize,
     /// Program counter to resume in caller.
     pub return_pc: usize,
+    /// Bytecode function active in the caller; `None` denotes the root unit.
+    pub caller_code_id: Option<u32>,
 }
 
 /// Contiguous register-based virtual machine executor.
@@ -87,6 +91,10 @@ pub struct RegisterVM {
     string_units_limit: usize,
     /// Maximum number of own properties on one object.
     property_limit: usize,
+    /// Preallocated call-frame headers; pushes never grow this allocation.
+    frames: Vec<FrameHeader>,
+    /// Maximum simultaneously active bytecode calls.
+    call_frame_limit: usize,
 }
 
 impl Default for RegisterVM {
@@ -119,6 +127,8 @@ impl RegisterVM {
             operand_stack_limit,
             string_units_limit: usize::MAX,
             property_limit: usize::MAX,
+            frames: Vec::with_capacity(register_capacity),
+            call_frame_limit: register_capacity,
         }
     }
 
@@ -130,6 +140,11 @@ impl RegisterVM {
     /// Updates the maximum number of own properties on one object.
     pub(crate) const fn set_property_limit(&mut self, limit: usize) {
         self.property_limit = limit;
+    }
+
+    /// Updates the maximum simultaneously active bytecode calls.
+    pub(crate) const fn set_call_frame_limit(&mut self, limit: usize) {
+        self.call_frame_limit = limit;
     }
 
     /// Reads a register relative to the active frame pointer.
@@ -160,7 +175,7 @@ impl RegisterVM {
             .ok_or(VMError::StackOverflow)?;
         let registers = self
             .stack
-            .get_mut(self.fp..frame_end)
+            .get_mut(..frame_end)
             .ok_or(VMError::StackOverflow)?;
         heap.scavenge_with_roots(registers, &mut self.acc)?;
         Ok(())
@@ -189,6 +204,21 @@ impl RegisterVM {
     ) -> Result<ObjectRef, VMError> {
         loop {
             match heap.allocate_array(length) {
+                Ok(reference) => return Ok(reference),
+                Err(HeapError::NurseryFull) => self.collect_young(code, heap)?,
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    fn allocate_function(
+        &mut self,
+        code: &BytecodeFunction,
+        heap: &mut GenerationalHeap,
+        code_id: u32,
+    ) -> Result<ObjectRef, VMError> {
+        loop {
+            match heap.allocate_function(code_id) {
                 Ok(reference) => return Ok(reference),
                 Err(HeapError::NurseryFull) => self.collect_young(code, heap)?,
                 Err(error) => return Err(error.into()),
@@ -324,8 +354,10 @@ impl RegisterVM {
         feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
     ) -> Result<Value, VMError> {
+        self.fp = 0;
+        self.frames.clear();
         code.verify().map_err(VMError::InvalidBytecode)?;
-        if feedback.len() != usize::from(code.feedback_slot_count) {
+        if !feedback.matches_code(code) {
             return Err(VMError::InvalidFeedbackVector);
         }
         if code.entry_stack_requirement > self.operand_stack_limit {
@@ -336,7 +368,7 @@ impl RegisterVM {
             .checked_sub(code.entry_fuel_cost)
             .ok_or(VMError::OutOfFuel)?;
         let mut pc: usize = 0;
-        let instructions = &code.instructions;
+        let mut current_code_id = None;
         let frame_end = self
             .fp
             .checked_add(code.register_count as usize)
@@ -360,24 +392,32 @@ impl RegisterVM {
         self.acc = VALUE_UNDEFINED;
 
         loop {
-            let Some(&inst) = instructions.get(pc) else {
+            let active_code = code_unit(code, current_code_id).ok_or(VMError::InvalidBytecode(
+                VerificationError::FunctionOutOfBounds {
+                    pc,
+                    index: current_code_id.unwrap_or(u32::MAX),
+                },
+            ))?;
+            let Some(&inst) = active_code.instructions.get(pc) else {
                 return Err(VMError::UnexpectedEnd);
             };
             pc = pc.saturating_add(1);
+            let active_feedback = feedback_unit_mut(feedback, current_code_id)
+                .ok_or(VMError::InvalidFeedbackVector)?;
 
             match inst {
                 Instruction::LdaSmi(val) => {
                     self.acc = Value::from_smi(val);
                 }
                 Instruction::LdaConstant(idx) => {
-                    self.acc = code
+                    self.acc = active_code
                         .constants
                         .get(idx as usize)
                         .copied()
                         .ok_or(VMError::InvalidRegister)?;
                 }
                 Instruction::LdaString(index) => {
-                    let units = code
+                    let units = active_code
                         .string_constants
                         .get(index as usize)
                         .ok_or(VMError::InvalidRegister)?;
@@ -569,7 +609,7 @@ impl RegisterVM {
                     }
                 }
                 Instruction::GetNamed { obj, name, slot } => {
-                    let name = code
+                    let name = active_code
                         .string_constants
                         .get(name as usize)
                         .ok_or(VMError::InvalidRegister)?;
@@ -580,7 +620,7 @@ impl RegisterVM {
                     let prototype_epoch = heap.shapes.prototype_epoch();
 
                     // Inline cache check
-                    let cached = feedback
+                    let cached = active_feedback
                         .get_named_ic(slot)
                         .and_then(|ic| ic.try_get(name, shape_id, prototype_epoch));
 
@@ -599,7 +639,7 @@ impl RegisterVM {
                     }
 
                     if let Some(property) = heap.lookup_named(oref, name)? {
-                        if let Some(ic) = feedback.get_named_ic_mut(slot) {
+                        if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
                             ic.record(NamedAccessCase {
                                 name,
                                 receiver_shape: property.receiver_shape,
@@ -615,7 +655,7 @@ impl RegisterVM {
                     }
                 }
                 Instruction::SetNamed { obj, name, slot } => {
-                    let name = code
+                    let name = active_code
                         .string_constants
                         .get(name as usize)
                         .ok_or(VMError::InvalidRegister)?;
@@ -625,7 +665,7 @@ impl RegisterVM {
                     let current_shape = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
                     let prototype_epoch = heap.shapes.prototype_epoch();
 
-                    let cached = feedback
+                    let cached = active_feedback
                         .get_named_ic(slot)
                         .and_then(|ic| ic.try_get(name, current_shape, prototype_epoch));
                     if let Some(case) = cached
@@ -640,7 +680,7 @@ impl RegisterVM {
                     if let Some(loc) = heap.shapes.lookup(current_shape, name) {
                         let val = self.acc;
                         heap.set_object_slot(oref, loc.slot_offset, val)?;
-                        if let Some(ic) = feedback.get_named_ic_mut(slot) {
+                        if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
                             ic.record(NamedAccessCase {
                                 name,
                                 receiver_shape: current_shape,
@@ -665,7 +705,7 @@ impl RegisterVM {
                         let val = self.acc;
                         heap.set_object_shape(oref, new_shape)?;
                         heap.set_object_slot(oref, slot_idx, val)?;
-                        if let Some(ic) = feedback.get_named_ic_mut(slot) {
+                        if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
                             ic.record(NamedAccessCase {
                                 name,
                                 receiver_shape: new_shape,
@@ -704,7 +744,7 @@ impl RegisterVM {
                         };
                         let shape_id = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
                         let prototype_epoch = heap.shapes.prototype_epoch();
-                        let cached = feedback
+                        let cached = active_feedback
                             .get_named_ic(slot)
                             .and_then(|ic| ic.try_get(name, shape_id, prototype_epoch));
                         if let Some(case) = cached
@@ -721,7 +761,7 @@ impl RegisterVM {
                             continue;
                         }
                         if let Some(property) = heap.lookup_named(oref, name)? {
-                            if let Some(ic) = feedback.get_named_ic_mut(slot) {
+                            if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
                                 ic.record(NamedAccessCase {
                                     name,
                                     receiver_shape: property.receiver_shape,
@@ -774,7 +814,7 @@ impl RegisterVM {
                         let current_shape =
                             heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
                         let prototype_epoch = heap.shapes.prototype_epoch();
-                        let cached = feedback
+                        let cached = active_feedback
                             .get_named_ic(slot)
                             .and_then(|ic| ic.try_get(name, current_shape, prototype_epoch));
                         if let Some(case) = cached
@@ -786,7 +826,7 @@ impl RegisterVM {
                         }
                         if let Some(location) = heap.shapes.lookup(current_shape, name) {
                             heap.set_object_slot(oref, location.slot_offset, val)?;
-                            if let Some(ic) = feedback.get_named_ic_mut(slot) {
+                            if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
                                 ic.record(NamedAccessCase {
                                     name,
                                     receiver_shape: current_shape,
@@ -809,7 +849,7 @@ impl RegisterVM {
                             );
                             heap.set_object_shape(oref, new_shape)?;
                             heap.set_object_slot(oref, property_slot, val)?;
-                            if let Some(ic) = feedback.get_named_ic_mut(slot) {
+                            if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
                                 ic.record(NamedAccessCase {
                                     name,
                                     receiver_shape: new_shape,
@@ -831,22 +871,100 @@ impl RegisterVM {
                 }
                 Instruction::CreateObject => {
                     let root_shape = heap.shapes.root_shape();
-                    let oref = self.allocate_object(code, heap, root_shape)?;
+                    let oref = self.allocate_object(active_code, heap, root_shape)?;
                     self.acc = Value::from_object(oref);
                 }
                 Instruction::CreateArray(length) => {
                     if self.property_limit == 0 {
                         return Err(VMError::PropertyLimit);
                     }
-                    let oref = self.allocate_array(code, heap, length)?;
+                    let oref = self.allocate_array(active_code, heap, length)?;
                     self.acc = Value::from_object(oref);
                 }
-                Instruction::Call { .. } => {
-                    // Higher level function calls bridge through contiguous call frames
-                    self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                Instruction::CreateClosure(code_id) => {
+                    let function = self.allocate_function(active_code, heap, code_id)?;
+                    self.acc = Value::from_object(function);
+                }
+                Instruction::Call {
+                    func,
+                    arg_start,
+                    arg_count,
+                    slot,
+                } => {
+                    let function = self.read_reg(func)?;
+                    let function = function.as_object().ok_or(VMError::TypeError)?;
+                    let function = heap.get_object(function).ok_or(VMError::TypeError)?;
+                    let super::object::ObjectKind::Function { code_id, .. } = function.kind else {
+                        return Err(VMError::TypeError);
+                    };
+                    let callee =
+                        code.functions
+                            .get(code_id as usize)
+                            .ok_or(VMError::InvalidBytecode(
+                                VerificationError::FunctionOutOfBounds {
+                                    pc: pc.saturating_sub(1),
+                                    index: code_id,
+                                },
+                            ))?;
+                    if self.frames.len() >= self.call_frame_limit
+                        || self.frames.len() == self.frames.capacity()
+                    {
+                        return Err(VMError::CallStackOverflow);
+                    }
+                    if callee.entry_stack_requirement > self.operand_stack_limit {
+                        return Err(VMError::StackOverflow);
+                    }
+                    self.fuel = self
+                        .fuel
+                        .checked_sub(callee.entry_fuel_cost)
+                        .ok_or(VMError::OutOfFuel)?;
+                    let next_frame = self
+                        .fp
+                        .checked_add(active_code.register_count as usize)
+                        .ok_or(VMError::StackOverflow)?;
+                    let frame_end = next_frame
+                        .checked_add(callee.register_count as usize)
+                        .ok_or(VMError::StackOverflow)?;
+                    self.stack
+                        .get_mut(next_frame..frame_end)
+                        .ok_or(VMError::StackOverflow)?
+                        .fill(VALUE_UNDEFINED);
+                    let argument_start = self
+                        .fp
+                        .checked_add(arg_start.0 as usize)
+                        .ok_or(VMError::StackOverflow)?;
+                    for index in 0..usize::from(arg_count.min(callee.parameter_count)) {
+                        let argument = *self
+                            .stack
+                            .get(argument_start.saturating_add(index))
+                            .ok_or(VMError::InvalidRegister)?;
+                        *self
+                            .stack
+                            .get_mut(next_frame.saturating_add(index))
+                            .ok_or(VMError::StackOverflow)? = argument;
+                    }
+                    active_feedback
+                        .record_call(slot, code_id)
+                        .ok_or(VMError::InvalidFeedbackVector)?;
+                    self.frames.push(FrameHeader {
+                        caller_fp: self.fp,
+                        return_pc: pc,
+                        caller_code_id: current_code_id,
+                    });
+                    self.fp = next_frame;
+                    current_code_id = Some(code_id);
+                    pc = 0;
+                    self.acc = VALUE_UNDEFINED;
                 }
                 Instruction::Return => {
-                    return Ok(self.acc);
+                    if let Some(frame) = self.frames.pop() {
+                        self.fp = frame.caller_fp;
+                        pc = frame.return_pc;
+                        current_code_id = frame.caller_code_id;
+                    } else {
+                        self.fp = 0;
+                        return Ok(self.acc);
+                    }
                 }
             }
         }
@@ -855,6 +973,21 @@ impl RegisterVM {
 
 fn number_to_i32(number: f64) -> i32 {
     i32::from_ne_bytes(crate::value::number_uint32(number).to_ne_bytes())
+}
+
+fn code_unit(root: &BytecodeFunction, code_id: Option<u32>) -> Option<&BytecodeFunction> {
+    code_id.map_or(Some(root), |code_id| root.functions.get(code_id as usize))
+}
+
+fn feedback_unit_mut(
+    root: &mut FeedbackVector,
+    code_id: Option<u32>,
+) -> Option<&mut FeedbackVector> {
+    if let Some(code_id) = code_id {
+        root.function_mut(code_id)
+    } else {
+        Some(root)
+    }
 }
 
 fn numeric_value(value: Value) -> Option<f64> {
@@ -954,6 +1087,7 @@ fn property_name_units(value: Value, heap: &GenerationalHeap) -> Result<Vec<u16>
 
 #[cfg(test)]
 mod tests {
+    use super::super::feedback::CallIC;
     use super::*;
 
     #[test]
@@ -1210,5 +1344,124 @@ mod tests {
             Some(super::super::feedback::NamedAccessIC::Polymorphic(cases))
                 if cases.len() == 2 && cases[0].name != cases[1].name
         ));
+    }
+
+    #[test]
+    fn bytecode_calls_use_contiguous_frames_and_record_targets() {
+        let mut add = BytecodeFunction::new(2, 2);
+        add.emit(Instruction::Ldar(Reg(0)));
+        add.emit(Instruction::Add(Reg(1)));
+        add.emit(Instruction::Return);
+
+        let mut root = BytecodeFunction::new(3, 0);
+        root.functions.push(add);
+        root.feedback_slot_count = 1;
+        root.emit(Instruction::CreateClosure(0));
+        root.emit(Instruction::Star(Reg(0)));
+        root.emit(Instruction::LdaSmi(20));
+        root.emit(Instruction::Star(Reg(1)));
+        root.emit(Instruction::LdaSmi(22));
+        root.emit(Instruction::Star(Reg(2)));
+        root.emit(Instruction::Call {
+            func: Reg(0),
+            arg_start: Reg(1),
+            arg_count: 2,
+            slot: 0,
+        });
+        root.emit(Instruction::Return);
+
+        let mut heap = GenerationalHeap::new();
+        let mut feedback = FeedbackVector::for_code(&root);
+        let mut vm = RegisterVM::with_stack_capacity(100, 8);
+        let frame_capacity = vm.frames.capacity();
+        assert_eq!(
+            vm.run(&root, &mut feedback, &mut heap),
+            Ok(Value::from_smi(42))
+        );
+        assert_eq!(vm.frames.capacity(), frame_capacity);
+        assert!(vm.frames.is_empty());
+        assert_eq!(feedback.get_call_ic(0), Some(&CallIC::Monomorphic(0)));
+    }
+
+    #[test]
+    fn nested_calls_obey_frame_limits_and_vm_recovers() {
+        let mut recursive = BytecodeFunction::new(1, 0);
+        recursive.feedback_slot_count = 1;
+        recursive.emit(Instruction::CreateClosure(0));
+        recursive.emit(Instruction::Star(Reg(0)));
+        recursive.emit(Instruction::Call {
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 0,
+            slot: 0,
+        });
+        recursive.emit(Instruction::Return);
+
+        let mut root = BytecodeFunction::new(1, 0);
+        root.functions.push(recursive);
+        root.feedback_slot_count = 1;
+        root.emit(Instruction::CreateClosure(0));
+        root.emit(Instruction::Star(Reg(0)));
+        root.emit(Instruction::Call {
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 0,
+            slot: 0,
+        });
+        root.emit(Instruction::Return);
+
+        let mut heap = GenerationalHeap::new();
+        let mut feedback = FeedbackVector::for_code(&root);
+        let mut vm = RegisterVM::with_stack_capacity(100, 8);
+        vm.set_call_frame_limit(2);
+        assert_eq!(
+            vm.run(&root, &mut feedback, &mut heap),
+            Err(VMError::CallStackOverflow)
+        );
+
+        let mut value = BytecodeFunction::new(0, 0);
+        value.emit(Instruction::LdaSmi(7));
+        value.emit(Instruction::Return);
+        let mut feedback = FeedbackVector::for_code(&value);
+        assert_eq!(
+            vm.run(&value, &mut feedback, &mut heap),
+            Ok(Value::from_smi(7))
+        );
+        assert!(vm.frames.is_empty());
+    }
+
+    #[test]
+    fn callee_scavenge_forwards_caller_registers() {
+        let mut allocate = BytecodeFunction::new(0, 0);
+        allocate.emit(Instruction::CreateObject);
+        allocate.emit(Instruction::Return);
+
+        let mut root = BytecodeFunction::new(1, 0);
+        root.functions.push(allocate);
+        root.feedback_slot_count = 2;
+        root.emit(Instruction::CreateClosure(0));
+        root.emit(Instruction::Star(Reg(0)));
+        root.emit(Instruction::Call {
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 0,
+            slot: 0,
+        });
+        root.emit(Instruction::Call {
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 0,
+            slot: 1,
+        });
+        root.emit(Instruction::Return);
+
+        let mut heap = GenerationalHeap::with_nursery_capacity(1);
+        let mut feedback = FeedbackVector::for_code(&root);
+        let mut vm = RegisterVM::with_stack_capacity(100, 8);
+        let result = vm.run(&root, &mut feedback, &mut heap).unwrap();
+        assert!(result.is_object());
+        assert!(heap.get_object(result.as_object().unwrap()).is_some());
+        assert_eq!(feedback.get_call_ic(0), Some(&CallIC::Monomorphic(0)));
+        assert_eq!(feedback.get_call_ic(1), Some(&CallIC::Monomorphic(0)));
     }
 }

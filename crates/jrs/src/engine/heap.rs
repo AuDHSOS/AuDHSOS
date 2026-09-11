@@ -296,6 +296,21 @@ impl GenerationalHeap {
         Ok(ObjectRef::young(object_index, self.nursery.generation))
     }
 
+    /// Bump-allocates a callable bytecode function object in the Nursery.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::NurseryFull`] when a Safe Point is required, or
+    /// [`HeapError::ReferenceSpaceExhausted`] when no tagged index remains.
+    pub fn allocate_function(&mut self, code_id: u32) -> Result<ObjectRef, HeapError> {
+        let reference = self.allocate_object(self.shapes.root_shape(), VALUE_NULL)?;
+        self.object_mut(reference)?.kind = ObjectKind::Function {
+            code_id,
+            context: None,
+        };
+        Ok(reference)
+    }
+
     /// Reads an immutable object reference from its tagged generation.
     #[must_use]
     pub fn get_object(&self, reference: ObjectRef) -> Option<&JSObject> {
