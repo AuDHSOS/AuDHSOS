@@ -506,6 +506,7 @@ struct RegisterLowerer {
     local_count: u16,
     bindings: BTreeMap<String, RegisterBinding>,
     loops: Vec<RegisterLoop>,
+    completions: Vec<crate::engine::bytecode::Reg>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -520,6 +521,7 @@ struct RegisterLoop {
     continues: Vec<usize>,
     result_register: crate::engine::bytecode::Reg,
     bindings: BTreeMap<String, RegisterBinding>,
+    completion_depth: usize,
 }
 
 #[derive(Clone)]
@@ -543,6 +545,7 @@ impl RegisterLowerer {
             local_count: 0,
             bindings: BTreeMap::new(),
             loops: Vec::new(),
+            completions: Vec::new(),
         }
     }
 
@@ -725,15 +728,36 @@ impl RegisterLowerer {
             }
             Stmt::If(condition, yes, no) => self.lower_if(condition, yes, no.as_deref())?,
             Stmt::Block(body) => {
-                let mut flow = RegisterFlow::Empty;
+                let result_register = self.allocate_register()?;
+                self.code
+                    .emit(crate::engine::bytecode::Instruction::Star(result_register));
+                self.completions.push(result_register);
                 for statement in body {
                     match self.lower_statement(statement)? {
                         RegisterFlow::Empty => {}
-                        RegisterFlow::Value => flow = RegisterFlow::Value,
-                        RegisterFlow::Abrupt => return Some(RegisterFlow::Abrupt),
+                        RegisterFlow::Value => {
+                            self.code
+                                .emit(crate::engine::bytecode::Instruction::Star(result_register));
+                        }
+                        RegisterFlow::Abrupt => {
+                            self.completions.pop()?;
+                            self.release_register(result_register)?;
+                            return Some(RegisterFlow::Abrupt);
+                        }
                     }
                 }
-                flow
+                self.completions.pop()?;
+                self.code
+                    .emit(crate::engine::bytecode::Instruction::Ldar(result_register));
+                self.release_register(result_register)?;
+                if body
+                    .iter()
+                    .any(|statement| !matches!(statement, Stmt::Empty))
+                {
+                    RegisterFlow::Value
+                } else {
+                    RegisterFlow::Empty
+                }
             }
             Stmt::While(condition, body) => {
                 self.lower_while(condition, body)?;
@@ -764,6 +788,9 @@ impl RegisterLowerer {
             return None;
         }
         let result_register = loop_state.result_register;
+        if let Some(&completion) = self.completions.get(loop_state.completion_depth..)?.last() {
+            self.code.emit(Instruction::Ldar(completion));
+        }
         self.code.emit(Instruction::Star(result_register));
         let jump = self.code.emit(Instruction::Jump(0));
         let loop_state = self.loops.last_mut()?;
@@ -793,6 +820,7 @@ impl RegisterLowerer {
             continues: Vec::new(),
             result_register,
             bindings: bindings_at_head.clone(),
+            completion_depth: self.completions.len(),
         });
         let flow = self.lower_statement(body)?;
         let loop_state = self.loops.pop()?;
@@ -881,6 +909,7 @@ impl RegisterLowerer {
             continues: Vec::new(),
             result_register,
             bindings: bindings_at_head.clone(),
+            completion_depth: self.completions.len(),
         });
         let flow = self.lower_statement(body)?;
         let loop_state = self.loops.pop()?;
