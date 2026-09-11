@@ -262,7 +262,11 @@ The serial output carries a line protocol that the runner parses:
 An `[info]` line reports what the kernel found on the machine rather than
 what a test made of it, and the runner reads it: `[info] framebuffer=absent`
 is what a machine without a graphics adapter says, and a machine with one
-names its mode. A `[bench]` line reports a measurement and not a test: `<ticks>` is the
+names its mode. `[info] ecam=<base> segment=<n> buses=<first>..=<last>`
+names the configuration window of the PCI bus the `MCFG` table of the
+firmware published, and `[info] ecam=absent` is what a machine whose
+firmware published none says. No base address is written down here: it is
+whatever the table says. A `[bench]` line reports a measurement and not a test: `<ticks>` is the
 median of `<count>` round trips, in ticks of the time-stamp counter, and
 the line counts towards neither the passed nor the failed total. An image
 that writes one writes its test lines and its summary like every other.
@@ -276,7 +280,7 @@ the first release.
 
 | Trait | Responsibility | `x86_64` adapter |
 |-------|----------------|------------------|
-| `Platform` | boot information: memory regions, boot image location, physical window offset, ACPI root pointer | validated `BootInfo` |
+| `Platform` | boot information: memory regions, boot image location, physical window offset, ACPI root pointer, and the configuration window of the bus the kernel read out of the `MCFG` table | validated `BootInfo` |
 | `InterruptController` | map a line to a vector, mask, unmask, end-of-interrupt, spurious handling | local APIC and I/O APIC register blocks |
 | `Timer` | start a periodic tick with a frequency, read the tick counter | local APIC timer calibrated with the PIT |
 | `FrameAccess<T>` | a physical frame as a `&mut PageTable` of entry type `T` | the physical window |

@@ -33,7 +33,8 @@
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status, WORD};
 use audhsos_abi::layout::{MAX_MESSAGE_BYTES, MAX_SYSCALL_ARGUMENTS};
 use audhsos_abi::{
-    Error, Fault, FaultKind, Framebuffer, FramebufferFormat, Handle, Rights, Syscall, ThreadState,
+    Ecam, Error, Fault, FaultKind, Framebuffer, FramebufferFormat, Handle, Rights, Syscall,
+    ThreadState,
 };
 use user_rt::handle::{
     EndpointHandle, InterruptHandle, IoPortHandle, MemoryHandle, NotificationHandle, ProcessHandle,
@@ -61,10 +62,13 @@ pub struct MemoryInfo {
 }
 
 /// How many words `system_info` writes into the message area.
-pub const SYSTEM_INFO_WORDS: usize = 26;
+pub const SYSTEM_INFO_WORDS: usize = 30;
 
 /// Where the six words about the framebuffer begin.
 const FRAMEBUFFER_WORD: usize = 20;
+
+/// Where the four words about the configuration window of the bus begin.
+const ECAM_WORD: usize = 26;
 
 /// What `system_info` says about the machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -77,6 +81,8 @@ pub struct SystemInfo {
     pub acpi: u64,
     /// The framebuffer of the machine, if it has one.
     pub framebuffer: Option<Framebuffer>,
+    /// The configuration window of the bus, if the firmware published one.
+    pub ecam: Option<Ecam>,
 }
 
 /// How many words a seed of `random_bytes` is: the thirty-two bytes a
@@ -1038,8 +1044,9 @@ impl Gate {
     }
 
     /// `system_info`: the capacity and the live count of every object pool,
-    /// the tick rate, the root system description pointer, and the
-    /// framebuffer of the machine when it has one.
+    /// the tick rate, the root system description pointer, the framebuffer
+    /// of the machine when it has one, and the configuration window of the
+    /// bus when the firmware published one.
     ///
     /// # Errors
     ///
@@ -1066,11 +1073,21 @@ impl Gate {
                     stride: u32::try_from(described(4).unwrap_or(0)).unwrap_or(0),
                     format,
                 });
+        let window = |offset: usize| view.word(ECAM_WORD.saturating_add(offset)).unwrap_or(0);
+        let ecam = Ecam {
+            base: window(0),
+            segment: u16::try_from(window(1)).unwrap_or(0),
+            first_bus: u8::try_from(window(2)).unwrap_or(0),
+            last_bus: u8::try_from(window(3)).unwrap_or(0),
+        };
         Ok(SystemInfo {
             pools,
             ticks_per_second: view.word(18).unwrap_or(0),
             acpi: view.word(19).unwrap_or(0),
             framebuffer,
+            // Four zero words are a window over no bus, which is what a
+            // machine whose firmware published no `MCFG` table answers.
+            ecam: (ecam.base != 0 && !ecam.is_empty()).then_some(ecam),
         })
     }
 

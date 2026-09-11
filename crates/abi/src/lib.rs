@@ -7,6 +7,7 @@
 
 pub mod boot_image;
 pub mod boot_info;
+pub mod ecam;
 pub mod error;
 pub mod handle;
 pub mod ipc_buffer;
@@ -24,12 +25,13 @@ pub use boot_info::{
     BootInfoError, BootInfoView, BootInfoWriter, BootRegion, BootRegionKind, Framebuffer,
     FramebufferFormat,
 };
+pub use ecam::Ecam;
 pub use error::Error;
 pub use handle::Handle;
 pub use ipc_buffer::{Buffer, BufferMut, Message, MessageError, Status};
 pub use object::ObjectType;
 pub use rights::Rights;
-pub use startup::{Given, Payload, Role, STARTUP_LABEL, Screen, StartupError};
+pub use startup::{BusRange, Given, Payload, Role, STARTUP_LABEL, Screen, StartupError};
 pub use syscall::{FirstArgument, Syscall};
 pub use thread::{Fault, FaultKind, ThreadState};
 

@@ -57,9 +57,9 @@ const MEMORY_WORD: usize = 2;
 const BAD_WORD: usize = 3;
 const CONTROL_WORD: usize = 4;
 
-/// The payload word the first pair is in. Above the twenty-six words
+/// The payload word the first pair is in. Above the thirty words
 /// `system_info` writes into the message area of the caller's own buffer.
-const FIRST_RESULT: usize = 28;
+const FIRST_RESULT: usize = 32;
 
 /// The payload word past the last pair.
 const RESULTS_END: usize = 400;

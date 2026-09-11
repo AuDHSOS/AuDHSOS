@@ -7,6 +7,82 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Phase 13, the bus: `kernel-acpi` gains `mcfg.rs`, which reads the `MCFG`
+  table of the firmware the way `madt.rs` reads the MADT — signature,
+  length and checksum through the existing `SdtHeader`, then the allocation
+  structures with their base address, segment group and bus range, into a
+  bounded array. An allocation whose last bus is below its first, or whose
+  base is no page, is an error rather than something a mapping finds out
+  later. `Platform` gains `ecam()` and the `x86_64` adapter fills it at the
+  entry, before the memory bring-up, because the range has to be among the
+  device apertures by the time a program may ask for it.
+
+- `system_info` gains four result words, twenty-six to twenty-nine: the
+  base address of the configuration window, its segment group, and its
+  first and last bus, all four zero on a machine whose firmware published
+  no `MCFG` table. `MAX_RESULT_WORDS` and `SYSTEM_INFO_WORDS` are thirty.
+  The kernel records the window beside the `MmioReserved` apertures whether
+  or not the memory map marked it — the firmware of the reference machine
+  publishes it in the table and leaves it out of the map — so
+  `memory_create_device` admits the one aperture that makes the bus
+  reachable. `boot::run` reports
+  `[info] ecam=<base> segment=<n> buses=<first>..=<last>`, or
+  `[info] ecam=absent`.
+
+- The crate `pci`: a layer-1 logic crate over a `ConfigSpace` trait of two
+  methods, with the ECAM address arithmetic as a pure function, the type-0
+  header, the walk bounded by the bus range of the window, base address
+  register decoding with size probing, the capability list, the MSI-X
+  capability and its table entry, and the vendor capabilities of virtio 1.x
+  from section 4.1.4. Four rules the tests hold it to: probing clears the
+  decode bits of the command register and restores it on every path out,
+  the failing ones included; the capability walk is bounded by the entries
+  that fit below the extended space, so a list pointing at itself is an
+  error and never a hang; a 64-bit register consumes the register above it
+  and that one is never decoded again; and `virtio` reports every structure
+  it found in the order the capability list had them and chooses none,
+  because that order is the device's order of preference and the choice
+  belongs to the driver. Bridges are read, reported, and not descended into
+  (D-112).
+
+- `RecordedConfigSpace` behind the feature `test-doubles`: the
+  configuration space of a `q35` machine with a virtio-net device, read out
+  of the ECAM window of a running machine through the monitor and kept as a
+  byte fixture. The one thing a byte dump cannot carry is what a register
+  answers after all ones were written to it, so the size masks the machine
+  reported are recorded beside the bytes and a probe answers them.
+
+- `user-sys-x86_64` gains `mmio.rs`: read and write of `u8`, `u16`, `u32`
+  and `u64` over a mapped region, each one `read_volatile` or
+  `write_volatile` at an offset checked against the length of the region,
+  plus a sub-window that narrows a region to a structure. A register is not
+  memory that behaves, and a framebuffer reached as a byte slice is; this
+  is what keeps everything above it safe (13.7, D-113). The `unsafe` budget
+  of the crate grows from twenty-one sites to thirty-two.
+
+- `app-lspci`, a program of the archive: it asks `system_info` for the
+  window through the root task, maps it one bus at a time — a window of
+  every bus is two hundred and fifty-six mebibytes, and one bus is a page
+  table — walks each bus, and reports every function with its
+  identifiers, its class, the base address registers it decoded and the
+  capabilities it found, and for the virtio device the structures it
+  published and the size of its message table. A machine whose firmware
+  published no window, and one started without the network device, report
+  that and end.
+
+- The reference machine gains `-netdev user,id=n0,hostfwd=...` and
+  `-device virtio-net-pci,disable-legacy=on,mq=off`, with the host port
+  chosen free by the runner. Nothing drives the device in this phase; it is
+  there so that the bus walk finds a device with real base address
+  registers and a real MSI-X table. The end-to-end run is accepted a third
+  time without the two lines, as it is accepted without a graphics adapter
+  (D-118).
+
+- Two fuzz targets, `mcfg` and `pci_config`: arbitrary bytes as an ACPI
+  table and as the configuration space of four functions. Enumeration must
+  end with functions or with an error, read nothing outside the bytes it
+  was given, and never loop.
+
 - The timer takes the processor in the kernel that ships. Time-slice
   preemption was built and proved in Phase 5 and wired into the test
   harness only: `Scheduler::tick` charges the running thread its tick and

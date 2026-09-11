@@ -6,7 +6,7 @@
 use crate::error::AcpiError;
 
 /// Every variant, so that the report of one is never empty.
-const EVERY: [AcpiError; 14] = [
+const EVERY: [AcpiError; 17] = [
     AcpiError::RootPointerSignature,
     AcpiError::RootPointerChecksum,
     AcpiError::ExtendedChecksum,
@@ -27,6 +27,12 @@ const EVERY: [AcpiError; 14] = [
     },
     AcpiError::TooManyIoApics,
     AcpiError::TooManyOverrides,
+    AcpiError::TooManyAllocations,
+    AcpiError::BusRange {
+        first_bus: 16,
+        last_bus: 15,
+    },
+    AcpiError::Unaligned(0xB000_0001),
 ];
 
 #[test]

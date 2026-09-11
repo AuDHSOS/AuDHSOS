@@ -50,10 +50,10 @@ pub const CONTROL_WORD: usize = 4;
 /// The payload word the first pair goes into. The kernel reads the pairs
 /// from here to [`RESULTS_END`].
 ///
-/// Above the twenty-six words `system_info` writes into the message area of
-/// the caller's own buffer, which is what the convention for a result that
-/// does not fit into two return words does with it.
-pub const FIRST_RESULT: usize = 28;
+/// Above the thirty words `system_info` writes into the message area of the
+/// caller's own buffer, which is what the convention for a result that does
+/// not fit into two return words does with it.
+pub const FIRST_RESULT: usize = 32;
 
 /// The payload word past the last pair the program may write.
 pub const RESULTS_END: usize = 400;
@@ -313,7 +313,7 @@ fn devices(log: &mut Log, control: u64, bad: u64) {
     log.run(Syscall::MemoryCreateDevice, &[control, framebuffer, 1]);
     log.run(Syscall::MemoryCreateDevice, &[control, framebuffer, 0]);
     log.run(Syscall::SystemInfo, &[bad]);
-    // The twenty-six words `system_info` wrote sit below the log; the header
+    // The thirty words `system_info` wrote sit below the log; the header
     // it left says nothing the calls after it read.
     log.set_message(0, 0);
 }

@@ -283,6 +283,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcfg"
+version = "0.1.0"
+dependencies = [
+ "fuzz-support",
+ "kernel-acpi",
+]
+
+[[package]]
 name = "mouse_packet"
 version = "0.1.0"
 dependencies = [
@@ -359,6 +367,18 @@ dependencies = [
 [[package]]
 name = "net-wire"
 version = "0.1.0"
+
+[[package]]
+name = "pci"
+version = "0.1.0"
+
+[[package]]
+name = "pci_config"
+version = "0.1.0"
+dependencies = [
+ "fuzz-support",
+ "pci",
+]
 
 [[package]]
 name = "pem"

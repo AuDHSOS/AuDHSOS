@@ -136,6 +136,8 @@ roles! {
     DisplayServer = 15, handle => "The endpoint of the display server, badged with what that server is to know this process by. A program that draws receives one; a program that finds the server by name instead receives an endpoint that names nobody, and the server refuses it.",
     AuxInterrupt = 16, handle => "An interrupt object for the second line of a controller the process serves. The driver of the PS/2 controller receives one for the mouse beside the `Interrupt` of the keyboard; a driver that serves one line receives none (D-109).",
     InputServer = 17, handle => "The endpoint of the input server, badged with what that server is to know this process by. A program that listens receives one, exactly as a program that draws receives `DisplayServer`, and for the same reason (D-109).",
+    Ecam = 18, handle => "A device memory object over the configuration window of the PCI bus. Only the program that enumerates the bus receives it.",
+    EcamBuses = 19, value => "The segment group of that window in the high half of the word, its first bus in bits 15 to 8, and its last bus in bits 7 to 0. It comes with `Ecam`.",
 }
 
 /// Why a startup message could not be read.
@@ -294,6 +296,52 @@ impl Screen {
                 format,
             }),
             None => None,
+        }
+    }
+}
+
+/// The buses of a configuration window, as its value role carries them.
+///
+/// It is here for the reason [`Screen`] is: the root task packs the word out
+/// of what `system_info` told it, and the program that enumerates unpacks
+/// it. The base address is no part of it — the program reaches the window
+/// through the mapping of its memory object and never names an address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BusRange {
+    /// The segment group the window covers.
+    pub segment: u16,
+    /// The first bus of the group the window holds.
+    pub first_bus: u8,
+    /// The last bus of the group the window holds.
+    pub last_bus: u8,
+}
+
+impl BusRange {
+    /// The word of [`Role::EcamBuses`].
+    #[must_use]
+    #[expect(
+        clippy::as_conversions,
+        reason = "widening three fields into the word they are packed in, in a const fn"
+    )]
+    pub const fn word(self) -> u64 {
+        pack(
+            self.segment as u32,
+            ((self.first_bus as u32) << 8) | (self.last_bus as u32),
+        )
+    }
+
+    /// The buses the word describes.
+    #[must_use]
+    #[expect(
+        clippy::as_conversions,
+        reason = "each mask keeps its field inside the type it goes into, and the function is const"
+    )]
+    pub const fn from_word(word: u64) -> Self {
+        let (segment, buses) = unpack(word);
+        BusRange {
+            segment: (segment & 0xFFFF) as u16,
+            first_bus: ((buses >> 8) & 0xFF) as u8,
+            last_bus: (buses & 0xFF) as u8,
         }
     }
 }

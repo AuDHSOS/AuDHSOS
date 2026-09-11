@@ -73,6 +73,7 @@ fn every_role_lands_in_the_field_it_names() {
         (Role::DisplayServer, handle(12)),
         (Role::AuxInterrupt, handle(13)),
         (Role::InputServer, handle(14)),
+        (Role::Ecam, handle(15)),
     ])
     .unwrap();
     assert_eq!(startup.own_process.unwrap().handle(), handle(1));
@@ -89,14 +90,16 @@ fn every_role_lands_in_the_field_it_names() {
     assert_eq!(startup.display_server.unwrap().handle(), handle(12));
     assert_eq!(startup.aux_interrupt.unwrap().handle(), handle(13));
     assert_eq!(startup.input_server.unwrap().handle(), handle(14));
+    assert_eq!(startup.ecam.unwrap().handle(), handle(15));
     // The name of this test is a promise, and a role added later would
     // break it silently otherwise: every role but `Ram`, which is a list
-    // and has a test of its own, and the two value roles, which carry no
-    // handle and are read in `the_mode_of_the_framebuffer_comes_as_two_words`,
+    // and has a test of its own, and the three value roles, which carry no
+    // handle and are read in `the_mode_of_the_framebuffer_comes_as_two_words`
+    // and `the_bus_range_of_the_configuration_window_comes_as_one_word`,
     // is one field above.
     assert_eq!(
         Role::ALL.len(),
-        17,
+        19,
         "a role was added; give it a field and a line here"
     );
 }
@@ -206,6 +209,28 @@ fn the_mode_of_the_framebuffer_comes_as_two_words() {
     .unwrap();
     assert_eq!(startup.framebuffer.unwrap().handle(), handle(3));
     assert_eq!(startup.screen(), Some(screen));
+}
+
+#[test]
+fn the_bus_range_of_the_configuration_window_comes_as_one_word() {
+    let buses = audhsos_abi::startup::BusRange {
+        segment: 0,
+        first_bus: 0,
+        last_bus: 255,
+    };
+    let startup = read_mixed(
+        &[(Role::Ecam, handle(4))],
+        &[(Role::EcamBuses, buses.word())],
+    )
+    .unwrap();
+    assert_eq!(startup.ecam.unwrap().handle(), handle(4));
+    assert_eq!(startup.bus_range(), Some(buses));
+}
+
+#[test]
+fn a_process_given_no_configuration_window_has_no_bus_range() {
+    let startup = read(&[(Role::OwnProcess, handle(1))]).unwrap();
+    assert_eq!(startup.bus_range(), None);
 }
 
 #[test]

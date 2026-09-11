@@ -16,7 +16,7 @@ use crate::error::Error;
 ///
 /// The order does not matter to the reader, which searches by name, and it
 /// is kept because a dump of the image is easier to read that way.
-pub(crate) const PROGRAMS: [&str; 11] = [
+pub(crate) const PROGRAMS: [&str; 12] = [
     "server-memory",
     "server-name",
     "server-console",
@@ -27,6 +27,7 @@ pub(crate) const PROGRAMS: [&str; 11] = [
     "app-paint",
     "app-input",
     "app-canvas",
+    "app-lspci",
     "app-faulter",
 ];
 

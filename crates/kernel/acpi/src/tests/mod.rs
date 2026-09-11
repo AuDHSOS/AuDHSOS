@@ -7,6 +7,7 @@
 mod build;
 mod error;
 mod madt;
+mod mcfg;
 mod properties;
 mod raw;
 mod rsdp;

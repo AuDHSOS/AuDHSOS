@@ -389,6 +389,22 @@ registers it decoded, the four virtio capabilities it found, and the size
 of its MSI-X table; on a machine started without the two network lines it
 reports the rest of the bus, finds no virtio device, and ends by itself.
 
+Done: the window of the reference machine covers all two hundred and
+fifty-six buses, which is two hundred and fifty-six mebibytes, so
+`app-lspci` maps one bus at a time at one address and takes it back before
+the next: what the program costs is the page tables of one mebibyte,
+whatever the firmware published. The ECAM range is recorded beside the
+`MmioReserved` apertures whether or not the memory map marked it, and on
+the machine this was built on it does not: the firmware of the reference
+machine publishes the window in the `MCFG` table at `0xE000_0000` and
+leaves it out of the memory map, so without that entry
+`memory_create_device` would refuse the one aperture that makes the bus
+reachable. The recorded configuration space of the `pci` double was read
+out of the ECAM window of a running machine through the monitor, which is
+the only part of a byte dump a probe of a base address register cannot
+carry: the size masks the machine reported are recorded beside the
+bytes.
+
 ## 8.16 Phase 14: The network on the machine
 
 Deliverables: `driver-virtio-net` over a register trait with a scripted

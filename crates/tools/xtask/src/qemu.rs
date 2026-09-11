@@ -58,6 +58,10 @@ const FIRMWARE_RELATIVES: [&str; 4] = [
     "../share/qemu/OVMF.fd",
 ];
 
+/// The port inside the guest the forwarded host port reaches, which is the
+/// echo port of a listener Phase 14 brings up.
+const GUEST_PORT: u16 = 7;
+
 /// Time limit of one run in seconds.
 const DEFAULT_TIMEOUT: u64 = 60;
 
@@ -196,21 +200,49 @@ pub(crate) struct Options {
     /// Run without a graphics adapter, which leaves the firmware without a
     /// Graphics Output Protocol and the kernel without a framebuffer.
     pub(crate) no_vga: bool,
+    /// The host port QEMU's user-mode network forwards into the guest, and
+    /// with it the network device itself. `None` is a machine without the
+    /// two network lines, which is the second run Phase 13 and Phase 14 are
+    /// accepted on (D-118).
+    pub(crate) network: Option<u16>,
 }
 
 impl Options {
-    /// A headless run of the reference machine.
+    /// A headless run of the reference machine, network included.
     pub(crate) fn plain() -> Self {
-        Options::default()
+        Options {
+            network: free_port(),
+            ..Options::default()
+        }
     }
 
     /// The same, with QEMU's own window.
     pub(crate) fn windowed(display: bool) -> Self {
         Options {
             display,
-            ..Options::default()
+            ..Options::plain()
         }
     }
+
+    /// The same, without the two network lines.
+    pub(crate) fn without_network() -> Self {
+        Options::default()
+    }
+}
+
+/// A port on the loopback of the development machine that nothing listens
+/// on, or `None` when the system would give none.
+///
+/// The port is asked of the system by binding one and letting it go again,
+/// which is what every test harness does: nothing can hold a port between
+/// the moment it is chosen and the moment QEMU takes it, and a port that
+/// was taken in between makes QEMU refuse to start with a message that
+/// names it.
+pub(crate) fn free_port() -> Option<u16> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
+    let port = listener.local_addr().ok()?.port();
+    drop(listener);
+    Some(port)
 }
 
 /// A socket path for the machine protocol, short enough for a Unix socket.
@@ -441,7 +473,29 @@ pub(crate) fn arguments(
         line.push("-qmp".to_owned());
         line.push(format!("unix:{},server,nowait", socket.display()));
     }
+    line.extend(network(options.network));
     line
+}
+
+/// The network of the reference machine, as
+/// [13.12](../../../docs/13-the-network-on-the-machine.md) prescribes it, or
+/// nothing for a run without one.
+///
+/// `disable-legacy=on` makes it a non-transitional virtio 1.0 device, whose
+/// device identifier is then `0x1041` and not the transitional `0x1000`;
+/// `mq=off` is the default and is written down because the driver depends on
+/// it. The forwarded port reaches a listener inside the guest and needs no
+/// host network and no privileges.
+fn network(host_port: Option<u16>) -> Vec<String> {
+    let Some(port) = host_port else {
+        return Vec::new();
+    };
+    vec![
+        "-netdev".to_owned(),
+        format!("user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:{GUEST_PORT}"),
+        "-device".to_owned(),
+        "virtio-net-pci,netdev=n0,disable-legacy=on,mq=off".to_owned(),
+    ]
 }
 
 /// The graphics adapter of the reference machine and the mode the firmware

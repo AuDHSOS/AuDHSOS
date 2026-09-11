@@ -3,7 +3,7 @@
 
 //! The boot platform: what the loader left behind.
 
-use audhsos_abi::Framebuffer;
+use audhsos_abi::{Ecam, Framebuffer};
 use kernel_types::{PhysAddr, VirtAddr};
 
 /// What a physical memory region holds at boot.
@@ -59,4 +59,10 @@ pub trait Platform {
     /// Physical address of the ACPI root pointer, if the firmware provided
     /// one.
     fn acpi_rsdp(&self) -> Option<PhysAddr>;
+
+    /// The configuration window of the bus, if the firmware published an
+    /// `MCFG` table naming one. It is what `system_info` reports and what
+    /// the root task builds the device memory object of the program that
+    /// enumerates from.
+    fn ecam(&self) -> Option<Ecam>;
 }

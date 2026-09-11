@@ -11,12 +11,13 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds twelve programs and each uses a different part of
+// The package holds thirteen programs and each uses a different part of
 // what it depends on; these are the crates this one does not.
 use app_canvas as _;
 use driver_i8042 as _;
 use driver_uart16550 as _;
 use gfx as _;
+use pci as _;
 use server_console as _;
 use server_display as _;
 use server_input as _;

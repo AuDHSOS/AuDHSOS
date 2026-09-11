@@ -8,7 +8,7 @@
 //! is given, so that it runs unchanged on the host and in QEMU.
 
 use audhsos_abi::layout::PHYS_WINDOW_BASE;
-use audhsos_abi::{Framebuffer, FramebufferFormat};
+use audhsos_abi::{Ecam, Framebuffer, FramebufferFormat};
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::exit::{ExitStatus, TestExit};
 use kernel_hal_api::platform::{MemoryRegion, MemoryRegionKind, Platform};
@@ -75,6 +75,7 @@ pub fn run(platform: &impl Platform, console: &mut impl DebugConsole) -> Result<
     }
     println!(console, "usable {} KiB", usable_kib(regions));
     print_framebuffer(console, platform.framebuffer());
+    print_ecam(console, platform.ecam());
     let window = platform.physical_window_base().as_u64();
     if window != PHYS_WINDOW_BASE {
         return Err(BootError::WindowBase(window));
@@ -104,6 +105,28 @@ fn print_framebuffer(console: &mut impl DebugConsole, framebuffer: Option<Frameb
             screen.phys_start
         ),
         None => println!(console, "[info] framebuffer=absent"),
+    }
+}
+
+/// Reports the configuration window of the bus, or that the firmware
+/// published none.
+///
+/// The line carries the `[info]` prefix of
+/// [03 3.1.7](../../../../docs/03-target-platform.md#317-test-exit-protocol)
+/// for the same reason the framebuffer line does: the runner reads it, and
+/// a machine started without the network device is a run of exactly this
+/// line.
+fn print_ecam(console: &mut impl DebugConsole, ecam: Option<Ecam>) {
+    match ecam {
+        Some(window) => println!(
+            console,
+            "[info] ecam={:#x} segment={} buses={}..={}",
+            window.base,
+            window.segment,
+            window.first_bus,
+            window.last_bus
+        ),
+        None => println!(console, "[info] ecam=absent"),
     }
 }
 

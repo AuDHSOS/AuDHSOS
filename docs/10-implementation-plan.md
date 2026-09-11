@@ -3124,9 +3124,12 @@ adapter contains no layout knowledge of its own.
 
 ### 10.13.5 The program that enumerates
 
-`app-lspci`, a program of the archive: asks `system_info` for the ECAM
-window, has the root task make it a `Device` memory object, maps it,
-enumerates, and reports one line per function — address, vendor and
+`app-lspci`, a program of the archive: the root task asks `system_info` for
+the ECAM window, makes it a `Device` memory object, and grants it with the
+segment and the bus range. The program maps one bus of it at a time, at one
+address, and takes that mapping back before the next — a window of every bus
+is two hundred and fifty-six mebibytes and one bus is a page table — walks
+each bus, and reports one line per function — address, vendor and
 device id, class, the base address registers it decoded, the
 capabilities it found, and for a virtio device the four structures and
 the size of the MSI-X table. On a machine with no `MCFG`, or an empty

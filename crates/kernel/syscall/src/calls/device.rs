@@ -33,6 +33,9 @@ const BYTE: u8 = 1;
 /// [`system_info`].
 const FRAMEBUFFER_WORD: usize = 20;
 
+/// Where the four words about the configuration window of the bus begin.
+const ECAM_WORD: usize = 26;
+
 /// `interrupt_create`: an interrupt object for an ISA line.
 ///
 /// The call takes no vector: the vector of a line is fixed by the plan of
@@ -466,7 +469,7 @@ pub fn memory_create_device<
     }
 }
 
-/// `system_info`: twenty-six words about the machine, in the message area of
+/// `system_info`: thirty words about the machine, in the message area of
 /// the caller's own buffer.
 ///
 /// For each of the eight pools its capacity and its live count, in the order
@@ -476,8 +479,11 @@ pub fn memory_create_device<
 /// root system description pointer, which is zero when the platform named
 /// none, and last the framebuffer: its physical start, its length, its
 /// width, its height, its stride, and the code of its pixel format, all six
-/// zero when the machine has none. The root task makes the device memory
-/// object of the display server out of those six words.
+/// zero when the machine has none, and last the configuration window of the
+/// bus: its base address, its segment group, its first and its last bus,
+/// all four zero when the firmware published no `MCFG` table. The root task
+/// makes the device memory objects of the display server and of the program
+/// that enumerates the bus out of those two groups.
 ///
 /// # Errors
 ///
@@ -508,6 +514,19 @@ pub fn system_info<
     }
     if let Some(slot) = words.get_mut(19) {
         *slot = machine.environment.acpi_pointer();
+    }
+    if let Some(window) = machine.environment.ecam() {
+        let described = [
+            window.base,
+            u64::from(window.segment),
+            u64::from(window.first_bus),
+            u64::from(window.last_bus),
+        ];
+        for (index, value) in described.iter().enumerate() {
+            if let Some(slot) = words.get_mut(index.saturating_add(ECAM_WORD)) {
+                *slot = *value;
+            }
+        }
     }
     if let Some(framebuffer) = machine.environment.framebuffer() {
         let described = [

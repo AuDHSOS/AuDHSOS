@@ -14,12 +14,12 @@
 
 use core::fmt;
 
-use audhsos_abi::Framebuffer;
 use audhsos_abi::boot_image::BootImageHeader;
 use audhsos_abi::layout::{
     BOOT_INFO_VADDR, BOOT_STACK_PAGES, BOOT_STACK_TOP, KERNEL_BASE, MAX_BOOT_REGIONS,
     MAX_PAGES_PER_CALL, MAX_PHYS_WINDOW_BYTES, PAGE_SIZE, PHYS_WINDOW_BASE, USER_SPACE_END,
 };
+use audhsos_abi::{Ecam, Framebuffer};
 use audhsos_sync::{Global, UncontendedToken};
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::paging::{FrameAccess, FrameSource, TlbControl};
@@ -123,9 +123,10 @@ impl From<MapError> for MemoryError {
     }
 }
 
-/// The device apertures of the machine, as the boot information reported
-/// them: at most one per region it can hold.
-type DeviceRanges = [PhysFrameRange; MAX_BOOT_REGIONS];
+/// The device apertures of the machine: at most one per region the boot
+/// information can hold, and one more for the configuration window of the
+/// bus, which no memory map reliably marks.
+type DeviceRanges = [PhysFrameRange; MAX_BOOT_REGIONS + 1];
 
 /// What the kernel owns after the bring-up.
 #[derive(Debug)]
@@ -138,6 +139,7 @@ pub struct KernelMemory {
     boot_info: PhysFrame,
     identity_pages: u64,
     framebuffer: Option<Framebuffer>,
+    ecam: Option<Ecam>,
     devices: DeviceRanges,
     device_count: usize,
 }
@@ -174,6 +176,15 @@ impl KernelMemory {
     #[must_use]
     pub const fn framebuffer(&self) -> Option<Framebuffer> {
         self.framebuffer
+    }
+
+    /// The configuration window of the bus, if the firmware published one.
+    /// The kernel does not read it: it keeps the description so that
+    /// `system_info` can report it to the root task, which makes the device
+    /// memory object of the program that enumerates out of it.
+    #[must_use]
+    pub const fn ecam(&self) -> Option<Ecam> {
+        self.ecam
     }
 
     /// The device apertures the machine reported.
@@ -680,24 +691,32 @@ where
         boot_info,
         identity_pages,
         framebuffer: platform.framebuffer(),
+        ecam: platform.ecam(),
         devices,
         device_count,
     })
 }
 
 /// The apertures the machine reported as device memory, rounded outward to
-/// whole frames. A region that is no range of frames of this machine is
-/// left out: nothing can be mapped from it anyway.
+/// whole frames, and the configuration window of the bus beside them. A
+/// region that is no range of frames of this machine is left out: nothing
+/// can be mapped from it anyway.
+///
+/// The window is recorded whether or not the firmware's memory map marked
+/// it, because not every firmware does, and `memory_create_device` would
+/// otherwise refuse the one aperture that makes the bus reachable.
 fn device_ranges(platform: &impl Platform) -> (DeviceRanges, usize) {
-    let mut ranges = [PhysFrameRange::EMPTY; MAX_BOOT_REGIONS];
+    let mut ranges = [PhysFrameRange::EMPTY; MAX_BOOT_REGIONS + 1];
     let mut count = 0usize;
-    for region in platform.memory_regions() {
-        if region.kind != MemoryRegionKind::MmioReserved {
-            continue;
-        }
-        let Some(range) = frames_of(region.start.as_u64(), region.len) else {
-            continue;
-        };
+    let window = platform
+        .ecam()
+        .and_then(|window| frames_of(window.base, window.len()));
+    let apertures = platform
+        .memory_regions()
+        .iter()
+        .filter(|region| region.kind == MemoryRegionKind::MmioReserved)
+        .filter_map(|region| frames_of(region.start.as_u64(), region.len));
+    for range in window.into_iter().chain(apertures) {
         if let Some(slot) = ranges.get_mut(count) {
             *slot = range;
             count = count.saturating_add(1);

@@ -566,6 +566,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pci"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
 name = "server-console"
 version = "0.1.0"
 dependencies = [
@@ -633,6 +640,7 @@ dependencies = [
  "driver-i8042",
  "driver-uart16550",
  "gfx",
+ "pci",
  "server-console",
  "server-display",
  "server-input",

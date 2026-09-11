@@ -10,9 +10,10 @@ use test_support::generators::bytes;
 use test_support::property::check;
 
 use crate::madt::{MAX_IO_APICS, MAX_OVERRIDES, parse};
+use crate::mcfg::{MAX_ECAM_ALLOCATIONS, parse as parse_mcfg};
 use crate::rsdp::{RSDP_LEN, parse_rsdp};
 use crate::sdt::{RootTable, SdtHeader};
-use crate::tests::build::{fix_table, madt};
+use crate::tests::build::{fix_table, madt, mcfg};
 
 #[test]
 fn no_bytes_make_a_parser_panic() {
@@ -23,6 +24,7 @@ fn no_bytes_make_a_parser_panic() {
             let _ = SdtHeader::parse(raw);
             let _ = RootTable::parse(raw);
             let _ = parse(raw);
+            let _ = parse_mcfg(raw);
             if let Ok(fixed) = <[u8; RSDP_LEN]>::try_from(raw.as_slice()) {
                 let _ = parse_rsdp(&fixed);
             }
@@ -57,6 +59,31 @@ fn a_table_the_parser_accepts_names_no_more_than_the_kernel_holds() {
                         "line {} is not routed to {}",
                         entry.source, entry.gsi
                     ));
+                }
+            }
+            Ok(())
+        },
+    );
+}
+
+#[test]
+fn an_accepted_configuration_table_names_no_more_windows_than_the_kernel_holds() {
+    check(
+        "an accepted mcfg stays inside the fixed capacities",
+        &bytes(0..=512),
+        |raw| {
+            let mut table = mcfg(&[]);
+            table.extend_from_slice(raw);
+            fix_table(&mut table);
+            let Ok(parsed) = parse_mcfg(&table) else {
+                return Ok(());
+            };
+            if parsed.count() > MAX_ECAM_ALLOCATIONS {
+                return Err(format!("{} windows", parsed.count()));
+            }
+            for window in parsed.allocations.iter().flatten() {
+                if window.last_bus < window.first_bus {
+                    return Err(format!("buses {} to {}", window.first_bus, window.last_bus));
                 }
             }
             Ok(())

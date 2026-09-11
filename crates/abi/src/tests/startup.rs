@@ -256,7 +256,10 @@ fn a_role_carries_a_handle_or_a_value_and_says_which() {
         .filter(|role| role.carries_value())
         .map(|role| role.name())
         .collect();
-    assert_eq!(values, vec!["FramebufferGeometry", "FramebufferLine"]);
+    assert_eq!(
+        values,
+        vec!["FramebufferGeometry", "FramebufferLine", "EcamBuses"]
+    );
     assert!(!Role::Framebuffer.carries_value());
     assert!(!Role::DisplayServer.carries_value());
 }

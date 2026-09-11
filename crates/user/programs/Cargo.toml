@@ -86,12 +86,19 @@ path = "src/bin/app_canvas.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "app-lspci"
+path = "src/bin/app_lspci.rs"
+test = false
+bench = false
+
 [dependencies]
 app-canvas.workspace = true
 audhsos-abi.workspace = true
 driver-i8042.workspace = true
 driver-uart16550.workspace = true
 gfx.workspace = true
+pci.workspace = true
 server-console.workspace = true
 server-display.workspace = true
 server-input.workspace = true

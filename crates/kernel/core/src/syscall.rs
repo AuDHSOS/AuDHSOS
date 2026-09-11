@@ -15,7 +15,7 @@ use core::marker::PhantomData;
 
 use audhsos_abi::ipc_buffer::SIZE;
 use audhsos_abi::layout::PAGE_SIZE;
-use audhsos_abi::{Error, Framebuffer};
+use audhsos_abi::{Ecam, Error, Framebuffer};
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::device::Devices;
 use kernel_hal_api::interrupt::{InterruptError, InterruptLine, Vector};
@@ -368,6 +368,10 @@ where
 
     fn acpi_pointer(&self) -> u64 {
         self.acpi
+    }
+
+    fn ecam(&self) -> Option<Ecam> {
+        self.memory.ecam()
     }
 }
 

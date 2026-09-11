@@ -46,6 +46,7 @@ members = [
     "crates/sync",
     "crates/drivers/uart16550",
     "crates/drivers/i8042",
+    "crates/pci",
     "crates/virtio/queue",
     "crates/fs/fat",
     "crates/user/apps/canvas",
@@ -136,6 +137,7 @@ audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
 driver-uart16550 = { path = "crates/drivers/uart16550" }
 driver-i8042 = { path = "crates/drivers/i8042" }
+pci = { path = "crates/pci" }
 virtio-queue = { path = "crates/virtio/queue" }
 fs-fat = { path = "crates/fs/fat" }
 server-console = { path = "crates/user/servers/console" }

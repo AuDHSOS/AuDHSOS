@@ -2186,6 +2186,13 @@ what the kernel dispatches on, so the check is what the kernel saw.
 
 ### 6.6.61 The bus (`kernel-acpi`, `pci`, QEMU)
 
+- The window the kernel keeps (`kernel-core`): `system_info` reports the
+  base address, the segment group, and the first and last bus as its words
+  twenty-six to twenty-nine, and four zeros on a machine whose firmware
+  published none; the range is among the device apertures even when the
+  memory map marked no region at all, a frame above it belongs to none, and
+  `boot::run` writes `[info] ecam=<base> segment=<n> buses=<first>..=<last>`
+  or `[info] ecam=absent`.
 - `MCFG` (`kernel-acpi`): a table with one allocation and one with several;
   a wrong signature, a length below the header, a length beyond the
   buffer, and a bad checksum are each refused before any field is read; an
@@ -2237,6 +2244,17 @@ what the kernel dispatches on, so the check is what the kernel saw.
   outside the buffer, and never loops.
 - Fuzz target `mcfg`: arbitrary bytes as a table; the parse answers or
   refuses and reads nothing outside the buffer.
+- The volatile accessor (`user-sys-x86_64`, QEMU): every read and write
+  answers inside the region it was made with and `None` outside it, and a
+  sub-window narrows a region and reaches no further. It is proved by the
+  bus walk of `app-lspci`, which reaches the configuration space of a real
+  machine through nothing else.
+- End to end (QEMU): the run of the reference machine carries
+  `[info] ecam=`, the window `app-lspci` was given, the virtio-net function
+  with the device identifier `0x1041`, the four structures it published in
+  whatever order it prefers, and a message table of four vectors; the run
+  without the two network lines carries the host bridge, no virtio device,
+  and ends by itself.
 
 ### 6.6.62 The network device (`driver-virtio-net`)
 

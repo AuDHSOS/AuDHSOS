@@ -9,7 +9,7 @@
 //! space shares; a kernel stack slot it hands out is mapped and guarded.
 
 use audhsos_abi::ipc_buffer::SIZE;
-use audhsos_abi::{Error, Framebuffer};
+use audhsos_abi::{Ecam, Error, Framebuffer};
 use kernel_mm::page_table::Permissions;
 use kernel_types::{CachePolicy, Page, PhysFrame, PhysFrameRange, VirtAddr};
 
@@ -233,4 +233,9 @@ pub trait Environment {
     /// when the platform named none. It is the only thing of the firmware
     /// the kernel keeps, and `system_info` is what reports it.
     fn acpi_pointer(&self) -> u64;
+
+    /// The configuration window of the bus, if the firmware published one.
+    /// `system_info` reports it, and the root task makes the device memory
+    /// object of the program that enumerates out of it.
+    fn ecam(&self) -> Option<Ecam>;
 }

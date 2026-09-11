@@ -6,7 +6,7 @@
 
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status};
 use audhsos_abi::layout::PAGE_SIZE;
-use audhsos_abi::{Error, Framebuffer, Handle, Rights, Syscall};
+use audhsos_abi::{Ecam, Error, Framebuffer, Handle, Rights, Syscall};
 use kernel_mm::page_table::Permissions;
 use kernel_objects::handle_table::{Entry, HandleList};
 use kernel_objects::object::{
@@ -129,6 +129,9 @@ pub(super) struct Recorder {
     pub(super) framebuffer: Option<Framebuffer>,
     /// The address of the root system description pointer.
     pub(super) rsdp: u64,
+    /// The configuration window of the bus the firmware is to have
+    /// published.
+    pub(super) ecam: Option<Ecam>,
 }
 
 impl Recorder {
@@ -389,6 +392,10 @@ impl Environment for Recorder {
 
     fn acpi_pointer(&self) -> u64 {
         self.rsdp
+    }
+
+    fn ecam(&self) -> Option<Ecam> {
+        self.ecam
     }
 }
 

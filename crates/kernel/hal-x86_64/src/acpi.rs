@@ -11,6 +11,7 @@
 
 use kernel_acpi::error::AcpiError;
 use kernel_acpi::madt::{MADT_SIGNATURE, Madt};
+use kernel_acpi::mcfg::{MCFG_SIGNATURE, Mcfg};
 use kernel_acpi::rsdp::{RSDP_LEN, parse_rsdp};
 use kernel_acpi::sdt::{RootTable, SDT_HEADER_LEN, SdtHeader, announced_length};
 use kernel_hal_api::platform::{MemoryRegionKind, Platform};
@@ -32,6 +33,9 @@ pub enum TableError {
     Table(AcpiError),
     /// The root table names no multiple APIC description table.
     NoMadt,
+    /// The root table names no memory mapped configuration table, so the
+    /// firmware published no window over the configuration space.
+    NoMcfg,
 }
 
 impl core::fmt::Display for TableError {
@@ -46,6 +50,7 @@ impl core::fmt::Display for TableError {
             }
             TableError::Table(error) => write!(f, "{error}"),
             TableError::NoMadt => f.write_str("no table of the machine is an apic table"),
+            TableError::NoMcfg => f.write_str("no table of the machine is an mcfg table"),
         }
     }
 }
@@ -89,6 +94,42 @@ pub unsafe fn find_madt(platform: &X86Platform) -> Result<Madt, TableError> {
         }
     }
     Err(TableError::NoMadt)
+}
+
+/// Reads the memory mapped configuration table of the machine.
+///
+/// The walk is the one [`find_madt`] makes, for the table that carries the
+/// `MCFG` signature instead.
+///
+/// # Errors
+///
+/// [`TableError::NoMcfg`] for a machine whose firmware published no such
+/// table, which is no fault: the kernel then reports that the bus has no
+/// window. The other [`TableError`] variants for tables it cannot read.
+///
+/// # Safety
+///
+/// The tables the loader built must be active, so that the window maps
+/// every frame of the memory the firmware reported.
+pub unsafe fn find_mcfg(platform: &X86Platform) -> Result<Mcfg, TableError> {
+    let limit = window_limit(platform);
+    // SAFETY: the caller promises that the loader's tables are active, so
+    // the window maps every frame of memory; every range this value hands
+    // out is checked against `limit` first.
+    let window = unsafe { PhysicalWindow::kernel() };
+    let address = platform.acpi_rsdp().ok_or(TableError::NoRootPointer)?;
+    let pointer: [u8; RSDP_LEN] = read_array(window, limit, address)?;
+    let rsdp = parse_rsdp(&pointer)?;
+    let root_bytes = read_table(&window, limit, rsdp.root())?;
+    let root = RootTable::parse(root_bytes)?;
+    for entry in root.addresses() {
+        let bytes = read_table(&window, limit, entry)?;
+        let header = SdtHeader::parse(bytes)?;
+        if header.signature == MCFG_SIGNATURE {
+            return Ok(kernel_acpi::mcfg::parse(bytes)?);
+        }
+    }
+    Err(TableError::NoMcfg)
 }
 
 /// The first byte above the memory the window maps, which is what the

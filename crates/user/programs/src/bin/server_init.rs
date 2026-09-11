@@ -23,12 +23,13 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds twelve programs and each uses a different part of
+// The package holds thirteen programs and each uses a different part of
 // what it depends on; these are the crates this one does not.
 use app_canvas as _;
 use driver_i8042 as _;
 use driver_uart16550 as _;
 use gfx as _;
+use pci as _;
 use server_console as _;
 use server_display as _;
 use server_input as _;
@@ -37,7 +38,7 @@ use server_name as _;
 use user_proto::parent;
 
 use audhsos_abi::layout::{MAX_MESSAGE_HANDLES, PAGE_SIZE};
-use audhsos_abi::startup::{Payload, Role, Screen, Writer};
+use audhsos_abi::startup::{BusRange, Payload, Role, Screen, Writer};
 use audhsos_abi::{Error, Handle, Rights};
 use user_loader::tar::{Archive, Kind};
 use user_loader::{Plan, STACK_PAGES};
@@ -67,6 +68,8 @@ enum Grant {
     /// The ports of the PS/2 controller and the two lines its devices
     /// interrupt on.
     Input,
+    /// The configuration window of the PCI bus and the buses it covers.
+    Ecam,
 }
 
 /// One line of the start table: what to start, how, and with what.
@@ -110,7 +113,7 @@ struct Program {
 /// The quotas are what the programs measured out at need with room over
 /// them; a program that asks for more than its line says is refused by the
 /// kernel and not by this table.
-const PROGRAMS: [Program; 11] = [
+const PROGRAMS: [Program; 12] = [
     Program {
         name: b"server-memory",
         priority: priority::SERVER,
@@ -248,6 +251,22 @@ const PROGRAMS: [Program; 11] = [
         memory: true,
         draws: true,
         listens: true,
+        reports: true,
+    },
+    // The bus walk maps one mebibyte of the configuration window at a time,
+    // which is a page table and the levels above it, so its quota of frames
+    // is the smallest of any program that maps anything.
+    Program {
+        name: b"app-lspci",
+        priority: priority::APPLICATION,
+        handles: 32,
+        frames: 32,
+        objects: 32,
+        grant: Grant::Ecam,
+        names: true,
+        memory: true,
+        draws: false,
+        listens: false,
         reports: true,
     },
     // It faults and its thread stops there, so it never reports and the
@@ -650,6 +669,16 @@ fn grant(
                 tell(given, count, Role::FramebufferLine, screen.line())?;
             }
         }
+        // A machine whose firmware published no window grants nothing here:
+        // the program starts all the same and reports that there is none.
+        Grant::Ecam => {
+            if let Some((memory, buses)) = ecam(gate, world)? {
+                let handle =
+                    gate.process_install_handle(child, memory.handle(), ObjectRights::DEVICE)?;
+                push(given, count, Role::Ecam, handle)?;
+                tell(given, count, Role::EcamBuses, buses.word())?;
+            }
+        }
         Grant::Input => {
             let (ports, keyboard, mouse) = ps2(gate, world)?;
             let handle = gate.process_install_handle(child, ports.handle(), ObjectRights::PORTS)?;
@@ -768,6 +797,38 @@ fn framebuffer(gate: &mut Gate, world: &World) -> Result<Option<(MemoryHandle, S
             height: described.height,
             stride: described.stride,
             format: described.format,
+        },
+    )))
+}
+
+/// The configuration window of the PCI bus as a memory object, with the
+/// buses it covers, or nothing when the firmware published no `MCFG` table.
+///
+/// `system_info` is what says where it is, for the reason it says where the
+/// framebuffer is: the kernel read the table at bring-up and reports what it
+/// found, and this is the only program that may ask.
+fn ecam(gate: &mut Gate, world: &World) -> Result<Option<(MemoryHandle, BusRange)>, Error> {
+    let system = world.system.ok_or(Error::AccessDenied)?;
+    let Some(window) = gate.system_info(system)?.ecam else {
+        return Ok(None);
+    };
+    let first = window.base.wrapping_div(PAGE_SIZE);
+    let frames = window.len().wrapping_div(PAGE_SIZE);
+    // A window the kernel will not make an object of — one that meets
+    // memory the machine reported as usable, or one the address space
+    // cannot hold — is no reason to leave the program unstarted. It starts
+    // without the window and reports that there is none; a program of the
+    // table that never starts is a report that never comes, and the machine
+    // waits for it.
+    let Ok(memory) = gate.memory_create_device(system, first, frames) else {
+        return Ok(None);
+    };
+    Ok(Some((
+        memory,
+        BusRange {
+            segment: window.segment,
+            first_bus: window.first_bus,
+            last_bus: window.last_bus,
         },
     )))
 }

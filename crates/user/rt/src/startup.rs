@@ -21,7 +21,7 @@
 //! first system call, because a call overwrites the buffer it stands in.
 
 use audhsos_abi::layout::MAX_BOOT_REGIONS;
-use audhsos_abi::startup::{Payload, Role, Screen, StartupError};
+use audhsos_abi::startup::{BusRange, Payload, Role, Screen, StartupError};
 use audhsos_abi::{Buffer, Handle};
 use audhsos_collections::ArrayVec;
 
@@ -105,6 +105,11 @@ pub struct Startup {
     /// The stride and the format of that framebuffer, packed as
     /// [`Role::FramebufferLine`] carries them.
     pub framebuffer_line: Option<u64>,
+    /// The device memory over the configuration window of the PCI bus.
+    pub ecam: Option<MemoryHandle>,
+    /// The segment group and the bus range of that window, packed as
+    /// [`Role::EcamBuses`] carries them.
+    pub ecam_buses: Option<u64>,
 }
 
 impl Default for Startup {
@@ -135,6 +140,18 @@ impl Startup {
             framebuffer: None,
             framebuffer_geometry: None,
             framebuffer_line: None,
+            ecam: None,
+            ecam_buses: None,
+        }
+    }
+
+    /// The buses of the configuration window, or `None` when the process
+    /// was given no window.
+    #[must_use]
+    pub const fn bus_range(&self) -> Option<BusRange> {
+        match self.ecam_buses {
+            Some(word) => Some(BusRange::from_word(word)),
+            None => None,
         }
     }
 
@@ -168,6 +185,7 @@ impl Startup {
         let field = match role {
             Role::FramebufferGeometry => &mut self.framebuffer_geometry,
             Role::FramebufferLine => &mut self.framebuffer_line,
+            Role::EcamBuses => &mut self.ecam_buses,
             _ => return Ok(()),
         };
         if field.is_some() {
@@ -194,7 +212,8 @@ impl Startup {
             Role::DisplayServer => once(&mut self.display_server, role, handle),
             Role::InputServer => once(&mut self.input_server, role, handle),
             Role::Framebuffer => once(&mut self.framebuffer, role, handle),
-            Role::FramebufferGeometry | Role::FramebufferLine => Ok(()),
+            Role::Ecam => once(&mut self.ecam, role, handle),
+            Role::FramebufferGeometry | Role::FramebufferLine | Role::EcamBuses => Ok(()),
             Role::Ram => self
                 .ram
                 .push(MemoryHandle::from_handle(handle))

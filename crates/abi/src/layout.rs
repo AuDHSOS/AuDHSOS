@@ -122,10 +122,11 @@ pub const MAX_MESSAGE_BYTES: usize = MAX_MESSAGE_WORDS * 8;
 
 /// Maximum number of words a system call result writes into the message
 /// area of the caller's own buffer when it does not fit into
-/// [`MAX_SYSCALL_RETURN_WORDS`] return words. `system_info` writes
-/// twenty-six, which is the widest result of this interface: twenty about
-/// the kernel and six about the framebuffer.
-pub const MAX_RESULT_WORDS: usize = 26;
+/// [`MAX_SYSCALL_RETURN_WORDS`] return words. `system_info` writes thirty,
+/// which is the widest result of this interface: twenty about the kernel,
+/// six about the framebuffer, and four about the configuration window of
+/// the bus.
+pub const MAX_RESULT_WORDS: usize = 30;
 
 /// Number of threads one process may hold.
 pub const THREADS_PER_PROCESS: usize = 64;

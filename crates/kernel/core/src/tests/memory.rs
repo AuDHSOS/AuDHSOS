@@ -13,7 +13,7 @@ use audhsos_abi::layout::{
     KERNEL_STACK_SLOTS, KERNEL_STACKS_BASE, MAX_PHYS_WINDOW_BYTES, PAGE_SIZE, PHYS_WINDOW_BASE,
     USER_SPACE_END,
 };
-use audhsos_abi::{Framebuffer, FramebufferFormat};
+use audhsos_abi::{Ecam, Framebuffer, FramebufferFormat};
 use kernel_hal_api::doubles::{
     CountingFrameSource, MemoryFrameAccess, RecordingConsole, RecordingTlb, ScriptedPlatform,
 };
@@ -692,6 +692,63 @@ fn a_machine_that_reported_no_aperture_has_no_device_memory() {
     assert!(memory.devices().is_empty());
     let range = PhysFrameRange::from_numbers(0xE0000, 0xE0001).unwrap();
     assert!(!memory.is_device_memory(range));
+}
+
+#[test]
+fn the_configuration_window_is_an_aperture_whether_the_memory_map_marked_it_or_not() {
+    let window = Ecam {
+        base: 0xE000_0000,
+        segment: 0,
+        first_bus: 0,
+        last_bus: 1,
+    };
+    let platform = platform().ecam(window);
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let memory =
+        bring_up::<X86Entry, _, _, _>(&platform, machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    assert_eq!(memory.ecam(), Some(window));
+    assert_eq!(memory.devices().len(), 1, "the map marked no region at all");
+    let whole = PhysFrameRange::from_numbers(0xE0000, 0xE0200).unwrap();
+    assert!(
+        memory.is_device_memory(whole),
+        "the two mebibytes of the window's two buses"
+    );
+    let beyond = PhysFrameRange::from_numbers(0xE0200, 0xE0201).unwrap();
+    assert!(
+        !memory.is_device_memory(beyond),
+        "the frame above the window belongs to no aperture"
+    );
+}
+
+#[test]
+fn a_configuration_window_the_address_space_cannot_hold_is_left_out() {
+    let platform = platform().ecam(Ecam {
+        base: MAX_PHYS_ADDR - PAGE_SIZE + 1,
+        segment: 0,
+        first_bus: 0,
+        last_bus: 255,
+    });
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let memory =
+        bring_up::<X86Entry, _, _, _>(&platform, machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    assert!(
+        memory.devices().is_empty(),
+        "a window that runs past the machine is no aperture"
+    );
+}
+
+#[test]
+fn a_machine_without_a_configuration_window_reports_none() {
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let memory =
+        bring_up::<X86Entry, _, _, _>(&platform(), machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    assert_eq!(memory.ecam(), None);
 }
 
 #[test]

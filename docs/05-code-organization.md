@@ -29,7 +29,7 @@ AuDHSOS/
 │   ├── elf/                   audhsos-elf: ELF64 parser producing validated load segments
 │   ├── uefi/                  audhsos-uefi: UEFI structure layouts, GUIDs, constants (no calls)
 │   ├── gfx/                   gfx: framebuffer logic, bitmap font, damage tracking
-│   ├── pci/                   pci: configuration space, BARs, capabilities, MSI-X, the virtio capabilities (document 13, Phase 13)
+│   ├── pci/                   pci: configuration space, BARs, capabilities, MSI-X, the virtio capabilities (document 13)
 │   ├── sync/                  audhsos-sync: Global<T> and Preset<T> cells (unsafe allowed)
 │   ├── time/                  audhsos-time: UnixTime, CivilTime, Instant, Duration (document 12)
 │   ├── encoding/              audhsos-encoding: Base64, hex, PEM (document 12)
@@ -146,7 +146,7 @@ AuDHSOS/
 | `gfx` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf`; `test-support` as a dev-dependency |
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
-| `pci` (Phase 13) | 1 | all | no | yes, fuzz | - (feature `test-doubles`); `test-support` as a dev-dependency |
+| `pci` | 1 | all | no | yes, fuzz | - (feature `test-doubles`); `test-support` as a dev-dependency |
 | `driver-virtio-net` (Phase 14) | 2 | all | no | yes, fuzz | `pci`, `virtio-queue` (feature `test-doubles`) |
 | `fs-fat` | 1 | all | no | yes | `audhsos-time`; `test-support` as a dev-dependency; feature `test-doubles` |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
@@ -170,7 +170,7 @@ AuDHSOS/
 | `server-display` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `gfx`, `user-proto` |
 | `server-input` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `driver-i8042`, `user-proto`; feature `test-doubles` |
 | `server-net` (Phase 14) | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `net-stack`, `pci`, `user-proto` |
-| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | the three server logic crates, `audhsos-abi`, `driver-uart16550`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
+| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | the three server logic crates, `audhsos-abi`, `driver-uart16550`, `pci`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
 | `crypto-ct` | c0 | all | no | yes | - |
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
 | `crypto-hash` | c1 | all | no | yes | `crypto-ct` |

@@ -152,7 +152,7 @@ const E2E_TIMEOUT: Duration = Duration::from_secs(60);
 /// archive, the memory server answered, the name server answered, the
 /// console driver took the port, and the application found it and said
 /// something through it.
-const E2E_LINES: [(&str, &str); 16] = [
+const E2E_LINES: [(&str, &str); 19] = [
     (
         "[init] started server-memory",
         "the memory server did not start",
@@ -207,6 +207,18 @@ const E2E_LINES: [(&str, &str); 16] = [
         "the program that listens did not start",
     ),
     (
+        "[info] ecam=",
+        "the kernel did not report the configuration window of the bus",
+    ),
+    (
+        "[lspci] window segment=",
+        "the program that walks the bus was given no window",
+    ),
+    (
+        " 1af4:1041 class=02:00:00",
+        "the bus walk did not find the virtio network device of the machine",
+    ),
+    (
         "[faulter] about to write to nowhere",
         "the program that faults on purpose never ran",
     ),
@@ -215,6 +227,37 @@ const E2E_LINES: [(&str, &str); 16] = [
         "the root task did not report the fault of its child",
     ),
 ];
+
+/// The four structures a driver of the network device needs, which the bus
+/// walk has to have read off the device itself.
+const VIRTIO_STRUCTURES: [&str; 4] = ["common", "notify", "isr", "device"];
+
+/// What the line about the virtio device does not say.
+///
+/// The order of the names is the device's own order of preference and no
+/// business of this check (virtio 4.1.4), so each is looked for on its own.
+fn virtio_lines(output: &str) -> Vec<String> {
+    let Some(line) = output
+        .lines()
+        .find(|line| line.contains("[lspci] virtio-net structures="))
+    else {
+        return vec!["the bus walk read no structures off the network device".to_owned()];
+    };
+    let mut violations = Vec::new();
+    for wanted in VIRTIO_STRUCTURES {
+        if !line.contains(wanted) {
+            violations.push(format!(
+                "the network device published no {wanted} structure"
+            ));
+        }
+    }
+    if !line.contains("msix=4") {
+        violations.push(format!(
+            "the message table of the network device is not the four vectors QEMU gives it: {line}"
+        ));
+    }
+    violations
+}
 
 /// How many lines the second client writes while the first writes its own.
 ///
@@ -269,6 +312,9 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
             violations.push((*complaint).to_owned());
             break;
         }
+    }
+    if violations.is_empty() {
+        violations.extend(virtio_lines(&session.output()));
     }
     // The picture, while the machine still runs: `app-hello` is waiting to
     // be typed at, so nothing has ended yet. What is on the screen is
@@ -344,7 +390,8 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
         eprintln!("--- end ---");
     }
     Error::from_violations(violations)?;
-    test_without_a_framebuffer(&machine, &path)
+    test_without_a_framebuffer(&machine, &path)?;
+    test_without_a_network(&machine, &path)
 }
 
 /// Where `app-paint` fills its rectangle and what it fills it with. It says
@@ -708,6 +755,21 @@ fn picture_of(qmp: &mut Qmp, root: &Path) -> Result<ppm::Image, Error> {
     qmp.screendump(&root.join("target").join("screen.ppm"))
 }
 
+/// Presses the key that ends the canvas and waits for it to say it did.
+///
+/// Every run that has a screen needs this: the canvas presents nothing
+/// until an event reaches it and ends on nothing but this key (D-126), and
+/// a run that never sends it waits for the program until the time limit.
+fn end_the_canvas(socket: &Path, session: &mut Session) -> Result<(), Error> {
+    let mut qmp = Qmp::connect(socket, E2E_TIMEOUT)?;
+    let done = session.count_seen("[canvas] done");
+    press(&mut qmp, ENDS_QCODE)?;
+    if !session.wait_for_more("[canvas] done", done, E2E_TIMEOUT) {
+        return Err(Error::Usage("the canvas never said it was done".to_owned()));
+    }
+    Ok(())
+}
+
 /// The name QEMU knows [`app_canvas::ENDS`] under.
 const ENDS_QCODE: &str = "f10";
 
@@ -1046,6 +1108,86 @@ const NO_VGA_LINES: [(&str, &str); 4] = [
         "the canvas did not say that it has no screen",
     ),
 ];
+
+/// The lines the run without the two network lines has to carry: the bus is
+/// walked, the device is not there, and the machine ends by itself.
+const NO_NETWORK_LINES: [(&str, &str); 3] = [
+    (
+        "[lspci] window segment=",
+        "the program that walks the bus was given no window",
+    ),
+    (
+        "[lspci] 00:00.0 8086:29c0",
+        "the bus walk did not find the host bridge of the machine",
+    ),
+    (
+        "[lspci] no virtio device",
+        "the bus walk did not report that there is no virtio device",
+    ),
+];
+
+/// The same system on a machine without the two network lines: the bus walk
+/// reports the rest of the bus, finds no virtio device, and the run ends by
+/// itself (13.12).
+fn test_without_a_network(machine: &Machine, path: &Path) -> Result<(), Error> {
+    let socket = qemu::socket_path("audhsos-qmp-nonet")?;
+    let _ = std::fs::remove_file(&socket);
+    let mut session = Session::start(
+        machine,
+        path,
+        &qemu::Options {
+            qmp: Some(socket.clone()),
+            ..qemu::Options::without_network()
+        },
+    )?;
+    let mut violations = Vec::new();
+    for (needle, complaint) in NO_NETWORK_LINES {
+        if !session.wait_for(needle, E2E_TIMEOUT) {
+            violations.push((*complaint).to_owned());
+            break;
+        }
+    }
+    if violations.is_empty() && session.wait_for("[hello] ready", E2E_TIMEOUT) {
+        session.send(b"typed\n")?;
+    }
+    // The programs that listen end when they have seen what they wait for,
+    // and nothing but the runner sends it: a run that injects nothing waits
+    // for them until the time limit. This machine has a screen, so the
+    // canvas waits for the key that ends it as well.
+    if violations.is_empty() {
+        match inject_input(&socket, &mut session) {
+            Ok(()) => violations.extend(input_lines(&session.output())),
+            Err(error) => violations.push(format!("nothing could be injected: {error}")),
+        }
+    }
+    if violations.is_empty() {
+        match end_the_canvas(&socket, &mut session) {
+            Ok(()) => {}
+            Err(error) => violations.push(format!("the canvas did not end: {error}")),
+        }
+    }
+    if violations.is_empty() {
+        match session.wait_for_end(E2E_TIMEOUT) {
+            None => violations.push("the machine did not end by itself".to_owned()),
+            status => {
+                let outcome = qemu::outcome_of(status, false);
+                if outcome != qemu::Outcome::Success {
+                    violations.push(format!("the machine reported a {}", outcome.name()));
+                }
+            }
+        }
+    }
+    let output = session.finish();
+    let _ = std::fs::remove_file(&socket);
+    note!("qemu without a network: {} line(s)", output.lines().count());
+    report("without a network", &violations);
+    if !violations.is_empty() {
+        eprintln!("--- serial output of the run without a network ---");
+        eprintln!("{output}");
+        eprintln!("--- end ---");
+    }
+    Error::from_violations(violations)
+}
 
 /// Every test kernel in QEMU, then the three images that must make the
 /// loader report a failure.

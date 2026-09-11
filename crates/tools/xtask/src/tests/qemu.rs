@@ -127,7 +127,7 @@ fn the_command_line_is_the_one_the_target_platform_document_prescribes() {
         Path::new("/fw/edk2-x86_64-code.fd"),
         Path::new("/img/audhsos.img"),
         "tcg",
-        &Options::plain(),
+        &Options::without_network(),
     )
     .join(" ");
     assert_eq!(
@@ -158,6 +158,7 @@ fn what_a_run_asks_for_beyond_the_reference_machine_is_appended_to_it() {
         display: false,
         qmp: Some(std::path::PathBuf::from("/tmp/qmp.sock")),
         no_vga: true,
+        network: None,
     };
     let line = arguments(Path::new("/fw"), Path::new("/img"), "tcg", &options).join(" ");
     assert!(
@@ -314,4 +315,50 @@ fn a_bench_line_does_not_count_as_a_test() {
     assert_eq!(report.passed(), 0);
     assert_eq!(report.failed(), 0);
     assert!(check(&report, &ended_with(EXIT_SUCCESS)).is_ok());
+}
+
+#[test]
+fn the_network_of_the_reference_machine_is_one_netdev_and_one_device() {
+    let line = arguments(
+        Path::new("/fw"),
+        Path::new("/img"),
+        "tcg",
+        &Options {
+            network: Some(52_000),
+            ..Options::without_network()
+        },
+    )
+    .join(" ");
+    assert!(
+        line.ends_with(
+            "-netdev user,id=n0,hostfwd=tcp:127.0.0.1:52000-:7 \
+             -device virtio-net-pci,netdev=n0,disable-legacy=on,mq=off"
+        ),
+        "{line}"
+    );
+}
+
+#[test]
+fn a_run_without_a_network_carries_neither_line() {
+    let line = arguments(
+        Path::new("/fw"),
+        Path::new("/img"),
+        "tcg",
+        &Options::without_network(),
+    )
+    .join(" ");
+    assert!(!line.contains("-netdev"), "{line}");
+    assert!(!line.contains("virtio-net-pci"), "{line}");
+}
+
+#[test]
+fn a_plain_run_carries_the_network_on_a_port_of_the_loopback() {
+    let options = Options::plain();
+    let port = options.network.expect("the system gives a free port");
+    let line = arguments(Path::new("/fw"), Path::new("/img"), "tcg", &options).join(" ");
+    assert!(
+        line.contains(&format!("hostfwd=tcp:127.0.0.1:{port}-:7")),
+        "{line}"
+    );
+    assert_ne!(port, 0, "a forwarded port is one the system gave");
 }

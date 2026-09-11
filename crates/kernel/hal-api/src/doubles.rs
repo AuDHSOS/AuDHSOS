@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use audhsos_abi::Framebuffer;
+use audhsos_abi::{Ecam, Framebuffer};
 use kernel_types::{Page, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
 
 use crate::console::DebugConsole;
@@ -711,6 +711,7 @@ pub struct ScriptedPlatform {
     window_base: VirtAddr,
     rsdp: Option<PhysAddr>,
     framebuffer: Option<Framebuffer>,
+    ecam: Option<Ecam>,
 }
 
 impl ScriptedPlatform {
@@ -722,6 +723,7 @@ impl ScriptedPlatform {
             window_base,
             rsdp: None,
             framebuffer: None,
+            ecam: None,
         }
     }
 
@@ -745,6 +747,13 @@ impl ScriptedPlatform {
         self.framebuffer = Some(framebuffer);
         self
     }
+
+    /// Sets the configuration window the firmware is to have published.
+    #[must_use]
+    pub const fn ecam(mut self, ecam: Ecam) -> Self {
+        self.ecam = Some(ecam);
+        self
+    }
 }
 
 impl Platform for ScriptedPlatform {
@@ -762,6 +771,10 @@ impl Platform for ScriptedPlatform {
 
     fn acpi_rsdp(&self) -> Option<PhysAddr> {
         self.rsdp
+    }
+
+    fn ecam(&self) -> Option<Ecam> {
+        self.ecam
     }
 }
 
