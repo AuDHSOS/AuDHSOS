@@ -555,6 +555,7 @@ fn resource_limits_exact_boundaries_are_accepted() -> Result<(), Error> {
         stack: 1,
         string_units: 1,
         heap_entries: 32,
+        feedback_vectors: 1,
         call_frames: 8,
         binding_slots: 32,
         properties: 32,

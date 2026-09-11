@@ -26,8 +26,8 @@ pub struct NamedAccessCase {
     pub holder_shape: ShapeId,
     /// Property slot in the holder object.
     pub slot: u32,
-    /// Prototype-validity epoch at resolution time.
-    pub prototype_epoch: u64,
+    /// Prototype-validity epoch for inherited accesses; absent for own properties.
+    pub prototype_epoch: Option<u64>,
 }
 
 /// State machine for a named property access Inline Cache site (`o.x` / `o.x = v`).
@@ -52,10 +52,9 @@ impl NamedAccessIC {
         actual_shape: ShapeId,
         prototype_epoch: Option<u64>,
     ) -> Option<NamedAccessCase> {
-        let prototype_epoch = prototype_epoch?;
         match self {
             Self::Monomorphic(case) => {
-                if case.receiver_shape == actual_shape && case.prototype_epoch == prototype_epoch {
+                if case_matches(*case, actual_shape, prototype_epoch) {
                     Some(*case)
                 } else {
                     None
@@ -63,9 +62,7 @@ impl NamedAccessIC {
             }
             Self::Polymorphic(entries) => {
                 for case in entries {
-                    if case.receiver_shape == actual_shape
-                        && case.prototype_epoch == prototype_epoch
-                    {
+                    if case_matches(*case, actual_shape, prototype_epoch) {
                         return Some(*case);
                     }
                 }
@@ -105,6 +102,16 @@ impl NamedAccessIC {
             Self::Megamorphic => {}
         }
     }
+}
+
+fn case_matches(
+    case: NamedAccessCase,
+    actual_shape: ShapeId,
+    prototype_epoch: Option<u64>,
+) -> bool {
+    case.receiver_shape == actual_shape
+        && (case.holder_depth == 0
+            || matches!((case.prototype_epoch, prototype_epoch), (Some(expected), Some(actual)) if expected == actual))
 }
 
 /// Observed types for binary operations (+, -, *, <).
@@ -193,17 +200,17 @@ mod tests {
             holder_depth: 0,
             holder_shape: ShapeId(1),
             slot: 0,
-            prototype_epoch: 0,
+            prototype_epoch: None,
         };
         ic.record(first);
         assert_eq!(ic, NamedAccessIC::Monomorphic(first));
         assert_eq!(ic.try_get(ShapeId(1), Some(0)), Some(first));
-        assert_eq!(ic.try_get(ShapeId(1), Some(1)), None);
-        assert_eq!(ic.try_get(ShapeId(1), None), None);
+        assert_eq!(ic.try_get(ShapeId(1), Some(1)), Some(first));
+        assert_eq!(ic.try_get(ShapeId(1), None), Some(first));
         assert_eq!(ic.try_get(ShapeId(2), Some(0)), None);
 
         let refreshed = NamedAccessCase {
-            prototype_epoch: 1,
+            prototype_epoch: None,
             ..first
         };
         ic.record(refreshed);
@@ -215,7 +222,7 @@ mod tests {
             holder_depth: 1,
             holder_shape: ShapeId(3),
             slot: 1,
-            prototype_epoch: 0,
+            prototype_epoch: Some(0),
         };
         ic.record(second);
         assert!(matches!(ic, NamedAccessIC::Polymorphic(_)));

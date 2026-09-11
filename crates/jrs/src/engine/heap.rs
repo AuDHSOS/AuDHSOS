@@ -414,7 +414,11 @@ impl GenerationalHeap {
                     value: object
                         .get_slot(location.slot_offset)
                         .unwrap_or(VALUE_UNDEFINED),
-                    prototype_epoch: self.shapes.prototype_epoch(),
+                    prototype_epoch: if depth == 0 {
+                        None
+                    } else {
+                        self.shapes.prototype_epoch()
+                    },
                 }));
             }
             if object.prototype.is_null() {
@@ -445,13 +449,16 @@ impl GenerationalHeap {
         holder_depth: u16,
         holder_shape: ShapeId,
         slot: u32,
-        prototype_epoch: u64,
+        prototype_epoch: Option<u64>,
     ) -> Result<Option<Value>, HeapError> {
         let object = self
             .get_object(receiver)
             .ok_or(HeapError::InvalidReference)?;
-        if object.shape_id != receiver_shape
-            || self.shapes.prototype_epoch() != Some(prototype_epoch)
+        if object.shape_id != receiver_shape {
+            return Ok(None);
+        }
+        if holder_depth != 0
+            && (prototype_epoch.is_none() || self.shapes.prototype_epoch() != prototype_epoch)
         {
             return Ok(None);
         }

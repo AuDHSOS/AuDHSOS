@@ -54,6 +54,8 @@ pub struct Limits {
     pub string_units: usize,
     /// Maximum live binding cells and function objects in the tracing heap.
     pub heap_entries: usize,
+    /// Maximum compiled functions with Agent-local execution feedback.
+    pub feedback_vectors: usize,
     /// Maximum simultaneously active JavaScript calls (not Rust recursion).
     pub call_frames: usize,
     /// Maximum binding slots across all active call frames, including the script.
@@ -77,6 +79,7 @@ impl Default for Limits {
             stack: 4096,
             string_units: 1_048_576,
             heap_entries: 65_536,
+            feedback_vectors: 65_536,
             call_frames: 1024,
             binding_slots: 65_536,
             properties: 65_536,

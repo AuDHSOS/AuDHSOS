@@ -587,9 +587,7 @@ impl RegisterVM {
                     }
 
                     if let Some(property) = heap.lookup_named(oref, name)? {
-                        if let Some(prototype_epoch) = property.prototype_epoch
-                            && let Some(ic) = feedback.get_named_ic_mut(slot)
-                        {
+                        if let Some(ic) = feedback.get_named_ic_mut(slot) {
                             ic.record(NamedAccessCase {
                                 receiver_shape: property.receiver_shape,
                                 holder_depth: property.holder_depth,
@@ -612,11 +610,32 @@ impl RegisterVM {
                     let target = self.read_reg(obj)?;
                     let oref = target.as_object().ok_or(VMError::TypeError)?;
                     let current_shape = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
+                    let prototype_epoch = heap.shapes.prototype_epoch();
+
+                    let cached = feedback
+                        .get_named_ic(slot)
+                        .and_then(|ic| ic.try_get(current_shape, prototype_epoch));
+                    if let Some(case) = cached
+                        && case.holder_depth == 0
+                        && case.holder_shape == current_shape
+                    {
+                        heap.set_object_slot(oref, case.slot, self.acc)?;
+                        continue;
+                    }
 
                     // Check if property exists in current shape
                     if let Some(loc) = heap.shapes.lookup(current_shape, name) {
                         let val = self.acc;
                         heap.set_object_slot(oref, loc.slot_offset, val)?;
+                        if let Some(ic) = feedback.get_named_ic_mut(slot) {
+                            ic.record(NamedAccessCase {
+                                receiver_shape: current_shape,
+                                holder_depth: 0,
+                                holder_shape: current_shape,
+                                slot: loc.slot_offset,
+                                prototype_epoch: None,
+                            });
+                        }
                     } else {
                         // Transition to new Shape
                         let (new_shape, slot_idx) = heap.shapes.transition(
@@ -627,15 +646,13 @@ impl RegisterVM {
                         let val = self.acc;
                         heap.set_object_shape(oref, new_shape)?;
                         heap.set_object_slot(oref, slot_idx, val)?;
-                        if let Some(prototype_epoch) = heap.shapes.prototype_epoch()
-                            && let Some(ic) = feedback.get_named_ic_mut(slot)
-                        {
+                        if let Some(ic) = feedback.get_named_ic_mut(slot) {
                             ic.record(NamedAccessCase {
                                 receiver_shape: new_shape,
                                 holder_depth: 0,
                                 holder_shape: new_shape,
                                 slot: slot_idx,
-                                prototype_epoch,
+                                prototype_epoch: None,
                             });
                         }
                     }

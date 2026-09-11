@@ -12,7 +12,7 @@ use crate::{
     parser::{Binary, Unary},
     value::{Callable, FunctionValue},
 };
-use alloc::{collections::VecDeque, rc::Rc, vec::Vec};
+use alloc::{collections::VecDeque, rc::Rc, rc::Weak, vec::Vec};
 
 mod abort;
 mod arrays;
@@ -198,6 +198,24 @@ pub struct Runtime {
     intrinsic_code: Vec<(Builtin, Rc<FunctionCode>)>,
     register_vm: Option<crate::engine::interpreter::RegisterVM>,
     register_heap: Option<crate::engine::heap::GenerationalHeap>,
+    register_feedback: Vec<RegisterFeedbackState>,
+}
+
+struct RegisterFeedbackState {
+    code: Weak<crate::engine::bytecode::BytecodeFunction>,
+    vector: crate::engine::feedback::FeedbackVector,
+    invocations: u64,
+}
+
+impl RegisterFeedbackState {
+    fn new(code: &Rc<crate::engine::bytecode::BytecodeFunction>) -> Self {
+        let vector = crate::engine::feedback::FeedbackVector::new(code.feedback_slot_count);
+        Self {
+            code: Rc::downgrade(code),
+            vector,
+            invocations: 0,
+        }
+    }
 }
 
 struct Execution<'host> {
@@ -265,6 +283,7 @@ struct Execution<'host> {
     reported_exceptions: Vec<Error>,
     register_vm: Option<crate::engine::interpreter::RegisterVM>,
     register_heap: Option<crate::engine::heap::GenerationalHeap>,
+    register_feedback: Vec<RegisterFeedbackState>,
 }
 
 impl Runtime {
@@ -277,6 +296,7 @@ impl Runtime {
             intrinsic_code: Vec::new(),
             register_vm: None,
             register_heap: None,
+            register_feedback: Vec::new(),
         }
     }
 
@@ -292,12 +312,28 @@ impl Runtime {
         execution.intrinsic_code = core::mem::take(&mut self.intrinsic_code);
         execution.register_vm = self.register_vm.take();
         execution.register_heap = self.register_heap.take();
+        execution.register_feedback = core::mem::take(&mut self.register_feedback);
         let result = execution.run(program);
         self.stack = execution.stack;
         self.intrinsic_code = execution.intrinsic_code;
         self.register_vm = execution.register_vm;
         self.register_heap = execution.register_heap;
+        self.register_feedback = execution.register_feedback;
         result
+    }
+
+    #[cfg(test)]
+    pub(crate) fn register_feedback_invocations(&self, program: &Program) -> Option<u64> {
+        let code = program.register_code.as_ref()?;
+        self.register_feedback
+            .iter()
+            .find(|state| state.code.as_ptr() == Rc::as_ptr(code))
+            .map(|state| state.invocations)
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn register_feedback_count(&self) -> usize {
+        self.register_feedback.len()
     }
 }
 
@@ -367,6 +403,7 @@ impl<'host> Execution<'host> {
             reported_exceptions: Vec::new(),
             register_vm: None,
             register_heap: None,
+            register_feedback: Vec::new(),
         }
     }
 }
@@ -374,7 +411,7 @@ impl<'host> Execution<'host> {
 impl Execution<'_> {
     fn execute_register_program(
         &mut self,
-        code: &crate::engine::bytecode::BytecodeFunction,
+        code: &Rc<crate::engine::bytecode::BytecodeFunction>,
     ) -> Result<Value, Error> {
         let mut vm = self.register_vm.take().unwrap_or_else(|| {
             crate::engine::interpreter::RegisterVM::with_limits(
@@ -386,8 +423,32 @@ impl Execution<'_> {
         vm.fuel = self.fuel;
         vm.set_string_units_limit(self.limits.string_units);
         let mut heap = self.register_heap.take().unwrap_or_default();
-        let mut feedback = crate::engine::feedback::FeedbackVector::new(code.feedback_slot_count);
-        let result = vm.run(code, &mut feedback, &mut heap);
+        self.register_feedback
+            .retain(|state| state.code.strong_count() != 0);
+        let feedback_index = if let Some(index) = self
+            .register_feedback
+            .iter()
+            .position(|state| state.code.as_ptr() == Rc::as_ptr(code))
+        {
+            index
+        } else {
+            if self.register_feedback.len() >= self.limits.feedback_vectors {
+                self.register_vm = Some(vm);
+                self.register_heap = Some(heap);
+                return Err(Error::Limit {
+                    resource: "feedback vectors",
+                });
+            }
+            self.register_feedback
+                .push(RegisterFeedbackState::new(code));
+            self.register_feedback.len().saturating_sub(1)
+        };
+        let feedback = self
+            .register_feedback
+            .get_mut(feedback_index)
+            .ok_or(Error::InvalidBytecode)?;
+        feedback.invocations = feedback.invocations.saturating_add(1);
+        let result = vm.run(code, &mut feedback.vector, &mut heap);
         self.fuel = vm.fuel;
         let result = match result {
             Ok(value) if value.is_undefined() => Ok(Value::Undefined),

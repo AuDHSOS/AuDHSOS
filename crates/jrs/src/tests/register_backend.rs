@@ -134,6 +134,33 @@ fn named_property_bytecode_is_reusable_across_independent_agent_heaps() -> Resul
 }
 
 #[test]
+fn feedback_vectors_persist_per_code_identity_and_obey_the_agent_quota() -> Result<(), Error> {
+    let limits = Limits {
+        feedback_vectors: 2,
+        ..Limits::default()
+    };
+    let first = compile("let o={x:1};o.x", limits)?;
+    let second = compile("let o={y:2};o.y", limits)?;
+    let third = compile("let o={z:3};o.z", limits)?;
+    let mut runtime = Runtime::new(limits);
+
+    assert_eq!(runtime.run(&first, &mut SilentHost)?, Value::Number(1.0));
+    assert_eq!(runtime.run(&first, &mut SilentHost)?, Value::Number(1.0));
+    assert_eq!(runtime.register_feedback_invocations(&first), Some(2));
+    assert_eq!(runtime.run(&second, &mut SilentHost)?, Value::Number(2.0));
+    assert_eq!(runtime.register_feedback_invocations(&first), Some(2));
+    assert_eq!(runtime.register_feedback_invocations(&second), Some(1));
+    assert_eq!(runtime.register_feedback_count(), 2);
+    assert_eq!(
+        runtime.run(&third, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "feedback vectors"
+        })
+    );
+    Ok(())
+}
+
+#[test]
 fn object_completion_values_stay_on_the_legacy_backend_until_handles_are_public()
 -> Result<(), Error> {
     for source in ["({x:1})", "let o={x:1};o", "true?({x:1}):({x:2})"] {
