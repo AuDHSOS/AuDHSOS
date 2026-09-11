@@ -93,8 +93,11 @@ impl Execution<'_> {
             },
         )?;
         for (name, builtin) in [("valueOf", value_of), ("toString", to_string)] {
-            let f =
-                self.new_host_behavior(crate::heap::HostBehavior::Intrinsic(builtin), name, 0)?;
+            let f = self.new_host_behavior(
+                crate::heap::HostBehavior::Intrinsic(builtin),
+                name,
+                u32::from(builtin == Builtin::NumberToString),
+            )?;
             self.define(
                 &value,
                 Value::string(name).units(),
@@ -245,10 +248,15 @@ impl Execution<'_> {
                     message: "invalid number radix",
                 });
             }
-            if !Value::Number(n).strictly_equals(&Value::Number(10.0)) {
-                return Err(Error::Type {
-                    message: "non-decimal number formatting is not implemented",
-                });
+            #[expect(
+                clippy::as_conversions,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss
+            )]
+            let radix_u32 = n as u32;
+            if let Value::Number(num) = value {
+                let formatted = crate::number::format_with_radix(num, radix_u32);
+                return Ok(Some(Value::string(&formatted)));
             }
         }
         Ok(Some(if stringify {

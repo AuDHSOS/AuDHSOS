@@ -96,3 +96,118 @@ fn even_tie(value: f64, digits: &str, scale: i32) -> Option<u128> {
         None
     }
 }
+
+/// Formats an IEEE-754 double according to ECMA-262 `Number::toString` with the specified radix (2..=36).
+#[expect(
+    clippy::as_conversions,
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing
+)]
+#[must_use]
+pub(crate) fn format_with_radix(value: f64, radix: u32) -> String {
+    if value.is_nan() {
+        return String::from("NaN");
+    }
+    if value == 0.0 {
+        return String::from("0");
+    }
+    if value == f64::INFINITY {
+        return String::from("Infinity");
+    }
+    if value == f64::NEG_INFINITY {
+        return String::from("-Infinity");
+    }
+    if radix == 10 {
+        return format!("{value}");
+    }
+    let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let negative = value.is_sign_negative();
+    let abs_val = value.abs();
+
+    let mut result = String::new();
+    if negative {
+        result.push('-');
+    }
+
+    let int_part = float_floor(abs_val);
+    let mut frac_part = abs_val - int_part;
+
+    if int_part == 0.0 {
+        result.push('0');
+    } else if int_part <= 9_007_199_254_740_991.0 {
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let mut n = int_part as u64;
+        let mut chars = alloc::vec::Vec::new();
+        let r = u64::from(radix);
+        while n > 0 {
+            let d = usize::try_from(n % r).unwrap_or(0);
+            chars.push(digits[d]);
+            n /= r;
+        }
+        chars.reverse();
+        for b in chars {
+            result.push(b as char);
+        }
+    } else {
+        let r = f64::from(radix);
+        let mut chars = alloc::vec::Vec::new();
+        let mut n = int_part;
+        while n >= 1.0 {
+            let rem = n % r;
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let d = usize::try_from(rem as u64).unwrap_or(0);
+            chars.push(digits[d.min(digits.len() - 1)]);
+            n = (n - rem) / r;
+        }
+        chars.reverse();
+        for b in chars {
+            result.push(b as char);
+        }
+    }
+
+    if frac_part != 0.0 {
+        result.push('.');
+        let r = f64::from(radix);
+        for _ in 0..50 {
+            frac_part *= r;
+            let d_float = float_floor(frac_part);
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let d = usize::try_from(d_float as u64).unwrap_or(0);
+            result.push(digits[d.min(digits.len() - 1)] as char);
+            frac_part -= d_float;
+            if frac_part == 0.0 {
+                break;
+            }
+        }
+    }
+
+    result
+}
+
+#[expect(clippy::as_conversions, clippy::arithmetic_side_effects)]
+fn float_trunc(n: f64) -> f64 {
+    if n.is_nan() || n.is_infinite() || n == 0.0 {
+        return n;
+    }
+    let bits = n.to_bits();
+    let exponent = ((bits >> 52) & 0x7ff) as i32 - 1023;
+    if exponent < 0 {
+        if n.is_sign_negative() { -0.0 } else { 0.0 }
+    } else if exponent >= 52 {
+        n
+    } else {
+        let shift = 52 - exponent;
+        let mask = !((1u64 << shift) - 1);
+        f64::from_bits(bits & mask)
+    }
+}
+
+#[expect(clippy::float_cmp)]
+fn float_floor(n: f64) -> f64 {
+    let trunc = float_trunc(n);
+    if n < 0.0 && trunc != n {
+        trunc - 1.0
+    } else {
+        trunc
+    }
+}
