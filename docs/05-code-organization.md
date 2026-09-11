@@ -97,7 +97,7 @@ AuDHSOS/
 │   │   ├── dh/                crypto-dh: finite-field Diffie-Hellman over the MODP groups of RFC 3526
 │   │   ├── rng/               crypto-rng: Entropy and Rng traits, ChaCha20 generator
 │   │   └── rsa/               crypto-rsa: RSA verification, PKCS #1 v1.5 and PSS
-│   ├── net/                   (documents 11 and 12)
+│   ├── net/                   (documents 11, 12 and 14)
 │   │   ├── der/               audhsos-der: strict zero-copy DER reader
 │   │   ├── x509/              audhsos-x509: certificates, path validation, name matching
 │   │   ├── tls/               audhsos-tls: TLS 1.3 client, sans-I/O
@@ -110,7 +110,8 @@ AuDHSOS/
 │   │   ├── dns/               net-dns: the RFC 1035 message format, name compression, the stub resolver
 │   │   ├── dhcp/              net-dhcp: the RFC 2131 client state machine, its options, the lease timers
 │   │   ├── http/              net-http: HTTP/1.1 client encoding and parsing
-│   │   └── stack/             net-stack: interface, demultiplexing, poll
+│   │   ├── stack/             net-stack: interface, demultiplexing, poll
+│   │   └── ssh/               audhsos-ssh: SSH-2 client, sans-I/O (document 14, track S)
 │   └── tools/
 │       ├── xtask/             build, image (GPT + FAT32 writer, CRC32), run, test, lint, check-layering, check-deps, unsafe-budget, fuzz, coverage; policy tables
 │       ├── markdown/          doc-markdown: the Markdown parser of this repository's documents
@@ -181,6 +182,7 @@ AuDHSOS/
 | `crypto-rng` | c2 | all | no | yes | `crypto-ct`, `crypto-aead`; feature `test-doubles` |
 | `crypto-rsa` | c2 | all | no | yes, fuzz | `crypto-bignum`, `crypto-ct`, `crypto-hash`; feature `test-signing` |
 | `audhsos-x509` | c3 | all | no | yes, fuzz | `audhsos-der`, `audhsos-time`, `crypto-hash`, `crypto-ec`, `crypto-rsa`; feature `test-certificates` |
+| `audhsos-ssh` (track S) | c3 | all | no | yes, fuzz | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-dh`, `crypto-rng` |
 | `audhsos-tls` | c4 | all | no | yes, fuzz | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-time`, `audhsos-x509` |
 | `net-wire` | n0 | all | no | yes | `test-support` as a dev-dependency |
 | `net-eth` | n1 | all | no | yes | `net-wire`, `audhsos-time`, `audhsos-collections`; `test-support` as a dev-dependency |

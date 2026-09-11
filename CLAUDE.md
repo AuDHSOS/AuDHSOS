@@ -26,6 +26,7 @@ Locations:
 - `docs/ecma` everything related to ECMAScript
 - `docs/itu` for JPEG
 - `docs/oasis` virtio specifications
+- `docs/openssh` the SSH cipher that has no RFC
 - `docs/pcisig` some information related to PCI
 - `docs/rfc` RFC documents
 - `docs/ti` the 16550 serial controller

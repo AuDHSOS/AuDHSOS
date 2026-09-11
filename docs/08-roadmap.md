@@ -646,7 +646,7 @@ build. What it refuses, and why each name is refused, is section 14.5.
 |------|------|------|-----------|
 | S1 | `audhsos-ssh`: `wire`, `packet` | M | the types of RFC 4251, section 5, against the vectors of that section, and the binary packet with its padding and its sequence numbers |
 | S2 | `kex` | L | `crypto-dh` is built (D-122); what remains is `SSH_MSG_KEXINIT` and the negotiation rule, both key exchange methods, the exchange hash, the six keys of RFC 4253, section 7.2, and the aborts |
-| S3 | the cipher | M | `chacha20-poly1305@openssh.com` over the packet layer; the provenance question of 14.13 is answered before the step, not during it |
+| S3 | the cipher | M | `chacha20-poly1305@openssh.com` over the packet layer, against the worked example of the draft D-134 keeps in `docs/openssh/` |
 | S4 | host keys | S-M | the `ssh-ed25519` blobs of RFC 8709, the signature over the exchange hash verified, and the trust rule as a parameter |
 | S5 | `auth` | M | `publickey` with the signature of RFC 4252, section 7, and `ext-info-c` with `server-sig-algs` |
 | S6 | `channel` | L | channels, the window, the session channel, `exec` and `shell`, extended data, and `exit-status` |

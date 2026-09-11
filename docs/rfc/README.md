@@ -652,9 +652,11 @@ These were read and left out, in the form of the section above.
 These five were published together in January 2006 and are one
 specification cut into five files: each of the other four is written in
 the types RFC 4251 defines and uses the constants RFC 4250 assigns.
-Nothing in this repository implements them yet; they are here so that the
-work can be written against the text rather than against a recollection
-of it.
+Nothing in this repository implements them yet, and the work that will is
+specified: an SSH-2 client, D-123 and
+[document 14](../14-secure-shell-as-a-client.md), track S of the roadmap.
+They are here so that it can be written against the text rather than
+against a recollection of it.
 
 **RFC 4251** is the architecture, and section 5 is the reason it is read
 first: the wire types the whole protocol family is spelled in — `byte`,
@@ -762,13 +764,15 @@ its siblings from MUST to SHOULD, and `curve25519-sha256` — which had no
 recommendation at all — to SHOULD. The two SHA-1 exchanges this system
 refuses are the two the IETF itself has withdrawn. What the same table
 puts in their place is `diffie-hellman-group14-sha256`, which it makes
-the one MUST, and that one this system does not implement either; the
-document is kept so that the departure can be stated as what it is
-rather than as a list of things that were skipped. Section 3.5 also
-makes `ext-info-c` and `ext-info-s` SHOULD, which is why RFC 8308 is
-here. Keeping RFC 4253 without this document would be keeping a text
-whose requirement levels no longer hold, which is the reason RFC 9293 is
-here instead of RFC 793.
+the one MUST, and the client of document 14 offers it: `crypto-dh` is the
+arithmetic under it (D-122), and step S2 of track S is the method above
+that arithmetic. What stays a departure is the three algorithms RFC 4253
+makes REQUIRED and this system refuses, and the document is kept so that
+it can be stated as what it is rather than as a list of things that were
+skipped. Section 3.5 also makes `ext-info-c` and `ext-info-s` SHOULD,
+which is why RFC 8308 is here. Keeping RFC 4253 without this document
+would be keeping a text whose requirement levels no longer hold, which is
+the reason RFC 9293 is here instead of RFC 793.
 
 **RFC 8731** is `curve25519-sha256`, and section 3.1 is the passage that
 makes it worth a file. X25519 produces 32 bytes, which RFC 7748 defines
@@ -829,12 +833,15 @@ and is not in this directory.
 ## What Secure Shell still needs, and why it is not here
 
 - **`chacha20-poly1305@openssh.com`** is the cipher this work will use,
-  and it has no RFC. It is specified in `PROTOCOL.chacha20poly1305` in
-  the OpenSSH source, which is a document but not a standards body's.
-  Whether it is kept the way D-100 added `docs/oasis/` for a second
-  body, or cited the way D-124 cites what PCI-SIG releases only to
-  members, is an open decision. The same applies to
-  `aes128-gcm@openssh.com` and `zlib@openssh.com`.
+  and it has no RFC. It is not open any more and it is not here: D-134
+  keeps its two documents in [`docs/openssh/`](../openssh/README.md), the
+  way D-100 added `docs/oasis/` for a second body. They are the OpenSSH
+  file `PROTOCOL.chacha20poly1305` at its last revision, which OpenSSH
+  removed in 2025, and `draft-ietf-sshm-chacha20-poly1305-04`, which is
+  where the OpenSSH source now points and which the crate is written
+  against. If `aes128-gcm@openssh.com` or `zlib@openssh.com` is ever
+  wanted, that directory is where they would go; neither is in the
+  algorithm set of document 14.
 - **RFC 5647** is AES-GCM for Secure Shell, and it was read and left out.
   Its section 7.3 is worth knowing — the packet length field becomes
   additional authenticated data rather than plaintext, because a tag
@@ -849,13 +856,13 @@ and is not in this directory.
   length. The encrypt-then-MAC variants that repair it are OpenSSH names
   without a document either.
 - **`diffie-hellman-group14-sha256`** is the one MUST of RFC 9142's
-  table, and the two documents it needs — RFC 8268 for the name and
-  RFC 3526 for the group — are now here, with a section of their own
-  below. What is not here is a modular exponentiation with a secret
-  exponent: `Modulus::pow` in `crypto-bignum` takes an exponent of 64
-  bits, and `pow_wide` says of itself that nothing in the product calls
-  it and that it exists so a test can sign a certificate. That is the
-  work the method waits on, not a document.
+  table, and nothing about it is open any more. The two documents it
+  needs — RFC 8268 for the name and RFC 3526 for the group — are here,
+  with a section of their own below, and the exponentiation with a secret
+  exponent it waited on is `Modulus::pow_secret` in `crypto-bignum`,
+  under the crate `crypto-dh` (D-122). What is left is the method above
+  the arithmetic: the two messages, the exchange hash and the key
+  derivation, which is step S2 of track S.
 - **RFC 4419** is Diffie-Hellman group exchange, which RFC 9142 puts at
   SHOULD NOT in its SHA-1 form and MAY in its SHA-256 form. Nothing here
   negotiates a group.

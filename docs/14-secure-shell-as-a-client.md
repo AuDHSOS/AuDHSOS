@@ -60,32 +60,41 @@ methods; agent forwarding.
 
 ## 14.3 What is there and what is missing
 
-Everything in the left column exists today and is tested.
+Everything in the left column is built and tested, with the two
+qualifications the rows state.
 
 | What SSH needs | What carries it |
 |----------------|-----------------|
 | X25519 | `crypto-ec::x25519`, against the vectors of RFC 7748, sections 5.2 and 6.1 |
 | Finite-field Diffie-Hellman with a secret exponent | `crypto-dh` over `crypto-bignum::Modulus::pow_secret` (D-122) |
 | SHA-256 | `crypto-hash::Sha256` |
-| Ed25519 signing and verification | `crypto-ec::ed25519` |
+| Ed25519 verification | `crypto-ec::ed25519::verify` |
+| Ed25519 signing | `crypto-ec::ed25519::sign`, which compiles only under the feature `test-signing` (D-39) |
 | ChaCha20 and Poly1305 as separate primitives | `crypto-aead`, which holds both beside its RFC 8439 construction |
 | Unpredictable bytes | `crypto-rng` seeded from the `random_bytes` call of D-121 |
 | A monotonic clock and a wait with a deadline | D-120 |
-| A TCP connection with back pressure | `net-tcp` and the socket protocol of D-116 |
+| A TCP connection with back pressure | `net-tcp`, built and tested; the socket protocol of D-116 is Phase 14, and step S8 is the one step that waits on it |
 
 Not one new cryptographic primitive is needed. That is the result of
 choosing the algorithm set in 14.5 rather than the one RFC 4253 makes
 mandatory, and it is the reason this track is protocol work only.
 
+One of them has to change what it is compiled into. D-39 keeps the
+asymmetric product surface verification only and leaves signing behind
+test features, and `publickey` authentication signs with the client's own
+key, so step S5 needs `ed25519::sign` outside `test-signing`. That is a
+decision and not code, and 14.13 carries it.
+
 What is missing is every part that is SSH-shaped: the wire types, the
 binary packet, the negotiation, the exchange hash, the key derivation,
-the authentication exchange, and the channel layer. Two things are also
+the authentication exchange, and the channel layer. Three things are also
 missing that are not code, and 14.13 lists them.
 
 ## 14.4 The documents
 
-All twelve are in `docs/rfc/` under D-59, with their checksums, and the
-README there says what each is kept for.
+All thirteen are in `docs/rfc/` under D-59, with their checksums, and
+the README there says what each is kept for. The last two share a row
+because the two documents above them defer to them for the same reason.
 
 | Document | What is taken from it |
 |----------|-----------------------|
@@ -102,14 +111,22 @@ README there says what each is kept for.
 | RFC 8308 | `ext-info-c`, `SSH_MSG_EXT_INFO`, `server-sig-algs` |
 | RFC 8032, RFC 7748 | What RFC 8709 and RFC 8731 defer to |
 
-RFC 6668 and RFC 5656 are in the directory and are not used by this
-client: the first defines the SHA-2 MACs an AEAD makes unnecessary, the
-second the NIST-curve methods that RFC 9142 puts at SHOULD and that add
-nothing this set does not already have.
+Three more Secure Shell documents are in the directory and are not used
+by this client. RFC 6668 is the SHA-2 MACs an AEAD makes unnecessary.
+RFC 5656 is the NIST-curve methods that RFC 9142 puts at SHOULD and that
+add nothing this set does not already have. RFC 8332 is `rsa-sha2-256`
+and `rsa-sha2-512`, which 14.5 refuses; it is kept for the asymmetry that
+a later reader would otherwise have to rediscover, that the key blob of
+those algorithms still names `ssh-rsa` while the signature blob does not.
 
-One document is not in `docs/rfc/` and is needed: the specification of
-`chacha20-poly1305@openssh.com`, which is a file of the OpenSSH source
-and not a standard. 14.13 records that as open.
+The cipher is the one algorithm no standards body published, and its two
+documents are in [`docs/openssh/`](openssh/README.md) rather than in
+`docs/rfc/` (D-134). One is `PROTOCOL.chacha20poly1305` of the OpenSSH
+source at its last revision; OpenSSH removed the file in 2025 and points
+instead at the other, `draft-ietf-sshm-chacha20-poly1305-04`, which is
+what the crate is written against. That the second is an Internet-Draft
+is stated where it is kept, with what makes a numbered revision usable
+anyway and what happens when it becomes an RFC.
 
 ## 14.5 The algorithms this client offers
 
@@ -118,7 +135,7 @@ and not a standard. 14.13 records that as open.
 | Key exchange | `curve25519-sha256` | RFC 8731 | `crypto-ec::x25519`, SHA-256 |
 | Key exchange | `diffie-hellman-group14-sha256` | RFC 8268, RFC 3526 §3 | `crypto-dh`, SHA-256 |
 | Host key | `ssh-ed25519` | RFC 8709, RFC 8032 | `crypto-ec::ed25519::verify` |
-| Cipher and integrity | `chacha20-poly1305@openssh.com` | OpenSSH | `crypto-aead` |
+| Cipher and integrity | `chacha20-poly1305@openssh.com` | OpenSSH, `draft-ietf-sshm-chacha20-poly1305-04` (D-134) | `crypto-aead` |
 | Compression | `none` | RFC 4253 §6.2 | — |
 | Authentication | `publickey` with `ssh-ed25519` | RFC 4252 §7, RFC 8709 | `crypto-ec::ed25519::sign` |
 | Extension | `ext-info-c`, `server-sig-algs` | RFC 8308 | — |
@@ -346,25 +363,30 @@ driven end to end against a server built in the tests.
 
 **What can be transcribed** (D-40): the `mpint` and name-list encodings
 worked out in hex in RFC 4251, section 5, which are the only published
-vectors in the framework documents; the group of RFC 3526, section 3,
-which `crypto-dh` already holds; and the primitive vectors of RFC 7748,
-RFC 8032 and RFC 8439, which the crypto crates already hold.
+vectors in the framework documents; appendix A of
+`draft-ietf-sshm-chacha20-poly1305-04`, which is one whole packet — its
+padding, its sequence number, the 64 bytes of key material, and the bytes
+that went on the wire — and is what step S3 is checked against; the group
+of RFC 3526, section 3, which `crypto-dh` already holds; and the
+primitive vectors of RFC 7748, RFC 8032 and RFC 8439, which the crypto
+crates already hold.
 
-**What cannot.** There is no RFC 8448 for SSH. No document publishes a
-complete handshake with the keys that made it, so there is nothing to
-replay and no way to check this client against an implementation that is
-not itself from a file. That is the difference between this track and the
-TLS track, and it decides the shape of the outside check.
+**What cannot.** There is no RFC 8448 for SSH. One packet is published
+with the keys that made it and a whole handshake is not, so there is
+nothing to replay and no way to check the negotiation, the exchange hash
+and the key derivation against an implementation that is not itself from
+a file. That is the difference between this track and the TLS track, and
+it decides the shape of the outside check.
 
 **The outside check is a live OpenSSH.** The development machine runs
 one; the reference machine of D-118 reaches the development machine, and
-Phase 15 already accepts a TLS client that way. The acceptance for this
-track is the same shape: a program of the boot archive opens a connection
-to an `sshd` the test starts, authenticates with a key the test
-generated, runs a command, and reads its output and its exit status. A
-handshake against a server that this project did not write is the only
-evidence that the exchange hash, the key derivation and the packet layer
-are what the documents mean.
+the acceptance of Phase 15 is written that way (catalog 6.6.65). The
+acceptance for this track is the same shape: a program of the boot
+archive opens a connection to an `sshd` the test starts, authenticates
+with a key the test generated, runs a command, and reads its output and
+its exit status. A handshake against a server that this project did not
+write is the only evidence that the exchange hash, the key derivation
+and the packet layer are what the documents mean.
 
 **Fuzz targets** (D-23, D-54): `ssh_packet` for the binary packet reader,
 and `ssh_handshake` for the `KEXINIT` name-lists and the key exchange
@@ -381,13 +403,15 @@ listed against until that step is reached.
 
 | What is open | Where it is felt | Shape of the answer |
 |--------------|------------------|---------------------|
-| Where `PROTOCOL.chacha20poly1305` is kept | step S3: a cipher whose specification is not in the house | a `docs/openssh/` under the rule D-100 used for OASIS, or the provenance regime D-124 keeps for what cannot be obtained |
 | How a host key is trusted | step S4, and 14.10 | a rule the client is given at construction; the question is what the image can carry |
 | Where the client's private key comes from | step S5 | the boot archive of D-27, or generated per boot, in which case the far side must already know the public half |
+| Whether `ed25519::sign` becomes product surface | step S5, and 14.3 | a decision that amends D-39 for a client that authenticates with a key of its own, with the constant-time statement the crate makes for its other functions |
 
-Two questions that stood here are answered. Secure Shell enters this
-project as a client and this document is its design, which is D-123; and
-the track is track S of the roadmap, section 8.26, with the steps below.
+Three questions that stood here are answered. Secure Shell enters this
+project as a client and this document is its design, which is D-123; the
+track is track S of the roadmap, section 8.26, with the steps below; and
+the cipher's documents are in `docs/openssh/`, which is D-134 and is what
+step S3 was waiting for.
 
 ## 14.14 Order of work
 
@@ -401,7 +425,7 @@ definition of done every phase and every track step uses.
 |------|------|------|-----------|
 | S1 | `wire`, `packet` | M | the types of RFC 4251, section 5, encoded and decoded with the vectors of that section, and the binary packet framed, padded and read back, with the sequence numbers |
 | S2 | `kex` | L | `crypto-dh` is built and is the arithmetic half of this step (D-122); what remains is `SSH_MSG_KEXINIT` and the negotiation rule, both key exchange methods, the exchange hash, the six keys of section 7.2, `SSH_MSG_NEWKEYS`, and the aborts |
-| S3 | the cipher | M | `chacha20-poly1305@openssh.com` over the packet layer; needs the document question of 14.13 answered first |
+| S3 | the cipher | M | `chacha20-poly1305@openssh.com` over the packet layer, against the worked example of appendix A of the draft D-134 keeps |
 | S4 | host keys | S-M | the `ssh-ed25519` blobs of RFC 8709, the signature over `H` verified, and the trust rule as a parameter |
 | S5 | `auth` | M | `publickey` with the signature of RFC 4252, section 7, the failure and success paths, and `ext-info-c` with `server-sig-algs` |
 | S6 | `channel` | L | the channel messages, the window, the session channel, `exec` and `shell`, extended data, `exit-status`, and the close sequence |
@@ -416,9 +440,9 @@ the machine.
 
 | Risk | Effect | Mitigation |
 |------|--------|------------|
-| No published trace to replay | the client is checked only against itself and agrees with nobody | the interop acceptance of 14.12 is not optional and is what the track is judged on; it runs in `check` as the TLS probe does |
+| No published trace to replay | the client is checked only against itself and agrees with nobody | the interop acceptance of 14.12 is not optional and is what the track is judged on; it is an end-to-end run and belongs to `test --e2e`, which `check` runs. `tools/tls-probe` is not the model for it: that one is a separate workspace and no part of the checks (11.12) |
 | The `mpint` of the shared secret | a handshake that succeeds about half the time and fails otherwise, with no error that names the cause | a test for both cases — a shared secret whose top bit is set and one whose is clear — written before the exchange hash is |
-| A cipher with no standards document | a constant with no source, which D-59 exists to prevent | 14.13 makes the provenance question a precondition of step S3 rather than something discovered during it |
+| A cipher whose specification is a draft | the text the crate cites is revised or expires under it | the copy is a numbered revision and cannot change (D-134); a later revision is a later file, and the RFC it becomes goes to `docs/rfc/` with the citations moved to it |
 | Trusting a host key with no storage | a client that reaches the wrong machine and cannot tell | the rule is a parameter, not a default; a client constructed without one does not connect |
 | Fixed buffers meet a peer that wants more | a connection refused for a size rather than for a reason | the receive sizes are the ones RFC 4253, section 6.1, makes mandatory, so a peer that needs more than 35000 bytes is outside what it may require |
 | Departing from three REQUIRED algorithms | a peer this client cannot talk to | the departure is measured, not assumed: OpenSSH negotiates every algorithm of 14.5, and the interop test is what says so on the day it stops being true |

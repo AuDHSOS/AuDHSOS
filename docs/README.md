@@ -19,9 +19,10 @@ first.
 One track is decided and not started: Secure Shell as a client, which
 D-123 admits and [document 14](14-secure-shell-as-a-client.md)
 specifies, as track S of the roadmap. One step of it exists already, the
-finite-field arithmetic of `crypto-dh` (D-122). Three questions inside
-that track are open and each is a precondition of one of its steps rather
-than of the track; section 14.13 names them.
+finite-field arithmetic of `crypto-dh` (D-122), and one precondition is
+met: the cipher's documents are in [openssh/](openssh) (D-134). Three
+questions inside that track are open and each is a precondition of one of
+its steps rather than of the track; section 14.13 names them.
 
 ## Reading order
 
@@ -46,16 +47,19 @@ Beside the documents lie the standards they cite, verbatim and with
 their checksums, one directory per body that publishes them:
 [rfc/](rfc) for the RFCs (D-59), [oasis/](oasis) for what OASIS
 publishes (D-100), [w3c/](w3c), [ecma/](ecma), [itu/](itu) for the
-JPEG Recommendations, [cipa/](cipa) for Exif, and [ti/](ti) for the
+JPEG Recommendations, [cipa/](cipa) for Exif, [ti/](ti) for the
 16550 serial controller, which is a datasheet from a manufacturer rather
-than a standard from a standards body. Each directory has a `README.md`
+than a standard from a standards body, and [openssh/](openssh) for the
+one cipher of the Secure Shell client that no standards body published
+(D-134), which is kept as the OpenSSH document it came from and the IETF
+draft that replaced it. Each directory has a `README.md`
 naming what belongs there and how it is fetched. Nothing under them is
 compiled, linked, or read at run time.
 
 D-124 states what decides whether a document is kept: whether it can be
 obtained, not whether its licence permits the copy. `rfc/`, `oasis/`,
-`w3c/` and `ecma/` hold documents that may be redistributed. `itu/`,
-`cipa/` and `ti/` hold documents that the ITU, CIPA and Texas
+`w3c/`, `ecma/` and `openssh/` hold documents that may be redistributed.
+`itu/`, `cipa/` and `ti/` hold documents that the ITU, CIPA and Texas
 Instruments serve to anyone at no charge but do not licence for
 redistribution; the copies are kept regardless, and each of those
 READMEs quotes the restriction it stands against and states what follows

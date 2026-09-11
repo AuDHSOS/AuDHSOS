@@ -7,6 +7,21 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `docs/openssh/`, for the one algorithm of the Secure Shell client that
+  no standards body published (D-134). Two documents, because one
+  replaced the other: `PROTOCOL.chacha20poly1305` of the OpenSSH source
+  at revision 1.5, which is the last there was — OpenSSH removed the file
+  in August 2025 because what it documented now has IETF documents — and
+  `draft-ietf-sshm-chacha20-poly1305-04`, which is where the `PROTOCOL`
+  file now points and which the crate will be written against. The README
+  carries both checksums, the two commits the OpenSSH file is pinned
+  between, why a draft is citable here at all and what happens when it
+  becomes an RFC. Appendix A of that draft is a worked example — one
+  packet with its keys, its sequence number and the bytes on the wire —
+  and it is the only published vector this track has for a whole packet.
+  This answers the precondition of step S3; document 14 and the roadmap
+  carry it, and 14.13 is down to three open questions.
+
 - Phase 13, the bus: `kernel-acpi` gains `mcfg.rs`, which reads the `MCFG`
   table of the firmware the way `madt.rs` reads the MADT — signature,
   length and checksum through the existing `SdtHeader`, then the allocation
