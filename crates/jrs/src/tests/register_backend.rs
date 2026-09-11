@@ -50,7 +50,7 @@ fn primitive_expressions_run_through_register_bytecode_and_match_legacy() -> Res
 
 #[test]
 fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<(), Error> {
-    for source in ["'1'+2", "typeof 1", "let x=1;x+2", "Number(1)"] {
+    for source in ["'1'+2", "typeof 1", "{let x=1;x+2}", "Number(1)"] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
             "{source}"
@@ -120,5 +120,49 @@ fn realm_executes_register_backend_without_legacy_bytecode() -> Result<(), Error
     let mut realm = Realm::new(limits, &mut host)?;
     assert_eq!(realm.evaluate_compiled(&script)?, Value::Number(42.0));
     assert_eq!(realm.evaluate_compiled(&script)?, Value::Number(42.0));
+    Ok(())
+}
+
+#[test]
+fn local_bindings_and_assignments_match_legacy_execution() -> Result<(), Error> {
+    for source in [
+        "let x=1;x+2",
+        "const x=6;let y=7;x*y",
+        "let x;x===undefined",
+        "let x=1;x=2;x",
+        "let x=1;x+=2;x*=3;x",
+        "let x=1;x=2",
+        "let x=1;x;2",
+        "let x=1,y=x+1;y",
+        "let x=1;(x=2,x+3)",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn local_binding_lowering_preserves_tdz_and_const_guards_by_staying_legacy() -> Result<(), Error> {
+    for source in [
+        "let x=x;x",
+        "let x=y,y=1;x",
+        "const x=1;x=2",
+        "{let x=1;x}",
+        "var x=1;x",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
     Ok(())
 }

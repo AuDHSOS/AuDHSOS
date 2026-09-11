@@ -449,7 +449,6 @@ pub fn compile_script(source: &str, limits: Limits) -> Result<Script, Error> {
 }
 fn compile_mode(source: &str, limits: Limits, realm: bool) -> Result<Program, Error> {
     let body = parser::parse(source, limits)?;
-    let register_candidate = register_candidate(&body);
     let mut compiler = Compiler {
         program: Program {
             code: Vec::new(),
@@ -475,12 +474,12 @@ fn compile_mode(source: &str, limits: Limits, realm: bool) -> Result<Program, Er
         compiler.root_body(&body)?;
     }
     compiler.finish();
-    if let Some(expression) = register_candidate {
-        compiler.program.register_code = Some(Rc::new(lower_register_expression(
-            expression,
-            u64::try_from(compiler.program.total_instructions).unwrap_or(u64::MAX),
-        )?));
-    }
+    compiler.program.register_code = lower_register_script(
+        &body,
+        realm,
+        u64::try_from(compiler.program.total_instructions).unwrap_or(u64::MAX),
+    )
+    .map(Rc::new);
     Ok(compiler.program)
 }
 
@@ -492,57 +491,19 @@ enum RegisterType {
     Undefined,
 }
 
-fn register_candidate(body: &[Stmt]) -> Option<&Expr> {
-    let [Stmt::Expr(expression)] = body else {
-        return None;
-    };
-    register_type(expression).map(|_| expression)
-}
-
-fn register_type(expression: &Expr) -> Option<RegisterType> {
-    match &expression.kind {
-        ExprKind::Literal(Value::Number(_)) => Some(RegisterType::Number),
-        ExprKind::Literal(Value::Boolean(_)) => Some(RegisterType::Boolean),
-        ExprKind::Literal(Value::Null) => Some(RegisterType::Null),
-        ExprKind::Literal(Value::Undefined) => Some(RegisterType::Undefined),
-        ExprKind::Group(inner) => register_type(inner),
-        ExprKind::Unary(operator, inner) => {
-            let inner = register_type(inner)?;
-            match operator {
-                Unary::Plus | Unary::Minus | Unary::BitNot if inner == RegisterType::Number => {
-                    Some(RegisterType::Number)
-                }
-                Unary::Not => Some(RegisterType::Boolean),
-                Unary::Void => Some(RegisterType::Undefined),
-                _ => None,
-            }
-        }
-        ExprKind::Binary(operator, left, right) => {
-            let left = register_type(left)?;
-            let right = register_type(right)?;
-            match operator {
-                Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
-                    if left == RegisterType::Number && right == RegisterType::Number =>
-                {
-                    Some(RegisterType::Number)
-                }
-                Binary::Lt | Binary::Le | Binary::Gt | Binary::Ge
-                    if left == RegisterType::Number && right == RegisterType::Number =>
-                {
-                    Some(RegisterType::Boolean)
-                }
-                Binary::StrictEq => Some(RegisterType::Boolean),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
+#[derive(Clone, Copy)]
+struct RegisterBinding {
+    register: crate::engine::bytecode::Reg,
+    value_type: Option<RegisterType>,
+    mutable: bool,
 }
 
 struct RegisterLowerer {
     code: crate::engine::bytecode::BytecodeFunction,
     next_register: u16,
     register_count: u16,
+    local_count: u16,
+    bindings: BTreeMap<String, RegisterBinding>,
 }
 
 impl RegisterLowerer {
@@ -554,118 +515,326 @@ impl RegisterLowerer {
             code,
             next_register: 0,
             register_count: 0,
+            local_count: 0,
+            bindings: BTreeMap::new(),
         }
     }
 
-    fn lower(&mut self, expression: &Expr) -> Result<(), Error> {
+    fn declare(&mut self, name: &str, mutable: bool) -> Option<()> {
+        if self.bindings.contains_key(name) {
+            return None;
+        }
+        let register = crate::engine::bytecode::Reg(self.local_count);
+        self.local_count = self.local_count.checked_add(1)?;
+        self.next_register = self.local_count;
+        self.register_count = self.register_count.max(self.local_count);
+        self.bindings.insert(
+            String::from(name),
+            RegisterBinding {
+                register,
+                value_type: None,
+                mutable,
+            },
+        );
+        Some(())
+    }
+
+    fn initialize(&mut self, name: &str, expression: Option<&Expr>) -> Option<()> {
+        let (register, value_type) = if let Some(expression) = expression {
+            let value_type = self.lower(expression)?;
+            (self.bindings.get(name)?.register, value_type)
+        } else {
+            self.code
+                .emit(crate::engine::bytecode::Instruction::LdaUndefined);
+            (self.bindings.get(name)?.register, RegisterType::Undefined)
+        };
+        self.code
+            .emit(crate::engine::bytecode::Instruction::Star(register));
+        self.bindings.get_mut(name)?.value_type = Some(value_type);
+        Some(())
+    }
+
+    fn lower(&mut self, expression: &Expr) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        match &expression.kind {
+        let result = match &expression.kind {
             ExprKind::Literal(value) => match value {
                 Value::Number(number) => {
                     let index = self.constant(crate::engine::value::Value::from_f64(*number))?;
                     self.code.emit(Instruction::LdaConstant(index));
+                    RegisterType::Number
                 }
                 Value::Boolean(true) => {
                     self.code.emit(Instruction::LdaTrue);
+                    RegisterType::Boolean
                 }
                 Value::Boolean(false) => {
                     self.code.emit(Instruction::LdaFalse);
+                    RegisterType::Boolean
                 }
                 Value::Null => {
                     self.code.emit(Instruction::LdaNull);
+                    RegisterType::Null
                 }
                 Value::Undefined => {
                     self.code.emit(Instruction::LdaUndefined);
+                    RegisterType::Undefined
                 }
                 Value::String(_) | Value::Symbol(_) | Value::Function(_) | Value::Object(_) => {
-                    return Err(Error::InvalidBytecode);
+                    return None;
                 }
             },
+            ExprKind::Name(name) => {
+                if let Some(binding) = self.bindings.get(name).copied() {
+                    let value_type = binding.value_type?;
+                    self.code.emit(Instruction::Ldar(binding.register));
+                    value_type
+                } else {
+                    match name.as_str() {
+                        "undefined" => {
+                            self.code.emit(Instruction::LdaUndefined);
+                            RegisterType::Undefined
+                        }
+                        "NaN" => {
+                            let index = self.constant(crate::engine::value::VALUE_NAN)?;
+                            self.code.emit(Instruction::LdaConstant(index));
+                            RegisterType::Number
+                        }
+                        "Infinity" => {
+                            let index = self
+                                .constant(crate::engine::value::Value::from_f64(f64::INFINITY))?;
+                            self.code.emit(Instruction::LdaConstant(index));
+                            RegisterType::Number
+                        }
+                        _ => return None,
+                    }
+                }
+            }
             ExprKind::Group(inner) => self.lower(inner)?,
+            ExprKind::Sequence(left, right) => {
+                self.lower(left)?;
+                self.lower(right)?
+            }
             ExprKind::Unary(operator, inner) => {
-                self.lower(inner)?;
+                let inner_type = self.lower(inner)?;
                 self.code.emit(match operator {
-                    Unary::Plus => return Ok(()),
-                    Unary::Minus => Instruction::Negate,
+                    Unary::Plus if inner_type == RegisterType::Number => {
+                        return Some(RegisterType::Number);
+                    }
+                    Unary::Minus if inner_type == RegisterType::Number => Instruction::Negate,
                     Unary::Not => Instruction::LogicalNot,
                     Unary::Void => Instruction::ToUndefined,
-                    Unary::BitNot => Instruction::BitNot,
-                    Unary::Typeof | Unary::Delete => return Err(Error::InvalidBytecode),
+                    Unary::BitNot if inner_type == RegisterType::Number => Instruction::BitNot,
+                    Unary::Plus | Unary::Minus | Unary::BitNot | Unary::Typeof | Unary::Delete => {
+                        return None;
+                    }
                 });
+                match operator {
+                    Unary::Minus | Unary::BitNot => RegisterType::Number,
+                    Unary::Not => RegisterType::Boolean,
+                    Unary::Void => RegisterType::Undefined,
+                    Unary::Plus | Unary::Typeof | Unary::Delete => return None,
+                }
             }
-            ExprKind::Binary(operator, left, right) => {
-                self.lower(left)?;
-                let left_register = self.allocate_register()?;
-                self.code.emit(Instruction::Star(left_register));
-                self.lower(right)?;
-                let right_register = self.allocate_register()?;
-                self.code.emit(Instruction::Star(right_register));
-                self.code.emit(Instruction::Ldar(left_register));
-                self.code.emit(match operator {
+            ExprKind::Binary(operator, left, right) => self.lower_binary(*operator, left, right)?,
+            ExprKind::Assign(name, operator, right) => {
+                self.lower_assignment(name, *operator, right)?
+            }
+            _ => return None,
+        };
+        Some(result)
+    }
+
+    fn lower_binary(
+        &mut self,
+        operator: Binary,
+        left: &Expr,
+        right: &Expr,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let left_type = self.lower(left)?;
+        let left_register = self.allocate_register()?;
+        self.code.emit(Instruction::Star(left_register));
+        let right_type = self.lower(right)?;
+        let right_register = self.allocate_register()?;
+        self.code.emit(Instruction::Star(right_register));
+        self.code.emit(Instruction::Ldar(left_register));
+        let (instruction, result_type) = match operator {
+            Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
+                if left_type == RegisterType::Number && right_type == RegisterType::Number =>
+            {
+                let instruction = match operator {
                     Binary::Add => Instruction::Add(right_register),
                     Binary::Sub => Instruction::Sub(right_register),
                     Binary::Mul => Instruction::Mul(right_register),
                     Binary::Div => Instruction::Div(right_register),
                     Binary::Rem => Instruction::Mod(right_register),
+                    _ => return None,
+                };
+                (instruction, RegisterType::Number)
+            }
+            Binary::Lt | Binary::Le | Binary::Gt | Binary::Ge
+                if left_type == RegisterType::Number && right_type == RegisterType::Number =>
+            {
+                let instruction = match operator {
                     Binary::Lt => Instruction::TestLessThan(right_register),
                     Binary::Le => Instruction::TestLessThanOrEqual(right_register),
                     Binary::Gt => Instruction::TestGreaterThan(right_register),
                     Binary::Ge => Instruction::TestGreaterThanOrEqual(right_register),
-                    Binary::StrictEq => Instruction::TestStrictEqual(right_register),
-                    _ => return Err(Error::InvalidBytecode),
-                });
-                self.release_register(right_register)?;
-                self.release_register(left_register)?;
+                    _ => return None,
+                };
+                (instruction, RegisterType::Boolean)
             }
-            _ => return Err(Error::InvalidBytecode),
-        }
-        Ok(())
+            Binary::StrictEq => (
+                Instruction::TestStrictEqual(right_register),
+                RegisterType::Boolean,
+            ),
+            _ => return None,
+        };
+        self.code.emit(instruction);
+        self.release_register(right_register)?;
+        self.release_register(left_register)?;
+        Some(result_type)
     }
 
-    fn allocate_register(&mut self) -> Result<crate::engine::bytecode::Reg, Error> {
+    fn lower_assignment(
+        &mut self,
+        name: &str,
+        operator: Option<Binary>,
+        right: &Expr,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let binding = *self.bindings.get(name)?;
+        if !binding.mutable || binding.value_type.is_none() {
+            return None;
+        }
+        let result_type = if let Some(operator) = operator {
+            let left_type = binding.value_type?;
+            self.code.emit(Instruction::Ldar(binding.register));
+            let left_register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(left_register));
+            let right_type = self.lower(right)?;
+            if left_type != RegisterType::Number || right_type != RegisterType::Number {
+                return None;
+            }
+            let right_register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(right_register));
+            self.code.emit(Instruction::Ldar(left_register));
+            self.code.emit(match operator {
+                Binary::Add => Instruction::Add(right_register),
+                Binary::Sub => Instruction::Sub(right_register),
+                Binary::Mul => Instruction::Mul(right_register),
+                Binary::Div => Instruction::Div(right_register),
+                Binary::Rem => Instruction::Mod(right_register),
+                _ => return None,
+            });
+            self.release_register(right_register)?;
+            self.release_register(left_register)?;
+            RegisterType::Number
+        } else {
+            self.lower(right)?
+        };
+        self.code.emit(Instruction::Star(binding.register));
+        self.bindings.get_mut(name)?.value_type = Some(result_type);
+        Some(result_type)
+    }
+
+    fn allocate_register(&mut self) -> Option<crate::engine::bytecode::Reg> {
         let register = crate::engine::bytecode::Reg(self.next_register);
-        self.next_register = self.next_register.checked_add(1).ok_or(Error::Limit {
-            resource: "register bytecode frame",
-        })?;
+        self.next_register = self.next_register.checked_add(1)?;
         self.register_count = self.register_count.max(self.next_register);
-        Ok(register)
+        Some(register)
     }
 
-    fn release_register(&mut self, register: crate::engine::bytecode::Reg) -> Result<(), Error> {
-        self.next_register = self
-            .next_register
-            .checked_sub(1)
-            .ok_or(Error::InvalidBytecode)?;
+    fn release_register(&mut self, register: crate::engine::bytecode::Reg) -> Option<()> {
+        self.next_register = self.next_register.checked_sub(1)?;
         if register.0 != self.next_register {
-            return Err(Error::InvalidBytecode);
+            return None;
         }
-        Ok(())
+        Some(())
     }
 
-    fn constant(&mut self, value: crate::engine::value::Value) -> Result<u16, Error> {
-        let index = u16::try_from(self.code.constants.len()).map_err(|_| Error::Limit {
-            resource: "register constant pool",
-        })?;
+    fn constant(&mut self, value: crate::engine::value::Value) -> Option<u16> {
+        let index = u16::try_from(self.code.constants.len()).ok()?;
         self.code.constants.push(value);
-        Ok(index)
+        Some(index)
     }
 }
 
-fn lower_register_expression(
-    expression: &Expr,
+fn lower_register_script(
+    body: &[Stmt],
+    realm: bool,
     entry_fuel_cost: u64,
-) -> Result<crate::engine::bytecode::BytecodeFunction, Error> {
-    let mut lowerer = RegisterLowerer::new(
-        entry_fuel_cost,
-        register_expression_stack_requirement(expression),
-    );
-    lowerer.lower(expression)?;
+) -> Option<crate::engine::bytecode::BytecodeFunction> {
+    let mut saw_expression = false;
+    let mut saw_declaration = false;
+    for statement in body {
+        match statement {
+            Stmt::Declare(bindings) if !saw_expression && !realm => {
+                saw_declaration = true;
+                for (name, _, _) in bindings {
+                    // Allocate all lexical slots before any initializer, matching TDZ setup.
+                    if bindings
+                        .iter()
+                        .filter(|(candidate, _, _)| candidate == name)
+                        .count()
+                        > 1
+                    {
+                        return None;
+                    }
+                }
+            }
+            Stmt::Expr(_) => saw_expression = true,
+            Stmt::Empty => {}
+            _ => return None,
+        }
+    }
+    if !saw_expression {
+        return None;
+    }
+    let stack_requirement = body
+        .iter()
+        .fold(1usize, |maximum, statement| match statement {
+            Stmt::Declare(bindings) => bindings.iter().fold(maximum, |current, (_, _, init)| {
+                current.max(
+                    init.as_ref()
+                        .map_or(1, register_expression_stack_requirement),
+                )
+            }),
+            Stmt::Expr(expression) => {
+                maximum.max(register_expression_stack_requirement(expression))
+            }
+            _ => maximum,
+        });
+    let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement);
+    if saw_declaration {
+        for statement in body {
+            if let Stmt::Declare(bindings) = statement {
+                for (name, mutable, _) in bindings {
+                    lowerer.declare(name, *mutable)?;
+                }
+            }
+        }
+    }
+    for statement in body {
+        match statement {
+            Stmt::Declare(bindings) => {
+                for (name, _, initializer) in bindings {
+                    lowerer.initialize(name, initializer.as_ref())?;
+                }
+            }
+            Stmt::Expr(expression) => {
+                lowerer.lower(expression)?;
+            }
+            Stmt::Empty => {}
+            _ => return None,
+        }
+    }
     lowerer
         .code
         .emit(crate::engine::bytecode::Instruction::Return);
     lowerer.code.register_count = lowerer.register_count;
-    lowerer.code.verify().map_err(|_| Error::InvalidBytecode)?;
-    Ok(lowerer.code)
+    lowerer.code.verify().ok()?;
+    Some(lowerer.code)
 }
 
 fn register_expression_stack_requirement(expression: &Expr) -> usize {
@@ -673,6 +842,12 @@ fn register_expression_stack_requirement(expression: &Expr) -> usize {
         ExprKind::Group(inner) | ExprKind::Unary(_, inner) => {
             register_expression_stack_requirement(inner)
         }
+        ExprKind::Sequence(left, right) => register_expression_stack_requirement(left)
+            .max(register_expression_stack_requirement(right)),
+        ExprKind::Assign(_, Some(_), right) => {
+            1usize.saturating_add(register_expression_stack_requirement(right))
+        }
+        ExprKind::Assign(_, None, right) => register_expression_stack_requirement(right),
         ExprKind::Binary(_, left, right) => register_expression_stack_requirement(left)
             .max(1usize.saturating_add(register_expression_stack_requirement(right))),
         _ => 1,

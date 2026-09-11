@@ -377,8 +377,9 @@ impl Execution<'_> {
         code: &crate::engine::bytecode::BytecodeFunction,
     ) -> Result<Value, Error> {
         let mut vm = self.register_vm.take().unwrap_or_else(|| {
-            crate::engine::interpreter::RegisterVM::with_stack_capacity(
+            crate::engine::interpreter::RegisterVM::with_limits(
                 self.fuel,
+                self.limits.stack.saturating_add(self.limits.binding_slots),
                 self.limits.stack,
             )
         });

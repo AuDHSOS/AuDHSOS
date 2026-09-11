@@ -70,6 +70,8 @@ pub struct RegisterVM {
     acc: Value,
     /// Fuel remaining for bounded execution.
     pub fuel: u64,
+    /// Public operand-stack limit preserved across backend migration.
+    operand_stack_limit: usize,
 }
 
 impl Default for RegisterVM {
@@ -88,11 +90,18 @@ impl RegisterVM {
     /// Creates a VM whose contiguous register stack has an explicit capacity.
     #[must_use]
     pub fn with_stack_capacity(fuel: u64, stack_capacity: usize) -> Self {
+        Self::with_limits(fuel, stack_capacity, stack_capacity)
+    }
+
+    /// Creates a VM with separate physical register and source operand-stack limits.
+    #[must_use]
+    pub fn with_limits(fuel: u64, register_capacity: usize, operand_stack_limit: usize) -> Self {
         Self {
-            stack: alloc::vec![VALUE_UNDEFINED; stack_capacity],
+            stack: alloc::vec![VALUE_UNDEFINED; register_capacity],
             fp: 0,
             acc: VALUE_UNDEFINED,
             fuel,
+            operand_stack_limit,
         }
     }
 
@@ -175,7 +184,7 @@ impl RegisterVM {
         if feedback.len() != usize::from(code.feedback_slot_count) {
             return Err(VMError::InvalidFeedbackVector);
         }
-        if code.entry_stack_requirement > self.stack.len() {
+        if code.entry_stack_requirement > self.operand_stack_limit {
             return Err(VMError::StackOverflow);
         }
         self.fuel = self
