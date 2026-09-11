@@ -666,6 +666,7 @@ impl RegisterLowerer {
             ExprKind::Assign(name, operator, right) => {
                 self.lower_assignment(name, *operator, right)?
             }
+            ExprKind::Update(name, add, prefix) => self.lower_update(name, *add, *prefix)?,
             ExprKind::Conditional(condition, yes, no) => {
                 self.lower_conditional(condition, yes, no)?
             }
@@ -699,20 +700,57 @@ impl RegisterLowerer {
         Some(yes_type)
     }
 
-    fn lower_statement(&mut self, statement: &Stmt) -> Option<()> {
-        use crate::engine::bytecode::Instruction;
-        match statement {
+    fn lower_statement(&mut self, statement: &Stmt) -> Option<bool> {
+        let has_completion = match statement {
             Stmt::Expr(expression) => {
                 self.lower(expression)?;
+                true
             }
             Stmt::If(condition, yes, no) => {
                 self.lower_if(condition, yes, no.as_deref())?;
+                true
             }
-            Stmt::Empty => {
-                self.code.emit(Instruction::LdaUndefined);
+            Stmt::Block(body) => {
+                let mut has_completion = false;
+                for statement in body {
+                    has_completion |= self.lower_statement(statement)?;
+                }
+                has_completion
             }
+            Stmt::While(condition, body) => {
+                self.lower_while(condition, body)?;
+                true
+            }
+            Stmt::Empty => false,
             _ => return None,
+        };
+        Some(has_completion)
+    }
+
+    fn lower_while(&mut self, condition: &Expr, body: &Stmt) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        self.code.emit(Instruction::LdaUndefined);
+        let result_register = self.allocate_register()?;
+        self.code.emit(Instruction::Star(result_register));
+        let head = self.code.instructions.len();
+        let bindings_at_head = self.bindings.clone();
+        self.lower(condition)?;
+        if self.bindings != bindings_at_head {
+            return None;
         }
+        let branch = self.code.emit(Instruction::JumpIfFalse(0));
+        self.code.emit(Instruction::Ldar(result_register));
+        self.lower_statement(body)?;
+        if self.bindings != bindings_at_head {
+            return None;
+        }
+        self.code.emit(Instruction::Star(result_register));
+        let back_edge = self.code.emit(Instruction::Jump(0));
+        let done = self.code.instructions.len();
+        self.code.emit(Instruction::Ldar(result_register));
+        self.patch_jump(branch, done)?;
+        self.patch_jump(back_edge, head)?;
+        self.release_register(result_register)?;
         Some(())
     }
 
@@ -721,15 +759,17 @@ impl RegisterLowerer {
         self.lower(condition)?;
         let branch = self.code.emit(Instruction::JumpIfFalse(0));
         let bindings_before = self.bindings.clone();
+        self.code
+            .emit(crate::engine::bytecode::Instruction::LdaUndefined);
         self.lower_statement(yes)?;
         let bindings_after_yes = self.bindings.clone();
         let jump = self.code.emit(Instruction::Jump(0));
         let no_start = self.code.instructions.len();
         self.bindings = bindings_before;
+        self.code
+            .emit(crate::engine::bytecode::Instruction::LdaUndefined);
         if let Some(no) = no {
             self.lower_statement(no)?;
-        } else {
-            self.code.emit(Instruction::LdaUndefined);
         }
         if self.bindings != bindings_after_yes {
             return None;
@@ -834,6 +874,38 @@ impl RegisterLowerer {
         Some(result_type)
     }
 
+    fn lower_update(&mut self, name: &str, add: bool, prefix: bool) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let binding = *self.bindings.get(name)?;
+        if !binding.mutable || binding.value_type != Some(RegisterType::Number) {
+            return None;
+        }
+        self.code.emit(Instruction::Ldar(binding.register));
+        let original = if prefix {
+            None
+        } else {
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            Some(register)
+        };
+        let one = self.allocate_register()?;
+        self.code.emit(Instruction::LdaSmi(1));
+        self.code.emit(Instruction::Star(one));
+        self.code.emit(Instruction::Ldar(binding.register));
+        self.code.emit(if add {
+            Instruction::Add(one)
+        } else {
+            Instruction::Sub(one)
+        });
+        self.code.emit(Instruction::Star(binding.register));
+        self.release_register(one)?;
+        if let Some(original) = original {
+            self.code.emit(Instruction::Ldar(original));
+            self.release_register(original)?;
+        }
+        Some(RegisterType::Number)
+    }
+
     fn allocate_register(&mut self) -> Option<crate::engine::bytecode::Reg> {
         let register = crate::engine::bytecode::Reg(self.next_register);
         self.next_register = self.next_register.checked_add(1)?;
@@ -893,7 +965,9 @@ fn lower_register_script(
                     }
                 }
             }
-            Stmt::Expr(_) | Stmt::If(_, _, _) => saw_expression = true,
+            Stmt::Expr(_) | Stmt::Block(_) | Stmt::If(_, _, _) | Stmt::While(_, _) => {
+                saw_expression = true;
+            }
             Stmt::Empty => {}
             _ => return None,
         }
@@ -914,30 +988,45 @@ fn lower_register_script(
             }
         }
     }
+    let result_register = lowerer.allocate_register()?;
+    lowerer
+        .code
+        .emit(crate::engine::bytecode::Instruction::LdaUndefined);
+    lowerer
+        .code
+        .emit(crate::engine::bytecode::Instruction::Star(result_register));
     for statement in body {
         let snapshot = lowerer.snapshot();
+        lowerer
+            .code
+            .emit(crate::engine::bytecode::Instruction::Ldar(result_register));
         match statement {
             Stmt::Declare(bindings) => {
                 for (name, _, initializer) in bindings {
                     lowerer.initialize(name, initializer.as_ref())?;
                 }
+                lowerer
+                    .code
+                    .emit(crate::engine::bytecode::Instruction::Ldar(result_register));
             }
-            Stmt::Expr(expression) => {
-                if lowerer.lower(expression).is_none() {
+            _ => match lowerer.lower_statement(statement) {
+                Some(true) => {
+                    lowerer
+                        .code
+                        .emit(crate::engine::bytecode::Instruction::Star(result_register));
+                }
+                Some(false) => {}
+                None => {
                     lowerer.restore(snapshot);
                     return None;
                 }
-            }
-            Stmt::If(condition, yes, no) => {
-                if lowerer.lower_if(condition, yes, no.as_deref()).is_none() {
-                    lowerer.restore(snapshot);
-                    return None;
-                }
-            }
-            Stmt::Empty => {}
-            _ => return None,
+            },
         }
     }
+    lowerer
+        .code
+        .emit(crate::engine::bytecode::Instruction::Ldar(result_register));
+    lowerer.release_register(result_register)?;
     lowerer
         .code
         .emit(crate::engine::bytecode::Instruction::Return);
@@ -983,6 +1072,11 @@ fn register_statement_stack_requirement(statement: &Stmt) -> usize {
                 no.as_deref()
                     .map_or(1, register_statement_stack_requirement),
             ),
+        Stmt::Block(body) => body.iter().fold(1usize, |maximum, statement| {
+            maximum.max(register_statement_stack_requirement(statement))
+        }),
+        Stmt::While(condition, body) => register_expression_stack_requirement(condition)
+            .max(register_statement_stack_requirement(body)),
         _ => 1,
     }
 }

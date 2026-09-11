@@ -220,7 +220,72 @@ fn register_branch_lowering_rejects_incompatible_control_flow() -> Result<(), Er
         "true ? 1 : false",
         "let x=1;if(true)x=true;else x=2;x",
         "let x=1;if(true)x=true;x",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn blocks_updates_and_while_loops_match_legacy_execution() -> Result<(), Error> {
+    for source in [
+        "let x=1;{x++;x}",
+        "let x=1;{x--;x}",
+        "let x=1;let y=x++;x+y",
+        "let x=1;let y=++x;x+y",
+        "let i=0;while(i<10)i++;i",
+        "let i=0;let sum=0;while(i<10){sum+=i;i++;}sum",
+        "let i=0;while(i<3){i=i+1;i}",
+        "let i=0;1;while(i<0){2}",
+        "let x=1;{}",
+        "1;{}",
+        "let i=0;while(i++<2);",
+        "let i=0;while(i<2){i++; ;}",
+        "let i=0;while(i<3){if(i<2)i+=1;else i+=1;}i",
         "if(true){1}else{2}",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn register_while_checks_fuel_at_back_edges() -> Result<(), Error> {
+    let limits = Limits {
+        fuel: 100,
+        ..Limits::default()
+    };
+    let program = compile("let i=0;while(true)i++", limits)?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::new(limits).run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "execution fuel"
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn register_loop_lowering_rejects_unstable_or_abrupt_bodies() -> Result<(), Error> {
+    for source in [
+        "let x=1;while(false)x=true;x",
+        "let x=1;while(x=true)x",
+        "while(true)break",
+        "while(true)continue",
+        "while(false){let x=1;x}",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
