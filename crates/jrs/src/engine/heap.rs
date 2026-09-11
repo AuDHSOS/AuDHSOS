@@ -767,7 +767,7 @@ impl GenerationalHeap {
     pub fn scavenge(&mut self) -> Result<ScavengeStats, HeapError> {
         let mut no_external_roots = [];
         let mut no_accumulator = VALUE_NULL;
-        self.scavenge_with_roots(&mut no_external_roots, &mut no_accumulator)
+        self.scavenge_with_roots(&mut no_external_roots, &mut no_accumulator, &mut [])
     }
 
     /// Runs a minor collection with an interpreter register slice and accumulator.
@@ -783,6 +783,7 @@ impl GenerationalHeap {
         &mut self,
         registers: &mut [Value],
         accumulator: &mut Value,
+        contexts: &mut [Option<ContextRef>],
     ) -> Result<ScavengeStats, HeapError> {
         let capacity = self.nursery.object_capacity;
         let next_generation = self
@@ -804,6 +805,9 @@ impl GenerationalHeap {
             evacuator.evacuate_value(value)?;
         }
         evacuator.evacuate_value(accumulator)?;
+        for context in contexts.iter_mut().flatten() {
+            *context = evacuator.evacuate_context(*context)?;
+        }
 
         for index in remembered_objects {
             evacuator.enqueue_old_object(index);
@@ -2154,7 +2158,7 @@ mod tests {
         let mut registers = [Value::from_object(object)];
         let mut accumulator = VALUE_NULL;
 
-        heap.scavenge_with_roots(&mut registers, &mut accumulator)
+        heap.scavenge_with_roots(&mut registers, &mut accumulator, &mut [])
             .unwrap();
 
         let forwarded = registers[0].as_object().unwrap();

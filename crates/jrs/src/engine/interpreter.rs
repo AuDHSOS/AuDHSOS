@@ -17,6 +17,7 @@
 
 use super::{
     bytecode::{BinaryOp, BytecodeFunction, Instruction, Reg, VerificationError},
+    context::ContextRef,
     feedback::{BinaryOpFeedback, FeedbackVector, NamedAccessCase},
     heap::{GenerationalHeap, HeapError},
     shape::{PropertyFlags, ShapeId},
@@ -77,6 +78,8 @@ pub struct FrameHeader {
     pub caller_code_id: Option<u32>,
     /// Active binding count to restore with the caller.
     pub caller_binding_count: usize,
+    /// Lexical heap context to restore with the caller.
+    pub caller_context: Option<ContextRef>,
 }
 
 /// Contiguous register-based virtual machine executor.
@@ -103,6 +106,10 @@ pub struct RegisterVM {
     active_binding_count: usize,
     /// Maximum active parameter/local bindings.
     binding_limit: usize,
+    /// Lexical heap context of the active frame.
+    current_context: Option<ContextRef>,
+    /// Reused precise context-root buffer for minor collection.
+    context_roots: Vec<Option<ContextRef>>,
 }
 
 impl Default for RegisterVM {
@@ -139,6 +146,8 @@ impl RegisterVM {
             call_frame_limit: register_capacity,
             active_binding_count: 0,
             binding_limit: usize::MAX,
+            current_context: None,
+            context_roots: Vec::with_capacity(register_capacity.saturating_add(1)),
         }
     }
 
@@ -192,7 +201,21 @@ impl RegisterVM {
             .stack
             .get_mut(..frame_end)
             .ok_or(VMError::StackOverflow)?;
-        heap.scavenge_with_roots(registers, &mut self.acc)?;
+        self.context_roots.clear();
+        self.context_roots.push(self.current_context);
+        self.context_roots
+            .extend(self.frames.iter().map(|frame| frame.caller_context));
+        heap.scavenge_with_roots(registers, &mut self.acc, &mut self.context_roots)?;
+        self.current_context = self.context_roots.first().copied().flatten();
+        for (frame, context) in self.frames.iter_mut().zip(
+            self.context_roots
+                .get(1..)
+                .unwrap_or_default()
+                .iter()
+                .copied(),
+        ) {
+            frame.caller_context = context;
+        }
         Ok(())
     }
 
@@ -231,12 +254,38 @@ impl RegisterVM {
         code: &BytecodeFunction,
         heap: &mut GenerationalHeap,
         code_id: u32,
-        context: Option<super::context::ContextRef>,
+        captures_context: bool,
     ) -> Result<ObjectRef, VMError> {
         loop {
+            let context = if captures_context {
+                Some(self.current_context.ok_or(VMError::InvalidRegister)?)
+            } else {
+                None
+            };
             match heap.allocate_function(code_id, context) {
                 Ok(reference) => return Ok(reference),
                 Err(HeapError::NurseryFull) => self.collect_young(code, heap)?,
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    fn allocate_context(
+        &mut self,
+        code: &BytecodeFunction,
+        heap: &mut GenerationalHeap,
+        parent: Option<ContextRef>,
+        slot_count: u16,
+    ) -> Result<ContextRef, VMError> {
+        let mut parent = parent;
+        loop {
+            match heap.allocate_context(parent, usize::from(slot_count)) {
+                Ok(context) => return Ok(context),
+                Err(HeapError::NurseryFull) => {
+                    self.current_context = parent;
+                    self.collect_young(code, heap)?;
+                    parent = self.current_context;
+                }
                 Err(error) => return Err(error.into()),
             }
         }
@@ -467,6 +516,7 @@ impl RegisterVM {
     ) -> Result<Value, VMError> {
         self.fp = 0;
         self.frames.clear();
+        self.current_context = None;
         code.verify().map_err(VMError::InvalidBytecode)?;
         if !feedback.matches_code(code) {
             return Err(VMError::InvalidFeedbackVector);
@@ -505,6 +555,9 @@ impl RegisterVM {
             *slot = value;
         }
         self.acc = VALUE_UNDEFINED;
+        if let Some(slot_count) = code.own_context_slot_count {
+            self.current_context = Some(self.allocate_context(code, heap, None, slot_count)?);
+        }
 
         loop {
             let active_code = code_unit(code, current_code_id).ok_or(VMError::InvalidBytecode(
@@ -570,6 +623,23 @@ impl RegisterVM {
                 Instruction::Mov { src, dst } => {
                     let val = self.read_reg(src)?;
                     self.write_reg(dst, val)?;
+                }
+                Instruction::LoadContext { depth, slot } => {
+                    self.acc = heap
+                        .context_slot(
+                            self.current_context.ok_or(VMError::InvalidRegister)?,
+                            depth,
+                            slot,
+                        )
+                        .ok_or(VMError::InvalidRegister)?;
+                }
+                Instruction::StoreContext { depth, slot } => {
+                    heap.set_context_slot(
+                        self.current_context.ok_or(VMError::InvalidRegister)?,
+                        depth,
+                        slot,
+                        self.acc,
+                    )?;
                 }
                 Instruction::Add(reg) => {
                     let rhs = self.read_reg(reg)?;
@@ -1004,7 +1074,18 @@ impl RegisterVM {
                     self.acc = Value::from_object(oref);
                 }
                 Instruction::CreateClosure(code_id) => {
-                    let function = self.allocate_function(active_code, heap, code_id, None)?;
+                    let target =
+                        code.functions
+                            .get(code_id as usize)
+                            .ok_or(VMError::InvalidBytecode(
+                                VerificationError::FunctionOutOfBounds {
+                                    pc: pc.saturating_sub(1),
+                                    index: code_id,
+                                },
+                            ))?;
+                    let captures_context = !target.outer_context_slot_counts.is_empty();
+                    let function =
+                        self.allocate_function(active_code, heap, code_id, captures_context)?;
                     self.acc = Value::from_object(function);
                 }
                 Instruction::Call {
@@ -1016,7 +1097,8 @@ impl RegisterVM {
                     let function = self.read_reg(func)?;
                     let function_ref = function.as_object().ok_or(VMError::TypeError)?;
                     let function = heap.get_object(function_ref).ok_or(VMError::TypeError)?;
-                    let super::object::ObjectKind::Function { code_id, .. } = function.kind else {
+                    let super::object::ObjectKind::Function { code_id, context } = function.kind
+                    else {
                         return Err(VMError::TypeError);
                     };
                     let callee =
@@ -1081,15 +1163,28 @@ impl RegisterVM {
                     active_feedback
                         .record_call(slot, code_id)
                         .ok_or(VMError::InvalidFeedbackVector)?;
+                    let caller_context = self.current_context;
                     self.frames.push(FrameHeader {
                         caller_fp: self.fp,
                         return_pc: pc,
                         caller_code_id: current_code_id,
                         caller_binding_count: self.active_binding_count,
+                        caller_context,
                     });
                     self.fp = next_frame;
                     self.active_binding_count = callee_bindings;
                     current_code_id = Some(code_id);
+                    self.current_context = context;
+                    self.current_context = if let Some(slot_count) = callee.own_context_slot_count {
+                        Some(self.allocate_context(
+                            callee,
+                            heap,
+                            self.current_context,
+                            slot_count,
+                        )?)
+                    } else {
+                        self.current_context
+                    };
                     pc = 0;
                     self.acc = VALUE_UNDEFINED;
                 }
@@ -1099,9 +1194,11 @@ impl RegisterVM {
                         pc = frame.return_pc;
                         current_code_id = frame.caller_code_id;
                         self.active_binding_count = frame.caller_binding_count;
+                        self.current_context = frame.caller_context;
                     } else {
                         self.fp = 0;
                         self.active_binding_count = 0;
+                        self.current_context = None;
                         return Ok(self.acc);
                     }
                 }
@@ -1702,6 +1799,51 @@ mod tests {
         assert_eq!(
             feedback.function(0).and_then(|vector| vector.get_binary(0)),
             Some(BinaryOpFeedback::Generic)
+        );
+    }
+
+    #[test]
+    fn closure_context_load_store_and_safe_points_preserve_binding_identity() {
+        let mut increment = BytecodeFunction::new(2, 0);
+        increment.outer_context_slot_counts.push(1);
+        increment.emit(Instruction::LoadContext { depth: 0, slot: 0 });
+        increment.emit(Instruction::Star(Reg(0)));
+        increment.emit(Instruction::LdaSmi(1));
+        increment.emit(Instruction::Star(Reg(1)));
+        increment.emit(Instruction::Ldar(Reg(0)));
+        increment.emit(Instruction::Add(Reg(1)));
+        increment.emit(Instruction::StoreContext { depth: 0, slot: 0 });
+        increment.emit(Instruction::Return);
+
+        let mut root = BytecodeFunction::new(2, 0);
+        root.own_context_slot_count = Some(1);
+        root.functions.push(increment);
+        let first_call = root.allocate_feedback_slot(FeedbackKind::Call);
+        let second_call = root.allocate_feedback_slot(FeedbackKind::Call);
+        root.emit(Instruction::LdaSmi(40));
+        root.emit(Instruction::StoreContext { depth: 0, slot: 0 });
+        root.emit(Instruction::CreateClosure(0));
+        root.emit(Instruction::Star(Reg(0)));
+        root.emit(Instruction::Call {
+            func: Reg(0),
+            arg_start: Reg(1),
+            arg_count: 0,
+            slot: first_call,
+        });
+        root.emit(Instruction::Call {
+            func: Reg(0),
+            arg_start: Reg(1),
+            arg_count: 0,
+            slot: second_call,
+        });
+        root.emit(Instruction::Return);
+
+        let mut heap = GenerationalHeap::with_nursery_capacity(1);
+        let mut feedback = FeedbackVector::for_code(&root);
+        let mut vm = RegisterVM::new(100);
+        assert_eq!(
+            vm.run(&root, &mut feedback, &mut heap),
+            Ok(Value::from_smi(42))
         );
     }
 }

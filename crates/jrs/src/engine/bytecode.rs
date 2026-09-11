@@ -118,6 +118,22 @@ pub enum VerificationError {
         /// Invalid top-level function index.
         index: u32,
     },
+    /// A context access leaves the statically declared lexical context chain.
+    ContextOutOfBounds {
+        /// Instruction offset.
+        pc: usize,
+        /// Outer-context depth.
+        depth: u16,
+        /// Slot index at that depth.
+        slot: u16,
+    },
+    /// A closure expects a lexical context layout unavailable at its creation site.
+    ClosureContextMismatch {
+        /// Instruction offset.
+        pc: usize,
+        /// Function whose outer context contract does not match.
+        index: u32,
+    },
     /// A relative branch target is outside the instruction array.
     JumpOutOfBounds {
         /// Instruction offset.
@@ -165,6 +181,20 @@ pub enum Instruction {
         src: Reg,
         /// Destination register.
         dst: Reg,
+    },
+    /// `acc = current_context[depth][slot]`.
+    LoadContext {
+        /// Outer-context depth.
+        depth: u16,
+        /// Binding slot.
+        slot: u16,
+    },
+    /// `current_context[depth][slot] = acc`.
+    StoreContext {
+        /// Outer-context depth.
+        depth: u16,
+        /// Binding slot.
+        slot: u16,
     },
     /// `acc = acc + reg`
     Add(Reg),
@@ -294,6 +324,10 @@ pub struct BytecodeFunction {
     pub binding_count: u16,
     /// Register initialized with the currently called Function object.
     pub self_register: Option<Reg>,
+    /// Own heap-context slot count, when this frame creates a lexical context.
+    pub own_context_slot_count: Option<u16>,
+    /// Slot counts expected in each captured outer lexical context.
+    pub outer_context_slot_counts: Vec<u16>,
     /// Static category of every feedback vector slot.
     pub feedback_slots: Vec<FeedbackKind>,
     /// Fuel charged once in the function prologue.
@@ -315,6 +349,8 @@ impl BytecodeFunction {
             parameter_count,
             binding_count: parameter_count,
             self_register: None,
+            own_context_slot_count: None,
+            outer_context_slot_counts: Vec::new(),
             feedback_slots: Vec::new(),
             entry_fuel_cost: 1,
             entry_stack_requirement: 0,
@@ -464,6 +500,11 @@ impl BytecodeFunction {
                 self.verify_register(pc, src)?;
                 Some(dst)
             }
+            Instruction::LoadContext { depth, slot }
+            | Instruction::StoreContext { depth, slot } => {
+                self.verify_context_access(pc, depth, slot)?;
+                None
+            }
             Instruction::Binary { rhs, slot, .. } => {
                 self.verify_feedback(pc, slot, FeedbackKind::BinaryOp)?;
                 Some(rhs)
@@ -487,13 +528,7 @@ impl BytecodeFunction {
                 arg_count,
                 slot,
             } => {
-                self.verify_register(pc, func)?;
-                self.verify_register(pc, arg_start)?;
-                self.verify_feedback(pc, slot, FeedbackKind::Call)?;
-                let end = u32::from(arg_start.0).saturating_add(u32::from(arg_count));
-                if end > u32::from(self.register_count) {
-                    return Err(VerificationError::CallArgumentsOutOfBounds { pc });
-                }
+                self.verify_call(pc, func, arg_start, arg_count, slot)?;
                 None
             }
             Instruction::LdaConstant(index) => {
@@ -509,12 +544,12 @@ impl BytecodeFunction {
                 None
             }
             Instruction::CreateClosure(index) => {
-                if usize::try_from(index)
+                let target = usize::try_from(index)
                     .ok()
-                    .as_ref()
-                    .is_none_or(|index| *index >= functions.len())
-                {
-                    return Err(VerificationError::FunctionOutOfBounds { pc, index });
+                    .and_then(|index| functions.get(index))
+                    .ok_or(VerificationError::FunctionOutOfBounds { pc, index })?;
+                if !target.outer_context_matches(self) {
+                    return Err(VerificationError::ClosureContextMismatch { pc, index });
                 }
                 None
             }
@@ -579,6 +614,68 @@ impl BytecodeFunction {
         } else {
             Ok(())
         }
+    }
+
+    fn context_slot_count(&self, depth: u16) -> Option<u16> {
+        let depth = usize::from(depth);
+        if let Some(own) = self.own_context_slot_count {
+            if depth == 0 {
+                Some(own)
+            } else {
+                self.outer_context_slot_counts
+                    .get(depth.checked_sub(1)?)
+                    .copied()
+            }
+        } else {
+            self.outer_context_slot_counts.get(depth).copied()
+        }
+    }
+
+    fn verify_context_access(
+        &self,
+        pc: usize,
+        depth: u16,
+        slot: u16,
+    ) -> Result<(), VerificationError> {
+        if self
+            .context_slot_count(depth)
+            .is_some_and(|count| slot < count)
+        {
+            Ok(())
+        } else {
+            Err(VerificationError::ContextOutOfBounds { pc, depth, slot })
+        }
+    }
+
+    fn verify_call(
+        &self,
+        pc: usize,
+        function: Reg,
+        argument_start: Reg,
+        argument_count: u16,
+        slot: u16,
+    ) -> Result<(), VerificationError> {
+        self.verify_register(pc, function)?;
+        self.verify_register(pc, argument_start)?;
+        self.verify_feedback(pc, slot, FeedbackKind::Call)?;
+        let end = u32::from(argument_start.0).saturating_add(u32::from(argument_count));
+        if end > u32::from(self.register_count) {
+            Err(VerificationError::CallArgumentsOutOfBounds { pc })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn outer_context_matches(&self, creator: &Self) -> bool {
+        self.outer_context_slot_counts
+            .iter()
+            .enumerate()
+            .all(|(depth, count)| {
+                u16::try_from(depth)
+                    .ok()
+                    .and_then(|depth| creator.context_slot_count(depth))
+                    == Some(*count)
+            })
     }
 
     fn jump_target(&self, pc: usize, offset: i32) -> Result<usize, VerificationError> {
@@ -764,6 +861,32 @@ mod tests {
         assert_eq!(
             root.verify(),
             Err(VerificationError::NestedFunctionTable { index: 0 })
+        );
+
+        let mut context = BytecodeFunction::new(0, 0);
+        context.own_context_slot_count = Some(1);
+        context.emit(Instruction::LoadContext { depth: 0, slot: 1 });
+        context.emit(Instruction::Return);
+        assert_eq!(
+            context.verify(),
+            Err(VerificationError::ContextOutOfBounds {
+                pc: 0,
+                depth: 0,
+                slot: 1,
+            })
+        );
+
+        let mut root = BytecodeFunction::new(0, 0);
+        root.emit(Instruction::CreateClosure(0));
+        root.emit(Instruction::Return);
+        let mut child = BytecodeFunction::new(0, 0);
+        child.outer_context_slot_counts.push(1);
+        child.emit(Instruction::LoadContext { depth: 0, slot: 0 });
+        child.emit(Instruction::Return);
+        root.functions.push(child);
+        assert_eq!(
+            root.verify(),
+            Err(VerificationError::ClosureContextMismatch { pc: 0, index: 0 })
         );
     }
 
