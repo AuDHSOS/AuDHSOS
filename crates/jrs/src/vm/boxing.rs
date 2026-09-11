@@ -283,6 +283,18 @@ impl Execution<'_> {
                 .map(|s| Value::string(s).units())
                 .collect());
         }
+        if matches!(
+            value,
+            Value::Function(FunctionValue(crate::value::Callable::Native(
+                Builtin::Proxy
+            )))
+        ) {
+            self.charge(2)?;
+            return Ok(["length", "name"]
+                .iter()
+                .map(|s| Value::string(s).units())
+                .collect());
+        }
         let object = self.object_ref(value)?;
         let mut keys = Vec::new();
         if let Some(Value::String(units)) = &object.primitive {
