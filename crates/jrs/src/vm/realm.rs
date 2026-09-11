@@ -529,6 +529,15 @@ impl Execution<'_> {
         }
         let math = self.math_object()?;
         let reflect = self.reflect_object()?;
+        let eval_fn = self.new_host_behavior(crate::heap::HostBehavior::EvalScript, "eval", 1)?;
+        self.define(
+            &global,
+            Value::string("eval").units(),
+            Property {
+                enumerable: false,
+                ..Property::data(eval_fn)
+            },
+        )?;
         self.define(
             &global,
             Value::string("Reflect").units(),

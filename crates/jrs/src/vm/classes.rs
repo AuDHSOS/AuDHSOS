@@ -517,6 +517,11 @@ impl Execution<'_> {
         ) {
             return self.construct_event(kind, args, target);
         }
+        if kind == Builtin::Eval {
+            return Err(Error::Type {
+                message: "eval is not a constructor",
+            });
+        }
         if kind == Builtin::Proxy {
             let target_arg = args.first().unwrap_or(&Value::Undefined);
             let handler_arg = args.get(1).unwrap_or(&Value::Undefined);
