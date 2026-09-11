@@ -9,7 +9,7 @@
 //! Property lookups start as Monomorphic (1 check, direct slot load),
 //! expand to Polymorphic (2-4 shapes), or degrade to Megamorphic.
 
-use super::shape::ShapeId;
+use super::{shape::ShapeId, value::StringRef};
 use alloc::vec::Vec;
 
 /// Maximum number of shapes handled inline in a polymorphic cache before degrading.
@@ -18,6 +18,8 @@ pub const POLYMORPHIC_LIMIT: usize = 4;
 /// Cacheable resolution of one named property for one receiver Shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NamedAccessCase {
+    /// Interned property name guarded by this case.
+    pub name: StringRef,
     /// Shape observed on the receiver object.
     pub receiver_shape: ShapeId,
     /// Number of `[[Prototype]]` edges from receiver to the property holder.
@@ -49,12 +51,13 @@ impl NamedAccessIC {
     #[must_use]
     pub fn try_get(
         &self,
+        name: StringRef,
         actual_shape: ShapeId,
         prototype_epoch: Option<u64>,
     ) -> Option<NamedAccessCase> {
         match self {
             Self::Monomorphic(case) => {
-                if case_matches(*case, actual_shape, prototype_epoch) {
+                if case_matches(*case, name, actual_shape, prototype_epoch) {
                     Some(*case)
                 } else {
                     None
@@ -62,7 +65,7 @@ impl NamedAccessIC {
             }
             Self::Polymorphic(entries) => {
                 for case in entries {
-                    if case_matches(*case, actual_shape, prototype_epoch) {
+                    if case_matches(*case, name, actual_shape, prototype_epoch) {
                         return Some(*case);
                     }
                 }
@@ -79,7 +82,7 @@ impl NamedAccessIC {
                 *self = Self::Monomorphic(case);
             }
             Self::Monomorphic(old) => {
-                if old.receiver_shape == case.receiver_shape {
+                if old.name == case.name && old.receiver_shape == case.receiver_shape {
                     *old = case;
                     return;
                 }
@@ -88,7 +91,7 @@ impl NamedAccessIC {
             }
             Self::Polymorphic(entries) => {
                 for old in entries.iter_mut() {
-                    if old.receiver_shape == case.receiver_shape {
+                    if old.name == case.name && old.receiver_shape == case.receiver_shape {
                         *old = case;
                         return;
                     }
@@ -106,10 +109,12 @@ impl NamedAccessIC {
 
 fn case_matches(
     case: NamedAccessCase,
+    name: StringRef,
     actual_shape: ShapeId,
     prototype_epoch: Option<u64>,
 ) -> bool {
-    case.receiver_shape == actual_shape
+    case.name == name
+        && case.receiver_shape == actual_shape
         && (case.holder_depth == 0
             || matches!((case.prototype_epoch, prototype_epoch), (Some(expected), Some(actual)) if expected == actual))
 }
@@ -192,10 +197,12 @@ mod tests {
     fn named_ic_monomorphic_to_polymorphic_transition() {
         let mut ic = NamedAccessIC::default();
         assert_eq!(ic, NamedAccessIC::Uninitialized);
-        assert_eq!(ic.try_get(ShapeId(1), Some(0)), None);
+        let name = StringRef::from_parts(1, 0);
+        assert_eq!(ic.try_get(name, ShapeId(1), Some(0)), None);
 
         // First execution -> Monomorphic
         let first = NamedAccessCase {
+            name,
             receiver_shape: ShapeId(1),
             holder_depth: 0,
             holder_shape: ShapeId(1),
@@ -204,10 +211,14 @@ mod tests {
         };
         ic.record(first);
         assert_eq!(ic, NamedAccessIC::Monomorphic(first));
-        assert_eq!(ic.try_get(ShapeId(1), Some(0)), Some(first));
-        assert_eq!(ic.try_get(ShapeId(1), Some(1)), Some(first));
-        assert_eq!(ic.try_get(ShapeId(1), None), Some(first));
-        assert_eq!(ic.try_get(ShapeId(2), Some(0)), None);
+        assert_eq!(ic.try_get(name, ShapeId(1), Some(0)), Some(first));
+        assert_eq!(ic.try_get(name, ShapeId(1), Some(1)), Some(first));
+        assert_eq!(ic.try_get(name, ShapeId(1), None), Some(first));
+        assert_eq!(ic.try_get(name, ShapeId(2), Some(0)), None);
+        assert_eq!(
+            ic.try_get(StringRef::from_parts(2, 0), ShapeId(1), Some(0)),
+            None
+        );
 
         let refreshed = NamedAccessCase {
             prototype_epoch: None,
@@ -218,6 +229,7 @@ mod tests {
 
         // Second shape -> Polymorphic
         let second = NamedAccessCase {
+            name,
             receiver_shape: ShapeId(2),
             holder_depth: 1,
             holder_shape: ShapeId(3),
@@ -226,8 +238,8 @@ mod tests {
         };
         ic.record(second);
         assert!(matches!(ic, NamedAccessIC::Polymorphic(_)));
-        assert_eq!(ic.try_get(ShapeId(1), Some(1)), Some(refreshed));
-        assert_eq!(ic.try_get(ShapeId(2), Some(0)), Some(second));
-        assert_eq!(ic.try_get(ShapeId(3), Some(0)), None);
+        assert_eq!(ic.try_get(name, ShapeId(1), Some(1)), Some(refreshed));
+        assert_eq!(ic.try_get(name, ShapeId(2), Some(0)), Some(second));
+        assert_eq!(ic.try_get(name, ShapeId(3), Some(0)), None);
     }
 }

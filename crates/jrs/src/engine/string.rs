@@ -191,6 +191,12 @@ impl StringArena {
         Ok(reference)
     }
 
+    /// Returns an existing permanent property-name atom without allocating one.
+    #[must_use]
+    pub fn lookup_interned_units(&self, units: &[u16]) -> Option<StringRef> {
+        self.intern_table.get(units).copied()
+    }
+
     /// Allocates a lazy concatenation, flattening inputs when depth is bounded out.
     ///
     /// # Errors

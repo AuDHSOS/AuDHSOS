@@ -8,6 +8,14 @@
 use alloc::{format, string::String, string::ToString};
 use core::fmt;
 
+struct Decimal(f64);
+
+impl fmt::Display for Decimal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        decimal(self.0, formatter)
+    }
+}
+
 pub(crate) fn decimal(value: f64, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     let scientific = format!("{:e}", value.abs());
     let (mantissa, exponent) = scientific.split_once('e').ok_or(fmt::Error)?;
@@ -53,6 +61,23 @@ pub(crate) fn decimal(value: f64, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         }
         write!(f, "e{exponent:+}")
     }
+}
+
+pub(crate) fn decimal_string(value: f64) -> String {
+    if value.is_nan() {
+        return String::from("NaN");
+    }
+    if value == f64::INFINITY {
+        return String::from("Infinity");
+    }
+    if value == f64::NEG_INFINITY {
+        return String::from("-Infinity");
+    }
+    if value == 0.0 {
+        return String::from("0");
+    }
+    let decimal = Decimal(value);
+    format!("{decimal}")
 }
 
 fn even_tie(value: f64, digits: &str, scale: i32) -> Option<u128> {
@@ -209,5 +234,27 @@ fn float_floor(n: f64) -> f64 {
         trunc - 1.0
     } else {
         trunc
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decimal_string;
+
+    #[test]
+    fn decimal_string_matches_ecmascript_number_keys() {
+        for (number, expected) in [
+            (f64::NAN, "NaN"),
+            (f64::INFINITY, "Infinity"),
+            (f64::NEG_INFINITY, "-Infinity"),
+            (-0.0, "0"),
+            (1.5, "1.5"),
+            (1e20, "100000000000000000000"),
+            (1e21, "1e+21"),
+            (1e-6, "0.000001"),
+            (1e-7, "1e-7"),
+        ] {
+            assert_eq!(decimal_string(number), expected);
+        }
     }
 }

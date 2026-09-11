@@ -489,6 +489,7 @@ fn compile_mode(source: &str, limits: Limits, realm: bool) -> Result<Program, Er
 enum RegisterType {
     Array(u32),
     Number,
+    NumberOrUndefined,
     Boolean,
     Null,
     Object(u32),
@@ -507,9 +508,21 @@ impl RegisterType {
         matches!(self, Self::Array(_) | Self::Object(_))
     }
 
+    const fn is_numeric_primitive(self) -> bool {
+        matches!(self, Self::Number | Self::NumberOrUndefined)
+    }
+
     fn merge(self, other: Self) -> Self {
         if self == other {
             self
+        } else if matches!(
+            self,
+            Self::Number | Self::NumberOrUndefined | Self::Undefined
+        ) && matches!(
+            other,
+            Self::Number | Self::NumberOrUndefined | Self::Undefined
+        ) {
+            Self::NumberOrUndefined
         } else if self.is_primitive() && other.is_primitive() {
             Self::Primitive
         } else {
@@ -910,15 +923,35 @@ impl RegisterLowerer {
             self.release_register(object)?;
             Some(RegisterType::Number)
         } else if matches!(base_type, RegisterType::Array(_)) {
-            let index = Self::static_array_index(key)?;
             let RegisterType::Array(object_id) = base_type else {
                 return None;
             };
             let RegisterObjectLayout::Array(elements) = self.object_layouts.get(&object_id)? else {
                 return None;
             };
-            let result_type = *elements.get(&index)?;
-            self.emit_array_index(index)?;
+            let static_index = Self::static_array_index(key);
+            let result_type = if let Some(index) = static_index {
+                elements
+                    .get(&index)
+                    .copied()
+                    .unwrap_or(RegisterType::Undefined)
+            } else {
+                elements
+                    .values()
+                    .copied()
+                    .reduce(RegisterType::merge)
+                    .unwrap_or(RegisterType::Undefined)
+                    .merge(RegisterType::Number)
+                    .merge(RegisterType::Undefined)
+            };
+            if let Some(index) = static_index {
+                self.emit_array_index(index)?;
+            } else {
+                let key_type = self.lower(key)?;
+                if !key_type.is_primitive() {
+                    return None;
+                }
+            }
             let key = self.allocate_register()?;
             self.code.emit(Instruction::Star(key));
             let slot = self.feedback_slot()?;
@@ -1433,7 +1466,7 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Ldar(left_register));
         let (instruction, result_type) = match operator {
             Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
-                if left_type == RegisterType::Number && right_type == RegisterType::Number =>
+                if left_type.is_numeric_primitive() && right_type.is_numeric_primitive() =>
             {
                 let instruction = match operator {
                     Binary::Add => Instruction::Add(right_register),
@@ -1505,7 +1538,7 @@ impl RegisterLowerer {
                     RegisterType::String
                 }
                 Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
-                    if left_type == RegisterType::Number && right_type == RegisterType::Number =>
+                    if left_type.is_numeric_primitive() && right_type.is_numeric_primitive() =>
                 {
                     RegisterType::Number
                 }

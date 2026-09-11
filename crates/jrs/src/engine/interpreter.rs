@@ -262,7 +262,7 @@ impl RegisterVM {
             } else {
                 self.acc = Value::from_f64(f64::from(a) + f64::from(b));
             }
-        } else if let (Some(a), Some(b)) = (self.acc.as_f64(), rhs.as_f64()) {
+        } else if let (Some(a), Some(b)) = (numeric_value(self.acc), numeric_value(rhs)) {
             self.acc = Value::from_f64(a + b);
         } else {
             return Err(VMError::TypeError);
@@ -396,7 +396,7 @@ impl RegisterVM {
                     self.acc = VALUE_FALSE;
                 }
                 Instruction::Negate => {
-                    let number = self.acc.as_f64().ok_or(VMError::TypeError)?;
+                    let number = numeric_value(self.acc).ok_or(VMError::TypeError)?;
                     self.acc = Value::from_f64(-number);
                 }
                 Instruction::LogicalNot => {
@@ -428,7 +428,8 @@ impl RegisterVM {
                         } else {
                             self.acc = Value::from_f64(f64::from(a) - f64::from(b));
                         }
-                    } else if let (Some(a), Some(b)) = (self.acc.as_f64(), rhs.as_f64()) {
+                    } else if let (Some(a), Some(b)) = (numeric_value(self.acc), numeric_value(rhs))
+                    {
                         self.acc = Value::from_f64(a - b);
                     } else {
                         return Err(VMError::TypeError);
@@ -442,7 +443,8 @@ impl RegisterVM {
                         } else {
                             self.acc = Value::from_f64(f64::from(a) * f64::from(b));
                         }
-                    } else if let (Some(a), Some(b)) = (self.acc.as_f64(), rhs.as_f64()) {
+                    } else if let (Some(a), Some(b)) = (numeric_value(self.acc), numeric_value(rhs))
+                    {
                         self.acc = Value::from_f64(a * b);
                     } else {
                         return Err(VMError::TypeError);
@@ -450,7 +452,7 @@ impl RegisterVM {
                 }
                 Instruction::Div(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    if let (Some(a), Some(b)) = (self.acc.as_f64(), rhs.as_f64()) {
+                    if let (Some(a), Some(b)) = (numeric_value(self.acc), numeric_value(rhs)) {
                         self.acc = Value::from_f64(a / b);
                     } else {
                         return Err(VMError::TypeError);
@@ -458,7 +460,7 @@ impl RegisterVM {
                 }
                 Instruction::Mod(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    if let (Some(a), Some(b)) = (self.acc.as_f64(), rhs.as_f64()) {
+                    if let (Some(a), Some(b)) = (numeric_value(self.acc), numeric_value(rhs)) {
                         self.acc = Value::from_f64(a % b);
                     } else {
                         return Err(VMError::TypeError);
@@ -514,7 +516,7 @@ impl RegisterVM {
                 }
                 Instruction::TestLessThan(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    if let (Some(a), Some(b)) = (self.acc.as_f64(), rhs.as_f64()) {
+                    if let (Some(a), Some(b)) = (numeric_value(self.acc), numeric_value(rhs)) {
                         self.acc = Value::from_bool(a < b);
                     } else {
                         return Err(VMError::TypeError);
@@ -522,7 +524,7 @@ impl RegisterVM {
                 }
                 Instruction::TestLessThanOrEqual(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    if let (Some(a), Some(b)) = (self.acc.as_f64(), rhs.as_f64()) {
+                    if let (Some(a), Some(b)) = (numeric_value(self.acc), numeric_value(rhs)) {
                         self.acc = Value::from_bool(a <= b);
                     } else {
                         return Err(VMError::TypeError);
@@ -530,7 +532,7 @@ impl RegisterVM {
                 }
                 Instruction::TestGreaterThan(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    if let (Some(a), Some(b)) = (self.acc.as_f64(), rhs.as_f64()) {
+                    if let (Some(a), Some(b)) = (numeric_value(self.acc), numeric_value(rhs)) {
                         self.acc = Value::from_bool(a > b);
                     } else {
                         return Err(VMError::TypeError);
@@ -538,7 +540,7 @@ impl RegisterVM {
                 }
                 Instruction::TestGreaterThanOrEqual(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    if let (Some(a), Some(b)) = (self.acc.as_f64(), rhs.as_f64()) {
+                    if let (Some(a), Some(b)) = (numeric_value(self.acc), numeric_value(rhs)) {
                         self.acc = Value::from_bool(a >= b);
                     } else {
                         return Err(VMError::TypeError);
@@ -580,7 +582,7 @@ impl RegisterVM {
                     // Inline cache check
                     let cached = feedback
                         .get_named_ic(slot)
-                        .and_then(|ic| ic.try_get(shape_id, prototype_epoch));
+                        .and_then(|ic| ic.try_get(name, shape_id, prototype_epoch));
 
                     if let Some(case) = cached
                         && let Some(value) = heap.load_cached_named(
@@ -599,6 +601,7 @@ impl RegisterVM {
                     if let Some(property) = heap.lookup_named(oref, name)? {
                         if let Some(ic) = feedback.get_named_ic_mut(slot) {
                             ic.record(NamedAccessCase {
+                                name,
                                 receiver_shape: property.receiver_shape,
                                 holder_depth: property.holder_depth,
                                 holder_shape: property.holder_shape,
@@ -624,7 +627,7 @@ impl RegisterVM {
 
                     let cached = feedback
                         .get_named_ic(slot)
-                        .and_then(|ic| ic.try_get(current_shape, prototype_epoch));
+                        .and_then(|ic| ic.try_get(name, current_shape, prototype_epoch));
                     if let Some(case) = cached
                         && case.holder_depth == 0
                         && case.holder_shape == current_shape
@@ -639,6 +642,7 @@ impl RegisterVM {
                         heap.set_object_slot(oref, loc.slot_offset, val)?;
                         if let Some(ic) = feedback.get_named_ic_mut(slot) {
                             ic.record(NamedAccessCase {
+                                name,
                                 receiver_shape: current_shape,
                                 holder_depth: 0,
                                 holder_shape: current_shape,
@@ -663,6 +667,7 @@ impl RegisterVM {
                         heap.set_object_slot(oref, slot_idx, val)?;
                         if let Some(ic) = feedback.get_named_ic_mut(slot) {
                             ic.record(NamedAccessCase {
+                                name,
                                 receiver_shape: new_shape,
                                 holder_depth: 0,
                                 holder_shape: new_shape,
@@ -672,20 +677,67 @@ impl RegisterVM {
                         }
                     }
                 }
-                Instruction::GetByValue { obj, key, .. } => {
+                Instruction::GetByValue { obj, key, slot } => {
                     let target = self.read_reg(obj)?;
                     let oref = target.as_object().ok_or(VMError::TypeError)?;
                     let js_obj = heap.get_object(oref).ok_or(VMError::TypeError)?;
                     let key_val = self.read_reg(key)?;
 
-                    if let (Some(idx), Some(eref)) = (array_index(key_val), js_obj.elements) {
+                    if let (Some(idx), Some(eref)) = (array_index(key_val, heap)?, js_obj.elements)
+                    {
                         let elem = heap.get_elements(eref).ok_or(VMError::TypeError)?;
                         self.acc = elem.get(idx).unwrap_or(VALUE_UNDEFINED);
                     } else {
-                        return Err(VMError::TypeError);
+                        let name = property_name_units(key_val, heap)?;
+                        if name.as_slice() == [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68]
+                            && let Some(length) = heap.array_length(oref)
+                        {
+                            self.acc = i32::try_from(length).map_or_else(
+                                |_| Value::from_f64(f64::from(length)),
+                                Value::from_smi,
+                            );
+                            continue;
+                        }
+                        let Some(name) = heap.strings.lookup_interned_units(&name) else {
+                            self.acc = VALUE_UNDEFINED;
+                            continue;
+                        };
+                        let shape_id = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
+                        let prototype_epoch = heap.shapes.prototype_epoch();
+                        let cached = feedback
+                            .get_named_ic(slot)
+                            .and_then(|ic| ic.try_get(name, shape_id, prototype_epoch));
+                        if let Some(case) = cached
+                            && let Some(value) = heap.load_cached_named(
+                                oref,
+                                case.receiver_shape,
+                                case.holder_depth,
+                                case.holder_shape,
+                                case.slot,
+                                case.prototype_epoch,
+                            )?
+                        {
+                            self.acc = value;
+                            continue;
+                        }
+                        if let Some(property) = heap.lookup_named(oref, name)? {
+                            if let Some(ic) = feedback.get_named_ic_mut(slot) {
+                                ic.record(NamedAccessCase {
+                                    name,
+                                    receiver_shape: property.receiver_shape,
+                                    holder_depth: property.holder_depth,
+                                    holder_shape: property.holder_shape,
+                                    slot: property.slot,
+                                    prototype_epoch,
+                                });
+                            }
+                            self.acc = property.value;
+                        } else {
+                            self.acc = VALUE_UNDEFINED;
+                        }
                     }
                 }
-                Instruction::SetByValue { obj, key, .. } => {
+                Instruction::SetByValue { obj, key, slot } => {
                     let target = self.read_reg(obj)?;
                     let oref = target.as_object().ok_or(VMError::TypeError)?;
                     let js_obj = heap.get_object(oref).ok_or(VMError::TypeError)?;
@@ -693,7 +745,7 @@ impl RegisterVM {
                     let val = self.acc;
 
                     if js_obj.elements.is_some()
-                        && let Some(index) = array_index(key_val)
+                        && let Some(index) = array_index(key_val, heap)?
                     {
                         let elements_reference = js_obj.elements.ok_or(VMError::TypeError)?;
                         let elements = heap
@@ -707,7 +759,67 @@ impl RegisterVM {
                         }
                         heap.set_array_element(oref, index, val)?;
                     } else {
-                        return Err(VMError::TypeError);
+                        let name_units = property_name_units(key_val, heap)?;
+                        let name =
+                            if let Some(name) = heap.strings.lookup_interned_units(&name_units) {
+                                name
+                            } else {
+                                if heap.own_property_count(oref).unwrap_or(usize::MAX)
+                                    >= self.property_limit
+                                {
+                                    return Err(VMError::PropertyLimit);
+                                }
+                                heap.strings.intern_units(&name_units)?
+                            };
+                        let current_shape =
+                            heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
+                        let prototype_epoch = heap.shapes.prototype_epoch();
+                        let cached = feedback
+                            .get_named_ic(slot)
+                            .and_then(|ic| ic.try_get(name, current_shape, prototype_epoch));
+                        if let Some(case) = cached
+                            && case.holder_depth == 0
+                            && case.holder_shape == current_shape
+                        {
+                            heap.set_object_slot(oref, case.slot, val)?;
+                            continue;
+                        }
+                        if let Some(location) = heap.shapes.lookup(current_shape, name) {
+                            heap.set_object_slot(oref, location.slot_offset, val)?;
+                            if let Some(ic) = feedback.get_named_ic_mut(slot) {
+                                ic.record(NamedAccessCase {
+                                    name,
+                                    receiver_shape: current_shape,
+                                    holder_depth: 0,
+                                    holder_shape: current_shape,
+                                    slot: location.slot_offset,
+                                    prototype_epoch: None,
+                                });
+                            }
+                        } else {
+                            if heap.own_property_count(oref).unwrap_or(usize::MAX)
+                                >= self.property_limit
+                            {
+                                return Err(VMError::PropertyLimit);
+                            }
+                            let (new_shape, property_slot) = heap.shapes.transition(
+                                current_shape,
+                                name,
+                                PropertyFlags::ordinary_data(),
+                            );
+                            heap.set_object_shape(oref, new_shape)?;
+                            heap.set_object_slot(oref, property_slot, val)?;
+                            if let Some(ic) = feedback.get_named_ic_mut(slot) {
+                                ic.record(NamedAccessCase {
+                                    name,
+                                    receiver_shape: new_shape,
+                                    holder_depth: 0,
+                                    holder_shape: new_shape,
+                                    slot: property_slot,
+                                    prototype_epoch: None,
+                                });
+                            }
+                        }
                     }
                 }
                 Instruction::GetArrayLength { obj } => {
@@ -745,28 +857,99 @@ fn number_to_i32(number: f64) -> i32 {
     i32::from_ne_bytes(crate::value::number_uint32(number).to_ne_bytes())
 }
 
-fn array_index(value: Value) -> Option<u32> {
+fn numeric_value(value: Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.is_undefined().then_some(f64::NAN))
+}
+
+fn array_index(value: Value, heap: &GenerationalHeap) -> Result<Option<u32>, VMError> {
     if let Some(index) = value.as_smi() {
-        return u32::try_from(index).ok();
+        return Ok(u32::try_from(index).ok());
     }
-    let number = value.as_f64()?;
-    if number == 0.0 {
-        return Some(0);
+    if let Some(number) = value.as_f64() {
+        if number == 0.0 {
+            return Ok(Some(0));
+        }
+        if !number.is_finite() || number < 0.0 || number >= f64::from(u32::MAX) {
+            return Ok(None);
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "finite integral value was bounded to the Array-index range"
+        )]
+        let index = number as u32;
+        #[expect(
+            clippy::float_cmp,
+            reason = "Array indices require exact integral binary64 values"
+        )]
+        return Ok((f64::from(index) == number).then_some(index));
     }
-    if !number.is_finite() || number < 0.0 || number >= f64::from(u32::MAX) {
-        return None;
+    if !value.is_string() {
+        return Ok(None);
     }
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "finite integral value was bounded to the Array-index range"
-    )]
-    let index = number as u32;
-    #[expect(
-        clippy::float_cmp,
-        reason = "Array indices require exact integral binary64 values"
-    )]
-    (f64::from(index) == number).then_some(index)
+    let length = heap
+        .strings
+        .length_of(value)
+        .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+    if length == 0 || length > 10 {
+        return Ok(None);
+    }
+    let first = heap
+        .strings
+        .char_code_at(value, 0)
+        .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+    if length > 1 && first == u16::from(b'0') {
+        return Ok(None);
+    }
+    let mut index = 0u32;
+    for position in 0..length {
+        let unit = heap
+            .strings
+            .char_code_at(value, position)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let Some(digit) = unit
+            .checked_sub(u16::from(b'0'))
+            .filter(|digit| *digit < 10)
+        else {
+            return Ok(None);
+        };
+        let Some(next) = index
+            .checked_mul(10)
+            .and_then(|index| index.checked_add(u32::from(digit)))
+        else {
+            return Ok(None);
+        };
+        index = next;
+    }
+    Ok((index != u32::MAX).then_some(index))
+}
+
+fn property_name_units(value: Value, heap: &GenerationalHeap) -> Result<Vec<u16>, VMError> {
+    if value.is_string() {
+        return heap
+            .strings
+            .to_utf16(value)
+            .ok_or(VMError::Heap(HeapError::InvalidReference));
+    }
+    if let Some(number) = value.as_f64() {
+        return Ok(crate::number::decimal_string(number)
+            .encode_utf16()
+            .collect());
+    }
+    if let Some(boolean) = value.as_boolean() {
+        return Ok(if boolean { "true" } else { "false" }
+            .encode_utf16()
+            .collect());
+    }
+    if value.is_null() {
+        return Ok("null".encode_utf16().collect());
+    }
+    if value.is_undefined() {
+        return Ok("undefined".encode_utf16().collect());
+    }
+    Err(VMError::TypeError)
 }
 
 #[cfg(test)]
@@ -921,20 +1104,32 @@ mod tests {
 
     #[test]
     fn array_index_classification_matches_array_property_boundaries() {
-        assert_eq!(array_index(Value::from_smi(0)), Some(0));
-        assert_eq!(array_index(Value::from_smi(-1)), None);
-        assert_eq!(array_index(Value::from_f64(-0.0)), Some(0));
+        let mut heap = GenerationalHeap::new();
+        assert_eq!(array_index(Value::from_smi(0), &heap), Ok(Some(0)));
+        assert_eq!(array_index(Value::from_smi(-1), &heap), Ok(None));
+        assert_eq!(array_index(Value::from_f64(-0.0), &heap), Ok(Some(0)));
         assert_eq!(
-            array_index(Value::from_f64(2_147_483_648.0)),
-            Some(2_147_483_648)
+            array_index(Value::from_f64(2_147_483_648.0), &heap),
+            Ok(Some(2_147_483_648))
         );
-        assert_eq!(array_index(Value::from_f64(1.5)), None);
-        assert_eq!(array_index(Value::from_f64(f64::NAN)), None);
+        assert_eq!(array_index(Value::from_f64(1.5), &heap), Ok(None));
+        assert_eq!(array_index(Value::from_f64(f64::NAN), &heap), Ok(None));
         assert_eq!(
-            array_index(Value::from_f64(4_294_967_294.0)),
-            Some(4_294_967_294)
+            array_index(Value::from_f64(4_294_967_294.0), &heap),
+            Ok(Some(4_294_967_294))
         );
-        assert_eq!(array_index(Value::from_f64(4_294_967_295.0)), None);
+        assert_eq!(
+            array_index(Value::from_f64(4_294_967_295.0), &heap),
+            Ok(None)
+        );
+        let zero = Value::from_string(heap.strings.allocate_str("0").unwrap());
+        let leading_zero = Value::from_string(heap.strings.allocate_str("01").unwrap());
+        let maximum = Value::from_string(heap.strings.allocate_str("4294967294").unwrap());
+        let too_large = Value::from_string(heap.strings.allocate_str("4294967295").unwrap());
+        assert_eq!(array_index(zero, &heap), Ok(Some(0)));
+        assert_eq!(array_index(leading_zero, &heap), Ok(None));
+        assert_eq!(array_index(maximum, &heap), Ok(Some(4_294_967_294)));
+        assert_eq!(array_index(too_large, &heap), Ok(None));
     }
 
     #[test]
@@ -969,5 +1164,51 @@ mod tests {
             vm.run(&code, &mut feedback, &mut heap),
             Err(VMError::PropertyLimit)
         );
+    }
+
+    #[test]
+    fn keyed_named_access_guards_the_property_atom() {
+        let mut code = BytecodeFunction::new(2, 0);
+        code.feedback_slot_count = 2;
+        code.emit(Instruction::CreateArray(0));
+        code.emit(Instruction::Star(Reg(0)));
+        code.emit(Instruction::LdaSmi(-1));
+        code.emit(Instruction::Star(Reg(1)));
+        code.emit(Instruction::LdaSmi(7));
+        code.emit(Instruction::SetByValue {
+            obj: Reg(0),
+            key: Reg(1),
+            slot: 0,
+        });
+        code.emit(Instruction::LdaSmi(-2));
+        code.emit(Instruction::Star(Reg(1)));
+        code.emit(Instruction::LdaSmi(8));
+        code.emit(Instruction::SetByValue {
+            obj: Reg(0),
+            key: Reg(1),
+            slot: 0,
+        });
+        code.emit(Instruction::LdaSmi(-1));
+        code.emit(Instruction::Star(Reg(1)));
+        code.emit(Instruction::GetByValue {
+            obj: Reg(0),
+            key: Reg(1),
+            slot: 1,
+        });
+        code.emit(Instruction::Return);
+
+        let mut heap = GenerationalHeap::new();
+        let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+        let mut vm = RegisterVM::new(100);
+        vm.set_property_limit(3);
+        assert_eq!(
+            vm.run(&code, &mut feedback, &mut heap),
+            Ok(Value::from_smi(7))
+        );
+        assert!(matches!(
+            feedback.get_named_ic(0),
+            Some(super::super::feedback::NamedAccessIC::Polymorphic(cases))
+                if cases.len() == 2 && cases[0].name != cases[1].name
+        ));
     }
 }

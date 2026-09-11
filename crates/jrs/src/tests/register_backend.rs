@@ -126,6 +126,20 @@ fn array_literals_and_indices_run_through_dense_elements() -> Result<(), Error> 
         "let a=[1];a['0']",
         "let a=[];a[2147483648]=9;a[2147483648]",
         "let a=[];a[4294967294]=9;a.length",
+        "let a=[1];a[-1]===undefined",
+        "let a=[1,,3];a[1]===undefined",
+        "let a=[2,3,5];let i=1;a[i]",
+        "let a=[2,3,5];let i=-0;a[i]",
+        "let a=[2,3,5];let i=-1;a[i]===undefined",
+        "let a=[2,3,5];let i=1.5;a[i]===undefined",
+        "let a=[2,3,5];let i=4294967295;a[i]===undefined",
+        "let a=[2,3,5];let i='1';a[i]",
+        "let a=[2,3,5];let i='length';a[i]",
+        "let a=[2,3,5];let i='01';a[i]===undefined",
+        "let a=[2,3,5];let i=true;a[i]===undefined",
+        "let a=[2,3,5];let i=null;a[i]===undefined",
+        "let a=[2,3,5];let i=9;a[i]+1",
+        "let a=[2,3,5];let sum=0;for(let i=0;i<a.length;i++){sum+=a[i]}sum",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -169,11 +183,8 @@ fn numeric_array_indices_do_not_enter_the_property_name_pool() -> Result<(), Err
 #[test]
 fn non_indices_and_object_results_remain_on_the_full_property_path() -> Result<(), Error> {
     for source in [
-        "let a=[1];a[-1]",
-        "let a=[1];a['01']",
         "let a=[];a[4294967295]=9;a.length",
         "({0:1})[0]",
-        "[1,,3][1]===undefined",
         "let o={x:1};o.missing===undefined",
         "[1,2]",
     ] {
