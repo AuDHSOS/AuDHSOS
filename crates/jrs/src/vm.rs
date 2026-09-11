@@ -424,6 +424,7 @@ impl Execution<'_> {
         vm.set_string_units_limit(self.limits.string_units);
         vm.set_property_limit(self.limits.properties);
         vm.set_call_frame_limit(self.limits.call_frames);
+        vm.set_binding_limit(self.limits.binding_slots);
         let mut heap = self.register_heap.take().unwrap_or_default();
         self.register_feedback
             .retain(|state| state.code.strong_count() != 0);
@@ -489,6 +490,9 @@ impl Execution<'_> {
             }),
             Err(crate::engine::interpreter::VMError::CallStackOverflow) => Err(Error::Limit {
                 resource: "call frames",
+            }),
+            Err(crate::engine::interpreter::VMError::BindingStackOverflow) => Err(Error::Limit {
+                resource: "binding slots",
             }),
             Err(crate::engine::interpreter::VMError::StringLimit) => Err(Error::Limit {
                 resource: "string units",

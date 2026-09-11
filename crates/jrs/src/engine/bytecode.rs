@@ -21,6 +21,8 @@ pub enum VerificationError {
     EmptyFunction,
     /// The parameter window does not fit in the register frame.
     ParametersExceedRegisters,
+    /// The active binding prefix does not fit in the register frame.
+    BindingsExceedRegisters,
     /// An instruction addresses a register outside the frame.
     RegisterOutOfBounds {
         /// Instruction offset.
@@ -234,6 +236,8 @@ pub struct BytecodeFunction {
     pub register_count: u16,
     /// Number of formal parameters expected.
     pub parameter_count: u16,
+    /// Number of parameter/local binding registers charged to the active binding budget.
+    pub binding_count: u16,
     /// Number of feedback vector slots allocated for inline caches.
     pub feedback_slot_count: u16,
     /// Fuel charged once in the function prologue.
@@ -253,6 +257,7 @@ impl BytecodeFunction {
             functions: Vec::new(),
             register_count,
             parameter_count,
+            binding_count: parameter_count,
             feedback_slot_count: 0,
             entry_fuel_cost: 1,
             entry_stack_requirement: 0,
@@ -323,6 +328,9 @@ impl BytecodeFunction {
         }
         if self.parameter_count > self.register_count {
             return Err(VerificationError::ParametersExceedRegisters);
+        }
+        if self.binding_count > self.register_count || self.parameter_count > self.binding_count {
+            return Err(VerificationError::BindingsExceedRegisters);
         }
         for (index, constant) in self.constants.iter().enumerate() {
             if constant.is_object()
@@ -543,6 +551,14 @@ mod tests {
         assert_eq!(
             parameters.verify(),
             Err(VerificationError::ParametersExceedRegisters)
+        );
+
+        let mut bindings = BytecodeFunction::new(1, 0);
+        bindings.binding_count = 2;
+        bindings.emit(Instruction::Return);
+        assert_eq!(
+            bindings.verify(),
+            Err(VerificationError::BindingsExceedRegisters)
         );
 
         let mut register = BytecodeFunction::new(1, 0);

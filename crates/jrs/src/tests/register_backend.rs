@@ -341,6 +341,15 @@ fn simple_functions_use_contiguous_register_call_frames() -> Result<(), Error> {
         "function f(){42}f()",
         "function f(){return}f()",
         "function f(){return 'a'+'b'}f()",
+        "function f(a){return a}f(42)",
+        "function f(a){return a}f()",
+        "function f(a,b){return b}f(1,42)",
+        "function f(a){return a}f('value')",
+        "function f(a){return a}f(null)",
+        "function f(a){return a}f(true)",
+        "function f(a){return a}f(42,7)",
+        "function f(a){if(a)return 1;return 2}f(true)",
+        "function f(a){return a===42}f(42)",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -359,13 +368,17 @@ fn simple_functions_use_contiguous_register_call_frames() -> Result<(), Error> {
 #[test]
 fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> Result<(), Error> {
     for source in [
-        "function f(a){return a}f(42)",
+        "function add(a,b){return a+b}add(20,22)",
         "function f(){return this}f()",
         "function f(){return arguments.length}f()",
         "let x=42;function f(){return x}f()",
         "function f(){return {x:1}}f()",
         "async function f(){return 1}f()",
         "function f(){function g(){return 1}return g()}f()",
+        "let f=function inner(a){return a};f(42)",
+        "function f(a,a){return a}f(1,2)",
+        "function f(a={}){return a}f()",
+        "function f(...a){return a.length}f(1)",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
@@ -397,6 +410,25 @@ fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> R
         Err(Error::Limit {
             resource: "feedback vectors"
         })
+    );
+
+    let limits = Limits {
+        binding_slots: 1,
+        ..Limits::default()
+    };
+    let program = compile("function f(a,b){return b}f(1,2)", limits)?;
+    assert!(program.uses_register_backend());
+    let mut runtime = Runtime::new(limits);
+    assert_eq!(
+        runtime.run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "binding slots"
+        })
+    );
+    let recovery = compile("42", limits)?;
+    assert_eq!(
+        runtime.run(&recovery, &mut SilentHost)?,
+        Value::Number(42.0)
     );
 
     let base = Limits::default();

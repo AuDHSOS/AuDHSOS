@@ -516,6 +516,13 @@ impl RegisterType {
         matches!(self, Self::Number | Self::NumberOrUndefined)
     }
 
+    fn accepts(self, actual: Self) -> bool {
+        match self {
+            Self::Primitive => actual.is_primitive(),
+            _ => self == actual,
+        }
+    }
+
     fn merge(self, other: Self) -> Self {
         if self == other {
             self
@@ -563,6 +570,7 @@ struct RegisterLowerer {
     object_layouts: BTreeMap<u32, RegisterObjectLayout>,
     property_limit: usize,
     function_returns: BTreeMap<u32, RegisterType>,
+    function_parameters: BTreeMap<u32, Vec<RegisterType>>,
     allow_return: bool,
     return_type: Option<RegisterType>,
 }
@@ -595,6 +603,7 @@ struct RegisterSnapshot {
     object_layouts: BTreeMap<u32, RegisterObjectLayout>,
     functions: usize,
     function_returns: BTreeMap<u32, RegisterType>,
+    function_parameters: BTreeMap<u32, Vec<RegisterType>>,
     return_type: Option<RegisterType>,
 }
 
@@ -619,6 +628,7 @@ impl RegisterLowerer {
             object_layouts: BTreeMap::new(),
             property_limit,
             function_returns: BTreeMap::new(),
+            function_parameters: BTreeMap::new(),
             allow_return: false,
             return_type: None,
         }
@@ -670,6 +680,7 @@ impl RegisterLowerer {
             object_layouts: self.object_layouts.clone(),
             functions: self.code.functions.len(),
             function_returns: self.function_returns.clone(),
+            function_parameters: self.function_parameters.clone(),
             return_type: self.return_type,
         }
     }
@@ -687,6 +698,7 @@ impl RegisterLowerer {
         self.object_layouts = snapshot.object_layouts;
         self.code.functions.truncate(snapshot.functions);
         self.function_returns = snapshot.function_returns;
+        self.function_parameters = snapshot.function_parameters;
         self.return_type = snapshot.return_type;
     }
 
@@ -943,10 +955,25 @@ impl RegisterLowerer {
     fn lower_function(&mut self, function: &Function) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         if function.async_kind != parser::AsyncKind::Sync
-            || !function.parameters.is_empty()
             || function.constructor_kind != parser::ConstructorKind::Ordinary
+            || function.name.is_some()
+            || function
+                .parameters
+                .iter()
+                .any(|parameter| parameter.rest || parameter.default.is_some())
         {
             return None;
+        }
+        for parameter in &function.parameters {
+            if function
+                .parameters
+                .iter()
+                .filter(|candidate| candidate.name == parameter.name)
+                .count()
+                != 1
+            {
+                return None;
+            }
         }
         let mut child = Self::new(
             0,
@@ -956,6 +983,10 @@ impl RegisterLowerer {
             self.property_limit,
         );
         child.allow_return = true;
+        for parameter in &function.parameters {
+            child.declare(&parameter.name, true)?;
+            child.bindings.get_mut(&parameter.name)?.value_type = Some(RegisterType::Primitive);
+        }
         for statement in &function.body {
             match statement {
                 Stmt::Declare(bindings) => {
@@ -998,36 +1029,65 @@ impl RegisterLowerer {
             return None;
         }
         child.code.register_count = child.register_count;
-        child.code.parameter_count = 0;
+        child.code.parameter_count = u16::try_from(function.parameters.len()).ok()?;
+        child.code.binding_count = child.local_count;
         child.code.verify().ok()?;
         let code_id = u32::try_from(self.code.functions.len()).ok()?;
         self.code.functions.push(child.code);
         self.function_returns.insert(code_id, return_type);
+        self.function_parameters.insert(
+            code_id,
+            alloc::vec![RegisterType::Primitive; function.parameters.len()],
+        );
         self.code.emit(Instruction::CreateClosure(code_id));
         Some(RegisterType::Function(code_id))
     }
 
     fn lower_call(&mut self, callee: &Expr, arguments: &[Expr]) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        if !arguments.is_empty() {
-            return None;
-        }
         let RegisterType::Function(code_id) = self.lower(callee)? else {
             return None;
         };
         let function = self.allocate_register()?;
         self.code.emit(Instruction::Star(function));
-        let argument_start = self.allocate_register()?;
-        self.code.emit(Instruction::LdaUndefined);
-        self.code.emit(Instruction::Star(argument_start));
+        let parameter_types = self.function_parameters.get(&code_id)?.clone();
+        let mut argument_registers = Vec::new();
+        for (index, argument) in arguments.iter().enumerate() {
+            let argument_type = self.lower(argument)?;
+            if !argument_type.is_primitive()
+                || parameter_types
+                    .get(index)
+                    .is_some_and(|parameter| !parameter.accepts(argument_type))
+            {
+                return None;
+            }
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            argument_registers.push(register);
+        }
+        let dummy = if argument_registers.is_empty() {
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::LdaUndefined);
+            self.code.emit(Instruction::Star(register));
+            Some(register)
+        } else {
+            None
+        };
+        let argument_start = argument_registers.first().copied().or(dummy)?;
+        let argument_count = u16::try_from(arguments.len()).ok()?;
         let slot = self.feedback_slot()?;
         self.code.emit(Instruction::Call {
             func: function,
             arg_start: argument_start,
-            arg_count: 0,
+            arg_count: argument_count,
             slot,
         });
-        self.release_register(argument_start)?;
+        if let Some(dummy) = dummy {
+            self.release_register(dummy)?;
+        }
+        for register in argument_registers.into_iter().rev() {
+            self.release_register(register)?;
+        }
         self.release_register(function)?;
         self.function_returns.get(&code_id).copied()
     }
@@ -1986,6 +2046,7 @@ fn lower_register_script(
         .code
         .emit(crate::engine::bytecode::Instruction::Return);
     lowerer.code.register_count = lowerer.register_count;
+    lowerer.code.binding_count = lowerer.local_count;
     lowerer.code.verify().ok()?;
     Some(lowerer.code)
 }

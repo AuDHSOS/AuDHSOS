@@ -38,6 +38,8 @@ pub enum VMError {
     InvalidRegister,
     /// Active bytecode calls exceed the configured frame limit.
     CallStackOverflow,
+    /// Active parameter/local bindings exceed the configured binding limit.
+    BindingStackOverflow,
     /// Operand stack limit exceeded.
     StackOverflow,
     /// A string result exceeds the configured UTF-16 code-unit limit.
@@ -73,6 +75,8 @@ pub struct FrameHeader {
     pub return_pc: usize,
     /// Bytecode function active in the caller; `None` denotes the root unit.
     pub caller_code_id: Option<u32>,
+    /// Active binding count to restore with the caller.
+    pub caller_binding_count: usize,
 }
 
 /// Contiguous register-based virtual machine executor.
@@ -95,6 +99,10 @@ pub struct RegisterVM {
     frames: Vec<FrameHeader>,
     /// Maximum simultaneously active bytecode calls.
     call_frame_limit: usize,
+    /// Active parameter/local bindings across all register frames.
+    active_binding_count: usize,
+    /// Maximum active parameter/local bindings.
+    binding_limit: usize,
 }
 
 impl Default for RegisterVM {
@@ -129,6 +137,8 @@ impl RegisterVM {
             property_limit: usize::MAX,
             frames: Vec::with_capacity(register_capacity),
             call_frame_limit: register_capacity,
+            active_binding_count: 0,
+            binding_limit: usize::MAX,
         }
     }
 
@@ -145,6 +155,11 @@ impl RegisterVM {
     /// Updates the maximum simultaneously active bytecode calls.
     pub(crate) const fn set_call_frame_limit(&mut self, limit: usize) {
         self.call_frame_limit = limit;
+    }
+
+    /// Updates the maximum active parameter/local binding count.
+    pub(crate) const fn set_binding_limit(&mut self, limit: usize) {
+        self.binding_limit = limit;
     }
 
     /// Reads a register relative to the active frame pointer.
@@ -362,6 +377,10 @@ impl RegisterVM {
         }
         if code.entry_stack_requirement > self.operand_stack_limit {
             return Err(VMError::StackOverflow);
+        }
+        self.active_binding_count = usize::from(code.binding_count);
+        if self.active_binding_count > self.binding_limit {
+            return Err(VMError::BindingStackOverflow);
         }
         self.fuel = self
             .fuel
@@ -911,6 +930,13 @@ impl RegisterVM {
                     {
                         return Err(VMError::CallStackOverflow);
                     }
+                    let callee_bindings = self
+                        .active_binding_count
+                        .checked_add(usize::from(callee.binding_count))
+                        .ok_or(VMError::BindingStackOverflow)?;
+                    if callee_bindings > self.binding_limit {
+                        return Err(VMError::BindingStackOverflow);
+                    }
                     if callee.entry_stack_requirement > self.operand_stack_limit {
                         return Err(VMError::StackOverflow);
                     }
@@ -950,8 +976,10 @@ impl RegisterVM {
                         caller_fp: self.fp,
                         return_pc: pc,
                         caller_code_id: current_code_id,
+                        caller_binding_count: self.active_binding_count,
                     });
                     self.fp = next_frame;
+                    self.active_binding_count = callee_bindings;
                     current_code_id = Some(code_id);
                     pc = 0;
                     self.acc = VALUE_UNDEFINED;
@@ -961,8 +989,10 @@ impl RegisterVM {
                         self.fp = frame.caller_fp;
                         pc = frame.return_pc;
                         current_code_id = frame.caller_code_id;
+                        self.active_binding_count = frame.caller_binding_count;
                     } else {
                         self.fp = 0;
+                        self.active_binding_count = 0;
                         return Ok(self.acc);
                     }
                 }
