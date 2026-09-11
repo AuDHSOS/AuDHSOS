@@ -320,6 +320,7 @@ impl Execution<'_> {
             ("Number", native(Builtin::Number)),
             ("Boolean", native(Builtin::Boolean)),
             ("RegExp", native(Builtin::RegExp)),
+            ("Proxy", native(Builtin::Proxy)),
         ] {
             self.define(
                 &value,
@@ -414,6 +415,26 @@ impl Execution<'_> {
         if let Value::Function(FunctionValue(Callable::Native(builtin))) = object {
             if *builtin == Builtin::Function {
                 return self.function_constructor_property(key);
+            }
+            if *builtin == Builtin::Proxy {
+                if key == Value::string("length").units().as_ref() {
+                    return Ok(Some(Property {
+                        value: Value::Number(2.0),
+                        writable: false,
+                        enumerable: false,
+                        configurable: true,
+                        accessor: None,
+                    }));
+                }
+                if key == Value::string("name").units().as_ref() {
+                    return Ok(Some(Property {
+                        value: Value::string("Proxy"),
+                        writable: false,
+                        enumerable: false,
+                        configurable: true,
+                        accessor: None,
+                    }));
+                }
             }
             if let Some(property) = Self::json_property(*builtin, key) {
                 return Ok(Some(property));

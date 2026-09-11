@@ -248,6 +248,7 @@ pub(crate) enum Builtin {
     SyntaxError,
     EvalError,
     URIError,
+    Proxy,
     ErrorToString,
     ErrorIsError,
     ThrowTypeError,
@@ -2001,6 +2002,7 @@ pub(crate) fn builtin(name: &str) -> Option<Builtin> {
         "SyntaxError" => Builtin::SyntaxError,
         "EvalError" => Builtin::EvalError,
         "URIError" => Builtin::URIError,
+        "Proxy" => Builtin::Proxy,
         _ => return None,
     })
 }

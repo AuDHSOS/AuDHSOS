@@ -513,6 +513,7 @@ impl Execution<'_> {
             "SyntaxError",
             "EvalError",
             "URIError",
+            "Proxy",
             "isNaN",
             "isFinite",
         ] {
