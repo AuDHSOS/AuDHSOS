@@ -18,9 +18,9 @@
 use super::{
     bytecode::{BytecodeFunction, Instruction, Reg},
     feedback::FeedbackVector,
-    heap::GenerationalHeap,
-    shape::PropertyFlags,
-    value::{VALUE_FALSE, VALUE_NULL, VALUE_TRUE, VALUE_UNDEFINED, Value},
+    heap::{GenerationalHeap, HeapError},
+    shape::{PropertyFlags, ShapeId},
+    value::{ObjectRef, VALUE_FALSE, VALUE_NULL, VALUE_TRUE, VALUE_UNDEFINED, Value},
 };
 use alloc::vec::Vec;
 
@@ -37,6 +37,14 @@ pub enum VMError {
     TypeError,
     /// Instruction execution fell off bytecode bounds without Return.
     UnexpectedEnd,
+    /// Generational heap invariant or reference failure.
+    Heap(HeapError),
+}
+
+impl From<HeapError> for VMError {
+    fn from(error: HeapError) -> Self {
+        Self::Heap(error)
+    }
 }
 
 /// Light frame boundary recorded on the contiguous call stack.
@@ -95,6 +103,53 @@ impl RegisterVM {
         }
     }
 
+    fn collect_young(
+        &mut self,
+        code: &BytecodeFunction,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let frame_end = self
+            .fp
+            .checked_add(code.register_count as usize)
+            .ok_or(VMError::StackOverflow)?;
+        let registers = self
+            .stack
+            .get_mut(self.fp..frame_end)
+            .ok_or(VMError::StackOverflow)?;
+        heap.scavenge_with_roots(registers, &mut self.acc)?;
+        Ok(())
+    }
+
+    fn allocate_object(
+        &mut self,
+        code: &BytecodeFunction,
+        heap: &mut GenerationalHeap,
+        shape: ShapeId,
+    ) -> Result<ObjectRef, VMError> {
+        loop {
+            match heap.allocate_object(shape, VALUE_NULL) {
+                Ok(reference) => return Ok(reference),
+                Err(HeapError::NurseryFull) => self.collect_young(code, heap)?,
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    fn allocate_array(
+        &mut self,
+        code: &BytecodeFunction,
+        heap: &mut GenerationalHeap,
+        length: u32,
+    ) -> Result<ObjectRef, VMError> {
+        loop {
+            match heap.allocate_array(length) {
+                Ok(reference) => return Ok(reference),
+                Err(HeapError::NurseryFull) => self.collect_young(code, heap)?,
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
     /// Executes a bytecode function against the heap with active feedback caching.
     ///
     /// # Errors
@@ -108,6 +163,15 @@ impl RegisterVM {
     ) -> Result<Value, VMError> {
         let mut pc: usize = 0;
         let instructions = &code.instructions;
+        let frame_end = self
+            .fp
+            .checked_add(code.register_count as usize)
+            .ok_or(VMError::StackOverflow)?;
+        self.stack
+            .get_mut(self.fp..frame_end)
+            .ok_or(VMError::StackOverflow)?
+            .fill(VALUE_UNDEFINED);
+        self.acc = VALUE_UNDEFINED;
 
         loop {
             let Some(&inst) = instructions.get(pc) else {
@@ -341,8 +405,7 @@ impl RegisterVM {
                     // Check if property exists in current shape
                     if let Some(loc) = heap.shapes.lookup(current_shape, name) {
                         let val = self.acc;
-                        let js_obj = heap.get_object_mut(oref).ok_or(VMError::TypeError)?;
-                        js_obj.set_slot(loc.slot_offset, val);
+                        heap.set_object_slot(oref, loc.slot_offset, val)?;
                     } else {
                         // Transition to new Shape
                         let (new_shape, slot_idx) = heap.shapes.transition(
@@ -351,9 +414,8 @@ impl RegisterVM {
                             PropertyFlags::ordinary_data(),
                         );
                         let val = self.acc;
-                        let js_obj = heap.get_object_mut(oref).ok_or(VMError::TypeError)?;
-                        js_obj.shape_id = new_shape;
-                        js_obj.set_slot(slot_idx, val);
+                        heap.set_object_shape(oref, new_shape)?;
+                        heap.set_object_slot(oref, slot_idx, val)?;
                         if let Some(ic) = feedback.get_named_ic_mut(slot) {
                             ic.record_shape(new_shape, slot_idx);
                         }
@@ -386,18 +448,17 @@ impl RegisterVM {
                     if let (Some(idx), Some(eref)) = (key_val.as_smi(), js_obj.elements)
                         && idx >= 0
                     {
-                        let elem = heap.get_elements_mut(eref).ok_or(VMError::TypeError)?;
                         #[expect(clippy::as_conversions, reason = "non-negative index fits u32")]
-                        elem.set(idx as u32, val);
+                        heap.set_element(eref, idx as u32, val)?;
                     }
                 }
                 Instruction::CreateObject => {
                     let root_shape = heap.shapes.root_shape();
-                    let oref = heap.allocate_object(root_shape, VALUE_NULL);
+                    let oref = self.allocate_object(code, heap, root_shape)?;
                     self.acc = Value::from_object(oref);
                 }
                 Instruction::CreateArray(length) => {
-                    let oref = heap.allocate_array(length);
+                    let oref = self.allocate_array(code, heap, length)?;
                     self.acc = Value::from_object(oref);
                 }
                 Instruction::Call { .. } => {
@@ -513,5 +574,25 @@ mod tests {
             ic,
             super::super::feedback::NamedAccessIC::Monomorphic { .. }
         ));
+    }
+
+    #[test]
+    fn allocation_safe_point_forwards_live_registers_and_promotes_survivors() {
+        let mut code = BytecodeFunction::new(2, 0);
+        code.emit(Instruction::CreateObject);
+        code.emit(Instruction::Star(Reg(0)));
+        code.emit(Instruction::CreateObject);
+        code.emit(Instruction::Star(Reg(1)));
+        code.emit(Instruction::Ldar(Reg(0)));
+        code.emit(Instruction::Return);
+
+        let mut heap = GenerationalHeap::with_nursery_capacity(1);
+        let mut feedback = FeedbackVector::new(0);
+        let mut vm = RegisterVM::new(100);
+
+        let result = vm.run(&code, &mut feedback, &mut heap).unwrap();
+        let first = result.as_object().unwrap();
+        assert!(first.is_old());
+        assert!(heap.get_object(first).is_some());
     }
 }

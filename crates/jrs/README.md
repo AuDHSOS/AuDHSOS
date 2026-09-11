@@ -567,6 +567,14 @@ cannot satisfy them. Regex implementation restrictions now use fatal
 `Error::Unsupported`, not catchable `SyntaxError`, so they cannot produce false
 negative-test passes. Other parser/builtin completeness gaps remain open.
 
+The full pinned checkout was measured on 2026-09-11 with
+`sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary`.
+It contained 53,582 standalone files and 102,925 executed variants: 27,965 passed,
+64,007 failed and 10,953 were reported as unsupported; 294 fixture files were not
+standalone tests. The command correctly returned failure. These figures are the
+unfiltered migration baseline at revision
+`419d3e0a2273ba01a3bfcbec423f2801425b8e93`, not a conformance claim.
+
 Object.prototype.propertyIsEnumerable and isPrototypeOf use the ordinary property
 and prototype operations, with Symbol keys, primitive boxing and required error
 ordering. Both are GC-owned mutable native Function objects. Immediate native

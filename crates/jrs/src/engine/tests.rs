@@ -25,44 +25,40 @@ fn end_to_end_shape_transitions_and_shared_shapes() {
     let prop_b = heap.strings.intern("b");
 
     // Object 1: { a: 1, b: 2 }
-    let obj1 = heap.allocate_object(root, VALUE_NULL);
+    let obj1 = heap.allocate_object(root, VALUE_NULL).unwrap();
     let (shape_a, slot_a) = heap
         .shapes
         .transition(root, prop_a, PropertyFlags::ordinary_data());
-    heap.get_object_mut(obj1).unwrap().shape_id = shape_a;
-    heap.get_object_mut(obj1)
-        .unwrap()
-        .set_slot(slot_a, Value::from_smi(1));
+    heap.set_object_shape(obj1, shape_a).unwrap();
+    heap.set_object_slot(obj1, slot_a, Value::from_smi(1))
+        .unwrap();
 
     let (shape_ab, slot_b) =
         heap.shapes
             .transition(shape_a, prop_b, PropertyFlags::ordinary_data());
-    heap.get_object_mut(obj1).unwrap().shape_id = shape_ab;
-    heap.get_object_mut(obj1)
-        .unwrap()
-        .set_slot(slot_b, Value::from_smi(2));
+    heap.set_object_shape(obj1, shape_ab).unwrap();
+    heap.set_object_slot(obj1, slot_b, Value::from_smi(2))
+        .unwrap();
 
     // Object 2: { a: 10, b: 20 } - transitions along the same path
-    let obj2 = heap.allocate_object(root, VALUE_NULL);
+    let obj2 = heap.allocate_object(root, VALUE_NULL).unwrap();
     let (shape_a2, slot_a2) = heap
         .shapes
         .transition(root, prop_a, PropertyFlags::ordinary_data());
     assert_eq!(shape_a2, shape_a);
     assert_eq!(slot_a2, slot_a);
-    heap.get_object_mut(obj2).unwrap().shape_id = shape_a2;
-    heap.get_object_mut(obj2)
-        .unwrap()
-        .set_slot(slot_a2, Value::from_smi(10));
+    heap.set_object_shape(obj2, shape_a2).unwrap();
+    heap.set_object_slot(obj2, slot_a2, Value::from_smi(10))
+        .unwrap();
 
     let (shape_ab2, slot_b2) =
         heap.shapes
             .transition(shape_a2, prop_b, PropertyFlags::ordinary_data());
     assert_eq!(shape_ab2, shape_ab);
     assert_eq!(slot_b2, slot_b);
-    heap.get_object_mut(obj2).unwrap().shape_id = shape_ab2;
-    heap.get_object_mut(obj2)
-        .unwrap()
-        .set_slot(slot_b2, Value::from_smi(20));
+    heap.set_object_shape(obj2, shape_ab2).unwrap();
+    heap.set_object_slot(obj2, slot_b2, Value::from_smi(20))
+        .unwrap();
 
     // Both objects share the exact same shape!
     assert_eq!(
@@ -74,19 +70,13 @@ fn end_to_end_shape_transitions_and_shared_shapes() {
 #[test]
 fn end_to_end_packed_array_operations() {
     let mut heap = GenerationalHeap::new();
-    let arr_ref = heap.allocate_array(4);
+    let arr_ref = heap.allocate_array(4).unwrap();
     let elem_ref = heap.get_object(arr_ref).unwrap().elements.unwrap();
 
     // Fast push of integers
-    heap.get_elements_mut(elem_ref)
-        .unwrap()
-        .push(Value::from_smi(100));
-    heap.get_elements_mut(elem_ref)
-        .unwrap()
-        .push(Value::from_smi(200));
-    heap.get_elements_mut(elem_ref)
-        .unwrap()
-        .push(Value::from_smi(300));
+    heap.push_element(elem_ref, Value::from_smi(100)).unwrap();
+    heap.push_element(elem_ref, Value::from_smi(200)).unwrap();
+    heap.push_element(elem_ref, Value::from_smi(300)).unwrap();
 
     assert_eq!(heap.get_elements(elem_ref).unwrap().len(), 3);
     assert_eq!(

@@ -21,6 +21,40 @@ use core::fmt;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjectRef(pub u32);
 
+const OLD_GENERATION_BIT: u32 = 1 << 31;
+
+impl ObjectRef {
+    /// Creates a reference into the active Nursery semispace.
+    #[must_use]
+    pub const fn young(index: u32) -> Self {
+        Self(index & !OLD_GENERATION_BIT)
+    }
+
+    /// Creates a reference into the Old Generation.
+    #[must_use]
+    pub const fn old(index: u32) -> Self {
+        Self(OLD_GENERATION_BIT | (index & !OLD_GENERATION_BIT))
+    }
+
+    /// Returns `true` when this reference addresses the Old Generation.
+    #[must_use]
+    pub const fn is_old(self) -> bool {
+        self.0 & OLD_GENERATION_BIT != 0
+    }
+
+    /// Returns `true` when this reference addresses the Nursery.
+    #[must_use]
+    pub const fn is_young(self) -> bool {
+        !self.is_old()
+    }
+
+    /// Returns the generation-local object index.
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        self.0 & !OLD_GENERATION_BIT
+    }
+}
+
 /// Opaque index reference to a string in the string arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StringRef(pub u32);
