@@ -7,7 +7,7 @@
 )]
 
 use super::{
-    bytecode::{BytecodeFunction, Instruction, Reg},
+    bytecode::{BytecodeFunction, FeedbackKind, Instruction, Reg},
     elements::ElementsKind,
     feedback::{FeedbackVector, NamedAccessIC},
     heap::GenerationalHeap,
@@ -104,10 +104,10 @@ fn end_to_end_vm_execution_with_inline_caches() {
     let r_obj = Reg(0);
     let r_res = Reg(1);
 
-    let slot_set_x = code.allocate_feedback_slot();
-    let slot_get_x = code.allocate_feedback_slot();
-    let slot_set_y = code.allocate_feedback_slot();
-    let slot_get_y = code.allocate_feedback_slot();
+    let slot_set_x = code.allocate_feedback_slot(FeedbackKind::NamedAccess);
+    let slot_get_x = code.allocate_feedback_slot(FeedbackKind::NamedAccess);
+    let slot_set_y = code.allocate_feedback_slot(FeedbackKind::NamedAccess);
+    let slot_get_y = code.allocate_feedback_slot(FeedbackKind::NamedAccess);
 
     let mut heap = GenerationalHeap::new();
     let prop_x = code.add_string_constant("x".encode_utf16().collect());
@@ -149,7 +149,7 @@ fn end_to_end_vm_execution_with_inline_caches() {
     code.emit(Instruction::Add(r_res));
     code.emit(Instruction::Return);
 
-    let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+    let mut feedback = FeedbackVector::for_code(&code);
     let mut vm = RegisterVM::new(50_000);
 
     let result = vm.run(&code, &mut feedback, &mut heap).unwrap();
@@ -181,7 +181,7 @@ fn inherited_named_access_uses_depth_cache_and_invalidates_on_mutation() {
         .unwrap();
 
     let mut code = BytecodeFunction::new(1, 1);
-    let feedback_slot = code.allocate_feedback_slot();
+    let feedback_slot = code.allocate_feedback_slot(FeedbackKind::NamedAccess);
     let name_constant = code.add_string_constant("answer".encode_utf16().collect());
     code.emit(Instruction::GetNamed {
         obj: Reg(0),
@@ -189,7 +189,7 @@ fn inherited_named_access_uses_depth_cache_and_invalidates_on_mutation() {
         slot: feedback_slot,
     });
     code.emit(Instruction::Return);
-    let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+    let mut feedback = FeedbackVector::for_code(&code);
     let mut vm = RegisterVM::new(100);
 
     assert_eq!(
@@ -278,7 +278,7 @@ fn inherited_cache_checks_the_holder_shape_for_equal_receiver_shapes() {
         .unwrap();
 
     let mut code = BytecodeFunction::new(1, 1);
-    let feedback_slot = code.allocate_feedback_slot();
+    let feedback_slot = code.allocate_feedback_slot(FeedbackKind::NamedAccess);
     let wanted_constant = code.add_string_constant("wanted".encode_utf16().collect());
     code.emit(Instruction::GetNamed {
         obj: Reg(0),
@@ -286,7 +286,7 @@ fn inherited_cache_checks_the_holder_shape_for_equal_receiver_shapes() {
         slot: feedback_slot,
     });
     code.emit(Instruction::Return);
-    let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+    let mut feedback = FeedbackVector::for_code(&code);
     let mut vm = RegisterVM::new(100);
     assert_eq!(
         vm.run_with_arguments(
@@ -349,7 +349,7 @@ fn end_to_end_loop_sum_100k_with_smi_to_double_overflow() {
 
     let mut vm = RegisterVM::new(10_000_000);
     let mut heap = GenerationalHeap::new();
-    let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+    let mut feedback = FeedbackVector::for_code(&code);
 
     let res = vm.run(&code, &mut feedback, &mut heap).unwrap();
     // Sum of 0..99,999 = 4,999,950,000 (promotes from Smi to Double upon overflow)
@@ -393,7 +393,7 @@ fn benchmark_register_vm_sum_10_runs_100k() {
 
     let mut vm = RegisterVM::new(10_000_000);
     let mut heap = GenerationalHeap::new();
-    let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+    let mut feedback = FeedbackVector::for_code(&code);
 
     let start = std::time::Instant::now();
     for _ in 0..10 {

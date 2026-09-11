@@ -1117,6 +1117,7 @@ fn property_name_units(value: Value, heap: &GenerationalHeap) -> Result<Vec<u16>
 
 #[cfg(test)]
 mod tests {
+    use super::super::bytecode::FeedbackKind;
     use super::super::feedback::CallIC;
     use super::*;
 
@@ -1169,7 +1170,7 @@ mod tests {
 
         let mut vm = RegisterVM::new(100_000);
         let mut heap = GenerationalHeap::new();
-        let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+        let mut feedback = FeedbackVector::for_code(&code);
 
         let res = vm.run(&code, &mut feedback, &mut heap).unwrap();
         assert_eq!(res.as_smi(), Some(45));
@@ -1182,8 +1183,8 @@ mod tests {
         // return o.x
         let mut code = BytecodeFunction::new(2, 0);
         let r_obj = Reg(0);
-        let s_slot = code.allocate_feedback_slot();
-        let g_slot = code.allocate_feedback_slot();
+        let s_slot = code.allocate_feedback_slot(FeedbackKind::NamedAccess);
+        let g_slot = code.allocate_feedback_slot(FeedbackKind::NamedAccess);
 
         let mut heap = GenerationalHeap::new();
         let prop_x = code.add_string_constant("x".encode_utf16().collect());
@@ -1205,7 +1206,7 @@ mod tests {
         });
         code.emit(Instruction::Return);
 
-        let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+        let mut feedback = FeedbackVector::for_code(&code);
         let mut vm = RegisterVM::new(10_000);
 
         let res = vm.run(&code, &mut feedback, &mut heap).unwrap();
@@ -1258,7 +1259,7 @@ mod tests {
         );
 
         let mut valid = BytecodeFunction::new(0, 0);
-        valid.feedback_slot_count = 1;
+        valid.feedback_slots.push(FeedbackKind::NamedAccess);
         valid.emit(Instruction::Return);
         assert_eq!(
             vm.run(&valid, &mut feedback, &mut heap),
@@ -1299,7 +1300,7 @@ mod tests {
     #[test]
     fn dynamic_array_stores_obey_the_property_limit() {
         let mut code = BytecodeFunction::new(2, 0);
-        code.feedback_slot_count = 2;
+        code.feedback_slots = alloc::vec![FeedbackKind::NamedAccess; 2];
         code.emit(Instruction::CreateArray(0));
         code.emit(Instruction::Star(Reg(0)));
         code.emit(Instruction::LdaSmi(0));
@@ -1321,7 +1322,7 @@ mod tests {
         code.emit(Instruction::Return);
 
         let mut heap = GenerationalHeap::new();
-        let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+        let mut feedback = FeedbackVector::for_code(&code);
         let mut vm = RegisterVM::new(100);
         vm.set_property_limit(2);
         assert_eq!(
@@ -1333,7 +1334,7 @@ mod tests {
     #[test]
     fn keyed_named_access_guards_the_property_atom() {
         let mut code = BytecodeFunction::new(2, 0);
-        code.feedback_slot_count = 2;
+        code.feedback_slots = alloc::vec![FeedbackKind::NamedAccess; 2];
         code.emit(Instruction::CreateArray(0));
         code.emit(Instruction::Star(Reg(0)));
         code.emit(Instruction::LdaSmi(-1));
@@ -1362,7 +1363,7 @@ mod tests {
         code.emit(Instruction::Return);
 
         let mut heap = GenerationalHeap::new();
-        let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+        let mut feedback = FeedbackVector::for_code(&code);
         let mut vm = RegisterVM::new(100);
         vm.set_property_limit(3);
         assert_eq!(
@@ -1385,7 +1386,7 @@ mod tests {
 
         let mut root = BytecodeFunction::new(3, 0);
         root.functions.push(add);
-        root.feedback_slot_count = 1;
+        root.feedback_slots.push(FeedbackKind::Call);
         root.emit(Instruction::CreateClosure(0));
         root.emit(Instruction::Star(Reg(0)));
         root.emit(Instruction::LdaSmi(20));
@@ -1416,7 +1417,7 @@ mod tests {
     #[test]
     fn nested_calls_obey_frame_limits_and_vm_recovers() {
         let mut recursive = BytecodeFunction::new(1, 0);
-        recursive.feedback_slot_count = 1;
+        recursive.feedback_slots.push(FeedbackKind::Call);
         recursive.emit(Instruction::CreateClosure(0));
         recursive.emit(Instruction::Star(Reg(0)));
         recursive.emit(Instruction::Call {
@@ -1429,7 +1430,7 @@ mod tests {
 
         let mut root = BytecodeFunction::new(1, 0);
         root.functions.push(recursive);
-        root.feedback_slot_count = 1;
+        root.feedback_slots.push(FeedbackKind::Call);
         root.emit(Instruction::CreateClosure(0));
         root.emit(Instruction::Star(Reg(0)));
         root.emit(Instruction::Call {
@@ -1468,7 +1469,7 @@ mod tests {
 
         let mut root = BytecodeFunction::new(1, 0);
         root.functions.push(allocate);
-        root.feedback_slot_count = 2;
+        root.feedback_slots = alloc::vec![FeedbackKind::Call; 2];
         root.emit(Instruction::CreateClosure(0));
         root.emit(Instruction::Star(Reg(0)));
         root.emit(Instruction::Call {

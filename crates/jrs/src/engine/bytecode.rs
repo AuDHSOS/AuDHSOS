@@ -14,6 +14,17 @@ use alloc::{collections::VecDeque, vec::Vec};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Reg(pub u16);
 
+/// Runtime feedback category assigned statically to one bytecode site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FeedbackKind {
+    /// Named or keyed property access.
+    NamedAccess,
+    /// Binary operator type profile.
+    BinaryOp,
+    /// Callable target profile.
+    Call,
+}
+
 /// Structural verification failure in register bytecode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VerificationError {
@@ -55,6 +66,17 @@ pub enum VerificationError {
         pc: usize,
         /// Invalid feedback slot.
         slot: u16,
+    },
+    /// A bytecode site uses a feedback slot declared for a different category.
+    FeedbackKindMismatch {
+        /// Instruction offset.
+        pc: usize,
+        /// Mismatched feedback slot.
+        slot: u16,
+        /// Kind required by the instruction.
+        expected: FeedbackKind,
+        /// Kind declared by the function.
+        actual: FeedbackKind,
     },
     /// A Call argument window leaves the register frame.
     CallArgumentsOutOfBounds {
@@ -238,8 +260,8 @@ pub struct BytecodeFunction {
     pub parameter_count: u16,
     /// Number of parameter/local binding registers charged to the active binding budget.
     pub binding_count: u16,
-    /// Number of feedback vector slots allocated for inline caches.
-    pub feedback_slot_count: u16,
+    /// Static category of every feedback vector slot.
+    pub feedback_slots: Vec<FeedbackKind>,
     /// Fuel charged once in the function prologue.
     pub entry_fuel_cost: u64,
     /// Legacy operand-stack capacity required by the selected source program.
@@ -258,7 +280,7 @@ impl BytecodeFunction {
             register_count,
             parameter_count,
             binding_count: parameter_count,
-            feedback_slot_count: 0,
+            feedback_slots: Vec::new(),
             entry_fuel_cost: 1,
             entry_stack_requirement: 0,
         }
@@ -295,10 +317,12 @@ impl BytecodeFunction {
         (index as u16)
     }
 
-    /// Allocates an inline cache slot in the feedback vector.
-    pub const fn allocate_feedback_slot(&mut self) -> u16 {
-        let slot = self.feedback_slot_count;
-        self.feedback_slot_count = self.feedback_slot_count.saturating_add(1);
+    /// Allocates a statically typed runtime feedback slot.
+    pub fn allocate_feedback_slot(&mut self, kind: FeedbackKind) -> u16 {
+        let slot = u16::try_from(self.feedback_slots.len()).unwrap_or(u16::MAX);
+        if slot != u16::MAX {
+            self.feedback_slots.push(kind);
+        }
         slot
     }
 
@@ -405,13 +429,13 @@ impl BytecodeFunction {
             Instruction::GetNamed { obj, name, slot }
             | Instruction::SetNamed { obj, name, slot } => {
                 self.verify_string_constant(pc, name)?;
-                self.verify_feedback(pc, slot)?;
+                self.verify_feedback(pc, slot, FeedbackKind::NamedAccess)?;
                 Some(obj)
             }
             Instruction::GetByValue { obj, key, slot, .. }
             | Instruction::SetByValue { obj, key, slot, .. } => {
                 self.verify_register(pc, obj)?;
-                self.verify_feedback(pc, slot)?;
+                self.verify_feedback(pc, slot, FeedbackKind::NamedAccess)?;
                 Some(key)
             }
             Instruction::GetArrayLength { obj } => Some(obj),
@@ -423,7 +447,7 @@ impl BytecodeFunction {
             } => {
                 self.verify_register(pc, func)?;
                 self.verify_register(pc, arg_start)?;
-                self.verify_feedback(pc, slot)?;
+                self.verify_feedback(pc, slot, FeedbackKind::Call)?;
                 let end = u32::from(arg_start.0).saturating_add(u32::from(arg_count));
                 if end > u32::from(self.register_count) {
                     return Err(VerificationError::CallArgumentsOutOfBounds { pc });
@@ -485,11 +509,25 @@ impl BytecodeFunction {
         }
     }
 
-    const fn verify_feedback(&self, pc: usize, slot: u16) -> Result<(), VerificationError> {
-        if slot >= self.feedback_slot_count {
-            Err(VerificationError::FeedbackOutOfBounds { pc, slot })
-        } else {
+    fn verify_feedback(
+        &self,
+        pc: usize,
+        slot: u16,
+        expected: FeedbackKind,
+    ) -> Result<(), VerificationError> {
+        let actual = *self
+            .feedback_slots
+            .get(usize::from(slot))
+            .ok_or(VerificationError::FeedbackOutOfBounds { pc, slot })?;
+        if actual == expected {
             Ok(())
+        } else {
+            Err(VerificationError::FeedbackKindMismatch {
+                pc,
+                slot,
+                expected,
+                actual,
+            })
         }
     }
 
@@ -615,8 +653,19 @@ mod tests {
             Err(VerificationError::FeedbackOutOfBounds { pc: 0, slot: 0 })
         );
 
+        feedback.feedback_slots.push(FeedbackKind::Call);
+        assert_eq!(
+            feedback.verify(),
+            Err(VerificationError::FeedbackKindMismatch {
+                pc: 0,
+                slot: 0,
+                expected: FeedbackKind::NamedAccess,
+                actual: FeedbackKind::Call,
+            })
+        );
+
         let mut call = BytecodeFunction::new(2, 0);
-        call.feedback_slot_count = 1;
+        call.feedback_slots.push(FeedbackKind::Call);
         call.emit(Instruction::Call {
             func: Reg(0),
             arg_start: Reg(1),

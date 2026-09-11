@@ -9,7 +9,7 @@
 //! Property lookups start as Monomorphic (1 check, direct slot load),
 //! expand to Polymorphic (2-4 shapes), or degrade to Megamorphic.
 
-use super::{shape::ShapeId, value::StringRef};
+use super::{bytecode::FeedbackKind, shape::ShapeId, value::StringRef};
 use alloc::vec::Vec;
 
 /// Maximum number of shapes handled inline in a polymorphic cache before degrading.
@@ -188,12 +188,13 @@ pub struct FeedbackVector {
 
 impl FeedbackVector {
     /// Allocates a new feedback vector with `count` named access slots.
+    ///
+    /// This constructor is retained for focused property-IC tests. Production
+    /// code uses [`Self::for_code`] and the bytecode's explicit slot kinds.
     #[must_use]
     pub fn new(count: u16) -> Self {
-        let mut slots = Vec::with_capacity(count as usize);
-        for _ in 0..count {
-            slots.push(FeedbackSlot::Uninitialized);
-        }
+        let slots =
+            alloc::vec![FeedbackSlot::NamedAccess(NamedAccessIC::Uninitialized); count as usize];
         Self {
             slots,
             functions: Vec::new(),
@@ -203,13 +204,29 @@ impl FeedbackVector {
     /// Allocates feedback for a root bytecode unit and its flat function table.
     #[must_use]
     pub fn for_code(code: &super::bytecode::BytecodeFunction) -> Self {
-        let mut vector = Self::new(code.feedback_slot_count);
+        let mut vector = Self::from_kinds(&code.feedback_slots);
         vector.functions = code
             .functions
             .iter()
-            .map(|function| Self::new(function.feedback_slot_count))
+            .map(|function| Self::from_kinds(&function.feedback_slots))
             .collect();
         vector
+    }
+
+    fn from_kinds(kinds: &[FeedbackKind]) -> Self {
+        Self {
+            slots: kinds
+                .iter()
+                .map(|kind| match kind {
+                    FeedbackKind::NamedAccess => {
+                        FeedbackSlot::NamedAccess(NamedAccessIC::Uninitialized)
+                    }
+                    FeedbackKind::BinaryOp => FeedbackSlot::BinaryOp(BinaryOpFeedback::None),
+                    FeedbackKind::Call => FeedbackSlot::Call(CallIC::Uninitialized),
+                })
+                .collect(),
+            functions: Vec::new(),
+        }
     }
 
     /// Returns the number of allocated feedback slots.
@@ -280,16 +297,28 @@ impl FeedbackVector {
     }
 
     pub(crate) fn matches_code(&self, code: &super::bytecode::BytecodeFunction) -> bool {
-        self.slots.len() == usize::from(code.feedback_slot_count)
+        self.matches_kinds(&code.feedback_slots)
             && self.functions.len() == code.functions.len()
             && self
                 .functions
                 .iter()
                 .zip(&code.functions)
                 .all(|(feedback, function)| {
-                    feedback.slots.len() == usize::from(function.feedback_slot_count)
+                    feedback.matches_kinds(&function.feedback_slots)
                         && feedback.functions.is_empty()
                 })
+    }
+
+    fn matches_kinds(&self, kinds: &[FeedbackKind]) -> bool {
+        self.slots.len() == kinds.len()
+            && self.slots.iter().zip(kinds).all(|(slot, kind)| {
+                matches!(
+                    (slot, kind),
+                    (FeedbackSlot::NamedAccess(_), FeedbackKind::NamedAccess)
+                        | (FeedbackSlot::BinaryOp(_), FeedbackKind::BinaryOp)
+                        | (FeedbackSlot::Call(_), FeedbackKind::Call)
+                )
+            })
     }
 
     /// Number of feedback vectors represented by this root and its function table.

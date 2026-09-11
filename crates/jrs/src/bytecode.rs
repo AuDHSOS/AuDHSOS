@@ -877,7 +877,7 @@ impl RegisterLowerer {
             if !value_type.is_primitive() {
                 return None;
             }
-            let slot = self.feedback_slot()?;
+            let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
             self.code.emit(Instruction::SetNamed {
                 obj: object,
                 name,
@@ -933,7 +933,7 @@ impl RegisterLowerer {
             if !value_type.is_primitive() {
                 return None;
             }
-            let slot = self.feedback_slot()?;
+            let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
             self.code.emit(Instruction::SetByValue {
                 obj: array,
                 key,
@@ -1075,7 +1075,7 @@ impl RegisterLowerer {
         };
         let argument_start = argument_registers.first().copied().or(dummy)?;
         let argument_count = u16::try_from(arguments.len()).ok()?;
-        let slot = self.feedback_slot()?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
         self.code.emit(Instruction::Call {
             func: function,
             arg_start: argument_start,
@@ -1140,7 +1140,7 @@ impl RegisterLowerer {
             }
             let key = self.allocate_register()?;
             self.code.emit(Instruction::Star(key));
-            let slot = self.feedback_slot()?;
+            let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
             self.code.emit(Instruction::GetByValue {
                 obj: object,
                 key,
@@ -1160,7 +1160,7 @@ impl RegisterLowerer {
             };
             let result_type = *properties.get(name)?;
             let name = self.string_constant(name)?;
-            let slot = self.feedback_slot()?;
+            let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
             self.code.emit(Instruction::GetNamed {
                 obj: object,
                 name,
@@ -1216,7 +1216,7 @@ impl RegisterLowerer {
         if !value_type.is_primitive() {
             return None;
         }
-        let slot = self.feedback_slot()?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
         if let Some(key) = key_register {
             self.code.emit(Instruction::SetByValue {
                 obj: object,
@@ -1856,11 +1856,11 @@ impl RegisterLowerer {
         Some(index)
     }
 
-    const fn feedback_slot(&mut self) -> Option<u16> {
-        if self.code.feedback_slot_count == u16::MAX {
+    fn feedback_slot(&mut self, kind: crate::engine::bytecode::FeedbackKind) -> Option<u16> {
+        if self.code.feedback_slots.len() >= usize::from(u16::MAX) {
             return None;
         }
-        Some(self.code.allocate_feedback_slot())
+        Some(self.code.allocate_feedback_slot(kind))
     }
 
     fn patch_jump(&mut self, at: usize, target: usize) -> Option<()> {
