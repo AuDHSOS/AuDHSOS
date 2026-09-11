@@ -88,6 +88,24 @@ test = false
 bench = false
 
 [[bin]]
+name = "clock_and_wait"
+path = "src/bin/clock_and_wait.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "entropy"
+path = "src/bin/entropy.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "msi_vector"
+path = "src/bin/msi_vector.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "bench_yield"
 path = "src/bin/bench_yield.rs"
 test = false

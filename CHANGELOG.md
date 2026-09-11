@@ -7,6 +7,82 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Phase 12, the three capabilities everything above the kernel wants and
+  the kernel did not have: time, randomness, and message interrupts. Four
+  system calls, numbers forty-seven to fifty. `clock_now` answers the
+  microseconds since the kernel started, computed from the ticks it counts
+  and the rate it reports; the unit is the microsecond and the resolution
+  is the tick, which at a thousand ticks a second is a millisecond, and the
+  documentation says so rather than implying a precision the timer has not
+  got. `notification_wait_until` is `notification_wait` with a deadline in
+  that same scale, and answers zero bits when the deadline came first; the
+  existing call is untouched (D-108). `random_bytes` answers the four words
+  a stream cipher seed is, each drawn from `RDSEED` inside a retry bound,
+  and `Unavailable` rather than a word the hardware did not give.
+  `interrupt_create_msi` allocates one vector out of the space the I/O APIC
+  lines are allocated from and answers the `Interrupt` handle, the message
+  address, and the message data, so that a driver can program its device's
+  MSI-X table itself. Two error codes carry them: `Unavailable` and
+  `NoVector`.
+
+- A deadline on the `BlockedNotification` state of `kernel-sched`: a plain
+  word of microseconds in the thread entry, so that no kernel crate has to
+  depend on `audhsos-time`, and one list ordered by it. The tick handler
+  walks that list from the front and stops at the first deadline that has
+  not passed, so a tick that wakes nobody costs one comparison. A thread
+  signalled, suspended or killed before its deadline leaves the list in the
+  call that changes its state, so an entry never outlives the wait it
+  belongs to. The list is threaded through the thread entries the way the
+  run queues are, and not held as an `IndexList` over them: a `Link` in no
+  list is not zero, and the `Scheduler` lives in the one `static` that
+  carries the object pools (D-131).
+
+- `IndexList::insert_after` in `audhsos-collections`, the one operation the
+  type was missing: it could push at either end and unlink anywhere, and
+  the `Link` fields are private, so no caller could splice for it. An
+  insert after `None` is a `push_front`, after the tail a `push_back`, and
+  in the middle it links both neighbours; its ownership checks are those of
+  `push_back`. This is the only change the phase makes to a finished crate.
+
+- `kernel-hal-api` gains `trait Random` with a `ScriptedRandom` double, and
+  `InterruptController` gains `allocate_msi` and `release_msi`. The
+  `x86_64` adapter implements the first with `RDSEED` behind a `CPUID`
+  check — a machine without the instruction raises an invalid opcode, and a
+  kernel that found that out in an interrupt handler would have found it
+  out too late — and the second from the local APIC's message region and
+  the destination it already knows. The two raise the unsafe budget of
+  `kernel-hal-x86_64` from 145 to 149 and its `asm!` budget from 28 to 30
+  (D-132).
+
+- Every vector of the message space has a gate in the interrupt descriptor
+  table from the start. A message interrupt is routed by nobody: the device
+  writes the vector itself, so a vector without a gate arrives as a general
+  protection fault rather than as an interrupt. The plan of
+  `kernel_x86_tables::vectors` names the space — `MSI_BASE` at 0x58,
+  forty vectors, ending below the system call vector — so no message can
+  alias a line and no line a message.
+
+- The reference machine's CPU model is `qemu64,+rdrand,+rdseed`. `qemu64`
+  carries neither flag, which was asked of QEMU through
+  `query-cpu-model-expansion` and not assumed (D-110).
+
+- The test image `clock` and the three user programs it runs:
+  `clock_and_wait` reads the clock around a wait of fifty milliseconds that
+  nothing but its deadline ends, `entropy` draws two seeds and reports
+  whether they differ, and `msi_vector` takes a message interrupt, binds
+  it, and reports the bit it woke with when the image raises the vector.
+  Catalog 6.6.59 and 6.6.60.
+
+### Changed
+
+- `Interrupt::line` is an `Option<u8>`: a message interrupt has no line at
+  any controller the kernel could mask. `interrupt_ack` on such an object
+  clears the outstanding flag and touches no hardware, because the mask bit
+  lies in the device's own table, which is mapped in the driver and not in
+  the kernel; a device that raises interrupts faster than its driver
+  services them is quieted by its driver (D-111). The vector of such an
+  object goes back to the space when the last handle to it closes.
+
 - `ioport_write_string`, the forty-sixth system call: a run of bytes in the
   message area to one I/O port, checked against the same `IoPortRange`
   capability at width one that `ioport_write` is checked against. The

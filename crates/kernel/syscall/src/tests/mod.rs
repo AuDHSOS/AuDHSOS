@@ -7,6 +7,7 @@
 mod calls_device;
 mod calls_handle;
 mod calls_ipc;
+mod calls_machine;
 mod calls_memory;
 mod calls_notify;
 mod calls_process;

@@ -162,6 +162,37 @@ pub trait Environment {
     /// [`Error::Unsupported`] on a machine without port access.
     fn write_port_string(&mut self, port: u16, bytes: &[u8]) -> Result<(), Error>;
 
+    /// The microseconds since the kernel started, at the resolution of the
+    /// timer tick. `clock_now` answers this word, and every deadline of the
+    /// interface is in the same scale.
+    fn now_micros(&self) -> u64;
+
+    /// Four words drawn from the entropy source of the machine, which is
+    /// the thirty-two bytes a stream cipher takes as a seed.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unavailable`] when a word could not be drawn inside the
+    /// retry bound of the adapter, or when the machine has no source. No
+    /// partial result reaches the caller.
+    fn random_seed(&mut self) -> Result<[u64; 4], Error>;
+
+    /// Takes one vector out of the message interrupt space and answers with
+    /// the vector, the address a device writes to, and the value it writes.
+    ///
+    /// Nothing is routed and nothing is masked: a message interrupt reaches
+    /// the processor because the driver programmed its device to write
+    /// there.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoVector`] when the space has nothing left;
+    /// [`Error::Unsupported`] on a machine whose controller is not up.
+    fn allocate_message_vector(&mut self) -> Result<(u8, u64, u32), Error>;
+
+    /// Gives a message interrupt vector back to the space it came from.
+    fn release_message_vector(&mut self, vector: u8);
+
     /// The vector the plan of this machine routes `line` to, or `None` for a
     /// line it reserves no vector for.
     ///

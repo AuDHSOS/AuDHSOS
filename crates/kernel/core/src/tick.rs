@@ -47,3 +47,15 @@ pub const fn seconds(ticks: u64) -> u64 {
 pub const fn milliseconds(ticks: u64) -> u64 {
     ticks.saturating_mul(1000).wrapping_div(RATE)
 }
+
+/// The number of microseconds `ticks` ticks are, which is the scale
+/// `clock_now` answers in.
+///
+/// The unit is the microsecond and the resolution is the tick: at
+/// [`TICKS_PER_SECOND`] the clock moves in steps of a millisecond, and a
+/// count that would overflow the microsecond saturates rather than
+/// wrapping, so a machine left running does not travel backwards.
+#[must_use]
+pub const fn micros(ticks: u64) -> u64 {
+    ticks.saturating_mul(1_000_000).wrapping_div(RATE)
+}

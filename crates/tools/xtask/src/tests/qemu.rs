@@ -132,7 +132,7 @@ fn the_command_line_is_the_one_the_target_platform_document_prescribes() {
     .join(" ");
     assert_eq!(
         line,
-        "-machine q35 -accel tcg -cpu qemu64 -smp 1 -m 256M \
+        "-machine q35 -accel tcg -cpu qemu64,+rdrand,+rdseed -smp 1 -m 256M \
          -drive if=pflash,format=raw,readonly=on,file=/fw/edk2-x86_64-code.fd \
          -drive format=raw,file=/img/audhsos.img \
          -serial stdio -display none \

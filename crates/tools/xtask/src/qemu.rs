@@ -31,6 +31,12 @@ use crate::out::note;
 /// The QEMU binary the reference machine runs on.
 const QEMU_BINARY: &str = "qemu-system-x86_64";
 
+/// The CPU model of the reference machine. `qemu64` carries neither
+/// `rdrand` nor `rdseed`, which was checked against QEMU through
+/// `query-cpu-model-expansion` and not assumed; TCG provides both once
+/// they are asked for, and `random_bytes` needs `rdseed` (D-110).
+const CPU_MODEL: &str = "qemu64,+rdrand,+rdseed";
+
 /// Names the QEMU binary, instead of searching the `PATH`.
 const QEMU_VARIABLE: &str = "AUDHSOS_QEMU";
 
@@ -406,7 +412,7 @@ pub(crate) fn arguments(
         "-accel".to_owned(),
         accelerator.to_owned(),
         "-cpu".to_owned(),
-        "qemu64".to_owned(),
+        CPU_MODEL.to_owned(),
         "-smp".to_owned(),
         "1".to_owned(),
         "-m".to_owned(),
@@ -568,7 +574,7 @@ fn probe_accelerator(qemu: &Path, accelerator: &str) -> Result<(), String> {
             "-accel",
             accelerator,
             "-cpu",
-            "qemu64",
+            CPU_MODEL,
             "-display",
             "none",
             "-nodefaults",

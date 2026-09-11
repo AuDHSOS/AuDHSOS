@@ -6,7 +6,7 @@
 //!
 //! A system call is three steps — write the call number and the arguments
 //! into the page, execute `int 0x80`, read the status word back — and the
-//! forty-two methods here are those three steps with the names and the
+//! methods here are those three steps with the names and the
 //! types of the call table. Everything they need of the machine is the
 //! address of the page, which the kernel put in the first argument register
 //! when it started the thread.
@@ -79,6 +79,22 @@ pub struct SystemInfo {
     pub framebuffer: Option<Framebuffer>,
 }
 
+/// How many words a seed of `random_bytes` is: the thirty-two bytes a
+/// stream cipher takes.
+pub const SEED_WORDS: usize = 4;
+
+/// What `interrupt_create_msi` answers: the interrupt object, and the
+/// write a device makes to raise it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MessageInterrupt {
+    /// The interrupt object, which binds and acknowledges like any other.
+    pub interrupt: InterruptHandle,
+    /// The address the device writes to.
+    pub address: u64,
+    /// The value it writes there.
+    pub data: u32,
+}
+
 /// What a message says of its sender and of the answer it expects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Received {
@@ -102,11 +118,11 @@ pub struct Received {
 /// and Rust gives no way to enumerate the methods of a type without a
 /// macro, which [D-92](../../../../docs/09-decisions.md) rules out for
 /// this seam. That half is proved by running them: the `wrappers` test
-/// image calls all forty-two in the order of this list and holds the
+/// image calls all of them in the order of this list and holds the
 /// numbers the kernel saw against the table, so a method missing from the
 /// run, or one passing another call of the same shape, fails there
 /// (D-98).
-const COVERED: [Syscall; 46] = [
+const COVERED: [Syscall; 50] = [
     Syscall::ProcessCreate,
     Syscall::ProcessInstallHandle,
     Syscall::ProcessSetFaultHandler,
@@ -153,6 +169,10 @@ const COVERED: [Syscall; 46] = [
     Syscall::ProcessUnwatch,
     Syscall::MemoryReferences,
     Syscall::IoPortWriteString,
+    Syscall::ClockNow,
+    Syscall::NotificationWaitUntil,
+    Syscall::RandomBytes,
+    Syscall::InterruptCreateMsi,
 ];
 
 /// `true` when [`COVERED`] is the system call table, in its order.
@@ -821,6 +841,28 @@ impl Gate {
         self.value(Syscall::NotificationWait, &[notification.raw()])
     }
 
+    /// `notification_wait_until`: the bits, or zero when `deadline` came
+    /// first. The deadline is in the microseconds since boot that
+    /// [`Gate::clock_now`] answers in.
+    ///
+    /// A caller that must tell an empty wait from a deadline apart reads
+    /// the clock afterwards; nothing else distinguishes them, because a
+    /// signal of no bits is a signal of nothing.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn notification_wait_until(
+        &mut self,
+        notification: NotificationHandle,
+        deadline: u64,
+    ) -> Result<u64, Error> {
+        self.value(
+            Syscall::NotificationWaitUntil,
+            &[notification.raw(), deadline],
+        )
+    }
+
     /// `notification_poll`: the bits that are set, cleared, without
     /// waiting. Zero when none are.
     ///
@@ -844,6 +886,32 @@ impl Gate {
         line: u64,
     ) -> Result<InterruptHandle, Error> {
         self.capability(Syscall::InterruptCreate, &[system.raw(), line])
+    }
+
+    /// `interrupt_create_msi`: an interrupt object for a message
+    /// interrupt, with the write that raises it.
+    ///
+    /// The driver puts the address and the data into its device's MSI-X
+    /// table, which is in the device's own window and therefore in the
+    /// driver's address space and not the kernel's.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn interrupt_create_msi(
+        &mut self,
+        system: SystemControlHandle,
+    ) -> Result<MessageInterrupt, Error> {
+        self.request(Syscall::InterruptCreateMsi, &[system.raw()])?;
+        let view = self.reader();
+        let handle = Handle::from_raw(view.return_word(0).unwrap_or(0))
+            .map(InterruptHandle::from_handle)
+            .ok_or(Error::InvalidHandle)?;
+        Ok(MessageInterrupt {
+            interrupt: handle,
+            address: view.word(0).unwrap_or(0),
+            data: u32::try_from(view.word(1).unwrap_or(0)).unwrap_or(0),
+        })
     }
 
     /// `interrupt_bind`: an arriving interrupt sets `bit` of
@@ -1004,6 +1072,37 @@ impl Gate {
             acpi: view.word(19).unwrap_or(0),
             framebuffer,
         })
+    }
+
+    /// `clock_now`: the microseconds since the kernel started.
+    ///
+    /// The resolution is the timer tick and not the microsecond: at a
+    /// thousand ticks a second the clock moves in steps of a millisecond.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn clock_now(&mut self) -> Result<u64, Error> {
+        self.value(Syscall::ClockNow, &[])
+    }
+
+    /// `random_bytes`: the thirty-two bytes of a seed, as four words.
+    ///
+    /// A process draws one of these at startup and takes everything else
+    /// from a generator it seeds with it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered; [`Error::Unavailable`] when the
+    /// machine's source would not deliver.
+    pub fn random_bytes(&mut self) -> Result<[u64; SEED_WORDS], Error> {
+        self.request(Syscall::RandomBytes, &[])?;
+        let view = self.reader();
+        let mut seed = [0_u64; SEED_WORDS];
+        for (index, word) in seed.iter_mut().enumerate() {
+            *word = view.word(index).ok_or(Error::BufferTooSmall)?;
+        }
+        Ok(seed)
     }
 
     /// `debug_log`: writes the bytes of the message area to the debug

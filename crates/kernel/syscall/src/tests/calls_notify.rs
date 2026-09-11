@@ -211,3 +211,109 @@ fn a_notification_the_machine_has_no_slot_for_leaves_the_quota_as_it_was() {
         "what the call charged, it gave back"
     );
 }
+
+#[test]
+fn a_wait_until_takes_what_is_there_without_looking_at_the_deadline() {
+    let mut fixture = Fixture::new();
+    let (_id, handle) = notification(&mut fixture);
+    fixture.environment.now = 9_000;
+    call(
+        &mut fixture,
+        &mut request(Syscall::NotificationSignal, &[handle.raw(), 0b110]),
+    );
+    // A deadline long past, which a call that takes bits never consults.
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(Syscall::NotificationWaitUntil, &[handle.raw(), 0])
+        ),
+        0b110
+    );
+}
+
+#[test]
+fn a_deadline_that_has_passed_returns_at_once_with_no_bits() {
+    let mut fixture = Fixture::new();
+    let (id, handle) = notification(&mut fixture);
+    fixture.environment.now = 1_000;
+    assert_eq!(
+        value_of(
+            &mut fixture,
+            request(Syscall::NotificationWaitUntil, &[handle.raw(), 1_000])
+        ),
+        0
+    );
+    assert_eq!(
+        fixture.objects.threads.get(fixture.thread).unwrap().state,
+        ThreadState::Running,
+        "the caller never blocked"
+    );
+    assert_eq!(fixture.objects.notifications.get(id).unwrap().waiter, None);
+}
+
+#[test]
+fn a_signal_before_the_deadline_answers_the_bits() {
+    let mut fixture = Fixture::new();
+    let (_id, handle) = notification(&mut fixture);
+    let waiter = fixture.running(fixture.process, 4);
+    let mut buffer = request(Syscall::NotificationWaitUntil, &[handle.raw(), 5_000]);
+    fixture.write_buffer(waiter, &buffer);
+    crate::dispatch::dispatch(&mut fixture.machine(), waiter, &mut buffer);
+    assert_eq!(
+        fixture.objects.threads.get(waiter).unwrap().state,
+        ThreadState::BlockedNotification
+    );
+    assert_eq!(
+        fixture.objects.threads.get(waiter).unwrap().deadline,
+        Some(5_000)
+    );
+
+    call(
+        &mut fixture,
+        &mut request(Syscall::NotificationSignal, &[handle.raw(), 0b1]),
+    );
+    assert_eq!(fixture.returns_of(waiter), [0b1, 0]);
+    assert_eq!(fixture.status_of(waiter).error(), None);
+    assert_eq!(fixture.objects.threads.get(waiter).unwrap().deadline, None);
+}
+
+#[test]
+fn a_deadline_that_comes_first_answers_zero() {
+    let mut fixture = Fixture::new();
+    let (_id, handle) = notification(&mut fixture);
+    let waiter = fixture.running(fixture.process, 4);
+    let mut buffer = request(Syscall::NotificationWaitUntil, &[handle.raw(), 5_000]);
+    fixture.write_buffer(waiter, &buffer);
+    crate::dispatch::dispatch(&mut fixture.machine(), waiter, &mut buffer);
+
+    let outcome = kernel_ipc::expire(&mut fixture.objects, &mut fixture.scheduler, 5_000).unwrap();
+    let wakeup = outcome.wakeup.unwrap();
+    assert_eq!(wakeup.thread, waiter);
+    assert_eq!(wakeup.values, [0, 0]);
+    assert_eq!(
+        fixture.objects.threads.get(waiter).unwrap().state,
+        ThreadState::Ready
+    );
+}
+
+#[test]
+fn a_wait_until_needs_the_same_right_and_the_same_type_as_a_wait() {
+    let mut fixture = Fixture::new();
+    let (id, _handle) = notification(&mut fixture);
+    let other = fixture.install(AnyObjectId::of(id), Rights::SIGNAL).raw();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::NotificationWaitUntil, &[other, 1])
+        ),
+        Some(Error::AccessDenied)
+    );
+    let own = fixture.own_thread.raw();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::NotificationWaitUntil, &[own, 1])
+        ),
+        Some(Error::WrongObjectType)
+    );
+}

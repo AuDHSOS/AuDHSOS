@@ -16,6 +16,7 @@ pub mod paging;
 pub mod platform;
 #[cfg(feature = "port-io")]
 pub mod port;
+pub mod random;
 pub mod timer;
 
 #[cfg(test)]

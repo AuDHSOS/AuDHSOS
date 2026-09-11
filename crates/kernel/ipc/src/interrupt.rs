@@ -37,7 +37,8 @@ pub fn interrupt_for<const NP: usize, const NT: usize, const NM: usize, const NH
         .map(|(id, _)| id)
 }
 
-/// The interrupt object that already names `line`, if one does.
+/// The interrupt object that already names `line`, if one does. A message
+/// interrupt names none and is never found here.
 #[must_use]
 pub fn interrupt_of_line<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     objects: &Objects<NP, NT, NM, NH>,
@@ -46,7 +47,7 @@ pub fn interrupt_of_line<const NP: usize, const NT: usize, const NM: usize, cons
     objects
         .interrupts
         .iter()
-        .find(|(_, held)| held.line == line)
+        .find(|(_, held)| held.line == Some(line))
         .map(|(id, _)| id)
 }
 
@@ -88,8 +89,10 @@ fn raise<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     deliver_word(objects, scheduler, notification, held)
 }
 
-/// `interrupt_ack`: the line is no longer masked as far as the kernel is
-/// concerned, and the adapter unmasks it. Returns the line.
+/// `interrupt_ack`: the interrupt is no longer held off as far as the
+/// kernel is concerned. Returns the line the adapter unmasks, or `None` for
+/// a message interrupt, whose mask bit is in the device's own table and
+/// therefore in the driver's address space and not the kernel's (D-111).
 ///
 /// # Errors
 ///
@@ -97,7 +100,7 @@ fn raise<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
 pub fn acknowledge<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     objects: &mut Objects<NP, NT, NM, NH>,
     interrupt: InterruptId,
-) -> Result<u8, Error> {
+) -> Result<Option<u8>, Error> {
     let held = objects
         .interrupts
         .get_mut(interrupt)

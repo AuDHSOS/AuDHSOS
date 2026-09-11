@@ -11,7 +11,7 @@
 //! wrong method — the kernel's argument-count check would not notice
 //! either.
 //!
-//! What notices is this image. `every_wrapper` calls all forty-two methods
+//! What notices is this image. `every_wrapper` calls every method
 //! in the order of the table, and the kernel writes down the number each
 //! call arrived under. The number is what the wrapper wrote into the
 //! buffer, so the sequence the kernel saw is the sequence of calls the

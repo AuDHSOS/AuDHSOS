@@ -11,7 +11,10 @@ use kernel_objects::object::{
     AnyObjectId, Interrupt, IoPortRange, MemoryKind, Notification, SystemControl,
 };
 
-use super::double::{Call, Fixture, call, error_of, request, value_of};
+use super::double::{
+    Call, Fixture, MESSAGE_ADDRESS, MESSAGE_BASE, MESSAGE_VECTORS, call, error_of, request,
+    value_of,
+};
 
 /// The handle to the system control capability, which the root task receives
 /// at boot and every test installs by hand.
@@ -34,7 +37,7 @@ fn an_interrupt_object_takes_the_vector_the_plan_gives_its_line() {
     assert_eq!(entry.object_type(), ObjectType::Interrupt);
     let id = entry.object.typed::<Interrupt>().unwrap();
     let held = *fixture.objects.interrupts.get(id).unwrap();
-    assert_eq!(held.line, 3);
+    assert_eq!(held.line, Some(3));
     assert_eq!(held.vector, 0x43, "the double routes line n to 0x40 plus n");
     assert!(!held.masked);
     assert_eq!(fixture.environment.count(&Call::Route(3, 0x43)), 1);
@@ -657,5 +660,289 @@ fn the_root_authority_is_what_the_four_calls_check_and_nothing_else() {
     assert_eq!(
         error_of(&mut fixture, request(Syscall::SystemInfo, &[weak])),
         Some(Error::AccessDenied)
+    );
+}
+
+/// Creates a message interrupt and answers the handle, the address, and the
+/// data of it.
+fn message_interrupt(fixture: &mut Fixture, system: u64) -> (Handle, u64, u64) {
+    let mut buffer = request(Syscall::InterruptCreateMsi, &[system]);
+    let (status, values, _) = call(fixture, &mut buffer);
+    assert_eq!(status.error(), None);
+    let view = Buffer::new(&buffer);
+    (
+        Handle::from_raw(values[0]).unwrap(),
+        view.word(0).unwrap(),
+        view.word(1).unwrap(),
+    )
+}
+
+#[test]
+fn a_message_interrupt_answers_a_handle_an_address_and_a_data_word() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let (handle, address, data) = message_interrupt(&mut fixture, system);
+    let entry = fixture.objects.entry(fixture.process, handle).unwrap();
+    assert_eq!(entry.object_type(), ObjectType::Interrupt);
+    assert_eq!(
+        entry.rights,
+        Rights::MANAGE | Rights::DUPLICATE | Rights::TRANSFER
+    );
+    let id = entry.object.typed::<Interrupt>().unwrap();
+    let held = *fixture.objects.interrupts.get(id).unwrap();
+    assert_eq!(held.line, None, "a message interrupt has no line");
+    assert_eq!(held.vector, MESSAGE_BASE);
+    assert!(!held.masked);
+    assert_eq!(address, MESSAGE_ADDRESS);
+    assert_eq!(data, u64::from(MESSAGE_BASE));
+    assert_eq!(
+        fixture.environment.count(&Call::Route(0, 0)),
+        0,
+        "nothing routed"
+    );
+}
+
+#[test]
+fn a_vector_is_handed_out_once_and_the_exhausted_space_is_no_vector() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let mut vectors = Vec::new();
+    for _ in 0..MESSAGE_VECTORS {
+        let (handle, _, data) = message_interrupt(&mut fixture, system);
+        vectors.push(data);
+        let _ = handle;
+    }
+    let mut unique = vectors.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        vectors.len(),
+        "no vector was handed out twice"
+    );
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::InterruptCreateMsi, &[system])
+        ),
+        Some(Error::NoVector)
+    );
+}
+
+#[test]
+fn a_message_interrupt_that_has_nowhere_to_go_gives_its_vector_back() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    fixture.fill_handles();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::InterruptCreateMsi, &[system])
+        ),
+        Some(Error::QuotaExceeded)
+    );
+    assert_eq!(fixture.objects.interrupts.live(), 0);
+    assert!(
+        fixture.environment.messages.is_empty(),
+        "the vector went back"
+    );
+    assert_eq!(
+        fixture
+            .objects
+            .processes
+            .get(fixture.process)
+            .unwrap()
+            .kernel_object_quota
+            .used(),
+        0
+    );
+}
+
+#[test]
+fn a_machine_without_a_controller_refuses_a_message_interrupt() {
+    let mut fixture = Fixture::new();
+    fixture.environment.no_controller = true;
+    let system = control(&mut fixture);
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::InterruptCreateMsi, &[system])
+        ),
+        Some(Error::Unsupported)
+    );
+    assert_eq!(fixture.objects.interrupts.live(), 0);
+}
+
+#[test]
+fn a_message_interrupt_needs_the_right_to_manage_the_machine() {
+    let mut fixture = Fixture::new();
+    let weak = fixture
+        .install(AnyObjectId::of(SystemControl::ID), Rights::INFO)
+        .raw();
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::InterruptCreateMsi, &[weak])),
+        Some(Error::AccessDenied)
+    );
+}
+
+#[test]
+fn a_message_interrupt_binds_like_any_other_and_its_ack_touches_no_hardware() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let (interrupt, _address, _data) = message_interrupt(&mut fixture, system);
+    let notification = Handle::from_raw(value_of(
+        &mut fixture,
+        request(Syscall::NotificationCreate, &[]),
+    ))
+    .unwrap();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(
+                Syscall::InterruptBind,
+                &[interrupt.raw(), notification.raw(), 5]
+            )
+        ),
+        None
+    );
+    let unmasks = fixture
+        .environment
+        .calls
+        .iter()
+        .filter(|call| matches!(call, Call::Unmask(_)))
+        .count();
+    assert_eq!(unmasks, 0, "there is no line to unmask");
+
+    let id = fixture
+        .objects
+        .entry(fixture.process, interrupt)
+        .unwrap()
+        .object
+        .typed::<Interrupt>()
+        .unwrap();
+    fixture.objects.interrupts.get_mut(id).unwrap().masked = true;
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::InterruptAck, &[interrupt.raw()])
+        ),
+        None
+    );
+    assert!(!fixture.objects.interrupts.get(id).unwrap().masked);
+    let unmasks = fixture
+        .environment
+        .calls
+        .iter()
+        .filter(|call| matches!(call, Call::Unmask(_)))
+        .count();
+    assert_eq!(unmasks, 0, "and none to unmask on the way out either");
+}
+
+#[test]
+fn an_ack_without_an_outstanding_signal_is_no_error() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let (interrupt, _address, _data) = message_interrupt(&mut fixture, system);
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::InterruptAck, &[interrupt.raw()])
+        ),
+        None
+    );
+}
+
+#[test]
+fn a_vector_freed_with_its_interrupt_object_is_handed_out_again() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let mut handles = Vec::new();
+    for _ in 0..MESSAGE_VECTORS {
+        let (handle, _, _) = message_interrupt(&mut fixture, system);
+        handles.push(handle);
+    }
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::InterruptCreateMsi, &[system])
+        ),
+        Some(Error::NoVector)
+    );
+    let first = handles.first().copied().unwrap();
+    let freed = fixture
+        .objects
+        .entry(fixture.process, first)
+        .unwrap()
+        .object
+        .typed::<Interrupt>()
+        .unwrap();
+    let vector = fixture.objects.interrupts.get(freed).unwrap().vector;
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::HandleClose, &[first.raw()])),
+        None
+    );
+    assert!(fixture.objects.interrupts.get(freed).is_err());
+    let (_handle, _address, data) = message_interrupt(&mut fixture, system);
+    assert_eq!(
+        data,
+        u64::from(vector),
+        "the space handed the vector out again"
+    );
+}
+
+#[test]
+fn a_line_interrupt_that_is_closed_frees_no_message_vector() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let raw = value_of(
+        &mut fixture,
+        request(Syscall::InterruptCreate, &[system, 3]),
+    );
+    let handle = Handle::from_raw(raw).unwrap();
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::HandleClose, &[handle.raw()])),
+        None
+    );
+    let released = fixture
+        .environment
+        .calls
+        .iter()
+        .filter(|call| matches!(call, Call::ReleaseMessage(_)))
+        .count();
+    assert_eq!(released, 0);
+}
+
+#[test]
+fn a_message_interrupt_with_a_second_handle_keeps_its_vector() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let (handle, _, data) = message_interrupt(&mut fixture, system);
+    let second = value_of(
+        &mut fixture,
+        request(
+            Syscall::HandleDuplicate,
+            &[handle.raw(), u64::from(Rights::MANAGE.bits())],
+        ),
+    );
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::HandleClose, &[handle.raw()])),
+        None
+    );
+    let released = fixture
+        .environment
+        .calls
+        .iter()
+        .filter(|call| matches!(call, Call::ReleaseMessage(_)))
+        .count();
+    assert_eq!(released, 0, "one handle of two is not the last reference");
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::HandleClose, &[second])),
+        None
+    );
+    assert_eq!(
+        fixture
+            .environment
+            .count(&Call::ReleaseMessage(u8::try_from(data).unwrap())),
+        1
     );
 }

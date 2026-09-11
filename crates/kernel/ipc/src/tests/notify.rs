@@ -9,7 +9,7 @@ use kernel_objects::object::Wait;
 
 use super::fixture::Fixture;
 use crate::cancel::cancel;
-use crate::notify::{poll, signal, wait};
+use crate::notify::{expire, poll, signal, wait, wait_until};
 use crate::outcome::Wakeup;
 
 #[test]
@@ -346,4 +346,249 @@ fn signalling_zero_leaves_a_waiter_waiting() {
         fixture.state(waiter),
         Some(ThreadState::BlockedNotification)
     );
+}
+
+#[test]
+fn a_wait_until_takes_what_is_present_and_never_looks_at_the_deadline() {
+    let mut fixture = Fixture::new();
+    let owner = fixture.process(8);
+    let thread = fixture.running(owner, 4);
+    let notification = fixture.notification();
+    signal(
+        &mut fixture.objects,
+        &mut fixture.scheduler,
+        notification,
+        0b101,
+    )
+    .unwrap();
+    // A deadline long past, which a call that takes bits never consults.
+    let outcome = wait_until(
+        &mut fixture.objects,
+        &mut fixture.scheduler,
+        thread,
+        notification,
+        0,
+        9_000,
+    )
+    .unwrap();
+    assert!(!outcome.blocked);
+    assert_eq!(outcome.values, [0b101, 0]);
+    assert_eq!(fixture.state(thread), Some(ThreadState::Running));
+}
+
+#[test]
+fn a_deadline_that_has_passed_answers_at_once_with_no_bits() {
+    let mut fixture = Fixture::new();
+    let owner = fixture.process(8);
+    let thread = fixture.running(owner, 4);
+    let notification = fixture.notification();
+    let outcome = wait_until(
+        &mut fixture.objects,
+        &mut fixture.scheduler,
+        thread,
+        notification,
+        1_000,
+        1_000,
+    )
+    .unwrap();
+    assert!(!outcome.blocked);
+    assert_eq!(outcome.values, [0, 0]);
+    assert_eq!(fixture.state(thread), Some(ThreadState::Running));
+    assert_eq!(
+        fixture
+            .objects
+            .notifications
+            .get(notification)
+            .unwrap()
+            .waiter,
+        None,
+        "nobody was recorded as waiting"
+    );
+}
+
+#[test]
+fn a_signal_before_the_deadline_wakes_the_waiter_with_the_word() {
+    let mut fixture = Fixture::new();
+    let owner = fixture.process(8);
+    let waiter = fixture.running(owner, 4);
+    let notification = fixture.notification();
+    let outcome = wait_until(
+        &mut fixture.objects,
+        &mut fixture.scheduler,
+        waiter,
+        notification,
+        5_000,
+        0,
+    )
+    .unwrap();
+    assert!(outcome.blocked);
+    assert_eq!(
+        fixture.objects.threads.get(waiter).unwrap().deadline,
+        Some(5_000)
+    );
+
+    let outcome = signal(
+        &mut fixture.objects,
+        &mut fixture.scheduler,
+        notification,
+        0b10,
+    )
+    .unwrap();
+    assert_eq!(outcome.wakeup, Some(Wakeup::ok(waiter, [0b10, 0])));
+    assert_eq!(
+        fixture.objects.threads.get(waiter).unwrap().deadline,
+        None,
+        "the entry left with the wait"
+    );
+    // The tick that follows the deadline finds nobody, so the thread is
+    // not woken a second time.
+    assert!(expire(&mut fixture.objects, &mut fixture.scheduler, 9_000).is_none());
+}
+
+#[test]
+fn a_deadline_that_comes_first_wakes_the_waiter_with_nothing() {
+    let mut fixture = Fixture::new();
+    let owner = fixture.process(8);
+    let waiter = fixture.running(owner, 4);
+    let notification = fixture.notification();
+    wait_until(
+        &mut fixture.objects,
+        &mut fixture.scheduler,
+        waiter,
+        notification,
+        5_000,
+        0,
+    )
+    .unwrap();
+    assert!(
+        expire(&mut fixture.objects, &mut fixture.scheduler, 4_999).is_none(),
+        "a tick before the deadline wakes nobody"
+    );
+    let outcome = expire(&mut fixture.objects, &mut fixture.scheduler, 5_000).unwrap();
+    assert_eq!(outcome.wakeup, Some(Wakeup::ok(waiter, [0, 0])));
+    assert_eq!(fixture.state(waiter), Some(ThreadState::Ready));
+    assert_eq!(fixture.wait_of(waiter), Wait::Nothing);
+    assert_eq!(
+        fixture
+            .objects
+            .notifications
+            .get(notification)
+            .unwrap()
+            .waiter,
+        None,
+        "the notification has let go of it"
+    );
+    assert!(expire(&mut fixture.objects, &mut fixture.scheduler, 9_000).is_none());
+}
+
+#[test]
+fn a_second_waiter_with_a_deadline_is_refused_as_one_without_is() {
+    let mut fixture = Fixture::new();
+    let owner = fixture.process(8);
+    let first = fixture.running(owner, 4);
+    let notification = fixture.notification();
+    wait_until(
+        &mut fixture.objects,
+        &mut fixture.scheduler,
+        first,
+        notification,
+        5_000,
+        0,
+    )
+    .unwrap();
+    let second = fixture.thread(owner, 4);
+    fixture.on_the_processor(second);
+    assert_eq!(
+        wait_until(
+            &mut fixture.objects,
+            &mut fixture.scheduler,
+            second,
+            notification,
+            5_000,
+            0
+        ),
+        Err(Error::Busy)
+    );
+}
+
+#[test]
+fn a_wait_until_on_a_notification_that_is_gone_answers_nothing() {
+    let mut fixture = Fixture::new();
+    let owner = fixture.process(8);
+    let thread = fixture.running(owner, 4);
+    let stale = kernel_objects::pool::ObjectId::new(6, 4);
+    assert_eq!(
+        wait_until(
+            &mut fixture.objects,
+            &mut fixture.scheduler,
+            thread,
+            stale,
+            1,
+            0
+        ),
+        Err(Error::InvalidHandle)
+    );
+}
+
+#[test]
+fn a_thread_that_may_not_block_leaves_the_notification_as_it_found_it_with_a_deadline() {
+    let mut fixture = Fixture::new();
+    let owner = fixture.process(8);
+    let inactive = fixture.thread(owner, 4);
+    let notification = fixture.notification();
+    assert_eq!(
+        wait_until(
+            &mut fixture.objects,
+            &mut fixture.scheduler,
+            inactive,
+            notification,
+            5_000,
+            0
+        ),
+        Err(Error::InvalidState)
+    );
+    assert_eq!(
+        fixture
+            .objects
+            .notifications
+            .get(notification)
+            .unwrap()
+            .waiter,
+        None
+    );
+    assert_eq!(fixture.wait_of(inactive), Wait::Nothing);
+    assert_eq!(
+        fixture.objects.threads.get(inactive).unwrap().deadline,
+        None
+    );
+}
+
+#[test]
+fn the_deadlines_of_several_waiters_come_out_in_their_order() {
+    let mut fixture = Fixture::new();
+    let owner = fixture.process(8);
+    let mut waiters = Vec::new();
+    for (step, deadline) in [3_000_u64, 1_000, 2_000].iter().enumerate() {
+        let thread = fixture.thread(owner, 4);
+        fixture.on_the_processor(thread);
+        let notification = fixture.notification();
+        wait_until(
+            &mut fixture.objects,
+            &mut fixture.scheduler,
+            thread,
+            notification,
+            *deadline,
+            0,
+        )
+        .unwrap();
+        waiters.push((*deadline, thread));
+        let _ = step;
+    }
+    waiters.sort_by_key(|(deadline, _)| *deadline);
+    let mut woken = Vec::new();
+    while let Some(outcome) = expire(&mut fixture.objects, &mut fixture.scheduler, 3_000) {
+        woken.push(outcome.wakeup.unwrap().thread);
+    }
+    let expected: Vec<_> = waiters.iter().map(|(_, thread)| *thread).collect();
+    assert_eq!(woken, expected);
 }

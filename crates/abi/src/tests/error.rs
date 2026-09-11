@@ -54,6 +54,14 @@ fn codes_are_dense_from_one() {
 }
 
 #[test]
+fn the_two_codes_of_phase_twelve_are_their_own() {
+    assert_eq!(Error::Unavailable.code(), 27);
+    assert_eq!(Error::NoVector.code(), 28);
+    assert_eq!(Error::from_code(27), Some(Error::Unavailable));
+    assert_eq!(Error::from_code(28), Some(Error::NoVector));
+}
+
+#[test]
 fn a_cancelled_operation_has_a_code_of_its_own() {
     assert_eq!(Error::Cancelled.code(), 25);
     assert_eq!(Error::from_code(25), Some(Error::Cancelled));

@@ -179,6 +179,7 @@ pub const fn required_rights(call: Syscall) -> Rights {
         | Syscall::ThreadSetPriority
         | Syscall::ThreadInfo
         | Syscall::InterruptCreate
+        | Syscall::InterruptCreateMsi
         | Syscall::InterruptBind
         | Syscall::InterruptAck
         | Syscall::IoPortCreate
@@ -203,7 +204,9 @@ pub const fn required_rights(call: Syscall) -> Rights {
         Syscall::IpcSend | Syscall::IpcCall => Rights::SEND,
         Syscall::IpcRecv | Syscall::IpcTryRecv => Rights::RECV,
         Syscall::NotificationSignal => Rights::SIGNAL,
-        Syscall::NotificationWait | Syscall::NotificationPoll => Rights::WAIT,
+        Syscall::NotificationWait | Syscall::NotificationWaitUntil | Syscall::NotificationPoll => {
+            Rights::WAIT
+        }
         Syscall::IoPortRead => Rights::READ,
         Syscall::IoPortWrite | Syscall::IoPortWriteString => Rights::WRITE,
         // `handle_duplicate` checks `DUPLICATE` against the rights it is
@@ -217,6 +220,8 @@ pub const fn required_rights(call: Syscall) -> Rights {
         | Syscall::ThreadYield
         | Syscall::EndpointCreate
         | Syscall::NotificationCreate
+        | Syscall::ClockNow
+        | Syscall::RandomBytes
         | Syscall::DebugLog => Rights::EMPTY,
     }
 }

@@ -80,7 +80,7 @@ fn an_acknowledged_interrupt_lets_the_next_one_arrive() {
         .unwrap();
     bind(&mut fixture.objects, interrupt, notification, 0).unwrap();
     deliver(&mut fixture.objects, &mut fixture.scheduler, VECTOR).unwrap();
-    assert_eq!(acknowledge(&mut fixture.objects, interrupt), Ok(7));
+    assert_eq!(acknowledge(&mut fixture.objects, interrupt), Ok(Some(7)));
     assert!(!fixture.objects.interrupts.get(interrupt).unwrap().masked);
     deliver(&mut fixture.objects, &mut fixture.scheduler, VECTOR).unwrap();
     let outcome = wait(

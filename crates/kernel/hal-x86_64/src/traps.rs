@@ -230,7 +230,11 @@ macro_rules! device_handlers {
 
 // The vectors of the plan in `kernel_x86_tables::vectors` that a device can
 // raise: the range the two legacy controllers were moved to, the timer, one
-// per global system interrupt, and the spurious vector of the local APIC.
+// per global system interrupt, one per vector of the message space, and the
+// spurious vector of the local APIC. A message interrupt is routed by
+// nobody — the device writes the vector itself — so every vector of that
+// space needs a gate from the start, or the write would land on an entry
+// the processor calls absent.
 // The system call vector is not among them: it has its own handler and the
 // one gate of this table the processor may enter from ring three.
 device_handlers! {
@@ -240,7 +244,15 @@ device_handlers! {
     device_41 = 0x41, device_42 = 0x42, device_43 = 0x43, device_44 = 0x44, device_45 = 0x45, device_46 = 0x46,
     device_47 = 0x47, device_48 = 0x48, device_49 = 0x49, device_4a = 0x4A, device_4b = 0x4B, device_4c = 0x4C,
     device_4d = 0x4D, device_4e = 0x4E, device_4f = 0x4F, device_50 = 0x50, device_51 = 0x51, device_52 = 0x52,
-    device_53 = 0x53, device_54 = 0x54, device_55 = 0x55, device_56 = 0x56, device_57 = 0x57, device_ff = 0xFF,
+    device_53 = 0x53, device_54 = 0x54, device_55 = 0x55, device_56 = 0x56, device_57 = 0x57,
+    device_58 = 0x58, device_59 = 0x59, device_5a = 0x5A, device_5b = 0x5B, device_5c = 0x5C, device_5d = 0x5D,
+    device_5e = 0x5E, device_5f = 0x5F, device_60 = 0x60, device_61 = 0x61, device_62 = 0x62, device_63 = 0x63,
+    device_64 = 0x64, device_65 = 0x65, device_66 = 0x66, device_67 = 0x67, device_68 = 0x68, device_69 = 0x69,
+    device_6a = 0x6A, device_6b = 0x6B, device_6c = 0x6C, device_6d = 0x6D, device_6e = 0x6E, device_6f = 0x6F,
+    device_70 = 0x70, device_71 = 0x71, device_72 = 0x72, device_73 = 0x73, device_74 = 0x74, device_75 = 0x75,
+    device_76 = 0x76, device_77 = 0x77, device_78 = 0x78, device_79 = 0x79, device_7a = 0x7A, device_7b = 0x7B,
+    device_7c = 0x7C, device_7d = 0x7D, device_7e = 0x7E, device_7f = 0x7F,
+    device_ff = 0xFF,
 }
 
 handlers_with_code! {

@@ -95,6 +95,66 @@ pub fn interrupt_create<
     }
 }
 
+/// `interrupt_create_msi`: an interrupt object for a message interrupt.
+///
+/// The call allocates one vector out of the space the lines are allocated
+/// from and answers with the handle, the address the device writes to, and
+/// the value it writes. Nothing is routed: the driver puts those two into
+/// its device's MSI-X table, which is in the device's own window and
+/// therefore in the driver's address space and not the kernel's (D-111).
+///
+/// # Errors
+///
+/// [`Error::NoVector`] when the vector space has nothing left;
+/// [`Error::Unsupported`] on a machine whose controller is not up;
+/// [`Error::QuotaExceeded`], [`Error::PoolExhausted`], or
+/// [`Error::OutOfHandles`] as [`interrupt_create`] answers them. A call
+/// that fails after the vector was taken gives it back.
+pub fn interrupt_create_msi<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    process: ProcessId,
+) -> Result<Reply, Error> {
+    super::charge_object(machine, process)?;
+    let (vector, address, data) = match machine.environment.allocate_message_vector() {
+        Ok(message) => message,
+        Err(error) => {
+            super::refund_object(machine, process);
+            return Err(error);
+        }
+    };
+    let id = match machine
+        .objects
+        .interrupts
+        .allocate(Interrupt::message(vector))
+    {
+        Ok(id) => id,
+        Err(error) => {
+            machine.environment.release_message_vector(vector);
+            super::refund_object(machine, process);
+            return Err(Error::from(error));
+        }
+    };
+    let entry = Entry::new(
+        AnyObjectId::of(id),
+        Rights::MANAGE | Rights::DUPLICATE | Rights::TRANSFER,
+    );
+    match machine.objects.install_handle(process, entry) {
+        Ok(handle) => Ok(Reply::value(handle.raw()).with_words(&[address, u64::from(data)])),
+        Err(error) => {
+            let _ = machine.objects.interrupts.release(id);
+            machine.environment.release_message_vector(vector);
+            super::refund_object(machine, process);
+            Err(error)
+        }
+    }
+}
+
 /// `interrupt_bind`: the interrupt signals one bit of a notification.
 ///
 /// The line is unmasked here, because this is the moment it has somewhere
@@ -134,13 +194,20 @@ pub fn interrupt_bind<
     let bit = u8::try_from(request.argument(2)).map_err(|_| Error::InvalidArgument)?;
     interrupt::bind(machine.objects, id, notification, bit)?;
     let line = machine.objects.interrupts.get(id).map(|held| held.line);
-    if let Ok(line) = line {
+    if let Ok(Some(line)) = line {
         machine.environment.unmask_interrupt(line);
     }
     Ok(Reply::DONE)
 }
 
-/// `interrupt_ack`: the line is unmasked and the next interrupt may arrive.
+/// `interrupt_ack`: the interrupt is no longer held off and the next one
+/// may arrive.
+///
+/// For a line that is an unmask at the interrupt controller. A message
+/// interrupt has no line: its mask bit lies in the device's own table,
+/// which is mapped in the driver, so the call clears the outstanding flag
+/// and touches no hardware (D-111). A device that raises interrupts faster
+/// than its driver services them is quieted by its driver.
 ///
 /// # Errors
 ///
@@ -160,8 +227,9 @@ pub fn interrupt_ack<
     let (id, _rights) = machine
         .objects
         .resolve::<Interrupt>(process, handle, Rights::MANAGE)?;
-    let line = interrupt::acknowledge(machine.objects, id)?;
-    machine.environment.unmask_interrupt(line);
+    if let Some(line) = interrupt::acknowledge(machine.objects, id)? {
+        machine.environment.unmask_interrupt(line);
+    }
     Ok(Reply::DONE)
 }
 

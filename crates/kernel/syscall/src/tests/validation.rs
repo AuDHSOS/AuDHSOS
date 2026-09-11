@@ -173,8 +173,8 @@ fn handle_for(fixture: &mut Fixture, call: Syscall) -> u64 {
 fn every_call_of_the_table_is_implemented() {
     assert_eq!(
         Syscall::ALL.len() - UNIMPLEMENTED.len(),
-        46,
-        "the whole table, including memory_references and ioport_write_string"
+        50,
+        "the whole table, including the four calls of Phase 12"
     );
     assert!(UNIMPLEMENTED.is_empty());
 }

@@ -11,11 +11,14 @@
 //! nothing arrives before the kernel says it may.
 
 use kernel_acpi::madt::{Madt, Polarity, Trigger};
-use kernel_hal_api::interrupt::{InterruptController, InterruptError, InterruptLine, Vector};
+use kernel_hal_api::interrupt::{
+    InterruptController, InterruptError, InterruptLine, MessageInterrupt, Vector,
+};
 use kernel_hal_api::timer::{Timer, TimerError};
 use kernel_types::VirtAddr;
 use kernel_x86_tables::ioapic;
 use kernel_x86_tables::lapic;
+use kernel_x86_tables::vectors;
 
 use crate::instructions::{read_msr, write_msr};
 use crate::timer::{self, CalibrationError};
@@ -26,6 +29,38 @@ pub const IA32_APIC_BASE: u32 = 0x1B;
 
 /// The bit of [`IA32_APIC_BASE`] that turns the local APIC on.
 pub const APIC_BASE_ENABLE: u64 = 1 << 11;
+
+/// The base of the message region the local APIC answers to. A device that
+/// writes here raises an interrupt on the processor the address names;
+/// the region needs no mapping in the kernel, because the writer is the
+/// device.
+pub const MSI_ADDRESS_BASE: u64 = 0xFEE0_0000;
+
+/// Where the destination APIC identifier sits in a message address.
+pub const MSI_DESTINATION_SHIFT: u32 = 12;
+
+/// The message address that reaches the processor with the local APIC
+/// identifier `destination`: physical destination mode, no redirection
+/// hint, which is what leaves the low bits clear.
+#[must_use]
+#[expect(
+    clippy::as_conversions,
+    reason = "widening a byte to the width of an address, in a const fn"
+)]
+pub const fn msi_address(destination: u8) -> u64 {
+    MSI_ADDRESS_BASE | (destination as u64).wrapping_shl(MSI_DESTINATION_SHIFT)
+}
+
+/// The message data that delivers `vector`: fixed delivery, edge
+/// triggered, which is what leaves everything above the vector clear.
+#[must_use]
+#[expect(
+    clippy::as_conversions,
+    reason = "widening a byte to a register word, in a const fn"
+)]
+pub const fn msi_data(vector: u8) -> u32 {
+    vector as u32
+}
 
 /// The local APIC of this processor, reached through its register window.
 #[derive(Debug)]
@@ -291,6 +326,8 @@ pub struct Apics {
     madt: Madt,
     destination: u8,
     ticks_per_ms: u32,
+    /// One bit per vector of the message space, set while it is handed out.
+    messages: u64,
 }
 
 impl Apics {
@@ -308,6 +345,7 @@ impl Apics {
             madt,
             destination,
             ticks_per_ms: 0,
+            messages: 0,
         }
     }
 
@@ -458,6 +496,31 @@ impl InterruptController for Apics {
 
     fn end_of_interrupt(&mut self, _vector: Vector) {
         self.local.end_of_interrupt();
+    }
+
+    fn allocate_msi(&mut self) -> Result<MessageInterrupt, InterruptError> {
+        let free = (!self.messages).trailing_zeros();
+        let index = u8::try_from(free).map_err(|_| InterruptError::NoVector)?;
+        if index >= vectors::MSI_VECTORS {
+            return Err(InterruptError::NoVector);
+        }
+        let number = vectors::MSI_BASE
+            .checked_add(index)
+            .ok_or(InterruptError::NoVector)?;
+        let vector = Vector::new(number)?;
+        self.messages |= 1_u64.wrapping_shl(free);
+        Ok(MessageInterrupt {
+            vector,
+            address: msi_address(self.destination),
+            data: msi_data(number),
+        })
+    }
+
+    fn release_msi(&mut self, vector: Vector) {
+        let Some(index) = vectors::message_index(vector.number()) else {
+            return;
+        };
+        self.messages &= !1_u64.wrapping_shl(u32::from(index));
     }
 }
 

@@ -85,6 +85,9 @@ name = "panic"
 [[test]]
 name = "tick_window"
 
+[[test]]
+name = "clock"
+
 [dependencies]
 audhsos-abi.workspace = true
 kernel-core.workspace = true

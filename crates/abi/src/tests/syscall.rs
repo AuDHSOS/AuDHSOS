@@ -30,12 +30,16 @@ fn numbers_are_unique_dense_and_non_zero() {
 
 #[test]
 fn the_table_holds_every_call_of_the_interface() {
-    assert_eq!(Syscall::ALL.len(), 46);
+    assert_eq!(Syscall::ALL.len(), 50);
     assert_eq!(Syscall::ProcessCreate.number(), 1);
     assert_eq!(Syscall::DebugLog.number(), 41);
     assert_eq!(Syscall::MemoryMerge.number(), 42);
     assert_eq!(Syscall::ProcessWatch.number(), 43);
     assert_eq!(Syscall::IoPortWriteString.number(), 46);
+    assert_eq!(Syscall::ClockNow.number(), 47);
+    assert_eq!(Syscall::NotificationWaitUntil.number(), 48);
+    assert_eq!(Syscall::RandomBytes.number(), 49);
+    assert_eq!(Syscall::InterruptCreateMsi.number(), 50);
 }
 
 #[test]
@@ -180,6 +184,25 @@ fn the_table_matches_the_interface_documentation() {
             FirstArgument::Object(ObjectType::SystemControl),
         ),
         (Syscall::DebugLog, "debug_log", 0, FirstArgument::Nothing),
+        (Syscall::ClockNow, "clock_now", 0, FirstArgument::Nothing),
+        (
+            Syscall::NotificationWaitUntil,
+            "notification_wait_until",
+            2,
+            FirstArgument::Object(ObjectType::Notification),
+        ),
+        (
+            Syscall::RandomBytes,
+            "random_bytes",
+            0,
+            FirstArgument::Nothing,
+        ),
+        (
+            Syscall::InterruptCreateMsi,
+            "interrupt_create_msi",
+            1,
+            FirstArgument::Object(ObjectType::SystemControl),
+        ),
     ];
     for &(call, name, args, first) in expected {
         assert_eq!(call.name(), name);

@@ -20,7 +20,7 @@ pub use endpoint::{
     reply_caller, send, sent, undo_meeting,
 };
 pub use interrupt::{acknowledge, bind, deliver, interrupt_for, interrupt_of_line};
-pub use notify::{poll, signal, wait};
+pub use notify::{expire, poll, signal, wait, wait_until};
 pub use outcome::{Outcome, Waiters, Wakeup};
 pub use transfer::{Transferred, transfer};
 

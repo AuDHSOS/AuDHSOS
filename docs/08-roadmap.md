@@ -347,6 +347,15 @@ program waits on a notification nothing signals and returns at its
 deadline; a third draws two seeds and they differ; an MSI vector created
 by the root task and raised by a test device arrives as a signalled bit.
 
+Done: the deadline list is threaded through the thread entries rather than
+held as an `IndexList` over them, because a `Link` in no list is not zero
+and the `Scheduler` lives in the one `static` that carries the object
+pools (D-131). `IndexList::insert_after` is built and tested all the same;
+it was the operation the type was missing. The vector space of a message
+interrupt needed a gate in the interrupt descriptor table for every one of
+its vectors before a device could write one: nothing routes a message, so
+a vector without a gate arrives as a general protection fault.
+
 ## 8.15 Phase 13: PCI and the bus
 
 Deliverables: `kernel-acpi` gains `mcfg.rs`, which reads the `MCFG` table

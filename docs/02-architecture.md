@@ -387,6 +387,10 @@ through shared memory objects.
   zero is a no-op that succeeds.
 - `notification_wait(handle)` blocks until the word is non-zero, then
   returns and clears it.
+- `notification_wait_until(handle, deadline)` is the same wait with a
+  deadline, in the microseconds since boot that `clock_now` answers in. It
+  returns the bits, or zero when the deadline came first; a caller that
+  must tell the two apart reads the clock.
 - `notification_poll(handle)` returns and clears without blocking.
 - Several signals before a wait are merged. Only one thread may wait on a
   notification at a time; a second waiter gets `Busy`.
@@ -429,7 +433,10 @@ through shared memory objects.
   the outstanding flag and touches no hardware, because the mask bit is in
   memory the kernel does not map: a device that raises interrupts faster
   than its driver services them is quieted by its driver and not by the
-  kernel.
+  kernel. Every vector of that space carries a gate in the interrupt
+  descriptor table from the moment the table is built: nothing routes a
+  message, so a vector without a gate would arrive as a general protection
+  fault rather than as an interrupt.
 - The PCI configuration space is found by the kernel and walked by
   userland: `kernel-acpi` reads the `MCFG` table, `system_info` reports
   the ECAM window, the root task makes it a `Device` memory object, and

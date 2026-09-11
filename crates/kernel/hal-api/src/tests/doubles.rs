@@ -317,3 +317,63 @@ fn the_page_table_double_reaches_the_bytes_of_a_frame_as_well() {
     let mut plain: MemoryFrameAccess<u64> = MemoryFrameAccess::new();
     assert!(plain.frame_bytes_mut(frame(1)).is_none());
 }
+
+#[test]
+fn the_double_hands_out_a_message_vector_once_and_takes_it_back() {
+    use crate::interrupt::MessageInterrupt;
+
+    let mut controller = FakeInterruptController::new(4).with_message_vectors(2);
+    let first = controller.allocate_msi().unwrap();
+    let second = controller.allocate_msi().unwrap();
+    assert_ne!(first.vector, second.vector);
+    assert_eq!(first.data, u32::from(first.vector.number()));
+    assert_eq!(
+        controller.allocate_msi(),
+        Err(InterruptError::NoVector),
+        "the space is exhausted"
+    );
+    controller.release_msi(first.vector);
+    let again: MessageInterrupt = controller.allocate_msi().unwrap();
+    assert_eq!(again.vector, first.vector, "the vector came back");
+    assert_eq!(controller.messages().len(), 2);
+    // A vector that was never handed out is left alone.
+    let outside = Vector::new(Vector::FIRST_DEVICE).unwrap();
+    controller.release_msi(outside);
+    assert_eq!(controller.messages().len(), 2);
+}
+
+#[test]
+fn the_devices_of_one_machine_forward_the_message_vector_and_the_seed() {
+    use crate::device::Devices;
+    use crate::doubles::RecordingDevices;
+    use crate::random::RandomError;
+
+    fn drive(devices: &mut impl Devices) -> Result<[u64; 4], RandomError> {
+        let message = devices.allocate_msi().unwrap();
+        devices.release_msi(message.vector);
+        devices.seed()
+    }
+
+    let mut devices = RecordingDevices::new(4).seeding(Ok([1, 2, 3, 4]));
+    assert_eq!(drive(&mut devices), Ok([1, 2, 3, 4]));
+    assert_eq!(drive(&mut devices), Err(RandomError::Unavailable));
+    assert_eq!(devices.random.calls(), 2);
+}
+
+#[test]
+fn a_scripted_source_answers_its_script_and_then_nothing() {
+    use crate::doubles::ScriptedRandom;
+    use crate::random::{Random, RandomError};
+
+    let mut source = ScriptedRandom::new()
+        .then(Ok([9, 8, 7, 6]))
+        .then(Err(RandomError::Unavailable))
+        .then(Ok([5, 4, 3, 2]));
+    assert_eq!(source.seed(), Ok([9, 8, 7, 6]));
+    assert_eq!(source.seed(), Err(RandomError::Unavailable));
+    assert_eq!(source.seed(), Ok([5, 4, 3, 2]));
+    assert_eq!(source.seed(), Err(RandomError::Unavailable));
+    assert_eq!(source.calls(), 4);
+    assert!(!RandomError::Unavailable.to_string().is_empty());
+    assert_eq!(ScriptedRandom::default().calls(), 0);
+}

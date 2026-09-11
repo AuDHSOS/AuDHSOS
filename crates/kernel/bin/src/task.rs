@@ -247,15 +247,17 @@ pub(crate) fn answer(
     entry::with_console(|console| {
         with_memory(|memory| {
             with_machine(|machine| {
-                let mut environment = KernelEnvironment::<X86Entry, _, _, _, DeviceAccess<'_>>::new(
-                    memory,
-                    &mut tables,
-                    &mut tlb,
-                    Some(console),
-                    devices.take(),
-                    acpi_pointer(),
-                    context::prepare_user,
-                );
+                let mut environment =
+                    KernelEnvironment::<X86Entry, _, _, _, DeviceAccess<'_>>::new(
+                        memory,
+                        &mut tables,
+                        &mut tlb,
+                        Some(console),
+                        devices.take(),
+                        acpi_pointer(),
+                        context::prepare_user,
+                    )
+                    .at(now_micros());
                 let reschedule = handle_syscall(
                     &mut machine.objects,
                     &mut machine.scheduler,
@@ -408,6 +410,14 @@ fn environment<'a>(
         acpi_pointer(),
         context::prepare_user,
     )
+    .at(now_micros())
+}
+
+/// The clock the system call layer answers with: the ticks the timer has
+/// counted, in microseconds. The count is an atomic of the interrupt
+/// module, so reading it borrows nothing.
+fn now_micros() -> u64 {
+    kernel_core::tick::micros(kernel_hal_x86_64::interrupts::ticks())
 }
 
 /// The physical address of the root system description pointer, which is

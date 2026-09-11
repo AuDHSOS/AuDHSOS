@@ -147,6 +147,73 @@ pub fn read_tsc() -> u64 {
     u64::from(low) | (u64::from(high) << 32)
 }
 
+/// The leaf of `CPUID` that reports the extended features.
+const CPUID_EXTENDED_FEATURES: u32 = 7;
+
+/// The bit of `EBX` of that leaf that reports `RDSEED`.
+const CPUID_RDSEED_BIT: u32 = 1 << 18;
+
+/// `true` when this processor has `RDSEED`.
+///
+/// `CPUID` writes `EBX`, which the compiler reserves as the base register
+/// of position-independent code, so the one `asm!` site saves it, runs the
+/// instruction, takes the answer out, and puts it back.
+#[must_use]
+pub fn has_rdseed() -> bool {
+    let features: u32;
+    // SAFETY: `CPUID` is available at every privilege level and on every
+    // processor this kernel runs on; leaf seven is defined on every
+    // processor that reports a maximum leaf of at least seven, and one that
+    // does not answers zeros, which reports the feature as absent. The site
+    // restores `RBX` before it ends.
+    unsafe {
+        asm!(
+            "mov {saved:r}, rbx",
+            "cpuid",
+            "mov {features:r}, rbx",
+            "mov rbx, {saved:r}",
+            saved = out(reg) _,
+            features = out(reg) features,
+            inout("eax") CPUID_EXTENDED_FEATURES => _,
+            inout("ecx") 0_u32 => _,
+            out("edx") _,
+            options(nomem, nostack),
+        );
+    }
+    features & CPUID_RDSEED_BIT != 0
+}
+
+/// One draw from the hardware entropy source, or `None` when the pool was
+/// momentarily empty.
+///
+/// `RDSEED` reports success in the carry flag and leaves the destination
+/// register undefined when it fails, so the flag is read back and the word
+/// is used only when it says the draw happened. The instruction is present
+/// only on a processor that reports it in `CPUID`; a machine without it
+/// raises an invalid opcode, which is why the caller is the one that knows
+/// whether the model has it.
+///
+/// # Safety
+///
+/// The processor must support `RDSEED`.
+#[must_use]
+pub unsafe fn read_seed() -> Option<u64> {
+    let value: u64;
+    let ok: u8;
+    // SAFETY: the caller promises the instruction exists. It writes one
+    // register of this function and the flags, and touches no memory.
+    unsafe {
+        asm!(
+            "rdseed {value}",
+            "setc {ok}",
+            value = out(reg) value,
+            ok = out(reg_byte) ok,
+            options(nomem, nostack),
+        );
+    }
+    (ok != 0).then_some(value)
+}
+
 /// The address the last page fault named.
 #[must_use]
 pub fn read_fault_address() -> u64 {

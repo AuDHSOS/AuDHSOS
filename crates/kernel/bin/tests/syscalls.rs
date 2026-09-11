@@ -531,6 +531,26 @@ const REFUSALS: &[(Syscall, Error, &str)] = &[
         Error::InvalidHandle,
         "a handle that names nothing",
     ),
+    (
+        Syscall::ClockNow,
+        Error::ArgumentCount,
+        "an argument word above the none it reads",
+    ),
+    (
+        Syscall::NotificationWaitUntil,
+        Error::AccessDenied,
+        "a capability that may signal and not wait",
+    ),
+    (
+        Syscall::RandomBytes,
+        Error::ArgumentCount,
+        "an argument word above the none it reads",
+    ),
+    (
+        Syscall::InterruptCreateMsi,
+        Error::InvalidHandle,
+        "a handle that names nothing",
+    ),
 ];
 
 /// Every call this phase implements answered exactly one error, and it is

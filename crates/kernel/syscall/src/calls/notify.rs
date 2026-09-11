@@ -97,6 +97,39 @@ pub fn wait<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
     apply(machine, outcome)
 }
 
+/// `notification_wait_until`: takes what is present, or blocks until
+/// something is or until the deadline of the second argument, whichever
+/// comes first. A thread that woke at its deadline finds zero bits, which
+/// a caller that must tell the two apart separates by reading the clock.
+///
+/// # Errors
+///
+/// As [`wait`].
+pub fn wait_until<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    caller: ThreadId,
+    process: ProcessId,
+    request: &Request,
+) -> Result<Reply, Error> {
+    let id = notification_of(machine, process, request, Rights::WAIT)?;
+    let now = machine.environment.now_micros();
+    let outcome = notify::wait_until(
+        machine.objects,
+        machine.scheduler,
+        caller,
+        id,
+        request.argument(1),
+        now,
+    )?;
+    apply(machine, outcome)
+}
+
 /// `notification_poll`: takes what is present, which may be nothing.
 ///
 /// # Errors

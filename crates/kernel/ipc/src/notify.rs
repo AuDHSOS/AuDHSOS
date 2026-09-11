@@ -124,6 +124,94 @@ pub fn wait<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     }
 }
 
+/// `notification_wait_until`: takes what is present, or blocks until
+/// something is or until `deadline`, whichever comes first.
+///
+/// `now` is the clock the caller read, in the microseconds since boot that
+/// `clock_now` answers in. Bits that are already there are taken and the
+/// deadline is never consulted; a deadline that has passed answers at once
+/// with no bits, which is what a thread that woke at its deadline also
+/// finds (see [`expire`]).
+///
+/// # Errors
+///
+/// As [`wait`].
+pub fn wait_until<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    objects: &mut Objects<NP, NT, NM, NH>,
+    scheduler: &mut Scheduler,
+    waiter: ThreadId,
+    notification: NotificationId,
+    deadline: u64,
+    now: u64,
+) -> Result<Outcome, Error> {
+    let held = objects
+        .notifications
+        .get(notification)
+        .copied()
+        .map_err(|_| Error::InvalidHandle)?;
+    if held.word != 0 {
+        return poll(objects, notification);
+    }
+    if held.waiter.is_some() {
+        return Err(Error::Busy);
+    }
+    if deadline <= now {
+        return Ok(Outcome::values(0, 0));
+    }
+    objects
+        .notifications
+        .with(notification, |slot| slot.waiter = Some(waiter));
+    objects.threads.with(waiter, |thread| {
+        thread.wait = Wait::Notification { notification }
+    });
+    match scheduler.on_block_until(
+        &mut objects.threads,
+        waiter,
+        Event::BlockNotification,
+        deadline,
+    ) {
+        Ok(outcome) => Ok(Outcome::blocked().switching(outcome.reschedule)),
+        Err(error) => {
+            objects
+                .notifications
+                .with(notification, |slot| slot.waiter = None);
+            objects
+                .threads
+                .with(waiter, |thread| thread.wait = Wait::Nothing);
+            Err(error)
+        }
+    }
+}
+
+/// The next thread whose deadline has passed at `now`, made ready with no
+/// bits. `None` says that nothing is due, which is what a tick that wakes
+/// nobody costs: one comparison against the front of the list.
+///
+/// The caller loops until this answers `None`, so a list whose deadlines
+/// have all passed empties in one tick.
+pub fn expire<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    objects: &mut Objects<NP, NT, NM, NH>,
+    scheduler: &mut Scheduler,
+    now: u64,
+) -> Option<Outcome> {
+    let waiter = scheduler.expired(&mut objects.threads, now)?;
+    let waited_on = objects.threads.get(waiter).ok().map(|thread| thread.wait);
+    if let Some(Wait::Notification { notification }) = waited_on {
+        objects
+            .notifications
+            .with(notification, |slot| slot.waiter = None);
+    }
+    objects
+        .threads
+        .with(waiter, |thread| thread.wait = Wait::Nothing);
+    let reschedule = wake(&mut objects.threads, scheduler, waiter)?;
+    Some(
+        Outcome::DONE
+            .waking(Wakeup::ok(waiter, [0, 0]))
+            .switching(reschedule),
+    )
+}
+
 /// `notification_poll`: takes what is present, which may be nothing.
 ///
 /// # Errors

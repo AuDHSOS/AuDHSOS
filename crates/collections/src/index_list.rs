@@ -201,6 +201,43 @@ impl IndexList {
         Ok(())
     }
 
+    /// Puts `node` behind `after`, or at the front when `after` is `None`.
+    ///
+    /// This is the one operation that splices in the middle, and the list
+    /// needs it because the `Link` fields are private: a caller that keeps
+    /// its nodes in an order of its own cannot write them itself.
+    ///
+    /// # Errors
+    ///
+    /// [`CollectionError::Index`] when either node is outside `links`,
+    /// [`CollectionError::AlreadyLinked`] when `node` is in a list already,
+    /// and [`CollectionError::NotLinked`] when `after` is in another list
+    /// or in none. A refused insert changes nothing.
+    pub fn insert_after(
+        &mut self,
+        links: &mut [Link],
+        node: u32,
+        after: Option<u32>,
+    ) -> Result<(), CollectionError> {
+        let Some(after) = after else {
+            return self.push_front(links, node);
+        };
+        Self::claim(links, node)?;
+        let previous = *Self::at(links, after)?;
+        if previous.owner != self.id {
+            return Err(CollectionError::NotLinked(after));
+        }
+        let next = previous.next;
+        if next == NONE {
+            return self.push_back(links, node);
+        }
+        Self::write(links, node, after, next, self.id)?;
+        Self::set_next(links, after, node)?;
+        Self::set_prev(links, next, node)?;
+        self.len = self.len.wrapping_add(1);
+        Ok(())
+    }
+
     /// Removes and returns the first node, or `None` when the list is
     /// empty.
     pub fn pop_front(&mut self, links: &mut [Link]) -> Option<u32> {

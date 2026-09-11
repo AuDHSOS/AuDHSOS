@@ -3,7 +3,8 @@
 ## 3.1 First target: QEMU `x86_64` with UEFI
 
 The first release runs on `qemu-system-x86_64` with the `q35` machine, the
-default `qemu64` CPU model, and the UEFI firmware bundled with QEMU.
+`qemu64` CPU model with two feature flags added, and the UEFI firmware
+bundled with QEMU.
 
 ### 3.1.1 Reference machine configuration
 
@@ -13,7 +14,7 @@ The build automation owns this command line; nobody types it by hand.
 qemu-system-x86_64 \
   -machine q35 \
   -accel <kvm or tcg> \
-  -cpu qemu64 \
+  -cpu qemu64,+rdrand,+rdseed \
   -smp 1 \
   -m 256M \
   -drive if=pflash,format=raw,readonly=on,file=<qemu share dir>/edk2-x86_64-code.fd \
@@ -59,13 +60,12 @@ on macOS and `-display gtk` on Linux. The run without a graphics adapter
 keeps `-vga none` and drops the three lines that follow it, which leaves
 the firmware without a Graphics Output Protocol.
 
-From Phase 12 on the CPU model is `qemu64,+rdrand,+rdseed`. `random_bytes`
-draws from `RDSEED`, which D-43 decided and Phase 12 builds, and the model
-`qemu64` carries neither flag — asked of QEMU 11.1 through
-`query-cpu-model-expansion`, not assumed. TCG provides both instructions
-once they are named, and the line starts without a warning under
-`enforce`. Without them the call would fail on the one machine this system
-is developed on (D-110).
+The CPU model carries `+rdrand,+rdseed` since Phase 12. `random_bytes`
+draws from `RDSEED`, which D-43 decided, and the model `qemu64` carries
+neither flag — asked of QEMU 11.1 through `query-cpu-model-expansion`, not
+assumed. TCG provides both instructions once they are named, and the line
+starts without a warning under `enforce`. Without them the call answers
+`Unavailable` on the one machine this system is developed on (D-110).
 
 From Phase 13 on the runner adds two more lines:
 

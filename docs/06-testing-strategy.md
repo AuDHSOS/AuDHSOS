@@ -1253,6 +1253,11 @@ done until every applicable item has a test. Items are added, never removed.
   list identified by `NONE` is refused at construction; a walk over links
   a caller has corrupted into a cycle still ends, because it takes as many
   steps as the list says it is long.
+- `IndexList::insert_after`: an insert after `None` is a `push_front`;
+  after the tail is a `push_back`; in the middle links both neighbours; a
+  node that is already linked, one outside the slice, and an `after` that
+  belongs to another list or to none are each refused and change nothing.
+  The item belongs to 6.6.59 as well, which is the phase that added it.
 - `BitSet` further: a set of no words holds no bit and refuses every
   index; a first word that is full sends `first_clear` into the second;
   `count` and `is_empty` agree with the bits that are set.
@@ -1985,7 +1990,7 @@ system call table; it cannot see the methods themselves (D-92). This item
 is the other half, and it needs a machine: the numbers a wrapper writes are
 what the kernel dispatches on, so the check is what the kernel saw.
 
-- `every_wrapper` calls all forty-two methods of `Gate` in the order of the
+- `every_wrapper` calls every method of `Gate` in the order of the
   table, each with a handle that names nothing, so that every call is
   refused and none of them waits for a partner or ends the thread;
   `thread_exit` is last, because it does not come back.

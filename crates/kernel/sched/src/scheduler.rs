@@ -79,6 +79,8 @@ pub struct Scheduler {
     current: Option<ThreadId>,
     idle: Option<ThreadId>,
     ended: u32,
+    deadlines: Queue,
+    waiting: u32,
 }
 
 impl Default for Scheduler {
@@ -99,6 +101,8 @@ impl Scheduler {
             current: None,
             idle: None,
             ended: 0,
+            deadlines: Queue::EMPTY,
+            waiting: 0,
         }
     }
 
@@ -336,6 +340,167 @@ impl Scheduler {
         Ok(id)
     }
 
+    /// How many threads wait with a deadline.
+    #[must_use]
+    pub const fn waiting_until(&self) -> u32 {
+        self.waiting
+    }
+
+    /// The earliest deadline anyone waits for.
+    #[must_use]
+    pub const fn next_deadline(&self) -> Option<ThreadId> {
+        self.deadlines.head
+    }
+
+    /// Blocks `id` on `event` until `deadline`, which is microseconds since
+    /// boot. The thread enters the deadline list at its place, and
+    /// [`Scheduler::expired`] hands it back once the tick count passes it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Scheduler::on_block`]. A refused operation leaves the thread in
+    /// no deadline list.
+    pub fn on_block_until<const N: usize>(
+        &mut self,
+        threads: &mut Pool<Thread, N>,
+        id: ThreadId,
+        event: Event,
+        deadline: u64,
+    ) -> Result<Outcome, Error> {
+        let outcome = self.on_block(threads, id, event)?;
+        self.insert_deadline(threads, id, deadline)?;
+        Ok(outcome)
+    }
+
+    /// The first thread whose deadline is at or before `now`, taken out of
+    /// the list. `None` stops the walk: the list is ordered, so the first
+    /// entry that has not passed is the end of what this tick wakes.
+    ///
+    /// The thread is out of the list and its deadline is cleared; making it
+    /// ready is the caller's, which is what lets the layer above write into
+    /// its buffer what it wakes with.
+    pub fn expired<const N: usize>(
+        &mut self,
+        threads: &mut Pool<Thread, N>,
+        now: u64,
+    ) -> Option<ThreadId> {
+        let head = self.deadlines.head?;
+        let deadline = threads.get(head).ok()?.deadline?;
+        if deadline > now {
+            return None;
+        }
+        self.remove_deadline(threads, head);
+        Some(head)
+    }
+
+    /// Puts `id` into the deadline list at its place: behind everyone whose
+    /// deadline is at or before its own, so that two threads that named the
+    /// same microsecond come out in the order they went in.
+    ///
+    /// The walk starts at the tail, which is where a deadline later than
+    /// every other belongs and which is the common case; only a deadline
+    /// that falls inside the list costs a walk, and the list is bounded by
+    /// the number of threads.
+    fn insert_deadline<const N: usize>(
+        &mut self,
+        threads: &mut Pool<Thread, N>,
+        id: ThreadId,
+        deadline: u64,
+    ) -> Result<(), Error> {
+        let thread = threads.get_mut(id).map_err(|_| Error::InvalidHandle)?;
+        thread.deadline = Some(deadline);
+        thread.deadline_links = Links::UNLINKED;
+        let after = self.place_for(threads, deadline);
+        let before = match after {
+            Some(after) => {
+                threads
+                    .get(after)
+                    .map_err(|_| Error::InvalidHandle)?
+                    .deadline_links
+                    .next
+            }
+            None => self.deadlines.head,
+        };
+        let thread = threads.get_mut(id).map_err(|_| Error::InvalidHandle)?;
+        thread.deadline_links = Links {
+            next: before,
+            previous: after,
+        };
+        match after {
+            Some(after) => {
+                threads
+                    .get_mut(after)
+                    .map_err(|_| Error::InvalidHandle)?
+                    .deadline_links
+                    .next = Some(id);
+            }
+            None => self.deadlines.head = Some(id),
+        }
+        match before {
+            Some(before) => {
+                threads
+                    .get_mut(before)
+                    .map_err(|_| Error::InvalidHandle)?
+                    .deadline_links
+                    .previous = Some(id);
+            }
+            None => self.deadlines.tail = Some(id),
+        }
+        self.waiting = self.waiting.saturating_add(1);
+        Ok(())
+    }
+
+    /// The last thread whose deadline is at or before `deadline`, or `None`
+    /// when the new entry belongs at the front.
+    fn place_for<const N: usize>(
+        &self,
+        threads: &Pool<Thread, N>,
+        deadline: u64,
+    ) -> Option<ThreadId> {
+        let mut at = self.deadlines.tail;
+        // The walk is bounded by the length the list says it has, so links
+        // that were torn cannot make it run forever.
+        for _ in 0..self.waiting {
+            let id = at?;
+            let thread = threads.get(id).ok()?;
+            if thread.deadline.is_some_and(|held| held <= deadline) {
+                return Some(id);
+            }
+            at = thread.deadline_links.previous;
+        }
+        None
+    }
+
+    /// Takes `id` out of the deadline list and clears its deadline. A
+    /// thread that waits without one is left alone.
+    fn remove_deadline<const N: usize>(&mut self, threads: &mut Pool<Thread, N>, id: ThreadId) {
+        let Ok(thread) = threads.get_mut(id) else {
+            return;
+        };
+        if thread.deadline.take().is_none() {
+            return;
+        }
+        let links = thread.deadline_links;
+        thread.deadline_links = Links::UNLINKED;
+        match links.previous {
+            Some(previous) => {
+                if let Ok(before) = threads.get_mut(previous) {
+                    before.deadline_links.next = links.next;
+                }
+            }
+            None => self.deadlines.head = links.next,
+        }
+        match links.next {
+            Some(next) => {
+                if let Ok(after) = threads.get_mut(next) {
+                    after.deadline_links.previous = links.previous;
+                }
+            }
+            None => self.deadlines.tail = links.previous,
+        }
+        self.waiting = self.waiting.saturating_sub(1);
+    }
+
     /// Applies `event` to the state of `id` without touching the queues.
     ///
     /// # Errors
@@ -355,6 +520,12 @@ impl Scheduler {
         thread.state = state;
         if state == ThreadState::Exited && was != ThreadState::Exited {
             self.ended = self.ended.saturating_add(1);
+        }
+        if state != ThreadState::BlockedNotification {
+            // A thread signalled, suspended, or killed before its deadline
+            // leaves the list in the call that changes its state, so an
+            // entry never outlives the wait it belongs to.
+            self.remove_deadline(threads, id);
         }
         Ok(state)
     }

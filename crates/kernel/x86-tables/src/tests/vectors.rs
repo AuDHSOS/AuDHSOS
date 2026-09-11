@@ -5,8 +5,8 @@
 
 use crate::idt::SYSCALL_VECTOR;
 use crate::vectors::{
-    EXCEPTIONS, IOAPIC_BASE, IOAPIC_LINES, PIC_BASE, PIC_LAST, PIC_SLAVE_BASE, SPURIOUS, SYSCALL,
-    TIMER, for_gsi, gsi_of, is_exception,
+    EXCEPTIONS, IOAPIC_BASE, IOAPIC_LINES, MSI_BASE, MSI_VECTORS, PIC_BASE, PIC_LAST,
+    PIC_SLAVE_BASE, SPURIOUS, SYSCALL, TIMER, for_gsi, gsi_of, is_exception, message_index,
 };
 
 #[test]
@@ -18,6 +18,28 @@ fn the_plan_puts_every_range_where_the_document_says() {
     assert_eq!(IOAPIC_LINES, 24);
     assert_eq!(SYSCALL, SYSCALL_VECTOR);
     assert_eq!(SPURIOUS, 0xFF);
+    assert_eq!(MSI_BASE, 0x58);
+    assert_eq!(MSI_VECTORS, 0x28);
+}
+
+#[test]
+fn the_message_range_follows_the_lines_and_stops_below_the_system_call() {
+    assert_eq!(message_index(MSI_BASE), Some(0));
+    assert_eq!(
+        message_index(MSI_BASE + MSI_VECTORS - 1),
+        Some(MSI_VECTORS - 1)
+    );
+    assert_eq!(message_index(MSI_BASE - 1), None, "the last line");
+    assert_eq!(message_index(SYSCALL), None);
+    assert_eq!(message_index(SPURIOUS), None);
+    assert_eq!(message_index(TIMER), None);
+    // No message vector carries a line and no line carries a message.
+    for index in 0..MSI_VECTORS {
+        assert_eq!(gsi_of(MSI_BASE + index), None, "{index}");
+    }
+    for gsi in 0..IOAPIC_LINES {
+        assert_eq!(message_index(for_gsi(gsi).unwrap()), None, "line {gsi}");
+    }
 }
 
 #[test]

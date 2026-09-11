@@ -144,7 +144,7 @@ fn on_syscall() {
     // line or a port need. Holding it turns interrupts off for the length
     // of the call.
     let reschedule = interrupts::with_controller(|apics| {
-        let mut devices = kernel_hal_x86_64::ports::DeviceAccess::new(apics);
+        let mut devices = kernel_hal_x86_64::ports::DeviceAccess::new(apics).with_entropy();
         task::answer(caller, bytes, Some(&mut devices))
     })
     .unwrap_or(false);
@@ -225,6 +225,36 @@ fn on_interrupt(vector: u8) {
         return;
     }
     interrupts::acknowledge(vector);
+    if vector == vectors::TIMER {
+        on_timer_tick();
+    }
+}
+
+/// What a timer tick does for the threads: wake everyone whose deadline has
+/// passed, and give the processor to one of them when it wants it.
+///
+/// The walk stops at the first entry that has not passed, so a tick that
+/// wakes nobody costs one comparison. A tick that arrives while the kernel
+/// holds the machine finds it busy and changes nothing; the next one is a
+/// millisecond later.
+fn on_timer_tick() {
+    let now = kernel_core::tick::micros(interrupts::ticks());
+    let mut switch = false;
+    loop {
+        let woken = kernel_core::with_machine(|machine| {
+            kernel_ipc::expire(&mut machine.objects, &mut machine.scheduler, now)
+        });
+        let Some(Some(outcome)) = woken else {
+            break;
+        };
+        if let Some(wakeup) = outcome.wakeup {
+            announce(wakeup);
+        }
+        switch |= outcome.reschedule;
+    }
+    if switch {
+        task::run(None);
+    }
 }
 
 /// Hands `vector` to the driver that holds its interrupt object, in the
@@ -249,7 +279,7 @@ fn forward(vector: u8) {
                 .interrupts
                 .get(id)
                 .ok()
-                .map(|held| held.line)
+                .and_then(|held| held.line)
         })
     })
     .flatten();

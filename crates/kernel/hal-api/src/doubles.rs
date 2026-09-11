@@ -3,20 +3,21 @@
 
 //! In-memory implementations of the HAL traits that record every call.
 
-use std::collections::HashMap;
-#[cfg(feature = "port-io")]
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use audhsos_abi::Framebuffer;
 use kernel_types::{Page, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
 
 use crate::console::DebugConsole;
 use crate::exit::{ExitStatus, TestExit};
-use crate::interrupt::{InterruptController, InterruptError, InterruptLine, Vector};
+use crate::interrupt::{
+    InterruptController, InterruptError, InterruptLine, MessageInterrupt, Vector,
+};
 use crate::paging::{
     AddressSpaceControl, FRAME_BYTES, FrameAccess, FrameBytes, FrameSource, TlbControl,
 };
 use crate::platform::{MemoryRegion, MemoryRegionKind, Platform};
+use crate::random::{Random, RandomError, SEED_WORDS};
 use crate::timer::{Timer, TimerError};
 
 /// Page tables stored in a map from frame to table. A range of frames can
@@ -399,6 +400,10 @@ pub enum IrqEvent {
     Unmask(InterruptLine),
     /// An end of interrupt was sent for a vector.
     EndOfInterrupt(Vector),
+    /// A vector was handed out for a message interrupt.
+    AllocateMsi(Vector),
+    /// A message interrupt vector was given back.
+    ReleaseMsi(Vector),
 }
 
 /// Records controller operations and models routing state.
@@ -408,6 +413,9 @@ pub struct FakeInterruptController {
     routes: HashMap<InterruptLine, Vector>,
     masked: HashMap<InterruptLine, bool>,
     events: Vec<IrqEvent>,
+    messages: Vec<Vector>,
+    free_messages: Vec<Vector>,
+    message_space: u8,
 }
 
 impl FakeInterruptController {
@@ -419,7 +427,26 @@ impl FakeInterruptController {
             routes: HashMap::new(),
             masked: HashMap::new(),
             events: Vec::new(),
+            messages: Vec::new(),
+            free_messages: Vec::new(),
+            message_space: DOUBLE_MSI_VECTORS,
         }
+    }
+
+    /// The same controller with a message vector space of `vectors`, so
+    /// that a test can exhaust it.
+    #[must_use]
+    pub fn with_message_vectors(self, vectors: u8) -> Self {
+        FakeInterruptController {
+            message_space: vectors,
+            ..self
+        }
+    }
+
+    /// The vectors handed out for message interrupts, in order.
+    #[must_use]
+    pub fn messages(&self) -> &[Vector] {
+        &self.messages
     }
 
     /// Every operation in order.
@@ -478,6 +505,96 @@ impl InterruptController for FakeInterruptController {
 
     fn end_of_interrupt(&mut self, vector: Vector) {
         self.events.push(IrqEvent::EndOfInterrupt(vector));
+    }
+
+    fn allocate_msi(&mut self) -> Result<MessageInterrupt, InterruptError> {
+        let vector = match self.free_messages.pop() {
+            Some(vector) => vector,
+            None => self.fresh_message()?,
+        };
+        self.messages.push(vector);
+        self.events.push(IrqEvent::AllocateMsi(vector));
+        Ok(MessageInterrupt {
+            vector,
+            address: DOUBLE_MSI_ADDRESS,
+            data: u32::from(vector.number()),
+        })
+    }
+
+    fn release_msi(&mut self, vector: Vector) {
+        if !self.messages.contains(&vector) {
+            return;
+        }
+        self.messages.retain(|held| *held != vector);
+        self.free_messages.push(vector);
+        self.events.push(IrqEvent::ReleaseMsi(vector));
+    }
+}
+
+impl FakeInterruptController {
+    /// The next vector of the message space that was never handed out.
+    fn fresh_message(&self) -> Result<Vector, InterruptError> {
+        let taken = u8::try_from(self.messages.len()).unwrap_or(u8::MAX);
+        if taken >= self.message_space {
+            return Err(InterruptError::NoVector);
+        }
+        let number = DOUBLE_MSI_FIRST
+            .checked_add(taken)
+            .ok_or(InterruptError::NoVector)?;
+        Vector::new(number)
+    }
+}
+
+/// The first vector the double hands out for a message interrupt, well
+/// above the lines it routes.
+const DOUBLE_MSI_FIRST: u8 = 0x80;
+
+/// How many message vectors the double has before it runs out.
+const DOUBLE_MSI_VECTORS: u8 = 8;
+
+/// The message address the double answers with. A number and not the local
+/// APIC's region: nothing of this crate knows what an APIC is.
+const DOUBLE_MSI_ADDRESS: u64 = 0xFEE0_0000;
+
+/// A source of seeds whose words are scripted, so that a caller of
+/// `random_bytes` is tested without hardware.
+///
+/// A source with nothing scripted left answers
+/// [`RandomError::Unavailable`], which is what a machine whose entropy pool
+/// stayed empty through the retry bound looks like.
+#[derive(Debug, Default)]
+pub struct ScriptedRandom {
+    seeds: VecDeque<Result<[u64; SEED_WORDS], RandomError>>,
+    calls: u32,
+}
+
+impl ScriptedRandom {
+    /// A source with nothing scripted, which answers `Unavailable`.
+    #[must_use]
+    pub fn new() -> Self {
+        ScriptedRandom::default()
+    }
+
+    /// The same source with one more answer at the end of the script.
+    #[must_use]
+    pub fn then(mut self, seed: Result<[u64; SEED_WORDS], RandomError>) -> Self {
+        self.seeds.push_back(seed);
+        self
+    }
+
+    /// How many times a seed was asked for.
+    #[must_use]
+    pub const fn calls(&self) -> u32 {
+        self.calls
+    }
+}
+
+impl Random for ScriptedRandom {
+    fn seed(&mut self) -> Result<[u64; SEED_WORDS], RandomError> {
+        self.calls = self.calls.saturating_add(1);
+        self.seeds
+            .pop_front()
+            .unwrap_or(Err(RandomError::Unavailable))
     }
 }
 
@@ -699,6 +816,8 @@ pub struct RecordingDevices {
     pub interrupts: FakeInterruptController,
     /// The ports.
     pub ports: RecordingPorts,
+    /// The entropy source.
+    pub random: ScriptedRandom,
 }
 
 #[cfg(feature = "port-io")]
@@ -709,7 +828,16 @@ impl RecordingDevices {
         RecordingDevices {
             interrupts: FakeInterruptController::new(lines),
             ports: RecordingPorts::new(),
+            random: ScriptedRandom::new(),
         }
+    }
+
+    /// The same devices with one more answer at the end of the entropy
+    /// script.
+    #[must_use]
+    pub fn seeding(mut self, seed: Result<[u64; SEED_WORDS], RandomError>) -> Self {
+        self.random = self.random.then(seed);
+        self
     }
 }
 
@@ -740,6 +868,21 @@ impl InterruptController for RecordingDevices {
 
     fn end_of_interrupt(&mut self, vector: Vector) {
         self.interrupts.end_of_interrupt(vector);
+    }
+
+    fn allocate_msi(&mut self) -> Result<MessageInterrupt, InterruptError> {
+        self.interrupts.allocate_msi()
+    }
+
+    fn release_msi(&mut self, vector: Vector) {
+        self.interrupts.release_msi(vector);
+    }
+}
+
+#[cfg(feature = "port-io")]
+impl Random for RecordingDevices {
+    fn seed(&mut self) -> Result<[u64; SEED_WORDS], RandomError> {
+        self.random.seed()
     }
 }
 

@@ -627,9 +627,11 @@ pub(crate) const CRATES: &[Crate] = &[
     Crate {
         name: "kernel-hal-x86_64",
         path: "crates/kernel/hal-x86_64",
+        // The two sites and two `asm!` of `random_bytes` raised this from
+        // 145 and 28 (D-132).
         kind: Kind::Adapter {
-            unsafe_budget: 145,
-            asm_budget: 28,
+            unsafe_budget: 149,
+            asm_budget: 30,
         },
         deps: &[
             "kernel-acpi",
@@ -759,8 +761,10 @@ pub(crate) const CRATES: &[Crate] = &[
     Crate {
         name: "user-test-programs",
         path: "crates/user/test-programs",
+        // Three programs of Phase 12 raised this from 78: every call a
+        // program makes is a site, as it is in every other program here.
         kind: Kind::Adapter {
-            unsafe_budget: 78,
+            unsafe_budget: 98,
             asm_budget: 1,
         },
         deps: &["audhsos-abi", "user-rt", "user-sys-x86_64"],

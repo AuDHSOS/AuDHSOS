@@ -101,6 +101,10 @@ const BOUND_BIT: u64 = 3;
 /// A bit index above the sixty-four a notification has.
 const NO_SUCH_BIT: u64 = 64;
 
+/// A deadline that has passed on any machine, so that a wait with one never
+/// blocks this single thread.
+const PAST: u64 = 0;
+
 /// One page, as the length arguments of the memory calls take it.
 const PAGE: u64 = 0x1000;
 
@@ -187,6 +191,7 @@ fn main(ipc_buffer: u64) -> ! {
 
     rendezvous(&mut log, process, bad);
     devices(&mut log, control, bad);
+    machine(&mut log);
     implemented(&mut log, process, thread, memory, bad);
 
     // `thread_exit` last, and its failure before its success: a call whose
@@ -243,6 +248,25 @@ fn rendezvous(log: &mut Log, process: u64, bad: u64) {
     log.run(Syscall::NotificationWait, &[weak]);
     log.run(Syscall::NotificationPoll, &[notification]);
     log.run(Syscall::NotificationPoll, &[weak]);
+    // A wait with a deadline: the word is not empty, so it takes the bits
+    // and the deadline is never consulted; the capability that may not wait
+    // is refused for the same reason a plain wait is.
+    log.run(Syscall::NotificationSignal, &[notification, 0b0110]);
+    log.run(Syscall::NotificationWaitUntil, &[notification, PAST]);
+    log.run(Syscall::NotificationWaitUntil, &[weak, PAST]);
+    log.set_message(0, 0);
+}
+
+/// The two calls that ask the machine itself. Neither takes a handle, so
+/// the one way either is refused is an argument word above what it reads,
+/// which the dispatcher answers before the call is reached.
+fn machine(log: &mut Log) {
+    log.run(Syscall::ClockNow, &[]);
+    log.run(Syscall::ClockNow, &[1]);
+    log.run(Syscall::RandomBytes, &[]);
+    log.run(Syscall::RandomBytes, &[1]);
+    // The four words a seed is sit below the log; the header they left says
+    // nothing the calls after them read.
     log.set_message(0, 0);
 }
 
@@ -262,6 +286,10 @@ fn devices(log: &mut Log, control: u64, bad: u64) {
     );
     log.run(Syscall::InterruptAck, &[interrupt]);
     log.run(Syscall::InterruptAck, &[bad]);
+
+    // A message interrupt, which needs the root authority and no line.
+    log.run(Syscall::InterruptCreateMsi, &[control]);
+    log.run(Syscall::InterruptCreateMsi, &[bad]);
 
     let ports = log.run(Syscall::IoPortCreate, &[control, FIRST_PORT, PORT_COUNT]);
     log.run(Syscall::IoPortCreate, &[control, FIRST_PORT, 0]);
