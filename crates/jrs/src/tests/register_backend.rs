@@ -275,6 +275,14 @@ fn register_while_checks_fuel_at_back_edges() -> Result<(), Error> {
             resource: "execution fuel"
         })
     );
+    let program = compile("while(true)continue", limits)?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::new(limits).run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "execution fuel"
+        })
+    );
     Ok(())
 }
 
@@ -283,8 +291,6 @@ fn register_loop_lowering_rejects_unstable_or_abrupt_bodies() -> Result<(), Erro
     for source in [
         "let x=1;while(false)x=true;x",
         "let x=1;while(x=true)x",
-        "while(true)break",
-        "while(true)continue",
         "while(false){let x=1;x}",
     ] {
         assert!(
@@ -330,11 +336,39 @@ fn register_for_lowering_rejects_unstable_or_observable_lexical_cases() -> Resul
         "for(var i=0;i<2;i++){}i",
         "for(let i=0;i<2;i++){let x=i;}i",
         "for(let i=0;i<2;i++){(()=>i)}",
-        "for(let i=0;i<2;i++){break}",
+        "let x=1;while(true){x=true;break}x",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
             "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn register_loops_patch_break_and_continue_targets() -> Result<(), Error> {
+    for source in [
+        "let i=0;while(true){i++;if(i===3)break;}i",
+        "let i=0;let sum=0;while(i<5){i++;if(i===3)continue;sum+=i;}sum",
+        "let sum=0;for(let i=0;i<10;i++){if(i===4)break;sum+=i;}sum",
+        "let sum=0;for(let i=0;i<5;i++){if(i===2)continue;sum+=i;}sum",
+        "let i=0;while(i<3){while(true){i++;break}}i",
+        "while(true)break",
+        "let i=0;while(i++<3)continue;i",
+        "while(true){1;break}",
+        "let i=0;while(i++<2){7;continue}",
+        "for(let i=0;i<1;i++){9;break}",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
         );
     }
     Ok(())

@@ -505,6 +505,21 @@ struct RegisterLowerer {
     register_count: u16,
     local_count: u16,
     bindings: BTreeMap<String, RegisterBinding>,
+    loops: Vec<RegisterLoop>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RegisterFlow {
+    Empty,
+    Value,
+    Abrupt,
+}
+
+struct RegisterLoop {
+    breaks: Vec<usize>,
+    continues: Vec<usize>,
+    result_register: crate::engine::bytecode::Reg,
+    bindings: BTreeMap<String, RegisterBinding>,
 }
 
 #[derive(Clone)]
@@ -527,6 +542,7 @@ impl RegisterLowerer {
             register_count: 0,
             local_count: 0,
             bindings: BTreeMap::new(),
+            loops: Vec::new(),
         }
     }
 
@@ -701,35 +717,62 @@ impl RegisterLowerer {
         Some(yes_type)
     }
 
-    fn lower_statement(&mut self, statement: &Stmt) -> Option<bool> {
-        let has_completion = match statement {
+    fn lower_statement(&mut self, statement: &Stmt) -> Option<RegisterFlow> {
+        let flow = match statement {
             Stmt::Expr(expression) => {
                 self.lower(expression)?;
-                true
+                RegisterFlow::Value
             }
-            Stmt::If(condition, yes, no) => {
-                self.lower_if(condition, yes, no.as_deref())?;
-                true
-            }
+            Stmt::If(condition, yes, no) => self.lower_if(condition, yes, no.as_deref())?,
             Stmt::Block(body) => {
-                let mut has_completion = false;
+                let mut flow = RegisterFlow::Empty;
                 for statement in body {
-                    has_completion |= self.lower_statement(statement)?;
+                    match self.lower_statement(statement)? {
+                        RegisterFlow::Empty => {}
+                        RegisterFlow::Value => flow = RegisterFlow::Value,
+                        RegisterFlow::Abrupt => return Some(RegisterFlow::Abrupt),
+                    }
                 }
-                has_completion
+                flow
             }
             Stmt::While(condition, body) => {
                 self.lower_while(condition, body)?;
-                true
+                RegisterFlow::Value
             }
             Stmt::For(initializer, condition, step, body) => {
                 self.lower_for(initializer, condition.as_ref(), step.as_ref(), body)?;
-                true
+                RegisterFlow::Value
             }
-            Stmt::Empty => false,
+            Stmt::Break => {
+                self.lower_loop_jump(true)?;
+                RegisterFlow::Abrupt
+            }
+            Stmt::Continue => {
+                self.lower_loop_jump(false)?;
+                RegisterFlow::Abrupt
+            }
+            Stmt::Empty => RegisterFlow::Empty,
             _ => return None,
         };
-        Some(has_completion)
+        Some(flow)
+    }
+
+    fn lower_loop_jump(&mut self, is_break: bool) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        let loop_state = self.loops.last()?;
+        if self.bindings != loop_state.bindings {
+            return None;
+        }
+        let result_register = loop_state.result_register;
+        self.code.emit(Instruction::Star(result_register));
+        let jump = self.code.emit(Instruction::Jump(0));
+        let loop_state = self.loops.last_mut()?;
+        if is_break {
+            loop_state.breaks.push(jump);
+        } else {
+            loop_state.continues.push(jump);
+        }
+        Some(())
     }
 
     fn lower_while(&mut self, condition: &Expr, body: &Stmt) -> Option<()> {
@@ -745,16 +788,32 @@ impl RegisterLowerer {
         }
         let branch = self.code.emit(Instruction::JumpIfFalse(0));
         self.code.emit(Instruction::Ldar(result_register));
-        self.lower_statement(body)?;
-        if self.bindings != bindings_at_head {
-            return None;
+        self.loops.push(RegisterLoop {
+            breaks: Vec::new(),
+            continues: Vec::new(),
+            result_register,
+            bindings: bindings_at_head.clone(),
+        });
+        let flow = self.lower_statement(body)?;
+        let loop_state = self.loops.pop()?;
+        if flow != RegisterFlow::Abrupt {
+            if self.bindings != bindings_at_head {
+                return None;
+            }
+            self.code.emit(Instruction::Star(result_register));
         }
-        self.code.emit(Instruction::Star(result_register));
         let back_edge = self.code.emit(Instruction::Jump(0));
         let done = self.code.instructions.len();
         self.code.emit(Instruction::Ldar(result_register));
         self.patch_jump(branch, done)?;
         self.patch_jump(back_edge, head)?;
+        for jump in loop_state.breaks {
+            self.patch_jump(jump, done)?;
+        }
+        for jump in loop_state.continues {
+            self.patch_jump(jump, head)?;
+        }
+        self.bindings = bindings_at_head;
         self.release_register(result_register)?;
         Some(())
     }
@@ -817,11 +876,25 @@ impl RegisterLowerer {
             None
         };
         self.code.emit(Instruction::Ldar(result_register));
-        self.lower_statement(body)?;
-        if self.bindings != bindings_at_head {
-            return None;
+        self.loops.push(RegisterLoop {
+            breaks: Vec::new(),
+            continues: Vec::new(),
+            result_register,
+            bindings: bindings_at_head.clone(),
+        });
+        let flow = self.lower_statement(body)?;
+        let loop_state = self.loops.pop()?;
+        if flow != RegisterFlow::Abrupt {
+            if self.bindings != bindings_at_head {
+                return None;
+            }
+            self.code.emit(Instruction::Star(result_register));
         }
-        self.code.emit(Instruction::Star(result_register));
+        let step_start = self.code.instructions.len();
+        for jump in loop_state.continues {
+            self.patch_jump(jump, step_start)?;
+        }
+        self.bindings = bindings_at_head.clone();
         if let Some(step) = step {
             self.lower(step)?;
             if self.bindings != bindings_at_head {
@@ -835,6 +908,10 @@ impl RegisterLowerer {
             self.patch_jump(branch, done)?;
         }
         self.patch_jump(back_edge, head)?;
+        for jump in loop_state.breaks {
+            self.patch_jump(jump, done)?;
+        }
+        self.bindings = bindings_at_head;
         self.release_register(result_register)?;
         for (name, register) in scoped_registers.into_iter().rev() {
             self.bindings.remove(name)?;
@@ -843,30 +920,42 @@ impl RegisterLowerer {
         Some(())
     }
 
-    fn lower_if(&mut self, condition: &Expr, yes: &Stmt, no: Option<&Stmt>) -> Option<()> {
+    fn lower_if(
+        &mut self,
+        condition: &Expr,
+        yes: &Stmt,
+        no: Option<&Stmt>,
+    ) -> Option<RegisterFlow> {
         use crate::engine::bytecode::Instruction;
         self.lower(condition)?;
         let branch = self.code.emit(Instruction::JumpIfFalse(0));
         let bindings_before = self.bindings.clone();
         self.code
             .emit(crate::engine::bytecode::Instruction::LdaUndefined);
-        self.lower_statement(yes)?;
+        let yes_flow = self.lower_statement(yes)?;
         let bindings_after_yes = self.bindings.clone();
-        let jump = self.code.emit(Instruction::Jump(0));
+        let jump = (yes_flow != RegisterFlow::Abrupt).then(|| self.code.emit(Instruction::Jump(0)));
         let no_start = self.code.instructions.len();
         self.bindings = bindings_before;
         self.code
             .emit(crate::engine::bytecode::Instruction::LdaUndefined);
-        if let Some(no) = no {
-            self.lower_statement(no)?;
-        }
-        if self.bindings != bindings_after_yes {
-            return None;
-        }
+        let no_flow = no.map_or(Some(RegisterFlow::Value), |no| self.lower_statement(no))?;
+        let bindings_after_no = self.bindings.clone();
         let end = self.code.instructions.len();
         self.patch_jump(branch, no_start)?;
-        self.patch_jump(jump, end)?;
-        Some(())
+        if let Some(jump) = jump {
+            self.patch_jump(jump, end)?;
+        }
+        self.bindings = match (yes_flow, no_flow) {
+            (RegisterFlow::Abrupt, RegisterFlow::Abrupt) => {
+                return Some(RegisterFlow::Abrupt);
+            }
+            (RegisterFlow::Abrupt, _) => bindings_after_no,
+            (_, RegisterFlow::Abrupt) => bindings_after_yes,
+            _ if bindings_after_yes == bindings_after_no => bindings_after_yes,
+            _ => return None,
+        };
+        Some(RegisterFlow::Value)
     }
 
     fn lower_binary(
@@ -1103,12 +1192,13 @@ fn lower_register_script(
                     .emit(crate::engine::bytecode::Instruction::Ldar(result_register));
             }
             _ => match lowerer.lower_statement(statement) {
-                Some(true) => {
+                Some(RegisterFlow::Value) => {
                     lowerer
                         .code
                         .emit(crate::engine::bytecode::Instruction::Star(result_register));
                 }
-                Some(false) => {}
+                Some(RegisterFlow::Empty) => {}
+                Some(RegisterFlow::Abrupt) => return None,
                 None => {
                     lowerer.restore(snapshot);
                     return None;
