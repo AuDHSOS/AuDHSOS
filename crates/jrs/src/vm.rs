@@ -384,13 +384,12 @@ impl Execution<'_> {
             )
         });
         vm.fuel = self.fuel;
+        vm.set_string_units_limit(self.limits.string_units);
         let mut heap = self.register_heap.take().unwrap_or_default();
         let mut feedback = crate::engine::feedback::FeedbackVector::new(code.feedback_slot_count);
         let result = vm.run(code, &mut feedback, &mut heap);
         self.fuel = vm.fuel;
-        self.register_vm = Some(vm);
-        self.register_heap = Some(heap);
-        match result {
+        let result = match result {
             Ok(value) if value.is_undefined() => Ok(Value::Undefined),
             Ok(value) if value.is_null() => Ok(Value::Null),
             Ok(value) if value.is_boolean() => value
@@ -400,6 +399,11 @@ impl Execution<'_> {
             Ok(value) if value.is_number() => value
                 .as_f64()
                 .map(Value::Number)
+                .ok_or(Error::InvalidBytecode),
+            Ok(value) if value.is_string() => heap
+                .strings
+                .to_utf16(value)
+                .map(|units| Value::String(units.into()))
                 .ok_or(Error::InvalidBytecode),
             Ok(_)
             | Err(
@@ -416,7 +420,13 @@ impl Execution<'_> {
             Err(crate::engine::interpreter::VMError::StackOverflow) => Err(Error::Limit {
                 resource: "operand stack",
             }),
-        }
+            Err(crate::engine::interpreter::VMError::StringLimit) => Err(Error::Limit {
+                resource: "string units",
+            }),
+        };
+        self.register_vm = Some(vm);
+        self.register_heap = Some(heap);
+        result
     }
 
     fn execute_program_body(&mut self, program: &Program, boundary: usize) -> Result<Value, Error> {

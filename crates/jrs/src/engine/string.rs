@@ -276,6 +276,37 @@ impl StringArena {
         Some(String::from_utf16_lossy(&units))
     }
 
+    /// Compares two string values by UTF-16 code units without flattening.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StringError::InvalidReference`] when either value is not a
+    /// string or contains a stale arena reference.
+    pub fn equals(&self, left: Value, right: Value) -> Result<bool, StringError> {
+        let left_len = self.length_of(left).ok_or(StringError::InvalidReference)?;
+        let right_len = self.length_of(right).ok_or(StringError::InvalidReference)?;
+        if left_len != right_len {
+            return Ok(false);
+        }
+        for index in 0..left_len {
+            if self.char_code_at(left, index) != self.char_code_at(right, index) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Materializes a string value as UTF-16 code units.
+    #[must_use]
+    pub fn to_utf16(&self, value: Value) -> Option<Vec<u16>> {
+        let len = self.length_of(value)?;
+        let mut units = Vec::with_capacity(len);
+        for index in 0..len {
+            units.push(self.char_code_at(value, index)?);
+        }
+        Some(units)
+    }
+
     /// Flattens a Cons/Sliced record in place while preserving its identity.
     ///
     /// # Errors
@@ -421,15 +452,6 @@ impl StringArena {
             self.flatten(reference)?;
         }
         Ok(value)
-    }
-
-    fn to_utf16(&self, value: Value) -> Option<Vec<u16>> {
-        let len = self.length_of(value)?;
-        let mut units = Vec::with_capacity(len);
-        for index in 0..len {
-            units.push(self.char_code_at(value, index)?);
-        }
-        Some(units)
     }
 }
 

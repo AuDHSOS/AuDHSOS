@@ -180,11 +180,8 @@ fn inherited_named_access_uses_depth_cache_and_invalidates_on_mutation() {
         .allocate_object(root_shape, Value::from_object(first_prototype))
         .unwrap();
 
-    let mut code = BytecodeFunction::new(1, 0);
+    let mut code = BytecodeFunction::new(1, 1);
     let feedback_slot = code.allocate_feedback_slot();
-    code.constants.push(Value::from_object(receiver));
-    code.emit(Instruction::LdaConstant(0));
-    code.emit(Instruction::Star(Reg(0)));
     code.emit(Instruction::GetNamed {
         obj: Reg(0),
         name,
@@ -195,7 +192,14 @@ fn inherited_named_access_uses_depth_cache_and_invalidates_on_mutation() {
     let mut vm = RegisterVM::new(100);
 
     assert_eq!(
-        vm.run(&code, &mut feedback, &mut heap).unwrap().as_smi(),
+        vm.run_with_arguments(
+            &code,
+            &[Value::from_object(receiver)],
+            &mut feedback,
+            &mut heap,
+        )
+        .unwrap()
+        .as_smi(),
         Some(41)
     );
     assert!(matches!(
@@ -212,7 +216,14 @@ fn inherited_named_access_uses_depth_cache_and_invalidates_on_mutation() {
         .unwrap();
 
     assert_eq!(
-        vm.run(&code, &mut feedback, &mut heap).unwrap().as_smi(),
+        vm.run_with_arguments(
+            &code,
+            &[Value::from_object(receiver)],
+            &mut feedback,
+            &mut heap,
+        )
+        .unwrap()
+        .as_smi(),
         Some(42)
     );
 }
@@ -265,11 +276,8 @@ fn inherited_cache_checks_the_holder_shape_for_equal_receiver_shapes() {
         .allocate_object(root_shape, Value::from_object(other_prototype))
         .unwrap();
 
-    let mut code = BytecodeFunction::new(1, 0);
+    let mut code = BytecodeFunction::new(1, 1);
     let feedback_slot = code.allocate_feedback_slot();
-    code.constants.push(Value::from_object(first));
-    code.emit(Instruction::LdaConstant(0));
-    code.emit(Instruction::Star(Reg(0)));
     code.emit(Instruction::GetNamed {
         obj: Reg(0),
         name: wanted,
@@ -279,15 +287,26 @@ fn inherited_cache_checks_the_holder_shape_for_equal_receiver_shapes() {
     let mut feedback = FeedbackVector::new(code.feedback_slot_count);
     let mut vm = RegisterVM::new(100);
     assert_eq!(
-        vm.run(&code, &mut feedback, &mut heap).unwrap().as_smi(),
+        vm.run_with_arguments(
+            &code,
+            &[Value::from_object(first)],
+            &mut feedback,
+            &mut heap,
+        )
+        .unwrap()
+        .as_smi(),
         Some(1)
     );
 
-    code.constants[0] = Value::from_object(second);
     assert!(
-        vm.run(&code, &mut feedback, &mut heap)
-            .unwrap()
-            .is_undefined()
+        vm.run_with_arguments(
+            &code,
+            &[Value::from_object(second)],
+            &mut feedback,
+            &mut heap,
+        )
+        .unwrap()
+        .is_undefined()
     );
 }
 

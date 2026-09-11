@@ -20,6 +20,7 @@ use super::{
     feedback::{FeedbackVector, NamedAccessCase},
     heap::{GenerationalHeap, HeapError},
     shape::{PropertyFlags, ShapeId},
+    string::StringError,
     value::{ObjectRef, VALUE_FALSE, VALUE_NULL, VALUE_TRUE, VALUE_UNDEFINED, Value},
 };
 use alloc::vec::Vec;
@@ -37,6 +38,8 @@ pub enum VMError {
     InvalidRegister,
     /// Operand stack limit exceeded.
     StackOverflow,
+    /// A string result exceeds the configured UTF-16 code-unit limit.
+    StringLimit,
     /// Property lookup failed or target is not an object.
     TypeError,
     /// Instruction execution fell off bytecode bounds without Return.
@@ -48,6 +51,12 @@ pub enum VMError {
 impl From<HeapError> for VMError {
     fn from(error: HeapError) -> Self {
         Self::Heap(error)
+    }
+}
+
+impl From<StringError> for VMError {
+    fn from(error: StringError) -> Self {
+        Self::Heap(HeapError::String(error))
     }
 }
 
@@ -72,6 +81,8 @@ pub struct RegisterVM {
     pub fuel: u64,
     /// Public operand-stack limit preserved across backend migration.
     operand_stack_limit: usize,
+    /// Maximum UTF-16 code units in one materialized string value.
+    string_units_limit: usize,
 }
 
 impl Default for RegisterVM {
@@ -102,7 +113,13 @@ impl RegisterVM {
             acc: VALUE_UNDEFINED,
             fuel,
             operand_stack_limit,
+            string_units_limit: usize::MAX,
         }
+    }
+
+    /// Updates the maximum length of a materialized string value.
+    pub(crate) const fn set_string_units_limit(&mut self, limit: usize) {
+        self.string_units_limit = limit;
     }
 
     /// Reads a register relative to the active frame pointer.
@@ -169,14 +186,131 @@ impl RegisterVM {
         }
     }
 
+    fn allocate_string(
+        &self,
+        heap: &mut GenerationalHeap,
+        units: &[u16],
+    ) -> Result<Value, VMError> {
+        if units.len() > self.string_units_limit {
+            return Err(VMError::StringLimit);
+        }
+        let latin1 = units
+            .iter()
+            .copied()
+            .map(u8::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .ok();
+        if let Some(bytes) = latin1 {
+            if units.len() <= 5 {
+                return Value::from_sso(&bytes).ok_or(VMError::StringLimit);
+            }
+            return Ok(Value::from_string(heap.strings.allocate_latin1(bytes)?));
+        }
+        let reference = heap.strings.allocate_utf16(units.to_vec())?;
+        Ok(Value::from_string(reference))
+    }
+
+    fn add(&mut self, rhs: Value, heap: &mut GenerationalHeap) -> Result<(), VMError> {
+        if self.acc.is_string() && rhs.is_string() {
+            let length = heap
+                .strings
+                .length_of(self.acc)
+                .and_then(|left| {
+                    heap.strings
+                        .length_of(rhs)
+                        .and_then(|right| left.checked_add(right))
+                })
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            if length > self.string_units_limit {
+                return Err(VMError::StringLimit);
+            }
+            if length <= 5 {
+                let mut units = Vec::with_capacity(length);
+                for index in 0..heap.strings.length_of(self.acc).unwrap_or_default() {
+                    units.push(
+                        heap.strings
+                            .char_code_at(self.acc, index)
+                            .ok_or(VMError::Heap(HeapError::InvalidReference))?,
+                    );
+                }
+                for index in 0..heap.strings.length_of(rhs).unwrap_or_default() {
+                    units.push(
+                        heap.strings
+                            .char_code_at(rhs, index)
+                            .ok_or(VMError::Heap(HeapError::InvalidReference))?,
+                    );
+                }
+                self.acc = self.allocate_string(heap, &units)?;
+            } else {
+                self.acc = Value::from_string(heap.strings.allocate_cons(self.acc, rhs)?);
+            }
+            return Ok(());
+        }
+        if let (Some(a), Some(b)) = (self.acc.as_smi(), rhs.as_smi()) {
+            if let Some(result) = a.checked_add(b) {
+                self.acc = Value::from_smi(result);
+            } else {
+                self.acc = Value::from_f64(f64::from(a) + f64::from(b));
+            }
+        } else if let (Some(a), Some(b)) = (self.acc.as_f64(), rhs.as_f64()) {
+            self.acc = Value::from_f64(a + b);
+        } else {
+            return Err(VMError::TypeError);
+        }
+        Ok(())
+    }
+
+    fn strictly_equals(
+        left: Value,
+        right: Value,
+        heap: &GenerationalHeap,
+    ) -> Result<bool, VMError> {
+        if left.is_string() && right.is_string() {
+            return Ok(heap.strings.equals(left, right)?);
+        }
+        Ok(left.strictly_equals(right))
+    }
+
+    fn to_boolean(value: Value, heap: &GenerationalHeap) -> Result<bool, VMError> {
+        if value.is_heap_string() {
+            return heap
+                .strings
+                .length_of(value)
+                .map(|length| length != 0)
+                .ok_or(VMError::Heap(HeapError::InvalidReference));
+        }
+        Ok(value.to_boolean())
+    }
+
     /// Executes a bytecode function against the heap with active feedback caching.
     ///
     /// # Errors
     /// Returns [`VMError`] on out of fuel, type errors, invalid registers, or stack overflow.
-    #[expect(clippy::too_many_lines, reason = "central bytecode dispatch loop")]
     pub fn run(
         &mut self,
         code: &BytecodeFunction,
+        feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        self.run_with_arguments(code, &[], feedback, heap)
+    }
+
+    /// Executes bytecode after copying supplied values into the formal-parameter
+    /// prefix of the contiguous register frame.
+    ///
+    /// Missing parameters remain `undefined`; extra arguments are ignored by
+    /// this low-level entry point. Values in parameter registers participate in
+    /// precise Nursery forwarding at allocation Safe Points.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError`] on invalid bytecode, resource exhaustion, invalid
+    /// heap references, or an operation unsupported by the current bytecode.
+    #[expect(clippy::too_many_lines, reason = "central bytecode dispatch loop")]
+    pub fn run_with_arguments(
+        &mut self,
+        code: &BytecodeFunction,
+        arguments: &[Value],
         feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
     ) -> Result<Value, VMError> {
@@ -201,6 +335,18 @@ impl RegisterVM {
             .get_mut(self.fp..frame_end)
             .ok_or(VMError::StackOverflow)?
             .fill(VALUE_UNDEFINED);
+        for (index, value) in arguments
+            .iter()
+            .copied()
+            .take(usize::from(code.parameter_count))
+            .enumerate()
+        {
+            let slot = self
+                .stack
+                .get_mut(self.fp.saturating_add(index))
+                .ok_or(VMError::StackOverflow)?;
+            *slot = value;
+        }
         self.acc = VALUE_UNDEFINED;
 
         loop {
@@ -220,6 +366,13 @@ impl RegisterVM {
                         .copied()
                         .ok_or(VMError::InvalidRegister)?;
                 }
+                Instruction::LdaString(index) => {
+                    let units = code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    self.acc = self.allocate_string(heap, units)?;
+                }
                 Instruction::LdaUndefined | Instruction::ToUndefined => {
                     self.acc = VALUE_UNDEFINED;
                 }
@@ -237,7 +390,7 @@ impl RegisterVM {
                     self.acc = Value::from_f64(-number);
                 }
                 Instruction::LogicalNot => {
-                    self.acc = Value::from_bool(!self.acc.to_boolean());
+                    self.acc = Value::from_bool(!Self::to_boolean(self.acc, heap)?);
                 }
                 Instruction::BitNot => {
                     let number = self.acc.as_f64().ok_or(VMError::TypeError)?;
@@ -255,17 +408,7 @@ impl RegisterVM {
                 }
                 Instruction::Add(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    if let (Some(a), Some(b)) = (self.acc.as_smi(), rhs.as_smi()) {
-                        if let Some(res) = a.checked_add(b) {
-                            self.acc = Value::from_smi(res);
-                        } else {
-                            self.acc = Value::from_f64(f64::from(a) + f64::from(b));
-                        }
-                    } else if let (Some(a), Some(b)) = (self.acc.as_f64(), rhs.as_f64()) {
-                        self.acc = Value::from_f64(a + b);
-                    } else {
-                        return Err(VMError::TypeError);
-                    }
+                    self.add(rhs, heap)?;
                 }
                 Instruction::Sub(reg) => {
                     let rhs = self.read_reg(reg)?;
@@ -357,7 +500,7 @@ impl RegisterVM {
                 }
                 Instruction::TestEqual(reg) | Instruction::TestStrictEqual(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    self.acc = Value::from_bool(self.acc.strictly_equals(rhs));
+                    self.acc = Value::from_bool(Self::strictly_equals(self.acc, rhs, heap)?);
                 }
                 Instruction::TestLessThan(reg) => {
                     let rhs = self.read_reg(reg)?;
@@ -398,7 +541,7 @@ impl RegisterVM {
                     pc = (pc as isize + offset as isize) as usize;
                 }
                 Instruction::JumpIfTrue(offset) => {
-                    if self.acc.to_boolean() {
+                    if Self::to_boolean(self.acc, heap)? {
                         if offset < 0 {
                             self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
                         }
@@ -406,7 +549,7 @@ impl RegisterVM {
                     }
                 }
                 Instruction::JumpIfFalse(offset) => {
-                    if !self.acc.to_boolean() {
+                    if !Self::to_boolean(self.acc, heap)? {
                         if offset < 0 {
                             self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
                         }

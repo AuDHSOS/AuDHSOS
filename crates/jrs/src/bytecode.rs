@@ -489,6 +489,7 @@ enum RegisterType {
     Number,
     Boolean,
     Null,
+    String,
     Undefined,
 }
 
@@ -528,6 +529,7 @@ struct RegisterLoop {
 struct RegisterSnapshot {
     instructions: usize,
     constants: usize,
+    string_constants: usize,
     next_register: u16,
     register_count: u16,
     bindings: BTreeMap<String, RegisterBinding>,
@@ -587,6 +589,7 @@ impl RegisterLowerer {
         RegisterSnapshot {
             instructions: self.code.instructions.len(),
             constants: self.code.constants.len(),
+            string_constants: self.code.string_constants.len(),
             next_register: self.next_register,
             register_count: self.register_count,
             bindings: self.bindings.clone(),
@@ -596,6 +599,9 @@ impl RegisterLowerer {
     fn restore(&mut self, snapshot: RegisterSnapshot) {
         self.code.instructions.truncate(snapshot.instructions);
         self.code.constants.truncate(snapshot.constants);
+        self.code
+            .string_constants
+            .truncate(snapshot.string_constants);
         self.next_register = snapshot.next_register;
         self.register_count = snapshot.register_count;
         self.bindings = snapshot.bindings;
@@ -626,7 +632,12 @@ impl RegisterLowerer {
                     self.code.emit(Instruction::LdaUndefined);
                     RegisterType::Undefined
                 }
-                Value::String(_) | Value::Symbol(_) | Value::Function(_) | Value::Object(_) => {
+                Value::String(units) => {
+                    let index = self.string_constant(units)?;
+                    self.code.emit(Instruction::LdaString(index));
+                    RegisterType::String
+                }
+                Value::Symbol(_) | Value::Function(_) | Value::Object(_) => {
                     return None;
                 }
             },
@@ -1015,6 +1026,11 @@ impl RegisterLowerer {
                 };
                 (instruction, RegisterType::Number)
             }
+            Binary::Add
+                if left_type == RegisterType::String && right_type == RegisterType::String =>
+            {
+                (Instruction::Add(right_register), RegisterType::String)
+            }
             Binary::Lt | Binary::Le | Binary::Gt | Binary::Ge
                 if left_type == RegisterType::Number && right_type == RegisterType::Number =>
             {
@@ -1031,6 +1047,13 @@ impl RegisterLowerer {
                 Instruction::TestStrictEqual(right_register),
                 RegisterType::Boolean,
             ),
+            Binary::StrictNe => {
+                self.code.emit(Instruction::TestStrictEqual(right_register));
+                self.code.emit(Instruction::LogicalNot);
+                self.release_register(right_register)?;
+                self.release_register(left_register)?;
+                return Some(RegisterType::Boolean);
+            }
             _ => return None,
         };
         self.code.emit(instruction);
@@ -1056,9 +1079,19 @@ impl RegisterLowerer {
             let left_register = self.allocate_register()?;
             self.code.emit(Instruction::Star(left_register));
             let right_type = self.lower(right)?;
-            if left_type != RegisterType::Number || right_type != RegisterType::Number {
-                return None;
-            }
+            let result_type = match operator {
+                Binary::Add
+                    if left_type == RegisterType::String && right_type == RegisterType::String =>
+                {
+                    RegisterType::String
+                }
+                Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
+                    if left_type == RegisterType::Number && right_type == RegisterType::Number =>
+                {
+                    RegisterType::Number
+                }
+                _ => return None,
+            };
             let right_register = self.allocate_register()?;
             self.code.emit(Instruction::Star(right_register));
             self.code.emit(Instruction::Ldar(left_register));
@@ -1072,7 +1105,7 @@ impl RegisterLowerer {
             });
             self.release_register(right_register)?;
             self.release_register(left_register)?;
-            RegisterType::Number
+            result_type
         } else {
             self.lower(right)?
         };
@@ -1131,6 +1164,12 @@ impl RegisterLowerer {
     fn constant(&mut self, value: crate::engine::value::Value) -> Option<u16> {
         let index = u16::try_from(self.code.constants.len()).ok()?;
         self.code.constants.push(value);
+        Some(index)
+    }
+
+    fn string_constant(&mut self, units: &[u16]) -> Option<u16> {
+        let index = u16::try_from(self.code.string_constants.len()).ok()?;
+        self.code.string_constants.push(units.to_vec());
         Some(index)
     }
 

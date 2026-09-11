@@ -49,6 +49,68 @@ fn primitive_expressions_run_through_register_bytecode_and_match_legacy() -> Res
 }
 
 #[test]
+fn string_expressions_run_through_heap_independent_register_bytecode() -> Result<(), Error> {
+    for source in [
+        "'hello'",
+        "'hello' + ' world'",
+        "'Grüße' + ' 世界'",
+        "'ab' === 'a' + 'b'",
+        "'ab' !== 'a' + 'c'",
+        "!''",
+        "!'x'",
+        "let x='a';x+='b';x",
+        "let x='a';while(x==='a'){x+='b'}x",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn string_constants_are_reusable_across_independent_agent_heaps() -> Result<(), Error> {
+    let mut program = compile("'hello' + ' 世界'", Limits::default())?;
+    assert!(program.uses_register_backend());
+    program.code.clear();
+
+    let expected = Value::string("hello 世界");
+    assert_eq!(
+        Runtime::new(Limits::default()).run(&program, &mut SilentHost)?,
+        expected
+    );
+    assert_eq!(
+        Runtime::new(Limits::default()).run(&program, &mut SilentHost)?,
+        expected
+    );
+    Ok(())
+}
+
+#[test]
+fn register_string_concatenation_preserves_string_unit_limit() -> Result<(), Error> {
+    let limits = Limits {
+        string_units: 3,
+        ..Limits::default()
+    };
+    let program = compile("'ab' + 'cd'", limits)?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::new(limits).run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "string units"
+        })
+    );
+    Ok(())
+}
+
+#[test]
 fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<(), Error> {
     for source in ["'1'+2", "typeof 1", "{let x=1;x+2}", "Number(1)"] {
         assert!(
