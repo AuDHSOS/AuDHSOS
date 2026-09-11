@@ -18,8 +18,8 @@ use super::{
     elements::{ElementsKind, ElementsRef},
     object::{JSObject, ObjectKind},
     shape::{ShapeId, ShapeTable},
-    string::StringArena,
-    value::{ObjectRef, VALUE_NULL, Value},
+    string::{StringArena, StringError},
+    value::{ObjectRef, StringRef, VALUE_NULL, Value},
 };
 use alloc::{collections::BTreeMap, collections::BTreeSet, vec::Vec};
 
@@ -41,6 +41,14 @@ pub enum HeapError {
     InvalidReference,
     /// A generation-local index cannot be represented in the handle payload.
     ReferenceSpaceExhausted,
+    /// String arena operation failed.
+    String(StringError),
+}
+
+impl From<StringError> for HeapError {
+    fn from(error: StringError) -> Self {
+        Self::String(error)
+    }
 }
 
 #[derive(Clone)]
@@ -160,6 +168,10 @@ pub struct MajorCollectionStats {
     pub marked_elements: usize,
     /// Unreachable Old Generation elements stores reclaimed by sweeping.
     pub reclaimed_elements: usize,
+    /// Reachable or interned heap strings retained by marking.
+    pub marked_strings: usize,
+    /// Unreachable heap strings reclaimed by sweeping.
+    pub reclaimed_strings: usize,
 }
 
 /// Generational execution heap.
@@ -494,14 +506,18 @@ impl GenerationalHeap {
         registers: &[Value],
         accumulator: Value,
     ) -> Result<MajorCollectionStats, HeapError> {
-        let (marked_objects, marked_elements) = {
+        let (marked_objects, marked_elements, marked_strings) = {
             let mut marker = MajorMarker::new(&self.nursery, &self.old_gen);
             for value in self.roots.iter().chain(registers) {
                 marker.mark_value(*value);
             }
             marker.mark_value(accumulator);
             marker.drain()?;
-            (marker.marked_objects, marker.marked_elements)
+            (
+                marker.marked_objects,
+                marker.marked_elements,
+                marker.marked_strings,
+            )
         };
 
         let mut stats = MajorCollectionStats {
@@ -531,6 +547,14 @@ impl GenerationalHeap {
                 }
             }
         }
+        let string_roots: Vec<_> = marked_strings
+            .iter()
+            .copied()
+            .map(Value::from_string)
+            .collect();
+        let string_stats = self.strings.collect(&string_roots)?;
+        stats.marked_strings = string_stats.marked;
+        stats.reclaimed_strings = string_stats.reclaimed;
         self.rebuild_remembered_sets();
         Ok(stats)
     }
@@ -622,6 +646,7 @@ struct MajorMarker<'heap> {
     old: &'heap OldGeneration,
     marked_objects: BTreeSet<u32>,
     marked_elements: BTreeSet<u32>,
+    marked_strings: BTreeSet<StringRef>,
     visited_young_objects: BTreeSet<u32>,
     visited_young_elements: BTreeSet<u32>,
     work: Vec<Work>,
@@ -634,6 +659,7 @@ impl<'heap> MajorMarker<'heap> {
             old,
             marked_objects: BTreeSet::new(),
             marked_elements: BTreeSet::new(),
+            marked_strings: BTreeSet::new(),
             visited_young_objects: BTreeSet::new(),
             visited_young_elements: BTreeSet::new(),
             work: Vec::new(),
@@ -644,6 +670,9 @@ impl<'heap> MajorMarker<'heap> {
         if let Some(reference) = value.as_object() {
             self.work.push(Work::Object(reference));
         }
+        if let Some(reference) = value.as_heap_string() {
+            self.marked_strings.insert(reference);
+        }
     }
 
     fn drain(&mut self) -> Result<(), HeapError> {
@@ -651,6 +680,9 @@ impl<'heap> MajorMarker<'heap> {
             match work {
                 Work::Object(reference) => self.mark_object(reference)?,
                 Work::Elements(reference) => self.mark_elements(reference)?,
+                Work::String(reference) => {
+                    self.marked_strings.insert(reference);
+                }
             }
         }
         Ok(())
@@ -764,6 +796,7 @@ impl<'heap> MajorMarker<'heap> {
 enum Work {
     Object(ObjectRef),
     Elements(ElementsRef),
+    String(StringRef),
 }
 
 struct Evacuator<'heap> {
@@ -880,6 +913,7 @@ impl<'heap> Evacuator<'heap> {
             match work {
                 Work::Object(reference) => self.scan_object(reference)?,
                 Work::Elements(reference) => self.scan_elements(reference)?,
+                Work::String(_) => {}
             }
         }
         Ok(())
@@ -1115,6 +1149,9 @@ fn trace_elements_work(elements: &ElementsKind, work: &mut Vec<Work>) {
 fn push_value_work(work: &mut Vec<Work>, value: Value) {
     if let Some(reference) = value.as_object() {
         work.push(Work::Object(reference));
+    }
+    if let Some(reference) = value.as_heap_string() {
+        work.push(Work::String(reference));
     }
 }
 
@@ -1416,5 +1453,39 @@ mod tests {
         assert_eq!(minimum.nursery.object_capacity, 1);
         let maximum = GenerationalHeap::with_nursery_capacity(usize::MAX);
         assert_eq!(maximum.nursery.object_capacity, MAX_NURSERY_ENTRIES);
+    }
+
+    #[test]
+    fn major_collection_traces_strings_through_objects_and_ropes() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(2);
+        heap.enter_scope();
+        let left = heap.strings.allocate_str("left").unwrap();
+        let right = heap.strings.allocate_str("right").unwrap();
+        let garbage = heap.strings.allocate_str("garbage").unwrap();
+        let rope = heap
+            .strings
+            .allocate_cons(Value::from_string(left), Value::from_string(right))
+            .unwrap();
+        let object = heap
+            .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
+            .unwrap();
+        heap.set_object_slot(object, 0, Value::from_string(rope))
+            .unwrap();
+        heap.push_root(Value::from_object(object)).unwrap();
+
+        let stats = heap.collect_old().unwrap();
+
+        assert_eq!(stats.marked_strings, 3);
+        assert_eq!(stats.reclaimed_strings, 1);
+        assert_eq!(
+            heap.strings
+                .to_rust_string(Value::from_string(rope))
+                .as_deref(),
+            Some("leftright")
+        );
+        assert_eq!(
+            heap.strings.to_rust_string(Value::from_string(garbage)),
+            None
+        );
     }
 }

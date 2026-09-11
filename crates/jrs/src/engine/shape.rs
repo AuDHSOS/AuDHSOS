@@ -199,8 +199,8 @@ mod tests {
         let mut table = ShapeTable::new();
         let root = table.root_shape();
 
-        let prop_x = StringRef(1);
-        let prop_y = StringRef(2);
+        let prop_x = StringRef::from_parts(1, 0);
+        let prop_y = StringRef::from_parts(2, 0);
 
         let (shape1, offset1) = table.transition(root, prop_x, PropertyFlags::ordinary_data());
         assert_eq!(offset1, 0);
@@ -225,7 +225,7 @@ mod tests {
         let loc_y = table.lookup(shape2, prop_y).unwrap();
         assert_eq!(loc_y.slot_offset, 1);
 
-        let loc_z = table.lookup(shape2, StringRef(3));
+        let loc_z = table.lookup(shape2, StringRef::from_parts(3, 0));
         assert!(loc_z.is_none());
     }
 }

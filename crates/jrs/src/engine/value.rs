@@ -87,7 +87,40 @@ impl ObjectRef {
 
 /// Opaque index reference to a string in the string arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct StringRef(pub u32);
+pub struct StringRef(u32);
+
+const STRING_GENERATION_SHIFT: u32 = 24;
+const STRING_INDEX_MASK: u32 = (1 << STRING_GENERATION_SHIFT) - 1;
+
+impl StringRef {
+    #[expect(
+        clippy::as_conversions,
+        reason = "widening the u8 string generation to u32 is lossless"
+    )]
+    pub(crate) const fn from_parts(index: u32, generation: u8) -> Self {
+        Self((index & STRING_INDEX_MASK) | ((generation as u32) << STRING_GENERATION_SHIFT))
+    }
+
+    const fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    /// Returns the arena-local string index.
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        self.0 & STRING_INDEX_MASK
+    }
+
+    /// Returns the generation used to reject stale reused references.
+    #[must_use]
+    #[expect(
+        clippy::as_conversions,
+        reason = "the high eight bits are exactly the string generation"
+    )]
+    pub const fn generation(self) -> u8 {
+        (self.0 >> STRING_GENERATION_SHIFT) as u8
+    }
+}
 
 /// Opaque index reference to a symbol in the symbol arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -338,7 +371,7 @@ impl Value {
                 clippy::as_conversions,
                 reason = "payload mask ensures truncation fits u32 index"
             )]
-            Some(StringRef((self.0 & PAYLOAD_MASK) as u32))
+            Some(StringRef::from_raw((self.0 & PAYLOAD_MASK) as u32))
         } else {
             None
         }
@@ -546,10 +579,13 @@ mod tests {
         assert!(obj.is_object());
         assert_eq!(obj.as_object(), Some(ObjectRef::young(1234, 0)));
 
-        let str_ref = Value::from_string(StringRef(5678));
+        let str_ref = Value::from_string(StringRef::from_parts(5678, 0));
         assert!(str_ref.is_heap_string());
         assert!(str_ref.is_string());
-        assert_eq!(str_ref.as_heap_string(), Some(StringRef(5678)));
+        assert_eq!(
+            str_ref.as_heap_string(),
+            Some(StringRef::from_parts(5678, 0))
+        );
 
         let sso = Value::from_sso(b"hello").unwrap();
         assert!(sso.is_sso_string());

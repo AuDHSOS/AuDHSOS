@@ -21,8 +21,8 @@ fn end_to_end_shape_transitions_and_shared_shapes() {
     let mut heap = GenerationalHeap::new();
     let root = heap.shapes.root_shape();
 
-    let prop_a = heap.strings.intern("a");
-    let prop_b = heap.strings.intern("b");
+    let prop_a = heap.strings.intern("a").unwrap();
+    let prop_b = heap.strings.intern("b").unwrap();
 
     // Object 1: { a: 1, b: 2 }
     let obj1 = heap.allocate_object(root, VALUE_NULL).unwrap();
@@ -110,8 +110,8 @@ fn end_to_end_vm_execution_with_inline_caches() {
     let slot_get_y = code.allocate_feedback_slot();
 
     let mut heap = GenerationalHeap::new();
-    let prop_x = heap.strings.intern("x");
-    let prop_y = heap.strings.intern("y");
+    let prop_x = heap.strings.intern("x").unwrap();
+    let prop_y = heap.strings.intern("y").unwrap();
 
     // obj = {}
     code.emit(Instruction::CreateObject);

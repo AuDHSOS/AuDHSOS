@@ -543,7 +543,7 @@ mod tests {
         let g_slot = code.allocate_feedback_slot();
 
         let mut heap = GenerationalHeap::new();
-        let prop_x = heap.strings.intern("x");
+        let prop_x = heap.strings.intern("x").unwrap();
 
         code.emit(Instruction::CreateObject);
         code.emit(Instruction::Star(r_obj));
