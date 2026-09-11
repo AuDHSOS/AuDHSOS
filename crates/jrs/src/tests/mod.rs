@@ -631,6 +631,51 @@ fn error_variants_render_useful_messages() {
 }
 
 #[test]
+fn unsupported_syntax_is_distinct_from_syntax_errors() {
+    for source in [
+        "function* g(){}",
+        "async function* g(){}",
+        "class C{x=1}",
+        "let [x]=[1]",
+        "let f=([x])=>x",
+        "let {x}={x:1}",
+        "for(let {x} of [{x:1}]){}",
+        "try{}catch({x}){}",
+        "let x=0;x&&=1",
+        "let x={};x?.y",
+        "let x={...{a:1}}",
+        "let x={*g(){}}",
+        "let x={async *g(){}}",
+        "label: 0",
+        "do{}while(false)",
+        "123n",
+        "let café=1",
+    ] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+    for source in [
+        "let =",
+        "1 +",
+        "({x})={x:1}",
+        "for(true?0:'x' in {};false;);",
+    ] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn bitwise_conversion_shift_masks_and_precedence() {
     for (source, expected) in [
         ("~0", -1.0),

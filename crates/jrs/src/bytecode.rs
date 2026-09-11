@@ -423,8 +423,9 @@ impl Program {
 /// Parses and compiles a script without executing any host operation.
 ///
 /// # Errors
-/// Returns [`Error::Syntax`] for invalid or unsupported syntax and duplicate
-/// declarations, or [`Error::Limit`] when a compilation budget is exceeded.
+/// Returns [`Error::Syntax`] for invalid syntax and duplicate declarations,
+/// [`Error::Unsupported`] for recognized but unavailable language features, or
+/// [`Error::Limit`] when a compilation budget is exceeded.
 pub fn compile(source: &str, limits: Limits) -> Result<Program, Error> {
     compile_mode(source, limits, false)
 }
@@ -440,7 +441,7 @@ pub struct Script {
 /// Compiles a global Script without instantiating declarations or executing code.
 ///
 /// # Errors
-/// Syntax/unsupported grammar, early errors, or compilation resource exhaustion.
+/// Syntax and early errors, unsupported grammar, or compilation resource exhaustion.
 pub fn compile_script(source: &str, limits: Limits) -> Result<Script, Error> {
     Ok(Script {
         program: compile_realm(source, limits)?,

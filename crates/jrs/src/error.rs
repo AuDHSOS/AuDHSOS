@@ -9,7 +9,8 @@ use core::fmt;
 /// A compilation, execution, or embedding error.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Error {
-    /// Invalid or currently unsupported syntax at a UTF-8 byte offset.
+    /// A parser or static-semantics rejection at a UTF-8 byte offset.
+    /// Recognized valid-but-unavailable syntax uses [`Self::Unsupported`].
     Syntax {
         /// Zero-based byte offset in the source.
         offset: usize,

@@ -341,6 +341,9 @@ impl Parser {
             message,
         }
     }
+    const fn unsupported(feature: &'static str) -> Error {
+        Error::Unsupported { feature }
+    }
     fn is(&self, text: &str) -> bool {
         self.tokens.get(self.at).is_some_and(|t| match &t.kind {
             Kind::Word(w) => w == text,
@@ -412,6 +415,25 @@ impl Parser {
         reason = "statement dispatch keeps grammar alternatives together"
     )]
     fn statement_inner(&mut self) -> Result<Stmt, Error> {
+        if self.is("await")
+            && self
+                .tokens
+                .get(self.at.saturating_add(1))
+                .is_some_and(|token| matches!(&token.kind, Kind::Word(word) if word == "using"))
+        {
+            return Err(Self::unsupported("using declarations"));
+        }
+        if self.is("do") || self.is("with") || self.is("debugger") {
+            return Err(Self::unsupported("statement form"));
+        }
+        if matches!(&self.token()?.kind, Kind::Word(word) if !reserved(word))
+            && self
+                .tokens
+                .get(self.at.saturating_add(1))
+                .is_some_and(|token| token.kind == Kind::Punct(":"))
+        {
+            return Err(Self::unsupported("labelled statements"));
+        }
         if self.async_declaration_head() {
             return self.async_declaration();
         }
@@ -431,6 +453,9 @@ impl Parser {
             return self.statements(true).map(Stmt::Block);
         }
         if self.eat("function") {
+            if self.is("*") {
+                return Err(Self::unsupported("generator functions"));
+            }
             return self.function_declaration();
         }
         if self.eat("class") {
@@ -473,6 +498,9 @@ impl Parser {
             return Ok(Stmt::While(cond, Box::new(body)));
         }
         if self.eat("for") {
+            if self.is("await") {
+                return Err(Self::unsupported("async iteration"));
+            }
             self.need("(")?;
             let declaration = self.is("let") || self.is("const") || self.is("var");
             let init = if declaration {
@@ -582,6 +610,9 @@ impl Parser {
         target: Option<Expr>,
     ) -> Result<Stmt, Error> {
         if let Some(target) = &target {
+            if destructuring_target(&target.kind) {
+                return Err(Self::unsupported("destructuring assignment in for-in/of"));
+            }
             if let Some(name) = target.reference_name() {
                 self.assignment_name(name)?;
             } else if target.member().is_none() {
@@ -611,7 +642,7 @@ impl Parser {
         }
         let binding = if let Some((pattern, kind)) = binding {
             let BindingPattern::Name(name) = pattern else {
-                return Err(self.error("destructuring for-in is not implemented yet"));
+                return Err(Self::unsupported("destructuring for-in bindings"));
             };
             Some((name, kind))
         } else {
@@ -632,12 +663,15 @@ impl Parser {
             self.need("const")?;
         }
         let kind = if var { None } else { Some(mutable) };
+        if self.is("{") {
+            return Err(Self::unsupported("object destructuring bindings"));
+        }
         let pattern = self.binding_pattern()?;
         if self.is("in") || self.is("of") {
             return Ok(ForDeclaration::InOf(pattern, kind));
         }
         let BindingPattern::Name(name) = pattern else {
-            return Err(self.error("destructuring declaration is not implemented yet"));
+            return Err(Self::unsupported("destructuring declarations"));
         };
         let initializer = if self.eat("=") {
             Some(self.expression(0)?)
@@ -700,6 +734,9 @@ impl Parser {
         let body = self.statements(true)?;
         let catch = if self.eat("catch") {
             let name = if self.eat("(") {
+                if self.is("[") || self.is("{") {
+                    return Err(Self::unsupported("destructuring catch bindings"));
+                }
                 let name = self.name()?;
                 self.need(")")?;
                 Some(name)
@@ -757,6 +794,9 @@ impl Parser {
         let mutable = var || self.eat("let");
         if !mutable {
             self.need("const")?;
+        }
+        if self.is("[") || self.is("{") {
+            return Err(Self::unsupported("destructuring declarations"));
         }
         let mut bindings = Vec::new();
         loop {
@@ -873,9 +913,15 @@ impl Parser {
                 Kind::Punct(">>>=") => Some(Some(Binary::Ushr)),
                 _ => None,
             };
+            if min == 0 && (self.is("&&=") || self.is("||=") || self.is("??=")) {
+                return Err(Self::unsupported("logical assignment operators"));
+            }
             if min == 0
                 && let Some(op) = assignment
             {
+                if destructuring_target(&left.kind) {
+                    return Err(Self::unsupported("destructuring assignment"));
+                }
                 let name = left.reference_name().map(String::from);
                 if let Some(name) = &name {
                     self.assignment_name(name)?;
@@ -1038,6 +1084,12 @@ impl Parser {
             Kind::Punct("{") => self.object(token.offset)?,
             Kind::Word(word) if word == "this" => self.make(ExprKind::This, 1, token.offset)?,
             Kind::Word(word) if word == "function" => self.function_expression(token.offset)?,
+            Kind::Word(word) if word == "yield" => {
+                return Err(Self::unsupported("generators"));
+            }
+            Kind::Word(word) if word == "import" && (self.is("(") || self.is(".")) => {
+                return Err(Self::unsupported("dynamic import and import.meta"));
+            }
             Kind::Literal(value) => self.make(ExprKind::Literal(value), 1, token.offset)?,
             Kind::Word(name) if !reserved(&name) => {
                 self.make(ExprKind::Name(name), 1, token.offset)?
@@ -1048,14 +1100,15 @@ impl Parser {
                 let depth = expr.depth.saturating_add(1);
                 self.make(ExprKind::Group(Box::new(expr)), depth, token.offset)?
             }
-            _ => {
-                return Err(Error::Syntax {
-                    offset: token.offset,
-                    message: "expected expression; syntax may not be implemented yet",
-                });
-            }
+            _ => return Err(self.error("expected expression")),
         };
         loop {
+            if self.is("?.") {
+                return Err(Self::unsupported("optional chaining"));
+            }
+            if matches!(self.token()?.kind, Kind::Template { head: true, .. }) {
+                return Err(Self::unsupported("tagged templates"));
+            }
             if self.eat(".") {
                 if !matches!(
                     self.token()?.kind,
@@ -1127,6 +1180,9 @@ impl Parser {
     }
 
     fn function_expression(&mut self, offset: usize) -> Result<Expr, Error> {
+        if self.is("*") {
+            return Err(Self::unsupported("generator functions"));
+        }
         let name = if self.is("(") {
             None
         } else {
@@ -1147,6 +1203,9 @@ impl Parser {
     fn async_declaration(&mut self) -> Result<Stmt, Error> {
         let offset = self.token()?.offset;
         self.at = self.at.saturating_add(2);
+        if self.is("*") {
+            return Err(Self::unsupported("async generator functions"));
+        }
         let name = self.name()?;
         let mut function = self.function_kind(None, AsyncKind::Async)?;
         function.source = Some(self.source_since(offset)?);
@@ -1154,6 +1213,9 @@ impl Parser {
     }
     fn async_expression(&mut self, offset: usize) -> Result<Expr, Error> {
         self.need("function")?;
+        if self.is("*") {
+            return Err(Self::unsupported("async generator functions"));
+        }
         let name = if self.is("(") {
             None
         } else {
@@ -1251,10 +1313,19 @@ impl Parser {
         let mut depth = 1usize;
         let mut has_prototype = false;
         while !self.is("}") {
+            if self.is("...") {
+                return Err(Self::unsupported("object spread properties"));
+            }
+            if self.is("*") {
+                return Err(Self::unsupported("generator methods"));
+            }
             let method_start = self.token()?.offset;
             let async_method = self.async_method_head();
             if async_method {
                 self.need("async")?;
+                if self.is("*") {
+                    return Err(Self::unsupported("async generator methods"));
+                }
             }
             let accessor = if (self.is("get") || self.is("set"))
                 && self
@@ -1456,6 +1527,9 @@ impl Parser {
         if !self.is(")") {
             loop {
                 let rest = self.eat("...");
+                if self.is("[") || self.is("{") {
+                    return Err(Self::unsupported("destructured parameters"));
+                }
                 let name = self.name()?;
                 let default = if self.eat("=") {
                     Some(self.expression(0)?)
@@ -1627,6 +1701,10 @@ fn binary(kind: &Kind) -> Option<(Binary, u8)> {
         "%" => (Binary::Rem, 10),
         _ => return None,
     })
+}
+
+const fn destructuring_target(kind: &ExprKind) -> bool {
+    matches!(kind, ExprKind::Array(_) | ExprKind::Object(_))
 }
 
 const fn nullish_mix(op: Binary, child: &ExprKind) -> bool {
