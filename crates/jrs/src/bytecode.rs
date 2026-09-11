@@ -489,8 +489,27 @@ enum RegisterType {
     Number,
     Boolean,
     Null,
+    Object,
+    Primitive,
     String,
+    Unknown,
     Undefined,
+}
+
+impl RegisterType {
+    const fn is_primitive(self) -> bool {
+        !matches!(self, Self::Object | Self::Unknown)
+    }
+
+    fn merge(self, other: Self) -> Self {
+        if self == other {
+            self
+        } else if self.is_primitive() && other.is_primitive() {
+            Self::Primitive
+        } else {
+            Self::Unknown
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -513,7 +532,7 @@ struct RegisterLowerer {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RegisterFlow {
     Empty,
-    Value,
+    Value(RegisterType),
     Abrupt,
 }
 
@@ -607,6 +626,10 @@ impl RegisterLowerer {
         self.bindings = snapshot.bindings;
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "expression lowering keeps type propagation beside emitted operations"
+    )]
     fn lower(&mut self, expression: &Expr) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let result = match &expression.kind {
@@ -701,6 +724,11 @@ impl RegisterLowerer {
             ExprKind::Conditional(condition, yes, no) => {
                 self.lower_conditional(condition, yes, no)?
             }
+            ExprKind::Object(properties) => self.lower_object(properties)?,
+            ExprKind::Member(base, key) => self.lower_member(base, key)?,
+            ExprKind::SetMember(target, operator, value, _) => {
+                self.lower_member_assignment(target, *operator, value)?
+            }
             _ => return None,
         };
         Some(result)
@@ -722,33 +750,118 @@ impl RegisterLowerer {
         let no_start = self.code.instructions.len();
         self.bindings = bindings_before;
         let no_type = self.lower(no)?;
-        if yes_type != no_type || self.bindings != bindings_after_yes {
+        if self.bindings != bindings_after_yes {
             return None;
         }
         let end = self.code.instructions.len();
         self.patch_jump(branch, no_start)?;
         self.patch_jump(jump, end)?;
-        Some(yes_type)
+        Some(yes_type.merge(no_type))
+    }
+
+    fn lower_object(&mut self, properties: &[parser::ObjectProperty]) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        self.code.emit(Instruction::CreateObject);
+        let object = self.allocate_register()?;
+        self.code.emit(Instruction::Star(object));
+        for property in properties {
+            if property.prototype || property.accessor.is_some() {
+                return None;
+            }
+            let name = Self::static_property_name(&property.key)?;
+            let name = self.string_constant(name)?;
+            let value_type = self.lower(&property.value)?;
+            if !value_type.is_primitive() {
+                return None;
+            }
+            let slot = self.feedback_slot()?;
+            self.code.emit(Instruction::SetNamed {
+                obj: object,
+                name,
+                slot,
+            });
+        }
+        self.code.emit(Instruction::Ldar(object));
+        self.release_register(object)?;
+        Some(RegisterType::Object)
+    }
+
+    fn lower_member(&mut self, base: &Expr, key: &Expr) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let name = Self::static_property_name(key)?;
+        let name = self.string_constant(name)?;
+        if self.lower(base)? != RegisterType::Object {
+            return None;
+        }
+        let object = self.allocate_register()?;
+        self.code.emit(Instruction::Star(object));
+        let slot = self.feedback_slot()?;
+        self.code.emit(Instruction::GetNamed {
+            obj: object,
+            name,
+            slot,
+        });
+        self.release_register(object)?;
+        Some(RegisterType::Primitive)
+    }
+
+    fn lower_member_assignment(
+        &mut self,
+        target: &Expr,
+        operator: Option<Binary>,
+        value: &Expr,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        if operator.is_some() {
+            return None;
+        }
+        let (base, key) = target.member()?;
+        let name = Self::static_property_name(key)?;
+        let name = self.string_constant(name)?;
+        if self.lower(base)? != RegisterType::Object {
+            return None;
+        }
+        let object = self.allocate_register()?;
+        self.code.emit(Instruction::Star(object));
+        let value_type = self.lower(value)?;
+        if !value_type.is_primitive() {
+            return None;
+        }
+        let slot = self.feedback_slot()?;
+        self.code.emit(Instruction::SetNamed {
+            obj: object,
+            name,
+            slot,
+        });
+        self.release_register(object)?;
+        Some(value_type)
+    }
+
+    fn static_property_name(expression: &Expr) -> Option<&[u16]> {
+        match &expression.kind {
+            ExprKind::Literal(Value::String(units)) => Some(units),
+            ExprKind::Group(inner) => Self::static_property_name(inner),
+            _ => None,
+        }
     }
 
     fn lower_statement(&mut self, statement: &Stmt) -> Option<RegisterFlow> {
         let flow = match statement {
-            Stmt::Expr(expression) => {
-                self.lower(expression)?;
-                RegisterFlow::Value
-            }
+            Stmt::Expr(expression) => RegisterFlow::Value(self.lower(expression)?),
             Stmt::If(condition, yes, no) => self.lower_if(condition, yes, no.as_deref())?,
             Stmt::Block(body) => {
                 let result_register = self.allocate_register()?;
                 self.code
                     .emit(crate::engine::bytecode::Instruction::Star(result_register));
                 self.completions.push(result_register);
+                let mut result_type = None;
                 for statement in body {
                     match self.lower_statement(statement)? {
                         RegisterFlow::Empty => {}
-                        RegisterFlow::Value => {
+                        RegisterFlow::Value(value_type) => {
                             self.code
                                 .emit(crate::engine::bytecode::Instruction::Star(result_register));
+                            result_type = Some(value_type);
                         }
                         RegisterFlow::Abrupt => {
                             self.completions.pop()?;
@@ -761,23 +874,15 @@ impl RegisterLowerer {
                 self.code
                     .emit(crate::engine::bytecode::Instruction::Ldar(result_register));
                 self.release_register(result_register)?;
-                if body
-                    .iter()
-                    .any(|statement| !matches!(statement, Stmt::Empty))
-                {
-                    RegisterFlow::Value
-                } else {
-                    RegisterFlow::Empty
-                }
+                result_type.map_or(RegisterFlow::Empty, RegisterFlow::Value)
             }
-            Stmt::While(condition, body) => {
-                self.lower_while(condition, body)?;
-                RegisterFlow::Value
-            }
-            Stmt::For(initializer, condition, step, body) => {
-                self.lower_for(initializer, condition.as_ref(), step.as_ref(), body)?;
-                RegisterFlow::Value
-            }
+            Stmt::While(condition, body) => RegisterFlow::Value(self.lower_while(condition, body)?),
+            Stmt::For(initializer, condition, step, body) => RegisterFlow::Value(self.lower_for(
+                initializer,
+                condition.as_ref(),
+                step.as_ref(),
+                body,
+            )?),
             Stmt::Break => {
                 self.lower_loop_jump(true)?;
                 RegisterFlow::Abrupt
@@ -813,7 +918,7 @@ impl RegisterLowerer {
         Some(())
     }
 
-    fn lower_while(&mut self, condition: &Expr, body: &Stmt) -> Option<()> {
+    fn lower_while(&mut self, condition: &Expr, body: &Stmt) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         self.code.emit(Instruction::LdaUndefined);
         let result_register = self.allocate_register()?;
@@ -854,7 +959,10 @@ impl RegisterLowerer {
         }
         self.bindings = bindings_at_head;
         self.release_register(result_register)?;
-        Some(())
+        Some(match flow {
+            RegisterFlow::Value(value_type) => RegisterType::Undefined.merge(value_type),
+            RegisterFlow::Empty | RegisterFlow::Abrupt => RegisterType::Undefined,
+        })
     }
 
     fn lower_for(
@@ -863,7 +971,7 @@ impl RegisterLowerer {
         condition: Option<&Expr>,
         step: Option<&Expr>,
         body: &Stmt,
-    ) -> Option<()> {
+    ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let mut scoped_registers = Vec::new();
         match initializer {
@@ -957,7 +1065,10 @@ impl RegisterLowerer {
             self.bindings.remove(name)?;
             self.release_register(register)?;
         }
-        Some(())
+        Some(match flow {
+            RegisterFlow::Value(value_type) => RegisterType::Undefined.merge(value_type),
+            RegisterFlow::Empty | RegisterFlow::Abrupt => RegisterType::Undefined,
+        })
     }
 
     fn lower_if(
@@ -979,7 +1090,9 @@ impl RegisterLowerer {
         self.bindings = bindings_before;
         self.code
             .emit(crate::engine::bytecode::Instruction::LdaUndefined);
-        let no_flow = no.map_or(Some(RegisterFlow::Value), |no| self.lower_statement(no))?;
+        let no_flow = no.map_or(Some(RegisterFlow::Value(RegisterType::Undefined)), |no| {
+            self.lower_statement(no)
+        })?;
         let bindings_after_no = self.bindings.clone();
         let end = self.code.instructions.len();
         self.patch_jump(branch, no_start)?;
@@ -995,7 +1108,19 @@ impl RegisterLowerer {
             _ if bindings_after_yes == bindings_after_no => bindings_after_yes,
             _ => return None,
         };
-        Some(RegisterFlow::Value)
+        let value_type = match (yes_flow, no_flow) {
+            (RegisterFlow::Value(yes), RegisterFlow::Value(no)) => yes.merge(no),
+            (RegisterFlow::Value(value_type), RegisterFlow::Abrupt)
+            | (RegisterFlow::Abrupt, RegisterFlow::Value(value_type)) => value_type,
+            (RegisterFlow::Empty, RegisterFlow::Value(value_type))
+            | (RegisterFlow::Value(value_type), RegisterFlow::Empty) => {
+                RegisterType::Undefined.merge(value_type)
+            }
+            (RegisterFlow::Empty, RegisterFlow::Empty | RegisterFlow::Abrupt)
+            | (RegisterFlow::Abrupt, RegisterFlow::Empty) => RegisterType::Undefined,
+            (RegisterFlow::Abrupt, RegisterFlow::Abrupt) => return Some(RegisterFlow::Abrupt),
+        };
+        Some(RegisterFlow::Value(value_type))
     }
 
     fn lower_binary(
@@ -1173,6 +1298,13 @@ impl RegisterLowerer {
         Some(index)
     }
 
+    const fn feedback_slot(&mut self) -> Option<u16> {
+        if self.code.feedback_slot_count == u16::MAX {
+            return None;
+        }
+        Some(self.code.allocate_feedback_slot())
+    }
+
     fn patch_jump(&mut self, at: usize, target: usize) -> Option<()> {
         let next = at.checked_add(1)?;
         let target = isize::try_from(target).ok()?;
@@ -1245,6 +1377,7 @@ fn lower_register_script(
     lowerer
         .code
         .emit(crate::engine::bytecode::Instruction::Star(result_register));
+    let mut completion_type = RegisterType::Undefined;
     for statement in body {
         let snapshot = lowerer.snapshot();
         lowerer
@@ -1260,10 +1393,11 @@ fn lower_register_script(
                     .emit(crate::engine::bytecode::Instruction::Ldar(result_register));
             }
             _ => match lowerer.lower_statement(statement) {
-                Some(RegisterFlow::Value) => {
+                Some(RegisterFlow::Value(value_type)) => {
                     lowerer
                         .code
                         .emit(crate::engine::bytecode::Instruction::Star(result_register));
+                    completion_type = value_type;
                 }
                 Some(RegisterFlow::Empty) => {}
                 Some(RegisterFlow::Abrupt) => return None,
@@ -1273,6 +1407,9 @@ fn lower_register_script(
                 }
             },
         }
+    }
+    if !completion_type.is_primitive() {
+        return None;
     }
     lowerer
         .code

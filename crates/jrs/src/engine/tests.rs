@@ -110,8 +110,8 @@ fn end_to_end_vm_execution_with_inline_caches() {
     let slot_get_y = code.allocate_feedback_slot();
 
     let mut heap = GenerationalHeap::new();
-    let prop_x = heap.strings.intern("x").unwrap();
-    let prop_y = heap.strings.intern("y").unwrap();
+    let prop_x = code.add_string_constant("x".encode_utf16().collect());
+    let prop_y = code.add_string_constant("y".encode_utf16().collect());
 
     // obj = {}
     code.emit(Instruction::CreateObject);
@@ -182,9 +182,10 @@ fn inherited_named_access_uses_depth_cache_and_invalidates_on_mutation() {
 
     let mut code = BytecodeFunction::new(1, 1);
     let feedback_slot = code.allocate_feedback_slot();
+    let name_constant = code.add_string_constant("answer".encode_utf16().collect());
     code.emit(Instruction::GetNamed {
         obj: Reg(0),
-        name,
+        name: name_constant,
         slot: feedback_slot,
     });
     code.emit(Instruction::Return);
@@ -278,9 +279,10 @@ fn inherited_cache_checks_the_holder_shape_for_equal_receiver_shapes() {
 
     let mut code = BytecodeFunction::new(1, 1);
     let feedback_slot = code.allocate_feedback_slot();
+    let wanted_constant = code.add_string_constant("wanted".encode_utf16().collect());
     code.emit(Instruction::GetNamed {
         obj: Reg(0),
-        name: wanted,
+        name: wanted_constant,
         slot: feedback_slot,
     });
     code.emit(Instruction::Return);

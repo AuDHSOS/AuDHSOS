@@ -144,6 +144,28 @@ impl StringArena {
         }
     }
 
+    /// Allocates exact UTF-16 code units using Latin-1 storage when possible.
+    ///
+    /// Unlike [`Self::allocate_str`], this accepts lone surrogate code units and
+    /// therefore preserves every ECMAScript String value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StringError::ReferenceSpaceExhausted`] when no arena slot remains.
+    pub fn allocate_units(&mut self, units: &[u16]) -> Result<StringRef, StringError> {
+        let latin1 = units
+            .iter()
+            .copied()
+            .map(u8::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .ok();
+        if let Some(bytes) = latin1 {
+            self.allocate_latin1(bytes)
+        } else {
+            self.allocate_utf16(units.to_vec())
+        }
+    }
+
     /// Interns a permanent identifier/property atom.
     ///
     /// # Errors
@@ -151,12 +173,21 @@ impl StringArena {
     /// Returns [`StringError::ReferenceSpaceExhausted`] when no arena slot remains.
     pub fn intern(&mut self, string: &str) -> Result<StringRef, StringError> {
         let units: Vec<u16> = string.encode_utf16().collect();
-        if let Some(&existing) = self.intern_table.get(&units) {
+        self.intern_units(&units)
+    }
+
+    /// Interns exact UTF-16 code units as a permanent property-name atom.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StringError::ReferenceSpaceExhausted`] when no arena slot remains.
+    pub fn intern_units(&mut self, units: &[u16]) -> Result<StringRef, StringError> {
+        if let Some(&existing) = self.intern_table.get(units) {
             return Ok(existing);
         }
-        let reference = self.allocate_str(string)?;
+        let reference = self.allocate_units(units)?;
         self.record_mut(reference)?.is_interned = true;
-        self.intern_table.insert(units, reference);
+        self.intern_table.insert(units.to_vec(), reference);
         Ok(reference)
     }
 
@@ -556,5 +587,18 @@ mod tests {
         assert_eq!(arena.char_code_at(value, 3), None);
         assert_eq!(arena.to_rust_string(VALUE_NULL), None);
         assert_eq!(arena.intern("abc").unwrap(), arena.intern("abc").unwrap());
+    }
+
+    #[test]
+    fn exact_utf16_atoms_preserve_lone_surrogates_and_share_identity() {
+        let mut arena = StringArena::new();
+        let units = [0xD800, u16::from(b'x')];
+        let first = arena.intern_units(&units).unwrap();
+        let second = arena.intern_units(&units).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(
+            arena.to_utf16(Value::from_string(first)),
+            Some(units.into())
+        );
     }
 }

@@ -7,7 +7,7 @@
 //! accumulator register (acc). This mirrors modern production engines (Ignition)
 //! and eliminates the stack push/pop dispatch overhead.
 
-use super::value::{StringRef, Value};
+use super::value::Value;
 use alloc::{collections::VecDeque, vec::Vec};
 
 /// Virtual register index inside a function's call frame.
@@ -149,8 +149,8 @@ pub enum Instruction {
     GetNamed {
         /// Object register.
         obj: Reg,
-        /// Property name identifier.
-        name: StringRef,
+        /// Property-name index in the heap-independent UTF-16 constant pool.
+        name: u16,
         /// Feedback vector slot for inline caching.
         slot: u16,
     },
@@ -158,8 +158,8 @@ pub enum Instruction {
     SetNamed {
         /// Object register.
         obj: Reg,
-        /// Property name identifier.
-        name: StringRef,
+        /// Property-name index in the heap-independent UTF-16 constant pool.
+        name: u16,
         /// Feedback vector slot for inline caching.
         slot: u16,
     },
@@ -358,7 +358,9 @@ impl BytecodeFunction {
                 self.verify_register(pc, src)?;
                 Some(dst)
             }
-            Instruction::GetNamed { obj, slot, .. } | Instruction::SetNamed { obj, slot, .. } => {
+            Instruction::GetNamed { obj, name, slot }
+            | Instruction::SetNamed { obj, name, slot } => {
+                self.verify_string_constant(pc, name)?;
                 self.verify_feedback(pc, slot)?;
                 Some(obj)
             }
@@ -431,6 +433,14 @@ impl BytecodeFunction {
     const fn verify_feedback(&self, pc: usize, slot: u16) -> Result<(), VerificationError> {
         if slot >= self.feedback_slot_count {
             Err(VerificationError::FeedbackOutOfBounds { pc, slot })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn verify_string_constant(&self, pc: usize, index: u16) -> Result<(), VerificationError> {
+        if usize::from(index) >= self.string_constants.len() {
+            Err(VerificationError::StringConstantOutOfBounds { pc, index })
         } else {
             Ok(())
         }
@@ -516,9 +526,9 @@ mod tests {
         );
 
         let mut heap_bound = BytecodeFunction::new(0, 0);
-        heap_bound
-            .constants
-            .push(Value::from_string(StringRef::from_parts(0, 0)));
+        heap_bound.constants.push(Value::from_string(
+            super::super::value::StringRef::from_parts(0, 0),
+        ));
         heap_bound.emit(Instruction::LdaConstant(0));
         heap_bound.emit(Instruction::Return);
         assert_eq!(
@@ -530,9 +540,10 @@ mod tests {
     #[test]
     fn verifier_rejects_invalid_feedback_calls_and_jumps() {
         let mut feedback = BytecodeFunction::new(1, 0);
+        let name = feedback.add_string_constant("x".encode_utf16().collect());
         feedback.emit(Instruction::GetNamed {
             obj: Reg(0),
-            name: StringRef::from_parts(0, 0),
+            name,
             slot: 0,
         });
         feedback.emit(Instruction::Return);

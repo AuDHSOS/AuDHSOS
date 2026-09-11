@@ -94,6 +94,59 @@ fn string_constants_are_reusable_across_independent_agent_heaps() -> Result<(), 
 }
 
 #[test]
+fn ordinary_named_properties_run_through_shapes_and_inline_caches() -> Result<(), Error> {
+    for source in [
+        "let o={x:42};o.x",
+        "let o={x:1};o.x=42;o.x",
+        "let o={x:1,x:2};o.x",
+        "let o={true:'yes',null:'no'};o.true",
+        "let o={x:'a'};o['x']='ab';o.x",
+        "let o={x:1};o.missing===undefined",
+        "let o={x:1};o.x===1",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn named_property_bytecode_is_reusable_across_independent_agent_heaps() -> Result<(), Error> {
+    let mut program = compile("let o={answer:42};o.answer", Limits::default())?;
+    assert!(program.uses_register_backend());
+    program.code.clear();
+
+    for _ in 0..2 {
+        assert_eq!(
+            Runtime::new(Limits::default()).run(&program, &mut SilentHost)?,
+            Value::Number(42.0)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn object_completion_values_stay_on_the_legacy_backend_until_handles_are_public()
+-> Result<(), Error> {
+    for source in ["({x:1})", "let o={x:1};o", "true?({x:1}):({x:2})"] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    assert!(compile("let o={x:1};42", Limits::default())?.uses_register_backend());
+    Ok(())
+}
+
+#[test]
 fn register_string_concatenation_preserves_string_unit_limit() -> Result<(), Error> {
     let limits = Limits {
         string_units: 3,
@@ -237,6 +290,7 @@ fn conditional_expressions_match_legacy_execution() -> Result<(), Error> {
         "let x=1;(true ? (x=2) : (x=3));x",
         "let x=1;false?(x=2):(x=3);x",
         "let x=1;(x=2)?x+1:x+2",
+        "true ? 1 : false",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -279,7 +333,6 @@ fn conditional_statements_match_legacy_execution() -> Result<(), Error> {
 #[test]
 fn register_branch_lowering_rejects_incompatible_control_flow() -> Result<(), Error> {
     for source in [
-        "true ? 1 : false",
         "let x=1;if(true)x=true;else x=2;x",
         "let x=1;if(true)x=true;x",
     ] {

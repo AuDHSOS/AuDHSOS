@@ -557,6 +557,11 @@ impl RegisterVM {
                     }
                 }
                 Instruction::GetNamed { obj, name, slot } => {
+                    let name = code
+                        .string_constants
+                        .get(name as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = heap.strings.intern_units(name)?;
                     let target = self.read_reg(obj)?;
                     let oref = target.as_object().ok_or(VMError::TypeError)?;
                     let shape_id = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
@@ -599,6 +604,11 @@ impl RegisterVM {
                     }
                 }
                 Instruction::SetNamed { obj, name, slot } => {
+                    let name = code
+                        .string_constants
+                        .get(name as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = heap.strings.intern_units(name)?;
                     let target = self.read_reg(obj)?;
                     let oref = target.as_object().ok_or(VMError::TypeError)?;
                     let current_shape = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
@@ -756,7 +766,7 @@ mod tests {
         let g_slot = code.allocate_feedback_slot();
 
         let mut heap = GenerationalHeap::new();
-        let prop_x = heap.strings.intern("x").unwrap();
+        let prop_x = code.add_string_constant("x".encode_utf16().collect());
 
         code.emit(Instruction::CreateObject);
         code.emit(Instruction::Star(r_obj));
