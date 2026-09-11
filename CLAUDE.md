@@ -1,4 +1,4 @@
-# wiriting style
+# writing style
 
 Keep everything in US English. Write clear and distinct sentences. Get to the point.
 Do not write rule of thumb sentences. Especially not in headlines.
