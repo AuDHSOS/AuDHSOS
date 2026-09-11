@@ -34,6 +34,8 @@ pub enum BinaryOp {
     Sub,
     /// Numeric multiplication.
     Mul,
+    /// Numeric exponentiation.
+    Pow,
     /// Numeric division.
     Div,
     /// Numeric remainder.
@@ -206,6 +208,8 @@ pub enum Instruction {
     Sub(Reg),
     /// `acc = acc * reg`
     Mul(Reg),
+    /// `acc = acc ** reg`
+    Pow(Reg),
     /// `acc = acc / reg`
     Div(Reg),
     /// `acc = acc % reg`
@@ -497,6 +501,7 @@ impl BytecodeFunction {
             | Instruction::Add(register)
             | Instruction::Sub(register)
             | Instruction::Mul(register)
+            | Instruction::Pow(register)
             | Instruction::Div(register)
             | Instruction::Mod(register)
             | Instruction::BitAnd(register)

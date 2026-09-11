@@ -2010,17 +2010,10 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(right_register));
         self.code.emit(Instruction::Ldar(left_register));
         let (instruction, result_type) = match operator {
-            Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
+            Binary::Add | Binary::Sub | Binary::Mul | Binary::Pow | Binary::Div | Binary::Rem
                 if left_type.is_numeric_primitive() && right_type.is_numeric_primitive() =>
             {
-                let instruction = match operator {
-                    Binary::Add => Instruction::Add(right_register),
-                    Binary::Sub => Instruction::Sub(right_register),
-                    Binary::Mul => Instruction::Mul(right_register),
-                    Binary::Div => Instruction::Div(right_register),
-                    Binary::Rem => Instruction::Mod(right_register),
-                    _ => return None,
-                };
+                let instruction = Self::number_instruction(operator, right_register)?;
                 (instruction, RegisterType::Number)
             }
             Binary::Add
@@ -2043,6 +2036,7 @@ impl RegisterLowerer {
             Binary::Add
             | Binary::Sub
             | Binary::Mul
+            | Binary::Pow
             | Binary::Div
             | Binary::Rem
             | Binary::Lt
@@ -2103,6 +2097,22 @@ impl RegisterLowerer {
         Some(result_type)
     }
 
+    const fn number_instruction(
+        operator: Binary,
+        rhs: crate::engine::bytecode::Reg,
+    ) -> Option<crate::engine::bytecode::Instruction> {
+        use crate::engine::bytecode::Instruction;
+        Some(match operator {
+            Binary::Add => Instruction::Add(rhs),
+            Binary::Sub => Instruction::Sub(rhs),
+            Binary::Mul => Instruction::Mul(rhs),
+            Binary::Pow => Instruction::Pow(rhs),
+            Binary::Div => Instruction::Div(rhs),
+            Binary::Rem => Instruction::Mod(rhs),
+            _ => return None,
+        })
+    }
+
     fn feedback_binary(
         &mut self,
         operator: Binary,
@@ -2113,6 +2123,7 @@ impl RegisterLowerer {
             Binary::Add => (BinaryOp::Add, RegisterType::Primitive),
             Binary::Sub => (BinaryOp::Sub, RegisterType::Number),
             Binary::Mul => (BinaryOp::Mul, RegisterType::Number),
+            Binary::Pow => (BinaryOp::Pow, RegisterType::Number),
             Binary::Div => (BinaryOp::Div, RegisterType::Number),
             Binary::Rem => (BinaryOp::Mod, RegisterType::Number),
             Binary::Lt => (BinaryOp::LessThan, RegisterType::Boolean),
@@ -2153,7 +2164,8 @@ impl RegisterLowerer {
                 {
                     RegisterType::Number
                 }
-                Binary::BitAnd
+                Binary::Pow
+                | Binary::BitAnd
                 | Binary::BitOr
                 | Binary::BitXor
                 | Binary::Shl
@@ -2169,10 +2181,19 @@ impl RegisterLowerer {
             let right_register = self.allocate_register()?;
             self.code.emit(Instruction::Star(right_register));
             self.code.emit(Instruction::Ldar(left_register));
-            self.code.emit(match operator {
+            let instruction = match operator {
                 Binary::Add => Instruction::Add(right_register),
                 Binary::Sub => Instruction::Sub(right_register),
                 Binary::Mul => Instruction::Mul(right_register),
+                Binary::Pow => {
+                    let slot =
+                        self.feedback_slot(crate::engine::bytecode::FeedbackKind::BinaryOp)?;
+                    Instruction::Binary {
+                        op: crate::engine::bytecode::BinaryOp::Pow,
+                        rhs: right_register,
+                        slot,
+                    }
+                }
                 Binary::Div => Instruction::Div(right_register),
                 Binary::Rem => Instruction::Mod(right_register),
                 Binary::BitAnd => Instruction::BitAnd(right_register),
@@ -2182,7 +2203,8 @@ impl RegisterLowerer {
                 Binary::Shr => Instruction::Shr(right_register),
                 Binary::Ushr => Instruction::Ushr(right_register),
                 _ => return None,
-            });
+            };
+            self.code.emit(instruction);
             self.release_register(right_register)?;
             self.release_register(left_register)?;
             result_type
@@ -2364,7 +2386,8 @@ fn register_expression_type(
                 {
                     RegisterType::Number
                 }
-                Binary::BitAnd
+                Binary::Pow
+                | Binary::BitAnd
                 | Binary::BitOr
                 | Binary::BitXor
                 | Binary::Shl

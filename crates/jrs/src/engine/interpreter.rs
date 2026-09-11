@@ -469,6 +469,7 @@ impl RegisterVM {
             BinaryOp::Add => Value::from_f64(left + right),
             BinaryOp::Sub => Value::from_f64(left - right),
             BinaryOp::Mul => Value::from_f64(left * right),
+            BinaryOp::Pow => Value::from_f64(audhsos_math::pow(left, right)),
             BinaryOp::Div => Value::from_f64(left / right),
             BinaryOp::Mod => Value::from_f64(left % right),
             BinaryOp::LessThan => Value::from_bool(left < right),
@@ -754,6 +755,15 @@ impl RegisterVM {
                     } else if let (Some(a), Some(b)) = (numeric_value(self.acc), numeric_value(rhs))
                     {
                         self.acc = Value::from_f64(a * b);
+                    } else {
+                        return Err(VMError::TypeError);
+                    }
+                }
+                Instruction::Pow(reg) => {
+                    let rhs = self.read_reg(reg)?;
+                    if let (Some(left), Some(right)) = (numeric_value(self.acc), numeric_value(rhs))
+                    {
+                        self.acc = Value::from_f64(audhsos_math::pow(left, right));
                     } else {
                         return Err(VMError::TypeError);
                     }

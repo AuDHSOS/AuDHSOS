@@ -205,6 +205,39 @@ fn short_circuit_expressions_run_through_register_bytecode() -> Result<(), Error
 }
 
 #[test]
+fn primitive_exponentiation_runs_through_register_bytecode() -> Result<(), Error> {
+    for source in [
+        "2**3**2",
+        "(2**3)**2",
+        "2**-2",
+        "(-2)**3",
+        "2**null",
+        "true**false",
+        "'3'**3",
+        "2**undefined",
+        "(-0)**3",
+        "(-0)**-3",
+        "NaN**0",
+        "(-Infinity)**-3",
+        "let a=2;a**=3**2;a",
+        "let a='2';a**=3;a",
+        "function f(a,b){return a**b}f('2',3)",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn string_expressions_run_through_heap_independent_register_bytecode() -> Result<(), Error> {
     for source in [
         "'hello'",
@@ -517,6 +550,8 @@ fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<
         "let x=1;x>>={};0",
         "let o={};false&&(o.x=1);0",
         "let x=1;false&&(function(){return x});x",
+        "({valueOf(){return 2}})**3",
+        "let x={};x**=2;0",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
