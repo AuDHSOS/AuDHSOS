@@ -491,7 +491,7 @@ enum RegisterType {
     Undefined,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct RegisterBinding {
     register: crate::engine::bytecode::Reg,
     value_type: Option<RegisterType>,
@@ -503,6 +503,15 @@ struct RegisterLowerer {
     next_register: u16,
     register_count: u16,
     local_count: u16,
+    bindings: BTreeMap<String, RegisterBinding>,
+}
+
+#[derive(Clone)]
+struct RegisterSnapshot {
+    instructions: usize,
+    constants: usize,
+    next_register: u16,
+    register_count: u16,
     bindings: BTreeMap<String, RegisterBinding>,
 }
 
@@ -552,6 +561,24 @@ impl RegisterLowerer {
             .emit(crate::engine::bytecode::Instruction::Star(register));
         self.bindings.get_mut(name)?.value_type = Some(value_type);
         Some(())
+    }
+
+    fn snapshot(&self) -> RegisterSnapshot {
+        RegisterSnapshot {
+            instructions: self.code.instructions.len(),
+            constants: self.code.constants.len(),
+            next_register: self.next_register,
+            register_count: self.register_count,
+            bindings: self.bindings.clone(),
+        }
+    }
+
+    fn restore(&mut self, snapshot: RegisterSnapshot) {
+        self.code.instructions.truncate(snapshot.instructions);
+        self.code.constants.truncate(snapshot.constants);
+        self.next_register = snapshot.next_register;
+        self.register_count = snapshot.register_count;
+        self.bindings = snapshot.bindings;
     }
 
     fn lower(&mut self, expression: &Expr) -> Option<RegisterType> {
@@ -639,9 +666,78 @@ impl RegisterLowerer {
             ExprKind::Assign(name, operator, right) => {
                 self.lower_assignment(name, *operator, right)?
             }
+            ExprKind::Conditional(condition, yes, no) => {
+                self.lower_conditional(condition, yes, no)?
+            }
             _ => return None,
         };
         Some(result)
+    }
+
+    fn lower_conditional(
+        &mut self,
+        condition: &Expr,
+        yes: &Expr,
+        no: &Expr,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        self.lower(condition)?;
+        let branch = self.code.emit(Instruction::JumpIfFalse(0));
+        let bindings_before = self.bindings.clone();
+        let yes_type = self.lower(yes)?;
+        let bindings_after_yes = self.bindings.clone();
+        let jump = self.code.emit(Instruction::Jump(0));
+        let no_start = self.code.instructions.len();
+        self.bindings = bindings_before;
+        let no_type = self.lower(no)?;
+        if yes_type != no_type || self.bindings != bindings_after_yes {
+            return None;
+        }
+        let end = self.code.instructions.len();
+        self.patch_jump(branch, no_start)?;
+        self.patch_jump(jump, end)?;
+        Some(yes_type)
+    }
+
+    fn lower_statement(&mut self, statement: &Stmt) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        match statement {
+            Stmt::Expr(expression) => {
+                self.lower(expression)?;
+            }
+            Stmt::If(condition, yes, no) => {
+                self.lower_if(condition, yes, no.as_deref())?;
+            }
+            Stmt::Empty => {
+                self.code.emit(Instruction::LdaUndefined);
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+
+    fn lower_if(&mut self, condition: &Expr, yes: &Stmt, no: Option<&Stmt>) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        self.lower(condition)?;
+        let branch = self.code.emit(Instruction::JumpIfFalse(0));
+        let bindings_before = self.bindings.clone();
+        self.lower_statement(yes)?;
+        let bindings_after_yes = self.bindings.clone();
+        let jump = self.code.emit(Instruction::Jump(0));
+        let no_start = self.code.instructions.len();
+        self.bindings = bindings_before;
+        if let Some(no) = no {
+            self.lower_statement(no)?;
+        } else {
+            self.code.emit(Instruction::LdaUndefined);
+        }
+        if self.bindings != bindings_after_yes {
+            return None;
+        }
+        let end = self.code.instructions.len();
+        self.patch_jump(branch, no_start)?;
+        self.patch_jump(jump, end)?;
+        Some(())
     }
 
     fn lower_binary(
@@ -758,6 +854,20 @@ impl RegisterLowerer {
         self.code.constants.push(value);
         Some(index)
     }
+
+    fn patch_jump(&mut self, at: usize, target: usize) -> Option<()> {
+        let next = at.checked_add(1)?;
+        let target = isize::try_from(target).ok()?;
+        let next = isize::try_from(next).ok()?;
+        let offset = i32::try_from(target.checked_sub(next)?).ok()?;
+        match self.code.instructions.get_mut(at)? {
+            crate::engine::bytecode::Instruction::Jump(value)
+            | crate::engine::bytecode::Instruction::JumpIfFalse(value)
+            | crate::engine::bytecode::Instruction::JumpIfTrue(value) => *value = offset,
+            _ => return None,
+        }
+        Some(())
+    }
 }
 
 fn lower_register_script(
@@ -783,7 +893,7 @@ fn lower_register_script(
                     }
                 }
             }
-            Stmt::Expr(_) => saw_expression = true,
+            Stmt::Expr(_) | Stmt::If(_, _, _) => saw_expression = true,
             Stmt::Empty => {}
             _ => return None,
         }
@@ -791,20 +901,9 @@ fn lower_register_script(
     if !saw_expression {
         return None;
     }
-    let stack_requirement = body
-        .iter()
-        .fold(1usize, |maximum, statement| match statement {
-            Stmt::Declare(bindings) => bindings.iter().fold(maximum, |current, (_, _, init)| {
-                current.max(
-                    init.as_ref()
-                        .map_or(1, register_expression_stack_requirement),
-                )
-            }),
-            Stmt::Expr(expression) => {
-                maximum.max(register_expression_stack_requirement(expression))
-            }
-            _ => maximum,
-        });
+    let stack_requirement = body.iter().fold(1usize, |maximum, statement| {
+        maximum.max(register_statement_stack_requirement(statement))
+    });
     let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement);
     if saw_declaration {
         for statement in body {
@@ -816,6 +915,7 @@ fn lower_register_script(
         }
     }
     for statement in body {
+        let snapshot = lowerer.snapshot();
         match statement {
             Stmt::Declare(bindings) => {
                 for (name, _, initializer) in bindings {
@@ -823,7 +923,16 @@ fn lower_register_script(
                 }
             }
             Stmt::Expr(expression) => {
-                lowerer.lower(expression)?;
+                if lowerer.lower(expression).is_none() {
+                    lowerer.restore(snapshot);
+                    return None;
+                }
+            }
+            Stmt::If(condition, yes, no) => {
+                if lowerer.lower_if(condition, yes, no.as_deref()).is_none() {
+                    lowerer.restore(snapshot);
+                    return None;
+                }
             }
             Stmt::Empty => {}
             _ => return None,
@@ -848,8 +957,32 @@ fn register_expression_stack_requirement(expression: &Expr) -> usize {
             1usize.saturating_add(register_expression_stack_requirement(right))
         }
         ExprKind::Assign(_, None, right) => register_expression_stack_requirement(right),
+        ExprKind::Conditional(condition, yes, no) => {
+            register_expression_stack_requirement(condition)
+                .max(register_expression_stack_requirement(yes))
+                .max(register_expression_stack_requirement(no))
+        }
         ExprKind::Binary(_, left, right) => register_expression_stack_requirement(left)
             .max(1usize.saturating_add(register_expression_stack_requirement(right))),
+        _ => 1,
+    }
+}
+
+fn register_statement_stack_requirement(statement: &Stmt) -> usize {
+    match statement {
+        Stmt::Declare(bindings) => bindings.iter().fold(1usize, |maximum, (_, _, init)| {
+            maximum.max(
+                init.as_ref()
+                    .map_or(1, register_expression_stack_requirement),
+            )
+        }),
+        Stmt::Expr(expression) => register_expression_stack_requirement(expression),
+        Stmt::If(condition, yes, no) => register_expression_stack_requirement(condition)
+            .max(register_statement_stack_requirement(yes))
+            .max(
+                no.as_deref()
+                    .map_or(1, register_statement_stack_requirement),
+            ),
         _ => 1,
     }
 }

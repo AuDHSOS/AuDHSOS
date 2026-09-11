@@ -166,3 +166,66 @@ fn local_binding_lowering_preserves_tdz_and_const_guards_by_staying_legacy() -> 
     }
     Ok(())
 }
+
+#[test]
+fn conditional_expressions_match_legacy_execution() -> Result<(), Error> {
+    for source in [
+        "true ? 1 : 2",
+        "false ? 1 : 2",
+        "let x=1;(true ? (x=2) : (x=3));x",
+        "let x=1;false?(x=2):(x=3);x",
+        "let x=1;(x=2)?x+1:x+2",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn conditional_statements_match_legacy_execution() -> Result<(), Error> {
+    for source in [
+        "if(true) 3; else 4",
+        "if(false) 3; else 4",
+        "if(false) 3",
+        "let x=1;if(true)x=2;else x=3;x",
+        "let x=1;if(false)x=2;else x=3;x",
+        "if(true) if(false) 3; else 4;",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn register_branch_lowering_rejects_incompatible_control_flow() -> Result<(), Error> {
+    for source in [
+        "true ? 1 : false",
+        "let x=1;if(true)x=true;else x=2;x",
+        "let x=1;if(true)x=true;x",
+        "if(true){1}else{2}",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    Ok(())
+}
