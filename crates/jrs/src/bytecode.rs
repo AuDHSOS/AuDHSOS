@@ -2021,6 +2021,26 @@ impl RegisterLowerer {
             {
                 self.feedback_binary(operator, right_register)?
             }
+            Binary::BitAnd
+            | Binary::BitOr
+            | Binary::BitXor
+            | Binary::Shl
+            | Binary::Shr
+            | Binary::Ushr => {
+                if !left_type.is_primitive() || !right_type.is_primitive() {
+                    return None;
+                }
+                let instruction = match operator {
+                    Binary::BitAnd => Instruction::BitAnd(right_register),
+                    Binary::BitOr => Instruction::BitOr(right_register),
+                    Binary::BitXor => Instruction::BitXor(right_register),
+                    Binary::Shl => Instruction::Shl(right_register),
+                    Binary::Shr => Instruction::Shr(right_register),
+                    Binary::Ushr => Instruction::Ushr(right_register),
+                    _ => return None,
+                };
+                (instruction, RegisterType::Number)
+            }
             Binary::StrictEq => (
                 Instruction::TestStrictEqual(right_register),
                 RegisterType::Boolean,
@@ -2101,6 +2121,17 @@ impl RegisterLowerer {
                 {
                     RegisterType::Number
                 }
+                Binary::BitAnd
+                | Binary::BitOr
+                | Binary::BitXor
+                | Binary::Shl
+                | Binary::Shr
+                | Binary::Ushr => {
+                    if !left_type.is_primitive() || !right_type.is_primitive() {
+                        return None;
+                    }
+                    RegisterType::Number
+                }
                 _ => return None,
             };
             let right_register = self.allocate_register()?;
@@ -2112,6 +2143,12 @@ impl RegisterLowerer {
                 Binary::Mul => Instruction::Mul(right_register),
                 Binary::Div => Instruction::Div(right_register),
                 Binary::Rem => Instruction::Mod(right_register),
+                Binary::BitAnd => Instruction::BitAnd(right_register),
+                Binary::BitOr => Instruction::BitOr(right_register),
+                Binary::BitXor => Instruction::BitXor(right_register),
+                Binary::Shl => Instruction::Shl(right_register),
+                Binary::Shr => Instruction::Shr(right_register),
+                Binary::Ushr => Instruction::Ushr(right_register),
                 _ => return None,
             });
             self.release_register(right_register)?;
@@ -2291,6 +2328,17 @@ fn register_expression_type(
                 Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
                     if left.is_numeric_primitive() && right.is_numeric_primitive() =>
                 {
+                    RegisterType::Number
+                }
+                Binary::BitAnd
+                | Binary::BitOr
+                | Binary::BitXor
+                | Binary::Shl
+                | Binary::Shr
+                | Binary::Ushr => {
+                    if !left.is_primitive() || !right.is_primitive() {
+                        return None;
+                    }
                     RegisterType::Number
                 }
                 Binary::Lt

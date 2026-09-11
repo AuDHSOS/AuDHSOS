@@ -783,47 +783,39 @@ impl RegisterVM {
                 }
                 Instruction::BitAnd(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    if let (Some(a), Some(b)) = (self.acc.as_smi(), rhs.as_smi()) {
-                        self.acc = Value::from_smi(a & b);
-                    } else {
-                        return Err(VMError::TypeError);
-                    }
+                    let left = number_to_i32(primitive_number(self.acc, heap)?);
+                    let right = number_to_i32(primitive_number(rhs, heap)?);
+                    self.acc = Value::from_smi(left & right);
                 }
                 Instruction::BitOr(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    if let (Some(a), Some(b)) = (self.acc.as_smi(), rhs.as_smi()) {
-                        self.acc = Value::from_smi(a | b);
-                    } else {
-                        return Err(VMError::TypeError);
-                    }
+                    let left = number_to_i32(primitive_number(self.acc, heap)?);
+                    let right = number_to_i32(primitive_number(rhs, heap)?);
+                    self.acc = Value::from_smi(left | right);
                 }
                 Instruction::BitXor(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    if let (Some(a), Some(b)) = (self.acc.as_smi(), rhs.as_smi()) {
-                        self.acc = Value::from_smi(a ^ b);
-                    } else {
-                        return Err(VMError::TypeError);
-                    }
+                    let left = number_to_i32(primitive_number(self.acc, heap)?);
+                    let right = number_to_i32(primitive_number(rhs, heap)?);
+                    self.acc = Value::from_smi(left ^ right);
                 }
                 Instruction::Shl(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    if let (Some(a), Some(b)) = (self.acc.as_smi(), rhs.as_smi()) {
-                        #[expect(clippy::as_conversions, reason = "shift count masked")]
-                        let shift = (b as u32) & 0x1F;
-                        self.acc = Value::from_smi(a << shift);
-                    } else {
-                        return Err(VMError::TypeError);
-                    }
+                    let left = number_to_i32(primitive_number(self.acc, heap)?);
+                    let shift = crate::value::number_uint32(primitive_number(rhs, heap)?) & 0x1F;
+                    self.acc = Value::from_smi(left.wrapping_shl(shift));
                 }
                 Instruction::Shr(reg) => {
                     let rhs = self.read_reg(reg)?;
-                    if let (Some(a), Some(b)) = (self.acc.as_smi(), rhs.as_smi()) {
-                        #[expect(clippy::as_conversions, reason = "shift count masked")]
-                        let shift = (b as u32) & 0x1F;
-                        self.acc = Value::from_smi(a >> shift);
-                    } else {
-                        return Err(VMError::TypeError);
-                    }
+                    let left = number_to_i32(primitive_number(self.acc, heap)?);
+                    let shift = crate::value::number_uint32(primitive_number(rhs, heap)?) & 0x1F;
+                    self.acc = Value::from_smi(left.wrapping_shr(shift));
+                }
+                Instruction::Ushr(reg) => {
+                    let rhs = self.read_reg(reg)?;
+                    let left = crate::value::number_uint32(primitive_number(self.acc, heap)?);
+                    let shift = crate::value::number_uint32(primitive_number(rhs, heap)?) & 0x1F;
+                    self.acc = Value::from_f64(f64::from(left.wrapping_shr(shift)));
                 }
                 Instruction::TestEqual(reg) => {
                     let rhs = self.read_reg(reg)?;

@@ -134,6 +134,41 @@ fn primitive_loose_equality_runs_through_register_bytecode() -> Result<(), Error
 }
 
 #[test]
+fn primitive_bitwise_operations_run_through_register_bytecode() -> Result<(), Error> {
+    for source in [
+        "7 & 3",
+        "4 | 1",
+        "7 ^ 3",
+        "1 << 31",
+        "1 << 32",
+        "1 << -1",
+        "-8 >> 2",
+        "-1 >>> 0",
+        "-8 >>> 2",
+        "'3.9' & 7",
+        "true | null",
+        "undefined ^ 7",
+        "4294967297 | 0",
+        "9007199254740991 >>> 0",
+        "9007199254740992 >>> 0",
+        "let x=7;x&=3;x|=8;x^=1;x<<=2;x>>=1;x>>>=1;x",
+        "function f(a,b){return a>>>b}f(-1,'1')",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn string_expressions_run_through_heap_independent_register_bytecode() -> Result<(), Error> {
     for source in [
         "'hello'",
@@ -439,6 +474,11 @@ fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<
         "({valueOf(){return 1}})+2",
         "+({valueOf(){return 1}})",
         "-function(){}",
+        "({}) & 1",
+        "1 | ({})",
+        "let o={};let x=o^1;0",
+        "let x={};x<<=1;0",
+        "let x=1;x>>={};0",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),

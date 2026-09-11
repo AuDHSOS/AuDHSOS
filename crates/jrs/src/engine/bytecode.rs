@@ -229,6 +229,8 @@ pub enum Instruction {
     Shl(Reg),
     /// `acc = acc >> reg`
     Shr(Reg),
+    /// `acc = acc >>> reg`
+    Ushr(Reg),
     /// `acc = (acc == reg)`
     TestEqual(Reg),
     /// `acc = (acc === reg)`
@@ -498,6 +500,7 @@ impl BytecodeFunction {
             | Instruction::BitXor(register)
             | Instruction::Shl(register)
             | Instruction::Shr(register)
+            | Instruction::Ushr(register)
             | Instruction::TestEqual(register)
             | Instruction::TestStrictEqual(register)
             | Instruction::TestLessThan(register)
