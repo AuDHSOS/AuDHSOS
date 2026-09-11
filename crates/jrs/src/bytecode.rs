@@ -479,6 +479,7 @@ fn compile_mode(source: &str, limits: Limits, realm: bool) -> Result<Program, Er
         &body,
         realm,
         u64::try_from(compiler.program.total_instructions).unwrap_or(u64::MAX),
+        limits.properties,
     )
     .map(Rc::new);
     Ok(compiler.program)
@@ -486,10 +487,11 @@ fn compile_mode(source: &str, limits: Limits, realm: bool) -> Result<Program, Er
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RegisterType {
+    Array(u32),
     Number,
     Boolean,
     Null,
-    Object,
+    Object(u32),
     Primitive,
     String,
     Unknown,
@@ -498,7 +500,11 @@ enum RegisterType {
 
 impl RegisterType {
     const fn is_primitive(self) -> bool {
-        !matches!(self, Self::Object | Self::Unknown)
+        !matches!(self, Self::Array(_) | Self::Object(_) | Self::Unknown)
+    }
+
+    const fn is_object(self) -> bool {
+        matches!(self, Self::Array(_) | Self::Object(_))
     }
 
     fn merge(self, other: Self) -> Self {
@@ -510,6 +516,12 @@ impl RegisterType {
             Self::Unknown
         }
     }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum RegisterObjectLayout {
+    Ordinary(BTreeMap<Vec<u16>, RegisterType>),
+    Array(BTreeMap<u32, RegisterType>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -527,6 +539,9 @@ struct RegisterLowerer {
     bindings: BTreeMap<String, RegisterBinding>,
     loops: Vec<RegisterLoop>,
     completions: Vec<crate::engine::bytecode::Reg>,
+    next_object_id: u32,
+    object_layouts: BTreeMap<u32, RegisterObjectLayout>,
+    property_limit: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -542,6 +557,7 @@ struct RegisterLoop {
     result_register: crate::engine::bytecode::Reg,
     bindings: BTreeMap<String, RegisterBinding>,
     completion_depth: usize,
+    object_layouts: BTreeMap<u32, RegisterObjectLayout>,
 }
 
 #[derive(Clone)]
@@ -552,10 +568,16 @@ struct RegisterSnapshot {
     next_register: u16,
     register_count: u16,
     bindings: BTreeMap<String, RegisterBinding>,
+    next_object_id: u32,
+    object_layouts: BTreeMap<u32, RegisterObjectLayout>,
 }
 
 impl RegisterLowerer {
-    const fn new(entry_fuel_cost: u64, entry_stack_requirement: usize) -> Self {
+    const fn new(
+        entry_fuel_cost: u64,
+        entry_stack_requirement: usize,
+        property_limit: usize,
+    ) -> Self {
         let mut code = crate::engine::bytecode::BytecodeFunction::new(0, 0);
         code.entry_fuel_cost = entry_fuel_cost;
         code.entry_stack_requirement = entry_stack_requirement;
@@ -567,6 +589,9 @@ impl RegisterLowerer {
             bindings: BTreeMap::new(),
             loops: Vec::new(),
             completions: Vec::new(),
+            next_object_id: 0,
+            object_layouts: BTreeMap::new(),
+            property_limit,
         }
     }
 
@@ -612,6 +637,8 @@ impl RegisterLowerer {
             next_register: self.next_register,
             register_count: self.register_count,
             bindings: self.bindings.clone(),
+            next_object_id: self.next_object_id,
+            object_layouts: self.object_layouts.clone(),
         }
     }
 
@@ -624,6 +651,8 @@ impl RegisterLowerer {
         self.next_register = snapshot.next_register;
         self.register_count = snapshot.register_count;
         self.bindings = snapshot.bindings;
+        self.next_object_id = snapshot.next_object_id;
+        self.object_layouts = snapshot.object_layouts;
     }
 
     #[expect(
@@ -635,8 +664,13 @@ impl RegisterLowerer {
         let result = match &expression.kind {
             ExprKind::Literal(value) => match value {
                 Value::Number(number) => {
-                    let index = self.constant(crate::engine::value::Value::from_f64(*number))?;
-                    self.code.emit(Instruction::LdaConstant(index));
+                    if let Some(smi) = smi_literal(*number) {
+                        self.code.emit(Instruction::LdaSmi(smi));
+                    } else {
+                        let index =
+                            self.constant(crate::engine::value::Value::from_f64(*number))?;
+                        self.code.emit(Instruction::LdaConstant(index));
+                    }
                     RegisterType::Number
                 }
                 Value::Boolean(true) => {
@@ -725,6 +759,7 @@ impl RegisterLowerer {
                 self.lower_conditional(condition, yes, no)?
             }
             ExprKind::Object(properties) => self.lower_object(properties)?,
+            ExprKind::Array(items) => self.lower_array(items)?,
             ExprKind::Member(base, key) => self.lower_member(base, key)?,
             ExprKind::SetMember(target, operator, value, _) => {
                 self.lower_member_assignment(target, *operator, value)?
@@ -744,13 +779,16 @@ impl RegisterLowerer {
         self.lower(condition)?;
         let branch = self.code.emit(Instruction::JumpIfFalse(0));
         let bindings_before = self.bindings.clone();
+        let properties_before = self.object_layouts.clone();
         let yes_type = self.lower(yes)?;
         let bindings_after_yes = self.bindings.clone();
+        let properties_after_yes = self.object_layouts.clone();
         let jump = self.code.emit(Instruction::Jump(0));
         let no_start = self.code.instructions.len();
         self.bindings = bindings_before;
+        self.object_layouts = properties_before;
         let no_type = self.lower(no)?;
-        if self.bindings != bindings_after_yes {
+        if self.bindings != bindings_after_yes || self.object_layouts != properties_after_yes {
             return None;
         }
         let end = self.code.instructions.len();
@@ -761,6 +799,10 @@ impl RegisterLowerer {
 
     fn lower_object(&mut self, properties: &[parser::ObjectProperty]) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        let object_id = self.next_object_id;
+        self.next_object_id = self.next_object_id.checked_add(1)?;
+        self.object_layouts
+            .insert(object_id, RegisterObjectLayout::Ordinary(BTreeMap::new()));
         self.code.emit(Instruction::CreateObject);
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
@@ -769,6 +811,18 @@ impl RegisterLowerer {
                 return None;
             }
             let name = Self::static_property_name(&property.key)?;
+            if parse_array_index(name).is_some() {
+                return None;
+            }
+            let name_units = name.to_vec();
+            let RegisterObjectLayout::Ordinary(properties) = self.object_layouts.get(&object_id)?
+            else {
+                return None;
+            };
+            let is_new = !properties.contains_key(name);
+            if is_new && properties.len() >= self.property_limit {
+                return None;
+            }
             let name = self.string_constant(name)?;
             let value_type = self.lower(&property.value)?;
             if !value_type.is_primitive() {
@@ -780,29 +834,122 @@ impl RegisterLowerer {
                 name,
                 slot,
             });
+            let RegisterObjectLayout::Ordinary(properties) =
+                self.object_layouts.get_mut(&object_id)?
+            else {
+                return None;
+            };
+            properties.insert(name_units, value_type);
         }
         self.code.emit(Instruction::Ldar(object));
         self.release_register(object)?;
-        Some(RegisterType::Object)
+        Some(RegisterType::Object(object_id))
+    }
+
+    fn lower_array(&mut self, items: &[Option<Expr>]) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let object_id = self.next_object_id;
+        self.next_object_id = self.next_object_id.checked_add(1)?;
+        self.object_layouts
+            .insert(object_id, RegisterObjectLayout::Array(BTreeMap::new()));
+        let property_count = items
+            .iter()
+            .filter(|item| item.is_some())
+            .count()
+            .saturating_add(1);
+        if property_count > self.property_limit {
+            return None;
+        }
+        let length = u32::try_from(items.len()).ok()?;
+        self.code.emit(Instruction::CreateArray(length));
+        let array = self.allocate_register()?;
+        self.code.emit(Instruction::Star(array));
+        for (index, item) in items.iter().enumerate() {
+            let Some(item) = item else {
+                continue;
+            };
+            if matches!(item.kind, ExprKind::Spread(_)) {
+                return None;
+            }
+            let index = u32::try_from(index).ok()?;
+            self.emit_array_index(index)?;
+            let key = self.allocate_register()?;
+            self.code.emit(Instruction::Star(key));
+            let value_type = self.lower(item)?;
+            if !value_type.is_primitive() {
+                return None;
+            }
+            let slot = self.feedback_slot()?;
+            self.code.emit(Instruction::SetByValue {
+                obj: array,
+                key,
+                slot,
+            });
+            let RegisterObjectLayout::Array(elements) = self.object_layouts.get_mut(&object_id)?
+            else {
+                return None;
+            };
+            elements.insert(index, value_type);
+            self.release_register(key)?;
+        }
+        self.code.emit(Instruction::Ldar(array));
+        self.release_register(array)?;
+        Some(RegisterType::Array(object_id))
     }
 
     fn lower_member(&mut self, base: &Expr, key: &Expr) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        let name = Self::static_property_name(key)?;
-        let name = self.string_constant(name)?;
-        if self.lower(base)? != RegisterType::Object {
+        let base_type = self.lower(base)?;
+        if !base_type.is_object() {
             return None;
         }
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
-        let slot = self.feedback_slot()?;
-        self.code.emit(Instruction::GetNamed {
-            obj: object,
-            name,
-            slot,
-        });
-        self.release_register(object)?;
-        Some(RegisterType::Primitive)
+        if matches!(base_type, RegisterType::Array(_)) && Self::is_length_name(key) {
+            self.code.emit(Instruction::GetArrayLength { obj: object });
+            self.release_register(object)?;
+            Some(RegisterType::Number)
+        } else if matches!(base_type, RegisterType::Array(_)) {
+            let index = Self::static_array_index(key)?;
+            let RegisterType::Array(object_id) = base_type else {
+                return None;
+            };
+            let RegisterObjectLayout::Array(elements) = self.object_layouts.get(&object_id)? else {
+                return None;
+            };
+            let result_type = *elements.get(&index)?;
+            self.emit_array_index(index)?;
+            let key = self.allocate_register()?;
+            self.code.emit(Instruction::Star(key));
+            let slot = self.feedback_slot()?;
+            self.code.emit(Instruction::GetByValue {
+                obj: object,
+                key,
+                slot,
+            });
+            self.release_register(key)?;
+            self.release_register(object)?;
+            Some(result_type)
+        } else {
+            let name = Self::static_property_name(key)?;
+            let RegisterType::Object(object_id) = base_type else {
+                return None;
+            };
+            let RegisterObjectLayout::Ordinary(properties) = self.object_layouts.get(&object_id)?
+            else {
+                return None;
+            };
+            let result_type = *properties.get(name)?;
+            let name = self.string_constant(name)?;
+            let slot = self.feedback_slot()?;
+            self.code.emit(Instruction::GetNamed {
+                obj: object,
+                name,
+                slot,
+            });
+            self.release_register(object)?;
+            Some(result_type)
+        }
     }
 
     fn lower_member_assignment(
@@ -816,23 +963,81 @@ impl RegisterLowerer {
             return None;
         }
         let (base, key) = target.member()?;
-        let name = Self::static_property_name(key)?;
-        let name = self.string_constant(name)?;
-        if self.lower(base)? != RegisterType::Object {
+        let base_type = self.lower(base)?;
+        if !base_type.is_object()
+            || matches!(base_type, RegisterType::Array(_)) && Self::is_length_name(key)
+        {
             return None;
         }
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
+        let array_index = if matches!(base_type, RegisterType::Array(_)) {
+            Some(Self::static_array_index(key)?)
+        } else {
+            None
+        };
+        let key_register = if matches!(base_type, RegisterType::Array(_)) {
+            self.emit_array_index(array_index?)?;
+            let key = self.allocate_register()?;
+            self.code.emit(Instruction::Star(key));
+            Some(key)
+        } else {
+            None
+        };
+        let name = if array_index.is_none() {
+            Some(self.string_constant(Self::static_property_name(key)?)?)
+        } else {
+            None
+        };
         let value_type = self.lower(value)?;
         if !value_type.is_primitive() {
             return None;
         }
         let slot = self.feedback_slot()?;
-        self.code.emit(Instruction::SetNamed {
-            obj: object,
-            name,
-            slot,
-        });
+        if let Some(key) = key_register {
+            self.code.emit(Instruction::SetByValue {
+                obj: object,
+                key,
+                slot,
+            });
+            self.release_register(key)?;
+            let RegisterType::Array(object_id) = base_type else {
+                return None;
+            };
+            let RegisterObjectLayout::Array(elements) = self.object_layouts.get_mut(&object_id)?
+            else {
+                return None;
+            };
+            let is_new = !elements.contains_key(&array_index?);
+            if is_new && elements.len().saturating_add(1) >= self.property_limit {
+                return None;
+            }
+            elements.insert(array_index?, value_type);
+        } else {
+            self.code.emit(Instruction::SetNamed {
+                obj: object,
+                name: name?,
+                slot,
+            });
+            let RegisterType::Object(object_id) = base_type else {
+                return None;
+            };
+            let property_name = Self::static_property_name(key)?;
+            let RegisterObjectLayout::Ordinary(properties) = self.object_layouts.get(&object_id)?
+            else {
+                return None;
+            };
+            let is_new = !properties.contains_key(property_name);
+            if is_new && properties.len() >= self.property_limit {
+                return None;
+            }
+            let RegisterObjectLayout::Ordinary(properties) =
+                self.object_layouts.get_mut(&object_id)?
+            else {
+                return None;
+            };
+            properties.insert(property_name.to_vec(), value_type);
+        }
         self.release_register(object)?;
         Some(value_type)
     }
@@ -843,6 +1048,50 @@ impl RegisterLowerer {
             ExprKind::Group(inner) => Self::static_property_name(inner),
             _ => None,
         }
+    }
+
+    fn is_length_name(expression: &Expr) -> bool {
+        const LENGTH: [u16; 6] = [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68];
+        Self::static_property_name(expression).is_some_and(|name| name == LENGTH)
+    }
+
+    fn static_array_index(expression: &Expr) -> Option<u32> {
+        let number = match &expression.kind {
+            ExprKind::Literal(Value::Number(number)) => *number,
+            ExprKind::Literal(Value::String(units)) => return parse_array_index(units),
+            ExprKind::Group(inner) => return Self::static_array_index(inner),
+            _ => return None,
+        };
+        if number == 0.0 {
+            return Some(0);
+        }
+        if !number.is_finite() || number < 0.0 || number >= f64::from(u32::MAX) {
+            return None;
+        }
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "finite literal was bounded to the Array-index range"
+        )]
+        let index = number as u32;
+        #[expect(
+            clippy::float_cmp,
+            reason = "Array indices require exact integral binary64 values"
+        )]
+        (f64::from(index) == number).then_some(index)
+    }
+
+    fn emit_array_index(&mut self, index: u32) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        if let Ok(index) = i32::try_from(index) {
+            self.code.emit(Instruction::LdaSmi(index));
+        } else {
+            let constant =
+                self.constant(crate::engine::value::Value::from_f64(f64::from(index)))?;
+            self.code.emit(Instruction::LdaConstant(constant));
+        }
+        Some(())
     }
 
     fn lower_statement(&mut self, statement: &Stmt) -> Option<RegisterFlow> {
@@ -900,7 +1149,9 @@ impl RegisterLowerer {
     fn lower_loop_jump(&mut self, is_break: bool) -> Option<()> {
         use crate::engine::bytecode::Instruction;
         let loop_state = self.loops.last()?;
-        if self.bindings != loop_state.bindings {
+        if self.bindings != loop_state.bindings
+            || !self.loop_layouts_match(&loop_state.object_layouts)
+        {
             return None;
         }
         let result_register = loop_state.result_register;
@@ -937,11 +1188,24 @@ impl RegisterLowerer {
             result_register,
             bindings: bindings_at_head.clone(),
             completion_depth: self.completions.len(),
+            object_layouts: bindings_at_head
+                .values()
+                .filter_map(|binding| match binding.value_type {
+                    Some(RegisterType::Object(id) | RegisterType::Array(id)) => self
+                        .object_layouts
+                        .get(&id)
+                        .cloned()
+                        .map(|layout| (id, layout)),
+                    _ => None,
+                })
+                .collect(),
         });
         let flow = self.lower_statement(body)?;
         let loop_state = self.loops.pop()?;
         if flow != RegisterFlow::Abrupt {
-            if self.bindings != bindings_at_head {
+            if self.bindings != bindings_at_head
+                || !self.loop_layouts_match(&loop_state.object_layouts)
+            {
                 return None;
             }
             self.code.emit(Instruction::Star(result_register));
@@ -965,6 +1229,10 @@ impl RegisterLowerer {
         })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "for lowering keeps lexical scope, completion and object-shape state atomic"
+    )]
     fn lower_for(
         &mut self,
         initializer: &Stmt,
@@ -1029,11 +1297,24 @@ impl RegisterLowerer {
             result_register,
             bindings: bindings_at_head.clone(),
             completion_depth: self.completions.len(),
+            object_layouts: bindings_at_head
+                .values()
+                .filter_map(|binding| match binding.value_type {
+                    Some(RegisterType::Object(id) | RegisterType::Array(id)) => self
+                        .object_layouts
+                        .get(&id)
+                        .cloned()
+                        .map(|layout| (id, layout)),
+                    _ => None,
+                })
+                .collect(),
         });
         let flow = self.lower_statement(body)?;
         let loop_state = self.loops.pop()?;
         if flow != RegisterFlow::Abrupt {
-            if self.bindings != bindings_at_head {
+            if self.bindings != bindings_at_head
+                || !self.loop_layouts_match(&loop_state.object_layouts)
+            {
                 return None;
             }
             self.code.emit(Instruction::Star(result_register));
@@ -1081,13 +1362,16 @@ impl RegisterLowerer {
         self.lower(condition)?;
         let branch = self.code.emit(Instruction::JumpIfFalse(0));
         let bindings_before = self.bindings.clone();
+        let properties_before = self.object_layouts.clone();
         self.code
             .emit(crate::engine::bytecode::Instruction::LdaUndefined);
         let yes_flow = self.lower_statement(yes)?;
         let bindings_after_yes = self.bindings.clone();
+        let properties_after_yes = self.object_layouts.clone();
         let jump = (yes_flow != RegisterFlow::Abrupt).then(|| self.code.emit(Instruction::Jump(0)));
         let no_start = self.code.instructions.len();
         self.bindings = bindings_before;
+        self.object_layouts = properties_before;
         self.code
             .emit(crate::engine::bytecode::Instruction::LdaUndefined);
         let no_flow = no.map_or(Some(RegisterFlow::Value(RegisterType::Undefined)), |no| {
@@ -1105,7 +1389,11 @@ impl RegisterLowerer {
             }
             (RegisterFlow::Abrupt, _) => bindings_after_no,
             (_, RegisterFlow::Abrupt) => bindings_after_yes,
-            _ if bindings_after_yes == bindings_after_no => bindings_after_yes,
+            _ if bindings_after_yes == bindings_after_no
+                && properties_after_yes == self.object_layouts =>
+            {
+                bindings_after_yes
+            }
             _ => return None,
         };
         let value_type = match (yes_flow, no_flow) {
@@ -1121,6 +1409,12 @@ impl RegisterLowerer {
             (RegisterFlow::Abrupt, RegisterFlow::Abrupt) => return Some(RegisterFlow::Abrupt),
         };
         Some(RegisterFlow::Value(value_type))
+    }
+
+    fn loop_layouts_match(&self, expected: &BTreeMap<u32, RegisterObjectLayout>) -> bool {
+        expected
+            .iter()
+            .all(|(id, layout)| self.object_layouts.get(id) == Some(layout))
     }
 
     fn lower_binary(
@@ -1320,10 +1614,49 @@ impl RegisterLowerer {
     }
 }
 
+fn smi_literal(number: f64) -> Option<i32> {
+    if !number.is_finite()
+        || number < f64::from(i32::MIN)
+        || number > f64::from(i32::MAX)
+        || number == 0.0 && number.is_sign_negative()
+    {
+        return None;
+    }
+    #[expect(
+        clippy::as_conversions,
+        clippy::cast_possible_truncation,
+        reason = "finite Number literal was bounded to the signed 32-bit range"
+    )]
+    let integer = number as i32;
+    #[expect(
+        clippy::float_cmp,
+        reason = "Smi literals require exact integral binary64 values"
+    )]
+    (f64::from(integer) == number).then_some(integer)
+}
+
+fn parse_array_index(units: &[u16]) -> Option<u32> {
+    if units.is_empty()
+        || units.len() > 10
+        || units.len() > 1 && units.first() == Some(&u16::from(b'0'))
+    {
+        return None;
+    }
+    let mut index = 0u32;
+    for unit in units {
+        let digit = unit
+            .checked_sub(u16::from(b'0'))
+            .filter(|digit| *digit < 10)?;
+        index = index.checked_mul(10)?.checked_add(u32::from(digit))?;
+    }
+    (index != u32::MAX).then_some(index)
+}
+
 fn lower_register_script(
     body: &[Stmt],
     realm: bool,
     entry_fuel_cost: u64,
+    property_limit: usize,
 ) -> Option<crate::engine::bytecode::BytecodeFunction> {
     let mut saw_expression = false;
     let mut saw_declaration = false;
@@ -1360,7 +1693,7 @@ fn lower_register_script(
     let stack_requirement = body.iter().fold(1usize, |maximum, statement| {
         maximum.max(register_statement_stack_requirement(statement))
     });
-    let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement);
+    let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement, property_limit);
     if saw_declaration {
         for statement in body {
             if let Stmt::Declare(bindings) = statement {

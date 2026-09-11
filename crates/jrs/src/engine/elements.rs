@@ -16,6 +16,8 @@
 use super::value::Value;
 use alloc::{collections::BTreeMap, vec::Vec};
 
+const MAX_HOLEY_GAP: usize = 1024;
+
 /// Reference to an elements backing store in the arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ElementsRef(u32);
@@ -119,6 +121,18 @@ impl ElementsKind {
         self.len() == 0
     }
 
+    /// Returns the number of present indexed properties, excluding holes.
+    #[must_use]
+    pub fn property_count(&self) -> usize {
+        match self {
+            Self::PackedSmi(values) => values.len(),
+            Self::PackedDouble(values) => values.len(),
+            Self::PackedValues(values) => values.len(),
+            Self::Holey(values) => values.iter().filter(|value| value.is_some()).count(),
+            Self::Dictionary(values) => values.len(),
+        }
+    }
+
     /// Reads the element at index `idx`.
     #[must_use]
     pub fn get(&self, idx: u32) -> Option<Value> {
@@ -147,6 +161,39 @@ impl ElementsKind {
     )]
     pub fn set(&mut self, idx: u32, val: Value) {
         let index = idx as usize;
+        if !matches!(self, Self::Dictionary(_)) && index.saturating_sub(self.len()) > MAX_HOLEY_GAP
+        {
+            let previous = core::mem::replace(self, Self::Dictionary(BTreeMap::new()));
+            let mut dictionary = BTreeMap::new();
+            match previous {
+                Self::PackedSmi(values) => {
+                    for (index, value) in values.into_iter().enumerate() {
+                        dictionary.insert(index as u32, Value::from_smi(value));
+                    }
+                }
+                Self::PackedDouble(values) => {
+                    for (index, value) in values.into_iter().enumerate() {
+                        dictionary.insert(index as u32, Value::from_f64(value));
+                    }
+                }
+                Self::PackedValues(values) => {
+                    for (index, value) in values.into_iter().enumerate() {
+                        dictionary.insert(index as u32, value);
+                    }
+                }
+                Self::Holey(values) => {
+                    for (index, value) in values.into_iter().enumerate() {
+                        if let Some(value) = value {
+                            dictionary.insert(index as u32, value);
+                        }
+                    }
+                }
+                Self::Dictionary(values) => dictionary = values,
+            }
+            dictionary.insert(idx, val);
+            *self = Self::Dictionary(dictionary);
+            return;
+        }
         // Transition check
         match self {
             Self::PackedSmi(vec) => {
@@ -241,20 +288,10 @@ impl ElementsKind {
                     }
                 } else {
                     // Sparse write -> Holey or Dictionary
-                    if index.saturating_sub(vec.len()) > 1024 {
-                        let mut dict = BTreeMap::new();
-                        for (i, &v) in vec.iter().enumerate() {
-                            #[expect(clippy::as_conversions, reason = "index fits u32")]
-                            dict.insert(i as u32, v);
-                        }
-                        dict.insert(idx, val);
-                        *self = Self::Dictionary(dict);
-                    } else {
-                        let mut holey: Vec<Option<Value>> = vec.iter().copied().map(Some).collect();
-                        holey.resize(index, None);
-                        holey.push(Some(val));
-                        *self = Self::Holey(holey);
-                    }
+                    let mut holey: Vec<Option<Value>> = vec.iter().copied().map(Some).collect();
+                    holey.resize(index, None);
+                    holey.push(Some(val));
+                    *self = Self::Holey(holey);
                 }
             }
             Self::Holey(vec) => {
@@ -431,6 +468,24 @@ mod tests {
         assert_eq!(dictionary.get(2048), Some(Value::from_smi(2)));
         dictionary.set(2048, Value::from_smi(3));
         assert_eq!(dictionary.get(2048), Some(Value::from_smi(3)));
+
+        let mut sparse_smi = ElementsKind::new_packed_smi(1);
+        sparse_smi.push(Value::from_smi(1));
+        sparse_smi.set(2_000_000_000, Value::from_smi(2));
+        assert!(matches!(sparse_smi, ElementsKind::Dictionary(_)));
+        assert_eq!(sparse_smi.get(0), Some(Value::from_smi(1)));
+        assert_eq!(sparse_smi.get(2_000_000_000), Some(Value::from_smi(2)));
+
+        let mut sparse_double = ElementsKind::PackedDouble(vec![1.5]);
+        sparse_double.set(2_000_000_000, Value::from_f64(2.5));
+        assert!(matches!(sparse_double, ElementsKind::Dictionary(_)));
+        assert_eq!(sparse_double.get(0), Some(Value::from_f64(1.5)));
+
+        let mut sparse_holey = ElementsKind::Holey(vec![None, Some(Value::from_smi(2))]);
+        sparse_holey.set(2_000_000_000, Value::from_smi(3));
+        assert!(matches!(sparse_holey, ElementsKind::Dictionary(_)));
+        assert_eq!(sparse_holey.get(0), None);
+        assert_eq!(sparse_holey.get(1), Some(Value::from_smi(2)));
     }
 
     #[test]

@@ -40,6 +40,8 @@ pub enum VMError {
     StackOverflow,
     /// A string result exceeds the configured UTF-16 code-unit limit.
     StringLimit,
+    /// An object exceeds the configured own-property limit.
+    PropertyLimit,
     /// Property lookup failed or target is not an object.
     TypeError,
     /// Instruction execution fell off bytecode bounds without Return.
@@ -83,6 +85,8 @@ pub struct RegisterVM {
     operand_stack_limit: usize,
     /// Maximum UTF-16 code units in one materialized string value.
     string_units_limit: usize,
+    /// Maximum number of own properties on one object.
+    property_limit: usize,
 }
 
 impl Default for RegisterVM {
@@ -114,12 +118,18 @@ impl RegisterVM {
             fuel,
             operand_stack_limit,
             string_units_limit: usize::MAX,
+            property_limit: usize::MAX,
         }
     }
 
     /// Updates the maximum length of a materialized string value.
     pub(crate) const fn set_string_units_limit(&mut self, limit: usize) {
         self.string_units_limit = limit;
+    }
+
+    /// Updates the maximum number of own properties on one object.
+    pub(crate) const fn set_property_limit(&mut self, limit: usize) {
+        self.property_limit = limit;
     }
 
     /// Reads a register relative to the active frame pointer.
@@ -637,6 +647,11 @@ impl RegisterVM {
                             });
                         }
                     } else {
+                        if heap.own_property_count(oref).unwrap_or(usize::MAX)
+                            >= self.property_limit
+                        {
+                            return Err(VMError::PropertyLimit);
+                        }
                         // Transition to new Shape
                         let (new_shape, slot_idx) = heap.shapes.transition(
                             current_shape,
@@ -663,15 +678,11 @@ impl RegisterVM {
                     let js_obj = heap.get_object(oref).ok_or(VMError::TypeError)?;
                     let key_val = self.read_reg(key)?;
 
-                    if let (Some(idx), Some(eref)) = (key_val.as_smi(), js_obj.elements)
-                        && idx >= 0
-                    {
+                    if let (Some(idx), Some(eref)) = (array_index(key_val), js_obj.elements) {
                         let elem = heap.get_elements(eref).ok_or(VMError::TypeError)?;
-                        #[expect(clippy::as_conversions, reason = "non-negative index fits u32")]
-                        let uidx = idx as u32;
-                        self.acc = elem.get(uidx).unwrap_or(VALUE_UNDEFINED);
+                        self.acc = elem.get(idx).unwrap_or(VALUE_UNDEFINED);
                     } else {
-                        self.acc = VALUE_UNDEFINED;
+                        return Err(VMError::TypeError);
                     }
                 }
                 Instruction::SetByValue { obj, key, .. } => {
@@ -681,12 +692,30 @@ impl RegisterVM {
                     let key_val = self.read_reg(key)?;
                     let val = self.acc;
 
-                    if let (Some(idx), Some(eref)) = (key_val.as_smi(), js_obj.elements)
-                        && idx >= 0
+                    if js_obj.elements.is_some()
+                        && let Some(index) = array_index(key_val)
                     {
-                        #[expect(clippy::as_conversions, reason = "non-negative index fits u32")]
-                        heap.set_element(eref, idx as u32, val)?;
+                        let elements_reference = js_obj.elements.ok_or(VMError::TypeError)?;
+                        let elements = heap
+                            .get_elements(elements_reference)
+                            .ok_or(VMError::TypeError)?;
+                        if elements.get(index).is_none()
+                            && heap.own_property_count(oref).unwrap_or(usize::MAX)
+                                >= self.property_limit
+                        {
+                            return Err(VMError::PropertyLimit);
+                        }
+                        heap.set_array_element(oref, index, val)?;
+                    } else {
+                        return Err(VMError::TypeError);
                     }
+                }
+                Instruction::GetArrayLength { obj } => {
+                    let target = self.read_reg(obj)?;
+                    let object = target.as_object().ok_or(VMError::TypeError)?;
+                    let length = heap.array_length(object).ok_or(VMError::TypeError)?;
+                    self.acc = i32::try_from(length)
+                        .map_or_else(|_| Value::from_f64(f64::from(length)), Value::from_smi);
                 }
                 Instruction::CreateObject => {
                     let root_shape = heap.shapes.root_shape();
@@ -694,6 +723,9 @@ impl RegisterVM {
                     self.acc = Value::from_object(oref);
                 }
                 Instruction::CreateArray(length) => {
+                    if self.property_limit == 0 {
+                        return Err(VMError::PropertyLimit);
+                    }
                     let oref = self.allocate_array(code, heap, length)?;
                     self.acc = Value::from_object(oref);
                 }
@@ -711,6 +743,30 @@ impl RegisterVM {
 
 fn number_to_i32(number: f64) -> i32 {
     i32::from_ne_bytes(crate::value::number_uint32(number).to_ne_bytes())
+}
+
+fn array_index(value: Value) -> Option<u32> {
+    if let Some(index) = value.as_smi() {
+        return u32::try_from(index).ok();
+    }
+    let number = value.as_f64()?;
+    if number == 0.0 {
+        return Some(0);
+    }
+    if !number.is_finite() || number < 0.0 || number >= f64::from(u32::MAX) {
+        return None;
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "finite integral value was bounded to the Array-index range"
+    )]
+    let index = number as u32;
+    #[expect(
+        clippy::float_cmp,
+        reason = "Array indices require exact integral binary64 values"
+    )]
+    (f64::from(index) == number).then_some(index)
 }
 
 #[cfg(test)]
@@ -860,6 +916,58 @@ mod tests {
         assert_eq!(
             vm.run(&valid, &mut feedback, &mut heap),
             Err(VMError::InvalidFeedbackVector)
+        );
+    }
+
+    #[test]
+    fn array_index_classification_matches_array_property_boundaries() {
+        assert_eq!(array_index(Value::from_smi(0)), Some(0));
+        assert_eq!(array_index(Value::from_smi(-1)), None);
+        assert_eq!(array_index(Value::from_f64(-0.0)), Some(0));
+        assert_eq!(
+            array_index(Value::from_f64(2_147_483_648.0)),
+            Some(2_147_483_648)
+        );
+        assert_eq!(array_index(Value::from_f64(1.5)), None);
+        assert_eq!(array_index(Value::from_f64(f64::NAN)), None);
+        assert_eq!(
+            array_index(Value::from_f64(4_294_967_294.0)),
+            Some(4_294_967_294)
+        );
+        assert_eq!(array_index(Value::from_f64(4_294_967_295.0)), None);
+    }
+
+    #[test]
+    fn dynamic_array_stores_obey_the_property_limit() {
+        let mut code = BytecodeFunction::new(2, 0);
+        code.feedback_slot_count = 2;
+        code.emit(Instruction::CreateArray(0));
+        code.emit(Instruction::Star(Reg(0)));
+        code.emit(Instruction::LdaSmi(0));
+        code.emit(Instruction::Star(Reg(1)));
+        code.emit(Instruction::LdaSmi(1));
+        code.emit(Instruction::SetByValue {
+            obj: Reg(0),
+            key: Reg(1),
+            slot: 0,
+        });
+        code.emit(Instruction::LdaSmi(1));
+        code.emit(Instruction::Star(Reg(1)));
+        code.emit(Instruction::LdaSmi(2));
+        code.emit(Instruction::SetByValue {
+            obj: Reg(0),
+            key: Reg(1),
+            slot: 1,
+        });
+        code.emit(Instruction::Return);
+
+        let mut heap = GenerationalHeap::new();
+        let mut feedback = FeedbackVector::new(code.feedback_slot_count);
+        let mut vm = RegisterVM::new(100);
+        vm.set_property_limit(2);
+        assert_eq!(
+            vm.run(&code, &mut feedback, &mut heap),
+            Err(VMError::PropertyLimit)
         );
     }
 }

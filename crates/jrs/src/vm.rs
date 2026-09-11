@@ -422,6 +422,7 @@ impl Execution<'_> {
         });
         vm.fuel = self.fuel;
         vm.set_string_units_limit(self.limits.string_units);
+        vm.set_property_limit(self.limits.properties);
         let mut heap = self.register_heap.take().unwrap_or_default();
         self.register_feedback
             .retain(|state| state.code.strong_count() != 0);
@@ -483,6 +484,9 @@ impl Execution<'_> {
             }),
             Err(crate::engine::interpreter::VMError::StringLimit) => Err(Error::Limit {
                 resource: "string units",
+            }),
+            Err(crate::engine::interpreter::VMError::PropertyLimit) => Err(Error::Limit {
+                resource: "object properties",
             }),
         };
         self.register_vm = Some(vm);

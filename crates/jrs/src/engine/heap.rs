@@ -328,6 +328,29 @@ impl GenerationalHeap {
         }
     }
 
+    /// Returns an Array exotic object's logical `length`.
+    #[must_use]
+    pub fn array_length(&self, reference: ObjectRef) -> Option<u32> {
+        match self.get_object(reference)?.kind {
+            ObjectKind::Array { length } => Some(length),
+            _ => None,
+        }
+    }
+
+    /// Returns the number of own named and indexed properties on an object.
+    /// Array `length` is included even though it lives in the fixed header.
+    #[must_use]
+    pub fn own_property_count(&self, reference: ObjectRef) -> Option<usize> {
+        let object = self.get_object(reference)?;
+        let named = usize::try_from(self.shapes.property_count(object.shape_id)).ok()?;
+        let indexed = object
+            .elements
+            .and_then(|elements| self.get_elements(elements))
+            .map_or(0, ElementsKind::property_count);
+        let array_length = usize::from(matches!(object.kind, ObjectKind::Array { .. }));
+        named.checked_add(indexed)?.checked_add(array_length)
+    }
+
     /// Updates an object's Shape without exposing a mutable heap borrow.
     ///
     /// # Errors
@@ -508,6 +531,34 @@ impl GenerationalHeap {
     ) -> Result<(), HeapError> {
         self.remember_elements_store(reference, value);
         self.elements_mut(reference)?.set(index, value);
+        Ok(())
+    }
+
+    /// Writes an Array index and grows the Array's logical `length` if needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] unless `object` is a live Array
+    /// with a live Elements backing store.
+    pub fn set_array_element(
+        &mut self,
+        object: ObjectRef,
+        index: u32,
+        value: Value,
+    ) -> Result<(), HeapError> {
+        if index == u32::MAX {
+            return Err(HeapError::InvalidReference);
+        }
+        let elements = self
+            .get_object(object)
+            .and_then(|object| object.elements)
+            .ok_or(HeapError::InvalidReference)?;
+        self.set_element(elements, index, value)?;
+        let object = self.object_mut(object)?;
+        let ObjectKind::Array { length } = &mut object.kind else {
+            return Err(HeapError::InvalidReference);
+        };
+        *length = (*length).max(index.saturating_add(1));
         Ok(())
     }
 
@@ -1469,6 +1520,27 @@ mod tests {
         assert_eq!(
             heap.delete_element(elements, 0),
             Err(HeapError::InvalidReference)
+        );
+    }
+
+    #[test]
+    fn indexed_array_stores_update_length_without_dense_sparse_allocation() {
+        let mut heap = GenerationalHeap::new();
+        let array = heap.allocate_array(1).unwrap();
+        heap.set_array_element(array, 0, Value::from_smi(1))
+            .unwrap();
+        assert_eq!(heap.array_length(array), Some(1));
+        heap.set_array_element(array, 2_000_000_000, Value::from_smi(2))
+            .unwrap();
+        assert_eq!(heap.array_length(array), Some(2_000_000_001));
+        let elements = heap.get_object(array).unwrap().elements.unwrap();
+        assert!(matches!(
+            heap.get_elements(elements),
+            Some(ElementsKind::Dictionary(_))
+        ));
+        assert_eq!(
+            heap.get_elements(elements).unwrap().get(2_000_000_000),
+            Some(Value::from_smi(2))
         );
     }
 

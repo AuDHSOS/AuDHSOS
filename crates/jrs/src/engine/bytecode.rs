@@ -181,6 +181,11 @@ pub enum Instruction {
         /// Feedback vector slot for inline caching.
         slot: u16,
     },
+    /// Loads an Array exotic object's `length` data property.
+    GetArrayLength {
+        /// Array object register.
+        obj: Reg,
+    },
     /// Creates an empty object `{}` in `acc`.
     CreateObject,
     /// Creates an empty array `[]` in `acc` with initial capacity.
@@ -370,6 +375,7 @@ impl BytecodeFunction {
                 self.verify_feedback(pc, slot)?;
                 Some(key)
             }
+            Instruction::GetArrayLength { obj } => Some(obj),
             Instruction::Call {
                 func,
                 arg_start,

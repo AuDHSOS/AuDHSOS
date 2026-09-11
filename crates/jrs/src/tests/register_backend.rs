@@ -101,7 +101,6 @@ fn ordinary_named_properties_run_through_shapes_and_inline_caches() -> Result<()
         "let o={x:1,x:2};o.x",
         "let o={true:'yes',null:'no'};o.true",
         "let o={x:'a'};o['x']='ab';o.x",
-        "let o={x:1};o.missing===undefined",
         "let o={x:1};o.x===1",
     ] {
         let program = compile(source, Limits::default())?;
@@ -115,6 +114,94 @@ fn ordinary_named_properties_run_through_shapes_and_inline_caches() -> Result<()
             "{source}: {actual:?} != {expected:?}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn array_literals_and_indices_run_through_dense_elements() -> Result<(), Error> {
+    for source in [
+        "[1,2,3][1]",
+        "let a=[1,,3];a.length===3",
+        "let a=[];a[2]=7;a.length===3",
+        "let a=[1];a['0']",
+        "let a=[];a[2147483648]=9;a[2147483648]",
+        "let a=[];a[4294967294]=9;a.length",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn numeric_array_indices_do_not_enter_the_property_name_pool() -> Result<(), Error> {
+    let program = compile("let a=[1,2];a[1]", Limits::default())?;
+    let code = program
+        .register_code
+        .as_ref()
+        .ok_or(Error::InvalidBytecode)?;
+    assert!(code.string_constants.is_empty());
+    assert!(code.instructions.iter().any(|instruction| matches!(
+        instruction,
+        crate::engine::bytecode::Instruction::SetByValue { .. }
+    )));
+    assert!(code.instructions.iter().any(|instruction| matches!(
+        instruction,
+        crate::engine::bytecode::Instruction::GetByValue { .. }
+    )));
+    assert!(
+        code.instructions.iter().any(|instruction| matches!(
+            instruction,
+            crate::engine::bytecode::Instruction::LdaSmi(1)
+        ))
+    );
+    Ok(())
+}
+
+#[test]
+fn non_indices_and_object_results_remain_on_the_full_property_path() -> Result<(), Error> {
+    for source in [
+        "let a=[1];a[-1]",
+        "let a=[1];a['01']",
+        "let a=[];a[4294967295]=9;a.length",
+        "({0:1})[0]",
+        "[1,,3][1]===undefined",
+        "let o={x:1};o.missing===undefined",
+        "[1,2]",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn register_array_elements_preserve_property_limits() -> Result<(), Error> {
+    let limits = Limits {
+        properties: 1,
+        ..Limits::default()
+    };
+    assert!(!compile("[1,2][0]", limits)?.uses_register_backend());
+    let program = compile("let a=[];a.length", limits)?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::new(limits).run(&program, &mut SilentHost)?,
+        Value::Number(0.0)
+    );
+    assert!(
+        !compile("let a=[];a[0]=1;0", limits)?.uses_register_backend(),
+        "the compiler must retain the full property-limit semantics"
+    );
     Ok(())
 }
 
