@@ -574,12 +574,38 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 
 ### Current Test262 result
 
-The latest measurements were run on 2026-09-12 against Test262 revision
-`419d3e0a2273ba01a3bfcbec423f2801425b8e93`. The checkout was clean at that
-pinned revision. All runs used the original Test262 harness, fresh realms, no
-expected-failure masks or feature exclusions, and a limit of 1,000,000 fuel
-units per realm. A failed or unsupported variant is not counted as passing, so
-all commands correctly returned failure.
+The latest measurements were run on 2026-09-13 against Test262 revision
+`419d3e0a2273ba01a3bfcbec423f2801425b8e93`. The checkout was obtained with
+`sh tools/xtask.sh test-ext` and was clean at that pinned revision, which
+`sh tools/xtask.sh test-ext --status` reported back. Every run used the
+original Test262 harness, a fresh realm per test, no expected-failure masks
+and no feature exclusions, and a limit of 1,000,000 fuel units per realm.
+Resource exhaustion, harness failure, an unexecuted test and `unsupported`
+are not passes, so all commands correctly returned failure. Host: macOS on
+aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
+
+| Scope | Run | Implementation commit | Command | Files | Variants | Passed | Failed | Unsupported |
+|---|---|---|---|---:|---:|---:|---:|---:|
+| Throw statements (focused) | focused | `e040682db6ff724258979bf867a08bcb0454cf5c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/throw --summary` | 14 | 28 | 28 (100.00%) | 0 (0.00%) | 0 (0.00%) |
+| Try statements (focused) | focused | `e040682db6ff724258979bf867a08bcb0454cf5c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/try --summary` | 201 | 388 | 334 (86.08%) | 5 (1.29%) | 49 (12.63%) |
+| Switch statements (focused) | focused | `e040682db6ff724258979bf867a08bcb0454cf5c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/switch --summary` | 111 | 216 | 135 (62.50%) | 11 (5.09%) | 70 (32.41%) |
+| For-in statements (focused) | focused | `e040682db6ff724258979bf867a08bcb0454cf5c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for-in --summary` | 119 | 206 | 168 (81.55%) | 7 (3.40%) | 31 (15.05%) |
+| Complete pinned suite, including staging and Intl | full | `e040682db6ff724258979bf867a08bcb0454cf5c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+
+The complete run also identified 294 `_FIXTURE` files which were correctly not
+executed as standalone tests. These numbers are a migration measurement, not a
+conformance claim. Failed and unsupported variants of both the focused and the
+full runs remain open work.
+
+The four focused families are the statements the register backend gained in
+this migration step. Each produces the counts the legacy stack backend
+produces for the same family, which is what a backend migration has to show:
+the full-suite counts are unchanged against the same suite measured before it.
+
+### Historical Test262 baseline
+
+The preceding measurement was taken on 2026-09-12 with the same Test262
+revision. It is superseded by the table above and is not the current status:
 
 | Scope | Implementation commit | Command | Files | Variants | Passed | Failed | Unsupported |
 |---|---|---|---:|---:|---:|---:|---:|
@@ -589,14 +615,7 @@ all commands correctly returned failure.
 | Destructuring assignment (focused) | `1f7f4879f91186dffda86812e366151a6446bcc7` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr --summary` | 368 | 640 | 446 (69.69%) | 0 (0.00%) | 194 (30.31%) |
 | Complete pinned suite, including staging and Intl | `fab47fdb0adf3b8a7b5e9e575a4a3487e468b345` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,399 (34.39%) | 30,724 (29.85%) | 36,802 (35.76%) |
 
-The complete run also identified 294 `_FIXTURE` files which were correctly not
-executed as standalone tests. These numbers are a migration measurement, not a
-conformance claim. Failed or unsupported focused and full-suite variants remain
-open work.
-
-### Historical Test262 baseline
-
-The preceding full-suite baseline was measured on 2026-09-11 with the same
+The full-suite baseline before that was measured on 2026-09-11 with the same
 Test262 revision and command. It contained 53,582 standalone files and 102,925
 executed variants: 27,965 passed (27.17%), 64,007 failed (62.19%), and 10,953
 were unsupported (10.64%); 294 fixture files were not standalone tests. These
