@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! Why a table was rejected.
+//! Why a table was rejected. The fields these variants name are the
+//! *ACPI Specification* 6.6, sections 5.2.5.3, 5.2.6 and 5.2.12.
 
 use core::fmt;
 
@@ -10,7 +11,8 @@ use core::fmt;
 pub enum AcpiError {
     /// The root pointer does not start with `RSD PTR `.
     RootPointerSignature,
-    /// The sum of the first twenty bytes of the root pointer is not zero.
+    /// The sum of the first twenty bytes of the root pointer is not zero,
+    /// which section 5.2.5.3 requires.
     RootPointerChecksum,
     /// The sum of the bytes the root pointer's length names is not zero.
     ExtendedChecksum,
@@ -24,7 +26,8 @@ pub enum AcpiError {
     /// The table announces a length the bytes do not cover, or one below
     /// the header.
     Length(u32),
-    /// The sum of the bytes the table's length names is not zero.
+    /// The sum of the bytes the table's length names is not zero, which
+    /// section 5.2.6 requires.
     Checksum,
     /// The table carries a signature the caller did not ask for.
     Signature([u8; 4]),

@@ -4,9 +4,14 @@
 //! The root system description pointer, which the firmware leaves behind
 //! and the loader passes on.
 //!
+//! The layout is the *ACPI Specification* 6.6, section 5.2.5.3: the
+//! signature, a checksum over the first twenty bytes, the revision that
+//! decides whether an XSDT is present, and a second checksum over the
+//! length the structure announces.
+//!
 //! Invariants: a [`Rsdp`] this module hands out has the signature, the
-//! checksum, and, from revision two on, the extended checksum of the
-//! specification; the address it names fits the physical address width.
+//! checksum, and, from revision two on, the extended checksum that section
+//! defines; the address it names fits the physical address width.
 
 use kernel_types::PhysAddr;
 
@@ -14,7 +19,7 @@ use crate::error::AcpiError;
 use crate::raw::sum_of;
 
 /// Number of bytes of the revision two root pointer, which is the largest
-/// one the specification defines and the length this parser reads.
+/// one section 5.2.5.3 defines and the length this parser reads.
 pub const RSDP_LEN: usize = 36;
 
 /// Number of bytes the first checksum covers, which is also the length of
@@ -63,10 +68,10 @@ impl Rsdp {
 ///
 /// The first checksum covers the first [`RSDP_V1_LEN`] bytes. A revision
 /// two pointer adds a length and a second checksum over that many bytes;
-/// because the structure the specification defines is exactly [`RSDP_LEN`]
-/// bytes long, a length that does not reach the extended checksum byte or
-/// that leaves the structure describes something this kernel cannot check
-/// and is rejected.
+/// because the structure of section 5.2.5.3 is exactly [`RSDP_LEN`] bytes
+/// long, a length that does not reach the extended checksum byte or that
+/// leaves the structure describes something this kernel cannot check and
+/// is rejected.
 ///
 /// # Errors
 ///
