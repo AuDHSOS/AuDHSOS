@@ -69,7 +69,7 @@ qualifications the rows state.
 | Finite-field Diffie-Hellman with a secret exponent | `crypto-dh` over `crypto-bignum::Modulus::pow_secret` (D-122) |
 | SHA-256 | `crypto-hash::Sha256` |
 | Ed25519 verification | `crypto-ec::ed25519::verify` |
-| Ed25519 signing | `crypto-ec::ed25519::sign`, which compiles only under the feature `test-signing` (D-39) |
+| Ed25519 signing | `crypto-ec::ed25519::sign`, product surface since D-135, over the masked multiplication that decision added |
 | ChaCha20 and Poly1305 as separate primitives | `crypto-aead`, which holds both beside its RFC 8439 construction |
 | Unpredictable bytes | `crypto-rng` seeded from the `random_bytes` call of D-121 |
 | A monotonic clock and a wait with a deadline | D-120 |
@@ -79,20 +79,23 @@ Not one new cryptographic primitive is needed. That is the result of
 choosing the algorithm set in 14.5 rather than the one RFC 4253 makes
 mandatory, and it is the reason this track is protocol work only.
 
-One of them has to change what it is compiled into. D-39 keeps the
-asymmetric product surface verification only and leaves signing behind
+One of them had to change what it is compiled into, and has. D-39 kept
+the asymmetric product surface verification only and left signing behind
 test features, and `publickey` authentication signs with the client's own
-key, so step S5 needs `ed25519::sign` outside `test-signing`. That is a
-decision and not code, and 14.13 carries it.
+key. D-135 amends that for Ed25519: `sign` and `public_key` are product
+surface, and because the point and scalar arithmetic of that module was
+written for a verifier and branched on the bits it was given, the decision
+carries the masked multiplication that signing now runs on. ECDSA signing
+stays behind `test-signing`.
 
 The wire types and the binary packet are built, which is step S1. What is
 missing is everything above them: the negotiation, the exchange hash, the
-key derivation, the authentication exchange, and the channel layer. Three
+key derivation, the authentication exchange, and the channel layer. Two
 things are also missing that are not code, and 14.13 lists them.
 
 ## 14.4 The documents
 
-All thirteen are in `docs/rfc/` under D-59, with their checksums, and
+All fourteen are in `docs/rfc/` under D-59, with their checksums, and
 the README there says what each is kept for. The last two share a row
 because the two documents above them defer to them for the same reason.
 
@@ -414,13 +417,18 @@ listed against until that step is reached.
 |--------------|------------------|---------------------|
 | How a host key is trusted | step S4, and 14.10 | a rule the client is given at construction; the question is what the image can carry |
 | Where the client's private key comes from | step S5 | the boot archive of D-27, or generated per boot, in which case the far side must already know the public half |
-| Whether `ed25519::sign` becomes product surface | step S5, and 14.3 | a decision that amends D-39 for a client that authenticates with a key of its own, with the constant-time statement the crate makes for its other functions |
 
-Three questions that stood here are answered. Secure Shell enters this
-project as a client and this document is its design, which is D-123; the
-track is track S of the roadmap, section 8.26, with the steps below; and
-the cipher's documents are in `docs/openssh/`, which is D-134 and is what
-step S3 was waiting for.
+Four questions that stood here are answered. Whether `ed25519::sign`
+becomes product surface is settled by D-135: it does, together with
+`public_key`, and with the masked point and scalar multiplications a
+secret scalar needs, because the arithmetic under the gate had been
+written for a verifier; ECDSA signing stays behind `test-signing`. Secure
+Shell enters this project as a client and this document is its design,
+which is D-123. The track is track S of the roadmap, section 8.26, with
+the steps below. And the cipher's documents are in `docs/openssh/`, which
+is D-134 and is what step S3 was waiting for; `PROTOCOL.key` is there
+beside them, for the format whatever answers the second question above is
+read out of.
 
 ## 14.14 Order of work
 

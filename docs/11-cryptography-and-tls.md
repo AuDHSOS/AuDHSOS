@@ -105,7 +105,8 @@ allocation, `Target::Host` in the policy table, coverage gate on. Each
 takes `test-support` as a dev-dependency. Four carry a feature for the
 data their own tests and the tests above them need: `test-signing` on
 `crypto-ec` and on `crypto-rsa`, `test-certificates` on `audhsos-x509`,
-and `test-doubles` on `crypto-rng`. None is enabled by a product build. No crate of this track is depended on by
+and `test-doubles` on `crypto-rng`. What `test-signing` holds on
+`crypto-ec` is ECDSA alone; Ed25519 signing is product surface (D-135). None is enabled by a product build. No crate of this track is depended on by
 the kernel; the dependency edges run from userland only, and from the
 network track of [document 12](12-parallel-work.md), which uses
 `crypto-rng` for initial sequence numbers and transaction ids (D-51).
@@ -265,12 +266,23 @@ throughout; AES-GCM follows. Tests: catalog 6.6.32.
   coordinates are not unique, so a comparison would answer a question the
   caller did not ask.
 
-Signature *creation* is not part of the product surface. It exists only
-behind the feature `test-signing`: deterministic Ed25519 signing and
-deterministic ECDSA per RFC 6979, used by the test certificate builder in
-11.9 so that all test data is project-generated and reproducible. The
-feature is off in every non-test build and is rejected by the layering
-check outside test and xtask contexts.
+ECDSA signature *creation* is not part of the product surface. It exists
+only behind the feature `test-signing`, deterministic per RFC 6979, used
+by the test certificate builder in 11.9 so that all test data is
+project-generated and reproducible. The feature is off in every non-test
+build and is rejected by the layering check outside test and xtask
+contexts.
+
+Ed25519 signing left that feature with D-135, because the Secure Shell
+client of document 14 authenticates with a key of its own. What made the
+gate more than a `#[cfg]` is that the point and scalar arithmetic of that
+module was written for a verifier and branched on the bits it was given.
+Signing therefore runs on `Point::mul_secret` and `Scalar::mul_secret`,
+which double and add at every position and keep the sum behind a mask, and
+on a reduction that takes its difference behind a mask in a fixed two
+rounds. `Point::mul` and `Scalar::mul` stay for the public scalars of
+verification. The boundary is the name, as it is for `pow_secret` in
+`crypto-bignum` (D-122), and the module states it.
 
 Tests: catalog 6.6.33.
 

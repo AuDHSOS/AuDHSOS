@@ -943,9 +943,17 @@ done until every applicable item has a test. Items are added, never removed.
   one thousand rounds and, behind a slow test, at one million; a peer
   value that produces an all-zero shared secret is rejected; non-canonical
   peer encodings are handled as the RFC prescribes.
-- Ed25519 verification against RFC 8032 §7.1; rejection of `S >= L`, of
+- Ed25519 against RFC 8032 §7.1 in both directions: every vector verifies,
+  and signing reproduces the public key and the signature the vector
+  states, signing being deterministic. Rejection of `S >= L`, of
   non-canonical point encodings, of small-order public keys, and of a
   signature over a modified message.
+- The masked multiplications of D-135 answer what the branching ones do:
+  `Point::mul_secret` agrees with `Point::mul` on the base point and on
+  another point, for zero, for a scalar of all ones, and for generated
+  scalars; `Scalar::mul_secret` agrees with `Scalar::mul` over a small
+  square of factors. The RFC 8032 signatures are the second half of that
+  check, since signing takes the masked path and its vectors are pinned.
 - P-256: the generator and its first multiples against the published
   points; the group law, including that the multiple by the order is the
   neutral element and the multiple by one less is the negation of the
@@ -959,8 +967,9 @@ done until every applicable item has a test. Items are added, never removed.
   digest longer than the order is truncated to its leftmost bytes, so a
   change beyond them does not change the outcome and a change within them
   does.
-- With `test-signing`: signing then verifying round-trips for both
-  algorithms; the deterministic ECDSA nonce matches the RFC 6979 example.
+- Signing then verifying round-trips for generated Ed25519 keys, and a
+  modified message does not verify. With `test-signing`: the same round
+  trip for ECDSA, whose deterministic nonce matches the RFC 6979 example.
 
 ### 6.6.34 Random generator (`crypto-rng`)
 

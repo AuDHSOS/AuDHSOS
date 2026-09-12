@@ -7,6 +7,23 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Ed25519 signing as product surface, with the arithmetic a secret scalar
+  needs (D-135). `ed25519::sign` and `ed25519::public_key` lose the
+  `#[cfg]` that kept them behind `test-signing`, because the Secure Shell
+  client of document 14 authenticates with a key of its own and step S5
+  signs with it. The gate was not the whole of it: `Point::mul` adds where
+  a bit of its scalar is set, `Scalar::mul` does the same, and
+  `subtract_order` stopped as soon as the value had fallen below the
+  order, all three variable-time on a long-term private key and on the
+  nonce of a signature, because that module was written for a verifier.
+  `Point::mul_secret` and `Scalar::mul_secret` now double and add at every
+  position and keep the sum behind a mask of `crypto-ct`, `subtract_order`
+  runs both rounds always and selects its difference with a mask, and
+  signing calls nothing else. The branching pair stays for the public
+  scalars of verification; what separates them is the name, as it is for
+  `pow_secret` in `crypto-bignum` (D-122), and the modules say so. ECDSA
+  signing stays behind `test-signing`. Catalog 6.6.33.
+
 - `pem::encode_wrapped` and `pem::decode_wrapped` in `audhsos-encoding`,
   the RFC 7468 frame at a width the RFC does not fix. `openssh-key-v1`
   wraps at seventy characters, which is not a multiple of four, so a body

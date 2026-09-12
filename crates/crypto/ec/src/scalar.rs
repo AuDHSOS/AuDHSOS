@@ -7,9 +7,19 @@
 //! A scalar is four limbs of 64 bits, always below the order. Reduction of
 //! a wide value walks its bits from the top and doubles the accumulator,
 //! which is slower than a Barrett step and short enough to check by
-//! reading. Nothing here is on a secret path: verification reduces a hash
-//! that is public, and the signing behind `test-signing` produces test
-//! data.
+//! reading.
+//!
+//! Two things here see a secret, and both say so. [`Scalar::mul_secret`]
+//! is the product whose right-hand bits must not show: it doubles and adds
+//! at every one of the 256 positions and keeps the sum behind a mask,
+//! where [`Scalar::mul`] adds only where a bit is set and is for the public
+//! scalars a verifier reduces. And the reduction every addition and every
+//! doubling ends with takes its difference behind a mask in a fixed two
+//! rounds, rather than stopping once the value has fallen below the
+//! order: signing a message runs that reduction more than five hundred
+//! times over bits nobody may learn.
+
+use crypto_ct::{Choice, ct_select_u64};
 
 /// Bytes of an encoded scalar.
 pub const BYTES: usize = 32;
@@ -109,6 +119,35 @@ impl Scalar {
         result
     }
 
+    /// The product, where the bits of `other` are secret.
+    ///
+    /// Every position costs a doubling and an addition, and which of the
+    /// two the result becomes is chosen with a mask, so the time and the
+    /// sequence of operations depend on nothing but the fixed count. This
+    /// is [`Scalar::mul`] for a factor that may not show, and the two stand
+    /// beside each other the way `pow_secret` stands beside `pow` in
+    /// `crypto-bignum` (D-122): what separates them is the name, and a
+    /// caller that hands a secret to `mul` is wrong.
+    #[must_use]
+    pub fn mul_secret(self, other: Scalar) -> Scalar {
+        let mut result = Scalar::ZERO;
+        for position in (0..256u32).rev() {
+            result = result.double();
+            let sum = result.add(self);
+            result = Scalar::select(Choice::from_lsb(other.bit(position)), sum, result);
+        }
+        result
+    }
+
+    /// `a` when `choice` is true, `b` otherwise, without a branch.
+    fn select(choice: Choice, a: Scalar, b: Scalar) -> Scalar {
+        let mut limbs = [0u64; 4];
+        for (slot, (left, right)) in limbs.iter_mut().zip(a.0.iter().zip(b.0)) {
+            *slot = ct_select_u64(choice, *left, right);
+        }
+        Scalar(limbs)
+    }
+
     /// Bit `position` of the scalar.
     #[must_use]
     pub fn bit(self, position: u32) -> u8 {
@@ -167,6 +206,13 @@ fn add_limbs(a: [u64; 4], b: [u64; 4]) -> ([u64; 4], u64) {
 }
 
 /// The difference with the borrow out.
+///
+/// The two borrows are joined with a bitwise `or` and not with `||`,
+/// which would be a branch on a secret: this runs under `subtract_order`,
+/// and that runs 512 times over the reduction of a signing nonce. At most
+/// one of the two is ever set — a first borrow leaves a difference of at
+/// least one, which the second subtraction of a single bit cannot wrap —
+/// so the two spellings agree on every input.
 fn sub_limbs(a: [u64; 4], b: [u64; 4]) -> ([u64; 4], u64) {
     let mut result = [0u64; 4];
     let mut borrow = 0u64;
@@ -174,24 +220,33 @@ fn sub_limbs(a: [u64; 4], b: [u64; 4]) -> ([u64; 4], u64) {
         let (partial, first) = left.overflowing_sub(right);
         let (value, second) = partial.overflowing_sub(borrow);
         *slot = value;
-        borrow = u64::from(first || second);
+        borrow = u64::from(first) | u64::from(second);
     }
     (result, borrow)
 }
 
 /// Subtracts the order while the value is at or above it. A carry out of
-/// the addition means the value is above the order twice over.
+/// the addition means the value is above the order twice over, which is
+/// why two rounds are enough.
+///
+/// Both rounds always run and neither branches on the value: a round takes
+/// its difference when there was no borrow, or when the carry says the
+/// value is above the order twice, and keeps what it had otherwise. Once
+/// the value is below the order the round is a no-op, so running it again
+/// costs time and changes nothing — which is the point, because the value
+/// is a secret in every signature.
 fn subtract_order(value: [u64; 4], carry: u64) -> [u64; 4] {
     let mut result = value;
     let mut above = carry;
     for _ in 0..2 {
         let (difference, borrow) = sub_limbs(result, ORDER);
-        if above == 1 || borrow == 0 {
-            result = difference;
-            above = 0;
-        } else {
-            break;
+        // The round keeps its difference unless the value was below the
+        // order and no carry stood above it.
+        let take = Choice::is_zero_u64((above ^ 1) & borrow);
+        for (slot, candidate) in result.iter_mut().zip(difference) {
+            *slot = ct_select_u64(take, candidate, *slot);
         }
+        above &= u64::from(take.value() ^ 1);
     }
     result
 }
