@@ -583,6 +583,7 @@ all commands correctly returned failure.
 
 | Scope | Implementation commit | Command | Files | Variants | Passed | Failed | Unsupported |
 |---|---|---|---:|---:|---:|---:|---:|
+| Equality operators (focused) | `fccd5e6571261014c37fc5dc94321c8fbba8c780` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/equals test/language/expressions/does-not-equals test/language/expressions/strict-equals test/language/expressions/strict-does-not-equals --summary` | 145 | 286 | 222 (77.62%) | 0 (0.00%) | 64 (22.38%) |
 | Return statements (focused) | `fab47fdb0adf3b8a7b5e9e575a4a3487e468b345` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/return --summary` | 16 | 31 | 26 (83.87%) | 1 (3.23%) | 4 (12.90%) |
 | Object literals (focused) | `caeb6559961fd79dd275ed4cf4f3123afc2a5a01` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/object --summary` | 1,170 | 2,252 | 684 (30.37%) | 54 (2.40%) | 1,514 (67.23%) |
 | Destructuring assignment (focused) | `1f7f4879f91186dffda86812e366151a6446bcc7` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr --summary` | 368 | 640 | 446 (69.69%) | 0 (0.00%) | 194 (30.31%) |
