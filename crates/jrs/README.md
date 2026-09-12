@@ -572,13 +572,34 @@ cannot satisfy them. Regex implementation restrictions now use fatal
 `Error::Unsupported`, not catchable `SyntaxError`, so they cannot produce false
 negative-test passes. Other parser/builtin completeness gaps remain open.
 
-The full pinned checkout was measured on 2026-09-11 with
-`sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary`.
-It contained 53,582 standalone files and 102,925 executed variants: 27,965 passed,
-64,007 failed and 10,953 were reported as unsupported; 294 fixture files were not
-standalone tests. The command correctly returned failure. These figures are the
-unfiltered migration baseline at revision
-`419d3e0a2273ba01a3bfcbec423f2801425b8e93`, not a conformance claim.
+### Current Test262 result
+
+The current implementation measurement was run on 2026-09-12 against jrs
+implementation commit `867cc169f02f9bd60639216a396a0c94ddc3871a` and Test262
+revision `419d3e0a2273ba01a3bfcbec423f2801425b8e93`. The checkout was clean at
+that pinned revision. Both runs used the original Test262 harness, fresh realms,
+no expected-failure masks or feature exclusions, and a limit of 1,000,000 fuel
+units per realm. A failed or unsupported variant is not counted as passing, so
+both commands correctly returned failure.
+
+| Scope | Command | Files | Variants | Passed | Failed | Unsupported |
+|---|---|---:|---:|---:|---:|---:|
+| Destructuring assignment (focused) | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr --summary` | 368 | 640 | 446 (69.69%) | 0 (0.00%) | 194 (30.31%) |
+| Complete pinned suite, including staging and Intl | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,399 (34.39%) | 30,724 (29.85%) | 36,802 (35.76%) |
+
+The complete run also identified 294 `_FIXTURE` files which were correctly not
+executed as standalone tests. These numbers are a migration measurement, not a
+conformance claim. In particular, the 194 unsupported focused variants and all
+failed or unsupported full-suite variants remain open work.
+
+### Historical Test262 baseline
+
+The preceding full-suite baseline was measured on 2026-09-11 with the same
+Test262 revision and command. It contained 53,582 standalone files and 102,925
+executed variants: 27,965 passed (27.17%), 64,007 failed (62.19%), and 10,953
+were unsupported (10.64%); 294 fixture files were not standalone tests. These
+figures are retained only for historical comparison and are not the current
+implementation status.
 
 Object.prototype.propertyIsEnumerable and isPrototypeOf use the ordinary property
 and prototype operations, with Symbol keys, primitive boxing and required error
@@ -588,9 +609,10 @@ Global declaration collisions are validated before function/var definability
 checks, and top-level arrows no longer incorrectly permit new.target.
 
 The full run uses `--fuel 1000000` per realm as a bounded diagnostic baseline;
-resource exhaustion is a failure, not a pass. The current focused JSON run covers
-165 original files / 330 strict and non-strict variants: 272 passed, 54 failed,
-4 unsupported. No expected-failure masks or feature exclusions are used.
+resource exhaustion is a failure, not a pass. A historical focused JSON run
+covered 165 original files / 330 strict and non-strict variants: 272 passed,
+54 failed and 4 were unsupported. It predates the current full-suite result
+above. No expected-failure masks or feature exclusions were used.
 
 Math.pow, exponentiation (`**`, `**=`) and the comma operator are implemented.
 `crates/math` owns the allocation-free `no_std` binary64 power kernel, with exact
