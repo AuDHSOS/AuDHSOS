@@ -17,7 +17,6 @@ fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), 
     for source in [
         "let [x]=[1];x",
         "var [x]=[1];x",
-        "let {x=1}={};x",
         "let k='x';let {[k]:x}={x:1};x",
         "let {x,...rest}={x:1};rest",
         "{const [x]=[1];x}",
@@ -31,7 +30,7 @@ fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), 
 }
 
 #[test]
-fn static_object_binding_patterns_use_register_property_caches() -> Result<(), Error> {
+fn static_object_binding_patterns_and_defaults_use_register_property_caches() -> Result<(), Error> {
     for source in [
         "let {x}={x:42};x",
         "var {x:y}={x:42};y",
@@ -40,7 +39,21 @@ fn static_object_binding_patterns_use_register_property_caches() -> Result<(), E
         "let {[('x')]:x}={x:42};x",
         "let {0:x,length:n}=[41];x+n",
         "let {}={x:1};42",
+        "let {x=42}={x:undefined};x",
+        "let {x=42}={};x",
+        "let {x=1}={x:2};x",
+        "var {x:y=40}={x:undefined};y+2",
+        "let {x,y=x+2}={x:40,y:undefined};x+y",
+        "let {x:{y=42}}={x:{y:undefined}};y",
+        "let n=0;let {x=(n=1)}={x:2};x+n",
+        "let n=0;let {x=(n=1)}={x:undefined};x+n",
+        "let flag=true;let {x=42}={x:flag?undefined:1};x",
+        "let flag=true;let {x=42}={x:flag?undefined:'a'};x",
+        "let flag=false;let {x=42}={x:flag?undefined:'a'};x",
         "function f(){let {x}={x:42};return x}f()",
+        "function f(){let {x=42}={x:undefined};return x}f()",
+        "function f(){let n=0;let {x=(n=1)}={x:undefined};return x+n}f()",
+        "function f(){let x=1;function g(){return x}let {y=(x=2)}={};return g()+y}f()",
         "function f(){var {x:y}={x:42};return y}f()",
     ] {
         let program = compile(source, Limits::default())?;
@@ -49,6 +62,12 @@ fn static_object_binding_patterns_use_register_property_caches() -> Result<(), E
             .register_code
             .as_ref()
             .ok_or(Error::InvalidBytecode)?;
+        if source.contains("flag?undefined") {
+            assert!(code.instructions.iter().any(|instruction| matches!(
+                instruction,
+                crate::engine::bytecode::Instruction::JumpIfNotUndefined(_)
+            )));
+        }
         if !source.contains("let {}") {
             assert!(
                 core::iter::once(code.as_ref())
@@ -71,6 +90,16 @@ fn static_object_binding_patterns_use_register_property_caches() -> Result<(), E
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn observable_object_binding_defaults_stay_on_legacy_backend() -> Result<(), Error> {
+    for source in ["let {x=({})}={};42", "let o={};let {x=(o.y=1)}={};42"] {
+        let program = compile(source, Limits::default())?;
+        assert!(!program.uses_register_backend(), "{source}");
+        Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
     }
     Ok(())
 }
@@ -1235,6 +1264,8 @@ fn var_frame_slots_exist_before_source_order_initializers() -> Result<(), Error>
 #[test]
 fn captured_var_mutations_wait_for_deoptimization() -> Result<(), Error> {
     for source in [
+        "let x=1;function g(){return x}let {y=(x='a')}={};g()+1",
+        "var x=1;function g(){return x}var {y=(x='a')}={};g()",
         "var x=1;function g(){return x}x='a';g()",
         "var x=1;var g=function(){return x};x='a';g()",
         "var f=1;function f(){return f}typeof f",

@@ -897,6 +897,14 @@ impl RegisterVM {
                         pc = (pc as isize + offset as isize) as usize;
                     }
                 }
+                Instruction::JumpIfNotUndefined(offset) => {
+                    if !self.acc.is_undefined() {
+                        if offset < 0 {
+                            self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                        }
+                        pc = (pc as isize + offset as isize) as usize;
+                    }
+                }
                 Instruction::GetNamed { obj, name, slot } => {
                     let name = active_code
                         .string_constants
@@ -1514,6 +1522,26 @@ mod tests {
 
         let res = vm.run(&code, &mut feedback, &mut heap).unwrap();
         assert_eq!(res.as_smi(), Some(45));
+    }
+
+    #[test]
+    fn undefined_branch_distinguishes_null_and_undefined() {
+        for (value, expected) in [
+            (Instruction::LdaUndefined, Value::from_smi(42)),
+            (Instruction::LdaNull, VALUE_NULL),
+        ] {
+            let mut code = BytecodeFunction::new(0, 0);
+            code.emit(value);
+            code.emit(Instruction::JumpIfNotUndefined(1));
+            code.emit(Instruction::LdaSmi(42));
+            code.emit(Instruction::Return);
+            let mut feedback = FeedbackVector::for_code(&code);
+            let mut heap = GenerationalHeap::default();
+            assert_eq!(
+                RegisterVM::default().run(&code, &mut feedback, &mut heap),
+                Ok(expected)
+            );
+        }
     }
 
     #[test]

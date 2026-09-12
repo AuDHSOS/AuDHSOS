@@ -255,6 +255,8 @@ pub enum Instruction {
     JumpIfFalse(i32),
     /// Jump if `acc` is neither `undefined` nor `null`.
     JumpIfNotNullish(i32),
+    /// Jump if `acc` is not `undefined`.
+    JumpIfNotUndefined(i32),
     /// Load named property: `acc = obj_reg[name]` (uses feedback slot).
     GetNamed {
         /// Object register.
@@ -475,7 +477,8 @@ impl BytecodeFunction {
                 }
                 Instruction::JumpIfTrue(offset)
                 | Instruction::JumpIfFalse(offset)
-                | Instruction::JumpIfNotNullish(offset) => {
+                | Instruction::JumpIfNotNullish(offset)
+                | Instruction::JumpIfNotUndefined(offset) => {
                     work.push_back(self.jump_target(pc, offset)?);
                     work.push_back(self.fallthrough(pc)?);
                 }
@@ -576,7 +579,8 @@ impl BytecodeFunction {
             Instruction::Jump(offset)
             | Instruction::JumpIfTrue(offset)
             | Instruction::JumpIfFalse(offset)
-            | Instruction::JumpIfNotNullish(offset) => {
+            | Instruction::JumpIfNotNullish(offset)
+            | Instruction::JumpIfNotUndefined(offset) => {
                 self.jump_target(pc, offset)?;
                 None
             }
@@ -738,6 +742,13 @@ mod tests {
         function.emit(Instruction::Jump(-2));
         function.emit(Instruction::Return);
         assert_eq!(function.verify(), Ok(()));
+
+        let mut default = BytecodeFunction::new(0, 0);
+        default.emit(Instruction::LdaUndefined);
+        default.emit(Instruction::JumpIfNotUndefined(1));
+        default.emit(Instruction::LdaSmi(42));
+        default.emit(Instruction::Return);
+        assert_eq!(default.verify(), Ok(()));
     }
 
     #[test]
@@ -862,6 +873,14 @@ mod tests {
         jump.emit(Instruction::Return);
         assert_eq!(
             jump.verify(),
+            Err(VerificationError::JumpOutOfBounds { pc: 0 })
+        );
+
+        let mut undefined_jump = BytecodeFunction::new(0, 0);
+        undefined_jump.emit(Instruction::JumpIfNotUndefined(1));
+        undefined_jump.emit(Instruction::Return);
+        assert_eq!(
+            undefined_jump.verify(),
             Err(VerificationError::JumpOutOfBounds { pc: 0 })
         );
 

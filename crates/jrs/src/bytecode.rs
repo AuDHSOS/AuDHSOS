@@ -779,11 +779,11 @@ impl RegisterLowerer {
                 let source = self.allocate_register()?;
                 self.code.emit(Instruction::Star(source));
                 for property in &object.properties {
-                    if property.initializer.is_some() {
-                        return None;
+                    let mut property_type =
+                        self.lower_property_from_register(source, value_type, &property.key, true)?;
+                    if let Some(initializer) = &property.initializer {
+                        property_type = self.lower_binding_default(property_type, initializer)?;
                     }
-                    let property_type =
-                        self.lower_property_from_register(source, value_type, &property.key)?;
                     self.bind_pattern(property_type, &property.pattern)?;
                 }
                 self.release_register(source)?;
@@ -791,6 +791,47 @@ impl RegisterLowerer {
             parser::BindingPattern::Array(_) | parser::BindingPattern::Object(_) => return None,
         }
         Some(())
+    }
+
+    fn lower_binding_default(
+        &mut self,
+        value_type: RegisterType,
+        initializer: &Expr,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        if value_type == RegisterType::Undefined {
+            let bindings_without_default = self.bindings.clone();
+            let layouts_without_default = self.object_layouts.clone();
+            let default_type = self.lower(initializer)?;
+            return (default_type.is_primitive()
+                && self.object_layouts == layouts_without_default
+                && register_context_bindings_unchanged(&bindings_without_default, &self.bindings))
+            .then_some(default_type);
+        }
+        if !matches!(
+            value_type,
+            RegisterType::NumberOrUndefined | RegisterType::Primitive
+        ) {
+            return Some(value_type);
+        }
+        let present = self.code.emit(Instruction::JumpIfNotUndefined(0));
+        let bindings_without_default = self.bindings.clone();
+        let layouts_without_default = self.object_layouts.clone();
+        let default_type = self.lower(initializer)?;
+        if !default_type.is_primitive()
+            || self.object_layouts != layouts_without_default
+            || !register_context_bindings_unchanged(&bindings_without_default, &self.bindings)
+        {
+            return None;
+        }
+        self.bindings = merge_register_bindings(&bindings_without_default, &self.bindings)?;
+        let end = self.code.instructions.len();
+        self.patch_jump(present, end)?;
+        Some(if value_type == RegisterType::Primitive {
+            RegisterType::Primitive
+        } else {
+            RegisterType::Number.merge(default_type)
+        })
     }
 
     fn prepare_var_bindings(&mut self, body: &[Stmt]) -> Option<()> {
@@ -1576,7 +1617,7 @@ impl RegisterLowerer {
         }
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
-        let result = self.lower_property_from_register(object, base_type, key)?;
+        let result = self.lower_property_from_register(object, base_type, key, false)?;
         self.release_register(object)?;
         Some(result)
     }
@@ -1586,6 +1627,7 @@ impl RegisterLowerer {
         object: crate::engine::bytecode::Reg,
         base_type: RegisterType,
         key: &Expr,
+        missing_is_undefined: bool,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         if matches!(base_type, RegisterType::Array(_)) && Self::is_length_name(key) {
@@ -1644,7 +1686,14 @@ impl RegisterLowerer {
             else {
                 return None;
             };
-            let result_type = *properties.get(name)?;
+            let result_type = if missing_is_undefined {
+                properties
+                    .get(name)
+                    .copied()
+                    .unwrap_or(RegisterType::Undefined)
+            } else {
+                *properties.get(name)?
+            };
             let name = self.string_constant(name)?;
             let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
             self.code.emit(Instruction::GetNamed {
@@ -2501,7 +2550,8 @@ impl RegisterLowerer {
             crate::engine::bytecode::Instruction::Jump(value)
             | crate::engine::bytecode::Instruction::JumpIfFalse(value)
             | crate::engine::bytecode::Instruction::JumpIfTrue(value)
-            | crate::engine::bytecode::Instruction::JumpIfNotNullish(value) => *value = offset,
+            | crate::engine::bytecode::Instruction::JumpIfNotNullish(value)
+            | crate::engine::bytecode::Instruction::JumpIfNotUndefined(value) => *value = offset,
             _ => return None,
         }
         Some(())
@@ -2666,6 +2716,16 @@ fn register_bindings_fit(
     merge_register_bindings(actual, expected).as_ref() == Some(expected)
 }
 
+fn register_context_bindings_unchanged(
+    before: &BTreeMap<String, RegisterBinding>,
+    after: &BTreeMap<String, RegisterBinding>,
+) -> bool {
+    before.iter().all(|(name, binding)| {
+        !matches!(binding.storage, RegisterBindingStorage::Context { .. })
+            || after.get(name) == Some(binding)
+    })
+}
+
 fn register_body_var_names(body: &[Stmt]) -> Option<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     for statement in body {
@@ -2815,7 +2875,10 @@ fn register_statement_writes_names(statement: &Stmt, names: &BTreeSet<String>) -
             register_expression_writes_names(expression, names)?
         }
         Stmt::Declare(bindings) => {
-            for (_, _, initializer) in bindings {
+            for (pattern, _, initializer) in bindings {
+                if pattern.contains_expression() {
+                    return None;
+                }
                 if let Some(initializer) = initializer
                     && register_expression_writes_names(initializer, names)?
                 {
@@ -2825,7 +2888,10 @@ fn register_statement_writes_names(statement: &Stmt, names: &BTreeSet<String>) -
             false
         }
         Stmt::Var(bindings) => {
-            for (_, initializer) in bindings {
+            for (pattern, initializer) in bindings {
+                if pattern.contains_expression() {
+                    return None;
+                }
                 if let Some(initializer) = initializer
                     && register_expression_writes_names(initializer, names)?
                 {
@@ -3106,6 +3172,27 @@ fn register_expression_references(
     Some(())
 }
 
+fn register_binding_pattern_references(
+    pattern: &parser::BindingPattern,
+    names: &mut BTreeSet<String>,
+    nested_free_names: &mut BTreeSet<String>,
+) -> Option<()> {
+    match pattern {
+        parser::BindingPattern::Name(_) => {}
+        parser::BindingPattern::Object(object) if object.rest.is_none() => {
+            for property in &object.properties {
+                register_expression_references(&property.key, names, nested_free_names)?;
+                register_binding_pattern_references(&property.pattern, names, nested_free_names)?;
+                if let Some(initializer) = &property.initializer {
+                    register_expression_references(initializer, names, nested_free_names)?;
+                }
+            }
+        }
+        parser::BindingPattern::Array(_) | parser::BindingPattern::Object(_) => return None,
+    }
+    Some(())
+}
+
 fn register_statement_references(
     statement: &Stmt,
     names: &mut BTreeSet<String>,
@@ -3116,14 +3203,16 @@ fn register_statement_references(
             register_expression_references(expression, names, nested_free_names)?;
         }
         Stmt::Declare(bindings) => {
-            for (_, _, expression) in bindings {
+            for (pattern, _, expression) in bindings {
+                register_binding_pattern_references(pattern, names, nested_free_names)?;
                 if let Some(expression) = expression {
                     register_expression_references(expression, names, nested_free_names)?;
                 }
             }
         }
         Stmt::Var(bindings) => {
-            for (_, expression) in bindings {
+            for (pattern, expression) in bindings {
+                register_binding_pattern_references(pattern, names, nested_free_names)?;
                 if let Some(expression) = expression {
                     register_expression_references(expression, names, nested_free_names)?;
                 }
@@ -3397,8 +3486,7 @@ fn register_binding_pattern_supported(pattern: &parser::BindingPattern) -> bool 
         parser::BindingPattern::Object(object) => {
             object.rest.is_none()
                 && object.properties.iter().all(|property| {
-                    property.initializer.is_none()
-                        && RegisterLowerer::static_property_name(&property.key).is_some()
+                    RegisterLowerer::static_property_name(&property.key).is_some()
                         && register_binding_pattern_supported(&property.pattern)
                 })
         }
