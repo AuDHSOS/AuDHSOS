@@ -587,7 +587,10 @@ impl RegisterType {
 
 #[derive(Clone, PartialEq, Eq)]
 enum RegisterObjectLayout {
-    Ordinary(BTreeMap<Vec<u16>, RegisterType>),
+    Ordinary {
+        properties: BTreeMap<Vec<u16>, RegisterType>,
+        order: Vec<Vec<u16>>,
+    },
     Array {
         length: Option<u32>,
         elements: BTreeMap<u32, RegisterType>,
@@ -785,13 +788,20 @@ impl RegisterLowerer {
                 self.store_binding(binding);
                 self.bindings.get_mut(name)?.value_type = Some(value_type);
             }
-            parser::BindingPattern::Object(object) if object.rest.is_none() => {
+            parser::BindingPattern::Object(object) => {
                 if !value_type.is_object() {
+                    return None;
+                }
+                if object.rest.is_some() && !matches!(value_type, RegisterType::Object(_)) {
                     return None;
                 }
                 let source = self.allocate_register()?;
                 self.code.emit(Instruction::Star(source));
+                let mut excluded = Vec::new();
                 for property in &object.properties {
+                    if object.rest.is_some() {
+                        excluded.push(Self::binding_property_name(property)?);
+                    }
                     let mut property_type = self.lower_property_from_register(
                         source,
                         value_type,
@@ -803,6 +813,13 @@ impl RegisterLowerer {
                         property_type = self.lower_binding_default(property_type, initializer)?;
                     }
                     self.bind_pattern(property_type, &property.pattern)?;
+                }
+                if let Some(rest) = &object.rest {
+                    let (rest_type, rest_object) =
+                        self.lower_object_rest_from_register(source, value_type, &excluded)?;
+                    self.code.emit(Instruction::Ldar(rest_object));
+                    self.bind_pattern(rest_type, &parser::BindingPattern::Name(rest.clone()))?;
+                    self.release_register(rest_object)?;
                 }
                 self.release_register(source)?;
             }
@@ -838,7 +855,6 @@ impl RegisterLowerer {
                 }
                 self.release_register(source)?;
             }
-            parser::BindingPattern::Object(_) => return None,
         }
         Some(())
     }
@@ -1208,8 +1224,13 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         let object_id = self.next_object_id;
         self.next_object_id = self.next_object_id.checked_add(1)?;
-        self.object_layouts
-            .insert(object_id, RegisterObjectLayout::Ordinary(BTreeMap::new()));
+        self.object_layouts.insert(
+            object_id,
+            RegisterObjectLayout::Ordinary {
+                properties: BTreeMap::new(),
+                order: Vec::new(),
+            },
+        );
         self.code.emit(Instruction::CreateObject);
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
@@ -1222,7 +1243,8 @@ impl RegisterLowerer {
                 return None;
             }
             let name_units = name.to_vec();
-            let RegisterObjectLayout::Ordinary(properties) = self.object_layouts.get(&object_id)?
+            let RegisterObjectLayout::Ordinary { properties, .. } =
+                self.object_layouts.get(&object_id)?
             else {
                 return None;
             };
@@ -1241,11 +1263,14 @@ impl RegisterLowerer {
                 name,
                 slot,
             });
-            let RegisterObjectLayout::Ordinary(properties) =
+            let RegisterObjectLayout::Ordinary { properties, order } =
                 self.object_layouts.get_mut(&object_id)?
             else {
                 return None;
             };
+            if is_new {
+                order.push(name_units.clone());
+            }
             properties.insert(name_units, value_type);
         }
         self.code.emit(Instruction::Ldar(object));
@@ -1860,6 +1885,69 @@ impl RegisterLowerer {
         Some((RegisterType::Array(rest_id), rest_array))
     }
 
+    fn lower_object_rest_from_register(
+        &mut self,
+        source: crate::engine::bytecode::Reg,
+        source_type: RegisterType,
+        excluded: &[Vec<u16>],
+    ) -> Option<(RegisterType, crate::engine::bytecode::Reg)> {
+        use crate::engine::bytecode::Instruction;
+        let RegisterType::Object(source_id) = source_type else {
+            return None;
+        };
+        let RegisterObjectLayout::Ordinary { properties, order } =
+            self.object_layouts.get(&source_id)?
+        else {
+            return None;
+        };
+        let copied = order
+            .iter()
+            .filter(|name| !excluded.contains(name))
+            .map(|name| Some((name.clone(), *properties.get(name)?)))
+            .collect::<Option<Vec<_>>>()?;
+        if copied.len() > self.property_limit {
+            return None;
+        }
+        let rest_id = self.next_object_id;
+        self.next_object_id = self.next_object_id.checked_add(1)?;
+        self.object_layouts.insert(
+            rest_id,
+            RegisterObjectLayout::Ordinary {
+                properties: BTreeMap::new(),
+                order: Vec::new(),
+            },
+        );
+        self.code.emit(Instruction::CreateObject);
+        let rest_object = self.allocate_register()?;
+        self.code.emit(Instruction::Star(rest_object));
+        for (name, value_type) in copied {
+            let property_name = name.clone();
+            let name = self.string_constant(&property_name)?;
+            let get_slot =
+                self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: source,
+                name,
+                slot: get_slot,
+            });
+            let set_slot =
+                self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::SetNamed {
+                obj: rest_object,
+                name,
+                slot: set_slot,
+            });
+            let RegisterObjectLayout::Ordinary { properties, order } =
+                self.object_layouts.get_mut(&rest_id)?
+            else {
+                return None;
+            };
+            order.push(property_name.clone());
+            properties.insert(property_name, value_type);
+        }
+        Some((RegisterType::Object(rest_id), rest_object))
+    }
+
     fn lower_ordinary_property_from_register(
         &mut self,
         object: crate::engine::bytecode::Reg,
@@ -1872,7 +1960,8 @@ impl RegisterLowerer {
         let RegisterType::Object(object_id) = base_type else {
             return None;
         };
-        let RegisterObjectLayout::Ordinary(properties) = self.object_layouts.get(&object_id)?
+        let RegisterObjectLayout::Ordinary { properties, .. } =
+            self.object_layouts.get(&object_id)?
         else {
             return None;
         };
@@ -2007,7 +2096,8 @@ impl RegisterLowerer {
                 return None;
             };
             let property_name = Self::static_property_name(key)?;
-            let RegisterObjectLayout::Ordinary(properties) = self.object_layouts.get(&object_id)?
+            let RegisterObjectLayout::Ordinary { properties, .. } =
+                self.object_layouts.get(&object_id)?
             else {
                 return None;
             };
@@ -2015,11 +2105,14 @@ impl RegisterLowerer {
             if is_new && properties.len() >= self.property_limit {
                 return None;
             }
-            let RegisterObjectLayout::Ordinary(properties) =
+            let RegisterObjectLayout::Ordinary { properties, order } =
                 self.object_layouts.get_mut(&object_id)?
             else {
                 return None;
             };
+            if is_new {
+                order.push(property_name.to_vec());
+            }
             properties.insert(property_name.to_vec(), value_type);
         }
         self.release_register(object)?;
@@ -2061,6 +2154,14 @@ impl RegisterLowerer {
             ExprKind::Literal(Value::Undefined) => Some("undefined".encode_utf16().collect()),
             ExprKind::Group(inner) => Self::static_property_key_units(inner),
             _ => None,
+        }
+    }
+
+    fn binding_property_name(property: &parser::ObjectBindingProperty) -> Option<Vec<u16>> {
+        if property.computed {
+            Self::static_property_key_units(&property.key)
+        } else {
+            Some(Self::static_property_name(&property.key)?.to_vec())
         }
     }
 
@@ -3548,7 +3649,7 @@ fn register_binding_pattern_references(
                 }
             }
         }
-        parser::BindingPattern::Object(object) if object.rest.is_none() => {
+        parser::BindingPattern::Object(object) => {
             for property in &object.properties {
                 register_expression_references(&property.key, names, nested_free_names)?;
                 register_binding_pattern_references(&property.pattern, names, nested_free_names)?;
@@ -3557,7 +3658,6 @@ fn register_binding_pattern_references(
                 }
             }
         }
-        parser::BindingPattern::Object(_) => return None,
     }
     Some(())
 }
@@ -3909,14 +4009,16 @@ fn register_binding_pattern_supported(pattern: &parser::BindingPattern) -> bool 
                 .is_none_or(register_binding_pattern_supported)
         }
         parser::BindingPattern::Object(object) => {
-            object.rest.is_none()
-                && object.properties.iter().all(|property| {
-                    (!property.computed
-                        && RegisterLowerer::static_property_name(&property.key).is_some()
-                        || property.computed
-                            && register_computed_property_key_supported(&property.key))
-                        && register_binding_pattern_supported(&property.pattern)
-                })
+            object.properties.iter().all(|property| {
+                (!property.computed
+                    && RegisterLowerer::static_property_name(&property.key).is_some()
+                    || property.computed && register_computed_property_key_supported(&property.key))
+                    && register_binding_pattern_supported(&property.pattern)
+            }) && (object.rest.is_none()
+                || object
+                    .properties
+                    .iter()
+                    .all(|property| RegisterLowerer::binding_property_name(property).is_some()))
         }
     }
 }

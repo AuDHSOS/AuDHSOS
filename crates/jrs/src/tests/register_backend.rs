@@ -18,7 +18,8 @@ fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), 
         "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [x]=input;x",
         "let a=[1];a[Symbol.iterator]=function(){return {next(){return {value:42}}}};let [x]=a;x",
         "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [...x]=input;x",
-        "let {x,...rest}={x:1};rest",
+        "let source={get x(){return 1},y:2};let {x,...rest}=source;rest.y",
+        "let key={toString(){return 'x'}};let {[key]:x,...rest}={x:1,y:2};rest.y",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
@@ -178,6 +179,49 @@ fn observable_object_binding_defaults_stay_on_legacy_backend() -> Result<(), Err
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
         Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn fresh_object_rest_bindings_copy_shape_slots() -> Result<(), Error> {
+    for source in [
+        "let {...rest}={x:20,y:22};rest.x+rest.y",
+        "let {x,...rest}={x:1,y:42};x+rest.y",
+        "let {x,...rest}={x:1,y:42};let {x:copy=7,y}=rest;copy+y",
+        "let {['x']:x,...rest}={x:1,y:42};x+rest.y",
+        "let {nested:{x,...rest}}={nested:{x:1,y:42}};x+rest.y",
+        "let {...rest}={};42",
+        "let {x,...rest}={x:42};x",
+        "let {x,...rest}={x:42,x:1,y:41};x+rest.y",
+        "let input={x:1,y:2};let {x,...rest}=input;rest.y=40;input.y+rest.y",
+        "function f(){let {x,...rest}={x:1,y:41};return x+rest.y}f()",
+        "let total=0;for(let {x,...rest}={x:1,y:2};total<1;total++)rest.y",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let code = program
+            .register_code
+            .as_ref()
+            .ok_or(Error::InvalidBytecode)?;
+        assert!(
+            core::iter::once(code.as_ref())
+                .chain(code.functions.iter())
+                .flat_map(|function| &function.instructions)
+                .any(|instruction| matches!(
+                    instruction,
+                    crate::engine::bytecode::Instruction::CreateObject
+                )),
+            "{source}"
+        );
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
     }
     Ok(())
 }
