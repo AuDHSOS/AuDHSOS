@@ -2656,7 +2656,7 @@ impl RegisterLowerer {
         if self.bindings != bindings_before || self.object_layouts != layouts_before {
             return None;
         }
-        self.reject_protected_calls(start, end)?;
+        let opaque = self.range_contains_call(start, end)?;
         if body_flow != RegisterFlow::Abrupt {
             self.code.emit(Instruction::Star(result_register));
         }
@@ -2666,8 +2666,11 @@ impl RegisterLowerer {
         }
 
         let handler_pc = self.code.instructions.len();
+        // A callee's thrown type is not tracked, so a call in the protected
+        // range widens the catch parameter to the top type.
         let value_type = thrown
             .into_iter()
+            .chain(opaque.then_some(RegisterType::Unknown))
             .reduce(RegisterType::merge)
             .unwrap_or(RegisterType::Primitive);
         let mut handler_flow = RegisterFlow::Abrupt;
@@ -2707,7 +2710,6 @@ impl RegisterLowerer {
             }
             handler_flow = flow?;
             let catch_end = self.code.instructions.len();
-            self.reject_protected_calls(catch_start, catch_end)?;
             if handler_flow != RegisterFlow::Abrupt {
                 self.code.emit(Instruction::Star(result_register));
                 exits.push(self.code.emit(Instruction::Jump(0)));
@@ -2785,21 +2787,21 @@ impl RegisterLowerer {
         )
     }
 
-    /// Refuses a protected range containing a call, whose thrown type the
-    /// lowerer does not track.
-    fn reject_protected_calls(&self, start: usize, end: usize) -> Option<()> {
-        let clean = self
-            .code
-            .instructions
-            .get(start..end)?
-            .iter()
-            .all(|instruction| {
-                !matches!(
-                    instruction,
-                    crate::engine::bytecode::Instruction::Call { .. }
-                )
-            });
-        clean.then_some(())
+    /// Whether a protected range calls a function, whose thrown value the
+    /// lowerer cannot type.
+    fn range_contains_call(&self, start: usize, end: usize) -> Option<bool> {
+        Some(
+            self.code
+                .instructions
+                .get(start..end)?
+                .iter()
+                .any(|instruction| {
+                    matches!(
+                        instruction,
+                        crate::engine::bytecode::Instruction::Call { .. }
+                    )
+                }),
+        )
     }
 
     fn lower_block(&mut self, body: &[Stmt]) -> Option<RegisterFlow> {

@@ -2211,6 +2211,12 @@ fn register_try_catch_rethrows_when_the_handler_throws() -> Result<(), Error> {
     for source in [
         "try{throw 1}catch(e){throw e+1}",
         "try{throw 'a'}catch(e){throw e}",
+        // A call inside the protected range unwinds through its frame.
+        "function f(){throw 1}let x=0;try{f()}catch(e){x=2}x",
+        "function f(){throw 1}let x=0;try{f()}finally{x=3}",
+        "function f(){return 1}let x=0;try{f()}catch(e){x=2}x",
+        "function g(){throw 5}function f(){g()}let x=0;try{f()}catch(e){x=1}x",
+        "function f(){try{throw 1}catch(e){return e+1}return 0}f()",
     ] {
         differential(source)?;
     }
@@ -2220,7 +2226,7 @@ fn register_try_catch_rethrows_when_the_handler_throws() -> Result<(), Error> {
 #[test]
 fn register_lowering_rejects_exception_shapes_it_cannot_type() -> Result<(), Error> {
     for source in [
-        // A callee's thrown type is unknown inside a protected range.
+        // A callee's thrown type is unknown, so reading the parameter bails.
         "function f(){return 1}try{f()}catch(e){e}",
         // A destructuring catch parameter is not lowered.
         "try{throw [1]}catch([e]){e}",
