@@ -115,6 +115,26 @@ step and prints the output of a step only when that step fails:
 sh tools/xtask-check.sh --quiet
 ```
 
+`sh tools/target-clean.sh` is maintenance, not a wrapper. The target
+directory of this workspace passes twenty gigabytes — the host kernel
+under `x86_64-unknown-none`, the coverage build, and the QEMU artifacts
+each hold gigabytes of their own — and most of it belongs to work that is
+finished. The script deletes the files below `$CARGO_TARGET_DIR`, or
+`./target`, whose mtime predates a cutoff of fourteen days by default,
+then removes the directories that empties. `CACHEDIR.TAG` stays, because
+it is what keeps a backup out of the tree. Cargo and the xtask rebuild
+what goes.
+
+```bash
+sh tools/target-clean.sh --dry-run --days 7
+```
+
+`--dry-run` names every file and the total instead of deleting. The cutoff
+is a marker file and `find ! -newer`, because the two `find`
+implementations round `-mtime` differently. No build may run at the same
+time: a file the compiler is still writing is old as soon as its mtime
+predates the cutoff.
+
 ## 7.6 Continuous integration
 
 GitHub Actions on Linux runners with QEMU and its UEFI firmware from the

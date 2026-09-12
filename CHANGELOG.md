@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `tools/target-clean.sh`, which drops from the target directory what no
+  build has touched for a while. The tree passes twenty gigabytes on this
+  machine and most of it belongs to work that is finished: one `find` pass
+  deletes the files whose mtime predates a cutoff of fourteen days by
+  default and then the directories that empties, and Cargo and the xtask
+  rebuild what goes. `--dry-run` names every file and the total instead.
+  The cutoff is a marker file and `find ! -newer`, because the two `find`
+  implementations round `-mtime` differently, and `CACHEDIR.TAG` stays,
+  since it is what keeps a backup out of the tree. 07 section 7.5 has it.
+
 - Ed25519 signing as product surface, with the arithmetic a secret scalar
   needs (D-135). `ed25519::sign` and `ed25519::public_key` lose the
   `#[cfg]` that kept them behind `test-signing`, because the Secure Shell
