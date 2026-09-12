@@ -128,7 +128,7 @@ is, which is what a test that boots twice to see what survived needs.
 | PCI configuration space via ECAM (`MCFG`) | the kernel reads the `MCFG` table and reports the window through `system_info`; userland maps it as a `Device` memory object and walks the bus with the crate `pci` (D-112) | userland virtio drivers | 13 |
 | MSI-X on a PCI device | `interrupt_create_msi` allocates the vector; the driver writes the address and data into the device's own table (D-111) | userland virtio drivers | 12 |
 | virtio-net over PCI (`virtio-net-pci`, non-transitional) | MMIO through the volatile accessor, DMA through a `Ram` memory object with `INFO`, interrupts through MSI-X | on the machine from 13, so that the bus walk has a device to find; driven by `driver-virtio-net` and `server-net` from 14 | 13, 14 |
-| virtio-blk over PCI (`virtio-blk-pci`, non-transitional), on a second disk and only for a run that asks | the same three paths | the scratch disk of a run that writes; a driver is later work | later |
+| virtio-blk over PCI (`virtio-blk-pci`, non-transitional), on a second disk and only for a run that asks | the same three paths | the scratch disk of a run that writes; `driver-virtio-blk` is what will drive it | later |
 | `RDSEED` | the `random_bytes` system call | `crypto-rng` seeding in every process that needs randomness | 12 |
 | Standard VGA device (`q35` default) with a linear framebuffer exposed by the UEFI Graphics Output Protocol | loader: mode query through `EFI_GRAPHICS_OUTPUT_PROTOCOL`; userland: MMIO via a `Device` memory object | boot information; userland display server | 2, 9 |
 | i8042 PS/2 controller (I/O ports `0x60` and `0x64`, IRQ 1 keyboard, IRQ 12 mouse) | port I/O via `IoPortRange`, `Interrupt` | userland input driver | 10 |

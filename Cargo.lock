@@ -303,6 +303,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "driver-virtio-blk"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+ "virtio-queue",
+]
+
+[[package]]
 name = "fs-fat"
 version = "0.1.0"
 dependencies = [

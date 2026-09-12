@@ -1181,6 +1181,52 @@ are gone, and the bytes of the image did not change (D-138).
 Tests: catalog 6.6.72. Coverage 96.6 percent of lines and 93.6 percent of
 branches.
 
+### 12.7.4 `driver-virtio-blk`
+
+Implemented. The block device of virtio 5.2 as logic: what the registers
+of one mean, which features it asks for, how a request is framed, and the
+order the device is brought up in. Registers reach it through a trait of
+its own — a structure, an offset and a width — so the crate computes no
+address, and the queue is F1's, so it encodes no descriptor either.
+
+It depends on `virtio-queue` and on nothing else. 13.9 sketches
+`driver-virtio-net` as depending on `pci` as well, and for the network
+device that may hold; this one parses no capability, so `pci` would be a
+dependency for nothing. What the two crates share is the device
+identifier, and that stays in `pci::virtio` beside the network device's,
+because a bus walk is what reads it.
+
+Three of the eight request types are here: read, write and flush. The
+five that are missing each need a feature this driver does not take or a
+framing rule of their own, and `features.rs` names every bit of 5.2.3
+including the ones that are turned down, so that an omission reads as a
+decision. Of the three that are taken, `VIRTIO_BLK_F_FLUSH` is there
+because a system that writes a file system and cannot ask for the write
+to reach the disk is telling its caller something it does not know, and
+`VIRTIO_BLK_F_RO` because 5.2.6.1 asks a driver to accept it and a write
+refused before it is sent says more than a status byte does after.
+
+What the crate contributes beyond the framing is the refusals. A request
+whose data is not whole sectors, a flush that carries data, a read or a
+write that carries none, a flush of a sector other than zero, a request
+that reaches past the last sector, and a write to a read-only device are
+each a rule of 5.2.6.1, and each is refused at the call rather than sent
+and answered with a status byte and a lost request.
+
+Two rules of the transport are kept that are easy to miss. The features
+are read at step 4 of 3.1.1 and not before, because reading them writes a
+window selector and the driver makes no write before it has said it is
+there. And the capacity is eight bytes, which 2.5.1 forbids assuming is
+read at once, so it is read between two reads of the configuration
+generation, with a bound on the attempts rather than a loop.
+
+Waiting is the caller's, as it is for F1: `reset` writes the zero and
+`is_reset` says when the device has finished, and `initialize` refuses a
+device that is not at zero rather than spinning on one.
+
+Tests: catalog 6.6.73. Coverage 97.6 percent of lines and 91.1 percent of
+branches.
+
 ## 12.8 Track G: tooling
 
 ### 12.8.1 `fuzz-support`

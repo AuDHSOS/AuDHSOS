@@ -2748,6 +2748,57 @@ offset is tested against that table.
   a table leaves a read that refuses, that recovers, or that answers the
   partition that was written — never a different one.
 
+### 6.6.73 The block device (`driver-virtio-blk`)
+
+D-139. The device is virtio 5.2 and the transport is virtio 4.1; every
+offset and every bit is tested against the section it came from.
+
+- Registers: each width moves the bytes it names and keeps only the bits
+  its register holds; what is written to a structure is read back; the
+  interrupt status clears as it is read.
+- Common configuration: every field of the layout follows the one before
+  it with no gap, and the last ends where the structure this driver reads
+  does; the offered features come out of both windows and the accepted
+  ones go into both; the status is one byte; nothing is read until it is
+  asked for, so the features answer zero before they have been read.
+- Features: every bit is the one the specification numbers; the driver
+  asks for the version, the flush and the read-only flag and no more;
+  every bit of the device's range has a name and no two share one; a bit
+  of the transport's range has none; what the driver does not take is
+  what `refused` reports.
+- Configuration space: the capacity is read out of the device
+  configuration through the generation dance of virtio 2.5.1, and a
+  device whose generation changes under every read is refused after a
+  bounded number of attempts rather than read in a loop.
+- Bringing the device up: the status writes are the five of section
+  3.1.1 in order; what the device offers and the driver wants is what is
+  taken; the rings, the queue size and both vectors reach the registers
+  and the queue is enabled last; a device offering a smaller queue
+  settles the size; a device with no request queue, rings of a size that
+  is not a power of two, a device that was not reset, one that will not
+  take a vector, one that clears `FEATURES_OK`, and one that does not
+  offer `VERSION_1` are each refused by name; a reset puts back
+  everything the driver had learned; a device driven without message
+  interrupts writes `NO_VECTOR` and is not refused for it.
+- Requests: a read and a write are three buffers in the order of section
+  5.2.6, the data device-writable for a read and device-readable for a
+  write, the status device-writable in both; a flush is two; a request
+  carrying the wrong parts, data that is not whole sectors, a request
+  past the last sector including one whose sector would overflow the
+  sum, a write or a flush to a read-only device, and a flush of a sector
+  other than zero are each refused; a queue with fewer descriptors free
+  than the chain needs refuses with the count.
+- The header: the type, the reserved word and the sector, with nothing
+  written past the sixteen bytes; a buffer too short is refused and left
+  as it was; only `VIRTIO_BLK_S_OK` is success.
+- Notification: the write goes to the offset the queue's own offset and
+  the capability's multiplier make, and carries the queue index.
+- Properties: a header written for any sector and any type carries that
+  sector and that type and reaches no further than its length; and a
+  request is taken exactly when every framing rule of 5.2.6.1 holds for
+  it, which is checked against the rules said a second time rather than
+  against the driver.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

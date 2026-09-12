@@ -7,6 +7,25 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `driver-virtio-blk`, the virtio block device of virtio 5.2 as logic:
+  what the registers of one mean, which features it asks for, how a
+  request is framed, and the order the device is brought up in. Registers
+  reach it through a trait of its own — a structure, an offset and a
+  width — so it computes no address, and the queue is `virtio-queue`'s,
+  so it encodes no descriptor. It depends on that crate and on nothing
+  else; `BLOCK_DEVICE` stands in `pci::virtio` beside `NETWORK_DEVICE`,
+  because what reads a device identifier is a bus walk. Read, write and
+  flush are implemented and the other five request types are named
+  refusals, as is every feature bit of 5.2.3 the driver turns down. What
+  it contributes beyond the framing is the refusals of 5.2.6.1 at the
+  call rather than a request sent and lost: data that is not whole
+  sectors, a flush that carries data or names a sector, a read or a write
+  that carries none, anything past the last sector, and a write to a
+  device that said it is read-only. Two rules of the transport that are
+  easy to miss are kept: the feature windows are read at step 4 of 3.1.1
+  and not before, and the capacity is read between two reads of the
+  configuration generation. D-139, catalog 6.6.73, roadmap step F4.
+
 - `fs-gpt`, the GUID partition table as structures over the block device
   trait `fs-fat` defines: the protective record, both headers with their
   checksums, the entry array, and the CRC-32 the format is checked with.

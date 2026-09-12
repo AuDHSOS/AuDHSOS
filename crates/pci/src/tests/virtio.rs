@@ -12,7 +12,8 @@ use crate::error::PciError;
 use crate::header::read as read_header;
 use crate::tests::build::{Builder, VIRTIO_NET, one};
 use crate::virtio::{
-    DEVICE_BASE, Kind, MAX_STRUCTURES, NETWORK_DEVICE, Structure, first, is_modern, structures,
+    BLOCK_DEVICE, DEVICE_BASE, Kind, MAX_STRUCTURES, NETWORK_DEVICE, Structure, first, is_modern,
+    structures,
 };
 
 /// The structures the one function of `space` publishes.
@@ -173,6 +174,8 @@ fn a_capability_that_is_not_vendor_specific_is_no_structure() {
 #[test]
 fn the_network_device_of_virtio_one_is_not_the_transitional_one() {
     assert_eq!(NETWORK_DEVICE, DEVICE_BASE + 1);
+    assert_eq!(BLOCK_DEVICE, DEVICE_BASE + 2);
+    assert!(is_modern(0x1AF4, BLOCK_DEVICE, 2));
     assert!(is_modern(0x1AF4, NETWORK_DEVICE, 1));
     assert!(!is_modern(0x1AF4, 0x1000, 1), "the transitional device");
     assert!(!is_modern(0x8086, NETWORK_DEVICE, 1));

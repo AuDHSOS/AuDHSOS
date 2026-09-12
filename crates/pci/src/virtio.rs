@@ -32,6 +32,10 @@ pub const DEVICE_BASE: u16 = 0x1040;
 /// one.
 pub const NETWORK_DEVICE: u16 = DEVICE_BASE + 1;
 
+/// The device identifier of a virtio block device, which is device type
+/// two (virtio 5.2.1).
+pub const BLOCK_DEVICE: u16 = DEVICE_BASE + 2;
+
 /// Number of structures this crate reports of one function.
 pub const MAX_STRUCTURES: usize = 16;
 

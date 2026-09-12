@@ -533,6 +533,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "driver-virtio-blk",
+        path: "crates/drivers/virtio-blk",
+        kind: Kind::Logic,
+        deps: &["virtio-queue", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "fs-gpt",
         path: "crates/fs/gpt",
         kind: Kind::Logic,

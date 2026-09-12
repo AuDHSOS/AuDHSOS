@@ -40,6 +40,7 @@ AuDHSOS/
 │   ├── drivers/
 │   │   ├── uart16550/         driver-uart16550: register logic over a port access trait
 │   │   ├── i8042/             driver-i8042: PS/2 controller and decoder logic over a port access trait
+│   │   ├── virtio-blk/        driver-virtio-blk: virtio 1.x block device logic over a register trait
 │   │   └── virtio-net/        driver-virtio-net: virtio 1.0 network device logic over a register trait (document 13, Phase 14)
 │   ├── support/
 │   │   ├── testing/           test-support: property-test engine, builders, strategies, model-test runner
@@ -150,6 +151,7 @@ AuDHSOS/
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
 | `pci` | 1 | all | no | yes, fuzz | - (feature `test-doubles`); `test-support` as a dev-dependency |
 | `driver-virtio-net` (Phase 14) | 2 | all | no | yes, fuzz | `pci`, `virtio-queue` (feature `test-doubles`) |
+| `driver-virtio-blk` | 2 | all | no | yes | `virtio-queue` (feature `test-doubles` as a dev-dependency); `test-support` as a dev-dependency; feature `test-doubles` |
 | `fs-fat` | 1 | all | no | yes | `audhsos-time`; `test-support` as a dev-dependency; feature `test-doubles` |
 | `fs-gpt` | 1 | all | no | yes | `fs-fat`, for the block device trait it reads through; `test-support` and `fs-fat` with `test-doubles` as dev-dependencies |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
@@ -276,12 +278,15 @@ remains separate. The independent fuzz target is `json_codec`.
     them, by driver and server processes. `fs-gpt` is the one exception to
     the layer-0 rule: it depends on `fs-fat`, which is layer 1, because the
     block device trait it reads through is defined there (D-138).
-12. `driver-virtio-net` is a logic crate at layer 2, the one driver crate
-    above layer 1, because it needs both `pci` and `virtio-queue`. It
-    depends on those two and on nothing else, and on nothing of the
-    network crates of rule 10: it hands frames out and takes them in as
-    byte slices, and what a frame means belongs to `server-net`
-    (D-114).
+12. `driver-virtio-blk` is a logic crate at layer 2, and
+    `driver-virtio-net` will be another, because a driver of a virtio
+    device stands above the queue logic it drives the device through.
+    `driver-virtio-blk` depends on `virtio-queue` and on nothing else: it
+    reaches registers through a trait of its own and parses no capability,
+    so it needs nothing of `pci` (D-139). `driver-virtio-net` needs both,
+    and neither depends on the network crates of rule 10: it hands frames
+    out and takes them in as byte slices, and what a frame means belongs
+    to `server-net` (D-114).
 
 ## 5.4 Workspace configuration
 
