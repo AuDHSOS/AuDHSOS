@@ -641,10 +641,12 @@ Tests: catalog 6.6.53 and 6.6.58.
 ## 8.26 Track S: Secure Shell as a client
 
 Status: decided in D-123, specified in
-[document 14](14-secure-shell-as-a-client.md), begun. Step S1 is built,
-and so is the arithmetic half of S2: `crypto-dh` and the constant-time
-exponentiation under it were built before the track and are decided in
-D-122.
+[document 14](14-secure-shell-as-a-client.md), begun. Steps S1, S2 and S3
+are built: the wire types and the binary packet, the greeting and the
+negotiation, both key exchange methods over `crypto-dh` (D-122) and
+`crypto-ec::x25519` with the exchange hash and the six keys, and the
+cipher over the packet layer. What is left needs the two decisions of
+14.13: the host key of S4 and the authentication of S5.
 
 The track is a client for SSH-2 and not a server, for the reason D-123
 gives. It offers `curve25519-sha256` and `diffie-hellman-group14-sha256`
@@ -656,8 +658,8 @@ build. What it refuses, and why each name is refused, is section 14.5.
 | Step | What | Size | Ends with |
 |------|------|------|-----------|
 | S1 | `audhsos-ssh`: `wire`, `packet` | M | implemented: the types of RFC 4251, section 5, against the vectors of that section, and the binary packet with its padding and its sequence numbers (catalog 6.6.68) |
-| S2 | `kex` | L | `crypto-dh` is built (D-122); what remains is `SSH_MSG_KEXINIT` and the negotiation rule, both key exchange methods, the exchange hash, the six keys of RFC 4253, section 7.2, and the aborts |
-| S3 | the cipher | M | `chacha20-poly1305@openssh.com` over the packet layer, against the worked example of the draft D-134 keeps in `docs/openssh/` |
+| S2 | `kex` | L | implemented: the greeting, the message numbers, `SSH_MSG_KEXINIT` and the negotiation rule (catalog 6.6.69); both methods, the exchange hash, the six keys of RFC 4253, section 7.2, `SSH_MSG_NEWKEYS` and the aborts (catalog 6.6.70) |
+| S3 | the cipher | M | implemented: `chacha20-poly1305@openssh.com` over the packet layer, against the worked example of the draft D-134 keeps in `docs/openssh/` (catalog 6.6.70) |
 | S4 | host keys | S-M | the `ssh-ed25519` blobs of RFC 8709, the signature over the exchange hash verified, and the trust rule as a parameter |
 | S5 | `auth` | M | `publickey` with the signature of RFC 4252, section 7, and `ext-info-c` with `server-sig-algs` |
 | S6 | `channel` | L | channels, the window, the session channel, `exec` and `shell`, extended data, and `exit-status` |
@@ -667,9 +669,9 @@ build. What it refuses, and why each name is refused, is section 14.5.
 S1 to S7 depend on no phase and are built between them, as the whole of
 track C was. S8 needs the network on the machine.
 
-Tests: catalog 6.6.66 and 6.6.68 are written, because the arithmetic of
-S2 and the whole of S1 are built; the rest are written with the step that
-owns each. There is no RFC 8448 for this protocol — no document publishes a
+Tests: catalog 6.6.66, 6.6.68, 6.6.69 and 6.6.70 are written, for the
+arithmetic of S2 and the whole of S1, S2 and S3; the rest are written
+with the step that owns each. There is no RFC 8448 for this protocol — no document publishes a
 complete handshake with the keys that made it — so the check from outside
 is the interop test of S8 and not a replay, which is the one way this
 track differs in kind from track C.

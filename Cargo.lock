@@ -99,6 +99,11 @@ dependencies = [
 name = "audhsos-ssh"
 version = "0.1.0"
 dependencies = [
+ "crypto-aead",
+ "crypto-ct",
+ "crypto-dh",
+ "crypto-ec",
+ "crypto-hash",
  "crypto-rng",
  "test-support",
 ]

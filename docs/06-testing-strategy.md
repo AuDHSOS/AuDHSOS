@@ -2660,6 +2660,104 @@ example (D-134) over it.
   other.
 - Every refusal renders a sentence of its own.
 
+### 6.6.69 The greeting and the negotiation (`audhsos-ssh`)
+
+The front of step S2 of 8.26: what both key exchange methods start with.
+No document publishes an identification exchange or a `SSH_MSG_KEXINIT`
+with the lists that made it, so these are checked against the rules the
+documents state and against this crate's own writer.
+
+- The identification string this client sends is the form of RFC 4253,
+  section 4.2: the prefix, a software version that is printable US-ASCII
+  with no space and no minus, CR LF, and under 255 characters. A buffer
+  too small for it writes nothing.
+- The peer's is the line without its CR LF, which is what the exchange
+  hash takes; the lines a server may send before it are skipped and
+  counted, and the caller is told where the binary packet protocol
+  starts. Nothing is said before a line has ended.
+- Every line is held to 255 characters whether it has ended or not, so
+  what is refused does not depend on how the bytes were split on the way
+  here; one byte under the limit is a line either way.
+- Refused: a version this client does not speak, which includes the
+  `SSH-1.99-` of section 5.1; a software version of no length; a byte
+  that is not printable US-ASCII; bytes that are not UTF-8.
+- The message numbers are the ones RFC 4250, section 4.1.2, assigns,
+  transcribed a second time so that the constant and the test do not
+  share one slip, and each falls in the range section 4.1.1 gives it.
+- `SSH_MSG_KEXINIT` holds the fields of RFC 4253, section 7.1, in that
+  order, with the cookie one call on the generator (D-121), empty
+  language lists, and no guess. What was written reads back as the lists
+  that were offered. Refused: another message number, a message that ends
+  early at any point, a name that may not be in a list, a buffer too
+  small, and a generator with nothing left.
+- The negotiation takes the first name on the client's list that the
+  server also has, whatever the server prefers. The key exchange method
+  and the host key algorithm are chosen together, so a method both sides
+  have but no host key this client can check a signature with is not
+  chosen, and says so.
+- Nothing in common ends the connection and names the list it ended on.
+  A cipher that carries its own integrity needs no MAC; any other cipher
+  does, and a proposal that offers one is what says so both ways.
+- An `ext-info-c` or `ext-info-s` that ends up chosen is a disconnect and
+  not a method (RFC 8308, section 2.2).
+- A guessed packet is one to ignore unless both of the peer's first names
+  are the chosen ones — the right method under the wrong host key is
+  still wrong — and a message that announces no guess is nothing to
+  ignore whatever its first names are.
+
+### 6.6.70 The key exchange and the cipher (`audhsos-ssh`)
+
+The rest of step S2 of 8.26, and the whole of S3. The cipher has a
+published vector and the key exchange has none, so the hash and the key
+derivation are checked against the same computation written a second time
+in the tests, and the two methods against each other.
+
+- Both sides of `curve25519-sha256` reach one secret, and so do both
+  sides of `diffie-hellman-group14-sha256`. A generator with nothing left
+  makes no key pair.
+- The first message carries the public value as its method encodes it: a
+  string for the curve (RFC 5656, section 4), an `mpint` for the group
+  (RFC 4253, section 8). The two message numbers are 30 and 31; RFC 5656,
+  section 7.1, prints them for the curve method and no document this
+  repository holds prints them for the other, so what says they are right
+  there is the interop run of step S8.
+- The reply is the host key, the public value and the signature; another
+  message number, a message that ends early, a non-canonical `mpint` and
+  a negative one are each refused.
+- The aborts are refusals and not values: a public value that is not
+  thirty-two bytes and a point of small order for the curve (RFC 8731,
+  section 3), and for the group the open interval of RFC 8268, section 4,
+  whose two ends the closed form of RFC 4253 would have admitted.
+- The exchange hash is the concatenation of RFC 4253, section 8, in that
+  order: every one of the eight fields changes it, and no two of them can
+  be swapped without it changing.
+- The shared secret enters the hash as an `mpint` and not as it stands.
+  A value whose top bit is set hashes differently from the same bytes as
+  a fixed-length string; one whose top bit is clear hashes the same,
+  which is why the mistake succeeds on about half of all connections. A
+  leading zero is not part of the value.
+- The six keys of section 7.2 are the six letters; a key shorter than the
+  hash is its first bytes, and one longer is extended by hashing the
+  whole key so far, which is what the 64 bytes of the cipher need. The
+  shared secret is hashed as an `mpint` here too.
+- The cipher is appendix A of the draft D-134 keeps: the packet of that
+  example seals to the bytes it prints, tag included, and those bytes
+  open as the packet they were. The length field is read from its four
+  bytes alone. A tag that does not check decrypts nothing, and the same
+  packet under another sequence number neither seals the same nor opens.
+- The packet layer under that cipher frames the example from its payload
+  up, which is what says the padding aligns the region the length field
+  is outside of. A sealed packet round-trips, one whose bytes were
+  changed anywhere is refused and not counted, and a decoder waits for
+  the tag as well as for the packet.
+- Taking keys into use does not reset the sequence number, so the first
+  packet under the new keys carries the number the last one under the old
+  did not (RFC 4253, sections 7.3 and 6.4).
+- A buffer of this side's own is not a key exchange that failed: a shared
+  secret that does not fit is refused as a buffer and not as a disconnect
+  the peer earned. A buffer with room for a sealed frame but not for its
+  tag says how much it holds, not how much was written into it.
+
 ### 6.6.71 The wall clock (`audhsos-uefi`, `audhsos-abi`, `kernel-syscall`, QEMU)
 
 D-137. The conversion and the refusals are host tests; what QEMU adds is

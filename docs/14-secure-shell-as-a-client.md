@@ -176,6 +176,13 @@ the virtio features.
 | `zlib`, `zlib@openssh.com` | `audhsos-deflate` compresses in one call over one block; SSH compression is one stream across a connection, flushed at every packet, with the window carried between them. That is a second mode of that crate, not a parameter of this one |
 | `none` as a cipher or a MAC | An unencrypted connection is not a thing this client can be talked into |
 
+One thing this client does not send is a MAC list. RFC 4253, section 7.1,
+asks every algorithm list to hold at least one name, and the one cipher
+offered is an AEAD that needs no MAC, so the two MAC lists go out empty.
+The alternative is naming a MAC this client does not have, which would be
+a worse answer to the same sentence, and a server that would need one
+cannot negotiate with this client anyway: it offers exactly one cipher.
+
 Three of these — `ssh-dss`, `3des-cbc`, `hmac-sha1` — are REQUIRED in
 RFC 4253. RFC 9142 withdrew the two SHA-1 key exchanges of the same
 document but not these; refusing them is a departure from the standard,
@@ -197,7 +204,13 @@ share what a crate boundary would have to hand back and forth: the packet
 writer, the sequence numbers, and the session identifier that the
 authentication signature is over. `audhsos-tls` is one crate with
 `record`, `handshake`, `keys` and `client` as modules, and this follows
-it: `wire`, `packet`, `kex`, `auth`, `channel`, `client`.
+it: `wire`, `packet`, `ident`, `msg`, `kex`, `exchange`, `keys`,
+`cipher`, `auth`, `channel`, `client`. The small ones carry what every
+layer above them cites: `ident` is the identification string of RFC 4253,
+section 4.2, which is neither a packet nor a key exchange and goes into
+the exchange hash of both, and `msg` is the message numbers of RFC 4250.
+`kex` is the negotiation, `exchange` the two methods and the exchange
+hash, `keys` the derivation of section 7.2, and `cipher` the one cipher.
 
 The client is a state machine with no I/O. It is given bytes that arrived
 and a buffer to write bytes into, and it answers with what it wants sent,
@@ -218,7 +231,11 @@ already read.
 **The binary packet** (RFC 4253, section 6): a `uint32` length, a padding
 length byte, the payload, at least four bytes of random padding, and the
 integrity tag. The length of everything but the tag is a multiple of the
-cipher block size or of eight, whichever is larger. The padding comes
+cipher block size or of eight, whichever is larger — except that the
+cipher of 14.5 encrypts the length field with a key of its own and leaves
+it outside the region the padding aligns. Neither document that describes
+that cipher says so in words; its worked example does, and it is a packet
+of 76 bytes whose length field names 72. The padding comes
 from the generator this crate is given, once per packet; nothing calls
 `random_bytes` per packet, which is what D-121 requires.
 
@@ -441,8 +458,8 @@ definition of done every phase and every track step uses.
 | Step | What | Size | Ends with |
 |------|------|------|-----------|
 | S1 | `wire`, `packet` | M | implemented: the types of RFC 4251, section 5, encoded and decoded with the vectors of that section, and the binary packet framed, padded and read back, with the sequence numbers (catalog 6.6.68) |
-| S2 | `kex` | L | `crypto-dh` is built and is the arithmetic half of this step (D-122); what remains is `SSH_MSG_KEXINIT` and the negotiation rule, both key exchange methods, the exchange hash, the six keys of section 7.2, `SSH_MSG_NEWKEYS`, and the aborts |
-| S3 | the cipher | M | `chacha20-poly1305@openssh.com` over the packet layer, against the worked example of appendix A of the draft D-134 keeps |
+| S2 | `kex` | L | implemented: the identification string, the message numbers, `SSH_MSG_KEXINIT` and the negotiation rule (catalog 6.6.69); both key exchange methods over `crypto-dh` (D-122) and `crypto-ec::x25519`, the exchange hash, the six keys of section 7.2, `SSH_MSG_NEWKEYS`, and the aborts (catalog 6.6.70) |
+| S3 | the cipher | M | implemented: `chacha20-poly1305@openssh.com` over the packet layer, against the worked example of appendix A of the draft D-134 keeps (catalog 6.6.70) |
 | S4 | host keys | S-M | the `ssh-ed25519` blobs of RFC 8709, the signature over `H` verified, and the trust rule as a parameter |
 | S5 | `auth` | M | `publickey` with the signature of RFC 4252, section 7, the failure and success paths, and `ext-info-c` with `server-sig-algs` |
 | S6 | `channel` | L | the channel messages, the window, the session channel, `exec` and `shell`, extended data, `exit-status`, and the close sequence |

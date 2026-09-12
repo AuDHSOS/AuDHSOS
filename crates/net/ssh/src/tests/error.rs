@@ -21,6 +21,11 @@ fn every_refusal_renders_a_sentence_of_its_own() {
         SshError::PaddingLength(3),
         SshError::PayloadLength(40_000),
         SshError::BlockSize(4),
+        SshError::Message(21),
+        SshError::Identification,
+        SshError::Negotiation("cipher"),
+        SshError::KeyExchangeFailed,
+        SshError::Tag,
         SshError::Rng(RngError::Entropy(EntropyError::Unavailable)),
     ]
     .iter()

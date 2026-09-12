@@ -41,6 +41,26 @@ pub enum SshError {
     PayloadLength(usize),
     /// A cipher block size a packet cannot be padded to.
     BlockSize(usize),
+    /// A message number where another was expected. The number is what
+    /// arrived.
+    Message(u8),
+    /// An identification string that is none: too long, not printable
+    /// US-ASCII, or a protocol version this client does not speak.
+    Identification,
+    /// Two sides with nothing in common in one of the lists of RFC 4253,
+    /// section 7.1, which the document answers with a disconnect. The
+    /// text names the list.
+    Negotiation(&'static str),
+    /// A key exchange that cannot be finished: a public value of the
+    /// wrong length, one outside the group, or a shared secret of all
+    /// zeros. RFC 8731, section 3, and RFC 8268, section 4, each answer
+    /// this with a disconnect carrying
+    /// [`crate::msg::disconnect::KEY_EXCHANGE_FAILED`].
+    KeyExchangeFailed,
+    /// A Poly1305 tag that is not the tag of what arrived. Nothing was
+    /// decrypted, and RFC 4250, section 4.2.2, has a reason code of its
+    /// own for it.
+    Tag,
     /// The generator had no bytes for the padding.
     Rng(RngError),
 }
@@ -58,6 +78,13 @@ impl fmt::Display for SshError {
             SshError::PaddingLength(length) => write!(f, "{length} bytes of padding do not fit"),
             SshError::PayloadLength(length) => write!(f, "a payload of {length} bytes is too long"),
             SshError::BlockSize(size) => write!(f, "{size} is no block size to pad to"),
+            SshError::Message(number) => write!(f, "message {number} is not the one expected"),
+            SshError::Identification => {
+                f.write_str("the peer sent no identification this client speaks")
+            }
+            SshError::Negotiation(list) => write!(f, "no {list} both sides have"),
+            SshError::KeyExchangeFailed => f.write_str("the key exchange cannot be finished"),
+            SshError::Tag => f.write_str("the tag is not the tag of this packet"),
             SshError::Rng(error) => write!(f, "the padding has no randomness: {error}"),
         }
     }

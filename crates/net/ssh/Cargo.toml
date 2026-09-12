@@ -11,6 +11,11 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+crypto-aead.workspace = true
+crypto-ct.workspace = true
+crypto-dh.workspace = true
+crypto-ec.workspace = true
+crypto-hash.workspace = true
 crypto-rng.workspace = true
 
 [dev-dependencies]

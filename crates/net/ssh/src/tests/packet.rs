@@ -9,10 +9,12 @@ use test_support::generators::bytes;
 use test_support::property::check;
 
 use crate::error::SshError;
+use crate::msg;
 use crate::packet::{
     Decoded, Decoder, Encoder, MAX_BLOCK, MAX_FRAME, MAX_PACKET, MAX_PAYLOAD, MIN_BLOCK,
     MIN_PACKET, SequenceNumber,
 };
+use crate::tests::unhex;
 
 /// Padding bytes for a test that does not care what they are.
 const PADDING: [u8; 512] = [0x5a; 512];
@@ -63,7 +65,7 @@ fn what_was_framed_comes_back_out() {
         let total = encoder
             .encode(payload, &mut rng, &mut out)
             .map_err(|error| format!("{error}"))?;
-        match decoder.decode(out.get(..total).unwrap_or(&[])) {
+        match decoder.decode(out.get_mut(..total).unwrap_or(&mut [])) {
             Ok(Decoded::Packet {
                 payload: read,
                 length,
@@ -83,20 +85,20 @@ fn a_decoder_waits_for_the_length_and_then_for_the_packet() {
     let mut decoder = Decoder::new();
     for len in 0..4usize {
         assert_eq!(
-            decoder.decode(out.get(..len).unwrap_or(&[])),
+            decoder.decode(out.get_mut(..len).unwrap_or(&mut [])),
             Ok(Decoded::Incomplete { needed: 4 })
         );
     }
     for len in 4..total {
         assert_eq!(
-            decoder.decode(out.get(..len).unwrap_or(&[])),
+            decoder.decode(out.get_mut(..len).unwrap_or(&mut [])),
             Ok(Decoded::Incomplete { needed: total })
         );
     }
     // Nothing was counted while the packet was incomplete.
     assert_eq!(decoder.sequence(), 0);
     assert!(matches!(
-        decoder.decode(out.get(..total).unwrap_or(&[])),
+        decoder.decode(out.get_mut(..total).unwrap_or(&mut [])),
         Ok(Decoded::Packet { .. })
     ));
     assert_eq!(decoder.sequence(), 1);
@@ -107,22 +109,22 @@ fn a_length_no_packet_has_is_refused_before_the_packet_is_waited_for() {
     let mut decoder = Decoder::new();
     // Under the sixteen bytes of section 6.
     assert_eq!(
-        decoder.decode(&[0x00, 0x00, 0x00, 0x04]),
+        decoder.decode(&mut [0x00, 0x00, 0x00, 0x04]),
         Err(SshError::PacketLength(4))
     );
     // Not a whole number of blocks.
     assert_eq!(
-        decoder.decode(&[0x00, 0x00, 0x00, 0x0d]),
+        decoder.decode(&mut [0x00, 0x00, 0x00, 0x0d]),
         Err(SshError::PacketLength(13))
     );
     // Above what section 6.1 makes mandatory, and answered from four
     // bytes rather than from a buffer of that size.
     assert_eq!(
-        decoder.decode(&[0x00, 0x00, 0xff, 0xfc]),
+        decoder.decode(&mut [0x00, 0x00, 0xff, 0xfc]),
         Err(SshError::PacketLength(65532))
     );
     assert_eq!(
-        decoder.decode(&[0xff, 0xff, 0xff, 0xfc]),
+        decoder.decode(&mut [0xff, 0xff, 0xff, 0xfc]),
         Err(SshError::PacketLength(4_294_967_292))
     );
     assert_eq!(decoder.sequence(), 0);
@@ -136,14 +138,17 @@ fn padding_that_is_not_inside_the_packet_is_refused() {
         .get_mut(..5)
         .unwrap_or_default()
         .copy_from_slice(&[0x00, 0x00, 0x00, 0x0c, 0x0c]);
-    assert_eq!(decoder.decode(&packet), Err(SshError::PaddingLength(12)));
+    assert_eq!(
+        decoder.decode(&mut packet),
+        Err(SshError::PaddingLength(12))
+    );
 
     // Section 6: there MUST be at least four bytes of padding.
     packet
         .get_mut(4..5)
         .unwrap_or_default()
         .copy_from_slice(&[0x03]);
-    assert_eq!(decoder.decode(&packet), Err(SshError::PaddingLength(3)));
+    assert_eq!(decoder.decode(&mut packet), Err(SshError::PaddingLength(3)));
     assert_eq!(decoder.sequence(), 0);
 }
 
@@ -176,13 +181,13 @@ fn a_payload_above_what_the_document_requires_is_refused_at_both_ends() {
         .copy_from_slice(&[0x04]);
     assert!(packet.len() <= MAX_FRAME && packet.len() <= MAX_PACKET);
     assert_eq!(
-        decoder.decode(&packet),
+        decoder.decode(&mut packet),
         Err(SshError::PayloadLength(33_015))
     );
 
     let beyond = u32::try_from(MAX_FRAME.saturating_add(4)).unwrap_or_default();
     assert_eq!(
-        decoder.decode(&beyond.to_be_bytes()),
+        decoder.decode(&mut beyond.to_be_bytes()),
         Err(SshError::PacketLength(beyond))
     );
 }
@@ -245,7 +250,7 @@ fn a_block_no_packet_can_be_padded_to_is_refused_and_the_one_in_use_stands() {
     let mut out = [0u8; 64];
     assert_eq!(encoder.encode(b"x", &mut rng, &mut out), Ok(16));
     assert!(matches!(
-        decoder.decode(&out),
+        decoder.decode(&mut out),
         Ok(Decoded::Packet { length: 16, .. })
     ));
     assert_eq!(encoder.set_block(MIN_BLOCK), Ok(()));
@@ -262,7 +267,10 @@ fn a_new_block_size_does_not_reset_the_sequence_number() {
     let mut rng = ScriptedRng::new(&PADDING);
     let mut out = [0u8; 64];
     assert_eq!(encoder.encode(b"kexinit", &mut rng, &mut out), Ok(16));
-    assert!(matches!(decoder.decode(&out), Ok(Decoded::Packet { .. })));
+    assert!(matches!(
+        decoder.decode(&mut out),
+        Ok(Decoded::Packet { .. })
+    ));
     assert_eq!(encoder.sequence(), 1);
     assert_eq!(decoder.sequence(), 1);
 
@@ -276,7 +284,7 @@ fn a_new_block_size_does_not_reset_the_sequence_number() {
         .unwrap_or_default();
     assert_eq!(total % 16, 0);
     assert!(matches!(
-        decoder.decode(out.get(..total).unwrap_or(&[])),
+        decoder.decode(out.get_mut(..total).unwrap_or(&mut [])),
         Ok(Decoded::Packet { .. })
     ));
     assert_eq!(encoder.sequence(), 2);
@@ -319,7 +327,7 @@ fn both_directions_count_on_their_own() {
     assert_eq!(encoder.sequence(), 3);
     assert_eq!(decoder.sequence(), 0);
     assert!(matches!(
-        decoder.decode(&out),
+        decoder.decode(&mut out),
         Ok(Decoded::Packet { length: 16, .. })
     ));
     assert_eq!(decoder.sequence(), 1);
@@ -336,12 +344,216 @@ fn a_packet_of_the_largest_payload_fits_in_a_buffer_of_the_mandatory_size() {
 
     let mut decoder = Decoder::new();
     assert_eq!(
-        decoder.decode(out.get(..total).unwrap_or(&[])),
+        decoder.decode(out.get_mut(..total).unwrap_or(&mut [])),
         Ok(Decoded::Packet {
             payload: payload.as_slice(),
             length: total
         })
     );
+}
+
+#[test]
+fn the_worked_example_of_the_cipher_is_what_the_packet_layer_frames() {
+    // Appendix A of the draft D-134 keeps, from the payload up: the
+    // padding rule of an AEAD that encrypts the length field on its own,
+    // the length field, the cipher, and the tag in one packet.
+    let key = unhex(
+        "8bbff6855fc102338c373e73aac0c914         f076a905b2444a32eecaffeae22becc5         e9b7a7a5825a8249346ec1c28301cf39         4543fc7569887d76e168f37562ac0740",
+    );
+    let mut material = [0u8; 64];
+    for (slot, byte) in material.iter_mut().zip(key) {
+        *slot = byte;
+    }
+    let payload = unhex(
+        "5e0000000000000038         4c6f72656d20697073756d20646f6c6f7220         73697420616d65742c20636f6e736563         7465747572206164697069736963696e         6720656c6974",
+    );
+    assert_eq!(payload.len(), 65);
+    let padding = unhex("4e43e804dc6c");
+    let expected = unhex(
+        "2c3ecce4a5bc05895bf07a7ba956b6c6         8829ac7c83b780b7000ecde745afc705         bbc378ce03a280236b87b53bed583966         2302b164b6286a48cd1e097138e3cb90         9b8b2b829dd18d2a35ff82d995349e85         5bf02c298ef775f2d1a7e8b8",
+    );
+
+    let mut encoder = Encoder::at(7);
+    encoder.set_cipher(&material);
+    let mut rng = ScriptedRng::new(&padding);
+    let mut out = [0u8; 128];
+    let total = encoder
+        .encode(&payload, &mut rng, &mut out)
+        .unwrap_or_default();
+    assert_eq!(total, 92);
+    assert_eq!(out.get(..total), Some(expected.as_slice()));
+    assert_eq!(rng.left(), 0, "the padding is the example's six bytes");
+
+    let mut decoder = Decoder::at(7);
+    decoder.set_cipher(&material);
+    let mut wire = expected;
+    assert_eq!(
+        decoder.decode(&mut wire),
+        Ok(Decoded::Packet {
+            payload: payload.as_slice(),
+            length: 92
+        })
+    );
+    assert_eq!(decoder.sequence(), 8);
+}
+
+#[test]
+fn a_sealed_packet_round_trips_and_carries_its_tag() {
+    let material = [0x42u8; 64];
+    let mut encoder = Encoder::new();
+    let mut decoder = Decoder::new();
+    encoder.set_cipher(&material);
+    decoder.set_cipher(&material);
+    let mut rng = ScriptedRng::new(&PADDING);
+    let mut out = [0u8; 256];
+    for payload in [
+        b"".as_slice(),
+        b"x".as_slice(),
+        b"a longer payload".as_slice(),
+    ] {
+        let total = encoder
+            .encode(payload, &mut rng, &mut out)
+            .unwrap_or_default();
+        // The length field is encrypted, so what can be seen from
+        // outside is the shape: the field, a whole number of blocks, and
+        // the tag.
+        assert_eq!(total.saturating_sub(4 + 16) % 8, 0);
+        assert!(total >= 4 + 8 + 16);
+        let mut wire = out;
+        assert_eq!(
+            decoder.decode(wire.get_mut(..total).unwrap_or(&mut [])),
+            Ok(Decoded::Packet {
+                payload,
+                length: total
+            })
+        );
+    }
+    assert_eq!(encoder.sequence(), 3);
+    assert_eq!(decoder.sequence(), 3);
+}
+
+#[test]
+fn a_buffer_too_small_for_the_tag_says_how_much_it_holds() {
+    let material = [0x42u8; 64];
+    let mut encoder = Encoder::new();
+    encoder.set_cipher(&material);
+    let mut rng = ScriptedRng::new(&PADDING);
+    let mut whole = [0u8; 128];
+    let total = encoder
+        .encode(b"x", &mut rng, &mut whole)
+        .unwrap_or_default();
+
+    // Room for the frame but not for the tag beside it: what the error
+    // names is the buffer, not the part of it that was written.
+    let mut encoder = Encoder::new();
+    encoder.set_cipher(&material);
+    let mut rng = ScriptedRng::new(&PADDING);
+    let short = total.saturating_sub(1);
+    let mut out = [0u8; 128];
+    assert_eq!(
+        encoder.encode(b"x", &mut rng, out.get_mut(..short).unwrap_or(&mut [])),
+        Err(SshError::OutOfBounds {
+            needed: total,
+            available: short
+        })
+    );
+    assert_eq!(encoder.sequence(), 0);
+}
+
+#[test]
+fn a_sealed_packet_whose_bytes_were_changed_is_refused() {
+    let material = [0x42u8; 64];
+    let mut encoder = Encoder::new();
+    encoder.set_cipher(&material);
+    let mut rng = ScriptedRng::new(&PADDING);
+    let mut out = [0u8; 128];
+    let total = encoder
+        .encode(b"the payload", &mut rng, &mut out)
+        .unwrap_or_default();
+
+    for index in [4usize, 20, total.saturating_sub(1)] {
+        let mut decoder = Decoder::new();
+        decoder.set_cipher(&material);
+        let mut wire = out;
+        if let Some(byte) = wire.get_mut(index) {
+            *byte ^= 0x01;
+        }
+        assert_eq!(
+            decoder.decode(wire.get_mut(..total).unwrap_or(&mut [])),
+            Err(SshError::Tag)
+        );
+        assert_eq!(
+            decoder.sequence(),
+            0,
+            "a packet that is not one is not counted"
+        );
+    }
+}
+
+#[test]
+fn a_sealed_decoder_waits_for_the_tag_as_well_as_the_packet() {
+    let material = [0x42u8; 64];
+    let mut encoder = Encoder::new();
+    let mut decoder = Decoder::new();
+    encoder.set_cipher(&material);
+    decoder.set_cipher(&material);
+    let mut rng = ScriptedRng::new(&PADDING);
+    let mut out = [0u8; 128];
+    let total = encoder.encode(b"x", &mut rng, &mut out).unwrap_or_default();
+    for len in 0..total {
+        let mut wire = out;
+        assert_eq!(
+            decoder.decode(wire.get_mut(..len).unwrap_or(&mut [])),
+            Ok(Decoded::Incomplete {
+                needed: if len < 4 { 4 } else { total }
+            }),
+            "{len}"
+        );
+    }
+}
+
+#[test]
+fn the_keys_taken_into_use_do_not_reset_the_count() {
+    // RFC 4253, section 7.3: `SSH_MSG_NEWKEYS` is sent with the old keys
+    // and everything after it uses the new ones. Section 6.4 does not
+    // reset the sequence number for it, so the first sealed packet
+    // carries the number the last plain one did not.
+    let material = [0x42u8; 64];
+    let mut encoder = Encoder::new();
+    let mut decoder = Decoder::new();
+    let mut rng = ScriptedRng::new(&PADDING);
+    let mut out = [0u8; 128];
+
+    let total = encoder
+        .encode(&[msg::NEWKEYS], &mut rng, &mut out)
+        .unwrap_or_default();
+    assert_eq!(
+        decoder.decode(out.get_mut(..total).unwrap_or(&mut [])),
+        Ok(Decoded::Packet {
+            payload: [msg::NEWKEYS].as_slice(),
+            length: total
+        })
+    );
+    assert_eq!(encoder.sequence(), 1);
+    assert_eq!(decoder.sequence(), 1);
+
+    encoder.set_cipher(&material);
+    decoder.set_cipher(&material);
+    assert_eq!(encoder.sequence(), 1);
+    assert_eq!(decoder.sequence(), 1);
+
+    let total = encoder
+        .encode(b"the first packet under the new keys", &mut rng, &mut out)
+        .unwrap_or_default();
+    assert_eq!(
+        decoder.decode(out.get_mut(..total).unwrap_or(&mut [])),
+        Ok(Decoded::Packet {
+            payload: b"the first packet under the new keys".as_slice(),
+            length: total
+        })
+    );
+    assert_eq!(encoder.sequence(), 2);
+    assert_eq!(decoder.sequence(), 2);
 }
 
 #[test]
@@ -358,7 +570,7 @@ fn a_packet_is_read_out_of_a_stream_that_holds_more_than_one() {
     let mut decoder = Decoder::new();
     let mut read = 0usize;
     for expected in [b"one".as_slice(), b"two".as_slice()] {
-        match decoder.decode(stream.get(read..written).unwrap_or(&[])) {
+        match decoder.decode(stream.get_mut(read..written).unwrap_or(&mut [])) {
             Ok(Decoded::Packet { payload, length }) => {
                 assert_eq!(payload, expected);
                 read = read.saturating_add(length);

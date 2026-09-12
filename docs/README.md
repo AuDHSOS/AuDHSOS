@@ -18,10 +18,11 @@ first.
 
 One track is begun and not finished: Secure Shell as a client, which
 D-123 admits and [document 14](14-secure-shell-as-a-client.md)
-specifies, as track S of the roadmap. Two steps of it exist, the wire
-types and the binary packet of `audhsos-ssh` (S1) and the finite-field
-arithmetic of `crypto-dh` (D-122), and one precondition is met: the
-cipher's documents are in [openssh/](openssh) (D-134). Three questions
+specifies, as track S of the roadmap. Steps S1 to S3 exist: the wire
+types and the binary packet of `audhsos-ssh`, the greeting and the
+negotiation, both key exchange methods with the exchange hash and the six
+keys, and the cipher over the packet layer, whose documents are in
+[openssh/](openssh) (D-134). Three questions
 inside that track are open and each is a precondition of one of its steps
 rather than of the track; section 14.13 names them.
 

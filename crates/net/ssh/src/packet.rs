@@ -15,6 +15,7 @@
 
 use crypto_rng::Rng;
 
+use crate::cipher::{self, ChaChaPoly};
 use crate::error::SshError;
 use crate::wire::{Reader, Writer};
 
@@ -56,6 +57,9 @@ pub const MAX_BLOCK: usize = MAX_PADDING - 3;
 /// The length field and the padding length byte.
 const HEADER_BYTES: usize = 5;
 
+/// The length field on its own.
+const LENGTH_BYTES: usize = 4;
+
 /// The implicit packet sequence number of RFC 4253, section 6.4: a
 /// `uint32` that never appears on the wire, starts at zero, is never
 /// reset by a re-exchange, and wraps at 2^32.
@@ -80,6 +84,30 @@ impl SequenceNumber {
         let used = self.0;
         self.0 = self.0.wrapping_add(1);
         used
+    }
+}
+
+#[cfg(test)]
+impl Encoder {
+    /// An encoder whose next packet carries `sequence`.
+    pub(crate) const fn at(sequence: u32) -> Encoder {
+        Encoder {
+            block: Block(MIN_BLOCK),
+            sequence: SequenceNumber::at(sequence),
+            cipher: None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Decoder {
+    /// A decoder whose next packet carries `sequence`.
+    pub(crate) const fn at(sequence: u32) -> Decoder {
+        Decoder {
+            block: Block(MIN_BLOCK),
+            sequence: SequenceNumber::at(sequence),
+            cipher: None,
+        }
     }
 }
 
@@ -117,15 +145,21 @@ impl Block {
     const fn divides(self, length: usize) -> bool {
         length.next_multiple_of(self.0) == length
     }
+
+    /// The block itself.
+    const fn size(self) -> usize {
+        self.0
+    }
 }
 
 /// Frames outgoing packets, and counts them.
-#[derive(Clone, Debug)]
 pub struct Encoder {
     /// What the packet length is padded to.
     block: Block,
     /// The number of the next packet.
     sequence: SequenceNumber,
+    /// The cipher, once one has been negotiated and taken into use.
+    cipher: Option<ChaChaPoly>,
 }
 
 impl Encoder {
@@ -136,7 +170,16 @@ impl Encoder {
         Encoder {
             block: Block(MIN_BLOCK),
             sequence: SequenceNumber::new(),
+            cipher: None,
         }
+    }
+
+    /// Encrypts from the next packet on, which is what
+    /// `SSH_MSG_NEWKEYS` decides. The sequence number is untouched here
+    /// too, and the block size the cipher pads to is its own.
+    pub fn set_cipher(&mut self, key: &[u8; cipher::KEY_BYTES]) {
+        self.block = Block(cipher::BLOCK);
+        self.cipher = Some(ChaChaPoly::new(key));
     }
 
     /// Pads to `block` from the next packet on, which is what a
@@ -185,18 +228,55 @@ impl Encoder {
         if payload.len() > MAX_PAYLOAD {
             return Err(SshError::PayloadLength(payload.len()));
         }
-        let content = HEADER_BYTES.saturating_add(payload.len());
-        let total = self.block.padded(content);
-        let padding = total.saturating_sub(content);
-        let length = u32::try_from(total.saturating_sub(4)).unwrap_or(u32::MAX);
+        // What the padding aligns differs with the cipher: this one
+        // encrypts the length field on its own and leaves it outside the
+        // aligned region, which is what appendix A of its draft shows —
+        // a packet of 76 bytes whose length field names 72.
+        let sealed = self.cipher.is_some();
+        let content = Encoder::header(sealed).saturating_add(payload.len());
+        let aligned = self.block.padded(content);
+        let padding = aligned.saturating_sub(content);
+        let length = if sealed {
+            aligned
+        } else {
+            aligned.saturating_sub(LENGTH_BYTES)
+        };
+        let frame = length.saturating_add(LENGTH_BYTES);
         let count = u8::try_from(padding).unwrap_or(u8::MAX);
-        let mut writer = Writer::new(out);
-        writer.write_u32(length)?;
-        writer.write_byte(count)?;
-        writer.write_bytes(payload)?;
-        rng.fill(writer.take(padding)?).map_err(SshError::Rng)?;
+        let available = out.len();
+        {
+            let mut writer = Writer::new(out);
+            writer.write_u32(u32::try_from(length).unwrap_or(u32::MAX))?;
+            writer.write_byte(count)?;
+            writer.write_bytes(payload)?;
+            rng.fill(writer.take(padding)?).map_err(SshError::Rng)?;
+        }
+        let Some(cipher) = self.cipher.as_ref() else {
+            self.sequence.advance();
+            return Ok(frame);
+        };
+        let mut tag = [0u8; cipher::TAG_BYTES];
+        let total = frame.saturating_add(cipher::TAG_BYTES);
+        let whole = out.get_mut(..total).ok_or(SshError::OutOfBounds {
+            needed: total,
+            available,
+        })?;
+        let (body, slot) = whole.split_at_mut(frame);
+        cipher.seal(self.sequence.get(), body, &mut tag)?;
+        slot.copy_from_slice(&tag);
         self.sequence.advance();
         Ok(total)
+    }
+}
+
+impl Encoder {
+    /// How much of the header the aligned region holds.
+    const fn header(sealed: bool) -> usize {
+        if sealed {
+            HEADER_BYTES.saturating_sub(LENGTH_BYTES)
+        } else {
+            HEADER_BYTES
+        }
     }
 }
 
@@ -225,12 +305,13 @@ pub enum Decoded<'a> {
 }
 
 /// Reads incoming packets, and counts them.
-#[derive(Clone, Debug)]
 pub struct Decoder {
     /// What the packet length must be a multiple of.
     block: Block,
     /// The number of the next packet.
     sequence: SequenceNumber,
+    /// The cipher, once one has been negotiated and taken into use.
+    cipher: Option<ChaChaPoly>,
 }
 
 impl Decoder {
@@ -241,7 +322,15 @@ impl Decoder {
         Decoder {
             block: Block(MIN_BLOCK),
             sequence: SequenceNumber::new(),
+            cipher: None,
         }
+    }
+
+    /// Decrypts from the next packet on. As with [`Encoder::set_cipher`],
+    /// the sequence number stands.
+    pub fn set_cipher(&mut self, key: &[u8; cipher::KEY_BYTES]) {
+        self.block = Block(cipher::BLOCK);
+        self.cipher = Some(ChaChaPoly::new(key));
     }
 
     /// Expects packets a multiple of `block` long from the next one on.
@@ -273,6 +362,12 @@ impl Decoder {
     /// arrived, and before the rest is waited for, so a length no packet
     /// has costs nothing to refuse.
     ///
+    /// Once a cipher is in use this decrypts `bytes` in place and the
+    /// payload it answers with borrows them, so what the caller holds
+    /// after a packet is read is that packet in the clear. A second call
+    /// over the same bytes reads what has already been decrypted and is
+    /// not the same packet again.
+    ///
     /// # Errors
     ///
     /// [`SshError::PacketLength`] for a length below [`MIN_PACKET`], above
@@ -280,22 +375,72 @@ impl Decoder {
     /// [`SshError::PaddingLength`] for padding that is not inside the
     /// packet or is under [`MIN_PADDING`]; [`SshError::PayloadLength`] for
     /// a payload above [`MAX_PAYLOAD`].
-    pub fn decode<'a>(&mut self, bytes: &'a [u8]) -> Result<Decoded<'a>, SshError> {
-        let mut reader = Reader::new(bytes);
-        let Ok(length) = reader.read_u32() else {
-            return Ok(Decoded::Incomplete { needed: 4 });
+    pub fn decode<'a>(&mut self, bytes: &'a mut [u8]) -> Result<Decoded<'a>, SshError> {
+        let Some(head) = bytes.first_chunk::<LENGTH_BYTES>() else {
+            return Ok(Decoded::Incomplete {
+                needed: LENGTH_BYTES,
+            });
         };
-        let total = usize::try_from(length)
+        let length = match self.cipher.as_ref() {
+            Some(cipher) => cipher.length(self.sequence.get(), head),
+            None => u32::from_be_bytes(*head),
+        };
+        let frame = usize::try_from(length)
             .unwrap_or(usize::MAX)
-            .saturating_add(4);
-        if !(MIN_PACKET..=MAX_FRAME).contains(&total) || !self.block.divides(total) {
-            return Err(SshError::PacketLength(length));
-        }
+            .saturating_add(LENGTH_BYTES);
+        self.check(length, frame)?;
+        let tag_len = self.cipher.as_ref().map_or(0, |_| cipher::TAG_BYTES);
+        let total = frame.saturating_add(tag_len);
         if bytes.len() < total {
             return Ok(Decoded::Incomplete { needed: total });
         }
+        if let Some(cipher) = self.cipher.as_ref() {
+            // The tag is over the ciphertext, so it is checked before a
+            // byte is decrypted, which is what the draft requires of a
+            // receiver.
+            let (body, rest) = bytes.split_at_mut(frame);
+            let tag = rest.get(..tag_len).unwrap_or(&[]);
+            cipher.open(self.sequence.get(), body, tag)?;
+        }
+        let payload = Decoder::payload(bytes.get(..frame).unwrap_or(&[]))?;
+        self.sequence.advance();
+        Ok(Decoded::Packet {
+            payload,
+            length: total,
+        })
+    }
+
+    /// What a length field may name: a frame the block divides, inside
+    /// the bounds of section 6.1, and no shorter than a packet is.
+    ///
+    /// The floor differs with the cipher. Without one the frame holds the
+    /// length field and section 6 asks for sixteen bytes altogether; with
+    /// this cipher the length field is outside the aligned region, so
+    /// what the document's floor can ask for is one block, and a packet
+    /// of one block is what an OpenSSH sends for a one-byte payload.
+    const fn check(&self, length: u32, frame: usize) -> Result<(), SshError> {
+        let floor = if self.cipher.is_some() {
+            self.block.size().saturating_add(LENGTH_BYTES)
+        } else {
+            MIN_PACKET
+        };
+        let aligned = if self.cipher.is_some() {
+            frame.saturating_sub(LENGTH_BYTES)
+        } else {
+            frame
+        };
+        if frame < floor || frame > MAX_FRAME || !self.block.divides(aligned) {
+            return Err(SshError::PacketLength(length));
+        }
+        Ok(())
+    }
+
+    /// The payload of a frame whose length is already judged.
+    fn payload(frame: &[u8]) -> Result<&[u8], SshError> {
+        let mut reader = Reader::new(frame);
+        reader.read_bytes(LENGTH_BYTES)?;
         let padding = reader.read_byte()?;
-        let content = total.saturating_sub(HEADER_BYTES);
+        let content = frame.len().saturating_sub(HEADER_BYTES);
         let payload_len = content
             .checked_sub(usize::from(padding))
             .ok_or(SshError::PaddingLength(padding))?;
@@ -305,12 +450,7 @@ impl Decoder {
         if payload_len > MAX_PAYLOAD {
             return Err(SshError::PayloadLength(payload_len));
         }
-        let payload = reader.read_bytes(payload_len)?;
-        self.sequence.advance();
-        Ok(Decoded::Packet {
-            payload,
-            length: total,
-        })
+        reader.read_bytes(payload_len)
     }
 }
 

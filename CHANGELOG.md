@@ -194,6 +194,57 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   directory READMEs, document 14, section 14.4, and the index of `docs/`
   name them.
 
+- The rest of step S2 of track S and the whole of S3, in `audhsos-ssh`.
+  `exchange` is the two key exchange methods and the exchange hash: an
+  `Ephemeral` that holds the scalar or the exponent and clears it when it
+  is dropped, the two messages of RFC 5656, section 7.1, and RFC 4253,
+  section 8, and the hash over the eight values of that section. The
+  public values are strings for the curve and `mpint`s for the group, and
+  the shared secret is an `mpint` for both, which is the trap RFC 8731,
+  section 3.1, exists to name — a test holds the hash against a
+  fixed-length encoding for a secret whose top bit is set and shows the
+  two agreeing when it is clear, which is why that mistake works half the
+  time. The aborts of RFC 8731, section 3, and RFC 8268, section 4, are
+  refusals where they are found. `keys` is the six keys of section 7.2
+  with the extension rule the 64 bytes of the cipher need.
+
+- `cipher` is `chacha20-poly1305@openssh.com`, checked against the worked
+  example of appendix A of the draft in `docs/openssh/`: the packet of
+  that example seals to the bytes it prints and opens back. Two things
+  the vector settled that no prose in either document states: the two key
+  halves are named the other way round in the two documents, and the
+  length field lies outside the region the padding aligns, which is why
+  the example's 76-byte packet names 72. `Encoder::set_cipher` and
+  `Decoder::set_cipher` take keys into use without touching the sequence
+  number, which is what `SSH_MSG_NEWKEYS` needs of them, and a decoder
+  checks the tag before it decrypts a byte. Sealing and opening share one
+  operation, because encrypting and decrypting a frame are the same one,
+  and it refuses a frame it cannot encrypt rather than answering with a
+  tag over plaintext. The `mpint` encoding of the shared secret exists
+  once and is used by the exchange hash and by the key derivation, which
+  have to agree about what `K` is. Catalog 6.6.70.
+
+- The front of step S2 of track S, in `audhsos-ssh`: the greeting and the
+  negotiation both key exchange methods start with. `ident` is the
+  identification string of RFC 4253, section 4.2 — the part before the CR
+  LF is handed back because that is what the exchange hash takes, the
+  lines a server may send first are skipped and counted, and every line
+  is held to 255 characters whether it has ended or not, so what is
+  refused does not depend on how the bytes were split on the way here.
+  `msg` is the message numbers of RFC 4250, section 4.1.2. `kex` is
+  `SSH_MSG_KEXINIT` with the cookie in one call on the generator, the
+  algorithm set of 14.5 including `ext-info-c` (RFC 8308), and the rule
+  of section 7.1 that chooses from two proposals: the first name the
+  other side also has, except for the key exchange method and the host
+  key algorithm, which are chosen together because a method that needs a
+  signature cannot be run with a key that cannot sign. An extension
+  indicator that ends up chosen is a disconnect, and a guessed packet is
+  ignored unless both of the peer's first names are the chosen ones. The
+  MAC lists this client sends are empty, which document 14, section 14.5,
+  now states as what it is: the one cipher offered is an AEAD, and naming
+  a MAC this client does not have would be the alternative. Catalog
+  6.6.69.
+
 - Step S1 of track S: the crate `audhsos-ssh` at `crates/net/ssh`,
   sans-I/O and host-tested, with the two layers everything above it is
   written in. `wire` is the types of RFC 4251, section 5, over a cursor

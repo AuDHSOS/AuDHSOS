@@ -113,7 +113,7 @@ AuDHSOS/
 │   │   ├── dhcp/              net-dhcp: the RFC 2131 client state machine, its options, the lease timers
 │   │   ├── http/              net-http: HTTP/1.1 client encoding and parsing
 │   │   ├── stack/             net-stack: interface, demultiplexing, poll
-│   │   └── ssh/               audhsos-ssh: SSH-2 client, sans-I/O: the wire types and the binary packet (document 14, track S)
+│   │   └── ssh/               audhsos-ssh: SSH-2 client, sans-I/O: packets, negotiation, key exchange, cipher (document 14, track S)
 │   └── tools/
 │       ├── xtask/             build, image (GPT + FAT32 writer, CRC32), run, test, lint, check-layering, check-deps, unsafe-budget, fuzz, coverage; policy tables
 │       ├── markdown/          doc-markdown: the Markdown parser of this repository's documents
@@ -186,7 +186,7 @@ AuDHSOS/
 | `crypto-rng` | c2 | all | no | yes | `crypto-ct`, `crypto-aead`; feature `test-doubles` |
 | `crypto-rsa` | c2 | all | no | yes, fuzz | `crypto-bignum`, `crypto-ct`, `crypto-hash`; feature `test-signing` |
 | `audhsos-x509` | c3 | all | no | yes, fuzz | `audhsos-der`, `audhsos-time`, `crypto-hash`, `crypto-ec`, `crypto-rsa`; feature `test-certificates` |
-| `audhsos-ssh` (track S) | c3 | all | no | yes | `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies. The crypto crates of 14.5 join it with the steps that need them |
+| `audhsos-ssh` (track S) | c3 | all | no | yes | `crypto-aead`, `crypto-ct`, `crypto-dh`, `crypto-ec`, `crypto-hash`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `audhsos-tls` | c4 | all | no | yes, fuzz | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-time`, `audhsos-x509` |
 | `net-wire` | n0 | all | no | yes | `test-support` as a dev-dependency |
 | `net-eth` | n1 | all | no | yes | `net-wire`, `audhsos-time`, `audhsos-collections`; `test-support` as a dev-dependency |
