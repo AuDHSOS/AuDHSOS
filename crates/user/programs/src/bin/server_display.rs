@@ -303,8 +303,13 @@ fn handle(
         Request::DestroySurface { id } => {
             Reply::Destroyed(destroy(gate, startup, display, held, badge, *id))
         }
-        Request::SetCursor { x, y, visible } => Reply::CursorSet(match screen {
-            Some(surface) => display.set_cursor(*x, *y, *visible, surface),
+        Request::SetCursor {
+            x,
+            y,
+            visible,
+            shape,
+        } => Reply::CursorSet(match screen {
+            Some(surface) => display.set_cursor(*x, *y, *visible, *shape, surface),
             None => Err(Error::NotFound),
         }),
     }

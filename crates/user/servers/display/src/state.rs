@@ -18,7 +18,7 @@
 use audhsos_abi::Error;
 use audhsos_collections::ArrayVec;
 use gfx::{Damage, PixelFormat, Rect, Surface, present};
-use user_proto::display::Mode;
+use user_proto::display::{CursorShape, Mode};
 
 use crate::cursor::Cursor;
 
@@ -244,8 +244,8 @@ impl<const N: usize> Display<N> {
         written.map_err(|_| Error::InvalidArgument)
     }
 
-    /// Moves the pointer, clamped to the screen, and draws it where it now
-    /// is.
+    /// Moves the pointer, clamped to the screen, and draws `shape` where it
+    /// now is.
     ///
     /// # Errors
     ///
@@ -255,12 +255,18 @@ impl<const N: usize> Display<N> {
         x: u32,
         y: u32,
         visible: bool,
+        shape: CursorShape,
         screen: &mut Surface<'_>,
     ) -> Result<(), Error> {
         let mode = self.screen()?;
         self.cursor.erase(screen);
-        self.cursor
-            .place(x, y, visible, Rect::new(0, 0, mode.width, mode.height));
+        self.cursor.place(
+            x,
+            y,
+            visible,
+            shape,
+            Rect::new(0, 0, mode.width, mode.height),
+        );
         self.cursor.draw(screen);
         Ok(())
     }

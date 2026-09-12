@@ -7,6 +7,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- A second cursor sprite, the double arrow a window shows while it is
+  being resized, and the shape field that chooses it. `SetCursor` carries
+  a `CursorShape` beside the position, packed into the word that already
+  carried whether the sprite is shown, and a shape code the protocol does
+  not have is refused rather than drawn as the arrow. The display server
+  keeps one bitmap per shape and derives body from edge for both, so the
+  new sprite adds one table and no second rule; the position stays the
+  corner of the sprite for either shape, so nothing about erasing and
+  restoring changes. Nothing asks for the resize shape yet: this system
+  has no window manager, and the program that drags a corner is the one
+  that will. Catalog 6.6.27 and 6.6.56.
+
 - `tools/target-clean.sh`, which drops from the target directory what no
   build has touched for a while. The tree passes twenty gigabytes on this
   machine and most of it belongs to work that is finished: one `find` pass

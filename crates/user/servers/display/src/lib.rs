@@ -8,8 +8,12 @@
 pub mod cursor;
 pub mod state;
 
-pub use cursor::{CURSOR_HEIGHT, CURSOR_SHAPE, CURSOR_WIDTH, Cursor, pixel_of};
+pub use cursor::{ARROW_SHAPE, CURSOR_HEIGHT, CURSOR_WIDTH, Cursor, RESIZE_SHAPE, pixel_of};
 pub use state::{Display, Held, MAX_CLIENTS, NOBODY};
+// The shape of the sprite is a field of the protocol, and the end-to-end
+// run asks this crate which pixels a shape has. Re-exported so that both
+// name one type.
+pub use user_proto::display::CursorShape;
 
 #[cfg(test)]
 mod tests;

@@ -814,7 +814,9 @@ done until every applicable item has a test. Items are added, never removed.
   sprite saves and restores the background; the cursor is clamped to the
   screen; a surface larger than the screen is rejected; a client
   presenting a surface it does not own is rejected by badge; a client
-  that goes away releases its surface.
+  that goes away releases its surface; the sprite is the shape the client
+  asked for, the resize shape is the same under a turn of half a circle,
+  and each shape has a white body inside a black edge.
 
 ### 6.6.28 QMP client and screendump reader (`xtask`)
 
@@ -1978,7 +1980,9 @@ item is what 12.9 asked for before the encodings could be written
   is refused where it is read, which is the case an encoder of this crate
   cannot produce and a sender of another release could.
 - A message of one protocol handed to the decoder of another is refused
-  with both protocols named.
+  with both protocols named. A `SetCursor` whose shape word names no
+  sprite is refused the same way, because a shape is a name and not a
+  number the server clamps.
 - The parent protocol has one message and no reply, because the child that
   sends it exits behind it (D-94): the status it carries comes back, a
   message number the protocol does not have is refused, and a report

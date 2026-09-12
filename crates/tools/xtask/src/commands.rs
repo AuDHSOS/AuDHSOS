@@ -965,16 +965,18 @@ fn glyph_at(image: &ppm::Image, at: (u32, u32), character: char) -> Vec<String> 
 
 /// What the picture does not show of the sprite standing at `at`.
 ///
-/// Every pixel the sprite covers is checked, and what each should be is
+/// Every pixel the arrow covers is checked, and what each should be is
 /// asked of the display server itself rather than written out again here:
-/// which pixels are the body and which the edge follows from the one shape
+/// which pixels are the body and which the edge follows from the shape
 /// table, and a test that carried its own copy of that rule would agree
 /// with a wrong one just as readily.
 fn sprite_at(image: &ppm::Image, at: (u32, u32)) -> Vec<String> {
     for row in 0..server_display::CURSOR_HEIGHT {
         for column in 0..server_display::CURSOR_WIDTH {
             let index = usize::try_from(row).unwrap_or(0);
-            let Some(color) = server_display::pixel_of(index, column) else {
+            let Some(color) =
+                server_display::pixel_of(server_display::CursorShape::Arrow, index, column)
+            else {
                 continue;
             };
             let x = at.0.saturating_add(column);

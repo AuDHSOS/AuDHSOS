@@ -8,7 +8,8 @@ use audhsos_abi::{Error, FramebufferFormat, Handle};
 use gfx::{DAMAGE_CAPACITY, Damage, Rect};
 
 use crate::display::{
-    CREATE_SURFACE, DESTROY_SURFACE, INFO, Mode, PRESENT, Reply, Request, SET_CURSOR, Surface,
+    CREATE_SURFACE, CursorShape, DESTROY_SURFACE, INFO, Mode, PRESENT, Reply, Request, SET_CURSOR,
+    Surface,
 };
 use crate::label::{Label, ProtoError, Protocol};
 
@@ -64,11 +65,19 @@ fn every_request_comes_back_as_it_was_sent() {
             x: 100,
             y: 200,
             visible: true,
+            shape: CursorShape::Arrow,
         },
         Request::SetCursor {
             x: 0,
             y: 0,
             visible: false,
+            shape: CursorShape::Arrow,
+        },
+        Request::SetCursor {
+            x: 7,
+            y: 9,
+            visible: true,
+            shape: CursorShape::Resize,
         },
     ];
     for request in requests {
@@ -246,6 +255,31 @@ fn a_format_code_that_names_no_format_is_refused() {
 }
 
 #[test]
+fn a_shape_code_that_names_no_sprite_is_refused() {
+    let mut bytes = buffer();
+    let mut view = BufferMut::new(&mut bytes);
+    let mut writer = user_rt::message::Writer::new();
+    writer.word(&mut view, 0).unwrap();
+    writer.word(&mut view, 9 << 32).unwrap();
+    writer
+        .finish(&mut view, Label::new(Protocol::Display, SET_CURSOR).raw())
+        .unwrap();
+    assert_eq!(
+        Request::decode(Buffer::new(&bytes)),
+        Err(ProtoError::Message(Protocol::Display, SET_CURSOR))
+    );
+}
+
+#[test]
+fn a_shape_is_the_number_it_travels_as_and_the_arrow_by_default() {
+    assert_eq!(CursorShape::default(), CursorShape::Arrow);
+    for shape in [CursorShape::Arrow, CursorShape::Resize] {
+        assert_eq!(CursorShape::from_code(shape.code()), Some(shape));
+    }
+    assert_eq!(CursorShape::from_code(2), None);
+}
+
+#[test]
 fn every_request_and_reply_names_its_own_message() {
     assert_eq!(Request::Info.label().message, INFO);
     assert_eq!(
@@ -275,7 +309,8 @@ fn every_request_and_reply_names_its_own_message() {
         Request::SetCursor {
             x: 1,
             y: 1,
-            visible: true
+            visible: true,
+            shape: CursorShape::Arrow
         }
         .label()
         .message,

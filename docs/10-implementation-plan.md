@@ -2448,7 +2448,8 @@ against a checksum table in the test file.
 display server allocates the backing store from the memory server and
 transfers a handle with `READ | WRITE | MAP`); `Present { surface id,
 damage: up to 16 rects }`; `DestroySurface { surface id }`; `SetCursor {
-x, y, visible }`. One full-screen surface per client in this phase; the
+x, y, visible, shape }`, where the shape is the arrow or the double arrow
+of a resize. One full-screen surface per client in this phase; the
 client with the most recent `Present` owns the screen. Errors: `NotFound`
 when no framebuffer exists, `InvalidArgument` for a surface larger than
 the screen, `PermissionDenied` for a surface of another badge.

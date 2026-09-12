@@ -19,7 +19,8 @@
 //! Invariants: a reply carries the memory object in the handle area only
 //! when its status word says the surface was created; a `Present` carries
 //! at most [`gfx::DAMAGE_CAPACITY`] rectangles, because that is what the
-//! damage set of a surface holds.
+//! damage set of a surface holds; the shape word of a `SetCursor` names a
+//! sprite this protocol has, or the message is refused.
 
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut};
 use audhsos_abi::{Error, FramebufferFormat, Handle};
@@ -48,6 +49,41 @@ const FIELD_SHIFT: u32 = 32;
 
 /// The low half of a packed word.
 const FIELD_MASK: u64 = 0xFFFF_FFFF;
+
+/// Which sprite the pointer shows.
+///
+/// The shape is the client's to choose, because the server knows where the
+/// pointer is and nothing about what it stands over: a program that drags
+/// the corner of a window is the one that knows the drag is a resize.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CursorShape {
+    /// The arrow, which is what the pointer is when nothing is going on.
+    #[default]
+    Arrow,
+    /// The double arrow of a resize, along the diagonal a corner moves on.
+    Resize,
+}
+
+impl CursorShape {
+    /// The number the shape travels as.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        match self {
+            CursorShape::Arrow => 0,
+            CursorShape::Resize => 1,
+        }
+    }
+
+    /// The shape a number names, or nothing for a number that names none.
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            0 => Some(CursorShape::Arrow),
+            1 => Some(CursorShape::Resize),
+            _other => None,
+        }
+    }
+}
 
 /// What the screen is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -102,7 +138,7 @@ pub enum Request {
         /// The surface, as [`Surface::id`] named it.
         id: u32,
     },
-    /// The pointer is here, and is shown or is not.
+    /// The pointer is here, shows this sprite, and is shown or is not.
     SetCursor {
         /// Column of the hot spot.
         x: u32,
@@ -110,6 +146,8 @@ pub enum Request {
         y: u32,
         /// Whether the sprite is drawn.
         visible: bool,
+        /// Which sprite it is.
+        shape: CursorShape,
     },
 }
 
@@ -215,9 +253,14 @@ impl Request {
                 write_damage(&mut writer, buffer, damage)?;
             }
             Request::DestroySurface { id } => writer.word(buffer, u64::from(*id))?,
-            Request::SetCursor { x, y, visible } => {
+            Request::SetCursor {
+                x,
+                y,
+                visible,
+                shape,
+            } => {
                 writer.word(buffer, pack(*x, *y))?;
-                writer.word(buffer, u64::from(*visible))?;
+                writer.word(buffer, pack(shape.code(), u32::from(*visible)))?;
             }
         }
         writer.finish(buffer, self.label().raw())?;
@@ -257,10 +300,13 @@ impl Request {
             }),
             SET_CURSOR => {
                 let (x, y) = unpack(reader.word()?);
+                let (shape, visible) = unpack(reader.word()?);
                 Ok(Request::SetCursor {
                     x,
                     y,
-                    visible: reader.word()? != 0,
+                    visible: visible != 0,
+                    shape: CursorShape::from_code(shape)
+                        .ok_or(ProtoError::Message(Protocol::Display, SET_CURSOR))?,
                 })
             }
             other => Err(ProtoError::Message(Protocol::Display, other)),

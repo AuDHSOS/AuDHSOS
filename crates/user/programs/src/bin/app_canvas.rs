@@ -59,7 +59,7 @@ use audhsos_abi::{Error, Handle, Rights};
 use gfx::{Damage, PixelFormat, Surface};
 use user_programs::client::{lookup, write_line};
 use user_programs::mapping::Mapping;
-use user_proto::display::{Mode, Reply, Request, Surface as Given};
+use user_proto::display::{CursorShape, Mode, Reply, Request, Surface as Given};
 use user_proto::input::{Event, Reply as InputReply, Request as InputRequest, RingReader};
 use user_proto::parent;
 use user_rt::{EndpointHandle, MemoryHandle, Startup, Typed};
@@ -386,6 +386,7 @@ fn set_cursor(gate: &mut Gate, display: EndpointHandle, x: u32, y: u32) -> Resul
         x,
         y,
         visible: true,
+        shape: CursorShape::Arrow,
     };
     request.encode(&mut gate.writer())?;
     gate.ipc_call(display)?;
