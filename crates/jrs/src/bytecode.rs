@@ -612,6 +612,29 @@ enum RegisterBindingStorage {
     Context { depth: u16, slot: u16 },
 }
 
+struct RegisterMemberAssignment {
+    object: crate::engine::bytecode::Reg,
+    base_type: RegisterType,
+    key: RegisterMemberKey,
+}
+
+enum RegisterMemberKey {
+    Named {
+        constant: u16,
+        name: Vec<u16>,
+    },
+    Keyed {
+        register: crate::engine::bytecode::Reg,
+        array_index: Option<u32>,
+    },
+}
+
+enum RegisterPreparedAssignment {
+    NestedPattern,
+    Name,
+    Member(RegisterMemberAssignment),
+}
+
 struct RegisterLowerer {
     code: crate::engine::bytecode::BytecodeFunction,
     function_table_base: u32,
@@ -1241,21 +1264,23 @@ impl RegisterLowerer {
                     else {
                         continue;
                     };
+                    let prepared = self.prepare_assignment_pattern_target(target)?;
                     let index = u32::try_from(index).ok()?;
                     let mut element_type =
                         self.lower_array_index_from_register(source, value_type, index)?;
                     if let Some(initializer) = initializer {
                         element_type = self.lower_binding_default(element_type, initializer)?;
                     }
-                    self.assign_pattern(element_type, target)?;
+                    self.finish_assignment_pattern_target(element_type, target, prepared)?;
                 }
                 if let Some(rest) = &array.rest {
+                    let prepared = self.prepare_assignment_pattern_target(rest)?;
                     let start = u32::try_from(array.elements.len()).ok()?;
                     let (rest_type, rest_array) =
                         self.lower_array_rest_from_register(source, value_type, start)?;
                     self.code.emit(Instruction::Ldar(rest_array));
-                    self.assign_pattern(rest_type, rest)?;
                     self.release_register(rest_array)?;
+                    self.finish_assignment_pattern_target(rest_type, rest, prepared)?;
                 }
                 self.release_register(source)?;
             }
@@ -1269,6 +1294,7 @@ impl RegisterLowerer {
                 self.code.emit(Instruction::Star(source));
                 let mut excluded = Vec::new();
                 for property in &object.properties {
+                    let prepared = self.prepare_assignment_pattern_target(&property.target)?;
                     if object.rest.is_some() {
                         excluded.push(Self::static_property_key_units(&property.key)?);
                     }
@@ -1282,20 +1308,88 @@ impl RegisterLowerer {
                     if let Some(initializer) = &property.initializer {
                         property_type = self.lower_binding_default(property_type, initializer)?;
                     }
-                    self.assign_pattern(property_type, &property.target)?;
+                    self.finish_assignment_pattern_target(
+                        property_type,
+                        &property.target,
+                        prepared,
+                    )?;
                 }
                 if let Some(rest) = &object.rest {
-                    let name = rest.reference_name()?;
+                    let prepared = self.prepare_assignment_reference(rest)?;
                     let (rest_type, rest_object) =
                         self.lower_object_rest_from_register(source, value_type, &excluded)?;
                     self.code.emit(Instruction::Ldar(rest_object));
-                    self.assign_name(rest_type, name)?;
                     self.release_register(rest_object)?;
+                    self.finish_assignment_reference(rest_type, rest, prepared)?;
                 }
                 self.release_register(source)?;
             }
         }
         Some(())
+    }
+
+    fn prepare_assignment_pattern_target(
+        &mut self,
+        pattern: &parser::AssignmentPattern,
+    ) -> Option<RegisterPreparedAssignment> {
+        let parser::AssignmentPattern::Target(target) = pattern else {
+            return Some(RegisterPreparedAssignment::NestedPattern);
+        };
+        self.prepare_assignment_reference(target)
+    }
+
+    fn finish_assignment_pattern_target(
+        &mut self,
+        value_type: RegisterType,
+        pattern: &parser::AssignmentPattern,
+        prepared: RegisterPreparedAssignment,
+    ) -> Option<()> {
+        match (pattern, prepared) {
+            (
+                parser::AssignmentPattern::Target(target),
+                prepared @ (RegisterPreparedAssignment::Name
+                | RegisterPreparedAssignment::Member(_)),
+            ) => self.finish_assignment_reference(value_type, target, prepared),
+            (
+                parser::AssignmentPattern::Array(_) | parser::AssignmentPattern::Object(_),
+                RegisterPreparedAssignment::NestedPattern,
+            ) => self.assign_pattern(value_type, pattern),
+            (parser::AssignmentPattern::Target(_), RegisterPreparedAssignment::NestedPattern)
+            | (
+                parser::AssignmentPattern::Array(_) | parser::AssignmentPattern::Object(_),
+                RegisterPreparedAssignment::Name | RegisterPreparedAssignment::Member(_),
+            ) => None,
+        }
+    }
+
+    fn prepare_assignment_reference(
+        &mut self,
+        target: &Expr,
+    ) -> Option<RegisterPreparedAssignment> {
+        if target.reference_name().is_some() {
+            Some(RegisterPreparedAssignment::Name)
+        } else {
+            self.prepare_member_assignment(target)
+                .map(RegisterPreparedAssignment::Member)
+        }
+    }
+
+    fn finish_assignment_reference(
+        &mut self,
+        value_type: RegisterType,
+        target: &Expr,
+        prepared: RegisterPreparedAssignment,
+    ) -> Option<()> {
+        match prepared {
+            RegisterPreparedAssignment::Name => {
+                self.assign_name(value_type, target.reference_name()?)
+            }
+            RegisterPreparedAssignment::Member(prepared) => {
+                target.member()?;
+                self.finish_member_assignment(prepared, value_type)
+            }
+            RegisterPreparedAssignment::NestedPattern => None,
+        }
     }
 
     fn assign_name(&mut self, value_type: RegisterType, name: &str) -> Option<()> {
@@ -2133,10 +2227,17 @@ impl RegisterLowerer {
         operator: Option<Binary>,
         value: &Expr,
     ) -> Option<RegisterType> {
-        use crate::engine::bytecode::Instruction;
         if operator.is_some() {
             return None;
         }
+        let prepared = self.prepare_member_assignment(target)?;
+        let value_type = self.lower(value)?;
+        self.finish_member_assignment(prepared, value_type)?;
+        Some(value_type)
+    }
+
+    fn prepare_member_assignment(&mut self, target: &Expr) -> Option<RegisterMemberAssignment> {
+        use crate::engine::bytecode::Instruction;
         let (base, key) = target.member()?;
         let base_type = self.lower(base)?;
         if !base_type.is_object()
@@ -2146,12 +2247,8 @@ impl RegisterLowerer {
         }
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
-        let array_index = if matches!(base_type, RegisterType::Array(_)) {
-            Self::static_array_index(key)
-        } else {
-            None
-        };
-        let key_register = if matches!(base_type, RegisterType::Array(_)) {
+        let key = if matches!(base_type, RegisterType::Array(_)) {
+            let array_index = Self::static_array_index(key);
             if let Some(index) = array_index {
                 self.emit_array_index(index)?;
             } else if self.lower(key)? != RegisterType::Number {
@@ -2159,80 +2256,99 @@ impl RegisterLowerer {
             }
             let key = self.allocate_register()?;
             self.code.emit(Instruction::Star(key));
-            Some(key)
+            RegisterMemberKey::Keyed {
+                register: key,
+                array_index,
+            }
         } else {
-            None
+            let name = Self::static_property_name(key)?.to_vec();
+            RegisterMemberKey::Named {
+                constant: self.string_constant(&name)?,
+                name,
+            }
         };
-        let name = if matches!(base_type, RegisterType::Array(_)) {
-            None
-        } else {
-            Some(self.string_constant(Self::static_property_name(key)?)?)
-        };
-        let value_type = self.lower(value)?;
-        if !value_type.is_primitive() {
+        Some(RegisterMemberAssignment {
+            object,
+            base_type,
+            key,
+        })
+    }
+
+    fn finish_member_assignment(
+        &mut self,
+        prepared: RegisterMemberAssignment,
+        value_type: RegisterType,
+    ) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        if !value_type.is_primitive() && !value_type.is_object() {
             return None;
         }
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
-        if let Some(key) = key_register {
-            self.code.emit(Instruction::SetByValue {
-                obj: object,
-                key,
-                slot,
-            });
-            self.release_register(key)?;
-            let RegisterType::Array(object_id) = base_type else {
-                return None;
-            };
-            let RegisterObjectLayout::Array {
-                length,
-                elements,
-                dynamic,
-            } = self.object_layouts.get_mut(&object_id)?
-            else {
-                return None;
-            };
-            if let Some(index) = array_index {
-                let is_new = !elements.contains_key(&index);
-                if is_new && elements.len().saturating_add(1) >= self.property_limit {
+        match prepared.key {
+            RegisterMemberKey::Keyed {
+                register,
+                array_index,
+            } => {
+                self.code.emit(Instruction::SetByValue {
+                    obj: prepared.object,
+                    key: register,
+                    slot,
+                });
+                self.release_register(register)?;
+                let RegisterType::Array(object_id) = prepared.base_type else {
+                    return None;
+                };
+                let RegisterObjectLayout::Array {
+                    length,
+                    elements,
+                    dynamic,
+                } = self.object_layouts.get_mut(&object_id)?
+                else {
+                    return None;
+                };
+                if let Some(index) = array_index {
+                    let is_new = !elements.contains_key(&index);
+                    if is_new && elements.len().saturating_add(1) >= self.property_limit {
+                        return None;
+                    }
+                    elements.insert(index, value_type);
+                    *length = Some((*length)?.max(index.checked_add(1)?));
+                } else {
+                    *dynamic =
+                        Some(dynamic.map_or(value_type, |current| current.merge(value_type)));
+                    *length = None;
+                }
+            }
+            RegisterMemberKey::Named { constant, name } => {
+                self.code.emit(Instruction::SetNamed {
+                    obj: prepared.object,
+                    name: constant,
+                    slot,
+                });
+                let RegisterType::Object(object_id) = prepared.base_type else {
+                    return None;
+                };
+                let RegisterObjectLayout::Ordinary { properties, .. } =
+                    self.object_layouts.get(&object_id)?
+                else {
+                    return None;
+                };
+                let is_new = !properties.contains_key(&name);
+                if is_new && properties.len() >= self.property_limit {
                     return None;
                 }
-                elements.insert(index, value_type);
-                *length = Some((*length)?.max(index.checked_add(1)?));
-            } else {
-                *dynamic = Some(dynamic.map_or(value_type, |current| current.merge(value_type)));
-                *length = None;
+                let RegisterObjectLayout::Ordinary { properties, order } =
+                    self.object_layouts.get_mut(&object_id)?
+                else {
+                    return None;
+                };
+                if is_new {
+                    order.push(name.clone());
+                }
+                properties.insert(name, value_type);
             }
-        } else {
-            self.code.emit(Instruction::SetNamed {
-                obj: object,
-                name: name?,
-                slot,
-            });
-            let RegisterType::Object(object_id) = base_type else {
-                return None;
-            };
-            let property_name = Self::static_property_name(key)?;
-            let RegisterObjectLayout::Ordinary { properties, .. } =
-                self.object_layouts.get(&object_id)?
-            else {
-                return None;
-            };
-            let is_new = !properties.contains_key(property_name);
-            if is_new && properties.len() >= self.property_limit {
-                return None;
-            }
-            let RegisterObjectLayout::Ordinary { properties, order } =
-                self.object_layouts.get_mut(&object_id)?
-            else {
-                return None;
-            };
-            if is_new {
-                order.push(property_name.to_vec());
-            }
-            properties.insert(property_name.to_vec(), value_type);
         }
-        self.release_register(object)?;
-        Some(value_type)
+        self.release_register(prepared.object)
     }
 
     fn static_property_name(expression: &Expr) -> Option<&[u16]> {
@@ -3573,7 +3689,13 @@ fn register_assignment_pattern_writes_names(
     names: &BTreeSet<String>,
 ) -> Option<bool> {
     match pattern {
-        parser::AssignmentPattern::Target(target) => Some(names.contains(target.reference_name()?)),
+        parser::AssignmentPattern::Target(target) => {
+            if let Some(name) = target.reference_name() {
+                Some(names.contains(name))
+            } else {
+                register_expression_writes_names(target, names)
+            }
+        }
         parser::AssignmentPattern::Array(array) => {
             for element in &array.elements {
                 if let parser::AssignmentArrayElement::Element {
@@ -3610,7 +3732,11 @@ fn register_assignment_pattern_writes_names(
                 }
             }
             object.rest.as_ref().map_or(Some(false), |rest| {
-                Some(names.contains(rest.reference_name()?))
+                if let Some(name) = rest.reference_name() {
+                    Some(names.contains(name))
+                } else {
+                    register_expression_writes_names(rest, names)
+                }
             })
         }
     }
@@ -3805,7 +3931,11 @@ fn register_assignment_pattern_references(
 ) -> Option<()> {
     match pattern {
         parser::AssignmentPattern::Target(target) => {
-            names.insert(String::from(target.reference_name()?));
+            if let Some(name) = target.reference_name() {
+                names.insert(String::from(name));
+            } else {
+                register_expression_references(target, names, nested_free_names)?;
+            }
         }
         parser::AssignmentPattern::Array(array) => {
             for element in &array.elements {
@@ -3833,7 +3963,11 @@ fn register_assignment_pattern_references(
                 }
             }
             if let Some(rest) = &object.rest {
-                names.insert(String::from(rest.reference_name()?));
+                if let Some(name) = rest.reference_name() {
+                    names.insert(String::from(name));
+                } else {
+                    register_expression_references(rest, names, nested_free_names)?;
+                }
             }
         }
     }
@@ -4237,7 +4371,9 @@ fn register_binding_pattern_supported(pattern: &parser::BindingPattern) -> bool 
 
 fn register_assignment_pattern_supported(pattern: &parser::AssignmentPattern) -> bool {
     match pattern {
-        parser::AssignmentPattern::Target(target) => target.reference_name().is_some(),
+        parser::AssignmentPattern::Target(target) => {
+            target.reference_name().is_some() || register_member_assignment_supported(target)
+        }
         parser::AssignmentPattern::Array(array) => {
             array.elements.iter().all(|element| match element {
                 parser::AssignmentArrayElement::Elision => true,
@@ -4254,13 +4390,19 @@ fn register_assignment_pattern_supported(pattern: &parser::AssignmentPattern) ->
                 register_computed_property_key_supported(&property.key)
                     && register_assignment_pattern_supported(&property.target)
             }) && object.rest.as_ref().is_none_or(|rest| {
-                rest.reference_name().is_some()
+                (rest.reference_name().is_some() || register_member_assignment_supported(rest))
                     && object.properties.iter().all(|property| {
                         RegisterLowerer::static_property_key_units(&property.key).is_some()
                     })
             })
         }
     }
+}
+
+fn register_member_assignment_supported(target: &Expr) -> bool {
+    target.member().is_some_and(|(base, key)| {
+        base.reference_name().is_some() && register_computed_property_key_supported(key)
+    })
 }
 
 fn register_computed_property_key_supported(expression: &Expr) -> bool {

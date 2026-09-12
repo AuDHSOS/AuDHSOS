@@ -258,13 +258,41 @@ fn identifier_destructuring_assignments_use_register_storage() -> Result<(), Err
 }
 
 #[test]
-fn observable_destructuring_assignments_stay_on_legacy_backend() -> Result<(), Error> {
+fn member_destructuring_targets_use_shape_and_elements_storage() -> Result<(), Error> {
     for source in [
         "let target={};[target.x]=[42];target.x",
         "let target={};({x:target.x}={x:42});target.x",
+        "let target=[];[target[0]]=[42];target[0]",
+        "let target=[0],i=0;[target[i]=(i=1)]=[];target[0]===1&&i===1",
+        "let target=[0],i=0;({x:target[i]=(i=1)}={});target[0]===1&&i===1",
+        "let target={};[[target.x]]=[[42]];target.x",
+        "let target={};({x:{y:target.z}}={x:{y:42}});target.z",
+        "let target={};[...target.x]=[20,22];target.x[0]+target.x[1]",
+        "let target={},x=0;({x,...target.rest}={x:1,y:41});x+target.rest.y",
+        "let target={},value={x:42};target.value=value;target.value.x",
+        "let target=[],value=[42];target[0]=value;target[0][0]",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn observable_destructuring_assignments_stay_on_legacy_backend() -> Result<(), Error> {
+    for source in [
         "const x=0;[x]=[1]",
         "let x=0;[x]={0:42,length:1}",
         "let x=0;let input=[1];input[Symbol.iterator]=function(){return {next(){return {value:42}}}};[x]=input;x",
+        "let target={},key='x';[target[key]]=[42];target.x",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
