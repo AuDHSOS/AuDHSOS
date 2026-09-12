@@ -602,7 +602,14 @@ done until every applicable item has a test. Items are added, never removed.
 - Runner: QEMU exit status mapping for 33, 35, 37, 0, 1, and a killed
   process; timeout produces a crash report with the captured output.
 - Command line: a subcommand that takes no option refuses one and names
-  it; `check` refuses an unknown option before it runs a step.
+  it; `check` refuses an unknown option before it runs a step; `run`
+  refuses one before it builds anything.
+- The second disk: a run that asks for it carries the two
+  `virtio-blk-pci` lines at the end of the machine line and the boot
+  volume unchanged beside them, a run that does not carries neither; the
+  disk is created blank once at the size the format wants, kept as it
+  stands on every run after that, and its path is the run's name under
+  `target/qemu/` (D-136).
 - Quiet mode: a command that succeeds under `--quiet` prints nothing and
   is still an `Ok`, a command that fails is still an error.
 

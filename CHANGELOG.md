@@ -7,6 +7,21 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- A second disk for a run that writes, so that nothing the system writes
+  can reach the volume it boots from. The boot volume is one FAT32
+  partition the firmware and the loader read, and FAT32 has no journal: a
+  write torn by a crash loses a chain, and on that volume a lost chain is
+  a machine that no longer boots. `cargo xtask run --scratch` attaches a
+  blank `virtio-blk-pci` disk beside it instead — no partition table, so
+  the system formats the whole disk — and the runner keeps one per run
+  name under `target/qemu/`, blank when it is new and untouched when it is
+  not, which is what a test that boots twice to see what survived will
+  need. No run carries the device unless it asks for it. The alternatives
+  are in D-136: rebuilding the image before every run is what the runner
+  does today and it is why nothing has been corrupted yet, but it makes a
+  persistence test impossible, and `snapshot=on` does the same. 03 section
+  3.1.1 has the two lines, catalog 6.6.20.
+
 - A second cursor sprite, the double arrow a window shows while it is
   being resized, and the shape field that chooses it. `SetCursor` carries
   a `CursorShape` beside the position, packed into the word that already

@@ -76,8 +76,10 @@ subcommands:
                    --status only reports where they stand. The one
                    subcommand that uses the network, and never a step of
                    check
-  run [--release] [--display]
-                   boot the system in QEMU with the console on the terminal
+  run [--release] [--display] [--scratch]
+                   boot the system in QEMU with the console on the
+                   terminal; --scratch attaches the second disk, blank when
+                   it is new and kept across runs under target/qemu/
   check [--quiet]  everything CI runs, in CI order; --quiet leaves one
                    line per step and prints the output of a step only
                    when it fails

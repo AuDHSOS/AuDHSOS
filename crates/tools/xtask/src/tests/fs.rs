@@ -3,7 +3,7 @@
 
 //! Tests of `crate::fs`.
 
-use crate::fs::{extension, file_name, walk_files};
+use crate::fs::{create_sparse, extension, file_name, walk_files};
 use std::path::Path;
 
 #[test]
@@ -60,4 +60,35 @@ fn the_walk_skips_the_directories_the_policy_excludes() {
         "a worktree under `.claude/worktrees/` is a checkout of its own"
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_scratch_disk_is_created_once_and_kept_afterwards() {
+    let dir = std::env::temp_dir().join(format!("audhsos-xtask-sparse-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("qemu").join("run.scratch.img");
+    assert!(create_sparse(&path, 4096).expect("the disk"));
+    assert_eq!(std::fs::metadata(&path).expect("the disk").len(), 4096);
+    std::fs::write(&path, b"what a run wrote").expect("a write");
+    assert!(!create_sparse(&path, 4096).expect("the disk"));
+    assert_eq!(
+        std::fs::read(&path).expect("the disk"),
+        b"what a run wrote",
+        "a second run took the disk as it stood"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_scratch_disk_whose_directory_cannot_be_made_is_an_error() {
+    // A path under the root would be an error for an ordinary user and a
+    // directory tree at `/` for a privileged one, so the thing in the way
+    // is a file: no user may make a directory below one.
+    let dir = std::env::temp_dir().join(format!("audhsos-xtask-blocked-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a directory");
+    let blocker = dir.join("in-the-way");
+    std::fs::write(&blocker, b"not a directory").expect("a file");
+    assert!(create_sparse(&blocker.join("disk.img"), 4096).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
 }

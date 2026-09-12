@@ -1375,6 +1375,38 @@ fn disk_image(
     disk::build(&files)
 }
 
+/// The size of a scratch disk. FAT32 wants 65525 clusters, which at one
+/// sector each is thirty-three mebibytes before the two tables above them;
+/// this is what the boot volume has by default, and the file is sparse, so
+/// a disk nothing wrote costs a directory entry.
+const SCRATCH_SIZE: u64 = 64 * 1024 * 1024;
+
+/// Where the scratch disk of the run `name` lies.
+///
+/// One disk per run name, because two machines writing one file would tear
+/// it and QEMU refuses the second one anyway; and the same path across
+/// runs of that name, because a test that boots twice to see what survived
+/// needs the bytes the first boot wrote (D-136).
+pub(crate) fn scratch_path(root: &Path, name: &str) -> PathBuf {
+    root.join("target")
+        .join("qemu")
+        .join(format!("{name}.scratch.img"))
+}
+
+/// The scratch disk of the run `name`, blank when it was not there and as
+/// it stands when it was.
+fn scratch_image(root: &Path, name: &str) -> Result<PathBuf, Error> {
+    let path = scratch_path(root, name);
+    if fs::create_sparse(&path, SCRATCH_SIZE)? {
+        note!(
+            "scratch disk {}: blank, {} MiB",
+            path.display(),
+            SCRATCH_SIZE >> 20
+        );
+    }
+    Ok(path)
+}
+
 /// Writes one image of a run into `target/qemu/`.
 fn write_run_image(root: &Path, name: &str, image: &[u8]) -> Result<PathBuf, Error> {
     let path = root.join("target").join("qemu").join(format!("{name}.img"));
@@ -1443,10 +1475,12 @@ fn report_tests(
 /// success; the errors of the build and of the image writers.
 pub(crate) fn run(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut display = false;
+    let mut scratch = false;
     let mut build_options = Vec::new();
     for option in options {
         match option.as_str() {
             "--display" => display = true,
+            "--scratch" => scratch = true,
             "--release" => build_options.push("--release".to_owned()),
             other => return Err(Error::Usage(format!("unknown option `{other}` for run"))),
         }
@@ -1455,7 +1489,13 @@ pub(crate) fn run(root: &Path, options: &[String]) -> Result<(), Error> {
     image(root, &build_options)?;
     let machine = Machine::locate()?;
     let path = root.join("target").join("audhsos.img");
-    let status = machine.run_attached(&path, &qemu::Options::windowed(display))?;
+    let machine_options = qemu::Options {
+        scratch: scratch
+            .then(|| scratch_image(root, "audhsos"))
+            .transpose()?,
+        ..qemu::Options::windowed(display)
+    };
+    let status = machine.run_attached(&path, &machine_options)?;
     match qemu::outcome_of(status, false) {
         qemu::Outcome::Success => Ok(()),
         outcome => Err(Error::Usage(format!(

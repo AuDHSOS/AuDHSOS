@@ -159,6 +159,7 @@ fn what_a_run_asks_for_beyond_the_reference_machine_is_appended_to_it() {
         qmp: Some(std::path::PathBuf::from("/tmp/qmp.sock")),
         no_vga: true,
         network: None,
+        scratch: None,
     };
     let line = arguments(Path::new("/fw"), Path::new("/img"), "tcg", &options).join(" ");
     assert!(
@@ -349,6 +350,44 @@ fn a_run_without_a_network_carries_neither_line() {
     .join(" ");
     assert!(!line.contains("-netdev"), "{line}");
     assert!(!line.contains("virtio-net-pci"), "{line}");
+}
+
+#[test]
+fn a_run_that_writes_carries_a_second_disk_as_a_block_device() {
+    let line = arguments(
+        Path::new("/fw"),
+        Path::new("/img"),
+        "tcg",
+        &Options {
+            scratch: Some(PathBuf::from("/img/audhsos.scratch.img")),
+            ..Options::without_network()
+        },
+    )
+    .join(" ");
+    assert!(
+        line.ends_with(
+            "-drive if=none,id=s0,format=raw,file=/img/audhsos.scratch.img \
+             -device virtio-blk-pci,drive=s0,disable-legacy=on,num-queues=1"
+        ),
+        "{line}"
+    );
+    assert!(
+        line.contains("-drive format=raw,file=/img"),
+        "the boot volume is still the one the firmware reads: {line}"
+    );
+}
+
+#[test]
+fn a_run_that_writes_nothing_carries_neither_line() {
+    let line = arguments(
+        Path::new("/fw"),
+        Path::new("/img"),
+        "tcg",
+        &Options::plain(),
+    )
+    .join(" ");
+    assert!(!line.contains("virtio-blk-pci"), "{line}");
+    assert!(!line.contains("id=s0"), "{line}");
 }
 
 #[test]

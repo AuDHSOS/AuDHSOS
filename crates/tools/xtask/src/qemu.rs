@@ -205,6 +205,10 @@ pub(crate) struct Options {
     /// two network lines, which is the second run Phase 13 and Phase 14 are
     /// accepted on (D-118).
     pub(crate) network: Option<u16>,
+    /// The second disk, and with it the block device itself. `None` is a
+    /// machine that has the boot volume and nothing else, which is every
+    /// run that writes nothing (D-136).
+    pub(crate) scratch: Option<PathBuf>,
 }
 
 impl Options {
@@ -474,6 +478,7 @@ pub(crate) fn arguments(
         line.push(format!("unix:{},server,nowait", socket.display()));
     }
     line.extend(network(options.network));
+    line.extend(scratch(options.scratch.as_deref()));
     line
 }
 
@@ -495,6 +500,31 @@ fn network(host_port: Option<u16>) -> Vec<String> {
         format!("user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:{GUEST_PORT}"),
         "-device".to_owned(),
         "virtio-net-pci,netdev=n0,disable-legacy=on,mq=off".to_owned(),
+    ]
+}
+
+/// The second disk of a run that writes, as
+/// [03-target-platform.md 3.1.1](../../../docs/03-target-platform.md)
+/// prescribes it, or nothing for a run that writes nothing.
+///
+/// The boot volume stays what the firmware and the loader read; what the
+/// system writes, it writes here, so that no run can leave the volume it
+/// boots from torn (D-136). The disk arrives blank and holds no partition
+/// table: what formats it is the system.
+///
+/// `disable-legacy=on` makes it a non-transitional virtio 1.0 device,
+/// whose device identifier is then `0x1042` and not the transitional
+/// `0x1001`. `num-queues=1` is not the default — QEMU gives the device one
+/// queue per processor — and it is named because the driver will drive one.
+fn scratch(disk: Option<&Path>) -> Vec<String> {
+    let Some(disk) = disk else {
+        return Vec::new();
+    };
+    vec![
+        "-drive".to_owned(),
+        format!("if=none,id=s0,format=raw,file={}", disk.display()),
+        "-device".to_owned(),
+        "virtio-blk-pci,drive=s0,disable-legacy=on,num-queues=1".to_owned(),
     ]
 }
 
