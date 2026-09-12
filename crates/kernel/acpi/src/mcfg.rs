@@ -26,8 +26,8 @@ use crate::sdt::{SDT_HEADER_LEN, SdtHeader};
 /// The four bytes that name this table.
 pub const MCFG_SIGNATURE: [u8; 4] = *b"MCFG";
 
-/// Number of bytes before the first allocation: the table header and the
-/// eight bytes the specification reserves.
+/// Number of bytes before the first allocation: the table header of
+/// ACPI 6.6, section 5.2.6 and the eight bytes section 4.1.2 reserves.
 pub const MCFG_HEADER_LEN: usize = SDT_HEADER_LEN + 8;
 
 /// Number of bytes of one allocation structure.

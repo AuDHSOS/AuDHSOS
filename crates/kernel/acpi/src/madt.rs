@@ -3,7 +3,12 @@
 
 //! The multiple APIC description table: where the local APIC is, where the
 //! I/O APICs are, and which of the ISA interrupt lines the firmware wired
-//! somewhere other than the specification's default.
+//! somewhere other than the default.
+//!
+//! The layout is the *ACPI Specification* 6.6, section 5.2.12: the table
+//! header, the local APIC address, the flags, then the interrupt
+//! controller structures. Sections 5.2.12.2, 5.2.12.3, 5.2.12.5 and
+//! 5.2.12.8 give the four structures this parser reads.
 //!
 //! Invariants: the walk over the entries always ends, because an entry of
 //! length zero is an error and every other entry advances the offset by at
@@ -21,7 +26,7 @@ use crate::sdt::{SDT_HEADER_LEN, SdtHeader};
 pub const MADT_SIGNATURE: [u8; 4] = *b"APIC";
 
 /// Number of bytes before the first entry: the table header, the local
-/// APIC address, and the flags.
+/// APIC address, and the flags, from section 5.2.12.
 pub const MADT_HEADER_LEN: usize = SDT_HEADER_LEN + 8;
 
 /// Number of I/O APICs this kernel holds.
@@ -31,35 +36,37 @@ pub const MAX_IO_APICS: usize = 4;
 pub const MAX_OVERRIDES: usize = 16;
 
 /// The flag that says the machine also has the two legacy interrupt
-/// controllers, which the kernel then has to mask.
+/// controllers, which the kernel then has to mask. Section 5.2.12 defines
+/// it as bit zero and the only flag of the table.
 pub const PCAT_COMPAT: u32 = 1;
 
-/// Entry type: a processor's local APIC.
+/// Entry type: a processor's local APIC, section 5.2.12.2.
 const ENTRY_LOCAL_APIC: u8 = 0;
 
-/// Entry type: an I/O APIC.
+/// Entry type: an I/O APIC, section 5.2.12.3.
 const ENTRY_IO_APIC: u8 = 1;
 
-/// Entry type: an interrupt source override.
+/// Entry type: an interrupt source override, section 5.2.12.5.
 const ENTRY_OVERRIDE: u8 = 2;
 
 /// Entry type: a 64-bit address of the local APIC that replaces the 32-bit
-/// one in the table header.
+/// one in the table header, section 5.2.12.8.
 const ENTRY_LOCAL_APIC_OVERRIDE: u8 = 5;
 
-/// Length of a processor local APIC entry.
+/// Length of a processor local APIC entry, section 5.2.12.2.
 const LOCAL_APIC_LEN: u8 = 8;
 
-/// Length of an I/O APIC entry.
+/// Length of an I/O APIC entry, section 5.2.12.3.
 const IO_APIC_LEN: u8 = 12;
 
-/// Length of an interrupt source override entry.
+/// Length of an interrupt source override entry, section 5.2.12.5.
 const OVERRIDE_LEN: u8 = 10;
 
-/// Length of a local APIC address override entry.
+/// Length of a local APIC address override entry, section 5.2.12.8.
 const LOCAL_APIC_OVERRIDE_LEN: u8 = 12;
 
-/// The bus the ISA interrupt lines are on.
+/// The bus the ISA interrupt lines are on, the only one section 5.2.12.5
+/// overrides.
 pub const ISA_BUS: u8 = 0;
 
 /// One I/O APIC of the machine.
@@ -111,7 +118,7 @@ pub struct Override {
 
 impl Override {
     /// The polarity the flags name; the ISA default where they say
-    /// `conforms` or a value the specification reserves.
+    /// `conforms` or a value section 5.2.12.5 reserves.
     #[must_use]
     pub const fn polarity(self) -> Polarity {
         if self.flags & 0b11 == 0b11 {
@@ -122,7 +129,7 @@ impl Override {
     }
 
     /// The trigger mode the flags name; the ISA default where they say
-    /// `conforms` or a value the specification reserves.
+    /// `conforms` or a value section 5.2.12.5 reserves.
     #[must_use]
     pub const fn trigger(self) -> Trigger {
         if (self.flags >> 2) & 0b11 == 0b11 {
@@ -300,8 +307,8 @@ fn read_entry(
     Ok(end)
 }
 
-/// Checks that an entry of a type this parser reads has the length the
-/// specification gives it.
+/// Checks that an entry of a type this parser reads has the length its
+/// section of ACPI 6.6 gives it.
 const fn expect_length(kind: u8, announced: u8, wanted: u8) -> Result<(), AcpiError> {
     if announced == wanted {
         Ok(())
