@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! The system table and the boot services table.
+//! The system table, the boot services table, and the runtime services
+//! table.
 //!
-//! Invariant: the boot services table holds all forty-four service slots
-//! in specification order, so that the offset of every service is right
-//! even though the loader calls only five of them.
+//! Invariant: each table holds every service slot in specification order,
+//! so that the offset of every service is right even though the loader
+//! calls only six of them.
 
 use core::ffi::c_void;
 
 use crate::memory_map::{AllocateType, MemoryType};
-use crate::protocols::SimpleTextOutputProtocol;
+use crate::protocols::{SimpleTextOutputProtocol, Time};
 use crate::status::Status;
 use crate::types::{ConfigurationTable, Guid, Handle, TableHeader};
 
@@ -19,6 +20,10 @@ pub const SYSTEM_TABLE_SIGNATURE: u64 = 0x5453_5953_2049_4249;
 
 /// Signature of the boot services table: `BOOTSERV`.
 pub const BOOT_SERVICES_SIGNATURE: u64 = 0x5652_4553_544F_4F42;
+
+/// Signature of the runtime services table: `RUNTSERV`. UEFI 2.11,
+/// section 4.5.1, `EFI_RUNTIME_SERVICES_SIGNATURE`.
+pub const RUNTIME_SERVICES_SIGNATURE: u64 = 0x5652_4553_544E_5552;
 
 /// Allocates physically contiguous pages.
 pub type AllocatePages = unsafe extern "efiapi" fn(
@@ -56,6 +61,52 @@ pub type LocateProtocol = unsafe extern "efiapi" fn(
     registration: *mut c_void,
     interface: *mut *mut c_void,
 ) -> Status;
+
+/// Reads the platform clock. UEFI 2.11, section 8.3.1. `capabilities` may
+/// be null, which is what the loader passes: it wants the time, not the
+/// resolution of the device that keeps it.
+pub type GetTime = unsafe extern "efiapi" fn(time: *mut Time, capabilities: *mut c_void) -> Status;
+
+/// The runtime services table. UEFI 2.11, section 4.5.1. Every slot the
+/// loader does not call is a `usize`, so that the table keeps its size and
+/// every offset stays right.
+///
+/// The loader calls one of the fourteen, and calls it while the boot
+/// services are still up: after `ExitBootServices` a runtime service needs
+/// the virtual address map the kernel never sets.
+#[repr(C)]
+pub struct RuntimeServices {
+    /// The table header.
+    pub header: TableHeader,
+    /// `GetTime`.
+    pub get_time: GetTime,
+    /// `SetTime`.
+    pub set_time: usize,
+    /// `GetWakeupTime`.
+    pub get_wakeup_time: usize,
+    /// `SetWakeupTime`.
+    pub set_wakeup_time: usize,
+    /// `SetVirtualAddressMap`.
+    pub set_virtual_address_map: usize,
+    /// `ConvertPointer`.
+    pub convert_pointer: usize,
+    /// `GetVariable`.
+    pub get_variable: usize,
+    /// `GetNextVariableName`.
+    pub get_next_variable_name: usize,
+    /// `SetVariable`.
+    pub set_variable: usize,
+    /// `GetNextHighMonotonicCount`.
+    pub get_next_high_monotonic_count: usize,
+    /// `ResetSystem`.
+    pub reset_system: usize,
+    /// `UpdateCapsule`.
+    pub update_capsule: usize,
+    /// `QueryCapsuleCapabilities`.
+    pub query_capsule_capabilities: usize,
+    /// `QueryVariableInfo`.
+    pub query_variable_info: usize,
+}
 
 /// The boot services table. Every slot the loader does not call is a
 /// `usize`, so that the table keeps its size and every offset stays right.
@@ -175,7 +226,7 @@ pub struct SystemTable {
     /// The standard error protocol.
     pub standard_error: *mut SimpleTextOutputProtocol,
     /// The runtime services table.
-    pub runtime_services: *mut c_void,
+    pub runtime_services: *mut RuntimeServices,
     /// The boot services table.
     pub boot_services: *mut BootServices,
     /// Number of entries in the configuration table.

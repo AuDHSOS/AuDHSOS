@@ -15,7 +15,7 @@ use core::marker::PhantomData;
 
 use audhsos_abi::ipc_buffer::SIZE;
 use audhsos_abi::layout::PAGE_SIZE;
-use audhsos_abi::{Ecam, Error, Framebuffer};
+use audhsos_abi::{Ecam, Error, Framebuffer, WallClockSource};
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::device::Devices;
 use kernel_hal_api::interrupt::{InterruptError, InterruptLine, Vector};
@@ -74,9 +74,13 @@ where
     /// a tick answers the clock it started with.
     pub now: u64,
     /// The physical address of the root system description pointer, which
-    /// the bring-up read and `system_info` reports. It is the only thing of
-    /// the firmware the kernel keeps.
+    /// the bring-up read and `system_info` reports.
     pub acpi: u64,
+    /// The moment the firmware clock stood at when the loader read it, in
+    /// seconds from the Unix epoch, and where it came from; `None` on a
+    /// machine that reported no clock. `clock_wall` answers this plus
+    /// `now`.
+    pub wall: Option<(i64, WallClockSource)>,
     /// Writes the frame a new thread returns through, in the frame the top
     /// of its kernel stack lies in.
     ///
@@ -114,9 +118,20 @@ where
             devices,
             acpi,
             now: 0,
+            wall: None,
             prepare,
             format: PhantomData,
         }
+    }
+
+    /// The same environment with the wall clock the loader reported.
+    ///
+    /// It is a builder and not a parameter of [`KernelEnvironment::new`]
+    /// for the reason `at` is one: the six the constructor takes are
+    /// borrows of the machine, and these two are values read out of it.
+    #[must_use]
+    pub const fn with_wall_clock(self, wall: Option<(i64, WallClockSource)>) -> Self {
+        KernelEnvironment { wall, ..self }
     }
 
     /// The same environment with `now` as the clock, in the microseconds
@@ -307,6 +322,10 @@ where
 
     fn now_micros(&self) -> u64 {
         self.now
+    }
+
+    fn boot_wall(&self) -> Option<(i64, WallClockSource)> {
+        self.wall
     }
 
     fn random_seed(&mut self) -> Result<[u64; 4], Error> {

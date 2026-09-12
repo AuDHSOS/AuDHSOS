@@ -13,6 +13,7 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
         let _ = view.phys_window_base();
         let _ = view.acpi_rsdp();
         let _ = view.framebuffer();
+        let _ = view.wall_clock();
         for region in view.regions() {
             let _ = region.end();
         }

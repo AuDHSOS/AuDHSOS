@@ -10,7 +10,7 @@
 
 use audhsos_abi::Ecam;
 use audhsos_abi::boot_info::{
-    BOOT_INFO_PAGE_LEN, BootInfoError, BootInfoView, BootRegionKind, Framebuffer,
+    BOOT_INFO_PAGE_LEN, BootInfoError, BootInfoView, BootRegionKind, Framebuffer, WallClockSource,
 };
 use audhsos_abi::layout::MAX_BOOT_REGIONS;
 use kernel_hal_api::platform::{MemoryRegion, MemoryRegionKind, Platform};
@@ -31,6 +31,7 @@ pub struct X86Platform {
     rsdp: Option<u64>,
     framebuffer: Option<Framebuffer>,
     ecam: Option<Ecam>,
+    wall_clock: Option<(i64, WallClockSource)>,
 }
 
 impl X86Platform {
@@ -105,6 +106,7 @@ impl X86Platform {
             rsdp: view.acpi_rsdp(),
             framebuffer: view.framebuffer(),
             ecam: None,
+            wall_clock: view.wall_clock(),
         })
     }
 
@@ -197,5 +199,9 @@ impl Platform for X86Platform {
 
     fn ecam(&self) -> Option<Ecam> {
         self.ecam
+    }
+
+    fn wall_clock(&self) -> Option<(i64, WallClockSource)> {
+        self.wall_clock
     }
 }

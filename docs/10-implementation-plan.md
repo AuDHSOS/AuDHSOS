@@ -3259,6 +3259,38 @@ Acceptance: `check` green; catalog 6.6.62 to 6.6.64; the seven e2e
 assertions of 13.13 pass, and the run without the two network lines ends
 by itself.
 
+## 10.14A The wall clock
+
+D-137, done ahead of Phase 15 because certificate validation is what
+needed it. Nothing here is a phase of its own; it is one capability across
+four crates.
+
+- `audhsos-uefi` gains `RuntimeServices` with `GetTime` as the first slot
+  after the header, pinned by a layout test, and `time::to_unix`, which
+  turns an `EFI_TIME` into a count of seconds and a `WallClockSource`.
+  The conversion is here and not in the loader so that the calendar
+  arithmetic is host-tested under the coverage gate; the crate gains
+  `audhsos-time` as its second dependency.
+- `audhsos-abi` goes to boot information version 2.
+  `BOOT_INFO_HEADER_LEN` becomes 144: `reserved` becomes `wall_clock`,
+  the code of a `WallClockSource`, and `boot_unix_seconds: i64` is
+  appended. The parser refuses an unknown source, a source whose seconds
+  are not after the epoch, and seconds with no source. Version 1 is
+  refused as a version.
+- `boot-uefi-x86_64` calls `GetTime` once, before `leave_boot_services`,
+  and threads the pair into `bootinfo::write`. Two `unsafe` sites: the
+  deref of the runtime services table in `Firmware::new`, and the call.
+- `kernel-hal-api` and `kernel-hal-x86_64` carry `Platform::wall_clock`;
+  `audhsos-kernel` stores the pair in two atomics beside `ACPI` and hands
+  it to `KernelEnvironment::with_wall_clock`.
+- `kernel-syscall` gains `clock_wall`, number 51, no handle, two result
+  words: the microseconds since the epoch, and the source code.
+  `Unavailable` for a machine that reported no clock.
+- `user-sys-x86_64` gains `Gate::clock_wall`; `wall_clock` joins the test
+  programs.
+
+Acceptance: `check` green; catalog 6.6.71.
+
 ## 10.15 Phase 15: TLS over the network
 
 Step T8 of [document 11](11-cryptography-and-tls.md), which section 11.14
@@ -3269,7 +3301,9 @@ specifies and which has waited for a transport.
 - The transport glue lives beside `app-net` as a module of
   `user-programs`: it moves record bytes between `audhsos-tls` and a
   socket ring, drives the handshake against a deadline of `clock_now`,
-  and sends and expects `close_notify`.
+  and sends and expects `close_notify`. The `now` of `ClientConfig` comes
+  from `clock_wall` (10.14A); a machine that answers `Unavailable` there
+  does not validate a chain against a guess, it refuses to connect.
 - The trust anchors the image carries are the ones the test certificate
   builder of `audhsos-x509` wrote, placed in the archive as one file.
 - `app-tls` performs an HTTPS `GET` against a server the test starts on

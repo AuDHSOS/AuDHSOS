@@ -9,7 +9,7 @@
 //! space shares; a kernel stack slot it hands out is mapped and guarded.
 
 use audhsos_abi::ipc_buffer::SIZE;
-use audhsos_abi::{Ecam, Error, Framebuffer};
+use audhsos_abi::{Ecam, Error, Framebuffer, WallClockSource};
 use kernel_mm::page_table::Permissions;
 use kernel_types::{CachePolicy, Page, PhysFrame, PhysFrameRange, VirtAddr};
 
@@ -166,6 +166,15 @@ pub trait Environment {
     /// timer tick. `clock_now` answers this word, and every deadline of the
     /// interface is in the same scale.
     fn now_micros(&self) -> u64;
+
+    /// The moment the firmware clock stood at when the loader read it, in
+    /// seconds from the Unix epoch, and how far it can be trusted; `None`
+    /// on a machine that reported no clock.
+    ///
+    /// It is the moment of the boot and not the moment of the call.
+    /// `clock_wall` adds [`Environment::now_micros`] to it, which is why
+    /// the drift of that count is the drift of the wall clock too.
+    fn boot_wall(&self) -> Option<(i64, WallClockSource)>;
 
     /// Four words drawn from the entropy source of the machine, which is
     /// the thirty-two bytes a stream cipher takes as a seed.

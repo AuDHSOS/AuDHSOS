@@ -23,7 +23,7 @@ pub mod thread;
 pub use boot_image::{BootImageError, BootImageHeader};
 pub use boot_info::{
     BootInfoError, BootInfoView, BootInfoWriter, BootRegion, BootRegionKind, Framebuffer,
-    FramebufferFormat,
+    FramebufferFormat, WallClockSource,
 };
 pub use ecam::Ecam;
 pub use error::Error;

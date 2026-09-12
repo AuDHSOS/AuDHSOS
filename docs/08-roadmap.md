@@ -444,15 +444,22 @@ interface and the run ends by itself.
 This is step T8 of [document 11](11-cryptography-and-tls.md), which has
 waited for a transport since the client was finished.
 
+The wall clock this phase needed arrived ahead of it and is done (D-137,
+catalog 6.6.71): the loader reads `GetTime` before it leaves the boot
+services, the moment travels in the boot information, and `clock_wall`
+answers the microseconds since the epoch with the source the firmware
+named. Certificate validation had a `now` parameter and no value to put
+in it; now it has one.
+
 Deliverables: the transport glue that joins `audhsos-tls` to a TCP
 connection of `server-net` — the record layer's bytes in and out of the
 socket's ring, the handshake driven to completion against a deadline of
 the clock of Phase 12, and the close notify in both directions; the
-certificate path validated against the trust anchors the image carries;
-`tools/tls-probe` keeps its host role and gains a counterpart that runs
-on the target.
+certificate path validated against the trust anchors the image carries,
+against the date `clock_wall` answers; `tools/tls-probe` keeps its host
+role and gains a counterpart that runs on the target.
 
-Tests: catalog 6.6.65.
+Tests: catalog 6.6.65, with 6.6.71 already in.
 
 Acceptance: an HTTPS `GET` from a program of the archive against a server
 the test starts on the development machine, with a chain the test

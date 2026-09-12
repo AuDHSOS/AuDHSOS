@@ -123,6 +123,12 @@ path = "src/bin/bench_replier.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "wall_clock"
+path = "src/bin/wall_clock.rs"
+test = false
+bench = false
+
 [dependencies]
 audhsos-abi.workspace = true
 user-rt.workspace = true

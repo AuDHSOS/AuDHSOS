@@ -30,6 +30,7 @@ Locations:
 - `docs/pcisig` some information related to PCI
 - `docs/rfc` RFC documents
 - `docs/ti` the 16550 serial controller
+- `docs/uefi` what the UEFI Forum publishes: the UEFI specification the loader is written against, and the ACPI specification the kernel reads its tables from
 - `docs/w3c` documents from the web consortium
 - `docs/whatwg` documents from WHATWG
 

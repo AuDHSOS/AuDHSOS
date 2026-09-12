@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use audhsos_abi::{Ecam, Framebuffer};
+use audhsos_abi::{Ecam, Framebuffer, WallClockSource};
 use kernel_types::{Page, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
 
 use crate::console::DebugConsole;
@@ -775,6 +775,13 @@ impl Platform for ScriptedPlatform {
 
     fn ecam(&self) -> Option<Ecam> {
         self.ecam
+    }
+
+    /// Always `None`. A scripted platform has no firmware to have read a
+    /// clock from, and nothing that uses this double asks for one; a setter
+    /// belongs here when a test needs it and not before.
+    fn wall_clock(&self) -> Option<(i64, WallClockSource)> {
+        None
     }
 }
 

@@ -9,7 +9,7 @@
 use crate::boot_info::{
     BOOT_INFO_HEADER_LEN, BOOT_INFO_MAGIC, BOOT_INFO_PAGE_LEN, BOOT_INFO_VERSION, BOOT_REGION_LEN,
     BootInfoError, BootInfoHeader, BootInfoView, BootInfoWriter, BootRegion, BootRegionKind,
-    FixedRange, Framebuffer, FramebufferFormat,
+    FixedRange, Framebuffer, FramebufferFormat, WallClockSource,
 };
 use crate::layout::{MAX_BOOT_REGIONS, PAGE_SIZE};
 use crate::strategies::{any_boot_info_bytes, any_boot_region, any_framebuffer};
@@ -84,9 +84,14 @@ fn valid_header() -> BootInfoHeader {
         framebuffer_stride: 0,
         framebuffer_format: 0,
         region_count: 0,
-        reserved: 0,
+        wall_clock: WallClockSource::FirmwareUtc.code(),
+        boot_unix_seconds: BOOT_SECONDS,
     }
 }
+
+/// 2026-09-12T13:00:00Z, the moment the firmware clock stands at in every
+/// test that does not care which moment it is.
+const BOOT_SECONDS: i64 = 1_789_218_000;
 
 impl Default for Raw {
     fn default() -> Self {
@@ -136,10 +141,11 @@ impl Raw {
             (120, header.framebuffer_stride),
             (124, header.framebuffer_format),
             (128, count),
-            (132, header.reserved),
+            (132, header.wall_clock),
         ] {
             bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
         }
+        bytes[136..144].copy_from_slice(&header.boot_unix_seconds.to_le_bytes());
         for (index, region) in self.regions.iter().enumerate() {
             let base = BOOT_INFO_HEADER_LEN + index * BOOT_REGION_LEN;
             bytes[base..base + 8].copy_from_slice(&region.start.to_le_bytes());
@@ -207,7 +213,7 @@ fn wrong_magic_is_rejected() {
 
 #[test]
 fn wrong_version_is_rejected() {
-    for version in [0, 2, u32::MAX] {
+    for version in [0, 1, 3, u32::MAX] {
         let raw = Raw {
             version,
             ..Raw::default()
@@ -218,7 +224,7 @@ fn wrong_version_is_rejected() {
 
 #[test]
 fn size_below_the_fixed_part_above_a_page_or_not_matching_the_count_is_rejected() {
-    for size in [0, 135] {
+    for size in [0, 143] {
         let raw = Raw {
             size: Some(size),
             ..Raw::default()
@@ -780,11 +786,11 @@ fn the_writer_takes_the_framebuffer_the_parser_reports() {
 }
 
 #[test]
-fn the_fixed_part_is_one_hundred_and_thirty_six_bytes() {
-    assert_eq!(BOOT_INFO_HEADER_LEN, 136);
+fn the_fixed_part_is_one_hundred_and_forty_four_bytes() {
+    assert_eq!(BOOT_INFO_HEADER_LEN, 144);
     assert_eq!(
         BOOT_INFO_HEADER_LEN + MAX_BOOT_REGIONS * BOOT_REGION_LEN,
-        3208
+        3216
     );
     const { assert!(BOOT_INFO_HEADER_LEN + MAX_BOOT_REGIONS * BOOT_REGION_LEN <= BOOT_INFO_PAGE_LEN) };
 }
@@ -812,4 +818,101 @@ fn property_the_writer_produces_what_the_parser_accepts() {
         }
         Ok(())
     });
+}
+
+#[test]
+fn every_wall_clock_source_round_trips_its_code() {
+    let mut codes = Vec::new();
+    for source in WallClockSource::ALL {
+        assert_eq!(WallClockSource::from_code(source.code()), Some(*source));
+        codes.push(source.code());
+    }
+    codes.sort_unstable();
+    codes.dedup();
+    assert_eq!(codes.len(), WallClockSource::ALL.len());
+    assert_eq!(WallClockSource::from_code(0), None);
+    assert_eq!(WallClockSource::from_code(3), None);
+}
+
+#[test]
+fn the_wall_clock_is_reported_with_the_source_it_came_from() {
+    for source in WallClockSource::ALL {
+        let mut header = valid_header();
+        header.wall_clock = source.code();
+        let raw = Raw {
+            header,
+            ..Raw::default()
+        };
+        let bytes = raw.bytes();
+        let view = BootInfoView::parse(&bytes).unwrap();
+        assert_eq!(view.wall_clock(), Some((BOOT_SECONDS, *source)));
+    }
+}
+
+#[test]
+fn a_machine_that_reported_no_wall_clock_parses_and_has_none() {
+    let mut header = valid_header();
+    header.wall_clock = 0;
+    header.boot_unix_seconds = 0;
+    let raw = Raw {
+        header,
+        ..Raw::default()
+    };
+    let bytes = raw.bytes();
+    let view = BootInfoView::parse(&bytes).unwrap();
+    assert_eq!(view.wall_clock(), None);
+}
+
+#[test]
+fn an_unknown_wall_clock_source_is_rejected() {
+    for code in [3, 4, u32::MAX] {
+        let mut header = valid_header();
+        header.wall_clock = code;
+        let raw = Raw {
+            header,
+            ..Raw::default()
+        };
+        assert_eq!(raw.parse(), Err(BootInfoError::WallClockSource(code)));
+    }
+}
+
+#[test]
+fn a_source_whose_seconds_are_not_after_the_epoch_is_rejected() {
+    for seconds in [0, -1, i64::MIN] {
+        let mut header = valid_header();
+        header.boot_unix_seconds = seconds;
+        let raw = Raw {
+            header,
+            ..Raw::default()
+        };
+        assert_eq!(raw.parse(), Err(BootInfoError::WallClockTime(seconds)));
+    }
+}
+
+#[test]
+fn seconds_without_a_source_are_rejected() {
+    for seconds in [1, BOOT_SECONDS, -1] {
+        let mut header = valid_header();
+        header.wall_clock = 0;
+        header.boot_unix_seconds = seconds;
+        let raw = Raw {
+            header,
+            ..Raw::default()
+        };
+        assert_eq!(raw.parse(), Err(BootInfoError::WallClockTime(seconds)));
+    }
+}
+
+#[test]
+fn the_writer_carries_the_wall_clock_of_its_header() {
+    let mut header = valid_header();
+    header.wall_clock = WallClockSource::FirmwareUnspecifiedZone.code();
+    let regions = [BootRegion::new(0, 64 * MIB, BootRegionKind::Usable)];
+    let mut page = [0u8; BOOT_INFO_PAGE_LEN];
+    BootInfoWriter::write(&mut page, &header, None, &regions).unwrap();
+    let view = BootInfoView::parse(&page).unwrap();
+    assert_eq!(
+        view.wall_clock(),
+        Some((BOOT_SECONDS, WallClockSource::FirmwareUnspecifiedZone))
+    );
 }

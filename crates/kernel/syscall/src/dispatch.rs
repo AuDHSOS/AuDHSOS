@@ -221,6 +221,7 @@ pub const fn required_rights(call: Syscall) -> Rights {
         | Syscall::EndpointCreate
         | Syscall::NotificationCreate
         | Syscall::ClockNow
+        | Syscall::ClockWall
         | Syscall::RandomBytes
         | Syscall::DebugLog => Rights::EMPTY,
     }

@@ -172,6 +172,7 @@ syscalls! {
     NotificationWaitUntil = 48 => "notification_wait_until" (2, Notification),
     RandomBytes = 49 => "random_bytes" (0, Nothing),
     InterruptCreateMsi = 50 => "interrupt_create_msi" (1, SystemControl),
+    ClockWall = 51 => "clock_wall" (0, Nothing),
 }
 
 impl Syscall {

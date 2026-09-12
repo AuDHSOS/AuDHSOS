@@ -257,12 +257,14 @@ fn rendezvous(log: &mut Log, process: u64, bad: u64) {
     log.set_message(0, 0);
 }
 
-/// The two calls that ask the machine itself. Neither takes a handle, so
-/// the one way either is refused is an argument word above what it reads,
+/// The three calls that ask the machine itself. None takes a handle, so
+/// the one way any is refused is an argument word above what it reads,
 /// which the dispatcher answers before the call is reached.
 fn machine(log: &mut Log) {
     log.run(Syscall::ClockNow, &[]);
     log.run(Syscall::ClockNow, &[1]);
+    log.run(Syscall::ClockWall, &[]);
+    log.run(Syscall::ClockWall, &[1]);
     log.run(Syscall::RandomBytes, &[]);
     log.run(Syscall::RandomBytes, &[1]);
     // The four words a seed is sit below the log; the header they left says

@@ -34,7 +34,7 @@ use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status, WORD};
 use audhsos_abi::layout::{MAX_MESSAGE_BYTES, MAX_SYSCALL_ARGUMENTS};
 use audhsos_abi::{
     Ecam, Error, Fault, FaultKind, Framebuffer, FramebufferFormat, Handle, Rights, Syscall,
-    ThreadState,
+    ThreadState, WallClockSource,
 };
 use user_rt::handle::{
     EndpointHandle, InterruptHandle, IoPortHandle, MemoryHandle, NotificationHandle, ProcessHandle,
@@ -128,7 +128,7 @@ pub struct Received {
 /// numbers the kernel saw against the table, so a method missing from the
 /// run, or one passing another call of the same shape, fails there
 /// (D-98).
-const COVERED: [Syscall; 50] = [
+const COVERED: [Syscall; 51] = [
     Syscall::ProcessCreate,
     Syscall::ProcessInstallHandle,
     Syscall::ProcessSetFaultHandler,
@@ -179,6 +179,7 @@ const COVERED: [Syscall; 50] = [
     Syscall::NotificationWaitUntil,
     Syscall::RandomBytes,
     Syscall::InterruptCreateMsi,
+    Syscall::ClockWall,
 ];
 
 /// `true` when [`COVERED`] is the system call table, in its order.
@@ -1101,6 +1102,30 @@ impl Gate {
     /// Whatever the kernel answered.
     pub fn clock_now(&mut self) -> Result<u64, Error> {
         self.value(Syscall::ClockNow, &[])
+    }
+
+    /// `clock_wall`: the moment the machine believes it is, in
+    /// microseconds since 1970-01-01T00:00:00Z, and where that belief came
+    /// from.
+    ///
+    /// The resolution and the drift are those of [`Gate::clock_now`], which
+    /// is what is added to the moment the loader read out of the firmware.
+    /// A [`WallClockSource::FirmwareUnspecifiedZone`] says the firmware
+    /// named no offset from universal time, so the value may be wrong by a
+    /// zone.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unavailable`] on a machine whose firmware reported no
+    /// clock. There is nothing to fall back on: a caller that needs the
+    /// date has to say what it does without one.
+    pub fn clock_wall(&mut self) -> Result<(u64, WallClockSource), Error> {
+        let (micros, code) = self.values(Syscall::ClockWall, &[])?;
+        let source = u32::try_from(code)
+            .ok()
+            .and_then(WallClockSource::from_code)
+            .ok_or(Error::Unavailable)?;
+        Ok((micros, source))
     }
 
     /// `random_bytes`: the thirty-two bytes of a seed, as four words.

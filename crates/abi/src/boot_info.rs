@@ -20,11 +20,13 @@ use crate::layout::{MAX_BOOT_REGIONS, PAGE_SIZE};
 /// The first eight bytes of every boot information structure.
 pub const BOOT_INFO_MAGIC: [u8; 8] = *b"AUDHBOOT";
 
-/// The only version this release understands.
-pub const BOOT_INFO_VERSION: u32 = 1;
+/// The only version this release understands. Version 1 carried no wall
+/// clock and is refused: the loader and the kernel ship together, so there
+/// is no machine on which the two versions meet.
+pub const BOOT_INFO_VERSION: u32 = 2;
 
 /// Length of the fixed part in bytes.
-pub const BOOT_INFO_HEADER_LEN: usize = 136;
+pub const BOOT_INFO_HEADER_LEN: usize = 144;
 
 /// Length of one region entry in bytes.
 pub const BOOT_REGION_LEN: usize = 24;
@@ -38,7 +40,7 @@ const _: () =
     assert!(BOOT_INFO_HEADER_LEN + MAX_BOOT_REGIONS * BOOT_REGION_LEN <= BOOT_INFO_PAGE_LEN);
 
 /// [`BOOT_INFO_HEADER_LEN`] as a `u32`, for the size arithmetic.
-const HEADER_LEN_FIELD: u32 = 136;
+const HEADER_LEN_FIELD: u32 = 144;
 
 /// [`BOOT_REGION_LEN`] as a `u32`, for the size arithmetic.
 const REGION_LEN_FIELD: u32 = 24;
@@ -122,7 +124,7 @@ pub struct BootRegion {
     pub len: u64,
     /// The numeric code of a [`BootRegionKind`].
     pub kind: u32,
-    /// Zero in version 1.
+    /// Zero; no version has given it a meaning.
     pub reserved: u32,
 }
 
@@ -198,8 +200,60 @@ pub struct BootInfoHeader {
     pub framebuffer_format: u32,
     /// Number of entries in the region array.
     pub region_count: u32,
-    /// Zero in version 1.
-    pub reserved: u32,
+    /// The code of a [`WallClockSource`]; `0` if the machine gave none.
+    pub wall_clock: u32,
+    /// Seconds from 1970-01-01T00:00:00Z as the firmware clock stood when
+    /// the loader read it; `0` if [`BootInfoHeader::wall_clock`] is `0`.
+    ///
+    /// It is a count and not a time type, so that the crate every other
+    /// crate depends on depends on nothing. Whoever wants a calendar out of
+    /// it builds one, which is the arrangement D-120 already made for the
+    /// deadlines of the scheduler.
+    pub boot_unix_seconds: i64,
+}
+
+/// Where the wall clock the loader reported came from.
+///
+/// A machine reports no clock at all as `0` rather than as a member here,
+/// the way a missing framebuffer is a format of `0`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u32)]
+pub enum WallClockSource {
+    /// The firmware named its offset from coordinated universal time and
+    /// the loader applied it, so the value is UTC.
+    FirmwareUtc = 1,
+    /// The firmware left its offset unspecified. The value is read as UTC
+    /// and may be wrong by whatever zone the machine is set to, which is
+    /// why the source travels beside the seconds instead of being dropped.
+    FirmwareUnspecifiedZone = 2,
+}
+
+impl WallClockSource {
+    /// Every source, in numeric order.
+    pub const ALL: &'static [WallClockSource] = &[
+        WallClockSource::FirmwareUtc,
+        WallClockSource::FirmwareUnspecifiedZone,
+    ];
+
+    /// The stable numeric code; `0` means that the machine reported no
+    /// wall clock.
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        match self {
+            WallClockSource::FirmwareUtc => 1,
+            WallClockSource::FirmwareUnspecifiedZone => 2,
+        }
+    }
+
+    /// The source with the given code, if it is known.
+    #[must_use]
+    pub const fn from_code(code: u32) -> Option<Self> {
+        match code {
+            1 => Some(WallClockSource::FirmwareUtc),
+            2 => Some(WallClockSource::FirmwareUnspecifiedZone),
+            _ => None,
+        }
+    }
 }
 
 /// How the bytes of a framebuffer pixel are ordered. Both formats carry
@@ -365,6 +419,12 @@ pub enum BootInfoError {
     FramebufferOverlapsUsable,
     /// No reported device region encloses the framebuffer.
     FramebufferNotReserved,
+    /// The wall clock source code is not one this version knows.
+    WallClockSource(u32),
+    /// The seconds and the source disagree: a source names a clock and the
+    /// seconds are not a moment after the epoch, or no source is named and
+    /// the seconds are not zero.
+    WallClockTime(i64),
 }
 
 impl fmt::Display for BootInfoError {
@@ -428,6 +488,15 @@ impl fmt::Display for BootInfoError {
             }
             BootInfoError::FramebufferNotReserved => {
                 f.write_str("no reported device region encloses the framebuffer")
+            }
+            BootInfoError::WallClockSource(code) => {
+                write!(f, "wall clock source {code} is not supported")
+            }
+            BootInfoError::WallClockTime(seconds) => {
+                write!(
+                    f,
+                    "the wall clock seconds {seconds} do not match its source"
+                )
             }
         }
     }
@@ -503,7 +572,9 @@ impl<'a> BootInfoView<'a> {
             framebuffer_stride,
             framebuffer_format,
             region_count,
-            reserved,
+            wall_clock,
+            wall_seconds_low,
+            wall_seconds_high,
         ] = words::<HEADER_WORDS>(fixed);
 
         if join(magic_low, magic_high) != MAGIC_WORD {
@@ -549,14 +620,35 @@ impl<'a> BootInfoView<'a> {
             framebuffer_stride,
             framebuffer_format,
             region_count,
-            reserved,
+            wall_clock,
+            boot_unix_seconds: join(wall_seconds_low, wall_seconds_high).cast_signed(),
         };
         let view = BootInfoView { header, regions };
         view.check_regions()?;
         view.check_fixed_ranges()?;
         view.check_acpi_pointer()?;
         view.check_framebuffer()?;
+        view.check_wall_clock()?;
         Ok(view)
+    }
+
+    /// The source is one this version knows, and the seconds say the same
+    /// thing the source does. A machine that reported no clock carries
+    /// zero seconds, and a machine that reported one carries a moment
+    /// after the epoch: a zero or negative count with a source named is a
+    /// firmware whose clock was never set, which is worth refusing here
+    /// rather than letting a certificate be judged against 1970.
+    const fn check_wall_clock(&self) -> Result<(), BootInfoError> {
+        let seconds = self.header.boot_unix_seconds;
+        match WallClockSource::from_code(self.header.wall_clock) {
+            Some(_) if seconds > 0 => Ok(()),
+            Some(_) => Err(BootInfoError::WallClockTime(seconds)),
+            None if self.header.wall_clock != 0 => {
+                Err(BootInfoError::WallClockSource(self.header.wall_clock))
+            }
+            None if seconds != 0 => Err(BootInfoError::WallClockTime(seconds)),
+            None => Ok(()),
+        }
     }
 
     fn check_regions(&self) -> Result<(), BootInfoError> {
@@ -745,6 +837,21 @@ impl<'a> BootInfoView<'a> {
             Some(self.header.acpi_rsdp)
         }
     }
+
+    /// The moment the firmware clock stood at when the loader read it, in
+    /// seconds from 1970-01-01T00:00:00Z, and where it came from; `None`
+    /// on a machine that reported no clock.
+    ///
+    /// The source travels with the seconds because it says how far the
+    /// value can be trusted: an unspecified zone is a count that may be
+    /// wrong by hours.
+    #[must_use]
+    pub const fn wall_clock(&self) -> Option<(i64, WallClockSource)> {
+        match WallClockSource::from_code(self.header.wall_clock) {
+            Some(source) => Some((self.header.boot_unix_seconds, source)),
+            None => None,
+        }
+    }
 }
 
 /// Writes a boot information structure into the page the loader reserved
@@ -757,7 +864,10 @@ impl BootInfoWriter {
     /// the number of bytes written. The magic, the version, the size, and
     /// the region count come from `regions`, and the framebuffer fields
     /// from `framebuffer`, not from `header`; a writer and a parser that
-    /// disagree would be a defect the tests could not see.
+    /// disagree would be a defect the tests could not see. The wall clock
+    /// is the exception among the pairs: both of its fields are taken from
+    /// `header`, so a caller that leaves them at their default writes a
+    /// page that reports no clock.
     ///
     /// # Errors
     ///
@@ -808,7 +918,9 @@ impl BootInfoWriter {
             framebuffer.map_or(0, |buffer| buffer.stride),
             framebuffer.map_or(0, |buffer| buffer.format.code()),
             count,
-            0,
+            header.wall_clock,
+            low(header.boot_unix_seconds.cast_unsigned()),
+            high(header.boot_unix_seconds.cast_unsigned()),
         ];
         page.fill(0);
         let (chunks, _rest) = page.as_chunks_mut::<4>();

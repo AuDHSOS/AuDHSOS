@@ -700,6 +700,7 @@ fn environment<'a>(
         context::prepare_user,
     )
     .at(now_micros())
+    .with_wall_clock(wall_clock())
 }
 
 /// The clock the system call layer answers with: the ticks the timer has
@@ -716,6 +717,17 @@ pub(crate) fn acpi_pointer() -> u64 {
         platform.acpi_rsdp().map_or(0, |address| address.as_u64())
     })
     .unwrap_or(0)
+}
+
+/// The wall clock the loader read, as the system call layer takes it. The
+/// test images read it from the platform on every call rather than out of a
+/// static, because a test kernel has no `task::start` to record one in.
+pub(crate) fn wall_clock() -> Option<(i64, audhsos_abi::WallClockSource)> {
+    testing::with_platform(|platform| {
+        use kernel_hal_api::platform::Platform;
+        platform.wall_clock()
+    })
+    .flatten()
 }
 
 /// Where the stack of thread `index` of a process ends. One unmapped page
@@ -1149,7 +1161,8 @@ fn answer(
                     acpi_pointer(),
                     context::prepare_user,
                 )
-                .at(now_micros());
+                .at(now_micros())
+                .with_wall_clock(wall_clock());
             let reschedule = handle_syscall(
                 &mut machine.objects,
                 &mut machine.scheduler,

@@ -27,7 +27,7 @@ AuDHSOS/
 │   ├── timer-queue/           audhsos-timer-queue: bounded stable deadline queue without a clock or executor
 │   ├── abi/                   audhsos-abi: syscall table, errors, rights, message layout, boot image header, boot information, address constants
 │   ├── elf/                   audhsos-elf: ELF64 parser producing validated load segments
-│   ├── uefi/                  audhsos-uefi: UEFI structure layouts, GUIDs, constants (no calls)
+│   ├── uefi/                  audhsos-uefi: UEFI structure layouts, GUIDs, constants, the firmware clock conversion (no calls)
 │   ├── gfx/                   gfx: framebuffer logic, bitmap font, damage tracking
 │   ├── pci/                   pci: configuration space, BARs, capabilities, MSI-X, the virtio capabilities (document 13)
 │   ├── sync/                  audhsos-sync: Global<T> and Preset<T> cells (unsafe allowed)
@@ -132,7 +132,7 @@ AuDHSOS/
 |-------|-------|--------|----------|------------|---------------|
 | `audhsos-abi` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
 | `audhsos-elf` | 0 | all | no | yes, fuzz | `test-support` behind the feature `test-strategies` |
-| `audhsos-uefi` | 0 | all | no | yes (layouts) | `audhsos-abi` |
+| `audhsos-uefi` | 0 | all | no | yes (layouts) | `audhsos-abi`, `audhsos-time` |
 | `audhsos-sync` | 0 | all | allowlisted | Miri | - |
 | `audhsos-time` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
 | `audhsos-encoding` | 0 | all | no | yes, fuzz | `test-support` behind the feature `test-strategies` |

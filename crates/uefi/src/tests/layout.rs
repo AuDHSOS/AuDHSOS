@@ -14,7 +14,10 @@ use crate::protocols::{
     FILE_INFO_HEADER_LEN, FileInfo, FileProtocol, LoadedImageProtocol, SimpleFileSystemProtocol,
     SimpleTextOutputProtocol, Time,
 };
-use crate::tables::{BOOT_SERVICES_SIGNATURE, BootServices, SYSTEM_TABLE_SIGNATURE, SystemTable};
+use crate::tables::{
+    BOOT_SERVICES_SIGNATURE, BootServices, RUNTIME_SERVICES_SIGNATURE, RuntimeServices,
+    SYSTEM_TABLE_SIGNATURE, SystemTable,
+};
 use crate::types::{ConfigurationTable, Guid, TableHeader};
 
 #[test]
@@ -264,4 +267,33 @@ fn the_graphics_identifier_and_the_locate_service_are_in_place() {
         320,
         "the loader calls it, so it is typed and its offset must be right"
     );
+}
+
+#[test]
+fn the_runtime_services_table_holds_fourteen_slots_in_order() {
+    let offsets = [
+        (offset_of!(RuntimeServices, header), 0),
+        (offset_of!(RuntimeServices, get_time), 24),
+        (offset_of!(RuntimeServices, set_time), 32),
+        (offset_of!(RuntimeServices, get_wakeup_time), 40),
+        (offset_of!(RuntimeServices, set_wakeup_time), 48),
+        (offset_of!(RuntimeServices, set_virtual_address_map), 56),
+        (offset_of!(RuntimeServices, convert_pointer), 64),
+        (offset_of!(RuntimeServices, get_variable), 72),
+        (offset_of!(RuntimeServices, get_next_variable_name), 80),
+        (offset_of!(RuntimeServices, set_variable), 88),
+        (
+            offset_of!(RuntimeServices, get_next_high_monotonic_count),
+            96,
+        ),
+        (offset_of!(RuntimeServices, reset_system), 104),
+        (offset_of!(RuntimeServices, update_capsule), 112),
+        (offset_of!(RuntimeServices, query_capsule_capabilities), 120),
+        (offset_of!(RuntimeServices, query_variable_info), 128),
+    ];
+    for (actual, expected) in offsets {
+        assert_eq!(actual, expected);
+    }
+    assert_eq!(size_of::<RuntimeServices>(), 136);
+    assert_eq!(RUNTIME_SERVICES_SIGNATURE.to_le_bytes(), *b"RUNTSERV");
 }

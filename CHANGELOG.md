@@ -7,6 +7,159 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- A wall clock. The loader calls `EFI_RUNTIME_SERVICES.GetTime` once,
+  before it leaves the boot services, and the moment travels to the kernel
+  in the boot information; `clock_wall`, system call 51, answers it as
+  microseconds since 1970-01-01T00:00:00Z with the source the firmware
+  named. This is what certificate validation has been missing: document
+  11 section 11.14 has carried "a clock" as a gap since the TLS client was
+  finished, because `ClientConfig::now` is a parameter and no crate of the
+  project had a value to put in it. D-137 records the arrangement. Nothing
+  changed about D-46 — no logic crate reads a clock, and the one place
+  that touches the device is the loader, which is an adapter.
+
+  The reading has to happen before `ExitBootServices`, because a runtime
+  service after that point needs the virtual address map of
+  `SetVirtualAddressMap`, which this system never sets. The conversion
+  from `EFI_TIME` lives in `audhsos-uefi` rather than in the loader, so
+  that a calendar conversion is host-tested under the coverage gate and
+  the loader gains only the call: the offset is applied in the direction
+  UEFI 2.11, section 8.3.1 gives, `Localtime = UTC - TimeZone`, and the
+  daylight bits are checked but change nothing, because the firmware
+  moves the offset with the time and a correction here would be applied
+  twice.
+
+  A firmware that names no offset is not refused. `EFI_UNSPECIFIED_TIMEZONE`
+  means a local time whose zone the firmware does not know, which is what
+  OVMF reports on the reference machine, so the value is read as universal
+  time and the source travels beside it saying it may be wrong by a zone.
+  What is refused is a clock that was never set: an all-zero structure, a
+  field outside the calendar, and a moment that is not after the epoch are
+  each an error, and a machine without a usable clock is answered
+  `Unavailable` rather than a guess. A certificate is never judged against
+  a made-up date.
+
+  The boot information goes to version 2 and its fixed part from 136 bytes
+  to 144: `reserved` becomes `wall_clock` and `boot_unix_seconds` is
+  appended. Version 1 is refused rather than read with a zero clock — the
+  loader and the kernel ship together, so there is no machine on which the
+  two versions meet. The seconds are a plain `i64` and not a `UnixTime`,
+  so `audhsos-abi` keeps depending on nothing, which is the arrangement
+  D-120 already made for the deadlines of the scheduler.
+
+  What this does not fix is drift. The wall clock is the boot moment plus
+  the microseconds `clock_now` answers, and that count comes from an APIC
+  timer calibrated against the interval timer once at boot with nothing
+  correcting it afterwards. For a certificate window, which is days wide,
+  that is enough; the documentation says so rather than implying a
+  precision the machine does not have. There is no `clock_set`, because
+  nothing would call it yet.
+
+  Catalog 6.6.71. The unsafe budget of `boot-uefi-x86_64` rises from 39 to
+  41 for the deref of the runtime services table and the call, and that of
+  `user-test-programs` from 98 to 105 for the image that reads the date
+  from ring three.
+
+- What the UEFI Forum publishes, in `docs/uefi/`: the UEFI specification
+  release 2.11, which the loader is written against, and the ACPI
+  specification release 6.6, which `kernel-acpi` parses the root pointer,
+  the table headers and the multiple APIC description table out of. Both
+  under the second case of D-124 — the Forum serves them at no charge and
+  does not licence them for redistribution, and the copies are kept anyway
+  because a clause has to be readable without a network at wording that
+  cannot change. The README records one thing the other directories have
+  not had to: the Forum's site answers an automated request with a bot
+  check, so both files were fetched by hand and the checksum is what
+  stands in for the fetch.
+
+  `kernel-acpi` was written before the document was at hand and says "the
+  specification" where D-40 wants a section named. Its citations are not
+  updated here; the directory is what makes updating them possible.
+
+- A second disk for a run that writes, so that nothing the system writes
+  can reach the volume it boots from. The boot volume is one FAT32
+  partition the firmware and the loader read, and FAT32 has no journal: a
+  write torn by a crash loses a chain, and on that volume a lost chain is
+  a machine that no longer boots. `cargo xtask run --scratch` attaches a
+  blank `virtio-blk-pci` disk beside it instead — no partition table, so
+  the system formats the whole disk — and the runner keeps one per run
+  name under `target/qemu/`, blank when it is new and untouched when it is
+  not, which is what a test that boots twice to see what survived will
+  need. No run carries the device unless it asks for it. The alternatives
+  are in D-136: rebuilding the image before every run is what the runner
+  does today and it is why nothing has been corrupted yet, but it makes a
+  persistence test impossible, and `snapshot=on` does the same. 03 section
+  3.1.1 has the two lines, catalog 6.6.20.
+
+- A second cursor sprite, the double arrow a window shows while it is
+  being resized, and the shape field that chooses it. `SetCursor` carries
+  a `CursorShape` beside the position, packed into the word that already
+  carried whether the sprite is shown, and a shape code the protocol does
+  not have is refused rather than drawn as the arrow. The display server
+  keeps one bitmap per shape and derives body from edge for both, so the
+  new sprite adds one table and no second rule; the position stays the
+  corner of the sprite for either shape, so nothing about erasing and
+  restoring changes. Nothing asks for the resize shape yet: this system
+  has no window manager, and the program that drags a corner is the one
+  that will. Catalog 6.6.27 and 6.6.56.
+
+- `tools/target-clean.sh`, which drops from the target directory what no
+  build has touched for a while. The tree passes twenty gigabytes on this
+  machine and most of it belongs to work that is finished: one `find` pass
+  deletes the files whose mtime predates a cutoff of fourteen days by
+  default and then the directories that empties, and Cargo and the xtask
+  rebuild what goes. `--dry-run` names every file and the total instead.
+  The cutoff is a marker file and `find ! -newer`, because the two `find`
+  implementations round `-mtime` differently, and `CACHEDIR.TAG` stays,
+  since it is what keeps a backup out of the tree. 07 section 7.5 has it.
+
+- Ed25519 signing as product surface, with the arithmetic a secret scalar
+  needs (D-135). `ed25519::sign` and `ed25519::public_key` lose the
+  `#[cfg]` that kept them behind `test-signing`, because the Secure Shell
+  client of document 14 authenticates with a key of its own and step S5
+  signs with it. The gate was not the whole of it: `Point::mul` adds where
+  a bit of its scalar is set, `Scalar::mul` does the same, and
+  `subtract_order` stopped as soon as the value had fallen below the
+  order, all three variable-time on a long-term private key and on the
+  nonce of a signature, because that module was written for a verifier.
+  `Point::mul_secret` and `Scalar::mul_secret` now double and add at every
+  position and keep the sum behind a mask of `crypto-ct`, `subtract_order`
+  runs both rounds always and selects its difference with a mask, and
+  signing calls nothing else. The branching pair stays for the public
+  scalars of verification; what separates them is the name, as it is for
+  `pow_secret` in `crypto-bignum` (D-122), and the modules say so. ECDSA
+  signing stays behind `test-signing`. Catalog 6.6.33.
+
+- `pem::encode_wrapped` and `pem::decode_wrapped` in `audhsos-encoding`,
+  the RFC 7468 frame at a width the RFC does not fix. `openssh-key-v1`
+  wraps at seventy characters, which is not a multiple of four, so a body
+  line holds part of a Base64 quantum and cannot be encoded or decoded on
+  its own: the body is now written as one text and pushed apart into
+  lines from the back, and it is read a quantum at a time with the
+  quantum carried across a line boundary. The reader of a wrapped text
+  holds a line to a maximum rather than to a length, because a width no
+  standard fixes is the width some writer chose; the RFC 7468 reader is
+  unchanged and still demands full lines. `encode` and `decode` are those
+  two at the width of `LINE`. `EncodingError::LineLength` carries the
+  width it judged a line against, which the message no longer spells as
+  64. Catalog 6.6.40.
+
+- The two documents the private key of a Secure Shell client is written
+  in. `docs/openssh/PROTOCOL.key` is `openssh-key-v1`: the magic string,
+  the cipher and KDF names, the public keys, and the one string that
+  holds the private keys, with the two `checkint` words that say a
+  passphrase was right and the padding that counts up from one.
+  `docs/rfc/rfc9987.txt` is the SSH agent protocol, which that file
+  defers to where the key itself is encoded and which nothing here
+  implements otherwise: section 5.2.3 is the Ed25519 blob, `string
+  "ssh-ed25519"`, `string ENC(A)`, `string k || ENC(A)`, whose `k` is the
+  32-byte seed of RFC 8032, section 3.2, and not the scalar the seed
+  expands into. No code cites either yet. Step S5 signs with a key of
+  this client's own, and 14.13 holds the open question of where that key
+  comes from; every answer to it reads a file in this format. Both
+  directory READMEs, document 14, section 14.4, and the index of `docs/`
+  name them.
+
 - A second disk for a run that writes, so that nothing the system writes
   can reach the volume it boots from. The boot volume is one FAT32
   partition the firmware and the loader read, and FAT32 has no journal: a

@@ -6,9 +6,14 @@
 
 use audhsos_abi::Error;
 use audhsos_abi::Syscall;
+use audhsos_abi::WallClockSource;
 use audhsos_abi::ipc_buffer::Buffer;
 
 use super::double::{Call, Fixture, call, error_of, request, value_of};
+
+/// 2026-09-12T13:00:00Z, and the same moment in microseconds.
+const BOOT_SECONDS: i64 = 1_789_218_000;
+const BOOT_MICROS: u64 = 1_789_218_000_000_000;
 
 #[test]
 fn the_clock_answers_the_microseconds_of_the_machine() {
@@ -83,5 +88,66 @@ fn a_machine_without_a_source_answers_unavailable() {
     assert_eq!(
         error_of(&mut fixture, request(Syscall::RandomBytes, &[])),
         Some(Error::Unavailable)
+    );
+}
+
+#[test]
+fn the_wall_clock_is_the_boot_moment_plus_what_the_machine_has_run() {
+    let mut fixture = Fixture::new();
+    fixture.environment.wall_clock = Some((BOOT_SECONDS, WallClockSource::FirmwareUtc));
+    fixture.environment.now = 0;
+    let mut buffer = request(Syscall::ClockWall, &[]);
+    let (status, values, _) = call(&mut fixture, &mut buffer);
+    assert_eq!(status.error(), None);
+    assert_eq!(values[0], BOOT_MICROS);
+    assert_eq!(values[1], u64::from(WallClockSource::FirmwareUtc.code()));
+
+    fixture.environment.now = 50_000;
+    let mut later = request(Syscall::ClockWall, &[]);
+    let (_, values, _) = call(&mut fixture, &mut later);
+    assert_eq!(values[0], BOOT_MICROS + 50_000);
+}
+
+#[test]
+fn the_wall_clock_reports_the_source_the_loader_recorded() {
+    for source in WallClockSource::ALL {
+        let mut fixture = Fixture::new();
+        fixture.environment.wall_clock = Some((BOOT_SECONDS, *source));
+        let mut buffer = request(Syscall::ClockWall, &[]);
+        let (_, values, _) = call(&mut fixture, &mut buffer);
+        assert_eq!(values[1], u64::from(source.code()));
+    }
+}
+
+#[test]
+fn a_machine_without_a_wall_clock_refuses_rather_than_guesses() {
+    let mut fixture = Fixture::new();
+    fixture.environment.wall_clock = None;
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::ClockWall, &[])),
+        Some(Error::Unavailable)
+    );
+}
+
+#[test]
+fn a_boot_moment_that_does_not_fit_the_scale_refuses() {
+    for seconds in [-1, i64::MIN, i64::MAX] {
+        let mut fixture = Fixture::new();
+        fixture.environment.wall_clock = Some((seconds, WallClockSource::FirmwareUtc));
+        assert_eq!(
+            error_of(&mut fixture, request(Syscall::ClockWall, &[])),
+            Some(Error::Unavailable),
+            "a count the microsecond scale cannot hold is not answered with a wrong one"
+        );
+    }
+}
+
+#[test]
+fn the_wall_clock_takes_no_handle_and_needs_no_right() {
+    assert_eq!(Syscall::ClockWall.argument_count(), 0);
+    assert!(!Syscall::ClockWall.takes_handle());
+    assert_eq!(
+        crate::dispatch::required_rights(Syscall::ClockWall),
+        audhsos_abi::Rights::EMPTY
     );
 }

@@ -9,11 +9,14 @@
 
 use core::ffi::c_void;
 
+use audhsos_abi::WallClockSource;
 use audhsos_uefi::memory_map::{AllocateType, MemoryType};
 use audhsos_uefi::protocols::SimpleTextOutputProtocol;
+use audhsos_uefi::protocols::Time;
 use audhsos_uefi::status::Status;
 use audhsos_uefi::tables::{
-    BOOT_SERVICES_SIGNATURE, BootServices, SYSTEM_TABLE_SIGNATURE, SystemTable,
+    BOOT_SERVICES_SIGNATURE, BootServices, RUNTIME_SERVICES_SIGNATURE, RuntimeServices,
+    SYSTEM_TABLE_SIGNATURE, SystemTable,
 };
 use audhsos_uefi::types::{Guid, Handle};
 use audhsos_uefi::utf16;
@@ -40,6 +43,7 @@ pub(crate) struct Firmware<'a> {
     table: &'a SystemTable,
     boot: &'a BootServices,
     console: Option<&'a SimpleTextOutputProtocol>,
+    runtime: Option<&'a RuntimeServices>,
 }
 
 impl<'a> Firmware<'a> {
@@ -79,12 +83,53 @@ impl<'a> Firmware<'a> {
             // long as the system table lives.
             Some(unsafe { &*table.console_out })
         };
+        let runtime = if table.runtime_services.is_null() {
+            None
+        } else {
+            // SAFETY: the system table is valid and its runtime services
+            // pointer is not null, so the firmware owns a runtime services
+            // table there for as long as the system table lives.
+            let runtime = unsafe { &*table.runtime_services };
+            (runtime.header.signature == RUNTIME_SERVICES_SIGNATURE).then_some(runtime)
+        };
         Ok(Firmware {
             image,
             table,
             boot,
             console,
+            runtime,
         })
+    }
+
+    /// The moment the platform clock stands at, in seconds from the Unix
+    /// epoch, and how far it can be trusted.
+    ///
+    /// `None` for a machine whose firmware published no runtime services,
+    /// whose `GetTime` refused, or whose clock reads a moment this system
+    /// will not build a wall clock out of. A machine without a clock is not
+    /// a machine that cannot boot, so this reports absence rather than
+    /// failing the loader.
+    ///
+    /// It must be called before `ExitBootServices`. A runtime service after
+    /// that point needs the virtual address map of
+    /// `SetVirtualAddressMap`, which this system never sets.
+    pub(crate) fn wall_clock(&self) -> Option<(i64, WallClockSource)> {
+        let runtime = self.runtime?;
+        let mut time = Time::default();
+        // SAFETY: the runtime services table carried its signature, the
+        // time pointer names a local that outlives the call, the
+        // capabilities argument is optional and null says so, and boot
+        // services are still active.
+        //
+        // Success and nothing else: a warning leaves the structure at
+        // whatever the firmware wrote into it, and a date this system
+        // cannot tell from a real one is worse than no date at all.
+        let status = unsafe { (runtime.get_time)(&raw mut time, core::ptr::null_mut()) };
+        if !status.is_success() {
+            return None;
+        }
+        let (unix, source) = audhsos_uefi::to_unix(time).ok()?;
+        Some((unix.seconds(), source))
     }
 
     /// `count` physically contiguous frames of loader data.

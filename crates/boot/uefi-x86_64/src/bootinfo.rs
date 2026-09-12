@@ -13,6 +13,7 @@ use core::fmt;
 
 use audhsos_abi::boot_info::{
     BOOT_INFO_PAGE_LEN, BootInfoHeader, BootInfoWriter, BootRegion, BootRegionKind, Framebuffer,
+    WallClockSource,
 };
 use audhsos_abi::layout::{MAX_BOOT_REGIONS, PHYS_WINDOW_BASE};
 use audhsos_uefi::memory_map::{ConversionError, descriptors, to_boot_regions};
@@ -71,6 +72,7 @@ pub(crate) fn write(
     descriptor_size: usize,
     ranges: &Ranges,
     framebuffer: Option<Framebuffer>,
+    wall_clock: Option<(i64, WallClockSource)>,
 ) -> Result<Option<Framebuffer>, WriteError> {
     let mut regions = [EMPTY_REGION; MAX_BOOT_REGIONS];
     let mut count = to_boot_regions(descriptors(map, descriptor_size), &mut regions)
@@ -99,6 +101,8 @@ pub(crate) fn write(
         boot_stack_phys_start: ranges.boot_stack.start,
         boot_stack_phys_len: ranges.boot_stack.len,
         acpi_rsdp: rsdp,
+        wall_clock: wall_clock.map_or(0, |(_, source)| source.code()),
+        boot_unix_seconds: wall_clock.map_or(0, |(seconds, _)| seconds),
         ..BootInfoHeader::default()
     };
     BootInfoWriter::write(page, &header, framebuffer, used).map_err(|_| WriteError::TooLarge)?;

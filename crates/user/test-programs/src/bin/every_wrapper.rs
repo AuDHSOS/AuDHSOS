@@ -121,6 +121,7 @@ fn main(ipc_buffer: u64) -> ! {
     let _ = gate.notification_wait_until(notification, 0);
     let _ = gate.random_bytes();
     let _ = gate.interrupt_create_msi(system);
+    let _ = gate.clock_wall();
 
     gate.thread_exit()
 }

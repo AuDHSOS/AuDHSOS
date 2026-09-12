@@ -551,6 +551,11 @@ const REFUSALS: &[(Syscall, Error, &str)] = &[
         Error::InvalidHandle,
         "a handle that names nothing",
     ),
+    (
+        Syscall::ClockWall,
+        Error::ArgumentCount,
+        "an argument word above the none it reads",
+    ),
 ];
 
 /// Every call this phase implements answered exactly one error, and it is

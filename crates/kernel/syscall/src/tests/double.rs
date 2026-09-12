@@ -6,7 +6,7 @@
 
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status};
 use audhsos_abi::layout::PAGE_SIZE;
-use audhsos_abi::{Ecam, Error, Framebuffer, Handle, Rights, Syscall};
+use audhsos_abi::{Ecam, Error, Framebuffer, Handle, Rights, Syscall, WallClockSource};
 use kernel_mm::page_table::Permissions;
 use kernel_objects::handle_table::{Entry, HandleList};
 use kernel_objects::object::{
@@ -132,6 +132,9 @@ pub(super) struct Recorder {
     /// The configuration window of the bus the firmware is to have
     /// published.
     pub(super) ecam: Option<Ecam>,
+    /// The wall clock the loader is to have read, or `None` for a machine
+    /// whose firmware reported none.
+    pub(super) wall_clock: Option<(i64, WallClockSource)>,
 }
 
 impl Recorder {
@@ -317,6 +320,10 @@ impl Environment for Recorder {
 
     fn now_micros(&self) -> u64 {
         self.now
+    }
+
+    fn boot_wall(&self) -> Option<(i64, WallClockSource)> {
+        self.wall_clock
     }
 
     fn random_seed(&mut self) -> Result<[u64; 4], Error> {

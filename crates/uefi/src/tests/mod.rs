@@ -8,4 +8,5 @@ mod graphics;
 mod layout;
 mod memory_map;
 mod status;
+mod time;
 mod utf16;

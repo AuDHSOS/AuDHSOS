@@ -146,6 +146,7 @@ name = "audhsos-uefi"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "audhsos-time",
  "test-support",
 ]
 

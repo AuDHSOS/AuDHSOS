@@ -30,7 +30,7 @@ fn numbers_are_unique_dense_and_non_zero() {
 
 #[test]
 fn the_table_holds_every_call_of_the_interface() {
-    assert_eq!(Syscall::ALL.len(), 50);
+    assert_eq!(Syscall::ALL.len(), 51);
     assert_eq!(Syscall::ProcessCreate.number(), 1);
     assert_eq!(Syscall::DebugLog.number(), 41);
     assert_eq!(Syscall::MemoryMerge.number(), 42);
@@ -40,6 +40,7 @@ fn the_table_holds_every_call_of_the_interface() {
     assert_eq!(Syscall::NotificationWaitUntil.number(), 48);
     assert_eq!(Syscall::RandomBytes.number(), 49);
     assert_eq!(Syscall::InterruptCreateMsi.number(), 50);
+    assert_eq!(Syscall::ClockWall.number(), 51);
 }
 
 #[test]

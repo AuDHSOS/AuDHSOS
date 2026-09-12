@@ -3,7 +3,7 @@
 
 //! The boot platform: what the loader left behind.
 
-use audhsos_abi::{Ecam, Framebuffer};
+use audhsos_abi::{Ecam, Framebuffer, WallClockSource};
 use kernel_types::{PhysAddr, VirtAddr};
 
 /// What a physical memory region holds at boot.
@@ -65,4 +65,13 @@ pub trait Platform {
     /// the root task builds the device memory object of the program that
     /// enumerates from.
     fn ecam(&self) -> Option<Ecam>;
+
+    /// The moment the firmware clock stood at when the loader read it, in
+    /// seconds from the Unix epoch, and how far it can be trusted; `None`
+    /// on a machine that reported no clock.
+    ///
+    /// It is the only wall clock this system has. Nothing here reads a
+    /// device: the loader read one once, while it still had the firmware,
+    /// and what the kernel keeps is the count it was handed.
+    fn wall_clock(&self) -> Option<(i64, WallClockSource)>;
 }

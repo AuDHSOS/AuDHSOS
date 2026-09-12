@@ -470,7 +470,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-uefi",
         path: "crates/uefi",
         kind: Kind::Logic,
-        deps: &["audhsos-abi"],
+        deps: &["audhsos-abi", "audhsos-time"],
         coverage_gate: true,
         target: Target::Host,
     },
@@ -478,7 +478,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "boot-uefi-x86_64",
         path: "crates/boot/uefi-x86_64",
         kind: Kind::Adapter {
-            unsafe_budget: 39,
+            unsafe_budget: 41,
             asm_budget: 2,
         },
         deps: &[
@@ -785,7 +785,7 @@ pub(crate) const CRATES: &[Crate] = &[
         // Three programs of Phase 12 raised this from 78: every call a
         // program makes is a site, as it is in every other program here.
         kind: Kind::Adapter {
-            unsafe_budget: 98,
+            unsafe_budget: 105,
             asm_budget: 1,
         },
         deps: &["audhsos-abi", "user-rt", "user-sys-x86_64"],

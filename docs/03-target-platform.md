@@ -199,7 +199,7 @@ in the entry call.
 | Field | Type | Content |
 |-------|------|---------|
 | `magic` | `[u8; 8]` | `AUDHBOOT` |
-| `version` | `u32` | `1` |
+| `version` | `u32` | `2`; version 1 carried no wall clock and is refused (D-137) |
 | `size` | `u32` | total size in bytes of the structure including the region array |
 | `phys_window_base` | `u64` | virtual base of the physical memory window (`PHYS_WINDOW_BASE`) |
 | `kernel_phys_start`, `kernel_phys_len` | `u64` | physical range of the kernel image |
@@ -213,10 +213,22 @@ in the entry call.
 | `framebuffer_stride` | `u32` | pixels per scan line, at least `framebuffer_width` |
 | `framebuffer_format` | `u32` | `0` absent, `1` `Rgbx8888` (red in the lowest byte), `2` `Bgrx8888` (blue in the lowest byte); four bytes per pixel in both |
 | `region_count` | `u32` | number of entries in the region array, at most `MAX_BOOT_REGIONS` |
+| `wall_clock` | `u32` | `0` the machine reported no clock, `1` `FirmwareUtc`, `2` `FirmwareUnspecifiedZone` |
+| `boot_unix_seconds` | `i64` | seconds from 1970-01-01T00:00:00Z as the firmware clock stood when the loader read it, `0` if `wall_clock` is `0` |
 | `regions` | `[BootRegion; region_count]` | `{ start: u64, len: u64, kind: u32, reserved: u32 }` |
+
+The fixed part is 144 bytes; the region array follows it.
 
 Region kinds: `Usable`, `Reserved`, `AcpiReclaimable`, `AcpiNvs`,
 `MmioReserved`. Loader code and data are reported as `Usable`.
+
+Wall clock rules: the pair is present or neither half is. With
+`wall_clock == 0`, `boot_unix_seconds` is `0`; otherwise the code is one
+the version knows and the seconds are a moment after the epoch. The loader
+reads them from `EFI_RUNTIME_SERVICES.GetTime` before it leaves the boot
+services, and `FirmwareUnspecifiedZone` says the firmware named no offset
+from universal time, so the value may be wrong by a zone. The kernel adds
+the microseconds since boot and answers `clock_wall` with the sum.
 
 Framebuffer rules: with `framebuffer_format == 0` every framebuffer field
 is `0`. Otherwise `framebuffer_phys_start` is frame-aligned and non-zero,
@@ -300,7 +312,7 @@ the first release.
 
 | Trait | Responsibility | `x86_64` adapter |
 |-------|----------------|------------------|
-| `Platform` | boot information: memory regions, boot image location, physical window offset, ACPI root pointer, and the configuration window of the bus the kernel read out of the `MCFG` table | validated `BootInfo` |
+| `Platform` | boot information: memory regions, boot image location, physical window offset, ACPI root pointer, the wall clock the loader read from the firmware (D-137), and the configuration window of the bus the kernel read out of the `MCFG` table | validated `BootInfo` |
 | `InterruptController` | map a line to a vector, mask, unmask, end-of-interrupt, spurious handling | local APIC and I/O APIC register blocks |
 | `Timer` | start a periodic tick with a frequency, read the tick counter | local APIC timer calibrated with the PIT |
 | `FrameAccess<T>` | a physical frame as a `&mut PageTable` of entry type `T` | the physical window |

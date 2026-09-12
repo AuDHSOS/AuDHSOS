@@ -23,7 +23,7 @@
 
 use audhsos_abi::ipc_buffer::Status;
 use audhsos_abi::layout::TICKS_PER_SECOND;
-use audhsos_abi::{Error, Rights};
+use audhsos_abi::{Error, Rights, WallClockSource};
 use kernel_hal_x86_64::testing;
 use kernel_hal_x86_64::vectors;
 use kernel_objects::object::{AnyObjectId, SystemControl};
@@ -48,6 +48,10 @@ static ENTROPY: &[u8] = include_bytes!(concat!(env!("AUDHSOS_USER_TESTS_DIR"), "
 static MSI_VECTOR: &[u8] =
     include_bytes!(concat!(env!("AUDHSOS_USER_TESTS_DIR"), "/msi_vector.bin"));
 
+/// The program that reads the wall clock around a wait.
+static WALL_CLOCK: &[u8] =
+    include_bytes!(concat!(env!("AUDHSOS_USER_TESTS_DIR"), "/wall_clock.bin"));
+
 /// The words `clock_and_wait` writes.
 const CLOCK_BEFORE: usize = 0;
 const CLOCK_AFTER: usize = 1;
@@ -65,6 +69,23 @@ const WAIT: u64 = 50_000;
 /// The microseconds one tick is, which is the resolution of the clock and
 /// therefore the tolerance of every reading.
 const TICK: u64 = 1_000_000 / TICKS_PER_SECOND as u64;
+
+/// The words `wall_clock` writes.
+const WALL_STATUS: usize = 0;
+const WALL_BEFORE: usize = 1;
+const WALL_SOURCE: usize = 2;
+const WALL_AFTER: usize = 3;
+const WALL_MONOTONIC: usize = 4;
+const WALL_DONE: usize = 5;
+
+/// The value `wall_clock` writes when it has finished.
+const WALL_FINISHED: u64 = 0x0A_11C1;
+
+/// 2026-01-01T00:00:00Z and 2100-01-01T00:00:00Z in microseconds. A
+/// reading outside them is not a clock that drifted but one that was never
+/// set, and this image is newer than the first of the two.
+const EARLIEST: u64 = 1_767_225_600_000_000;
+const LATEST: u64 = 4_102_444_800_000_000;
 
 /// The words `entropy` writes.
 const ENTROPY_FIRST_STATUS: usize = 0;
@@ -166,6 +187,73 @@ fn the_clock_measures_a_wait_that_ends_at_its_deadline() {
         ));
     }
     say!("the clock read {before} and {after}, {elapsed} microseconds apart");
+}
+
+/// The wall clock names a plausible date, moves forward with the wait, and
+/// is the boot moment plus what the monotonic clock counted.
+#[test_case]
+fn the_wall_clock_reads_the_date_the_firmware_kept() {
+    support::bring_up();
+    support::start_timer(|_ticks| false);
+    let page = run(WALL_CLOCK, WALL_DONE, WALL_FINISHED, false);
+
+    let status = support::page_word(page, WALL_STATUS);
+    if status == Status::failed(Error::Unavailable).raw() {
+        testing::fail(format_args!(
+            "the machine reported no wall clock; the firmware's GetTime answered nothing usable"
+        ));
+    }
+    if status != Status::OK.raw() {
+        testing::fail(format_args!("the wall clock answered {status:#x}"));
+    }
+
+    let source = support::page_word(page, WALL_SOURCE);
+    if u32::try_from(source)
+        .ok()
+        .and_then(WallClockSource::from_code)
+        .is_none()
+    {
+        testing::fail(format_args!(
+            "the wall clock named the unknown source {source}"
+        ));
+    }
+
+    let before = support::page_word(page, WALL_BEFORE);
+    if before < EARLIEST || before > LATEST {
+        testing::fail(format_args!(
+            "the wall clock reads {before} microseconds, which is not a date this image can have"
+        ));
+    }
+
+    let after = support::page_word(page, WALL_AFTER);
+    if after < before {
+        testing::fail(format_args!(
+            "the wall clock went backwards: {before} to {after}"
+        ));
+    }
+    let elapsed = after.saturating_sub(before);
+    if elapsed < WAIT.saturating_sub(TICK) {
+        testing::fail(format_args!(
+            "the wait of {WAIT} microseconds moved the wall clock by only {elapsed}"
+        ));
+    }
+    if elapsed > WAIT.saturating_add(TICK.saturating_mul(4)) {
+        testing::fail(format_args!(
+            "the wait of {WAIT} microseconds moved the wall clock by {elapsed}"
+        ));
+    }
+
+    // The wall clock is the boot moment plus the monotonic count, so
+    // subtracting the one from the other has to leave a boot moment that is
+    // itself a plausible date.
+    let monotonic = support::page_word(page, WALL_MONOTONIC);
+    let boot = before.saturating_sub(monotonic);
+    if boot < EARLIEST || boot > LATEST {
+        testing::fail(format_args!(
+            "the boot moment behind the reading is {boot} microseconds"
+        ));
+    }
+    say!("the wall clock reads {before} microseconds, source {source}, booted at {boot}");
 }
 
 /// `random_bytes` answers four words on the reference machine, and two

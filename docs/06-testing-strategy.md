@@ -2663,6 +2663,47 @@ example (D-134) over it.
   other.
 - Every refusal renders a sentence of its own.
 
+### 6.6.71 The wall clock (`audhsos-uefi`, `audhsos-abi`, `kernel-syscall`, QEMU)
+
+D-137. The conversion and the refusals are host tests; what QEMU adds is
+that the firmware of the reference machine answers at all and that the
+date reaches ring three.
+
+- `EFI_TIME` becomes a count of seconds: a reading in universal time is
+  its own second, and a named offset is added to reach one, in the
+  direction UEFI 2.11, section 8.3.1 gives — `Localtime = UTC -
+  TimeZone`, so an offset of 480 moves 13:00 to 21:00 and not to 05:00.
+  The bounds the section names, -1440 and 1440, are accepted and the
+  values one past them are not.
+- `EFI_UNSPECIFIED_TIMEZONE` is a usable reading and not a refusal: the
+  value is read as universal time and the source says the zone was never
+  named. Nothing else in the structure carries that, which is why the
+  source travels with the seconds.
+- The daylight bits are checked and change nothing. The firmware moves
+  the offset with the time when daylight saving begins, so a correction
+  applied here would be applied twice; a bit the section does not define
+  is refused.
+- A firmware without a clock answers an all-zero structure, whose month
+  of zero is what refuses it. A field outside the calendar, a year the
+  calendar will not take, and a moment that is not after the epoch are
+  each refused with the field that was wrong, so that a clock which was
+  never set cannot become a date.
+- The boot information carries the pair or neither: a source this version
+  does not know, a source with seconds that are not after the epoch, and
+  seconds with no source are three separate refusals, and version 1 is
+  refused as a version. The fixed part is 144 bytes, and the fuzz corpus
+  of `boot_info` carries a version 2 structure.
+- `clock_wall` is the boot moment plus what `clock_now` answers, in
+  microseconds, with the source in the second word. A machine without a
+  clock is `Unavailable`, and so is a boot moment the microsecond scale
+  cannot hold — nothing is answered with a wrong date.
+- On the reference machine the date lies between 2026 and 2100, moves
+  forward by a wait of fifty milliseconds to within a tick, and leaves a
+  boot moment in the same range when the monotonic count is taken off it.
+  A clock that read nothing usable fails naming `GetTime`, because that
+  is the one part of this no host test can reach.
+
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

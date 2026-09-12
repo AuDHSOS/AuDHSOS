@@ -50,7 +50,10 @@ their checksums, one directory per body that publishes them:
 publishes (D-100), [w3c/](w3c), [ecma/](ecma), [itu/](itu) for the
 JPEG Recommendations, [cipa/](cipa) for Exif, [ti/](ti) for the
 16550 serial controller, which is a datasheet from a manufacturer rather
-than a standard from a standards body, and [openssh/](openssh) for what
+than a standard from a standards body, [uefi/](uefi) for what the UEFI
+Forum publishes — the firmware interface the loader is written against and
+the ACPI tables the kernel finds its interrupt controllers through — and
+[openssh/](openssh) for what
 OpenSSH specified and no standards body did (D-134): the one cipher of
 the Secure Shell client, kept as the OpenSSH document it came from and
 the IETF draft that replaced it, and the private key format a client
@@ -61,15 +64,19 @@ compiled, linked, or read at run time.
 D-124 states what decides whether a document is kept: whether it can be
 obtained, not whether its licence permits the copy. `rfc/`, `oasis/`,
 `w3c/`, `ecma/` and `openssh/` hold documents that may be redistributed.
-`itu/`, `cipa/` and `ti/` hold documents that the ITU, CIPA and Texas
-Instruments serve to anyone at no charge but do not licence for
-redistribution; the copies are kept regardless, and each of those
-READMEs quotes the restriction it stands against and states what follows
-from it. `ti/` records one thing more, because the part the crate is
-named after is the one document of all of these that its publisher no
-longer serves: what is kept is the datasheet of a compatible part that
-TI does serve, and the README says which routes to the original were
-tried and what the substitution does and does not cover.
+`itu/`, `cipa/`, `ti/` and `uefi/` hold documents that the ITU, CIPA,
+Texas Instruments and the UEFI Forum serve to anyone at no charge but do
+not licence for redistribution; the copies are kept regardless, and each
+of those READMEs quotes the restriction it stands against and states what
+follows from it. Two of them record something further. `ti/` does,
+because the part the crate is named after is the one document of all of
+these that its publisher no longer serves: what is kept is the datasheet
+of a compatible part that TI does serve, and the README says which routes
+to the original were tried and what the substitution does and does not
+cover. `uefi/` does, because its two documents are the first here that a
+shell on the development machine cannot fetch: the Forum's site answers
+an automated request with a bot check, so they were downloaded by hand
+and the checksum is what stands in for the fetch.
 [pcisig/](pcisig) holds no document, because PCI-SIG releases the two
 specifications the crate `pci` cites only to members or against payment;
 it records instead which documents those are and what takes the place of

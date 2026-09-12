@@ -13,7 +13,7 @@ use core::convert::Infallible;
 use core::fmt;
 
 use audhsos_abi::boot_image::BOOT_IMAGE_HEADER_LEN;
-use audhsos_abi::boot_info::{BOOT_INFO_PAGE_LEN, BootRegionKind, Framebuffer};
+use audhsos_abi::boot_info::{BOOT_INFO_PAGE_LEN, BootRegionKind, Framebuffer, WallClockSource};
 use audhsos_abi::layout::{
     BOOT_INFO_VADDR, BOOT_STACK_PAGES, BOOT_STACK_TOP, KERNEL_SPACE_START, PAGE_SHIFT, PAGE_SIZE,
     PHYS_WINDOW_BASE,
@@ -153,6 +153,9 @@ fn load(firmware: &Firmware<'_>) -> Result<Infallible, Failure> {
 
     let root = build_tables(ram_end, &placement, stack, info_page, pool)?;
     let framebuffer = graphics::framebuffer(firmware);
+    // Before the exit: a runtime service after it needs the virtual
+    // address map this system never sets.
+    let wall_clock = firmware.wall_clock();
 
     let final_map = leave_boot_services(firmware, map_frames)?;
     write_boot_info(
@@ -170,6 +173,7 @@ fn load(firmware: &Firmware<'_>) -> Result<Infallible, Failure> {
             rsdp,
         },
         framebuffer,
+        wall_clock,
     );
 
     // SAFETY: the tables rooted in `root` map the loader's own code
@@ -413,6 +417,7 @@ fn write_boot_info(
     map: MemoryMapInfo,
     ranges: &Ranges,
     framebuffer: Option<Framebuffer>,
+    wall_clock: Option<(i64, WallClockSource)>,
 ) {
     // SAFETY: the page was allocated for the boot information, nothing
     // else borrows it, and the identity mapping is active.
@@ -430,7 +435,16 @@ fn write_boot_info(
     let Some(buffer) = (unsafe { memory::bytes_mut(map_frames, len) }) else {
         exit::die();
     };
-    if bootinfo::write(page, buffer, map.descriptor_size, ranges, framebuffer).is_err() {
+    if bootinfo::write(
+        page,
+        buffer,
+        map.descriptor_size,
+        ranges,
+        framebuffer,
+        wall_clock,
+    )
+    .is_err()
+    {
         exit::die();
     }
 }

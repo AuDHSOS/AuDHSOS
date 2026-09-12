@@ -48,7 +48,7 @@
 //! | `ioport_write` | port range handle, port, width, value |
 //! | `memory_create_device` | system control handle, first frame, frame count |
 //! | `system_info` | system control handle |
-//! | `clock_now`, `random_bytes` | none |
+//! | `clock_now`, `clock_wall`, `random_bytes` | none |
 //! | `debug_log` | none; the message area carries the bytes |
 
 pub mod debug;
@@ -131,6 +131,7 @@ pub fn run<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
         Syscall::MemoryCreateDevice => device::memory_create_device(machine, process, request),
         Syscall::SystemInfo => device::system_info(machine),
         Syscall::ClockNow => machine::clock_now(machine),
+        Syscall::ClockWall => machine::clock_wall(machine),
         Syscall::RandomBytes => machine::random_bytes(machine),
         Syscall::DebugLog => debug::log(machine, buffer),
     }
