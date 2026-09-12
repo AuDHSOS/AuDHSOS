@@ -4300,7 +4300,7 @@ impl Compiler {
     fn try_statement(
         &mut self,
         body: &[Stmt],
-        catch: Option<&(Option<String>, Vec<Stmt>)>,
+        catch: Option<&(Option<parser::BindingPattern>, Vec<Stmt>)>,
         finally: Option<&[Stmt]>,
     ) -> Result<(), Error> {
         self.emit(Op::Constant(Value::Undefined))?;
@@ -4312,24 +4312,42 @@ impl Compiler {
         })?;
         self.block(body)?;
         self.emit(Op::EndTry)?;
-        let catch_at = if let Some((name, body)) = catch {
+        let catch_at = if let Some((pattern, body)) = catch {
             let entry = self.program.code.len();
             self.scopes.push(BTreeMap::new());
-            if let Some(name) = name {
-                if body.iter().any(|stmt| {
-                    matches!(stmt, Stmt::Declare(bindings) if bindings.iter().any(|(pattern,_,_)| {
-                        let mut names = Vec::new();
-                        pattern.names(&mut names);
-                        names.iter().any(|bound| bound == name)
-                    }))
-                }) {
+            if let Some(pattern) = pattern {
+                let mut catch_names = Vec::new();
+                pattern.names(&mut catch_names);
+                let mut unique = BTreeSet::new();
+                if catch_names.iter().any(|name| !unique.insert(name)) {
                     return Err(Error::Syntax {
                         offset: 0,
-                        message: "catch binding conflicts with lexical declaration",
+                        message: "duplicate catch binding",
                     });
                 }
-                self.declare(name, true)?;
-                self.emit(Op::Init(self.local(name).ok_or(Error::InvalidBytecode)?))?;
+                let mut body_vars = Vec::new();
+                for statement in body {
+                    var_names(statement, &mut body_vars);
+                }
+                if pattern.identifier().is_none()
+                    && catch_names.iter().any(|name| body_vars.contains(name))
+                    || body.iter().any(|stmt| {
+                        matches!(stmt, Stmt::Declare(bindings) if bindings.iter().any(|(pattern,_,_)| {
+                            let mut names = Vec::new();
+                            pattern.names(&mut names);
+                            names.iter().any(|bound| catch_names.contains(bound))
+                        }))
+                    })
+                {
+                    return Err(Error::Syntax {
+                        offset: 0,
+                        message: "catch binding conflicts with block declaration",
+                    });
+                }
+                for name in catch_names {
+                    self.declare(&name, true)?;
+                }
+                self.bind_pattern(pattern, true)?;
             } else {
                 self.emit(Op::Pop)?;
             }

@@ -642,7 +642,6 @@ fn unsupported_syntax_is_distinct_from_syntax_errors() {
         "function* g(){}",
         "async function* g(){}",
         "class C{x=1}",
-        "try{}catch({x}){}",
         "let x=0;x&&=1",
         "let x={};x?.y",
         "let x={...{a:1}}",

@@ -342,7 +342,7 @@ pub(crate) enum Stmt {
     Throw(Expr),
     Try {
         body: Vec<Stmt>,
-        catch: Option<(Option<String>, Vec<Stmt>)>,
+        catch: Option<(Option<BindingPattern>, Vec<Stmt>)>,
         finally: Option<Vec<Stmt>>,
     },
 }
@@ -996,18 +996,15 @@ impl Parser {
         self.need("{")?;
         let body = self.statements(true)?;
         let catch = if self.eat("catch") {
-            let name = if self.eat("(") {
-                if self.is("[") || self.is("{") {
-                    return Err(Self::unsupported("destructuring catch bindings"));
-                }
-                let name = self.name()?;
+            let pattern = if self.eat("(") {
+                let pattern = self.binding_pattern()?;
                 self.need(")")?;
-                Some(name)
+                Some(pattern)
             } else {
                 None
             };
             self.need("{")?;
-            Some((name, self.statements(true)?))
+            Some((pattern, self.statements(true)?))
         } else {
             None
         };
