@@ -48,17 +48,27 @@ pub fn object_prototype_intrinsic(name: &[u16]) -> Option<Intrinsic> {
 pub enum Intrinsic {
     /// `Object.prototype.hasOwnProperty` (20.1.3.2).
     ObjectPrototypeHasOwnProperty,
+    /// `Object.prototype.isPrototypeOf` (20.1.3.3).
+    ObjectPrototypeIsPrototypeOf,
+    /// `Object.prototype.propertyIsEnumerable` (20.1.3.4).
+    ObjectPrototypePropertyIsEnumerable,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 1] = [Self::ObjectPrototypeHasOwnProperty];
+    pub const ALL: [Self; 3] = [
+        Self::ObjectPrototypeHasOwnProperty,
+        Self::ObjectPrototypeIsPrototypeOf,
+        Self::ObjectPrototypePropertyIsEnumerable,
+    ];
 
     /// The identifier carried by the function object.
     #[must_use]
     pub const fn id(self) -> u32 {
         match self {
             Self::ObjectPrototypeHasOwnProperty => 0,
+            Self::ObjectPrototypeIsPrototypeOf => 1,
+            Self::ObjectPrototypePropertyIsEnumerable => 2,
         }
     }
 
@@ -66,6 +76,8 @@ impl Intrinsic {
     const fn index(self) -> usize {
         match self {
             Self::ObjectPrototypeHasOwnProperty => 0,
+            Self::ObjectPrototypeIsPrototypeOf => 1,
+            Self::ObjectPrototypePropertyIsEnumerable => 2,
         }
     }
 
@@ -74,6 +86,8 @@ impl Intrinsic {
     pub const fn from_id(id: u32) -> Option<Self> {
         match id {
             0 => Some(Self::ObjectPrototypeHasOwnProperty),
+            1 => Some(Self::ObjectPrototypeIsPrototypeOf),
+            2 => Some(Self::ObjectPrototypePropertyIsEnumerable),
             _ => None,
         }
     }
@@ -83,6 +97,8 @@ impl Intrinsic {
     pub const fn name(self) -> &'static str {
         match self {
             Self::ObjectPrototypeHasOwnProperty => "hasOwnProperty",
+            Self::ObjectPrototypeIsPrototypeOf => "isPrototypeOf",
+            Self::ObjectPrototypePropertyIsEnumerable => "propertyIsEnumerable",
         }
     }
 
@@ -90,7 +106,9 @@ impl Intrinsic {
     #[must_use]
     pub const fn length(self) -> u32 {
         match self {
-            Self::ObjectPrototypeHasOwnProperty => 1,
+            Self::ObjectPrototypeHasOwnProperty
+            | Self::ObjectPrototypeIsPrototypeOf
+            | Self::ObjectPrototypePropertyIsEnumerable => 1,
         }
     }
 }

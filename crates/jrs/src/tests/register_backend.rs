@@ -2375,6 +2375,12 @@ fn register_object_prototype_methods_run_as_native_intrinsics() -> Result<(), Er
         "let o={a:1};o.hasOwnProperty()",
         "let o={undefined:1};o.hasOwnProperty(undefined)",
         "let o={a:1};o.hasOwnProperty('a')&&o.hasOwnProperty('a')",
+        "let o={a:1};o.propertyIsEnumerable('a')",
+        "let o={a:1};o.propertyIsEnumerable('b')",
+        "let o={};o.propertyIsEnumerable('toString')",
+        "let o={a:1};o.isPrototypeOf({})",
+        "let o={a:1};o.isPrototypeOf(1)",
+        "let o={a:1};o.isPrototypeOf('a')",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -2402,6 +2408,7 @@ fn register_lowering_rejects_reads_the_prototype_chain_cannot_answer() -> Result
     for source in [
         // 20.1.3 names %Object.prototype% owns whose intrinsic does not exist yet.
         "let o={};o.toString",
+        "let o={};o.valueOf()",
         "let o={x:1};o.valueOf",
         "let o={};o['toString']",
         "let o={};o.toString()",

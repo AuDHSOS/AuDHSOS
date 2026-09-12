@@ -2007,11 +2007,11 @@ impl RegisterLowerer {
         };
         let function = self.allocate_register()?;
         self.code.emit(Instruction::Star(function));
+        // An intrinsic reads its arguments as values, so any lowered
+        // expression may be one; only a bytecode callee needs typed parameters.
         let mut argument_registers = Vec::new();
         for argument in arguments {
-            if !self.lower(argument)?.is_primitive() {
-                return None;
-            }
+            self.lower(argument)?;
             let register = self.allocate_register()?;
             self.code.emit(Instruction::Star(register));
             argument_registers.push(register);
@@ -4160,7 +4160,11 @@ fn register_expression_type(
 /// The type one intrinsic returns.
 const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> RegisterType {
     match intrinsic {
-        crate::engine::realm::Intrinsic::ObjectPrototypeHasOwnProperty => RegisterType::Boolean,
+        crate::engine::realm::Intrinsic::ObjectPrototypeHasOwnProperty
+        | crate::engine::realm::Intrinsic::ObjectPrototypeIsPrototypeOf
+        | crate::engine::realm::Intrinsic::ObjectPrototypePropertyIsEnumerable => {
+            RegisterType::Boolean
+        }
     }
 }
 

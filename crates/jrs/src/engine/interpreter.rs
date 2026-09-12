@@ -769,6 +769,34 @@ impl RegisterVM {
                 let own = heap.own_named_flags(object, key)?;
                 Ok(Value::from_bool(own.is_some()))
             }
+            // 20.1.3.3: a non-Object argument is false without coercing `this`.
+            Intrinsic::ObjectPrototypeIsPrototypeOf => {
+                let Some(mut value) = argument(self, 0)?.as_object() else {
+                    return Ok(VALUE_FALSE);
+                };
+                let object = Self::coerce_object(call.receiver, heap, realm)?;
+                loop {
+                    let prototype = heap
+                        .get_object(value)
+                        .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                        .prototype;
+                    let Some(prototype) = prototype.as_object() else {
+                        return Ok(VALUE_FALSE);
+                    };
+                    if prototype == object {
+                        return Ok(VALUE_TRUE);
+                    }
+                    value = prototype;
+                }
+            }
+            // 20.1.3.4: an own property that is absent answers false.
+            Intrinsic::ObjectPrototypePropertyIsEnumerable => {
+                let key = argument(self, 0)?;
+                let key = property_key(key, heap)?;
+                let object = Self::coerce_object(call.receiver, heap, realm)?;
+                let own = heap.own_named_flags(object, key)?;
+                Ok(Value::from_bool(own.is_some_and(|flags| flags.enumerable)))
+            }
         }
     }
 
