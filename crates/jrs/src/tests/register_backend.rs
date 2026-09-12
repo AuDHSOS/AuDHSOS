@@ -227,6 +227,53 @@ fn fresh_object_rest_bindings_copy_shape_slots() -> Result<(), Error> {
 }
 
 #[test]
+fn identifier_destructuring_assignments_use_register_storage() -> Result<(), Error> {
+    for source in [
+        "let x=0,y=0;[x,y]=[20,22];x+y",
+        "let x=0,y=0;[x,,y]=[20,0,22];x+y",
+        "let x=0,y=0;[x=20,y=x+2]=[];x+y",
+        "let x=0,y=0;[[x],{value:y}]=[[20],{value:22}];x+y",
+        "let x=0,rest=[];[x,...rest]=[1,20,22];x+rest[0]+rest[1]",
+        "let x=0,y=0;({x,y}={x:20,y:22});x+y",
+        "let x=0,y=0;({x:{y}}={x:{y:42}});y",
+        "let x=0,y=0;({x=20,y=x+2}={});x+y",
+        "let x=0,rest={};({x,...rest}={x:1,y:41});x+rest.y",
+        "let x=0;let input=[42];let same=([x]=input)===input;same&&x===42",
+        "let x=0;let input={x:42};let same=({x}=input)===input;same&&x===42",
+        "function f(){let x=0;[x]=[42];return x}f()",
+        "let i=0,x=0;while(i<1){[x]=[42];i++}x",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn observable_destructuring_assignments_stay_on_legacy_backend() -> Result<(), Error> {
+    for source in [
+        "let target={};[target.x]=[42];target.x",
+        "let target={};({x:target.x}={x:42});target.x",
+        "const x=0;[x]=[1]",
+        "let x=0;[x]={0:42,length:1}",
+        "let x=0;let input=[1];input[Symbol.iterator]=function(){return {next(){return {value:42}}}};[x]=input;x",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(!program.uses_register_backend(), "{source}");
+        let _ = Runtime::new(Limits::default()).run(&program, &mut SilentHost);
+    }
+    Ok(())
+}
+
+#[test]
 fn primitive_expressions_run_through_register_bytecode_and_match_legacy() -> Result<(), Error> {
     for source in [
         "1 + 2 * 3",
@@ -1507,6 +1554,16 @@ fn captured_var_mutations_wait_for_deoptimization() -> Result<(), Error> {
     for source in [
         "let x=1;function g(){return x}let {y=(x='a')}={};g()+1",
         "var x=1;function g(){return x}var {y=(x='a')}={};g()",
+        "var x=1,y=0;function g(){return x}[x]=[2];g()",
+        "var x=1,y=0;function g(){return x}[[x]]=[[2]];g()",
+        "var x=1;function g(){return x}[...x]=[2];g()",
+        "var x=1,y=0;function g(){return x}[y=(x=2)]=[];g()",
+        "var x=1,y=0;function g(){return x}[y]=(x=[2]);g()",
+        "var x=1,y=0;function g(){return x}({a:x}={a:2});g()",
+        "var x=1,y=0;function g(){return x}({a:{b:x}}={a:{b:2}});g()",
+        "var x=1,y=0;function g(){return x}({[x='key']:y}={key:2});g()",
+        "var x=1,y=0;function g(){return x}({a:y=(x=2)}={});g()",
+        "var x=1;function g(){return x}({...x}={a:2});g()",
         "var x=1;function g(){return x}x='a';g()",
         "var x=1;var g=function(){return x};x='a';g()",
         "var f=1;function f(){return f}typeof f",
@@ -1531,6 +1588,31 @@ fn captured_var_mutations_wait_for_deoptimization() -> Result<(), Error> {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
         Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn destructuring_other_bindings_preserves_captured_register_contexts() -> Result<(), Error> {
+    for source in [
+        "function f(){var x=40,y=0;function g(){return x}[y]=[2];return g()+y}f()",
+        "function f(){var x=40,y=0;function g(){return x}[,y]=[0,2];return g()+y}f()",
+        "function f(){var x=40,y=0;function g(){return x}[y=2]=[];return g()+y}f()",
+        "function f(){var x=40,y=[];function g(){return x}[...y]=[2];return g()+y[0]}f()",
+        "function f(){var x=40,y=0;function g(){return x}({a:y}={a:2});return g()+y}f()",
+        "function f(){var x=40,y=0;function g(){return x}({a:y=2}={});return g()+y}f()",
+        "function f(){var x=40,y={};function g(){return x}({...y}={a:2});return g()+y.a}f()",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
     }
     Ok(())
 }

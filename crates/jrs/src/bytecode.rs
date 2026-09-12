@@ -1175,6 +1175,9 @@ impl RegisterLowerer {
             ExprKind::Assign(name, operator, right) => {
                 self.lower_assignment(name, *operator, right)?
             }
+            ExprKind::Destructure(pattern, right) => {
+                self.lower_destructuring_assignment(pattern, right)?
+            }
             ExprKind::Update(name, add, prefix) => self.lower_update(name, *add, *prefix)?,
             ExprKind::Conditional(condition, yes, no) => {
                 self.lower_conditional(condition, yes, no)?
@@ -1190,6 +1193,119 @@ impl RegisterLowerer {
             _ => return None,
         };
         Some(result)
+    }
+
+    fn lower_destructuring_assignment(
+        &mut self,
+        pattern: &parser::AssignmentPattern,
+        right: &Expr,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        if !register_assignment_pattern_supported(pattern) {
+            return None;
+        }
+        let value_type = self.lower(right)?;
+        if !value_type.is_object() {
+            return None;
+        }
+        let result = self.allocate_register()?;
+        self.code.emit(Instruction::Star(result));
+        self.assign_pattern(value_type, pattern)?;
+        self.code.emit(Instruction::Ldar(result));
+        self.release_register(result)?;
+        Some(value_type)
+    }
+
+    fn assign_pattern(
+        &mut self,
+        value_type: RegisterType,
+        pattern: &parser::AssignmentPattern,
+    ) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        match pattern {
+            parser::AssignmentPattern::Target(target) => {
+                let name = target.reference_name()?;
+                self.assign_name(value_type, name)?;
+            }
+            parser::AssignmentPattern::Array(array) => {
+                if !matches!(value_type, RegisterType::Array(_)) {
+                    return None;
+                }
+                let source = self.allocate_register()?;
+                self.code.emit(Instruction::Star(source));
+                for (index, element) in array.elements.iter().enumerate() {
+                    let parser::AssignmentArrayElement::Element {
+                        target,
+                        initializer,
+                    } = element
+                    else {
+                        continue;
+                    };
+                    let index = u32::try_from(index).ok()?;
+                    let mut element_type =
+                        self.lower_array_index_from_register(source, value_type, index)?;
+                    if let Some(initializer) = initializer {
+                        element_type = self.lower_binding_default(element_type, initializer)?;
+                    }
+                    self.assign_pattern(element_type, target)?;
+                }
+                if let Some(rest) = &array.rest {
+                    let start = u32::try_from(array.elements.len()).ok()?;
+                    let (rest_type, rest_array) =
+                        self.lower_array_rest_from_register(source, value_type, start)?;
+                    self.code.emit(Instruction::Ldar(rest_array));
+                    self.assign_pattern(rest_type, rest)?;
+                    self.release_register(rest_array)?;
+                }
+                self.release_register(source)?;
+            }
+            parser::AssignmentPattern::Object(object) => {
+                if !value_type.is_object()
+                    || object.rest.is_some() && !matches!(value_type, RegisterType::Object(_))
+                {
+                    return None;
+                }
+                let source = self.allocate_register()?;
+                self.code.emit(Instruction::Star(source));
+                let mut excluded = Vec::new();
+                for property in &object.properties {
+                    if object.rest.is_some() {
+                        excluded.push(Self::static_property_key_units(&property.key)?);
+                    }
+                    let mut property_type = self.lower_property_from_register(
+                        source,
+                        value_type,
+                        &property.key,
+                        Self::static_property_name(&property.key).is_none(),
+                        true,
+                    )?;
+                    if let Some(initializer) = &property.initializer {
+                        property_type = self.lower_binding_default(property_type, initializer)?;
+                    }
+                    self.assign_pattern(property_type, &property.target)?;
+                }
+                if let Some(rest) = &object.rest {
+                    let name = rest.reference_name()?;
+                    let (rest_type, rest_object) =
+                        self.lower_object_rest_from_register(source, value_type, &excluded)?;
+                    self.code.emit(Instruction::Ldar(rest_object));
+                    self.assign_name(rest_type, name)?;
+                    self.release_register(rest_object)?;
+                }
+                self.release_register(source)?;
+            }
+        }
+        Some(())
+    }
+
+    fn assign_name(&mut self, value_type: RegisterType, name: &str) -> Option<()> {
+        let binding = *self.bindings.get(name)?;
+        if !binding.mutable || binding.value_type.is_none() || binding.stable_function_identity {
+            return None;
+        }
+        self.store_binding(binding);
+        self.bindings.get_mut(name)?.value_type = Some(value_type);
+        Some(())
     }
 
     fn lower_conditional(
@@ -3434,8 +3550,11 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         }
         ExprKind::Function(function) => register_function_writes_names(function, names)?,
         ExprKind::Literal(_) | ExprKind::Name(_) => false,
-        ExprKind::Destructure(_, _)
-        | ExprKind::Regex(_, _)
+        ExprKind::Destructure(pattern, right) => {
+            register_expression_writes_names(right, names)?
+                || register_assignment_pattern_writes_names(pattern, names)?
+        }
+        ExprKind::Regex(_, _)
         | ExprKind::Template(_, _)
         | ExprKind::Await(_)
         | ExprKind::Construct(_, _)
@@ -3447,6 +3566,54 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         | ExprKind::Spread(_)
         | ExprKind::UpdateMember(_, _, _, _) => return None,
     })
+}
+
+fn register_assignment_pattern_writes_names(
+    pattern: &parser::AssignmentPattern,
+    names: &BTreeSet<String>,
+) -> Option<bool> {
+    match pattern {
+        parser::AssignmentPattern::Target(target) => Some(names.contains(target.reference_name()?)),
+        parser::AssignmentPattern::Array(array) => {
+            for element in &array.elements {
+                if let parser::AssignmentArrayElement::Element {
+                    target,
+                    initializer,
+                } = element
+                {
+                    if register_assignment_pattern_writes_names(target, names)? {
+                        return Some(true);
+                    }
+                    if let Some(initializer) = initializer
+                        && register_expression_writes_names(initializer, names)?
+                    {
+                        return Some(true);
+                    }
+                }
+            }
+            if let Some(rest) = &array.rest {
+                return register_assignment_pattern_writes_names(rest, names);
+            }
+            Some(false)
+        }
+        parser::AssignmentPattern::Object(object) => {
+            for property in &object.properties {
+                if register_expression_writes_names(&property.key, names)?
+                    || register_assignment_pattern_writes_names(&property.target, names)?
+                {
+                    return Some(true);
+                }
+                if let Some(initializer) = &property.initializer
+                    && register_expression_writes_names(initializer, names)?
+                {
+                    return Some(true);
+                }
+            }
+            object.rest.as_ref().map_or(Some(false), |rest| {
+                Some(names.contains(rest.reference_name()?))
+            })
+        }
+    }
 }
 
 fn register_function_writes_names(function: &Function, names: &BTreeSet<String>) -> Option<bool> {
@@ -3612,8 +3779,11 @@ fn register_expression_references(
             nested_free_names.extend(register_function_scope(function)?.free_names);
         }
         ExprKind::Literal(_) => {}
-        ExprKind::Destructure(_, _)
-        | ExprKind::Regex(_, _)
+        ExprKind::Destructure(pattern, right) => {
+            register_expression_references(right, names, nested_free_names)?;
+            register_assignment_pattern_references(pattern, names, nested_free_names)?;
+        }
+        ExprKind::Regex(_, _)
         | ExprKind::Template(_, _)
         | ExprKind::Await(_)
         | ExprKind::Construct(_, _)
@@ -3624,6 +3794,48 @@ fn register_expression_references(
         | ExprKind::This
         | ExprKind::Spread(_)
         | ExprKind::UpdateMember(_, _, _, _) => return None,
+    }
+    Some(())
+}
+
+fn register_assignment_pattern_references(
+    pattern: &parser::AssignmentPattern,
+    names: &mut BTreeSet<String>,
+    nested_free_names: &mut BTreeSet<String>,
+) -> Option<()> {
+    match pattern {
+        parser::AssignmentPattern::Target(target) => {
+            names.insert(String::from(target.reference_name()?));
+        }
+        parser::AssignmentPattern::Array(array) => {
+            for element in &array.elements {
+                if let parser::AssignmentArrayElement::Element {
+                    target,
+                    initializer,
+                } = element
+                {
+                    register_assignment_pattern_references(target, names, nested_free_names)?;
+                    if let Some(initializer) = initializer {
+                        register_expression_references(initializer, names, nested_free_names)?;
+                    }
+                }
+            }
+            if let Some(rest) = &array.rest {
+                register_assignment_pattern_references(rest, names, nested_free_names)?;
+            }
+        }
+        parser::AssignmentPattern::Object(object) => {
+            for property in &object.properties {
+                register_expression_references(&property.key, names, nested_free_names)?;
+                register_assignment_pattern_references(&property.target, names, nested_free_names)?;
+                if let Some(initializer) = &property.initializer {
+                    register_expression_references(initializer, names, nested_free_names)?;
+                }
+            }
+            if let Some(rest) = &object.rest {
+                names.insert(String::from(rest.reference_name()?));
+            }
+        }
     }
     Some(())
 }
@@ -4019,6 +4231,34 @@ fn register_binding_pattern_supported(pattern: &parser::BindingPattern) -> bool 
                     .properties
                     .iter()
                     .all(|property| RegisterLowerer::binding_property_name(property).is_some()))
+        }
+    }
+}
+
+fn register_assignment_pattern_supported(pattern: &parser::AssignmentPattern) -> bool {
+    match pattern {
+        parser::AssignmentPattern::Target(target) => target.reference_name().is_some(),
+        parser::AssignmentPattern::Array(array) => {
+            array.elements.iter().all(|element| match element {
+                parser::AssignmentArrayElement::Elision => true,
+                parser::AssignmentArrayElement::Element { target, .. } => {
+                    register_assignment_pattern_supported(target)
+                }
+            }) && array
+                .rest
+                .as_deref()
+                .is_none_or(register_assignment_pattern_supported)
+        }
+        parser::AssignmentPattern::Object(object) => {
+            object.properties.iter().all(|property| {
+                register_computed_property_key_supported(&property.key)
+                    && register_assignment_pattern_supported(&property.target)
+            }) && object.rest.as_ref().is_none_or(|rest| {
+                rest.reference_name().is_some()
+                    && object.properties.iter().all(|property| {
+                        RegisterLowerer::static_property_key_units(&property.key).is_some()
+                    })
+            })
         }
     }
 }
