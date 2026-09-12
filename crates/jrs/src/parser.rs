@@ -322,6 +322,7 @@ pub(crate) enum Stmt {
     Var(Vec<(BindingPattern, Option<Expr>)>),
     If(Expr, Box<Stmt>, Option<Box<Stmt>>),
     While(Expr, Box<Stmt>),
+    DoWhile(Box<Stmt>, Expr),
     For(Box<Stmt>, Option<Expr>, Option<Expr>, Box<Stmt>),
     Switch(Expr, Vec<(Option<Expr>, Vec<Stmt>)>),
     ForIn {
@@ -592,7 +593,7 @@ impl Parser {
         {
             return Err(Self::unsupported("using declarations"));
         }
-        if self.is("do") || self.is("with") || self.is("debugger") {
+        if self.is("with") || self.is("debugger") {
             return Err(Self::unsupported("statement form"));
         }
         if matches!(&self.token()?.kind, Kind::Word(word) if !reserved(word))
@@ -670,6 +671,24 @@ impl Parser {
             self.loops = self.loops.saturating_sub(1);
             return Ok(Stmt::While(cond, Box::new(body)));
         }
+        if self.eat("do") {
+            self.loops = self.loops.saturating_add(1);
+            let body = self.single_statement();
+            self.loops = self.loops.saturating_sub(1);
+            let body = body?;
+            if !self.eat("while") {
+                return Err(self.error("expected while after do statement"));
+            }
+            if !self.eat("(") {
+                return Err(self.error("expected ( after do-while keyword"));
+            }
+            let condition = self.sequence()?;
+            if !self.eat(")") {
+                return Err(self.error("expected ) after do-while condition"));
+            }
+            self.semicolon()?;
+            return Ok(Stmt::DoWhile(Box::new(body), condition));
+        }
         if self.eat("for") {
             if self.is("await") {
                 return Err(Self::unsupported("async iteration"));
@@ -737,7 +756,12 @@ impl Parser {
         Ok(Stmt::Expr(expr))
     }
     fn single_statement(&mut self) -> Result<Stmt, Error> {
-        if self.is("let") || self.is("const") || self.is("function") || self.is("class") {
+        if self.is("let")
+            || self.is("const")
+            || self.is("function")
+            || self.is("class")
+            || self.async_declaration_head()
+        {
             return Err(self.error("lexical declaration requires a block"));
         }
         self.statement()

@@ -2529,6 +2529,9 @@ impl RegisterLowerer {
             Stmt::If(condition, yes, no) => self.lower_if(condition, yes, no.as_deref())?,
             Stmt::Block(body) => self.lower_block(body)?,
             Stmt::While(condition, body) => RegisterFlow::Value(self.lower_while(condition, body)?),
+            Stmt::DoWhile(body, condition) => {
+                RegisterFlow::Value(self.lower_do_while(body, condition)?)
+            }
             Stmt::For(initializer, condition, step, body) => RegisterFlow::Value(self.lower_for(
                 initializer,
                 condition.as_ref(),
@@ -2754,6 +2757,68 @@ impl RegisterLowerer {
         self.release_register(result_register)?;
         Some(match flow {
             RegisterFlow::Value(value_type) => RegisterType::Undefined.merge(value_type),
+            RegisterFlow::Empty | RegisterFlow::Abrupt => RegisterType::Undefined,
+        })
+    }
+
+    fn lower_do_while(&mut self, body: &Stmt, condition: &Expr) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        self.code.emit(Instruction::LdaUndefined);
+        let result_register = self.allocate_register()?;
+        self.code.emit(Instruction::Star(result_register));
+        let mut bindings_at_head = self.bindings.clone();
+        infer_register_var_types_to_fixed_point(body, &mut bindings_at_head)?;
+        self.bindings = bindings_at_head.clone();
+        let head = self.code.instructions.len();
+        self.code.emit(Instruction::Ldar(result_register));
+        self.loops.push(RegisterLoop {
+            breaks: Vec::new(),
+            continues: Vec::new(),
+            result_register,
+            bindings: bindings_at_head.clone(),
+            completion_depth: self.completions.len(),
+            object_layouts: bindings_at_head
+                .values()
+                .filter_map(|binding| match binding.value_type {
+                    Some(RegisterType::Object(id) | RegisterType::Array(id)) => self
+                        .object_layouts
+                        .get(&id)
+                        .cloned()
+                        .map(|layout| (id, layout)),
+                    _ => None,
+                })
+                .collect(),
+        });
+        let flow = self.lower_statement(body)?;
+        let loop_state = self.loops.pop()?;
+        if flow != RegisterFlow::Abrupt {
+            if !register_bindings_fit(&self.bindings, &bindings_at_head)
+                || !self.loop_layouts_match(&loop_state.object_layouts)
+            {
+                return None;
+            }
+            self.code.emit(Instruction::Star(result_register));
+        }
+        let condition_start = self.code.instructions.len();
+        for jump in loop_state.continues {
+            self.patch_jump(jump, condition_start)?;
+        }
+        self.bindings = bindings_at_head.clone();
+        self.lower(condition)?;
+        if self.bindings != bindings_at_head {
+            return None;
+        }
+        let back_edge = self.code.emit(Instruction::JumpIfTrue(0));
+        let done = self.code.instructions.len();
+        self.code.emit(Instruction::Ldar(result_register));
+        self.patch_jump(back_edge, head)?;
+        for jump in loop_state.breaks {
+            self.patch_jump(jump, done)?;
+        }
+        self.bindings = bindings_at_head;
+        self.release_register(result_register)?;
+        Some(match flow {
+            RegisterFlow::Value(value_type) => value_type,
             RegisterFlow::Empty | RegisterFlow::Abrupt => RegisterType::Undefined,
         })
     }
@@ -3525,7 +3590,9 @@ fn register_statement_var_names(
                 register_statement_var_names(no, names, initialized_only)?;
             }
         }
-        Stmt::While(_, body) => register_statement_var_names(body, names, initialized_only)?,
+        Stmt::While(_, body) | Stmt::DoWhile(body, _) => {
+            register_statement_var_names(body, names, initialized_only)?;
+        }
         Stmt::For(initializer, _, _, body) => {
             register_statement_var_names(initializer, names, initialized_only)?;
             register_statement_var_names(body, names, initialized_only)?;
@@ -3577,7 +3644,9 @@ fn infer_register_var_types(
                 infer_register_var_types(no, bindings)?;
             }
         }
-        Stmt::While(_, body) => infer_register_var_types(body, bindings)?,
+        Stmt::While(_, body) | Stmt::DoWhile(body, _) => {
+            infer_register_var_types(body, bindings)?;
+        }
         Stmt::For(initializer, _, _, body) => {
             infer_register_var_types(initializer, bindings)?;
             infer_register_var_types(body, bindings)?;
@@ -3677,6 +3746,10 @@ fn register_statement_writes_names(statement: &Stmt, names: &BTreeSet<String>) -
         Stmt::While(condition, body) => {
             register_expression_writes_names(condition, names)?
                 || register_statement_writes_names(body, names)?
+        }
+        Stmt::DoWhile(body, condition) => {
+            register_statement_writes_names(body, names)?
+                || register_expression_writes_names(condition, names)?
         }
         Stmt::For(initializer, condition, step, body) => {
             register_statement_writes_names(initializer, names)?
@@ -4148,6 +4221,10 @@ fn register_statement_references(
             register_expression_references(condition, names, nested_free_names)?;
             register_statement_references(body, names, nested_free_names)?;
         }
+        Stmt::DoWhile(body, condition) => {
+            register_statement_references(body, names, nested_free_names)?;
+            register_expression_references(condition, names, nested_free_names)?;
+        }
         Stmt::For(initializer, condition, step, body) => {
             register_statement_references(initializer, names, nested_free_names)?;
             if let Some(condition) = condition {
@@ -4204,6 +4281,7 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
             | Stmt::Block(_)
             | Stmt::If(_, _, _)
             | Stmt::While(_, _)
+            | Stmt::DoWhile(_, _)
             | Stmt::For(_, _, _, _) => saw_expression = true,
             Stmt::Empty => {}
             _ => return None,
@@ -4229,7 +4307,7 @@ fn register_statement_has_lexical_block(statement: &Stmt) -> bool {
                     .as_deref()
                     .is_some_and(register_statement_has_lexical_block)
         }
-        Stmt::While(_, body) | Stmt::For(_, _, _, body) => {
+        Stmt::While(_, body) | Stmt::DoWhile(body, _) | Stmt::For(_, _, _, body) => {
             register_statement_has_lexical_block(body)
         }
         Stmt::Function(_, function) => function
@@ -4387,7 +4465,9 @@ fn register_statement_has_unsupported_binding_pattern(statement: &Stmt) -> bool 
                     .as_deref()
                     .is_some_and(register_statement_has_unsupported_binding_pattern)
         }
-        Stmt::While(_, body) => register_statement_has_unsupported_binding_pattern(body),
+        Stmt::While(_, body) | Stmt::DoWhile(body, _) => {
+            register_statement_has_unsupported_binding_pattern(body)
+        }
         Stmt::For(initializer, _, _, body) => {
             register_statement_has_unsupported_binding_pattern(initializer)
                 || register_statement_has_unsupported_binding_pattern(body)
@@ -4559,6 +4639,8 @@ fn register_statement_stack_requirement(statement: &Stmt) -> usize {
         }),
         Stmt::While(condition, body) => register_expression_stack_requirement(condition)
             .max(register_statement_stack_requirement(body)),
+        Stmt::DoWhile(body, condition) => register_statement_stack_requirement(body)
+            .max(register_expression_stack_requirement(condition)),
         Stmt::For(initializer, condition, step, body) => {
             register_statement_stack_requirement(initializer)
                 .max(
@@ -4778,6 +4860,7 @@ impl Compiler {
                 self.patch(jump, self.program.code.len())?;
             }
             Stmt::While(cond, body) => self.loop_body(Some(cond), None, body, &[])?,
+            Stmt::DoWhile(body, condition) => self.do_while_body(body, condition)?,
             Stmt::For(init, cond, step, body) => {
                 if let Stmt::Declare(bindings) = init.as_ref() {
                     let mut names = Vec::new();
@@ -4919,6 +5002,26 @@ impl Compiler {
         }
         for at in state.continues {
             self.patch(at, next)?;
+        }
+        Ok(())
+    }
+
+    fn do_while_body(&mut self, body: &Stmt, condition: &Expr) -> Result<(), Error> {
+        self.emit(Op::Constant(Value::Undefined))?;
+        self.emit(Op::Result)?;
+        let head = self.program.code.len();
+        self.loops.push(Loop::default());
+        self.statement(body)?;
+        let condition_start = self.program.code.len();
+        self.expression(condition)?;
+        self.emit(Op::Branch(head, Branch::True))?;
+        let done = self.program.code.len();
+        let state = self.loops.pop().ok_or(Error::InvalidBytecode)?;
+        for at in state.breaks {
+            self.patch(at, done)?;
+        }
+        for at in state.continues {
+            self.patch(at, condition_start)?;
         }
         Ok(())
     }
@@ -6315,7 +6418,7 @@ fn var_names(stmt: &Stmt, names: &mut Vec<String>) {
                 var_names(no, names);
             }
         }
-        Stmt::While(_, body) => var_names(body, names),
+        Stmt::While(_, body) | Stmt::DoWhile(body, _) => var_names(body, names),
         Stmt::For(init, _, _, body) => {
             var_names(init, names);
             var_names(body, names);

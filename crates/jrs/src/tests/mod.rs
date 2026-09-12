@@ -232,6 +232,9 @@ fn loops_control_flow_and_slot_reset() {
             "let i=0; while(i<3){let x; if(x !== undefined)break; x=9;i++;}i",
             3.0,
         ),
+        ("let i=0;do{i++}while(i<3);i", 3.0),
+        ("let i=0;do{i++;if(i<3)continue;break}while(true);i", 3.0),
+        ("let i=0;do i++;while(false);i", 1.0),
         ("if (false) 3; else 4", 4.0),
         ("if(true) if(false) 3; else 4;", 4.0),
     ] {
@@ -245,6 +248,18 @@ fn loops_control_flow_and_slot_reset() {
         eval("let i=0; while(i<2){ if(i==1)x; let x=3; i++; }"),
         Err(Error::Reference { .. })
     ));
+    for source in [
+        "do let x=1;while(false)",
+        "do async function f(){}while(false)",
+        "do{}while false",
+        "do{}while(true",
+        "do var x=1;var y=2;while(false)",
+    ] {
+        assert!(matches!(
+            compile(source, Limits::default()),
+            Err(Error::Syntax { .. })
+        ));
+    }
 }
 
 #[test]
@@ -648,7 +663,6 @@ fn unsupported_syntax_is_distinct_from_syntax_errors() {
         "let x={*g(){}}",
         "let x={async *g(){}}",
         "label: 0",
-        "do{}while(false)",
         "123n",
         "let café=1",
     ] {

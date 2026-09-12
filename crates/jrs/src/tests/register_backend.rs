@@ -1976,6 +1976,49 @@ fn blocks_updates_and_while_loops_match_legacy_execution() -> Result<(), Error> 
 }
 
 #[test]
+fn do_while_loops_match_legacy_completion_and_control_flow() -> Result<(), Error> {
+    for source in [
+        "let i=0;do{i++}while(i<3);i",
+        "let i=0;do i++;while(false);i",
+        "let i=0;do{i++;if(i<3)continue;break}while(true);i",
+        "let i=0,s=0;do{s+=i;i++}while(i<4);s",
+        "let i=0;do{if(i===2)break;i++}while(true);i",
+        "function f(){let i=0;do{if(i===2)return i;i++}while(true)}f()",
+        "let i=0;do{let x=i;i=x+1}while(i<3);i",
+        "let i=0;do{i++}while(false)\ni",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn register_do_while_checks_fuel_at_the_condition_back_edge() -> Result<(), Error> {
+    let limits = Limits {
+        fuel: 4,
+        ..Limits::default()
+    };
+    let program = compile("do{}while(true)", limits)?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::new(limits).run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "execution fuel"
+        })
+    );
+    Ok(())
+}
+
+#[test]
 fn register_while_checks_fuel_at_back_edges() -> Result<(), Error> {
     let limits = Limits {
         fuel: 100,
