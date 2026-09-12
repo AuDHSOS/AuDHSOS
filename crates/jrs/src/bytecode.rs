@@ -431,8 +431,12 @@ impl Program {
     }
     /// Number of statically allocated binding slots.
     #[must_use]
-    pub const fn binding_count(&self) -> usize {
-        self.slots.len()
+    pub fn binding_count(&self) -> usize {
+        if let Some(code) = &self.register_code {
+            usize::from(code.binding_count)
+        } else {
+            self.slots.len()
+        }
     }
 
     /// Returns whether this Program executes through verified Register bytecode.
@@ -610,6 +614,8 @@ struct RegisterLowerer {
     next_register: u16,
     register_count: u16,
     local_count: u16,
+    active_binding_count: u16,
+    max_binding_count: u16,
     bindings: BTreeMap<String, RegisterBinding>,
     loops: Vec<RegisterLoop>,
     completions: Vec<crate::engine::bytecode::Reg>,
@@ -647,6 +653,8 @@ struct RegisterSnapshot {
     string_constants: usize,
     next_register: u16,
     register_count: u16,
+    active_binding_count: u16,
+    max_binding_count: u16,
     bindings: BTreeMap<String, RegisterBinding>,
     next_object_id: u32,
     object_layouts: BTreeMap<u32, RegisterObjectLayout>,
@@ -676,6 +684,8 @@ impl RegisterLowerer {
             next_register: 0,
             register_count: 0,
             local_count: 0,
+            active_binding_count: 0,
+            max_binding_count: 0,
             bindings: BTreeMap::new(),
             loops: Vec::new(),
             completions: Vec::new(),
@@ -697,6 +707,8 @@ impl RegisterLowerer {
         }
         let register = crate::engine::bytecode::Reg(self.local_count);
         self.local_count = self.local_count.checked_add(1)?;
+        self.active_binding_count = self.active_binding_count.checked_add(1)?;
+        self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
         self.next_register = self.local_count;
         self.register_count = self.register_count.max(self.local_count);
         self.bindings.insert(
@@ -960,6 +972,8 @@ impl RegisterLowerer {
             string_constants: self.code.string_constants.len(),
             next_register: self.next_register,
             register_count: self.register_count,
+            active_binding_count: self.active_binding_count,
+            max_binding_count: self.max_binding_count,
             bindings: self.bindings.clone(),
             next_object_id: self.next_object_id,
             object_layouts: self.object_layouts.clone(),
@@ -982,6 +996,8 @@ impl RegisterLowerer {
             .truncate(snapshot.string_constants);
         self.next_register = snapshot.next_register;
         self.register_count = snapshot.register_count;
+        self.active_binding_count = snapshot.active_binding_count;
+        self.max_binding_count = snapshot.max_binding_count;
         self.bindings = snapshot.bindings;
         self.next_object_id = snapshot.next_object_id;
         self.object_layouts = snapshot.object_layouts;
@@ -1297,7 +1313,7 @@ impl RegisterLowerer {
         }
         child.code.register_count = child.register_count;
         child.code.parameter_count = u16::try_from(function.parameters.len()).ok()?;
-        child.code.binding_count = child.local_count;
+        child.code.binding_count = child.max_binding_count;
         child.code.self_register = self_register;
         let nested_functions = core::mem::take(&mut child.code.functions);
         self.code.functions.push(child.code);
@@ -1954,33 +1970,7 @@ impl RegisterLowerer {
         let flow = match statement {
             Stmt::Expr(expression) => RegisterFlow::Value(self.lower(expression)?),
             Stmt::If(condition, yes, no) => self.lower_if(condition, yes, no.as_deref())?,
-            Stmt::Block(body) => {
-                let result_register = self.allocate_register()?;
-                self.code
-                    .emit(crate::engine::bytecode::Instruction::Star(result_register));
-                self.completions.push(result_register);
-                let mut result_type = None;
-                for statement in body {
-                    match self.lower_statement(statement)? {
-                        RegisterFlow::Empty => {}
-                        RegisterFlow::Value(value_type) => {
-                            self.code
-                                .emit(crate::engine::bytecode::Instruction::Star(result_register));
-                            result_type = Some(value_type);
-                        }
-                        RegisterFlow::Abrupt => {
-                            self.completions.pop()?;
-                            self.release_register(result_register)?;
-                            return Some(RegisterFlow::Abrupt);
-                        }
-                    }
-                }
-                self.completions.pop()?;
-                self.code
-                    .emit(crate::engine::bytecode::Instruction::Ldar(result_register));
-                self.release_register(result_register)?;
-                result_type.map_or(RegisterFlow::Empty, RegisterFlow::Value)
-            }
+            Stmt::Block(body) => self.lower_block(body)?,
             Stmt::While(condition, body) => RegisterFlow::Value(self.lower_while(condition, body)?),
             Stmt::For(initializer, condition, step, body) => RegisterFlow::Value(self.lower_for(
                 initializer,
@@ -2022,6 +2012,108 @@ impl RegisterLowerer {
             _ => return None,
         };
         Some(flow)
+    }
+
+    fn lower_block(&mut self, body: &[Stmt]) -> Option<RegisterFlow> {
+        use crate::engine::bytecode::Instruction;
+        let result_register = self.allocate_register()?;
+        self.code.emit(Instruction::Star(result_register));
+        let scoped_bindings = self.enter_block_scope(body)?;
+        self.completions.push(result_register);
+        let mut result_type = None;
+        let mut flow = RegisterFlow::Empty;
+        for statement in body {
+            flow = match statement {
+                Stmt::Declare(bindings) => {
+                    for (pattern, _, initializer) in bindings {
+                        if let Some(initializer) = initializer {
+                            self.initialize_pattern(pattern, initializer)?;
+                        } else {
+                            self.initialize(pattern.identifier()?, None)?;
+                        }
+                        let mut names = Vec::new();
+                        pattern.names(&mut names);
+                        if names.iter().any(|name| {
+                            !self
+                                .bindings
+                                .get(name)
+                                .and_then(|binding| binding.value_type)
+                                .is_some_and(RegisterType::is_primitive)
+                        }) {
+                            return None;
+                        }
+                    }
+                    RegisterFlow::Empty
+                }
+                _ => self.lower_statement(statement)?,
+            };
+            match flow {
+                RegisterFlow::Empty => {}
+                RegisterFlow::Value(value_type) => {
+                    self.code.emit(Instruction::Star(result_register));
+                    result_type = Some(value_type);
+                }
+                RegisterFlow::Abrupt => break,
+            }
+        }
+        self.completions.pop()?;
+        self.leave_block_scope(scoped_bindings)?;
+        if flow == RegisterFlow::Abrupt {
+            self.release_register(result_register)?;
+            return Some(RegisterFlow::Abrupt);
+        }
+        self.code.emit(Instruction::Ldar(result_register));
+        self.release_register(result_register)?;
+        Some(result_type.map_or(RegisterFlow::Empty, RegisterFlow::Value))
+    }
+
+    fn enter_block_scope(
+        &mut self,
+        body: &[Stmt],
+    ) -> Option<
+        Vec<(
+            String,
+            crate::engine::bytecode::Reg,
+            Option<RegisterBinding>,
+        )>,
+    > {
+        let names = register_block_local_names(body)?;
+        let mut scoped = Vec::new();
+        for (name, mutable) in names {
+            let register = self.allocate_register()?;
+            self.active_binding_count = self.active_binding_count.checked_add(1)?;
+            self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+            let previous = self.bindings.insert(
+                name.clone(),
+                RegisterBinding {
+                    storage: RegisterBindingStorage::Register(register),
+                    value_type: None,
+                    mutable,
+                    stable_function_identity: false,
+                },
+            );
+            scoped.push((name, register, previous));
+        }
+        Some(scoped)
+    }
+
+    fn leave_block_scope(
+        &mut self,
+        scoped: Vec<(
+            String,
+            crate::engine::bytecode::Reg,
+            Option<RegisterBinding>,
+        )>,
+    ) -> Option<()> {
+        for (name, register, previous) in scoped.into_iter().rev() {
+            self.bindings.remove(&name)?;
+            if let Some(previous) = previous {
+                self.bindings.insert(name, previous);
+            }
+            self.release_register(register)?;
+            self.active_binding_count = self.active_binding_count.checked_sub(1)?;
+        }
+        Some(())
     }
 
     fn lower_loop_jump(&mut self, is_break: bool) -> Option<()> {
@@ -2134,6 +2226,9 @@ impl RegisterLowerer {
                             return None;
                         }
                         let register = self.allocate_register()?;
+                        self.active_binding_count = self.active_binding_count.checked_add(1)?;
+                        self.max_binding_count =
+                            self.max_binding_count.max(self.active_binding_count);
                         self.bindings.insert(
                             name.clone(),
                             RegisterBinding {
@@ -2235,6 +2330,7 @@ impl RegisterLowerer {
         for (name, register) in scoped_registers.into_iter().rev() {
             self.bindings.remove(&name)?;
             self.release_register(register)?;
+            self.active_binding_count = self.active_binding_count.checked_sub(1)?;
         }
         Some(match flow {
             RegisterFlow::Value(value_type) => RegisterType::Undefined.merge(value_type),
@@ -3172,6 +3268,28 @@ fn register_function_local_names(function: &Function) -> Option<BTreeSet<String>
     Some(names)
 }
 
+fn register_block_local_names(body: &[Stmt]) -> Option<BTreeMap<String, bool>> {
+    let mut names = BTreeMap::new();
+    for statement in body {
+        match statement {
+            Stmt::Declare(bindings) => {
+                for (pattern, mutable, _) in bindings {
+                    let mut bound = Vec::new();
+                    pattern.names(&mut bound);
+                    for name in bound {
+                        if names.insert(name, *mutable).is_some() {
+                            return None;
+                        }
+                    }
+                }
+            }
+            Stmt::Function(_, _) => return None,
+            _ => {}
+        }
+    }
+    Some(names)
+}
+
 fn register_function_scope(function: &Function) -> Option<RegisterFunctionScope> {
     let local_names = register_function_local_names(function)?;
     register_body_scope(&function.body, &local_names)
@@ -3315,9 +3433,17 @@ fn register_statement_references(
             }
         }
         Stmt::Block(body) => {
+            let local_names: BTreeSet<_> = register_block_local_names(body)?.into_keys().collect();
+            let mut direct = BTreeSet::new();
+            let mut nested = BTreeSet::new();
             for statement in body {
-                register_statement_references(statement, names, nested_free_names)?;
+                register_statement_references(statement, &mut direct, &mut nested)?;
             }
+            if nested.iter().any(|name| local_names.contains(name)) {
+                return None;
+            }
+            names.extend(direct.difference(&local_names).cloned());
+            nested_free_names.extend(nested.difference(&local_names).cloned());
         }
         Stmt::If(condition, yes, no) => {
             register_expression_references(condition, names, nested_free_names)?;
@@ -3362,6 +3488,9 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
     let mut saw_expression = false;
     let mut saw_declaration = false;
     let mut saw_function = false;
+    if realm && body.iter().any(register_statement_has_lexical_block) {
+        return None;
+    }
     for statement in body {
         match statement {
             Stmt::Declare(bindings) if !saw_expression && !realm => {
@@ -3393,6 +3522,41 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
             .iter()
             .any(|statement| matches!(statement, Stmt::Var(_))))
     .then_some((saw_declaration, saw_function))
+}
+
+fn register_statement_has_lexical_block(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Block(body) => {
+            body.iter()
+                .any(|statement| matches!(statement, Stmt::Declare(_)))
+                || body.iter().any(register_statement_has_lexical_block)
+        }
+        Stmt::If(_, yes, no) => {
+            register_statement_has_lexical_block(yes)
+                || no
+                    .as_deref()
+                    .is_some_and(register_statement_has_lexical_block)
+        }
+        Stmt::While(_, body) | Stmt::For(_, _, _, body) => {
+            register_statement_has_lexical_block(body)
+        }
+        Stmt::Function(_, function) => function
+            .body
+            .iter()
+            .any(register_statement_has_lexical_block),
+        Stmt::Empty
+        | Stmt::Expr(_)
+        | Stmt::Declare(_)
+        | Stmt::Var(_)
+        | Stmt::Return(_)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::Switch(_, _)
+        | Stmt::ForIn { .. }
+        | Stmt::ForOf { .. }
+        | Stmt::Throw(_)
+        | Stmt::Try { .. } => false,
+    }
 }
 
 fn prepare_register_bindings(
@@ -3509,7 +3673,7 @@ fn lower_register_script(
         .code
         .emit(crate::engine::bytecode::Instruction::Return);
     lowerer.code.register_count = lowerer.register_count;
-    lowerer.code.binding_count = lowerer.local_count;
+    lowerer.code.binding_count = lowerer.max_binding_count;
     lowerer.code.verify().ok()?;
     Some(lowerer.code)
 }

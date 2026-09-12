@@ -656,7 +656,6 @@ fn register_string_concatenation_preserves_string_unit_limit() -> Result<(), Err
 fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<(), Error> {
     for source in [
         "typeof absent",
-        "{let x=1;x+2}",
         "Number(1)",
         "({valueOf(){return 1}})+2",
         "+({valueOf(){return 1}})",
@@ -1063,6 +1062,7 @@ fn local_bindings_and_assignments_match_legacy_execution() -> Result<(), Error> 
         "let x=1;x;2",
         "let x=1,y=x+1;y",
         "let x=1;(x=2,x+3)",
+        "{let x=1;x+2}",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -1080,12 +1080,131 @@ fn local_bindings_and_assignments_match_legacy_execution() -> Result<(), Error> 
 
 #[test]
 fn local_binding_lowering_preserves_tdz_and_const_guards_by_staying_legacy() -> Result<(), Error> {
-    for source in ["let x=x;x", "let x=y,y=1;x", "const x=1;x=2", "{let x=1;x}"] {
+    for source in ["let x=x;x", "let x=y,y=1;x", "const x=1;x=2"] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
             "{source}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn block_lexical_bindings_use_scoped_registers() -> Result<(), Error> {
+    for source in [
+        "{let x=1;x}",
+        "let x=1;{let x=2;x}x",
+        "let x=1;{let x=2;x+1}",
+        "let x=1;{const {x,y}={x:20,y:22};x+y}x",
+        "let x=1;{{let x=2;x}x}",
+        "function f(){let x=1;{let {x=2}={};x}return x}f()",
+        "let x=1;if(true){let x=2;x}else{x}x",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn block_registers_count_towards_the_binding_budget() -> Result<(), Error> {
+    let two = Limits {
+        binding_slots: 2,
+        ..Limits::default()
+    };
+    let nested = compile("{let x=20;{let y=22;x+y}}", two)?;
+    assert!(nested.uses_register_backend());
+    assert_eq!(
+        nested
+            .register_code
+            .as_ref()
+            .ok_or(Error::InvalidBytecode)?
+            .binding_count,
+        2
+    );
+    assert_eq!(
+        Runtime::new(two).run(&nested, &mut SilentHost)?,
+        Value::Number(42.0)
+    );
+    assert_eq!(
+        Runtime::new(Limits {
+            binding_slots: 1,
+            ..Limits::default()
+        })
+        .run(&nested, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "binding slots"
+        })
+    );
+
+    let sequential = compile("{let x=1;x}{let y=2;y}", Limits::default())?;
+    assert_eq!(
+        sequential
+            .register_code
+            .as_ref()
+            .ok_or(Error::InvalidBytecode)?
+            .binding_count,
+        1
+    );
+    assert_eq!(
+        Runtime::new(Limits {
+            binding_slots: 1,
+            ..Limits::default()
+        })
+        .run(&sequential, &mut SilentHost)?,
+        Value::Number(2.0)
+    );
+
+    let function = compile(
+        "function f(a){let x=1;{let y=2;return a+x+y}}f(39)",
+        Limits::default(),
+    )?;
+    let body = function
+        .register_code
+        .as_ref()
+        .and_then(|code| code.functions.first())
+        .ok_or(Error::InvalidBytecode)?;
+    assert_eq!(body.binding_count, 3);
+    assert_eq!(
+        Runtime::new(Limits {
+            binding_slots: 2,
+            ..Limits::default()
+        })
+        .run(&function, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "binding slots"
+        })
+    );
+    Ok(())
+}
+
+#[test]
+fn observable_block_scope_cases_stay_on_legacy_backend() -> Result<(), Error> {
+    for source in [
+        "{let x=x;x}",
+        "{let x=y,y=1;x}",
+        "{const x=1;x=2}",
+        "let f;{let x=42;f=()=>x}f()",
+        "{function f(){return 42}f()}",
+        "{let x={};42}",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(!program.uses_register_backend(), "{source}");
+        let _ = Runtime::new(Limits::default()).run(&program, &mut SilentHost);
+    }
+    assert!(
+        !compile_script("{let x=1;x}", Limits::default())?
+            .program
+            .uses_register_backend()
+    );
     Ok(())
 }
 
@@ -1465,11 +1584,7 @@ fn register_while_checks_fuel_at_back_edges() -> Result<(), Error> {
 
 #[test]
 fn register_loop_lowering_rejects_unstable_or_abrupt_bodies() -> Result<(), Error> {
-    for source in [
-        "let x=1;while(false)x=true;x",
-        "let x=1;while(x=true)x",
-        "while(false){let x=1;x}",
-    ] {
+    for source in ["let x=1;while(false)x=true;x", "let x=1;while(x=true)x"] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
             "{source}"

@@ -523,7 +523,11 @@ impl Execution<'_> {
         self.array_proto = None;
         self.fuel = self.limits.fuel;
         self.owner = Rc::new(());
-        self.binding_slots = program.slots.len();
+        self.binding_slots = if program.register_code.is_some() {
+            0
+        } else {
+            program.slots.len()
+        };
         if self.binding_slots > self.limits.binding_slots {
             return Err(Error::Limit {
                 resource: "binding slots",
