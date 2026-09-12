@@ -7,6 +7,22 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The two documents the private key of a Secure Shell client is written
+  in. `docs/openssh/PROTOCOL.key` is `openssh-key-v1`: the magic string,
+  the cipher and KDF names, the public keys, and the one string that
+  holds the private keys, with the two `checkint` words that say a
+  passphrase was right and the padding that counts up from one.
+  `docs/rfc/rfc9987.txt` is the SSH agent protocol, which that file
+  defers to where the key itself is encoded and which nothing here
+  implements otherwise: section 5.2.3 is the Ed25519 blob, `string
+  "ssh-ed25519"`, `string ENC(A)`, `string k || ENC(A)`, whose `k` is the
+  32-byte seed of RFC 8032, section 3.2, and not the scalar the seed
+  expands into. No code cites either yet. Step S5 signs with a key of
+  this client's own, and 14.13 holds the open question of where that key
+  comes from; every answer to it reads a file in this format. Both
+  directory READMEs, document 14, section 14.4, and the index of `docs/`
+  name them.
+
 - Step S1 of track S: the crate `audhsos-ssh` at `crates/net/ssh`,
   sans-I/O and host-tested, with the two layers everything above it is
   written in. `wire` is the types of RFC 4251, section 5, over a cursor

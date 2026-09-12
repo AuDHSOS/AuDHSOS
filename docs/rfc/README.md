@@ -74,6 +74,7 @@ same rule and for the same reason (D-100).
 | `rfc9112.txt` | RFC 9112, *HTTP/1.1*, R. Fielding (ed.), M. Nottingham (ed.), J. Reschke (ed.), June 2022 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc9112.txt` | 109913 | `e4f426bac6206b67fdf9e0da826154f70588db2133a0a86b15cde4ff725d8937` |
 | `rfc9142.txt` | RFC 9142, *Key Exchange (KEX) Method Updates and Recommendations for Secure Shell (SSH)*, M. Baushke, January 2022 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc9142.txt` | 52250 | `68226c742986b83511fbc958cfa8bf5b51a8fdefdcae146d7ea41f2e4be79026` |
 | `rfc9293.txt` | RFC 9293, *Transmission Control Protocol (TCP)*, W. Eddy, Ed., August 2022 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc9293.txt` | 263696 | `6d9ac8be4b0286f8c3d337addf442b2eb6a9b14e1366594ea7fbc273f93dc2d9` |
+| `rfc9987.txt` | RFC 9987, *Secure Shell (SSH) Agent Protocol*, D. Miller, May 2026 | 2026-09-12 from `https://www.rfc-editor.org/rfc/rfc9987.txt` | 62192 | `2da579912a2a39265f3a719c2091408cd1fedb31c2f1e8240fd629f6dcb94999` |
 
 The checksums are here so that a reader can tell a file has not been
 edited. Each is the text as the RFC Editor publishes it, byte for byte,
@@ -829,6 +830,29 @@ curve. It is the one of the seven that does not stand alone. Point
 encoding, public key validation, cofactor ECDH and the conversion from a
 field element to an integer are all in SEC 1, which is a SECG document
 and is not in this directory.
+
+## Why RFC 9987, which is an agent this system will not run
+
+The agent is out of scope. Document 14, section 14.2, refuses agent
+forwarding, and nothing here will run a second program that holds a key
+for the first. The document is kept for one section it owns, and for a
+reference that dangles without it.
+
+`PROTOCOL.key` in [`docs/openssh/`](../openssh/README.md) is the file a
+private key is stored in. Where the bytes of the key itself belong, its
+section 3 says only that each one is encoded by the rules used for the
+SSH agent, and stops. RFC 9987 is those rules. Section 5.2.3 is the
+Ed25519 case: `string "ssh-ed25519"`, `string ENC(A)`, and
+`string k || ENC(A)`, the public key repeated inside the private blob
+because deployed implementations expect to find it there.
+
+The `k` in that third field is the 32-byte seed of RFC 8032,
+section 3.2, and not the scalar the seed expands into. Those two are the
+same length and one of them is wrong, which is the kind of mistake that
+surfaces as a public key that does not match the private one.
+
+OpenSSH's own `PROTOCOL.agent` is now a pointer to this RFC and a list of
+its vendor extensions; the base protocol is here and that file is not.
 
 ## What Secure Shell still needs, and why it is not here
 

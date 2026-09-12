@@ -50,10 +50,11 @@ their checksums, one directory per body that publishes them:
 publishes (D-100), [w3c/](w3c), [ecma/](ecma), [itu/](itu) for the
 JPEG Recommendations, [cipa/](cipa) for Exif, [ti/](ti) for the
 16550 serial controller, which is a datasheet from a manufacturer rather
-than a standard from a standards body, and [openssh/](openssh) for the
-one cipher of the Secure Shell client that no standards body published
-(D-134), which is kept as the OpenSSH document it came from and the IETF
-draft that replaced it. Each directory has a `README.md`
+than a standard from a standards body, and [openssh/](openssh) for what
+OpenSSH specified and no standards body did (D-134): the one cipher of
+the Secure Shell client, kept as the OpenSSH document it came from and
+the IETF draft that replaced it, and the private key format a client
+reads a key of its own from. Each directory has a `README.md`
 naming what belongs there and how it is fetched. Nothing under them is
 compiled, linked, or read at run time.
 

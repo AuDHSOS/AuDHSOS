@@ -111,13 +111,16 @@ because the two documents above them defer to them for the same reason.
 | RFC 8308 | `ext-info-c`, `SSH_MSG_EXT_INFO`, `server-sig-algs` |
 | RFC 8032, RFC 7748 | What RFC 8709 and RFC 8731 defer to |
 
-Three more Secure Shell documents are in the directory and are not used
-by this client. RFC 6668 is the SHA-2 MACs an AEAD makes unnecessary.
-RFC 5656 is the NIST-curve methods that RFC 9142 puts at SHOULD and that
-add nothing this set does not already have. RFC 8332 is `rsa-sha2-256`
-and `rsa-sha2-512`, which 14.5 refuses; it is kept for the asymmetry that
-a later reader would otherwise have to rediscover, that the key blob of
-those algorithms still names `ssh-rsa` while the signature blob does not.
+Four more Secure Shell documents are in the directory and are not used
+by the client on the wire. RFC 6668 is the SHA-2 MACs an AEAD makes
+unnecessary. RFC 5656 is the NIST-curve methods that RFC 9142 puts at
+SHOULD and that add nothing this set does not already have. RFC 8332 is
+`rsa-sha2-256` and `rsa-sha2-512`, which 14.5 refuses; it is kept for the
+asymmetry that a later reader would otherwise have to rediscover, that
+the key blob of those algorithms still names `ssh-rsa` while the
+signature blob does not. RFC 9987 is the agent protocol, which 14.2 puts
+out of scope; its section 5.2.3 is kept because the private key format
+below defers to it for the encoding of the key itself.
 
 The cipher is the one algorithm no standards body published, and its two
 documents are in [`docs/openssh/`](openssh/README.md) rather than in
@@ -127,6 +130,12 @@ instead at the other, `draft-ietf-sshm-chacha20-poly1305-04`, which is
 what the crate is written against. That the second is an Internet-Draft
 is stated where it is kept, with what makes a numbered revision usable
 anyway and what happens when it becomes an RFC.
+
+`PROTOCOL.key` is in that directory for the same reason: the file a
+private key is stored in is OpenSSH's format and no standards body wrote
+it down. Step S5 signs with a key of this client's own, and 14.13 holds
+the question of where that key comes from; every answer to it reads a
+file in this format, so the document is kept before the step needs it.
 
 ## 14.5 The algorithms this client offers
 
