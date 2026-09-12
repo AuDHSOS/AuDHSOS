@@ -174,6 +174,7 @@ pub(crate) struct ObjectBindingPattern {
 #[derive(Debug)]
 pub(crate) struct ObjectBindingProperty {
     pub(crate) key: Expr,
+    pub(crate) computed: bool,
     pub(crate) pattern: BindingPattern,
     pub(crate) initializer: Option<Expr>,
 }
@@ -264,7 +265,7 @@ impl BindingPattern {
                 }) || array.rest.as_deref().is_some_and(Self::contains_expression)
             }
             Self::Object(object) => object.properties.iter().any(|property| {
-                !matches!(property.key.kind, ExprKind::Literal(_))
+                property.computed
                     || property.initializer.is_some()
                     || property.pattern.contains_expression()
             }),
@@ -979,6 +980,7 @@ impl Parser {
             };
             properties.push(ObjectBindingProperty {
                 key,
+                computed,
                 pattern,
                 initializer,
             });
