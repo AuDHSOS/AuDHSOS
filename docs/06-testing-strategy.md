@@ -1222,6 +1222,16 @@ done until every applicable item has a test. Items are added, never removed.
   or trailing space, two spaces, a hyphen, or a character outside the
   printable range is refused; line terminators after the end line are not
   data.
+- PEM at a width that is not RFC 7468: a block wrapped at seventy, the
+  width `openssh-key-v1` is written at, round-trips and carries lines of
+  exactly seventy characters but the last; the strict reader refuses it
+  and names both the line and the width it expected. The wrapped reader
+  takes a text wrapped more narrowly and refuses one wrapped wider, an
+  empty body line, a pad before the last line, and a body whose characters
+  do not fill a quantum. A character outside the alphabet is named by its
+  offset in the body and not in the quantum it fell in, which is what a
+  reader four characters at a time would otherwise report. A buffer one
+  byte short of `encoded_len_wrapped` is an error and writes nothing.
 - Property: no input causes a panic, and every accepted block re-encodes
   to a canonical form that decodes to the same bytes. The generator of
   near-valid blocks is itself checked to reach both an accepted and a

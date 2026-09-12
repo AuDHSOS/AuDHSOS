@@ -37,8 +37,16 @@ pub enum EncodingError {
     /// A label carries a character RFC 7468 does not allow in one, or a
     /// space where it may not stand.
     Label,
-    /// A body line other than the last is not exactly 64 characters.
-    LineLength(usize),
+    /// A body line does not fit the width the text wraps at: it is not
+    /// exactly that many characters where the strict form of RFC 7468
+    /// requires it, or it is empty or longer than that where a text of
+    /// another width is read.
+    LineLength {
+        /// The characters the line holds.
+        characters: usize,
+        /// The width the text wraps at.
+        wrap: usize,
+    },
     /// The block carries no bytes between its begin and end lines.
     EmptyPayload,
     /// Something follows the end line. Explanatory text is allowed before
@@ -67,10 +75,10 @@ impl fmt::Display for EncodingError {
                 f.write_str("the end line names a different label than the begin line")
             }
             EncodingError::Label => f.write_str("the label is not one RFC 7468 allows"),
-            EncodingError::LineLength(length) => {
+            EncodingError::LineLength { characters, wrap } => {
                 write!(
                     f,
-                    "a body line before the last is {length} characters, not 64"
+                    "a body line is {characters} characters, not the {wrap} this text wraps at"
                 )
             }
             EncodingError::EmptyPayload => f.write_str("the block carries no bytes"),

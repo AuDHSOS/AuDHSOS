@@ -7,6 +7,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `pem::encode_wrapped` and `pem::decode_wrapped` in `audhsos-encoding`,
+  the RFC 7468 frame at a width the RFC does not fix. `openssh-key-v1`
+  wraps at seventy characters, which is not a multiple of four, so a body
+  line holds part of a Base64 quantum and cannot be encoded or decoded on
+  its own: the body is now written as one text and pushed apart into
+  lines from the back, and it is read a quantum at a time with the
+  quantum carried across a line boundary. The reader of a wrapped text
+  holds a line to a maximum rather than to a length, because a width no
+  standard fixes is the width some writer chose; the RFC 7468 reader is
+  unchanged and still demands full lines. `encode` and `decode` are those
+  two at the width of `LINE`. `EncodingError::LineLength` carries the
+  width it judged a line against, which the message no longer spells as
+  64. Catalog 6.6.40.
+
 - The two documents the private key of a Secure Shell client is written
   in. `docs/openssh/PROTOCOL.key` is `openssh-key-v1`: the magic string,
   the cipher and KDF names, the public keys, and the one string that
