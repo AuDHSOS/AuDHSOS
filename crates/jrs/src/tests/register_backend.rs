@@ -731,8 +731,6 @@ fn array_literals_and_indices_run_through_dense_elements() -> Result<(), Error> 
         "let a=[2,3,5];let i=-1;a[i]===undefined",
         "let a=[2,3,5];let i=1.5;a[i]===undefined",
         "let a=[2,3,5];let i=4294967295;a[i]===undefined",
-        "let a=[2,3,5];let i='1';a[i]",
-        "let a=[2,3,5];let i='length';a[i]",
         "let a=[2,3,5];let i='01';a[i]===undefined",
         "let a=[2,3,5];let i=true;a[i]===undefined",
         "let a=[2,3,5];let i=null;a[i]===undefined",
@@ -2358,6 +2356,67 @@ fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error>
         "for(const k in {a:1}){(()=>k)}",
         // for-of still needs the iterator protocol.
         "for(const k of [1]){}",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn register_object_prototype_methods_run_as_native_intrinsics() -> Result<(), Error> {
+    for source in [
+        "let o={a:1};o.hasOwnProperty('a')",
+        "let o={a:1};o.hasOwnProperty('b')",
+        "let o={};o.hasOwnProperty('a')",
+        "let o={a:1,b:2};o.hasOwnProperty('b')",
+        "let o={a:1};o.hasOwnProperty()",
+        "let o={undefined:1};o.hasOwnProperty(undefined)",
+        "let o={a:1};o.hasOwnProperty('a')&&o.hasOwnProperty('a')",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let code = program
+            .register_code
+            .as_ref()
+            .ok_or(Error::InvalidBytecode)?;
+        assert!(
+            core::iter::once(code.as_ref())
+                .chain(code.functions.iter())
+                .flat_map(|function| &function.instructions)
+                .any(|instruction| matches!(
+                    instruction,
+                    crate::engine::bytecode::Instruction::CallMethod { .. }
+                )),
+            "{source}"
+        );
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn register_lowering_rejects_reads_the_prototype_chain_cannot_answer() -> Result<(), Error> {
+    for source in [
+        // 20.1.3 names %Object.prototype% owns whose intrinsic does not exist yet.
+        "let o={};o.toString",
+        "let o={x:1};o.valueOf",
+        "let o={};o['toString']",
+        "let o={};o.toString()",
+        // A key known only at run time can name one of them.
+        "let o={x:42},key='x';o[key]",
+        "let o={x:40,y:2},key=true?'x':'y';o[key]+2",
+        "let k='x';let {[k]:x}={x:42};x",
+        "function f(key){let o={[key]:42};return o[key]}f('answer')",
+        // An intrinsic is only lowered at a call site.
+        "let o={a:1};o.hasOwnProperty",
+        // A String key can name a property of the chain.
+        "let a=[2,3,5];let i='1';a[i]",
+        "let a=[2,3,5];let i='length';a[i]",
+        // A parameter has no tracked object layout.
+        "function f(o){return o.hasOwnProperty('a')}f({a:1})",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),

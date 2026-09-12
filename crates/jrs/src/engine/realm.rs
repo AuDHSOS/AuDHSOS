@@ -32,6 +32,14 @@ pub enum NativeErrorKind {
     UriError,
 }
 
+/// Whether an implemented intrinsic of `%Object.prototype%` has this name.
+#[must_use]
+pub fn object_prototype_intrinsic(name: &[u16]) -> Option<Intrinsic> {
+    Intrinsic::ALL
+        .into_iter()
+        .find(|intrinsic| intrinsic.name().encode_utf16().eq(name.iter().copied()))
+}
+
 /// A native function of the standard library.
 ///
 /// The identifier travels in the object's `NativeFunction` kind, so a call
@@ -233,10 +241,6 @@ impl Realm {
                 .ok_or(HeapError::InvalidReference)? = prototype;
         }
 
-        // The native functions are allocated but not yet defined on their
-        // holders: a compiler that types a property read from an object's own
-        // layout still assumes the Prototype Chain owns nothing, and a
-        // non-empty %Object.prototype% would make that assumption wrong.
         let mut intrinsics = [object_prototype; Intrinsic::ALL.len()];
         let function_parent = Self::rooted(heap, function_prototype)?;
         for intrinsic in Intrinsic::ALL {
@@ -257,6 +261,11 @@ impl Realm {
                 .get_mut(intrinsic.index())
                 .ok_or(HeapError::InvalidReference)? =
                 heap.push_root(Value::from_object(function))?;
+            let holder = Self::rooted(heap, object_prototype)?
+                .as_object()
+                .ok_or(HeapError::InvalidReference)?;
+            let key = heap.strings.intern(intrinsic.name())?;
+            heap.define_own_named(holder, key, Value::from_object(function), builtin_data())?;
         }
 
         Ok(Self {

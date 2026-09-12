@@ -528,6 +528,7 @@ fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program,
 enum RegisterType {
     Array(u32),
     Function(u32),
+    NativeFunction(crate::engine::realm::Intrinsic),
     Number,
     NumberOrUndefined,
     Boolean,
@@ -543,7 +544,11 @@ impl RegisterType {
     const fn is_primitive(self) -> bool {
         !matches!(
             self,
-            Self::Array(_) | Self::Function(_) | Self::Object(_) | Self::Unknown
+            Self::Array(_)
+                | Self::Function(_)
+                | Self::NativeFunction(_)
+                | Self::Object(_)
+                | Self::Unknown
         )
     }
 
@@ -1905,6 +1910,9 @@ impl RegisterLowerer {
 
     fn lower_call(&mut self, callee: &Expr, arguments: &[Expr]) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        if let ExprKind::Member(base, key) = &callee.kind {
+            return self.lower_method_call(base, key, arguments);
+        }
         let RegisterType::Function(code_id) = self.lower(callee)? else {
             return None;
         };
@@ -1975,6 +1983,68 @@ impl RegisterLowerer {
         self.function_returns.get(&code_id).copied()
     }
 
+    /// Lowers a call whose callee is a property of an object, evaluating the
+    /// base once and passing it as the `this` value (13.3.6.1).
+    fn lower_method_call(
+        &mut self,
+        base: &Expr,
+        key: &Expr,
+        arguments: &[Expr],
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let base_type = self.lower(base)?;
+        if !base_type.is_object() {
+            return None;
+        }
+        let receiver = self.allocate_register()?;
+        self.code.emit(Instruction::Star(receiver));
+        let keyed = matches!(base_type, RegisterType::Object(_))
+            && Self::static_property_name(key).is_none();
+        let callee_type =
+            self.lower_property_from_register(receiver, base_type, key, keyed, true)?;
+        let RegisterType::NativeFunction(intrinsic) = callee_type else {
+            return None;
+        };
+        let function = self.allocate_register()?;
+        self.code.emit(Instruction::Star(function));
+        let mut argument_registers = Vec::new();
+        for argument in arguments {
+            if !self.lower(argument)?.is_primitive() {
+                return None;
+            }
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            argument_registers.push(register);
+        }
+        let dummy = if argument_registers.is_empty() {
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::LdaUndefined);
+            self.code.emit(Instruction::Star(register));
+            Some(register)
+        } else {
+            None
+        };
+        let arg_start = argument_registers.first().copied().or(dummy)?;
+        let arg_count = u16::try_from(arguments.len()).ok()?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver,
+            func: function,
+            arg_start,
+            arg_count,
+            slot,
+        });
+        if let Some(dummy) = dummy {
+            self.release_register(dummy)?;
+        }
+        for register in argument_registers.into_iter().rev() {
+            self.release_register(register)?;
+        }
+        self.release_register(function)?;
+        self.release_register(receiver)?;
+        Some(intrinsic_result_type(intrinsic))
+    }
+
     fn lower_member(&mut self, base: &Expr, key: &Expr) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let base_type = self.lower(base)?;
@@ -2034,9 +2104,13 @@ impl RegisterLowerer {
             return None;
         };
         let static_index = Self::static_array_index(key);
-        let static_name = keyed
-            .then(|| Self::static_property_key_units(key))
-            .flatten();
+        let static_name = if keyed {
+            self.static_key_units(key)
+        } else {
+            Self::static_property_name(key).map(<[u16]>::to_vec)
+        };
+        // A name that is neither "length" nor an index is resolved on the
+        // Prototype Chain, and a key known only at run time can name one.
         let result_type = if static_name.as_deref().is_some_and(Self::is_length) {
             RegisterType::Number
         } else if let Some(index) = static_index {
@@ -2045,6 +2119,18 @@ impl RegisterLowerer {
                 .copied()
                 .unwrap_or(RegisterType::Undefined);
             dynamic.map_or(static_type, |dynamic| static_type.merge(dynamic))
+        } else if let Some(name) = static_name.as_deref() {
+            if crate::engine::realm::object_prototype_owns(name) {
+                return None;
+            }
+            elements
+                .values()
+                .copied()
+                .chain(dynamic.iter().copied())
+                .reduce(RegisterType::merge)
+                .unwrap_or(RegisterType::Undefined)
+                .merge(RegisterType::Number)
+                .merge(RegisterType::Undefined)
         } else {
             elements
                 .values()
@@ -2054,6 +2140,11 @@ impl RegisterLowerer {
                 .unwrap_or(RegisterType::Undefined)
                 .merge(RegisterType::Number)
                 .merge(RegisterType::Undefined)
+                .merge(if self.key_reaches_prototype(key) {
+                    RegisterType::Unknown
+                } else {
+                    RegisterType::Undefined
+                })
         };
         if keyed {
             if !self.lower(key)?.is_primitive() {
@@ -2275,7 +2366,21 @@ impl RegisterLowerer {
         let result_type = if let Some(name) = static_name.as_deref() {
             let known = properties.get(name).copied();
             if known.is_none() && crate::engine::realm::object_prototype_owns(name) {
-                return None;
+                // The name is resolved on %Object.prototype%, so it is the
+                // intrinsic when one is implemented and unsupported otherwise.
+                let intrinsic = crate::engine::realm::object_prototype_intrinsic(name)?;
+                if dynamic.is_some() {
+                    return None;
+                }
+                let slot =
+                    self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+                let name = self.string_constant(name)?;
+                self.code.emit(Instruction::GetNamed {
+                    obj: object,
+                    name,
+                    slot,
+                });
+                return Some(RegisterType::NativeFunction(intrinsic));
             }
             match (known, dynamic) {
                 (Some(known), Some(dynamic)) => known.merge(*dynamic),
@@ -2292,7 +2397,11 @@ impl RegisterLowerer {
                 .reduce(RegisterType::merge)
                 .unwrap_or(RegisterType::Undefined)
                 .merge(RegisterType::Undefined)
-                .merge(RegisterType::Unknown)
+                .merge(if self.key_reaches_prototype(key) {
+                    RegisterType::Unknown
+                } else {
+                    RegisterType::Undefined
+                })
         };
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
         if keyed {
@@ -2466,6 +2575,23 @@ impl RegisterLowerer {
     fn is_length(units: &[u16]) -> bool {
         const LENGTH: [u16; 6] = [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68];
         units == LENGTH
+    }
+
+    /// Whether a key expression can denote a name %Object.prototype% owns.
+    ///
+    /// Only a String key can: every other primitive converts to a name the
+    /// prototype does not own.
+    fn key_reaches_prototype(&self, key: &Expr) -> bool {
+        !matches!(
+            register_expression_type(key, &self.bindings),
+            Some(
+                RegisterType::Number
+                    | RegisterType::NumberOrUndefined
+                    | RegisterType::Boolean
+                    | RegisterType::Null
+                    | RegisterType::Undefined
+            )
+        )
     }
 
     /// The property name a key expression denotes at compile time, including
@@ -4029,6 +4155,13 @@ fn register_expression_type(
         _ => return None,
     };
     Some(value_type)
+}
+
+/// The type one intrinsic returns.
+const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> RegisterType {
+    match intrinsic {
+        crate::engine::realm::Intrinsic::ObjectPrototypeHasOwnProperty => RegisterType::Boolean,
+    }
 }
 
 fn merge_register_bindings(
