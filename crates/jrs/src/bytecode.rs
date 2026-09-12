@@ -589,6 +589,7 @@ impl RegisterType {
 enum RegisterObjectLayout {
     Ordinary(BTreeMap<Vec<u16>, RegisterType>),
     Array {
+        length: Option<u32>,
         elements: BTreeMap<u32, RegisterType>,
         dynamic: Option<RegisterType>,
     },
@@ -805,7 +806,7 @@ impl RegisterLowerer {
                 }
                 self.release_register(source)?;
             }
-            parser::BindingPattern::Array(array) if array.rest.is_none() => {
+            parser::BindingPattern::Array(array) => {
                 if !matches!(value_type, RegisterType::Array(_)) {
                     return None;
                 }
@@ -827,9 +828,17 @@ impl RegisterLowerer {
                     }
                     self.bind_pattern(element_type, pattern)?;
                 }
+                if let Some(rest) = &array.rest {
+                    let start = u32::try_from(array.elements.len()).ok()?;
+                    let (rest_type, rest_array) =
+                        self.lower_array_rest_from_register(source, value_type, start)?;
+                    self.code.emit(Instruction::Ldar(rest_array));
+                    self.bind_pattern(rest_type, rest)?;
+                    self.release_register(rest_array)?;
+                }
                 self.release_register(source)?;
             }
-            parser::BindingPattern::Array(_) | parser::BindingPattern::Object(_) => return None,
+            parser::BindingPattern::Object(_) => return None,
         }
         Some(())
     }
@@ -1248,9 +1257,11 @@ impl RegisterLowerer {
         use crate::engine::bytecode::Instruction;
         let object_id = self.next_object_id;
         self.next_object_id = self.next_object_id.checked_add(1)?;
+        let length = u32::try_from(items.len()).ok()?;
         self.object_layouts.insert(
             object_id,
             RegisterObjectLayout::Array {
+                length: Some(length),
                 elements: BTreeMap::new(),
                 dynamic: None,
             },
@@ -1263,7 +1274,6 @@ impl RegisterLowerer {
         if property_count > self.property_limit {
             return None;
         }
-        let length = u32::try_from(items.len()).ok()?;
         self.code.emit(Instruction::CreateArray(length));
         let array = self.allocate_register()?;
         self.code.emit(Instruction::Star(array));
@@ -1704,8 +1714,9 @@ impl RegisterLowerer {
         let RegisterType::Array(object_id) = base_type else {
             return None;
         };
-        let RegisterObjectLayout::Array { elements, dynamic } =
-            self.object_layouts.get(&object_id)?
+        let RegisterObjectLayout::Array {
+            elements, dynamic, ..
+        } = self.object_layouts.get(&object_id)?
         else {
             return None;
         };
@@ -1762,8 +1773,9 @@ impl RegisterLowerer {
         let RegisterType::Array(object_id) = base_type else {
             return None;
         };
-        let RegisterObjectLayout::Array { elements, dynamic } =
-            self.object_layouts.get(&object_id)?
+        let RegisterObjectLayout::Array {
+            elements, dynamic, ..
+        } = self.object_layouts.get(&object_id)?
         else {
             return None;
         };
@@ -1783,6 +1795,69 @@ impl RegisterLowerer {
         });
         self.release_register(key)?;
         Some(result_type)
+    }
+
+    fn lower_array_rest_from_register(
+        &mut self,
+        source: crate::engine::bytecode::Reg,
+        source_type: RegisterType,
+        start: u32,
+    ) -> Option<(RegisterType, crate::engine::bytecode::Reg)> {
+        use crate::engine::bytecode::Instruction;
+        let RegisterType::Array(source_id) = source_type else {
+            return None;
+        };
+        let RegisterObjectLayout::Array {
+            length: Some(length),
+            ..
+        } = self.object_layouts.get(&source_id)?
+        else {
+            return None;
+        };
+        let length = *length;
+        let rest_length = length.saturating_sub(start);
+        if usize::try_from(rest_length).ok()?.saturating_add(1) > self.property_limit {
+            return None;
+        }
+        let rest_id = self.next_object_id;
+        self.next_object_id = self.next_object_id.checked_add(1)?;
+        self.object_layouts.insert(
+            rest_id,
+            RegisterObjectLayout::Array {
+                length: Some(rest_length),
+                elements: BTreeMap::new(),
+                dynamic: None,
+            },
+        );
+        self.code.emit(Instruction::CreateArray(rest_length));
+        let rest_array = self.allocate_register()?;
+        self.code.emit(Instruction::Star(rest_array));
+        for offset in 0..rest_length {
+            let source_index = start.checked_add(offset)?;
+            let value_type =
+                self.lower_array_index_from_register(source, source_type, source_index)?;
+            let value = self.allocate_register()?;
+            self.code.emit(Instruction::Star(value));
+            self.emit_array_index(offset)?;
+            let key = self.allocate_register()?;
+            self.code.emit(Instruction::Star(key));
+            self.code.emit(Instruction::Ldar(value));
+            let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::SetByValue {
+                obj: rest_array,
+                key,
+                slot,
+            });
+            self.release_register(key)?;
+            self.release_register(value)?;
+            let RegisterObjectLayout::Array { elements, .. } =
+                self.object_layouts.get_mut(&rest_id)?
+            else {
+                return None;
+            };
+            elements.insert(offset, value_type);
+        }
+        Some((RegisterType::Array(rest_id), rest_array))
     }
 
     fn lower_ordinary_property_from_register(
@@ -1903,8 +1978,11 @@ impl RegisterLowerer {
             let RegisterType::Array(object_id) = base_type else {
                 return None;
             };
-            let RegisterObjectLayout::Array { elements, dynamic } =
-                self.object_layouts.get_mut(&object_id)?
+            let RegisterObjectLayout::Array {
+                length,
+                elements,
+                dynamic,
+            } = self.object_layouts.get_mut(&object_id)?
             else {
                 return None;
             };
@@ -1914,8 +1992,10 @@ impl RegisterLowerer {
                     return None;
                 }
                 elements.insert(index, value_type);
+                *length = Some((*length)?.max(index.checked_add(1)?));
             } else {
                 *dynamic = Some(dynamic.map_or(value_type, |current| current.merge(value_type)));
+                *length = None;
             }
         } else {
             self.code.emit(Instruction::SetNamed {
@@ -2459,15 +2539,19 @@ impl RegisterLowerer {
                 .is_some_and(|actual| match (expected, actual) {
                     (
                         RegisterObjectLayout::Array {
+                            length: expected_length,
                             elements: expected_elements,
                             dynamic: expected_dynamic,
                         },
                         RegisterObjectLayout::Array {
+                            length: actual_length,
                             elements: actual_elements,
                             dynamic: actual_dynamic,
                         },
                     ) => {
-                        expected_elements == actual_elements
+                        (expected_length == actual_length
+                            || expected_length.is_some() && actual_length.is_none())
+                            && expected_elements == actual_elements
                             && (expected_dynamic == actual_dynamic
                                 || expected_dynamic.is_none() && actual_dynamic.is_some())
                     }
@@ -3450,7 +3534,7 @@ fn register_binding_pattern_references(
 ) -> Option<()> {
     match pattern {
         parser::BindingPattern::Name(_) => {}
-        parser::BindingPattern::Array(array) if array.rest.is_none() => {
+        parser::BindingPattern::Array(array) => {
             for element in &array.elements {
                 if let parser::ArrayBindingElement::Element {
                     pattern,
@@ -3473,7 +3557,7 @@ fn register_binding_pattern_references(
                 }
             }
         }
-        parser::BindingPattern::Array(_) | parser::BindingPattern::Object(_) => return None,
+        parser::BindingPattern::Object(_) => return None,
     }
     Some(())
 }
@@ -3814,13 +3898,15 @@ fn register_binding_pattern_supported(pattern: &parser::BindingPattern) -> bool 
     match pattern {
         parser::BindingPattern::Name(_) => true,
         parser::BindingPattern::Array(array) => {
-            array.rest.is_none()
-                && array.elements.iter().all(|element| match element {
-                    parser::ArrayBindingElement::Elision => true,
-                    parser::ArrayBindingElement::Element { pattern, .. } => {
-                        register_binding_pattern_supported(pattern)
-                    }
-                })
+            array.elements.iter().all(|element| match element {
+                parser::ArrayBindingElement::Elision => true,
+                parser::ArrayBindingElement::Element { pattern, .. } => {
+                    register_binding_pattern_supported(pattern)
+                }
+            }) && array
+                .rest
+                .as_deref()
+                .is_none_or(register_binding_pattern_supported)
         }
         parser::BindingPattern::Object(object) => {
             object.rest.is_none()

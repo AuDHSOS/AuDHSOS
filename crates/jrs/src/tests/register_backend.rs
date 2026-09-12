@@ -17,7 +17,7 @@ fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), 
     for source in [
         "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [x]=input;x",
         "let a=[1];a[Symbol.iterator]=function(){return {next(){return {value:42}}}};let [x]=a;x",
-        "let [x,...rest]=[1,2,3];rest",
+        "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [...x]=input;x",
         "let {x,...rest}={x:1};rest",
     ] {
         let program = compile(source, Limits::default())?;
@@ -39,6 +39,13 @@ fn fresh_array_binding_patterns_use_dense_elements() -> Result<(), Error> {
         "let [x,y=x+2]=[40];x+y",
         "let [{x}]=[{x:42}];x",
         "let [[x]]=[[42]];x",
+        "let [x,...rest]=[1,2,3];x+rest[0]+rest[1]",
+        "let [,,...rest]=[1,2,20,22];rest[0]+rest[1]",
+        "let [x,...rest]=[42];x+rest.length",
+        "let [...rest]=[];rest.length",
+        "let [...[x,y]]=[20,22];x+y",
+        "let [...{0:x,1:y,length:n}]=[20,22];x+y+n",
+        "let input=[1,2];let [...rest]=input;rest[0]=40;input[0]+rest[0]",
         "{const [x]=[42];x}",
         "for(let [x]=[1];x<2;x++){}",
         "function f(){let [x]=[42];return x}f()",
@@ -49,16 +56,18 @@ fn fresh_array_binding_patterns_use_dense_elements() -> Result<(), Error> {
             .register_code
             .as_ref()
             .ok_or(Error::InvalidBytecode)?;
-        assert!(
-            core::iter::once(code.as_ref())
-                .chain(code.functions.iter())
-                .flat_map(|function| &function.instructions)
-                .any(|instruction| matches!(
-                    instruction,
-                    crate::engine::bytecode::Instruction::GetByValue { .. }
-                )),
-            "{source}"
-        );
+        if source != "let [...rest]=[];rest.length" {
+            assert!(
+                core::iter::once(code.as_ref())
+                    .chain(code.functions.iter())
+                    .flat_map(|function| &function.instructions)
+                    .any(|instruction| matches!(
+                        instruction,
+                        crate::engine::bytecode::Instruction::GetByValue { .. }
+                    )),
+                "{source}"
+            );
+        }
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
