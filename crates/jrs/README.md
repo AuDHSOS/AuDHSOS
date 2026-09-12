@@ -214,8 +214,9 @@ There is no JIT and no claim of competitive performance without benchmarks.
   traced through active and suspended async frames. User next/return functions
   run under the same host, fuel and native-reentry quotas as other calls.
 - Function declarations and expressions, named self-recursion, arrow
-  functions with simple, default and rest parameters, `return`, hoisting, first-class calls
-  and closures over shared mutable bindings. `for (let ...)` creates
+  functions with simple, default, rest and destructured parameters, `return`,
+  hoisting, first-class calls and closures over shared mutable bindings.
+  `for (let ...)` creates
   per-iteration bindings; `for (var ...)` retains one shared binding.
   Non-simple parameters initialize through bytecode with a parameter TDZ;
   default-expression closures do not see body `var`/function declarations.
@@ -318,7 +319,6 @@ There is no JIT and no claim of competitive performance without benchmarks.
   another engine; its measured work consumes VM fuel.
 
 Missing language features include complete function properties,
-destructured parameters,
 remaining array methods, complete completion records outside exception handlers, Unicode
 identifiers, `BigInt`, full `RegExp`, modules, class fields/private elements/static
 blocks, iterator helpers, generators,

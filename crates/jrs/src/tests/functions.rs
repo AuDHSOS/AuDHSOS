@@ -417,6 +417,49 @@ fn default_and_rest_parameters_have_tdz_and_separate_body_environment() {
 }
 
 #[test]
+fn destructured_parameters_use_parameter_environment_and_unmapped_arguments() {
+    for (source, expected) in [
+        (
+            "function f([a,b]){return a+b}f([20,22])",
+            Value::Number(42.0),
+        ),
+        (
+            "function f({x:a,y:b}){return a+b}f({x:20,y:22})",
+            Value::Number(42.0),
+        ),
+        (
+            "function f([a=20,{b=22}={}]=[]){return a+b}f()",
+            Value::Number(42.0),
+        ),
+        (
+            "function f(...[a,b]){return a+b}f(20,22)",
+            Value::Number(42.0),
+        ),
+        (
+            "function f([a]){arguments[0]=[9];return a}f([42])",
+            Value::Number(42.0),
+        ),
+        (
+            "function f([a=42],g=()=>a){var a=1;return g()}f([])",
+            Value::Number(42.0),
+        ),
+        ("function f([a],b){return a+b}f.length", Value::Number(2.0)),
+        ("function f([a]=[],b){}f.length", Value::Number(0.0)),
+    ] {
+        assert_eq!(eval(source), Ok(expected), "{source}");
+    }
+
+    for source in [
+        "function f([a,a]){}",
+        "function f({x:a,y:a}){}",
+        "function f([a]){'use strict'}",
+        "function f([a]){let a}",
+    ] {
+        assert!(compile(source, Limits::default()).is_err(), "{source}");
+    }
+}
+
+#[test]
 fn parameter_objects_and_rest_arguments_survive_gc_before_body() -> Result<(), Error> {
     let limits = Limits {
         // Include the newly GC-owned Array methods in the stress-test budget.

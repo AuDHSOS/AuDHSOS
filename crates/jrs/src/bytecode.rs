@@ -1300,15 +1300,14 @@ impl RegisterLowerer {
     fn register_function_supported(function: &Function) -> bool {
         function.async_kind == parser::AsyncKind::Sync
             && function.constructor_kind == parser::ConstructorKind::Ordinary
-            && function
-                .parameters
-                .iter()
-                .all(|parameter| !parameter.rest && parameter.default.is_none())
+            && function.parameters.iter().all(parser::Parameter::is_simple)
             && function.parameters.iter().all(|parameter| {
                 function
                     .parameters
                     .iter()
-                    .filter(|candidate| candidate.name == parameter.name)
+                    .filter(|candidate| {
+                        candidate.pattern.identifier() == parameter.pattern.identifier()
+                    })
                     .count()
                     == 1
             })
@@ -1354,14 +1353,15 @@ impl RegisterLowerer {
             );
         }
         for parameter in &function.parameters {
-            child.declare(&parameter.name, true)?;
-            child.bindings.get_mut(&parameter.name)?.value_type = Some(RegisterType::Primitive);
+            let name = parameter.pattern.identifier()?;
+            child.declare(name, true)?;
+            child.bindings.get_mut(name)?.value_type = Some(RegisterType::Primitive);
         }
         let self_register = if let Some(name) = &function.name {
             if function
                 .parameters
                 .iter()
-                .any(|parameter| parameter.name == *name)
+                .any(|parameter| parameter.pattern.identifier() == Some(name))
             {
                 return None;
             }
@@ -2982,7 +2982,9 @@ struct RegisterFunctionScope {
 fn register_function_local_names(function: &Function) -> Option<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     for parameter in &function.parameters {
-        names.insert(parameter.name.clone());
+        let mut bound = Vec::new();
+        parameter.names(&mut bound);
+        names.extend(bound);
     }
     if let Some(name) = &function.name {
         names.insert(name.clone());
@@ -5005,36 +5007,42 @@ impl Compiler {
     }
 
     fn parameter_init(&mut self, function: &Function) -> Result<(Vec<usize>, bool), Error> {
-        let complex = function
-            .parameters
-            .iter()
-            .any(|p| p.rest || p.default.is_some());
+        let complex = function.parameters.iter().any(|p| !p.is_simple());
         let mut slots = Vec::new();
         // Discard only the self-name reset: named function values initialize it
         // in the call setup. Complex parameters stay uninitialized until code.
         self.program.code.clear();
         self.program.total_instructions = 0;
         for parameter in &function.parameters {
-            let name = &parameter.name;
-            if self
-                .scopes
-                .last()
-                .is_some_and(|scope| scope.contains_key(name))
-            {
-                if function.arrow
-                    || function.strict
-                    || complex
-                    || function.async_kind == parser::AsyncKind::Async
+            let mut names = Vec::new();
+            parameter.names(&mut names);
+            for name in &names {
+                if self
+                    .scopes
+                    .last()
+                    .is_some_and(|scope| scope.contains_key(name))
                 {
-                    return Err(Error::Syntax {
-                        offset: 0,
-                        message: "duplicate formal parameter",
-                    });
+                    if function.arrow
+                        || function.strict
+                        || complex
+                        || function.async_kind == parser::AsyncKind::Async
+                    {
+                        return Err(Error::Syntax {
+                            offset: 0,
+                            message: "duplicate formal parameter",
+                        });
+                    }
+                } else {
+                    self.declare(name, true)?;
                 }
-            } else {
-                self.declare(name, true)?;
             }
-            slots.push(self.local(name).ok_or(Error::InvalidBytecode)?);
+            if !complex {
+                let name = parameter
+                    .pattern
+                    .identifier()
+                    .ok_or(Error::InvalidBytecode)?;
+                slots.push(self.local(name).ok_or(Error::InvalidBytecode)?);
+            }
         }
         if !complex {
             self.program.code.clear();
@@ -5053,22 +5061,37 @@ impl Compiler {
                 self.emit(Op::Binary(Binary::StrictEq))?;
                 let jump = self.emit(Op::Branch(0, Branch::False))?;
                 self.emit(Op::Pop)?;
-                self.expression(default)?;
+                if let Some(name) = parameter.pattern.identifier() {
+                    self.binding_initializer(default, name)?;
+                } else {
+                    self.expression(default)?;
+                }
                 self.patch(jump, self.program.code.len())?;
             }
-            self.emit(Op::Init(*slots.get(index).ok_or(Error::InvalidBytecode)?))?;
+            self.bind_pattern(&parameter.pattern, true)?;
         }
         self.emit(Op::EndParameters)?;
-        if function.parameters.iter().any(|p| p.default.is_some()) {
+        if function
+            .parameters
+            .iter()
+            .any(parser::Parameter::contains_expression)
+        {
             self.parameter_body_scope(function)?;
         }
         Ok((slots, true))
     }
 
     fn arguments_binding(&mut self, function: &Function) -> Result<Option<usize>, Error> {
+        let mut parameter_names = Vec::new();
+        for parameter in &function.parameters {
+            parameter.names(&mut parameter_names);
+        }
         let needed = !function.arrow
-            && !function.parameters.iter().any(|p| p.name == "arguments")
-            && (function.parameters.iter().any(|p| p.default.is_some())
+            && !parameter_names.iter().any(|name| name == "arguments")
+            && (function
+                .parameters
+                .iter()
+                .any(parser::Parameter::contains_expression)
                 || !function.body.iter().any(|stmt| match stmt {
                     Stmt::Function(name, _) => name == "arguments",
                     Stmt::Declare(bindings) => bindings.iter().any(|(pattern, _, _)| {
@@ -5102,13 +5125,16 @@ impl Compiler {
         }
         self.scopes.push(BTreeMap::new());
         for parameter in &function.parameters {
-            if names.contains(&parameter.name) {
-                let from = self.local(&parameter.name).ok_or(Error::InvalidBytecode)?;
-                self.declare(&parameter.name, true)?;
+            let mut parameter_names = Vec::new();
+            parameter.names(&mut parameter_names);
+            for name in parameter_names {
+                if !names.contains(&name) {
+                    continue;
+                }
+                let from = self.local(&name).ok_or(Error::InvalidBytecode)?;
+                self.declare(&name, true)?;
                 self.emit(Op::Load(Access::Local(from)))?;
-                self.emit(Op::Init(
-                    self.local(&parameter.name).ok_or(Error::InvalidBytecode)?,
-                ))?;
+                self.emit(Op::Init(self.local(&name).ok_or(Error::InvalidBytecode)?))?;
             }
         }
         Ok(())
@@ -5175,15 +5201,16 @@ fn var_names(stmt: &Stmt, names: &mut Vec<String>) {
 }
 
 fn validate_function(function: &Function) -> Result<(), Error> {
+    let mut parameter_names = Vec::new();
+    for parameter in &function.parameters {
+        parameter.names(&mut parameter_names);
+    }
     for stmt in &function.body {
         if let Stmt::Declare(bindings) = stmt {
             for (pattern, _, _) in bindings {
                 let mut names = Vec::new();
                 pattern.names(&mut names);
-                if names
-                    .iter()
-                    .any(|name| function.parameters.iter().any(|p| p.name == *name))
-                {
+                if names.iter().any(|name| parameter_names.contains(name)) {
                     return Err(Error::Syntax {
                         offset: 0,
                         message: "parameter conflicts with lexical declaration",
@@ -5193,10 +5220,8 @@ fn validate_function(function: &Function) -> Result<(), Error> {
         }
     }
     if function.strict
-        && function
-            .parameters
+        && parameter_names
             .iter()
-            .map(|p| &p.name)
             .chain(function.name.iter())
             .any(|name| parser::strict_binding(name))
     {

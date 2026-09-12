@@ -138,7 +138,7 @@ pub(crate) enum AsyncKind {
 
 #[derive(Debug)]
 pub(crate) struct Parameter {
-    pub(crate) name: String,
+    pub(crate) pattern: BindingPattern,
     pub(crate) default: Option<Expr>,
     pub(crate) rest: bool,
 }
@@ -249,6 +249,40 @@ impl BindingPattern {
                 }
             }
         }
+    }
+
+    pub(crate) fn contains_expression(&self) -> bool {
+        match self {
+            Self::Name(_) => false,
+            Self::Array(array) => {
+                array.elements.iter().any(|element| match element {
+                    ArrayBindingElement::Elision => false,
+                    ArrayBindingElement::Element {
+                        pattern,
+                        initializer,
+                    } => initializer.is_some() || pattern.contains_expression(),
+                }) || array.rest.as_deref().is_some_and(Self::contains_expression)
+            }
+            Self::Object(object) => object.properties.iter().any(|property| {
+                !matches!(property.key.kind, ExprKind::Literal(_))
+                    || property.initializer.is_some()
+                    || property.pattern.contains_expression()
+            }),
+        }
+    }
+}
+
+impl Parameter {
+    pub(crate) const fn is_simple(&self) -> bool {
+        !self.rest && self.default.is_none() && matches!(self.pattern, BindingPattern::Name(_))
+    }
+
+    pub(crate) fn contains_expression(&self) -> bool {
+        self.default.is_some() || self.pattern.contains_expression()
+    }
+
+    pub(crate) fn names(&self, names: &mut Vec<String>) {
+        self.pattern.names(names);
     }
 }
 
@@ -1436,7 +1470,7 @@ impl Parser {
             self.parameters_without_await()?
         } else {
             alloc::vec![Parameter {
-                name: self.name()?,
+                pattern: BindingPattern::Name(self.name()?),
                 default: None,
                 rest: false
             }]
@@ -1972,10 +2006,7 @@ impl Parser {
         if !self.is(")") {
             loop {
                 let rest = self.eat("...");
-                if self.is("[") || self.is("{") {
-                    return Err(Self::unsupported("destructured parameters"));
-                }
-                let name = self.name()?;
+                let pattern = self.binding_pattern()?;
                 let default = if self.eat("=") {
                     Some(self.expression(0)?)
                 } else {
@@ -1985,7 +2016,7 @@ impl Parser {
                     return Err(self.error("rest parameter must be last and have no default"));
                 }
                 names.push(Parameter {
-                    name,
+                    pattern,
                     default,
                     rest,
                 });
@@ -2006,7 +2037,7 @@ impl Parser {
     }
 
     fn parameter_directive(&mut self, parameters: &[Parameter]) -> Result<(), Error> {
-        if parameters.iter().any(|p| p.rest || p.default.is_some()) && self.is("{") {
+        if parameters.iter().any(|parameter| !parameter.is_simple()) && self.is("{") {
             let saved = self.at;
             self.at = self.at.saturating_add(1);
             let strict = self.strict_prologue();
