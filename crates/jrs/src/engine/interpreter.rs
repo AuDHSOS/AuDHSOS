@@ -724,7 +724,6 @@ impl RegisterVM {
     ///
     /// Returns [`VMError`] on invalid bytecode, resource exhaustion, invalid
     /// heap references, or an operation unsupported by the current bytecode.
-    #[expect(clippy::too_many_lines, reason = "central bytecode dispatch loop")]
     pub fn run_with_arguments(
         &mut self,
         code: &BytecodeFunction,
@@ -779,6 +778,41 @@ impl RegisterVM {
         }
 
         loop {
+            match self.step(code, feedback, heap, realm, &mut pc, &mut current_code_id) {
+                Ok(None) => {}
+                Ok(Some(value)) => return Ok(value),
+                // 14.15: a thrown value looks for a handler from the throwing
+                // instruction outwards before it leaves the outermost frame.
+                Err(VMError::Thrown(value)) => {
+                    let (next_pc, next_code_id) =
+                        self.unwind(code, pc.saturating_sub(1), current_code_id, value)?;
+                    pc = next_pc;
+                    current_code_id = next_code_id;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Executes one instruction, returning the function's value when it returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] for a value the caller has to unwind to a
+    /// handler, and any other [`VMError`] for a failure execution cannot catch.
+    #[expect(clippy::too_many_lines, reason = "central bytecode dispatch")]
+    fn step(
+        &mut self,
+        code: &BytecodeFunction,
+        feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+        pc_out: &mut usize,
+        code_id_out: &mut Option<u32>,
+    ) -> Result<Option<Value>, VMError> {
+        let mut pc = *pc_out;
+        let mut current_code_id = *code_id_out;
+        let outcome = (|| -> Result<Option<Value>, VMError> {
             let active_code = code_unit(code, current_code_id).ok_or(VMError::InvalidBytecode(
                 VerificationError::FunctionOutOfBounds {
                     pc,
@@ -1073,7 +1107,7 @@ impl RegisterVM {
                         )?
                     {
                         self.acc = value;
-                        continue;
+                        return Ok(None);
                     }
 
                     if let Some(property) = heap.lookup_named(oref, name)? {
@@ -1111,7 +1145,7 @@ impl RegisterVM {
                         && case.holder_shape == current_shape
                     {
                         heap.set_object_slot(oref, case.slot, self.acc)?;
-                        continue;
+                        return Ok(None);
                     }
 
                     // Check if property exists in current shape
@@ -1174,11 +1208,11 @@ impl RegisterVM {
                                 |_| Value::from_f64(f64::from(length)),
                                 Value::from_smi,
                             );
-                            continue;
+                            return Ok(None);
                         }
                         let Some(name) = heap.strings.lookup_interned_units(&name) else {
                             self.acc = VALUE_UNDEFINED;
-                            continue;
+                            return Ok(None);
                         };
                         let shape_id = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
                         let prototype_epoch = heap.shapes.prototype_epoch();
@@ -1196,7 +1230,7 @@ impl RegisterVM {
                             )?
                         {
                             self.acc = value;
-                            continue;
+                            return Ok(None);
                         }
                         if let Some(property) = heap.lookup_named(oref, name)? {
                             if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
@@ -1260,7 +1294,7 @@ impl RegisterVM {
                             && case.holder_shape == current_shape
                         {
                             heap.set_object_slot(oref, case.slot, val)?;
-                            continue;
+                            return Ok(None);
                         }
                         if let Some(location) = heap.shapes.lookup(current_shape, name) {
                             heap.set_object_slot(oref, location.slot_offset, val)?;
@@ -1442,13 +1476,7 @@ impl RegisterVM {
                 Instruction::ForInNext { state } => {
                     self.acc = self.for_in_next(active_code, state, heap, realm)?;
                 }
-                Instruction::Throw => {
-                    let thrown = self.acc;
-                    let (next_pc, next_code) =
-                        self.unwind(code, pc.saturating_sub(1), current_code_id, thrown)?;
-                    pc = next_pc;
-                    current_code_id = next_code;
-                }
+                Instruction::Throw => return Err(VMError::Thrown(self.acc)),
                 Instruction::Return => {
                     if let Some(frame) = self.frames.pop() {
                         self.fp = frame.caller_fp;
@@ -1460,11 +1488,15 @@ impl RegisterVM {
                         self.fp = 0;
                         self.active_binding_count = 0;
                         self.current_context = None;
-                        return Ok(self.acc);
+                        return Ok(Some(self.acc));
                     }
                 }
             }
-        }
+            Ok(None)
+        })();
+        *pc_out = pc;
+        *code_id_out = current_code_id;
+        outcome
     }
 }
 
