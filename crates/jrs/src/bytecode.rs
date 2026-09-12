@@ -552,7 +552,7 @@ impl RegisterType {
     }
 
     const fn is_returnable(self) -> bool {
-        self.is_primitive() || matches!(self, Self::Function(_))
+        self.is_primitive() || self.is_object()
     }
 
     const fn is_numeric_primitive(self) -> bool {
@@ -654,6 +654,7 @@ struct RegisterLowerer {
     function_returns: BTreeMap<u32, RegisterType>,
     function_parameters: BTreeMap<u32, Vec<RegisterType>>,
     function_capture_effects: BTreeMap<u32, BTreeMap<String, RegisterType>>,
+    function_layout_effects: BTreeMap<u32, BTreeMap<u32, RegisterObjectLayout>>,
     binding_type_hints: BTreeMap<String, RegisterType>,
     allow_return: bool,
     return_type: Option<RegisterType>,
@@ -693,6 +694,7 @@ struct RegisterSnapshot {
     function_returns: BTreeMap<u32, RegisterType>,
     function_parameters: BTreeMap<u32, Vec<RegisterType>>,
     function_capture_effects: BTreeMap<u32, BTreeMap<String, RegisterType>>,
+    function_layout_effects: BTreeMap<u32, BTreeMap<u32, RegisterObjectLayout>>,
     binding_type_hints: BTreeMap<String, RegisterType>,
     return_type: Option<RegisterType>,
 }
@@ -724,6 +726,7 @@ impl RegisterLowerer {
             function_returns: BTreeMap::new(),
             function_parameters: BTreeMap::new(),
             function_capture_effects: BTreeMap::new(),
+            function_layout_effects: BTreeMap::new(),
             binding_type_hints: BTreeMap::new(),
             allow_return: false,
             return_type: None,
@@ -1057,6 +1060,7 @@ impl RegisterLowerer {
             function_returns: self.function_returns.clone(),
             function_parameters: self.function_parameters.clone(),
             function_capture_effects: self.function_capture_effects.clone(),
+            function_layout_effects: self.function_layout_effects.clone(),
             binding_type_hints: self.binding_type_hints.clone(),
             return_type: self.return_type,
         }
@@ -1081,6 +1085,7 @@ impl RegisterLowerer {
         self.function_returns = snapshot.function_returns;
         self.function_parameters = snapshot.function_parameters;
         self.function_capture_effects = snapshot.function_capture_effects;
+        self.function_layout_effects = snapshot.function_layout_effects;
         self.binding_type_hints = snapshot.binding_type_hints;
         self.return_type = snapshot.return_type;
     }
@@ -1594,6 +1599,8 @@ impl RegisterLowerer {
         let code_id = u32::try_from(self.code.functions.len())
             .ok()?
             .checked_add(self.function_table_base)?;
+        let first_child_object_id = self.next_object_id;
+        let inherited_layouts = self.object_layouts.clone();
         let scope = register_function_scope(function)?;
         let mut captures = BTreeMap::new();
         for name in &scope.free_names {
@@ -1617,9 +1624,24 @@ impl RegisterLowerer {
                 Some((name.clone(), initial_type.merge(final_type)))
             })
             .collect::<Option<BTreeMap<_, _>>>()?;
+        let layout_effects = inherited_layouts
+            .iter()
+            .filter_map(|(id, inherited)| {
+                let final_layout = child.object_layouts.get(id)?;
+                (final_layout != inherited).then(|| (*id, final_layout.clone()))
+            })
+            .collect();
         if !return_type.is_returnable() {
             return None;
         }
+        self.next_object_id = child.next_object_id;
+        self.object_layouts.extend(
+            child
+                .object_layouts
+                .iter()
+                .filter(|(id, _)| **id >= first_child_object_id)
+                .map(|(id, layout)| (*id, layout.clone())),
+        );
         child.code.register_count = child.register_count;
         child.code.parameter_count = u16::try_from(function.parameters.len()).ok()?;
         child.code.binding_count = child.max_binding_count;
@@ -1631,6 +1653,8 @@ impl RegisterLowerer {
         self.function_parameters.extend(child.function_parameters);
         self.function_capture_effects
             .extend(child.function_capture_effects);
+        self.function_layout_effects
+            .extend(child.function_layout_effects);
         self.function_returns.insert(code_id, return_type);
         self.function_parameters.insert(
             code_id,
@@ -1638,6 +1662,7 @@ impl RegisterLowerer {
         );
         self.function_capture_effects
             .insert(code_id, capture_effects);
+        self.function_layout_effects.insert(code_id, layout_effects);
         self.code.emit(Instruction::CreateClosure(code_id));
         Some(RegisterType::Function(code_id))
     }
@@ -1703,6 +1728,9 @@ impl RegisterLowerer {
         child.function_returns = self.function_returns.clone();
         child.function_parameters = self.function_parameters.clone();
         child.function_capture_effects = self.function_capture_effects.clone();
+        child.function_layout_effects = self.function_layout_effects.clone();
+        child.next_object_id = self.next_object_id;
+        child.object_layouts = self.object_layouts.clone();
         let depth_shift = u16::from(!captured_names.is_empty());
         for (name, binding) in captures {
             let RegisterBindingStorage::Context { depth, slot } = binding.storage else {
@@ -1935,6 +1963,9 @@ impl RegisterLowerer {
                     binding.value_type = Some(binding.value_type?.merge(effect));
                 }
             }
+        }
+        if let Some(effects) = self.function_layout_effects.get(&code_id).cloned() {
+            self.object_layouts.extend(effects);
         }
         self.function_returns.get(&code_id).copied()
     }
