@@ -3083,11 +3083,11 @@ impl RegisterLowerer {
                 Instruction::TestStrictEqual(right_register),
                 RegisterType::Boolean,
             ),
-            Binary::Eq if left_type.is_primitive() && right_type.is_primitive() => (
+            Binary::Eq if equality_operands_supported(left_type, right_type) => (
                 Instruction::TestEqual(right_register),
                 RegisterType::Boolean,
             ),
-            Binary::Ne if left_type.is_primitive() && right_type.is_primitive() => {
+            Binary::Ne if equality_operands_supported(left_type, right_type) => {
                 self.code.emit(Instruction::TestEqual(right_register));
                 self.code.emit(Instruction::LogicalNot);
                 self.release_register(right_register)?;
@@ -3309,6 +3309,10 @@ impl RegisterLowerer {
         }
         Some(())
     }
+}
+
+const fn equality_operands_supported(left: RegisterType, right: RegisterType) -> bool {
+    left.is_primitive() && right.is_primitive() || left.is_object() && right.is_object()
 }
 
 fn smi_literal(number: f64) -> Option<i32> {

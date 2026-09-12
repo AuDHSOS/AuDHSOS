@@ -529,6 +529,9 @@ impl RegisterVM {
         mut right: Value,
         heap: &GenerationalHeap,
     ) -> Result<bool, VMError> {
+        if left.is_object() && right.is_object() {
+            return Ok(left.strictly_equals(right));
+        }
         if left.is_object() || right.is_object() || left.is_bigint() || right.is_bigint() {
             return Err(VMError::TypeError);
         }

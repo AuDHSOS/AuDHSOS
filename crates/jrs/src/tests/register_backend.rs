@@ -1069,6 +1069,7 @@ fn register_functions_return_gc_owned_objects_and_layouts() -> Result<(), Error>
         "function make(x){return {x}}make(42).x",
         "function f(){let i=0;while(i<300){[i];i++}return {x:42}}f().x",
         "let o={x:42};let f=function(){return o};f().x",
+        "let o={x:42};let f=function(){return o};f()===o",
         "let o={x:40};let f=function(){o.y=2;return o};f().x+o.y",
         "let o={x:1};let f=function(){o.y=2};o.y===undefined",
     ] {
@@ -1085,13 +1086,6 @@ fn register_functions_return_gc_owned_objects_and_layouts() -> Result<(), Error>
     }
     assert!(
         !compile(
-            "let o={x:42};function f(){return o}f()===o",
-            Limits::default()
-        )?
-        .uses_register_backend()
-    );
-    assert!(
-        !compile(
             "let o={x:42};function f(){return o}f().x",
             Limits::default()
         )?
@@ -1104,6 +1098,35 @@ fn register_functions_return_gc_owned_objects_and_layouts() -> Result<(), Error>
         )?
         .uses_register_backend()
     );
+    Ok(())
+}
+
+#[test]
+fn object_identity_equality_runs_without_coercion() -> Result<(), Error> {
+    for source in [
+        "let o={};o===o",
+        "let o={};o!==o",
+        "let a={},b={};a===b",
+        "let a={},b={};a!==b",
+        "let o={};o==o",
+        "let o={};o!=o",
+        "let a={},b={};a==b",
+        "let a={},b={};a!=b",
+        "let a=[],b=a;a===b&&a==b",
+        "function f(){return {}}let a=f(),b=f();a!==b&&a!=b",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert_eq!(actual, expected, "{source}");
+    }
+
+    for source in ["let o={};o==0", "let o={};0!=o"] {
+        assert!(!compile(source, Limits::default())?.uses_register_backend());
+    }
     Ok(())
 }
 
