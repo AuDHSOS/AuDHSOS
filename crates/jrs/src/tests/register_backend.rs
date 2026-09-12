@@ -17,7 +17,6 @@ fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), 
     for source in [
         "let [x]=[1];x",
         "var [x]=[1];x",
-        "let k='x';let {[k]:x}={x:1};x",
         "let {x,...rest}={x:1};rest",
         "{const [x]=[1];x}",
         "for(let [x]=[1];false;){}",
@@ -37,6 +36,15 @@ fn static_object_binding_patterns_and_defaults_use_register_property_caches() ->
         "let {x,y}={x:20,y:22};x+y",
         "let {x:{y}}={x:{y:42}};y",
         "let {[('x')]:x}={x:42};x",
+        "let {['x']:x}={x:42};x",
+        "let {[true]:x}={'true':42};x",
+        "let {[false]:x}={'false':42};x",
+        "let {[null]:x}={'null':42};x",
+        "let {[undefined]:x}={'undefined':42};x",
+        "let k='x';let {[k]:x}={x:42};x",
+        "let k=true;let {[k]:x}={'true':42};x",
+        "let {[0]:x,['length']:n}=[41];x+n",
+        "let {[1]:x=42}=[];x",
         "let {0:x,length:n}=[41];x+n",
         "let {}={x:1};42",
         "let {x=42}={x:undefined};x",
@@ -68,6 +76,18 @@ fn static_object_binding_patterns_and_defaults_use_register_property_caches() ->
                 crate::engine::bytecode::Instruction::JumpIfNotUndefined(_)
             )));
         }
+        if source.contains("{[") {
+            assert!(
+                core::iter::once(code.as_ref())
+                    .chain(code.functions.iter())
+                    .flat_map(|function| &function.instructions)
+                    .any(|instruction| matches!(
+                        instruction,
+                        crate::engine::bytecode::Instruction::GetByValue { .. }
+                    )),
+                "{source}"
+            );
+        }
         if !source.contains("let {}") {
             assert!(
                 core::iter::once(code.as_ref())
@@ -96,7 +116,13 @@ fn static_object_binding_patterns_and_defaults_use_register_property_caches() ->
 
 #[test]
 fn observable_object_binding_defaults_stay_on_legacy_backend() -> Result<(), Error> {
-    for source in ["let {x=({})}={};42", "let o={};let {x=(o.y=1)}={};42"] {
+    for source in [
+        "let {x=({})}={};42",
+        "let o={};let {x=(o.y=1)}={};42",
+        "let key={toString(){return 'x'}};let {[key]:x}={x:42};x",
+        "let key='x';let {[key='y']:x}={x:42};x",
+        "let {['x'+'']:x}={x:42};x",
+    ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
         Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;

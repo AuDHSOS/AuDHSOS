@@ -779,8 +779,13 @@ impl RegisterLowerer {
                 let source = self.allocate_register()?;
                 self.code.emit(Instruction::Star(source));
                 for property in &object.properties {
-                    let mut property_type =
-                        self.lower_property_from_register(source, value_type, &property.key, true)?;
+                    let mut property_type = self.lower_property_from_register(
+                        source,
+                        value_type,
+                        &property.key,
+                        property.computed,
+                        true,
+                    )?;
                     if let Some(initializer) = &property.initializer {
                         property_type = self.lower_binding_default(property_type, initializer)?;
                     }
@@ -1617,7 +1622,7 @@ impl RegisterLowerer {
         }
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
-        let result = self.lower_property_from_register(object, base_type, key, false)?;
+        let result = self.lower_property_from_register(object, base_type, key, false, false)?;
         self.release_register(object)?;
         Some(result)
     }
@@ -1627,82 +1632,146 @@ impl RegisterLowerer {
         object: crate::engine::bytecode::Reg,
         base_type: RegisterType,
         key: &Expr,
+        keyed: bool,
         missing_is_undefined: bool,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        if matches!(base_type, RegisterType::Array(_)) && Self::is_length_name(key) {
+        if !keyed && matches!(base_type, RegisterType::Array(_)) && Self::is_length_name(key) {
             self.code.emit(Instruction::GetArrayLength { obj: object });
-            Some(RegisterType::Number)
-        } else if matches!(base_type, RegisterType::Array(_)) {
-            let RegisterType::Array(object_id) = base_type else {
-                return None;
-            };
-            let RegisterObjectLayout::Array { elements, dynamic } =
-                self.object_layouts.get(&object_id)?
-            else {
-                return None;
-            };
-            let static_index = Self::static_array_index(key);
-            let result_type = if let Some(index) = static_index {
-                let static_type = elements
-                    .get(&index)
-                    .copied()
-                    .unwrap_or(RegisterType::Undefined);
-                dynamic.map_or(static_type, |dynamic| static_type.merge(dynamic))
-            } else {
-                elements
-                    .values()
-                    .copied()
-                    .chain(dynamic.iter().copied())
-                    .reduce(RegisterType::merge)
-                    .unwrap_or(RegisterType::Undefined)
-                    .merge(RegisterType::Number)
-                    .merge(RegisterType::Undefined)
-            };
-            if let Some(index) = static_index {
-                self.emit_array_index(index)?;
-            } else {
-                let key_type = self.lower(key)?;
-                if !key_type.is_primitive() {
-                    return None;
-                }
-            }
-            let key = self.allocate_register()?;
-            self.code.emit(Instruction::Star(key));
-            let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
-            self.code.emit(Instruction::GetByValue {
-                obj: object,
-                key,
-                slot,
-            });
-            self.release_register(key)?;
-            Some(result_type)
+            return Some(RegisterType::Number);
+        }
+        if matches!(base_type, RegisterType::Array(_)) {
+            self.lower_array_property_from_register(object, base_type, key, keyed)
         } else {
-            let name = Self::static_property_name(key)?;
-            let RegisterType::Object(object_id) = base_type else {
+            self.lower_ordinary_property_from_register(
+                object,
+                base_type,
+                key,
+                keyed,
+                missing_is_undefined,
+            )
+        }
+    }
+
+    fn lower_array_property_from_register(
+        &mut self,
+        object: crate::engine::bytecode::Reg,
+        base_type: RegisterType,
+        key: &Expr,
+        keyed: bool,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let RegisterType::Array(object_id) = base_type else {
+            return None;
+        };
+        let RegisterObjectLayout::Array { elements, dynamic } =
+            self.object_layouts.get(&object_id)?
+        else {
+            return None;
+        };
+        let static_index = Self::static_array_index(key);
+        let static_name = keyed
+            .then(|| Self::static_property_key_units(key))
+            .flatten();
+        let result_type = if static_name.as_deref().is_some_and(Self::is_length) {
+            RegisterType::Number
+        } else if let Some(index) = static_index {
+            let static_type = elements
+                .get(&index)
+                .copied()
+                .unwrap_or(RegisterType::Undefined);
+            dynamic.map_or(static_type, |dynamic| static_type.merge(dynamic))
+        } else {
+            elements
+                .values()
+                .copied()
+                .chain(dynamic.iter().copied())
+                .reduce(RegisterType::merge)
+                .unwrap_or(RegisterType::Undefined)
+                .merge(RegisterType::Number)
+                .merge(RegisterType::Undefined)
+        };
+        if keyed {
+            if !self.lower(key)?.is_primitive() {
                 return None;
-            };
-            let RegisterObjectLayout::Ordinary(properties) = self.object_layouts.get(&object_id)?
-            else {
-                return None;
-            };
-            let result_type = if missing_is_undefined {
+            }
+        } else if let Some(index) = static_index {
+            self.emit_array_index(index)?;
+        } else if !self.lower(key)?.is_primitive() {
+            return None;
+        }
+        let key = self.allocate_register()?;
+        self.code.emit(Instruction::Star(key));
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetByValue {
+            obj: object,
+            key,
+            slot,
+        });
+        self.release_register(key)?;
+        Some(result_type)
+    }
+
+    fn lower_ordinary_property_from_register(
+        &mut self,
+        object: crate::engine::bytecode::Reg,
+        base_type: RegisterType,
+        key: &Expr,
+        keyed: bool,
+        missing_is_undefined: bool,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let RegisterType::Object(object_id) = base_type else {
+            return None;
+        };
+        let RegisterObjectLayout::Ordinary(properties) = self.object_layouts.get(&object_id)?
+        else {
+            return None;
+        };
+        let static_name = if keyed {
+            Self::static_property_key_units(key)
+        } else {
+            Some(Self::static_property_name(key)?.to_vec())
+        };
+        let result_type = if let Some(name) = static_name.as_deref() {
+            if missing_is_undefined {
                 properties
                     .get(name)
                     .copied()
                     .unwrap_or(RegisterType::Undefined)
             } else {
                 *properties.get(name)?
-            };
-            let name = self.string_constant(name)?;
-            let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+            }
+        } else {
+            properties
+                .values()
+                .copied()
+                .reduce(RegisterType::merge)
+                .unwrap_or(RegisterType::Undefined)
+                .merge(RegisterType::Undefined)
+        };
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        if keyed {
+            if !self.lower(key)?.is_primitive() {
+                return None;
+            }
+            let key = self.allocate_register()?;
+            self.code.emit(Instruction::Star(key));
+            self.code.emit(Instruction::GetByValue {
+                obj: object,
+                key,
+                slot,
+            });
+            self.release_register(key)?;
+        } else {
+            let name = self.string_constant(static_name.as_deref()?)?;
             self.code.emit(Instruction::GetNamed {
                 obj: object,
                 name,
                 slot,
             });
-            Some(result_type)
         }
+        Some(result_type)
     }
 
     fn lower_member_assignment(
@@ -1815,6 +1884,31 @@ impl RegisterLowerer {
     fn is_length_name(expression: &Expr) -> bool {
         const LENGTH: [u16; 6] = [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68];
         Self::static_property_name(expression).is_some_and(|name| name == LENGTH)
+    }
+
+    fn is_length(units: &[u16]) -> bool {
+        const LENGTH: [u16; 6] = [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68];
+        units == LENGTH
+    }
+
+    fn static_property_key_units(expression: &Expr) -> Option<Vec<u16>> {
+        match &expression.kind {
+            ExprKind::Literal(Value::String(units)) => Some(units.to_vec()),
+            ExprKind::Literal(Value::Number(number)) => Some(
+                crate::number::decimal_string(*number)
+                    .encode_utf16()
+                    .collect(),
+            ),
+            ExprKind::Literal(Value::Boolean(value)) => Some(
+                if *value { "true" } else { "false" }
+                    .encode_utf16()
+                    .collect(),
+            ),
+            ExprKind::Literal(Value::Null) => Some("null".encode_utf16().collect()),
+            ExprKind::Literal(Value::Undefined) => Some("undefined".encode_utf16().collect()),
+            ExprKind::Group(inner) => Self::static_property_key_units(inner),
+            _ => None,
+        }
     }
 
     fn static_array_index(expression: &Expr) -> Option<u32> {
@@ -3486,10 +3580,28 @@ fn register_binding_pattern_supported(pattern: &parser::BindingPattern) -> bool 
         parser::BindingPattern::Object(object) => {
             object.rest.is_none()
                 && object.properties.iter().all(|property| {
-                    RegisterLowerer::static_property_name(&property.key).is_some()
+                    (!property.computed
+                        && RegisterLowerer::static_property_name(&property.key).is_some()
+                        || property.computed
+                            && register_computed_property_key_supported(&property.key))
                         && register_binding_pattern_supported(&property.pattern)
                 })
         }
+    }
+}
+
+fn register_computed_property_key_supported(expression: &Expr) -> bool {
+    match &expression.kind {
+        ExprKind::Literal(
+            Value::Number(_)
+            | Value::Boolean(_)
+            | Value::Null
+            | Value::Undefined
+            | Value::String(_),
+        )
+        | ExprKind::Name(_) => true,
+        ExprKind::Group(inner) => register_computed_property_key_supported(inner),
+        _ => false,
     }
 }
 
