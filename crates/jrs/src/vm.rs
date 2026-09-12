@@ -965,14 +965,24 @@ impl Execution<'_> {
                         pc = self.frames.last().ok_or(Error::InvalidBytecode)?.pc;
                         frame_changed = true;
                     }
-                    Op::Call(_) | Op::CallExpanded => {
-                        let count = if let Op::Call(count) = op {
+                    Op::Call(_) | Op::CallExpanded | Op::Eval(_, _) | Op::EvalExpanded(_) => {
+                        let count = if let Op::Call(count) | Op::Eval(count, _) = op {
                             *count
                         } else {
                             self.expanded_count()?
                         };
                         self.frames.last_mut().ok_or(Error::InvalidBytecode)?.pc = pc;
-                        self.invoke(count, program)?;
+                        let strict_eval = match op {
+                            Op::Eval(_, strict) | Op::EvalExpanded(strict) => Some(*strict),
+                            _ => None,
+                        };
+                        if let Some(strict) = strict_eval
+                            && self.is_direct_eval_callee(count)?
+                        {
+                            self.perform_direct_eval(count, strict)?;
+                        } else {
+                            self.invoke(count, program)?;
+                        }
                         let frame = self.frames.last().ok_or(Error::InvalidBytecode)?;
                         pc = frame.pc;
                         frame_changed = true;
@@ -1387,6 +1397,42 @@ impl Execution<'_> {
     fn invoke(&mut self, count: usize, program: &Program) -> Result<(), Error> {
         self.invoke_kind(count, program, None)
     }
+
+    fn is_direct_eval_callee(&self, count: usize) -> Result<bool, Error> {
+        let start = self
+            .stack
+            .len()
+            .checked_sub(count.saturating_add(2))
+            .ok_or(Error::InvalidBytecode)?;
+        let callee = self.stack.get(start).ok_or(Error::InvalidBytecode)?;
+        match callee {
+            Value::Function(FunctionValue(Callable::Native(Builtin::Eval))) => Ok(true),
+            Value::Function(FunctionValue(Callable::Host { handle, .. })) => Ok(matches!(
+                self.heap.get(*handle)?,
+                Node::HostFunction {
+                    behavior: crate::heap::HostBehavior::Eval,
+                    ..
+                }
+            )),
+            _ => Ok(false),
+        }
+    }
+
+    fn perform_direct_eval(&mut self, count: usize, strict_caller: bool) -> Result<(), Error> {
+        let start = self
+            .stack
+            .len()
+            .checked_sub(count.saturating_add(2))
+            .ok_or(Error::InvalidBytecode)?;
+        let input = self
+            .stack
+            .get(start.saturating_add(2))
+            .cloned()
+            .unwrap_or(Value::Undefined);
+        let result = self.eval_source(&input, strict_caller)?;
+        self.stack.truncate(start);
+        self.push(result)
+    }
     #[expect(
         clippy::too_many_lines,
         reason = "single call dispatch handles forwarding and frame initialization without recursive forwarding"
@@ -1720,6 +1766,9 @@ impl Execution<'_> {
                 args,
                 &Value::Function(FunctionValue::native(Builtin::Function)),
             );
+        }
+        if builtin == Builtin::Eval {
+            return self.eval_source(args.first().unwrap_or(&Value::Undefined), false);
         }
         if let Some(value) = self.string_call(builtin, receiver, args)? {
             return Ok(value);

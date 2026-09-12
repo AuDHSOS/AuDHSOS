@@ -227,6 +227,20 @@ enum ForDeclaration {
 }
 
 pub(crate) fn parse(source: &str, limits: Limits) -> Result<Vec<Stmt>, Error> {
+    parse_script(source, limits, false)
+}
+
+/// Parse eval code with the strictness inherited from a syntactically direct
+/// eval call. The eval source's own Directive Prologue is still considered.
+pub(crate) fn parse_eval(
+    source: &str,
+    limits: Limits,
+    strict_caller: bool,
+) -> Result<Vec<Stmt>, Error> {
+    parse_script(source, limits, strict_caller)
+}
+
+fn parse_script(source: &str, limits: Limits, strict_caller: bool) -> Result<Vec<Stmt>, Error> {
     let tokens = lexer::lex(source, limits)?;
     let mut parser = Parser {
         source: Rc::from(source),
@@ -243,7 +257,7 @@ pub(crate) fn parse(source: &str, limits: Limits) -> Result<Vec<Stmt>, Error> {
         super_context: SuperContext::None,
         allow_in: true,
     };
-    parser.strict = parser.strict_prologue();
+    parser.strict = strict_caller || parser.strict_prologue();
     parser.statements(false)
 }
 
@@ -261,22 +275,29 @@ pub(crate) fn dynamic_function(
             message: "hashbang is not a FormalParameters token",
         });
     }
-    let mut params = Parser::dynamic(&alloc::format!("{parameters}\n)"), limits)?;
-    let parameters = params.parameters_without_await()?;
-    if params.token()?.kind != Kind::End {
-        return Err(params.error("unexpected text after dynamic parameters"));
-    }
+    let mut parsed_parameters = dynamic_parameters(parameters, limits, false)?;
     let mut parser = Parser::dynamic(body, limits)?;
     parser.async_context = async_kind == AsyncKind::Async;
     parser.strict = parser.strict_prologue();
-    if parser.strict && parameters.iter().any(|p| p.rest || p.default.is_some()) {
+    let body = parser.statements(false)?;
+    // CreateDynamicFunction parses the fragments independently and then parses
+    // the synthesized FunctionExpression. Reparse the already-delimited
+    // parameters as strict code to apply the combined expression's Early
+    // Errors when the body contains a Use Strict Directive.
+    if parser.strict {
+        parsed_parameters = dynamic_parameters(parameters, limits, true)?;
+    }
+    if parser.strict
+        && parsed_parameters
+            .iter()
+            .any(|p| p.rest || p.default.is_some())
+    {
         return Err(parser.error("use strict directive with non-simple parameters"));
     }
-    let body = parser.statements(false)?;
     Ok(Function {
         source: None,
         name: None,
-        parameters,
+        parameters: parsed_parameters,
         body,
         arrow: false,
         strict: parser.strict,
@@ -284,6 +305,17 @@ pub(crate) fn dynamic_function(
         async_kind,
         constructor_kind: ConstructorKind::Ordinary,
     })
+}
+
+fn dynamic_parameters(source: &str, limits: Limits, strict: bool) -> Result<Vec<Parameter>, Error> {
+    let delimited = alloc::format!("{source}\n)");
+    let mut parser = Parser::dynamic(&delimited, limits)?;
+    parser.strict = strict;
+    let parameters = parser.parameters_without_await()?;
+    if parser.token()?.kind != Kind::End {
+        return Err(parser.error("unexpected text after dynamic parameters"));
+    }
+    Ok(parameters)
 }
 
 struct Parser {

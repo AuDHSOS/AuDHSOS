@@ -59,6 +59,8 @@ pub(crate) enum Op {
     Branch(usize, Branch),
     Call(usize),
     CallExpanded,
+    Eval(usize, bool),
+    EvalExpanded(bool),
     ConstructExpanded,
     ArgumentAppend(bool),
     ArrayAppend(bool),
@@ -456,6 +458,19 @@ pub fn compile_script(source: &str, limits: Limits) -> Result<Script, Error> {
 }
 fn compile_mode(source: &str, limits: Limits, realm: bool) -> Result<Program, Error> {
     let body = parser::parse(source, limits)?;
+    compile_parsed(&body, limits, realm)
+}
+
+pub(crate) fn compile_eval(
+    source: &str,
+    limits: Limits,
+    strict_caller: bool,
+) -> Result<Program, Error> {
+    let body = parser::parse_eval(source, limits, strict_caller)?;
+    compile_parsed(&body, limits, true)
+}
+
+fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program, Error> {
     let mut compiler = Compiler {
         program: Program {
             code: Vec::new(),
@@ -476,13 +491,13 @@ fn compile_mode(source: &str, limits: Limits, realm: bool) -> Result<Program, Er
     };
     compiler.scopes.push(BTreeMap::new());
     if realm {
-        compiler.global_body(&body)?;
+        compiler.global_body(body)?;
     } else {
-        compiler.root_body(&body)?;
+        compiler.root_body(body)?;
     }
     compiler.finish();
     compiler.program.register_code = lower_register_script(
-        &body,
+        body,
         realm,
         u64::try_from(compiler.program.total_instructions).unwrap_or(u64::MAX),
         limits.properties,
@@ -4112,7 +4127,7 @@ impl Compiler {
             }
             ExprKind::Function(function) => self.function(function, None)?,
             ExprKind::Call(callee, args) => {
-                self.call(callee, args)?;
+                self.call(callee, args, expr.strict)?;
             }
             ExprKind::Construct(callee, args) => {
                 self.construct(callee, args)?;
@@ -4121,7 +4136,7 @@ impl Compiler {
         Ok(())
     }
 
-    fn call(&mut self, callee: &Expr, args: &[Expr]) -> Result<(), Error> {
+    fn call(&mut self, callee: &Expr, args: &[Expr], strict: bool) -> Result<(), Error> {
         if matches!(callee.kind, ExprKind::Super) {
             self.emit(Op::PrepareSuperCall)?;
             let expanded = self.arguments(args)?;
@@ -4145,7 +4160,12 @@ impl Compiler {
             self.emit(Op::Constant(Value::Undefined))?;
         }
         let expanded = self.arguments(args)?;
-        self.emit(if expanded {
+        let direct_eval = callee.reference_name() == Some("eval");
+        self.emit(if direct_eval && expanded {
+            Op::EvalExpanded(strict)
+        } else if direct_eval {
+            Op::Eval(args.len(), strict)
+        } else if expanded {
             Op::CallExpanded
         } else {
             Op::Call(args.len())
@@ -4657,7 +4677,7 @@ impl Compiler {
                 .program
                 .code
                 .iter()
-                .any(|op| matches!(op,Op::Load(Access::Local(index)) if *index==slot))
+                .any(|op| matches!(op,Op::Load(Access::Local(index)) | Op::Store(Access::Local(index)) if *index==slot))
     }
 
     fn parameter_body_scope(&mut self, function: &Function) -> Result<(), Error> {

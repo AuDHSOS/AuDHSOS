@@ -444,7 +444,23 @@ impl<'host> Realm<'host> {
 }
 
 impl Execution<'_> {
+    pub(super) fn eval_source(
+        &mut self,
+        input: &Value,
+        strict_caller: bool,
+    ) -> Result<Value, Error> {
+        let Value::String(units) = input else {
+            return Ok(input.clone());
+        };
+        self.eval_source_units(units, strict_caller)
+    }
+
     pub(super) fn eval_global_source(&mut self, input: &Value) -> Result<Value, Error> {
+        let units = self.string_units(input)?;
+        self.eval_source_units(&units, false)
+    }
+
+    fn eval_source_units(&mut self, units: &[u16], strict_caller: bool) -> Result<Value, Error> {
         if self.native_depth >= 12 {
             return Err(Error::Limit {
                 resource: "nested Script reentry",
@@ -452,15 +468,14 @@ impl Execution<'_> {
         }
         self.native_depth = self.native_depth.saturating_add(1);
         let roots = self.native_roots.len();
-        self.native_roots.push(input.clone());
+        self.native_roots.push(Value::String(units.into()));
         let result = (|| {
-            let units = self.string_units(input)?;
             self.charge(u64::try_from(units.len()).unwrap_or(u64::MAX))?;
             let source =
-                alloc::string::String::from_utf16(&units).map_err(|_| Error::Unsupported {
+                alloc::string::String::from_utf16(units).map_err(|_| Error::Unsupported {
                     feature: "lone-surrogate Script source",
                 })?;
-            let program = crate::bytecode::compile_realm(&source, self.limits)?;
+            let program = crate::bytecode::compile_eval(&source, self.limits, strict_caller)?;
             self.charge(u64::try_from(program.instruction_count()).unwrap_or(u64::MAX))?;
             self.execute_nested_script(program)
         })();
@@ -532,7 +547,7 @@ impl Execution<'_> {
         }
         let math = self.math_object()?;
         let reflect = self.reflect_object()?;
-        let eval_fn = self.new_host_behavior(crate::heap::HostBehavior::EvalScript, "eval", 1)?;
+        let eval_fn = self.new_host_behavior(crate::heap::HostBehavior::Eval, "eval", 1)?;
         self.define(
             &global,
             Value::string("eval").units(),
