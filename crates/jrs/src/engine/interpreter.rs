@@ -21,6 +21,7 @@ use super::{
     feedback::{BinaryOpFeedback, FeedbackVector, NamedAccessCase},
     heap::{GenerationalHeap, HeapError},
     object::ObjectKind,
+    realm::Realm,
     shape::{PropertyFlags, ShapeId},
     string::StringError,
     value::{ObjectRef, VALUE_FALSE, VALUE_NULL, VALUE_TRUE, VALUE_UNDEFINED, Value},
@@ -224,10 +225,14 @@ impl RegisterVM {
         &mut self,
         code: &BytecodeFunction,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
         shape: ShapeId,
     ) -> Result<ObjectRef, VMError> {
         loop {
-            match heap.allocate_object(shape, VALUE_NULL) {
+            // The prototype root is re-read after every collection, because a
+            // scavenge forwards the intrinsic into the next semispace.
+            let prototype = realm.object_prototype(heap)?;
+            match heap.allocate_object(shape, prototype) {
                 Ok(reference) => return Ok(reference),
                 Err(HeapError::NurseryFull) => self.collect_young(code, heap)?,
                 Err(error) => return Err(error.into()),
@@ -239,10 +244,11 @@ impl RegisterVM {
         &mut self,
         code: &BytecodeFunction,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
         length: u32,
     ) -> Result<ObjectRef, VMError> {
         loop {
-            match heap.allocate_array(length) {
+            match realm.array(heap, length) {
                 Ok(reference) => return Ok(reference),
                 Err(HeapError::NurseryFull) => self.collect_young(code, heap)?,
                 Err(error) => return Err(error.into()),
@@ -254,6 +260,7 @@ impl RegisterVM {
         &mut self,
         code: &BytecodeFunction,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
         code_id: u32,
         captures_context: bool,
     ) -> Result<ObjectRef, VMError> {
@@ -263,8 +270,12 @@ impl RegisterVM {
             } else {
                 None
             };
+            let prototype = realm.function_prototype(heap)?;
             match heap.allocate_function(code_id, context) {
-                Ok(reference) => return Ok(reference),
+                Ok(reference) => {
+                    heap.set_object_prototype(reference, prototype)?;
+                    return Ok(reference);
+                }
                 Err(HeapError::NurseryFull) => self.collect_young(code, heap)?,
                 Err(error) => return Err(error.into()),
             }
@@ -572,8 +583,9 @@ impl RegisterVM {
         code: &BytecodeFunction,
         feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<Value, VMError> {
-        self.run_with_arguments(code, &[], feedback, heap)
+        self.run_with_arguments(code, &[], feedback, heap, realm)
     }
 
     /// Executes bytecode after copying supplied values into the formal-parameter
@@ -594,6 +606,7 @@ impl RegisterVM {
         arguments: &[Value],
         feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<Value, VMError> {
         self.fp = 0;
         self.frames.clear();
@@ -1171,14 +1184,14 @@ impl RegisterVM {
                 }
                 Instruction::CreateObject => {
                     let root_shape = heap.shapes.root_shape();
-                    let oref = self.allocate_object(active_code, heap, root_shape)?;
+                    let oref = self.allocate_object(active_code, heap, realm, root_shape)?;
                     self.acc = Value::from_object(oref);
                 }
                 Instruction::CreateArray(length) => {
                     if self.property_limit == 0 {
                         return Err(VMError::PropertyLimit);
                     }
-                    let oref = self.allocate_array(active_code, heap, length)?;
+                    let oref = self.allocate_array(active_code, heap, realm, length)?;
                     self.acc = Value::from_object(oref);
                 }
                 Instruction::CreateClosure(code_id) => {
@@ -1192,8 +1205,13 @@ impl RegisterVM {
                                 },
                             ))?;
                     let captures_context = !target.outer_context_slot_counts.is_empty();
-                    let function =
-                        self.allocate_function(active_code, heap, code_id, captures_context)?;
+                    let function = self.allocate_function(
+                        active_code,
+                        heap,
+                        realm,
+                        code_id,
+                        captures_context,
+                    )?;
                     self.acc = Value::from_object(function);
                 }
                 Instruction::Call {
@@ -1521,9 +1539,10 @@ mod tests {
 
         let mut vm = RegisterVM::new(100_000);
         let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
         let mut feedback = FeedbackVector::for_code(&code);
 
-        let res = vm.run(&code, &mut feedback, &mut heap).unwrap();
+        let res = vm.run(&code, &mut feedback, &mut heap, &realm).unwrap();
         assert_eq!(res.as_smi(), Some(45));
     }
 
@@ -1540,8 +1559,9 @@ mod tests {
             code.emit(Instruction::Return);
             let mut feedback = FeedbackVector::for_code(&code);
             let mut heap = GenerationalHeap::default();
+            let realm = Realm::new(&mut heap).unwrap();
             assert_eq!(
-                RegisterVM::default().run(&code, &mut feedback, &mut heap),
+                RegisterVM::default().run(&code, &mut feedback, &mut heap, &realm),
                 Ok(expected)
             );
         }
@@ -1558,6 +1578,8 @@ mod tests {
         let g_slot = code.allocate_feedback_slot(FeedbackKind::NamedAccess);
 
         let mut heap = GenerationalHeap::new();
+
+        let realm = Realm::new(&mut heap).unwrap();
         let prop_x = code.add_string_constant("x".encode_utf16().collect());
 
         code.emit(Instruction::CreateObject);
@@ -1580,7 +1602,7 @@ mod tests {
         let mut feedback = FeedbackVector::for_code(&code);
         let mut vm = RegisterVM::new(10_000);
 
-        let res = vm.run(&code, &mut feedback, &mut heap).unwrap();
+        let res = vm.run(&code, &mut feedback, &mut heap, &realm).unwrap();
         assert_eq!(res.as_smi(), Some(42));
 
         // Verification of IC feedback: slot g_slot must be monomorphic!
@@ -1602,10 +1624,12 @@ mod tests {
         code.emit(Instruction::Return);
 
         let mut heap = GenerationalHeap::with_nursery_capacity(1);
+
+        let realm = Realm::new(&mut heap).unwrap();
         let mut feedback = FeedbackVector::new(0);
         let mut vm = RegisterVM::new(100);
 
-        let result = vm.run(&code, &mut feedback, &mut heap).unwrap();
+        let result = vm.run(&code, &mut feedback, &mut heap, &realm).unwrap();
         let first = result.as_object().unwrap();
         assert!(first.is_old());
         assert!(heap.get_object(first).is_some());
@@ -1614,13 +1638,14 @@ mod tests {
     #[test]
     fn run_rejects_unverified_code_and_mismatched_feedback() {
         let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
         let mut vm = RegisterVM::new(100);
         let mut malformed = BytecodeFunction::new(0, 0);
         malformed.emit(Instruction::Ldar(Reg(0)));
         malformed.emit(Instruction::Return);
         let mut feedback = FeedbackVector::new(0);
         assert_eq!(
-            vm.run(&malformed, &mut feedback, &mut heap),
+            vm.run(&malformed, &mut feedback, &mut heap, &realm),
             Err(VMError::InvalidBytecode(
                 VerificationError::RegisterOutOfBounds {
                     pc: 0,
@@ -1633,7 +1658,7 @@ mod tests {
         valid.feedback_slots.push(FeedbackKind::NamedAccess);
         valid.emit(Instruction::Return);
         assert_eq!(
-            vm.run(&valid, &mut feedback, &mut heap),
+            vm.run(&valid, &mut feedback, &mut heap, &realm),
             Err(VMError::InvalidFeedbackVector)
         );
     }
@@ -1645,6 +1670,7 @@ mod tests {
         code.emit(Instruction::ToNumber);
         code.emit(Instruction::Return);
         let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
         let object = heap
             .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
             .unwrap();
@@ -1657,7 +1683,7 @@ mod tests {
             let mut feedback = FeedbackVector::for_code(&code);
             let mut vm = RegisterVM::new(100);
             assert_eq!(
-                vm.run_with_arguments(&code, &[value], &mut feedback, &mut heap),
+                vm.run_with_arguments(&code, &[value], &mut feedback, &mut heap, &realm),
                 Err(VMError::TypeError)
             );
         }
@@ -1670,6 +1696,7 @@ mod tests {
         code.emit(Instruction::TestEqual(Reg(1)));
         code.emit(Instruction::Return);
         let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
         let object = heap
             .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
             .unwrap();
@@ -1681,7 +1708,13 @@ mod tests {
             let mut feedback = FeedbackVector::for_code(&code);
             let mut vm = RegisterVM::new(100);
             assert_eq!(
-                vm.run_with_arguments(&code, &[VALUE_UNDEFINED, value], &mut feedback, &mut heap),
+                vm.run_with_arguments(
+                    &code,
+                    &[VALUE_UNDEFINED, value],
+                    &mut feedback,
+                    &mut heap,
+                    &realm
+                ),
                 Err(VMError::TypeError)
             );
         }
@@ -1692,7 +1725,7 @@ mod tests {
             let mut feedback = FeedbackVector::for_code(&code);
             let mut vm = RegisterVM::new(100);
             assert_eq!(
-                vm.run_with_arguments(&code, &[first, right], &mut feedback, &mut heap),
+                vm.run_with_arguments(&code, &[first, right], &mut feedback, &mut heap, &realm),
                 Ok(Value::from_bool(expected))
             );
         }
@@ -1753,11 +1786,13 @@ mod tests {
         code.emit(Instruction::Return);
 
         let mut heap = GenerationalHeap::new();
+
+        let realm = Realm::new(&mut heap).unwrap();
         let mut feedback = FeedbackVector::for_code(&code);
         let mut vm = RegisterVM::new(100);
         vm.set_property_limit(2);
         assert_eq!(
-            vm.run(&code, &mut feedback, &mut heap),
+            vm.run(&code, &mut feedback, &mut heap, &realm),
             Err(VMError::PropertyLimit)
         );
     }
@@ -1794,11 +1829,13 @@ mod tests {
         code.emit(Instruction::Return);
 
         let mut heap = GenerationalHeap::new();
+
+        let realm = Realm::new(&mut heap).unwrap();
         let mut feedback = FeedbackVector::for_code(&code);
         let mut vm = RegisterVM::new(100);
         vm.set_property_limit(3);
         assert_eq!(
-            vm.run(&code, &mut feedback, &mut heap),
+            vm.run(&code, &mut feedback, &mut heap, &realm),
             Ok(Value::from_smi(7))
         );
         assert!(matches!(
@@ -1833,11 +1870,13 @@ mod tests {
         root.emit(Instruction::Return);
 
         let mut heap = GenerationalHeap::new();
+
+        let realm = Realm::new(&mut heap).unwrap();
         let mut feedback = FeedbackVector::for_code(&root);
         let mut vm = RegisterVM::with_stack_capacity(100, 8);
         let frame_capacity = vm.frames.capacity();
         assert_eq!(
-            vm.run(&root, &mut feedback, &mut heap),
+            vm.run(&root, &mut feedback, &mut heap, &realm),
             Ok(Value::from_smi(42))
         );
         assert_eq!(vm.frames.capacity(), frame_capacity);
@@ -1873,11 +1912,13 @@ mod tests {
         root.emit(Instruction::Return);
 
         let mut heap = GenerationalHeap::new();
+
+        let realm = Realm::new(&mut heap).unwrap();
         let mut feedback = FeedbackVector::for_code(&root);
         let mut vm = RegisterVM::with_stack_capacity(100, 8);
         vm.set_call_frame_limit(2);
         assert_eq!(
-            vm.run(&root, &mut feedback, &mut heap),
+            vm.run(&root, &mut feedback, &mut heap, &realm),
             Err(VMError::CallStackOverflow)
         );
 
@@ -1886,7 +1927,7 @@ mod tests {
         value.emit(Instruction::Return);
         let mut feedback = FeedbackVector::for_code(&value);
         assert_eq!(
-            vm.run(&value, &mut feedback, &mut heap),
+            vm.run(&value, &mut feedback, &mut heap, &realm),
             Ok(Value::from_smi(7))
         );
         assert!(vm.frames.is_empty());
@@ -1918,9 +1959,11 @@ mod tests {
         root.emit(Instruction::Return);
 
         let mut heap = GenerationalHeap::with_nursery_capacity(1);
+
+        let realm = Realm::new(&mut heap).unwrap();
         let mut feedback = FeedbackVector::for_code(&root);
         let mut vm = RegisterVM::with_stack_capacity(100, 8);
-        let result = vm.run(&root, &mut feedback, &mut heap).unwrap();
+        let result = vm.run(&root, &mut feedback, &mut heap, &realm).unwrap();
         assert!(result.is_object());
         assert!(heap.get_object(result.as_object().unwrap()).is_some());
         assert_eq!(feedback.get_call_ic(0), Some(&CallIC::Monomorphic(0)));
@@ -1957,10 +2000,12 @@ mod tests {
         root.emit(Instruction::Return);
 
         let mut heap = GenerationalHeap::new();
+
+        let realm = Realm::new(&mut heap).unwrap();
         let mut feedback = FeedbackVector::for_code(&root);
         let mut vm = RegisterVM::new(100);
         assert_eq!(
-            vm.run(&root, &mut feedback, &mut heap),
+            vm.run(&root, &mut feedback, &mut heap, &realm),
             Ok(Value::from_smi(42))
         );
         assert_eq!(
@@ -1971,7 +2016,7 @@ mod tests {
         root.instructions[2] = Instruction::LdaConstant(root.add_constant(Value::from_f64(0.5)));
         vm.fuel = 100;
         assert_eq!(
-            vm.run(&root, &mut feedback, &mut heap),
+            vm.run(&root, &mut feedback, &mut heap, &realm),
             Ok(Value::from_f64(22.5))
         );
         assert_eq!(
@@ -1982,7 +2027,7 @@ mod tests {
         root.string_constants.push("x".encode_utf16().collect());
         root.instructions[2] = Instruction::LdaString(0);
         vm.fuel = 100;
-        let value = vm.run(&root, &mut feedback, &mut heap).unwrap();
+        let value = vm.run(&root, &mut feedback, &mut heap, &realm).unwrap();
         assert_eq!(heap.strings.to_rust_string(value).as_deref(), Some("x22"));
         assert_eq!(
             feedback.function(0).and_then(|vector| vector.get_binary(0)),
@@ -2027,10 +2072,12 @@ mod tests {
         root.emit(Instruction::Return);
 
         let mut heap = GenerationalHeap::with_nursery_capacity(1);
+
+        let realm = Realm::new(&mut heap).unwrap();
         let mut feedback = FeedbackVector::for_code(&root);
         let mut vm = RegisterVM::new(100);
         assert_eq!(
-            vm.run(&root, &mut feedback, &mut heap),
+            vm.run(&root, &mut feedback, &mut heap, &realm),
             Ok(Value::from_smi(42))
         );
     }

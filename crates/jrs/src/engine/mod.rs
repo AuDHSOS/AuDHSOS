@@ -9,9 +9,11 @@
 //! 2. Shapes (Hidden Classes) and Elements backing store (`shape`, `elements`, `object`)
 //! 3. Generational bump-pointer Nursery and rooting protocol (`heap`)
 //! 4. Register-based bytecode format (`bytecode`)
-//! 5. Inline Caches and feedback vectors (`feedback`)
-//! 6. Fast contiguous register interpreter (`interpreter`)
+//! 5. Realm intrinsic object graph (`realm`)
+//! 6. Inline Caches and feedback vectors (`feedback`)
+//! 7. Fast contiguous register interpreter (`interpreter`)
 
+pub mod agent;
 pub mod bytecode;
 pub mod context;
 pub mod elements;
@@ -19,6 +21,7 @@ pub mod feedback;
 pub mod heap;
 pub mod interpreter;
 pub mod object;
+pub mod realm;
 pub mod shape;
 pub mod string;
 pub mod value;

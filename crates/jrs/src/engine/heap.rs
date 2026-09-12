@@ -18,7 +18,7 @@ use super::{
     context::{Context, ContextRef},
     elements::{ElementsKind, ElementsRef},
     object::{JSObject, ObjectKind},
-    shape::{ShapeId, ShapeTable},
+    shape::{PropertyFlags, ShapeId, ShapeTable},
     string::{StringArena, StringError},
     value::{ObjectRef, StringRef, VALUE_NULL, VALUE_UNDEFINED, Value},
 };
@@ -313,6 +313,42 @@ impl GenerationalHeap {
             age: 0,
         });
         Ok(ObjectRef::young(index, self.nursery.generation))
+    }
+
+    /// Allocates an immortal object directly in the Old Generation.
+    ///
+    /// Realm intrinsics outlive every collection, so copying them through the
+    /// Nursery on each scavenge would be pure cost. The caller must root the
+    /// result; the major collector reclaims it only when it is unreachable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::ReferenceSpaceExhausted`] when no tagged index remains.
+    pub fn allocate_immortal_object(
+        &mut self,
+        shape_id: ShapeId,
+        prototype: Value,
+    ) -> Result<ObjectRef, HeapError> {
+        self.old_gen
+            .allocate_object(JSObject::new(shape_id, prototype))
+    }
+
+    /// Allocates an immortal Array and its elements store in the Old Generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::ReferenceSpaceExhausted`] when no tagged index remains.
+    pub fn allocate_immortal_array(
+        &mut self,
+        prototype: Value,
+        length: u32,
+    ) -> Result<ObjectRef, HeapError> {
+        let elements = self
+            .old_gen
+            .allocate_elements(ElementsKind::new_packed_smi(0))?;
+        let shape = self.shapes.root_shape();
+        self.old_gen
+            .allocate_object(JSObject::new_array(shape, prototype, elements, length))
     }
 
     /// Allocates an Array and its dedicated elements store in the Nursery.
@@ -659,6 +695,35 @@ impl GenerationalHeap {
         self.remember_object_store(reference, value);
         self.object_mut(reference)?.set_slot(slot, value);
         Ok(())
+    }
+
+    /// Defines an own data property by name, transitioning the Shape when the
+    /// property is new. An existing own property keeps its attributes and only
+    /// its value is replaced, matching ordinary `[[Set]]` on a data property.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale or invalid object reference.
+    pub fn define_own_named(
+        &mut self,
+        reference: ObjectRef,
+        name: StringRef,
+        value: Value,
+        flags: PropertyFlags,
+    ) -> Result<u32, HeapError> {
+        let shape_id = self
+            .get_object(reference)
+            .ok_or(HeapError::InvalidReference)?
+            .shape_id;
+        let slot = if let Some(location) = self.shapes.lookup(shape_id, name) {
+            location.slot_offset
+        } else {
+            let (shape, slot) = self.shapes.transition(shape_id, name, flags);
+            self.set_object_shape(reference, shape)?;
+            slot
+        };
+        self.set_object_slot(reference, slot, value)?;
+        Ok(slot)
     }
 
     /// Writes an indexed element and records an Old-to-Young edge.

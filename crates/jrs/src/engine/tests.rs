@@ -12,6 +12,7 @@ use super::{
     feedback::{FeedbackVector, NamedAccessIC},
     heap::GenerationalHeap,
     interpreter::RegisterVM,
+    realm::Realm,
     shape::PropertyFlags,
     value::{VALUE_NULL, Value},
 };
@@ -110,6 +111,8 @@ fn end_to_end_vm_execution_with_inline_caches() {
     let slot_get_y = code.allocate_feedback_slot(FeedbackKind::NamedAccess);
 
     let mut heap = GenerationalHeap::new();
+
+    let realm = Realm::new(&mut heap).unwrap();
     let prop_x = code.add_string_constant("x".encode_utf16().collect());
     let prop_y = code.add_string_constant("y".encode_utf16().collect());
 
@@ -152,7 +155,7 @@ fn end_to_end_vm_execution_with_inline_caches() {
     let mut feedback = FeedbackVector::for_code(&code);
     let mut vm = RegisterVM::new(50_000);
 
-    let result = vm.run(&code, &mut feedback, &mut heap).unwrap();
+    let result = vm.run(&code, &mut feedback, &mut heap, &realm).unwrap();
     assert_eq!(result.as_smi(), Some(35));
 
     // Verify that both getter ICs became monomorphic
@@ -166,6 +169,7 @@ fn end_to_end_vm_execution_with_inline_caches() {
 #[test]
 fn inherited_named_access_uses_depth_cache_and_invalidates_on_mutation() {
     let mut heap = GenerationalHeap::new();
+    let realm = Realm::new(&mut heap).unwrap();
     let root_shape = heap.shapes.root_shape();
     let name = heap.strings.intern("answer").unwrap();
     let (prototype_shape, slot) =
@@ -198,6 +202,7 @@ fn inherited_named_access_uses_depth_cache_and_invalidates_on_mutation() {
             &[Value::from_object(receiver)],
             &mut feedback,
             &mut heap,
+            &realm,
         )
         .unwrap()
         .as_smi(),
@@ -222,6 +227,7 @@ fn inherited_named_access_uses_depth_cache_and_invalidates_on_mutation() {
             &[Value::from_object(receiver)],
             &mut feedback,
             &mut heap,
+            &realm,
         )
         .unwrap()
         .as_smi(),
@@ -252,6 +258,7 @@ fn prototype_updates_reject_cycles_and_non_objects() {
 #[test]
 fn inherited_cache_checks_the_holder_shape_for_equal_receiver_shapes() {
     let mut heap = GenerationalHeap::new();
+    let realm = Realm::new(&mut heap).unwrap();
     let root_shape = heap.shapes.root_shape();
     let wanted = heap.strings.intern("wanted").unwrap();
     let other = heap.strings.intern("other").unwrap();
@@ -294,6 +301,7 @@ fn inherited_cache_checks_the_holder_shape_for_equal_receiver_shapes() {
             &[Value::from_object(first)],
             &mut feedback,
             &mut heap,
+            &realm,
         )
         .unwrap()
         .as_smi(),
@@ -306,6 +314,7 @@ fn inherited_cache_checks_the_holder_shape_for_equal_receiver_shapes() {
             &[Value::from_object(second)],
             &mut feedback,
             &mut heap,
+            &realm,
         )
         .unwrap()
         .is_undefined()
@@ -349,9 +358,10 @@ fn end_to_end_loop_sum_100k_with_smi_to_double_overflow() {
 
     let mut vm = RegisterVM::new(10_000_000);
     let mut heap = GenerationalHeap::new();
+    let realm = Realm::new(&mut heap).unwrap();
     let mut feedback = FeedbackVector::for_code(&code);
 
-    let res = vm.run(&code, &mut feedback, &mut heap).unwrap();
+    let res = vm.run(&code, &mut feedback, &mut heap, &realm).unwrap();
     // Sum of 0..99,999 = 4,999,950,000 (promotes from Smi to Double upon overflow)
     assert_eq!(res.as_f64(), Some(4_999_950_000.0));
 }
@@ -393,11 +403,12 @@ fn benchmark_register_vm_sum_10_runs_100k() {
 
     let mut vm = RegisterVM::new(10_000_000);
     let mut heap = GenerationalHeap::new();
+    let realm = Realm::new(&mut heap).unwrap();
     let mut feedback = FeedbackVector::for_code(&code);
 
     let start = std::time::Instant::now();
     for _ in 0..10 {
-        let _ = vm.run(&code, &mut feedback, &mut heap).unwrap();
+        let _ = vm.run(&code, &mut feedback, &mut heap, &realm).unwrap();
     }
     let elapsed = start.elapsed();
     eprintln!("Register VM: 10 runs of 100k loop sum elapsed = {elapsed:?}");

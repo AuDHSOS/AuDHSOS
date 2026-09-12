@@ -197,7 +197,7 @@ pub struct Runtime {
     stack: Vec<Value>,
     intrinsic_code: Vec<(Builtin, Rc<FunctionCode>)>,
     register_vm: Option<crate::engine::interpreter::RegisterVM>,
-    register_heap: Option<crate::engine::heap::GenerationalHeap>,
+    register_agent: Option<crate::engine::agent::Agent>,
     register_feedback: Vec<RegisterFeedbackState>,
 }
 
@@ -282,7 +282,7 @@ struct Execution<'host> {
     abort_signal_proto: Option<Value>,
     reported_exceptions: Vec<Error>,
     register_vm: Option<crate::engine::interpreter::RegisterVM>,
-    register_heap: Option<crate::engine::heap::GenerationalHeap>,
+    register_agent: Option<crate::engine::agent::Agent>,
     register_feedback: Vec<RegisterFeedbackState>,
 }
 
@@ -295,7 +295,7 @@ impl Runtime {
             stack: Vec::new(),
             intrinsic_code: Vec::new(),
             register_vm: None,
-            register_heap: None,
+            register_agent: None,
             register_feedback: Vec::new(),
         }
     }
@@ -311,13 +311,13 @@ impl Runtime {
         execution.stack = core::mem::take(&mut self.stack);
         execution.intrinsic_code = core::mem::take(&mut self.intrinsic_code);
         execution.register_vm = self.register_vm.take();
-        execution.register_heap = self.register_heap.take();
+        execution.register_agent = self.register_agent.take();
         execution.register_feedback = core::mem::take(&mut self.register_feedback);
         let result = execution.run(program);
         self.stack = execution.stack;
         self.intrinsic_code = execution.intrinsic_code;
         self.register_vm = execution.register_vm;
-        self.register_heap = execution.register_heap;
+        self.register_agent = execution.register_agent;
         self.register_feedback = execution.register_feedback;
         result
     }
@@ -402,13 +402,22 @@ impl<'host> Execution<'host> {
             abort_signal_proto: None,
             reported_exceptions: Vec::new(),
             register_vm: None,
-            register_heap: None,
+            register_agent: None,
             register_feedback: Vec::new(),
         }
     }
 }
 
 impl Execution<'_> {
+    /// Takes the Agent that owns the register backend's heap and intrinsics,
+    /// building it on first use.
+    fn register_agent(&mut self) -> Result<crate::engine::agent::Agent, Error> {
+        if let Some(agent) = self.register_agent.take() {
+            return Ok(agent);
+        }
+        crate::engine::agent::Agent::new().map_err(|_| Error::InvalidBytecode)
+    }
+
     fn execute_register_program(
         &mut self,
         code: &Rc<crate::engine::bytecode::BytecodeFunction>,
@@ -425,7 +434,13 @@ impl Execution<'_> {
         vm.set_property_limit(self.limits.properties);
         vm.set_call_frame_limit(self.limits.call_frames);
         vm.set_binding_limit(self.limits.binding_slots);
-        let mut heap = self.register_heap.take().unwrap_or_default();
+        let mut agent = match self.register_agent() {
+            Ok(agent) => agent,
+            Err(error) => {
+                self.register_vm = Some(vm);
+                return Err(error);
+            }
+        };
         self.register_feedback
             .retain(|state| state.code.strong_count() != 0);
         let feedback_index = if let Some(index) = self
@@ -441,7 +456,7 @@ impl Execution<'_> {
             });
             if used.saturating_add(required) > self.limits.feedback_vectors {
                 self.register_vm = Some(vm);
-                self.register_heap = Some(heap);
+                self.register_agent = Some(agent);
                 return Err(Error::Limit {
                     resource: "feedback vectors",
                 });
@@ -455,7 +470,7 @@ impl Execution<'_> {
             .get_mut(feedback_index)
             .ok_or(Error::InvalidBytecode)?;
         feedback.invocations = feedback.invocations.saturating_add(1);
-        let result = vm.run(code, &mut feedback.vector, &mut heap);
+        let result = vm.run(code, &mut feedback.vector, &mut agent.heap, &agent.realm);
         self.fuel = vm.fuel;
         let result = match result {
             Ok(value) if value.is_undefined() => Ok(Value::Undefined),
@@ -468,7 +483,8 @@ impl Execution<'_> {
                 .as_f64()
                 .map(Value::Number)
                 .ok_or(Error::InvalidBytecode),
-            Ok(value) if value.is_string() => heap
+            Ok(value) if value.is_string() => agent
+                .heap
                 .strings
                 .to_utf16(value)
                 .map(|units| Value::String(units.into()))
@@ -502,7 +518,7 @@ impl Execution<'_> {
             }),
         };
         self.register_vm = Some(vm);
-        self.register_heap = Some(heap);
+        self.register_agent = Some(agent);
         result
     }
 
