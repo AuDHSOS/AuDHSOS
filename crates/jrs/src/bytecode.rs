@@ -805,6 +805,30 @@ impl RegisterLowerer {
                 }
                 self.release_register(source)?;
             }
+            parser::BindingPattern::Array(array) if array.rest.is_none() => {
+                if !matches!(value_type, RegisterType::Array(_)) {
+                    return None;
+                }
+                let source = self.allocate_register()?;
+                self.code.emit(Instruction::Star(source));
+                for (index, element) in array.elements.iter().enumerate() {
+                    let parser::ArrayBindingElement::Element {
+                        pattern,
+                        initializer,
+                    } = element
+                    else {
+                        continue;
+                    };
+                    let index = u32::try_from(index).ok()?;
+                    let mut element_type =
+                        self.lower_array_index_from_register(source, value_type, index)?;
+                    if let Some(initializer) = initializer {
+                        element_type = self.lower_binding_default(element_type, initializer)?;
+                    }
+                    self.bind_pattern(element_type, pattern)?;
+                }
+                self.release_register(source)?;
+            }
             parser::BindingPattern::Array(_) | parser::BindingPattern::Object(_) => return None,
         }
         Some(())
@@ -1255,7 +1279,7 @@ impl RegisterLowerer {
             let key = self.allocate_register()?;
             self.code.emit(Instruction::Star(key));
             let value_type = self.lower(item)?;
-            if !value_type.is_primitive() {
+            if !value_type.is_primitive() && !value_type.is_object() {
                 return None;
             }
             let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
@@ -1716,6 +1740,39 @@ impl RegisterLowerer {
         } else if !self.lower(key)?.is_primitive() {
             return None;
         }
+        let key = self.allocate_register()?;
+        self.code.emit(Instruction::Star(key));
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        self.code.emit(Instruction::GetByValue {
+            obj: object,
+            key,
+            slot,
+        });
+        self.release_register(key)?;
+        Some(result_type)
+    }
+
+    fn lower_array_index_from_register(
+        &mut self,
+        object: crate::engine::bytecode::Reg,
+        base_type: RegisterType,
+        index: u32,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let RegisterType::Array(object_id) = base_type else {
+            return None;
+        };
+        let RegisterObjectLayout::Array { elements, dynamic } =
+            self.object_layouts.get(&object_id)?
+        else {
+            return None;
+        };
+        let static_type = elements
+            .get(&index)
+            .copied()
+            .unwrap_or(RegisterType::Undefined);
+        let result_type = dynamic.map_or(static_type, |dynamic| static_type.merge(dynamic));
+        self.emit_array_index(index)?;
         let key = self.allocate_register()?;
         self.code.emit(Instruction::Star(key));
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
@@ -3393,6 +3450,20 @@ fn register_binding_pattern_references(
 ) -> Option<()> {
     match pattern {
         parser::BindingPattern::Name(_) => {}
+        parser::BindingPattern::Array(array) if array.rest.is_none() => {
+            for element in &array.elements {
+                if let parser::ArrayBindingElement::Element {
+                    pattern,
+                    initializer,
+                } = element
+                {
+                    register_binding_pattern_references(pattern, names, nested_free_names)?;
+                    if let Some(initializer) = initializer {
+                        register_expression_references(initializer, names, nested_free_names)?;
+                    }
+                }
+            }
+        }
         parser::BindingPattern::Object(object) if object.rest.is_none() => {
             for property in &object.properties {
                 register_expression_references(&property.key, names, nested_free_names)?;
@@ -3742,7 +3813,15 @@ fn register_statement_has_unsupported_binding_pattern(statement: &Stmt) -> bool 
 fn register_binding_pattern_supported(pattern: &parser::BindingPattern) -> bool {
     match pattern {
         parser::BindingPattern::Name(_) => true,
-        parser::BindingPattern::Array(_) => false,
+        parser::BindingPattern::Array(array) => {
+            array.rest.is_none()
+                && array.elements.iter().all(|element| match element {
+                    parser::ArrayBindingElement::Elision => true,
+                    parser::ArrayBindingElement::Element { pattern, .. } => {
+                        register_binding_pattern_supported(pattern)
+                    }
+                })
+        }
         parser::BindingPattern::Object(object) => {
             object.rest.is_none()
                 && object.properties.iter().all(|property| {

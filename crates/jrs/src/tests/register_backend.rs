@@ -15,15 +15,58 @@ fn same_value(left: &Value, right: &Value) -> bool {
 #[test]
 fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), Error> {
     for source in [
-        "let [x]=[1];x",
-        "var [x]=[1];x",
+        "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [x]=input;x",
+        "let a=[1];a[Symbol.iterator]=function(){return {next(){return {value:42}}}};let [x]=a;x",
+        "let [x,...rest]=[1,2,3];rest",
         "let {x,...rest}={x:1};rest",
-        "{const [x]=[1];x}",
-        "for(let [x]=[1];false;){}",
-        "function f(){let [x]=[1];return x}f()",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn fresh_array_binding_patterns_use_dense_elements() -> Result<(), Error> {
+    for source in [
+        "let [x]=[42];x",
+        "var [x,y]=[20,22];x+y",
+        "let [,x,,]=[1,42,3];x",
+        "let [x]=[];x===undefined",
+        "let [x=42]=[];x",
+        "let [x=42]=[,];x",
+        "let [x=1]=[2];x",
+        "let [x,y=x+2]=[40];x+y",
+        "let [{x}]=[{x:42}];x",
+        "let [[x]]=[[42]];x",
+        "{const [x]=[42];x}",
+        "for(let [x]=[1];x<2;x++){}",
+        "function f(){let [x]=[42];return x}f()",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let code = program
+            .register_code
+            .as_ref()
+            .ok_or(Error::InvalidBytecode)?;
+        assert!(
+            core::iter::once(code.as_ref())
+                .chain(code.functions.iter())
+                .flat_map(|function| &function.instructions)
+                .any(|instruction| matches!(
+                    instruction,
+                    crate::engine::bytecode::Instruction::GetByValue { .. }
+                )),
+            "{source}"
+        );
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
     }
     Ok(())
 }
