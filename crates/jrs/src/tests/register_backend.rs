@@ -269,6 +269,9 @@ fn member_destructuring_targets_use_shape_and_elements_storage() -> Result<(), E
         "let target={};({x:{y:target.z}}={x:{y:42}});target.z",
         "let target={};[...target.x]=[20,22];target.x[0]+target.x[1]",
         "let target={},x=0;({x,...target.rest}={x:1,y:41});x+target.rest.y",
+        "let target={},key='x';[target[key]]=[42];target.x",
+        "let target={},key='x';({value:target[key]}={value:42});target.x",
+        "let target={x:'old'},key='x';[target[key]]=[42];target.x",
         "let target={},value={x:42};target.value=value;target.value.x",
         "let target=[],value=[42];target[0]=value;target[0][0]",
     ] {
@@ -287,12 +290,47 @@ fn member_destructuring_targets_use_shape_and_elements_storage() -> Result<(), E
 }
 
 #[test]
+fn dynamic_object_writes_keep_subsequent_reads_conservative() -> Result<(), Error> {
+    for source in [
+        "let target={x:1},key='x';target[key]='a';target.x+'b'",
+        "let target={x:1},key='y';target[key]=2;target.x+target.y",
+        "let target={x:1},key='x';[target[key]]=['a'];target.x+'b'",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+
+    let limits = Limits {
+        properties: 1,
+        ..Limits::default()
+    };
+    let program = compile("let target={x:1},key='y';target[key]=42;target.x", limits)?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::new(limits).run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "object properties"
+        })
+    );
+    Ok(())
+}
+
+#[test]
 fn observable_destructuring_assignments_stay_on_legacy_backend() -> Result<(), Error> {
     for source in [
         "const x=0;[x]=[1]",
         "let x=0;[x]={0:42,length:1}",
         "let x=0;let input=[1];input[Symbol.iterator]=function(){return {next(){return {value:42}}}};[x]=input;x",
-        "let target={},key='x';[target[key]]=[42];target.x",
+        "let target={},key={toString(){return 'x'}};[target[key]]=[42];target.x",
+        "let target={x:1},key='y',x=0,rest={};target[key]=2;({x,...rest}=target);rest.y",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");

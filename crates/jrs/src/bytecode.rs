@@ -590,6 +590,7 @@ enum RegisterObjectLayout {
     Ordinary {
         properties: BTreeMap<Vec<u16>, RegisterType>,
         order: Vec<Vec<u16>>,
+        dynamic: Option<RegisterType>,
     },
     Array {
         length: Option<u32>,
@@ -623,10 +624,11 @@ enum RegisterMemberKey {
         constant: u16,
         name: Vec<u16>,
     },
-    Keyed {
+    ArrayKeyed {
         register: crate::engine::bytecode::Reg,
         array_index: Option<u32>,
     },
+    ObjectKeyed(crate::engine::bytecode::Reg),
 }
 
 enum RegisterPreparedAssignment {
@@ -1439,6 +1441,7 @@ impl RegisterLowerer {
             RegisterObjectLayout::Ordinary {
                 properties: BTreeMap::new(),
                 order: Vec::new(),
+                dynamic: None,
             },
         );
         self.code.emit(Instruction::CreateObject);
@@ -1473,8 +1476,9 @@ impl RegisterLowerer {
                 name,
                 slot,
             });
-            let RegisterObjectLayout::Ordinary { properties, order } =
-                self.object_layouts.get_mut(&object_id)?
+            let RegisterObjectLayout::Ordinary {
+                properties, order, ..
+            } = self.object_layouts.get_mut(&object_id)?
             else {
                 return None;
             };
@@ -2105,11 +2109,17 @@ impl RegisterLowerer {
         let RegisterType::Object(source_id) = source_type else {
             return None;
         };
-        let RegisterObjectLayout::Ordinary { properties, order } =
-            self.object_layouts.get(&source_id)?
+        let RegisterObjectLayout::Ordinary {
+            properties,
+            order,
+            dynamic,
+        } = self.object_layouts.get(&source_id)?
         else {
             return None;
         };
+        if dynamic.is_some() {
+            return None;
+        }
         let copied = order
             .iter()
             .filter(|name| !excluded.contains(name))
@@ -2125,6 +2135,7 @@ impl RegisterLowerer {
             RegisterObjectLayout::Ordinary {
                 properties: BTreeMap::new(),
                 order: Vec::new(),
+                dynamic: None,
             },
         );
         self.code.emit(Instruction::CreateObject);
@@ -2147,8 +2158,9 @@ impl RegisterLowerer {
                 name,
                 slot: set_slot,
             });
-            let RegisterObjectLayout::Ordinary { properties, order } =
-                self.object_layouts.get_mut(&rest_id)?
+            let RegisterObjectLayout::Ordinary {
+                properties, order, ..
+            } = self.object_layouts.get_mut(&rest_id)?
             else {
                 return None;
             };
@@ -2170,8 +2182,11 @@ impl RegisterLowerer {
         let RegisterType::Object(object_id) = base_type else {
             return None;
         };
-        let RegisterObjectLayout::Ordinary { properties, .. } =
-            self.object_layouts.get(&object_id)?
+        let RegisterObjectLayout::Ordinary {
+            properties,
+            dynamic,
+            ..
+        } = self.object_layouts.get(&object_id)?
         else {
             return None;
         };
@@ -2181,18 +2196,19 @@ impl RegisterLowerer {
             Some(Self::static_property_name(key)?.to_vec())
         };
         let result_type = if let Some(name) = static_name.as_deref() {
-            if missing_is_undefined {
-                properties
-                    .get(name)
-                    .copied()
-                    .unwrap_or(RegisterType::Undefined)
-            } else {
-                *properties.get(name)?
+            let known = properties.get(name).copied();
+            match (known, dynamic) {
+                (Some(known), Some(dynamic)) => known.merge(*dynamic),
+                (Some(known), None) => known,
+                (None, Some(dynamic)) => RegisterType::Undefined.merge(*dynamic),
+                (None, None) if missing_is_undefined => RegisterType::Undefined,
+                (None, None) => return None,
             }
         } else {
             properties
                 .values()
                 .copied()
+                .chain(dynamic.iter().copied())
                 .reduce(RegisterType::merge)
                 .unwrap_or(RegisterType::Undefined)
                 .merge(RegisterType::Undefined)
@@ -2256,16 +2272,23 @@ impl RegisterLowerer {
             }
             let key = self.allocate_register()?;
             self.code.emit(Instruction::Star(key));
-            RegisterMemberKey::Keyed {
+            RegisterMemberKey::ArrayKeyed {
                 register: key,
                 array_index,
             }
-        } else {
-            let name = Self::static_property_name(key)?.to_vec();
+        } else if let Some(name) = Self::static_property_name(key) {
+            let name = name.to_vec();
             RegisterMemberKey::Named {
                 constant: self.string_constant(&name)?,
                 name,
             }
+        } else {
+            if !self.lower(key)?.is_primitive() {
+                return None;
+            }
+            let key = self.allocate_register()?;
+            self.code.emit(Instruction::Star(key));
+            RegisterMemberKey::ObjectKeyed(key)
         };
         Some(RegisterMemberAssignment {
             object,
@@ -2285,7 +2308,7 @@ impl RegisterLowerer {
         }
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
         match prepared.key {
-            RegisterMemberKey::Keyed {
+            RegisterMemberKey::ArrayKeyed {
                 register,
                 array_index,
             } => {
@@ -2319,6 +2342,23 @@ impl RegisterLowerer {
                     *length = None;
                 }
             }
+            RegisterMemberKey::ObjectKeyed(register) => {
+                self.code.emit(Instruction::SetByValue {
+                    obj: prepared.object,
+                    key: register,
+                    slot,
+                });
+                self.release_register(register)?;
+                let RegisterType::Object(object_id) = prepared.base_type else {
+                    return None;
+                };
+                let RegisterObjectLayout::Ordinary { dynamic, .. } =
+                    self.object_layouts.get_mut(&object_id)?
+                else {
+                    return None;
+                };
+                *dynamic = Some(dynamic.map_or(value_type, |current| current.merge(value_type)));
+            }
             RegisterMemberKey::Named { constant, name } => {
                 self.code.emit(Instruction::SetNamed {
                     obj: prepared.object,
@@ -2337,8 +2377,9 @@ impl RegisterLowerer {
                 if is_new && properties.len() >= self.property_limit {
                     return None;
                 }
-                let RegisterObjectLayout::Ordinary { properties, order } =
-                    self.object_layouts.get_mut(&object_id)?
+                let RegisterObjectLayout::Ordinary {
+                    properties, order, ..
+                } = self.object_layouts.get_mut(&object_id)?
                 else {
                     return None;
                 };
