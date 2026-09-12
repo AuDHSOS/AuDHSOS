@@ -189,6 +189,10 @@ There is no JIT and no claim of competitive performance without benchmarks.
   Number bitwise operators and signed/unsigned shifts,
   logical operators, nullish coalescing, conditional expressions, assignment,
   compound arithmetic assignment, prefix/postfix increment/decrement.
+- Array and object destructuring assignments support nested patterns, defaults,
+  rest targets, computed property keys and property-reference targets. Reference
+  evaluation, property reads, iterator closing and the assignment expression's
+  result follow their specified observable order.
 - `if`, `while`, three-part `for`, unlabelled `break` and `continue`.
 - Untagged template literals with nested substitutions, cooked escapes, line
   normalization and string-hint conversion in evaluation order. Tagged

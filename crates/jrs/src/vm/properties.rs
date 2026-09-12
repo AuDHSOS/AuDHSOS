@@ -785,13 +785,14 @@ impl Execution<'_> {
                 self.push(value)?;
             }
             Op::Key => {
-                let value = self.pop()?;
-                let key = self.property_key(&value)?;
-                self.push(key)?;
+                self.property_key_op(false)?;
             }
+            Op::KeyBelow => self.property_key_op(true)?,
             Op::ObjectBindingStart
             | Op::ObjectBindingGet(_)
+            | Op::ObjectAssignmentGet { .. }
             | Op::ObjectBindingRest(_)
+            | Op::ObjectAssignmentRest { .. }
             | Op::ObjectBindingEnd(_) => self.object_binding_op(op)?,
             Op::DupPair => {
                 let at = self
@@ -865,6 +866,17 @@ impl Execution<'_> {
         Ok(())
     }
 
+    fn property_key_op(&mut self, below_top: bool) -> Result<(), Error> {
+        let top = below_top.then(|| self.pop()).transpose()?;
+        let value = self.pop()?;
+        let key = self.property_key(&value)?;
+        self.push(key)?;
+        if let Some(top) = top {
+            self.push(top)?;
+        }
+        Ok(())
+    }
+
     fn object_binding_op(&mut self, op: &Op) -> Result<(), Error> {
         match op {
             Op::ObjectBindingStart => {
@@ -878,8 +890,20 @@ impl Execution<'_> {
             Op::ObjectBindingGet(excluded_count) => {
                 self.object_binding_get(*excluded_count)?;
             }
+            Op::ObjectAssignmentGet {
+                excluded,
+                target_slots,
+            } => {
+                self.object_assignment_get(*excluded, *target_slots)?;
+            }
             Op::ObjectBindingRest(excluded_count) => {
                 self.object_binding_rest(*excluded_count)?;
+            }
+            Op::ObjectAssignmentRest {
+                excluded,
+                target_slots,
+            } => {
+                self.object_assignment_rest(*excluded, *target_slots)?;
             }
             Op::ObjectBindingEnd(excluded_count) => {
                 let retained = excluded_count
@@ -916,6 +940,38 @@ impl Execution<'_> {
         self.push(value)
     }
 
+    fn object_assignment_get(
+        &mut self,
+        excluded_count: usize,
+        target_slots: usize,
+    ) -> Result<(), Error> {
+        let retained = excluded_count
+            .checked_add(target_slots)
+            .and_then(|count| count.checked_add(2))
+            .ok_or(Error::InvalidBytecode)?;
+        let source_index = self
+            .stack
+            .len()
+            .checked_sub(retained)
+            .ok_or(Error::InvalidBytecode)?;
+        let source = self
+            .stack
+            .get(source_index)
+            .ok_or(Error::InvalidBytecode)?
+            .clone();
+        let key = self
+            .stack
+            .get(
+                source_index
+                    .saturating_add(excluded_count)
+                    .saturating_add(1),
+            )
+            .ok_or(Error::InvalidBytecode)?
+            .clone();
+        let value = self.get_key(&source, &key)?;
+        self.push(value)
+    }
+
     fn object_binding_rest(&mut self, excluded_count: usize) -> Result<(), Error> {
         let retained = excluded_count
             .checked_add(1)
@@ -933,6 +989,41 @@ impl Execution<'_> {
             .to_vec();
         let rest = self.copy_data_properties(&source, &excluded)?;
         self.stack.truncate(start);
+        self.push(rest)
+    }
+
+    fn object_assignment_rest(
+        &mut self,
+        excluded_count: usize,
+        target_slots: usize,
+    ) -> Result<(), Error> {
+        let retained = excluded_count
+            .checked_add(target_slots)
+            .and_then(|count| count.checked_add(1))
+            .ok_or(Error::InvalidBytecode)?;
+        let start = self
+            .stack
+            .len()
+            .checked_sub(retained)
+            .ok_or(Error::InvalidBytecode)?;
+        let source = self.stack.get(start).ok_or(Error::InvalidBytecode)?.clone();
+        let excluded_end = start
+            .checked_add(excluded_count)
+            .and_then(|index| index.checked_add(1))
+            .ok_or(Error::InvalidBytecode)?;
+        let excluded = self
+            .stack
+            .get(start.saturating_add(1)..excluded_end)
+            .ok_or(Error::InvalidBytecode)?
+            .to_vec();
+        let targets = self
+            .stack
+            .get(excluded_end..)
+            .ok_or(Error::InvalidBytecode)?
+            .to_vec();
+        let rest = self.copy_data_properties(&source, &excluded)?;
+        self.stack.truncate(start);
+        self.stack.extend(targets);
         self.push(rest)
     }
 

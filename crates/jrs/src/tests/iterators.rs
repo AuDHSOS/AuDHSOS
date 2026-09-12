@@ -408,6 +408,54 @@ fn for_in_declarations_initialize_binding_patterns_per_iteration() {
 }
 
 #[test]
+fn destructuring_assignments_preserve_values_targets_and_iteration_order() {
+    for (source, expected) in [
+        (
+            "let a,b,r;let input=[1,2,3];let result=([a,b,...r]=input);result===input&&a===1&&b===2&&r.join()==='3'",
+            Value::Boolean(true),
+        ),
+        (
+            "let a,b,r;let input={x:1,y:2,z:3};let result=({x:a,y:b,...r}=input);result===input&&a===1&&b===2&&r.z===3",
+            Value::Boolean(true),
+        ),
+        (
+            "let a,b;({x:[a],y:{z:b}}={x:[20],y:{z:22}});a+b",
+            Value::Number(42.0),
+        ),
+        (
+            "let target={},i=0;[target[i++],target[i++]]=[20,22];target[0]+target[1]+i",
+            Value::Number(44.0),
+        ),
+        ("let a,b;[a=20,b=a+2]=[];a+b", Value::Number(42.0)),
+        (
+            "let value;for([value] in {key:1}){}value",
+            Value::string("k"),
+        ),
+        (
+            "let value;for({0:value} in {key:1}){}value",
+            Value::string("k"),
+        ),
+        ("var yield=4,x;[x=yield]=[];x", Value::Number(4.0)),
+    ] {
+        assert_eq!(eval(source), Ok(expected), "{source}");
+    }
+
+    for source in [
+        "'use strict';0,{yield}={}",
+        "let x={default}={default:1}",
+        "let x={extends}={extends:1}",
+    ] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn weakmap_and_promise_combinators_use_the_actual_iterator() {
     for source in [
         "let key={},n=0;let input={[Symbol.iterator](){return {next(){return n++?{done:true}:{value:[key,7]}}}}};new WeakMap(input).get(key)===7",

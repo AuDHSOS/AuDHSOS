@@ -41,8 +41,17 @@ pub(crate) enum Op {
     IteratorEnd(usize),
     ObjectBindingStart,
     ObjectBindingGet(usize),
+    ObjectAssignmentGet {
+        excluded: usize,
+        target_slots: usize,
+    },
     ObjectBindingRest(usize),
+    ObjectAssignmentRest {
+        excluded: usize,
+        target_slots: usize,
+    },
     ObjectBindingEnd(usize),
+    KeyBelow,
     RotateKey,
     Regex(Rc<crate::regexp::RegExp>),
     Load(Access),
@@ -2925,7 +2934,8 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         }
         ExprKind::Function(function) => register_function_writes_names(function, names)?,
         ExprKind::Literal(_) | ExprKind::Name(_) => false,
-        ExprKind::Regex(_, _)
+        ExprKind::Destructure(_, _)
+        | ExprKind::Regex(_, _)
         | ExprKind::Template(_, _)
         | ExprKind::Await(_)
         | ExprKind::Construct(_, _)
@@ -3078,7 +3088,8 @@ fn register_expression_references(
             nested_free_names.extend(register_function_scope(function)?.free_names);
         }
         ExprKind::Literal(_) => {}
-        ExprKind::Regex(_, _)
+        ExprKind::Destructure(_, _)
+        | ExprKind::Regex(_, _)
         | ExprKind::Template(_, _)
         | ExprKind::Await(_)
         | ExprKind::Construct(_, _)
@@ -3899,7 +3910,7 @@ impl Compiler {
     fn for_in(
         &mut self,
         binding: Option<&(parser::BindingPattern, Option<bool>)>,
-        target: Option<&Expr>,
+        target: Option<&parser::AssignmentTarget>,
         object: &Expr,
         body: &Stmt,
     ) -> Result<(), Error> {
@@ -3936,22 +3947,11 @@ impl Compiler {
             }
             self.bind_pattern(pattern, kind.is_some())?;
         } else if let Some(target) = target {
-            if let Some(name) = target.reference_name() {
-                let op = if let Some(slot) = self.resolve(name) {
-                    Op::Store(slot)
-                } else if self.realm {
-                    Op::SetGlobal(String::from(name), target.strict)
-                } else {
-                    Op::Missing(String::from(name))
-                };
-                self.emit(op)?;
-                self.emit(Op::Pop)?;
-            } else {
-                let (base, key) = target.member().ok_or(Error::InvalidBytecode)?;
-                self.reference(base, key)?;
-                self.emit(Op::RotateKey)?;
-                self.emit(Op::Set(target.strict))?;
-                self.emit(Op::Pop)?;
+            match target {
+                parser::AssignmentTarget::Reference(target) => {
+                    self.assign_reference_after_value(target)?;
+                }
+                parser::AssignmentTarget::Pattern(pattern) => self.assign_pattern(pattern)?,
             }
         }
         self.loops.push(Loop::default());
@@ -3974,7 +3974,7 @@ impl Compiler {
     fn for_of(
         &mut self,
         binding: Option<&(parser::BindingPattern, Option<bool>)>,
-        target: Option<&Expr>,
+        target: Option<&parser::AssignmentTarget>,
         object: &Expr,
         body: &Stmt,
     ) -> Result<(), Error> {
@@ -4009,22 +4009,11 @@ impl Compiler {
         if let Some((pattern, kind)) = binding {
             self.bind_pattern(pattern, kind.is_some())?;
         } else if let Some(target) = target {
-            if let Some(name) = target.reference_name() {
-                let op = if let Some(slot) = self.resolve(name) {
-                    Op::Store(slot)
-                } else if self.realm {
-                    Op::SetGlobal(String::from(name), target.strict)
-                } else {
-                    Op::Missing(String::from(name))
-                };
-                self.emit(op)?;
-                self.emit(Op::Pop)?;
-            } else {
-                let (base, key) = target.member().ok_or(Error::InvalidBytecode)?;
-                self.reference(base, key)?;
-                self.emit(Op::RotateKey)?;
-                self.emit(Op::Set(target.strict))?;
-                self.emit(Op::Pop)?;
+            match target {
+                parser::AssignmentTarget::Reference(target) => {
+                    self.assign_reference_after_value(target)?;
+                }
+                parser::AssignmentTarget::Pattern(pattern) => self.assign_pattern(pattern)?,
             }
         }
         self.loops.push(Loop::default());
@@ -4129,6 +4118,161 @@ impl Compiler {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn assign_pattern(&mut self, pattern: &parser::AssignmentPattern) -> Result<(), Error> {
+        match pattern {
+            parser::AssignmentPattern::Target(target) => {
+                self.assign_reference_after_value(target)?;
+            }
+            parser::AssignmentPattern::Array(array) => {
+                let id = self.enumerations;
+                self.enumerations = self.enumerations.saturating_add(1);
+                self.emit(Op::ForOfInit(id))?;
+                let guard = self.emit(Op::IteratorGuard(id, 0))?;
+                for element in &array.elements {
+                    if let parser::AssignmentArrayElement::Element {
+                        target,
+                        initializer,
+                    } = element
+                    {
+                        let prepared = self.prepare_assignment_pattern_target(target)?;
+                        self.emit(Op::IteratorValue(id))?;
+                        if let Some(initializer) = initializer {
+                            self.emit_assignment_default(target, initializer)?;
+                        }
+                        self.finish_assignment_pattern_target(target, prepared)?;
+                    } else {
+                        self.emit(Op::IteratorSkip(id))?;
+                    }
+                }
+                if let Some(rest) = &array.rest {
+                    let prepared = self.prepare_assignment_pattern_target(rest)?;
+                    self.emit(Op::IteratorRest(id))?;
+                    self.finish_assignment_pattern_target(rest, prepared)?;
+                }
+                let end = self.program.code.len();
+                self.emit(Op::IteratorEnd(id))?;
+                self.patch(guard, end.saturating_add(1))?;
+            }
+            parser::AssignmentPattern::Object(object) => {
+                self.emit(Op::ObjectBindingStart)?;
+                for (index, property) in object.properties.iter().enumerate() {
+                    self.expression(&property.key)?;
+                    self.emit(Op::Key)?;
+                    let prepared = self.prepare_assignment_pattern_target(&property.target)?;
+                    self.emit(Op::ObjectAssignmentGet {
+                        excluded: index,
+                        target_slots: prepared,
+                    })?;
+                    if let Some(initializer) = &property.initializer {
+                        self.emit_assignment_default(&property.target, initializer)?;
+                    }
+                    self.finish_assignment_pattern_target(&property.target, prepared)?;
+                }
+                if let Some(rest) = &object.rest {
+                    let prepared = self.prepare_assignment_reference(rest)?;
+                    self.emit(Op::ObjectAssignmentRest {
+                        excluded: object.properties.len(),
+                        target_slots: prepared,
+                    })?;
+                    self.finish_assignment_reference(rest, prepared)?;
+                } else {
+                    self.emit(Op::ObjectBindingEnd(object.properties.len()))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_assignment_pattern_target(
+        &mut self,
+        target: &parser::AssignmentPattern,
+    ) -> Result<usize, Error> {
+        if let parser::AssignmentPattern::Target(target) = target {
+            self.prepare_assignment_reference(target)
+        } else {
+            Ok(0)
+        }
+    }
+
+    fn finish_assignment_pattern_target(
+        &mut self,
+        target: &parser::AssignmentPattern,
+        prepared: usize,
+    ) -> Result<(), Error> {
+        if let parser::AssignmentPattern::Target(target) = target {
+            self.finish_assignment_reference(target, prepared)
+        } else {
+            self.assign_pattern(target)
+        }
+    }
+
+    fn prepare_assignment_reference(&mut self, target: &Expr) -> Result<usize, Error> {
+        if target.reference_name().is_some() {
+            Ok(0)
+        } else {
+            let (base, key) = target.member().ok_or(Error::InvalidBytecode)?;
+            self.expression(base)?;
+            self.expression(key)?;
+            Ok(2)
+        }
+    }
+
+    fn finish_assignment_reference(&mut self, target: &Expr, prepared: usize) -> Result<(), Error> {
+        if let Some(name) = target.reference_name() {
+            if prepared != 0 {
+                return Err(Error::InvalidBytecode);
+            }
+            let op = if let Some(slot) = self.resolve(name) {
+                Op::Store(slot)
+            } else if self.realm {
+                Op::SetGlobal(String::from(name), target.strict)
+            } else {
+                Op::Missing(String::from(name))
+            };
+            self.emit(op)?;
+        } else {
+            if prepared != 2 {
+                return Err(Error::InvalidBytecode);
+            }
+            self.emit(Op::KeyBelow)?;
+            self.emit(Op::Set(target.strict))?;
+        }
+        self.emit(Op::Pop)?;
+        Ok(())
+    }
+
+    fn assign_reference_after_value(&mut self, target: &Expr) -> Result<(), Error> {
+        if target.reference_name().is_some() {
+            self.finish_assignment_reference(target, 0)
+        } else {
+            let (base, key) = target.member().ok_or(Error::InvalidBytecode)?;
+            self.reference(base, key)?;
+            self.emit(Op::RotateKey)?;
+            self.finish_assignment_reference(target, 2)
+        }
+    }
+
+    fn emit_assignment_default(
+        &mut self,
+        target: &parser::AssignmentPattern,
+        initializer: &Expr,
+    ) -> Result<(), Error> {
+        self.emit(Op::Dup)?;
+        self.emit(Op::Constant(Value::Undefined))?;
+        self.emit(Op::Binary(Binary::StrictEq))?;
+        let present = self.emit(Op::Branch(0, Branch::False))?;
+        self.emit(Op::Pop)?;
+        if let parser::AssignmentPattern::Target(target) = target
+            && let Some(name) = target.reference_name()
+        {
+            self.binding_initializer(initializer, name)?;
+        } else {
+            self.expression(initializer)?;
+        }
+        self.patch(present, self.program.code.len())?;
         Ok(())
     }
 
@@ -4366,6 +4510,11 @@ impl Compiler {
                 } else {
                     self.emit(Op::Missing(name.clone()))?;
                 }
+            }
+            ExprKind::Destructure(pattern, right) => {
+                self.expression(right)?;
+                self.emit(Op::Dup)?;
+                self.assign_pattern(pattern)?;
             }
             ExprKind::Update(name, add, prefix) => {
                 if let Some(slot) = self.resolve(name) {

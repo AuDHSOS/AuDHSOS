@@ -62,6 +62,7 @@ pub(crate) enum ExprKind {
     Unary(Unary, Box<Expr>),
     Binary(Binary, Box<Expr>, Box<Expr>),
     Assign(String, Option<Binary>, Box<Expr>),
+    Destructure(AssignmentPattern, Box<Expr>),
     Update(String, bool, bool),
     Conditional(Box<Expr>, Box<Expr>, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
@@ -177,6 +178,47 @@ pub(crate) struct ObjectBindingProperty {
     pub(crate) initializer: Option<Expr>,
 }
 
+#[derive(Debug)]
+pub(crate) enum AssignmentPattern {
+    Target(Box<Expr>),
+    Array(AssignmentArrayPattern),
+    Object(AssignmentObjectPattern),
+}
+
+#[derive(Debug)]
+pub(crate) struct AssignmentArrayPattern {
+    pub(crate) elements: Vec<AssignmentArrayElement>,
+    pub(crate) rest: Option<Box<AssignmentPattern>>,
+}
+
+#[derive(Debug)]
+pub(crate) enum AssignmentArrayElement {
+    Elision,
+    Element {
+        target: AssignmentPattern,
+        initializer: Option<Expr>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct AssignmentObjectPattern {
+    pub(crate) properties: Vec<AssignmentObjectProperty>,
+    pub(crate) rest: Option<Box<Expr>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct AssignmentObjectProperty {
+    pub(crate) key: Expr,
+    pub(crate) target: AssignmentPattern,
+    pub(crate) initializer: Option<Expr>,
+}
+
+#[derive(Debug)]
+pub(crate) enum AssignmentTarget {
+    Reference(Expr),
+    Pattern(AssignmentPattern),
+}
+
 impl BindingPattern {
     pub(crate) const fn identifier(&self) -> Option<&str> {
         match self {
@@ -248,13 +290,13 @@ pub(crate) enum Stmt {
     Switch(Expr, Vec<(Option<Expr>, Vec<Stmt>)>),
     ForIn {
         binding: Option<(BindingPattern, Option<bool>)>,
-        target: Option<Expr>,
+        target: Option<AssignmentTarget>,
         object: Expr,
         body: Box<Stmt>,
     },
     ForOf {
         binding: Option<(BindingPattern, Option<bool>)>,
-        target: Option<Expr>,
+        target: Option<AssignmentTarget>,
         object: Expr,
         body: Box<Stmt>,
     },
@@ -474,12 +516,16 @@ impl Parser {
         let Kind::Word(name) = &self.token()?.kind else {
             return Err(self.error("expected binding identifier"));
         };
-        if reserved(name) || (self.strict && strict_binding(name)) {
+        if !self.identifier_reference_allowed(name) || (self.strict && strict_binding(name)) {
             return Err(self.error("reserved word is not a binding identifier"));
         }
         let name = name.clone();
         self.at = self.at.saturating_add(1);
         Ok(name)
+    }
+
+    fn identifier_reference_allowed(&self, name: &str) -> bool {
+        !reserved(name) || name == "yield" && !self.strict
     }
     fn statements(&mut self, block: bool) -> Result<Vec<Stmt>, Error> {
         let mut body = Vec::new();
@@ -604,10 +650,17 @@ impl Parser {
             } else if self.is(";") {
                 Stmt::Empty
             } else {
-                let target = self.with_in(false, Self::sequence)?;
+                let target = if self.is("[") || self.is("{") {
+                    AssignmentTarget::Pattern(self.assignment_pattern()?)
+                } else {
+                    AssignmentTarget::Reference(self.with_in(false, Self::sequence)?)
+                };
                 if self.is("in") || self.is("of") {
                     return self.for_in(None, Some(target));
                 }
+                let AssignmentTarget::Reference(target) = target else {
+                    return Err(self.error("destructuring pattern requires in or of"));
+                };
                 Stmt::Expr(target)
             };
             self.need(";")?;
@@ -698,12 +751,9 @@ impl Parser {
     fn for_in(
         &mut self,
         binding: Option<(BindingPattern, Option<bool>)>,
-        target: Option<Expr>,
+        target: Option<AssignmentTarget>,
     ) -> Result<Stmt, Error> {
-        if let Some(target) = &target {
-            if destructuring_target(&target.kind) {
-                return Err(Self::unsupported("destructuring assignment in for-in/of"));
-            }
+        if let Some(AssignmentTarget::Reference(target)) = &target {
             if let Some(name) = target.reference_name() {
                 self.assignment_name(name)?;
             } else if target.member().is_none() {
@@ -1031,11 +1081,229 @@ impl Parser {
         self.depth = self.depth.saturating_sub(1);
         result
     }
+
+    fn destructuring_assignment_ahead(&self) -> bool {
+        if !self.is("[") && !self.is("{") {
+            return false;
+        }
+        let mut depth = 0usize;
+        for (index, token) in self.tokens.iter().enumerate().skip(self.at) {
+            match token.kind {
+                Kind::Punct("[" | "{" | "(") => depth = depth.saturating_add(1),
+                Kind::Punct("]" | "}" | ")") => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return self
+                            .tokens
+                            .get(index.saturating_add(1))
+                            .is_some_and(|token| token.kind == Kind::Punct("="));
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn assignment_pattern(&mut self) -> Result<AssignmentPattern, Error> {
+        self.enter()?;
+        let pattern = if self.eat("[") {
+            AssignmentPattern::Array(self.assignment_array_pattern()?)
+        } else if self.eat("{") {
+            AssignmentPattern::Object(self.assignment_object_pattern()?)
+        } else {
+            return Err(self.error("expected destructuring assignment pattern"));
+        };
+        self.depth = self.depth.saturating_sub(1);
+        Ok(pattern)
+    }
+
+    fn assignment_array_pattern(&mut self) -> Result<AssignmentArrayPattern, Error> {
+        let mut elements = Vec::new();
+        let mut rest = None;
+        loop {
+            if self.eat("]") {
+                break;
+            }
+            if self.eat(",") {
+                elements.push(AssignmentArrayElement::Elision);
+                continue;
+            }
+            if self.eat("...") {
+                rest = Some(Box::new(self.assignment_pattern_or_target()?));
+                if self.is("=") {
+                    return Err(self.error("rest assignment element cannot have an initializer"));
+                }
+                if self.eat(",") {
+                    return Err(self.error("rest assignment element must be final"));
+                }
+                self.need("]")?;
+                break;
+            }
+            let target = self.assignment_pattern_or_target()?;
+            let initializer = if self.eat("=") {
+                Some(self.with_in(true, |parser| parser.expression(0))?)
+            } else {
+                None
+            };
+            elements.push(AssignmentArrayElement::Element {
+                target,
+                initializer,
+            });
+            if self.eat("]") {
+                break;
+            }
+            self.need(",")?;
+            if self.eat("]") {
+                break;
+            }
+        }
+        Ok(AssignmentArrayPattern { elements, rest })
+    }
+
+    fn assignment_object_pattern(&mut self) -> Result<AssignmentObjectPattern, Error> {
+        let mut properties = Vec::new();
+        let mut rest = None;
+        loop {
+            if self.eat("}") {
+                break;
+            }
+            if self.eat("...") {
+                rest = Some(Box::new(self.assignment_reference()?));
+                if self.is("=") {
+                    return Err(self.error("rest assignment property cannot have an initializer"));
+                }
+                if self.eat(",") {
+                    return Err(self.error("rest assignment property must be final"));
+                }
+                self.need("}")?;
+                break;
+            }
+            let computed = self.eat("[");
+            let shorthand = if computed {
+                None
+            } else {
+                match &self.token()?.kind {
+                    Kind::Word(name) => Some(name.clone()),
+                    _ => None,
+                }
+            };
+            let key = if computed {
+                let key = self.with_in(true, |parser| parser.expression(0))?;
+                self.need("]")?;
+                key
+            } else {
+                let offset = self.token()?.offset;
+                let value = self.property_name()?;
+                self.make(ExprKind::Literal(value), 1, offset)?
+            };
+            let (target, initializer) = if self.eat(":") {
+                let target = self.assignment_pattern_or_target()?;
+                let initializer = if self.eat("=") {
+                    Some(self.with_in(true, |parser| parser.expression(0))?)
+                } else {
+                    None
+                };
+                (target, initializer)
+            } else {
+                let name = shorthand.ok_or_else(|| self.error("expected assignment property"))?;
+                if !self.identifier_reference_allowed(&name) {
+                    return Err(self.error("reserved word is not an assignment target"));
+                }
+                self.assignment_name(&name)?;
+                let offset = key.offset;
+                let target = AssignmentPattern::Target(Box::new(self.make(
+                    ExprKind::Name(name),
+                    1,
+                    offset,
+                )?));
+                let initializer = if self.eat("=") {
+                    Some(self.with_in(true, |parser| parser.expression(0))?)
+                } else {
+                    None
+                };
+                (target, initializer)
+            };
+            properties.push(AssignmentObjectProperty {
+                key,
+                target,
+                initializer,
+            });
+            if self.eat("}") {
+                break;
+            }
+            self.need(",")?;
+        }
+        Ok(AssignmentObjectPattern { properties, rest })
+    }
+
+    fn assignment_pattern_or_target(&mut self) -> Result<AssignmentPattern, Error> {
+        if (self.is("[") || self.is("{")) && !self.literal_member_target_ahead() {
+            self.assignment_pattern()
+        } else {
+            self.assignment_reference()
+                .map(|target| AssignmentPattern::Target(Box::new(target)))
+        }
+    }
+
+    fn literal_member_target_ahead(&self) -> bool {
+        let Some(open) = self.tokens.get(self.at) else {
+            return false;
+        };
+        let close = match open.kind {
+            Kind::Punct("[") => "]",
+            Kind::Punct("{") => "}",
+            _ => return false,
+        };
+        let mut stack = Vec::new();
+        for (index, token) in self.tokens.iter().enumerate().skip(self.at) {
+            match token.kind {
+                Kind::Punct("[") => stack.push("]"),
+                Kind::Punct("{") => stack.push("}"),
+                Kind::Punct("(") => stack.push(")"),
+                Kind::Punct(actual) if stack.last() == Some(&actual) => {
+                    stack.pop();
+                    if stack.is_empty() && actual == close {
+                        return self
+                            .tokens
+                            .get(index.saturating_add(1))
+                            .is_some_and(|next| matches!(next.kind, Kind::Punct("." | "[")));
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn assignment_reference(&mut self) -> Result<Expr, Error> {
+        let target = self.prefix_with_calls(true)?;
+        if let Some(name) = target.reference_name() {
+            self.assignment_name(name)?;
+        } else if target.member().is_none() {
+            return Err(self.error("invalid destructuring assignment target"));
+        }
+        Ok(target)
+    }
     #[expect(
         clippy::too_many_lines,
         reason = "Pratt loop keeps operator precedence, assignments and early errors together"
     )]
     fn expression_inner(&mut self, min: u8) -> Result<Expr, Error> {
+        if min == 0 && self.destructuring_assignment_ahead() {
+            let offset = self.token()?.offset;
+            let pattern = self.assignment_pattern()?;
+            self.need("=")?;
+            let right = self.expression(0)?;
+            let depth = assignment_pattern_depth(&pattern)
+                .max(right.depth)
+                .saturating_add(1);
+            return self.make(
+                ExprKind::Destructure(pattern, Box::new(right)),
+                depth,
+                offset,
+            );
+        }
         if min == 0
             && self.is("async")
             && self
@@ -1094,7 +1362,7 @@ impl Parser {
                 && let Some(op) = assignment
             {
                 if destructuring_target(&left.kind) {
-                    return Err(Self::unsupported("destructuring assignment"));
+                    return Err(self.error("invalid destructuring assignment pattern"));
                 }
                 let name = left.reference_name().map(String::from);
                 if let Some(name) = &name {
@@ -1258,8 +1526,11 @@ impl Parser {
             Kind::Punct("{") => self.object(token.offset)?,
             Kind::Word(word) if word == "this" => self.make(ExprKind::This, 1, token.offset)?,
             Kind::Word(word) if word == "function" => self.function_expression(token.offset)?,
+            Kind::Word(word) if word == "yield" && !self.strict => {
+                self.make(ExprKind::Name(word), 1, token.offset)?
+            }
             Kind::Word(word) if word == "yield" => {
-                return Err(Self::unsupported("generators"));
+                return Err(self.error("yield is not an IdentifierReference here"));
             }
             Kind::Word(word) if word == "import" && (self.is("(") || self.is(".")) => {
                 return Err(Self::unsupported("dynamic import and import.meta"));
@@ -1879,6 +2150,41 @@ fn binary(kind: &Kind) -> Option<(Binary, u8)> {
 
 const fn destructuring_target(kind: &ExprKind) -> bool {
     matches!(kind, ExprKind::Array(_) | ExprKind::Object(_))
+}
+
+fn assignment_pattern_depth(pattern: &AssignmentPattern) -> usize {
+    match pattern {
+        AssignmentPattern::Target(target) => target.depth,
+        AssignmentPattern::Array(array) => array
+            .elements
+            .iter()
+            .filter_map(|element| match element {
+                AssignmentArrayElement::Elision => None,
+                AssignmentArrayElement::Element {
+                    target,
+                    initializer,
+                } => Some(
+                    assignment_pattern_depth(target)
+                        .max(initializer.as_ref().map_or(0, |value| value.depth)),
+                ),
+            })
+            .chain(array.rest.iter().map(|rest| assignment_pattern_depth(rest)))
+            .max()
+            .unwrap_or(1),
+        AssignmentPattern::Object(object) => object
+            .properties
+            .iter()
+            .map(|property| {
+                property
+                    .key
+                    .depth
+                    .max(assignment_pattern_depth(&property.target))
+                    .max(property.initializer.as_ref().map_or(0, |value| value.depth))
+            })
+            .chain(object.rest.iter().map(|rest| rest.depth))
+            .max()
+            .unwrap_or(1),
+    }
 }
 
 const fn nullish_mix(op: Binary, child: &ExprKind) -> bool {

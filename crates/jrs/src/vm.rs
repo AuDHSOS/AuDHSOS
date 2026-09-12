@@ -786,8 +786,11 @@ impl Execution<'_> {
                     | Op::Key
                     | Op::ObjectBindingStart
                     | Op::ObjectBindingGet(_)
+                    | Op::ObjectAssignmentGet { .. }
                     | Op::ObjectBindingRest(_)
+                    | Op::ObjectAssignmentRest { .. }
                     | Op::ObjectBindingEnd(_)
+                    | Op::KeyBelow
                     | Op::Get(_)
                     | Op::Set(_)
                     | Op::Delete(_)
