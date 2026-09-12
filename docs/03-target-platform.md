@@ -3,7 +3,8 @@
 ## 3.1 First target: QEMU `x86_64` with UEFI
 
 The first release runs on `qemu-system-x86_64` with the `q35` machine, the
-default `qemu64` CPU model, and the UEFI firmware bundled with QEMU.
+`qemu64` CPU model with two feature flags added, and the UEFI firmware
+bundled with QEMU.
 
 ### 3.1.1 Reference machine configuration
 
@@ -12,7 +13,8 @@ The build automation owns this command line; nobody types it by hand.
 ```
 qemu-system-x86_64 \
   -machine q35 \
-  -cpu qemu64 \
+  -accel <kvm or tcg> \
+  -cpu qemu64,+rdrand,+rdseed \
   -smp 1 \
   -m 256M \
   -drive if=pflash,format=raw,readonly=on,file=<qemu share dir>/edk2-x86_64-code.fd \
@@ -27,8 +29,10 @@ qemu-system-x86_64 \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04
 ```
 
-Accelerator: TCG. `-no-reboot` turns a triple fault into a QEMU exit, which
-the test runner reports as a crash.
+On Linux the xtask starts a short probe machine once, prefers KVM, falls
+back to TCG, and passes that choice to every runner Cargo starts. Other
+hosts use TCG. `-no-reboot` turns a triple fault into a QEMU exit, which the
+test runner reports as a crash.
 
 The screen is 1920x1200, and it takes three of the lines above to get it.
 The default VGA device of the `q35` machine would be the same device, but
@@ -56,13 +60,12 @@ on macOS and `-display gtk` on Linux. The run without a graphics adapter
 keeps `-vga none` and drops the three lines that follow it, which leaves
 the firmware without a Graphics Output Protocol.
 
-From Phase 12 on the CPU model is `qemu64,+rdrand,+rdseed`. `random_bytes`
-draws from `RDSEED`, which D-43 decided and Phase 12 builds, and the model
-`qemu64` carries neither flag — asked of QEMU 11.1 through
-`query-cpu-model-expansion`, not assumed. TCG provides both instructions
-once they are named, and the line starts without a warning under
-`enforce`. Without them the call would fail on the one machine this system
-is developed on (D-110).
+The CPU model carries `+rdrand,+rdseed` since Phase 12. `random_bytes`
+draws from `RDSEED`, which D-43 decided, and the model `qemu64` carries
+neither flag — asked of QEMU 11.1 through `query-cpu-model-expansion`, not
+assumed. TCG provides both instructions once they are named, and the line
+starts without a warning under `enforce`. Without them the call answers
+`Unavailable` on the one machine this system is developed on (D-110).
 
 From Phase 13 on the runner adds two more lines:
 
@@ -90,6 +93,26 @@ Before Phase 13 the machine has no network device at all: a device that
 neither a driver nor a bus walk looks at is one more thing for an
 unrelated test to trip over.
 
+A run that writes adds two lines more, and no run has them unless it asks:
+
+```
+-drive if=none,id=s0,format=raw,file=<scratch disk> \
+-device virtio-blk-pci,drive=s0,disable-legacy=on,num-queues=1
+```
+
+The boot volume is the firmware's and the loader's, and nothing in the
+system writes it. What the system writes, it writes to this second disk,
+so that no run can leave the volume the machine boots from torn (D-136).
+The disk arrives blank and holds no partition table: what formats it is
+the system, over the whole disk. `disable-legacy=on` makes it a
+non-transitional virtio 1.0 device, so its PCI device id is `0x1042` and
+not the transitional `0x1001`; `num-queues=1` is not the default, QEMU
+giving the device one queue per processor, and it is named because the
+driver will drive one. `cargo xtask run --scratch` is what asks for the
+disk today. The runner keeps one disk per run name under `target/qemu/`,
+creates it blank when it is not there, and leaves it as it stands when it
+is, which is what a test that boots twice to see what survived needs.
+
 ### 3.1.2 Devices
 
 | Device | Access path | Used by | Phase |
@@ -105,7 +128,7 @@ unrelated test to trip over.
 | PCI configuration space via ECAM (`MCFG`) | the kernel reads the `MCFG` table and reports the window through `system_info`; userland maps it as a `Device` memory object and walks the bus with the crate `pci` (D-112) | userland virtio drivers | 13 |
 | MSI-X on a PCI device | `interrupt_create_msi` allocates the vector; the driver writes the address and data into the device's own table (D-111) | userland virtio drivers | 12 |
 | virtio-net over PCI (`virtio-net-pci`, non-transitional) | MMIO through the volatile accessor, DMA through a `Ram` memory object with `INFO`, interrupts through MSI-X | on the machine from 13, so that the bus walk has a device to find; driven by `driver-virtio-net` and `server-net` from 14 | 13, 14 |
-| virtio-blk over PCI | the same three paths | later work | later |
+| virtio-blk over PCI (`virtio-blk-pci`, non-transitional), on a second disk and only for a run that asks | the same three paths | the scratch disk of a run that writes; `driver-virtio-blk` is what will drive it | later |
 | `RDSEED` | the `random_bytes` system call | `crypto-rng` seeding in every process that needs randomness | 12 |
 | Standard VGA device (`q35` default) with a linear framebuffer exposed by the UEFI Graphics Output Protocol | loader: mode query through `EFI_GRAPHICS_OUTPUT_PROTOCOL`; userland: MMIO via a `Device` memory object | boot information; userland display server | 2, 9 |
 | i8042 PS/2 controller (I/O ports `0x60` and `0x64`, IRQ 1 keyboard, IRQ 12 mouse) | port I/O via `IoPortRange`, `Interrupt` | userland input driver | 10 |
@@ -154,7 +177,9 @@ The loader is the crate `boot-uefi-x86_64`, built for the target
   type `0xEE` covering the whole disk, the primary GPT header in sector 1,
   the partition entry array in sectors 2 to 33, and the backup entry array
   and backup header at the end of the disk. Header and array carry CRC32
-  checksums computed by the xtask's own CRC32 implementation.
+  checksums. The structures and the checksum are `fs-gpt`'s; the xtask
+  keeps where the partition begins, what it is called, and the fixed
+  identifiers that make an image reproducible (D-138).
 - One partition with the EFI system partition type GUID
   `C12A7328-F81F-11D2-BA4B-00A0C93EC93B` and a fixed, project-defined unique
   partition GUID so that images are reproducible.
@@ -176,7 +201,7 @@ in the entry call.
 | Field | Type | Content |
 |-------|------|---------|
 | `magic` | `[u8; 8]` | `AUDHBOOT` |
-| `version` | `u32` | `1` |
+| `version` | `u32` | `2`; version 1 carried no wall clock and is refused (D-137) |
 | `size` | `u32` | total size in bytes of the structure including the region array |
 | `phys_window_base` | `u64` | virtual base of the physical memory window (`PHYS_WINDOW_BASE`) |
 | `kernel_phys_start`, `kernel_phys_len` | `u64` | physical range of the kernel image |
@@ -190,10 +215,22 @@ in the entry call.
 | `framebuffer_stride` | `u32` | pixels per scan line, at least `framebuffer_width` |
 | `framebuffer_format` | `u32` | `0` absent, `1` `Rgbx8888` (red in the lowest byte), `2` `Bgrx8888` (blue in the lowest byte); four bytes per pixel in both |
 | `region_count` | `u32` | number of entries in the region array, at most `MAX_BOOT_REGIONS` |
+| `wall_clock` | `u32` | `0` the machine reported no clock, `1` `FirmwareUtc`, `2` `FirmwareUnspecifiedZone` |
+| `boot_unix_seconds` | `i64` | seconds from 1970-01-01T00:00:00Z as the firmware clock stood when the loader read it, `0` if `wall_clock` is `0` |
 | `regions` | `[BootRegion; region_count]` | `{ start: u64, len: u64, kind: u32, reserved: u32 }` |
+
+The fixed part is 144 bytes; the region array follows it.
 
 Region kinds: `Usable`, `Reserved`, `AcpiReclaimable`, `AcpiNvs`,
 `MmioReserved`. Loader code and data are reported as `Usable`.
+
+Wall clock rules: the pair is present or neither half is. With
+`wall_clock == 0`, `boot_unix_seconds` is `0`; otherwise the code is one
+the version knows and the seconds are a moment after the epoch. The loader
+reads them from `EFI_RUNTIME_SERVICES.GetTime` before it leaves the boot
+services, and `FirmwareUnspecifiedZone` says the firmware named no offset
+from universal time, so the value may be wrong by a zone. The kernel adds
+the microseconds since boot and answers `clock_wall` with the sum.
 
 Framebuffer rules: with `framebuffer_format == 0` every framebuffer field
 is `0`. Otherwise `framebuffer_phys_start` is frame-aligned and non-zero,
@@ -259,7 +296,11 @@ The serial output carries a line protocol that the runner parses:
 An `[info]` line reports what the kernel found on the machine rather than
 what a test made of it, and the runner reads it: `[info] framebuffer=absent`
 is what a machine without a graphics adapter says, and a machine with one
-names its mode. A `[bench]` line reports a measurement and not a test: `<ticks>` is the
+names its mode. `[info] ecam=<base> segment=<n> buses=<first>..=<last>`
+names the configuration window of the PCI bus the `MCFG` table of the
+firmware published, and `[info] ecam=absent` is what a machine whose
+firmware published none says. No base address is written down here: it is
+whatever the table says. A `[bench]` line reports a measurement and not a test: `<ticks>` is the
 median of `<count>` round trips, in ticks of the time-stamp counter, and
 the line counts towards neither the passed nor the failed total. An image
 that writes one writes its test lines and its summary like every other.
@@ -273,7 +314,7 @@ the first release.
 
 | Trait | Responsibility | `x86_64` adapter |
 |-------|----------------|------------------|
-| `Platform` | boot information: memory regions, boot image location, physical window offset, ACPI root pointer | validated `BootInfo` |
+| `Platform` | boot information: memory regions, boot image location, physical window offset, ACPI root pointer, the wall clock the loader read from the firmware (D-137), and the configuration window of the bus the kernel read out of the `MCFG` table | validated `BootInfo` |
 | `InterruptController` | map a line to a vector, mask, unmask, end-of-interrupt, spurious handling | local APIC and I/O APIC register blocks |
 | `Timer` | start a periodic tick with a frequency, read the tick counter | local APIC timer calibrated with the PIT |
 | `FrameAccess<T>` | a physical frame as a `&mut PageTable` of entry type `T` | the physical window |

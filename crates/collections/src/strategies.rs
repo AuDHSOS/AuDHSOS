@@ -69,6 +69,8 @@ pub enum ListOp {
     PopBack,
     /// Take a named node out.
     Unlink(u32),
+    /// Put a node behind another, or at the front when there is none.
+    InsertAfter(u32, Option<u32>),
 }
 
 /// One operation on a map.
@@ -133,15 +135,22 @@ pub fn any_bit_op(bits: usize) -> BoxGen<BitOp> {
 #[must_use]
 pub fn any_list_op(nodes: u32) -> BoxGen<ListOp> {
     let highest = nodes.saturating_add(2);
-    pair(range(0u8..=7), range(0u32..=highest))
-        .map(|(choice, node)| match choice {
-            0 | 1 => ListOp::PushBack(node),
-            2 => ListOp::PopFront,
-            3 => ListOp::PopBack,
-            4 | 5 => ListOp::Unlink(node),
-            _ => ListOp::PushFront(node),
-        })
-        .boxed()
+    pair(
+        range(0u8..=9),
+        pair(
+            range(0u32..=highest),
+            range(0u32..=highest.saturating_add(1)),
+        ),
+    )
+    .map(move |(choice, (node, after))| match choice {
+        0 | 1 => ListOp::PushBack(node),
+        2 => ListOp::PopFront,
+        3 => ListOp::PopBack,
+        4 | 5 => ListOp::Unlink(node),
+        6 | 7 => ListOp::InsertAfter(node, (after <= highest).then_some(after)),
+        _ => ListOp::PushFront(node),
+    })
+    .boxed()
 }
 
 /// An operation on a map over a small range of keys, so that duplicates

@@ -12,7 +12,11 @@
 use std::collections::BTreeMap;
 
 use audhsos_time::UnixTime;
-use fs_fat::{BlockDevice, FileSystem, FormatOptions, Name};
+use fs_fat::{FileSystem, FormatOptions, Name};
+
+use crate::image::device::Slice;
+#[cfg(test)]
+use crate::image::device::View;
 
 use crate::error::Error;
 
@@ -92,76 +96,6 @@ const fn options() -> FormatOptions {
     }
 }
 
-/// The partition as a device of sectors.
-struct Partition<'a> {
-    /// The bytes of the partition, one sector after another.
-    bytes: &'a mut [u8],
-}
-
-/// The partition of an image that is only read.
-#[cfg(test)]
-struct View<'a> {
-    /// The bytes of the partition.
-    bytes: &'a [u8],
-}
-
-/// Where a sector begins, where the bytes hold it.
-fn offset(len: usize, sector: u32) -> Option<usize> {
-    let start = usize::try_from(sector).ok()?.checked_mul(SECTOR)?;
-    if start.checked_add(SECTOR)? <= len {
-        Some(start)
-    } else {
-        None
-    }
-}
-
-impl BlockDevice for Partition<'_> {
-    fn sectors(&self) -> u32 {
-        u32::try_from(self.bytes.len() / SECTOR).unwrap_or(u32::MAX)
-    }
-
-    fn read(&self, sector: u32, into: &mut [u8; SECTOR]) -> Result<(), fs_fat::Error> {
-        let start = offset(self.bytes.len(), sector).ok_or(fs_fat::Error::Device(sector))?;
-        let source = self
-            .bytes
-            .get(start..start.saturating_add(SECTOR))
-            .ok_or(fs_fat::Error::Device(sector))?;
-        into.copy_from_slice(source);
-        Ok(())
-    }
-
-    fn write(&mut self, sector: u32, from: &[u8; SECTOR]) -> Result<(), fs_fat::Error> {
-        let start = offset(self.bytes.len(), sector).ok_or(fs_fat::Error::Device(sector))?;
-        let target = self
-            .bytes
-            .get_mut(start..start.saturating_add(SECTOR))
-            .ok_or(fs_fat::Error::Device(sector))?;
-        target.copy_from_slice(from);
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-impl BlockDevice for View<'_> {
-    fn sectors(&self) -> u32 {
-        u32::try_from(self.bytes.len() / SECTOR).unwrap_or(u32::MAX)
-    }
-
-    fn read(&self, sector: u32, into: &mut [u8; SECTOR]) -> Result<(), fs_fat::Error> {
-        let start = offset(self.bytes.len(), sector).ok_or(fs_fat::Error::Device(sector))?;
-        let source = self
-            .bytes
-            .get(start..start.saturating_add(SECTOR))
-            .ok_or(fs_fat::Error::Device(sector))?;
-        into.copy_from_slice(source);
-        Ok(())
-    }
-
-    fn write(&mut self, sector: u32, _from: &[u8; SECTOR]) -> Result<(), fs_fat::Error> {
-        Err(fs_fat::Error::Device(sector))
-    }
-}
-
 /// The geometry of a partition of `sectors` sectors.
 ///
 /// # Errors
@@ -207,7 +141,7 @@ fn name_of(name: &str) -> Result<Name, Error> {
 pub(crate) fn write(partition: &mut [u8], files: &[(&str, Vec<u8>)]) -> Result<Geometry, Error> {
     let sectors = u32::try_from(partition.len() / SECTOR).unwrap_or(u32::MAX);
     let geometry = geometry(sectors)?;
-    let mut volume = FileSystem::format(Partition { bytes: partition }, &options())
+    let mut volume = FileSystem::format(Slice { bytes: partition }, &options())
         .map_err(|error| Error::Usage(format!("the file system was refused: {error}")))?;
     for (path, data) in files {
         let mut directory = volume.root();

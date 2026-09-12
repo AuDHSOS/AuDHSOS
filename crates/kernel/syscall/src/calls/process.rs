@@ -89,6 +89,45 @@ pub fn watch<E: Environment, const NP: usize, const NT: usize, const NM: usize, 
     Ok(Reply::DONE)
 }
 
+/// Removes a watch without changing any already delivered notification.
+/// Returns one when the process has ended, zero while it is alive. This
+/// lets a server validate an old queued bit against the current subscriber.
+///
+/// # Errors
+///
+/// The same capability and bit validation errors as [`watch`]. Removing
+/// a watch that is no longer present succeeds.
+pub fn unwatch<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    caller: ProcessId,
+    request: &Request,
+) -> Result<Reply, Error> {
+    let target = process_of(machine, caller, request)?;
+    let handle = Handle::from_raw(request.argument(1)).ok_or(Error::InvalidHandle)?;
+    let (notification, _rights) =
+        machine
+            .objects
+            .resolve::<Notification>(caller, handle, Rights::BIND)?;
+    let bit = u8::try_from(request.argument(2)).map_err(|_| Error::InvalidArgument)?;
+    if bit >= 64 {
+        return Err(Error::InvalidArgument);
+    }
+    machine
+        .objects
+        .processes
+        .get_mut(target)?
+        .remove_watcher(Watch { notification, bit });
+    Ok(Reply::value(u64::from(
+        machine.objects.processes.get(target)?.has_ended(),
+    )))
+}
+
 /// `process_create`: a process with an address space of its own, a handle
 /// capacity, and quotas, all of them within what the creator holds.
 ///

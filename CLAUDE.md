@@ -1,46 +1,61 @@
-# Anrede
-Sie reden mich mit sie an. Genauso werde ich sie mit sie anreden.
+# writing style
 
-# Schreibstil
+Keep everything in US English. Write clear and distinct sentences. Get to the point.
+Do not write rule of thumb sentences. Especially not in headlines.
 
-Schreiben sie immer klar und deutlich. Kommen sie immer auf den Punkt.
-Keine gnomischen Merksätze.
-Schreiben sie nicht von`Naht`. Sondern nutzen sie den englischen Begriff.
-Es sei denn, es wird von der Stoff-Naht geschrieben.
-Fachbegriffe, insbesondere aus der Informatik, bleiben englisch. In der deutschen Kommunikation werden Rust- und Systembegriffe nicht übersetzt: Crate, Trait, Slice, Borrow, Lifetime, Frame, Page, Handle, Endpoint, Guard Page, Fuzzing, Mangling, Kernel, Memory, Page Table, seed corpus, seed, seeds, corpus entry, corpus file. Sie werden als Fremdwörter dekliniert („des Crates", „die Traits").
+While you work report only bugs / critical findings / problems etc. Keep it short.
 
-# Referenzdokumente
+In your final summary message report your done work.
+Keep it also short. Overall keep your messages short.
+Your final summary message is not only short but shorter.
+Overall keep your messages shorter.
 
-Standards nie aus dem Gedächtnis zitieren, sondern erst nachsehen, ob das
-Dokument geladen ist:
+Keep comments in source code also short or shorter.
 
-- RFCs liegen unter `docs/rfc`.
-- Was OASIS herausgibt, liegt unter `docs/oasis`; dort liegt die
-  virtio-Spezifikation.
+If you encounter a long source code comment then make it shorter.
 
-Wenn das Dokument fehlt, lesen sie die `README.md` des jeweiligen
-Verzeichnisses, laden es so wie dort beschrieben und lesen es
-anschließend.
+Really do a "reduce to the max" without losing information.
 
-# Build- und Check-Kommandos
+Use `Big O notation` / classify algorithms by their run time. The user understands it.
 
-Der Check muss laufen, bevor ein `git commit` erstellt wird.
+# reference documents (RFCs etc.)
 
-Alle Cargo-Aufrufe dieses Projekts laufen über die Wrapper in `tools/`, nie
-über ein blankes `cargo`:
+Cite standards always by lookup in the concrete document.
+Locations:
+- `docs/cipa` EXIF specs
+- `docs/ecma` everything related to ECMAScript
+- `docs/itu` for JPEG
+- `docs/oasis` virtio specifications
+- `docs/openssh` the SSH cipher that has no RFC
+- `docs/pcisig` some information related to PCI
+- `docs/rfc` RFC documents
+- `docs/ti` the 16550 serial controller
+- `docs/uefi` what the UEFI Forum publishes: the UEFI specification the loader is written against, and the ACPI specification the kernel reads its tables from
+- `docs/w3c` documents from the web consortium
+- `docs/whatwg` documents from WHATWG
 
-- `sh tools/xtask.sh <subcommand>` — z. B. `lint`, `test`, `doc`, `fuzz`
-- `sh tools/xtask-check.sh` — der volle Check, muss vor jedem Commit grün sein
-  (warm ca. drei Minuten)
+If the subdirectory is missing read `rfc/README.md` to see how RFC documents are
+handle and reflect the style.
 
-Grund: `/opt/local/bin/rustc` (MacPorts) steht auf dieser Maschine vor
-`~/.cargo/bin` im `PATH`, der Workspace verlangt aber die gepinnte Nightly.
-Die Wrapper setzen den `PATH` gerade, schalten Pager und Farbe ab und
-`exec`en dann Cargo: Ausgabe und Exit-Status sind die des xtask, `&&` und
-`$?` gelten also. Ein voller Check schreibt warm rund dreitausend Zeilen;
-`sh tools/xtask-check.sh --quiet` macht daraus eine Zeile pro Schritt und
-zeigt die Ausgabe nur von dem Schritt, der fehlschlägt.
+IF the document is missing read `README.md` of the subdirectory and create
+the file in the subdirectory (mandatory).
 
-`cargo fmt --all` scheitert, sobald eine parallele Session ein halb
-geschriebenes Crate im Workspace liegen hat. Einzelne Packages formatieren:
-`cargo fmt -p <name>`.
+# build an check commands
+
+before a `git commit` the check must exit with 0.
+Do not take any shortcut so that exit 0 in the check is reached.
+
+Every cargo call on macOS is run through wrappers in `tools/`.
+`cargo` directly is not the nightly build.
+
+- `sh tools/xtask.sh <subcommand>` e.g. `lint`, `test`, `doc`, `fuzz`, `--help` for help
+- `sh tools/xtask-check.sh` — full check before every commit. Must exit with 0. Takes around 3 minutes when compiled
+
+If `cargo fmt --all` fails use `cargo fmt -p <name>` to format one package (parallel sessions).
+
+(Optional read for reason: `ER-1` in `extended-read.md`.
+
+# Python
+
+* `uv` is the only tool for managing packages or venvs
+* do not create permanent python scripts

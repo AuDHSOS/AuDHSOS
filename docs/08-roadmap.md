@@ -33,13 +33,16 @@ each phase down to crates, types, algorithms, and tests.
 
 Beside the phases run tracks that depend on none of them: the
 cryptography and TLS crates of section 8.21, specified in
-[document 11](11-cryptography-and-tls.md), and the tracks of sections
-8.22 to 8.25, specified in [document 12](12-parallel-work.md). Section
-8.26 states how many of them may be active at once and which phase work
-may be pulled forward. Every track but the two integration steps is
-finished, and those two are Phases 14 and 15; what the four phases from
-12 on need beyond them is specified in
-[document 13](13-the-network-on-the-machine.md).
+[document 11](11-cryptography-and-tls.md), the tracks of sections 8.22
+to 8.25, specified in [document 12](12-parallel-work.md), and the Secure
+Shell client of section 8.26, specified in
+[document 14](14-secure-shell-as-a-client.md). Section 8.27 states how
+many of them may be active at once and which phase work may be pulled
+forward. Of the tracks of documents 11 and 12 everything but the two
+integration steps is finished, and those two are Phases 14 and 15; what
+the four phases from 12 on need beyond them is specified in
+[document 13](13-the-network-on-the-machine.md). Track S is decided and
+not started (D-123).
 
 ## 8.2 Phase 0: Project foundation
 
@@ -263,6 +266,8 @@ region (D-104); the reference machine draws on 1280 by 800 pixels in
 
 ## 8.12 Phase 10: PS/2 input
 
+Status: implemented.
+
 Deliverables: `driver-i8042` over the port access trait; the input
 protocol in `user-proto` (key codes, key and pointer events, layout
 tables `us` and `de`, subscription with a ring buffer and a
@@ -279,6 +284,8 @@ the console driver.
 
 ## 8.13 Phase 11: Graphical demonstration
 
+Status: implemented.
+
 Deliverables: `app-canvas` with a full-screen surface, a cursor that
 follows the pointer, drawing while a button is held, and typed text
 rendered with the bitmap font; the display server draws the cursor;
@@ -287,9 +294,16 @@ end-to-end tests that combine injected input with screendumps.
 
 Tests: catalog 6.6.29 (combined items).
 
-Acceptance: `sh tools/xtask.sh run --display` shows the canvas;
-`sh tools/xtask.sh test --e2e` verifies cursor movement, a drawn stroke,
-and typed text in screendumps.
+Acceptance: `sh tools/xtask.sh run --display` shows the canvas, which it
+takes the screen for at the first event — the first movement of the mouse
+in an interactive run; `sh tools/xtask.sh test --e2e` verifies cursor
+movement, a drawn stroke, and typed text in screendumps.
+
+Done: two programs cannot both hold a screen the size of the screen and
+both be looked at, so the canvas presents nothing until an event reaches
+it (D-126). That leaves the picture of `app-paint` standing to be checked
+while the machine runs, and makes which of the two is on the screen a
+matter of what happened rather than of which started last.
 
 ## 8.14 Phase 12: Time, randomness, and message interrupts
 
@@ -333,6 +347,15 @@ program waits on a notification nothing signals and returns at its
 deadline; a third draws two seeds and they differ; an MSI vector created
 by the root task and raised by a test device arrives as a signalled bit.
 
+Done: the deadline list is threaded through the thread entries rather than
+held as an `IndexList` over them, because a `Link` in no list is not zero
+and the `Scheduler` lives in the one `static` that carries the object
+pools (D-131). `IndexList::insert_after` is built and tested all the same;
+it was the operation the type was missing. The vector space of a message
+interrupt needed a gate in the interrupt descriptor table for every one of
+its vectors before a device could write one: nothing routes a message, so
+a vector without a gate arrives as a general protection fault.
+
 ## 8.15 Phase 13: PCI and the bus
 
 Deliverables: `kernel-acpi` gains `mcfg.rs`, which reads the `MCFG` table
@@ -365,6 +388,22 @@ virtio-net device with its vendor and device id, the base address
 registers it decoded, the four virtio capabilities it found, and the size
 of its MSI-X table; on a machine started without the two network lines it
 reports the rest of the bus, finds no virtio device, and ends by itself.
+
+Done: the window of the reference machine covers all two hundred and
+fifty-six buses, which is two hundred and fifty-six mebibytes, so
+`app-lspci` maps one bus at a time at one address and takes it back before
+the next: what the program costs is the page tables of one mebibyte,
+whatever the firmware published. The ECAM range is recorded beside the
+`MmioReserved` apertures whether or not the memory map marked it, and on
+the machine this was built on it does not: the firmware of the reference
+machine publishes the window in the `MCFG` table at `0xE000_0000` and
+leaves it out of the memory map, so without that entry
+`memory_create_device` would refuse the one aperture that makes the bus
+reachable. The recorded configuration space of the `pci` double was read
+out of the ECAM window of a running machine through the monitor, which is
+the only part of a byte dump a probe of a base address register cannot
+carry: the size masks the machine reported are recorded beside the
+bytes.
 
 ## 8.16 Phase 14: The network on the machine
 
@@ -405,15 +444,22 @@ interface and the run ends by itself.
 This is step T8 of [document 11](11-cryptography-and-tls.md), which has
 waited for a transport since the client was finished.
 
+The wall clock this phase needed arrived ahead of it and is done (D-137,
+catalog 6.6.71): the loader reads `GetTime` before it leaves the boot
+services, the moment travels in the boot information, and `clock_wall`
+answers the microseconds since the epoch with the source the firmware
+named. Certificate validation had a `now` parameter and no value to put
+in it; now it has one.
+
 Deliverables: the transport glue that joins `audhsos-tls` to a TCP
 connection of `server-net` — the record layer's bytes in and out of the
 socket's ring, the handshake driven to completion against a deadline of
 the clock of Phase 12, and the close notify in both directions; the
-certificate path validated against the trust anchors the image carries;
-`tools/tls-probe` keeps its host role and gains a counterpart that runs
-on the target.
+certificate path validated against the trust anchors the image carries,
+against the date `clock_wall` answers; `tools/tls-probe` keeps its host
+role and gains a counterpart that runs on the target.
 
-Tests: catalog 6.6.65.
+Tests: catalog 6.6.65, with 6.6.71 already in.
 
 Acceptance: an HTTPS `GET` from a program of the archive against a server
 the test starts on the development machine, with a chain the test
@@ -424,9 +470,10 @@ each refused with the alert the standard names.
 
 ## 8.18 Later work, not scheduled
 
-virtio-blk driver and a file system server on top of the FAT32 logic of
-8.24, which Phase 13 brings within reach because the bus it needs is the
-one PCI gives it; certificate revocation checking; virtio-gpu;
+a file system server on top of the FAT32, partition table and block
+device logic of 8.24, which Phase 13 brings within reach because the bus
+it needs is the one PCI gives it: what is left is the DMA region, the
+process around the driver, and the protocol its clients speak; certificate revocation checking; virtio-gpu;
 virtio-input or `usb-tablet` for absolute pointer coordinates; a
 compositor with several windows; the `aarch64` port under HVF without a
 loader; SMP with per-CPU run queues; hardware port permission bitmaps;
@@ -457,7 +504,7 @@ names in the disk image writer.
 | Phase 14 is XL and the network stalls in it | the release slips while three crates are half-finished | the driver, the server, and the protocol are separate crates with separate catalog items; the driver and the crate `pci` are logic over a trait and can be finished before the phase that integrates them |
 | The kernel grows a deadline queue in the tick handler | every interrupt costs more | the list is ordered by instant, the walk stops at the first deadline that has not passed, and its length is bounded by the thread count |
 | MSI-X cannot be masked by the kernel | a device that raises interrupts faster than its driver services them keeps a core busy | the driver suppresses through the used ring flag `virtio-queue` implements; the limit is written down in 13.5 rather than discovered |
-| PCI-SIG specifications may not be kept beside the code | a layout constant is wrong and D-59's check does not exist for it | every constant names its document and revision; a configuration space captured from a real machine is a fixture of the crate's tests (D-117) |
+| PCI-SIG specifications cannot be obtained and so are not kept beside the code | a layout constant is wrong and D-59's check does not exist for it | every constant names its document and revision; a configuration space captured from a real machine is a fixture of the crate's tests (D-124) |
 
 ## 8.20 Resolved decisions
 
@@ -499,7 +546,7 @@ phase order and is built between phases.
 | T6 | `audhsos-x509` | L | implemented: certificate parsing, path validation, name matching, the test certificate builder |
 | T7 | `audhsos-tls` | XL | implemented: the client reproduces the RFC 8448 trace and completes a handshake against project-generated chains |
 | T8 | integration | M | Phase 15: the transport over a TCP connection of `server-net`, the `random_bytes` system call of Phase 12, and the HTTP client that `net-http` already is |
-| R1 | `crypto-bignum` | M-L | implemented: the limb arithmetic moved out of `crypto-ec`, with a modulus known at run time and Montgomery exponentiation in a narrow and a wide form |
+| R1 | `crypto-bignum` | M-L | implemented: the limb arithmetic moved out of `crypto-ec`, with a modulus known at run time and Montgomery exponentiation in a narrow and a wide form; a third form, the constant-time ladder for a secret exponent, came later with `crypto-dh` and belongs to no step of this track (D-122) |
 | R2 | `crypto-rsa` | M | implemented: the key with its bounds, and PKCS #1 v1.5 verified by construction (D-80) |
 | R3 | `crypto-rsa` | M | implemented: MGF1 and EMSA-PSS-VERIFY |
 | R4 | `audhsos-x509` | L | implemented: the RSA identifiers with the NULL parameter rule of RFC 4055, the key, and the test certificates |
@@ -568,8 +615,10 @@ Status: implemented.
 |------|-------|------|-----------|
 | F1 | `virtio-queue` | M | implemented: the descriptor table, the two rings and the chain arithmetic over a memory access trait, with the free set in the queue's own memory rather than in the table the device can see; the initialization state machine with its two failure paths; no packed ring, no indirect descriptor and no `EVENT_IDX`, each refused by name at negotiation (D-52, D-99) |
 | F2 | `fs-fat` | M | implemented: the boot parameter block against FAT12 and FAT16, cluster chains with every walk bounded by the cluster count, allocation and release with the free count counted at mount, directories in 8.3 form, and file read and write over a cursor; the xtask image writer is a user of it and keeps no FAT32 structure of its own (D-53, D-107) |
+| F3 | `fs-gpt` | M | implemented: the protective record, both headers with the checksum rule of UEFI 2.11, table 5.5, the entry array and the walk of it, reading with the fallback to the backup the format prescribes, and writing in the order a torn write survives; the CRC-32 of the format lives here and the xtask keeps no partition table structure of its own (D-138) |
+| F4 | `driver-virtio-blk` | L | implemented: the common configuration of virtio 4.1.4.3 and the register trait it is reached through, the feature set with every bit of virtio 5.2.3 named and all but three refused, the initialization of virtio 3.1.1 over the state machine of F1, and the request framing of virtio 5.2.6 with every rule of 5.2.6.1 refused at the call (D-139) |
 
-Tests: catalog 6.6.51 and 6.6.52.
+Tests: catalog 6.6.51, 6.6.52, 6.6.72 and 6.6.73.
 
 ## 8.25 Track G: tooling
 
@@ -589,7 +638,45 @@ beyond the host tests and the coverage gate every host crate has.
 
 Tests: catalog 6.6.53 and 6.6.58.
 
-## 8.26 Capacity for parallel work
+## 8.26 Track S: Secure Shell as a client
+
+Status: decided in D-123, specified in
+[document 14](14-secure-shell-as-a-client.md), begun. Steps S1, S2 and S3
+are built: the wire types and the binary packet, the greeting and the
+negotiation, both key exchange methods over `crypto-dh` (D-122) and
+`crypto-ec::x25519` with the exchange hash and the six keys, and the
+cipher over the packet layer. What is left needs the two decisions of
+14.13: the host key of S4 and the authentication of S5.
+
+The track is a client for SSH-2 and not a server, for the reason D-123
+gives. It offers `curve25519-sha256` and `diffie-hellman-group14-sha256`
+for the key exchange, `ssh-ed25519` for the host key and for `publickey`
+authentication, and `chacha20-poly1305@openssh.com` as the cipher, and
+needs no cryptographic primitive that the crypto track did not already
+build. What it refuses, and why each name is refused, is section 14.5.
+
+| Step | What | Size | Ends with |
+|------|------|------|-----------|
+| S1 | `audhsos-ssh`: `wire`, `packet` | M | implemented: the types of RFC 4251, section 5, against the vectors of that section, and the binary packet with its padding and its sequence numbers (catalog 6.6.68) |
+| S2 | `kex` | L | implemented: the greeting, the message numbers, `SSH_MSG_KEXINIT` and the negotiation rule (catalog 6.6.69); both methods, the exchange hash, the six keys of RFC 4253, section 7.2, `SSH_MSG_NEWKEYS` and the aborts (catalog 6.6.70) |
+| S3 | the cipher | M | implemented: `chacha20-poly1305@openssh.com` over the packet layer, against the worked example of the draft D-134 keeps in `docs/openssh/` (catalog 6.6.70) |
+| S4 | host keys | S-M | the `ssh-ed25519` blobs of RFC 8709, the signature over the exchange hash verified, and the trust rule as a parameter |
+| S5 | `auth` | M | `publickey` with the signature of RFC 4252, section 7, and `ext-info-c` with `server-sig-algs` |
+| S6 | `channel` | L | channels, the window, the session channel, `exec` and `shell`, extended data, and `exit-status` |
+| S7 | re-exchange | S-M | a re-exchange from either side, its two thresholds, and the disconnect reason codes of RFC 4250 |
+| S8 | integration | M | the client over a socket of `server-net`, a program in the boot archive, and a handshake against a live OpenSSH; needs Phase 14 |
+
+S1 to S7 depend on no phase and are built between them, as the whole of
+track C was. S8 needs the network on the machine.
+
+Tests: catalog 6.6.66, 6.6.68, 6.6.69 and 6.6.70 are written, for the
+arithmetic of S2 and the whole of S1, S2 and S3; the rest are written
+with the step that owns each. There is no RFC 8448 for this protocol — no document publishes a
+complete handshake with the keys that made it — so the check from outside
+is the interop test of S8 and not a replay, which is the one way this
+track differs in kind from track C.
+
+## 8.27 Capacity for parallel work
 
 - At most one side track besides the cryptography track is active at a
   time (D-45).
@@ -597,6 +684,10 @@ Tests: catalog 6.6.53 and 6.6.58.
 - Order: track E, then the cryptography track to T7, then track D, with
   step D6 not started beside an XL phase; track F when a driver becomes
   foreseeable; G2 before Phase 3.
+- Track S (8.26) is the one side track that is not finished. The first
+  rule covers it, and where it falls in the order above is not settled:
+  the order is the history of the tracks that are done, and no phase
+  requires track S of anything.
 - Phase work whose logic passes the admission test may be pulled
   forward without changing its phase, its catalog items, or its
   acceptance criteria: `gfx` (Phase 9), `driver-i8042` (Phase 10), the

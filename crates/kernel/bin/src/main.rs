@@ -81,7 +81,34 @@ fn run(platform: &X86Platform) {
 /// something can.
 fn idle() -> ! {
     loop {
+        // The borrow of the machine is only ever held with interrupts off,
+        // and this is the one place that would hold it otherwise: every
+        // other holder is a trap handler, and an interrupt gate clears the
+        // flag for it. An interrupt that arrived while the borrow stood
+        // would find the machine busy and be dropped, and a device whose
+        // line is edge-triggered never raises that edge again.
+        //
+        // SAFETY: the flag goes back on below, before anything can wait for
+        // it: the only path out of here that does not reach the `sti` is a
+        // switch into another thread, and that thread returns to user mode
+        // through `iretq`, which restores the flag from its own frame.
+        unsafe {
+            instructions::disable_interrupts();
+        }
         task::run(None);
+        // A switch carries no interrupt flag either: the six words it saves
+        // are the callee-saved registers and nothing else. So this thread
+        // comes back from a switch with interrupts off, and every thread
+        // but this one turns them back on by returning to user mode. This
+        // one returns nowhere; it halts. Halting with interrupts off stops
+        // the machine for good, so they go back on here first.
+        //
+        // SAFETY: nothing of the machine is borrowed here — `task::run`
+        // gave every borrow back — and this is the boot processor, whose
+        // descriptor tables carry a handler for every vector.
+        unsafe {
+            instructions::enable_interrupts();
+        }
         instructions::halt();
     }
 }
@@ -117,7 +144,7 @@ fn on_syscall() {
     // line or a port need. Holding it turns interrupts off for the length
     // of the call.
     let reschedule = interrupts::with_controller(|apics| {
-        let mut devices = kernel_hal_x86_64::ports::DeviceAccess::new(apics);
+        let mut devices = kernel_hal_x86_64::ports::DeviceAccess::new(apics).with_entropy();
         task::answer(caller, bytes, Some(&mut devices))
     })
     .unwrap_or(false);
@@ -198,6 +225,44 @@ fn on_interrupt(vector: u8) {
         return;
     }
     interrupts::acknowledge(vector);
+    if vector == vectors::TIMER {
+        on_timer_tick();
+    }
+}
+
+/// What a timer tick does for the threads: wake everyone whose deadline has
+/// passed, charge the running thread one tick of its time slice, and switch
+/// when either asks for it.
+///
+/// The walk stops at the first entry that has not passed, so a tick that
+/// wakes nobody costs one comparison. A tick that arrives while the kernel
+/// holds a cell of its own finds it busy and changes nothing; the next one
+/// is a millisecond later.
+fn on_timer_tick() {
+    let now = kernel_core::tick::micros(interrupts::ticks());
+    let mut switch = false;
+    loop {
+        let woken = kernel_core::with_machine(|machine| {
+            kernel_ipc::expire(&mut machine.objects, &mut machine.scheduler, now)
+        });
+        let Some(Some(outcome)) = woken else {
+            break;
+        };
+        if let Some(wakeup) = outcome.wakeup {
+            announce(wakeup);
+        }
+        switch |= outcome.reschedule;
+    }
+    let spent = kernel_core::with_machine(|machine| {
+        machine
+            .scheduler
+            .tick(&mut machine.objects.threads)
+            .reschedule
+    })
+    .unwrap_or(false);
+    if switch || spent {
+        task::run(None);
+    }
 }
 
 /// Hands `vector` to the driver that holds its interrupt object, in the
@@ -222,7 +287,7 @@ fn forward(vector: u8) {
                 .interrupts
                 .get(id)
                 .ok()
-                .map(|held| held.line)
+                .and_then(|held| held.line)
         })
     })
     .flatten();

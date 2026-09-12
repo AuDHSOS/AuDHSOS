@@ -475,6 +475,32 @@ pub fn info<E: Environment, const NP: usize, const NT: usize, const NM: usize, c
     Ok(Reply::values(start, length))
 }
 
+/// Counts handles and mappings, including the caller's handle. A count of
+/// one proves exclusive ownership until the caller shares it again.
+///
+/// # Errors
+///
+/// [`Error::InvalidHandle`] or [`Error::AccessDenied`] without INFO.
+pub fn references<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    process: ProcessId,
+    request: &Request,
+) -> Result<Reply, Error> {
+    let handle = request.handle.ok_or(Error::InvalidHandle)?;
+    let (id, _rights) = machine
+        .objects
+        .resolve::<MemoryObject>(process, handle, Rights::INFO)?;
+    Ok(Reply::value(u64::from(
+        machine.objects.memory.references(id)?,
+    )))
+}
+
 /// Charges one kernel object against the quota of `process`.
 fn charge_object<
     E: Environment,

@@ -261,7 +261,6 @@ fn a_notification_merges_signals_and_clears_when_consumed() {
     assert_eq!(notification, Notification::EMPTY);
     assert_eq!(notification, Notification::default());
     assert_eq!(notification.waiter, None);
-    assert_eq!(notification.bound_interrupt, None);
     notification.word |= 0b0010;
     notification.word |= 0b1000;
     assert_eq!(notification.consume(), 0b1010, "two signals are merged");
@@ -273,7 +272,7 @@ fn a_notification_merges_signals_and_clears_when_consumed() {
 #[test]
 fn an_interrupt_object_starts_bound_to_nothing_and_unmasked() {
     let interrupt = Interrupt::new(0, 0x40);
-    assert_eq!(interrupt.line, 0);
+    assert_eq!(interrupt.line, Some(0));
     assert_eq!(interrupt.vector, 0x40);
     assert_eq!(interrupt.notification, None);
     assert!(!interrupt.masked);

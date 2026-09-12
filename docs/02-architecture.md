@@ -328,6 +328,15 @@ runs. Every system call is bounded: operations over ranges process at most
 a fixed number of pages per call and return `Partial` with a progress count
 so that userland loops.
 
+The kernel's own bring-up is the exception, and it is why the switch has a
+guard. The timer starts before the root task is built, so the kernel
+finishes its bring-up with interrupts on and with its cells — the memory,
+the objects and the scheduler, the console — taken out for the length of
+real work. A switch from there would leave a cell borrowed by a thread that
+is no longer running, and nothing would give it back. A tick that finds one
+held therefore switches nobody and lets the next tick try, a millisecond
+later (D-133).
+
 ### 2.5.5 Context switch and entry paths
 
 - Every thread has a kernel stack. An interrupt or system call from user mode
@@ -387,6 +396,10 @@ through shared memory objects.
   zero is a no-op that succeeds.
 - `notification_wait(handle)` blocks until the word is non-zero, then
   returns and clears it.
+- `notification_wait_until(handle, deadline)` is the same wait with a
+  deadline, in the microseconds since boot that `clock_now` answers in. It
+  returns the bits, or zero when the deadline came first; a caller that
+  must tell the two apart reads the clock.
 - `notification_poll(handle)` returns and clears without blocking.
 - Several signals before a wait are merged. Only one thread may wait on a
   notification at a time; a second waiter gets `Busy`.
@@ -429,7 +442,10 @@ through shared memory objects.
   the outstanding flag and touches no hardware, because the mask bit is in
   memory the kernel does not map: a device that raises interrupts faster
   than its driver services them is quieted by its driver and not by the
-  kernel.
+  kernel. Every vector of that space carries a gate in the interrupt
+  descriptor table from the moment the table is built: nothing routes a
+  message, so a vector without a gate would arrive as a general protection
+  fault rather than as an interrupt.
 - The PCI configuration space is found by the kernel and walked by
   userland: `kernel-acpi` reads the `MCFG` table, `system_info` reports
   the ECAM window, the root task makes it a `Device` memory object, and
@@ -493,9 +509,12 @@ through shared memory objects.
 | `interrupt_create`, `interrupt_bind`, `interrupt_ack` | SystemControl / Interrupt | interrupt forwarding |
 | `interrupt_create_msi` | SystemControl | an interrupt object for an MSI-X vector; answers the vector's message address and data |
 | `ioport_create`, `ioport_read`, `ioport_write` | SystemControl / IoPortRange | x86 port I/O |
+| `ioport_write_string` | IoPortRange (`WRITE`) | the message area to one port, a byte at a time; one call carries a whole burst, which is what a driver over a FIFO needs (D-129) |
 | `memory_create_device` | SystemControl | device memory object |
 | `system_info` | SystemControl | pool capacities and usage, tick frequency, the address of the root system description pointer, the description of the framebuffer, which is six zero words on a machine without one, and the ECAM window of the `MCFG` table, which is four zero words on a machine whose firmware published none |
 | `process_watch` | Process (`INFO`) | binds the end of a process to one bit of a notification, so a server that holds something of a program gets it back when the program is gone (D-106) |
+| `process_unwatch` | Process (`INFO`) | removes the watch for the supplied notification (`BIND`) and bit; returns whether the process has ended; does not clear queued bits |
+| `memory_references` | MemoryObject (`INFO`) | counts all handles and mappings; a returned object may be recycled only when its sole reference belongs to the memory server |
 | `debug_log` | none | writes the message region to the debug UART; exists only in builds with the `debug-uart` feature |
 
 ## 2.9 Boot sequence
@@ -580,7 +599,7 @@ one runs on is a logic crate of its own, host-tested without a machine
 | `server-name` | registry: `register(name, endpoint)`, `lookup(name)`, with badge-based ownership | no |
 | `server-console` | 16550 UART driver: `driver-uart16550` register logic over `IoPortRange` system calls plus an `Interrupt`; `write(bytes)`, `read(max)` | no |
 | `server-memory` | allocation policy over memory objects: `allocate(len, alignment)`, `release`; zeroes every object before hand-out and immediately after return | no |
-| `user-programs` | the seven binaries: `server-init`, the root task, which parses the boot image, starts the servers and hands out the capabilities; `server-name`, `server-console` and `server-memory` around the three logic crates above; and `app-hello`, `app-checks` and `app-faulter`, which are what the end-to-end run watches | allowlisted |
+| `user-programs` | every program of the system, one binary each around a logic crate (D-97): `server-init`, the root task, which parses the boot image, starts the servers and hands out the capabilities; `server-name`, `server-console`, `server-memory`, `server-display` and `server-input` around the logic crates above; and `app-hello`, `app-checks`, `app-faulter`, `app-paint` and `app-input`, which are what the end-to-end run watches. Phase 11 adds `app-canvas` | allowlisted |
 | `gfx` | framebuffer logic: pixel formats, filling, blitting, clipping, damage rectangles, the project's bitmap font, text rendering | no |
 | `server-display` | owns the framebuffer `Device` memory object; surfaces backed by shared memory objects, `present` with damage rectangles, cursor | no |
 | `driver-i8042` (Phase 10) | i8042 controller and PS/2 device logic over the port access trait: controller initialization, scancode set 2 decoding, mouse packet parsing | no |

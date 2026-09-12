@@ -25,8 +25,12 @@ members = [
     "regex_nfa",
     "regex_bt",
     "madt",
+    "mcfg",
+    "pci_config",
+    "mouse_packet",
     "pem",
     "rsa",
+    "scancode",
     "tar",
     "tcp_segment",
     "tls_handshake",
@@ -53,10 +57,12 @@ audhsos-encoding = { path = "../crates/encoding" }
 audhsos-elf = { path = "../crates/elf" }
 audhsos-time = { path = "../crates/time" }
 crypto-rng = { path = "../crates/crypto/rng", features = ["test-doubles"] }
+driver-i8042 = { path = "../crates/drivers/i8042" }
 audhsos-tls = { path = "../crates/net/tls" }
 audhsos-x509 = { path = "../crates/net/x509" }
 crypto-rsa = { path = "../crates/crypto/rsa" }
 kernel-acpi = { path = "../crates/kernel/acpi" }
+pci = { path = "../crates/pci", features = ["test-doubles"] }
 net-dns = { path = "../crates/net/dns" }
 net-http = { path = "../crates/net/http" }
 net-ip = { path = "../crates/net/ip" }
@@ -254,6 +260,33 @@ rustflags = [
     "-Cllvm-args=-sanitizer-coverage-trace-compares",
 ]
 
+[profile.release.package.mcfg]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
+
+[profile.release.package.pci_config]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
+
+[profile.release.package.mouse_packet]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
+
 [profile.release.package.pem]
 rustflags = [
     "-Cpasses=sancov-module",
@@ -264,6 +297,15 @@ rustflags = [
 ]
 
 [profile.release.package.rsa]
+rustflags = [
+    "-Cpasses=sancov-module",
+    "-Cllvm-args=-sanitizer-coverage-level=4",
+    "-Cllvm-args=-sanitizer-coverage-inline-8bit-counters",
+    "-Cllvm-args=-sanitizer-coverage-pc-table",
+    "-Cllvm-args=-sanitizer-coverage-trace-compares",
+]
+
+[profile.release.package.scancode]
 rustflags = [
     "-Cpasses=sancov-module",
     "-Cllvm-args=-sanitizer-coverage-level=4",

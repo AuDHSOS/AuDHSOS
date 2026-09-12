@@ -275,3 +275,146 @@ fn the_rfc_8448_key_signs_with_the_wide_exponent_and_verifies_with_the_small_one
         .expect("the signature is below the modulus");
     assert_eq!(hex(&recovered), hex(&message));
 }
+
+#[test]
+fn the_width_is_the_bytes_of_the_limbs_the_modulus_uses() {
+    for bits in WIDTHS {
+        let modulus = Modulus::new(&fixed(bits)).expect("the fixed modulus is well formed");
+        assert_eq!(modulus.width(), bits / 8);
+    }
+}
+
+/// The ladder against the schoolbook reference, at every width and for
+/// exponents whose bytes the generator chooses.
+#[test]
+fn property_the_secret_exponentiation_agrees_with_the_reference() {
+    for bits in WIDTHS {
+        let width = bits / 8;
+        let name = format!("bignum_pow_secret_{bits}");
+        let generator = vec(bytes(width..=width), 2..=2);
+        let cases = if bits <= 2048 { 8 } else { 3 };
+        check_cases(cases, &name, &generator, |parts| {
+            let first = parts.first().ok_or_else(|| "no modulus".to_owned())?;
+            let second = parts.get(1).ok_or_else(|| "no base".to_owned())?;
+            let encoded = modulus_bytes(bits, first);
+            let modulus = Modulus::new(&encoded).map_err(|error| error.to_string())?;
+            let reference = Big::from_be_bytes(&encoded);
+            let base = Big::from_be_bytes(second).rem(&reference);
+            let base_bytes = base.to_be_bytes(width);
+            let exponent: Vec<u8> = second.iter().take(4).copied().collect();
+
+            let mut ours = vec![0u8; width];
+            modulus
+                .pow_secret(&base_bytes, &exponent, &mut ours)
+                .map_err(|error| error.to_string())?;
+            let theirs = base.pow_mod(&exponent, &reference).to_be_bytes(width);
+            if ours != theirs {
+                return Err(format!("{} against {}", hex(&ours), hex(&theirs)));
+            }
+            Ok(())
+        });
+    }
+}
+
+#[test]
+fn the_secret_exponentiation_agrees_with_the_public_one() {
+    let encoded = fixed(1024);
+    let modulus = Modulus::new(&encoded).expect("the fixed modulus is well formed");
+    let base = Big::from_be_bytes(&fixed(1016)).rem(&Big::from_be_bytes(&encoded));
+    let base_bytes = base.to_be_bytes(128);
+
+    for exponent in [
+        vec![0x00u8],
+        vec![0x01u8],
+        vec![0x02u8],
+        vec![0xffu8, 0xff],
+        vec![0x80u8, 0x00, 0x00, 0x01],
+        unhex(RFC8448_PRIVATE),
+    ] {
+        let mut secret = vec![0u8; 128];
+        modulus
+            .pow_secret(&base_bytes, &exponent, &mut secret)
+            .expect("the base is below the modulus");
+        let mut public = vec![0u8; 128];
+        modulus
+            .pow_wide(&base_bytes, &exponent, &mut public)
+            .expect("the base is below the modulus");
+        assert_eq!(hex(&secret), hex(&public), "exponent {}", hex(&exponent));
+    }
+}
+
+#[test]
+fn a_secret_exponent_of_zero_gives_one_however_it_is_written() {
+    let modulus = Modulus::new(&fixed(1024)).expect("the fixed modulus is well formed");
+    let base = fixed(1016);
+    let mut expected = vec![0u8; 128];
+    for slot in expected.iter_mut().rev().take(1) {
+        *slot = 1;
+    }
+    for exponent in [vec![], vec![0u8], vec![0u8; 32]] {
+        let mut out = vec![0u8; 128];
+        modulus
+            .pow_secret(&base, &exponent, &mut out)
+            .expect("the base is below the modulus");
+        assert_eq!(out, expected, "exponent of {} bytes", exponent.len());
+    }
+}
+
+#[test]
+fn leading_zero_bytes_of_a_secret_exponent_change_nothing_but_the_rounds() {
+    let modulus = Modulus::new(&fixed(1024)).expect("the fixed modulus is well formed");
+    let base = fixed(1016);
+    let mut short = vec![0u8; 128];
+    modulus
+        .pow_secret(&base, &[0x01, 0x23, 0x45], &mut short)
+        .expect("the base is below the modulus");
+    let mut padded = vec![0u8; 128];
+    modulus
+        .pow_secret(&base, &[0, 0, 0, 0, 0x01, 0x23, 0x45], &mut padded)
+        .expect("the base is below the modulus");
+    assert_eq!(hex(&short), hex(&padded));
+}
+
+#[test]
+fn the_secret_exponentiation_refuses_a_base_that_is_not_below_the_modulus() {
+    let encoded = fixed(1024);
+    let modulus = Modulus::new(&encoded).expect("the fixed modulus is well formed");
+    let mut out = vec![0u8; 128];
+    assert_eq!(
+        modulus.pow_secret(&encoded, &[3], &mut out),
+        Err(BignumError::OutOfRange)
+    );
+}
+
+#[test]
+fn the_secret_exponentiation_refuses_a_base_wider_than_the_arithmetic() {
+    let modulus = Modulus::new(&fixed(1024)).expect("the fixed modulus is well formed");
+    let mut out = vec![0u8; 128];
+    assert_eq!(
+        modulus.pow_secret(&[1u8; MAX_BYTES + 1], &[3], &mut out),
+        Err(BignumError::TooWide)
+    );
+}
+
+/// The public exponentiation writes a short buffer as long as the value
+/// happens to fit in it. The secret one refuses before it starts, because
+/// deciding afterwards would mean deciding on the value.
+#[test]
+fn the_secret_exponentiation_refuses_an_output_below_the_width_of_the_modulus() {
+    let modulus = Modulus::new(&fixed(1024)).expect("the fixed modulus is well formed");
+    let base = fixed(1016);
+    let mut out = vec![0u8; 127];
+    assert_eq!(
+        modulus.pow_secret(&base, &[1], &mut out),
+        Err(BignumError::OutputTooShort)
+    );
+    let mut wide = vec![0u8; 160];
+    modulus
+        .pow_secret(&base, &[1], &mut wide)
+        .expect("a buffer wider than the modulus is accepted");
+    let mut exact = vec![0u8; 128];
+    modulus
+        .pow_secret(&base, &[1], &mut exact)
+        .expect("a buffer of the width of the modulus is accepted");
+    assert_eq!(hex(&wide), format!("{}{}", hex(&[0u8; 32]), hex(&exact)));
+}

@@ -6,7 +6,7 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 use audhsos_abi::layout::PHYS_WINDOW_BASE;
-use audhsos_abi::{Framebuffer, FramebufferFormat};
+use audhsos_abi::{Ecam, Framebuffer, FramebufferFormat};
 use kernel_hal_api::doubles::{RecordingConsole, RecordingExit, ScriptedPlatform};
 use kernel_hal_api::exit::ExitStatus;
 use kernel_hal_api::platform::{MemoryRegionKind, Platform};
@@ -218,4 +218,25 @@ fn the_framebuffer_is_reported_with_its_mode_and_its_address() {
             "{text}"
         );
     }
+}
+
+#[test]
+fn a_machine_whose_firmware_published_no_window_says_so() {
+    let (_, text) = boot(&machine());
+    assert!(text.contains("[info] ecam=absent"), "{text}");
+}
+
+#[test]
+fn the_configuration_window_is_reported_with_its_segment_and_its_buses() {
+    let platform = machine().ecam(Ecam {
+        base: 0xE000_0000,
+        segment: 0,
+        first_bus: 0,
+        last_bus: 255,
+    });
+    let (_, text) = boot(&platform);
+    assert!(
+        text.contains("[info] ecam=0xe0000000 segment=0 buses=0..=255"),
+        "{text}"
+    );
 }

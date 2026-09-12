@@ -55,6 +55,20 @@ impl Vector {
     }
 }
 
+/// A message interrupt: the vector it was allocated out of, and the write
+/// that raises it. A driver puts the address and the data into its device's
+/// MSI-X table, which is in the device's own window and therefore in the
+/// driver's address space and not the kernel's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MessageInterrupt {
+    /// The vector the write delivers on.
+    pub vector: Vector,
+    /// The address the device writes to.
+    pub address: u64,
+    /// The value it writes there.
+    pub data: u32,
+}
+
 /// Errors of the interrupt controller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InterruptError {
@@ -64,6 +78,8 @@ pub enum InterruptError {
     UnknownLine(u8),
     /// The line is already routed.
     AlreadyRouted(u8),
+    /// The vector space has nothing left.
+    NoVector,
 }
 
 impl fmt::Display for InterruptError {
@@ -72,6 +88,7 @@ impl fmt::Display for InterruptError {
             InterruptError::ReservedVector(v) => write!(f, "vector {v} is reserved for exceptions"),
             InterruptError::UnknownLine(l) => write!(f, "interrupt line {l} does not exist"),
             InterruptError::AlreadyRouted(l) => write!(f, "interrupt line {l} is already routed"),
+            InterruptError::NoVector => f.write_str("the vector space has nothing left"),
         }
     }
 }
@@ -101,4 +118,20 @@ pub trait InterruptController {
 
     /// Signals that the handler of `vector` has finished.
     fn end_of_interrupt(&mut self, vector: Vector);
+
+    /// Takes one vector out of the space the lines are allocated from and
+    /// answers with the write that raises it.
+    ///
+    /// Nothing is routed: a message interrupt reaches the processor because
+    /// the device writes the address, and the driver is what programs the
+    /// device.
+    ///
+    /// # Errors
+    ///
+    /// [`InterruptError::NoVector`] when the space has nothing left.
+    fn allocate_msi(&mut self) -> Result<MessageInterrupt, InterruptError>;
+
+    /// Gives `vector` back to the space it came from. A vector that was
+    /// never handed out is left alone.
+    fn release_msi(&mut self, vector: Vector);
 }

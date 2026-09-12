@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod artifacts;
 mod commands;
 mod coverage;
 mod deps;
@@ -41,7 +42,7 @@ subcommands:
   check-deps       no dependency outside the workspace
   unsafe-budget    unsafe blocks and asm! sites per adapter crate
   test [--host] [--qemu] [--e2e] [--release]
-                   run the selected test levels (default: all available);
+                   run the selected test levels (default: host);
                    --release builds the end-to-end run from the release
                    profile
   pdf [options]    every Markdown document and every RFC as PDF, under
@@ -75,11 +76,18 @@ subcommands:
                    --status only reports where they stand. The one
                    subcommand that uses the network, and never a step of
                    check
-  run [--release] [--display]
-                   boot the system in QEMU with the console on the terminal
+  run [--release] [--display] [--scratch]
+                   boot the system in QEMU with the console on the
+                   terminal; --scratch attaches the second disk, blank when
+                   it is new and kept across runs under target/qemu/
   check [--quiet]  everything CI runs, in CI order; --quiet leaves one
                    line per step and prints the output of a step only
                    when it fails
+
+environment:
+  AUDHSOS_TEST_JOBS  maximum parallel host, coverage, and regression
+                    processes (default: available CPU count)
+  RUST_TEST_THREADS override the host test harness threads per process
 ";
 
 fn main() -> ExitCode {

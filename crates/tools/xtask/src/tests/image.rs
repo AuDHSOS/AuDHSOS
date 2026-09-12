@@ -8,8 +8,8 @@
 use audhsos_abi::boot_image::BootImageHeader;
 use audhsos_abi::layout::PAGE_SIZE;
 
-use crate::image::crc32::{Crc32, POLYNOMIAL, crc32};
 use crate::image::{boot_image, disk, fat32, gpt};
+use fs_gpt::crc32;
 
 fn read_u32(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
@@ -29,29 +29,6 @@ fn sample_files() -> Vec<(&'static str, Vec<u8>)> {
         (disk::KERNEL_PATH, vec![0xBB; 5000]),
         (disk::BOOT_IMAGE_PATH, vec![0xCC; 512]),
     ]
-}
-
-#[test]
-fn the_checksum_matches_the_published_check_value() {
-    assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-    assert_eq!(crc32(b""), 0);
-    assert_eq!(crc32(&[0u8]), 0xD202_EF8D);
-    assert_eq!(POLYNOMIAL, 0xEDB8_8320);
-}
-
-#[test]
-fn the_checksum_is_the_same_however_the_input_is_split() {
-    let bytes: Vec<u8> = (0..1000u32)
-        .map(|value| u8::try_from(value % 251).unwrap())
-        .collect();
-    let whole = crc32(&bytes);
-    for split in [0usize, 1, 255, 256, 257, 512, 999, 1000] {
-        let mut running = Crc32::new();
-        running.update(&bytes[..split]);
-        running.update(&bytes[split..]);
-        assert_eq!(running.finish(), whole, "split at {split}");
-    }
-    assert_eq!(Crc32::default().finish(), 0);
 }
 
 #[test]
@@ -79,21 +56,24 @@ fn the_two_headers_name_each_other_and_their_checksums_verify() {
     let backup = &image[gpt::sector_offset(last)..gpt::sector_offset(last + 1)];
 
     for (header, current, other) in [(primary, 1, last), (backup, last, 1)] {
-        assert_eq!(&header[..8], &gpt::HEADER_SIGNATURE);
-        assert_eq!(read_u32(header, 8), gpt::HEADER_REVISION);
+        assert_eq!(&header[..8], &fs_gpt::HEADER_SIGNATURE);
+        assert_eq!(read_u32(header, 8), fs_gpt::HEADER_REVISION);
         assert_eq!(
             read_u32(header, 12),
-            u32::try_from(gpt::HEADER_LEN).unwrap()
+            u32::try_from(fs_gpt::HEADER_LEN).unwrap()
         );
         assert_eq!(read_u64(header, 24), current);
         assert_eq!(read_u64(header, 32), other);
         assert_eq!(read_u64(header, 40), gpt::FIRST_USABLE);
-        assert_eq!(read_u64(header, 48), last - gpt::ARRAY_SECTORS - 1);
+        assert_eq!(read_u64(header, 48), last - fs_gpt::ARRAY_SECTORS - 1);
         assert_eq!(&header[56..72], &gpt::DISK_GUID);
-        assert_eq!(read_u32(header, 80), gpt::ENTRY_COUNT);
-        assert_eq!(read_u32(header, 84), u32::try_from(gpt::ENTRY_LEN).unwrap());
+        assert_eq!(read_u32(header, 80), fs_gpt::ENTRY_COUNT);
+        assert_eq!(
+            read_u32(header, 84),
+            u32::try_from(fs_gpt::ENTRY_LEN).unwrap()
+        );
 
-        let mut zeroed = header[..gpt::HEADER_LEN].to_vec();
+        let mut zeroed = header[..fs_gpt::HEADER_LEN].to_vec();
         let stored = read_u32(&zeroed, 16);
         zeroed[16..20].fill(0);
         assert_eq!(crc32(&zeroed), stored, "the header checksum verifies");
@@ -105,7 +85,7 @@ fn the_two_headers_name_each_other_and_their_checksums_verify() {
     );
     assert_eq!(
         read_u64(backup, 72),
-        last - gpt::ARRAY_SECTORS,
+        last - fs_gpt::ARRAY_SECTORS,
         "the backup array sits before the backup header"
     );
 }
@@ -115,9 +95,9 @@ fn the_partition_array_holds_one_entry_and_verifies() {
     let image = disk::try_build(&sample_files(), 64 * 1024 * 1024).unwrap();
     let sectors = u64::try_from(image.len() / gpt::SECTOR).unwrap();
     let last = sectors - 1;
-    let array_len = gpt::ENTRY_LEN * usize::try_from(gpt::ENTRY_COUNT).unwrap();
+    let array_len = fs_gpt::ENTRY_LEN * usize::try_from(fs_gpt::ENTRY_COUNT).unwrap();
     let primary = &image[gpt::sector_offset(2)..gpt::sector_offset(2) + array_len];
-    let backup_start = gpt::sector_offset(last - gpt::ARRAY_SECTORS);
+    let backup_start = gpt::sector_offset(last - fs_gpt::ARRAY_SECTORS);
     let backup = &image[backup_start..backup_start + array_len];
     assert_eq!(primary, backup, "both copies are identical");
 
@@ -127,14 +107,14 @@ fn the_partition_array_holds_one_entry_and_verifies() {
     assert_eq!(&primary[..16], &gpt::ESP_TYPE_GUID);
     assert_eq!(&primary[16..32], &gpt::PARTITION_GUID);
     assert_eq!(read_u64(primary, 32), gpt::PARTITION_START);
-    assert_eq!(read_u64(primary, 40), last - gpt::ARRAY_SECTORS - 1);
+    assert_eq!(read_u64(primary, 40), last - fs_gpt::ARRAY_SECTORS - 1);
     assert_eq!(read_u64(primary, 48), 0, "no attributes");
     let name: String = (0..gpt::PARTITION_NAME.len())
         .map(|index| char::from(u8::try_from(read_u16(primary, 56 + index * 2)).unwrap()))
         .collect();
     assert_eq!(name, gpt::PARTITION_NAME);
     assert!(
-        primary[gpt::ENTRY_LEN..].iter().all(|byte| *byte == 0),
+        primary[fs_gpt::ENTRY_LEN..].iter().all(|byte| *byte == 0),
         "exactly one entry is in use"
     );
 }

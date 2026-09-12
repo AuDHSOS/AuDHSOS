@@ -16,13 +16,17 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds nine programs and each uses a different part of
+// The package holds thirteen programs and each uses a different part of
 // what it depends on; these are the crates this one does not.
+use app_canvas as _;
 use audhsos_abi as _;
+use driver_i8042 as _;
 use driver_uart16550 as _;
 use gfx as _;
+use pci as _;
 use server_console as _;
 use server_display as _;
+use server_input as _;
 use server_memory as _;
 use server_name as _;
 use user_loader as _;
@@ -104,18 +108,22 @@ fn report(gate: &mut Gate, startup: &Startup) {
 
 /// Says it is ready, waits for a line, and says it back.
 ///
-/// The wait is a yield in a loop and not a sleep: this system has no timer
-/// a program can ask for. It costs nothing that matters, because the driver
-/// runs above this program and takes the processor the moment the interrupt
-/// wakes it.
+/// The wait is the call itself: a read of an empty console is held by the
+/// driver until a byte arrives, so this thread stands in `ipc_call` and the
+/// processor goes to whoever else can use it. Asking again in a loop is
+/// what this did before, and it kept the machine at full load for as long
+/// as nobody typed: this system has no timer a program can ask for, so a
+/// thread that keeps asking is always runnable and the kernel never halts.
 fn echo(gate: &mut Gate, console: user_rt::EndpointHandle) {
     let _ready = write_line(gate, console, READY);
     let mut line = [0u8; INPUT];
     let mut have = 0usize;
     loop {
         let mut chunk = [0u8; INPUT];
-        let taken =
-            read_bytes(gate, console, u64::try_from(INPUT).unwrap_or(0), &mut chunk).unwrap_or(0);
+        let Ok(taken) = read_bytes(gate, console, u64::try_from(INPUT).unwrap_or(0), &mut chunk)
+        else {
+            return;
+        };
         for byte in chunk.get(..taken).unwrap_or(&[]) {
             if let Some(slot) = line.get_mut(have) {
                 *slot = *byte;
@@ -125,9 +133,6 @@ fn echo(gate: &mut Gate, console: user_rt::EndpointHandle) {
                 say_back(gate, console, line.get(..have).unwrap_or(&[]));
                 return;
             }
-        }
-        if taken == 0 {
-            let _yielded = gate.thread_yield();
         }
     }
 }

@@ -12,6 +12,7 @@ rust-version.workspace = true
 
 [dependencies]
 audhsos-abi.workspace = true
+audhsos-time.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true

@@ -209,6 +209,48 @@ fn linking_behind_a_slot_outside_the_pool_leaves_the_free_list_alone() {
 }
 
 #[test]
+fn iteration_yields_every_live_object_and_stops_at_the_high_water_mark() {
+    let mut pool: Pool<u32, 256> = Pool::new();
+    assert_eq!(pool.iter().count(), 0, "a fresh pool walks nothing");
+
+    let ids: Vec<ObjectId<u32>> = (0..4).map(|value| pool.allocate(value).unwrap()).collect();
+    assert_eq!(
+        pool.iter().map(|(_, value)| *value).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3]
+    );
+
+    // A hole below the mark is skipped and the mark does not move back.
+    assert_eq!(pool.release(ids[1]), Ok(true));
+    assert_eq!(
+        pool.iter()
+            .map(|(id, value)| (id.index(), *value))
+            .collect::<Vec<_>>(),
+        vec![(0, 0), (2, 2), (3, 3)]
+    );
+
+    // The released slot is handed out again below the mark, which the
+    // walk still reaches.
+    let again = pool.allocate(9).unwrap();
+    assert_eq!(again.index(), 1);
+    assert_eq!(pool.iter().count(), 4);
+    assert_eq!(u32::try_from(pool.iter().count()), Ok(pool.live()));
+}
+
+#[test]
+fn iteration_of_a_full_pool_reaches_its_last_slot() {
+    let mut pool: Pool<u32, 4> = Pool::new();
+    for value in 0..4 {
+        pool.allocate(value).unwrap();
+    }
+    assert_eq!(pool.allocate(4), Err(PoolError::Exhausted));
+    assert_eq!(
+        pool.iter().map(|(id, _)| id.index()).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3],
+        "the mark is the capacity, so nothing is cut off"
+    );
+}
+
+#[test]
 fn freed_slots_are_reused_in_the_order_they_were_freed() {
     let mut pool: Pool<u32, 4> = Pool::new();
     let ids: Vec<ObjectId<u32>> = (0..4).map(|value| pool.allocate(value).unwrap()).collect();

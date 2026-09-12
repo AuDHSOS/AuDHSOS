@@ -47,3 +47,19 @@ fn jrs_check_refuses_unknown_or_extra_options_before_running_tools() {
         assert_eq!(message, "jrs-check accepts only --fix-format");
     }
 }
+
+#[test]
+fn the_scratch_disk_of_a_run_is_named_after_it_and_lies_under_target() {
+    let path = commands::scratch_path(Path::new("/work"), "audhsos");
+    assert_eq!(path, Path::new("/work/target/qemu/audhsos.scratch.img"));
+    assert_ne!(path, commands::scratch_path(Path::new("/work"), "console"));
+}
+
+#[test]
+fn run_refuses_an_unknown_option_before_it_builds_anything() {
+    let message = usage_message(commands::run(
+        Path::new("/definitely/missing"),
+        &["--scratchh".to_owned()],
+    ));
+    assert_eq!(message, "unknown option `--scratchh` for run");
+}

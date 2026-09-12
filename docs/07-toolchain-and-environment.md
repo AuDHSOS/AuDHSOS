@@ -49,13 +49,19 @@ None beyond the toolchain. The xtask calls `cargo`, `rustc`, `rustfmt`,
 and `qemu-system-x86_64`. Container software is never used, locally or in
 CI.
 
-## 7.4 QEMU on macOS
+## 7.4 QEMU
 
 QEMU 11.1.1 from MacPorts is installed: `/opt/local/bin/qemu-system-x86_64`
 with the UEFI firmware `/opt/local/share/qemu/edk2-x86_64-code.fd`. The
 xtask finds QEMU on the `PATH` or through `AUDHSOS_QEMU`, and the firmware
 next to the QEMU binary (`../share/qemu/`) or through `AUDHSOS_OVMF`.
 `AUDHSOS_QEMU_TIMEOUT` overrides the per-kernel timeout in seconds.
+
+On Linux the xtask probes KVM once before the first machine, then TCG if
+KVM cannot start. It passes the selected name through
+`AUDHSOS_QEMU_ACCELERATOR` to every Cargo runner, so the many kernel test
+machines do not repeat the probe. Setting the variable explicitly skips
+the probe. macOS keeps using TCG.
 
 Firmware for later targets is present in the same directory:
 `edk2-aarch64-code.fd` and `edk2-riscv-code.fd`.
@@ -108,6 +114,26 @@ step and prints the output of a step only when that step fails:
 ```bash
 sh tools/xtask-check.sh --quiet
 ```
+
+`sh tools/target-clean.sh` is maintenance, not a wrapper. The target
+directory of this workspace passes twenty gigabytes — the host kernel
+under `x86_64-unknown-none`, the coverage build, and the QEMU artifacts
+each hold gigabytes of their own — and most of it belongs to work that is
+finished. The script deletes the files below `$CARGO_TARGET_DIR`, or
+`./target`, whose mtime predates a cutoff of fourteen days by default,
+then removes the directories that empties. `CACHEDIR.TAG` stays, because
+it is what keeps a backup out of the tree. Cargo and the xtask rebuild
+what goes.
+
+```bash
+sh tools/target-clean.sh --dry-run --days 7
+```
+
+`--dry-run` names every file and the total instead of deleting. The cutoff
+is a marker file and `find ! -newer`, because the two `find`
+implementations round `-mtime` differently. No build may run at the same
+time: a file the compiler is still writing is old as soon as its mtime
+predates the cutoff.
 
 ## 7.6 Continuous integration
 

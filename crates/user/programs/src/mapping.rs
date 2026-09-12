@@ -111,6 +111,28 @@ impl Mapping {
         unsafe { core::slice::from_raw_parts_mut(pointer, len) }
     }
 
+    /// A shared input ring, without manufacturing an exclusive byte slice.
+    ///
+    /// # Safety
+    ///
+    /// This mapping must be live and backed by a ring page (or a private
+    /// zeroed page about to be initialized). All peers must access the
+    /// header and records atomically. It must not be unmapped while borrowed.
+    #[must_use]
+    pub unsafe fn ring(&self) -> Option<&user_proto::input::RingPage> {
+        use user_proto::input::RingPage;
+        let address = usize::try_from(self.address).ok()?;
+        if self.len < u64::try_from(core::mem::size_of::<RingPage>()).ok()?
+            || !address.is_multiple_of(core::mem::align_of::<RingPage>())
+        {
+            return None;
+        }
+        let pointer = core::ptr::without_provenance::<RingPage>(address);
+        // SAFETY: the caller guarantees the live mapping and exclusively
+        // atomic shared access. Every bit pattern of the atomic fields is valid.
+        Some(unsafe { &*pointer })
+    }
+
     /// Fills the mapping with zeros.
     ///
     /// # Safety

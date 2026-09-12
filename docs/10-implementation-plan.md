@@ -1092,6 +1092,8 @@ identity mapping afterwards.
   from the built loader and kernel.
 - `qemu.rs`: locate `qemu-system-x86_64` (`AUDHSOS_QEMU` or `PATH`) and the
   firmware (`AUDHSOS_OVMF` or `<qemu dir>/../share/qemu/edk2-x86_64-code.fd`);
+  on Linux probe KVM and then TCG once, pass the selected accelerator to
+  every Cargo runner through `AUDHSOS_QEMU_ACCELERATOR`;
   the command line of
   [03-target-platform.md 3.1.1](03-target-platform.md#311-reference-machine-configuration)
   with `-serial stdio -display none -no-reboot`; timeout 60 s
@@ -1805,11 +1807,7 @@ pub struct WaitQueue {
     head: Option<ThreadId>, tail: Option<ThreadId>, len: u32,
 }
 pub struct Reply { pub caller: ThreadId, pub consumed: bool }
-pub struct Notification {
-    pub word: u64,
-    pub waiter: Option<ThreadId>,
-    pub bound_interrupt: Option<InterruptId>,
-}
+pub struct Notification { pub word: u64, pub waiter: Option<ThreadId> }
 pub struct Interrupt {
     pub line: u8,
     pub vector: u8,
@@ -2450,7 +2448,8 @@ against a checksum table in the test file.
 display server allocates the backing store from the memory server and
 transfers a handle with `READ | WRITE | MAP`); `Present { surface id,
 damage: up to 16 rects }`; `DestroySurface { surface id }`; `SetCursor {
-x, y, visible }`. One full-screen surface per client in this phase; the
+x, y, visible, shape }`, where the shape is the arrow or the double arrow
+of a resize. One full-screen surface per client in this phase; the
 client with the most recent `Present` owns the screen. Errors: `NotFound`
 when no framebuffer exists, `InvalidArgument` for a surface larger than
 the screen, `PermissionDenied` for a surface of another badge.
@@ -2682,24 +2681,36 @@ which phase nine left at four protocols.
   and `from_bytes` round-trip on the host, and a record whose kind byte
   names neither is refused.
 - `Ring`: the header `{ write_seq: u64, read_seq: u64, overflow: u32,
-  capacity: u32 }` and the records behind it, over a byte slice of one
+  capacity: u32 }` and the records behind it, in an atomic `RingPage` of one
   page. Twenty-four bytes of header leave 4072, which is 254 records of
   sixteen bytes and eight bytes over. The writer is the server and the
   reader is the client, so the type has two halves: `RingWriter::push`,
   which drops the newest event and raises `overflow` when the ring is
   full, and `RingReader::pop`, which takes the oldest and clears
-  `overflow` when it reports it. Both are host-tested over a `Vec`.
-- `Subscribe` carries one handle, a capability to the client's own
-  notification reduced to `SIGNAL`, and its reply carries the memory
+  `overflow` with an atomic exchange when it reports it. Sequence publication
+  uses release/acquire ordering, and event bytes are atomic too. Neither
+  process creates an exclusive byte slice of the shared page. Host tests run
+  reader and writer concurrently and account for concurrent overflow updates.
+- `Subscribe` carries two handles: the client's own notification reduced to
+  `SIGNAL` and its process reduced to `INFO`, both with `TRANSFER`.
+  Its reply carries the memory
   object of the ring, which the server allocates from the memory server
-  and transfers with `READ | MAP`. It is the shape `CreateSurface` of the
+  and hands on as it stands: a memory object of this system carries no
+  `DUPLICATE`, so a handle with fewer rights cannot be made from one, and
+  the client needs `READ` and `WRITE` in any case — the reader advances the
+  read sequence and clears the count of what was dropped, and both of those
+  are writes into the page. It is the shape `CreateSurface` of the
   display protocol already has, and for the same reason: a server that
   keeps something per client allocates it, rather than trusting an object
   a client hands it to be a page long and to stay one. `Unsubscribe`
   carries nothing; the badge says who asks.
+  Extra handles or words are rejected; every received handle not adopted by
+  a successful subscription is closed, including on decode failure.
 - `Keyboard`, the client side: tracks the modifiers, maps `(KeyCode,
   modifiers)` through the layout tables `us` and `de` to a `char`, and
   answers `None` for a key that stands for no character.
+  Left and right modifiers are tracked separately, caps-lock repeats do not
+  toggle the lock, and `de` includes the AltGr level.
 
 ### 10.10.3 `server-input` (`crates/user/servers/input`)
 
@@ -2733,24 +2744,40 @@ sends it to the badged endpoint, and acknowledges both interrupt objects.
 It acknowledges both whichever line woke it, because one drain empties the
 buffer both lines fill.
 
+Bits 2 through 5 of the same notification carry process watches. The second
+thread forwards those under a separate label, without needing a third thread.
+
 The first thread receives. A message under `INTERRUPT_BADGE` is bytes: it
 feeds them to the decoders, appends what they produce to every
 subscriber's ring, and signals each subscriber's notification. A message
 under any other badge is a request of the input protocol. A subscriber
-whose `notification_signal` fails is removed and its ring unmapped; that
-is how a client that has ended is noticed, and it is why this server needs
-no watch of its own (D-106). A request that arrives without a badge is
-refused with `PermissionDenied`, as the display server refuses one: a
+whose `notification_signal` fails is removed and its ring unmapped, but a
+successful signal does not prove the client is alive: the retained handle
+keeps the notification alive. Process watches detect client ends (D-106).
+`process_unwatch` cancels the watch on unsubscribe and reports whether the
+current process has ended, so an old queued bit cannot remove a new subscriber
+in the same slot. A request that arrives without a badge is
+refused with `AccessDenied`, as the display server refuses one: a
 capability found under a name names nobody.
 
 Its `unsafe` counts against the budget of `user-programs`: the entry point
 the second thread is started at and the gate over that thread's IPC
 buffer, as D-105 and D-106 counted them for the two threads before it, and
-`Mapping::bytes` for the ring of a subscriber. Three sites, so the budget
-goes from twenty-three to twenty-six; the number in `policy::CRATES` is
-set to what the phase actually leaves.
+`Mapping::ring` for the ring of a subscriber, and the same again in the
+program that listens. The budget is thirty-one after review: the atomic
+mapping accessor has two sites and the E2E isolation check has one additional
+call site, beside the original twenty-eight;
+the number in `policy::CRATES` is what the phase actually leaves.
 
 ### 10.10.4 Kernel and root task
+
+Review adds `ProcessUnwatch = 44` and `MemoryReferences = 45`. The former
+requires `INFO` on the process and `BIND` on the notification, cancels exactly
+one watch, and returns the process's ended state; already queued bits remain.
+The latter requires `INFO` and counts all handles and mappings of the memory
+object. The memory server retires returned objects until the count is one,
+then zeroes and reclaims them before another allocation. Closing the server's
+mapping alone never authorizes recycling a page a client can still reach.
 
 `Notification::bound_interrupt` goes, per D-108, and with it the check in
 `kernel_ipc::interrupt::bind` and the `Error::AlreadyExists` of its
@@ -2803,7 +2830,9 @@ reports and exits. `archive::PROGRAMS` of the xtask grows by both names.
   subscribed, inject a key sequence, a pointer path, and a button press
   and release, then hold the `[input]` lines against what was sent — the
   key codes in order, the sum of the motion equal to the injected path,
-  the press before the release.
+  the press before the release. Every event waits for the line the program
+  writes for it before the next goes out: the controller holds sixteen
+  bytes and drops what does not fit.
 - The run without a graphics adapter runs the input tests too: the i8042
   is there whether the machine has a screen or not, which is what the last
   item of 6.6.29 says.
@@ -2824,21 +2853,49 @@ targets run for 60 seconds without findings.
 
 ## 10.11 Phase 11: Graphical demonstration
 
-- `app-canvas` (`crates/user/apps/canvas`): subscribes to `input`,
-  creates a full-screen surface on `display`, keeps a cursor position
+- `app-canvas` (`crates/user/apps/canvas`): the drawing state, which is a
+  host-tested module over `gfx::Surface`. It keeps a cursor position
   clamped to the screen, draws a line segment for every pointer event
-  while button 0 is held, renders typed characters from the `us` layout at
-  a text cursor with the bitmap font, clears the screen on `Escape`, and
-  presents with damage rectangles. It sends `SetCursor` on every pointer
-  event. The drawing state is a host-tested module over `gfx::Surface`.
+  while button 0 is held, advances a text cursor over the characters typed
+  from the `us` layout and renders them with the bitmap font, clears the
+  screen on `Escape`, and accumulates the damage rectangles. Surface in,
+  damage out; it makes no system call.
+- `app_canvas` (`crates/user/programs/src/bin/app_canvas.rs`): the loop
+  around it, as D-97 has every program of the userland be a binary of
+  `user-programs` around a logic crate. It subscribes to `input`, creates
+  a full-screen surface on `display`, feeds the events to the drawing
+  state, sends `SetCursor` on every pointer event, and presents with the
+  damage rectangles it gets back. `server-display` and `server_display.rs`
+  are the split this follows.
 - e2e tests: `canvas_cursor` (a pointer path moves the cursor sprite;
   screendump before and after), `canvas_stroke` (press, move, release;
   the pixels along the path carry the pen color), `canvas_text` (a typed
   string appears at the text cursor pixel for pixel).
 - `cargo xtask run --display` starts the canvas; the root task starts it
-  after the servers when the boot image contains it.
-- `policy::CRATES` entry `app-canvas` (Logic, `X86_64None`, deps
-  `user-rt`, `user-proto`, `gfx`).
+  after the servers when the boot image contains it. It presents nothing
+  until an event reaches it (D-126), so the picture of `app-paint` stands
+  until the pointer first moves.
+- `policy::CRATES` entry `app-canvas` (Logic, `Host`, coverage gate,
+  deps `gfx`, `user-proto`), as every logic crate of this workspace is
+  host-tested and none is built for `X86_64None`; the target and the
+  unsafe budget stay with `user-programs`, which gains the dependency.
+  Because `unused_crate_dependencies` is denied, every other binary of
+  that package gains a `use app_canvas as _;` line in the same commit.
+- `user-proto` re-exports the button constants of `driver-i8042` beside
+  the event types it already re-exports, so the driver, the server, and
+  every client name the button that draws by one constant.
+- `server-display` makes `cursor::pixel_of` public. The end-to-end run
+  checks a picture of the screen against the sprite that should stand in
+  it, and asking the server which of its pixels are body and which edge
+  is the one way to do that without a second copy of that rule in the
+  runner.
+- `Session::wait_for_another` in the xtask: `wait_for` is satisfied by a
+  line that arrived before the wait began, which for a line like
+  `[canvas] cursor ...` is every earlier move of the pointer. The three
+  tests below each wait for the next one.
+- The three tests drive the machine over the monitor connection that is
+  already open. A second connection beside it reads nothing: the machine
+  serves one monitor client at a time.
 
 Acceptance: `check` green; catalog 6.6.29 combined items; the three e2e
 tests pass in CI without a display window.
@@ -3068,9 +3125,12 @@ adapter contains no layout knowledge of its own.
 
 ### 10.13.5 The program that enumerates
 
-`app-lspci`, a program of the archive: asks `system_info` for the ECAM
-window, has the root task make it a `Device` memory object, maps it,
-enumerates, and reports one line per function — address, vendor and
+`app-lspci`, a program of the archive: the root task asks `system_info` for
+the ECAM window, makes it a `Device` memory object, and grants it with the
+segment and the bus range. The program maps one bus of it at a time, at one
+address, and takes that mapping back before the next — a window of every bus
+is two hundred and fifty-six mebibytes and one bus is a page table — walks
+each bus, and reports one line per function — address, vendor and
 device id, class, the base address registers it decoded, the
 capabilities it found, and for a virtio device the four structures and
 the size of the MSI-X table. On a machine with no `MCFG`, or an empty
@@ -3199,6 +3259,38 @@ Acceptance: `check` green; catalog 6.6.62 to 6.6.64; the seven e2e
 assertions of 13.13 pass, and the run without the two network lines ends
 by itself.
 
+## 10.14A The wall clock
+
+D-137, done ahead of Phase 15 because certificate validation is what
+needed it. Nothing here is a phase of its own; it is one capability across
+four crates.
+
+- `audhsos-uefi` gains `RuntimeServices` with `GetTime` as the first slot
+  after the header, pinned by a layout test, and `time::to_unix`, which
+  turns an `EFI_TIME` into a count of seconds and a `WallClockSource`.
+  The conversion is here and not in the loader so that the calendar
+  arithmetic is host-tested under the coverage gate; the crate gains
+  `audhsos-time` as its second dependency.
+- `audhsos-abi` goes to boot information version 2.
+  `BOOT_INFO_HEADER_LEN` becomes 144: `reserved` becomes `wall_clock`,
+  the code of a `WallClockSource`, and `boot_unix_seconds: i64` is
+  appended. The parser refuses an unknown source, a source whose seconds
+  are not after the epoch, and seconds with no source. Version 1 is
+  refused as a version.
+- `boot-uefi-x86_64` calls `GetTime` once, before `leave_boot_services`,
+  and threads the pair into `bootinfo::write`. Two `unsafe` sites: the
+  deref of the runtime services table in `Firmware::new`, and the call.
+- `kernel-hal-api` and `kernel-hal-x86_64` carry `Platform::wall_clock`;
+  `audhsos-kernel` stores the pair in two atomics beside `ACPI` and hands
+  it to `KernelEnvironment::with_wall_clock`.
+- `kernel-syscall` gains `clock_wall`, number 51, no handle, two result
+  words: the microseconds since the epoch, and the source code.
+  `Unavailable` for a machine that reported no clock.
+- `user-sys-x86_64` gains `Gate::clock_wall`; `wall_clock` joins the test
+  programs.
+
+Acceptance: `check` green; catalog 6.6.71.
+
 ## 10.15 Phase 15: TLS over the network
 
 Step T8 of [document 11](11-cryptography-and-tls.md), which section 11.14
@@ -3209,7 +3301,9 @@ specifies and which has waited for a transport.
 - The transport glue lives beside `app-net` as a module of
   `user-programs`: it moves record bytes between `audhsos-tls` and a
   socket ring, drives the handshake against a deadline of `clock_now`,
-  and sends and expects `close_notify`.
+  and sends and expects `close_notify`. The `now` of `ClientConfig` comes
+  from `clock_wall` (10.14A); a machine that answers `Unavailable` there
+  does not validate a chain against a guess, it refuses to connect.
 - The trust anchors the image carries are the ones the test certificate
   builder of `audhsos-x509` wrote, placed in the archive as one file.
 - `app-tls` performs an HTTPS `GET` against a server the test starts on

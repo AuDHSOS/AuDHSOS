@@ -106,6 +106,68 @@ impl Session {
         }
     }
 
+    /// How many lines holding `needle` the machine has written so far,
+    /// everything that has arrived and not yet been looked at included.
+    ///
+    /// A caller that is about to make the machine write one more of them
+    /// takes this first and hands it to [`Session::wait_for_more`]. It has
+    /// to be taken before the stimulus goes out and not after: the machine
+    /// may answer between the two, and a count taken then would already
+    /// hold the line that is being waited for.
+    pub(crate) fn count_seen(&mut self, needle: &str) -> usize {
+        self.catch_up();
+        self.count_of(needle)
+    }
+
+    /// Waits until more than `already` lines holding `needle` have arrived,
+    /// or until `timeout` is up.
+    ///
+    /// This is what a caller wants when the same line comes more than once
+    /// and only the next one is meant. [`Session::wait_for`] is satisfied
+    /// by one that came before the wait began, which for a line like
+    /// `[canvas] cursor ...` is every earlier move of the pointer.
+    pub(crate) fn wait_for_more(
+        &mut self,
+        needle: &str,
+        already: usize,
+        timeout: Duration,
+    ) -> bool {
+        let deadline = Instant::now().checked_add(timeout);
+        loop {
+            if self.count_of(needle) > already {
+                return true;
+            }
+            match self.lines.try_recv() {
+                Ok(line) => {
+                    self.seen.push(line);
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => return false,
+                Err(TryRecvError::Empty) => {}
+            }
+            if deadline.is_none_or(|deadline| Instant::now() >= deadline) {
+                return false;
+            }
+            std::thread::sleep(POLL);
+        }
+    }
+
+    /// Takes everything that has arrived and not yet been looked at, so
+    /// that a count over what has been seen is a count over what came.
+    fn catch_up(&mut self) {
+        while let Ok(line) = self.lines.try_recv() {
+            self.seen.push(line);
+        }
+    }
+
+    /// How many lines that have been looked at hold `needle`.
+    fn count_of(&self, needle: &str) -> usize {
+        self.seen
+            .iter()
+            .filter(|line| line.contains(needle))
+            .count()
+    }
+
     /// Writes `bytes` to the serial port of the machine.
     ///
     /// # Errors

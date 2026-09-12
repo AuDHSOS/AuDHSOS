@@ -43,6 +43,22 @@ impl Choice {
         Choice(folded.wrapping_shr(7) ^ 1)
     }
 
+    /// The choice that is true exactly when `value` is zero.
+    ///
+    /// The same trick as [`Choice::is_zero_u8`], one word wide: for every
+    /// non-zero word, either the value or its two's complement has the
+    /// high bit set.
+    #[must_use]
+    #[expect(
+        clippy::as_conversions,
+        clippy::cast_possible_truncation,
+        reason = "the shift leaves one bit, so the narrowing cast keeps the whole value"
+    )]
+    pub const fn is_zero_u64(value: u64) -> Choice {
+        let folded = value | value.wrapping_neg();
+        Choice((folded.wrapping_shr(63) as u8) ^ 1)
+    }
+
     /// The wrapped byte, `0` or `1`.
     #[must_use]
     pub const fn value(self) -> u8 {

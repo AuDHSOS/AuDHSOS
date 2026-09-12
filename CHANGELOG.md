@@ -7,6 +7,572 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `driver-virtio-blk`, the virtio block device of virtio 5.2 as logic:
+  what the registers of one mean, which features it asks for, how a
+  request is framed, and the order the device is brought up in. Registers
+  reach it through a trait of its own — a structure, an offset and a
+  width — so it computes no address, and the queue is `virtio-queue`'s,
+  so it encodes no descriptor. It depends on that crate and on nothing
+  else; `BLOCK_DEVICE` stands in `pci::virtio` beside `NETWORK_DEVICE`,
+  because what reads a device identifier is a bus walk. Read, write and
+  flush are implemented and the other five request types are named
+  refusals, as is every feature bit of 5.2.3 the driver turns down. What
+  it contributes beyond the framing is the refusals of 5.2.6.1 at the
+  call rather than a request sent and lost: data that is not whole
+  sectors, a flush that carries data or names a sector, a read or a write
+  that carries none, anything past the last sector, and a write to a
+  device that said it is read-only. Two rules of the transport that are
+  easy to miss are kept: the feature windows are read at step 4 of 3.1.1
+  and not before, and the capacity is read between two reads of the
+  configuration generation. D-139, catalog 6.6.73, roadmap step F4.
+
+- `fs-gpt`, the GUID partition table as structures over the block device
+  trait `fs-fat` defines: the protective record, both headers with their
+  checksums, the entry array, and the CRC-32 the format is checked with.
+  The reason is the reason D-53 gave for `fs-fat`: a file system server
+  that reads the boot volume has to find the partition before it can
+  mount it, and a second implementation of the header would be a second
+  place for an offset to be wrong. Reading checks everything UEFI 2.11,
+  section 5.3.2 asks for and falls back to the backup in the last block
+  when the primary is torn; writing lays the protective record down
+  first, then both arrays, then the backup header, then the primary, so
+  that a write cut short leaves a table that reads. The xtask image
+  writer is a user of it and keeps no structure of the format — its own
+  `gpt.rs` and `crc32.rs` are gone — and the bytes of the image did not
+  change. D-138, catalog 6.6.72.
+
+- A wall clock. The loader calls `EFI_RUNTIME_SERVICES.GetTime` once,
+  before it leaves the boot services, and the moment travels to the kernel
+  in the boot information; `clock_wall`, system call 51, answers it as
+  microseconds since 1970-01-01T00:00:00Z with the source the firmware
+  named. This is what certificate validation has been missing: document
+  11 section 11.14 has carried "a clock" as a gap since the TLS client was
+  finished, because `ClientConfig::now` is a parameter and no crate of the
+  project had a value to put in it. D-137 records the arrangement. Nothing
+  changed about D-46 — no logic crate reads a clock, and the one place
+  that touches the device is the loader, which is an adapter.
+
+  The reading has to happen before `ExitBootServices`, because a runtime
+  service after that point needs the virtual address map of
+  `SetVirtualAddressMap`, which this system never sets. The conversion
+  from `EFI_TIME` lives in `audhsos-uefi` rather than in the loader, so
+  that a calendar conversion is host-tested under the coverage gate and
+  the loader gains only the call: the offset is applied in the direction
+  UEFI 2.11, section 8.3.1 gives, `Localtime = UTC - TimeZone`, and the
+  daylight bits are checked but change nothing, because the firmware
+  moves the offset with the time and a correction here would be applied
+  twice.
+
+  A firmware that names no offset is not refused. `EFI_UNSPECIFIED_TIMEZONE`
+  means a local time whose zone the firmware does not know, which is what
+  OVMF reports on the reference machine, so the value is read as universal
+  time and the source travels beside it saying it may be wrong by a zone.
+  What is refused is a clock that was never set: an all-zero structure, a
+  field outside the calendar, and a moment that is not after the epoch are
+  each an error, and a machine without a usable clock is answered
+  `Unavailable` rather than a guess. A certificate is never judged against
+  a made-up date.
+
+  The boot information goes to version 2 and its fixed part from 136 bytes
+  to 144: `reserved` becomes `wall_clock` and `boot_unix_seconds` is
+  appended. Version 1 is refused rather than read with a zero clock — the
+  loader and the kernel ship together, so there is no machine on which the
+  two versions meet. The seconds are a plain `i64` and not a `UnixTime`,
+  so `audhsos-abi` keeps depending on nothing, which is the arrangement
+  D-120 already made for the deadlines of the scheduler.
+
+  What this does not fix is drift. The wall clock is the boot moment plus
+  the microseconds `clock_now` answers, and that count comes from an APIC
+  timer calibrated against the interval timer once at boot with nothing
+  correcting it afterwards. For a certificate window, which is days wide,
+  that is enough; the documentation says so rather than implying a
+  precision the machine does not have. There is no `clock_set`, because
+  nothing would call it yet.
+
+  Catalog 6.6.71. The unsafe budget of `boot-uefi-x86_64` rises from 39 to
+  41 for the deref of the runtime services table and the call, and that of
+  `user-test-programs` from 98 to 105 for the image that reads the date
+  from ring three.
+
+- What the UEFI Forum publishes, in `docs/uefi/`: the UEFI specification
+  release 2.11, which the loader is written against, and the ACPI
+  specification release 6.6, which `kernel-acpi` parses the root pointer,
+  the table headers and the multiple APIC description table out of. Both
+  under the second case of D-124 — the Forum serves them at no charge and
+  does not licence them for redistribution, and the copies are kept anyway
+  because a clause has to be readable without a network at wording that
+  cannot change. The README records one thing the other directories have
+  not had to: the Forum's site answers an automated request with a bot
+  check, so both files were fetched by hand and the checksum is what
+  stands in for the fetch.
+
+  `kernel-acpi` was written before the document was at hand and says "the
+  specification" where D-40 wants a section named. Its citations are not
+  updated here; the directory is what makes updating them possible.
+
+- A second disk for a run that writes, so that nothing the system writes
+  can reach the volume it boots from. The boot volume is one FAT32
+  partition the firmware and the loader read, and FAT32 has no journal: a
+  write torn by a crash loses a chain, and on that volume a lost chain is
+  a machine that no longer boots. `cargo xtask run --scratch` attaches a
+  blank `virtio-blk-pci` disk beside it instead — no partition table, so
+  the system formats the whole disk — and the runner keeps one per run
+  name under `target/qemu/`, blank when it is new and untouched when it is
+  not, which is what a test that boots twice to see what survived will
+  need. No run carries the device unless it asks for it. The alternatives
+  are in D-136: rebuilding the image before every run is what the runner
+  does today and it is why nothing has been corrupted yet, but it makes a
+  persistence test impossible, and `snapshot=on` does the same. 03 section
+  3.1.1 has the two lines, catalog 6.6.20.
+
+- A second cursor sprite, the double arrow a window shows while it is
+  being resized, and the shape field that chooses it. `SetCursor` carries
+  a `CursorShape` beside the position, packed into the word that already
+  carried whether the sprite is shown, and a shape code the protocol does
+  not have is refused rather than drawn as the arrow. The display server
+  keeps one bitmap per shape and derives body from edge for both, so the
+  new sprite adds one table and no second rule; the position stays the
+  corner of the sprite for either shape, so nothing about erasing and
+  restoring changes. Nothing asks for the resize shape yet: this system
+  has no window manager, and the program that drags a corner is the one
+  that will. Catalog 6.6.27 and 6.6.56.
+
+- `tools/target-clean.sh`, which drops from the target directory what no
+  build has touched for a while. The tree passes twenty gigabytes on this
+  machine and most of it belongs to work that is finished: one `find` pass
+  deletes the files whose mtime predates a cutoff of fourteen days by
+  default and then the directories that empties, and Cargo and the xtask
+  rebuild what goes. `--dry-run` names every file and the total instead.
+  The cutoff is a marker file and `find ! -newer`, because the two `find`
+  implementations round `-mtime` differently, and `CACHEDIR.TAG` stays,
+  since it is what keeps a backup out of the tree. 07 section 7.5 has it.
+
+- Ed25519 signing as product surface, with the arithmetic a secret scalar
+  needs (D-135). `ed25519::sign` and `ed25519::public_key` lose the
+  `#[cfg]` that kept them behind `test-signing`, because the Secure Shell
+  client of document 14 authenticates with a key of its own and step S5
+  signs with it. The gate was not the whole of it: `Point::mul` adds where
+  a bit of its scalar is set, `Scalar::mul` does the same, and
+  `subtract_order` stopped as soon as the value had fallen below the
+  order, all three variable-time on a long-term private key and on the
+  nonce of a signature, because that module was written for a verifier.
+  `Point::mul_secret` and `Scalar::mul_secret` now double and add at every
+  position and keep the sum behind a mask of `crypto-ct`, `subtract_order`
+  runs both rounds always and selects its difference with a mask, and
+  signing calls nothing else. The branching pair stays for the public
+  scalars of verification; what separates them is the name, as it is for
+  `pow_secret` in `crypto-bignum` (D-122), and the modules say so. ECDSA
+  signing stays behind `test-signing`. Catalog 6.6.33.
+
+- `pem::encode_wrapped` and `pem::decode_wrapped` in `audhsos-encoding`,
+  the RFC 7468 frame at a width the RFC does not fix. `openssh-key-v1`
+  wraps at seventy characters, which is not a multiple of four, so a body
+  line holds part of a Base64 quantum and cannot be encoded or decoded on
+  its own: the body is now written as one text and pushed apart into
+  lines from the back, and it is read a quantum at a time with the
+  quantum carried across a line boundary. The reader of a wrapped text
+  holds a line to a maximum rather than to a length, because a width no
+  standard fixes is the width some writer chose; the RFC 7468 reader is
+  unchanged and still demands full lines. `encode` and `decode` are those
+  two at the width of `LINE`. `EncodingError::LineLength` carries the
+  width it judged a line against, which the message no longer spells as
+  64. Catalog 6.6.40.
+
+- The two documents the private key of a Secure Shell client is written
+  in. `docs/openssh/PROTOCOL.key` is `openssh-key-v1`: the magic string,
+  the cipher and KDF names, the public keys, and the one string that
+  holds the private keys, with the two `checkint` words that say a
+  passphrase was right and the padding that counts up from one.
+  `docs/rfc/rfc9987.txt` is the SSH agent protocol, which that file
+  defers to where the key itself is encoded and which nothing here
+  implements otherwise: section 5.2.3 is the Ed25519 blob, `string
+  "ssh-ed25519"`, `string ENC(A)`, `string k || ENC(A)`, whose `k` is the
+  32-byte seed of RFC 8032, section 3.2, and not the scalar the seed
+  expands into. No code cites either yet. Step S5 signs with a key of
+  this client's own, and 14.13 holds the open question of where that key
+  comes from; every answer to it reads a file in this format. Both
+  directory READMEs, document 14, section 14.4, and the index of `docs/`
+  name them.
+
+- The rest of step S2 of track S and the whole of S3, in `audhsos-ssh`.
+  `exchange` is the two key exchange methods and the exchange hash: an
+  `Ephemeral` that holds the scalar or the exponent and clears it when it
+  is dropped, the two messages of RFC 5656, section 7.1, and RFC 4253,
+  section 8, and the hash over the eight values of that section. The
+  public values are strings for the curve and `mpint`s for the group, and
+  the shared secret is an `mpint` for both, which is the trap RFC 8731,
+  section 3.1, exists to name — a test holds the hash against a
+  fixed-length encoding for a secret whose top bit is set and shows the
+  two agreeing when it is clear, which is why that mistake works half the
+  time. The aborts of RFC 8731, section 3, and RFC 8268, section 4, are
+  refusals where they are found. `keys` is the six keys of section 7.2
+  with the extension rule the 64 bytes of the cipher need.
+
+- `cipher` is `chacha20-poly1305@openssh.com`, checked against the worked
+  example of appendix A of the draft in `docs/openssh/`: the packet of
+  that example seals to the bytes it prints and opens back. Two things
+  the vector settled that no prose in either document states: the two key
+  halves are named the other way round in the two documents, and the
+  length field lies outside the region the padding aligns, which is why
+  the example's 76-byte packet names 72. `Encoder::set_cipher` and
+  `Decoder::set_cipher` take keys into use without touching the sequence
+  number, which is what `SSH_MSG_NEWKEYS` needs of them, and a decoder
+  checks the tag before it decrypts a byte. Sealing and opening share one
+  operation, because encrypting and decrypting a frame are the same one,
+  and it refuses a frame it cannot encrypt rather than answering with a
+  tag over plaintext. The `mpint` encoding of the shared secret exists
+  once and is used by the exchange hash and by the key derivation, which
+  have to agree about what `K` is. Catalog 6.6.70.
+
+- The front of step S2 of track S, in `audhsos-ssh`: the greeting and the
+  negotiation both key exchange methods start with. `ident` is the
+  identification string of RFC 4253, section 4.2 — the part before the CR
+  LF is handed back because that is what the exchange hash takes, the
+  lines a server may send first are skipped and counted, and every line
+  is held to 255 characters whether it has ended or not, so what is
+  refused does not depend on how the bytes were split on the way here.
+  `msg` is the message numbers of RFC 4250, section 4.1.2. `kex` is
+  `SSH_MSG_KEXINIT` with the cookie in one call on the generator, the
+  algorithm set of 14.5 including `ext-info-c` (RFC 8308), and the rule
+  of section 7.1 that chooses from two proposals: the first name the
+  other side also has, except for the key exchange method and the host
+  key algorithm, which are chosen together because a method that needs a
+  signature cannot be run with a key that cannot sign. An extension
+  indicator that ends up chosen is a disconnect, and a guessed packet is
+  ignored unless both of the peer's first names are the chosen ones. The
+  MAC lists this client sends are empty, which document 14, section 14.5,
+  now states as what it is: the one cipher offered is an AEAD, and naming
+  a MAC this client does not have would be the alternative. Catalog
+  6.6.69.
+
+- Step S1 of track S: the crate `audhsos-ssh` at `crates/net/ssh`,
+  sans-I/O and host-tested, with the two layers everything above it is
+  written in. `wire` is the types of RFC 4251, section 5, over a cursor
+  that leaves its position where it was when a read fails and writes
+  nothing when a write does not fit. The two types with rules of their
+  own are checked rather than trusted: an `mpint` is refused unless it is
+  canonical — zero as no bytes, one zero byte before a positive number
+  whose top bit is set, no unnecessary leading `00` or `ff` — and a
+  name-list is refused for a name of no length, a byte outside US-ASCII,
+  or a null. `Writer::write_unsigned` is the encoding RFC 8731, section
+  3.1, requires of the shared secret, which is the trap that fails one
+  connection in two. `packet` is the binary packet of RFC 4253, section
+  6: an `Encoder` pads to a whole number of blocks with at least four
+  bytes of padding drawn in one call on the caller's generator (D-121),
+  and a `Decoder` judges the length from the four bytes that hold it
+  before it waits for the packet, against the largest packet that can
+  satisfy both bounds of section 6.1 at once, so the 35000 bytes that
+  section makes mandatory are more than a connection ever buffers. Each
+  holds the sequence number of section 6.4, which never appears on the
+  wire and wraps at 2^32; a new cipher changes the block size through
+  `set_block`, because a second constructor would be a way to reset a
+  count that must not be reset. Catalog 6.6.68; the crate is in the workspace, in the crate table of `xtask`,
+  and in document 5.
+
+- `docs/openssh/`, for the one algorithm of the Secure Shell client that
+  no standards body published (D-134). Two documents, because one
+  replaced the other: `PROTOCOL.chacha20poly1305` of the OpenSSH source
+  at revision 1.5, which is the last there was — OpenSSH removed the file
+  in August 2025 because what it documented now has IETF documents — and
+  `draft-ietf-sshm-chacha20-poly1305-04`, which is where the `PROTOCOL`
+  file now points and which the crate will be written against. The README
+  carries both checksums, the two commits the OpenSSH file is pinned
+  between, why a draft is citable here at all and what happens when it
+  becomes an RFC. Appendix A of that draft is a worked example — one
+  packet with its keys, its sequence number and the bytes on the wire —
+  and it is the only published vector this track has for a whole packet.
+  This answers the precondition of step S3; document 14 and the roadmap
+  carry it, and 14.13 is down to three open questions.
+
+- Phase 13, the bus: `kernel-acpi` gains `mcfg.rs`, which reads the `MCFG`
+  table of the firmware the way `madt.rs` reads the MADT — signature,
+  length and checksum through the existing `SdtHeader`, then the allocation
+  structures with their base address, segment group and bus range, into a
+  bounded array. An allocation whose last bus is below its first, or whose
+  base is no page, is an error rather than something a mapping finds out
+  later. `Platform` gains `ecam()` and the `x86_64` adapter fills it at the
+  entry, before the memory bring-up, because the range has to be among the
+  device apertures by the time a program may ask for it.
+
+- `system_info` gains four result words, twenty-six to twenty-nine: the
+  base address of the configuration window, its segment group, and its
+  first and last bus, all four zero on a machine whose firmware published
+  no `MCFG` table. `MAX_RESULT_WORDS` and `SYSTEM_INFO_WORDS` are thirty.
+  The kernel records the window beside the `MmioReserved` apertures whether
+  or not the memory map marked it — the firmware of the reference machine
+  publishes it in the table and leaves it out of the map — so
+  `memory_create_device` admits the one aperture that makes the bus
+  reachable. `boot::run` reports
+  `[info] ecam=<base> segment=<n> buses=<first>..=<last>`, or
+  `[info] ecam=absent`.
+
+- The crate `pci`: a layer-1 logic crate over a `ConfigSpace` trait of two
+  methods, with the ECAM address arithmetic as a pure function, the type-0
+  header, the walk bounded by the bus range of the window, base address
+  register decoding with size probing, the capability list, the MSI-X
+  capability and its table entry, and the vendor capabilities of virtio 1.x
+  from section 4.1.4. Four rules the tests hold it to: probing clears the
+  decode bits of the command register and restores it on every path out,
+  the failing ones included; the capability walk is bounded by the entries
+  that fit below the extended space, so a list pointing at itself is an
+  error and never a hang; a 64-bit register consumes the register above it
+  and that one is never decoded again; and `virtio` reports every structure
+  it found in the order the capability list had them and chooses none,
+  because that order is the device's order of preference and the choice
+  belongs to the driver. Bridges are read, reported, and not descended into
+  (D-112).
+
+- `RecordedConfigSpace` behind the feature `test-doubles`: the
+  configuration space of a `q35` machine with a virtio-net device, read out
+  of the ECAM window of a running machine through the monitor and kept as a
+  byte fixture. The one thing a byte dump cannot carry is what a register
+  answers after all ones were written to it, so the size masks the machine
+  reported are recorded beside the bytes and a probe answers them.
+
+- `user-sys-x86_64` gains `mmio.rs`: read and write of `u8`, `u16`, `u32`
+  and `u64` over a mapped region, each one `read_volatile` or
+  `write_volatile` at an offset checked against the length of the region,
+  plus a sub-window that narrows a region to a structure. A register is not
+  memory that behaves, and a framebuffer reached as a byte slice is; this
+  is what keeps everything above it safe (13.7, D-113). The `unsafe` budget
+  of the crate grows from twenty-one sites to thirty-two.
+
+- `app-lspci`, a program of the archive: it asks `system_info` for the
+  window through the root task, maps it one bus at a time — a window of
+  every bus is two hundred and fifty-six mebibytes, and one bus is a page
+  table — walks each bus, and reports every function with its
+  identifiers, its class, the base address registers it decoded and the
+  capabilities it found, and for the virtio device the structures it
+  published and the size of its message table. A machine whose firmware
+  published no window, and one started without the network device, report
+  that and end.
+
+- The reference machine gains `-netdev user,id=n0,hostfwd=...` and
+  `-device virtio-net-pci,disable-legacy=on,mq=off`, with the host port
+  chosen free by the runner. Nothing drives the device in this phase; it is
+  there so that the bus walk finds a device with real base address
+  registers and a real MSI-X table. The end-to-end run is accepted a third
+  time without the two lines, as it is accepted without a graphics adapter
+  (D-118).
+
+- Two fuzz targets, `mcfg` and `pci_config`: arbitrary bytes as an ACPI
+  table and as the configuration space of four functions. Enumeration must
+  end with functions or with an error, read nothing outside the bytes it
+  was given, and never loop.
+
+- The timer takes the processor in the kernel that ships. Time-slice
+  preemption was built and proved in Phase 5 and wired into the test
+  harness only: `Scheduler::tick` charges the running thread its tick and
+  asks for a switch when the slice runs out, and `crates/kernel/bin` never
+  called it, so the one kernel that boots handed the processor over only
+  when a thread asked it to. Every program of the boot archive blocks on
+  IPC or a notification, which is why nothing had shown it (D-133).
+
+- Phase 12, the three capabilities everything above the kernel wants and
+  the kernel did not have: time, randomness, and message interrupts. Four
+  system calls, numbers forty-seven to fifty. `clock_now` answers the
+  microseconds since the kernel started, computed from the ticks it counts
+  and the rate it reports; the unit is the microsecond and the resolution
+  is the tick, which at a thousand ticks a second is a millisecond, and the
+  documentation says so rather than implying a precision the timer has not
+  got. `notification_wait_until` is `notification_wait` with a deadline in
+  that same scale, and answers zero bits when the deadline came first; the
+  existing call is untouched (D-108). `random_bytes` answers the four words
+  a stream cipher seed is, each drawn from `RDSEED` inside a retry bound,
+  and `Unavailable` rather than a word the hardware did not give.
+  `interrupt_create_msi` allocates one vector out of the space the I/O APIC
+  lines are allocated from and answers the `Interrupt` handle, the message
+  address, and the message data, so that a driver can program its device's
+  MSI-X table itself. Two error codes carry them: `Unavailable` and
+  `NoVector`.
+
+- A deadline on the `BlockedNotification` state of `kernel-sched`: a plain
+  word of microseconds in the thread entry, so that no kernel crate has to
+  depend on `audhsos-time`, and one list ordered by it. The tick handler
+  walks that list from the front and stops at the first deadline that has
+  not passed, so a tick that wakes nobody costs one comparison. A thread
+  signalled, suspended or killed before its deadline leaves the list in the
+  call that changes its state, so an entry never outlives the wait it
+  belongs to. The list is threaded through the thread entries the way the
+  run queues are, and not held as an `IndexList` over them: a `Link` in no
+  list is not zero, and the `Scheduler` lives in the one `static` that
+  carries the object pools (D-131).
+
+- `IndexList::insert_after` in `audhsos-collections`, the one operation the
+  type was missing: it could push at either end and unlink anywhere, and
+  the `Link` fields are private, so no caller could splice for it. An
+  insert after `None` is a `push_front`, after the tail a `push_back`, and
+  in the middle it links both neighbours; its ownership checks are those of
+  `push_back`. This is the only change the phase makes to a finished crate.
+
+- `kernel-hal-api` gains `trait Random` with a `ScriptedRandom` double, and
+  `InterruptController` gains `allocate_msi` and `release_msi`. The
+  `x86_64` adapter implements the first with `RDSEED` behind a `CPUID`
+  check — a machine without the instruction raises an invalid opcode, and a
+  kernel that found that out in an interrupt handler would have found it
+  out too late — and the second from the local APIC's message region and
+  the destination it already knows. The two raise the unsafe budget of
+  `kernel-hal-x86_64` from 145 to 149 and its `asm!` budget from 28 to 30
+  (D-132).
+
+- Every vector of the message space has a gate in the interrupt descriptor
+  table from the start. A message interrupt is routed by nobody: the device
+  writes the vector itself, so a vector without a gate arrives as a general
+  protection fault rather than as an interrupt. The plan of
+  `kernel_x86_tables::vectors` names the space — `MSI_BASE` at 0x58,
+  forty vectors, ending below the system call vector — so no message can
+  alias a line and no line a message.
+
+- The reference machine's CPU model is `qemu64,+rdrand,+rdseed`. `qemu64`
+  carries neither flag, which was asked of QEMU through
+  `query-cpu-model-expansion` and not assumed (D-110).
+
+- The test image `clock` and the three user programs it runs:
+  `clock_and_wait` reads the clock around a wait of fifty milliseconds that
+  nothing but its deadline ends, `entropy` draws two seeds and reports
+  whether they differ, and `msi_vector` takes a message interrupt, binds
+  it, and reports the bit it woke with when the image raises the vector.
+  Catalog 6.6.59 and 6.6.60.
+
+### Fixed
+
+- A switch out of a thread that holds one of the kernel's cells leaves that
+  cell borrowed by a thread that is no longer running, and nothing gets it
+  back. `task::run` refuses to switch from there now, as the test harness
+  has refused since the `ipc` image wedged on it about one run in six: a
+  tick that finds a cell held switches nobody, and the next one tries a
+  millisecond later. The kernel checks three cells where the harness checks
+  two, and the console is the one this found. `task::start` writes
+  `root task at ...` once the root task is ready, so a tick between the
+  borrow of the console and the end of that line switched into the root
+  task and left the console held for good: the machine ran on, and every
+  line it had left to say — the servers' own, a fault, a panic — went
+  nowhere. Four of nine end-to-end runs stopped saying anything at that
+  line, which from outside is indistinguishable from a machine that has
+  stopped (D-133).
+
+### Changed
+
+- `Interrupt::line` is an `Option<u8>`: a message interrupt has no line at
+  any controller the kernel could mask. `interrupt_ack` on such an object
+  clears the outstanding flag and touches no hardware, because the mask bit
+  lies in the device's own table, which is mapped in the driver and not in
+  the kernel; a device that raises interrupts faster than its driver
+  services them is quieted by its driver (D-111). The vector of such an
+  object goes back to the space when the last handle to it closes.
+
+- `ioport_write_string`, the forty-sixth system call: a run of bytes in the
+  message area to one I/O port, checked against the same `IoPortRange`
+  capability at width one that `ioport_write` is checked against. The
+  payload words are little-endian, so the area read as bytes is the run in
+  order and the kernel copies nothing. It exists because every register
+  access of a userland driver is a system call, so a console line written a
+  byte at a time cost one call a byte whatever else was done (D-129).
+
+- Phase 11, the graphical demonstration: `app-canvas`, which is a
+  host-tested logic crate under `crates/user/apps/canvas` and a binary of
+  `user-programs` around it, as D-97 has every program of the userland
+  be. The logic keeps a pointer position clamped to the screen, joins one
+  position to the next with a Bresenham segment while button 0 is held,
+  writes the characters of the `us` layout at a text cursor that wraps at
+  both edges, and puts the background back on the escape key; the binary
+  is the loop that maps the surface and the ring, presents the damage of
+  each event, and sends `SetCursor` after every pointer event. The root
+  task starts it with both badged capabilities, and it is the eleventh
+  program of the boot archive.
+- The three end-to-end tests of catalog 6.6.29's combined item.
+  `canvas_cursor` moves the pointer twice and checks, in a picture of the
+  screen taken after each step, that every pixel of the sprite is what
+  `server-display::cursor::pixel_of` says it should be and that the place
+  the sprite left carries the background again. `canvas_stroke` holds the
+  button down over a segment and checks that the pen stands somewhere
+  across every step of its longer axis. `canvas_text` types three
+  characters and checks each against the glyph table pixel for pixel.
+  Each looks only where the canvas said on the console that it drew, so
+  the runner assumes no position and no resolution. All three run after
+  the program that listens has ended, so what they inject is no part of
+  what that one is checked against, and they drive the machine over the
+  monitor connection that is already open, because it serves one client
+  at a time.
+- `Session::wait_for_another` in the xtask: `wait_for` is satisfied by a
+  line that arrived before the wait began, which for a line the canvas
+  repeats is every earlier event. The three tests wait for the next one.
+- `user-proto` re-exports the button constants of `driver-i8042` beside
+  the event types, so the driver, the server, and every client name the
+  button that draws by one constant. `server-display` makes
+  `cursor::pixel_of` public for the reason the tests above give.
+
+- The JPEG standards, under a new `docs/itu/` and a new `docs/cipa/`,
+  each fetched twice and recorded with its checksum. JPEG answers in two
+  documents what is usually asked as one question. ITU-T T.81 |
+  ISO/IEC 10918-1 is the entropy-coded stream: the markers of Annex B,
+  the Huffman and arithmetic coders of Annexes C and D, the four modes of
+  operation, the example tables of Annex K. It states nothing that makes
+  a stream a file, so a decoder implementing it alone cannot tell whether
+  the three components it decoded are YCbCr or RGB. ITU-T T.871 |
+  ISO/IEC 10918-5 is the file: eighteen pages for the `APP0` segment, the
+  density, the thumbnail, and the colour space T.81 leaves unstated.
+  Beside them ITU-T T.84 | ISO/IEC 10918-3 for SPIFF, the second file
+  format, which claims the `APP8` marker, and the C-Cube JFIF 1.02 paper
+  the text of T.871 formalizes.
+
+  `docs/cipa/` holds Exif 3.0, CIPA DC-008-Translation-2023, because a
+  JPEG file on a disk is usually not the file T.871 describes: a camera
+  writes `APP1` with a TIFF Rev. 6.0 structure in it. `Orientation` is a
+  tag there and appears in neither ITU document, so a decoder reading
+  only those displays a large share of photographs rotated ninety degrees
+  while being right about every byte it read.
+
+  `docpdf` needs nothing: its `spec/` section is for the standards kept
+  as HTML, these are PDFs and are passed over, and the two READMEs land
+  in `other/` beside the one from `docs/pcisig/`.
+
+- Document 14, *Secure Shell as a Client*, and D-123, which admits it:
+  Secure Shell enters this project as a client, document 14 is its
+  design, and it is track S of the roadmap with steps S1 to S8. It is a
+  client and not a server, because a server needs a process server, a
+  file system, user accounts and a pseudo-terminal, and this system has
+  none of the four. The algorithm set it offers needs no cryptographic
+  primitive that does not already exist: `curve25519-sha256` and
+  `diffie-hellman-group14-sha256` for the key exchange, `ssh-ed25519` for
+  the host key and for `publickey` authentication, and
+  `chacha20-poly1305@openssh.com` as the cipher, which carries its own
+  integrity so that no MAC is negotiated. What it refuses is written out
+  with a reason each, in the form D-114 uses, and three of the refusals
+  — `ssh-dss`, `3des-cbc` and `hmac-sha1` — are REQUIRED by RFC 4253 and
+  are a deliberate departure that the interop test is what measures. Three
+  things D-123 does not settle and says so: where the specification of a
+  cipher that has no RFC is kept, how a host key is trusted on a system
+  with no writable storage, and where the client's private key comes
+  from. Each is a precondition of one step rather than of the track. And
+  one difference from the TLS track decides the shape of its testing: no
+  document publishes a complete SSH handshake with the keys that made it,
+  so there is no RFC 8448 to replay and the only check from outside is a
+  live OpenSSH.
+
+- `crypto-dh`, finite-field Diffie-Hellman over a MODP group, and the
+  constant-time modular exponentiation in `crypto-bignum` it stands on.
+  RFC 9142, table 12, makes `diffie-hellman-group14-sha256` the single
+  MUST of SSH key exchange, and it is the 2048-bit MODP group of
+  RFC 3526, section 3, with SHA-256. What was missing was not the
+  arithmetic but a place to put a secret exponent: `Modulus::pow` and
+  `Modulus::pow_wide` are left-to-right square-and-multiply and branch on
+  every bit of the exponent, which for a Diffie-Hellman private value is
+  the whole secret. `Modulus::pow_secret` is a Montgomery ladder over the
+  full length of the exponent buffer — eight rounds per byte whatever the
+  bytes are, one squaring and one multiplication in each, and a masked
+  exchange of the two working values rather than a branch — and
+  `limbs::montgomery_secret` gives it products whose final subtraction is
+  masked rather than conditional. Measured on the 2048-bit group at 256
+  bits of exponent, the old path runs between five microseconds and eight
+  hundred depending on the exponent; the new one runs at eight hundred
+  for all of them. `ModpGroup` above it holds the prime and the
+  generator, derives a public value, derives a shared secret, and refuses
+  a peer value outside the open interval `1 < v < p-1` that RFC 8268,
+  section 4, prescribes after correcting RFC 4253, section 8. The prime
+  is transcribed from RFC 3526 and checked in the tests against a second
+  transcription of the same rows. What is not here is the SSH method:
+  the two messages, the exchange hash, and the negotiation.
 - `cargo xtask test-ext`, which brings the external conformance suites under
   `docs/test-ext/` to the revision the policy table `EXTERNAL_SUITES` pins:
   it creates the checkout, fetches that revision without its history where the
@@ -395,14 +961,42 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   6.6.65, and `docs/pcisig/README.md`, which holds no document because
   PCI-SIG publishes none this repository may keep, and records instead
   what takes the place of having one.
-
-### Fixed
-
-- 10.9.4 named the kernel's device-memory check `inside_device_memory`;
-  the call Phase 9 built is `Environment::is_device_memory`. A document
-  and the code disagreed, which is a bug by the convention of
-  `docs/README.md`, and the document was the wrong one.
-
+- Two fuzz targets, `scancode` and `mouse_packet`: no stream of bytes may
+  panic either decoder, make it grow, or make it hand out a key the table
+  does not have or a delta outside the nine bits a packet carries. Both ran
+  for a minute without a finding.
+- `driver-i8042`: the PS/2 controller, its initialization sequence, and the
+  decoders of scancode set 2 and of the mouse packet. The crate depends on
+  nothing and reaches the hardware only through a `Ports` trait, so the
+  same logic serves the input server over the port system calls and the
+  tests over a scripted controller.
+- `server-input`: what the input server decides — who is subscribed, which
+  decoder a byte belongs to, what is appended to whose ring, and which
+  subscriber is dropped. Process watches detect client ends independently
+  of the retained notification, which remains signalable after its client exits.
+- The input server as a process, `app-input` as its first client, and the
+  runner that types at the machine. The root task makes the ports of the
+  PS/2 controller and the interrupt objects of its two lines and hands them
+  to `server-input`, which brings the controller up, starts a second thread
+  that drains it, and gives every client a ring of one page. `app-input`
+  subscribes, waits on the notification the server signals, and writes one
+  line per event; the end-to-end run injects a key sequence, a pointer path,
+  and a button through the machine protocol and holds the lines against
+  what it sent. The run without a graphics adapter does the same, because
+  the i8042 is part of the machine whether it has a screen or not.
+- The input protocol in `user-proto`: a subscription that hands the server
+  a notification and receives a ring of one page, the sixteen-byte record a
+  key or a pointer event is, and the two halves of that ring — the writer
+  is the server and drops the newest event when the ring is full, the
+  reader is the client and hears about a gap once. Beside it the client
+  side of the keyboard: the modifier state, and the layouts `us` and `de`
+  that turn a key code into a character.
+- Two roles of the startup message, `AuxInterrupt` and `InputServer`
+  (D-109). A driver of a controller with two lines is given the second
+  interrupt object under `AuxInterrupt` the way it is given the first under
+  `Interrupt`, and a program that listens is given the badged endpoint of
+  the input server the way one that draws is given that of the display
+  server. `user_rt::Startup` gains a field for each.
 - `server-display` as a process and `app-paint` as its first client. The
   root task makes the framebuffer of `system_info` into a device memory
   object, hands it and the mode to the display server, and starts both; the
@@ -480,6 +1074,84 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- The kernel's sweep for ended threads is O(1) where it was O(N) in the
+  capacity of the thread pool, and it ran after every system call and
+  every context switch. `Scheduler` counts the threads that have entered
+  `Exited` — raised in the one place a thread's state changes, lowered
+  when `reaper::clear` gives one back — and `reap` returns on that
+  comparison when there is nothing to find, which is every call on a
+  running machine. Beside it `Pool::iter` stops at the high-water mark,
+  taking every walk of every pool in the kernel from O(N) in the capacity
+  to O(H) in the number of objects ever allocated. The walk was some
+  twenty-nine per cent of what the machine did under a moving pointer; a
+  pointer packet now costs four to five milliseconds where it cost six to
+  seven, and under an injected packet every ten milliseconds the machine
+  is halted in nineteen samples of twenty, where it was halted in none
+  (D-130).
+
+- `driver-uart16550` sends in bursts. The transmitter is asked for THRE
+  once per burst and not once per byte, because SLLS597E page 41 says the
+  holding register "is actually a 16-byte FIFO" and page 37 says THRE is
+  set when that FIFO is empty, which page 34 spends as "1 to 16 characters
+  may be written". Whether the part has the FIFO is asked and not assumed:
+  `init` reads the identification register after enabling it, and a part
+  whose bits 6 and 7 stay clear gets one byte a THRE. `write_bytes` now
+  answers how many bytes the controller took, and hands each burst to the
+  register block as one run, which is what lets `server-console` spend one
+  `ioport_write_string` on it. One pointer event on the reference machine
+  fell from a hundred twenty-one system calls and sixteen milliseconds to
+  thirty-one and six (D-129).
+
+- D-124 states what decides whether a reference document is kept in this
+  repository: whether it can be obtained, not whether its licence permits
+  the copy. It supersedes D-117, whose rule for the crate `pci` it
+  carries forward unchanged, and it puts the three cases in one place.
+  Documents that may be redistributed — the RFCs, OASIS, the Consortium,
+  Ecma — are kept and there is nothing further to state. Documents a body
+  serves to anyone at no charge but does not licence for redistribution —
+  the ITU Recommendations, CIPA's Exif — are kept as well, because the
+  copy is what D-59 is for and no licence-respecting arrangement delivers
+  it for those standards; the obligations are stated rather than assumed,
+  so the files stay unmodified with their notices inside them, each such
+  README quotes the restriction it stands against, and a copy goes if the
+  body objects. Documents that cannot be obtained — the PCI Express Base
+  and PCI Firmware specifications, which PCI-SIG releases to members or
+  against payment — leave the provenance rule and the captured `q35`
+  configuration space in their place.
+
+  `docs/pcisig/README.md` now says what an attempt to obtain them found:
+  the one PCI specification free to non-members is the *PCI Code and ID
+  Assignment Specification*, which the crate does not cite and which is
+  released through a form requiring a name, a company and an email
+  address. It also records a condition that binds a reader with lawful
+  access rather than the copy — PCI-SIG forbids the use of its
+  specifications for building or training commercially available
+  artificial-intelligence systems without prior written consent.
+
+  It also records two vendor product guides that are free of charge and
+  free of registration, and what each is good for. AMD's PG054 carries
+  the type-0 and type-1 configuration space headers with every offset and
+  the position of the MSI-X capability; Altera's document 683093 carries
+  the sixteen-byte MSI-X table entry, the address arithmetic of the table
+  and of the pending bit array, and the four-kilobyte alignment of the
+  table base. What makes them worth recording is not the layouts but the
+  citation: the Altera guide names the clause the layouts come from,
+  section 6.8.2 of the PCI Local Bus Specification 3.0. D-40 requires a
+  transcribed constant to name its document, revision and section, and
+  this project does not cite a standard from memory; a document that
+  prints the number turns a section number that could only have been
+  guessed into one with a source behind it. They rank below the
+  provenance rule and the captured `q35` configuration space and the
+  README says so: they describe two implementations rather than the
+  standard, two cores can agree and both depart from it, and PG054 states
+  its compliance against revision 2.1 where the crate cites 6.0.
+
+- A notification may carry more than one interrupt, each on a bit of its
+  own (D-108). `interrupt_bind` refused a notification another interrupt
+  already named, and `Notification::bound_interrupt` held that rule and
+  nothing else; both are gone. The i8042 has one output buffer and two
+  lines, so a driver that waited on two notifications would need two
+  threads reading one buffer and racing each other for the byte in it.
 - `memory_map` merges a mapping that continues one the process already
   holds instead of adding a region for every call (D-104). A full screen of
   1280 by 800 pixels is a thousand pages and no call maps more than
@@ -516,7 +1188,37 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   one open side track. 06 gained the catalog item 6.6.58 for the toolchain,
   which the track had been citing 6.6.53 for, and 08 8.21 now names both.
 
-### Fixed
+- 10.9.4 named the kernel's device-memory check `inside_device_memory`;
+  the call Phase 9 built is `Environment::is_device_memory`. A document
+  and the code disagreed, which is a bug by the convention of
+  `docs/README.md`, and the document was the wrong one.
+- Phase 10 review: shared input rings use atomic records and acquire/release
+  sequence publication, with atomic overflow exchange. The memory server
+  retires returned objects while foreign handles or mappings remain, using
+  `memory_references` (45) before reclamation. Input subscriptions carry an
+  INFO process handle and use process watches; `process_unwatch` (44) cancels
+  watches and distinguishes delayed signals from the exit of a replacement
+  subscriber. Every rejected request closes its received capabilities.
+- Keyboard regression fixes: separate left/right modifier state, caps-lock
+  repeat suppression, German AltGr characters, and validated Pause tails with
+  recovery at the first mismatching byte. Host concurrency tests and QEMU
+  lifecycle/isolation/handle-exhaustion regressions cover the fixes.
+
+- The kernel no longer drops a device interrupt that arrives while the idle
+  thread is choosing what to run next. The borrow of the machine is only
+  ever held with interrupts off — every other holder is a trap handler, and
+  an interrupt gate clears the flag for it — and the idle loop was the one
+  place that held it otherwise. An interrupt that found the machine busy was
+  dropped, and a device whose line is edge-triggered never raised that edge
+  again: the keyboard or the mouse went quiet for the rest of the run.
+- The kernel no longer stops the machine when the idle thread is entered
+  from a trap. A switch saves the callee-saved registers and nothing else,
+  so a thread that gives the processor up inside a system call hands it on
+  with interrupts off; every thread but the idle one turns them back on by
+  returning to user mode, and the idle one halts. It now turns them on
+  before it halts. The console driver never showed it because one line of
+  input needs one interrupt; the input server, which needs one per byte,
+  stopped after the first.
 
 - An object is held by one reference per region that names it, and now
   really is. A protection or an unmapping that split a region left two

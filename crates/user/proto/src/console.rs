@@ -9,10 +9,13 @@
 //! it, and a client with more to say sends more messages — which is what it
 //! would have to do for a line of any length anyway.
 //!
-//! A read says how many bytes it will take and gets what has arrived, which
-//! may be none: the driver answers what it has rather than waiting, because
-//! a client that wants to wait can ask again and a client that does not
-//! must not be held.
+//! A read says how many bytes it will take and gets what has arrived. A
+//! read that finds nothing waits: the driver keeps the call and answers it
+//! when the next byte comes in. Asking again instead is a loop, and a
+//! program in a loop takes the whole processor of this machine, because
+//! there is no timer a program can ask to be woken by. The driver holds one
+//! read at a time; a second one is answered at once with what has arrived,
+//! which is nothing.
 //!
 //! Invariant: a reply carries bytes only when its status word says the read
 //! succeeded.

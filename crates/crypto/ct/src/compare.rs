@@ -61,6 +61,21 @@ pub fn ct_swap<const N: usize>(choice: Choice, a: &mut [u8; N], b: &mut [u8; N])
     }
 }
 
+/// Exchanges the contents of `a` and `b` when `choice` is true, and leaves
+/// them untouched otherwise.
+///
+/// The word-wide [`ct_swap`], for the two working values of a modular
+/// exponentiation whose exponent must not be observable. Both buffers are
+/// written in either case.
+pub fn ct_swap_u64<const N: usize>(choice: Choice, a: &mut [u64; N], b: &mut [u64; N]) {
+    let mask = choice.mask_u64();
+    for (left, right) in a.iter_mut().zip(b.iter_mut()) {
+        let difference = mask & (*left ^ *right);
+        *left ^= difference;
+        *right ^= difference;
+    }
+}
+
 /// Copies `source` over `destination` when `choice` is true, and leaves
 /// `destination` unchanged otherwise. Both are arrays of one length, for
 /// the reason given at [`ct_swap`].

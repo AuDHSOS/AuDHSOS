@@ -7,7 +7,7 @@
 
 pub(crate) mod archive;
 pub(crate) mod boot_image;
-pub(crate) mod crc32;
+pub(crate) mod device;
 pub(crate) mod disk;
 pub(crate) mod fat32;
 pub(crate) mod gpt;

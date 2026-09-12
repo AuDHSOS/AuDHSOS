@@ -20,6 +20,17 @@ the begin line is allowed, as the RFC permits, and is not returned — that
 is how a certificate file with a human-readable preamble is read without
 also accepting a file with something appended to it.
 
+The same frame is written at another width by `encode_wrapped` and read
+by `decode_wrapped`. `openssh-key-v1`, the file a Secure Shell private key
+is written into, fixes no width; OpenSSH writes it at seventy characters.
+Seventy is not a multiple of four, so a line of that text holds part of a
+Base64 quantum:
+the body is written in one piece and then pushed apart into lines, and it
+is read four characters at a time rather than a line at a time. The reader
+of such a text is the laxer of the two, and says why — a width no standard
+fixes is a width some writer chose, so a line is held to a maximum and not
+to a length.
+
 Decoding a block yields two borrows: the label points into the input, the
 bytes point into the buffer the caller supplied. The crate never sees a
 `Vec`, so the caller decides where a certificate lands.

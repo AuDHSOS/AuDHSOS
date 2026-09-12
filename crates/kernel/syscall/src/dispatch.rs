@@ -179,6 +179,7 @@ pub const fn required_rights(call: Syscall) -> Rights {
         | Syscall::ThreadSetPriority
         | Syscall::ThreadInfo
         | Syscall::InterruptCreate
+        | Syscall::InterruptCreateMsi
         | Syscall::InterruptBind
         | Syscall::InterruptAck
         | Syscall::IoPortCreate
@@ -195,14 +196,19 @@ pub const fn required_rights(call: Syscall) -> Rights {
         | Syscall::MemoryMerge => Rights::MAP,
         // Reading what an object is, and hearing that a process ended, are
         // both learning something about it and nothing more.
-        Syscall::MemoryInfo | Syscall::ProcessWatch => Rights::INFO,
+        Syscall::MemoryInfo
+        | Syscall::ProcessWatch
+        | Syscall::ProcessUnwatch
+        | Syscall::MemoryReferences => Rights::INFO,
         Syscall::EndpointBadge => Rights::BADGE,
         Syscall::IpcSend | Syscall::IpcCall => Rights::SEND,
         Syscall::IpcRecv | Syscall::IpcTryRecv => Rights::RECV,
         Syscall::NotificationSignal => Rights::SIGNAL,
-        Syscall::NotificationWait | Syscall::NotificationPoll => Rights::WAIT,
+        Syscall::NotificationWait | Syscall::NotificationWaitUntil | Syscall::NotificationPoll => {
+            Rights::WAIT
+        }
         Syscall::IoPortRead => Rights::READ,
-        Syscall::IoPortWrite => Rights::WRITE,
+        Syscall::IoPortWrite | Syscall::IoPortWriteString => Rights::WRITE,
         // `handle_duplicate` checks `DUPLICATE` against the rights it is
         // asked for, `handle_close` needs nothing, a reply object carries
         // no rights, and the rest takes no handle.
@@ -214,6 +220,9 @@ pub const fn required_rights(call: Syscall) -> Rights {
         | Syscall::ThreadYield
         | Syscall::EndpointCreate
         | Syscall::NotificationCreate
+        | Syscall::ClockNow
+        | Syscall::ClockWall
+        | Syscall::RandomBytes
         | Syscall::DebugLog => Rights::EMPTY,
     }
 }

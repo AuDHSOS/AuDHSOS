@@ -4,8 +4,10 @@
 //! A modulus that arrives at run time, with the two constants Montgomery
 //! arithmetic needs derived from it, and exponentiation over it.
 
+use crypto_ct::{Choice, ct_swap_u64};
+
 use crate::error::BignumError;
-use crate::limbs::{is_less, montgomery, shift_left_one, subtract};
+use crate::limbs::{is_less, montgomery, montgomery_secret, shift_left_one, subtract};
 
 /// Limbs of sixty-four bits a value occupies: four thousand and
 /// ninety-six bits, which is the widest key this system accepts.
@@ -73,6 +75,16 @@ impl Modulus {
             .saturating_sub(1)
             .saturating_mul(64)
             .saturating_add(significant)
+    }
+
+    /// Bytes this modulus occupies when it is written to whole limbs.
+    ///
+    /// Every value below the modulus fits in that many bytes, so this is
+    /// the width [`Modulus::pow_secret`] writes at and the shortest `out`
+    /// it accepts.
+    #[must_use]
+    pub const fn width(&self) -> usize {
+        self.used.saturating_mul(8)
     }
 
     /// `base^exponent` modulo this modulus, written big-endian into `out`
@@ -176,6 +188,107 @@ impl Modulus {
         );
         write_be(prefix(&scratch, used), out)
     }
+
+    /// `base^exponent` modulo this modulus for an exponent that must not
+    /// be observable, written big-endian into `out` with leading zeros.
+    ///
+    /// This is the Diffie-Hellman direction, where the base and the
+    /// modulus are public and the exponent is the private value. It is a
+    /// Montgomery ladder: two working values whose invariant is that the
+    /// second is the first times the base, one squaring and one
+    /// multiplication per bit whatever that bit is, and a masked exchange
+    /// rather than a branch to decide which of the two the bit puts in
+    /// front. The products go through [`montgomery_secret`], whose final
+    /// subtraction is masked as well, so no branch and no memory index in
+    /// the whole loop depends on a bit of the exponent or on a limb of an
+    /// intermediate value.
+    ///
+    /// What is public is the length of `exponent`, because it is a buffer
+    /// length and it sets the number of rounds: eight per byte, leading
+    /// zero bytes included. A caller that wants a shorter exponent passes
+    /// a shorter slice rather than a padded one.
+    ///
+    /// # Errors
+    ///
+    /// [`BignumError::TooWide`] when the base needs more than
+    /// [`MAX_LIMBS`] limbs, [`BignumError::OutOfRange`] when it is not
+    /// below the modulus, and [`BignumError::OutputTooShort`] when `out`
+    /// is narrower than [`Modulus::width`]. All three are decided before
+    /// the ladder runs and none of them looks at the exponent.
+    pub fn pow_secret(
+        &self,
+        base: &[u8],
+        exponent: &[u8],
+        out: &mut [u8],
+    ) -> Result<(), BignumError> {
+        let mut value = [0u64; MAX_LIMBS];
+        let _ = read_be(base, &mut value)?;
+        if !is_less(&value, &self.limbs) {
+            return Err(BignumError::OutOfRange);
+        }
+        if out.len() < self.width() {
+            return Err(BignumError::OutputTooShort);
+        }
+
+        let used = self.used;
+        let modulus = prefix(&self.limbs, used);
+        let r2 = prefix(&self.r2, used);
+        let unit = one();
+
+        // `ahead` is `power` times the base, and stays so.
+        let mut power = [0u64; MAX_LIMBS];
+        montgomery(
+            prefix(&unit, used),
+            r2,
+            modulus,
+            self.n0inv,
+            prefix_mut(&mut power, used),
+        );
+        let mut ahead = [0u64; MAX_LIMBS];
+        montgomery(
+            prefix(&value, used),
+            r2,
+            modulus,
+            self.n0inv,
+            prefix_mut(&mut ahead, used),
+        );
+
+        let mut product = [0u64; MAX_LIMBS];
+        let mut square = [0u64; MAX_LIMBS];
+        for (index, _) in exponent.iter().enumerate() {
+            for shift in (0u32..8).rev() {
+                let bit = bit_of(exponent, index, shift);
+                ct_swap_u64(bit, &mut power, &mut ahead);
+                montgomery_secret(
+                    prefix(&power, used),
+                    prefix(&ahead, used),
+                    modulus,
+                    self.n0inv,
+                    prefix_mut(&mut product, used),
+                );
+                montgomery_secret(
+                    prefix(&power, used),
+                    prefix(&power, used),
+                    modulus,
+                    self.n0inv,
+                    prefix_mut(&mut square, used),
+                );
+                power = square;
+                ahead = product;
+                ct_swap_u64(bit, &mut power, &mut ahead);
+            }
+        }
+
+        let mut result = [0u64; MAX_LIMBS];
+        montgomery_secret(
+            prefix(&power, used),
+            prefix(&unit, used),
+            modulus,
+            self.n0inv,
+            prefix_mut(&mut result, used),
+        );
+        write_be(prefix(&result, used), out)
+    }
 }
 
 /// The first `count` limbs, or every limb there is when there are fewer.
@@ -275,6 +388,21 @@ fn bit_length(bytes: &[u8]) -> usize {
         };
     }
     bits
+}
+
+/// Bit `shift` of byte `index` of a big-endian encoding, as a choice
+/// rather than as a branch.
+///
+/// Both coordinates come from the loop counters of the ladder and are
+/// public; the byte they select is not. So every byte is read and the
+/// wanted one is kept by a mask, and the running time and the memory
+/// accesses are the same whatever the bytes are.
+fn bit_of(bytes: &[u8], index: usize, shift: u32) -> Choice {
+    let mut value = 0u8;
+    for (position, byte) in bytes.iter().copied().enumerate() {
+        value |= Choice::from(position == index).mask_u8() & byte;
+    }
+    Choice::from_lsb(value.wrapping_shr(shift))
 }
 
 /// Bit `position` of a big-endian encoding, counted from the least

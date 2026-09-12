@@ -3,23 +3,9 @@
 
 //! Tests of `crate::coverage`.
 
-use crate::coverage::{Totals, crate_of, evaluate, executables_of, totals_by_crate};
+use crate::coverage::{Totals, crate_of, evaluate, totals_by_crate};
 use std::collections::BTreeMap;
 use std::path::Path;
-
-#[test]
-fn executables_are_read_from_cargo_output() {
-    let stderr = "   Compiling x\n    Finished test\n  Executable unittests src/lib.rs (/w/target/debug/deps/a-1)\n  Executable tests/it.rs (/w/target/debug/deps/b-2)\n";
-    let exes = executables_of(stderr);
-    assert_eq!(
-        exes,
-        vec![
-            Path::new("/w/target/debug/deps/a-1"),
-            Path::new("/w/target/debug/deps/b-2")
-        ]
-    );
-    assert!(executables_of("nothing here").is_empty());
-}
 
 #[test]
 fn lcov_records_are_summed_per_crate() {

@@ -699,6 +699,14 @@ fn environment<'a>(
         acpi_pointer(),
         context::prepare_user,
     )
+    .at(now_micros())
+    .with_wall_clock(wall_clock())
+}
+
+/// The clock the system call layer answers with: the ticks the timer has
+/// counted, in microseconds.
+pub(crate) fn now_micros() -> u64 {
+    kernel_core::tick::micros(interrupts::ticks())
 }
 
 /// The address of the root system description pointer, or zero when the
@@ -709,6 +717,17 @@ pub(crate) fn acpi_pointer() -> u64 {
         platform.acpi_rsdp().map_or(0, |address| address.as_u64())
     })
     .unwrap_or(0)
+}
+
+/// The wall clock the loader read, as the system call layer takes it. The
+/// test images read it from the platform on every call rather than out of a
+/// static, because a test kernel has no `task::start` to record one in.
+pub(crate) fn wall_clock() -> Option<(i64, audhsos_abi::WallClockSource)> {
+    testing::with_platform(|platform| {
+        use kernel_hal_api::platform::Platform;
+        platform.wall_clock()
+    })
+    .flatten()
 }
 
 /// Where the stack of thread `index` of a process ends. One unmapped page
@@ -1100,7 +1119,7 @@ fn on_syscall() {
         answer(caller, bytes, None)
     } else {
         interrupts::with_controller(|apics| {
-            let mut devices = DeviceAccess::new(apics);
+            let mut devices = DeviceAccess::new(apics).with_entropy();
             answer(caller, bytes, Some(&mut devices))
         })
         .unwrap_or(false)
@@ -1141,7 +1160,9 @@ fn answer(
                     devices.as_deref_mut(),
                     acpi_pointer(),
                     context::prepare_user,
-                );
+                )
+                .at(now_micros())
+                .with_wall_clock(wall_clock());
             let reschedule = handle_syscall(
                 &mut machine.objects,
                 &mut machine.scheduler,
@@ -1461,6 +1482,7 @@ fn on_interrupt(vector: u8) {
     let ticks = interrupts::ticks();
     let hook = TICK_HOOK.borrow(&UncontendedToken).ok().map(|hook| *hook);
     let asked = hook.is_some_and(|hook| hook(ticks));
+    let woken = wake_deadlines();
     let expired = with_machine(|machine| {
         machine
             .scheduler
@@ -1468,12 +1490,33 @@ fn on_interrupt(vector: u8) {
             .reschedule
     })
     .unwrap_or(false);
-    if asked || expired {
+    if asked || woken || expired {
         // The thread that leaves is the one the scheduler still calls
         // current, so the switch finds where to write its context by
         // itself; a thread the hook ended is not one to come back to.
         run_threads(None);
     }
+}
+
+/// Wakes every thread whose deadline has passed, and writes into each one's
+/// buffer the zero bits it woke with. Returns whether one of them should
+/// take the processor.
+fn wake_deadlines() -> bool {
+    let now = now_micros();
+    let mut switch = false;
+    loop {
+        let woken = with_machine(|machine| {
+            kernel_ipc::expire(&mut machine.objects, &mut machine.scheduler, now)
+        });
+        let Some(Some(outcome)) = woken else {
+            break;
+        };
+        if let Some(wakeup) = outcome.wakeup {
+            write_wakeup(wakeup);
+        }
+        switch |= outcome.reschedule;
+    }
+    switch
 }
 
 /// Forwards a device interrupt to whoever holds the interrupt object of its
@@ -1489,7 +1532,7 @@ fn forward_interrupt(vector: u8) {
                 .interrupts
                 .get(id)
                 .ok()
-                .map(|held| held.line)
+                .and_then(|held| held.line)
         })
     })
     .flatten();

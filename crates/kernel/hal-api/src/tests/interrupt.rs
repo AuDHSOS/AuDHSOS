@@ -19,6 +19,7 @@ fn errors_have_messages() {
         InterruptError::ReservedVector(1),
         InterruptError::UnknownLine(2),
         InterruptError::AlreadyRouted(3),
+        InterruptError::NoVector,
     ] {
         assert!(!error.to_string().is_empty());
     }

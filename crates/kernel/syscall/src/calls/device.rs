@@ -10,7 +10,8 @@
 //! because those belong to the memory server; a port access outside the
 //! range of the capability it was made through never reaches the hardware.
 
-use audhsos_abi::layout::{MAX_RESULT_WORDS, TICKS_PER_SECOND};
+use audhsos_abi::ipc_buffer::{SIZE, WORDS};
+use audhsos_abi::layout::{MAX_MESSAGE_BYTES, MAX_RESULT_WORDS, TICKS_PER_SECOND};
 use audhsos_abi::{Error, Rights};
 use kernel_ipc::interrupt;
 use kernel_objects::handle_table::Entry;
@@ -25,9 +26,15 @@ use crate::environment::Environment;
 /// The widths a port access may have, in bytes.
 const WIDTHS: [u8; 3] = [1, 2, 4];
 
+/// The width of a string port access, which moves one byte at a time.
+const BYTE: u8 = 1;
+
 /// Where the six words of the framebuffer begin in the result of
 /// [`system_info`].
 const FRAMEBUFFER_WORD: usize = 20;
+
+/// Where the four words about the configuration window of the bus begin.
+const ECAM_WORD: usize = 26;
 
 /// `interrupt_create`: an interrupt object for an ISA line.
 ///
@@ -91,6 +98,66 @@ pub fn interrupt_create<
     }
 }
 
+/// `interrupt_create_msi`: an interrupt object for a message interrupt.
+///
+/// The call allocates one vector out of the space the lines are allocated
+/// from and answers with the handle, the address the device writes to, and
+/// the value it writes. Nothing is routed: the driver puts those two into
+/// its device's MSI-X table, which is in the device's own window and
+/// therefore in the driver's address space and not the kernel's (D-111).
+///
+/// # Errors
+///
+/// [`Error::NoVector`] when the vector space has nothing left;
+/// [`Error::Unsupported`] on a machine whose controller is not up;
+/// [`Error::QuotaExceeded`], [`Error::PoolExhausted`], or
+/// [`Error::OutOfHandles`] as [`interrupt_create`] answers them. A call
+/// that fails after the vector was taken gives it back.
+pub fn interrupt_create_msi<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    process: ProcessId,
+) -> Result<Reply, Error> {
+    super::charge_object(machine, process)?;
+    let (vector, address, data) = match machine.environment.allocate_message_vector() {
+        Ok(message) => message,
+        Err(error) => {
+            super::refund_object(machine, process);
+            return Err(error);
+        }
+    };
+    let id = match machine
+        .objects
+        .interrupts
+        .allocate(Interrupt::message(vector))
+    {
+        Ok(id) => id,
+        Err(error) => {
+            machine.environment.release_message_vector(vector);
+            super::refund_object(machine, process);
+            return Err(Error::from(error));
+        }
+    };
+    let entry = Entry::new(
+        AnyObjectId::of(id),
+        Rights::MANAGE | Rights::DUPLICATE | Rights::TRANSFER,
+    );
+    match machine.objects.install_handle(process, entry) {
+        Ok(handle) => Ok(Reply::value(handle.raw()).with_words(&[address, u64::from(data)])),
+        Err(error) => {
+            let _ = machine.objects.interrupts.release(id);
+            machine.environment.release_message_vector(vector);
+            super::refund_object(machine, process);
+            Err(error)
+        }
+    }
+}
+
 /// `interrupt_bind`: the interrupt signals one bit of a notification.
 ///
 /// The line is unmasked here, because this is the moment it has somewhere
@@ -105,8 +172,8 @@ pub fn interrupt_create<
 ///
 /// [`Error::InvalidHandle`] for either handle; [`Error::AccessDenied`] when
 /// the notification handle lacks `BIND`; [`Error::InvalidArgument`] for a
-/// bit index above sixty-three; [`Error::AlreadyExists`] when the
-/// notification is bound to another interrupt.
+/// bit index above sixty-three. A notification another interrupt already
+/// signals into is bound all the same, on a bit of its own (D-108).
 pub fn interrupt_bind<
     E: Environment,
     const NP: usize,
@@ -130,13 +197,20 @@ pub fn interrupt_bind<
     let bit = u8::try_from(request.argument(2)).map_err(|_| Error::InvalidArgument)?;
     interrupt::bind(machine.objects, id, notification, bit)?;
     let line = machine.objects.interrupts.get(id).map(|held| held.line);
-    if let Ok(line) = line {
+    if let Ok(Some(line)) = line {
         machine.environment.unmask_interrupt(line);
     }
     Ok(Reply::DONE)
 }
 
-/// `interrupt_ack`: the line is unmasked and the next interrupt may arrive.
+/// `interrupt_ack`: the interrupt is no longer held off and the next one
+/// may arrive.
+///
+/// For a line that is an unmask at the interrupt controller. A message
+/// interrupt has no line: its mask bit lies in the device's own table,
+/// which is mapped in the driver, so the call clears the outstanding flag
+/// and touches no hardware (D-111). A device that raises interrupts faster
+/// than its driver services them is quieted by its driver.
 ///
 /// # Errors
 ///
@@ -156,8 +230,9 @@ pub fn interrupt_ack<
     let (id, _rights) = machine
         .objects
         .resolve::<Interrupt>(process, handle, Rights::MANAGE)?;
-    let line = interrupt::acknowledge(machine.objects, id)?;
-    machine.environment.unmask_interrupt(line);
+    if let Some(line) = interrupt::acknowledge(machine.objects, id)? {
+        machine.environment.unmask_interrupt(line);
+    }
     Ok(Reply::DONE)
 }
 
@@ -260,6 +335,41 @@ pub fn ioport_write<
     Ok(Reply::DONE)
 }
 
+/// `ioport_write_string`: the bytes of the message area to one port.
+///
+/// The third argument says how many bytes there are; they are the payload
+/// words of the message, which the buffer holds little-endian, so the area
+/// read as bytes is the run in the order it was written. One call carries
+/// a whole burst, which is what makes a console line cost two calls
+/// instead of two a byte.
+///
+/// # Errors
+///
+/// As [`ioport_write`], with the width fixed at one byte, and
+/// [`Error::InvalidArgument`] for a count above [`MAX_MESSAGE_BYTES`].
+pub fn ioport_write_string<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    process: ProcessId,
+    request: &Request,
+    buffer: &[u8; SIZE],
+) -> Result<Reply, Error> {
+    let port = port_at(machine, process, request, Rights::WRITE, BYTE)?;
+    let count = usize::try_from(request.argument(2)).map_err(|_| Error::InvalidArgument)?;
+    if count > MAX_MESSAGE_BYTES {
+        return Err(Error::InvalidArgument);
+    }
+    let end = WORDS.checked_add(count).ok_or(Error::InvalidArgument)?;
+    let bytes = buffer.get(WORDS..end).ok_or(Error::InvalidArgument)?;
+    machine.environment.write_port_string(port, bytes)?;
+    Ok(Reply::value(u64::try_from(count).unwrap_or(0)))
+}
+
 /// The port and the width an access names, checked against the range the
 /// handle carries.
 fn port_of<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
@@ -268,12 +378,25 @@ fn port_of<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
     request: &Request,
     required: Rights,
 ) -> Result<(u16, u8), Error> {
+    let width = u8::try_from(request.argument(2)).map_err(|_| Error::InvalidArgument)?;
+    let port = port_at(machine, process, request, required, width)?;
+    Ok((port, width))
+}
+
+/// The port an access names, checked against the range the handle carries
+/// for a width the caller fixes.
+fn port_at<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    machine: &Machine<'_, E, NP, NT, NM, NH>,
+    process: ProcessId,
+    request: &Request,
+    required: Rights,
+    width: u8,
+) -> Result<u16, Error> {
     let handle = request.handle.ok_or(Error::InvalidHandle)?;
     let (id, _rights) = machine
         .objects
         .resolve::<IoPortRange>(process, handle, required)?;
     let port = u16::try_from(request.argument(1)).map_err(|_| Error::InvalidArgument)?;
-    let width = u8::try_from(request.argument(2)).map_err(|_| Error::InvalidArgument)?;
     if !WIDTHS.contains(&width) {
         return Err(Error::InvalidArgument);
     }
@@ -281,7 +404,7 @@ fn port_of<E: Environment, const NP: usize, const NT: usize, const NM: usize, co
     if !range.holds(port, width) {
         return Err(Error::InvalidArgument);
     }
-    Ok((port, width))
+    Ok(port)
 }
 
 /// `memory_create_device`: a memory object over an aperture of the machine.
@@ -346,7 +469,7 @@ pub fn memory_create_device<
     }
 }
 
-/// `system_info`: twenty-six words about the machine, in the message area of
+/// `system_info`: thirty words about the machine, in the message area of
 /// the caller's own buffer.
 ///
 /// For each of the eight pools its capacity and its live count, in the order
@@ -356,8 +479,11 @@ pub fn memory_create_device<
 /// root system description pointer, which is zero when the platform named
 /// none, and last the framebuffer: its physical start, its length, its
 /// width, its height, its stride, and the code of its pixel format, all six
-/// zero when the machine has none. The root task makes the device memory
-/// object of the display server out of those six words.
+/// zero when the machine has none, and last the configuration window of the
+/// bus: its base address, its segment group, its first and its last bus,
+/// all four zero when the firmware published no `MCFG` table. The root task
+/// makes the device memory objects of the display server and of the program
+/// that enumerates the bus out of those two groups.
 ///
 /// # Errors
 ///
@@ -388,6 +514,19 @@ pub fn system_info<
     }
     if let Some(slot) = words.get_mut(19) {
         *slot = machine.environment.acpi_pointer();
+    }
+    if let Some(window) = machine.environment.ecam() {
+        let described = [
+            window.base,
+            u64::from(window.segment),
+            u64::from(window.first_bus),
+            u64::from(window.last_bus),
+        ];
+        for (index, value) in described.iter().enumerate() {
+            if let Some(slot) = words.get_mut(index.saturating_add(ECAM_WORD)) {
+                *slot = *value;
+            }
+        }
     }
     if let Some(framebuffer) = machine.environment.framebuffer() {
         let described = [

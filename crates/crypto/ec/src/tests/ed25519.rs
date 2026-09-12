@@ -5,6 +5,7 @@
 
 use crate::ed25519::{Point, public_key, sign, verify};
 use crate::error::EcError;
+use crate::scalar::Scalar;
 use crate::tests::{hex, unhex, unhex32};
 
 /// One vector: a secret, the public key it expands to, a message, and the
@@ -242,5 +243,43 @@ fn signing_and_verifying_round_trip_for_generated_keys() {
             Err(EcError::BadSignature),
             "seed {seed}"
         );
+    }
+}
+
+#[test]
+fn the_two_multiplications_answer_the_same_point() {
+    // What the masked ladder is worth rests on its agreeing with the
+    // formula it replaces, at the ends of the range as well as inside it.
+    let mut scalars = vec![Scalar::ZERO, Scalar::from_bytes_reduced(&[0xFF; 32])];
+    for seed in 0u8..6 {
+        let mut bytes = [0u8; 32];
+        for (index, slot) in bytes.iter_mut().enumerate() {
+            let index = u8::try_from(index).unwrap_or(0);
+            *slot = seed.wrapping_mul(53).wrapping_add(index.wrapping_mul(7));
+        }
+        scalars.push(Scalar::from_bytes_reduced(&bytes));
+    }
+    let base = Point::base();
+    for scalar in scalars {
+        assert_eq!(
+            base.mul_secret(scalar).compress(),
+            base.mul(scalar).compress()
+        );
+        let other = base.double().add(base);
+        assert_eq!(
+            other.mul_secret(scalar).compress(),
+            other.mul(scalar).compress()
+        );
+    }
+}
+
+#[test]
+fn the_two_scalar_products_answer_the_same_scalar() {
+    let one = Scalar::from_bytes_reduced(&[1u8; 32]);
+    let two = Scalar::from_bytes_reduced(&[0xFEu8; 32]);
+    for left in [Scalar::ZERO, one, two] {
+        for right in [Scalar::ZERO, one, two] {
+            assert_eq!(left.mul_secret(right), left.mul(right));
+        }
     }
 }

@@ -1,13 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! Ed25519 verification from RFC 8032.
+//! Ed25519 from RFC 8032: verification, and signing with a key of one's
+//! own.
 //!
 //! Everything a verifier touches is public: the key, the message, and the
-//! signature are all on the wire. The point arithmetic here therefore
-//! branches freely, which makes it shorter and easier to compare against
-//! the formulas it comes from. The constant-time work of this crate is in
-//! [`mod@crate::x25519`], where the scalar is secret.
+//! signature are all on the wire. [`Point::mul`] therefore branches on the
+//! bits of its scalar, which makes it shorter and easier to compare
+//! against the formula it comes from.
+//!
+//! A signer touches two values that are not public: the scalar its secret
+//! expands to, and the nonce of that signature. [`Point::mul_secret`] is
+//! for those — a doubling and an addition at every one of the 256
+//! positions, with the sum kept behind a mask — and [`sign`] and
+//! [`public_key`] call nothing else. The two multiplications stand beside
+//! each other the way `pow_secret` stands beside `pow` in `crypto-bignum`
+//! (D-122): what separates them is the name, and no check in this crate
+//! catches a caller that hands a secret to the public one. The scalar
+//! arithmetic underneath makes the same distinction; see
+//! [`mod@crate::scalar`].
 //!
 //! Verification is the strict form: the encodings of `R`, of the public
 //! key, and of `S` must be canonical, the public key must not be of small
@@ -19,6 +30,7 @@
 //! coordinates, `x = X/Z`, `y = Y/Z`, `xy = T/Z`. The only constructor
 //! from bytes checks the curve equation.
 
+use crypto_ct::Choice;
 use crypto_hash::Sha512;
 
 use crate::error::EcError;
@@ -240,6 +252,36 @@ impl Point {
         result
     }
 
+    /// The multiple of this point by a scalar whose bits are secret.
+    ///
+    /// Every position costs one doubling and one addition, and which of
+    /// the two the result becomes is chosen with a mask, so the work does
+    /// not depend on the scalar. [`Point::mul`] adds only where a bit is
+    /// set, which is about half of them, so this is twice the additions
+    /// and about a third more work in all. That is what a long-term
+    /// private key costs: the time of the loop says nothing about the bits
+    /// driving it.
+    #[must_use]
+    pub fn mul_secret(self, scalar: Scalar) -> Point {
+        let mut result = Point::IDENTITY;
+        for position in (0..256u32).rev() {
+            result = result.double();
+            let sum = result.add(self);
+            result = Point::select(Choice::from_lsb(scalar.bit(position)), sum, result);
+        }
+        result
+    }
+
+    /// `a` when `choice` is true, `b` otherwise, without a branch.
+    fn select(choice: Choice, a: Point, b: Point) -> Point {
+        Point {
+            x: Fe::select(choice, a.x, b.x),
+            y: Fe::select(choice, a.y, b.y),
+            z: Fe::select(choice, a.z, b.z),
+            t: Fe::select(choice, a.t, b.t),
+        }
+    }
+
     /// Whether the point has order eight or less, which is what a key that
     /// carries no signal looks like.
     #[must_use]
@@ -300,36 +342,44 @@ pub fn verify(
 }
 
 /// The public key of `secret`.
-#[cfg(any(test, feature = "test-signing"))]
+///
+/// The secret is a secret: the scalar it expands to drives
+/// [`Point::mul_secret`], not [`Point::mul`].
 #[must_use]
 pub fn public_key(secret: &[u8; 32]) -> [u8; PUBLIC_LEN] {
     let (scalar, _) = expand(secret);
-    Point::base().mul(scalar).compress()
+    Point::base().mul_secret(scalar).compress()
 }
 
 /// The signature of `message` under `secret`.
 ///
-/// Signing exists for the test data of this repository and is compiled
-/// into product builds by no feature. It is deterministic, as RFC 8032
-/// prescribes, so it needs no randomness.
-#[cfg(any(test, feature = "test-signing"))]
+/// Deterministic, as RFC 8032 prescribes, so it needs no randomness: the
+/// nonce is a hash of the secret's prefix and the message, and a repeated
+/// message signs to the same bytes.
+///
+/// Three values here are secret — the scalar, the prefix, and the nonce —
+/// and each drives the arithmetic that hides it: [`Point::mul_secret`] for
+/// the two multiples of the base point, and [`Scalar::mul_secret`] for the
+/// product of the challenge with the scalar. The message, the commitment
+/// and the public key are on the wire, and the hashes over them are not
+/// hidden.
 #[must_use]
 pub fn sign(secret: &[u8; 32], message: &[u8]) -> [u8; SIGNATURE_LEN] {
     let (scalar, prefix) = expand(secret);
-    let public = Point::base().mul(scalar).compress();
+    let public = Point::base().mul_secret(scalar).compress();
 
     let mut hash = Sha512::new();
     hash.update(&prefix);
     hash.update(message);
     let r = Scalar::from_wide(&hash.finish());
-    let commitment = Point::base().mul(r).compress();
+    let commitment = Point::base().mul_secret(r).compress();
 
     let mut hash = Sha512::new();
     hash.update(&commitment);
     hash.update(&public);
     hash.update(message);
     let k = Scalar::from_wide(&hash.finish());
-    let s = r.add(k.mul(scalar));
+    let s = r.add(k.mul_secret(scalar));
 
     let mut signature = [0u8; SIGNATURE_LEN];
     for (slot, byte) in signature.iter_mut().zip(commitment) {
@@ -341,8 +391,9 @@ pub fn sign(secret: &[u8; 32], message: &[u8]) -> [u8; SIGNATURE_LEN] {
     signature
 }
 
-/// The scalar and the prefix a secret expands into.
-#[cfg(any(test, feature = "test-signing"))]
+/// The scalar and the prefix a secret expands into. Both are secret, and
+/// the clamping of RFC 8032, section 5.1.5, is bit work over the digest
+/// with no branch on it.
 fn expand(secret: &[u8; 32]) -> (Scalar, [u8; 32]) {
     let digest = Sha512::digest(secret);
     let (low, high) = digest.split_at(32);

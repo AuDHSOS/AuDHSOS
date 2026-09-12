@@ -700,3 +700,116 @@ fn no_frame<A>(
 ) -> Option<kernel_types::VirtAddr> {
     stack_top.checked_sub(8)
 }
+
+#[test]
+fn the_clock_the_environment_answers_is_the_one_it_was_given() {
+    let (mut machine, mut memory) = kernel_memory();
+    let mut tlb = RecordingTlb::new();
+    let environment = KernelEnvironment::<X86Entry, _, _, RecordingConsole, RecordingDevices>::new(
+        &mut memory,
+        &mut machine.access,
+        &mut tlb,
+        None,
+        None,
+        0,
+        no_frame,
+    );
+    assert_eq!(environment.now_micros(), 0, "a machine that has not ticked");
+    let environment = environment.at(50_000);
+    assert_eq!(environment.now_micros(), 50_000);
+}
+
+#[test]
+fn a_seed_comes_from_the_devices_and_a_machine_without_them_has_none() {
+    let (mut machine, mut memory) = kernel_memory();
+    let mut tlb = RecordingTlb::new();
+    let mut devices = RecordingDevices::new(4).seeding(Ok([1, 2, 3, 4]));
+    let mut environment = KernelEnvironment::<X86Entry, _, _, RecordingConsole, _>::new(
+        &mut memory,
+        &mut machine.access,
+        &mut tlb,
+        None,
+        Some(&mut devices),
+        0,
+        no_frame,
+    );
+    assert_eq!(environment.random_seed(), Ok([1, 2, 3, 4]));
+    assert_eq!(
+        environment.random_seed(),
+        Err(Error::Unavailable),
+        "the script is empty"
+    );
+    let _ = &environment;
+
+    let mut environment =
+        KernelEnvironment::<X86Entry, _, _, RecordingConsole, RecordingDevices>::new(
+            &mut memory,
+            &mut machine.access,
+            &mut tlb,
+            None,
+            None,
+            0,
+            no_frame,
+        );
+    assert_eq!(
+        environment.random_seed(),
+        Err(Error::Unavailable),
+        "a machine whose devices are not up has no source"
+    );
+}
+
+#[test]
+fn a_message_vector_is_handed_out_taken_back_and_runs_out() {
+    let (mut machine, mut memory) = kernel_memory();
+    let mut tlb = RecordingTlb::new();
+    let mut devices = RecordingDevices {
+        interrupts: kernel_hal_api::doubles::FakeInterruptController::new(4)
+            .with_message_vectors(1),
+        ..RecordingDevices::new(4)
+    };
+    let mut environment = KernelEnvironment::<X86Entry, _, _, RecordingConsole, _>::new(
+        &mut memory,
+        &mut machine.access,
+        &mut tlb,
+        None,
+        Some(&mut devices),
+        0,
+        no_frame,
+    );
+    let (vector, address, data) = environment.allocate_message_vector().unwrap();
+    assert_eq!(u64::from(data), u64::from(vector));
+    assert_ne!(address, 0);
+    assert_eq!(
+        environment.allocate_message_vector(),
+        Err(Error::NoVector),
+        "the space of one is exhausted"
+    );
+    environment.release_message_vector(vector);
+    assert_eq!(
+        environment.allocate_message_vector(),
+        Ok((vector, address, data)),
+        "and the vector came back"
+    );
+    // A vector below the first the processor lets a device raise is no
+    // vector, and giving one back changes nothing.
+    environment.release_message_vector(0);
+    assert_eq!(environment.allocate_message_vector(), Err(Error::NoVector));
+    let _ = &environment;
+
+    let mut environment =
+        KernelEnvironment::<X86Entry, _, _, RecordingConsole, RecordingDevices>::new(
+            &mut memory,
+            &mut machine.access,
+            &mut tlb,
+            None,
+            None,
+            0,
+            no_frame,
+        );
+    assert_eq!(
+        environment.allocate_message_vector(),
+        Err(Error::Unsupported),
+        "a machine whose controller is not up routes nothing"
+    );
+    environment.release_message_vector(0x58);
+}

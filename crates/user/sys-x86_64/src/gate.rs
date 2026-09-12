@@ -6,7 +6,7 @@
 //!
 //! A system call is three steps — write the call number and the arguments
 //! into the page, execute `int 0x80`, read the status word back — and the
-//! forty-two methods here are those three steps with the names and the
+//! methods here are those three steps with the names and the
 //! types of the call table. Everything they need of the machine is the
 //! address of the page, which the kernel put in the first argument register
 //! when it started the thread.
@@ -30,10 +30,11 @@
 //! this one; a method that returns an error has read the status word and
 //! nothing else.
 
-use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status};
-use audhsos_abi::layout::MAX_SYSCALL_ARGUMENTS;
+use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status, WORD};
+use audhsos_abi::layout::{MAX_MESSAGE_BYTES, MAX_SYSCALL_ARGUMENTS};
 use audhsos_abi::{
-    Error, Fault, FaultKind, Framebuffer, FramebufferFormat, Handle, Rights, Syscall, ThreadState,
+    Ecam, Error, Fault, FaultKind, Framebuffer, FramebufferFormat, Handle, Rights, Syscall,
+    ThreadState, WallClockSource,
 };
 use user_rt::handle::{
     EndpointHandle, InterruptHandle, IoPortHandle, MemoryHandle, NotificationHandle, ProcessHandle,
@@ -61,10 +62,13 @@ pub struct MemoryInfo {
 }
 
 /// How many words `system_info` writes into the message area.
-pub const SYSTEM_INFO_WORDS: usize = 26;
+pub const SYSTEM_INFO_WORDS: usize = 30;
 
 /// Where the six words about the framebuffer begin.
 const FRAMEBUFFER_WORD: usize = 20;
+
+/// Where the four words about the configuration window of the bus begin.
+const ECAM_WORD: usize = 26;
 
 /// What `system_info` says about the machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -77,6 +81,24 @@ pub struct SystemInfo {
     pub acpi: u64,
     /// The framebuffer of the machine, if it has one.
     pub framebuffer: Option<Framebuffer>,
+    /// The configuration window of the bus, if the firmware published one.
+    pub ecam: Option<Ecam>,
+}
+
+/// How many words a seed of `random_bytes` is: the thirty-two bytes a
+/// stream cipher takes.
+pub const SEED_WORDS: usize = 4;
+
+/// What `interrupt_create_msi` answers: the interrupt object, and the
+/// write a device makes to raise it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MessageInterrupt {
+    /// The interrupt object, which binds and acknowledges like any other.
+    pub interrupt: InterruptHandle,
+    /// The address the device writes to.
+    pub address: u64,
+    /// The value it writes there.
+    pub data: u32,
 }
 
 /// What a message says of its sender and of the answer it expects.
@@ -102,11 +124,11 @@ pub struct Received {
 /// and Rust gives no way to enumerate the methods of a type without a
 /// macro, which [D-92](../../../../docs/09-decisions.md) rules out for
 /// this seam. That half is proved by running them: the `wrappers` test
-/// image calls all forty-two in the order of this list and holds the
+/// image calls all of them in the order of this list and holds the
 /// numbers the kernel saw against the table, so a method missing from the
 /// run, or one passing another call of the same shape, fails there
 /// (D-98).
-const COVERED: [Syscall; 43] = [
+const COVERED: [Syscall; 51] = [
     Syscall::ProcessCreate,
     Syscall::ProcessInstallHandle,
     Syscall::ProcessSetFaultHandler,
@@ -150,6 +172,14 @@ const COVERED: [Syscall; 43] = [
     Syscall::DebugLog,
     Syscall::MemoryMerge,
     Syscall::ProcessWatch,
+    Syscall::ProcessUnwatch,
+    Syscall::MemoryReferences,
+    Syscall::IoPortWriteString,
+    Syscall::ClockNow,
+    Syscall::NotificationWaitUntil,
+    Syscall::RandomBytes,
+    Syscall::InterruptCreateMsi,
+    Syscall::ClockWall,
 ];
 
 /// `true` when [`COVERED`] is the system call table, in its order.
@@ -641,6 +671,34 @@ impl Gate {
         Ok(MemoryInfo { start, length })
     }
 
+    /// Counts all handles and mappings of a memory object.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn memory_references(&mut self, memory: MemoryHandle) -> Result<u64, Error> {
+        self.value(Syscall::MemoryReferences, &[memory.raw()])
+    }
+
+    /// Removes a process watch and reports whether the process has ended.
+    /// Already delivered bits remain pending.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn process_unwatch(
+        &mut self,
+        process: ProcessHandle,
+        notification: NotificationHandle,
+        bit: u64,
+    ) -> Result<bool, Error> {
+        self.value(
+            Syscall::ProcessUnwatch,
+            &[process.raw(), notification.raw(), bit],
+        )
+        .map(|ended| ended != 0)
+    }
+
     // --- handles ---------------------------------------------------------
 
     /// `handle_duplicate`: a second handle to the same object, with rights
@@ -790,6 +848,28 @@ impl Gate {
         self.value(Syscall::NotificationWait, &[notification.raw()])
     }
 
+    /// `notification_wait_until`: the bits, or zero when `deadline` came
+    /// first. The deadline is in the microseconds since boot that
+    /// [`Gate::clock_now`] answers in.
+    ///
+    /// A caller that must tell an empty wait from a deadline apart reads
+    /// the clock afterwards; nothing else distinguishes them, because a
+    /// signal of no bits is a signal of nothing.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn notification_wait_until(
+        &mut self,
+        notification: NotificationHandle,
+        deadline: u64,
+    ) -> Result<u64, Error> {
+        self.value(
+            Syscall::NotificationWaitUntil,
+            &[notification.raw(), deadline],
+        )
+    }
+
     /// `notification_poll`: the bits that are set, cleared, without
     /// waiting. Zero when none are.
     ///
@@ -813,6 +893,32 @@ impl Gate {
         line: u64,
     ) -> Result<InterruptHandle, Error> {
         self.capability(Syscall::InterruptCreate, &[system.raw(), line])
+    }
+
+    /// `interrupt_create_msi`: an interrupt object for a message
+    /// interrupt, with the write that raises it.
+    ///
+    /// The driver puts the address and the data into its device's MSI-X
+    /// table, which is in the device's own window and therefore in the
+    /// driver's address space and not the kernel's.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn interrupt_create_msi(
+        &mut self,
+        system: SystemControlHandle,
+    ) -> Result<MessageInterrupt, Error> {
+        self.request(Syscall::InterruptCreateMsi, &[system.raw()])?;
+        let view = self.reader();
+        let handle = Handle::from_raw(view.return_word(0).unwrap_or(0))
+            .map(InterruptHandle::from_handle)
+            .ok_or(Error::InvalidHandle)?;
+        Ok(MessageInterrupt {
+            interrupt: handle,
+            address: view.word(0).unwrap_or(0),
+            data: u32::try_from(view.word(1).unwrap_or(0)).unwrap_or(0),
+        })
     }
 
     /// `interrupt_bind`: an arriving interrupt sets `bit` of
@@ -886,6 +992,40 @@ impl Gate {
         self.done(Syscall::IoPortWrite, &[ports.raw(), port, width, value])
     }
 
+    /// `ioport_write_string`: writes every byte of `bytes` to `port`, one
+    /// after another, and answers how many went out.
+    ///
+    /// The bytes travel in the message area, so a run longer than
+    /// [`MAX_MESSAGE_BYTES`] is written as far as that and the count says
+    /// how far it came.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn ioport_write_string(
+        &mut self,
+        ports: IoPortHandle,
+        port: u64,
+        bytes: &[u8],
+    ) -> Result<u64, Error> {
+        let count = bytes.len().min(MAX_MESSAGE_BYTES);
+        let taken = bytes.get(..count).unwrap_or(&[]);
+        {
+            let mut writer = self.writer();
+            for (index, chunk) in taken.chunks(WORD).enumerate() {
+                let mut word = [0u8; WORD];
+                if let Some(slot) = word.get_mut(..chunk.len()) {
+                    slot.copy_from_slice(chunk);
+                }
+                if !writer.set_word(index, u64::from_le_bytes(word)) {
+                    return Err(Error::InvalidArgument);
+                }
+            }
+        }
+        let count = u64::try_from(count).unwrap_or(0);
+        self.value(Syscall::IoPortWriteString, &[ports.raw(), port, count])
+    }
+
     /// `memory_create_device`: a memory object over frames that are not
     /// memory — a register window or a framebuffer.
     ///
@@ -905,8 +1045,9 @@ impl Gate {
     }
 
     /// `system_info`: the capacity and the live count of every object pool,
-    /// the tick rate, the root system description pointer, and the
-    /// framebuffer of the machine when it has one.
+    /// the tick rate, the root system description pointer, the framebuffer
+    /// of the machine when it has one, and the configuration window of the
+    /// bus when the firmware published one.
     ///
     /// # Errors
     ///
@@ -933,12 +1074,89 @@ impl Gate {
                     stride: u32::try_from(described(4).unwrap_or(0)).unwrap_or(0),
                     format,
                 });
+        let window = |offset: usize| view.word(ECAM_WORD.saturating_add(offset)).unwrap_or(0);
+        let ecam = Ecam {
+            base: window(0),
+            segment: u16::try_from(window(1)).unwrap_or(0),
+            first_bus: u8::try_from(window(2)).unwrap_or(0),
+            last_bus: u8::try_from(window(3)).unwrap_or(0),
+        };
         Ok(SystemInfo {
             pools,
             ticks_per_second: view.word(18).unwrap_or(0),
             acpi: view.word(19).unwrap_or(0),
             framebuffer,
+            // Four zero words are a window over no bus, which is what a
+            // machine whose firmware published no `MCFG` table answers.
+            ecam: (ecam.base != 0 && !ecam.is_empty()).then_some(ecam),
         })
+    }
+
+    /// `clock_now`: the microseconds since the kernel started.
+    ///
+    /// The resolution is the timer tick and not the microsecond: at a
+    /// thousand ticks a second the clock moves in steps of a millisecond.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered.
+    pub fn clock_now(&mut self) -> Result<u64, Error> {
+        self.value(Syscall::ClockNow, &[])
+    }
+
+    /// `clock_wall`: the moment the machine believes it is, in
+    /// microseconds since 1970-01-01T00:00:00Z, and where that belief came
+    /// from.
+    ///
+    /// The resolution and the drift are those of [`Gate::clock_now`], which
+    /// is what is added to the moment the loader read out of the firmware.
+    /// A [`WallClockSource::FirmwareUnspecifiedZone`] says the firmware
+    /// named no offset from universal time, so the value may be wrong by a
+    /// zone.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unavailable`] on a machine whose firmware reported no
+    /// clock. There is nothing to fall back on: a caller that needs the
+    /// date has to say what it does without one.
+    pub fn clock_wall(&mut self) -> Result<(u64, WallClockSource), Error> {
+        let (micros, code) = self.values(Syscall::ClockWall, &[])?;
+        let source = u32::try_from(code)
+            .ok()
+            .and_then(WallClockSource::from_code)
+            .ok_or(Error::Unavailable)?;
+        Ok((micros, source))
+    }
+
+    /// `random_bytes`: the thirty-two bytes of a seed, as four words.
+    ///
+    /// A process draws one of these at startup and takes everything else
+    /// from a generator it seeds with it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered; [`Error::Unavailable`] when the
+    /// machine's source would not deliver.
+    pub fn random_bytes(&mut self) -> Result<[u64; SEED_WORDS], Error> {
+        self.request(Syscall::RandomBytes, &[])?;
+        let view = self.reader();
+        // The count in the first return word is the convention's own
+        // statement of how much was written, and it is what has to be
+        // believed: `word` bounds against the message area and not against
+        // the count, so it answers a word for every index of a seed whether
+        // the kernel wrote one or not. Without this a short answer would be
+        // read as whatever this thread's own buffer held from the call
+        // before — words the program itself may have written — and handed
+        // back as a seed with no error anywhere.
+        let expected = u64::try_from(SEED_WORDS).unwrap_or(u64::MAX);
+        if view.return_word(0) != Some(expected) {
+            return Err(Error::BufferTooSmall);
+        }
+        let mut seed = [0_u64; SEED_WORDS];
+        for (index, word) in seed.iter_mut().enumerate() {
+            *word = view.word(index).ok_or(Error::BufferTooSmall)?;
+        }
+        Ok(seed)
     }
 
     /// `debug_log`: writes the bytes of the message area to the debug

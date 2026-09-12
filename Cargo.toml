@@ -22,11 +22,13 @@ members = [
     "crates/crypto/aead",
     "crates/crypto/bignum",
     "crates/crypto/ec",
+    "crates/crypto/dh",
     "crates/crypto/rng",
     "crates/crypto/rsa",
     "crates/net/der",
     "crates/net/x509",
     "crates/net/tls",
+    "crates/net/ssh",
     "crates/net/wire",
     "crates/net/eth",
     "crates/net/ip",
@@ -44,12 +46,18 @@ members = [
     "crates/uefi",
     "crates/sync",
     "crates/drivers/uart16550",
+    "crates/drivers/i8042",
+    "crates/drivers/virtio-blk",
+    "crates/pci",
     "crates/virtio/queue",
     "crates/fs/fat",
+    "crates/fs/gpt",
+    "crates/user/apps/canvas",
     "crates/user/loader",
     "crates/user/programs",
     "crates/user/servers/console",
     "crates/user/servers/display",
+    "crates/user/servers/input",
     "crates/user/servers/memory",
     "crates/user/servers/name",
     "crates/user/proto",
@@ -108,11 +116,13 @@ crypto-hash = { path = "crates/crypto/hash" }
 crypto-aead = { path = "crates/crypto/aead" }
 crypto-bignum = { path = "crates/crypto/bignum" }
 crypto-ec = { path = "crates/crypto/ec" }
+crypto-dh = { path = "crates/crypto/dh" }
 crypto-rng = { path = "crates/crypto/rng" }
 crypto-rsa = { path = "crates/crypto/rsa" }
 audhsos-der = { path = "crates/net/der" }
 audhsos-x509 = { path = "crates/net/x509" }
 audhsos-tls = { path = "crates/net/tls" }
+audhsos-ssh = { path = "crates/net/ssh" }
 net-wire = { path = "crates/net/wire" }
 net-eth = { path = "crates/net/eth" }
 net-ip = { path = "crates/net/ip" }
@@ -130,10 +140,16 @@ audhsos-symbols = { path = "crates/symbols" }
 audhsos-uefi = { path = "crates/uefi" }
 audhsos-sync = { path = "crates/sync" }
 driver-uart16550 = { path = "crates/drivers/uart16550" }
+driver-i8042 = { path = "crates/drivers/i8042" }
+pci = { path = "crates/pci" }
 virtio-queue = { path = "crates/virtio/queue" }
+driver-virtio-blk = { path = "crates/drivers/virtio-blk" }
 fs-fat = { path = "crates/fs/fat" }
+fs-gpt = { path = "crates/fs/gpt" }
 server-console = { path = "crates/user/servers/console" }
+app-canvas = { path = "crates/user/apps/canvas" }
 server-display = { path = "crates/user/servers/display" }
+server-input = { path = "crates/user/servers/input" }
 user-programs = { path = "crates/user/programs" }
 server-memory = { path = "crates/user/servers/memory" }
 server-name = { path = "crates/user/servers/name" }

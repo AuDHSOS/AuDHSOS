@@ -7,9 +7,10 @@
 
 use crate::doubles::{Access, RecordingRegisters};
 use crate::uart::{
-    FIFO_CONTROL_ENABLE, INTERRUPT_NONE, INTERRUPT_RECEIVE, INTERRUPT_TRANSMIT, LINE_CONTROL_8N1,
-    LINE_CONTROL_DIVISOR_LATCH, LINE_STATUS_DATA_READY, LINE_STATUS_TRANSMIT_EMPTY,
-    MODEM_CONTROL_READY, POLL_LIMIT, REGISTER_COUNT, Register, Uart16550, UartError,
+    FIFO_CONTROL_ENABLE, FIFO_DEPTH, INTERRUPT_FIFO_ENABLED, INTERRUPT_NONE, INTERRUPT_RECEIVE,
+    INTERRUPT_TRANSMIT, LINE_CONTROL_8N1, LINE_CONTROL_DIVISOR_LATCH, LINE_STATUS_DATA_READY,
+    LINE_STATUS_TRANSMIT_EMPTY, MODEM_CONTROL_READY, NO_FIFO_DEPTH, POLL_LIMIT, REGISTER_COUNT,
+    Register, Uart16550, UartError,
 };
 use test_support::generators::{range, vec};
 use test_support::property::check;
@@ -18,6 +19,15 @@ fn ready() -> RecordingRegisters {
     let mut registers = RecordingRegisters::new();
     registers.set(Register::LineStatus, LINE_STATUS_TRANSMIT_EMPTY);
     registers
+}
+
+/// A part that is always ready to send and answers that it took the FIFOs.
+fn with_fifo() -> Uart16550<RecordingRegisters> {
+    let mut registers = ready();
+    registers.set(Register::FifoControl, INTERRUPT_FIFO_ENABLED);
+    let uart = Uart16550::init(registers);
+    assert_eq!(uart.depth(), FIFO_DEPTH);
+    uart
 }
 
 #[test]
@@ -45,18 +55,43 @@ fn initialization_writes_the_registers_in_the_documented_order() {
             (Register::ModemControl, MODEM_CONTROL_READY),
         ]
     );
-    assert!(
-        registers
-            .log()
-            .iter()
-            .all(|access| matches!(access, Access::Write(..))),
-        "initialization reads nothing"
+    assert_eq!(
+        registers.log().last(),
+        Some(&Access::Read(Register::FifoControl, FIFO_CONTROL_ENABLE)),
+        "the one read is the last: what the part made of the FIFO request"
+    );
+    assert_eq!(registers.reads_of(Register::FifoControl), 1);
+}
+
+#[test]
+fn the_depth_is_what_the_part_answers_and_not_what_it_was_asked() {
+    let mut asked = RecordingRegisters::new();
+    // SLLS597E page 33: both bits are set when FCR0 is, and a 16C450
+    // clears them however the request read.
+    asked.script(Register::FifoControl, &[INTERRUPT_FIFO_ENABLED]);
+    assert_eq!(Uart16550::init(asked).depth(), FIFO_DEPTH);
+
+    let mut refused = RecordingRegisters::new();
+    refused.script(Register::FifoControl, &[0]);
+    assert_eq!(Uart16550::init(refused).depth(), NO_FIFO_DEPTH);
+
+    let mut half = RecordingRegisters::new();
+    half.script(Register::FifoControl, &[0x80]);
+    assert_eq!(
+        Uart16550::init(half).depth(),
+        NO_FIFO_DEPTH,
+        "one bit of the pair is not the pair"
     );
 }
 
 #[test]
 fn taking_the_block_over_without_initializing_touches_nothing() {
     let uart = Uart16550::new(RecordingRegisters::new());
+    assert_eq!(
+        uart.depth(),
+        NO_FIFO_DEPTH,
+        "nothing was asked of the part, so nothing is assumed of it"
+    );
     assert!(uart.into_registers().log().is_empty());
 }
 
@@ -98,9 +133,9 @@ fn a_transmitter_that_never_becomes_ready_makes_the_write_time_out() {
 }
 
 #[test]
-fn writing_a_string_stops_at_the_first_timeout() {
+fn writing_a_string_sends_every_byte_and_counts_them() {
     let mut uart = Uart16550::new(ready());
-    assert_eq!(uart.write_bytes(b"ok\n"), Ok(()));
+    assert_eq!(uart.write_bytes(b"ok\n"), Ok(3));
     assert_eq!(
         uart.into_registers().writes(),
         vec![
@@ -110,19 +145,122 @@ fn writing_a_string_stops_at_the_first_timeout() {
         ]
     );
 
+    let mut empty = Uart16550::new(RecordingRegisters::new());
+    assert_eq!(empty.write_bytes(&[]), Ok(0));
+    assert!(empty.into_registers().log().is_empty());
+}
+
+#[test]
+fn writing_a_string_stops_at_the_first_burst_that_times_out() {
+    // One byte a burst, so the second burst finds the transmitter busy.
     let mut registers = RecordingRegisters::new();
     registers.script(Register::LineStatus, &[LINE_STATUS_TRANSMIT_EMPTY]);
     let mut failing = Uart16550::new(registers);
-    assert_eq!(failing.write_bytes(b"ab"), Err(UartError::Timeout));
+    assert_eq!(failing.write_bytes(b"ab"), Ok(1));
     assert_eq!(
         failing.into_registers().writes(),
         vec![(Register::Data, b'a')],
         "the second byte was never sent"
     );
 
-    let mut empty = Uart16550::new(RecordingRegisters::new());
-    assert_eq!(empty.write_bytes(&[]), Ok(()));
-    assert!(empty.into_registers().log().is_empty());
+    let mut never = Uart16550::new(RecordingRegisters::new());
+    assert_eq!(
+        never.write_bytes(b"ab"),
+        Err(UartError::Timeout),
+        "a write that moved nothing is an error, not a count of zero"
+    );
+    assert!(never.into_registers().writes().is_empty());
+}
+
+#[test]
+fn one_wait_covers_a_whole_burst_and_no_burst_is_longer_than_the_fifo() {
+    let mut uart = with_fifo();
+    let line = [b'x'; 40];
+    assert_eq!(uart.write_bytes(&line), Ok(40));
+    let registers = uart.into_registers();
+    assert_eq!(
+        registers.reads_of(Register::LineStatus),
+        3,
+        "forty bytes are three bursts of at most sixteen"
+    );
+    // Every run of data writes between two status reads is a burst, and
+    // SLLS597E page 34 licenses at most sixteen of them per THRE. Counting
+    // starts at the first status read, which is where the write begins and
+    // initialization has had its say.
+    let sending = registers
+        .log()
+        .iter()
+        .skip_while(|access| !matches!(access, Access::Read(Register::LineStatus, _)));
+    let mut burst = 0usize;
+    let mut sent = 0usize;
+    for access in sending {
+        match access {
+            Access::Read(Register::LineStatus, _) => burst = 0,
+            Access::Write(Register::Data, _) => {
+                burst += 1;
+                sent += 1;
+                assert!(burst <= usize::from(FIFO_DEPTH), "burst of {burst}");
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(sent, 40);
+}
+
+/// A block that can take a whole run at once, which is what a console
+/// driver over system calls is: it records the runs and not the bytes.
+#[derive(Default)]
+struct BulkRegisters {
+    status: u8,
+    runs: Vec<(Register, Vec<u8>)>,
+}
+
+impl crate::uart::Registers for BulkRegisters {
+    fn read(&mut self, register: Register) -> u8 {
+        match register {
+            Register::FifoControl => INTERRUPT_FIFO_ENABLED,
+            _ => self.status,
+        }
+    }
+
+    fn write(&mut self, register: Register, value: u8) {
+        self.runs.push((register, vec![value]));
+    }
+
+    fn write_all(&mut self, register: Register, bytes: &[u8]) {
+        self.runs.push((register, bytes.to_vec()));
+    }
+}
+
+#[test]
+fn a_burst_reaches_the_block_as_one_run() {
+    let registers = BulkRegisters {
+        status: LINE_STATUS_TRANSMIT_EMPTY,
+        runs: Vec::new(),
+    };
+    let mut uart = Uart16550::init(registers);
+    assert_eq!(uart.depth(), FIFO_DEPTH);
+    uart.registers().runs.clear();
+    assert_eq!(uart.write_bytes(b"hello"), Ok(5));
+    assert_eq!(
+        uart.into_registers().runs,
+        vec![(Register::Data, b"hello".to_vec())],
+        "one run, not five writes: this is the whole point of the burst"
+    );
+}
+
+#[test]
+fn a_part_without_the_fifo_waits_for_every_byte() {
+    let mut registers = ready();
+    registers.script(Register::FifoControl, &[0]);
+    let mut uart = Uart16550::init(registers);
+    assert_eq!(uart.depth(), NO_FIFO_DEPTH);
+    assert_eq!(uart.write_bytes(b"abcd"), Ok(4));
+    assert_eq!(
+        uart.into_registers().reads_of(Register::LineStatus),
+        4,
+        "one THRE buys one byte where there is no FIFO behind it"
+    );
 }
 
 #[test]

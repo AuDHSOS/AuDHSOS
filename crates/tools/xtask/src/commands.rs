@@ -9,14 +9,14 @@ use std::time::Duration;
 use crate::error::Error;
 use crate::image::{archive, boot_image, disk};
 use crate::out::{self, note, note_raw};
-use crate::policy::{FUZZ_TARGETS, MIRI_TARGETS, Target, crates_for};
+use crate::policy::{FUZZ_TARGETS, FuzzTarget, MIRI_TARGETS, Target, crates_for};
 use crate::ppm;
-use crate::process::Cmd;
+use crate::process::{Cmd, run_parallel, test_jobs};
 use crate::qemu::{self, Machine, Run};
-use crate::qmp::Qmp;
+use crate::qmp::{Button, Qmp};
 use crate::session::Session;
 use crate::symbolize;
-use crate::{coverage, deps, fs, layering, linker, spdx, unsafe_budget};
+use crate::{artifacts, coverage, deps, fs, layering, linker, spdx, unsafe_budget};
 
 /// `rustfmt --check`, `clippy -D warnings` per target group, SPDX headers.
 pub(crate) fn lint(root: &Path) -> Result<(), Error> {
@@ -115,10 +115,23 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
         host = true;
     }
     if host {
-        let cmd = Cmd::cargo()
-            .cwd(root)
-            .args(["test", "--workspace", "--all-features"]);
-        exclude_cross(cmd).run()?;
+        let jobs = test_jobs()?;
+        let command =
+            exclude_cross(
+                Cmd::cargo()
+                    .cwd(root)
+                    .args(["test", "--workspace", "--all-features"]),
+            );
+        let executables = artifacts::build_tests(command.clone())?;
+        let jobs = jobs.min(executables.len());
+        let commands: Vec<_> = executables
+            .iter()
+            .map(|exe| exe.test_command(jobs))
+            .collect();
+        run_parallel(&commands, jobs)?;
+        // --no-run does not build or execute doc tests. Keep Cargo in
+        // charge of these so the host command retains its test coverage.
+        command.arg("--doc").run()?;
     }
     if qemu {
         test_qemu(root)?;
@@ -139,7 +152,7 @@ const E2E_TIMEOUT: Duration = Duration::from_secs(60);
 /// archive, the memory server answered, the name server answered, the
 /// console driver took the port, and the application found it and said
 /// something through it.
-const E2E_LINES: [(&str, &str); 14] = [
+const E2E_LINES: [(&str, &str); 19] = [
     (
         "[init] started server-memory",
         "the memory server did not start",
@@ -155,6 +168,10 @@ const E2E_LINES: [(&str, &str); 14] = [
     (
         "[init] started server-display",
         "the display server did not start",
+    ),
+    (
+        "[init] started server-input",
+        "the input server did not start",
     ),
     ("[init] started app-hello", "the application did not start"),
     (
@@ -186,6 +203,22 @@ const E2E_LINES: [(&str, &str); 14] = [
         "the display server did not take back the surface of the program that ended",
     ),
     (
+        "[init] started app-input",
+        "the program that listens did not start",
+    ),
+    (
+        "[info] ecam=",
+        "the kernel did not report the configuration window of the bus",
+    ),
+    (
+        "[lspci] window segment=",
+        "the program that walks the bus was given no window",
+    ),
+    (
+        " 1af4:1041 class=02:00:00",
+        "the bus walk did not find the virtio network device of the machine",
+    ),
+    (
         "[faulter] about to write to nowhere",
         "the program that faults on purpose never ran",
     ),
@@ -194,6 +227,37 @@ const E2E_LINES: [(&str, &str); 14] = [
         "the root task did not report the fault of its child",
     ),
 ];
+
+/// The four structures a driver of the network device needs, which the bus
+/// walk has to have read off the device itself.
+const VIRTIO_STRUCTURES: [&str; 4] = ["common", "notify", "isr", "device"];
+
+/// What the line about the virtio device does not say.
+///
+/// The order of the names is the device's own order of preference and no
+/// business of this check (virtio 4.1.4), so each is looked for on its own.
+fn virtio_lines(output: &str) -> Vec<String> {
+    let Some(line) = output
+        .lines()
+        .find(|line| line.contains("[lspci] virtio-net structures="))
+    else {
+        return vec!["the bus walk read no structures off the network device".to_owned()];
+    };
+    let mut violations = Vec::new();
+    for wanted in VIRTIO_STRUCTURES {
+        if !line.contains(wanted) {
+            violations.push(format!(
+                "the network device published no {wanted} structure"
+            ));
+        }
+    }
+    if !line.contains("msix=4") {
+        violations.push(format!(
+            "the message table of the network device is not the four vectors QEMU gives it: {line}"
+        ));
+    }
+    violations
+}
 
 /// How many lines the second client writes while the first writes its own.
 ///
@@ -249,6 +313,9 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
             break;
         }
     }
+    if violations.is_empty() {
+        violations.extend(virtio_lines(&session.output()));
+    }
     // The picture, while the machine still runs: `app-hello` is waiting to
     // be typed at, so nothing has ended yet. What is on the screen is
     // checked against what `app-paint` says it drew and against the font
@@ -271,6 +338,24 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
         } else {
             violations.push("the application never said it was ready".to_owned());
         }
+    }
+    // Input: the keyboard and the mouse of the machine, driven through the
+    // machine protocol. Nothing is injected before the program that listens
+    // says it is subscribed — an event sent earlier would reach a server
+    // whose client has no ring yet.
+    if violations.is_empty() {
+        match inject_input(&socket, &mut session) {
+            Ok(()) => violations.extend(input_lines(&session.output())),
+            Err(error) => violations.push(format!("nothing could be injected: {error}")),
+        }
+    }
+    // The canvas, which is the two protocols in one program: the sprite
+    // follows the pointer, a held button leaves a stroke, and what is typed
+    // stands on the screen. It runs after the program that listens has
+    // ended, so nothing injected here is part of what that one was checked
+    // against.
+    if violations.is_empty() {
+        violations.extend(inject_canvas(&socket, &mut session, root));
     }
     // Two clients wrote at once and no line of either may be torn: every
     // line the second one wrote has to stand whole and once, which the
@@ -305,7 +390,8 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
         eprintln!("--- end ---");
     }
     Error::from_violations(violations)?;
-    test_without_a_framebuffer(&machine, &path)
+    test_without_a_framebuffer(&machine, &path)?;
+    test_without_a_network(&machine, &path)
 }
 
 /// Where `app-paint` fills its rectangle and what it fills it with. It says
@@ -411,16 +497,551 @@ fn screen_size(output: &str) -> Option<(u32, u32)> {
     Some((width.parse().ok()?, height.trim().parse().ok()?))
 }
 
+/// The keys the runner injects, by the name QEMU knows them under and the
+/// key this system reports for each.
+const INPUT_KEYS: [(&str, driver_i8042::KeyCode); 3] = [
+    ("a", driver_i8042::KeyCode::A),
+    ("b", driver_i8042::KeyCode::B),
+    ("c", driver_i8042::KeyCode::C),
+];
+
+/// The key that ends the program that listens, which is the last thing
+/// injected.
+const INPUT_END: (&str, driver_i8042::KeyCode) = ("esc", driver_i8042::KeyCode::Escape);
+
+/// The steps of the pointer path, in pixels. Each goes out as one command,
+/// so each is one packet of the mouse.
+const INPUT_PATH: [(i32, i32); 3] = [(5, 0), (0, 7), (-3, -2)];
+
+/// One more step, injected after the button has come back up.
+const INPUT_LAST: (i32, i32) = (2, -4);
+
+/// The line the program that listens writes for [`INPUT_LAST`]: the last
+/// thing the pointer does, and the first packet after the button that says
+/// the button is up. A mouse of this machine reports a button coming up in
+/// the next packet it sends and not in one of its own, which is why the
+/// path has a step behind the button rather than ending at it.
+fn last_motion_line() -> String {
+    let (dx, dy) = INPUT_LAST;
+    format!("[input] pointer {dx} {dy} 0 0")
+}
+
+/// The line the program writes when the button goes down.
+const BUTTON_PRESSED: &str = "[input] pointer 0 0 0 1";
+
+/// Types at the machine and moves its pointer, once the program that
+/// listens says it is subscribed.
+///
+/// Every event waits for the line the program writes for it before the next
+/// one goes out. The controller of this machine holds sixteen bytes and
+/// drops what does not fit, which a run that sent everything at once found:
+/// six packets of the mouse are twenty-four bytes and the last two of them
+/// were never seen.
+fn inject_input(socket: &Path, session: &mut Session) -> Result<(), Error> {
+    for line in [
+        "[checks] input lifecycle and isolation: ok",
+        "is gone: ring released",
+    ] {
+        if !session.wait_for(line, E2E_TIMEOUT) {
+            return Err(Error::Usage(format!(
+                "input regression did not complete: `{line}`"
+            )));
+        }
+    }
+    if !session.wait_for("[input] ready", E2E_TIMEOUT) {
+        return Err(Error::Usage(
+            "the program that listens never subscribed".to_owned(),
+        ));
+    }
+    let mut qmp = Qmp::connect(socket, E2E_TIMEOUT)?;
+    for (qcode, code) in INPUT_KEYS {
+        for pressed in [true, false] {
+            qmp.send_key(qcode, pressed)?;
+            let line = format!("[input] key {} {}", code.code(), u8::from(pressed));
+            if !session.wait_for(&line, E2E_TIMEOUT) {
+                return Err(Error::Usage(format!("the machine never said `{line}`")));
+            }
+        }
+    }
+    for (dx, dy) in INPUT_PATH {
+        qmp.move_pointer(dx, dy)?;
+        let line = format!("[input] pointer {dx} {dy} 0 0");
+        if !session.wait_for(&line, E2E_TIMEOUT) {
+            return Err(Error::Usage(format!("the machine never said `{line}`")));
+        }
+    }
+    qmp.button(Button::Left, true)?;
+    if !session.wait_for(BUTTON_PRESSED, E2E_TIMEOUT) {
+        return Err(Error::Usage(
+            "the button of the pointer never went down".to_owned(),
+        ));
+    }
+    // A mouse of this machine reports a button coming up in the next packet
+    // it sends and not in one of its own, so the release and the step after
+    // it go out together and the step is what is waited for.
+    qmp.button(Button::Left, false)?;
+    let (dx, dy) = INPUT_LAST;
+    qmp.move_pointer(dx, dy)?;
+    if !session.wait_for(&last_motion_line(), E2E_TIMEOUT) {
+        return Err(Error::Usage(
+            "the button of the pointer never came back up".to_owned(),
+        ));
+    }
+    let (qcode, _code) = INPUT_END;
+    qmp.send_key(qcode, true)?;
+    qmp.send_key(qcode, false)?;
+    if !session.wait_for("[input] done", E2E_TIMEOUT) {
+        return Err(Error::Usage(
+            "the program that listens never saw the key that ends it".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// The numbers of the `[input]` lines of one kind, one row per line.
+fn input_events(output: &str, kind: &str) -> Vec<Vec<i64>> {
+    let head = format!("[input] {kind} ");
+    output
+        .lines()
+        .filter_map(|line| line.split(&head).nth(1))
+        .map(|rest| {
+            rest.split_whitespace()
+                .filter_map(|word| word.parse().ok())
+                .collect()
+        })
+        .collect()
+}
+
+/// What the `[input]` lines do not say about what was injected.
+///
+/// The two devices are checked apart from each other. The controller has one
+/// output buffer and two queues behind it, and which of them it hands out
+/// first is its own business, so a key and a packet of the mouse may arrive
+/// in either order; what each device says on its own is in the order it said
+/// it.
+fn input_lines(output: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    let keys: Vec<Vec<i64>> = input_events(output, "key");
+    let wanted: Vec<Vec<i64>> = INPUT_KEYS
+        .into_iter()
+        .chain(core::iter::once(INPUT_END))
+        .flat_map(|(_qcode, code)| {
+            [
+                vec![i64::from(code.code()), 1],
+                vec![i64::from(code.code()), 0],
+            ]
+        })
+        .collect();
+    if keys != wanted {
+        violations.push(format!(
+            "the keys came back as {keys:?} and were injected as {wanted:?}"
+        ));
+    }
+    let pointer = input_events(output, "pointer");
+    if pointer.is_empty() {
+        violations.push("the pointer never moved".to_owned());
+        return violations;
+    }
+    let moved = |index: usize| -> i64 {
+        pointer
+            .iter()
+            .filter_map(|row| row.get(index).copied())
+            .sum()
+    };
+    let path: Vec<(i32, i32)> = INPUT_PATH
+        .into_iter()
+        .chain(core::iter::once(INPUT_LAST))
+        .collect();
+    let sent = (
+        path.iter().map(|(dx, _dy)| i64::from(*dx)).sum::<i64>(),
+        path.iter().map(|(_dx, dy)| i64::from(*dy)).sum::<i64>(),
+    );
+    if (moved(0), moved(1)) != sent {
+        violations.push(format!(
+            "the pointer moved by {:?} and was moved by {sent:?}",
+            (moved(0), moved(1))
+        ));
+    }
+    // The button: it goes down in one packet and comes up in a later one.
+    let down = pointer
+        .iter()
+        .position(|row| row.get(3).copied().unwrap_or(0) != 0);
+    let up = down.and_then(|first| {
+        pointer
+            .iter()
+            .skip(first)
+            .position(|row| row.get(3).copied().unwrap_or(0) == 0)
+            .map(|later| first.saturating_add(later))
+    });
+    match (down, up) {
+        (Some(down), Some(up)) if down < up => {}
+        _other => violations.push(format!(
+            "the button was pressed at {down:?} and released at {up:?}"
+        )),
+    }
+    violations
+}
+
+/// How far the pointer is moved for each of the two steps that show the
+/// cursor sprite moving. Both are larger than the sprite, so the place it
+/// came from and the place it went to do not overlap and each can be looked
+/// at on its own.
+const CANVAS_CURSOR_STEPS: [(i32, i32); 2] = [(40, 24), (-30, 40)];
+
+/// The stroke: the button goes down, the pointer moves by this, and the
+/// button comes up again. It is long enough that its middle lies well clear
+/// of the sprite at either end.
+const CANVAS_STROKE: (i32, i32) = (120, 60);
+
+/// Where the pointer goes after the stroke, so that the sprite stands clear
+/// of the segment when the picture of it is taken.
+const CANVAS_ASIDE: (i32, i32) = (-200, 150);
+
+/// What is typed at the canvas, by the name QEMU knows each key under and
+/// the character this system types for it.
+const CANVAS_TYPING: [(&str, char); 3] = [("h", 'h'), ("i", 'i'), ("1", '1')];
+
+/// Drives the canvas: the escape key, two steps of the pointer, a stroke,
+/// a typed string, and the key that ends it, with a picture of the screen
+/// taken after each of the three.
+///
+/// It runs only on the machine that has a screen, and only after the
+/// program that listens has ended: that one echoes every event to the
+/// console, and what is injected here is not part of what it was checked
+/// against.
+fn inject_canvas(socket: &Path, session: &mut Session, root: &Path) -> Vec<String> {
+    let mut violations = Vec::new();
+    if !session.wait_for("[canvas] ready ", E2E_TIMEOUT) {
+        return vec!["the canvas never said it was ready".to_owned()];
+    }
+    let mut qmp = match Qmp::connect(socket, E2E_TIMEOUT) {
+        Ok(qmp) => qmp,
+        Err(error) => return vec![format!("the canvas could not be driven: {error}")],
+    };
+    // The escape key first: it puts the background down over whatever the
+    // program that paints left on the screen, so every pixel looked at
+    // below is one the canvas itself wrote. The canvas has cleared itself
+    // once already, for the escape that ended the program that listens, so
+    // what is counted is the line before this one goes out.
+    let cleared = session.count_seen("[canvas] cleared");
+    if let Err(error) = press(&mut qmp, "esc") {
+        return vec![format!("the escape key: {error}")];
+    }
+    if !session.wait_for_more("[canvas] cleared", cleared, E2E_TIMEOUT) {
+        return vec!["the canvas did not clear itself".to_owned()];
+    }
+    violations.extend(canvas_cursor(&mut qmp, session, root));
+    if violations.is_empty() {
+        violations.extend(canvas_stroke(&mut qmp, session, root));
+    }
+    if violations.is_empty() {
+        violations.extend(canvas_text(&mut qmp, session, root));
+    }
+    let done = session.count_seen("[canvas] done");
+    if let Err(error) = press(&mut qmp, ENDS_QCODE) {
+        violations.push(format!("the key that ends the canvas: {error}"));
+    } else if !session.wait_for_more("[canvas] done", done, E2E_TIMEOUT) {
+        violations.push("the canvas never ended".to_owned());
+    }
+    violations
+}
+
+/// A picture of the screen, taken over a connection that is already open.
+///
+/// The machine serves one monitor client at a time, so a second connection
+/// beside the one that is driving the pointer reads nothing: the picture
+/// goes through the same session as the events it is meant to show.
+fn picture_of(qmp: &mut Qmp, root: &Path) -> Result<ppm::Image, Error> {
+    qmp.screendump(&root.join("target").join("screen.ppm"))
+}
+
+/// Presses the key that ends the canvas and waits for it to say it did.
+///
+/// Every run that has a screen needs this: the canvas presents nothing
+/// until an event reaches it and ends on nothing but this key (D-126), and
+/// a run that never sends it waits for the program until the time limit.
+fn end_the_canvas(socket: &Path, session: &mut Session) -> Result<(), Error> {
+    let mut qmp = Qmp::connect(socket, E2E_TIMEOUT)?;
+    let done = session.count_seen("[canvas] done");
+    press(&mut qmp, ENDS_QCODE)?;
+    if !session.wait_for_more("[canvas] done", done, E2E_TIMEOUT) {
+        return Err(Error::Usage("the canvas never said it was done".to_owned()));
+    }
+    Ok(())
+}
+
+/// The name QEMU knows [`app_canvas::ENDS`] under.
+const ENDS_QCODE: &str = "f10";
+
+/// Presses a key and lets it come up again.
+fn press(qmp: &mut Qmp, qcode: &str) -> Result<(), Error> {
+    qmp.send_key(qcode, true)?;
+    qmp.send_key(qcode, false)
+}
+
+/// `canvas_cursor`: a pointer path moves the sprite, and the picture before
+/// a step and the picture after it differ in exactly that way — the sprite
+/// stands where the canvas said the pointer now is, and where it stood
+/// before carries the background again.
+fn canvas_cursor(qmp: &mut Qmp, session: &mut Session, root: &Path) -> Vec<String> {
+    let mut violations = Vec::new();
+    let mut before: Option<(u32, u32)> = None;
+    for (dx, dy) in CANVAS_CURSOR_STEPS {
+        let Some(at) = moved_to(qmp, session, dx, dy) else {
+            return vec![format!(
+                "the canvas never said where the pointer went after {dx},{dy}"
+            )];
+        };
+        let image = match picture_of(qmp, root) {
+            Ok(image) => image,
+            Err(error) => return vec![format!("no picture of the canvas: {error}")],
+        };
+        violations.extend(sprite_at(&image, at));
+        if let Some(gone) = before {
+            // The sprite is drawn by the display server and taken off by
+            // it, so the place it left has to hold what stood under it,
+            // which here is the background of the canvas.
+            let corner = (gone.0.saturating_add(1), gone.1.saturating_add(5));
+            match image.pixel(corner.0, corner.1) {
+                Ok(color) if color == rgb(app_canvas::BACKGROUND) => {}
+                Ok(color) => violations.push(format!(
+                    "the sprite left {corner:?} showing {color:?} and not the background"
+                )),
+                Err(error) => violations.push(format!("the pixel at {corner:?}: {error}")),
+            }
+        }
+        before = Some(at);
+        if !violations.is_empty() {
+            break;
+        }
+    }
+    violations
+}
+
+/// Moves the pointer and answers with where the canvas says it now is.
+fn moved_to(qmp: &mut Qmp, session: &mut Session, dx: i32, dy: i32) -> Option<(u32, u32)> {
+    let already = session.count_seen("[canvas] cursor ");
+    qmp.move_pointer(dx, dy).ok()?;
+    if !session.wait_for_more("[canvas] cursor ", already, E2E_TIMEOUT) {
+        return None;
+    }
+    last_pair(&session.output(), "[canvas] cursor ")
+}
+
+/// `canvas_stroke`: the button goes down, the pointer moves, and the pixels
+/// along the segment the canvas says it drew carry the pen.
+fn canvas_stroke(qmp: &mut Qmp, session: &mut Session, root: &Path) -> Vec<String> {
+    let pressed = session.count_seen("[canvas] stroke ");
+    if qmp.button(Button::Left, true).is_err() {
+        return vec!["the button of the pointer could not be pressed".to_owned()];
+    }
+    if !session.wait_for_more("[canvas] stroke ", pressed, E2E_TIMEOUT) {
+        return vec!["the canvas did not start a stroke when the button went down".to_owned()];
+    }
+    let held = session.count_seen("[canvas] stroke ");
+    let (dx, dy) = CANVAS_STROKE;
+    if qmp.move_pointer(dx, dy).is_err() {
+        return vec!["the pointer could not be moved with the button down".to_owned()];
+    }
+    if !session.wait_for_more("[canvas] stroke ", held, E2E_TIMEOUT) {
+        return vec!["the canvas drew no segment while the button was held".to_owned()];
+    }
+    let Some((from, to)) = last_four(&session.output(), "[canvas] stroke ") else {
+        return vec!["the canvas said nothing about the segment it drew".to_owned()];
+    };
+    // The button comes up in the next packet the mouse sends, so the
+    // release and the step that carries the pointer clear of the segment go
+    // out together.
+    if qmp.button(Button::Left, false).is_err() {
+        return vec!["the button of the pointer could not be released".to_owned()];
+    }
+    let (aside_x, aside_y) = CANVAS_ASIDE;
+    if moved_to(qmp, session, aside_x, aside_y).is_none() {
+        return vec!["the pointer never moved clear of the stroke".to_owned()];
+    }
+    let image = match picture_of(qmp, root) {
+        Ok(image) => image,
+        Err(error) => return vec![format!("no picture of the stroke: {error}")],
+    };
+    pen_along(&image, from, to)
+}
+
+/// What the picture does not show of the segment the canvas said it drew.
+///
+/// The segment is walked along its longer axis, and every step of that walk
+/// has to find the pen somewhere across the shorter one: a line drawn a
+/// pixel at a time is continuous in the axis it advances fastest in, and
+/// checking it that way needs no second copy of the algorithm that drew it.
+fn pen_along(image: &ppm::Image, from: (u32, u32), to: (u32, u32)) -> Vec<String> {
+    let pen = rgb(app_canvas::PEN);
+    let wide = from.0.abs_diff(to.0) >= from.1.abs_diff(to.1);
+    let (first, last) = if wide {
+        (from.0.min(to.0), from.0.max(to.0))
+    } else {
+        (from.1.min(to.1), from.1.max(to.1))
+    };
+    let (across_first, across_last) = if wide {
+        (from.1.min(to.1), from.1.max(to.1))
+    } else {
+        (from.0.min(to.0), from.0.max(to.0))
+    };
+    for along in first..=last {
+        let found = (across_first..=across_last).any(|across| {
+            let (x, y) = if wide {
+                (along, across)
+            } else {
+                (across, along)
+            };
+            image.pixel(x, y) == Ok(pen)
+        });
+        if !found {
+            return vec![format!(
+                "the stroke from {from:?} to {to:?} carries no pen at {along} of {first}..={last}"
+            )];
+        }
+    }
+    Vec::new()
+}
+
+/// `canvas_text`: what is typed appears at the text cursor the canvas
+/// named, pixel for pixel against the font this system carries.
+fn canvas_text(qmp: &mut Qmp, session: &mut Session, root: &Path) -> Vec<String> {
+    let mut cells = Vec::new();
+    for (qcode, character) in CANVAS_TYPING {
+        let written = session.count_seen("[canvas] text ");
+        if let Err(error) = press(qmp, qcode) {
+            return vec![format!("the key `{qcode}`: {error}")];
+        }
+        if !session.wait_for_more("[canvas] text ", written, E2E_TIMEOUT) {
+            return vec![format!("the canvas never wrote `{character}`")];
+        }
+        let Some(at) = last_pair(&session.output(), "[canvas] text ") else {
+            return vec![format!(
+                "the canvas said nothing about where `{character}` went"
+            )];
+        };
+        cells.push((at, character));
+    }
+    let image = match picture_of(qmp, root) {
+        Ok(image) => image,
+        Err(error) => return vec![format!("no picture of the typed text: {error}")],
+    };
+    let mut violations = Vec::new();
+    for (at, character) in cells {
+        violations.extend(glyph_at(&image, at, character));
+        if !violations.is_empty() {
+            break;
+        }
+    }
+    violations
+}
+
+/// What the picture does not show of one glyph at one cell.
+fn glyph_at(image: &ppm::Image, at: (u32, u32), character: char) -> Vec<String> {
+    let rows = gfx::glyph(character);
+    let ink = rgb(app_canvas::INK);
+    let ground = rgb(app_canvas::BACKGROUND);
+    for (row, bits) in rows.iter().enumerate() {
+        for column in 0..gfx::GLYPH_WIDTH {
+            let bit = 1_u8
+                .checked_shl(gfx::GLYPH_WIDTH.saturating_sub(1).saturating_sub(column))
+                .unwrap_or(0);
+            let wanted = if bits & bit == 0 { ground } else { ink };
+            let x = at.0.saturating_add(column);
+            let y = at.1.saturating_add(u32::try_from(row).unwrap_or(0));
+            match image.pixel(x, y) {
+                Ok(color) if color == wanted => {}
+                Ok(color) => {
+                    return vec![format!(
+                        "the pixel at {x},{y} of the typed {character:?} is {color:?}, not {wanted:?}"
+                    )];
+                }
+                Err(error) => return vec![format!("the typed text is not on the screen: {error}")],
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// What the picture does not show of the sprite standing at `at`.
+///
+/// Every pixel the arrow covers is checked, and what each should be is
+/// asked of the display server itself rather than written out again here:
+/// which pixels are the body and which the edge follows from the shape
+/// table, and a test that carried its own copy of that rule would agree
+/// with a wrong one just as readily.
+fn sprite_at(image: &ppm::Image, at: (u32, u32)) -> Vec<String> {
+    for row in 0..server_display::CURSOR_HEIGHT {
+        for column in 0..server_display::CURSOR_WIDTH {
+            let index = usize::try_from(row).unwrap_or(0);
+            let Some(color) =
+                server_display::pixel_of(server_display::CursorShape::Arrow, index, column)
+            else {
+                continue;
+            };
+            let x = at.0.saturating_add(column);
+            let y = at.1.saturating_add(row);
+            match image.pixel(x, y) {
+                Ok(seen) if seen == rgb(color) => {}
+                Ok(seen) => {
+                    return vec![format!(
+                        "the pointer is at {at:?} and the pixel at {x},{y} of its sprite is {seen:?}, not {:?}",
+                        rgb(color)
+                    )];
+                }
+                Err(error) => return vec![format!("the sprite is not on the screen: {error}")],
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// A color of this system as a picture of the screen reports it.
+const fn rgb(color: gfx::Color) -> (u8, u8, u8) {
+    (color.r, color.g, color.b)
+}
+
+/// The two numbers of the last line beginning with `head`.
+fn last_pair(output: &str, head: &str) -> Option<(u32, u32)> {
+    let numbers = last_numbers(output, head)?;
+    Some((*numbers.first()?, *numbers.get(1)?))
+}
+
+/// The two points of the last line beginning with `head`.
+fn last_four(output: &str, head: &str) -> Option<((u32, u32), (u32, u32))> {
+    let numbers = last_numbers(output, head)?;
+    Some((
+        (*numbers.first()?, *numbers.get(1)?),
+        (*numbers.get(2)?, *numbers.get(3)?),
+    ))
+}
+
+/// The numbers of the last line beginning with `head`.
+fn last_numbers(output: &str, head: &str) -> Option<Vec<u32>> {
+    let rest = output
+        .lines()
+        .filter_map(|line| line.split(head).nth(1))
+        .next_back()?;
+    Some(
+        rest.split_whitespace()
+            .filter_map(|word| word.parse().ok())
+            .collect(),
+    )
+}
+
 /// The same system on a machine with no graphics adapter: the firmware
 /// reports no Graphics Output Protocol, so the kernel finds no framebuffer,
 /// the display server answers that there is no screen, and the program that
 /// draws says it drew nothing — and the run still ends by itself.
 fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Error> {
+    let socket = qemu::socket_path("audhsos-qmp-novga")?;
+    let _ = std::fs::remove_file(&socket);
     let mut session = Session::start(
         machine,
         path,
         &qemu::Options {
             no_vga: true,
+            qmp: Some(socket.clone()),
             ..qemu::Options::plain()
         },
     )?;
@@ -433,6 +1054,14 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Erro
     }
     if violations.is_empty() && session.wait_for("[hello] ready", E2E_TIMEOUT) {
         session.send(b"typed\n")?;
+    }
+    // The i8042 is part of the machine whether it has a screen or not, so
+    // the input tests run here as well.
+    if violations.is_empty() {
+        match inject_input(&socket, &mut session) {
+            Ok(()) => violations.extend(input_lines(&session.output())),
+            Err(error) => violations.push(format!("nothing could be injected: {error}")),
+        }
     }
     if violations.is_empty() {
         match session.wait_for_end(E2E_TIMEOUT) {
@@ -448,6 +1077,7 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Erro
         }
     }
     let output = session.finish();
+    let _ = std::fs::remove_file(&socket);
     note!(
         "qemu without a graphics adapter: {} line(s)",
         output.lines().count()
@@ -462,7 +1092,7 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Erro
 }
 
 /// What a machine without a graphics adapter has to say.
-const NO_VGA_LINES: [(&str, &str); 3] = [
+const NO_VGA_LINES: [(&str, &str); 4] = [
     (
         "[info] framebuffer=absent",
         "the kernel did not report that the machine has no framebuffer",
@@ -475,11 +1105,96 @@ const NO_VGA_LINES: [(&str, &str); 3] = [
         "[paint] nothing drawn: ",
         "the program that draws did not say that it drew nothing",
     ),
+    (
+        "[canvas] no screen: ",
+        "the canvas did not say that it has no screen",
+    ),
 ];
+
+/// The lines the run without the two network lines has to carry: the bus is
+/// walked, the device is not there, and the machine ends by itself.
+const NO_NETWORK_LINES: [(&str, &str); 3] = [
+    (
+        "[lspci] window segment=",
+        "the program that walks the bus was given no window",
+    ),
+    (
+        "[lspci] 00:00.0 8086:29c0",
+        "the bus walk did not find the host bridge of the machine",
+    ),
+    (
+        "[lspci] no virtio device",
+        "the bus walk did not report that there is no virtio device",
+    ),
+];
+
+/// The same system on a machine without the two network lines: the bus walk
+/// reports the rest of the bus, finds no virtio device, and the run ends by
+/// itself (13.12).
+fn test_without_a_network(machine: &Machine, path: &Path) -> Result<(), Error> {
+    let socket = qemu::socket_path("audhsos-qmp-nonet")?;
+    let _ = std::fs::remove_file(&socket);
+    let mut session = Session::start(
+        machine,
+        path,
+        &qemu::Options {
+            qmp: Some(socket.clone()),
+            ..qemu::Options::without_network()
+        },
+    )?;
+    let mut violations = Vec::new();
+    for (needle, complaint) in NO_NETWORK_LINES {
+        if !session.wait_for(needle, E2E_TIMEOUT) {
+            violations.push((*complaint).to_owned());
+            break;
+        }
+    }
+    if violations.is_empty() && session.wait_for("[hello] ready", E2E_TIMEOUT) {
+        session.send(b"typed\n")?;
+    }
+    // The programs that listen end when they have seen what they wait for,
+    // and nothing but the runner sends it: a run that injects nothing waits
+    // for them until the time limit. This machine has a screen, so the
+    // canvas waits for the key that ends it as well.
+    if violations.is_empty() {
+        match inject_input(&socket, &mut session) {
+            Ok(()) => violations.extend(input_lines(&session.output())),
+            Err(error) => violations.push(format!("nothing could be injected: {error}")),
+        }
+    }
+    if violations.is_empty() {
+        match end_the_canvas(&socket, &mut session) {
+            Ok(()) => {}
+            Err(error) => violations.push(format!("the canvas did not end: {error}")),
+        }
+    }
+    if violations.is_empty() {
+        match session.wait_for_end(E2E_TIMEOUT) {
+            None => violations.push("the machine did not end by itself".to_owned()),
+            status => {
+                let outcome = qemu::outcome_of(status, false);
+                if outcome != qemu::Outcome::Success {
+                    violations.push(format!("the machine reported a {}", outcome.name()));
+                }
+            }
+        }
+    }
+    let output = session.finish();
+    let _ = std::fs::remove_file(&socket);
+    note!("qemu without a network: {} line(s)", output.lines().count());
+    report("without a network", &violations);
+    if !violations.is_empty() {
+        eprintln!("--- serial output of the run without a network ---");
+        eprintln!("{output}");
+        eprintln!("--- end ---");
+    }
+    Error::from_violations(violations)
+}
 
 /// Every test kernel in QEMU, then the three images that must make the
 /// loader report a failure.
 fn test_qemu(root: &Path) -> Result<(), Error> {
+    let machine = Machine::locate()?;
     build(root, &[])?;
     build_user_tests(root)?;
     let runner = runner_command()?;
@@ -494,12 +1209,13 @@ fn test_qemu(root: &Path) -> Result<(), Error> {
         ])
         .env(RUNNER_VARIABLE, runner)
         .env(ROOT_VARIABLE, root.display().to_string())
+        .env(qemu::ACCELERATOR_VARIABLE, machine.accelerator())
         .env(
             USER_TESTS_VARIABLE,
             root.join(USER_TESTS_DIR).display().to_string(),
         )
         .run()?;
-    loader_images(root)
+    loader_images(root, &machine)
 }
 
 /// The Cargo configuration variable that names the runner of the kernel
@@ -560,7 +1276,7 @@ const LOADER_PREFIX: &str = "[loader] ";
 type LoaderCase = (&'static str, Option<Vec<u8>>, Option<Vec<u8>>);
 
 /// The three images the loader has to reject, each run once.
-fn loader_images(root: &Path) -> Result<(), Error> {
+fn loader_images(root: &Path, machine: &Machine) -> Result<(), Error> {
     let profile = "debug";
     let loader = loader_bytes(root, profile)?;
     let kernel = fs::read_bytes(&kernel_binary(root, profile))?;
@@ -570,7 +1286,6 @@ fn loader_images(root: &Path) -> Result<(), Error> {
         ("missing-kernel", None, Some(boot)),
         ("missing-boot-image", Some(kernel), None),
     ];
-    let machine = Machine::locate()?;
     let mut violations = Vec::new();
     for (name, kernel, boot) in cases {
         let image = disk_image(loader.clone(), kernel, boot)?;
@@ -660,6 +1375,38 @@ fn disk_image(
     disk::build(&files)
 }
 
+/// The size of a scratch disk. FAT32 wants 65525 clusters, which at one
+/// sector each is thirty-three mebibytes before the two tables above them;
+/// this is what the boot volume has by default, and the file is sparse, so
+/// a disk nothing wrote costs a directory entry.
+const SCRATCH_SIZE: u64 = 64 * 1024 * 1024;
+
+/// Where the scratch disk of the run `name` lies.
+///
+/// One disk per run name, because two machines writing one file would tear
+/// it and QEMU refuses the second one anyway; and the same path across
+/// runs of that name, because a test that boots twice to see what survived
+/// needs the bytes the first boot wrote (D-136).
+pub(crate) fn scratch_path(root: &Path, name: &str) -> PathBuf {
+    root.join("target")
+        .join("qemu")
+        .join(format!("{name}.scratch.img"))
+}
+
+/// The scratch disk of the run `name`, blank when it was not there and as
+/// it stands when it was.
+fn scratch_image(root: &Path, name: &str) -> Result<PathBuf, Error> {
+    let path = scratch_path(root, name);
+    if fs::create_sparse(&path, SCRATCH_SIZE)? {
+        note!(
+            "scratch disk {}: blank, {} MiB",
+            path.display(),
+            SCRATCH_SIZE >> 20
+        );
+    }
+    Ok(path)
+}
+
 /// Writes one image of a run into `target/qemu/`.
 fn write_run_image(root: &Path, name: &str, image: &[u8]) -> Result<PathBuf, Error> {
     let path = root.join("target").join("qemu").join(format!("{name}.img"));
@@ -728,10 +1475,12 @@ fn report_tests(
 /// success; the errors of the build and of the image writers.
 pub(crate) fn run(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut display = false;
+    let mut scratch = false;
     let mut build_options = Vec::new();
     for option in options {
         match option.as_str() {
             "--display" => display = true,
+            "--scratch" => scratch = true,
             "--release" => build_options.push("--release".to_owned()),
             other => return Err(Error::Usage(format!("unknown option `{other}` for run"))),
         }
@@ -740,7 +1489,13 @@ pub(crate) fn run(root: &Path, options: &[String]) -> Result<(), Error> {
     image(root, &build_options)?;
     let machine = Machine::locate()?;
     let path = root.join("target").join("audhsos.img");
-    let status = machine.run_attached(&path, &qemu::Options::windowed(display))?;
+    let machine_options = qemu::Options {
+        scratch: scratch
+            .then(|| scratch_image(root, "audhsos"))
+            .transpose()?,
+        ..qemu::Options::windowed(display)
+    };
+    let status = machine.run_attached(&path, &machine_options)?;
     match qemu::outcome_of(status, false) {
         qemu::Outcome::Success => Ok(()),
         outcome => Err(Error::Usage(format!(
@@ -1054,10 +1809,13 @@ pub(crate) fn fuzz(root: &Path, options: &[String]) -> Result<(), Error> {
         note!("no fuzz targets are registered yet (policy::FUZZ_TARGETS); nothing to run");
         return Ok(());
     }
+    if matches!(mode, Job::Regression) {
+        return replay_corpora(root, &targets);
+    }
     for target in targets {
         match &mode {
             Job::Fuzz => run_fuzzer(root, target.name, seconds)?,
-            Job::Regression => replay_corpus(root, target.name)?,
+            Job::Regression => {}
             Job::Merge(from) => merge_corpus(root, target.name, from)?,
             Job::Minimize(file) => minimize_crash(root, target.name, file, seconds)?,
         }
@@ -1147,27 +1905,39 @@ fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
         .run()
 }
 
-/// Replays the stored corpus of one target. A target whose corpus
-/// directory does not exist is reported and skipped, so that a target that
-/// has found nothing yet does not fail the run.
-fn replay_corpus(root: &Path, name: &str) -> Result<(), Error> {
-    let corpus = corpus_of(root, name);
-    if !corpus.is_dir() {
-        note!("`{name}`: no corpus at {}", corpus.display());
+/// Builds selected regression binaries once, then replays their corpora
+/// concurrently. Targets without a corpus directory are reported and skipped.
+fn replay_corpora(root: &Path, targets: &[&FuzzTarget]) -> Result<(), Error> {
+    let jobs = test_jobs()?;
+    let mut selected = Vec::new();
+    let mut build = Cmd::cargo().cwd(&root.join("fuzz")).arg("build");
+    for target in targets {
+        let corpus = corpus_of(root, target.name);
+        if corpus.is_dir() {
+            selected.push((target.name, corpus));
+            build = build.args(["--bin", target.name]);
+        } else {
+            note!("`{}`: no corpus at {}", target.name, corpus.display());
+        }
+    }
+    if selected.is_empty() {
         return Ok(());
     }
-    note!("replaying the corpus of `{name}`");
-    Cmd::cargo()
-        .cwd(&root.join("fuzz"))
-        .args([
-            "run",
-            "--quiet",
-            "--bin",
-            name,
-            "--",
-            &corpus.display().to_string(),
-        ])
-        .run()
+    let executables = artifacts::build(build)?;
+    let mut commands = Vec::new();
+    for (name, corpus) in selected {
+        let executable = executables
+            .iter()
+            .find(|exe| exe.name == name && !exe.test)
+            .ok_or_else(|| Error::Parse(format!("Cargo reported no executable for `{name}`")))?;
+        commands.push(
+            executable
+                .command()
+                .cwd(&root.join("fuzz"))
+                .arg(corpus.display().to_string()),
+        );
+    }
+    run_parallel(&commands, jobs)
 }
 
 /// The corpus directory of one target.

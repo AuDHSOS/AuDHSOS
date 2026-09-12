@@ -4,14 +4,17 @@
 //! Tests of `crate::calls::device`: interrupts, port ranges, device memory,
 //! and the information about the machine.
 
-use audhsos_abi::ipc_buffer::Buffer;
-use audhsos_abi::layout::TICKS_PER_SECOND;
+use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE};
+use audhsos_abi::layout::{MAX_MESSAGE_BYTES, TICKS_PER_SECOND};
 use audhsos_abi::{Error, Handle, ObjectType, Rights, Syscall};
 use kernel_objects::object::{
     AnyObjectId, Interrupt, IoPortRange, MemoryKind, Notification, SystemControl,
 };
 
-use super::double::{Call, Fixture, call, error_of, request, value_of};
+use super::double::{
+    Call, Fixture, MESSAGE_ADDRESS, MESSAGE_BASE, MESSAGE_VECTORS, call, error_of, request,
+    value_of,
+};
 
 /// The handle to the system control capability, which the root task receives
 /// at boot and every test installs by hand.
@@ -34,7 +37,7 @@ fn an_interrupt_object_takes_the_vector_the_plan_gives_its_line() {
     assert_eq!(entry.object_type(), ObjectType::Interrupt);
     let id = entry.object.typed::<Interrupt>().unwrap();
     let held = *fixture.objects.interrupts.get(id).unwrap();
-    assert_eq!(held.line, 3);
+    assert_eq!(held.line, Some(3));
     assert_eq!(held.vector, 0x43, "the double routes line n to 0x40 plus n");
     assert!(!held.masked);
     assert_eq!(fixture.environment.count(&Call::Route(3, 0x43)), 1);
@@ -152,7 +155,7 @@ fn a_binding_arms_the_line_names_one_bit_and_an_acknowledgement_unmasks_it_again
 }
 
 #[test]
-fn a_binding_needs_a_bit_of_the_word_and_a_notification_of_its_own() {
+fn a_binding_needs_a_bit_of_the_word_and_a_notification_it_may_bind() {
     let mut fixture = Fixture::new();
     let system = control(&mut fixture);
     let interrupt = value_of(
@@ -190,7 +193,9 @@ fn a_binding_needs_a_bit_of_the_word_and_a_notification_of_its_own() {
         ),
         Some(Error::AccessDenied)
     );
-    // And a second interrupt cannot take a notification that is bound.
+    // A second interrupt may name the same notification, on a bit of its
+    // own: a controller with two lines and one output buffer is drained by
+    // one thread, and that thread waits on one notification (D-108).
     let second = value_of(
         &mut fixture,
         request(Syscall::InterruptCreate, &[system, 1]),
@@ -202,12 +207,12 @@ fn a_binding_needs_a_bit_of_the_word_and_a_notification_of_its_own() {
         )
         .is_none()
     );
-    assert_eq!(
+    assert!(
         error_of(
             &mut fixture,
             request(Syscall::InterruptBind, &[second, notification, 1])
-        ),
-        Some(Error::AlreadyExists)
+        )
+        .is_none()
     );
     assert_eq!(
         error_of(
@@ -317,6 +322,86 @@ fn a_port_is_read_and_written_only_inside_the_range_of_its_capability() {
     }
 }
 
+/// A request that carries `bytes` in the message area, as the wrapper of
+/// `ioport_write_string` puts them there: the payload words little-endian,
+/// which is the run in order.
+fn string_request(range: u64, port: u64, bytes: &[u8], count: u64) -> [u8; SIZE] {
+    let mut buffer = request(Syscall::IoPortWriteString, &[range, port, count]);
+    let mut writer = BufferMut::new(&mut buffer);
+    for (index, chunk) in bytes.chunks(8).enumerate() {
+        let mut word = [0u8; 8];
+        word[..chunk.len()].copy_from_slice(chunk);
+        assert!(writer.set_word(index, u64::from_le_bytes(word)));
+    }
+    buffer
+}
+
+#[test]
+fn a_string_write_moves_the_message_area_to_one_port() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let range = value_of(
+        &mut fixture,
+        request(Syscall::IoPortCreate, &[system, 0x3F8, 8]),
+    );
+    let line = b"[canvas] cursor 993 600\n";
+    let count = u64::try_from(line.len()).unwrap();
+    assert_eq!(
+        value_of(&mut fixture, string_request(range, 0x3F8, line, count)),
+        count,
+        "the call answers how many bytes went out"
+    );
+    assert_eq!(fixture.environment.port_string, line.to_vec());
+    assert_eq!(
+        fixture
+            .environment
+            .count(&Call::WritePortString(0x3F8, line.len())),
+        1,
+        "one call, whatever the run holds"
+    );
+}
+
+#[test]
+fn a_string_write_is_refused_outside_the_range_and_above_the_message_area() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let range = value_of(
+        &mut fixture,
+        request(Syscall::IoPortCreate, &[system, 0x40, 4]),
+    );
+    for (port, count) in [
+        (0x44, 1),
+        (0x3F, 1),
+        (0x1_0000, 1),
+        (
+            0x40,
+            u64::try_from(MAX_MESSAGE_BYTES).unwrap().saturating_add(1),
+        ),
+    ] {
+        assert_eq!(
+            error_of(&mut fixture, string_request(range, port, b"x", count)),
+            Some(Error::InvalidArgument),
+            "port {port:#x} count {count}"
+        );
+    }
+    assert!(fixture.environment.port_string.is_empty());
+}
+
+#[test]
+fn a_string_write_of_nothing_touches_no_port() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let range = value_of(
+        &mut fixture,
+        request(Syscall::IoPortCreate, &[system, 0x40, 4]),
+    );
+    assert_eq!(
+        value_of(&mut fixture, string_request(range, 0x40, b"", 0)),
+        0
+    );
+    assert!(fixture.environment.port_string.is_empty());
+}
+
 #[test]
 fn a_port_access_needs_the_right_for_its_direction() {
     let mut fixture = Fixture::new();
@@ -340,6 +425,11 @@ fn a_port_access_needs_the_right_for_its_direction() {
             request(Syscall::IoPortWrite, &[readable, 0x60, 1, 0])
         ),
         Some(Error::AccessDenied)
+    );
+    assert_eq!(
+        error_of(&mut fixture, string_request(readable, 0x60, b"x", 1)),
+        Some(Error::AccessDenied),
+        "a string write is a write"
     );
     assert_eq!(
         error_of(
@@ -487,6 +577,12 @@ fn a_creating_call_that_finds_no_handle_slot_leaves_nothing_behind() {
 fn the_system_information_reports_every_pool_the_ticks_and_the_firmware() {
     let mut fixture = Fixture::new();
     fixture.environment.rsdp = 0x000F_2340;
+    fixture.environment.ecam = Some(audhsos_abi::Ecam {
+        base: 0xE000_0000,
+        segment: 0,
+        first_bus: 0,
+        last_bus: 255,
+    });
     fixture.environment.framebuffer = Some(audhsos_abi::Framebuffer {
         phys_start: 0x8000_0000,
         len: 0x0040_0000,
@@ -499,11 +595,11 @@ fn the_system_information_reports_every_pool_the_ticks_and_the_firmware() {
     let mut buffer = request(Syscall::SystemInfo, &[system]);
     let (status, values, _) = call(&mut fixture, &mut buffer);
     assert_eq!(status.error(), None);
-    assert_eq!(values[0], 26, "twenty-six words, as the convention says");
+    assert_eq!(values[0], 30, "thirty words, as the convention says");
     let view = Buffer::new(&buffer);
     let header = view.message().unwrap();
     assert_eq!(header.label, 0);
-    assert_eq!(header.word_count, 26);
+    assert_eq!(header.word_count, 30);
     assert_eq!(header.handle_count, 0);
     let capacities = fixture.objects.capacities();
     let counts = fixture.objects.counts();
@@ -528,18 +624,22 @@ fn the_system_information_reports_every_pool_the_ticks_and_the_firmware() {
     assert_eq!(view.word(23), Some(800));
     assert_eq!(view.word(24), Some(1280));
     assert_eq!(view.word(25), Some(2));
+    assert_eq!(view.word(26), Some(0xE000_0000));
+    assert_eq!(view.word(27), Some(0));
+    assert_eq!(view.word(28), Some(0));
+    assert_eq!(view.word(29), Some(255));
 }
 
 #[test]
-fn a_machine_without_a_framebuffer_reports_six_zeros() {
+fn a_machine_without_a_framebuffer_or_a_window_reports_ten_zeros() {
     let mut fixture = Fixture::new();
     let system = control(&mut fixture);
     let mut buffer = request(Syscall::SystemInfo, &[system]);
     let (status, values, _) = call(&mut fixture, &mut buffer);
     assert_eq!(status.error(), None);
-    assert_eq!(values[0], 26);
+    assert_eq!(values[0], 30);
     let view = Buffer::new(&buffer);
-    for word in 20..26 {
+    for word in 20..30 {
         assert_eq!(view.word(word), Some(0), "word {word}");
     }
 }
@@ -570,5 +670,289 @@ fn the_root_authority_is_what_the_four_calls_check_and_nothing_else() {
     assert_eq!(
         error_of(&mut fixture, request(Syscall::SystemInfo, &[weak])),
         Some(Error::AccessDenied)
+    );
+}
+
+/// Creates a message interrupt and answers the handle, the address, and the
+/// data of it.
+fn message_interrupt(fixture: &mut Fixture, system: u64) -> (Handle, u64, u64) {
+    let mut buffer = request(Syscall::InterruptCreateMsi, &[system]);
+    let (status, values, _) = call(fixture, &mut buffer);
+    assert_eq!(status.error(), None);
+    let view = Buffer::new(&buffer);
+    (
+        Handle::from_raw(values[0]).unwrap(),
+        view.word(0).unwrap(),
+        view.word(1).unwrap(),
+    )
+}
+
+#[test]
+fn a_message_interrupt_answers_a_handle_an_address_and_a_data_word() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let (handle, address, data) = message_interrupt(&mut fixture, system);
+    let entry = fixture.objects.entry(fixture.process, handle).unwrap();
+    assert_eq!(entry.object_type(), ObjectType::Interrupt);
+    assert_eq!(
+        entry.rights,
+        Rights::MANAGE | Rights::DUPLICATE | Rights::TRANSFER
+    );
+    let id = entry.object.typed::<Interrupt>().unwrap();
+    let held = *fixture.objects.interrupts.get(id).unwrap();
+    assert_eq!(held.line, None, "a message interrupt has no line");
+    assert_eq!(held.vector, MESSAGE_BASE);
+    assert!(!held.masked);
+    assert_eq!(address, MESSAGE_ADDRESS);
+    assert_eq!(data, u64::from(MESSAGE_BASE));
+    assert_eq!(
+        fixture.environment.count(&Call::Route(0, 0)),
+        0,
+        "nothing routed"
+    );
+}
+
+#[test]
+fn a_vector_is_handed_out_once_and_the_exhausted_space_is_no_vector() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let mut vectors = Vec::new();
+    for _ in 0..MESSAGE_VECTORS {
+        let (handle, _, data) = message_interrupt(&mut fixture, system);
+        vectors.push(data);
+        let _ = handle;
+    }
+    let mut unique = vectors.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(
+        unique.len(),
+        vectors.len(),
+        "no vector was handed out twice"
+    );
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::InterruptCreateMsi, &[system])
+        ),
+        Some(Error::NoVector)
+    );
+}
+
+#[test]
+fn a_message_interrupt_that_has_nowhere_to_go_gives_its_vector_back() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    fixture.fill_handles();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::InterruptCreateMsi, &[system])
+        ),
+        Some(Error::QuotaExceeded)
+    );
+    assert_eq!(fixture.objects.interrupts.live(), 0);
+    assert!(
+        fixture.environment.messages.is_empty(),
+        "the vector went back"
+    );
+    assert_eq!(
+        fixture
+            .objects
+            .processes
+            .get(fixture.process)
+            .unwrap()
+            .kernel_object_quota
+            .used(),
+        0
+    );
+}
+
+#[test]
+fn a_machine_without_a_controller_refuses_a_message_interrupt() {
+    let mut fixture = Fixture::new();
+    fixture.environment.no_controller = true;
+    let system = control(&mut fixture);
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::InterruptCreateMsi, &[system])
+        ),
+        Some(Error::Unsupported)
+    );
+    assert_eq!(fixture.objects.interrupts.live(), 0);
+}
+
+#[test]
+fn a_message_interrupt_needs_the_right_to_manage_the_machine() {
+    let mut fixture = Fixture::new();
+    let weak = fixture
+        .install(AnyObjectId::of(SystemControl::ID), Rights::INFO)
+        .raw();
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::InterruptCreateMsi, &[weak])),
+        Some(Error::AccessDenied)
+    );
+}
+
+#[test]
+fn a_message_interrupt_binds_like_any_other_and_its_ack_touches_no_hardware() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let (interrupt, _address, _data) = message_interrupt(&mut fixture, system);
+    let notification = Handle::from_raw(value_of(
+        &mut fixture,
+        request(Syscall::NotificationCreate, &[]),
+    ))
+    .unwrap();
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(
+                Syscall::InterruptBind,
+                &[interrupt.raw(), notification.raw(), 5]
+            )
+        ),
+        None
+    );
+    let unmasks = fixture
+        .environment
+        .calls
+        .iter()
+        .filter(|call| matches!(call, Call::Unmask(_)))
+        .count();
+    assert_eq!(unmasks, 0, "there is no line to unmask");
+
+    let id = fixture
+        .objects
+        .entry(fixture.process, interrupt)
+        .unwrap()
+        .object
+        .typed::<Interrupt>()
+        .unwrap();
+    fixture.objects.interrupts.get_mut(id).unwrap().masked = true;
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::InterruptAck, &[interrupt.raw()])
+        ),
+        None
+    );
+    assert!(!fixture.objects.interrupts.get(id).unwrap().masked);
+    let unmasks = fixture
+        .environment
+        .calls
+        .iter()
+        .filter(|call| matches!(call, Call::Unmask(_)))
+        .count();
+    assert_eq!(unmasks, 0, "and none to unmask on the way out either");
+}
+
+#[test]
+fn an_ack_without_an_outstanding_signal_is_no_error() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let (interrupt, _address, _data) = message_interrupt(&mut fixture, system);
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::InterruptAck, &[interrupt.raw()])
+        ),
+        None
+    );
+}
+
+#[test]
+fn a_vector_freed_with_its_interrupt_object_is_handed_out_again() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let mut handles = Vec::new();
+    for _ in 0..MESSAGE_VECTORS {
+        let (handle, _, _) = message_interrupt(&mut fixture, system);
+        handles.push(handle);
+    }
+    assert_eq!(
+        error_of(
+            &mut fixture,
+            request(Syscall::InterruptCreateMsi, &[system])
+        ),
+        Some(Error::NoVector)
+    );
+    let first = handles.first().copied().unwrap();
+    let freed = fixture
+        .objects
+        .entry(fixture.process, first)
+        .unwrap()
+        .object
+        .typed::<Interrupt>()
+        .unwrap();
+    let vector = fixture.objects.interrupts.get(freed).unwrap().vector;
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::HandleClose, &[first.raw()])),
+        None
+    );
+    assert!(fixture.objects.interrupts.get(freed).is_err());
+    let (_handle, _address, data) = message_interrupt(&mut fixture, system);
+    assert_eq!(
+        data,
+        u64::from(vector),
+        "the space handed the vector out again"
+    );
+}
+
+#[test]
+fn a_line_interrupt_that_is_closed_frees_no_message_vector() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let raw = value_of(
+        &mut fixture,
+        request(Syscall::InterruptCreate, &[system, 3]),
+    );
+    let handle = Handle::from_raw(raw).unwrap();
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::HandleClose, &[handle.raw()])),
+        None
+    );
+    let released = fixture
+        .environment
+        .calls
+        .iter()
+        .filter(|call| matches!(call, Call::ReleaseMessage(_)))
+        .count();
+    assert_eq!(released, 0);
+}
+
+#[test]
+fn a_message_interrupt_with_a_second_handle_keeps_its_vector() {
+    let mut fixture = Fixture::new();
+    let system = control(&mut fixture);
+    let (handle, _, data) = message_interrupt(&mut fixture, system);
+    let second = value_of(
+        &mut fixture,
+        request(
+            Syscall::HandleDuplicate,
+            &[handle.raw(), u64::from(Rights::MANAGE.bits())],
+        ),
+    );
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::HandleClose, &[handle.raw()])),
+        None
+    );
+    let released = fixture
+        .environment
+        .calls
+        .iter()
+        .filter(|call| matches!(call, Call::ReleaseMessage(_)))
+        .count();
+    assert_eq!(released, 0, "one handle of two is not the last reference");
+    assert_eq!(
+        error_of(&mut fixture, request(Syscall::HandleClose, &[second])),
+        None
+    );
+    assert_eq!(
+        fixture
+            .environment
+            .count(&Call::ReleaseMessage(u8::try_from(data).unwrap())),
+        1
     );
 }

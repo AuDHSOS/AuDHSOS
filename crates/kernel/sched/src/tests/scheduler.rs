@@ -257,6 +257,52 @@ fn a_thread_that_ends_is_out_of_every_queue_whatever_it_was_doing() {
 }
 
 #[test]
+fn the_count_of_ended_threads_rises_once_a_thread_and_falls_when_it_is_cleared() {
+    let mut threads = Threads::default();
+    let mut scheduler = Scheduler::new();
+    let first = ready(&mut scheduler, &mut threads, 4);
+    let second = ready(&mut scheduler, &mut threads, 4);
+    assert_eq!(scheduler.ended(), 0, "nothing has ended yet");
+
+    scheduler.exit(&mut threads, first).unwrap();
+    assert_eq!(scheduler.ended(), 1);
+    scheduler.exit(&mut threads, first).unwrap();
+    assert_eq!(
+        scheduler.ended(),
+        1,
+        "ending a thread twice ends one thread"
+    );
+
+    scheduler.exit(&mut threads, second).unwrap();
+    assert_eq!(scheduler.ended(), 2);
+
+    scheduler.cleared();
+    scheduler.cleared();
+    assert_eq!(scheduler.ended(), 0);
+    scheduler.cleared();
+    assert_eq!(scheduler.ended(), 0, "the count does not go below nothing");
+}
+
+#[test]
+fn no_event_but_an_end_raises_the_count() {
+    let mut threads = Threads::default();
+    let mut scheduler = Scheduler::new();
+    let id = ready(&mut scheduler, &mut threads, 4);
+    scheduler.pick_next(&mut threads).unwrap();
+    scheduler
+        .on_block(&mut threads, id, Event::BlockSend)
+        .unwrap();
+    scheduler.on_wake(&mut threads, id).unwrap();
+    scheduler.pick_next(&mut threads).unwrap();
+    scheduler.yield_now(&mut threads, id).unwrap();
+    scheduler.suspend(&mut threads, id).unwrap();
+    scheduler.resume(&mut threads, id).unwrap();
+    assert_eq!(scheduler.ended(), 0);
+    scheduler.exit(&mut threads, id).unwrap();
+    assert_eq!(scheduler.ended(), 1);
+}
+
+#[test]
 fn the_time_slice_runs_out_exactly_at_its_last_tick() {
     let mut threads = Threads::new();
     let mut scheduler = Scheduler::new();

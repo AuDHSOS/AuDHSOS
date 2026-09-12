@@ -13,10 +13,11 @@
 //! returns through, the switch of the stacks, and the task state segment
 //! that says where a trap from user mode lands.
 
+use audhsos_abi::WallClockSource;
 use audhsos_abi::layout::{
     BOOT_STACK_TOP, KERNEL_STACK_PAGES, KERNEL_STACK_SLOT_PAGES, KERNEL_STACKS_BASE, PAGE_SIZE,
 };
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use kernel_core::memory::KernelMemory;
 use kernel_core::root::{self, Grants, RootTask};
 use kernel_core::syscall::{KernelEnvironment, handle_syscall, reap, schedule, store_context};
@@ -50,6 +51,10 @@ pub(crate) fn start(platform: &X86Platform) -> bool {
             .map_or(0, kernel_types::PhysAddr::as_u64),
         Ordering::Relaxed,
     );
+    if let Some((seconds, source)) = platform.wall_clock() {
+        WALL_SECONDS.store(seconds, Ordering::Relaxed);
+        WALL_SOURCE.store(source.code(), Ordering::Relaxed);
+    }
     let Some(program) = root_task_bytes(platform) else {
         return false;
     };
@@ -180,13 +185,48 @@ fn idle_thread() {
     });
 }
 
+/// Whether the thread that would leave the processor holds none of the
+/// kernel's cells: not the memory, not the machine, not the console.
+///
+/// The kernel is not inside a gate for the whole of its own bring-up. The
+/// timer runs from [`take_interrupts`](crate::take_interrupts) on, and
+/// `task::start` builds the root task after that, with interrupts on: it
+/// takes the memory and the machine out of their cells for the length of
+/// real work, and it writes its last line with the console out of its own.
+/// A switch from any of those leaves the cell borrowed by a thread that is
+/// no longer running, and nothing gets it back.
+///
+/// The console is the one this cost a morning on. `root task at ...` is
+/// printed after the root task is ready, so a tick between the borrow and
+/// the end of the line switched into it and left the console held for
+/// good: the machine ran on, and every line it had left to say — the
+/// servers' own, a fault, a panic — went nowhere. A run that has stopped
+/// saying anything and a run that has stopped look the same from outside.
+///
+/// A tick that finds a cell held switches nobody and lets the next tick
+/// try, a millisecond later. The test harness has carried the first two of
+/// these since the `ipc` image wedged on them about one run in six; it has
+/// no third to check, because its commentary builds a console value rather
+/// than borrowing one (D-133).
+fn nothing_is_held() -> bool {
+    with_memory(|_| ()).is_some()
+        && with_machine(|_| ()).is_some()
+        && entry::with_console(|_| ()).is_some()
+}
+
 /// Runs whichever thread the scheduler picks, and comes back when the
 /// processor is standing on this stack again.
+///
+/// A call made while the thread that would leave holds a cell of the
+/// kernel returns at once and switches nobody — see [`nothing_is_held`].
 ///
 /// `standing_on` names the thread whose kernel stack the processor stands
 /// on after the scheduler has let go of it, which is what a thread that
 /// faulted looks like.
 pub(crate) fn run(standing_on: Option<kernel_objects::object::ThreadId>) {
+    if !nothing_is_held() {
+        return;
+    }
     let Some((from, to, top)) = next_switch(standing_on) else {
         return;
     };
@@ -247,15 +287,18 @@ pub(crate) fn answer(
     entry::with_console(|console| {
         with_memory(|memory| {
             with_machine(|machine| {
-                let mut environment = KernelEnvironment::<X86Entry, _, _, _, DeviceAccess<'_>>::new(
-                    memory,
-                    &mut tables,
-                    &mut tlb,
-                    Some(console),
-                    devices.take(),
-                    acpi_pointer(),
-                    context::prepare_user,
-                );
+                let mut environment =
+                    KernelEnvironment::<X86Entry, _, _, _, DeviceAccess<'_>>::new(
+                        memory,
+                        &mut tables,
+                        &mut tlb,
+                        Some(console),
+                        devices.take(),
+                        acpi_pointer(),
+                        context::prepare_user,
+                    )
+                    .at(now_micros())
+                    .with_wall_clock(wall_clock());
                 let reschedule = handle_syscall(
                     &mut machine.objects,
                     &mut machine.scheduler,
@@ -408,6 +451,15 @@ fn environment<'a>(
         acpi_pointer(),
         context::prepare_user,
     )
+    .at(now_micros())
+    .with_wall_clock(wall_clock())
+}
+
+/// The clock the system call layer answers with: the ticks the timer has
+/// counted, in microseconds. The count is an atomic of the interrupt
+/// module, so reading it borrows nothing.
+fn now_micros() -> u64 {
+    kernel_core::tick::micros(kernel_hal_x86_64::interrupts::ticks())
 }
 
 /// The physical address of the root system description pointer, which is
@@ -419,6 +471,25 @@ static ACPI: AtomicU64 = AtomicU64::new(0);
 /// The pointer the bring-up read.
 fn acpi_pointer() -> u64 {
     ACPI.load(Ordering::Relaxed)
+}
+
+/// The moment the firmware clock stood at when the loader read it, in
+/// seconds from the Unix epoch, and the code of the source it came from.
+/// Both are kept here for the reason [`ACPI`] is: the paths that answer a
+/// system call are handed no platform.
+///
+/// A source of zero is a machine that reported no clock, which is what a
+/// fresh pair says, so a kernel whose boot information carried none needs
+/// no further mark.
+static WALL_SECONDS: AtomicI64 = AtomicI64::new(0);
+
+/// The code of the [`WallClockSource`] the loader reported; `0` for none.
+static WALL_SOURCE: AtomicU32 = AtomicU32::new(0);
+
+/// The wall clock the loader read, as the system call layer takes it.
+fn wall_clock() -> Option<(i64, WallClockSource)> {
+    let source = WallClockSource::from_code(WALL_SOURCE.load(Ordering::Relaxed))?;
+    Some((WALL_SECONDS.load(Ordering::Relaxed), source))
 }
 
 /// The physical window, which maps every frame of memory.

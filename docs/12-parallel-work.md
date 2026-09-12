@@ -1133,6 +1133,100 @@ wrote, which is what catalog 6.6.52 asks for in place of the ad-hoc check
 Tests: catalog 6.6.52. Coverage 94.7 percent of lines and 91.3 percent of
 branches.
 
+### 12.7.3 `fs-gpt`
+
+Implemented. The partition table that was in the xtask now lives here,
+over the same `BlockDevice` trait, for the reason 12.7.2 gives for the
+file system above it: a server that reads the boot volume has to find the
+partition before it can mount it, and a second implementation of the
+header would be a second place for an offset to be wrong. The crate reads
+and writes, so the offsets of UEFI 2.11, tables 5.3 to 5.6, exist once
+for both directions.
+
+It is the one layer-1 crate that depends on another. The trait is the
+contract a device offers, it is defined in `fs-fat`, and a crate of its
+own for it would move a public type out of that crate and the device half
+of its error with it — for one trait and two methods.
+
+Reading makes every check section 5.3.2 asks for: the signature, the
+header checksum over the size the header itself names with the checksum
+field read as zero, that the header lies in the block it names as its
+own, and the checksum of the entry array, which covers the count times
+the size and not the space left over in the last block. It makes one
+check more, the protective record, because a device whose first block is
+a legacy table is one whose partitions are described there, and a table
+behind such a record is what an older tool left standing. A primary that
+fails any of it sends the read to the last block, where the backup lies,
+and the error that comes back when the backup fails too is the primary's,
+because that is the table that was meant to be read.
+
+Writing goes down in the order a torn write survives: the protective
+record, both arrays, the backup header, the primary header. The format
+asks for the backup before the primary, which is the recovery it
+describes; the record goes before either, because a reader that finds no
+record reads no table at all, and a write cut short between them would
+leave a whole table nothing would look at.
+
+Two bounds are worth naming. A walk of the array carries the block it is
+inside, so walking every entry costs O(A) block reads in the blocks of
+the array rather than one read per entry. And entry sizes are the
+format's 128 times a power of two, narrowed to those that also divide a
+block, so that no entry straddles two of them; every writer uses 128.
+
+The xtask keeps what is the image's rather than the format's: where the
+partition begins, what it is called, and the identifiers that are fixed
+so that two runs produce the same bytes. Its own `gpt.rs` and `crc32.rs`
+are gone, and the bytes of the image did not change (D-138).
+
+Tests: catalog 6.6.72. Coverage 96.6 percent of lines and 93.6 percent of
+branches.
+
+### 12.7.4 `driver-virtio-blk`
+
+Implemented. The block device of virtio 5.2 as logic: what the registers
+of one mean, which features it asks for, how a request is framed, and the
+order the device is brought up in. Registers reach it through a trait of
+its own — a structure, an offset and a width — so the crate computes no
+address, and the queue is F1's, so it encodes no descriptor either.
+
+It depends on `virtio-queue` and on nothing else. 13.9 sketches
+`driver-virtio-net` as depending on `pci` as well, and for the network
+device that may hold; this one parses no capability, so `pci` would be a
+dependency for nothing. What the two crates share is the device
+identifier, and that stays in `pci::virtio` beside the network device's,
+because a bus walk is what reads it.
+
+Three of the eight request types are here: read, write and flush. The
+five that are missing each need a feature this driver does not take or a
+framing rule of their own, and `features.rs` names every bit of 5.2.3
+including the ones that are turned down, so that an omission reads as a
+decision. Of the three that are taken, `VIRTIO_BLK_F_FLUSH` is there
+because a system that writes a file system and cannot ask for the write
+to reach the disk is telling its caller something it does not know, and
+`VIRTIO_BLK_F_RO` because 5.2.6.1 asks a driver to accept it and a write
+refused before it is sent says more than a status byte does after.
+
+What the crate contributes beyond the framing is the refusals. A request
+whose data is not whole sectors, a flush that carries data, a read or a
+write that carries none, a flush of a sector other than zero, a request
+that reaches past the last sector, and a write to a read-only device are
+each a rule of 5.2.6.1, and each is refused at the call rather than sent
+and answered with a status byte and a lost request.
+
+Two rules of the transport are kept that are easy to miss. The features
+are read at step 4 of 3.1.1 and not before, because reading them writes a
+window selector and the driver makes no write before it has said it is
+there. And the capacity is eight bytes, which 2.5.1 forbids assuming is
+read at once, so it is read between two reads of the configuration
+generation, with a bound on the attempts rather than a loop.
+
+Waiting is the caller's, as it is for F1: `reset` writes the zero and
+`is_reset` says when the device has finished, and `initialize` refuses a
+device that is not at zero rather than spinning on one.
+
+Tests: catalog 6.6.73. Coverage 97.6 percent of lines and 91.1 percent of
+branches.
+
 ## 12.8 Track G: tooling
 
 ### 12.8.1 `fuzz-support`

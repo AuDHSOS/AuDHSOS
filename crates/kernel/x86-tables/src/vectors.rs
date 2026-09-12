@@ -36,6 +36,18 @@ pub const IOAPIC_BASE: u8 = 0x40;
 /// Number of global system interrupts the plan reserves vectors for.
 pub const IOAPIC_LINES: u32 = 24;
 
+/// The same count as a byte, which is the width a vector is.
+const LINES: u8 = 24;
+
+/// The first vector a message interrupt is allocated from. It follows the
+/// I/O APIC range, so lines and messages share one space and neither can
+/// alias the other.
+pub const MSI_BASE: u8 = IOAPIC_BASE.wrapping_add(LINES);
+
+/// How many vectors the plan reserves for message interrupts: everything
+/// between the last I/O APIC line and the system call vector.
+pub const MSI_VECTORS: u8 = SYSCALL.wrapping_sub(MSI_BASE);
+
 /// The vector the system call interface uses.
 pub const SYSCALL: u8 = 0x80;
 
@@ -49,6 +61,9 @@ const _: () = assert!(TIMER > PIC_LAST);
 const _: () = assert!(IOAPIC_BASE > TIMER);
 const _: () = assert!(IOAPIC_LINES <= SYSCALL.wrapping_sub(IOAPIC_BASE) as u32);
 const _: () = assert!(SYSCALL < SPURIOUS);
+const _: () = assert!(LINES as u32 == IOAPIC_LINES);
+const _: () = assert!(MSI_BASE as u32 == IOAPIC_BASE as u32 + IOAPIC_LINES);
+const _: () = assert!(MSI_VECTORS > 0 && MSI_BASE < SYSCALL);
 
 /// The vector global system interrupt `gsi` is routed to, or `None` for a
 /// line beyond what the plan reserves.
@@ -74,6 +89,16 @@ pub const fn gsi_of(vector: u8) -> Option<u32> {
     } else {
         Some(line)
     }
+}
+
+/// The index of `vector` in the message vector space, or `None` for a
+/// vector outside it.
+#[must_use]
+pub const fn message_index(vector: u8) -> Option<u8> {
+    if vector < MSI_BASE || vector >= SYSCALL {
+        return None;
+    }
+    Some(vector.wrapping_sub(MSI_BASE))
 }
 
 /// `true` if the processor, and not a device, raises this vector.

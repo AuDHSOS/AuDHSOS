@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "mouse_packet"
+description = "Fuzz target: mouse_packet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "mouse_packet"
+path = "src/main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+driver-i8042.workspace = true
+fuzz-support.workspace = true
+
+[lints]
+workspace = true

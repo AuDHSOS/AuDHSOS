@@ -267,6 +267,16 @@ impl Process {
         self.watchers.iter().flatten().copied()
     }
 
+    /// Removes exactly this watch. Already delivered notification bits
+    /// are not affected; the owner must validate a delayed delivery.
+    pub fn remove_watcher(&mut self, watch: Watch) {
+        for slot in &mut self.watchers {
+            if *slot == Some(watch) {
+                *slot = None;
+            }
+        }
+    }
+
     /// Whether the end of this process has been told.
     #[must_use]
     pub const fn has_ended(&self) -> bool {
@@ -390,6 +400,15 @@ pub struct Thread {
     /// What the thread waits on, so that a cancellation finds the queue
     /// without searching every endpoint.
     pub wait: Wait,
+    /// The microseconds since boot at which a wait with a deadline ends, or
+    /// `None` for a wait without one. A plain word and not an `Instant`: no
+    /// kernel crate depends on `audhsos-time`, and comparing two integers
+    /// needs no type.
+    pub deadline: Option<u64>,
+    /// The list of threads that wait with a deadline, ordered by it. A
+    /// thread is in it exactly while it is `BlockedNotification` with a
+    /// deadline.
+    pub deadline_links: Links,
     /// What the thread stopped on, for `thread_info` and for the message a
     /// fault handler receives.
     pub fault: Option<Fault>,
@@ -432,6 +451,8 @@ impl Thread {
             queue_links: Links::UNLINKED,
             wait_links: Links::UNLINKED,
             wait: Wait::Nothing,
+            deadline: None,
+            deadline_links: Links::UNLINKED,
             fault: None,
         })
     }
@@ -530,16 +551,17 @@ impl Reply {
     }
 }
 
-/// Sixty-four signal bits, at most one waiter, and the interrupt bound to
-/// it if one is.
+/// Sixty-four signal bits and at most one waiter.
+///
+/// Which interrupts signal into it is not recorded here: an interrupt
+/// carries the notification and the bit it sets, and several of them may
+/// name one notification, each on a bit of its own (D-108).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Notification {
     /// The bits that have been signalled and not yet consumed.
     pub word: u64,
     /// The one thread that may wait; a second gets `Busy`.
     pub waiter: Option<ThreadId>,
-    /// The interrupt object that signals into this notification.
-    pub bound_interrupt: Option<InterruptId>,
 }
 
 impl Object for Notification {
@@ -551,7 +573,6 @@ impl Notification {
     pub const EMPTY: Notification = Notification {
         word: 0,
         waiter: None,
-        bound_interrupt: None,
     };
 
     /// A notification with nothing signalled and nobody waiting.
@@ -571,14 +592,20 @@ impl Notification {
 /// A hardware interrupt line the kernel forwards to a notification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Interrupt {
-    /// The line, as the interrupt controller numbers it.
-    pub line: u8,
-    /// The vector the plan of `kernel_x86_tables::vectors` gives that line.
+    /// The line, as the interrupt controller numbers it, or `None` for a
+    /// message interrupt: a device that writes its vector itself has no
+    /// line at any controller the kernel could mask.
+    pub line: Option<u8>,
+    /// The vector the plan of `kernel_x86_tables::vectors` gives that line,
+    /// or the one the vector allocator handed out for a message interrupt.
     pub vector: u8,
     /// The notification the kernel signals, and which bit of it.
     pub notification: Option<(NotificationId, u8)>,
-    /// Whether the line is masked, which it is from the moment an
-    /// interrupt arrives until `interrupt_ack`.
+    /// Whether delivery is held off, which it is from the moment an
+    /// interrupt arrives until `interrupt_ack`. For a line that is the mask
+    /// at the controller; for a message interrupt it is a flag and nothing
+    /// more, because the mask bit lies in the device's own table, which is
+    /// mapped in the driver and not in the kernel (D-111).
     pub masked: bool,
 }
 
@@ -592,7 +619,19 @@ impl Interrupt {
     #[must_use]
     pub const fn new(line: u8, vector: u8) -> Self {
         Interrupt {
-            line,
+            line: Some(line),
+            vector,
+            notification: None,
+            masked: false,
+        }
+    }
+
+    /// An interrupt object for a message interrupt on `vector`, which has
+    /// no line.
+    #[must_use]
+    pub const fn message(vector: u8) -> Self {
+        Interrupt {
+            line: None,
             vector,
             notification: None,
             masked: false,

@@ -8,9 +8,10 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
+use crate::artifacts;
 use crate::error::Error;
 use crate::policy::{COVERAGE, CRATES, find};
-use crate::process::Cmd;
+use crate::process::{Cmd, run_parallel, test_jobs};
 
 /// Line and branch counts of one crate.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -55,6 +56,7 @@ fn percent(total: u64, missed: u64) -> f64 {
 
 /// Builds instrumented tests, runs them, and returns the per-crate totals.
 pub(crate) fn measure(root: &Path) -> Result<BTreeMap<String, Totals>, Error> {
+    let jobs = test_jobs()?;
     let target_dir = root.join("target").join("coverage-build");
     let profile_dir = root.join("target").join("coverage");
     let _ = std::fs::remove_dir_all(&profile_dir);
@@ -65,24 +67,20 @@ pub(crate) fn measure(root: &Path) -> Result<BTreeMap<String, Totals>, Error> {
         "test",
         "--workspace",
         "--all-features",
-        "--no-run",
     ]))
     .env("RUSTFLAGS", rustflags)
-    .env("CARGO_TARGET_DIR", target_dir.display().to_string())
-    .capture_stderr()?;
-    let executables = executables_of(&build);
-    if executables.is_empty() {
-        return Err(Error::Parse(
-            "cargo test --no-run reported no executables".to_owned(),
-        ));
-    }
+    .env("CARGO_TARGET_DIR", target_dir.display().to_string());
+    let executables = artifacts::build_tests(build)?;
+    let jobs = jobs.min(executables.len());
+    let mut commands = Vec::new();
     for (index, exe) in executables.iter().enumerate() {
         let pattern = profile_dir.join(format!("{index}-%p-%m.profraw"));
-        Cmd::new(exe)
-            .cwd(root)
-            .env("LLVM_PROFILE_FILE", pattern.display().to_string())
-            .run()?;
+        commands.push(
+            exe.test_command(jobs)
+                .env("LLVM_PROFILE_FILE", pattern.display().to_string()),
+        );
     }
+    run_parallel(&commands, jobs)?;
     let tools = llvm_tools_dir()?;
     let merged = profile_dir.join("merged.profdata");
     let mut merge = Cmd::new(tools.join("llvm-profdata"))
@@ -107,24 +105,10 @@ pub(crate) fn measure(root: &Path) -> Result<BTreeMap<String, Totals>, Error> {
         if index > 0 {
             export = export.arg("--object");
         }
-        export = export.arg(exe.display().to_string());
+        export = export.arg(exe.path.display().to_string());
     }
     let text = export.capture()?;
     Ok(totals_by_crate(&text, root))
-}
-
-/// The executables named in the standard error output of
-/// `cargo test --no-run`.
-pub(crate) fn executables_of(stderr: &str) -> Vec<PathBuf> {
-    stderr
-        .lines()
-        .filter(|line| line.trim_start().starts_with("Executable"))
-        .filter_map(|line| {
-            let open = line.rfind('(')?;
-            let close = line.rfind(')')?;
-            line.get(open.saturating_add(1)..close).map(PathBuf::from)
-        })
-        .collect()
 }
 
 /// The directory holding `llvm-profdata` and `llvm-cov` of the toolchain.

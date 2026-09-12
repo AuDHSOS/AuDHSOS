@@ -8,6 +8,7 @@
 #![allow(clippy::as_conversions, clippy::cast_possible_truncation)]
 
 use crate::madt::MADT_SIGNATURE;
+use crate::mcfg::MCFG_SIGNATURE;
 use crate::rsdp::{RSDP_LEN, RSDP_SIGNATURE, RSDP_V1_LEN};
 use crate::sdt::SDT_HEADER_LEN;
 
@@ -124,5 +125,25 @@ pub(crate) fn lapic_override(address: u64) -> Vec<u8> {
 pub(crate) fn unknown(kind: u8, length: u8) -> Vec<u8> {
     let mut entry = vec![kind, length];
     entry.resize(usize::from(length), 0);
+    entry
+}
+
+/// A memory mapped configuration table over the given allocations.
+pub(crate) fn mcfg(allocations: &[Vec<u8>]) -> Vec<u8> {
+    let mut body = vec![0u8; 8];
+    for allocation in allocations {
+        body.extend_from_slice(allocation);
+    }
+    table(MCFG_SIGNATURE, 1, &body)
+}
+
+/// One allocation structure.
+pub(crate) fn allocation(base: u64, segment: u16, first_bus: u8, last_bus: u8) -> Vec<u8> {
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&base.to_le_bytes());
+    entry.extend_from_slice(&segment.to_le_bytes());
+    entry.push(first_bus);
+    entry.push(last_bus);
+    entry.extend_from_slice(&[0u8; 4]);
     entry
 }

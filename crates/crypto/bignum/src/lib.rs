@@ -10,7 +10,7 @@ pub mod limbs;
 pub mod modulus;
 
 pub use error::BignumError;
-pub use limbs::{add_limbs, is_less, montgomery, subtract};
+pub use limbs::{add_limbs, is_less, montgomery, montgomery_secret, subtract};
 pub use modulus::{MAX_BYTES, MAX_LIMBS, Modulus};
 
 #[cfg(test)]

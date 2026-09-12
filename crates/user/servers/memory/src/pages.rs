@@ -3,9 +3,9 @@
 
 //! What the policy needs of the kernel, and nothing else.
 //!
-//! Six operations: map an object into the server's own address space, fill
+//! Seven operations: map an object into the server's own address space, fill
 //! it with zeros, take it out again, split an object, join two that lie
-//! side by side, and give a capability up. Everything the memory server
+//! side by side, give a capability up, and count its references. Everything the memory server
 //! does with memory is one of those, so a double that records them is a
 //! complete account of what a run of the policy did — which is what
 //! [6.6.23](../../../../docs/06-testing-strategy.md#6623-memory-server-logic-server-memory-host-tested-with-a-recording-double-for-map-zero-and-unmap)
@@ -24,6 +24,13 @@ use audhsos_abi::{Error, Handle};
 
 /// The operations the policy makes on memory.
 pub trait Pages {
+    /// Counts handles and mappings, including this server's handle.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the kernel answered; an unknown count is never exclusive.
+    fn references(&mut self, object: Handle) -> Result<u64, Error>;
+
     /// Maps `len` bytes of `object`, from `offset`, into the server's own
     /// address space, and answers with the address they went to.
     ///

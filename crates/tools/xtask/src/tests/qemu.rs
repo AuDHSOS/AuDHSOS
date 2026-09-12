@@ -4,12 +4,12 @@
 //! Tests of `crate::qemu`: the serial protocol parser, the exit status
 //! mapping, and the command line of the reference machine.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::qemu::{
     EXIT_LOADER_FAILURE, EXIT_SUCCESS, EXIT_TEST_FAILURE, Measurement, Options, Outcome, Report,
-    Run, TestOutcome, arguments, check, firmware_next_to, outcome_of, parse, socket_path,
-    strip_escapes,
+    Run, TestOutcome, arguments, check, choose_accelerator, firmware_candidates, outcome_of, parse,
+    socket_path, strip_escapes,
 };
 
 /// A run whose lines are all well formed.
@@ -126,12 +126,13 @@ fn the_command_line_is_the_one_the_target_platform_document_prescribes() {
     let line = arguments(
         Path::new("/fw/edk2-x86_64-code.fd"),
         Path::new("/img/audhsos.img"),
-        &Options::plain(),
+        "tcg",
+        &Options::without_network(),
     )
     .join(" ");
     assert_eq!(
         line,
-        "-machine q35 -cpu qemu64 -smp 1 -m 256M \
+        "-machine q35 -accel tcg -cpu qemu64,+rdrand,+rdseed -smp 1 -m 256M \
          -drive if=pflash,format=raw,readonly=on,file=/fw/edk2-x86_64-code.fd \
          -drive format=raw,file=/img/audhsos.img \
          -serial stdio -display none \
@@ -144,6 +145,7 @@ fn the_command_line_is_the_one_the_target_platform_document_prescribes() {
     let windowed = arguments(
         Path::new("/fw"),
         Path::new("/img"),
+        "tcg",
         &Options::windowed(true),
     )
     .join(" ");
@@ -156,8 +158,10 @@ fn what_a_run_asks_for_beyond_the_reference_machine_is_appended_to_it() {
         display: false,
         qmp: Some(std::path::PathBuf::from("/tmp/qmp.sock")),
         no_vga: true,
+        network: None,
+        scratch: None,
     };
-    let line = arguments(Path::new("/fw"), Path::new("/img"), &options).join(" ");
+    let line = arguments(Path::new("/fw"), Path::new("/img"), "tcg", &options).join(" ");
     assert!(
         line.ends_with("-qmp unix:/tmp/qmp.sock,server,nowait"),
         "{line}"
@@ -170,7 +174,13 @@ fn what_a_run_asks_for_beyond_the_reference_machine_is_appended_to_it() {
 
 #[test]
 fn the_mode_the_firmware_is_to_set_takes_both_the_edid_and_the_firmware_settings() {
-    let line = arguments(Path::new("/fw"), Path::new("/img"), &Options::plain()).join(" ");
+    let line = arguments(
+        Path::new("/fw"),
+        Path::new("/img"),
+        "tcg",
+        &Options::plain(),
+    )
+    .join(" ");
     assert!(
         line.contains("-device VGA,edid=on,xres=1920,yres=1200"),
         "{line}"
@@ -197,15 +207,37 @@ fn a_socket_path_of_a_run_fits_a_unix_socket() {
 }
 
 #[test]
-fn the_firmware_lies_next_to_the_qemu_binary() {
+fn the_firmware_search_covers_macports_and_debian() {
+    let macports = firmware_candidates(Path::new("/opt/local/bin/qemu-system-x86_64"));
     assert_eq!(
-        firmware_next_to(Path::new("/opt/local/bin/qemu-system-x86_64")),
-        Path::new("/opt/local/bin/../share/qemu/edk2-x86_64-code.fd")
+        macports.first().map(PathBuf::as_path),
+        Some(Path::new(
+            "/opt/local/bin/../share/qemu/edk2-x86_64-code.fd"
+        ))
     );
-    assert_eq!(
-        firmware_next_to(Path::new("qemu-system-x86_64")),
-        Path::new("../share/qemu/edk2-x86_64-code.fd")
-    );
+
+    let debian = firmware_candidates(Path::new("/usr/bin/qemu-system-x86_64"));
+    assert!(debian.contains(&PathBuf::from("/usr/bin/../share/OVMF/OVMF_CODE_4M.fd")));
+}
+
+#[test]
+fn linux_prefers_kvm_and_falls_back_to_tcg() {
+    let mut tried = Vec::new();
+    let selected = choose_accelerator(|name| {
+        tried.push(name.to_owned());
+        name == "kvm"
+    });
+    assert_eq!(selected, Some("kvm"));
+    assert_eq!(tried, ["kvm"]);
+
+    tried.clear();
+    let selected = choose_accelerator(|name| {
+        tried.push(name.to_owned());
+        name == "tcg"
+    });
+    assert_eq!(selected, Some("tcg"));
+    assert_eq!(tried, ["kvm", "tcg"]);
+    assert_eq!(choose_accelerator(|_| false), None);
 }
 
 #[test]
@@ -284,4 +316,88 @@ fn a_bench_line_does_not_count_as_a_test() {
     assert_eq!(report.passed(), 0);
     assert_eq!(report.failed(), 0);
     assert!(check(&report, &ended_with(EXIT_SUCCESS)).is_ok());
+}
+
+#[test]
+fn the_network_of_the_reference_machine_is_one_netdev_and_one_device() {
+    let line = arguments(
+        Path::new("/fw"),
+        Path::new("/img"),
+        "tcg",
+        &Options {
+            network: Some(52_000),
+            ..Options::without_network()
+        },
+    )
+    .join(" ");
+    assert!(
+        line.ends_with(
+            "-netdev user,id=n0,hostfwd=tcp:127.0.0.1:52000-:7 \
+             -device virtio-net-pci,netdev=n0,disable-legacy=on,mq=off"
+        ),
+        "{line}"
+    );
+}
+
+#[test]
+fn a_run_without_a_network_carries_neither_line() {
+    let line = arguments(
+        Path::new("/fw"),
+        Path::new("/img"),
+        "tcg",
+        &Options::without_network(),
+    )
+    .join(" ");
+    assert!(!line.contains("-netdev"), "{line}");
+    assert!(!line.contains("virtio-net-pci"), "{line}");
+}
+
+#[test]
+fn a_run_that_writes_carries_a_second_disk_as_a_block_device() {
+    let line = arguments(
+        Path::new("/fw"),
+        Path::new("/img"),
+        "tcg",
+        &Options {
+            scratch: Some(PathBuf::from("/img/audhsos.scratch.img")),
+            ..Options::without_network()
+        },
+    )
+    .join(" ");
+    assert!(
+        line.ends_with(
+            "-drive if=none,id=s0,format=raw,file=/img/audhsos.scratch.img \
+             -device virtio-blk-pci,drive=s0,disable-legacy=on,num-queues=1"
+        ),
+        "{line}"
+    );
+    assert!(
+        line.contains("-drive format=raw,file=/img"),
+        "the boot volume is still the one the firmware reads: {line}"
+    );
+}
+
+#[test]
+fn a_run_that_writes_nothing_carries_neither_line() {
+    let line = arguments(
+        Path::new("/fw"),
+        Path::new("/img"),
+        "tcg",
+        &Options::plain(),
+    )
+    .join(" ");
+    assert!(!line.contains("virtio-blk-pci"), "{line}");
+    assert!(!line.contains("id=s0"), "{line}");
+}
+
+#[test]
+fn a_plain_run_carries_the_network_on_a_port_of_the_loopback() {
+    let options = Options::plain();
+    let port = options.network.expect("the system gives a free port");
+    let line = arguments(Path::new("/fw"), Path::new("/img"), "tcg", &options).join(" ");
+    assert!(
+        line.contains(&format!("hostfwd=tcp:127.0.0.1:{port}-:7")),
+        "{line}"
+    );
+    assert_ne!(port, 0, "a forwarded port is one the system gave");
 }

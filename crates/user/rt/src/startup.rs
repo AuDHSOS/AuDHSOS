@@ -21,7 +21,7 @@
 //! first system call, because a call overwrites the buffer it stands in.
 
 use audhsos_abi::layout::MAX_BOOT_REGIONS;
-use audhsos_abi::startup::{Payload, Role, Screen, StartupError};
+use audhsos_abi::startup::{BusRange, Payload, Role, Screen, StartupError};
 use audhsos_abi::{Buffer, Handle};
 use audhsos_collections::ArrayVec;
 
@@ -86,11 +86,17 @@ pub struct Startup {
     pub io_ports: Option<IoPortHandle>,
     /// The interrupt the process serves.
     pub interrupt: Option<InterruptHandle>,
+    /// The interrupt of the second line of the controller the process
+    /// serves, which the driver of the PS/2 controller is given for the
+    /// mouse (D-109).
+    pub aux_interrupt: Option<InterruptHandle>,
     /// The endpoint of the process that started this one, badged with what
     /// that process knows this one by.
     pub parent: Option<EndpointHandle>,
     /// The endpoint of the display server.
     pub display_server: Option<EndpointHandle>,
+    /// The endpoint of the input server.
+    pub input_server: Option<EndpointHandle>,
     /// The device memory over the framebuffer of the machine.
     pub framebuffer: Option<MemoryHandle>,
     /// The width and the height of that framebuffer, packed as
@@ -99,6 +105,11 @@ pub struct Startup {
     /// The stride and the format of that framebuffer, packed as
     /// [`Role::FramebufferLine`] carries them.
     pub framebuffer_line: Option<u64>,
+    /// The device memory over the configuration window of the PCI bus.
+    pub ecam: Option<MemoryHandle>,
+    /// The segment group and the bus range of that window, packed as
+    /// [`Role::EcamBuses`] carries them.
+    pub ecam_buses: Option<u64>,
 }
 
 impl Default for Startup {
@@ -122,11 +133,25 @@ impl Startup {
             log: None,
             io_ports: None,
             interrupt: None,
+            aux_interrupt: None,
             parent: None,
             display_server: None,
+            input_server: None,
             framebuffer: None,
             framebuffer_geometry: None,
             framebuffer_line: None,
+            ecam: None,
+            ecam_buses: None,
+        }
+    }
+
+    /// The buses of the configuration window, or `None` when the process
+    /// was given no window.
+    #[must_use]
+    pub const fn bus_range(&self) -> Option<BusRange> {
+        match self.ecam_buses {
+            Some(word) => Some(BusRange::from_word(word)),
+            None => None,
         }
     }
 
@@ -160,6 +185,7 @@ impl Startup {
         let field = match role {
             Role::FramebufferGeometry => &mut self.framebuffer_geometry,
             Role::FramebufferLine => &mut self.framebuffer_line,
+            Role::EcamBuses => &mut self.ecam_buses,
             _ => return Ok(()),
         };
         if field.is_some() {
@@ -181,10 +207,13 @@ impl Startup {
             Role::Log => once(&mut self.log, role, handle),
             Role::IoPorts => once(&mut self.io_ports, role, handle),
             Role::Interrupt => once(&mut self.interrupt, role, handle),
+            Role::AuxInterrupt => once(&mut self.aux_interrupt, role, handle),
             Role::Parent => once(&mut self.parent, role, handle),
             Role::DisplayServer => once(&mut self.display_server, role, handle),
+            Role::InputServer => once(&mut self.input_server, role, handle),
             Role::Framebuffer => once(&mut self.framebuffer, role, handle),
-            Role::FramebufferGeometry | Role::FramebufferLine => Ok(()),
+            Role::Ecam => once(&mut self.ecam, role, handle),
+            Role::FramebufferGeometry | Role::FramebufferLine | Role::EcamBuses => Ok(()),
             Role::Ram => self
                 .ram
                 .push(MemoryHandle::from_handle(handle))

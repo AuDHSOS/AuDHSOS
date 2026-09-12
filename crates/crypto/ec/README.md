@@ -25,11 +25,22 @@ verification touches nothing secret — a public key, a message, and a
 signature are all on the wire — so it uses ordinary double-and-add, which
 is simpler and easier to check.
 
-Signing is not part of the product surface. A client that presents no
-certificate never signs, and leaving signing out removes the nonce
-generation that ECDSA is notorious for. It exists only behind the feature
-`test-signing`, deterministic in every algorithm, so that the certificates
-in the test suites are project-generated rather than vendored.
+ECDSA signing is not part of the product surface. A client that presents
+no certificate never signs, and leaving it out removes the nonce
+generation ECDSA is notorious for. It exists only behind the feature
+`test-signing`, deterministic per RFC 6979, so that the certificates in
+the test suites are project-generated rather than vendored.
+
+Ed25519 signing is product surface, because a Secure Shell client
+authenticates with a key of its own (D-135). Two functions see a secret
+and are written for it: `Point::mul_secret` and `Scalar::mul_secret`
+double and add at every position and keep the sum behind a mask, where
+`Point::mul` and `Scalar::mul` add only where a bit is set and are for the
+public scalars a verifier reduces. `subtract_order`, which ends every
+scalar addition, takes its difference behind a mask in a fixed two rounds
+for the same reason. Nothing enforces the boundary: a caller that hands a
+secret to the public multiplication is wrong, and the name is all that
+says so.
 
 ## Where the numbers come from
 

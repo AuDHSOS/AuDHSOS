@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use crate::error::Error;
 use crate::json::Value;
-use crate::qmp::{Qmp, Session};
+use crate::qmp::{Button, Qmp, Session};
 
 /// The greeting QEMU sends.
 const GREETING: &str =
@@ -181,4 +181,93 @@ fn a_stream_that_cannot_be_written_to_is_reported() {
     // The reader is at its end, so the answer is what fails, and it says so.
     let message = format!("{}", outcome.expect_err("an error"));
     assert!(message.contains("closed the connection"), "{message}");
+}
+
+#[test]
+fn a_key_goes_down_and_comes_up_by_the_name_qemu_knows_it_under() {
+    let mut session = session(&[
+        GREETING,
+        r#"{"return":{}}"#,
+        r#"{"return":{}}"#,
+        r#"{"return":{}}"#,
+    ]);
+    session.send_key("esc", true).expect("the key goes down");
+    session.send_key("esc", false).expect("and comes up");
+    assert_eq!(
+        written(&session).get(1..),
+        Some(
+            [
+                r#"{"arguments":{"events":[{"data":{"down":true,"key":{"data":"esc","type":"qcode"}},"type":"key"}]},"execute":"input-send-event"}"#.to_owned(),
+                r#"{"arguments":{"events":[{"data":{"down":false,"key":{"data":"esc","type":"qcode"}},"type":"key"}]},"execute":"input-send-event"}"#.to_owned(),
+            ]
+            .as_slice()
+        )
+    );
+}
+
+#[test]
+fn one_motion_of_the_pointer_is_one_command_carrying_both_axes() {
+    let mut session = session(&[GREETING, r#"{"return":{}}"#, r#"{"return":{}}"#]);
+    session.move_pointer(5, -3).expect("the pointer moves");
+    assert_eq!(
+        written(&session).get(1).map(String::as_str),
+        Some(
+            r#"{"arguments":{"events":[{"data":{"axis":"x","value":5},"type":"rel"},{"data":{"axis":"y","value":-3},"type":"rel"}]},"execute":"input-send-event"}"#
+        ),
+        "both axes go out together, so the mouse packetizes the motion once"
+    );
+}
+
+#[test]
+fn a_button_goes_down_and_comes_up_and_every_button_has_a_name() {
+    let mut session = session(&[
+        GREETING,
+        r#"{"return":{}}"#,
+        r#"{"return":{}}"#,
+        r#"{"return":{}}"#,
+    ]);
+    session
+        .button(Button::Left, true)
+        .expect("the button goes down");
+    session.button(Button::Left, false).expect("and comes up");
+    assert_eq!(
+        written(&session).get(1..),
+        Some(
+            [
+                r#"{"arguments":{"events":[{"data":{"button":"left","down":true},"type":"btn"}]},"execute":"input-send-event"}"#.to_owned(),
+                r#"{"arguments":{"events":[{"data":{"button":"left","down":false},"type":"btn"}]},"execute":"input-send-event"}"#.to_owned(),
+            ]
+            .as_slice()
+        )
+    );
+
+    let names: Vec<&str> = [
+        Button::Left,
+        Button::Middle,
+        Button::Right,
+        Button::WheelUp,
+        Button::WheelDown,
+    ]
+    .iter()
+    .map(|button| button.name())
+    .collect();
+    assert_eq!(
+        names,
+        vec!["left", "middle", "right", "wheel-up", "wheel-down"],
+        "QEMU names its buttons, so this does too"
+    );
+}
+
+#[test]
+fn an_injection_the_machine_refuses_is_an_error_and_not_a_panic() {
+    let mut session = session(&[
+        GREETING,
+        r#"{"return":{}}"#,
+        r#"{"error":{"class":"GenericError","desc":"no input device"}}"#,
+    ]);
+    let message = match session.send_key("a", true) {
+        Ok(()) => String::from("the key went down"),
+        Err(error) => format!("{error}"),
+    };
+    assert!(message.contains("no input device"), "{message}");
 }

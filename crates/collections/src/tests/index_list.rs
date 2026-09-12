@@ -196,6 +196,104 @@ fn the_walk_stops_after_as_many_steps_as_the_list_is_long() {
     assert_eq!(walked.len(), 3);
 }
 
+#[test]
+fn inserting_after_none_is_a_push_at_the_front() {
+    let (mut list, mut links) = list_of(1, 4);
+    list.insert_after(&mut links, 2, None).expect("a free node");
+    list.insert_after(&mut links, 1, None).expect("a free node");
+    assert_eq!(order(&list, &links), vec![1, 2]);
+    assert_eq!(list.head(), Some(1));
+    assert_eq!(list.tail(), Some(2));
+    assert_eq!(list.len(), 2);
+}
+
+#[test]
+fn inserting_after_the_tail_is_a_push_at_the_back() {
+    let (mut list, mut links) = list_of(1, 4);
+    list.push_back(&mut links, 0).expect("a free node");
+    list.insert_after(&mut links, 1, Some(0))
+        .expect("a free node");
+    assert_eq!(order(&list, &links), vec![0, 1]);
+    assert_eq!(list.tail(), Some(1));
+    assert_eq!(links.get(1).and_then(Link::next), None);
+}
+
+#[test]
+fn inserting_in_the_middle_links_both_neighbours() {
+    let (mut list, mut links) = list_of(1, 4);
+    list.push_back(&mut links, 0).expect("a free node");
+    list.push_back(&mut links, 2).expect("a free node");
+    list.insert_after(&mut links, 1, Some(0))
+        .expect("a free node");
+    assert_eq!(order(&list, &links), vec![0, 1, 2]);
+    assert_eq!(list.len(), 3);
+    assert_eq!(links.get(1).and_then(Link::prev), Some(0));
+    assert_eq!(links.get(1).and_then(Link::next), Some(2));
+    assert_eq!(links.get(2).and_then(Link::prev), Some(1));
+    assert_eq!(links.first().and_then(Link::next), Some(1));
+}
+
+#[test]
+fn an_insert_that_is_refused_changes_nothing() {
+    let (mut list, mut links) = list_of(1, 4);
+    let (mut other, _) = list_of(2, 4);
+    list.push_back(&mut links, 0).expect("a free node");
+    other.push_back(&mut links, 3).expect("a free node");
+    let before = links.clone();
+
+    assert_eq!(
+        list.insert_after(&mut links, 0, Some(0)),
+        Err(CollectionError::AlreadyLinked(0))
+    );
+    assert_eq!(
+        list.insert_after(&mut links, 9, None),
+        Err(CollectionError::Index(9))
+    );
+    assert_eq!(
+        list.insert_after(&mut links, 1, Some(9)),
+        Err(CollectionError::Index(9))
+    );
+    assert_eq!(
+        list.insert_after(&mut links, 1, Some(3)),
+        Err(CollectionError::NotLinked(3)),
+        "a node of another list is no anchor"
+    );
+    assert_eq!(
+        list.insert_after(&mut links, 1, Some(2)),
+        Err(CollectionError::NotLinked(2)),
+        "a node in no list is no anchor"
+    );
+    assert_eq!(links, before);
+    assert_eq!(list.len(), 1);
+}
+
+/// Where an insert lands in the model, or why it is refused: `None` is the
+/// front, and `Some(at)` is behind the node at that position.
+fn insert_after_of(
+    model: &VecDeque<u32>,
+    node: u32,
+    after: Option<u32>,
+) -> Result<Option<usize>, CollectionError> {
+    let index = |node: u32| CollectionError::Index(usize::try_from(node).unwrap_or(usize::MAX));
+    if node >= NODES {
+        return Err(index(node));
+    }
+    if model.contains(&node) {
+        return Err(CollectionError::AlreadyLinked(node));
+    }
+    let Some(after) = after else {
+        return Ok(None);
+    };
+    if after >= NODES {
+        return Err(index(after));
+    }
+    model
+        .iter()
+        .position(|held| *held == after)
+        .map(Some)
+        .ok_or(CollectionError::NotLinked(after))
+}
+
 /// The list against a `VecDeque` of the nodes it holds.
 struct ListModel;
 
@@ -273,6 +371,18 @@ impl ModelTest for ListModel {
                 let got = sut.list.pop_back(&mut sut.links);
                 if got != expected {
                     return Err(format!("pop_back {got:?} against {expected:?}"));
+                }
+            }
+            ListOp::InsertAfter(node, after) => {
+                let expected = insert_after_of(model, node, after);
+                let result = sut.list.insert_after(&mut sut.links, node, after);
+                if result.err() != expected.as_ref().err().copied() {
+                    return Err(format!("insert_after {node} after {after:?}"));
+                }
+                match expected {
+                    Ok(None) => model.push_front(node),
+                    Ok(Some(at)) => model.insert(at.saturating_add(1), node),
+                    Err(_) => {}
                 }
             }
             ListOp::Unlink(node) => {

@@ -215,7 +215,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "crypto-bignum",
         path: "crates/crypto/bignum",
         kind: Kind::Logic,
-        deps: &["test-support"],
+        deps: &["crypto-ct", "test-support"],
         coverage_gate: true,
         target: Target::Host,
     },
@@ -224,6 +224,14 @@ pub(crate) const CRATES: &[Crate] = &[
         path: "crates/crypto/ec",
         kind: Kind::Logic,
         deps: &["crypto-bignum", "crypto-ct", "crypto-hash", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "crypto-dh",
+        path: "crates/crypto/dh",
+        kind: Kind::Logic,
+        deps: &["crypto-bignum", "crypto-ct", "test-support"],
         coverage_gate: true,
         target: Target::Host,
     },
@@ -261,6 +269,22 @@ pub(crate) const CRATES: &[Crate] = &[
             "crypto-ec",
             "crypto-hash",
             "crypto-rsa",
+            "test-support",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "audhsos-ssh",
+        path: "crates/net/ssh",
+        kind: Kind::Logic,
+        deps: &[
+            "crypto-aead",
+            "crypto-ct",
+            "crypto-dh",
+            "crypto-ec",
+            "crypto-hash",
+            "crypto-rng",
             "test-support",
         ],
         coverage_gate: true,
@@ -454,7 +478,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-uefi",
         path: "crates/uefi",
         kind: Kind::Logic,
-        deps: &["audhsos-abi"],
+        deps: &["audhsos-abi", "audhsos-time"],
         coverage_gate: true,
         target: Target::Host,
     },
@@ -462,7 +486,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "boot-uefi-x86_64",
         path: "crates/boot/uefi-x86_64",
         kind: Kind::Adapter {
-            unsafe_budget: 39,
+            unsafe_budget: 41,
             asm_budget: 2,
         },
         deps: &[
@@ -485,6 +509,22 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "driver-i8042",
+        path: "crates/drivers/i8042",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "pci",
+        path: "crates/pci",
+        kind: Kind::Logic,
+        deps: &["test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "virtio-queue",
         path: "crates/virtio/queue",
         kind: Kind::Logic,
@@ -497,6 +537,22 @@ pub(crate) const CRATES: &[Crate] = &[
         path: "crates/fs/fat",
         kind: Kind::Logic,
         deps: &["audhsos-time", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "driver-virtio-blk",
+        path: "crates/drivers/virtio-blk",
+        kind: Kind::Logic,
+        deps: &["virtio-queue", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "fs-gpt",
+        path: "crates/fs/gpt",
+        kind: Kind::Logic,
+        deps: &["fs-fat", "test-support"],
         coverage_gate: true,
         target: Target::Host,
     },
@@ -611,9 +667,13 @@ pub(crate) const CRATES: &[Crate] = &[
     Crate {
         name: "kernel-hal-x86_64",
         path: "crates/kernel/hal-x86_64",
+        // The two sites and two `asm!` of `random_bytes` raised this from
+        // 145 and 28 (D-132). Reading the `MCFG` table raised it again, by
+        // the unsafe function that finds it, the window borrow inside it,
+        // and the call at the entry (Phase 13).
         kind: Kind::Adapter {
-            unsafe_budget: 145,
-            asm_budget: 28,
+            unsafe_budget: 152,
+            asm_budget: 30,
         },
         deps: &[
             "kernel-acpi",
@@ -633,7 +693,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-kernel",
         path: "crates/kernel/bin",
         kind: Kind::Adapter {
-            unsafe_budget: 31,
+            unsafe_budget: 33,
             asm_budget: 0,
         },
         deps: &[
@@ -664,7 +724,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-proto",
         path: "crates/user/proto",
         kind: Kind::Logic,
-        deps: &["audhsos-abi", "gfx", "user-rt"],
+        deps: &["audhsos-abi", "driver-i8042", "gfx", "user-rt"],
         coverage_gate: true,
         target: Target::Host,
     },
@@ -709,10 +769,34 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "server-input",
+        path: "crates/user/servers/input",
+        kind: Kind::Logic,
+        deps: &[
+            "audhsos-abi",
+            "audhsos-collections",
+            "driver-i8042",
+            "user-proto",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "app-canvas",
+        path: "crates/user/apps/canvas",
+        kind: Kind::Logic,
+        deps: &["gfx", "user-proto"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "user-sys-x86_64",
         path: "crates/user/sys-x86_64",
+        // The eight accessors of `mmio.rs`, the unsafe constructor they
+        // rest on, the safe one over a slice, and the sub-window raised
+        // this from 21 (Phase 13, 13.7).
         kind: Kind::Adapter {
-            unsafe_budget: 21,
+            unsafe_budget: 32,
             asm_budget: 1,
         },
         deps: &["audhsos-abi", "user-rt"],
@@ -722,8 +806,10 @@ pub(crate) const CRATES: &[Crate] = &[
     Crate {
         name: "user-test-programs",
         path: "crates/user/test-programs",
+        // Three programs of Phase 12 raised this from 78: every call a
+        // program makes is a site, as it is in every other program here.
         kind: Kind::Adapter {
-            unsafe_budget: 78,
+            unsafe_budget: 105,
             asm_budget: 1,
         },
         deps: &["audhsos-abi", "user-rt", "user-sys-x86_64"],
@@ -733,16 +819,22 @@ pub(crate) const CRATES: &[Crate] = &[
     Crate {
         name: "user-programs",
         path: "crates/user/programs",
+        // The bytes of the mapping `app-lspci` walks the bus through raised
+        // this from 33 (Phase 13).
         kind: Kind::Adapter {
-            unsafe_budget: 23,
+            unsafe_budget: 34,
             asm_budget: 0,
         },
         deps: &[
+            "app-canvas",
             "audhsos-abi",
+            "driver-i8042",
             "driver-uart16550",
             "gfx",
+            "pci",
             "server-console",
             "server-display",
+            "server-input",
             "server-memory",
             "server-name",
             "user-loader",
@@ -833,12 +925,16 @@ pub(crate) const CRATES: &[Crate] = &[
         path: "crates/tools/xtask",
         kind: Kind::Host,
         deps: &[
+            "app-canvas",
             "audhsos-abi",
             "audhsos-symbols",
             "audhsos-time",
+            "driver-i8042",
             "fs-fat",
+            "fs-gpt",
             "gfx",
             "kernel-test-harness",
+            "server-display",
             "user-loader",
         ],
         coverage_gate: false,
@@ -999,8 +1095,14 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "ipv4" },
     FuzzTarget { name: "ipv6" },
     FuzzTarget { name: "madt" },
+    FuzzTarget { name: "mcfg" },
+    FuzzTarget { name: "pci_config" },
+    FuzzTarget {
+        name: "mouse_packet",
+    },
     FuzzTarget { name: "pem" },
     FuzzTarget { name: "rsa" },
+    FuzzTarget { name: "scancode" },
     FuzzTarget { name: "tar" },
     FuzzTarget {
         name: "dns_message",

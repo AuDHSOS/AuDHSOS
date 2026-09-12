@@ -3,7 +3,7 @@
 
 [package]
 name = "user-proto"
-description = "The messages the servers of AuDHSOS speak: names, console, memory, display"
+description = "The messages the servers of AuDHSOS speak: names, console, memory, display, input"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,6 +12,7 @@ rust-version.workspace = true
 
 [dependencies]
 audhsos-abi.workspace = true
+driver-i8042.workspace = true
 gfx.workspace = true
 user-rt.workspace = true
 

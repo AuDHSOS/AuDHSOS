@@ -29,10 +29,14 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds nine programs and each uses a different part of what it
+// The package holds thirteen programs and each uses a different part of what it
 // depends on; these are the crates this one does not.
+use app_canvas as _;
+use driver_i8042 as _;
 use driver_uart16550 as _;
+use pci as _;
 use server_console as _;
+use server_input as _;
 use server_memory as _;
 use server_name as _;
 use user_loader as _;
@@ -299,8 +303,13 @@ fn handle(
         Request::DestroySurface { id } => {
             Reply::Destroyed(destroy(gate, startup, display, held, badge, *id))
         }
-        Request::SetCursor { x, y, visible } => Reply::CursorSet(match screen {
-            Some(surface) => display.set_cursor(*x, *y, *visible, surface),
+        Request::SetCursor {
+            x,
+            y,
+            visible,
+            shape,
+        } => Reply::CursorSet(match screen {
+            Some(surface) => display.set_cursor(*x, *y, *visible, *shape, surface),
             None => Err(Error::NotFound),
         }),
     }

@@ -15,11 +15,12 @@ use core::marker::PhantomData;
 
 use audhsos_abi::ipc_buffer::SIZE;
 use audhsos_abi::layout::PAGE_SIZE;
-use audhsos_abi::{Error, Framebuffer};
+use audhsos_abi::{Ecam, Error, Framebuffer, WallClockSource};
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::device::Devices;
 use kernel_hal_api::interrupt::{InterruptError, InterruptLine, Vector};
 use kernel_hal_api::paging::{AddressSpaceControl, FrameAccess, FrameBytes, TlbControl};
+use kernel_hal_api::random::RandomError;
 use kernel_mm::BitmapFrameAllocator;
 use kernel_mm::kernel_half;
 use kernel_mm::mapper::Mapper;
@@ -67,10 +68,19 @@ where
     /// bring-up has run. A kernel that has not brought them up refuses the
     /// calls that need them.
     pub devices: Option<&'a mut D>,
+    /// The microseconds since the kernel started, as the tick count stood
+    /// when the call began. It is a word and not a borrow of the state
+    /// cell: the count is read once, before the call, and a call that took
+    /// a tick answers the clock it started with.
+    pub now: u64,
     /// The physical address of the root system description pointer, which
-    /// the bring-up read and `system_info` reports. It is the only thing of
-    /// the firmware the kernel keeps.
+    /// the bring-up read and `system_info` reports.
     pub acpi: u64,
+    /// The moment the firmware clock stood at when the loader read it, in
+    /// seconds from the Unix epoch, and where it came from; `None` on a
+    /// machine that reported no clock. `clock_wall` answers this plus
+    /// `now`.
+    pub wall: Option<(i64, WallClockSource)>,
     /// Writes the frame a new thread returns through, in the frame the top
     /// of its kernel stack lies in.
     ///
@@ -107,9 +117,28 @@ where
             console,
             devices,
             acpi,
+            now: 0,
+            wall: None,
             prepare,
             format: PhantomData,
         }
+    }
+
+    /// The same environment with the wall clock the loader reported.
+    ///
+    /// It is a builder and not a parameter of [`KernelEnvironment::new`]
+    /// for the reason `at` is one: the six the constructor takes are
+    /// borrows of the machine, and these two are values read out of it.
+    #[must_use]
+    pub const fn with_wall_clock(self, wall: Option<(i64, WallClockSource)>) -> Self {
+        KernelEnvironment { wall, ..self }
+    }
+
+    /// The same environment with `now` as the clock, in the microseconds
+    /// since the kernel started that `clock_now` answers in.
+    #[must_use]
+    pub const fn at(self, now: u64) -> Self {
+        KernelEnvironment { now, ..self }
     }
 
     /// A mapper over the address space rooted at `root`.
@@ -283,6 +312,41 @@ where
         Ok(())
     }
 
+    fn write_port_string(&mut self, port: u16, bytes: &[u8]) -> Result<(), Error> {
+        let devices = self.devices.as_mut().ok_or(Error::Unsupported)?;
+        for byte in bytes {
+            devices.write_u8(port, *byte);
+        }
+        Ok(())
+    }
+
+    fn now_micros(&self) -> u64 {
+        self.now
+    }
+
+    fn boot_wall(&self) -> Option<(i64, WallClockSource)> {
+        self.wall
+    }
+
+    fn random_seed(&mut self) -> Result<[u64; 4], Error> {
+        let devices = self.devices.as_mut().ok_or(Error::Unavailable)?;
+        devices.seed().map_err(entropy_error)
+    }
+
+    fn allocate_message_vector(&mut self) -> Result<(u8, u64, u32), Error> {
+        let devices = self.devices.as_mut().ok_or(Error::Unsupported)?;
+        let message = devices.allocate_msi().map_err(routing_error)?;
+        Ok((message.vector.number(), message.address, message.data))
+    }
+
+    fn release_message_vector(&mut self, vector: u8) {
+        if let Some(devices) = self.devices.as_mut()
+            && let Ok(vector) = Vector::new(vector)
+        {
+            devices.release_msi(vector);
+        }
+    }
+
     fn interrupt_vector(&self, line: u8) -> Option<u8> {
         let devices = self.devices.as_ref()?;
         Some(devices.vector_of(InterruptLine::new(line))?.number())
@@ -324,6 +388,10 @@ where
     fn acpi_pointer(&self) -> u64 {
         self.acpi
     }
+
+    fn ecam(&self) -> Option<Ecam> {
+        self.memory.ecam()
+    }
 }
 
 /// The low bytes of a word, as a port write of the width of `T` takes them.
@@ -356,6 +424,14 @@ const fn routing_error(error: InterruptError) -> Error {
             Error::InvalidArgument
         }
         InterruptError::AlreadyRouted(_) => Error::AlreadyExists,
+        InterruptError::NoVector => Error::NoVector,
+    }
+}
+
+/// What an entropy failure says to a caller of a system call.
+const fn entropy_error(error: RandomError) -> Error {
+    match error {
+        RandomError::Unavailable => Error::Unavailable,
     }
 }
 

@@ -68,16 +68,18 @@ impl PortAccess for Ports {
     }
 }
 
-/// The interrupt controller and the ports of this machine in one value,
-/// which is what `kernel_core::KernelEnvironment` holds.
+/// The interrupt controller, the ports, and the entropy source of this
+/// machine in one value, which is what `kernel_core::KernelEnvironment`
+/// holds.
 ///
 /// The controller is borrowed, because it lives in the one cell every
-/// interrupt handler reaches; the ports are a value, because they hold
-/// nothing.
+/// interrupt handler reaches; the ports and the entropy source are values,
+/// because they hold nothing.
 #[derive(Debug)]
 pub struct DeviceAccess<'a> {
     apics: &'a mut crate::apic::Apics,
     ports: Ports,
+    random: Option<crate::random::HardwareRandom>,
 }
 
 impl<'a> DeviceAccess<'a> {
@@ -87,7 +89,32 @@ impl<'a> DeviceAccess<'a> {
         DeviceAccess {
             apics,
             ports: Ports::new(),
+            random: None,
         }
+    }
+
+    /// The same devices with the entropy source of this processor, on a
+    /// processor that has `RDSEED`. Without it `random_bytes` answers
+    /// `Unavailable`, which is what the reference machine looked like
+    /// before its CPU model gained the two feature flags.
+    #[must_use]
+    pub fn with_entropy(self) -> Self {
+        DeviceAccess {
+            random: crate::random::HardwareRandom::of_this_processor(),
+            ..self
+        }
+    }
+}
+
+impl kernel_hal_api::random::Random for DeviceAccess<'_> {
+    fn seed(
+        &mut self,
+    ) -> Result<[u64; kernel_hal_api::random::SEED_WORDS], kernel_hal_api::random::RandomError>
+    {
+        self.random
+            .as_mut()
+            .ok_or(kernel_hal_api::random::RandomError::Unavailable)?
+            .seed()
     }
 }
 
@@ -117,6 +144,19 @@ impl kernel_hal_api::interrupt::InterruptController for DeviceAccess<'_> {
 
     fn end_of_interrupt(&mut self, vector: kernel_hal_api::interrupt::Vector) {
         self.apics.end_of_interrupt(vector);
+    }
+
+    fn allocate_msi(
+        &mut self,
+    ) -> Result<
+        kernel_hal_api::interrupt::MessageInterrupt,
+        kernel_hal_api::interrupt::InterruptError,
+    > {
+        self.apics.allocate_msi()
+    }
+
+    fn release_msi(&mut self, vector: kernel_hal_api::interrupt::Vector) {
+        self.apics.release_msi(vector);
     }
 }
 

@@ -8,6 +8,7 @@
 
 pub mod gate;
 pub mod log;
+pub mod mmio;
 
 use core::arch::asm;
 
@@ -16,6 +17,7 @@ use audhsos_abi::ipc_buffer::{BufferMut, SIZE};
 
 pub use gate::{Gate, MemoryInfo, Received, SYSTEM_INFO_WORDS, SystemInfo, ThreadInfo};
 pub use log::write_line;
+pub use mmio::Mmio;
 pub use user_rt::Startup;
 
 /// Makes the system call the IPC buffer describes and returns when the

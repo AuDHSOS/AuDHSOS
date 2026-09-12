@@ -29,6 +29,21 @@ fn is_zero_holds_for_zero_alone() {
 }
 
 #[test]
+fn is_zero_of_a_word_holds_for_zero_alone() {
+    assert!(Choice::is_zero_u64(0).is_true());
+    for shift in 0u32..64 {
+        let value = 1u64.wrapping_shl(shift);
+        assert!(!Choice::is_zero_u64(value).is_true(), "bit {shift}");
+        assert!(
+            !Choice::is_zero_u64(value.wrapping_neg()).is_true(),
+            "negated bit {shift}"
+        );
+    }
+    assert!(!Choice::is_zero_u64(u64::MAX).is_true());
+    assert!(!Choice::is_zero_u64(1u64.wrapping_shl(63)).is_true());
+}
+
+#[test]
 fn masks_are_all_ones_or_all_zeros() {
     assert_eq!(Choice::YES.mask_u8(), 0xFF);
     assert_eq!(Choice::NO.mask_u8(), 0x00);

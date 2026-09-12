@@ -4,6 +4,7 @@
 //! File system helpers.
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use crate::error::Error;
@@ -59,6 +60,34 @@ pub(crate) fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     }
     fs::write(path, bytes)
         .map_err(|source| Error::io(format!("writing {}", path.display()), source))
+}
+
+/// Creates `path` as `len` zero bytes when nothing is there, leaves what
+/// is there as it stands, and answers whether it wrote a file. A failure
+/// leaves nothing behind.
+///
+/// The file is sparse where the file system has sparse files, so a disk
+/// nothing has written to costs no blocks.
+pub(crate) fn create_sparse(path: &Path, len: u64) -> Result<bool, Error> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|source| Error::io(format!("creating {}", parent.display()), source))?;
+    }
+    // The file is claimed rather than asked after: a check that answers
+    // whether it is there says nothing about the moment after it, and the
+    // create that would follow such a check truncates what it finds.
+    let file = match fs::File::create_new(path) {
+        Ok(file) => file,
+        Err(source) if source.kind() == ErrorKind::AlreadyExists => return Ok(false),
+        Err(source) => return Err(Error::io(format!("creating {}", path.display()), source)),
+    };
+    file.set_len(len).map_err(|source| {
+        // What is left is a file of no length, which the next run would
+        // take for the disk it kept.
+        let _ = fs::remove_file(path);
+        Error::io(format!("sizing {}", path.display()), source)
+    })?;
+    Ok(true)
 }
 
 /// The extension of a path as a string, or an empty string.

@@ -4,6 +4,11 @@
 //! The header every system description table starts with, and the root
 //! table that names the others.
 //!
+//! The layouts are the *ACPI Specification* 6.6: section 5.2.6 for the
+//! header and the checksum over the whole table, sections 5.2.7 and 5.2.8
+//! for the RSDT and the XSDT, whose entry arrays hold four- and eight-byte
+//! pointers.
+//!
 //! Invariants: a [`SdtHeader`] this module hands out announces a length
 //! that the bytes cover and that is at least the header itself, and the
 //! bytes of that length sum to zero; a [`RootTable`] hands out only
@@ -14,13 +19,16 @@ use kernel_types::PhysAddr;
 use crate::error::AcpiError;
 use crate::raw::{array_at, sum_of, u32_at, u64_at};
 
-/// Number of bytes of the header every table starts with.
+/// Number of bytes of the header every table starts with, from
+/// section 5.2.6.
 pub const SDT_HEADER_LEN: usize = 36;
 
-/// The signature of the root table with four-byte entries.
+/// The signature of the root table with four-byte entries,
+/// from section 5.2.7.
 pub const RSDT_SIGNATURE: [u8; 4] = *b"RSDT";
 
-/// The signature of the root table with eight-byte entries.
+/// The signature of the root table with eight-byte entries,
+/// from section 5.2.8.
 pub const XSDT_SIGNATURE: [u8; 4] = *b"XSDT";
 
 /// What the header of a table says.

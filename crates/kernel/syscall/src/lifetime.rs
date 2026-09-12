@@ -9,8 +9,8 @@
 //! can close under waiters — and then every one of them is woken with a
 //! status that says the object is gone.
 
-use audhsos_abi::Error;
-use kernel_objects::object::AnyObjectId;
+use audhsos_abi::{Error, ObjectType};
+use kernel_objects::object::{AnyObjectId, Interrupt};
 
 use crate::calls::ipc::write_result;
 use crate::dispatch::Machine;
@@ -33,14 +33,44 @@ pub fn release<
     machine: &mut Machine<'_, E, NP, NT, NM, NH>,
     object: AnyObjectId,
 ) -> Result<bool, Error> {
+    let vector = message_vector_of(machine, object);
     let Some(gone) = machine.objects.destroy(object) else {
         return Ok(false);
     };
+    if let Some(vector) = vector {
+        // The vector space is the kernel's, and an object that is gone no
+        // longer holds a vector of it.
+        machine.environment.release_message_vector(vector);
+    }
     let mut waiters = kernel_ipc::destroyed(&gone);
     while let Some(wakeup) = waiters.wake_next(&mut machine.objects.threads, machine.scheduler) {
         write_result(machine, wakeup)?;
     }
     Ok(waiters.wants_switch())
+}
+
+/// The vector of `object`, when it is a message interrupt that this
+/// release would destroy. A line interrupt keeps its routing, which is the
+/// plan of the machine and not a vector that was handed out.
+fn message_vector_of<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &Machine<'_, E, NP, NT, NM, NH>,
+    object: AnyObjectId,
+) -> Option<u8> {
+    if object.object_type() != ObjectType::Interrupt {
+        return None;
+    }
+    let id = object.typed::<Interrupt>().ok()?;
+    let held = machine.objects.interrupts.get(id).ok()?;
+    if machine.objects.interrupts.references(id) != Ok(1) {
+        return None;
+    }
+    held.line.is_none().then_some(held.vector)
 }
 
 /// Drops the reference every handle of `process` held, one at a time, and

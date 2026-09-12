@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "app-canvas"
+version = "0.1.0"
+dependencies = [
+ "gfx",
+ "user-proto",
+]
+
+[[package]]
 name = "audhsos-abi"
 version = "0.1.0"
 dependencies = [
@@ -88,6 +96,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "audhsos-ssh"
+version = "0.1.0"
+dependencies = [
+ "crypto-aead",
+ "crypto-ct",
+ "crypto-dh",
+ "crypto-ec",
+ "crypto-hash",
+ "crypto-rng",
+ "test-support",
+]
+
+[[package]]
 name = "audhsos-symbols"
 version = "0.1.0"
 dependencies = [
@@ -130,6 +151,7 @@ name = "audhsos-uefi"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "audhsos-time",
  "test-support",
 ]
 
@@ -173,6 +195,7 @@ dependencies = [
 name = "crypto-bignum"
 version = "0.1.0"
 dependencies = [
+ "crypto-ct",
  "test-support",
 ]
 
@@ -180,6 +203,15 @@ dependencies = [
 name = "crypto-ct"
 version = "0.1.0"
 dependencies = [
+ "test-support",
+]
+
+[[package]]
+name = "crypto-dh"
+version = "0.1.0"
+dependencies = [
+ "crypto-bignum",
+ "crypto-ct",
  "test-support",
 ]
 
@@ -262,6 +294,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "driver-i8042"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
 name = "driver-uart16550"
 version = "0.1.0"
 dependencies = [
@@ -269,10 +308,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "driver-virtio-blk"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+ "virtio-queue",
+]
+
+[[package]]
 name = "fs-fat"
 version = "0.1.0"
 dependencies = [
  "audhsos-time",
+ "test-support",
+]
+
+[[package]]
+name = "fs-gpt"
+version = "0.1.0"
+dependencies = [
+ "fs-fat",
  "test-support",
 ]
 
@@ -541,6 +596,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pci"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+]
+
+[[package]]
 name = "server-console"
 version = "0.1.0"
 dependencies = [
@@ -555,6 +617,16 @@ dependencies = [
  "audhsos-abi",
  "audhsos-collections",
  "gfx",
+ "user-proto",
+]
+
+[[package]]
+name = "server-input"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-collections",
+ "driver-i8042",
  "user-proto",
 ]
 
@@ -593,11 +665,15 @@ dependencies = [
 name = "user-programs"
 version = "0.1.0"
 dependencies = [
+ "app-canvas",
  "audhsos-abi",
+ "driver-i8042",
  "driver-uart16550",
  "gfx",
+ "pci",
  "server-console",
  "server-display",
+ "server-input",
  "server-memory",
  "server-name",
  "user-loader",
@@ -611,6 +687,7 @@ name = "user-proto"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "driver-i8042",
  "gfx",
  "user-rt",
 ]
@@ -653,11 +730,15 @@ dependencies = [
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "app-canvas",
  "audhsos-abi",
  "audhsos-symbols",
  "audhsos-time",
+ "driver-i8042",
  "fs-fat",
+ "fs-gpt",
  "gfx",
  "kernel-test-harness",
+ "server-display",
  "user-loader",
 ]

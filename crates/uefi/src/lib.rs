@@ -10,10 +10,12 @@ pub mod memory_map;
 pub mod protocols;
 pub mod status;
 pub mod tables;
+pub mod time;
 pub mod types;
 pub mod utf16;
 
 pub use status::Status;
+pub use time::{ClockError, to_unix};
 pub use types::{Guid, Handle, TableHeader};
 
 #[cfg(test)]

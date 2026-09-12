@@ -12,8 +12,12 @@
 //! drift apart.
 
 use std::io::Read;
+#[cfg(target_os = "linux")]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use kernel_test_harness::protocol::{
@@ -21,9 +25,17 @@ use kernel_test_harness::protocol::{
 };
 
 use crate::error::Error;
+#[cfg(target_os = "linux")]
+use crate::out::note;
 
 /// The QEMU binary the reference machine runs on.
 const QEMU_BINARY: &str = "qemu-system-x86_64";
+
+/// The CPU model of the reference machine. `qemu64` carries neither
+/// `rdrand` nor `rdseed`, which was checked against QEMU through
+/// `query-cpu-model-expansion` and not assumed; TCG provides both once
+/// they are asked for, and `random_bytes` needs `rdseed` (D-110).
+const CPU_MODEL: &str = "qemu64,+rdrand,+rdseed";
 
 /// Names the QEMU binary, instead of searching the `PATH`.
 const QEMU_VARIABLE: &str = "AUDHSOS_QEMU";
@@ -31,11 +43,24 @@ const QEMU_VARIABLE: &str = "AUDHSOS_QEMU";
 /// Names the firmware image, instead of looking next to QEMU.
 const FIRMWARE_VARIABLE: &str = "AUDHSOS_OVMF";
 
+/// The accelerator selected by the parent xtask for every QEMU runner.
+pub(crate) const ACCELERATOR_VARIABLE: &str = "AUDHSOS_QEMU_ACCELERATOR";
+
 /// Names the time limit of one run in seconds.
 const TIMEOUT_VARIABLE: &str = "AUDHSOS_QEMU_TIMEOUT";
 
-/// Where the firmware lives, relative to the directory holding QEMU.
-const FIRMWARE_RELATIVE: &str = "../share/qemu/edk2-x86_64-code.fd";
+/// Places distributions install the firmware, relative to the directory
+/// holding QEMU. `MacPorts` uses the first one; Debian uses the second one.
+const FIRMWARE_RELATIVES: [&str; 4] = [
+    "../share/qemu/edk2-x86_64-code.fd",
+    "../share/OVMF/OVMF_CODE_4M.fd",
+    "../share/OVMF/OVMF_CODE.fd",
+    "../share/qemu/OVMF.fd",
+];
+
+/// The port inside the guest the forwarded host port reaches, which is the
+/// echo port of a listener Phase 14 brings up.
+const GUEST_PORT: u16 = 7;
 
 /// Time limit of one run in seconds.
 const DEFAULT_TIMEOUT: u64 = 60;
@@ -54,6 +79,10 @@ const SCREEN_HEIGHT: u32 = 1200;
 
 /// How long the runner waits between two checks on the machine.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// The Linux accelerator probe is shared by every QEMU use of one xtask.
+#[cfg(target_os = "linux")]
+static LINUX_ACCELERATOR: OnceLock<Result<String, String>> = OnceLock::new();
 
 /// The exit status of a machine that reported success.
 pub(crate) const EXIT_SUCCESS: i32 = 33;
@@ -171,21 +200,53 @@ pub(crate) struct Options {
     /// Run without a graphics adapter, which leaves the firmware without a
     /// Graphics Output Protocol and the kernel without a framebuffer.
     pub(crate) no_vga: bool,
+    /// The host port QEMU's user-mode network forwards into the guest, and
+    /// with it the network device itself. `None` is a machine without the
+    /// two network lines, which is the second run Phase 13 and Phase 14 are
+    /// accepted on (D-118).
+    pub(crate) network: Option<u16>,
+    /// The second disk, and with it the block device itself. `None` is a
+    /// machine that has the boot volume and nothing else, which is every
+    /// run that writes nothing (D-136).
+    pub(crate) scratch: Option<PathBuf>,
 }
 
 impl Options {
-    /// A headless run of the reference machine.
+    /// A headless run of the reference machine, network included.
     pub(crate) fn plain() -> Self {
-        Options::default()
+        Options {
+            network: free_port(),
+            ..Options::default()
+        }
     }
 
     /// The same, with QEMU's own window.
     pub(crate) fn windowed(display: bool) -> Self {
         Options {
             display,
-            ..Options::default()
+            ..Options::plain()
         }
     }
+
+    /// The same, without the two network lines.
+    pub(crate) fn without_network() -> Self {
+        Options::default()
+    }
+}
+
+/// A port on the loopback of the development machine that nothing listens
+/// on, or `None` when the system would give none.
+///
+/// The port is asked of the system by binding one and letting it go again,
+/// which is what every test harness does: nothing can hold a port between
+/// the moment it is chosen and the moment QEMU takes it, and a port that
+/// was taken in between makes QEMU refuse to start with a message that
+/// names it.
+pub(crate) fn free_port() -> Option<u16> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
+    let port = listener.local_addr().ok()?.port();
+    drop(listener);
+    Some(port)
 }
 
 /// A socket path for the machine protocol, short enough for a Unix socket.
@@ -217,6 +278,7 @@ const MAX_SOCKET_PATH: usize = 104;
 pub(crate) struct Machine {
     qemu: PathBuf,
     firmware: PathBuf,
+    accelerator: String,
     timeout: Duration,
 }
 
@@ -241,9 +303,19 @@ impl Machine {
                 qemu.display()
             )));
         }
+        let accelerator = accelerator(&qemu)?;
         let firmware = match std::env::var_os(FIRMWARE_VARIABLE) {
             Some(value) => PathBuf::from(value),
-            None => firmware_next_to(&qemu),
+            None => firmware_next_to(&qemu).ok_or_else(|| {
+                let tried = firmware_candidates(&qemu)
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Error::Usage(format!(
+                    "no firmware image was found; tried {tried}; set {FIRMWARE_VARIABLE} to it"
+                ))
+            })?,
         };
         if !firmware.is_file() {
             return Err(Error::Usage(format!(
@@ -254,6 +326,7 @@ impl Machine {
         Ok(Machine {
             qemu,
             firmware,
+            accelerator,
             timeout: Duration::from_secs(timeout_seconds()),
         })
     }
@@ -261,12 +334,17 @@ impl Machine {
     /// The command line of the reference machine for `image`. `display`
     /// opens QEMU's own window instead of running headless.
     pub(crate) fn arguments(&self, image: &Path, options: &Options) -> Vec<String> {
-        arguments(&self.firmware, image, options)
+        arguments(&self.firmware, image, &self.accelerator, options)
     }
 
     /// The QEMU binary of the reference machine.
     pub(crate) fn qemu(&self) -> &Path {
         &self.qemu
+    }
+
+    /// The accelerator every run of this machine uses.
+    pub(crate) fn accelerator(&self) -> &str {
+        &self.accelerator
     }
 
     /// The command line for messages.
@@ -358,12 +436,19 @@ impl Machine {
 /// The command line of the reference machine, as
 /// [03-target-platform.md 3.1.1](../../../docs/03-target-platform.md)
 /// prescribes it.
-pub(crate) fn arguments(firmware: &Path, image: &Path, options: &Options) -> Vec<String> {
+pub(crate) fn arguments(
+    firmware: &Path,
+    image: &Path,
+    accelerator: &str,
+    options: &Options,
+) -> Vec<String> {
     let mut line = vec![
         "-machine".to_owned(),
         "q35".to_owned(),
+        "-accel".to_owned(),
+        accelerator.to_owned(),
         "-cpu".to_owned(),
-        "qemu64".to_owned(),
+        CPU_MODEL.to_owned(),
         "-smp".to_owned(),
         "1".to_owned(),
         "-m".to_owned(),
@@ -392,7 +477,55 @@ pub(crate) fn arguments(firmware: &Path, image: &Path, options: &Options) -> Vec
         line.push("-qmp".to_owned());
         line.push(format!("unix:{},server,nowait", socket.display()));
     }
+    line.extend(network(options.network));
+    line.extend(scratch(options.scratch.as_deref()));
     line
+}
+
+/// The network of the reference machine, as
+/// [13.12](../../../docs/13-the-network-on-the-machine.md) prescribes it, or
+/// nothing for a run without one.
+///
+/// `disable-legacy=on` makes it a non-transitional virtio 1.0 device, whose
+/// device identifier is then `0x1041` and not the transitional `0x1000`;
+/// `mq=off` is the default and is written down because the driver depends on
+/// it. The forwarded port reaches a listener inside the guest and needs no
+/// host network and no privileges.
+fn network(host_port: Option<u16>) -> Vec<String> {
+    let Some(port) = host_port else {
+        return Vec::new();
+    };
+    vec![
+        "-netdev".to_owned(),
+        format!("user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:{GUEST_PORT}"),
+        "-device".to_owned(),
+        "virtio-net-pci,netdev=n0,disable-legacy=on,mq=off".to_owned(),
+    ]
+}
+
+/// The second disk of a run that writes, as
+/// [03-target-platform.md 3.1.1](../../../docs/03-target-platform.md)
+/// prescribes it, or nothing for a run that writes nothing.
+///
+/// The boot volume stays what the firmware and the loader read; what the
+/// system writes, it writes here, so that no run can leave the volume it
+/// boots from torn (D-136). The disk arrives blank and holds no partition
+/// table: what formats it is the system.
+///
+/// `disable-legacy=on` makes it a non-transitional virtio 1.0 device,
+/// whose device identifier is then `0x1042` and not the transitional
+/// `0x1001`. `num-queues=1` is not the default — QEMU gives the device one
+/// queue per processor — and it is named because the driver will drive one.
+fn scratch(disk: Option<&Path>) -> Vec<String> {
+    let Some(disk) = disk else {
+        return Vec::new();
+    };
+    vec![
+        "-drive".to_owned(),
+        format!("if=none,id=s0,format=raw,file={}", disk.display()),
+        "-device".to_owned(),
+        "virtio-blk-pci,drive=s0,disable-legacy=on,num-queues=1".to_owned(),
+    ]
 }
 
 /// The graphics adapter of the reference machine and the mode the firmware
@@ -454,12 +587,126 @@ fn timeout_seconds() -> u64 {
         .unwrap_or(DEFAULT_TIMEOUT)
 }
 
-/// The firmware image next to a QEMU binary.
-pub(crate) fn firmware_next_to(qemu: &Path) -> PathBuf {
-    match qemu.parent() {
-        Some(directory) => directory.join(FIRMWARE_RELATIVE),
-        None => PathBuf::from(FIRMWARE_RELATIVE),
+/// The configured accelerator, or the first one the host can start.
+fn accelerator(qemu: &Path) -> Result<String, Error> {
+    if let Some(value) = std::env::var_os(ACCELERATOR_VARIABLE) {
+        let name = value
+            .to_str()
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| {
+                Error::Usage(format!(
+                    "{ACCELERATOR_VARIABLE} must name a QEMU accelerator"
+                ))
+            })?;
+        return Ok(name.to_owned());
     }
+
+    #[cfg(target_os = "linux")]
+    {
+        LINUX_ACCELERATOR
+            .get_or_init(|| detect_linux_accelerator(qemu))
+            .clone()
+            .map_err(Error::Usage)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = qemu;
+        Ok("tcg".to_owned())
+    }
+}
+
+/// Tries KVM before TCG and returns the first accelerator that works.
+///
+/// Only Linux picks an accelerator; the tests exercise the order on every
+/// host.
+#[cfg(any(test, target_os = "linux"))]
+pub(crate) fn choose_accelerator(mut works: impl FnMut(&str) -> bool) -> Option<&'static str> {
+    ["kvm", "tcg"].into_iter().find(|name| works(name))
+}
+
+/// Starts QEMU once per candidate and records the choice for this process.
+#[cfg(target_os = "linux")]
+fn detect_linux_accelerator(qemu: &Path) -> Result<String, String> {
+    let mut failures = Vec::new();
+    let selected = choose_accelerator(|name| match probe_accelerator(qemu, name) {
+        Ok(()) => true,
+        Err(problem) => {
+            failures.push(format!("{name}: {problem}"));
+            false
+        }
+    });
+    match selected {
+        Some(name) => {
+            note!("QEMU accelerator: {name}");
+            Ok(name.to_owned())
+        }
+        None => Err(format!(
+            "QEMU can start neither KVM nor TCG: {}",
+            failures.join("; ")
+        )),
+    }
+}
+
+/// Starts and immediately stops the reference machine with one accelerator.
+#[cfg(target_os = "linux")]
+fn probe_accelerator(qemu: &Path, accelerator: &str) -> Result<(), String> {
+    let mut child = Command::new(qemu)
+        .args([
+            "-machine",
+            "q35",
+            "-accel",
+            accelerator,
+            "-cpu",
+            CPU_MODEL,
+            "-display",
+            "none",
+            "-nodefaults",
+            "-S",
+            "-monitor",
+            "stdio",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|source| format!("could not start {}: {source}", qemu.display()))?;
+    if let Some(mut input) = child.stdin.take() {
+        let _ = input.write_all(b"quit\n");
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|source| format!("could not wait for {}: {source}", qemu.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let diagnostic = String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if diagnostic.is_empty() {
+        Err(format!("exited with {}", output.status))
+    } else {
+        Err(diagnostic)
+    }
+}
+
+/// The first installed firmware image next to a QEMU binary.
+fn firmware_next_to(qemu: &Path) -> Option<PathBuf> {
+    firmware_candidates(qemu)
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+}
+
+/// The firmware locations used by `MacPorts` and Linux distributions.
+pub(crate) fn firmware_candidates(qemu: &Path) -> Vec<PathBuf> {
+    let directory = qemu.parent().unwrap_or_else(|| Path::new(""));
+    FIRMWARE_RELATIVES
+        .iter()
+        .map(|relative| directory.join(relative))
+        .collect()
 }
 
 /// The first entry of the `PATH` that holds an executable file `name`.

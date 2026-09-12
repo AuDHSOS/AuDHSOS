@@ -8,6 +8,7 @@
 //! tables are loaded, the trap handlers report through the function the
 //! caller registered, and the debug console is programmed.
 
+use audhsos_abi::Ecam;
 use audhsos_sync::{Global, UncontendedToken};
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::exit::{ExitStatus, TestExit};
@@ -54,6 +55,19 @@ where
     // every physical frame read and write.
     if !unsafe { crate::memory::register_boot_info(&mut platform) } {
         fail(b"[boot] the boot information page has no translation\n");
+    }
+    // SAFETY: the tables the loader built are active, so the window maps
+    // every frame of the memory the firmware reported, which is where the
+    // ACPI tables lie.
+    if let Ok(mcfg) = unsafe { crate::acpi::find_mcfg(&platform) }
+        && let Some(window) = mcfg.first()
+    {
+        platform.set_ecam(Ecam {
+            base: window.base.as_u64(),
+            segment: window.segment,
+            first_bus: window.first_bus,
+            last_bus: window.last_bus,
+        });
     }
     main(&platform);
     halt_forever();

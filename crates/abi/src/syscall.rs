@@ -165,6 +165,14 @@ syscalls! {
     DebugLog = 41 => "debug_log" (0, Nothing),
     MemoryMerge = 42 => "memory_merge" (2, MemoryObject),
     ProcessWatch = 43 => "process_watch" (3, Process),
+    ProcessUnwatch = 44 => "process_unwatch" (3, Process),
+    MemoryReferences = 45 => "memory_references" (1, MemoryObject),
+    IoPortWriteString = 46 => "ioport_write_string" (3, IoPortRange),
+    ClockNow = 47 => "clock_now" (0, Nothing),
+    NotificationWaitUntil = 48 => "notification_wait_until" (2, Notification),
+    RandomBytes = 49 => "random_bytes" (0, Nothing),
+    InterruptCreateMsi = 50 => "interrupt_create_msi" (1, SystemControl),
+    ClockWall = 51 => "clock_wall" (0, Nothing),
 }
 
 impl Syscall {

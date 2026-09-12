@@ -50,10 +50,10 @@ pub const CONTROL_WORD: usize = 4;
 /// The payload word the first pair goes into. The kernel reads the pairs
 /// from here to [`RESULTS_END`].
 ///
-/// Above the twenty-six words `system_info` writes into the message area of
-/// the caller's own buffer, which is what the convention for a result that
-/// does not fit into two return words does with it.
-pub const FIRST_RESULT: usize = 28;
+/// Above the thirty words `system_info` writes into the message area of the
+/// caller's own buffer, which is what the convention for a result that does
+/// not fit into two return words does with it.
+pub const FIRST_RESULT: usize = 32;
 
 /// The payload word past the last pair the program may write.
 pub const RESULTS_END: usize = 400;
@@ -100,6 +100,10 @@ const BOUND_BIT: u64 = 3;
 
 /// A bit index above the sixty-four a notification has.
 const NO_SUCH_BIT: u64 = 64;
+
+/// A deadline that has passed on any machine, so that a wait with one never
+/// blocks this single thread.
+const PAST: u64 = 0;
 
 /// One page, as the length arguments of the memory calls take it.
 const PAGE: u64 = 0x1000;
@@ -187,6 +191,7 @@ fn main(ipc_buffer: u64) -> ! {
 
     rendezvous(&mut log, process, bad);
     devices(&mut log, control, bad);
+    machine(&mut log);
     implemented(&mut log, process, thread, memory, bad);
 
     // `thread_exit` last, and its failure before its success: a call whose
@@ -243,6 +248,27 @@ fn rendezvous(log: &mut Log, process: u64, bad: u64) {
     log.run(Syscall::NotificationWait, &[weak]);
     log.run(Syscall::NotificationPoll, &[notification]);
     log.run(Syscall::NotificationPoll, &[weak]);
+    // A wait with a deadline: the word is not empty, so it takes the bits
+    // and the deadline is never consulted; the capability that may not wait
+    // is refused for the same reason a plain wait is.
+    log.run(Syscall::NotificationSignal, &[notification, 0b0110]);
+    log.run(Syscall::NotificationWaitUntil, &[notification, PAST]);
+    log.run(Syscall::NotificationWaitUntil, &[weak, PAST]);
+    log.set_message(0, 0);
+}
+
+/// The three calls that ask the machine itself. None takes a handle, so
+/// the one way any is refused is an argument word above what it reads,
+/// which the dispatcher answers before the call is reached.
+fn machine(log: &mut Log) {
+    log.run(Syscall::ClockNow, &[]);
+    log.run(Syscall::ClockNow, &[1]);
+    log.run(Syscall::ClockWall, &[]);
+    log.run(Syscall::ClockWall, &[1]);
+    log.run(Syscall::RandomBytes, &[]);
+    log.run(Syscall::RandomBytes, &[1]);
+    // The four words a seed is sit below the log; the header they left says
+    // nothing the calls after them read.
     log.set_message(0, 0);
 }
 
@@ -263,6 +289,10 @@ fn devices(log: &mut Log, control: u64, bad: u64) {
     log.run(Syscall::InterruptAck, &[interrupt]);
     log.run(Syscall::InterruptAck, &[bad]);
 
+    // A message interrupt, which needs the root authority and no line.
+    log.run(Syscall::InterruptCreateMsi, &[control]);
+    log.run(Syscall::InterruptCreateMsi, &[bad]);
+
     let ports = log.run(Syscall::IoPortCreate, &[control, FIRST_PORT, PORT_COUNT]);
     log.run(Syscall::IoPortCreate, &[control, FIRST_PORT, 0]);
     log.run(Syscall::IoPortRead, &[ports, FIRST_PORT, 1]);
@@ -272,6 +302,11 @@ fn devices(log: &mut Log, control: u64, bad: u64) {
     );
     log.run(Syscall::IoPortWrite, &[ports, FIRST_PORT, 1, 0]);
     log.run(Syscall::IoPortWrite, &[ports, FIRST_PORT, 3, 0]);
+    // A run of no bytes: the message area of this thread holds the handles
+    // the kernel left and the pairs written so far, and none of it is meant
+    // for a port.
+    log.run(Syscall::IoPortWriteString, &[ports, FIRST_PORT, 0]);
+    log.run(Syscall::IoPortWriteString, &[bad, FIRST_PORT, 0]);
 
     // The framebuffer first: it is the one aperture this program knows the
     // address of, and `system_info` is what tells it.
@@ -280,7 +315,7 @@ fn devices(log: &mut Log, control: u64, bad: u64) {
     log.run(Syscall::MemoryCreateDevice, &[control, framebuffer, 1]);
     log.run(Syscall::MemoryCreateDevice, &[control, framebuffer, 0]);
     log.run(Syscall::SystemInfo, &[bad]);
-    // The twenty-six words `system_info` wrote sit below the log; the header
+    // The thirty words `system_info` wrote sit below the log; the header
     // it left says nothing the calls after it read.
     log.set_message(0, 0);
 }
@@ -332,6 +367,8 @@ fn implemented(log: &mut Log, process: u64, thread: u64, memory: u64, bad: u64) 
     let watcher = log.run(Syscall::NotificationCreate, &[]);
     log.run(Syscall::ProcessWatch, &[child, watcher, BOUND_BIT]);
     log.run(Syscall::ProcessWatch, &[child, watcher, NO_SUCH_BIT]);
+    log.run(Syscall::ProcessUnwatch, &[child, watcher, BOUND_BIT]);
+    log.run(Syscall::ProcessUnwatch, &[child, watcher, NO_SUCH_BIT]);
     log.run(Syscall::ThreadKill, &[bad]);
 
     // Memory: one object asked about, mapped, protected, unmapped, and
@@ -339,6 +376,8 @@ fn implemented(log: &mut Log, process: u64, thread: u64, memory: u64, bad: u64) 
     // the handle calls work on.
     log.run(Syscall::MemoryInfo, &[memory]);
     log.run(Syscall::MemoryInfo, &[bad]);
+    log.run(Syscall::MemoryReferences, &[memory]);
+    log.run(Syscall::MemoryReferences, &[bad]);
     log.run(
         Syscall::MemoryMap,
         &[process, memory, MAPPING, 0, PAGE, READ_WRITE],

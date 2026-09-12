@@ -105,7 +105,8 @@ allocation, `Target::Host` in the policy table, coverage gate on. Each
 takes `test-support` as a dev-dependency. Four carry a feature for the
 data their own tests and the tests above them need: `test-signing` on
 `crypto-ec` and on `crypto-rsa`, `test-certificates` on `audhsos-x509`,
-and `test-doubles` on `crypto-rng`. None is enabled by a product build. No crate of this track is depended on by
+and `test-doubles` on `crypto-rng`. What `test-signing` holds on
+`crypto-ec` is ECDSA alone; Ed25519 signing is product surface (D-135). None is enabled by a product build. No crate of this track is depended on by
 the kernel; the dependency edges run from userland only, and from the
 network track of [document 12](12-parallel-work.md), which uses
 `crypto-rng` for initial sequence numbers and transaction ids (D-51).
@@ -265,12 +266,23 @@ throughout; AES-GCM follows. Tests: catalog 6.6.32.
   coordinates are not unique, so a comparison would answer a question the
   caller did not ask.
 
-Signature *creation* is not part of the product surface. It exists only
-behind the feature `test-signing`: deterministic Ed25519 signing and
-deterministic ECDSA per RFC 6979, used by the test certificate builder in
-11.9 so that all test data is project-generated and reproducible. The
-feature is off in every non-test build and is rejected by the layering
-check outside test and xtask contexts.
+ECDSA signature *creation* is not part of the product surface. It exists
+only behind the feature `test-signing`, deterministic per RFC 6979, used
+by the test certificate builder in 11.9 so that all test data is
+project-generated and reproducible. The feature is off in every non-test
+build and is rejected by the layering check outside test and xtask
+contexts.
+
+Ed25519 signing left that feature with D-135, because the Secure Shell
+client of document 14 authenticates with a key of its own. What made the
+gate more than a `#[cfg]` is that the point and scalar arithmetic of that
+module was written for a verifier and branched on the bits it was given.
+Signing therefore runs on `Point::mul_secret` and `Scalar::mul_secret`,
+which double and add at every position and keep the sum behind a mask, and
+on a reduction that takes its difference behind a mask in a fixed two
+rounds. `Point::mul` and `Scalar::mul` stay for the public scalars of
+verification. The boundary is the name, as it is for `pow_secret` in
+`crypto-bignum` (D-122), and the module states it.
 
 Tests: catalog 6.6.33.
 
@@ -584,7 +596,7 @@ separate workspace and no part of the checks.
 | Self-written cryptography has flaws that tests do not find | a connection that looks encrypted but is not | vector tests from the standards, the RFC 8448 trace, negative tests for every rejection rule, fuzzing, the constant-time review section per crate, verification-only asymmetric surface |
 | Constant-time properties are lost to compiler optimization | timing side channels | no tables, no secret-dependent control flow at the source level; `black_box` where the source must not be folded away; the discipline is documented per function |
 | Self-written RSA has flaws the tests do not find | a chain that looks verified and is not | the construction of D-80 rather than a decoder, a negative test for each rejection rule of both encodings, the `CertificateVerify` of RFC 8448 as a vector from outside, the fuzz target `rsa`, and three real chains through `tools/tls-probe` |
-| Wide arithmetic is written for one purpose and used for another | a bignum that is safe for public values used where values are secret | `crypto-bignum` serves verification only: no secret ever reaches it, its module documentation says so in the form `montgomery.rs` already uses, and nothing in the track signs outside `test-signing` |
+| Wide arithmetic is written for one purpose and used for another | a bignum that is safe for public values used where values are secret | `crypto-bignum` holds two arithmetics and names them apart: `montgomery` and `pow` for values that are on the wire, `montgomery_secret` and `pow_secret` for an exponent that is not. Its README states which is which and what each protects; `crypto-rsa` uses only the first pair and signs only behind `test-signing`, and `crypto-dh` is the one caller with a secret exponent and uses only the second |
 | No revocation checking | a revoked certificate is accepted | stated as a known limit; short-lived anchors and operator-chosen trust stores are the only mitigation in this version |
 | The track grows past its estimate | kernel phases slip | the track is independent; work on it happens between phases, never instead of one |
 | Zeroization is best effort without `unsafe` | key material may remain in freed memory | keys live in `Secret<N>` with the shortest possible lifetime; the limit is documented rather than hidden |
@@ -597,7 +609,7 @@ nobody finds again.
 
 | What is missing | Where it is felt | Who owns it |
 |-----------------|------------------|-------------|
-| A clock | `audhsos-time` arrived, so `audhsos-der` yields a `CivilTime` that the calendar validated and `verify_chain` compares one as its `now`. What no crate of this project has is a source for that value, because none of them reads a clock | the platform timer of Phase 4 and the system call that carries it out |
+| ~~A clock~~ | `audhsos-time` arrived, so `audhsos-der` yields a `CivilTime` that the calendar validated and `verify_chain` compares one as its `now`. The source for that value arrived with D-137: the loader reads the firmware clock through `GetTime` before it leaves the boot services, the moment travels in the boot information, and `clock_wall` answers it to userland as microseconds since the epoch. No crate of this track reads a clock, which is what D-46 asked; what changed is that there is now a caller that can fill the parameter | D-137, catalog 6.6.71; step T8 is what joins the two |
 | ~~A PEM decoder~~ | `audhsos-encoding` arrived with strict Base64, hex, and PEM. The trust-anchor conversion of D-42 has its decoder; what is still unwritten is the conversion itself, which is xtask work and not this track's | D-47, [document 12](12-parallel-work.md) |
 | A source of entropy | `crypto-rng` ships the generator and the `Entropy` trait; no product code can construct a generator without a source | `RDSEED` in the HAL behind a `random_bytes` system call, D-43 |
 | A transport | step T8: the client is sans-I/O and needs bytes moved for it | `net-tcp`, D-49, [document 12](12-parallel-work.md) |
@@ -685,12 +697,23 @@ doublings: at four thousand ninety-six bits it is eight thousand one
 hundred and ninety-two doublings of sixty-four limbs, once per key.
 
 `pow` is left-to-right square-and-multiply, and it is not constant time.
-The argument is the one `montgomery.rs` already makes for the curves and
-it is stronger here: a modulus, an exponent, and a signature are all on
-the wire, and nothing secret ever enters this crate. The module
-documentation says so, in the form of the constant-time review sections
-of 11.11 — with the opposite conclusion, and the same obligation to state
-it.
+The argument is the one `montgomery.rs` already makes for the curves: a
+modulus, an RSA public exponent, and a signature are all on the wire, so
+branching on them costs nothing. The module documentation says so, in the
+form of the constant-time review sections of 11.11 — with the opposite
+conclusion, and the same obligation to state it.
+
+That argument held for the whole crate until finite-field Diffie-Hellman
+arrived, whose private exponent is the one value here that must not be
+observable. `pow_secret` is the answer: a Montgomery ladder over the full
+length of the exponent buffer, one squaring and one multiplication per
+bit whatever the bit is, the two working values exchanged by a mask
+rather than by a branch, and products from `montgomery_secret`, which
+subtracts the modulus always and masks whether the subtraction counts.
+What stays public is what a length is — the width of the modulus and the
+length of the exponent buffer, both of which set loop counts. The
+boundary is the function name, and the caller is the one who knows which
+side of it a call is on.
 
 The invariant that pays for the single width of D-78: limbs at or above
 `used` are zero, in every value the crate holds. The loops run over

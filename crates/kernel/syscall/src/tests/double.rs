@@ -6,7 +6,7 @@
 
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, Status};
 use audhsos_abi::layout::PAGE_SIZE;
-use audhsos_abi::{Error, Framebuffer, Handle, Rights, Syscall};
+use audhsos_abi::{Ecam, Error, Framebuffer, Handle, Rights, Syscall, WallClockSource};
 use kernel_mm::page_table::Permissions;
 use kernel_objects::handle_table::{Entry, HandleList};
 use kernel_objects::object::{
@@ -19,6 +19,15 @@ use kernel_types::{CachePolicy, Page, PhysAddr, PhysFrame, PhysFrameRange, VirtA
 
 use crate::dispatch::Machine;
 use crate::environment::{Environment, KernelStack};
+
+/// The first vector the double hands out for a message interrupt.
+pub(super) const MESSAGE_BASE: u8 = 0x58;
+
+/// How many message vectors the double has.
+pub(super) const MESSAGE_VECTORS: u8 = 4;
+
+/// The message address the double answers with.
+pub(super) const MESSAGE_ADDRESS: u64 = 0xFEE0_0000;
 
 /// What the environment was asked to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,12 +60,20 @@ pub(super) enum Call {
     ReadPort(u16, u8),
     /// A port was written, with the width in bytes and the value.
     WritePort(u16, u8, u64),
+    /// A run of bytes was written to one port, with how many.
+    WritePortString(u16, usize),
     /// An interrupt line was routed to a vector.
     Route(u8, u8),
     /// An interrupt line was masked.
     Mask(u8),
     /// An interrupt line was unmasked.
     Unmask(u8),
+    /// A message interrupt vector was handed out.
+    AllocateMessage(u8),
+    /// A message interrupt vector went back.
+    ReleaseMessage(u8),
+    /// A seed was drawn.
+    Seed,
 }
 
 /// An environment that records what it was asked and answers with what the
@@ -87,8 +104,21 @@ pub(super) struct Recorder {
     pub(super) buffers: std::collections::HashMap<PhysFrame, Box<[u8; SIZE]>>,
     /// What the next port read answers, per port.
     pub(super) port_reads: std::collections::HashMap<u16, u64>,
+    /// Every byte a string port write moved, in order.
+    pub(super) port_string: Vec<u8>,
     /// The lines the plan of this machine reserves no vector for.
     pub(super) unroutable: Vec<u8>,
+    /// The microseconds the clock answers.
+    pub(super) now: u64,
+    /// What the next draw of a seed answers, in order. An empty script
+    /// answers `Unavailable`, which is a machine without a source.
+    pub(super) seeds: std::collections::VecDeque<Result<[u64; 4], Error>>,
+    /// How many message vectors are left before the space is exhausted.
+    pub(super) message_vectors: u8,
+    /// The message vectors handed out and not given back.
+    pub(super) messages: Vec<u8>,
+    /// Whether the machine has an interrupt controller at all.
+    pub(super) no_controller: bool,
     /// The lines the controller has already routed.
     routed: Vec<u8>,
     /// The frames the machine reported as usable.
@@ -99,13 +129,22 @@ pub(super) struct Recorder {
     pub(super) framebuffer: Option<Framebuffer>,
     /// The address of the root system description pointer.
     pub(super) rsdp: u64,
+    /// The configuration window of the bus the firmware is to have
+    /// published.
+    pub(super) ecam: Option<Ecam>,
+    /// The wall clock the loader is to have read, or `None` for a machine
+    /// whose firmware reported none.
+    pub(super) wall_clock: Option<(i64, WallClockSource)>,
 }
 
 impl Recorder {
     /// A recorder that answers every request.
     #[must_use]
     pub(super) fn new() -> Self {
-        Recorder::default()
+        Recorder {
+            message_vectors: MESSAGE_VECTORS,
+            ..Recorder::default()
+        }
     }
 
     /// How often the environment was asked for `call`.
@@ -273,6 +312,45 @@ impl Environment for Recorder {
         Ok(())
     }
 
+    fn write_port_string(&mut self, port: u16, bytes: &[u8]) -> Result<(), Error> {
+        self.calls.push(Call::WritePortString(port, bytes.len()));
+        self.port_string.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn now_micros(&self) -> u64 {
+        self.now
+    }
+
+    fn boot_wall(&self) -> Option<(i64, WallClockSource)> {
+        self.wall_clock
+    }
+
+    fn random_seed(&mut self) -> Result<[u64; 4], Error> {
+        self.calls.push(Call::Seed);
+        self.seeds.pop_front().unwrap_or(Err(Error::Unavailable))
+    }
+
+    fn allocate_message_vector(&mut self) -> Result<(u8, u64, u32), Error> {
+        if self.no_controller {
+            return Err(Error::Unsupported);
+        }
+        // The lowest vector nobody holds, so that a vector given back is
+        // handed out again, as the machine's allocator does it.
+        let vector = (0..self.message_vectors)
+            .map(|index| MESSAGE_BASE.wrapping_add(index))
+            .find(|vector| !self.messages.contains(vector))
+            .ok_or(Error::NoVector)?;
+        self.messages.push(vector);
+        self.calls.push(Call::AllocateMessage(vector));
+        Ok((vector, MESSAGE_ADDRESS, u32::from(vector)))
+    }
+
+    fn release_message_vector(&mut self, vector: u8) {
+        self.messages.retain(|held| *held != vector);
+        self.calls.push(Call::ReleaseMessage(vector));
+    }
+
     fn interrupt_vector(&self, line: u8) -> Option<u8> {
         if self.unroutable.contains(&line) {
             return None;
@@ -321,6 +399,10 @@ impl Environment for Recorder {
 
     fn acpi_pointer(&self) -> u64 {
         self.rsdp
+    }
+
+    fn ecam(&self) -> Option<Ecam> {
+        self.ecam
     }
 }
 

@@ -8,8 +8,9 @@
 //! it passes to the kernel, and it stays mapped for the whole run; the
 //! parsing itself is `audhsos-abi`, which is safe and fuzzable.
 
+use audhsos_abi::Ecam;
 use audhsos_abi::boot_info::{
-    BOOT_INFO_PAGE_LEN, BootInfoError, BootInfoView, BootRegionKind, Framebuffer,
+    BOOT_INFO_PAGE_LEN, BootInfoError, BootInfoView, BootRegionKind, Framebuffer, WallClockSource,
 };
 use audhsos_abi::layout::MAX_BOOT_REGIONS;
 use kernel_hal_api::platform::{MemoryRegion, MemoryRegionKind, Platform};
@@ -29,6 +30,8 @@ pub struct X86Platform {
     window: u64,
     rsdp: Option<u64>,
     framebuffer: Option<Framebuffer>,
+    ecam: Option<Ecam>,
+    wall_clock: Option<(i64, WallClockSource)>,
 }
 
 impl X86Platform {
@@ -102,7 +105,19 @@ impl X86Platform {
             window: view.phys_window_base(),
             rsdp: view.acpi_rsdp(),
             framebuffer: view.framebuffer(),
+            ecam: None,
+            wall_clock: view.wall_clock(),
         })
+    }
+
+    /// Records the configuration window the `MCFG` table named.
+    ///
+    /// The window is no part of the boot information: the loader does not
+    /// read ACPI tables, and the kernel reads this one before it takes its
+    /// memory over, because the range has to be among the device apertures
+    /// by the time `memory_create_device` can be called.
+    pub const fn set_ecam(&mut self, ecam: Ecam) {
+        self.ecam = Some(ecam);
     }
 
     /// Appends the boot information page as a region of its own.
@@ -180,5 +195,13 @@ impl Platform for X86Platform {
 
     fn acpi_rsdp(&self) -> Option<PhysAddr> {
         self.rsdp.and_then(|address| PhysAddr::new(address).ok())
+    }
+
+    fn ecam(&self) -> Option<Ecam> {
+        self.ecam
+    }
+
+    fn wall_clock(&self) -> Option<(i64, WallClockSource)> {
+        self.wall_clock
     }
 }

@@ -23,18 +23,22 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds nine programs and each uses a different part of
+// The package holds thirteen programs and each uses a different part of
 // what it depends on; these are the crates this one does not.
+use app_canvas as _;
+use driver_i8042 as _;
 use driver_uart16550 as _;
 use gfx as _;
+use pci as _;
 use server_console as _;
 use server_display as _;
+use server_input as _;
 use server_memory as _;
 use server_name as _;
 use user_proto::parent;
 
 use audhsos_abi::layout::{MAX_MESSAGE_HANDLES, PAGE_SIZE};
-use audhsos_abi::startup::{Payload, Role, Screen, Writer};
+use audhsos_abi::startup::{BusRange, Payload, Role, Screen, Writer};
 use audhsos_abi::{Error, Handle, Rights};
 use user_loader::tar::{Archive, Kind};
 use user_loader::{Plan, STACK_PAGES};
@@ -61,6 +65,11 @@ enum Grant {
     Serial,
     /// The framebuffer of the machine and the mode the firmware set.
     Framebuffer,
+    /// The ports of the PS/2 controller and the two lines its devices
+    /// interrupt on.
+    Input,
+    /// The configuration window of the PCI bus and the buses it covers.
+    Ecam,
 }
 
 /// One line of the start table: what to start, how, and with what.
@@ -91,6 +100,9 @@ struct Program {
     /// server. A program that finds the server by name instead is refused
     /// by it: an unbadged request names nobody.
     draws: bool,
+    /// Whether it may listen, which is a badged capability to the input
+    /// server, for the same reason.
+    listens: bool,
     /// Whether it reports to this program when it is done. The machine
     /// ends when every program that reports has reported.
     reports: bool,
@@ -101,7 +113,7 @@ struct Program {
 /// The quotas are what the programs measured out at need with room over
 /// them; a program that asks for more than its line says is refused by the
 /// kernel and not by this table.
-const PROGRAMS: [Program; 8] = [
+const PROGRAMS: [Program; 12] = [
     Program {
         name: b"server-memory",
         priority: priority::SERVER,
@@ -112,6 +124,7 @@ const PROGRAMS: [Program; 8] = [
         names: false,
         memory: false,
         draws: false,
+        listens: false,
         reports: false,
     },
     Program {
@@ -124,6 +137,7 @@ const PROGRAMS: [Program; 8] = [
         names: false,
         memory: true,
         draws: false,
+        listens: false,
         reports: false,
     },
     Program {
@@ -136,6 +150,7 @@ const PROGRAMS: [Program; 8] = [
         names: true,
         memory: true,
         draws: false,
+        listens: false,
         reports: false,
     },
     // The display server maps the framebuffer, which is four mebibytes on
@@ -151,6 +166,23 @@ const PROGRAMS: [Program; 8] = [
         names: true,
         memory: true,
         draws: false,
+        listens: false,
+        reports: false,
+    },
+    // The input server owns the PS/2 controller and both of its lines. It
+    // starts after the display server so that a machine which has both
+    // brings the screen up before anything is typed at it.
+    Program {
+        name: b"server-input",
+        priority: priority::DRIVER,
+        handles: 64,
+        frames: 64,
+        objects: 64,
+        grant: Grant::Input,
+        names: true,
+        memory: true,
+        draws: false,
+        listens: false,
         reports: false,
     },
     Program {
@@ -163,6 +195,7 @@ const PROGRAMS: [Program; 8] = [
         names: true,
         memory: true,
         draws: false,
+        listens: false,
         reports: true,
     },
     Program {
@@ -175,6 +208,7 @@ const PROGRAMS: [Program; 8] = [
         names: true,
         memory: true,
         draws: false,
+        listens: true,
         reports: true,
     },
     Program {
@@ -187,6 +221,52 @@ const PROGRAMS: [Program; 8] = [
         names: true,
         memory: true,
         draws: true,
+        listens: false,
+        reports: true,
+    },
+    Program {
+        name: b"app-input",
+        priority: priority::APPLICATION,
+        handles: 32,
+        frames: 32,
+        objects: 32,
+        grant: Grant::None,
+        names: true,
+        memory: true,
+        draws: false,
+        listens: true,
+        reports: true,
+    },
+    // The canvas draws and listens at once, and its surface is the size of
+    // the screen, so it needs the frames the program that paints needs and
+    // both badged capabilities.
+    Program {
+        name: b"app-canvas",
+        priority: priority::APPLICATION,
+        handles: 32,
+        frames: 256,
+        objects: 32,
+        grant: Grant::None,
+        names: true,
+        memory: true,
+        draws: true,
+        listens: true,
+        reports: true,
+    },
+    // The bus walk maps one mebibyte of the configuration window at a time,
+    // which is a page table and the levels above it, so its quota of frames
+    // is the smallest of any program that maps anything.
+    Program {
+        name: b"app-lspci",
+        priority: priority::APPLICATION,
+        handles: 32,
+        frames: 32,
+        objects: 32,
+        grant: Grant::Ecam,
+        names: true,
+        memory: true,
+        draws: false,
+        listens: false,
         reports: true,
     },
     // It faults and its thread stops there, so it never reports and the
@@ -201,6 +281,7 @@ const PROGRAMS: [Program; 8] = [
         names: true,
         memory: true,
         draws: false,
+        listens: false,
         reports: false,
     },
 ];
@@ -223,6 +304,16 @@ const COM1_PORTS: u64 = 8;
 
 /// The interrupt line the controller raises on.
 const COM1_LINE: u64 = 4;
+
+/// The first port of the PS/2 controller and how many there are: the data
+/// register at `0x60` and the command register at `0x64`, with the four
+/// ports between them inside the range because a program is given one.
+const PS2_PORT: u64 = 0x60;
+const PS2_PORTS: u64 = 5;
+
+/// The line the keyboard asserts on, and the line the mouse asserts on.
+const PS2_KEYBOARD_LINE: u64 = 1;
+const PS2_MOUSE_LINE: u64 = 12;
 
 /// The badge the root task's own messages to a server carry.
 ///
@@ -256,6 +347,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         memory_for_self: None,
         console: None,
         display: None,
+        input: None,
         console_for_self: None,
         next_badge: 1,
     };
@@ -290,6 +382,8 @@ struct World {
     console: Option<EndpointHandle>,
     /// The endpoint of the display server.
     display: Option<EndpointHandle>,
+    /// The endpoint of the input server.
+    input: Option<EndpointHandle>,
     /// The same, badged for the root task's own lines.
     console_for_self: Option<EndpointHandle>,
     /// What the next child reports its faults under.
@@ -489,6 +583,15 @@ fn install_all(
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
         push(&mut given, &mut count, Role::DisplayServer, handle)?;
     }
+    // A program that listens is known to the input server the same way, and
+    // for the same reason: the server keeps a ring per client.
+    if program.listens
+        && let Some(input) = world.input
+    {
+        let marked = gate.endpoint_badge(input, badge)?;
+        let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
+        push(&mut given, &mut count, Role::InputServer, handle)?;
+    }
     // Everyone but the console driver gets the console as its log. The
     // driver is the console: a line it sent itself would be a call on the
     // endpoint it is the only receiver of, and it would wait for itself.
@@ -507,39 +610,7 @@ fn install_all(
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
         push(&mut given, &mut count, Role::Log, handle)?;
     }
-    match program.grant {
-        Grant::None => {}
-        Grant::Ram => {
-            for region in startup.ram.iter().skip(1) {
-                let handle =
-                    gate.process_install_handle(child, region.handle(), ObjectRights::MEMORY)?;
-                push(&mut given, &mut count, Role::Ram, handle)?;
-            }
-        }
-        Grant::Serial => {
-            let (ports, line) = serial(gate, world)?;
-            let handle = gate.process_install_handle(child, ports.handle(), ObjectRights::PORTS)?;
-            push(&mut given, &mut count, Role::IoPorts, handle)?;
-            let handle = gate.process_install_handle(child, line.handle(), ObjectRights::MANAGE)?;
-            push(&mut given, &mut count, Role::Interrupt, handle)?;
-        }
-        // A machine without a framebuffer grants nothing here: the display
-        // server starts all the same and answers that there is no screen.
-        Grant::Framebuffer => {
-            if let Some((memory, screen)) = framebuffer(gate, world)? {
-                let handle =
-                    gate.process_install_handle(child, memory.handle(), ObjectRights::DEVICE)?;
-                push(&mut given, &mut count, Role::Framebuffer, handle)?;
-                tell(
-                    &mut given,
-                    &mut count,
-                    Role::FramebufferGeometry,
-                    screen.geometry(),
-                )?;
-                tell(&mut given, &mut count, Role::FramebufferLine, screen.line())?;
-            }
-        }
-    }
+    grant(gate, startup, world, program, child, &mut given, &mut count)?;
 
     let mut writer = Writer::new();
     {
@@ -558,6 +629,69 @@ fn install_all(
         writer.finish(&mut buffer)?;
     }
     mapping.unmap(gate, world.own)
+}
+
+/// Installs what a program's line of the table grants it beyond the
+/// endpoints every program gets.
+fn grant(
+    gate: &mut Gate,
+    startup: &Startup,
+    world: &World,
+    program: &Program,
+    child: ProcessHandle,
+    given: &mut [(Role, Payload); MAX_GIVEN],
+    count: &mut usize,
+) -> Result<(), Error> {
+    match program.grant {
+        Grant::None => {}
+        Grant::Ram => {
+            for region in startup.ram.iter().skip(1) {
+                let handle =
+                    gate.process_install_handle(child, region.handle(), ObjectRights::MEMORY)?;
+                push(given, count, Role::Ram, handle)?;
+            }
+        }
+        Grant::Serial => {
+            let (ports, line) = serial(gate, world)?;
+            let handle = gate.process_install_handle(child, ports.handle(), ObjectRights::PORTS)?;
+            push(given, count, Role::IoPorts, handle)?;
+            let handle = gate.process_install_handle(child, line.handle(), ObjectRights::MANAGE)?;
+            push(given, count, Role::Interrupt, handle)?;
+        }
+        // A machine without a framebuffer grants nothing here: the display
+        // server starts all the same and answers that there is no screen.
+        Grant::Framebuffer => {
+            if let Some((memory, screen)) = framebuffer(gate, world)? {
+                let handle =
+                    gate.process_install_handle(child, memory.handle(), ObjectRights::DEVICE)?;
+                push(given, count, Role::Framebuffer, handle)?;
+                tell(given, count, Role::FramebufferGeometry, screen.geometry())?;
+                tell(given, count, Role::FramebufferLine, screen.line())?;
+            }
+        }
+        // A machine whose firmware published no window grants nothing here:
+        // the program starts all the same and reports that there is none.
+        Grant::Ecam => {
+            if let Some((memory, buses)) = ecam(gate, world)? {
+                let handle =
+                    gate.process_install_handle(child, memory.handle(), ObjectRights::DEVICE)?;
+                push(given, count, Role::Ecam, handle)?;
+                tell(given, count, Role::EcamBuses, buses.word())?;
+            }
+        }
+        Grant::Input => {
+            let (ports, keyboard, mouse) = ps2(gate, world)?;
+            let handle = gate.process_install_handle(child, ports.handle(), ObjectRights::PORTS)?;
+            push(given, count, Role::IoPorts, handle)?;
+            let handle =
+                gate.process_install_handle(child, keyboard.handle(), ObjectRights::MANAGE)?;
+            push(given, count, Role::Interrupt, handle)?;
+            let handle =
+                gate.process_install_handle(child, mouse.handle(), ObjectRights::MANAGE)?;
+            push(given, count, Role::AuxInterrupt, handle)?;
+        }
+    }
+    Ok(())
 }
 
 /// How many pairs the startup message holds: it is a run of role and
@@ -665,6 +799,55 @@ fn framebuffer(gate: &mut Gate, world: &World) -> Result<Option<(MemoryHandle, S
             format: described.format,
         },
     )))
+}
+
+/// The configuration window of the PCI bus as a memory object, with the
+/// buses it covers, or nothing when the firmware published no `MCFG` table.
+///
+/// `system_info` is what says where it is, for the reason it says where the
+/// framebuffer is: the kernel read the table at bring-up and reports what it
+/// found, and this is the only program that may ask.
+fn ecam(gate: &mut Gate, world: &World) -> Result<Option<(MemoryHandle, BusRange)>, Error> {
+    let system = world.system.ok_or(Error::AccessDenied)?;
+    let Some(window) = gate.system_info(system)?.ecam else {
+        return Ok(None);
+    };
+    let first = window.base.wrapping_div(PAGE_SIZE);
+    let frames = window.len().wrapping_div(PAGE_SIZE);
+    // A window the kernel will not make an object of — one that meets
+    // memory the machine reported as usable, or one the address space
+    // cannot hold — is no reason to leave the program unstarted. It starts
+    // without the window and reports that there is none; a program of the
+    // table that never starts is a report that never comes, and the machine
+    // waits for it.
+    let Ok(memory) = gate.memory_create_device(system, first, frames) else {
+        return Ok(None);
+    };
+    Ok(Some((
+        memory,
+        BusRange {
+            segment: window.segment,
+            first_bus: window.first_bus,
+            last_bus: window.last_bus,
+        },
+    )))
+}
+
+/// The ports of the PS/2 controller and the two lines its devices assert.
+///
+/// The range is one range and not two because `Role::IoPorts` is given once,
+/// so `0x61`, `0x62`, and `0x63` fall inside it. Of those the kernel reaches
+/// only `0x61`, the gate of the interval timer, and only while it calibrates
+/// that timer at bring-up, which is over before this program runs.
+fn ps2(
+    gate: &mut Gate,
+    world: &World,
+) -> Result<(IoPortHandle, InterruptHandle, InterruptHandle), Error> {
+    let system = world.system.ok_or(Error::AccessDenied)?;
+    let ports = gate.ioport_create(system, PS2_PORT, PS2_PORTS)?;
+    let keyboard = gate.interrupt_create(system, PS2_KEYBOARD_LINE)?;
+    let mouse = gate.interrupt_create(system, PS2_MOUSE_LINE)?;
+    Ok((ports, keyboard, mouse))
 }
 
 /// The port range and the interrupt of the serial controller, made once.
@@ -779,6 +962,7 @@ fn remember(
             world.console_for_self = Some(gate.endpoint_badge(endpoint, INIT_BADGE)?);
         }
         b"server-display" => world.display = Some(endpoint),
+        b"server-input" => world.input = Some(endpoint),
         _ => {}
     }
     Ok(())

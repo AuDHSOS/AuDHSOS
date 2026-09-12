@@ -22,6 +22,32 @@ Locally every one of these levels is started through the wrapper scripts of
 [07 section 7.5](07-toolchain-and-environment.md#75-findings-about-the-development-machine),
 `sh tools/xtask.sh <subcommand>` and `sh tools/xtask-check.sh`.
 
+`test --host`, `coverage`, and `fuzz --regression` build their executables
+first, then run them in a bounded worker pool. `AUDHSOS_TEST_JOBS` sets the
+maximum number of concurrent processes; it defaults to the available CPU
+count and must be a positive integer. For example:
+
+```sh
+AUDHSOS_TEST_JOBS=4 sh tools/xtask.sh test --host
+AUDHSOS_TEST_JOBS=4 sh tools/xtask.sh coverage
+AUDHSOS_TEST_JOBS=4 sh tools/xtask.sh fuzz --regression
+```
+
+The host harness thread count divides the available CPUs among the worker
+slots, with at least one thread per process. An explicit `RUST_TEST_THREADS`
+overrides that allocation. Each completed process sends its captured stdout
+and stderr to one reporter, which prints a complete block in completion
+order. The two streams retain their own order; their original interleaving
+is not preserved. Quiet checks show output only for failed processes.
+All queued processes finish even if one fails, and any failure fails the
+step. The full check still runs its steps sequentially.
+
+Host executables run from their package directories. Host doc tests run
+through Cargo after the executable tests pass. Coverage merges profiles
+only after every instrumented test executable passes. Fuzzing regressions
+run selected targets concurrently, preserving sequential corpus replay
+within each target and skipping targets whose corpus directory is absent.
+
 ## 6.2 Host testing of `no_std` crates
 
 - Every logic crate uses `#![cfg_attr(not(test), no_std)]`. Tests use `std`
@@ -321,8 +347,9 @@ done until every applicable item has a test. Items are added, never removed.
 - Notifications: signal without a waiter accumulates; signal zero is a
   success no-op; wait consumes and clears everything present; poll on zero
   returns zero without blocking; two signals before a wait are merged; a
-  second concurrent waiter gets `Busy`; the bound interrupt sets exactly its
-  bit.
+  second concurrent waiter gets `Busy`; an interrupt bound to it sets
+  exactly its bit, and two interrupts bound to one notification each set the
+  bit they were bound on (D-108).
 - Fault message: has the reserved label range, carries fault kind, address,
   instruction pointer, and error code; the reply resumes the thread; the
   handler killing the process ends the wait cleanly.
@@ -464,17 +491,14 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.15 Disk image writer (`xtask`)
 
-- CRC32: the standard check value for the string `123456789`; empty input;
-  a single byte; inputs crossing internal block boundaries.
-- Protective MBR: signature bytes, one entry of type `0xEE` starting at
-  sector 1 and covering the disk (capped at the maximum representable
-  size).
 - GPT: primary header at sector 1 and backup header at the last sector
   reference each other; header CRC32 and partition array CRC32 verify after
   writing; partition array has 128 entries of 128 bytes with exactly one in
   use; the entry carries the EFI system partition type GUID and the fixed
   unique GUID; first and last usable sector enclose the partition; a disk
-  too small for the GPT structures is rejected.
+  too small for the GPT structures is rejected. The structures themselves
+  are `fs-gpt`'s and 6.6.72 tests them; what is tested here is the image
+  the xtask makes of them.
 - FAT32: cluster count below 65525 is rejected; boot sector fields (bytes
   per sector, sectors per cluster, reserved sectors, number of FATs, FAT
   size, root cluster, FSInfo sector, backup boot sector); FSInfo free count
@@ -575,7 +599,14 @@ done until every applicable item has a test. Items are added, never removed.
 - Runner: QEMU exit status mapping for 33, 35, 37, 0, 1, and a killed
   process; timeout produces a crash report with the captured output.
 - Command line: a subcommand that takes no option refuses one and names
-  it; `check` refuses an unknown option before it runs a step.
+  it; `check` refuses an unknown option before it runs a step; `run`
+  refuses one before it builds anything.
+- The second disk: a run that asks for it carries the two
+  `virtio-blk-pci` lines at the end of the machine line and the boot
+  volume unchanged beside them, a run that does not carries neither; the
+  disk is created blank once at the size the format wants, kept as it
+  stands on every run after that, and its path is the run's name under
+  `target/qemu/` (D-136).
 - Quiet mode: a command that succeeds under `--quiet` prints nothing and
   is still an `Ok`, a command that fails is still an error.
 
@@ -705,6 +736,9 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.25 i8042 controller and PS/2 decoding (`driver-i8042`)
 
+- Regression: corrupt every position of the Pause tail; reject bogus Pause
+  events and reconsider a mismatching byte as the start of the next key.
+
 - Controller: a failed self-test returns an error; an output buffer that
   never fills or an input buffer that never empties hits the poll limit
   and returns an error instead of spinning; a missing keyboard or a
@@ -750,6 +784,18 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.27 Display and input servers (`server-display`, `server-input`, host-tested logic with doubles)
 
+- Regression: concurrent ring reader/writer preserve whole records and FIFO
+  order; overflow exchange accounts for concurrent increments. Invalid shared
+  capacity is rejected. Left/right modifiers remain independent, caps-lock
+  repeat does not toggle, and the German AltGr level produces its characters.
+- Regression: received handle snapshots survive nested IPC; invalid labels,
+  counts, extra handles and failed subscriptions close all unadopted handles.
+- Lifecycle: retained notifications still signal after a client exits; its
+  process watch reports that exit independently. Unwatch frees watcher capacity
+  and delayed bits cannot remove a new live subscriber in the reused slot.
+- Memory: returned pages with foreign handles or mappings are retired, not
+  zeroed or reallocated; only exclusive ownership permits reclamation.
+
 - Event ring: a full ring drops the newest event and sets the overflow
   flag; the reader clears the flag; sequence numbers are contiguous
   otherwise; a subscriber whose notification cannot be signalled is
@@ -757,7 +803,13 @@ done until every applicable item has a test. Items are added, never removed.
 - Input: the modifier state follows press and release; a release without
   a press is delivered as a release; pointer button state is tracked
   across packets; a wheel delta is delivered as its own event; both
-  interrupts are acknowledged after the output buffer is drained.
+  interrupts are acknowledged after the output buffer is drained, whichever
+  of the two woke the thread, and a drain that finds nothing acknowledges
+  them all the same; the `AUX` bit routes a byte to the mouse decoder and
+  every other byte to the keyboard decoder; a request without a badge gets
+  no ring; one badge holds one subscription and a slot that was let go of
+  is given out again; a subscriber that cannot be woken is dropped and its
+  slot freed, while a ring that is full or missing costs the event only.
 - Display: a client that carries no badge — which is what a capability
   found under a name looks like — gets no surface, because a server that
   keeps one per client cannot tell two of nobody apart; `present` with
@@ -766,7 +818,9 @@ done until every applicable item has a test. Items are added, never removed.
   sprite saves and restores the background; the cursor is clamped to the
   screen; a surface larger than the screen is rejected; a client
   presenting a surface it does not own is rejected by badge; a client
-  that goes away releases its surface.
+  that goes away releases its surface; the sprite is the shape the client
+  asked for, the resize shape is the same under a turn of half a circle,
+  and each shape has a white body inside a black edge.
 
 ### 6.6.28 QMP client and screendump reader (`xtask`)
 
@@ -786,6 +840,12 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.29 Graphical end-to-end tests in QEMU
 
+- Input regression: more malformed/duplicate requests than the input server's
+  handle capacity do not exhaust it; a ring retained across unsubscribe is
+  not reused, including when only its mapping remains; repeated subscriptions
+  do not exhaust watch slots. A client exits subscribed and its ring is
+  released before the runner injects any input. Run with and without VGA.
+
 - Output: every pixel of a filled rectangle carries the color it was
   filled with and the pixels around it are untouched; a rendered string
   matches the glyph table pixel for pixel; the resolution used by the test
@@ -799,13 +859,20 @@ done until every applicable item has a test. Items are added, never removed.
   surface up, and the display server takes it back — the kernel signals the
   end on the notification, the watching thread of the server turns it into
   a message, and the surface and its memory go back.
-- Combined: the cursor pixels move with the pointer; a stroke drawn while
-  the button is held changes the pixels along the path; typed text appears
-  at the text cursor.
+- Combined: the cursor pixels move with the pointer, and every pixel of
+  the sprite is what the display server's own shape says it is, while the
+  place it left carries the background again; a stroke drawn while the
+  button is held carries the pen at every step along its longer axis;
+  typed text stands at the text cursor pixel for pixel against the glyph
+  table. Each of the three is checked against a position the canvas said
+  on the console, never one the runner worked out for itself, and the
+  three run after the program that listens has ended, so what is injected
+  for them is no part of what that one was checked against.
 - Absent hardware: with `-vga none` the kernel reports
   `[info] framebuffer=absent`, the display server reports that there is no
-  screen, the program that draws says it drew nothing, the run still ends
-  by itself, and the input tests still pass (Phase 10).
+  screen, the program that draws says it drew nothing, the canvas says it
+  has no screen and ends without waiting for input, the run still ends by
+  itself, and the input tests still pass (Phase 10).
 
 ### 6.6.30 Constant-time helpers (`crypto-ct`)
 
@@ -882,9 +949,17 @@ done until every applicable item has a test. Items are added, never removed.
   one thousand rounds and, behind a slow test, at one million; a peer
   value that produces an all-zero shared secret is rejected; non-canonical
   peer encodings are handled as the RFC prescribes.
-- Ed25519 verification against RFC 8032 §7.1; rejection of `S >= L`, of
+- Ed25519 against RFC 8032 §7.1 in both directions: every vector verifies,
+  and signing reproduces the public key and the signature the vector
+  states, signing being deterministic. Rejection of `S >= L`, of
   non-canonical point encodings, of small-order public keys, and of a
   signature over a modified message.
+- The masked multiplications of D-135 answer what the branching ones do:
+  `Point::mul_secret` agrees with `Point::mul` on the base point and on
+  another point, for zero, for a scalar of all ones, and for generated
+  scalars; `Scalar::mul_secret` agrees with `Scalar::mul` over a small
+  square of factors. The RFC 8032 signatures are the second half of that
+  check, since signing takes the masked path and its vectors are pinned.
 - P-256: the generator and its first multiples against the published
   points; the group law, including that the multiple by the order is the
   neutral element and the multiple by one less is the negation of the
@@ -898,8 +973,9 @@ done until every applicable item has a test. Items are added, never removed.
   digest longer than the order is truncated to its leftmost bytes, so a
   change beyond them does not change the outcome and a change within them
   does.
-- With `test-signing`: signing then verifying round-trips for both
-  algorithms; the deterministic ECDSA nonce matches the RFC 6979 example.
+- Signing then verifying round-trips for generated Ed25519 keys, and a
+  modified message does not verify. With `test-signing`: the same round
+  trip for ECDSA, whose deterministic nonce matches the RFC 6979 example.
 
 ### 6.6.34 Random generator (`crypto-rng`)
 
@@ -1161,6 +1237,16 @@ done until every applicable item has a test. Items are added, never removed.
   or trailing space, two spaces, a hyphen, or a character outside the
   printable range is refused; line terminators after the end line are not
   data.
+- PEM at a width that is not RFC 7468: a block wrapped at seventy, the
+  width `openssh-key-v1` is written at, round-trips and carries lines of
+  exactly seventy characters but the last; the strict reader refuses it
+  and names both the line and the width it expected. The wrapped reader
+  takes a text wrapped more narrowly and refuses one wrapped wider, an
+  empty body line, a pad before the last line, and a body whose characters
+  do not fill a quantum. A character outside the alphabet is named by its
+  offset in the body and not in the quantum it fell in, which is what a
+  reader four characters at a time would otherwise report. A buffer one
+  byte short of `encoded_len_wrapped` is an error and writes nothing.
 - Property: no input causes a panic, and every accepted block re-encodes
   to a canonical form that decodes to the same bytes. The generator of
   near-valid blocks is itself checked to reach both an accepted and a
@@ -1192,6 +1278,11 @@ done until every applicable item has a test. Items are added, never removed.
   list identified by `NONE` is refused at construction; a walk over links
   a caller has corrupted into a cycle still ends, because it takes as many
   steps as the list says it is long.
+- `IndexList::insert_after`: an insert after `None` is a `push_front`;
+  after the tail is a `push_back`; in the middle links both neighbours; a
+  node that is already linked, one outside the slice, and an `after` that
+  belongs to another list or to none are each refused and change nothing.
+  The item belongs to 6.6.59 as well, which is the phase that added it.
 - `BitSet` further: a set of no words holds no bit and refuses every
   index; a first word that is full sends `first_clear` into the second;
   `count` and `is_empty` agree with the bits that are set.
@@ -1803,6 +1894,21 @@ follows the catalog rather than the layer, as 6.6.54 records.
   65537, and for an exponent with its top and bottom bits set; a round
   trip that signs with a wide exponent and verifies with a small one over
   the key of RFC 8448, section 2.
+- The secret exponentiation, which is the half of the crate written for
+  a value that must not be observable: `pow_secret` against the same
+  schoolbook reference on exponents the generator chooses, at each of the
+  four widths (property), and against `pow` on the exponents that one
+  takes. An exponent of zero gives one however many bytes it is written
+  in, and leading zero bytes change the rounds and not the value — the
+  two properties that say the ladder runs over the buffer rather than
+  over the value. A base that is not below the modulus, one wider than
+  the arithmetic, and an output buffer narrower than the modulus are each
+  refused; the last is refused before the ladder starts, because
+  refusing afterwards would be a decision about the value.
+- The masked product: `montgomery_secret` against `montgomery` over every
+  case of the final subtraction, the one it happens in and the one it
+  does not, and separately against the definition, so that the two
+  variants agreeing is not the only thing checked.
 - The key: the bounds of D-79 at each edge — an exponent of one, of two,
   of four, and of three; a modulus above the upper bound, and one whose
   top bit is clear — refused where the rule says and accepted where it
@@ -1859,7 +1965,7 @@ item is what 12.9 asked for before the encodings could be written
   that a client of a later release is told which of the two it is; a
   protocol code and a message number the release does not have are each
   refused.
-- Round trip, per message of each of the four protocols: what was encoded
+- Round trip, per message of each of the six protocols: what was encoded
   decodes to what it was. The names and the chunks are tested at zero
   bytes and at the full width of their field.
 - Replies: every reply carries a status word first, and the payload only
@@ -1878,11 +1984,31 @@ item is what 12.9 asked for before the encodings could be written
   is refused where it is read, which is the case an encoder of this crate
   cannot produce and a sender of another release could.
 - A message of one protocol handed to the decoder of another is refused
-  with both protocols named.
+  with both protocols named. A `SetCursor` whose shape word names no
+  sprite is refused the same way, because a shape is a name and not a
+  number the server clamps.
 - The parent protocol has one message and no reply, because the child that
   sends it exits behind it (D-94): the status it carries comes back, a
   message number the protocol does not have is refused, and a report
   without its status word is refused rather than read as a zero.
+- The input protocol carries two messages and its records live in shared
+  memory rather than in a message. An event record is sixteen bytes, its
+  key and pointer forms round-trip, the bytes the kind does not use are
+  zero, and a record whose kind byte names neither, whose reserved byte is
+  not zero, or whose key code names no key is refused. A ring over one page
+  holds 254 records: what the writer pushes the reader pops in order, the
+  sequence numbers stay contiguous across the wrap, a full ring drops the
+  newest event and counts it, the reader clears that count when it reports
+  it, and a record somebody wrote nonsense into is stepped over rather than
+  read for ever. A subscription carries a notification and a process handle and its reply carries
+  the memory object only behind a status that says it succeeded.
+- The layouts of the client side: a word typed on `us` comes out as that
+  word, the German layout swaps the two letters the United States layout
+  calls `Y` and `Z` and carries the umlauts, shift picks the other
+  character of a pair, the lock turns over on the press and changes the
+  letters only, the modifier state follows press and release, a release
+  without a press changes nothing, and a key that stands for no character
+  answers nothing.
 
 ### 6.6.57 The wrappers of the gate against the table (`user-sys-x86_64`, QEMU)
 
@@ -1891,7 +2017,7 @@ system call table; it cannot see the methods themselves (D-92). This item
 is the other half, and it needs a machine: the numbers a wrapper writes are
 what the kernel dispatches on, so the check is what the kernel saw.
 
-- `every_wrapper` calls all forty-two methods of `Gate` in the order of the
+- `every_wrapper` calls every method of `Gate` in the order of the
   table, each with a handle that names nothing, so that every call is
   refused and none of them waits for a partner or ends the thread;
   `thread_exit` is last, because it does not come back.
@@ -2087,6 +2213,13 @@ what the kernel dispatches on, so the check is what the kernel saw.
 
 ### 6.6.61 The bus (`kernel-acpi`, `pci`, QEMU)
 
+- The window the kernel keeps (`kernel-core`): `system_info` reports the
+  base address, the segment group, and the first and last bus as its words
+  twenty-six to twenty-nine, and four zeros on a machine whose firmware
+  published none; the range is among the device apertures even when the
+  memory map marked no region at all, a frame above it belongs to none, and
+  `boot::run` writes `[info] ecam=<base> segment=<n> buses=<first>..=<last>`
+  or `[info] ecam=absent`.
 - `MCFG` (`kernel-acpi`): a table with one allocation and one with several;
   a wrong signature, a length below the header, a length beyond the
   buffer, and a bad checksum are each refused before any field is read; an
@@ -2138,6 +2271,17 @@ what the kernel dispatches on, so the check is what the kernel saw.
   outside the buffer, and never loops.
 - Fuzz target `mcfg`: arbitrary bytes as a table; the parse answers or
   refuses and reads nothing outside the buffer.
+- The volatile accessor (`user-sys-x86_64`, QEMU): every read and write
+  answers inside the region it was made with and `None` outside it, and a
+  sub-window narrows a region and reaches no further. It is proved by the
+  bus walk of `app-lspci`, which reaches the configuration space of a real
+  machine through nothing else.
+- End to end (QEMU): the run of the reference machine carries
+  `[info] ecam=`, the window `app-lspci` was given, the virtio-net function
+  with the device identifier `0x1041`, the four structures it published in
+  whatever order it prefers, and a message table of four vectors; the run
+  without the two network lines carries the host bridge, no virtio device,
+  and ends by itself.
 
 ### 6.6.62 The network device (`driver-virtio-net`)
 
@@ -2230,7 +2374,48 @@ what the kernel dispatches on, so the check is what the kernel saw.
   attempt at the deadline rather than blocking the server.
 
 
-### 6.6.66 JavaScript core (`jrs`, `jrs-cli`)
+### 6.6.66 Finite-field Diffie-Hellman (`crypto-dh`)
+
+Step S2 of 8.26, the half of it that is built (D-122, D-123). The
+constant-time exponentiation this rests on is in `crypto-bignum` and is
+covered by 6.6.55.
+
+- The group of RFC 3526, section 3: the prime is the value the document
+  prints, checked against a second transcription of the same rows so that
+  the constant and the test do not share one slip; it is 2048 bits wide,
+  its two ends are the ones the closed form of that section gives it, and
+  the generator is the two the document states. The exponent length the
+  crate recommends is 256 bits, which is above the 112 bits of security
+  RFC 9142, table 4, gives the group.
+- The generator raised to a small exponent is that power of two, for
+  exponents whose result stays below the prime and is therefore
+  expressible without a second exponentiation; raised to the width of the
+  prime it is that power reduced exactly once, which the test computes by
+  subtracting the prime rather than by exponentiating again.
+- An exchange between two sides reaches one secret, and does so for
+  exponents the generator chooses (property). The same exchange runs over
+  the 1536-bit group of section 2 of the same document, so that nothing
+  in the code is tied to one width.
+- The range check of RFC 8268, section 4, which corrects RFC 4253,
+  section 8: a value inside the open interval is accepted, and zero, one,
+  `p-1`, `p`, `p+1`, and a value wider than the arithmetic are each
+  refused. A value carrying leading zero bytes is accepted, because that
+  is the shape an SSH `mpint` has once its length prefix is gone.
+- An exponent of zero produces a public value that must not be sent and a
+  shared secret that must not be used, and both are refused where they
+  are produced rather than passed to a caller.
+- Both operations refuse an output buffer narrower than the group, and a
+  public value may be written into one wider than it.
+- A group whose generator is below two, and one whose prime the
+  arithmetic cannot hold, are refused by the constructor.
+- Every refusal renders a sentence of its own.
+
+What is not here, and belongs to step S8: a handshake against an
+implementation this project did not write. No document publishes a
+complete SSH key exchange with the values that made it, so the arithmetic
+is checked against a reference inside the repository (6.6.55) and the
+protocol above it is checked against a live OpenSSH.
+### 6.6.67 JavaScript core (`jrs`, `jrs-cli`)
 
 - Lexical boundaries: all implemented radix literals and separators; malformed
   digits, exponents and escapes; comments and ASI line terminators; legacy
@@ -2424,6 +2609,293 @@ what the kernel dispatches on, so the check is what the kernel saw.
   rawJSON branding/integrity, cycles, callback GC and shared nesting/fuel limits.
   `json_codec` fuzzes parsing/range validity/quoting without the VM; `jrs_source`
   exercises hooks and realm use. The original passive-listener WPT stays unchanged.
+
+### 6.6.68 The wire types and the binary packet (`audhsos-ssh`)
+
+Step S1 of 8.26 (D-123). Everything here is host-tested; the packet layer
+is checked against itself until step S3 puts the cipher and its worked
+example (D-134) over it.
+
+- The vectors RFC 4251, section 5, prints: the five `mpint` encodings and
+  the three name-lists, each read into the value the document names and
+  written back into the bytes it prints; the `uint32` 699921578, and the
+  string `"testing"`.
+- The form of an `mpint` is the value or it is refused: zero is a string
+  of no bytes and a single `00` is not zero; `00` before a byte whose top
+  bit is clear and `ff` before one whose top bit is set are each an
+  unnecessary leading byte; the necessary ones are kept. A negative value
+  has no magnitude, which is what every `mpint` of the key exchange is
+  read as.
+- An unsigned value written as an `mpint` gets the encoding RFC 8731,
+  section 3.1, requires — leading zeros off, one zero byte back on when
+  the top bit is set — and reads back as the number that was written
+  (property).
+- A name-list holds no name of zero length, so a leading, a trailing, and
+  a doubled comma are each refused; so are a byte that is not US-ASCII,
+  a byte sequence that is not UTF-8, and a null. The writer refuses the
+  same, and a name with a comma in it besides.
+- A failed read leaves the cursor where it was and a write that does not
+  fit writes nothing, so no field is half read or half written.
+- A packet is a whole number of blocks with at least four bytes of
+  padding and never fewer than sixteen bytes altogether, for every block
+  size this crate takes and for payloads across the block; what was
+  framed comes back out (property).
+- A decoder judges the length from the four bytes that hold it and before
+  it waits for the packet: below sixteen, not a whole number of blocks,
+  and above the largest packet that can satisfy both bounds of section
+  6.1 at once are each refused there. Padding outside its packet or under
+  four bytes is refused, and so is a payload above 32768 in a packet
+  whose length is otherwise one a packet can have.
+- A block size that no packet can be padded to is refused, and the one in
+  use stands; a block size that is taken does not reset the sequence
+  number, which section 6.4 forbids for a re-exchange.
+- The padding is one call on the generator (D-121), a generator with
+  nothing left frames no packet, and a buffer short by any number of
+  bytes frames none either.
+- The sequence number of section 6.4 counts every packet, counts nothing
+  for a packet that was not whole, runs independently in each direction,
+  and wraps to zero after 2^32.
+- A packet of the largest mandatory payload fits in a buffer of the
+  mandatory size, and two packets in one buffer are read one after the
+  other.
+- Every refusal renders a sentence of its own.
+
+### 6.6.69 The greeting and the negotiation (`audhsos-ssh`)
+
+The front of step S2 of 8.26: what both key exchange methods start with.
+No document publishes an identification exchange or a `SSH_MSG_KEXINIT`
+with the lists that made it, so these are checked against the rules the
+documents state and against this crate's own writer.
+
+- The identification string this client sends is the form of RFC 4253,
+  section 4.2: the prefix, a software version that is printable US-ASCII
+  with no space and no minus, CR LF, and under 255 characters. A buffer
+  too small for it writes nothing.
+- The peer's is the line without its CR LF, which is what the exchange
+  hash takes; the lines a server may send before it are skipped and
+  counted, and the caller is told where the binary packet protocol
+  starts. Nothing is said before a line has ended.
+- Every line is held to 255 characters whether it has ended or not, so
+  what is refused does not depend on how the bytes were split on the way
+  here; one byte under the limit is a line either way.
+- Refused: a version this client does not speak, which includes the
+  `SSH-1.99-` of section 5.1; a software version of no length; a byte
+  that is not printable US-ASCII; bytes that are not UTF-8.
+- The message numbers are the ones RFC 4250, section 4.1.2, assigns,
+  transcribed a second time so that the constant and the test do not
+  share one slip, and each falls in the range section 4.1.1 gives it.
+- `SSH_MSG_KEXINIT` holds the fields of RFC 4253, section 7.1, in that
+  order, with the cookie one call on the generator (D-121), empty
+  language lists, and no guess. What was written reads back as the lists
+  that were offered. Refused: another message number, a message that ends
+  early at any point, a name that may not be in a list, a buffer too
+  small, and a generator with nothing left.
+- The negotiation takes the first name on the client's list that the
+  server also has, whatever the server prefers. The key exchange method
+  and the host key algorithm are chosen together, so a method both sides
+  have but no host key this client can check a signature with is not
+  chosen, and says so.
+- Nothing in common ends the connection and names the list it ended on.
+  A cipher that carries its own integrity needs no MAC; any other cipher
+  does, and a proposal that offers one is what says so both ways.
+- An `ext-info-c` or `ext-info-s` that ends up chosen is a disconnect and
+  not a method (RFC 8308, section 2.2).
+- A guessed packet is one to ignore unless both of the peer's first names
+  are the chosen ones — the right method under the wrong host key is
+  still wrong — and a message that announces no guess is nothing to
+  ignore whatever its first names are.
+
+### 6.6.70 The key exchange and the cipher (`audhsos-ssh`)
+
+The rest of step S2 of 8.26, and the whole of S3. The cipher has a
+published vector and the key exchange has none, so the hash and the key
+derivation are checked against the same computation written a second time
+in the tests, and the two methods against each other.
+
+- Both sides of `curve25519-sha256` reach one secret, and so do both
+  sides of `diffie-hellman-group14-sha256`. A generator with nothing left
+  makes no key pair.
+- The first message carries the public value as its method encodes it: a
+  string for the curve (RFC 5656, section 4), an `mpint` for the group
+  (RFC 4253, section 8). The two message numbers are 30 and 31; RFC 5656,
+  section 7.1, prints them for the curve method and no document this
+  repository holds prints them for the other, so what says they are right
+  there is the interop run of step S8.
+- The reply is the host key, the public value and the signature; another
+  message number, a message that ends early, a non-canonical `mpint` and
+  a negative one are each refused.
+- The aborts are refusals and not values: a public value that is not
+  thirty-two bytes and a point of small order for the curve (RFC 8731,
+  section 3), and for the group the open interval of RFC 8268, section 4,
+  whose two ends the closed form of RFC 4253 would have admitted.
+- The exchange hash is the concatenation of RFC 4253, section 8, in that
+  order: every one of the eight fields changes it, and no two of them can
+  be swapped without it changing.
+- The shared secret enters the hash as an `mpint` and not as it stands.
+  A value whose top bit is set hashes differently from the same bytes as
+  a fixed-length string; one whose top bit is clear hashes the same,
+  which is why the mistake succeeds on about half of all connections. A
+  leading zero is not part of the value.
+- The six keys of section 7.2 are the six letters; a key shorter than the
+  hash is its first bytes, and one longer is extended by hashing the
+  whole key so far, which is what the 64 bytes of the cipher need. The
+  shared secret is hashed as an `mpint` here too.
+- The cipher is appendix A of the draft D-134 keeps: the packet of that
+  example seals to the bytes it prints, tag included, and those bytes
+  open as the packet they were. The length field is read from its four
+  bytes alone. A tag that does not check decrypts nothing, and the same
+  packet under another sequence number neither seals the same nor opens.
+- The packet layer under that cipher frames the example from its payload
+  up, which is what says the padding aligns the region the length field
+  is outside of. A sealed packet round-trips, one whose bytes were
+  changed anywhere is refused and not counted, and a decoder waits for
+  the tag as well as for the packet.
+- Taking keys into use does not reset the sequence number, so the first
+  packet under the new keys carries the number the last one under the old
+  did not (RFC 4253, sections 7.3 and 6.4).
+- A buffer of this side's own is not a key exchange that failed: a shared
+  secret that does not fit is refused as a buffer and not as a disconnect
+  the peer earned. A buffer with room for a sealed frame but not for its
+  tag says how much it holds, not how much was written into it.
+
+### 6.6.71 The wall clock (`audhsos-uefi`, `audhsos-abi`, `kernel-syscall`, QEMU)
+
+D-137. The conversion and the refusals are host tests; what QEMU adds is
+that the firmware of the reference machine answers at all and that the
+date reaches ring three.
+
+- `EFI_TIME` becomes a count of seconds: a reading in universal time is
+  its own second, and a named offset is added to reach one, in the
+  direction UEFI 2.11, section 8.3.1 gives — `Localtime = UTC -
+  TimeZone`, so an offset of 480 moves 13:00 to 21:00 and not to 05:00.
+  The bounds the section names, -1440 and 1440, are accepted and the
+  values one past them are not.
+- `EFI_UNSPECIFIED_TIMEZONE` is a usable reading and not a refusal: the
+  value is read as universal time and the source says the zone was never
+  named. Nothing else in the structure carries that, which is why the
+  source travels with the seconds.
+- The daylight bits are checked and change nothing. The firmware moves
+  the offset with the time when daylight saving begins, so a correction
+  applied here would be applied twice; a bit the section does not define
+  is refused.
+- A firmware without a clock answers an all-zero structure, whose month
+  of zero is what refuses it. A field outside the calendar, a year the
+  calendar will not take, and a moment that is not after the epoch are
+  each refused with the field that was wrong, so that a clock which was
+  never set cannot become a date.
+- The boot information carries the pair or neither: a source this version
+  does not know, a source with seconds that are not after the epoch, and
+  seconds with no source are three separate refusals, and version 1 is
+  refused as a version. The fixed part is 144 bytes, and the fuzz corpus
+  of `boot_info` carries a version 2 structure.
+- `clock_wall` is the boot moment plus what `clock_now` answers, in
+  microseconds, with the source in the second word. A machine without a
+  clock is `Unavailable`, and so is a boot moment the microsecond scale
+  cannot hold — nothing is answered with a wrong date.
+- On the reference machine the date lies between 2026 and 2100, moves
+  forward by a wait of fifty milliseconds to within a tick, and leaves a
+  boot moment in the same range when the monotonic count is taken off it.
+  A clock that read nothing usable fails naming `GetTime`, because that
+  is the one part of this no host test can reach.
+
+### 6.6.72 Partition table structures (`fs-gpt`)
+
+D-138. The structures are UEFI 2.11, sections 5.2.3 and 5.3, and every
+offset is tested against that table.
+
+- CRC-32: the standard check value for the string `123456789`; empty
+  input; a single byte; the same bytes fed in one piece and in two, split
+  at both ends and across a block; a single bit changes it.
+- Protective record: the signature bytes, one record of type `0xEE`
+  starting at block 1 and covering the device, the size capped at the
+  largest a thirty-two-bit field carries, the rest of the block zero. It
+  is read back as protective; a zeroed block, one without the signature,
+  and one carrying a legacy partition type are not; the type is looked for
+  in all four records.
+- Header: written and parsed back whole; the checksum covers the header
+  with its own field read as zero; a torn byte is refused; a signature or
+  a revision the format does not have; a size below 92 and one above the
+  block, and both bounds accepted; a header read from a block other than
+  the one it names; an entry size that is not 128 times a power of two or
+  that would straddle a block, and 128, 256 and 512 accepted with the
+  count that keeps the array the same length; an empty usable range; an
+  array that runs off the device, into the usable range, or is empty, and
+  a length that overflows; the blocks an array takes when it does not fill
+  its last one.
+- Table: written onto a device and read back, with the header fields, the
+  entry, and its unique identifier as they were written; the backup names
+  the primary and lies in the last block; a torn primary header sends the
+  read to the backup, a torn array does the same, and both torn report
+  what the primary refused; a device partitioned the legacy way; a device
+  below the blocks a table needs, and the smallest one that holds it; a
+  walk that finds nothing; eight partitions walked in order; an entry
+  outside the usable range; a header naming a block the device does not
+  have; a device that refuses a block on read and one that refuses a
+  write; more entries than the array holds; a partition below the first
+  usable block and one above the last; two partitions that touch; an
+  unused entry among the written ones; and that a write cut short at the
+  primary header leaves a backup that reads.
+- Entry: written and parsed back; a name of every code unit it holds and
+  one more; a name outside the basic plane, which costs two units per code
+  point; a partition that ends before it begins; an entry of no type; a
+  slice too short for a field, which takes none of it; the blocks a
+  partition covers.
+- Properties: a partition written onto a device of any size between the
+  smallest and eight thousand blocks reads back as the partition it was;
+  and any single bit flipped anywhere in the first two thousand blocks of
+  a table leaves a read that refuses, that recovers, or that answers the
+  partition that was written — never a different one.
+
+### 6.6.73 The block device (`driver-virtio-blk`)
+
+D-139. The device is virtio 5.2 and the transport is virtio 4.1; every
+offset and every bit is tested against the section it came from.
+
+- Registers: each width moves the bytes it names and keeps only the bits
+  its register holds; what is written to a structure is read back; the
+  interrupt status clears as it is read.
+- Common configuration: every field of the layout follows the one before
+  it with no gap, and the last ends where the structure this driver reads
+  does; the offered features come out of both windows and the accepted
+  ones go into both; the status is one byte; nothing is read until it is
+  asked for, so the features answer zero before they have been read.
+- Features: every bit is the one the specification numbers; the driver
+  asks for the version, the flush and the read-only flag and no more;
+  every bit of the device's range has a name and no two share one; a bit
+  of the transport's range has none; what the driver does not take is
+  what `refused` reports.
+- Configuration space: the capacity is read out of the device
+  configuration through the generation dance of virtio 2.5.1, and a
+  device whose generation changes under every read is refused after a
+  bounded number of attempts rather than read in a loop.
+- Bringing the device up: the status writes are the five of section
+  3.1.1 in order; what the device offers and the driver wants is what is
+  taken; the rings, the queue size and both vectors reach the registers
+  and the queue is enabled last; a device offering a smaller queue
+  settles the size; a device with no request queue, rings of a size that
+  is not a power of two, a device that was not reset, one that will not
+  take a vector, one that clears `FEATURES_OK`, and one that does not
+  offer `VERSION_1` are each refused by name; a reset puts back
+  everything the driver had learned; a device driven without message
+  interrupts writes `NO_VECTOR` and is not refused for it.
+- Requests: a read and a write are three buffers in the order of section
+  5.2.6, the data device-writable for a read and device-readable for a
+  write, the status device-writable in both; a flush is two; a request
+  carrying the wrong parts, data that is not whole sectors, a request
+  past the last sector including one whose sector would overflow the
+  sum, a write or a flush to a read-only device, and a flush of a sector
+  other than zero are each refused; a queue with fewer descriptors free
+  than the chain needs refuses with the count.
+- The header: the type, the reserved word and the sector, with nothing
+  written past the sixteen bytes; a buffer too short is refused and left
+  as it was; only `VIRTIO_BLK_S_OK` is success.
+- Notification: the write goes to the offset the queue's own offset and
+  the capability's multiplier make, and carries the queue index.
+- Properties: a header written for any sector and any type carries that
+  sector and that type and reaches no further than its length; and a
+  request is taken exactly when every framing rule of 5.2.6.1 holds for
+  it, which is checked against the rules said a second time rather than
+  against the driver.
 
 ## 6.7 CI pipeline
 

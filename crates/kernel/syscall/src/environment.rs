@@ -9,7 +9,7 @@
 //! space shares; a kernel stack slot it hands out is mapped and guarded.
 
 use audhsos_abi::ipc_buffer::SIZE;
-use audhsos_abi::{Error, Framebuffer};
+use audhsos_abi::{Ecam, Error, Framebuffer, WallClockSource};
 use kernel_mm::page_table::Permissions;
 use kernel_types::{CachePolicy, Page, PhysFrame, PhysFrameRange, VirtAddr};
 
@@ -153,6 +153,55 @@ pub trait Environment {
     /// As [`Environment::read_port`].
     fn write_port(&mut self, port: u16, width: u8, value: u64) -> Result<(), Error>;
 
+    /// Writes every byte of `bytes` to `port`, one after another.
+    ///
+    /// The range check is the caller's, as for [`Environment::read_port`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] on a machine without port access.
+    fn write_port_string(&mut self, port: u16, bytes: &[u8]) -> Result<(), Error>;
+
+    /// The microseconds since the kernel started, at the resolution of the
+    /// timer tick. `clock_now` answers this word, and every deadline of the
+    /// interface is in the same scale.
+    fn now_micros(&self) -> u64;
+
+    /// The moment the firmware clock stood at when the loader read it, in
+    /// seconds from the Unix epoch, and how far it can be trusted; `None`
+    /// on a machine that reported no clock.
+    ///
+    /// It is the moment of the boot and not the moment of the call.
+    /// `clock_wall` adds [`Environment::now_micros`] to it, which is why
+    /// the drift of that count is the drift of the wall clock too.
+    fn boot_wall(&self) -> Option<(i64, WallClockSource)>;
+
+    /// Four words drawn from the entropy source of the machine, which is
+    /// the thirty-two bytes a stream cipher takes as a seed.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unavailable`] when a word could not be drawn inside the
+    /// retry bound of the adapter, or when the machine has no source. No
+    /// partial result reaches the caller.
+    fn random_seed(&mut self) -> Result<[u64; 4], Error>;
+
+    /// Takes one vector out of the message interrupt space and answers with
+    /// the vector, the address a device writes to, and the value it writes.
+    ///
+    /// Nothing is routed and nothing is masked: a message interrupt reaches
+    /// the processor because the driver programmed its device to write
+    /// there.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoVector`] when the space has nothing left;
+    /// [`Error::Unsupported`] on a machine whose controller is not up.
+    fn allocate_message_vector(&mut self) -> Result<(u8, u64, u32), Error>;
+
+    /// Gives a message interrupt vector back to the space it came from.
+    fn release_message_vector(&mut self, vector: u8);
+
     /// The vector the plan of this machine routes `line` to, or `None` for a
     /// line it reserves no vector for.
     ///
@@ -193,4 +242,9 @@ pub trait Environment {
     /// when the platform named none. It is the only thing of the firmware
     /// the kernel keeps, and `system_info` is what reports it.
     fn acpi_pointer(&self) -> u64;
+
+    /// The configuration window of the bus, if the firmware published one.
+    /// `system_info` reports it, and the root task makes the device memory
+    /// object of the program that enumerates out of it.
+    fn ecam(&self) -> Option<Ecam>;
 }

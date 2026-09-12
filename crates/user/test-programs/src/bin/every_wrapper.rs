@@ -18,7 +18,10 @@
 //! checked is the number the kernel saw, and a call the kernel refused was
 //! a call the kernel saw. The three that take no handle succeed —
 //! `endpoint_create`, `notification_create`, `thread_yield` — and so does
-//! `debug_log`, which is given an empty message so that it writes nothing.
+//! `debug_log`, which is given an empty message so that it writes nothing,
+//! and `clock_now`, which answers the machine and asks nothing of the
+//! caller. `random_bytes` succeeds or answers `Unavailable`, depending on
+//! whether the processor has the instruction; either way the kernel saw it.
 //!
 //! `thread_exit` is last and not twelfth: it does not come back, and the
 //! test kernel expects the table with that one call moved to the end.
@@ -111,6 +114,14 @@ fn main(ipc_buffer: u64) -> ! {
     let _ = gate.debug_log();
     let _ = gate.memory_merge(memory, memory);
     let _ = gate.process_watch(process, notification, 0);
+    let _ = gate.process_unwatch(process, notification, 0);
+    let _ = gate.memory_references(memory);
+    let _ = gate.ioport_write_string(ports, 0x40, b"x");
+    let _ = gate.clock_now();
+    let _ = gate.notification_wait_until(notification, 0);
+    let _ = gate.random_bytes();
+    let _ = gate.interrupt_create_msi(system);
+    let _ = gate.clock_wall();
 
     gate.thread_exit()
 }

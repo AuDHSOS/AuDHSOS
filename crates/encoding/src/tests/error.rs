@@ -36,8 +36,11 @@ fn every_variant_renders_a_message() {
         ),
         (EncodingError::Label, "the label is not one RFC 7468 allows"),
         (
-            EncodingError::LineLength(60),
-            "a body line before the last is 60 characters, not 64",
+            EncodingError::LineLength {
+                characters: 60,
+                wrap: 64,
+            },
+            "a body line is 60 characters, not the 64 this text wraps at",
         ),
         (EncodingError::EmptyPayload, "the block carries no bytes"),
         (
