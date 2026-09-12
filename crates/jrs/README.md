@@ -583,7 +583,7 @@ both commands correctly returned failure.
 
 | Scope | Implementation commit | Command | Files | Variants | Passed | Failed | Unsupported |
 |---|---|---|---:|---:|---:|---:|---:|
-| Object literals (focused) | `9246ad44ce53497e22fa3072af93082f282977f3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/object --summary` | 1,170 | 2,252 | 684 (30.37%) | 54 (2.40%) | 1,514 (67.23%) |
+| Object literals (focused) | `a785fc59533bb6b11d05112f339bc59b91fcfd11` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/object --summary` | 1,170 | 2,252 | 684 (30.37%) | 54 (2.40%) | 1,514 (67.23%) |
 | Destructuring assignment (focused) | `1f7f4879f91186dffda86812e366151a6446bcc7` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr --summary` | 368 | 640 | 446 (69.69%) | 0 (0.00%) | 194 (30.31%) |
 | Complete pinned suite, including staging and Intl | `867cc169f02f9bd60639216a396a0c94ddc3871a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,399 (34.39%) | 30,724 (29.85%) | 36,802 (35.76%) |
 
