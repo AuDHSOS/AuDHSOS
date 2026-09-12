@@ -628,7 +628,7 @@ enum RegisterMemberKey {
         register: crate::engine::bytecode::Reg,
         array_index: Option<u32>,
     },
-    ObjectKeyed(crate::engine::bytecode::Reg),
+    ObjectKeyed(crate::engine::bytecode::Reg, Option<Vec<u16>>),
 }
 
 enum RegisterPreparedAssignment {
@@ -1451,45 +1451,84 @@ impl RegisterLowerer {
             if property.prototype || property.accessor.is_some() {
                 return None;
             }
-            let name = Self::static_property_name(&property.key)?;
-            if parse_array_index(name).is_some() {
-                return None;
-            }
-            let name_units = name.to_vec();
-            let RegisterObjectLayout::Ordinary { properties, .. } =
-                self.object_layouts.get(&object_id)?
-            else {
-                return None;
+            let key = if property.computed {
+                let static_name = Self::static_property_key_units(&property.key);
+                if !self.lower(&property.key)?.is_primitive() {
+                    return None;
+                }
+                let register = self.allocate_register()?;
+                self.code.emit(Instruction::Star(register));
+                RegisterMemberKey::ObjectKeyed(register, static_name)
+            } else {
+                let name = Self::static_property_name(&property.key)?;
+                if parse_array_index(name).is_some() {
+                    return None;
+                }
+                let name = name.to_vec();
+                RegisterMemberKey::Named {
+                    constant: self.string_constant(&name)?,
+                    name,
+                }
             };
-            let is_new = !properties.contains_key(name);
-            if is_new && properties.len() >= self.property_limit {
-                return None;
-            }
-            let name = self.string_constant(name)?;
             let value_type = self.lower(&property.value)?;
             if !value_type.is_primitive() && !value_type.is_object() {
                 return None;
             }
             let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
-            self.code.emit(Instruction::SetNamed {
-                obj: object,
-                name,
-                slot,
-            });
-            let RegisterObjectLayout::Ordinary {
-                properties, order, ..
-            } = self.object_layouts.get_mut(&object_id)?
-            else {
-                return None;
+            let property_name = match key {
+                RegisterMemberKey::Named { constant, name } => {
+                    self.code.emit(Instruction::SetNamed {
+                        obj: object,
+                        name: constant,
+                        slot,
+                    });
+                    Some(name)
+                }
+                RegisterMemberKey::ObjectKeyed(register, name) => {
+                    self.code.emit(Instruction::SetByValue {
+                        obj: object,
+                        key: register,
+                        slot,
+                    });
+                    self.release_register(register)?;
+                    name
+                }
+                RegisterMemberKey::ArrayKeyed { .. } => return None,
             };
-            if is_new {
-                order.push(name_units.clone());
-            }
-            properties.insert(name_units, value_type);
+            self.record_ordinary_property_write(object_id, property_name, value_type)?;
         }
         self.code.emit(Instruction::Ldar(object));
         self.release_register(object)?;
         Some(RegisterType::Object(object_id))
+    }
+
+    fn record_ordinary_property_write(
+        &mut self,
+        object_id: u32,
+        property_name: Option<Vec<u16>>,
+        value_type: RegisterType,
+    ) -> Option<()> {
+        let RegisterObjectLayout::Ordinary {
+            properties,
+            order,
+            dynamic,
+        } = self.object_layouts.get_mut(&object_id)?
+        else {
+            return None;
+        };
+        if let Some(name) = property_name {
+            let is_new = !properties.contains_key(&name);
+            if is_new && properties.len() >= self.property_limit {
+                return None;
+            }
+            if is_new {
+                order.push(name.clone());
+            }
+            properties.insert(name, value_type);
+        } else {
+            *dynamic = Some(dynamic.map_or(value_type, |current| current.merge(value_type)));
+        }
+        Some(())
     }
 
     fn lower_array(&mut self, items: &[Option<Expr>]) -> Option<RegisterType> {
@@ -2288,7 +2327,7 @@ impl RegisterLowerer {
             }
             let key = self.allocate_register()?;
             self.code.emit(Instruction::Star(key));
-            RegisterMemberKey::ObjectKeyed(key)
+            RegisterMemberKey::ObjectKeyed(key, None)
         };
         Some(RegisterMemberAssignment {
             object,
@@ -2342,7 +2381,7 @@ impl RegisterLowerer {
                     *length = None;
                 }
             }
-            RegisterMemberKey::ObjectKeyed(register) => {
+            RegisterMemberKey::ObjectKeyed(register, name) => {
                 self.code.emit(Instruction::SetByValue {
                     obj: prepared.object,
                     key: register,
@@ -2352,12 +2391,7 @@ impl RegisterLowerer {
                 let RegisterType::Object(object_id) = prepared.base_type else {
                     return None;
                 };
-                let RegisterObjectLayout::Ordinary { dynamic, .. } =
-                    self.object_layouts.get_mut(&object_id)?
-                else {
-                    return None;
-                };
-                *dynamic = Some(dynamic.map_or(value_type, |current| current.merge(value_type)));
+                self.record_ordinary_property_write(object_id, name, value_type)?;
             }
             RegisterMemberKey::Named { constant, name } => {
                 self.code.emit(Instruction::SetNamed {
@@ -2368,25 +2402,7 @@ impl RegisterLowerer {
                 let RegisterType::Object(object_id) = prepared.base_type else {
                     return None;
                 };
-                let RegisterObjectLayout::Ordinary { properties, .. } =
-                    self.object_layouts.get(&object_id)?
-                else {
-                    return None;
-                };
-                let is_new = !properties.contains_key(&name);
-                if is_new && properties.len() >= self.property_limit {
-                    return None;
-                }
-                let RegisterObjectLayout::Ordinary {
-                    properties, order, ..
-                } = self.object_layouts.get_mut(&object_id)?
-                else {
-                    return None;
-                };
-                if is_new {
-                    order.push(name.clone());
-                }
-                properties.insert(name, value_type);
+                self.record_ordinary_property_write(object_id, Some(name), value_type)?;
             }
         }
         self.release_register(prepared.object)

@@ -85,6 +85,7 @@ pub(crate) enum ExprKind {
 pub(crate) struct ObjectProperty {
     pub(crate) key: Expr,
     pub(crate) value: Expr,
+    pub(crate) computed: bool,
     pub(crate) prototype: bool,
     pub(crate) accessor: Option<bool>,
 }
@@ -1888,6 +1889,7 @@ impl Parser {
             properties.push(ObjectProperty {
                 key,
                 value,
+                computed,
                 prototype,
                 accessor,
             });

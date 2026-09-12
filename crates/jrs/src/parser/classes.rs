@@ -162,6 +162,7 @@ impl Parser {
                     ObjectProperty {
                         key,
                         value,
+                        computed,
                         prototype: false,
                         accessor,
                     },

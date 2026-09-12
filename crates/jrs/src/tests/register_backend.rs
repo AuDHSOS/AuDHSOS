@@ -677,6 +677,51 @@ fn ordinary_named_properties_run_through_shapes_and_inline_caches() -> Result<()
 }
 
 #[test]
+fn computed_object_data_properties_use_keyed_shape_storage() -> Result<(), Error> {
+    for source in [
+        "let key='x';let o={[key]:40,y:2};o.x+o.y",
+        "let o={['x']:40,[true]:2};o.x+o.true",
+        "let o={[0]:40,['0']:42};o['0']",
+        "let o={['__proto__']:42};o.__proto__",
+        "let key='x',value='v';let o={[(key='k')]:(value=key+'!')};key+value+o.k",
+        "let key='x';let o={x:1,[key]:'a'};o.x+'b'",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let code = program
+            .register_code
+            .as_ref()
+            .ok_or(Error::InvalidBytecode)?;
+        assert!(
+            core::iter::once(code.as_ref())
+                .chain(code.functions.iter())
+                .flat_map(|function| &function.instructions)
+                .any(|instruction| matches!(
+                    instruction,
+                    crate::engine::bytecode::Instruction::SetByValue { .. }
+                )),
+            "{source}"
+        );
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+
+    for fallback in [
+        "let key={toString(){return 'x'}};let o={[key]:42};o.x",
+        "function f(key){let o={[key]:42};return o[key]}f('answer')",
+    ] {
+        assert!(!compile(fallback, Limits::default())?.uses_register_backend());
+    }
+    Ok(())
+}
+
+#[test]
 fn array_literals_and_indices_run_through_dense_elements() -> Result<(), Error> {
     for source in [
         "[1,2,3][1]",
