@@ -2265,12 +2265,18 @@ impl RegisterLowerer {
             return None;
         };
         let static_name = if keyed {
-            Self::static_property_key_units(key)
+            self.static_key_units(key)
         } else {
             Some(Self::static_property_name(key)?.to_vec())
         };
+        // A key the own layout does not carry is resolved on the Prototype
+        // Chain. A name %Object.prototype% owns is therefore not undefined, and
+        // a key only known at run time can reach one of those names.
         let result_type = if let Some(name) = static_name.as_deref() {
             let known = properties.get(name).copied();
+            if known.is_none() && crate::engine::realm::object_prototype_owns(name) {
+                return None;
+            }
             match (known, dynamic) {
                 (Some(known), Some(dynamic)) => known.merge(*dynamic),
                 (Some(known), None) => known,
@@ -2286,6 +2292,7 @@ impl RegisterLowerer {
                 .reduce(RegisterType::merge)
                 .unwrap_or(RegisterType::Undefined)
                 .merge(RegisterType::Undefined)
+                .merge(RegisterType::Unknown)
         };
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
         if keyed {
@@ -2459,6 +2466,21 @@ impl RegisterLowerer {
     fn is_length(units: &[u16]) -> bool {
         const LENGTH: [u16; 6] = [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68];
         units == LENGTH
+    }
+
+    /// The property name a key expression denotes at compile time, including
+    /// the `undefined` an unshadowed name denotes.
+    fn static_key_units(&self, expression: &Expr) -> Option<Vec<u16>> {
+        if let ExprKind::Name(name) = &expression.kind
+            && name == "undefined"
+            && !self.bindings.contains_key(name)
+        {
+            return Some("undefined".encode_utf16().collect());
+        }
+        if let ExprKind::Group(inner) = &expression.kind {
+            return self.static_key_units(inner);
+        }
+        Self::static_property_key_units(expression)
     }
 
     fn static_property_key_units(expression: &Expr) -> Option<Vec<u16>> {

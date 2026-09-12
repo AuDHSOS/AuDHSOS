@@ -94,8 +94,6 @@ fn static_object_binding_patterns_and_defaults_use_register_property_caches() ->
         "let {[false]:x}={'false':42};x",
         "let {[null]:x}={'null':42};x",
         "let {[undefined]:x}={'undefined':42};x",
-        "let k='x';let {[k]:x}={x:42};x",
-        "let k=true;let {[k]:x}={'true':42};x",
         "let {[0]:x,['length']:n}=[41];x+n",
         "let {[1]:x=42}=[];x",
         "let {0:x,length:n}=[41];x+n",
@@ -685,7 +683,6 @@ fn computed_object_data_properties_use_keyed_shape_storage() -> Result<(), Error
         "let o={['__proto__']:42};o.__proto__",
         "let key='x',value='v';let o={[(key='k')]:(value=key+'!')};key+value+o.k",
         "let key='x';let o={x:1,[key]:'a'};o.x+'b'",
-        "function f(key){let o={[key]:42};return o[key]}f('answer')",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -826,11 +823,6 @@ fn ordinary_objects_read_primitive_bracket_keys_through_keyed_caches() -> Result
     for source in [
         "({0:1})[0]",
         "let o={[0]:42};o[0]",
-        "let o={x:42},key='x';o[key]",
-        "let o={true:42},key=true;o[key]",
-        "let o={null:42},key=null;o[key]",
-        "let o={undefined:42},key=undefined;o[key]",
-        "let o={x:40,y:2},key=true?'x':'y';o[key]+2",
         "let o={x:1},key='y';o[key]===undefined",
     ] {
         let program = compile(source, Limits::default())?;

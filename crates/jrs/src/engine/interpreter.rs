@@ -21,7 +21,7 @@ use super::{
     feedback::{BinaryOpFeedback, FeedbackVector, NamedAccessCase},
     heap::{GenerationalHeap, HeapError},
     object::ObjectKind,
-    realm::Realm,
+    realm::{Intrinsic, Realm},
     shape::{PropertyFlags, ShapeId},
     string::StringError,
     value::{ObjectRef, VALUE_FALSE, VALUE_NULL, VALUE_TRUE, VALUE_UNDEFINED, Value},
@@ -69,6 +69,29 @@ impl From<StringError> for VMError {
     fn from(error: StringError) -> Self {
         Self::Heap(HeapError::String(error))
     }
+}
+
+/// Bit that marks a call-site target as a native intrinsic rather than an
+/// index into the shared bytecode function table.
+const NATIVE_CALL_TARGET: u32 = 1 << 31;
+
+/// Operands of one call site.
+#[derive(Clone, Copy, Debug)]
+struct Call {
+    /// The `this` value the callee sees.
+    receiver: Value,
+    /// Register holding the callable.
+    func: Reg,
+    /// First argument register.
+    arg_start: Reg,
+    /// Number of arguments passed.
+    arg_count: u16,
+    /// Feedback vector slot of the call site.
+    slot: u16,
+    /// Offset the caller resumes at.
+    return_pc: usize,
+    /// Bytecode unit active in the caller.
+    caller_code_id: Option<u32>,
 }
 
 /// Light frame boundary recorded on the contiguous call stack.
@@ -574,6 +597,205 @@ impl RegisterVM {
                 .ok_or(VMError::Heap(HeapError::InvalidReference));
         }
         Ok(value.to_boolean())
+    }
+
+    /// Enters a call: pushes a contiguous frame for a bytecode function and
+    /// returns its code index, or runs a native intrinsic in place and returns
+    /// `None`, leaving its value in the accumulator.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] for a callee that is not callable, and a
+    /// resource error when a frame, a binding or fuel is exhausted.
+    fn enter_call(
+        &mut self,
+        code: &BytecodeFunction,
+        active_code: &BytecodeFunction,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+        call: Call,
+    ) -> Result<Option<u32>, VMError> {
+        let function = self.read_reg(call.func)?;
+        let function_ref = function.as_object().ok_or(VMError::TypeError)?;
+        let kind = heap
+            .get_object(function_ref)
+            .ok_or(VMError::TypeError)?
+            .kind
+            .clone();
+        let (code_id, context) = match kind {
+            ObjectKind::Function { code_id, context } => (code_id, context),
+            ObjectKind::NativeFunction { id, .. } => {
+                let intrinsic = Intrinsic::from_id(id).ok_or(VMError::TypeError)?;
+                // A native identifier and a bytecode index are separate
+                // namespaces; the call site profile keeps them apart.
+                active_feedback
+                    .record_call(call.slot, NATIVE_CALL_TARGET | id)
+                    .ok_or(VMError::InvalidFeedbackVector)?;
+                let value = self.call_intrinsic(intrinsic, call, heap, realm)?;
+                self.acc = value;
+                return Ok(None);
+            }
+            _ => return Err(VMError::TypeError),
+        };
+        let callee = code
+            .functions
+            .get(code_id as usize)
+            .ok_or(VMError::InvalidBytecode(
+                VerificationError::FunctionOutOfBounds {
+                    pc: call.return_pc.saturating_sub(1),
+                    index: code_id,
+                },
+            ))?;
+        if self.frames.len() >= self.call_frame_limit || self.frames.len() == self.frames.capacity()
+        {
+            return Err(VMError::CallStackOverflow);
+        }
+        let callee_bindings = self
+            .active_binding_count
+            .checked_add(usize::from(callee.binding_count))
+            .ok_or(VMError::BindingStackOverflow)?;
+        if callee_bindings > self.binding_limit {
+            return Err(VMError::BindingStackOverflow);
+        }
+        if callee.entry_stack_requirement > self.operand_stack_limit {
+            return Err(VMError::StackOverflow);
+        }
+        self.fuel = self
+            .fuel
+            .checked_sub(callee.entry_fuel_cost)
+            .ok_or(VMError::OutOfFuel)?;
+        let next_frame = self.open_frame(active_code, callee, call, function_ref)?;
+        active_feedback
+            .record_call(call.slot, code_id)
+            .ok_or(VMError::InvalidFeedbackVector)?;
+        self.frames.push(FrameHeader {
+            caller_fp: self.fp,
+            return_pc: call.return_pc,
+            caller_code_id: call.caller_code_id,
+            caller_binding_count: self.active_binding_count,
+            caller_context: self.current_context,
+        });
+        self.fp = next_frame;
+        self.active_binding_count = callee_bindings;
+        self.current_context = context;
+        if let Some(slot_count) = callee.own_context_slot_count {
+            self.current_context =
+                Some(self.allocate_context(callee, heap, self.current_context, slot_count)?);
+        }
+        self.acc = VALUE_UNDEFINED;
+        Ok(Some(code_id))
+    }
+
+    /// Clears the callee's register window and fills its parameter prefix, the
+    /// callee's own Function object and its `this` value.
+    fn open_frame(
+        &mut self,
+        active_code: &BytecodeFunction,
+        callee: &BytecodeFunction,
+        call: Call,
+        function: ObjectRef,
+    ) -> Result<usize, VMError> {
+        let next_frame = self
+            .fp
+            .checked_add(active_code.register_count as usize)
+            .ok_or(VMError::StackOverflow)?;
+        let frame_end = next_frame
+            .checked_add(callee.register_count as usize)
+            .ok_or(VMError::StackOverflow)?;
+        self.stack
+            .get_mut(next_frame..frame_end)
+            .ok_or(VMError::StackOverflow)?
+            .fill(VALUE_UNDEFINED);
+        let argument_start = self
+            .fp
+            .checked_add(call.arg_start.0 as usize)
+            .ok_or(VMError::StackOverflow)?;
+        for index in 0..usize::from(call.arg_count.min(callee.parameter_count)) {
+            let argument = *self
+                .stack
+                .get(argument_start.saturating_add(index))
+                .ok_or(VMError::InvalidRegister)?;
+            *self
+                .stack
+                .get_mut(next_frame.saturating_add(index))
+                .ok_or(VMError::StackOverflow)? = argument;
+        }
+        if let Some(self_register) = callee.self_register {
+            *self
+                .stack
+                .get_mut(next_frame.saturating_add(self_register.0 as usize))
+                .ok_or(VMError::StackOverflow)? = Value::from_object(function);
+        }
+        if let Some(this_register) = callee.this_register {
+            *self
+                .stack
+                .get_mut(next_frame.saturating_add(this_register.0 as usize))
+                .ok_or(VMError::StackOverflow)? = call.receiver;
+        }
+        Ok(next_frame)
+    }
+
+    /// Runs one native intrinsic and returns its value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] for the exceptions the intrinsic's algorithm
+    /// specifies, and a heap error when a value cannot be materialized.
+    fn call_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let argument = |vm: &Self, index: u16| -> Result<Value, VMError> {
+            if index >= call.arg_count {
+                return Ok(VALUE_UNDEFINED);
+            }
+            let slot = vm
+                .fp
+                .checked_add(call.arg_start.0 as usize)
+                .and_then(|start| start.checked_add(index as usize))
+                .ok_or(VMError::InvalidRegister)?;
+            vm.stack.get(slot).copied().ok_or(VMError::InvalidRegister)
+        };
+        match intrinsic {
+            // 20.1.3.2: ToPropertyKey first, then ToObject, then HasOwnProperty.
+            Intrinsic::ObjectPrototypeHasOwnProperty => {
+                let key = argument(self, 0)?;
+                let key = property_key(key, heap)?;
+                let object = Self::coerce_object(call.receiver, heap, realm)?;
+                let own = heap.own_named_flags(object, key)?;
+                Ok(Value::from_bool(own.is_some()))
+            }
+        }
+    }
+
+    /// `ToObject` of 7.1.18: an Object is itself, a primitive is boxed, and
+    /// undefined and null throw a `TypeError`.
+    fn coerce_object(
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<ObjectRef, VMError> {
+        if let Some(object) = value.as_object() {
+            return Ok(object);
+        }
+        let kind = if let Some(boolean) = value.as_boolean() {
+            ObjectKind::BooleanWrapper(boolean)
+        } else if let Some(number) = value.as_f64() {
+            ObjectKind::NumberWrapper(number)
+        } else if value.is_string() {
+            ObjectKind::StringWrapper(value)
+        } else {
+            return Err(type_error(heap, realm, "cannot box null or undefined"));
+        };
+        let prototype = realm.object_prototype(heap)?;
+        let shape = heap.shapes.root_shape();
+        let boxed = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(boxed, kind)?;
+        Ok(boxed)
     }
 
     /// Produces the next key of a for-in enumeration, or undefined when the
@@ -1379,99 +1601,53 @@ impl RegisterVM {
                     arg_count,
                     slot,
                 } => {
-                    let function = self.read_reg(func)?;
-                    let function_ref = function.as_object().ok_or(VMError::TypeError)?;
-                    let function = heap.get_object(function_ref).ok_or(VMError::TypeError)?;
-                    let super::object::ObjectKind::Function { code_id, context } = function.kind
-                    else {
-                        return Err(VMError::TypeError);
-                    };
-                    let callee =
-                        code.functions
-                            .get(code_id as usize)
-                            .ok_or(VMError::InvalidBytecode(
-                                VerificationError::FunctionOutOfBounds {
-                                    pc: pc.saturating_sub(1),
-                                    index: code_id,
-                                },
-                            ))?;
-                    if self.frames.len() >= self.call_frame_limit
-                        || self.frames.len() == self.frames.capacity()
-                    {
-                        return Err(VMError::CallStackOverflow);
+                    if let Some(code_id) = self.enter_call(
+                        code,
+                        active_code,
+                        active_feedback,
+                        heap,
+                        realm,
+                        Call {
+                            receiver: VALUE_UNDEFINED,
+                            func,
+                            arg_start,
+                            arg_count,
+                            slot,
+                            return_pc: pc,
+                            caller_code_id: current_code_id,
+                        },
+                    )? {
+                        current_code_id = Some(code_id);
+                        pc = 0;
                     }
-                    let callee_bindings = self
-                        .active_binding_count
-                        .checked_add(usize::from(callee.binding_count))
-                        .ok_or(VMError::BindingStackOverflow)?;
-                    if callee_bindings > self.binding_limit {
-                        return Err(VMError::BindingStackOverflow);
+                }
+                Instruction::CallMethod {
+                    receiver,
+                    func,
+                    arg_start,
+                    arg_count,
+                    slot,
+                } => {
+                    let receiver = self.read_reg(receiver)?;
+                    if let Some(code_id) = self.enter_call(
+                        code,
+                        active_code,
+                        active_feedback,
+                        heap,
+                        realm,
+                        Call {
+                            receiver,
+                            func,
+                            arg_start,
+                            arg_count,
+                            slot,
+                            return_pc: pc,
+                            caller_code_id: current_code_id,
+                        },
+                    )? {
+                        current_code_id = Some(code_id);
+                        pc = 0;
                     }
-                    if callee.entry_stack_requirement > self.operand_stack_limit {
-                        return Err(VMError::StackOverflow);
-                    }
-                    self.fuel = self
-                        .fuel
-                        .checked_sub(callee.entry_fuel_cost)
-                        .ok_or(VMError::OutOfFuel)?;
-                    let next_frame = self
-                        .fp
-                        .checked_add(active_code.register_count as usize)
-                        .ok_or(VMError::StackOverflow)?;
-                    let frame_end = next_frame
-                        .checked_add(callee.register_count as usize)
-                        .ok_or(VMError::StackOverflow)?;
-                    self.stack
-                        .get_mut(next_frame..frame_end)
-                        .ok_or(VMError::StackOverflow)?
-                        .fill(VALUE_UNDEFINED);
-                    let argument_start = self
-                        .fp
-                        .checked_add(arg_start.0 as usize)
-                        .ok_or(VMError::StackOverflow)?;
-                    for index in 0..usize::from(arg_count.min(callee.parameter_count)) {
-                        let argument = *self
-                            .stack
-                            .get(argument_start.saturating_add(index))
-                            .ok_or(VMError::InvalidRegister)?;
-                        *self
-                            .stack
-                            .get_mut(next_frame.saturating_add(index))
-                            .ok_or(VMError::StackOverflow)? = argument;
-                    }
-                    if let Some(self_register) = callee.self_register {
-                        *self
-                            .stack
-                            .get_mut(next_frame.saturating_add(self_register.0 as usize))
-                            .ok_or(VMError::StackOverflow)? = Value::from_object(function_ref);
-                    }
-                    active_feedback
-                        .record_call(slot, code_id)
-                        .ok_or(VMError::InvalidFeedbackVector)?;
-                    let caller_context = self.current_context;
-                    self.frames.push(FrameHeader {
-                        caller_fp: self.fp,
-                        return_pc: pc,
-                        caller_code_id: current_code_id,
-                        caller_binding_count: self.active_binding_count,
-                        caller_context,
-                    });
-                    self.fp = next_frame;
-                    self.active_binding_count = callee_bindings;
-                    current_code_id = Some(code_id);
-                    self.current_context = context;
-                    self.current_context = if let Some(slot_count) = callee.own_context_slot_count {
-                        Some(self.allocate_context(
-                            callee,
-                            heap,
-                            self.current_context,
-                            slot_count,
-                        )?)
-                    } else {
-                        self.current_context
-                    };
-                    pc = 0;
-                    self.acc = VALUE_UNDEFINED;
                 }
                 Instruction::ForInNext { state } => {
                     self.acc = self.for_in_next(active_code, state, heap, realm)?;
@@ -1623,6 +1799,29 @@ fn array_index(value: Value, heap: &GenerationalHeap) -> Result<Option<u32>, VME
         index = next;
     }
     Ok((index != u32::MAX).then_some(index))
+}
+
+/// `ToPropertyKey` of 7.1.19 for the primitive values the engine carries.
+///
+/// An Object key needs `ToPrimitive`, which needs callable `valueOf` and
+/// `toString` intrinsics; until those exist such a key is refused.
+fn property_key(
+    value: Value,
+    heap: &mut GenerationalHeap,
+) -> Result<super::value::StringRef, VMError> {
+    if let Some(name) = value.as_heap_string() {
+        return Ok(name);
+    }
+    let units = property_name_units(value, heap)?;
+    Ok(heap.strings.intern_units(&units)?)
+}
+
+/// Creates a `TypeError` of the Realm and raises it as an exception.
+fn type_error(heap: &mut GenerationalHeap, realm: &Realm, message: &str) -> VMError {
+    match realm.create_native_error(heap, super::realm::NativeErrorKind::TypeError, message) {
+        Ok(error) => VMError::Thrown(Value::from_object(error)),
+        Err(error) => VMError::Heap(error),
+    }
 }
 
 fn property_name_units(value: Value, heap: &GenerationalHeap) -> Result<Vec<u16>, VMError> {
@@ -2246,6 +2445,116 @@ mod tests {
         assert_eq!(
             vm.run(&root, &mut feedback, &mut heap, &realm),
             Ok(Value::from_smi(42))
+        );
+    }
+
+    #[test]
+    fn native_intrinsic_calls_receive_the_method_receiver() {
+        // hasOwnProperty.call({ a: 1 }, "a"), with the intrinsic passed in as a
+        // parameter because it is not yet a property of %Object.prototype%.
+        let mut code = BytecodeFunction::new(4, 1);
+        let method = Reg(0);
+        let object = Reg(1);
+        let key = Reg(2);
+        let receiver = Reg(3);
+        let name = code.add_string_constant(alloc::vec![0x61]);
+        let set_name = code.allocate_feedback_slot(FeedbackKind::NamedAccess);
+        let call = code.allocate_feedback_slot(FeedbackKind::Call);
+
+        code.emit(Instruction::CreateObject);
+        code.emit(Instruction::Star(object));
+        code.emit(Instruction::LdaSmi(1));
+        code.emit(Instruction::SetNamed {
+            obj: object,
+            name,
+            slot: set_name,
+        });
+        code.emit(Instruction::LdaString(name));
+        code.emit(Instruction::Star(key));
+        code.emit(Instruction::Ldar(object));
+        code.emit(Instruction::Star(receiver));
+        code.emit(Instruction::CallMethod {
+            receiver,
+            func: method,
+            arg_start: key,
+            arg_count: 1,
+            slot: call,
+        });
+        code.emit(Instruction::Return);
+
+        let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
+        let has_own = realm
+            .intrinsic(&heap, Intrinsic::ObjectPrototypeHasOwnProperty)
+            .unwrap();
+        let mut feedback = FeedbackVector::for_code(&code);
+        let mut vm = RegisterVM::new(1000);
+        assert_eq!(
+            vm.run_with_arguments(&code, &[has_own], &mut feedback, &mut heap, &realm),
+            Ok(VALUE_TRUE)
+        );
+
+        // The same call for a key the object does not own.
+        let missing = code.add_string_constant(alloc::vec![0x62]);
+        let mut absent = code.clone();
+        absent.instructions[5] = Instruction::LdaString(missing);
+        let mut feedback = FeedbackVector::for_code(&absent);
+        let mut vm = RegisterVM::new(1000);
+        assert_eq!(
+            vm.run_with_arguments(&absent, &[has_own], &mut feedback, &mut heap, &realm),
+            Ok(VALUE_FALSE)
+        );
+    }
+
+    #[test]
+    fn a_native_intrinsic_boxes_a_primitive_receiver_and_refuses_a_nullish_one() {
+        let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
+
+        // 7.1.18: a primitive receiver is boxed, undefined and null are not.
+        let boxed = RegisterVM::coerce_object(Value::from_smi(1), &mut heap, &realm).unwrap();
+        assert!(matches!(
+            heap.get_object(boxed).unwrap().kind,
+            ObjectKind::NumberWrapper(_)
+        ));
+        for nullish in [VALUE_UNDEFINED, VALUE_NULL] {
+            let error = RegisterVM::coerce_object(nullish, &mut heap, &realm).unwrap_err();
+            let VMError::Thrown(value) = error else {
+                panic!("expected a thrown TypeError, got {error:?}");
+            };
+            let thrown = value.as_object().unwrap();
+            let name = heap.strings.intern("name").unwrap();
+            let found = heap.lookup_named(thrown, name).unwrap().unwrap();
+            assert_eq!(
+                heap.strings.to_rust_string(found.value).unwrap(),
+                "TypeError"
+            );
+        }
+    }
+
+    #[test]
+    fn a_property_key_is_the_canonical_string_of_a_primitive() {
+        let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
+        for (value, expected) in [
+            (Value::from_smi(12), "12"),
+            (VALUE_TRUE, "true"),
+            (VALUE_NULL, "null"),
+            (VALUE_UNDEFINED, "undefined"),
+        ] {
+            let key = property_key(value, &mut heap).unwrap();
+            assert_eq!(
+                heap.strings
+                    .to_rust_string(Value::from_string(key))
+                    .unwrap(),
+                expected
+            );
+        }
+        // An Object key needs ToPrimitive, which the engine cannot run yet.
+        let object = realm.ordinary_object(&mut heap).unwrap();
+        assert_eq!(
+            property_key(Value::from_object(object), &mut heap),
+            Err(VMError::TypeError)
         );
     }
 }

@@ -340,6 +340,20 @@ impl GenerationalHeap {
         Ok(ObjectRef::young(index, self.nursery.generation))
     }
 
+    /// Replaces an object's exotic specialization.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale or invalid reference.
+    pub fn set_object_kind(
+        &mut self,
+        reference: ObjectRef,
+        kind: ObjectKind,
+    ) -> Result<(), HeapError> {
+        self.object_mut(reference)?.kind = kind;
+        Ok(())
+    }
+
     /// Allocates an immortal object directly in the Old Generation.
     ///
     /// Realm intrinsics outlive every collection, so copying them through the
@@ -356,6 +370,23 @@ impl GenerationalHeap {
     ) -> Result<ObjectRef, HeapError> {
         self.old_gen
             .allocate_object(JSObject::new(shape_id, prototype))
+    }
+
+    /// Allocates an immortal native function object in the Old Generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::ReferenceSpaceExhausted`] when no tagged index remains.
+    pub fn allocate_immortal_native(
+        &mut self,
+        prototype: Value,
+        id: u32,
+        length: u32,
+    ) -> Result<ObjectRef, HeapError> {
+        let shape = self.shapes.root_shape();
+        let mut object = JSObject::new(shape, prototype);
+        object.kind = ObjectKind::NativeFunction { id, length };
+        self.old_gen.allocate_object(object)
     }
 
     /// Allocates an immortal Array and its elements store in the Old Generation.

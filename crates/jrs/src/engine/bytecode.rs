@@ -314,6 +314,20 @@ pub enum Instruction {
     CreateArray(u32),
     /// Creates a callable closure for one entry in the shared function table.
     CreateClosure(u32),
+    /// Calls a method: `acc = func(args...)` with `receiver` as the `this`
+    /// value the callee sees (13.3.6.1).
+    CallMethod {
+        /// Register holding the `this` value.
+        receiver: Reg,
+        /// Callable function register.
+        func: Reg,
+        /// First argument register.
+        arg_start: Reg,
+        /// Number of arguments passed.
+        arg_count: u16,
+        /// Feedback vector slot for call target caching.
+        slot: u16,
+    },
     /// Call function: `acc = func(arg_start..arg_start + count)` (uses feedback slot).
     Call {
         /// Callable function register.
@@ -374,6 +388,8 @@ pub struct BytecodeFunction {
     pub binding_count: u16,
     /// Register initialized with the currently called Function object.
     pub self_register: Option<Reg>,
+    /// Register initialized with the `this` value of the call (9.4.5).
+    pub this_register: Option<Reg>,
     /// Own heap-context slot count, when this frame creates a lexical context.
     pub own_context_slot_count: Option<u16>,
     /// Slot counts expected in each captured outer lexical context.
@@ -401,6 +417,7 @@ impl BytecodeFunction {
             parameter_count,
             binding_count: parameter_count,
             self_register: None,
+            this_register: None,
             own_context_slot_count: None,
             outer_context_slot_counts: Vec::new(),
             feedback_slots: Vec::new(),
@@ -494,7 +511,10 @@ impl BytecodeFunction {
         if self.binding_count > self.register_count || self.parameter_count > self.binding_count {
             return Err(VerificationError::BindingsExceedRegisters);
         }
-        if let Some(register) = self.self_register {
+        for register in [self.self_register, self.this_register]
+            .into_iter()
+            .flatten()
+        {
             self.verify_register(0, register)?;
         }
         for (index, constant) in self.constants.iter().enumerate() {
@@ -621,6 +641,17 @@ impl BytecodeFunction {
                 arg_count,
                 slot,
             } => {
+                self.verify_call(pc, func, arg_start, arg_count, slot)?;
+                None
+            }
+            Instruction::CallMethod {
+                receiver,
+                func,
+                arg_start,
+                arg_count,
+                slot,
+            } => {
+                self.verify_register(pc, receiver)?;
                 self.verify_call(pc, func, arg_start, arg_count, slot)?;
                 None
             }

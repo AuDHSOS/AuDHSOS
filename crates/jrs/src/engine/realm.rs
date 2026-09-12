@@ -32,6 +32,91 @@ pub enum NativeErrorKind {
     UriError,
 }
 
+/// A native function of the standard library.
+///
+/// The identifier travels in the object's `NativeFunction` kind, so a call
+/// dispatches on it without a lookup table in the heap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Intrinsic {
+    /// `Object.prototype.hasOwnProperty` (20.1.3.2).
+    ObjectPrototypeHasOwnProperty,
+}
+
+impl Intrinsic {
+    /// Every intrinsic, in the order the Realm allocates them.
+    pub const ALL: [Self; 1] = [Self::ObjectPrototypeHasOwnProperty];
+
+    /// The identifier carried by the function object.
+    #[must_use]
+    pub const fn id(self) -> u32 {
+        match self {
+            Self::ObjectPrototypeHasOwnProperty => 0,
+        }
+    }
+
+    /// Index of this intrinsic in [`Self::ALL`].
+    const fn index(self) -> usize {
+        match self {
+            Self::ObjectPrototypeHasOwnProperty => 0,
+        }
+    }
+
+    /// The intrinsic one identifier denotes.
+    #[must_use]
+    pub const fn from_id(id: u32) -> Option<Self> {
+        match id {
+            0 => Some(Self::ObjectPrototypeHasOwnProperty),
+            _ => None,
+        }
+    }
+
+    /// The `name` property of the function object (17).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ObjectPrototypeHasOwnProperty => "hasOwnProperty",
+        }
+    }
+
+    /// The `length` property of the function object (17).
+    #[must_use]
+    pub const fn length(self) -> u32 {
+        match self {
+            Self::ObjectPrototypeHasOwnProperty => 1,
+        }
+    }
+}
+
+/// The property names `%Object.prototype%` owns: 20.1.3 and, for the four
+/// accessor helpers and `__proto__`, B.2.2.
+///
+/// A compiler that types a property read from an object's own layout has to
+/// consult this list, because a name on it is resolved on the Prototype Chain
+/// and is not undefined. The Realm materializes these as intrinsics one at a
+/// time; the list is the contract either way.
+pub const OBJECT_PROTOTYPE_PROPERTIES: [&str; 12] = [
+    "constructor",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "toLocaleString",
+    "toString",
+    "valueOf",
+    "__proto__",
+    "__defineGetter__",
+    "__defineSetter__",
+    "__lookupGetter__",
+    "__lookupSetter__",
+];
+
+/// Whether `%Object.prototype%` owns a property of this name.
+#[must_use]
+pub fn object_prototype_owns(name: &[u16]) -> bool {
+    OBJECT_PROTOTYPE_PROPERTIES
+        .into_iter()
+        .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
+
 /// Number of native error types of 20.5.5.
 pub const NATIVE_ERROR_COUNT: usize = 6;
 
@@ -83,6 +168,18 @@ pub const fn builtin_data() -> PropertyFlags {
     }
 }
 
+/// Attributes of a built-in function's `name` and `length` (10.2.8, 10.2.9):
+/// not writable, not enumerable, configurable.
+#[must_use]
+pub const fn builtin_metadata() -> PropertyFlags {
+    PropertyFlags {
+        writable: false,
+        enumerable: false,
+        configurable: true,
+        is_accessor: false,
+    }
+}
+
 /// Well-known intrinsics of one Realm.
 pub struct Realm {
     object_prototype: Root,
@@ -90,6 +187,7 @@ pub struct Realm {
     array_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
+    intrinsics: [Root; Intrinsic::ALL.len()],
 }
 
 impl Realm {
@@ -135,13 +233,57 @@ impl Realm {
                 .ok_or(HeapError::InvalidReference)? = prototype;
         }
 
+        // The native functions are allocated but not yet defined on their
+        // holders: a compiler that types a property read from an object's own
+        // layout still assumes the Prototype Chain owns nothing, and a
+        // non-empty %Object.prototype% would make that assumption wrong.
+        let mut intrinsics = [object_prototype; Intrinsic::ALL.len()];
+        let function_parent = Self::rooted(heap, function_prototype)?;
+        for intrinsic in Intrinsic::ALL {
+            let function =
+                heap.allocate_immortal_native(function_parent, intrinsic.id(), intrinsic.length())?;
+            let length_key = intern(heap, "length")?;
+            let length = Value::from_smi(i32::try_from(intrinsic.length()).unwrap_or(i32::MAX));
+            heap.define_own_named(function, length_key, length, builtin_metadata())?;
+            let name_key = intern(heap, "name")?;
+            let name = heap.strings.allocate_str(intrinsic.name())?;
+            heap.define_own_named(
+                function,
+                name_key,
+                Value::from_string(name),
+                builtin_metadata(),
+            )?;
+            *intrinsics
+                .get_mut(intrinsic.index())
+                .ok_or(HeapError::InvalidReference)? =
+                heap.push_root(Value::from_object(function))?;
+        }
+
         Ok(Self {
             object_prototype,
             function_prototype,
             array_prototype,
             error_prototype,
             native_error_prototypes,
+            intrinsics,
         })
+    }
+
+    /// The function object of one native intrinsic.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root was discarded.
+    pub fn intrinsic(
+        &self,
+        heap: &GenerationalHeap,
+        intrinsic: Intrinsic,
+    ) -> Result<Value, HeapError> {
+        let root = *self
+            .intrinsics
+            .get(intrinsic.index())
+            .ok_or(HeapError::InvalidReference)?;
+        Self::rooted(heap, root)
     }
 
     /// %Object.prototype%.
