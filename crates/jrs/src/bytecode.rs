@@ -696,6 +696,87 @@ impl RegisterLowerer {
         Some(())
     }
 
+    fn initialize_vars(&mut self, bindings: &[(String, Option<Expr>)]) -> Option<()> {
+        for (name, initializer) in bindings {
+            let Some(initializer) = initializer else {
+                continue;
+            };
+            let binding = *self.bindings.get(name)?;
+            if binding.stable_function_identity {
+                return None;
+            }
+            let value_type = self.lower(initializer)?;
+            self.store_binding(binding);
+            self.bindings.get_mut(name)?.value_type = Some(value_type);
+        }
+        Some(())
+    }
+
+    fn prepare_var_bindings(&mut self, body: &[Stmt]) -> Option<()> {
+        let names = register_body_var_names(body)?;
+        let initialized_names = register_body_initialized_var_names(body)?;
+        for (index, statement) in body.iter().enumerate() {
+            let Stmt::Function(declared_name, function) = statement else {
+                continue;
+            };
+            let scope = register_function_scope(function)?;
+            let later_function_names: BTreeSet<_> = body
+                .iter()
+                .skip(index.saturating_add(1))
+                .filter_map(|statement| match statement {
+                    Stmt::Function(name, _) => Some(name),
+                    _ => None,
+                })
+                .collect();
+            if scope
+                .free_names
+                .iter()
+                .any(|name| name != declared_name && later_function_names.contains(name))
+            {
+                return None;
+            }
+        }
+        for name in &names {
+            if !self.bindings.contains_key(name) {
+                self.declare(name, true)?;
+                self.bindings.get_mut(name)?.value_type = Some(RegisterType::Undefined);
+            } else if self
+                .bindings
+                .get(name)
+                .is_some_and(|binding| !binding.mutable)
+            {
+                return None;
+            } else if self
+                .bindings
+                .get(name)
+                .is_some_and(|binding| binding.mutable && binding.value_type.is_none())
+            {
+                self.bindings.get_mut(name)?.value_type = Some(RegisterType::Undefined);
+            }
+        }
+        let local_names = self.bindings.keys().cloned().collect();
+        let captured_names = register_body_scope(body, &local_names)?.captured_names;
+        let captured_vars: BTreeSet<_> = captured_names.intersection(&names).cloned().collect();
+        // Captured readers are compiled against the merged primitive type of
+        // every var initializer. An arbitrary later assignment can invalidate
+        // that contract after the closure bytecode has been emitted; until
+        // guards and deoptimization exist, reject the complete enclosing body.
+        if !captured_vars.is_empty() {
+            for statement in body {
+                if register_statement_writes_names(statement, &captured_vars)? {
+                    return None;
+                }
+            }
+        }
+        let mut inferred = self.bindings.clone();
+        infer_register_body_var_types_to_fixed_point(body, &mut inferred)?;
+        for name in initialized_names {
+            let hint = inferred.get(&name)?.value_type?;
+            self.binding_type_hints.insert(name, hint);
+        }
+        Some(())
+    }
+
     fn load_binding(&mut self, binding: RegisterBinding) {
         use crate::engine::bytecode::Instruction;
         self.code.emit(match binding.storage {
@@ -1120,7 +1201,7 @@ impl RegisterLowerer {
         let scope = register_function_scope(function)?;
         if scope.free_names.contains(name) {
             let binding = self.bindings.get_mut(name)?;
-            if binding.value_type.is_some() {
+            if !binding.mutable {
                 return None;
             }
             binding.value_type = Some(RegisterType::Function(code_id));
@@ -1183,9 +1264,10 @@ impl RegisterLowerer {
                         depth: depth.checked_add(depth_shift)?,
                         slot,
                     },
-                    value_type: binding
-                        .value_type
-                        .or_else(|| self.binding_type_hints.get(name).copied()),
+                    value_type: merge_optional_register_types(
+                        binding.value_type,
+                        self.binding_type_hints.get(name).copied(),
+                    ),
                     ..*binding
                 },
             );
@@ -1226,11 +1308,22 @@ impl RegisterLowerer {
                         child.declare(name, *mutable)?;
                     }
                 }
-                Stmt::Function(name, _) => child.declare(name, true)?,
-                Stmt::Var(_) => return None,
+                Stmt::Function(name, _) => {
+                    if function.name.as_ref() == Some(name) {
+                        // A named FunctionExpression's immutable self binding
+                        // is outside the call's parameter/var environment. A
+                        // body FunctionDeclaration with the same name shadows
+                        // it with a distinct mutable binding.
+                        return None;
+                    }
+                    if !child.bindings.contains_key(name) {
+                        child.declare(name, true)?;
+                    }
+                }
                 _ => {}
             }
         }
+        child.prepare_var_bindings(&function.body)?;
         child.infer_binding_type_hints(&function.body)?;
         for name in captured_names {
             child.capture_binding(name)?;
@@ -1286,6 +1379,10 @@ impl RegisterLowerer {
                     for (name, _, initializer) in bindings {
                         child.initialize(name, initializer.as_ref())?;
                     }
+                    RegisterFlow::Empty
+                }
+                Stmt::Var(bindings) => {
+                    child.initialize_vars(bindings)?;
                     RegisterFlow::Empty
                 }
                 Stmt::Function(_, _) => RegisterFlow::Empty,
@@ -1646,6 +1743,10 @@ impl RegisterLowerer {
                 step.as_ref(),
                 body,
             )?),
+            Stmt::Var(bindings) => {
+                self.initialize_vars(bindings)?;
+                RegisterFlow::Empty
+            }
             Stmt::Break => {
                 self.lower_loop_jump(true)?;
                 RegisterFlow::Abrupt
@@ -1681,7 +1782,7 @@ impl RegisterLowerer {
     fn lower_loop_jump(&mut self, is_break: bool) -> Option<()> {
         use crate::engine::bytecode::Instruction;
         let loop_state = self.loops.last()?;
-        if self.bindings != loop_state.bindings
+        if !register_bindings_fit(&self.bindings, &loop_state.bindings)
             || !self.loop_layouts_match(&loop_state.object_layouts)
         {
             return None;
@@ -1706,8 +1807,10 @@ impl RegisterLowerer {
         self.code.emit(Instruction::LdaUndefined);
         let result_register = self.allocate_register()?;
         self.code.emit(Instruction::Star(result_register));
+        let mut bindings_at_head = self.bindings.clone();
+        infer_register_var_types_to_fixed_point(body, &mut bindings_at_head)?;
+        self.bindings = bindings_at_head.clone();
         let head = self.code.instructions.len();
-        let bindings_at_head = self.bindings.clone();
         self.lower(condition)?;
         if self.bindings != bindings_at_head {
             return None;
@@ -1735,7 +1838,7 @@ impl RegisterLowerer {
         let flow = self.lower_statement(body)?;
         let loop_state = self.loops.pop()?;
         if flow != RegisterFlow::Abrupt {
-            if self.bindings != bindings_at_head
+            if !register_bindings_fit(&self.bindings, &bindings_at_head)
                 || !self.loop_layouts_match(&loop_state.object_layouts)
             {
                 return None;
@@ -1805,6 +1908,9 @@ impl RegisterLowerer {
             Stmt::Expr(expression) => {
                 self.lower(expression)?;
             }
+            Stmt::Var(bindings) => {
+                self.initialize_vars(bindings)?;
+            }
             Stmt::Empty => {}
             _ => return None,
         }
@@ -1812,8 +1918,10 @@ impl RegisterLowerer {
         self.code.emit(Instruction::LdaUndefined);
         let result_register = self.allocate_register()?;
         self.code.emit(Instruction::Star(result_register));
+        let mut bindings_at_head = self.bindings.clone();
+        infer_register_var_types_to_fixed_point(body, &mut bindings_at_head)?;
+        self.bindings = bindings_at_head.clone();
         let head = self.code.instructions.len();
-        let bindings_at_head = self.bindings.clone();
         let branch = if let Some(condition) = condition {
             self.lower(condition)?;
             if self.bindings != bindings_at_head {
@@ -1845,7 +1953,7 @@ impl RegisterLowerer {
         let flow = self.lower_statement(body)?;
         let loop_state = self.loops.pop()?;
         if flow != RegisterFlow::Abrupt {
-            if self.bindings != bindings_at_head
+            if !register_bindings_fit(&self.bindings, &bindings_at_head)
                 || !self.loop_layouts_match(&loop_state.object_layouts)
             {
                 return None;
@@ -1922,10 +2030,8 @@ impl RegisterLowerer {
             }
             (RegisterFlow::Abrupt, _) => bindings_after_no,
             (_, RegisterFlow::Abrupt) => bindings_after_yes,
-            _ if bindings_after_yes == bindings_after_no
-                && properties_after_yes == self.object_layouts =>
-            {
-                bindings_after_yes
+            _ if properties_after_yes == self.object_layouts => {
+                merge_register_bindings(&bindings_after_yes, &bindings_after_no)?
             }
             _ => return None,
         };
@@ -2449,6 +2555,316 @@ fn merge_register_bindings(
         .collect()
 }
 
+fn register_bindings_fit(
+    actual: &BTreeMap<String, RegisterBinding>,
+    expected: &BTreeMap<String, RegisterBinding>,
+) -> bool {
+    merge_register_bindings(actual, expected).as_ref() == Some(expected)
+}
+
+fn register_body_var_names(body: &[Stmt]) -> Option<BTreeSet<String>> {
+    let mut names = BTreeSet::new();
+    for statement in body {
+        register_statement_var_names(statement, &mut names, false)?;
+    }
+    Some(names)
+}
+
+fn register_body_initialized_var_names(body: &[Stmt]) -> Option<BTreeSet<String>> {
+    let mut names = BTreeSet::new();
+    for statement in body {
+        register_statement_var_names(statement, &mut names, true)?;
+    }
+    Some(names)
+}
+
+fn register_statement_var_names(
+    statement: &Stmt,
+    names: &mut BTreeSet<String>,
+    initialized_only: bool,
+) -> Option<()> {
+    match statement {
+        Stmt::Var(bindings) => {
+            names.extend(
+                bindings
+                    .iter()
+                    .filter(|(_, initializer)| !initialized_only || initializer.is_some())
+                    .map(|(name, _)| name.clone()),
+            );
+        }
+        Stmt::Block(body) => {
+            for statement in body {
+                register_statement_var_names(statement, names, initialized_only)?;
+            }
+        }
+        Stmt::If(_, yes, no) => {
+            register_statement_var_names(yes, names, initialized_only)?;
+            if let Some(no) = no {
+                register_statement_var_names(no, names, initialized_only)?;
+            }
+        }
+        Stmt::While(_, body) => register_statement_var_names(body, names, initialized_only)?,
+        Stmt::For(initializer, _, _, body) => {
+            register_statement_var_names(initializer, names, initialized_only)?;
+            register_statement_var_names(body, names, initialized_only)?;
+        }
+        Stmt::Empty
+        | Stmt::Expr(_)
+        | Stmt::Declare(_)
+        | Stmt::Function(_, _)
+        | Stmt::Return(_)
+        | Stmt::Break
+        | Stmt::Continue => {}
+        Stmt::Switch(_, _)
+        | Stmt::ForIn { .. }
+        | Stmt::ForOf { .. }
+        | Stmt::Throw(_)
+        | Stmt::Try { .. } => return None,
+    }
+    Some(())
+}
+
+fn infer_register_var_types(
+    statement: &Stmt,
+    bindings: &mut BTreeMap<String, RegisterBinding>,
+) -> Option<()> {
+    match statement {
+        Stmt::Var(declarations) => {
+            for (name, initializer) in declarations {
+                let Some(initializer) = initializer else {
+                    continue;
+                };
+                let observed = register_expression_type(initializer, bindings)
+                    .unwrap_or(RegisterType::Unknown);
+                let binding = bindings.get_mut(name)?;
+                binding.value_type =
+                    merge_optional_register_types(binding.value_type, Some(observed));
+            }
+        }
+        Stmt::Block(body) => {
+            for statement in body {
+                infer_register_var_types(statement, bindings)?;
+            }
+        }
+        Stmt::If(_, yes, no) => {
+            infer_register_var_types(yes, bindings)?;
+            if let Some(no) = no {
+                infer_register_var_types(no, bindings)?;
+            }
+        }
+        Stmt::While(_, body) => infer_register_var_types(body, bindings)?,
+        Stmt::For(initializer, _, _, body) => {
+            infer_register_var_types(initializer, bindings)?;
+            infer_register_var_types(body, bindings)?;
+        }
+        Stmt::Empty
+        | Stmt::Expr(_)
+        | Stmt::Declare(_)
+        | Stmt::Function(_, _)
+        | Stmt::Return(_)
+        | Stmt::Break
+        | Stmt::Continue => {}
+        Stmt::Switch(_, _)
+        | Stmt::ForIn { .. }
+        | Stmt::ForOf { .. }
+        | Stmt::Throw(_)
+        | Stmt::Try { .. } => return None,
+    }
+    Some(())
+}
+
+fn infer_register_body_var_types_to_fixed_point(
+    body: &[Stmt],
+    bindings: &mut BTreeMap<String, RegisterBinding>,
+) -> Option<()> {
+    loop {
+        let before = bindings.clone();
+        for statement in body {
+            infer_register_var_types(statement, bindings)?;
+        }
+        if *bindings == before {
+            return Some(());
+        }
+    }
+}
+
+fn infer_register_var_types_to_fixed_point(
+    statement: &Stmt,
+    bindings: &mut BTreeMap<String, RegisterBinding>,
+) -> Option<()> {
+    loop {
+        let before = bindings.clone();
+        infer_register_var_types(statement, bindings)?;
+        if *bindings == before {
+            return Some(());
+        }
+    }
+}
+
+fn register_statement_writes_names(statement: &Stmt, names: &BTreeSet<String>) -> Option<bool> {
+    Some(match statement {
+        Stmt::Expr(expression) | Stmt::Return(Some(expression)) => {
+            register_expression_writes_names(expression, names)?
+        }
+        Stmt::Declare(bindings) => {
+            for (_, _, initializer) in bindings {
+                if let Some(initializer) = initializer
+                    && register_expression_writes_names(initializer, names)?
+                {
+                    return Some(true);
+                }
+            }
+            false
+        }
+        Stmt::Var(bindings) => {
+            for (_, initializer) in bindings {
+                if let Some(initializer) = initializer
+                    && register_expression_writes_names(initializer, names)?
+                {
+                    return Some(true);
+                }
+            }
+            false
+        }
+        Stmt::Block(body) => {
+            for statement in body {
+                if register_statement_writes_names(statement, names)? {
+                    return Some(true);
+                }
+            }
+            false
+        }
+        Stmt::If(condition, yes, no) => {
+            register_expression_writes_names(condition, names)?
+                || register_statement_writes_names(yes, names)?
+                || if let Some(no) = no {
+                    register_statement_writes_names(no, names)?
+                } else {
+                    false
+                }
+        }
+        Stmt::While(condition, body) => {
+            register_expression_writes_names(condition, names)?
+                || register_statement_writes_names(body, names)?
+        }
+        Stmt::For(initializer, condition, step, body) => {
+            register_statement_writes_names(initializer, names)?
+                || if let Some(condition) = condition {
+                    register_expression_writes_names(condition, names)?
+                } else {
+                    false
+                }
+                || if let Some(step) = step {
+                    register_expression_writes_names(step, names)?
+                } else {
+                    false
+                }
+                || register_statement_writes_names(body, names)?
+        }
+        Stmt::Function(_, function) => register_function_writes_names(function, names)?,
+        Stmt::Empty | Stmt::Return(None) | Stmt::Break | Stmt::Continue => false,
+        Stmt::Switch(_, _)
+        | Stmt::ForIn { .. }
+        | Stmt::ForOf { .. }
+        | Stmt::Throw(_)
+        | Stmt::Try { .. } => return None,
+    })
+}
+
+fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>) -> Option<bool> {
+    Some(match &expression.kind {
+        ExprKind::Assign(name, _, value) => {
+            names.contains(name) || register_expression_writes_names(value, names)?
+        }
+        ExprKind::Update(name, _, _) => names.contains(name),
+        ExprKind::Sequence(left, right)
+        | ExprKind::Binary(_, left, right)
+        | ExprKind::Member(left, right) => {
+            register_expression_writes_names(left, names)?
+                || register_expression_writes_names(right, names)?
+        }
+        ExprKind::Group(inner) | ExprKind::Unary(_, inner) => {
+            register_expression_writes_names(inner, names)?
+        }
+        ExprKind::Conditional(condition, yes, no) => {
+            register_expression_writes_names(condition, names)?
+                || register_expression_writes_names(yes, names)?
+                || register_expression_writes_names(no, names)?
+        }
+        ExprKind::Call(callee, arguments) => {
+            if register_expression_writes_names(callee, names)? {
+                return Some(true);
+            }
+            for argument in arguments {
+                if register_expression_writes_names(argument, names)? {
+                    return Some(true);
+                }
+            }
+            false
+        }
+        ExprKind::Object(properties) => {
+            for property in properties {
+                if register_expression_writes_names(&property.key, names)?
+                    || register_expression_writes_names(&property.value, names)?
+                {
+                    return Some(true);
+                }
+            }
+            false
+        }
+        ExprKind::Array(items) => {
+            for item in items.iter().flatten() {
+                if register_expression_writes_names(item, names)? {
+                    return Some(true);
+                }
+            }
+            false
+        }
+        ExprKind::SetMember(target, _, value, _) => {
+            register_expression_writes_names(target, names)?
+                || register_expression_writes_names(value, names)?
+        }
+        ExprKind::Function(function) => register_function_writes_names(function, names)?,
+        ExprKind::Literal(_) | ExprKind::Name(_) => false,
+        ExprKind::Regex(_, _)
+        | ExprKind::Template(_, _)
+        | ExprKind::Await(_)
+        | ExprKind::Construct(_, _)
+        | ExprKind::Class(_)
+        | ExprKind::Super
+        | ExprKind::NewTarget
+        | ExprKind::DefaultSuper
+        | ExprKind::This
+        | ExprKind::Spread(_)
+        | ExprKind::UpdateMember(_, _, _, _) => return None,
+    })
+}
+
+fn register_function_writes_names(function: &Function, names: &BTreeSet<String>) -> Option<bool> {
+    let local_names = register_function_local_names(function)?;
+    let free_targets: BTreeSet<_> = names.difference(&local_names).cloned().collect();
+    if free_targets.is_empty() {
+        return Some(false);
+    }
+    for statement in &function.body {
+        if register_statement_writes_names(statement, &free_targets)? {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+fn merge_optional_register_types(
+    left: Option<RegisterType>,
+    right: Option<RegisterType>,
+) -> Option<RegisterType> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.merge(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
 struct RegisterFunctionScope {
     free_names: BTreeSet<String>,
     captured_names: BTreeSet<String>,
@@ -2462,6 +2878,9 @@ fn register_function_local_names(function: &Function) -> Option<BTreeSet<String>
     if let Some(name) = &function.name {
         names.insert(name.clone());
     }
+    for name in register_body_var_names(&function.body)? {
+        names.insert(name);
+    }
     for statement in &function.body {
         match statement {
             Stmt::Declare(bindings) => {
@@ -2472,7 +2891,6 @@ fn register_function_local_names(function: &Function) -> Option<BTreeSet<String>
             Stmt::Function(name, _) => {
                 names.insert(name.clone());
             }
-            Stmt::Var(_) => return None,
             _ => {}
         }
     }
@@ -2481,26 +2899,25 @@ fn register_function_local_names(function: &Function) -> Option<BTreeSet<String>
 
 fn register_function_scope(function: &Function) -> Option<RegisterFunctionScope> {
     let local_names = register_function_local_names(function)?;
+    register_body_scope(&function.body, &local_names)
+}
+
+fn register_body_scope(
+    body: &[Stmt],
+    local_names: &BTreeSet<String>,
+) -> Option<RegisterFunctionScope> {
     let mut direct_references = BTreeSet::new();
-    for statement in &function.body {
-        register_statement_references(statement, &mut direct_references)?;
+    let mut nested_free_names = BTreeSet::new();
+    for statement in body {
+        register_statement_references(statement, &mut direct_references, &mut nested_free_names)?;
     }
-    let mut free_names: BTreeSet<_> = direct_references
-        .difference(&local_names)
-        .cloned()
-        .collect();
+    let mut free_names: BTreeSet<_> = direct_references.difference(local_names).cloned().collect();
     let mut captured_names = BTreeSet::new();
-    for statement in &function.body {
-        let Stmt::Function(_, nested) = statement else {
-            continue;
-        };
-        let nested_scope = register_function_scope(nested)?;
-        for name in nested_scope.free_names {
-            if local_names.contains(&name) {
-                captured_names.insert(name);
-            } else {
-                free_names.insert(name);
-            }
+    for name in nested_free_names {
+        if local_names.contains(&name) {
+            captured_names.insert(name);
+        } else {
+            free_names.insert(name);
         }
     }
     Some(RegisterFunctionScope {
@@ -2509,50 +2926,57 @@ fn register_function_scope(function: &Function) -> Option<RegisterFunctionScope>
     })
 }
 
-fn register_expression_references(expression: &Expr, names: &mut BTreeSet<String>) -> Option<()> {
+fn register_expression_references(
+    expression: &Expr,
+    names: &mut BTreeSet<String>,
+    nested_free_names: &mut BTreeSet<String>,
+) -> Option<()> {
     match &expression.kind {
         ExprKind::Name(name) | ExprKind::Assign(name, _, _) | ExprKind::Update(name, _, _) => {
             names.insert(name.clone());
             if let ExprKind::Assign(_, _, value) = &expression.kind {
-                register_expression_references(value, names)?;
+                register_expression_references(value, names, nested_free_names)?;
             }
         }
         ExprKind::Sequence(left, right)
         | ExprKind::Binary(_, left, right)
         | ExprKind::Member(left, right) => {
-            register_expression_references(left, names)?;
-            register_expression_references(right, names)?;
+            register_expression_references(left, names, nested_free_names)?;
+            register_expression_references(right, names, nested_free_names)?;
         }
         ExprKind::Group(inner) | ExprKind::Unary(_, inner) => {
-            register_expression_references(inner, names)?;
+            register_expression_references(inner, names, nested_free_names)?;
         }
         ExprKind::Conditional(condition, yes, no) => {
-            register_expression_references(condition, names)?;
-            register_expression_references(yes, names)?;
-            register_expression_references(no, names)?;
+            register_expression_references(condition, names, nested_free_names)?;
+            register_expression_references(yes, names, nested_free_names)?;
+            register_expression_references(no, names, nested_free_names)?;
         }
         ExprKind::Call(callee, arguments) => {
-            register_expression_references(callee, names)?;
+            register_expression_references(callee, names, nested_free_names)?;
             for argument in arguments {
-                register_expression_references(argument, names)?;
+                register_expression_references(argument, names, nested_free_names)?;
             }
         }
         ExprKind::Object(properties) => {
             for property in properties {
-                register_expression_references(&property.key, names)?;
-                register_expression_references(&property.value, names)?;
+                register_expression_references(&property.key, names, nested_free_names)?;
+                register_expression_references(&property.value, names, nested_free_names)?;
             }
         }
         ExprKind::Array(items) => {
             for item in items.iter().flatten() {
-                register_expression_references(item, names)?;
+                register_expression_references(item, names, nested_free_names)?;
             }
         }
         ExprKind::SetMember(target, _, value, _) => {
-            register_expression_references(target, names)?;
-            register_expression_references(value, names)?;
+            register_expression_references(target, names, nested_free_names)?;
+            register_expression_references(value, names, nested_free_names)?;
         }
-        ExprKind::Function(_) | ExprKind::Literal(_) => {}
+        ExprKind::Function(function) => {
+            nested_free_names.extend(register_function_scope(function)?.free_names);
+        }
+        ExprKind::Literal(_) => {}
         ExprKind::Regex(_, _)
         | ExprKind::Template(_, _)
         | ExprKind::Await(_)
@@ -2568,52 +2992,65 @@ fn register_expression_references(expression: &Expr, names: &mut BTreeSet<String
     Some(())
 }
 
-fn register_statement_references(statement: &Stmt, names: &mut BTreeSet<String>) -> Option<()> {
+fn register_statement_references(
+    statement: &Stmt,
+    names: &mut BTreeSet<String>,
+    nested_free_names: &mut BTreeSet<String>,
+) -> Option<()> {
     match statement {
         Stmt::Expr(expression) => {
-            register_expression_references(expression, names)?;
+            register_expression_references(expression, names, nested_free_names)?;
         }
         Stmt::Declare(bindings) => {
             for (_, _, expression) in bindings {
                 if let Some(expression) = expression {
-                    register_expression_references(expression, names)?;
+                    register_expression_references(expression, names, nested_free_names)?;
+                }
+            }
+        }
+        Stmt::Var(bindings) => {
+            for (_, expression) in bindings {
+                if let Some(expression) = expression {
+                    register_expression_references(expression, names, nested_free_names)?;
                 }
             }
         }
         Stmt::Block(body) => {
             for statement in body {
-                register_statement_references(statement, names)?;
+                register_statement_references(statement, names, nested_free_names)?;
             }
         }
         Stmt::If(condition, yes, no) => {
-            register_expression_references(condition, names)?;
-            register_statement_references(yes, names)?;
+            register_expression_references(condition, names, nested_free_names)?;
+            register_statement_references(yes, names, nested_free_names)?;
             if let Some(no) = no {
-                register_statement_references(no, names)?;
+                register_statement_references(no, names, nested_free_names)?;
             }
         }
         Stmt::While(condition, body) => {
-            register_expression_references(condition, names)?;
-            register_statement_references(body, names)?;
+            register_expression_references(condition, names, nested_free_names)?;
+            register_statement_references(body, names, nested_free_names)?;
         }
         Stmt::For(initializer, condition, step, body) => {
-            register_statement_references(initializer, names)?;
+            register_statement_references(initializer, names, nested_free_names)?;
             if let Some(condition) = condition {
-                register_expression_references(condition, names)?;
+                register_expression_references(condition, names, nested_free_names)?;
             }
             if let Some(step) = step {
-                register_expression_references(step, names)?;
+                register_expression_references(step, names, nested_free_names)?;
             }
-            register_statement_references(body, names)?;
+            register_statement_references(body, names, nested_free_names)?;
         }
         Stmt::Return(value) => {
             if let Some(value) = value {
-                register_expression_references(value, names)?;
+                register_expression_references(value, names, nested_free_names)?;
             }
         }
-        Stmt::Empty | Stmt::Break | Stmt::Continue | Stmt::Function(_, _) => {}
-        Stmt::Var(_)
-        | Stmt::Switch(_, _)
+        Stmt::Function(_, function) => {
+            nested_free_names.extend(register_function_scope(function)?.free_names);
+        }
+        Stmt::Empty | Stmt::Break | Stmt::Continue => {}
+        Stmt::Switch(_, _)
         | Stmt::ForIn { .. }
         | Stmt::ForOf { .. }
         | Stmt::Throw(_)
@@ -2642,6 +3079,7 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
                 }
             }
             Stmt::Function(_, _) if !realm => saw_function = true,
+            Stmt::Var(_) if !realm => {}
             Stmt::Expr(_)
             | Stmt::Block(_)
             | Stmt::If(_, _, _)
@@ -2651,7 +3089,11 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
             _ => return None,
         }
     }
-    saw_expression.then_some((saw_declaration, saw_function))
+    (saw_expression
+        || body
+            .iter()
+            .any(|statement| matches!(statement, Stmt::Var(_))))
+    .then_some((saw_declaration, saw_function))
 }
 
 fn prepare_register_bindings(
@@ -2666,11 +3108,14 @@ fn prepare_register_bindings(
                 for (name, mutable, _) in bindings {
                     lowerer.declare(name, *mutable)?;
                 }
-            } else if let Stmt::Function(name, _) = statement {
+            } else if let Stmt::Function(name, _) = statement
+                && !lowerer.bindings.contains_key(name)
+            {
                 lowerer.declare(name, true)?;
             }
         }
     }
+    lowerer.prepare_var_bindings(body)?;
     lowerer.infer_binding_type_hints(body)?;
     if saw_function {
         for statement in body {
@@ -2781,6 +3226,12 @@ fn register_expression_stack_requirement(expression: &Expr) -> usize {
 fn register_statement_stack_requirement(statement: &Stmt) -> usize {
     match statement {
         Stmt::Declare(bindings) => bindings.iter().fold(1usize, |maximum, (_, _, init)| {
+            maximum.max(
+                init.as_ref()
+                    .map_or(1, register_expression_stack_requirement),
+            )
+        }),
+        Stmt::Var(bindings) => bindings.iter().fold(1usize, |maximum, (_, init)| {
             maximum.max(
                 init.as_ref()
                     .map_or(1, register_expression_stack_requirement),
@@ -2989,7 +3440,7 @@ impl Compiler {
             Stmt::Var(bindings) => {
                 for (name, init) in bindings {
                     if let Some(init) = init {
-                        self.expression(init)?;
+                        self.binding_initializer(init, name)?;
                         let op = if let Some(access) = self.resolve(name) {
                             Op::Store(access)
                         } else if self.realm {
@@ -3091,7 +3542,7 @@ impl Compiler {
     ) -> Result<(), Error> {
         for (name, _, init) in bindings {
             if let Some(init) = init {
-                self.expression(init)?;
+                self.binding_initializer(init, name)?;
             } else {
                 self.emit(Op::Constant(Value::Undefined))?;
             }
@@ -3525,7 +3976,7 @@ impl Compiler {
                     message: "spread outside array or argument list",
                 });
             }
-            ExprKind::Class(class) => self.class(class)?,
+            ExprKind::Class(class) => self.class(class, None)?,
             ExprKind::NewTarget => {
                 self.emit(Op::NewTarget)?;
             }
@@ -3780,13 +4231,24 @@ impl Compiler {
         Ok(())
     }
 
+    fn binding_initializer(&mut self, expression: &Expr, name: &str) -> Result<(), Error> {
+        match &expression.kind {
+            ExprKind::Group(inner) => self.binding_initializer(inner, name),
+            ExprKind::Function(function) if function.name.is_none() => {
+                self.function(function, Some(name))
+            }
+            ExprKind::Class(class) if class.name.is_none() => self.class(class, Some(name)),
+            _ => self.expression(expression),
+        }
+    }
+
     fn super_reference(&mut self, key: &Expr) -> Result<(), Error> {
         self.emit(Op::SuperBase)?;
         self.expression(key)?;
         self.emit(Op::Key)?;
         Ok(())
     }
-    fn class(&mut self, class: &parser::Class) -> Result<(), Error> {
+    fn class(&mut self, class: &parser::Class, inferred_name: Option<&str>) -> Result<(), Error> {
         self.scopes.push(BTreeMap::new());
         let slot = if let Some(name) = &class.name {
             self.declare(name, false)?;
@@ -3799,7 +4261,7 @@ impl Compiler {
         } else {
             self.emit(Op::Constant(Value::Undefined))?;
         }
-        self.function(&class.constructor, class.name.as_deref())?;
+        self.function(&class.constructor, class.name.as_deref().or(inferred_name))?;
         self.emit(Op::Class(class.heritage.is_some()))?;
         for (is_static, method) in &class.methods {
             self.expression(&method.key)?;

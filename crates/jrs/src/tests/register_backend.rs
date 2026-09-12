@@ -788,6 +788,8 @@ fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> R
         "function f(...a){return a.length}f(1)",
         "let f=function inner(){return inner===f};f()",
         "let f=function inner(inner){return inner};f(42)",
+        "typeof (function inner(){var inner;return inner})()",
+        "typeof (function inner(){function inner(){return 42}return inner})()",
         "function outer(){function f(){return x}f();let x=1}outer()",
         "function f(){return f()}let g=f;f=0;g()",
         "function f(){f=0;return typeof f}f()",
@@ -960,16 +962,259 @@ fn local_bindings_and_assignments_match_legacy_execution() -> Result<(), Error> 
 
 #[test]
 fn local_binding_lowering_preserves_tdz_and_const_guards_by_staying_legacy() -> Result<(), Error> {
-    for source in [
-        "let x=x;x",
-        "let x=y,y=1;x",
-        "const x=1;x=2",
-        "{let x=1;x}",
-        "var x=1;x",
-    ] {
+    for source in ["let x=x;x", "let x=y,y=1;x", "const x=1;x=2", "{let x=1;x}"] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
             "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn var_bindings_are_hoisted_in_register_frames() -> Result<(), Error> {
+    for source in [
+        "x;var x",
+        "var x=42;var x;x",
+        "var a=b,b=2;a===undefined&&b===2",
+        "var x=1;{var x=2}x",
+        "if(false){var x=3}x",
+        "if(true){var x=1}else{var x=2}x",
+        "var i=0;while(i<3){var x=i;i++}x",
+        "var i=0;while(i<1){i++;var x=42;continue}x",
+        "for(var i=0;i<3;i++){}i",
+        "for(var i=0;i<3;i++){var x=i}x",
+        "function f(x){var x;return x}f(42)",
+        "function f(x){var x=2;return x}f(1)",
+        "function f(x){function x(){return 42}var x;return x()}f(1)",
+        "function f(x){function x(n){return n<2?1:n*x(n-1)}var x;return x(4)}f(0)",
+        "function f(){if(true){var x=42}return x}f()",
+        "function f(){function g(){return x}let before=g();var x=42;return before===undefined&&g()===42}f()",
+        "function f(){var g=function(){return x};var before=g();var x=42;return before===undefined&&g()===42}f()",
+        "function f(){var x=42;return function(){return x}}f()()",
+        "function f(){var x=40;function g(){return x+2}return g()}f()",
+        "function outer(){var x=1;function read(){return x}function shadow(x){x='a';return x}return read()+shadow('b')}outer()",
+        "function outer(){var x=1;function read(){return x}function shadow(){var x=2;x='a';return x}return read()+shadow()}outer()",
+        "function outer(){var x=1;function read(){return x}function shadow(){function x(){return 2}x='a';return x}return read()+shadow()}outer()",
+        "var f=1;function f(){return 42}f",
+        "var f;function f(){return 42}f()",
+        "function f(){return 1}function f(){return 42}f()",
+        "function make(x){var y=x;return function(){return y}}let keep=make(42);let i=0;while(i<3000){make(i);i++}keep()",
+        "var x",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn sibling_function_capture_requires_an_available_runtime_type() -> Result<(), Error> {
+    let safe = "function g(){return 41}function f(){return g()+1}f()";
+    let program = compile(safe, Limits::default())?;
+    assert!(program.uses_register_backend());
+    let mut legacy = program.clone();
+    legacy.register_code = None;
+    let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+    let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+    assert!(same_value(&actual, &expected));
+
+    // The var initializer gives `g` a primitive type hint while declaration
+    // instantiation replaces it with the later FunctionDeclaration before
+    // `f` can run. Lowering `f` from that stale hint would select numeric Add
+    // for a Function object.
+    let forward = "var g=1;function f(){return g+1}function g(){return 42}f()";
+    let program = compile(forward, Limits::default())?;
+    assert!(!program.uses_register_backend());
+    Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+    Ok(())
+}
+
+#[test]
+fn var_initializers_infer_anonymous_function_and_class_names() -> Result<(), Error> {
+    for source in [
+        "var f=function(){},a=()=>{},c=class{},p=(function(){}),s=(0,function(){});f.name==='f'&&a.name==='a'&&c.name==='c'&&p.name==='p'&&s.name===''",
+        "var f=function inner(){},c=class Inner{};f.name==='inner'&&c.name==='Inner'",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(!program.uses_register_backend(), "{source}");
+        assert_eq!(
+            Runtime::new(Limits::default()).run(&program, &mut SilentHost)?,
+            Value::Boolean(true),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn captured_var_uses_a_hoisted_heap_context() -> Result<(), Error> {
+    let source = "function f(){function g(){return x}let before=g();var x=42;return before===undefined&&g()===42}f()";
+    let program = compile(source, Limits::default())?;
+    let code = program
+        .register_code
+        .as_ref()
+        .ok_or(Error::InvalidBytecode)?;
+    let outer = code.functions.first().ok_or(Error::InvalidBytecode)?;
+    let inner = code.functions.get(1).ok_or(Error::InvalidBytecode)?;
+    assert_eq!(outer.own_context_slot_count, Some(1));
+    assert_eq!(inner.outer_context_slot_counts, [1]);
+    assert!(inner.instructions.iter().any(|instruction| matches!(
+        instruction,
+        crate::engine::bytecode::Instruction::LoadContext { depth: 0, slot: 0 }
+    )));
+
+    let source = "let y=40;function f(){var x=2;return function(){return y+x}}f()()";
+    let program = compile(source, Limits::default())?;
+    let code = program
+        .register_code
+        .as_ref()
+        .ok_or(Error::InvalidBytecode)?;
+    let outer = code.functions.first().ok_or(Error::InvalidBytecode)?;
+    let inner = code.functions.get(1).ok_or(Error::InvalidBytecode)?;
+    assert_eq!(outer.own_context_slot_count, Some(1));
+    assert_eq!(outer.outer_context_slot_counts, [1]);
+    assert_eq!(inner.outer_context_slot_counts, [1, 1]);
+    assert!(inner.instructions.iter().any(|instruction| matches!(
+        instruction,
+        crate::engine::bytecode::Instruction::LoadContext { depth: 0, slot: 0 }
+    )));
+    assert!(inner.instructions.iter().any(|instruction| matches!(
+        instruction,
+        crate::engine::bytecode::Instruction::LoadContext { depth: 1, slot: 0 }
+    )));
+    let mut legacy = program.clone();
+    legacy.register_code = None;
+    let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+    let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+    assert!(same_value(&actual, &expected));
+
+    let source = "let a=1;function outer(){var b=2;function middle(){var c=3;return function(){return a+b+c}}return middle()}outer()()";
+    let program = compile(source, Limits::default())?;
+    let code = program
+        .register_code
+        .as_ref()
+        .ok_or(Error::InvalidBytecode)?;
+    let outer = code.functions.first().ok_or(Error::InvalidBytecode)?;
+    let middle = code.functions.get(1).ok_or(Error::InvalidBytecode)?;
+    let inner = code.functions.get(2).ok_or(Error::InvalidBytecode)?;
+    assert_eq!(outer.own_context_slot_count, Some(1));
+    assert_eq!(outer.outer_context_slot_counts, [1]);
+    assert_eq!(middle.own_context_slot_count, Some(1));
+    assert_eq!(middle.outer_context_slot_counts, [1, 1]);
+    assert_eq!(inner.own_context_slot_count, None);
+    assert_eq!(inner.outer_context_slot_counts, [1, 1, 1]);
+    for depth in 0..=2 {
+        assert!(inner.instructions.iter().any(|instruction| matches!(
+            instruction,
+            crate::engine::bytecode::Instruction::LoadContext { depth: found, slot: 0 }
+                if *found == depth
+        )));
+    }
+    let mut legacy = program.clone();
+    legacy.register_code = None;
+    let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+    let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+    assert!(same_value(&actual, &expected));
+
+    let limits = Limits {
+        binding_slots: 1,
+        ..Limits::default()
+    };
+    let program = compile("var x=1,y=2;x+y", limits)?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::new(limits).run(&program, &mut SilentHost),
+        Err(Error::Limit {
+            resource: "binding slots"
+        })
+    );
+    assert!(
+        !compile_script("var x=1;x", Limits::default())?
+            .program
+            .uses_register_backend()
+    );
+    Ok(())
+}
+
+#[test]
+fn var_frame_slots_exist_before_source_order_initializers() -> Result<(), Error> {
+    use crate::engine::bytecode::{Instruction, Reg};
+
+    let program = compile("x;var x=42;x", Limits::default())?;
+    let code = program
+        .register_code
+        .as_ref()
+        .ok_or(Error::InvalidBytecode)?;
+    assert_eq!(code.binding_count, 1);
+    let read = code
+        .instructions
+        .iter()
+        .position(|instruction| *instruction == Instruction::Ldar(Reg(0)))
+        .ok_or(Error::InvalidBytecode)?;
+    let initialize = code
+        .instructions
+        .iter()
+        .position(|instruction| *instruction == Instruction::Star(Reg(0)))
+        .ok_or(Error::InvalidBytecode)?;
+    assert!(read < initialize);
+    Ok(())
+}
+
+#[test]
+fn captured_var_mutations_wait_for_deoptimization() -> Result<(), Error> {
+    for source in [
+        "var x=1;function g(){return x}x='a';g()",
+        "var x=1;var g=function(){return x};x='a';g()",
+        "var f=1;function f(){return f}typeof f",
+        "function f(){var x=1;function g(){return x}{x='a'}return g()}f()",
+        "function f(){var x=1;var g=function(){return x};x='a';return g()}f()",
+        "function f(){var x=1;function g(){return x}if(false)x='a';return g()}f()",
+        "function f(){var x=1;function g(){return x}while(false)x='a';return g()}f()",
+        "function f(){var x=1;function g(){return x}for(;false;x='a'){}return g()}f()",
+        "function f(){var x=1;function g(){return x}let y=(x='a');return g()}f()",
+        "function f(){var x=1;function g(){return x}var y=(x='a');return g()}f()",
+        "function f(){var x=1;function g(){return x}if(false)return x='a';return g()}f()",
+        "function f(){var x=1;function g(){return x}(0,x='a');return g()}f()",
+        "function f(){var x=1;function g(){return x}!(x='a');return g()}f()",
+        "function f(){var x=1;function g(){return x}0+(x='a');return g()}f()",
+        "function f(){var x=1;function g(){return x}false?0:(x='a');return g()}f()",
+        "function f(){var x=1;function g(){return x}g(x='a');return g()}f()",
+        "function f(){var x=1;function g(){return x}({a:(x='a')});return g()}f()",
+        "function f(){var x=1;function g(){return x}[x='a'];return g()}f()",
+        "function f(){var x=1,o={};function g(){return x}o.x=(x='a');return g()}f()",
+        "function f(){var x=1;function g(){return x}let h=function(){return x='a'};return g()}f()",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(!program.uses_register_backend(), "{source}");
+        Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn loop_var_type_inference_reaches_a_fixed_point() -> Result<(), Error> {
+    for source in [
+        "var i=0;while(i<2){var x=y;var y=1;i++}x",
+        "for(var i=0;i<2;i++){var x=y;var y=1}x",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
         );
     }
     Ok(())
@@ -1007,6 +1252,8 @@ fn conditional_statements_match_legacy_execution() -> Result<(), Error> {
         "if(false) 3",
         "let x=1;if(true)x=2;else x=3;x",
         "let x=1;if(false)x=2;else x=3;x",
+        "let x=1;if(true)x=true;else x=2;x",
+        "let x=1;if(false)x=true;x",
         "if(true) if(false) 3; else 4;",
     ] {
         let program = compile(source, Limits::default())?;
@@ -1026,8 +1273,10 @@ fn conditional_statements_match_legacy_execution() -> Result<(), Error> {
 #[test]
 fn register_branch_lowering_rejects_incompatible_control_flow() -> Result<(), Error> {
     for source in [
-        "let x=1;if(true)x=true;else x=2;x",
-        "let x=1;if(true)x=true;x",
+        "let x=1;if(true)x={};else x=2;x",
+        "let x=1;if(true)x=function(){};x",
+        "function f(){function g(){return x}var x=1;x='a';return g()}f()",
+        "function f(){var x=1;function g(){x++;return x}return g()}f()",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
@@ -1141,7 +1390,6 @@ fn register_for_lowering_rejects_unstable_or_observable_lexical_cases() -> Resul
     for source in [
         "let i=1;for(let i=0;i<2;i++){}i",
         "for(const i=0;i<2;i++){}",
-        "for(var i=0;i<2;i++){}i",
         "for(let i=0;i<2;i++){let x=i;}i",
         "for(let i=0;i<2;i++){(()=>i)}",
         "let x=1;while(true){x=true;break}x",
