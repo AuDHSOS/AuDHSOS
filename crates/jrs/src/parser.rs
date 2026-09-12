@@ -145,16 +145,65 @@ pub(crate) struct Parameter {
 #[derive(Debug)]
 pub(crate) enum BindingPattern {
     Name(String),
-    Array(Vec<Option<BindingPattern>>),
+    Array(ArrayBindingPattern),
+    Object(ObjectBindingPattern),
+}
+
+#[derive(Debug)]
+pub(crate) struct ArrayBindingPattern {
+    pub(crate) elements: Vec<ArrayBindingElement>,
+    pub(crate) rest: Option<Box<BindingPattern>>,
+}
+
+#[derive(Debug)]
+pub(crate) enum ArrayBindingElement {
+    Elision,
+    Element {
+        pattern: BindingPattern,
+        initializer: Option<Expr>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct ObjectBindingPattern {
+    pub(crate) properties: Vec<ObjectBindingProperty>,
+    pub(crate) rest: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ObjectBindingProperty {
+    pub(crate) key: Expr,
+    pub(crate) pattern: BindingPattern,
+    pub(crate) initializer: Option<Expr>,
 }
 
 impl BindingPattern {
+    pub(crate) const fn identifier(&self) -> Option<&str> {
+        match self {
+            Self::Name(name) => Some(name.as_str()),
+            Self::Array(_) | Self::Object(_) => None,
+        }
+    }
+
     pub(crate) fn names(&self, names: &mut Vec<String>) {
         match self {
             Self::Name(name) => names.push(name.clone()),
-            Self::Array(items) => {
-                for item in items.iter().flatten() {
-                    item.names(names);
+            Self::Array(array) => {
+                for element in &array.elements {
+                    if let ArrayBindingElement::Element { pattern, .. } = element {
+                        pattern.names(names);
+                    }
+                }
+                if let Some(rest) = &array.rest {
+                    rest.names(names);
+                }
+            }
+            Self::Object(object) => {
+                for property in &object.properties {
+                    property.pattern.names(names);
+                }
+                if let Some(rest) = &object.rest {
+                    names.push(rest.clone());
                 }
             }
         }
@@ -191,8 +240,8 @@ pub(crate) enum Stmt {
     Empty,
     Expr(Expr),
     Block(Vec<Stmt>),
-    Declare(Vec<(String, bool, Option<Expr>)>),
-    Var(Vec<(String, Option<Expr>)>),
+    Declare(Vec<(BindingPattern, bool, Option<Expr>)>),
+    Var(Vec<(BindingPattern, Option<Expr>)>),
     If(Expr, Box<Stmt>, Option<Box<Stmt>>),
     While(Expr, Box<Stmt>),
     For(Box<Stmt>, Option<Expr>, Option<Expr>, Box<Stmt>),
@@ -504,7 +553,11 @@ impl Parser {
                 .offset;
             let name = self.name()?;
             let expr = self.class_expression(Some(name.clone()), offset)?;
-            return Ok(Stmt::Declare(alloc::vec![(name, true, Some(expr))]));
+            return Ok(Stmt::Declare(alloc::vec![(
+                BindingPattern::Name(name),
+                true,
+                Some(expr),
+            )]));
         }
         if self.eat("return") {
             return self.return_statement();
@@ -701,42 +754,36 @@ impl Parser {
             self.need("const")?;
         }
         let kind = if var { None } else { Some(mutable) };
-        if self.is("{") {
-            return Err(Self::unsupported("object destructuring bindings"));
-        }
         let pattern = self.binding_pattern()?;
         if self.is("in") || self.is("of") {
             return Ok(ForDeclaration::InOf(pattern, kind));
         }
-        let BindingPattern::Name(name) = pattern else {
-            return Err(Self::unsupported("destructuring declarations"));
-        };
         let initializer = if self.eat("=") {
             Some(self.expression(0)?)
         } else {
             None
         };
-        if !mutable && initializer.is_none() {
+        if (!mutable || pattern.identifier().is_none()) && initializer.is_none() {
             return Err(self.error("const requires an initializer"));
         }
-        let mut bindings = alloc::vec![(name, mutable, initializer)];
+        let mut bindings = alloc::vec![(pattern, mutable, initializer)];
         while self.eat(",") {
-            let name = self.name()?;
+            let pattern = self.binding_pattern()?;
             let initializer = if self.eat("=") {
                 Some(self.expression(0)?)
             } else {
                 None
             };
-            if !mutable && initializer.is_none() {
+            if (!mutable || pattern.identifier().is_none()) && initializer.is_none() {
                 return Err(self.error("const requires an initializer"));
             }
-            bindings.push((name, mutable, initializer));
+            bindings.push((pattern, mutable, initializer));
         }
         Ok(ForDeclaration::Classic(Box::new(if var {
             Stmt::Var(
                 bindings
                     .into_iter()
-                    .map(|(name, _, initializer)| (name, initializer))
+                    .map(|(pattern, _, initializer)| (pattern, initializer))
                     .collect(),
             )
         } else {
@@ -747,24 +794,124 @@ impl Parser {
     fn binding_pattern(&mut self) -> Result<BindingPattern, Error> {
         self.enter()?;
         let pattern = if self.eat("[") {
-            let mut items = Vec::new();
-            while !self.eat("]") {
+            let mut elements = Vec::new();
+            let mut rest = None;
+            loop {
+                if self.eat("]") {
+                    break;
+                }
                 if self.eat(",") {
-                    items.push(None);
+                    elements.push(ArrayBindingElement::Elision);
                     continue;
                 }
-                items.push(Some(self.binding_pattern()?));
-                if !self.eat(",") {
+                if self.eat("...") {
+                    let pattern = self.binding_pattern()?;
+                    if self.is("=") {
+                        return Err(self.error("rest binding element cannot have an initializer"));
+                    }
+                    if self.eat(",") {
+                        return Err(self.error("rest binding element must be final"));
+                    }
                     self.need("]")?;
+                    rest = Some(Box::new(pattern));
+                    break;
+                }
+                let pattern = self.binding_pattern()?;
+                let initializer = if self.eat("=") {
+                    Some(self.with_in(true, |parser| parser.expression(0))?)
+                } else {
+                    None
+                };
+                elements.push(ArrayBindingElement::Element {
+                    pattern,
+                    initializer,
+                });
+                if self.eat("]") {
+                    break;
+                }
+                self.need(",")?;
+                if self.eat("]") {
                     break;
                 }
             }
-            BindingPattern::Array(items)
+            BindingPattern::Array(ArrayBindingPattern { elements, rest })
+        } else if self.eat("{") {
+            BindingPattern::Object(self.object_binding_pattern()?)
         } else {
             BindingPattern::Name(self.name()?)
         };
         self.depth = self.depth.saturating_sub(1);
         Ok(pattern)
+    }
+
+    fn object_binding_pattern(&mut self) -> Result<ObjectBindingPattern, Error> {
+        let mut properties = Vec::new();
+        let mut rest = None;
+        loop {
+            if self.eat("}") {
+                break;
+            }
+            if self.eat("...") {
+                let name = self.name()?;
+                if self.is("=") {
+                    return Err(self.error("rest binding property cannot have an initializer"));
+                }
+                rest = Some(name);
+                if self.eat(",") {
+                    return Err(self.error("rest binding property must be final"));
+                }
+                self.need("}")?;
+                break;
+            }
+            let computed = self.eat("[");
+            let shorthand = if computed {
+                None
+            } else {
+                match &self.token()?.kind {
+                    Kind::Word(name) => Some(name.clone()),
+                    _ => None,
+                }
+            };
+            let key = if computed {
+                let key = self.with_in(true, |parser| parser.expression(0))?;
+                self.need("]")?;
+                key
+            } else {
+                let offset = self.token()?.offset;
+                let value = self.property_name()?;
+                self.make(ExprKind::Literal(value), 1, offset)?
+            };
+            let (pattern, initializer) = if self.eat(":") {
+                let pattern = self.binding_pattern()?;
+                let initializer = if self.eat("=") {
+                    Some(self.with_in(true, |parser| parser.expression(0))?)
+                } else {
+                    None
+                };
+                (pattern, initializer)
+            } else {
+                let name = shorthand.ok_or_else(|| self.error("expected binding property"))?;
+                if reserved(&name) || (self.strict && strict_binding(&name)) {
+                    return Err(self.error("reserved word is not a binding identifier"));
+                }
+                let initializer = if self.eat("=") {
+                    Some(self.with_in(true, |parser| parser.expression(0))?)
+                } else {
+                    None
+                };
+                (BindingPattern::Name(name), initializer)
+            };
+            properties.push(ObjectBindingProperty {
+                key,
+                pattern,
+                initializer,
+            });
+            if self.eat("}") {
+                break;
+            }
+            self.need(",")?;
+        }
+        Ok(ObjectBindingPattern { properties, rest })
     }
 
     fn try_statement(&mut self) -> Result<Stmt, Error> {
@@ -833,27 +980,24 @@ impl Parser {
         if !mutable {
             self.need("const")?;
         }
-        if self.is("[") || self.is("{") {
-            return Err(Self::unsupported("destructuring declarations"));
-        }
         let mut bindings = Vec::new();
         loop {
-            let name = self.name()?;
+            let pattern = self.binding_pattern()?;
             let init = if self.eat("=") {
                 Some(self.expression(0)?)
             } else {
                 None
             };
-            if !mutable && init.is_none() {
+            if (!mutable || pattern.identifier().is_none()) && init.is_none() {
                 return Err(self.error("const requires an initializer"));
             }
-            bindings.push((name, mutable, init));
+            bindings.push((pattern, mutable, init));
             if !self.eat(",") {
                 return Ok(if var {
                     Stmt::Var(
                         bindings
                             .into_iter()
-                            .map(|(name, _, init)| (name, init))
+                            .map(|(pattern, _, init)| (pattern, init))
                             .collect(),
                     )
                 } else {

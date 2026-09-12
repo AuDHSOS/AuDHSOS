@@ -36,8 +36,13 @@ pub(crate) enum Op {
     ForOfInit(usize),
     IteratorValue(usize),
     IteratorSkip(usize),
+    IteratorRest(usize),
     IteratorGuard(usize, usize),
     IteratorEnd(usize),
+    ObjectBindingStart,
+    ObjectBindingGet(usize),
+    ObjectBindingRest(usize),
+    ObjectBindingEnd(usize),
     RotateKey,
     Regex(Rc<crate::regexp::RegExp>),
     Load(Access),
@@ -711,8 +716,12 @@ impl RegisterLowerer {
         Some(())
     }
 
-    fn initialize_vars(&mut self, bindings: &[(String, Option<Expr>)]) -> Option<()> {
-        for (name, initializer) in bindings {
+    fn initialize_vars(
+        &mut self,
+        bindings: &[(parser::BindingPattern, Option<Expr>)],
+    ) -> Option<()> {
+        for (pattern, initializer) in bindings {
+            let name = pattern.identifier()?;
             let Some(initializer) = initializer else {
                 continue;
             };
@@ -1319,7 +1328,8 @@ impl RegisterLowerer {
         for statement in &function.body {
             match statement {
                 Stmt::Declare(bindings) => {
-                    for (name, mutable, _) in bindings {
+                    for (pattern, mutable, _) in bindings {
+                        let name = pattern.identifier()?;
                         child.declare(name, *mutable)?;
                     }
                 }
@@ -1352,7 +1362,8 @@ impl RegisterLowerer {
             let Stmt::Declare(declarations) = statement else {
                 continue;
             };
-            for (name, _, initializer) in declarations {
+            for (pattern, _, initializer) in declarations {
+                let name = pattern.identifier()?;
                 let value_type = if let Some(initializer) = initializer {
                     let Some(value_type) = register_expression_type(initializer, &bindings) else {
                         continue;
@@ -1362,7 +1373,8 @@ impl RegisterLowerer {
                     RegisterType::Undefined
                 };
                 bindings.get_mut(name)?.value_type = Some(value_type);
-                self.binding_type_hints.insert(name.clone(), value_type);
+                self.binding_type_hints
+                    .insert(String::from(name), value_type);
             }
         }
         Some(())
@@ -1391,7 +1403,8 @@ impl RegisterLowerer {
         for statement in body {
             flow = match statement {
                 Stmt::Declare(bindings) => {
-                    for (name, _, initializer) in bindings {
+                    for (pattern, _, initializer) in bindings {
+                        let name = pattern.identifier()?;
                         child.initialize(name, initializer.as_ref())?;
                     }
                     RegisterFlow::Empty
@@ -1894,11 +1907,12 @@ impl RegisterLowerer {
         let mut scoped_registers = Vec::new();
         match initializer {
             Stmt::Declare(bindings) => {
-                for (name, mutable, _) in bindings {
+                for (pattern, mutable, _) in bindings {
+                    let name = pattern.identifier()?;
                     if self.bindings.contains_key(name)
                         || bindings
                             .iter()
-                            .filter(|(candidate, _, _)| candidate == name)
+                            .filter(|(candidate, _, _)| candidate.identifier() == Some(name))
                             .count()
                             != 1
                     {
@@ -1906,7 +1920,7 @@ impl RegisterLowerer {
                     }
                     let register = self.allocate_register()?;
                     self.bindings.insert(
-                        name.clone(),
+                        String::from(name),
                         RegisterBinding {
                             storage: RegisterBindingStorage::Register(register),
                             value_type: None,
@@ -1914,9 +1928,10 @@ impl RegisterLowerer {
                             stable_function_identity: false,
                         },
                     );
-                    scoped_registers.push((name, register));
+                    scoped_registers.push((String::from(name), register));
                 }
-                for (name, _, expression) in bindings {
+                for (pattern, _, expression) in bindings {
+                    let name = pattern.identifier()?;
                     self.initialize(name, expression.as_ref())?;
                 }
             }
@@ -1999,7 +2014,7 @@ impl RegisterLowerer {
         self.bindings = bindings_at_head;
         self.release_register(result_register)?;
         for (name, register) in scoped_registers.into_iter().rev() {
-            self.bindings.remove(name)?;
+            self.bindings.remove(&name)?;
             self.release_register(register)?;
         }
         Some(match flow {
@@ -2600,12 +2615,13 @@ fn register_statement_var_names(
 ) -> Option<()> {
     match statement {
         Stmt::Var(bindings) => {
-            names.extend(
-                bindings
-                    .iter()
-                    .filter(|(_, initializer)| !initialized_only || initializer.is_some())
-                    .map(|(name, _)| name.clone()),
-            );
+            for (pattern, initializer) in bindings {
+                if !initialized_only || initializer.is_some() {
+                    names.insert(String::from(pattern.identifier()?));
+                } else {
+                    pattern.identifier()?;
+                }
+            }
         }
         Stmt::Block(body) => {
             for statement in body {
@@ -2645,7 +2661,8 @@ fn infer_register_var_types(
 ) -> Option<()> {
     match statement {
         Stmt::Var(declarations) => {
-            for (name, initializer) in declarations {
+            for (pattern, initializer) in declarations {
+                let name = pattern.identifier()?;
                 let Some(initializer) = initializer else {
                     continue;
                 };
@@ -2899,8 +2916,8 @@ fn register_function_local_names(function: &Function) -> Option<BTreeSet<String>
     for statement in &function.body {
         match statement {
             Stmt::Declare(bindings) => {
-                for (name, _, _) in bindings {
-                    names.insert(name.clone());
+                for (pattern, _, _) in bindings {
+                    names.insert(String::from(pattern.identifier()?));
                 }
             }
             Stmt::Function(name, _) => {
@@ -3082,10 +3099,11 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
         match statement {
             Stmt::Declare(bindings) if !saw_expression && !realm => {
                 saw_declaration = true;
-                for (name, _, _) in bindings {
+                for (pattern, _, _) in bindings {
+                    let name = pattern.identifier()?;
                     if bindings
                         .iter()
-                        .filter(|(candidate, _, _)| candidate == name)
+                        .filter(|(candidate, _, _)| candidate.identifier() == Some(name))
                         .count()
                         > 1
                     {
@@ -3120,7 +3138,8 @@ fn prepare_register_bindings(
     if saw_declaration || saw_function {
         for statement in body {
             if let Stmt::Declare(bindings) = statement {
-                for (name, mutable, _) in bindings {
+                for (pattern, mutable, _) in bindings {
+                    let name = pattern.identifier()?;
                     lowerer.declare(name, *mutable)?;
                 }
             } else if let Stmt::Function(name, _) = statement
@@ -3151,6 +3170,9 @@ fn lower_register_script(
     entry_fuel_cost: u64,
     property_limit: usize,
 ) -> Option<crate::engine::bytecode::BytecodeFunction> {
+    if body.iter().any(register_statement_has_binding_pattern) {
+        return None;
+    }
     let (saw_declaration, saw_function) = register_script_features(body, realm)?;
     let stack_requirement = body.iter().fold(1usize, |maximum, statement| {
         maximum.max(register_statement_stack_requirement(statement))
@@ -3177,7 +3199,8 @@ fn lower_register_script(
                     .emit(crate::engine::bytecode::Instruction::Ldar(result_register));
             }
             Stmt::Declare(bindings) => {
-                for (name, _, initializer) in bindings {
+                for (pattern, _, initializer) in bindings {
+                    let name = pattern.identifier()?;
                     lowerer.initialize(name, initializer.as_ref())?;
                 }
                 lowerer
@@ -3214,6 +3237,63 @@ fn lower_register_script(
     lowerer.code.binding_count = lowerer.local_count;
     lowerer.code.verify().ok()?;
     Some(lowerer.code)
+}
+
+fn register_statement_has_binding_pattern(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Declare(bindings) => bindings
+            .iter()
+            .any(|(pattern, _, _)| pattern.identifier().is_none()),
+        Stmt::Var(bindings) => bindings
+            .iter()
+            .any(|(pattern, _)| pattern.identifier().is_none()),
+        Stmt::Block(body) => body.iter().any(register_statement_has_binding_pattern),
+        Stmt::If(_, yes, no) => {
+            register_statement_has_binding_pattern(yes)
+                || no
+                    .as_deref()
+                    .is_some_and(register_statement_has_binding_pattern)
+        }
+        Stmt::While(_, body) | Stmt::ForIn { body, .. } => {
+            register_statement_has_binding_pattern(body)
+        }
+        Stmt::For(initializer, _, _, body) => {
+            register_statement_has_binding_pattern(initializer)
+                || register_statement_has_binding_pattern(body)
+        }
+        Stmt::Switch(_, clauses) => clauses
+            .iter()
+            .any(|(_, body)| body.iter().any(register_statement_has_binding_pattern)),
+        Stmt::ForOf { binding, body, .. } => {
+            binding
+                .as_ref()
+                .is_some_and(|(pattern, _)| pattern.identifier().is_none())
+                || register_statement_has_binding_pattern(body)
+        }
+        Stmt::Function(_, function) => function
+            .body
+            .iter()
+            .any(register_statement_has_binding_pattern),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            body.iter().any(register_statement_has_binding_pattern)
+                || catch.as_ref().is_some_and(|(_, body)| {
+                    body.iter().any(register_statement_has_binding_pattern)
+                })
+                || finally
+                    .as_ref()
+                    .is_some_and(|body| body.iter().any(register_statement_has_binding_pattern))
+        }
+        Stmt::Empty
+        | Stmt::Expr(_)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::Return(_)
+        | Stmt::Throw(_) => false,
+    }
 }
 
 fn register_expression_stack_requirement(expression: &Expr) -> usize {
@@ -3406,8 +3486,12 @@ impl Compiler {
     }
     fn declarations(&mut self, stmt: &Stmt) -> Result<(), Error> {
         if let Stmt::Declare(bindings) = stmt {
-            for (name, mutable, _) in bindings {
-                self.declare(name, *mutable)?;
+            for (pattern, mutable, _) in bindings {
+                let mut names = Vec::new();
+                pattern.names(&mut names);
+                for name in names {
+                    self.declare(&name, *mutable)?;
+                }
             }
         }
         if let Stmt::Function(name, _) = stmt {
@@ -3452,22 +3536,7 @@ impl Compiler {
                 catch,
                 finally,
             } => self.try_statement(body, catch.as_ref(), finally.as_deref())?,
-            Stmt::Var(bindings) => {
-                for (name, init) in bindings {
-                    if let Some(init) = init {
-                        self.binding_initializer(init, name)?;
-                        let op = if let Some(access) = self.resolve(name) {
-                            Op::Store(access)
-                        } else if self.realm {
-                            Op::SetGlobal(name.clone(), init.strict)
-                        } else {
-                            return Err(Error::InvalidBytecode);
-                        };
-                        self.emit(op)?;
-                        self.emit(Op::Pop)?;
-                    }
-                }
-            }
+            Stmt::Var(bindings) => self.var_statement(bindings)?,
             Stmt::Return(value) => {
                 self.return_value(value.as_ref())?;
             }
@@ -3498,11 +3567,15 @@ impl Compiler {
                 if let Stmt::Declare(bindings) = init.as_ref() {
                     let mut names = Vec::new();
                     var_names(body, &mut names);
-                    if bindings.iter().any(|(name, _, _)| names.contains(name)) {
-                        return Err(Error::Syntax {
-                            offset: 0,
-                            message: "loop var conflicts with lexical binding",
-                        });
+                    for (pattern, _, _) in bindings {
+                        let mut bound = Vec::new();
+                        pattern.names(&mut bound);
+                        if bound.iter().any(|name| names.contains(name)) {
+                            return Err(Error::Syntax {
+                                offset: 0,
+                                message: "loop var conflicts with lexical binding",
+                            });
+                        }
                     }
                 }
                 self.scopes.push(BTreeMap::new());
@@ -3516,9 +3589,14 @@ impl Compiler {
                 }
                 let mut per_iteration = Vec::new();
                 if let Stmt::Declare(bindings) = init.as_ref() {
-                    for (name, mutable, _) in bindings {
+                    for (pattern, mutable, _) in bindings {
                         if *mutable {
-                            per_iteration.push(self.local(name).ok_or(Error::InvalidBytecode)?);
+                            let mut names = Vec::new();
+                            pattern.names(&mut names);
+                            for name in names {
+                                per_iteration
+                                    .push(self.local(&name).ok_or(Error::InvalidBytecode)?);
+                            }
                         }
                     }
                 }
@@ -3527,6 +3605,23 @@ impl Compiler {
             }
             Stmt::Break | Stmt::Continue => {
                 self.loop_control(matches!(stmt, Stmt::Break))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn var_statement(
+        &mut self,
+        bindings: &[(parser::BindingPattern, Option<Expr>)],
+    ) -> Result<(), Error> {
+        for (pattern, init) in bindings {
+            if let Some(init) = init {
+                if let Some(name) = pattern.identifier() {
+                    self.binding_initializer(init, name)?;
+                } else {
+                    self.expression(init)?;
+                }
+                self.bind_pattern(pattern, false)?;
             }
         }
         Ok(())
@@ -3553,22 +3648,19 @@ impl Compiler {
 
     fn initialize_bindings(
         &mut self,
-        bindings: &[(String, bool, Option<Expr>)],
+        bindings: &[(parser::BindingPattern, bool, Option<Expr>)],
     ) -> Result<(), Error> {
-        for (name, _, init) in bindings {
+        for (pattern, _, init) in bindings {
             if let Some(init) = init {
-                self.binding_initializer(init, name)?;
+                if let Some(name) = pattern.identifier() {
+                    self.binding_initializer(init, name)?;
+                } else {
+                    self.expression(init)?;
+                }
             } else {
                 self.emit(Op::Constant(Value::Undefined))?;
             }
-            let op = if let Some(slot) = self.local(name) {
-                Op::Init(slot)
-            } else if self.realm {
-                Op::InitGlobal(name.clone())
-            } else {
-                return Err(Error::InvalidBytecode);
-            };
-            self.emit(op)?;
+            self.bind_pattern(pattern, true)?;
         }
         Ok(())
     }
@@ -3641,13 +3733,17 @@ impl Compiler {
         }
         for (_, body) in clauses {
             for stmt in body {
-                if let Stmt::Declare(bindings) = stmt
-                    && bindings.iter().any(|(name, _, _)| vars.contains(name))
-                {
-                    return Err(Error::Syntax {
-                        offset: 0,
-                        message: "switch var conflicts with lexical declaration",
-                    });
+                if let Stmt::Declare(bindings) = stmt {
+                    for (pattern, _, _) in bindings {
+                        let mut names = Vec::new();
+                        pattern.names(&mut names);
+                        if names.iter().any(|name| vars.contains(name)) {
+                            return Err(Error::Syntax {
+                                offset: 0,
+                                message: "switch var conflicts with lexical declaration",
+                            });
+                        }
+                    }
                 }
                 self.declarations(stmt)?;
             }
@@ -3865,8 +3961,13 @@ impl Compiler {
         match pattern {
             parser::BindingPattern::Name(name) => {
                 if initialize {
-                    let slot = self.local(name).ok_or(Error::InvalidBytecode)?;
-                    self.emit(Op::Init(slot))?;
+                    if let Some(slot) = self.local(name) {
+                        self.emit(Op::Init(slot))?;
+                    } else if self.realm {
+                        self.emit(Op::InitGlobal(name.clone()))?;
+                    } else {
+                        return Err(Error::InvalidBytecode);
+                    }
                 } else {
                     let op = if let Some(slot) = self.resolve(name) {
                         Op::Store(slot)
@@ -3879,24 +3980,82 @@ impl Compiler {
                     self.emit(Op::Pop)?;
                 }
             }
-            parser::BindingPattern::Array(items) => {
+            parser::BindingPattern::Array(array) => {
                 let id = self.enumerations;
                 self.enumerations = self.enumerations.saturating_add(1);
                 self.emit(Op::ForOfInit(id))?;
                 let guard = self.emit(Op::IteratorGuard(id, 0))?;
-                for item in items {
-                    if let Some(item) = item {
+                for element in &array.elements {
+                    if let parser::ArrayBindingElement::Element {
+                        pattern,
+                        initializer,
+                    } = element
+                    {
                         self.emit(Op::IteratorValue(id))?;
-                        self.bind_pattern(item, initialize)?;
+                        if let Some(initializer) = initializer {
+                            self.emit(Op::Dup)?;
+                            self.emit(Op::Constant(Value::Undefined))?;
+                            self.emit(Op::Binary(Binary::StrictEq))?;
+                            let present = self.emit(Op::Branch(0, Branch::False))?;
+                            self.emit(Op::Pop)?;
+                            if let Some(name) = pattern.identifier() {
+                                self.binding_initializer(initializer, name)?;
+                            } else {
+                                self.expression(initializer)?;
+                            }
+                            self.patch(present, self.program.code.len())?;
+                        }
+                        self.bind_pattern(pattern, initialize)?;
                     } else {
                         self.emit(Op::IteratorSkip(id))?;
                     }
+                }
+                if let Some(rest) = &array.rest {
+                    self.emit(Op::IteratorRest(id))?;
+                    self.bind_pattern(rest, initialize)?;
                 }
                 let end = self.program.code.len();
                 self.emit(Op::IteratorEnd(id))?;
                 self.patch(guard, end.saturating_add(1))?;
             }
+            parser::BindingPattern::Object(object) => {
+                self.emit(Op::ObjectBindingStart)?;
+                for (index, property) in object.properties.iter().enumerate() {
+                    self.expression(&property.key)?;
+                    self.emit(Op::Key)?;
+                    self.emit(Op::ObjectBindingGet(index))?;
+                    if let Some(initializer) = &property.initializer {
+                        self.emit_binding_default(&property.pattern, initializer)?;
+                    }
+                    self.bind_pattern(&property.pattern, initialize)?;
+                }
+                if let Some(rest) = &object.rest {
+                    self.emit(Op::ObjectBindingRest(object.properties.len()))?;
+                    self.bind_pattern(&parser::BindingPattern::Name(rest.clone()), initialize)?;
+                } else {
+                    self.emit(Op::ObjectBindingEnd(object.properties.len()))?;
+                }
+            }
         }
+        Ok(())
+    }
+
+    fn emit_binding_default(
+        &mut self,
+        pattern: &parser::BindingPattern,
+        initializer: &Expr,
+    ) -> Result<(), Error> {
+        self.emit(Op::Dup)?;
+        self.emit(Op::Constant(Value::Undefined))?;
+        self.emit(Op::Binary(Binary::StrictEq))?;
+        let present = self.emit(Op::Branch(0, Branch::False))?;
+        self.emit(Op::Pop)?;
+        if let Some(name) = pattern.identifier() {
+            self.binding_initializer(initializer, name)?;
+        } else {
+            self.expression(initializer)?;
+        }
+        self.patch(present, self.program.code.len())?;
         Ok(())
     }
 
@@ -3919,8 +4078,17 @@ impl Compiler {
             let entry = self.program.code.len();
             self.scopes.push(BTreeMap::new());
             if let Some(name) = name {
-                if body.iter().any(|stmt| matches!(stmt, Stmt::Declare(bindings) if bindings.iter().any(|(bound,_,_)| bound == name))) {
-                    return Err(Error::Syntax { offset: 0, message: "catch binding conflicts with lexical declaration" });
+                if body.iter().any(|stmt| {
+                    matches!(stmt, Stmt::Declare(bindings) if bindings.iter().any(|(pattern,_,_)| {
+                        let mut names = Vec::new();
+                        pattern.names(&mut names);
+                        names.iter().any(|bound| bound == name)
+                    }))
+                }) {
+                    return Err(Error::Syntax {
+                        offset: 0,
+                        message: "catch binding conflicts with lexical declaration",
+                    });
                 }
                 self.declare(name, true)?;
                 self.emit(Op::Init(self.local(name).ok_or(Error::InvalidBytecode)?))?;
@@ -4451,20 +4619,24 @@ impl Compiler {
         }
         for stmt in body {
             if let Stmt::Declare(bindings) = stmt {
-                for (name, mutable, _) in bindings {
-                    if decls
-                        .insert(name.clone(), GlobalKind::Lexical(*mutable))
-                        .is_some()
-                    {
-                        return Err(Error::Syntax {
-                            offset: 0,
-                            message: "duplicate global declaration",
+                for (pattern, mutable, _) in bindings {
+                    let mut names = Vec::new();
+                    pattern.names(&mut names);
+                    for name in names {
+                        if decls
+                            .insert(name.clone(), GlobalKind::Lexical(*mutable))
+                            .is_some()
+                        {
+                            return Err(Error::Syntax {
+                                offset: 0,
+                                message: "duplicate global declaration",
+                            });
+                        }
+                        ordered.push(GlobalDecl {
+                            name,
+                            kind: GlobalKind::Lexical(*mutable),
                         });
                     }
-                    ordered.push(GlobalDecl {
-                        name: name.clone(),
-                        kind: GlobalKind::Lexical(*mutable),
-                    });
                 }
             }
         }
@@ -4658,9 +4830,11 @@ impl Compiler {
             && (function.parameters.iter().any(|p| p.default.is_some())
                 || !function.body.iter().any(|stmt| match stmt {
                     Stmt::Function(name, _) => name == "arguments",
-                    Stmt::Declare(bindings) => {
-                        bindings.iter().any(|(name, _, _)| name == "arguments")
-                    }
+                    Stmt::Declare(bindings) => bindings.iter().any(|(pattern, _, _)| {
+                        let mut names = Vec::new();
+                        pattern.names(&mut names);
+                        names.iter().any(|name| name == "arguments")
+                    }),
                     _ => false,
                 }));
         if needed {
@@ -4740,7 +4914,11 @@ fn var_names(stmt: &Stmt, names: &mut Vec<String>) {
                 }
             }
         }
-        Stmt::Var(bindings) => names.extend(bindings.iter().map(|(name, _)| name.clone())),
+        Stmt::Var(bindings) => {
+            for (pattern, _) in bindings {
+                pattern.names(names);
+            }
+        }
         Stmt::Block(body) => {
             for stmt in body {
                 var_names(stmt, names);
@@ -4763,15 +4941,20 @@ fn var_names(stmt: &Stmt, names: &mut Vec<String>) {
 
 fn validate_function(function: &Function) -> Result<(), Error> {
     for stmt in &function.body {
-        if let Stmt::Declare(bindings) = stmt
-            && bindings
-                .iter()
-                .any(|(name, _, _)| function.parameters.iter().any(|p| p.name == *name))
-        {
-            return Err(Error::Syntax {
-                offset: 0,
-                message: "parameter conflicts with lexical declaration",
-            });
+        if let Stmt::Declare(bindings) = stmt {
+            for (pattern, _, _) in bindings {
+                let mut names = Vec::new();
+                pattern.names(&mut names);
+                if names
+                    .iter()
+                    .any(|name| function.parameters.iter().any(|p| p.name == *name))
+                {
+                    return Err(Error::Syntax {
+                        offset: 0,
+                        message: "parameter conflicts with lexical declaration",
+                    });
+                }
+            }
         }
     }
     if function.strict
@@ -4798,8 +4981,10 @@ fn validate_lexical_vars(body: &[Stmt]) -> Result<(), Error> {
     }
     for stmt in body {
         if let Stmt::Declare(bindings) = stmt {
-            for (name, _, _) in bindings {
-                if vars.contains(name) {
+            for (pattern, _, _) in bindings {
+                let mut names = Vec::new();
+                pattern.names(&mut names);
+                if names.iter().any(|name| vars.contains(name)) {
                     return Err(Error::Syntax {
                         offset: 0,
                         message: "var conflicts with lexical declaration",

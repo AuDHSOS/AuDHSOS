@@ -72,7 +72,7 @@ impl Execution<'_> {
         }
         Ok(())
     }
-    fn append_element(&mut self, array: &Value, value: Value) -> Result<(), Error> {
+    pub(super) fn append_element(&mut self, array: &Value, value: Value) -> Result<(), Error> {
         let index = self
             .object_ref(array)?
             .properties
@@ -82,7 +82,7 @@ impl Execution<'_> {
             .to_uint32();
         if index == u32::MAX {
             return Err(Error::Limit {
-                resource: "array spread length",
+                resource: "array append length",
             });
         }
         self.define(

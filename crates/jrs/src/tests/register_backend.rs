@@ -13,6 +13,23 @@ fn same_value(left: &Value, right: &Value) -> bool {
 }
 
 #[test]
+fn binding_patterns_fail_closed_before_register_backend_selection() -> Result<(), Error> {
+    for source in [
+        "let [x]=[1];x",
+        "var [x]=[1];x",
+        "let {x}={x:1};x",
+        "var {x:y}={x:1};y",
+        "{const [x]=[1];x}",
+        "for(let [x]=[1];false;){}",
+        "function f(){let [x]=[1];return x}f()",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(!program.uses_register_backend(), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
 fn primitive_expressions_run_through_register_bytecode_and_match_legacy() -> Result<(), Error> {
     for source in [
         "1 + 2 * 3",

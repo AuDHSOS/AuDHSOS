@@ -12,7 +12,7 @@ use crate::{
     object::{Object, Property, same_value},
     value::{Callable, FunctionValue},
 };
-use alloc::{rc::Rc, string::String};
+use alloc::{rc::Rc, string::String, vec::Vec};
 
 impl Execution<'_> {
     pub(super) fn constructor_storage(&mut self, value: &Value) -> Result<Value, Error> {
@@ -789,6 +789,10 @@ impl Execution<'_> {
                 let key = self.property_key(&value)?;
                 self.push(key)?;
             }
+            Op::ObjectBindingStart
+            | Op::ObjectBindingGet(_)
+            | Op::ObjectBindingRest(_)
+            | Op::ObjectBindingEnd(_) => self.object_binding_op(op)?,
             Op::DupPair => {
                 let at = self
                     .stack
@@ -859,6 +863,116 @@ impl Execution<'_> {
             _ => return Err(Error::InvalidBytecode),
         }
         Ok(())
+    }
+
+    fn object_binding_op(&mut self, op: &Op) -> Result<(), Error> {
+        match op {
+            Op::ObjectBindingStart => {
+                if matches!(self.stack.last(), Some(Value::Null | Value::Undefined)) {
+                    return Err(Error::Type {
+                        message: "cannot destructure null or undefined",
+                    });
+                }
+                self.stack.last().ok_or(Error::InvalidBytecode)?;
+            }
+            Op::ObjectBindingGet(excluded_count) => {
+                self.object_binding_get(*excluded_count)?;
+            }
+            Op::ObjectBindingRest(excluded_count) => {
+                self.object_binding_rest(*excluded_count)?;
+            }
+            Op::ObjectBindingEnd(excluded_count) => {
+                let retained = excluded_count
+                    .checked_add(1)
+                    .ok_or(Error::InvalidBytecode)?;
+                let start = self
+                    .stack
+                    .len()
+                    .checked_sub(retained)
+                    .ok_or(Error::InvalidBytecode)?;
+                self.stack.truncate(start);
+            }
+            _ => return Err(Error::InvalidBytecode),
+        }
+        Ok(())
+    }
+
+    fn object_binding_get(&mut self, excluded_count: usize) -> Result<(), Error> {
+        let key = self.stack.last().ok_or(Error::InvalidBytecode)?.clone();
+        let retained = excluded_count
+            .checked_add(2)
+            .ok_or(Error::InvalidBytecode)?;
+        let source = self
+            .stack
+            .get(
+                self.stack
+                    .len()
+                    .checked_sub(retained)
+                    .ok_or(Error::InvalidBytecode)?,
+            )
+            .ok_or(Error::InvalidBytecode)?
+            .clone();
+        let value = self.get_key(&source, &key)?;
+        self.push(value)
+    }
+
+    fn object_binding_rest(&mut self, excluded_count: usize) -> Result<(), Error> {
+        let retained = excluded_count
+            .checked_add(1)
+            .ok_or(Error::InvalidBytecode)?;
+        let start = self
+            .stack
+            .len()
+            .checked_sub(retained)
+            .ok_or(Error::InvalidBytecode)?;
+        let source = self.stack.get(start).ok_or(Error::InvalidBytecode)?.clone();
+        let excluded = self
+            .stack
+            .get(start.saturating_add(1)..)
+            .ok_or(Error::InvalidBytecode)?
+            .to_vec();
+        let rest = self.copy_data_properties(&source, &excluded)?;
+        self.stack.truncate(start);
+        self.push(rest)
+    }
+
+    fn copy_data_properties(&mut self, source: &Value, excluded: &[Value]) -> Result<Value, Error> {
+        let roots = self.native_roots.len();
+        self.native_roots.push(source.clone());
+        self.native_roots.extend_from_slice(excluded);
+        let result = (|| {
+            let from = self.box_value(source)?;
+            self.native_roots.push(from.clone());
+            let prototype = self.prototype()?;
+            let target = self.allocate_object(prototype)?;
+            self.native_roots.push(target.clone());
+            let mut keys: Vec<Value> = self
+                .own_keys(&from)?
+                .into_iter()
+                .map(Value::String)
+                .collect();
+            keys.extend(self.symbol_keys(&from)?);
+            self.native_roots.extend(keys.iter().cloned());
+            for key in keys {
+                self.charge(1)?;
+                if excluded
+                    .iter()
+                    .any(|excluded| excluded.strictly_equals(&key))
+                {
+                    continue;
+                }
+                if self
+                    .own_key(&from, &key)?
+                    .is_some_and(|property| property.enumerable)
+                {
+                    let value = self.get_key(&from, &key)?;
+                    self.define_key(&target, key, Property::data(value))?;
+                }
+            }
+            Ok(target)
+        })();
+        self.native_roots.truncate(roots);
+        result
     }
 
     pub(super) fn object_call(

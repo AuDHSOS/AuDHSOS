@@ -784,6 +784,10 @@ impl Execution<'_> {
                     | Op::Define(_)
                     | Op::Accessor(_)
                     | Op::Key
+                    | Op::ObjectBindingStart
+                    | Op::ObjectBindingGet(_)
+                    | Op::ObjectBindingRest(_)
+                    | Op::ObjectBindingEnd(_)
                     | Op::Get(_)
                     | Op::Set(_)
                     | Op::Delete(_)
@@ -819,6 +823,10 @@ impl Execution<'_> {
                     }
                     Op::IteratorSkip(id) => {
                         self.enumeration_step_value(*id, false)?;
+                    }
+                    Op::IteratorRest(id) => {
+                        let array = self.enumeration_rest(*id)?;
+                        self.push(array)?;
                     }
                     Op::ForInNext(id, end) => {
                         if let Some(key) = self.enumeration_next(*id)? {

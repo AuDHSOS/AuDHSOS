@@ -195,9 +195,10 @@ There is no JIT and no claim of competitive performance without benchmarks.
   templates and their raw/cooked template-object identity are not implemented.
 - `instanceof` with ordinary prototype-chain semantics (without Symbol hooks),
   `switch` with strict selectors, fallthrough and shared lexical case scope,
-  `for…in` key enumeration, and synchronous iterable `for…of`. For-of declarations
-  support nested array binding patterns and elisions, not defaults or rest
-  inside patterns. Symbol.iterator is called with the original receiver; the
+  `for…in` key enumeration, and synchronous iterable `for…of`. Declarations and
+  for-of bindings support nested array/object binding patterns, elisions,
+  defaults and array rest. Object rest copies own enumerable String and Symbol
+  properties while preserving observable key/getter order. Symbol.iterator is called with the original receiver; the
   returned iterator's next method is cached and done is read before value.
   `IteratorClose` runs on early exits and binding-pattern completion, in lexical
   order with finally handlers. Next/done/value failures mark the record done;
@@ -223,8 +224,7 @@ There is no JIT and no claim of competitive performance without benchmarks.
   bounded operand stack, with a private count preserved across await/suspension.
   Array elements use data-property creation, not push/setter/species hooks.
   The super constructor is captured before argument evaluation, including
-  iterator side effects. Object spread and rest inside binding patterns remain
-  unimplemented.
+  iterator side effects. Object spread remains unimplemented.
 - Async function declarations/expressions, async arrows/methods and `await`.
   Await stores the frame, operand stack, lexical bindings, loop state and
   exception handlers in the tracing heap and resumes only through a FIFO job.
