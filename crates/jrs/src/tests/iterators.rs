@@ -373,6 +373,41 @@ fn array_binding_patterns_close_inner_iterators_and_skip_elision_values() {
 }
 
 #[test]
+fn for_in_declarations_initialize_binding_patterns_per_iteration() {
+    for (source, expected) in [
+        (
+            "let result='';for(let [first,...rest] in {key:1})result=first+rest.join('');result",
+            Value::string("key"),
+        ),
+        (
+            "let result='';for(const {0:first,2:last} in {key:1})result=first+last;result",
+            Value::string("ky"),
+        ),
+        ("for(var [first] in {key:1}){}first", Value::string("k")),
+        (
+            "let callbacks=[];for(let [first] in {aa:1,bb:2})callbacks.push(()=>first);callbacks[0]()+callbacks[1]()",
+            Value::string("ab"),
+        ),
+    ] {
+        assert_eq!(eval(source), Ok(expected), "{source}");
+    }
+
+    for source in [
+        "for(let [x,x] in {}){}",
+        "for(const {x:a,y:a} in {}){}",
+        "for(let [x] in {}){var x}",
+    ] {
+        assert!(
+            matches!(
+                compile(source, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn weakmap_and_promise_combinators_use_the_actual_iterator() {
     for source in [
         "let key={},n=0;let input={[Symbol.iterator](){return {next(){return n++?{done:true}:{value:[key,7]}}}}};new WeakMap(input).get(key)===7",

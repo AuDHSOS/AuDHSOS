@@ -3333,9 +3333,7 @@ fn register_statement_has_unsupported_binding_pattern(statement: &Stmt) -> bool 
                     .as_deref()
                     .is_some_and(register_statement_has_unsupported_binding_pattern)
         }
-        Stmt::While(_, body) | Stmt::ForIn { body, .. } => {
-            register_statement_has_unsupported_binding_pattern(body)
-        }
+        Stmt::While(_, body) => register_statement_has_unsupported_binding_pattern(body),
         Stmt::For(initializer, _, _, body) => {
             register_statement_has_unsupported_binding_pattern(initializer)
                 || register_statement_has_unsupported_binding_pattern(body)
@@ -3344,7 +3342,7 @@ fn register_statement_has_unsupported_binding_pattern(statement: &Stmt) -> bool 
             body.iter()
                 .any(register_statement_has_unsupported_binding_pattern)
         }),
-        Stmt::ForOf { binding, body, .. } => {
+        Stmt::ForOf { binding, body, .. } | Stmt::ForIn { binding, body, .. } => {
             binding
                 .as_ref()
                 .is_some_and(|(pattern, _)| !register_binding_pattern_supported(pattern))
@@ -3900,7 +3898,7 @@ impl Compiler {
 
     fn for_in(
         &mut self,
-        binding: Option<&(String, Option<bool>)>,
+        binding: Option<&(parser::BindingPattern, Option<bool>)>,
         target: Option<&Expr>,
         object: &Expr,
         body: &Stmt,
@@ -3908,16 +3906,20 @@ impl Compiler {
         let id = self.enumerations;
         self.enumerations = self.enumerations.saturating_add(1);
         self.scopes.push(BTreeMap::new());
-        if let Some((name, Some(mutable))) = binding {
-            let mut names = Vec::new();
-            var_names(body, &mut names);
-            if names.contains(name) {
-                return Err(Error::Syntax {
-                    offset: 0,
-                    message: "for-in lexical binding conflicts with var",
-                });
+        let mut binding_names = Vec::new();
+        if let Some((pattern, Some(mutable))) = binding {
+            pattern.names(&mut binding_names);
+            let mut body_vars = Vec::new();
+            var_names(body, &mut body_vars);
+            for name in &binding_names {
+                if body_vars.contains(name) {
+                    return Err(Error::Syntax {
+                        offset: 0,
+                        message: "for-in lexical binding conflicts with var",
+                    });
+                }
+                self.declare(name, *mutable)?;
             }
-            self.declare(name, *mutable)?;
         }
         self.emit(Op::Constant(Value::Undefined))?;
         self.emit(Op::Result)?;
@@ -3925,22 +3927,14 @@ impl Compiler {
         self.emit(Op::ForInInit(id))?;
         let head = self.program.code.len();
         let end = self.emit(Op::ForInNext(id, 0))?;
-        if let Some((name, kind)) = binding {
+        if let Some((pattern, kind)) = binding {
             if kind.is_some() {
-                let slot = self.local(name).ok_or(Error::InvalidBytecode)?;
-                self.emit(Op::Reset(slot))?;
-                self.emit(Op::Init(slot))?;
-            } else {
-                let op = if let Some(slot) = self.resolve(name) {
-                    Op::Store(slot)
-                } else if self.realm {
-                    Op::SetGlobal(name.clone(), false)
-                } else {
-                    return Err(Error::InvalidBytecode);
-                };
-                self.emit(op)?;
-                self.emit(Op::Pop)?;
+                for name in &binding_names {
+                    let slot = self.local(name).ok_or(Error::InvalidBytecode)?;
+                    self.emit(Op::Reset(slot))?;
+                }
             }
+            self.bind_pattern(pattern, kind.is_some())?;
         } else if let Some(target) = target {
             if let Some(name) = target.reference_name() {
                 let op = if let Some(slot) = self.resolve(name) {
@@ -4974,7 +4968,7 @@ impl Compiler {
 
 fn var_names(stmt: &Stmt, names: &mut Vec<String>) {
     match stmt {
-        Stmt::ForOf { binding, body, .. } => {
+        Stmt::ForOf { binding, body, .. } | Stmt::ForIn { binding, body, .. } => {
             if let Some((pattern, None)) = binding {
                 pattern.names(names);
             }
@@ -4986,12 +4980,6 @@ fn var_names(stmt: &Stmt, names: &mut Vec<String>) {
                     var_names(stmt, names);
                 }
             }
-        }
-        Stmt::ForIn { binding, body, .. } => {
-            if let Some((name, None)) = binding {
-                names.push(name.clone());
-            }
-            var_names(body, names);
         }
         Stmt::Try {
             body,

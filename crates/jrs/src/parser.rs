@@ -247,7 +247,7 @@ pub(crate) enum Stmt {
     For(Box<Stmt>, Option<Expr>, Option<Expr>, Box<Stmt>),
     Switch(Expr, Vec<(Option<Expr>, Vec<Stmt>)>),
     ForIn {
-        binding: Option<(String, Option<bool>)>,
+        binding: Option<(BindingPattern, Option<bool>)>,
         target: Option<Expr>,
         object: Expr,
         body: Box<Stmt>,
@@ -731,14 +731,6 @@ impl Parser {
                 body: Box::new(body),
             });
         }
-        let binding = if let Some((pattern, kind)) = binding {
-            let BindingPattern::Name(name) = pattern else {
-                return Err(Self::unsupported("destructuring for-in bindings"));
-            };
-            Some((name, kind))
-        } else {
-            None
-        };
         Ok(Stmt::ForIn {
             binding,
             target,
