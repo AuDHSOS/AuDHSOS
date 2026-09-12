@@ -2124,32 +2124,34 @@ impl RegisterLowerer {
         let mut scoped_registers = Vec::new();
         match initializer {
             Stmt::Declare(bindings) => {
+                let mut declared_names = BTreeSet::new();
                 for (pattern, mutable, _) in bindings {
-                    let name = pattern.identifier()?;
-                    if self.bindings.contains_key(name)
-                        || bindings
-                            .iter()
-                            .filter(|(candidate, _, _)| candidate.identifier() == Some(name))
-                            .count()
-                            != 1
-                    {
-                        return None;
+                    let mut names = Vec::new();
+                    pattern.names(&mut names);
+                    for name in names {
+                        if self.bindings.contains_key(&name) || !declared_names.insert(name.clone())
+                        {
+                            return None;
+                        }
+                        let register = self.allocate_register()?;
+                        self.bindings.insert(
+                            name.clone(),
+                            RegisterBinding {
+                                storage: RegisterBindingStorage::Register(register),
+                                value_type: None,
+                                mutable: *mutable,
+                                stable_function_identity: false,
+                            },
+                        );
+                        scoped_registers.push((name, register));
                     }
-                    let register = self.allocate_register()?;
-                    self.bindings.insert(
-                        String::from(name),
-                        RegisterBinding {
-                            storage: RegisterBindingStorage::Register(register),
-                            value_type: None,
-                            mutable: *mutable,
-                            stable_function_identity: false,
-                        },
-                    );
-                    scoped_registers.push((String::from(name), register));
                 }
                 for (pattern, _, expression) in bindings {
-                    let name = pattern.identifier()?;
-                    self.initialize(name, expression.as_ref())?;
+                    if let Some(expression) = expression {
+                        self.initialize_pattern(pattern, expression)?;
+                    } else {
+                        self.initialize(pattern.identifier()?, None)?;
+                    }
                 }
             }
             Stmt::Expr(expression) => {

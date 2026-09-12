@@ -1482,6 +1482,10 @@ fn register_loop_lowering_rejects_unstable_or_abrupt_bodies() -> Result<(), Erro
 fn classic_for_loops_match_legacy_execution() -> Result<(), Error> {
     for source in [
         "let sum=0;for(let i=0;i<10;i++){sum+=i;}sum",
+        "let sum=0;for(let {i,limit}={i:0,limit:4};i<limit;i++){sum+=i}sum",
+        "let sum=0;for(let {i=0,step=2}={};i<5;i+=step){sum+=i}sum",
+        "let count=0;for(const {x}={x:42};count<1;count++)x",
+        "function f(){let sum=0;for(let {i,n}={i:0,n:3};i<n;i++){sum+=i}return sum}f()",
         "let i=0;for(i=0;i<4;i++)i;i",
         "for(let i=0;i<3;i++)i",
         "1;for(let i=0;i<0;i++)2",
@@ -1509,9 +1513,11 @@ fn classic_for_loops_match_legacy_execution() -> Result<(), Error> {
 fn register_for_lowering_rejects_unstable_or_observable_lexical_cases() -> Result<(), Error> {
     for source in [
         "let i=1;for(let i=0;i<2;i++){}i",
+        "let x=1;for(let {x}={x:2};x<3;x++){}x",
         "for(const i=0;i<2;i++){}",
         "for(let i=0;i<2;i++){let x=i;}i",
         "for(let i=0;i<2;i++){(()=>i)}",
+        "for(let {i}={i:0};i<2;i++){(()=>i)}",
         "let x=1;while(true){x=true;break}x",
     ] {
         assert!(
@@ -1519,6 +1525,10 @@ fn register_for_lowering_rejects_unstable_or_observable_lexical_cases() -> Resul
             "{source}"
         );
     }
+    assert!(matches!(
+        compile("for(let {x}={x:1},x=2;x<3;x++){}", Limits::default()),
+        Err(Error::Syntax { .. })
+    ));
     Ok(())
 }
 
