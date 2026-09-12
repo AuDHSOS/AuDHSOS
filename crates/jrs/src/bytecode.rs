@@ -721,17 +721,65 @@ impl RegisterLowerer {
         bindings: &[(parser::BindingPattern, Option<Expr>)],
     ) -> Option<()> {
         for (pattern, initializer) in bindings {
-            let name = pattern.identifier()?;
             let Some(initializer) = initializer else {
                 continue;
             };
+            self.initialize_pattern(pattern, initializer)?;
+        }
+        Some(())
+    }
+
+    fn initialize_pattern(
+        &mut self,
+        pattern: &parser::BindingPattern,
+        expression: &Expr,
+    ) -> Option<()> {
+        if let Some(name) = pattern.identifier() {
             let binding = *self.bindings.get(name)?;
             if binding.stable_function_identity {
                 return None;
             }
-            let value_type = self.lower(initializer)?;
+            let value_type = self.lower(expression)?;
             self.store_binding(binding);
             self.bindings.get_mut(name)?.value_type = Some(value_type);
+            return Some(());
+        }
+        let value_type = self.lower(expression)?;
+        self.bind_pattern(value_type, pattern)
+    }
+
+    fn bind_pattern(
+        &mut self,
+        value_type: RegisterType,
+        pattern: &parser::BindingPattern,
+    ) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        match pattern {
+            parser::BindingPattern::Name(name) => {
+                let binding = *self.bindings.get(name)?;
+                if binding.stable_function_identity {
+                    return None;
+                }
+                self.store_binding(binding);
+                self.bindings.get_mut(name)?.value_type = Some(value_type);
+            }
+            parser::BindingPattern::Object(object) if object.rest.is_none() => {
+                if !value_type.is_object() {
+                    return None;
+                }
+                let source = self.allocate_register()?;
+                self.code.emit(Instruction::Star(source));
+                for property in &object.properties {
+                    if property.initializer.is_some() {
+                        return None;
+                    }
+                    let property_type =
+                        self.lower_property_from_register(source, value_type, &property.key)?;
+                    self.bind_pattern(property_type, &property.pattern)?;
+                }
+                self.release_register(source)?;
+            }
+            parser::BindingPattern::Array(_) | parser::BindingPattern::Object(_) => return None,
         }
         Some(())
     }
@@ -1080,7 +1128,7 @@ impl RegisterLowerer {
             }
             let name = self.string_constant(name)?;
             let value_type = self.lower(&property.value)?;
-            if !value_type.is_primitive() {
+            if !value_type.is_primitive() && !value_type.is_object() {
                 return None;
             }
             let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
@@ -1329,8 +1377,11 @@ impl RegisterLowerer {
             match statement {
                 Stmt::Declare(bindings) => {
                     for (pattern, mutable, _) in bindings {
-                        let name = pattern.identifier()?;
-                        child.declare(name, *mutable)?;
+                        let mut names = Vec::new();
+                        pattern.names(&mut names);
+                        for name in names {
+                            child.declare(&name, *mutable)?;
+                        }
                     }
                 }
                 Stmt::Function(name, _) => {
@@ -1363,7 +1414,9 @@ impl RegisterLowerer {
                 continue;
             };
             for (pattern, _, initializer) in declarations {
-                let name = pattern.identifier()?;
+                let Some(name) = pattern.identifier() else {
+                    continue;
+                };
                 let value_type = if let Some(initializer) = initializer {
                     let Some(value_type) = register_expression_type(initializer, &bindings) else {
                         continue;
@@ -1404,8 +1457,11 @@ impl RegisterLowerer {
             flow = match statement {
                 Stmt::Declare(bindings) => {
                     for (pattern, _, initializer) in bindings {
-                        let name = pattern.identifier()?;
-                        child.initialize(name, initializer.as_ref())?;
+                        if let Some(initializer) = initializer {
+                            child.initialize_pattern(pattern, initializer)?;
+                        } else {
+                            child.initialize(pattern.identifier()?, None)?;
+                        }
                     }
                     RegisterFlow::Empty
                 }
@@ -1511,9 +1567,20 @@ impl RegisterLowerer {
         }
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
+        let result = self.lower_property_from_register(object, base_type, key)?;
+        self.release_register(object)?;
+        Some(result)
+    }
+
+    fn lower_property_from_register(
+        &mut self,
+        object: crate::engine::bytecode::Reg,
+        base_type: RegisterType,
+        key: &Expr,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
         if matches!(base_type, RegisterType::Array(_)) && Self::is_length_name(key) {
             self.code.emit(Instruction::GetArrayLength { obj: object });
-            self.release_register(object)?;
             Some(RegisterType::Number)
         } else if matches!(base_type, RegisterType::Array(_)) {
             let RegisterType::Array(object_id) = base_type else {
@@ -1558,7 +1625,6 @@ impl RegisterLowerer {
                 slot,
             });
             self.release_register(key)?;
-            self.release_register(object)?;
             Some(result_type)
         } else {
             let name = Self::static_property_name(key)?;
@@ -1577,7 +1643,6 @@ impl RegisterLowerer {
                 name,
                 slot,
             });
-            self.release_register(object)?;
             Some(result_type)
         }
     }
@@ -2617,9 +2682,9 @@ fn register_statement_var_names(
         Stmt::Var(bindings) => {
             for (pattern, initializer) in bindings {
                 if !initialized_only || initializer.is_some() {
-                    names.insert(String::from(pattern.identifier()?));
-                } else {
-                    pattern.identifier()?;
+                    let mut bound = Vec::new();
+                    pattern.names(&mut bound);
+                    names.extend(bound);
                 }
             }
         }
@@ -2662,8 +2727,10 @@ fn infer_register_var_types(
     match statement {
         Stmt::Var(declarations) => {
             for (pattern, initializer) in declarations {
-                let name = pattern.identifier()?;
                 let Some(initializer) = initializer else {
+                    continue;
+                };
+                let Some(name) = pattern.identifier() else {
                     continue;
                 };
                 let observed = register_expression_type(initializer, bindings)
@@ -2917,7 +2984,9 @@ fn register_function_local_names(function: &Function) -> Option<BTreeSet<String>
         match statement {
             Stmt::Declare(bindings) => {
                 for (pattern, _, _) in bindings {
-                    names.insert(String::from(pattern.identifier()?));
+                    let mut bound = Vec::new();
+                    pattern.names(&mut bound);
+                    names.extend(bound);
                 }
             }
             Stmt::Function(name, _) => {
@@ -3099,15 +3168,14 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
         match statement {
             Stmt::Declare(bindings) if !saw_expression && !realm => {
                 saw_declaration = true;
+                let mut names = BTreeSet::new();
                 for (pattern, _, _) in bindings {
-                    let name = pattern.identifier()?;
-                    if bindings
-                        .iter()
-                        .filter(|(candidate, _, _)| candidate.identifier() == Some(name))
-                        .count()
-                        > 1
-                    {
-                        return None;
+                    let mut bound = Vec::new();
+                    pattern.names(&mut bound);
+                    for name in bound {
+                        if !names.insert(name) {
+                            return None;
+                        }
                     }
                 }
             }
@@ -3139,8 +3207,11 @@ fn prepare_register_bindings(
         for statement in body {
             if let Stmt::Declare(bindings) = statement {
                 for (pattern, mutable, _) in bindings {
-                    let name = pattern.identifier()?;
-                    lowerer.declare(name, *mutable)?;
+                    let mut names = Vec::new();
+                    pattern.names(&mut names);
+                    for name in names {
+                        lowerer.declare(&name, *mutable)?;
+                    }
                 }
             } else if let Stmt::Function(name, _) = statement
                 && !lowerer.bindings.contains_key(name)
@@ -3170,7 +3241,10 @@ fn lower_register_script(
     entry_fuel_cost: u64,
     property_limit: usize,
 ) -> Option<crate::engine::bytecode::BytecodeFunction> {
-    if body.iter().any(register_statement_has_binding_pattern) {
+    if body
+        .iter()
+        .any(register_statement_has_unsupported_binding_pattern)
+    {
         return None;
     }
     let (saw_declaration, saw_function) = register_script_features(body, realm)?;
@@ -3200,8 +3274,11 @@ fn lower_register_script(
             }
             Stmt::Declare(bindings) => {
                 for (pattern, _, initializer) in bindings {
-                    let name = pattern.identifier()?;
-                    lowerer.initialize(name, initializer.as_ref())?;
+                    if let Some(initializer) = initializer {
+                        lowerer.initialize_pattern(pattern, initializer)?;
+                    } else {
+                        lowerer.initialize(pattern.identifier()?, None)?;
+                    }
                 }
                 lowerer
                     .code
@@ -3239,53 +3316,59 @@ fn lower_register_script(
     Some(lowerer.code)
 }
 
-fn register_statement_has_binding_pattern(statement: &Stmt) -> bool {
+fn register_statement_has_unsupported_binding_pattern(statement: &Stmt) -> bool {
     match statement {
         Stmt::Declare(bindings) => bindings
             .iter()
-            .any(|(pattern, _, _)| pattern.identifier().is_none()),
+            .any(|(pattern, _, _)| !register_binding_pattern_supported(pattern)),
         Stmt::Var(bindings) => bindings
             .iter()
-            .any(|(pattern, _)| pattern.identifier().is_none()),
-        Stmt::Block(body) => body.iter().any(register_statement_has_binding_pattern),
+            .any(|(pattern, _)| !register_binding_pattern_supported(pattern)),
+        Stmt::Block(body) => body
+            .iter()
+            .any(register_statement_has_unsupported_binding_pattern),
         Stmt::If(_, yes, no) => {
-            register_statement_has_binding_pattern(yes)
+            register_statement_has_unsupported_binding_pattern(yes)
                 || no
                     .as_deref()
-                    .is_some_and(register_statement_has_binding_pattern)
+                    .is_some_and(register_statement_has_unsupported_binding_pattern)
         }
         Stmt::While(_, body) | Stmt::ForIn { body, .. } => {
-            register_statement_has_binding_pattern(body)
+            register_statement_has_unsupported_binding_pattern(body)
         }
         Stmt::For(initializer, _, _, body) => {
-            register_statement_has_binding_pattern(initializer)
-                || register_statement_has_binding_pattern(body)
+            register_statement_has_unsupported_binding_pattern(initializer)
+                || register_statement_has_unsupported_binding_pattern(body)
         }
-        Stmt::Switch(_, clauses) => clauses
-            .iter()
-            .any(|(_, body)| body.iter().any(register_statement_has_binding_pattern)),
+        Stmt::Switch(_, clauses) => clauses.iter().any(|(_, body)| {
+            body.iter()
+                .any(register_statement_has_unsupported_binding_pattern)
+        }),
         Stmt::ForOf { binding, body, .. } => {
             binding
                 .as_ref()
-                .is_some_and(|(pattern, _)| pattern.identifier().is_none())
-                || register_statement_has_binding_pattern(body)
+                .is_some_and(|(pattern, _)| !register_binding_pattern_supported(pattern))
+                || register_statement_has_unsupported_binding_pattern(body)
         }
         Stmt::Function(_, function) => function
             .body
             .iter()
-            .any(register_statement_has_binding_pattern),
+            .any(register_statement_has_unsupported_binding_pattern),
         Stmt::Try {
             body,
             catch,
             finally,
         } => {
-            body.iter().any(register_statement_has_binding_pattern)
+            body.iter()
+                .any(register_statement_has_unsupported_binding_pattern)
                 || catch.as_ref().is_some_and(|(_, body)| {
-                    body.iter().any(register_statement_has_binding_pattern)
+                    body.iter()
+                        .any(register_statement_has_unsupported_binding_pattern)
                 })
-                || finally
-                    .as_ref()
-                    .is_some_and(|body| body.iter().any(register_statement_has_binding_pattern))
+                || finally.as_ref().is_some_and(|body| {
+                    body.iter()
+                        .any(register_statement_has_unsupported_binding_pattern)
+                })
         }
         Stmt::Empty
         | Stmt::Expr(_)
@@ -3293,6 +3376,21 @@ fn register_statement_has_binding_pattern(statement: &Stmt) -> bool {
         | Stmt::Continue
         | Stmt::Return(_)
         | Stmt::Throw(_) => false,
+    }
+}
+
+fn register_binding_pattern_supported(pattern: &parser::BindingPattern) -> bool {
+    match pattern {
+        parser::BindingPattern::Name(_) => true,
+        parser::BindingPattern::Array(_) => false,
+        parser::BindingPattern::Object(object) => {
+            object.rest.is_none()
+                && object.properties.iter().all(|property| {
+                    property.initializer.is_none()
+                        && RegisterLowerer::static_property_name(&property.key).is_some()
+                        && register_binding_pattern_supported(&property.pattern)
+                })
+        }
     }
 }
 

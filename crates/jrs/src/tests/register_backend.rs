@@ -13,18 +13,64 @@ fn same_value(left: &Value, right: &Value) -> bool {
 }
 
 #[test]
-fn binding_patterns_fail_closed_before_register_backend_selection() -> Result<(), Error> {
+fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), Error> {
     for source in [
         "let [x]=[1];x",
         "var [x]=[1];x",
-        "let {x}={x:1};x",
-        "var {x:y}={x:1};y",
+        "let {x=1}={};x",
+        "let k='x';let {[k]:x}={x:1};x",
+        "let {x,...rest}={x:1};rest",
         "{const [x]=[1];x}",
         "for(let [x]=[1];false;){}",
         "function f(){let [x]=[1];return x}f()",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn static_object_binding_patterns_use_register_property_caches() -> Result<(), Error> {
+    for source in [
+        "let {x}={x:42};x",
+        "var {x:y}={x:42};y",
+        "let {x,y}={x:20,y:22};x+y",
+        "let {x:{y}}={x:{y:42}};y",
+        "let {[('x')]:x}={x:42};x",
+        "let {0:x,length:n}=[41];x+n",
+        "let {}={x:1};42",
+        "function f(){let {x}={x:42};return x}f()",
+        "function f(){var {x:y}={x:42};return y}f()",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let code = program
+            .register_code
+            .as_ref()
+            .ok_or(Error::InvalidBytecode)?;
+        if !source.contains("let {}") {
+            assert!(
+                core::iter::once(code.as_ref())
+                    .chain(code.functions.iter())
+                    .flat_map(|function| &function.instructions)
+                    .any(|instruction| matches!(
+                        instruction,
+                        crate::engine::bytecode::Instruction::GetNamed { .. }
+                            | crate::engine::bytecode::Instruction::GetByValue { .. }
+                            | crate::engine::bytecode::Instruction::GetArrayLength { .. }
+                    )),
+                "{source}"
+            );
+        }
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
     }
     Ok(())
 }
