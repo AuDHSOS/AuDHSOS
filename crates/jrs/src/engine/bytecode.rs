@@ -141,6 +141,16 @@ pub enum VerificationError {
         /// Instruction offset.
         pc: usize,
     },
+    /// An exception handler names an instruction offset outside the function.
+    HandlerOutOfBounds {
+        /// Index of the offending handler.
+        index: usize,
+    },
+    /// An exception handler protects an empty or inverted instruction range.
+    HandlerRangeInverted {
+        /// Index of the offending handler.
+        index: usize,
+    },
     /// A reachable control-flow path falls beyond the final instruction.
     ReachableFallthrough {
         /// Instruction offset whose fallthrough leaves the function.
@@ -315,8 +325,24 @@ pub enum Instruction {
         /// Feedback vector slot for call target caching.
         slot: u16,
     },
+    /// Throws `acc` as an exception (14.14.1).
+    Throw,
     /// Return `acc` to caller.
     Return,
+}
+
+/// One protected instruction range and the handler that receives control when
+/// a value is thrown inside it (14.15).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExceptionHandler {
+    /// First protected instruction offset.
+    pub start_pc: u32,
+    /// One past the last protected instruction offset.
+    pub end_pc: u32,
+    /// Instruction offset that receives control.
+    pub handler_pc: u32,
+    /// Register the thrown value is written to before the handler runs.
+    pub exception: Reg,
 }
 
 /// Compiled bytecode unit for a function or top-level script.
@@ -348,6 +374,8 @@ pub struct BytecodeFunction {
     pub entry_fuel_cost: u64,
     /// Legacy operand-stack capacity required by the selected source program.
     pub entry_stack_requirement: usize,
+    /// Protected instruction ranges, searched innermost first on a throw.
+    pub handlers: Vec<ExceptionHandler>,
 }
 
 impl BytecodeFunction {
@@ -368,7 +396,22 @@ impl BytecodeFunction {
             feedback_slots: Vec::new(),
             entry_fuel_cost: 1,
             entry_stack_requirement: 0,
+            handlers: Vec::new(),
         }
+    }
+
+    /// Returns the innermost handler protecting `pc`, if any.
+    ///
+    /// Ranges of nested `try` statements are nested, so the narrowest range
+    /// containing `pc` is the innermost one.
+    #[must_use]
+    pub fn find_handler(&self, pc: usize) -> Option<ExceptionHandler> {
+        let pc = u32::try_from(pc).ok()?;
+        self.handlers
+            .iter()
+            .filter(|handler| handler.start_pc <= pc && pc < handler.end_pc)
+            .min_by_key(|handler| handler.end_pc.saturating_sub(handler.start_pc))
+            .copied()
     }
 
     /// Emits an instruction and returns its program counter offset.
@@ -457,8 +500,25 @@ impl BytecodeFunction {
             self.verify_instruction(pc, *instruction, functions)?;
         }
 
-        let mut seen = alloc::vec![false; self.instructions.len()];
-        let mut work = VecDeque::from([0usize]);
+        let count = self.instructions.len();
+        for (index, handler) in self.handlers.iter().enumerate() {
+            if handler.start_pc >= handler.end_pc {
+                return Err(VerificationError::HandlerRangeInverted { index });
+            }
+            let out_of_bounds = usize::try_from(handler.end_pc).is_err()
+                || usize::try_from(handler.handler_pc).is_ok_and(|pc| pc >= count)
+                || usize::try_from(handler.end_pc).is_ok_and(|pc| pc > count);
+            if out_of_bounds {
+                return Err(VerificationError::HandlerOutOfBounds { index });
+            }
+            self.verify_register(0, handler.exception)?;
+        }
+
+        let mut seen = alloc::vec![false; count];
+        let mut work: VecDeque<usize> = VecDeque::from([0usize]);
+        for handler in &self.handlers {
+            work.push_back(usize::try_from(handler.handler_pc).unwrap_or(usize::MAX));
+        }
         while let Some(pc) = work.pop_front() {
             if seen.get(pc).copied().unwrap_or(false) {
                 continue;
@@ -471,7 +531,7 @@ impl BytecodeFunction {
                 .get(pc)
                 .ok_or(VerificationError::ReachableFallthrough { pc })?;
             match instruction {
-                Instruction::Return => {}
+                Instruction::Return | Instruction::Throw => {}
                 Instruction::Jump(offset) => {
                     work.push_back(self.jump_target(pc, offset)?);
                 }
@@ -597,6 +657,7 @@ impl BytecodeFunction {
             | Instruction::LdaFalse
             | Instruction::CreateObject
             | Instruction::CreateArray(_)
+            | Instruction::Throw
             | Instruction::Return => None,
         };
         if let Some(register) = register {

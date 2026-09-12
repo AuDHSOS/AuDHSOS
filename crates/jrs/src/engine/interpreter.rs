@@ -49,6 +49,8 @@ pub enum VMError {
     StringLimit,
     /// An object exceeds the configured own-property limit.
     PropertyLimit,
+    /// An exception left the outermost frame without a handler (14.15).
+    Thrown(Value),
     /// Property lookup failed or target is not an object.
     TypeError,
     /// Instruction execution fell off bytecode bounds without Return.
@@ -572,6 +574,45 @@ impl RegisterVM {
                 .ok_or(VMError::Heap(HeapError::InvalidReference));
         }
         Ok(value.to_boolean())
+    }
+
+    /// Transfers control to the innermost handler protecting the throwing
+    /// instruction, unwinding call frames until one is found (14.15).
+    ///
+    /// `pc` is the offset of the instruction that threw, not the next one.
+    fn unwind(
+        &mut self,
+        code: &BytecodeFunction,
+        mut pc: usize,
+        mut current_code_id: Option<u32>,
+        value: Value,
+    ) -> Result<(usize, Option<u32>), VMError> {
+        loop {
+            let active_code = code_unit(code, current_code_id).ok_or(VMError::InvalidBytecode(
+                VerificationError::FunctionOutOfBounds {
+                    pc,
+                    index: current_code_id.unwrap_or(u32::MAX),
+                },
+            ))?;
+            if let Some(handler) = active_code.find_handler(pc) {
+                self.write_reg(handler.exception, value)?;
+                self.acc = VALUE_UNDEFINED;
+                return Ok((handler.handler_pc as usize, current_code_id));
+            }
+            let Some(frame) = self.frames.pop() else {
+                self.fp = 0;
+                self.active_binding_count = 0;
+                self.current_context = None;
+                return Err(VMError::Thrown(value));
+            };
+            self.fp = frame.caller_fp;
+            self.active_binding_count = frame.caller_binding_count;
+            self.current_context = frame.caller_context;
+            current_code_id = frame.caller_code_id;
+            // The saved offset resumes after the call, so the protected
+            // instruction is the call itself.
+            pc = frame.return_pc.saturating_sub(1);
+        }
     }
 
     /// Executes a bytecode function against the heap with active feedback caching.
@@ -1313,6 +1354,13 @@ impl RegisterVM {
                     };
                     pc = 0;
                     self.acc = VALUE_UNDEFINED;
+                }
+                Instruction::Throw => {
+                    let thrown = self.acc;
+                    let (next_pc, next_code) =
+                        self.unwind(code, pc.saturating_sub(1), current_code_id, thrown)?;
+                    pc = next_pc;
+                    current_code_id = next_code;
                 }
                 Instruction::Return => {
                     if let Some(frame) = self.frames.pop() {

@@ -201,6 +201,35 @@ pub struct Runtime {
     register_feedback: Vec<RegisterFeedbackState>,
 }
 
+/// Converts a register-backend value into the legacy value the embedding sees.
+///
+/// Objects, Symbols and `BigInt`s of the new engine have no legacy identity, so
+/// they cannot cross this boundary and are refused rather than approximated.
+fn register_primitive(
+    value: crate::engine::value::Value,
+    heap: &crate::engine::heap::GenerationalHeap,
+) -> Option<Value> {
+    if value.is_undefined() {
+        return Some(Value::Undefined);
+    }
+    if value.is_null() {
+        return Some(Value::Null);
+    }
+    if let Some(boolean) = value.as_boolean() {
+        return Some(Value::Boolean(boolean));
+    }
+    if value.is_number() {
+        return value.as_f64().map(Value::Number);
+    }
+    if value.is_string() {
+        return heap
+            .strings
+            .to_utf16(value)
+            .map(|units| Value::String(units.into()));
+    }
+    None
+}
+
 struct RegisterFeedbackState {
     code: Weak<crate::engine::bytecode::BytecodeFunction>,
     vector: crate::engine::feedback::FeedbackVector,
@@ -473,24 +502,12 @@ impl Execution<'_> {
         let result = vm.run(code, &mut feedback.vector, &mut agent.heap, &agent.realm);
         self.fuel = vm.fuel;
         let result = match result {
-            Ok(value) if value.is_undefined() => Ok(Value::Undefined),
-            Ok(value) if value.is_null() => Ok(Value::Null),
-            Ok(value) if value.is_boolean() => value
-                .as_boolean()
-                .map(Value::Boolean)
-                .ok_or(Error::InvalidBytecode),
-            Ok(value) if value.is_number() => value
-                .as_f64()
-                .map(Value::Number)
-                .ok_or(Error::InvalidBytecode),
-            Ok(value) if value.is_string() => agent
-                .heap
-                .strings
-                .to_utf16(value)
-                .map(|units| Value::String(units.into()))
-                .ok_or(Error::InvalidBytecode),
-            Ok(_)
-            | Err(
+            Ok(value) => register_primitive(value, &agent.heap).ok_or(Error::InvalidBytecode),
+            Err(crate::engine::interpreter::VMError::Thrown(value)) => {
+                Err(register_primitive(value, &agent.heap)
+                    .map_or(Error::InvalidBytecode, |value| Error::Thrown { value }))
+            }
+            Err(
                 crate::engine::interpreter::VMError::InvalidBytecode(_)
                 | crate::engine::interpreter::VMError::InvalidFeedbackVector
                 | crate::engine::interpreter::VMError::InvalidRegister

@@ -6,7 +6,7 @@
 
 use crate::{
     Error, Limits, Value,
-    parser::{self, Binary, Expr, ExprKind, Function, Stmt, Unary},
+    parser::{self, Binary, BindingPattern, Expr, ExprKind, Function, Stmt, Unary},
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -648,6 +648,8 @@ struct RegisterLowerer {
     bindings: BTreeMap<String, RegisterBinding>,
     loops: Vec<RegisterLoop>,
     completions: Vec<crate::engine::bytecode::Reg>,
+    /// Types thrown lexically inside each enclosing protected range.
+    thrown: Vec<Vec<RegisterType>>,
     next_object_id: u32,
     object_layouts: BTreeMap<u32, RegisterObjectLayout>,
     property_limit: usize,
@@ -720,6 +722,7 @@ impl RegisterLowerer {
             bindings: BTreeMap::new(),
             loops: Vec::new(),
             completions: Vec::new(),
+            thrown: Vec::new(),
             next_object_id: 0,
             object_layouts: BTreeMap::new(),
             property_limit,
@@ -2568,10 +2571,142 @@ impl RegisterLowerer {
                 self.code.emit(crate::engine::bytecode::Instruction::Return);
                 RegisterFlow::Abrupt
             }
+            Stmt::Throw(value) => {
+                let value_type = self.lower(value)?;
+                // A value that leaves the script has to be representable at the
+                // legacy boundary, which only carries primitives.
+                if !value_type.is_primitive() {
+                    return None;
+                }
+                if let Some(thrown) = self.thrown.last_mut() {
+                    thrown.push(value_type);
+                }
+                self.code.emit(crate::engine::bytecode::Instruction::Throw);
+                RegisterFlow::Abrupt
+            }
+            Stmt::Try {
+                body,
+                catch: Some((parameter, handler)),
+                finally: None,
+            } => self.lower_try_catch(body, parameter.as_ref(), handler)?,
             Stmt::Empty => RegisterFlow::Empty,
             _ => return None,
         };
         Some(flow)
+    }
+
+    /// Lowers `try Block Catch` of 14.15.
+    ///
+    /// The completion value is the try Block's, or the Catch Block's when a
+    /// value was thrown, with an empty completion updated to undefined.
+    fn lower_try_catch(
+        &mut self,
+        body: &[Stmt],
+        parameter: Option<&BindingPattern>,
+        handler: &[Stmt],
+    ) -> Option<RegisterFlow> {
+        use crate::engine::bytecode::Instruction;
+        let name = match parameter {
+            Some(pattern) => Some(pattern.identifier()?),
+            None => None,
+        };
+        let result_register = self.allocate_register()?;
+        let exception_register = self.allocate_register()?;
+        self.code.emit(Instruction::LdaUndefined);
+        self.code.emit(Instruction::Star(result_register));
+
+        // An exception can be thrown at any point of the protected range, so a
+        // binding whose tracked type the Block changes has no single type in
+        // the Catch Block. Such a body is not lowered.
+        let bindings_before = self.bindings.clone();
+        let layouts_before = self.object_layouts.clone();
+        let start = self.code.instructions.len();
+        self.thrown.push(Vec::new());
+        let body_flow = self.lower_block(body);
+        let thrown = self.thrown.pop()?;
+        let body_flow = body_flow?;
+        let end = self.code.instructions.len();
+        if self.bindings != bindings_before || self.object_layouts != layouts_before {
+            return None;
+        }
+        // A callee's thrown type is not tracked, so a call inside the range
+        // leaves the catch parameter's type unknown.
+        if self
+            .code
+            .instructions
+            .get(start..end)?
+            .iter()
+            .any(|instruction| matches!(instruction, Instruction::Call { .. }))
+        {
+            return None;
+        }
+        if body_flow != RegisterFlow::Abrupt {
+            self.code.emit(Instruction::Star(result_register));
+        }
+        let skip =
+            (body_flow != RegisterFlow::Abrupt).then(|| self.code.emit(Instruction::Jump(0)));
+
+        let handler_pc = self.code.instructions.len();
+        self.code
+            .handlers
+            .push(crate::engine::bytecode::ExceptionHandler {
+                start_pc: u32::try_from(start).ok()?,
+                end_pc: u32::try_from(end).ok()?,
+                handler_pc: u32::try_from(handler_pc).ok()?,
+                exception: exception_register,
+            });
+        let value_type = thrown
+            .into_iter()
+            .reduce(RegisterType::merge)
+            .unwrap_or(RegisterType::Primitive);
+        let previous = name.map(|name| {
+            self.bindings.insert(
+                String::from(name),
+                RegisterBinding {
+                    storage: RegisterBindingStorage::Register(exception_register),
+                    value_type: Some(value_type),
+                    mutable: true,
+                    stable_function_identity: false,
+                },
+            )
+        });
+        if name.is_some() {
+            self.active_binding_count = self.active_binding_count.checked_add(1)?;
+            self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+        }
+        self.code.emit(Instruction::LdaUndefined);
+        let handler_flow = self.lower_block(handler);
+        if let (Some(name), Some(previous)) = (name, previous) {
+            self.bindings.remove(name)?;
+            if let Some(previous) = previous {
+                self.bindings.insert(String::from(name), previous);
+            }
+            self.active_binding_count = self.active_binding_count.checked_sub(1)?;
+        }
+        let handler_flow = handler_flow?;
+        if handler_flow != RegisterFlow::Abrupt {
+            self.code.emit(Instruction::Star(result_register));
+        }
+        let bindings_after_handler = self.bindings.clone();
+
+        let after = self.code.instructions.len();
+        if let Some(skip) = skip {
+            self.patch_jump(skip, after)?;
+        }
+        self.bindings = merge_register_bindings(&bindings_before, &bindings_after_handler)?;
+        self.code.emit(Instruction::Ldar(result_register));
+        self.release_register(exception_register)?;
+        self.release_register(result_register)?;
+        Some(match (body_flow, handler_flow) {
+            (RegisterFlow::Abrupt, RegisterFlow::Abrupt) => RegisterFlow::Abrupt,
+            (RegisterFlow::Value(value), RegisterFlow::Value(other)) => {
+                RegisterFlow::Value(value.merge(other))
+            }
+            (RegisterFlow::Value(value), _) | (_, RegisterFlow::Value(value)) => {
+                RegisterFlow::Value(value)
+            }
+            (RegisterFlow::Empty, _) | (_, RegisterFlow::Empty) => RegisterFlow::Empty,
+        })
     }
 
     fn lower_block(&mut self, body: &[Stmt]) -> Option<RegisterFlow> {
@@ -3597,20 +3732,37 @@ fn register_statement_var_names(
             register_statement_var_names(initializer, names, initialized_only)?;
             register_statement_var_names(body, names, initialized_only)?;
         }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for statement in try_statements(body, catch.as_ref(), finally.as_ref()) {
+                register_statement_var_names(statement, names, initialized_only)?;
+            }
+        }
         Stmt::Empty
         | Stmt::Expr(_)
         | Stmt::Declare(_)
         | Stmt::Function(_, _)
         | Stmt::Return(_)
+        | Stmt::Throw(_)
         | Stmt::Break
         | Stmt::Continue => {}
-        Stmt::Switch(_, _)
-        | Stmt::ForIn { .. }
-        | Stmt::ForOf { .. }
-        | Stmt::Throw(_)
-        | Stmt::Try { .. } => return None,
+        Stmt::Switch(_, _) | Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
     }
     Some(())
+}
+
+/// Every statement of a `try` statement's three Blocks, in evaluation order.
+fn try_statements<'a>(
+    body: &'a [Stmt],
+    catch: Option<&'a (Option<BindingPattern>, Vec<Stmt>)>,
+    finally: Option<&'a Vec<Stmt>>,
+) -> impl Iterator<Item = &'a Stmt> {
+    body.iter()
+        .chain(catch.into_iter().flat_map(|(_, body)| body.iter()))
+        .chain(finally.into_iter().flatten())
 }
 
 fn infer_register_var_types(
@@ -3651,18 +3803,24 @@ fn infer_register_var_types(
             infer_register_var_types(initializer, bindings)?;
             infer_register_var_types(body, bindings)?;
         }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for statement in try_statements(body, catch.as_ref(), finally.as_ref()) {
+                infer_register_var_types(statement, bindings)?;
+            }
+        }
         Stmt::Empty
         | Stmt::Expr(_)
         | Stmt::Declare(_)
         | Stmt::Function(_, _)
         | Stmt::Return(_)
+        | Stmt::Throw(_)
         | Stmt::Break
         | Stmt::Continue => {}
-        Stmt::Switch(_, _)
-        | Stmt::ForIn { .. }
-        | Stmt::ForOf { .. }
-        | Stmt::Throw(_)
-        | Stmt::Try { .. } => return None,
+        Stmt::Switch(_, _) | Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
     }
     Some(())
 }
@@ -3766,12 +3924,20 @@ fn register_statement_writes_names(statement: &Stmt, names: &BTreeSet<String>) -
                 || register_statement_writes_names(body, names)?
         }
         Stmt::Function(_, function) => register_function_writes_names(function, names)?,
+        Stmt::Throw(value) => register_expression_writes_names(value, names)?,
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            let mut writes = false;
+            for statement in try_statements(body, catch.as_ref(), finally.as_ref()) {
+                writes = writes || register_statement_writes_names(statement, names)?;
+            }
+            writes
+        }
         Stmt::Empty | Stmt::Return(None) | Stmt::Break | Stmt::Continue => false,
-        Stmt::Switch(_, _)
-        | Stmt::ForIn { .. }
-        | Stmt::ForOf { .. }
-        | Stmt::Throw(_)
-        | Stmt::Try { .. } => return None,
+        Stmt::Switch(_, _) | Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
     })
 }
 
@@ -4198,17 +4364,7 @@ fn register_statement_references(
             }
         }
         Stmt::Block(body) => {
-            let local_names: BTreeSet<_> = register_block_local_names(body)?.into_keys().collect();
-            let mut direct = BTreeSet::new();
-            let mut nested = BTreeSet::new();
-            for statement in body {
-                register_statement_references(statement, &mut direct, &mut nested)?;
-            }
-            if nested.iter().any(|name| local_names.contains(name)) {
-                return None;
-            }
-            names.extend(direct.difference(&local_names).cloned());
-            nested_free_names.extend(nested.difference(&local_names).cloned());
+            register_scoped_block_references(body, &BTreeSet::new(), names, nested_free_names)?;
         }
         Stmt::If(condition, yes, no) => {
             register_expression_references(condition, names, nested_free_names)?;
@@ -4243,13 +4399,56 @@ fn register_statement_references(
         Stmt::Function(_, function) => {
             nested_free_names.extend(register_function_scope(function)?.free_names);
         }
+        Stmt::Throw(value) => {
+            register_expression_references(value, names, nested_free_names)?;
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            // 14.15.1: the try Block, the Catch Block and the Finally Block are
+            // separate scopes, and the catch parameter binds only in its Block.
+            register_scoped_block_references(body, &BTreeSet::new(), names, nested_free_names)?;
+            if let Some((parameter, body)) = catch {
+                let mut bound = BTreeSet::new();
+                if let Some(parameter) = parameter {
+                    let mut declared = Vec::new();
+                    parameter.names(&mut declared);
+                    bound.extend(declared);
+                }
+                register_scoped_block_references(body, &bound, names, nested_free_names)?;
+            }
+            if let Some(body) = finally {
+                register_scoped_block_references(body, &BTreeSet::new(), names, nested_free_names)?;
+            }
+        }
         Stmt::Empty | Stmt::Break | Stmt::Continue => {}
-        Stmt::Switch(_, _)
-        | Stmt::ForIn { .. }
-        | Stmt::ForOf { .. }
-        | Stmt::Throw(_)
-        | Stmt::Try { .. } => return None,
+        Stmt::Switch(_, _) | Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
     }
+    Some(())
+}
+
+/// Collects the free names of one Block, hiding its own lexical bindings and
+/// any additional `bound` names such as a catch parameter.
+fn register_scoped_block_references(
+    body: &[Stmt],
+    bound: &BTreeSet<String>,
+    names: &mut BTreeSet<String>,
+    nested_free_names: &mut BTreeSet<String>,
+) -> Option<()> {
+    let mut local_names: BTreeSet<_> = register_block_local_names(body)?.into_keys().collect();
+    local_names.extend(bound.iter().cloned());
+    let mut direct = BTreeSet::new();
+    let mut nested = BTreeSet::new();
+    for statement in body {
+        register_statement_references(statement, &mut direct, &mut nested)?;
+    }
+    if nested.iter().any(|name| local_names.contains(name)) {
+        return None;
+    }
+    names.extend(direct.difference(&local_names).cloned());
+    nested_free_names.extend(nested.difference(&local_names).cloned());
     Some(())
 }
 
@@ -4282,6 +4481,8 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
             | Stmt::If(_, _, _)
             | Stmt::While(_, _)
             | Stmt::DoWhile(_, _)
+            | Stmt::Throw(_)
+            | Stmt::Try { .. }
             | Stmt::For(_, _, _, _) => saw_expression = true,
             Stmt::Empty => {}
             _ => return None,
@@ -4296,10 +4497,19 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
 
 fn register_statement_has_lexical_block(statement: &Stmt) -> bool {
     match statement {
-        Stmt::Block(body) => {
-            body.iter()
-                .any(|statement| matches!(statement, Stmt::Declare(_)))
-                || body.iter().any(register_statement_has_lexical_block)
+        Stmt::Block(body) => register_body_has_lexical_block(body),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            register_body_has_lexical_block(body)
+                || catch
+                    .as_ref()
+                    .is_some_and(|(_, body)| register_body_has_lexical_block(body))
+                || finally
+                    .as_ref()
+                    .is_some_and(|body| register_body_has_lexical_block(body))
         }
         Stmt::If(_, yes, no) => {
             register_statement_has_lexical_block(yes)
@@ -4324,9 +4534,14 @@ fn register_statement_has_lexical_block(statement: &Stmt) -> bool {
         | Stmt::Switch(_, _)
         | Stmt::ForIn { .. }
         | Stmt::ForOf { .. }
-        | Stmt::Throw(_)
-        | Stmt::Try { .. } => false,
+        | Stmt::Throw(_) => false,
     }
+}
+
+fn register_body_has_lexical_block(body: &[Stmt]) -> bool {
+    body.iter()
+        .any(|statement| matches!(statement, Stmt::Declare(_)))
+        || body.iter().any(register_statement_has_lexical_block)
 }
 
 fn prepare_register_bindings(
@@ -4393,7 +4608,12 @@ fn lower_register_script(
         .code
         .emit(crate::engine::bytecode::Instruction::Star(result_register));
     let mut completion_type = RegisterType::Undefined;
+    let mut abrupt = false;
     for statement in body {
+        if abrupt {
+            // 16.1.4: statements after an abrupt completion never evaluate.
+            break;
+        }
         let snapshot = lowerer.snapshot();
         lowerer
             .code
@@ -4424,7 +4644,7 @@ fn lower_register_script(
                     completion_type = value_type;
                 }
                 Some(RegisterFlow::Empty) => {}
-                Some(RegisterFlow::Abrupt) => return None,
+                Some(RegisterFlow::Abrupt) => abrupt = true,
                 None => {
                     lowerer.restore(snapshot);
                     return None;
@@ -4654,6 +4874,15 @@ fn register_statement_stack_requirement(statement: &Stmt) -> usize {
                 )
                 .max(register_statement_stack_requirement(body))
         }
+        Stmt::Throw(value) => register_expression_stack_requirement(value),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => try_statements(body, catch.as_ref(), finally.as_ref())
+            .fold(1usize, |maximum, statement| {
+                maximum.max(register_statement_stack_requirement(statement))
+            }),
         _ => 1,
     }
 }

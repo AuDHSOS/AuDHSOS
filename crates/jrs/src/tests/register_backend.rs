@@ -2135,3 +2135,100 @@ fn register_loops_patch_break_and_continue_targets() -> Result<(), Error> {
     }
     Ok(())
 }
+
+fn differential(source: &str) -> Result<(), Error> {
+    let program = compile(source, Limits::default())?;
+    assert!(program.uses_register_backend(), "{source}");
+    let mut legacy = program.clone();
+    legacy.register_code = None;
+    let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost);
+    let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost);
+    match (&actual, &expected) {
+        (Ok(actual), Ok(expected)) => assert!(
+            same_value(actual, expected),
+            "{source}: {actual:?} != {expected:?}"
+        ),
+        (Err(Error::Thrown { value: actual }), Err(Error::Thrown { value: expected })) => {
+            assert!(
+                same_value(actual, expected),
+                "{source}: {actual:?} != {expected:?}"
+            );
+        }
+        _ => panic!("{source}: {actual:?} != {expected:?}"),
+    }
+    Ok(())
+}
+
+#[test]
+fn register_throw_leaves_the_script_with_the_thrown_value() -> Result<(), Error> {
+    for source in [
+        "throw 42",
+        "throw 'boom'",
+        "throw true",
+        "throw null",
+        "throw undefined",
+        "let x=41;throw x+1",
+        "if(true){throw 1}else{throw 2}",
+        "let i=0;while(true){i++;if(i===3)throw i}",
+        "1;throw 2;3",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn register_try_catch_transfers_the_thrown_value_to_the_parameter() -> Result<(), Error> {
+    for source in [
+        "try{throw 42}catch(e){e}",
+        "try{throw 'boom'}catch(e){e}",
+        "try{1}catch(e){2}",
+        "try{throw 1}catch(e){e+41}",
+        "let x=0;try{throw 2}catch(e){x=e}x",
+        "try{throw 1}catch{42}",
+        "try{try{throw 1}catch(e){throw e+1}}catch(e){e}",
+        "try{throw 1}catch(e){try{throw 2}catch(f){e+f}}",
+        "let s=0;for(let i=0;i<3;i++){try{if(i===1)throw i;s+=10}catch(e){s+=e}}s",
+        "let e=1;try{throw 2}catch(e){e}",
+        "let e=1;try{throw 2}catch(f){f}e",
+        "try{}catch(e){e}",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn register_try_catch_rethrows_when_the_handler_throws() -> Result<(), Error> {
+    for source in [
+        "try{throw 1}catch(e){throw e+1}",
+        "try{throw 'a'}catch(e){throw e}",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn register_lowering_rejects_exception_shapes_it_cannot_type() -> Result<(), Error> {
+    for source in [
+        // A finally Block is not lowered yet.
+        "try{1}finally{2}",
+        "try{throw 1}catch(e){e}finally{2}",
+        // A callee's thrown type is unknown inside a protected range.
+        "function f(){return 1}try{f()}catch(e){e}",
+        // A destructuring catch parameter is not lowered.
+        "try{throw [1]}catch([e]){e}",
+        // The thrown value must be representable at the legacy boundary.
+        "throw {}",
+        "throw [1]",
+        // The Block must not change a tracked binding type.
+        "let x=1;try{x='a'}catch(e){e}x",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    Ok(())
+}
