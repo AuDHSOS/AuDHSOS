@@ -1133,6 +1133,54 @@ wrote, which is what catalog 6.6.52 asks for in place of the ad-hoc check
 Tests: catalog 6.6.52. Coverage 94.7 percent of lines and 91.3 percent of
 branches.
 
+### 12.7.3 `fs-gpt`
+
+Implemented. The partition table that was in the xtask now lives here,
+over the same `BlockDevice` trait, for the reason 12.7.2 gives for the
+file system above it: a server that reads the boot volume has to find the
+partition before it can mount it, and a second implementation of the
+header would be a second place for an offset to be wrong. The crate reads
+and writes, so the offsets of UEFI 2.11, tables 5.3 to 5.6, exist once
+for both directions.
+
+It is the one layer-1 crate that depends on another. The trait is the
+contract a device offers, it is defined in `fs-fat`, and a crate of its
+own for it would move a public type out of that crate and the device half
+of its error with it — for one trait and two methods.
+
+Reading makes every check section 5.3.2 asks for: the signature, the
+header checksum over the size the header itself names with the checksum
+field read as zero, that the header lies in the block it names as its
+own, and the checksum of the entry array, which covers the count times
+the size and not the space left over in the last block. It makes one
+check more, the protective record, because a device whose first block is
+a legacy table is one whose partitions are described there, and a table
+behind such a record is what an older tool left standing. A primary that
+fails any of it sends the read to the last block, where the backup lies,
+and the error that comes back when the backup fails too is the primary's,
+because that is the table that was meant to be read.
+
+Writing goes down in the order a torn write survives: the protective
+record, both arrays, the backup header, the primary header. The format
+asks for the backup before the primary, which is the recovery it
+describes; the record goes before either, because a reader that finds no
+record reads no table at all, and a write cut short between them would
+leave a whole table nothing would look at.
+
+Two bounds are worth naming. A walk of the array carries the block it is
+inside, so walking every entry costs O(A) block reads in the blocks of
+the array rather than one read per entry. And entry sizes are the
+format's 128 times a power of two, narrowed to those that also divide a
+block, so that no entry straddles two of them; every writer uses 128.
+
+The xtask keeps what is the image's rather than the format's: where the
+partition begins, what it is called, and the identifiers that are fixed
+so that two runs produce the same bytes. Its own `gpt.rs` and `crc32.rs`
+are gone, and the bytes of the image did not change (D-138).
+
+Tests: catalog 6.6.72. Coverage 96.6 percent of lines and 93.6 percent of
+branches.
+
 ## 12.8 Track G: tooling
 
 ### 12.8.1 `fuzz-support`

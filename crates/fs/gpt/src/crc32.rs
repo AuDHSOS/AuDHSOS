@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! The CRC-32 the GUID partition table uses: the reflected IEEE
-//! polynomial, initial and final value `0xFFFF_FFFF`.
+//! The CRC-32 the GUID partition table is checked with: the reflected
+//! IEEE polynomial, initial and final value `0xFFFF_FFFF`.
+//!
+//! Two fields of the header carry one (UEFI 2.11, table 5.5), and the
+//! header is the only place either is kept, so a writer that changes an
+//! entry has to recompute both.
 
 #![expect(
     clippy::as_conversions,
@@ -13,7 +17,7 @@
 )]
 
 /// The reflected IEEE polynomial.
-pub(crate) const POLYNOMIAL: u32 = 0xEDB8_8320;
+pub const POLYNOMIAL: u32 = 0xEDB8_8320;
 
 /// The lookup table, one entry per byte value.
 const TABLE: [u32; 256] = build_table();
@@ -38,9 +42,10 @@ const fn build_table() -> [u32; 256] {
     table
 }
 
-/// A running checksum, so that a caller can feed a header in pieces.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Crc32 {
+/// A running checksum, so that an array of more sectors than fit in
+/// memory can be fed one sector at a time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Crc32 {
     value: u32,
 }
 
@@ -52,12 +57,13 @@ impl Default for Crc32 {
 
 impl Crc32 {
     /// A checksum over nothing.
-    pub(crate) const fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Crc32 {
         Crc32 { value: u32::MAX }
     }
 
     /// Adds `bytes` to the checksum.
-    pub(crate) fn update(&mut self, bytes: &[u8]) {
+    pub fn update(&mut self, bytes: &[u8]) {
         for byte in bytes {
             let index = usize::from(u8::try_from(self.value & 0xFF).unwrap_or(0) ^ *byte);
             let entry = TABLE.get(index).copied().unwrap_or(0);
@@ -66,13 +72,15 @@ impl Crc32 {
     }
 
     /// The checksum of everything added so far.
-    pub(crate) const fn finish(self) -> u32 {
+    #[must_use]
+    pub const fn finish(self) -> u32 {
         self.value ^ u32::MAX
     }
 }
 
 /// The checksum of `bytes`.
-pub(crate) fn crc32(bytes: &[u8]) -> u32 {
+#[must_use]
+pub fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = Crc32::new();
     crc.update(bytes);
     crc.finish()

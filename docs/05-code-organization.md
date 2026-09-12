@@ -47,7 +47,8 @@ AuDHSOS/
 │   ├── virtio/
 │   │   └── queue/             virtio-queue: split virtqueue and initialization logic (document 12)
 │   ├── fs/
-│   │   └── fat/               fs-fat: FAT32 over a block device trait (document 12)
+│   │   ├── fat/               fs-fat: FAT32 over a block device trait (document 12)
+│   │   └── gpt/               fs-gpt: GUID partition table over the same trait
 │   ├── boot/
 │   │   └── uefi-x86_64/       boot-uefi-x86_64: the loader (unsafe allowed)
 │   ├── kernel/
@@ -150,6 +151,7 @@ AuDHSOS/
 | `pci` | 1 | all | no | yes, fuzz | - (feature `test-doubles`); `test-support` as a dev-dependency |
 | `driver-virtio-net` (Phase 14) | 2 | all | no | yes, fuzz | `pci`, `virtio-queue` (feature `test-doubles`) |
 | `fs-fat` | 1 | all | no | yes | `audhsos-time`; `test-support` as a dev-dependency; feature `test-doubles` |
+| `fs-gpt` | 1 | all | no | yes | `fs-fat`, for the block device trait it reads through; `test-support` and `fs-fat` with `test-doubles` as dev-dependencies |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-objects` | 2 | all | no | yes | `kernel-types`, `kernel-mm`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-sched` | 2 | all | no | yes | `kernel-objects`, `audhsos-abi` |
@@ -196,7 +198,7 @@ AuDHSOS/
 | `net-stack` | n5 | all | no | yes | every `net-` crate, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
 | `fuzz-support` | dev | host | allowlisted | yes, and Miri over `counters` and `sancov`, which hold its `unsafe` | - |
-| `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `audhsos-symbols`, `audhsos-time`, `fs-fat`, `user-loader` |
+| `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `audhsos-symbols`, `audhsos-time`, `fs-fat`, `fs-gpt`, `user-loader` |
 | `doc-markdown` | host | host | no | yes | - |
 | `doc-html` | host | host | no | yes | `doc-markdown` |
 | `doc-pdf` | host | host | no | yes | `audhsos-deflate` |
@@ -268,10 +270,12 @@ remains separate. The independent fuzz target is `json_codec`.
     crates. Userland depends on them, not the reverse. `audhsos-tls` and
     the network crates never reference each other; the transport that
     joins them lives in a userland process.
-11. `audhsos-symbols`, `virtio-queue`, `fs-fat`, and `pci` are logic crates
-    at layer 1. They depend on layer-0 crates only — `pci` on nothing at
-    all — and are used by the xtask and, when the phases reach them, by
-    driver and server processes.
+11. `audhsos-symbols`, `virtio-queue`, `fs-fat`, `fs-gpt`, and `pci` are
+    logic crates at layer 1. They depend on layer-0 crates only — `pci` on
+    nothing at all — and are used by the xtask and, when the phases reach
+    them, by driver and server processes. `fs-gpt` is the one exception to
+    the layer-0 rule: it depends on `fs-fat`, which is layer 1, because the
+    block device trait it reads through is defined there (D-138).
 12. `driver-virtio-net` is a logic crate at layer 2, the one driver crate
     above layer 1, because it needs both `pci` and `virtio-queue`. It
     depends on those two and on nothing else, and on nothing of the
@@ -397,6 +401,7 @@ still has none.
 | Error mapping | one `From` implementation per crate pair, tested by a table |
 | Test doubles | one implementation in `kernel-hal-api` behind `test-doubles` |
 | FAT32 structures in the image writer and in a later file system server | `fs-fat` over a block device trait; the image writer of the xtask is its first user and a file system server will be the second |
+| Partition table structures and the CRC-32 they are checked with, in the image writer and in a later file system server | `fs-gpt` over the same trait; the xtask keeps the image's own choices and no structure of the format (D-138) |
 | Calendar arithmetic in certificate validity, file timestamps, and network timers | `audhsos-time`; every interface takes time as a parameter, no crate reads a clock |
 | Fixed-capacity containers in kernel queues, the network stack, and userland | `audhsos-collections`; one model-tested implementation per container |
 | Base64 and PEM in the trust-anchor tool and in generated test data | `audhsos-encoding` |

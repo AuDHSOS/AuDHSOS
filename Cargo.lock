@@ -311,6 +311,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs-gpt"
+version = "0.1.0"
+dependencies = [
+ "fs-fat",
+ "test-support",
+]
+
+[[package]]
 name = "fuzz-support"
 version = "0.1.0"
 
@@ -715,6 +723,7 @@ dependencies = [
  "audhsos-time",
  "driver-i8042",
  "fs-fat",
+ "fs-gpt",
  "gfx",
  "kernel-test-harness",
  "server-display",

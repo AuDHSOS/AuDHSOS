@@ -533,6 +533,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "fs-gpt",
+        path: "crates/fs/gpt",
+        kind: Kind::Logic,
+        deps: &["fs-fat", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "kernel-x86-tables",
         path: "crates/kernel/x86-tables",
         kind: Kind::Logic,
@@ -907,6 +915,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "audhsos-time",
             "driver-i8042",
             "fs-fat",
+            "fs-gpt",
             "gfx",
             "kernel-test-harness",
             "server-display",

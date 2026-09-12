@@ -470,9 +470,9 @@ each refused with the alert the standard names.
 
 ## 8.18 Later work, not scheduled
 
-virtio-blk driver and a file system server on top of the FAT32 logic of
-8.24, which Phase 13 brings within reach because the bus it needs is the
-one PCI gives it; certificate revocation checking; virtio-gpu;
+virtio-blk driver and a file system server on top of the FAT32 and
+partition table logic of 8.24, which Phase 13 brings within reach because
+the bus it needs is the one PCI gives it; certificate revocation checking; virtio-gpu;
 virtio-input or `usb-tablet` for absolute pointer coordinates; a
 compositor with several windows; the `aarch64` port under HVF without a
 loader; SMP with per-CPU run queues; hardware port permission bitmaps;
@@ -614,8 +614,9 @@ Status: implemented.
 |------|-------|------|-----------|
 | F1 | `virtio-queue` | M | implemented: the descriptor table, the two rings and the chain arithmetic over a memory access trait, with the free set in the queue's own memory rather than in the table the device can see; the initialization state machine with its two failure paths; no packed ring, no indirect descriptor and no `EVENT_IDX`, each refused by name at negotiation (D-52, D-99) |
 | F2 | `fs-fat` | M | implemented: the boot parameter block against FAT12 and FAT16, cluster chains with every walk bounded by the cluster count, allocation and release with the free count counted at mount, directories in 8.3 form, and file read and write over a cursor; the xtask image writer is a user of it and keeps no FAT32 structure of its own (D-53, D-107) |
+| F3 | `fs-gpt` | M | implemented: the protective record, both headers with the checksum rule of UEFI 2.11, table 5.5, the entry array and the walk of it, reading with the fallback to the backup the format prescribes, and writing in the order a torn write survives; the CRC-32 of the format lives here and the xtask keeps no partition table structure of its own (D-138) |
 
-Tests: catalog 6.6.51 and 6.6.52.
+Tests: catalog 6.6.51, 6.6.52 and 6.6.72.
 
 ## 8.25 Track G: tooling
 

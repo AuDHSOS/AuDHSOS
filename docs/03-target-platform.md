@@ -177,7 +177,9 @@ The loader is the crate `boot-uefi-x86_64`, built for the target
   type `0xEE` covering the whole disk, the primary GPT header in sector 1,
   the partition entry array in sectors 2 to 33, and the backup entry array
   and backup header at the end of the disk. Header and array carry CRC32
-  checksums computed by the xtask's own CRC32 implementation.
+  checksums. The structures and the checksum are `fs-gpt`'s; the xtask
+  keeps where the partition begins, what it is called, and the fixed
+  identifiers that make an image reproducible (D-138).
 - One partition with the EFI system partition type GUID
   `C12A7328-F81F-11D2-BA4B-00A0C93EC93B` and a fixed, project-defined unique
   partition GUID so that images are reproducible.

@@ -17,6 +17,7 @@ audhsos-symbols.workspace = true
 audhsos-time.workspace = true
 driver-i8042.workspace = true
 fs-fat.workspace = true
+fs-gpt.workspace = true
 gfx.workspace = true
 kernel-test-harness.workspace = true
 server-display.workspace = true

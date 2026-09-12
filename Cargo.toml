@@ -50,6 +50,7 @@ members = [
     "crates/pci",
     "crates/virtio/queue",
     "crates/fs/fat",
+    "crates/fs/gpt",
     "crates/user/apps/canvas",
     "crates/user/loader",
     "crates/user/programs",
@@ -142,6 +143,7 @@ driver-i8042 = { path = "crates/drivers/i8042" }
 pci = { path = "crates/pci" }
 virtio-queue = { path = "crates/virtio/queue" }
 fs-fat = { path = "crates/fs/fat" }
+fs-gpt = { path = "crates/fs/gpt" }
 server-console = { path = "crates/user/servers/console" }
 app-canvas = { path = "crates/user/apps/canvas" }
 server-display = { path = "crates/user/servers/display" }

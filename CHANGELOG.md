@@ -7,6 +7,21 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `fs-gpt`, the GUID partition table as structures over the block device
+  trait `fs-fat` defines: the protective record, both headers with their
+  checksums, the entry array, and the CRC-32 the format is checked with.
+  The reason is the reason D-53 gave for `fs-fat`: a file system server
+  that reads the boot volume has to find the partition before it can
+  mount it, and a second implementation of the header would be a second
+  place for an offset to be wrong. Reading checks everything UEFI 2.11,
+  section 5.3.2 asks for and falls back to the backup in the last block
+  when the primary is torn; writing lays the protective record down
+  first, then both arrays, then the backup header, then the primary, so
+  that a write cut short leaves a table that reads. The xtask image
+  writer is a user of it and keeps no structure of the format — its own
+  `gpt.rs` and `crc32.rs` are gone — and the bytes of the image did not
+  change. D-138, catalog 6.6.72.
+
 - A wall clock. The loader calls `EFI_RUNTIME_SERVICES.GetTime` once,
   before it leaves the boot services, and the moment travels to the kernel
   in the boot information; `clock_wall`, system call 51, answers it as

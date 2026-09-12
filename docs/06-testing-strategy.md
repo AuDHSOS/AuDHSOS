@@ -491,17 +491,14 @@ done until every applicable item has a test. Items are added, never removed.
 
 ### 6.6.15 Disk image writer (`xtask`)
 
-- CRC32: the standard check value for the string `123456789`; empty input;
-  a single byte; inputs crossing internal block boundaries.
-- Protective MBR: signature bytes, one entry of type `0xEE` starting at
-  sector 1 and covering the disk (capped at the maximum representable
-  size).
 - GPT: primary header at sector 1 and backup header at the last sector
   reference each other; header CRC32 and partition array CRC32 verify after
   writing; partition array has 128 entries of 128 bytes with exactly one in
   use; the entry carries the EFI system partition type GUID and the fixed
   unique GUID; first and last usable sector enclose the partition; a disk
-  too small for the GPT structures is rejected.
+  too small for the GPT structures is rejected. The structures themselves
+  are `fs-gpt`'s and 6.6.72 tests them; what is tested here is the image
+  the xtask makes of them.
 - FAT32: cluster count below 65525 is rejected; boot sector fields (bytes
   per sector, sectors per cluster, reserved sectors, number of FATs, FAT
   size, root cluster, FSInfo sector, backup boot sector); FSInfo free count
@@ -2703,6 +2700,53 @@ date reaches ring three.
   A clock that read nothing usable fails naming `GetTime`, because that
   is the one part of this no host test can reach.
 
+### 6.6.72 Partition table structures (`fs-gpt`)
+
+D-138. The structures are UEFI 2.11, sections 5.2.3 and 5.3, and every
+offset is tested against that table.
+
+- CRC-32: the standard check value for the string `123456789`; empty
+  input; a single byte; the same bytes fed in one piece and in two, split
+  at both ends and across a block; a single bit changes it.
+- Protective record: the signature bytes, one record of type `0xEE`
+  starting at block 1 and covering the device, the size capped at the
+  largest a thirty-two-bit field carries, the rest of the block zero. It
+  is read back as protective; a zeroed block, one without the signature,
+  and one carrying a legacy partition type are not; the type is looked for
+  in all four records.
+- Header: written and parsed back whole; the checksum covers the header
+  with its own field read as zero; a torn byte is refused; a signature or
+  a revision the format does not have; a size below 92 and one above the
+  block, and both bounds accepted; a header read from a block other than
+  the one it names; an entry size that is not 128 times a power of two or
+  that would straddle a block, and 128, 256 and 512 accepted with the
+  count that keeps the array the same length; an empty usable range; an
+  array that runs off the device, into the usable range, or is empty, and
+  a length that overflows; the blocks an array takes when it does not fill
+  its last one.
+- Table: written onto a device and read back, with the header fields, the
+  entry, and its unique identifier as they were written; the backup names
+  the primary and lies in the last block; a torn primary header sends the
+  read to the backup, a torn array does the same, and both torn report
+  what the primary refused; a device partitioned the legacy way; a device
+  below the blocks a table needs, and the smallest one that holds it; a
+  walk that finds nothing; eight partitions walked in order; an entry
+  outside the usable range; a header naming a block the device does not
+  have; a device that refuses a block on read and one that refuses a
+  write; more entries than the array holds; a partition below the first
+  usable block and one above the last; two partitions that touch; an
+  unused entry among the written ones; and that a write cut short at the
+  primary header leaves a backup that reads.
+- Entry: written and parsed back; a name of every code unit it holds and
+  one more; a name outside the basic plane, which costs two units per code
+  point; a partition that ends before it begins; an entry of no type; a
+  slice too short for a field, which takes none of it; the blocks a
+  partition covers.
+- Properties: a partition written onto a device of any size between the
+  smallest and eight thousand blocks reads back as the partition it was;
+  and any single bit flipped anywhere in the first two thousand blocks of
+  a table leaves a read that refuses, that recovers, or that answers the
+  partition that was written — never a different one.
 
 ## 6.7 CI pipeline
 
