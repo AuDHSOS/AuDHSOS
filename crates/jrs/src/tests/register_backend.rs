@@ -2329,3 +2329,48 @@ fn register_lowering_rejects_case_blocks_with_lexical_declarations() -> Result<(
     }
     Ok(())
 }
+
+#[test]
+fn register_for_in_walks_own_keys_before_the_prototype_chain() -> Result<(), Error> {
+    for source in [
+        "let s='';for(const k in {a:1,b:2}){s+=k}s",
+        "let s='';for(let k in {a:1,b:2,c:3}){s+=k}s",
+        "let s='';for(const k in {}){s+=k}s",
+        "let n=0;for(const k in {a:1,b:2}){n++}n",
+        "let s='';for(const k in [10,20,30]){s+=k}s",
+        "let s='';for(const k in {2:'c',1:'b',0:'a'}){s+=k}s",
+        "let s='';for(const k in {b:1,a:2,1:3,0:4}){s+=k}s",
+        "let s='';for(const k in {a:1,b:2}){if(k==='a')continue;s+=k}s",
+        "let s='';for(const k in {a:1,b:2}){s+=k;break}s",
+        "let s='';for(const k in {a:1}){for(const j in {b:2}){s+=k+j}}s",
+        "for(const k in {a:1}){k}",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error> {
+    for source in [
+        // A `var` head shares one function-scoped binding.
+        "for(var k in {a:1}){}",
+        // An assignment head writes an existing reference.
+        "let k;for(k in {a:1}){}",
+        // A destructuring head is not lowered.
+        "for(const [k] in {a:1}){}",
+        // ToObject on a primitive is not lowered.
+        "for(const k in 'ab'){}",
+        "for(const k in null){}",
+        // A captured per-iteration binding needs a context of its own.
+        "for(const k in {a:1}){(()=>k)}",
+        // for-of still needs the iterator protocol.
+        "for(const k of [1]){}",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    Ok(())
+}

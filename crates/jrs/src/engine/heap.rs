@@ -178,6 +178,31 @@ impl OldGeneration {
     }
 }
 
+/// UTF-16 code units of the property name `"length"`.
+const LENGTH_UNITS: [u16; 6] = [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68];
+
+/// The array index a property key denotes, per the canonical numeric String
+/// rule of 6.1.7: only the shortest decimal form below 2^32 - 1 is an index.
+#[must_use]
+fn canonical_array_index(units: &[u16]) -> Option<u32> {
+    let digit = |unit: u16| {
+        (0x30..=0x39)
+            .contains(&unit)
+            .then(|| unit.wrapping_sub(0x30))
+    };
+    let (first, rest) = units.split_first()?;
+    if digit(*first).is_none() || (*first == 0x30 && !rest.is_empty()) || units.len() > 10 {
+        return None;
+    }
+    let mut value: u32 = 0;
+    for unit in units {
+        value = value
+            .checked_mul(10)?
+            .checked_add(u32::from(digit(*unit)?))?;
+    }
+    (value != u32::MAX).then_some(value)
+}
+
 /// Stable index into the heap's native root stack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Root(u32);
@@ -580,6 +605,127 @@ impl GenerationalHeap {
         self.object_mut(reference)?.prototype = prototype;
         self.shapes.invalidate_prototypes();
         Ok(())
+    }
+
+    /// Own property keys in the order of 10.1.11.1 `OrdinaryOwnPropertyKeys`:
+    /// array indices in ascending numeric order, then the remaining String keys
+    /// in property creation order. Each key carries whether it is enumerable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale reference, or a
+    /// string error when an index key cannot be interned.
+    pub fn own_keys(&mut self, reference: ObjectRef) -> Result<Vec<(StringRef, bool)>, HeapError> {
+        let object = self
+            .get_object(reference)
+            .ok_or(HeapError::InvalidReference)?;
+        let shape_id = object.shape_id;
+        let elements = object.elements;
+        let array_length = match object.kind {
+            ObjectKind::Array { length } => Some(length),
+            _ => None,
+        };
+        let mut indices: Vec<u32> = match elements {
+            Some(elements) => self
+                .get_elements(elements)
+                .ok_or(HeapError::InvalidReference)?
+                .indices(),
+            None => Vec::new(),
+        };
+        let mut named = Vec::new();
+        for (name, flags, _) in self.shapes.own_properties(shape_id) {
+            match self.array_index_of(name)? {
+                Some(index) => indices.push(index),
+                None => named.push((name, flags.enumerable)),
+            }
+        }
+        indices.sort_unstable();
+        indices.dedup();
+        let mut keys = Vec::with_capacity(indices.len().saturating_add(named.len()));
+        for index in indices {
+            keys.push((self.intern_index(index)?, true));
+        }
+        keys.extend(named);
+        if array_length.is_some() {
+            // 23.1.4: an Array's "length" is an own non-enumerable property, so
+            // it shadows an inherited one without being visited.
+            keys.push((self.strings.intern_units(&LENGTH_UNITS)?, false));
+        }
+        Ok(keys)
+    }
+
+    /// Attributes of one own property, without walking the Prototype Chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] for a stale reference.
+    pub fn own_named_flags(
+        &self,
+        reference: ObjectRef,
+        name: StringRef,
+    ) -> Result<Option<PropertyFlags>, HeapError> {
+        let object = self
+            .get_object(reference)
+            .ok_or(HeapError::InvalidReference)?;
+        if let Some(location) = self.shapes.lookup(object.shape_id, name) {
+            return Ok(Some(location.flags));
+        }
+        if let Some(index) = self.array_index_of(name)?
+            && let Some(elements) = object.elements
+            && self
+                .get_elements(elements)
+                .ok_or(HeapError::InvalidReference)?
+                .get(index)
+                .is_some()
+        {
+            return Ok(Some(PropertyFlags::ordinary_data()));
+        }
+        let units = self
+            .strings
+            .to_utf16(Value::from_string(name))
+            .ok_or(HeapError::InvalidReference)?;
+        if matches!(object.kind, ObjectKind::Array { .. }) && units == LENGTH_UNITS {
+            return Ok(Some(PropertyFlags {
+                writable: true,
+                enumerable: false,
+                configurable: false,
+                is_accessor: false,
+            }));
+        }
+        Ok(None)
+    }
+
+    /// The canonical array index a property key denotes, if it denotes one.
+    fn array_index_of(&self, name: StringRef) -> Result<Option<u32>, HeapError> {
+        let units = self
+            .strings
+            .to_utf16(Value::from_string(name))
+            .ok_or(HeapError::InvalidReference)?;
+        Ok(canonical_array_index(&units))
+    }
+
+    fn intern_index(&mut self, index: u32) -> Result<StringRef, HeapError> {
+        let mut digits = [0u16; 10];
+        let mut written = 0;
+        let mut value = index;
+        loop {
+            let digit = u16::try_from(value % 10).unwrap_or(0);
+            *digits.get_mut(written).ok_or(HeapError::InvalidReference)? =
+                digit.saturating_add(0x30);
+            written = written.saturating_add(1);
+            value /= 10;
+            if value == 0 {
+                break;
+            }
+        }
+        let units: Vec<u16> = digits
+            .get(..written)
+            .ok_or(HeapError::InvalidReference)?
+            .iter()
+            .rev()
+            .copied()
+            .collect();
+        Ok(self.strings.intern_units(&units)?)
     }
 
     /// Resolves a named property through the Prototype Chain.

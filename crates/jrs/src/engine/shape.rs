@@ -176,6 +176,27 @@ impl ShapeTable {
         }
     }
 
+    /// Own properties of one shape in property creation order.
+    ///
+    /// The transition chain records the newest property first, so the walk is
+    /// reversed to give the order 10.1.11.1 requires for String keys.
+    #[must_use]
+    pub fn own_properties(&self, shape_id: ShapeId) -> Vec<(StringRef, PropertyFlags, u32)> {
+        let mut properties = Vec::new();
+        let mut current = shape_id;
+        while let Some(shape) = self.shapes.get(current.0 as usize) {
+            if let Some(name) = shape.property_name {
+                properties.push((name, shape.flags, shape.slot_offset));
+            }
+            match shape.parent {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+        properties.reverse();
+        properties
+    }
+
     /// Returns the property count for a given shape.
     #[must_use]
     pub fn property_count(&self, shape_id: ShapeId) -> u32 {

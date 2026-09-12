@@ -2592,6 +2592,17 @@ impl RegisterLowerer {
                 finally,
             } => self.lower_try(body, catch.as_ref(), finally.as_deref())?,
             Stmt::Switch(discriminant, clauses) => self.lower_switch(discriminant, clauses)?,
+            Stmt::ForIn {
+                binding,
+                target,
+                object,
+                body,
+            } => RegisterFlow::Value(self.lower_for_in(
+                binding.as_ref(),
+                target.as_ref(),
+                object,
+                body,
+            )?),
             Stmt::Empty => RegisterFlow::Empty,
             _ => return None,
         };
@@ -3313,6 +3324,152 @@ impl RegisterLowerer {
         })
     }
 
+    /// Lowers `for (ForDeclaration in Expression) Statement` of 14.7.5.
+    ///
+    /// The enumeration keeps its state in four consecutive registers that
+    /// `ForInNext` advances: the object of the current Prototype Chain level,
+    /// that level's own-key Array, the index reached in it, and the object
+    /// recording the keys already visited.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function keeps the enumeration window and the loop together"
+    )]
+    fn lower_for_in(
+        &mut self,
+        binding: Option<&(BindingPattern, Option<bool>)>,
+        target: Option<&parser::AssignmentTarget>,
+        object: &Expr,
+        body: &Stmt,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        if target.is_some() {
+            return None;
+        }
+        // A `var` head shares one function-scoped binding whose inferred type
+        // the loop would have to widen; only a lexical head is lowered.
+        let (pattern, Some(mutable)) = binding? else {
+            return None;
+        };
+        let name = pattern.identifier()?;
+        if self.bindings.contains_key(name) {
+            return None;
+        }
+        // A per-iteration binding captured by a closure needs a fresh context
+        // for every key, which this lowering does not create.
+        let mut direct = BTreeSet::new();
+        let mut nested = BTreeSet::new();
+        register_statement_references(body, &mut direct, &mut nested)?;
+        if nested.contains(name) {
+            return None;
+        }
+        // ToObject on a primitive is not lowered, and neither is the empty
+        // enumeration of null or undefined.
+        let object_type = self.lower(object)?;
+        if !object_type.is_object() {
+            return None;
+        }
+
+        let state = self.allocate_register()?;
+        self.code.emit(Instruction::Star(state));
+        let keys = self.allocate_register()?;
+        self.code.emit(Instruction::LdaUndefined);
+        self.code.emit(Instruction::Star(keys));
+        let index = self.allocate_register()?;
+        self.code.emit(Instruction::LdaSmi(0));
+        self.code.emit(Instruction::Star(index));
+        let visited = self.allocate_register()?;
+        self.code.emit(Instruction::CreateObject);
+        self.code.emit(Instruction::Star(visited));
+        if keys.0 != state.0.checked_add(1)?
+            || index.0 != state.0.checked_add(2)?
+            || visited.0 != state.0.checked_add(3)?
+        {
+            return None;
+        }
+
+        self.code.emit(Instruction::LdaUndefined);
+        let result_register = self.allocate_register()?;
+        self.code.emit(Instruction::Star(result_register));
+
+        let key_register = self.allocate_register()?;
+        self.active_binding_count = self.active_binding_count.checked_add(1)?;
+        self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+        self.bindings.insert(
+            String::from(name),
+            RegisterBinding {
+                storage: RegisterBindingStorage::Register(key_register),
+                value_type: Some(RegisterType::String),
+                mutable: *mutable,
+                stable_function_identity: false,
+            },
+        );
+
+        let mut bindings_at_head = self.bindings.clone();
+        infer_register_var_types_to_fixed_point(body, &mut bindings_at_head)?;
+        self.bindings = bindings_at_head.clone();
+        let head = self.code.instructions.len();
+        self.code.emit(Instruction::ForInNext { state });
+        let enter = self.code.emit(Instruction::JumpIfNotUndefined(0));
+        let exit = self.code.emit(Instruction::Jump(0));
+        let body_start = self.code.instructions.len();
+        self.code.emit(Instruction::Star(key_register));
+        self.code.emit(Instruction::Ldar(result_register));
+        self.loops.push(RegisterLoop {
+            is_switch: false,
+            breaks: Vec::new(),
+            continues: Vec::new(),
+            result_register,
+            bindings: bindings_at_head.clone(),
+            completion_depth: self.completions.len(),
+            object_layouts: bindings_at_head
+                .values()
+                .filter_map(|binding| match binding.value_type {
+                    Some(RegisterType::Object(id) | RegisterType::Array(id)) => self
+                        .object_layouts
+                        .get(&id)
+                        .cloned()
+                        .map(|layout| (id, layout)),
+                    _ => None,
+                })
+                .collect(),
+        });
+        let flow = self.lower_statement(body)?;
+        let loop_state = self.loops.pop()?;
+        if flow != RegisterFlow::Abrupt {
+            if !register_bindings_fit(&self.bindings, &bindings_at_head)
+                || !self.loop_layouts_match(&loop_state.object_layouts)
+            {
+                return None;
+            }
+            self.code.emit(Instruction::Star(result_register));
+        }
+        let back_edge = self.code.emit(Instruction::Jump(0));
+        let done = self.code.instructions.len();
+        self.code.emit(Instruction::Ldar(result_register));
+        self.patch_jump(enter, body_start)?;
+        self.patch_jump(exit, done)?;
+        self.patch_jump(back_edge, head)?;
+        for jump in loop_state.breaks {
+            self.patch_jump(jump, done)?;
+        }
+        for jump in loop_state.continues {
+            self.patch_jump(jump, head)?;
+        }
+        self.bindings = bindings_at_head;
+        self.bindings.remove(name)?;
+        self.active_binding_count = self.active_binding_count.checked_sub(1)?;
+        self.release_register(key_register)?;
+        self.release_register(result_register)?;
+        self.release_register(visited)?;
+        self.release_register(index)?;
+        self.release_register(keys)?;
+        self.release_register(state)?;
+        Some(match flow {
+            RegisterFlow::Value(value_type) => RegisterType::Undefined.merge(value_type),
+            RegisterFlow::Empty | RegisterFlow::Abrupt => RegisterType::Undefined,
+        })
+    }
+
     fn lower_if(
         &mut self,
         condition: &Expr,
@@ -3964,6 +4121,12 @@ fn register_statement_var_names(
                 register_statement_var_names(statement, names, initialized_only)?;
             }
         }
+        Stmt::ForIn { binding, body, .. } => {
+            if binding.as_ref().is_some_and(|(_, kind)| kind.is_none()) {
+                return None;
+            }
+            register_statement_var_names(body, names, initialized_only)?;
+        }
         Stmt::Empty
         | Stmt::Expr(_)
         | Stmt::Declare(_)
@@ -3972,7 +4135,7 @@ fn register_statement_var_names(
         | Stmt::Throw(_)
         | Stmt::Break
         | Stmt::Continue => {}
-        Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
+        Stmt::ForOf { .. } => return None,
     }
     Some(())
 }
@@ -4014,6 +4177,7 @@ fn register_statement_transfers_control(statement: &Stmt) -> bool {
             .iter()
             .flat_map(|(_, body)| body)
             .any(register_statement_transfers_control),
+        Stmt::ForIn { body, .. } => register_statement_transfers_control(body),
         _ => false,
     }
 }
@@ -4049,7 +4213,7 @@ fn infer_register_var_types(
                 infer_register_var_types(no, bindings)?;
             }
         }
-        Stmt::While(_, body) | Stmt::DoWhile(body, _) => {
+        Stmt::While(_, body) | Stmt::DoWhile(body, _) | Stmt::ForIn { body, .. } => {
             infer_register_var_types(body, bindings)?;
         }
         Stmt::For(initializer, _, _, body) => {
@@ -4078,7 +4242,7 @@ fn infer_register_var_types(
         | Stmt::Throw(_)
         | Stmt::Break
         | Stmt::Continue => {}
-        Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
+        Stmt::ForOf { .. } => return None,
     }
     Some(())
 }
@@ -4183,6 +4347,20 @@ fn register_statement_writes_names(statement: &Stmt, names: &BTreeSet<String>) -
         }
         Stmt::Function(_, function) => register_function_writes_names(function, names)?,
         Stmt::Throw(value) => register_expression_writes_names(value, names)?,
+        Stmt::Try { .. } | Stmt::Switch(_, _) | Stmt::ForIn { .. } => {
+            register_scoped_statement_writes_names(statement, names)?
+        }
+        Stmt::Empty | Stmt::Return(None) | Stmt::Break | Stmt::Continue => false,
+        Stmt::ForOf { .. } => return None,
+    })
+}
+
+/// Whether one of the statements that own a scope writes any of `names`.
+fn register_scoped_statement_writes_names(
+    statement: &Stmt,
+    names: &BTreeSet<String>,
+) -> Option<bool> {
+    Some(match statement {
         Stmt::Try {
             body,
             catch,
@@ -4206,8 +4384,19 @@ fn register_statement_writes_names(statement: &Stmt, names: &BTreeSet<String>) -
             }
             writes
         }
-        Stmt::Empty | Stmt::Return(None) | Stmt::Break | Stmt::Continue => false,
-        Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
+        Stmt::ForIn {
+            target,
+            object,
+            body,
+            ..
+        } => {
+            if target.is_some() {
+                return None;
+            }
+            register_expression_writes_names(object, names)?
+                || register_statement_writes_names(body, names)?
+        }
+        _ => return None,
     })
 }
 
@@ -4693,6 +4882,22 @@ fn register_statement_references(
                 register_scoped_block_references(body, &BTreeSet::new(), names, nested_free_names)?;
             }
         }
+        Stmt::Switch(_, _) | Stmt::ForIn { .. } => {
+            register_scoped_statement_references(statement, names, nested_free_names)?;
+        }
+        Stmt::Empty | Stmt::Break | Stmt::Continue => {}
+        Stmt::ForOf { .. } => return None,
+    }
+    Some(())
+}
+
+/// Collects the free names of the two statements whose head owns a scope.
+fn register_scoped_statement_references(
+    statement: &Stmt,
+    names: &mut BTreeSet<String>,
+    nested_free_names: &mut BTreeSet<String>,
+) -> Option<()> {
+    match statement {
         Stmt::Switch(discriminant, clauses) => {
             // 14.12: one CaseBlock is a single Block scope over every clause.
             register_expression_references(discriminant, names, nested_free_names)?;
@@ -4704,8 +4909,30 @@ fn register_statement_references(
             let body: Vec<&Stmt> = clauses.iter().flat_map(|(_, body)| body).collect();
             register_scoped_clause_references(&body, names, nested_free_names)?;
         }
-        Stmt::Empty | Stmt::Break | Stmt::Continue => {}
-        Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
+        Stmt::ForIn {
+            binding,
+            target,
+            object,
+            body,
+        } => {
+            if target.is_some() {
+                return None;
+            }
+            // 14.7.5.4: the head's declaration binds only in the loop.
+            register_expression_references(object, names, nested_free_names)?;
+            let mut bound = BTreeSet::new();
+            if let Some((pattern, _)) = binding {
+                let mut declared = Vec::new();
+                pattern.names(&mut declared);
+                bound.extend(declared);
+            }
+            let mut direct = BTreeSet::new();
+            let mut nested = BTreeSet::new();
+            register_statement_references(body, &mut direct, &mut nested)?;
+            names.extend(direct.difference(&bound).cloned());
+            nested_free_names.extend(nested.difference(&bound).cloned());
+        }
+        _ => return None,
     }
     Some(())
 }
@@ -4801,6 +5028,7 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
             | Stmt::Throw(_)
             | Stmt::Try { .. }
             | Stmt::Switch(_, _)
+            | Stmt::ForIn { .. }
             | Stmt::For(_, _, _, _) => saw_expression = true,
             Stmt::Empty => {}
             _ => return None,
@@ -4819,6 +5047,7 @@ fn register_statement_has_lexical_block(statement: &Stmt) -> bool {
         Stmt::Switch(_, clauses) => clauses
             .iter()
             .any(|(_, body)| register_body_has_lexical_block(body)),
+        Stmt::ForIn { body, .. } => register_statement_has_lexical_block(body),
         Stmt::Try {
             body,
             catch,
@@ -4852,7 +5081,6 @@ fn register_statement_has_lexical_block(statement: &Stmt) -> bool {
         | Stmt::Return(_)
         | Stmt::Break
         | Stmt::Continue
-        | Stmt::ForIn { .. }
         | Stmt::ForOf { .. }
         | Stmt::Throw(_) => false,
     }
@@ -5195,6 +5423,8 @@ fn register_statement_stack_requirement(statement: &Stmt) -> usize {
                 .max(register_statement_stack_requirement(body))
         }
         Stmt::Throw(value) => register_expression_stack_requirement(value),
+        Stmt::ForIn { object, body, .. } => register_expression_stack_requirement(object)
+            .max(register_statement_stack_requirement(body)),
         Stmt::Switch(discriminant, clauses) => clauses.iter().fold(
             register_expression_stack_requirement(discriminant),
             |maximum, (test, body)| {

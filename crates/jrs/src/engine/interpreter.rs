@@ -576,6 +576,90 @@ impl RegisterVM {
         Ok(value.to_boolean())
     }
 
+    /// Produces the next key of a for-in enumeration, or undefined when the
+    /// Prototype Chain is spent (14.7.5.9).
+    ///
+    /// The four registers at `state` hold the object currently enumerated, that
+    /// level's own-key Array, the index reached in it, and the object recording
+    /// the keys already visited. An own key is recorded as visited even when it
+    /// is not enumerable, so that it shadows the same key on a prototype, and
+    /// the attributes are read again at this point, so that a property deleted
+    /// during the enumeration is not visited.
+    fn for_in_next(
+        &mut self,
+        code: &BytecodeFunction,
+        state: Reg,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let object_slot = state;
+        let keys_slot = Reg(state.0.checked_add(1).ok_or(VMError::InvalidRegister)?);
+        let index_slot = Reg(state.0.checked_add(2).ok_or(VMError::InvalidRegister)?);
+        let visited_slot = Reg(state.0.checked_add(3).ok_or(VMError::InvalidRegister)?);
+        loop {
+            let Some(object) = self.read_reg(object_slot)?.as_object() else {
+                return Ok(VALUE_UNDEFINED);
+            };
+            let keys = if let Some(keys) = self.read_reg(keys_slot)?.as_object() {
+                keys
+            } else {
+                let own = heap.own_keys(object)?;
+                let length = u32::try_from(own.len()).map_err(|_| VMError::PropertyLimit)?;
+                let keys = self.allocate_array(code, heap, realm, length)?;
+                for (index, (name, _)) in own.into_iter().enumerate() {
+                    let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+                    heap.set_array_element(keys, index, Value::from_string(name))?;
+                }
+                self.write_reg(keys_slot, Value::from_object(keys))?;
+                self.write_reg(index_slot, Value::from_smi(0))?;
+                keys
+            };
+            let length = heap.array_length(keys).ok_or(VMError::TypeError)?;
+            loop {
+                let index = self
+                    .read_reg(index_slot)?
+                    .as_smi()
+                    .ok_or(VMError::TypeError)?;
+                let index = u32::try_from(index).map_err(|_| VMError::TypeError)?;
+                if index >= length {
+                    break;
+                }
+                self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                self.write_reg(
+                    index_slot,
+                    Value::from_smi(i32::try_from(index.saturating_add(1)).unwrap_or(i32::MAX)),
+                )?;
+                let elements = heap.get_object(keys).ok_or(VMError::TypeError)?.elements;
+                let key = elements
+                    .and_then(|elements| heap.get_elements(elements))
+                    .and_then(|elements| elements.get(index))
+                    .ok_or(VMError::TypeError)?;
+                let name = key.as_heap_string().ok_or(VMError::TypeError)?;
+                let visited = self
+                    .read_reg(visited_slot)?
+                    .as_object()
+                    .ok_or(VMError::TypeError)?;
+                let visited_shape = heap.get_object(visited).ok_or(VMError::TypeError)?.shape_id;
+                if heap.shapes.lookup(visited_shape, name).is_some() {
+                    continue;
+                }
+                let Some(flags) = heap.own_named_flags(object, name)? else {
+                    continue;
+                };
+                if heap.own_property_count(visited).unwrap_or(usize::MAX) >= self.property_limit {
+                    return Err(VMError::PropertyLimit);
+                }
+                heap.define_own_named(visited, name, VALUE_TRUE, PropertyFlags::ordinary_data())?;
+                if flags.enumerable {
+                    return Ok(key);
+                }
+            }
+            let prototype = heap.get_object(object).ok_or(VMError::TypeError)?.prototype;
+            self.write_reg(object_slot, prototype)?;
+            self.write_reg(keys_slot, VALUE_UNDEFINED)?;
+        }
+    }
+
     /// Transfers control to the innermost handler protecting the throwing
     /// instruction, unwinding call frames until one is found (14.15).
     ///
@@ -1354,6 +1438,9 @@ impl RegisterVM {
                     };
                     pc = 0;
                     self.acc = VALUE_UNDEFINED;
+                }
+                Instruction::ForInNext { state } => {
+                    self.acc = self.for_in_next(active_code, state, heap, realm)?;
                 }
                 Instruction::Throw => {
                     let thrown = self.acc;

@@ -325,6 +325,16 @@ pub enum Instruction {
         /// Feedback vector slot for call target caching.
         slot: u16,
     },
+    /// Advances a for-in enumeration (14.7.5.9).
+    ///
+    /// `state` names the first of four consecutive registers holding the object
+    /// currently enumerated, that level's own-key Array, the index reached in
+    /// it, and the object recording the keys already visited. The accumulator
+    /// receives the next key, or undefined when the Prototype Chain is spent.
+    ForInNext {
+        /// First register of the four-register enumeration window.
+        state: Reg,
+    },
     /// Throws `acc` as an exception (14.14.1).
     Throw,
     /// Return `acc` to caller.
@@ -659,6 +669,18 @@ impl BytecodeFunction {
             | Instruction::CreateArray(_)
             | Instruction::Throw
             | Instruction::Return => None,
+            Instruction::ForInNext { state } => {
+                for offset in 0..4 {
+                    let register = state.0.checked_add(offset).ok_or(
+                        VerificationError::RegisterOutOfBounds {
+                            pc,
+                            register: state,
+                        },
+                    )?;
+                    self.verify_register(pc, Reg(register))?;
+                }
+                None
+            }
         };
         if let Some(register) = register {
             self.verify_register(pc, register)?;

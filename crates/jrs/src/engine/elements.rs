@@ -133,6 +133,35 @@ impl ElementsKind {
         }
     }
 
+    /// Present indices in ascending order, skipping holes.
+    #[must_use]
+    pub fn indices(&self) -> Vec<u32> {
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_possible_truncation,
+            reason = "an elements index is bounded by the array index space"
+        )]
+        let present = |length: usize| (0..length).map(|index| index as u32);
+        match self {
+            Self::PackedSmi(values) => present(values.len()).collect(),
+            Self::PackedDouble(values) => present(values.len()).collect(),
+            Self::PackedValues(values) => present(values.len()).collect(),
+            Self::Holey(values) => values
+                .iter()
+                .enumerate()
+                .filter_map(|(index, value)| {
+                    #[expect(
+                        clippy::as_conversions,
+                        clippy::cast_possible_truncation,
+                        reason = "an elements index is bounded by the array index space"
+                    )]
+                    value.map(|_| index as u32)
+                })
+                .collect(),
+            Self::Dictionary(values) => values.keys().copied().collect(),
+        }
+    }
+
     /// Reads the element at index `idx`.
     #[must_use]
     pub fn get(&self, idx: u32) -> Option<Value> {
