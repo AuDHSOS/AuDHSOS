@@ -574,18 +574,17 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 
 ### Current Test262 result
 
-The current implementation measurement was run on 2026-09-12 against jrs
-implementation commit `867cc169f02f9bd60639216a396a0c94ddc3871a` and Test262
-revision `419d3e0a2273ba01a3bfcbec423f2801425b8e93`. The checkout was clean at
-that pinned revision. Both runs used the original Test262 harness, fresh realms,
-no expected-failure masks or feature exclusions, and a limit of 1,000,000 fuel
+The latest measurements were run on 2026-09-12 against Test262 revision
+`419d3e0a2273ba01a3bfcbec423f2801425b8e93`. The checkout was clean at that
+pinned revision. Both runs used the original Test262 harness, fresh realms, no
+expected-failure masks or feature exclusions, and a limit of 1,000,000 fuel
 units per realm. A failed or unsupported variant is not counted as passing, so
 both commands correctly returned failure.
 
-| Scope | Command | Files | Variants | Passed | Failed | Unsupported |
-|---|---|---:|---:|---:|---:|---:|
-| Destructuring assignment (focused) | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr --summary` | 368 | 640 | 446 (69.69%) | 0 (0.00%) | 194 (30.31%) |
-| Complete pinned suite, including staging and Intl | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,399 (34.39%) | 30,724 (29.85%) | 36,802 (35.76%) |
+| Scope | Implementation commit | Command | Files | Variants | Passed | Failed | Unsupported |
+|---|---|---|---:|---:|---:|---:|---:|
+| Destructuring assignment (focused) | `1f7f4879f91186dffda86812e366151a6446bcc7` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr --summary` | 368 | 640 | 446 (69.69%) | 0 (0.00%) | 194 (30.31%) |
+| Complete pinned suite, including staging and Intl | `867cc169f02f9bd60639216a396a0c94ddc3871a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,399 (34.39%) | 30,724 (29.85%) | 36,802 (35.76%) |
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
