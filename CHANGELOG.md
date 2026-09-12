@@ -7,6 +7,30 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Step S1 of track S: the crate `audhsos-ssh` at `crates/net/ssh`,
+  sans-I/O and host-tested, with the two layers everything above it is
+  written in. `wire` is the types of RFC 4251, section 5, over a cursor
+  that leaves its position where it was when a read fails and writes
+  nothing when a write does not fit. The two types with rules of their
+  own are checked rather than trusted: an `mpint` is refused unless it is
+  canonical — zero as no bytes, one zero byte before a positive number
+  whose top bit is set, no unnecessary leading `00` or `ff` — and a
+  name-list is refused for a name of no length, a byte outside US-ASCII,
+  or a null. `Writer::write_unsigned` is the encoding RFC 8731, section
+  3.1, requires of the shared secret, which is the trap that fails one
+  connection in two. `packet` is the binary packet of RFC 4253, section
+  6: an `Encoder` pads to a whole number of blocks with at least four
+  bytes of padding drawn in one call on the caller's generator (D-121),
+  and a `Decoder` judges the length from the four bytes that hold it
+  before it waits for the packet, against the largest packet that can
+  satisfy both bounds of section 6.1 at once, so the 35000 bytes that
+  section makes mandatory are more than a connection ever buffers. Each
+  holds the sequence number of section 6.4, which never appears on the
+  wire and wraps at 2^32; a new cipher changes the block size through
+  `set_block`, because a second constructor would be a way to reset a
+  count that must not be reset. Catalog 6.6.68; the crate is in the workspace, in the crate table of `xtask`,
+  and in document 5.
+
 - `docs/openssh/`, for the one algorithm of the Secure Shell client that
   no standards body published (D-134). Two documents, because one
   replaced the other: `PROTOCOL.chacha20poly1305` of the OpenSSH source

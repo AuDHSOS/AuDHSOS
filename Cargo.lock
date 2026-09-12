@@ -96,6 +96,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "audhsos-ssh"
+version = "0.1.0"
+dependencies = [
+ "crypto-rng",
+ "test-support",
+]
+
+[[package]]
 name = "audhsos-symbols"
 version = "0.1.0"
 dependencies = [

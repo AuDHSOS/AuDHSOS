@@ -275,6 +275,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "audhsos-ssh",
+        path: "crates/net/ssh",
+        kind: Kind::Logic,
+        deps: &["crypto-rng", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "audhsos-tls",
         path: "crates/net/tls",
         kind: Kind::Logic,

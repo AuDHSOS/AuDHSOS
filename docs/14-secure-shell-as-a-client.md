@@ -85,10 +85,10 @@ test features, and `publickey` authentication signs with the client's own
 key, so step S5 needs `ed25519::sign` outside `test-signing`. That is a
 decision and not code, and 14.13 carries it.
 
-What is missing is every part that is SSH-shaped: the wire types, the
-binary packet, the negotiation, the exchange hash, the key derivation,
-the authentication exchange, and the channel layer. Three things are also
-missing that are not code, and 14.13 lists them.
+The wire types and the binary packet are built, which is step S1. What is
+missing is everything above them: the negotiation, the exchange hash, the
+key derivation, the authentication exchange, and the channel layer. Three
+things are also missing that are not code, and 14.13 lists them.
 
 ## 14.4 The documents
 
@@ -423,7 +423,7 @@ definition of done every phase and every track step uses.
 
 | Step | What | Size | Ends with |
 |------|------|------|-----------|
-| S1 | `wire`, `packet` | M | the types of RFC 4251, section 5, encoded and decoded with the vectors of that section, and the binary packet framed, padded and read back, with the sequence numbers |
+| S1 | `wire`, `packet` | M | implemented: the types of RFC 4251, section 5, encoded and decoded with the vectors of that section, and the binary packet framed, padded and read back, with the sequence numbers (catalog 6.6.68) |
 | S2 | `kex` | L | `crypto-dh` is built and is the arithmetic half of this step (D-122); what remains is `SSH_MSG_KEXINIT` and the negotiation rule, both key exchange methods, the exchange hash, the six keys of section 7.2, `SSH_MSG_NEWKEYS`, and the aborts |
 | S3 | the cipher | M | `chacha20-poly1305@openssh.com` over the packet layer, against the worked example of appendix A of the draft D-134 keeps |
 | S4 | host keys | S-M | the `ssh-ed25519` blobs of RFC 8709, the signature over `H` verified, and the trust rule as a parameter |

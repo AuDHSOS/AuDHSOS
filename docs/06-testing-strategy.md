@@ -2583,6 +2583,56 @@ protocol above it is checked against a live OpenSSH.
   `json_codec` fuzzes parsing/range validity/quoting without the VM; `jrs_source`
   exercises hooks and realm use. The original passive-listener WPT stays unchanged.
 
+### 6.6.68 The wire types and the binary packet (`audhsos-ssh`)
+
+Step S1 of 8.26 (D-123). Everything here is host-tested; the packet layer
+is checked against itself until step S3 puts the cipher and its worked
+example (D-134) over it.
+
+- The vectors RFC 4251, section 5, prints: the five `mpint` encodings and
+  the three name-lists, each read into the value the document names and
+  written back into the bytes it prints; the `uint32` 699921578, and the
+  string `"testing"`.
+- The form of an `mpint` is the value or it is refused: zero is a string
+  of no bytes and a single `00` is not zero; `00` before a byte whose top
+  bit is clear and `ff` before one whose top bit is set are each an
+  unnecessary leading byte; the necessary ones are kept. A negative value
+  has no magnitude, which is what every `mpint` of the key exchange is
+  read as.
+- An unsigned value written as an `mpint` gets the encoding RFC 8731,
+  section 3.1, requires — leading zeros off, one zero byte back on when
+  the top bit is set — and reads back as the number that was written
+  (property).
+- A name-list holds no name of zero length, so a leading, a trailing, and
+  a doubled comma are each refused; so are a byte that is not US-ASCII,
+  a byte sequence that is not UTF-8, and a null. The writer refuses the
+  same, and a name with a comma in it besides.
+- A failed read leaves the cursor where it was and a write that does not
+  fit writes nothing, so no field is half read or half written.
+- A packet is a whole number of blocks with at least four bytes of
+  padding and never fewer than sixteen bytes altogether, for every block
+  size this crate takes and for payloads across the block; what was
+  framed comes back out (property).
+- A decoder judges the length from the four bytes that hold it and before
+  it waits for the packet: below sixteen, not a whole number of blocks,
+  and above the largest packet that can satisfy both bounds of section
+  6.1 at once are each refused there. Padding outside its packet or under
+  four bytes is refused, and so is a payload above 32768 in a packet
+  whose length is otherwise one a packet can have.
+- A block size that no packet can be padded to is refused, and the one in
+  use stands; a block size that is taken does not reset the sequence
+  number, which section 6.4 forbids for a re-exchange.
+- The padding is one call on the generator (D-121), a generator with
+  nothing left frames no packet, and a buffer short by any number of
+  bytes frames none either.
+- The sequence number of section 6.4 counts every packet, counts nothing
+  for a packet that was not whole, runs independently in each direction,
+  and wraps to zero after 2^32.
+- A packet of the largest mandatory payload fits in a buffer of the
+  mandatory size, and two packets in one buffer are read one after the
+  other.
+- Every refusal renders a sentence of its own.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
