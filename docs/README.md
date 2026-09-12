@@ -44,6 +44,7 @@ rather than of the track; section 14.13 names them.
 | 12 | [Work parallel to the kernel phases](12-parallel-work.md) | The admission test for parallel work; the network stack, the shared foundations, the device logic, the tooling; what may be pulled forward |
 | 13 | [The network on the machine](13-the-network-on-the-machine.md) | What has to exist before a network driver can be written: a clock and a deadline, entropy, MSI-X, PCI, DMA; then the driver, the server, and the socket protocol |
 | 14 | [Secure Shell as a client](14-secure-shell-as-a-client.md) | The SSH-2 client: the algorithm set and what is refused, the crate, the three layers of the protocol, trusting a host key, testing against an implementation from outside |
+| 15 | [The disk on the machine](15-the-disk-on-the-machine.md) | What has to exist before a file system server can be written: the handover of a PCI device, the two adapters, the server, the file protocol, and the move of the programs onto the volume |
 
 Beside the documents lie the standards they cite, verbatim and with
 their checksums, one directory per body that publishes them:
