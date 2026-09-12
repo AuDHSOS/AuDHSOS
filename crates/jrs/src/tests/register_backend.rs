@@ -789,10 +789,33 @@ fn numeric_array_indices_do_not_enter_the_property_name_pool() -> Result<(), Err
 
 #[test]
 fn non_indices_and_object_results_remain_on_the_full_property_path() -> Result<(), Error> {
-    for source in ["let o={x:1};o.missing===undefined", "[1,2]"] {
+    let source = "[1,2]";
+    assert!(
+        !compile(source, Limits::default())?.uses_register_backend(),
+        "{source}"
+    );
+    Ok(())
+}
+
+#[test]
+fn missing_ordinary_properties_produce_undefined_in_register_bytecode() -> Result<(), Error> {
+    for source in [
+        "let o={x:1};o.missing===undefined",
+        "let o={};o.missing",
+        "let o={x:1};o['missing']===undefined",
+        "let o={x:1},key='missing';o[key]===undefined",
+        "let o={x:1},key='y';o[key]=2;o.missing===undefined",
+        "function f(){let o={x:1};return o.missing}f()===undefined",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
         assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
         );
     }
     Ok(())

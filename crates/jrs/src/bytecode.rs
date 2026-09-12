@@ -1949,7 +1949,7 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(object));
         let keyed = matches!(base_type, RegisterType::Object(_))
             && Self::static_property_name(key).is_none();
-        let result = self.lower_property_from_register(object, base_type, key, keyed, false)?;
+        let result = self.lower_property_from_register(object, base_type, key, keyed, true)?;
         self.release_register(object)?;
         Some(result)
     }
