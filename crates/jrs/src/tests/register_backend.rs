@@ -685,6 +685,7 @@ fn computed_object_data_properties_use_keyed_shape_storage() -> Result<(), Error
         "let o={['__proto__']:42};o.__proto__",
         "let key='x',value='v';let o={[(key='k')]:(value=key+'!')};key+value+o.k",
         "let key='x';let o={x:1,[key]:'a'};o.x+'b'",
+        "function f(key){let o={[key]:42};return o[key]}f('answer')",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
@@ -712,12 +713,8 @@ fn computed_object_data_properties_use_keyed_shape_storage() -> Result<(), Error
         );
     }
 
-    for fallback in [
-        "let key={toString(){return 'x'}};let o={[key]:42};o.x",
-        "function f(key){let o={[key]:42};return o[key]}f('answer')",
-    ] {
-        assert!(!compile(fallback, Limits::default())?.uses_register_backend());
-    }
+    let fallback = "let key={toString(){return 'x'}};let o={[key]:42};o.x";
+    assert!(!compile(fallback, Limits::default())?.uses_register_backend());
     Ok(())
 }
 
@@ -792,12 +789,49 @@ fn numeric_array_indices_do_not_enter_the_property_name_pool() -> Result<(), Err
 
 #[test]
 fn non_indices_and_object_results_remain_on_the_full_property_path() -> Result<(), Error> {
-    for source in ["({0:1})[0]", "let o={x:1};o.missing===undefined", "[1,2]"] {
+    for source in ["let o={x:1};o.missing===undefined", "[1,2]"] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
             "{source}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn ordinary_objects_read_primitive_bracket_keys_through_keyed_caches() -> Result<(), Error> {
+    for source in [
+        "({0:1})[0]",
+        "let o={[0]:42};o[0]",
+        "let o={x:42},key='x';o[key]",
+        "let o={true:42},key=true;o[key]",
+        "let o={null:42},key=null;o[key]",
+        "let o={undefined:42},key=undefined;o[key]",
+        "let o={x:40,y:2},key=true?'x':'y';o[key]+2",
+        "let o={x:1},key='y';o[key]===undefined",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let code = program
+            .register_code
+            .as_ref()
+            .ok_or(Error::InvalidBytecode)?;
+        assert!(code.instructions.iter().any(|instruction| matches!(
+            instruction,
+            crate::engine::bytecode::Instruction::GetByValue { .. }
+        )));
+        let mut legacy = program.clone();
+        legacy.register_code = None;
+        let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
+        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        assert!(
+            same_value(&actual, &expected),
+            "{source}: {actual:?} != {expected:?}"
+        );
+    }
+
+    let observable = "let key={toString(){return 'x'}};let o={x:42};o[key]";
+    assert!(!compile(observable, Limits::default())?.uses_register_backend());
     Ok(())
 }
 

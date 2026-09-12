@@ -1461,9 +1461,6 @@ impl RegisterLowerer {
                 RegisterMemberKey::ObjectKeyed(register, static_name)
             } else {
                 let name = Self::static_property_name(&property.key)?;
-                if parse_array_index(name).is_some() {
-                    return None;
-                }
                 let name = name.to_vec();
                 RegisterMemberKey::Named {
                     constant: self.string_constant(&name)?,
@@ -1950,7 +1947,9 @@ impl RegisterLowerer {
         }
         let object = self.allocate_register()?;
         self.code.emit(Instruction::Star(object));
-        let result = self.lower_property_from_register(object, base_type, key, false, false)?;
+        let keyed = matches!(base_type, RegisterType::Object(_))
+            && Self::static_property_name(key).is_none();
+        let result = self.lower_property_from_register(object, base_type, key, keyed, false)?;
         self.release_register(object)?;
         Some(result)
     }
