@@ -2192,6 +2192,14 @@ fn register_try_catch_transfers_the_thrown_value_to_the_parameter() -> Result<()
         "let e=1;try{throw 2}catch(e){e}",
         "let e=1;try{throw 2}catch(f){f}e",
         "try{}catch(e){e}",
+        // 14.15.3: an empty Block completes with undefined, not with the value
+        // of the statement before the `try`.
+        "1;try{}catch(e){}",
+        "2;try{3}catch(e){}",
+        "4;try{}catch(e){5}",
+        "6;try{7}catch(e){8}",
+        "1;try{throw null}catch(e){}",
+        "2;try{throw null}catch(e){3}",
     ] {
         differential(source)?;
     }
@@ -2212,9 +2220,6 @@ fn register_try_catch_rethrows_when_the_handler_throws() -> Result<(), Error> {
 #[test]
 fn register_lowering_rejects_exception_shapes_it_cannot_type() -> Result<(), Error> {
     for source in [
-        // A finally Block is not lowered yet.
-        "try{1}finally{2}",
-        "try{throw 1}catch(e){e}finally{2}",
         // A callee's thrown type is unknown inside a protected range.
         "function f(){return 1}try{f()}catch(e){e}",
         // A destructuring catch parameter is not lowered.
@@ -2224,11 +2229,50 @@ fn register_lowering_rejects_exception_shapes_it_cannot_type() -> Result<(), Err
         "throw [1]",
         // The Block must not change a tracked binding type.
         "let x=1;try{x='a'}catch(e){e}x",
+        // A Finally Block cannot run before a control transfer leaves it.
+        "let i=0;while(i<2){try{i++;break}finally{i+=10}}i",
+        "let i=0;while(i<2){try{i++}finally{continue}}i",
+        "function f(){try{return 1}finally{2}}f()",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
             "{source}"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn register_try_finally_runs_the_finally_block_on_both_paths() -> Result<(), Error> {
+    for source in [
+        "try{1}finally{2}",
+        "let x=0;try{x=1}finally{x+=10}x",
+        "let x=0;try{throw 1}catch(e){x=e}finally{x+=10}x",
+        "let x=0;try{x=1}catch(e){x=2}finally{x+=10}x",
+        "try{throw 1}catch(e){e}finally{2}",
+        "let x=0;try{try{throw 1}finally{x=5}}catch(e){x+e}",
+        "let x=0;try{try{throw 1}catch(e){throw e+1}finally{x=5}}catch(e){x+e}",
+        "let x=0;try{1}finally{x=2}x",
+        "let x=0;try{throw 7}finally{x=1}",
+        "let x=0;try{throw 7}catch(e){throw e+1}finally{x=1}",
+        "1;try{}finally{}",
+        "2;try{3}finally{}",
+        "4;try{}finally{5}",
+        "6;try{7}finally{8}",
+        "1;try{}catch(e){}finally{}",
+        "2;try{}catch(e){3}finally{}",
+        "4;try{}catch(e){}finally{5}",
+        "6;try{}catch(e){7}finally{8}",
+        "9;try{10}catch(e){}finally{}",
+        "11;try{12}catch(e){13}finally{}",
+        "14;try{15}catch(e){}finally{16}",
+        "17;try{18}catch(e){19}finally{20}",
+        "1;try{throw null}catch(e){}finally{}",
+        "2;try{throw null}catch(e){3}finally{}",
+        "4;try{throw null}catch(e){}finally{5}",
+        "6;try{throw null}catch(e){7}finally{8}",
+    ] {
+        differential(source)?;
     }
     Ok(())
 }
