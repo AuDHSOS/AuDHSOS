@@ -670,6 +670,8 @@ enum RegisterFlow {
 }
 
 struct RegisterLoop {
+    /// A `switch` is a break target but never a continue target (14.12).
+    is_switch: bool,
     breaks: Vec<usize>,
     continues: Vec<usize>,
     result_register: crate::engine::bytecode::Reg,
@@ -2589,6 +2591,7 @@ impl RegisterLowerer {
                 catch,
                 finally,
             } => self.lower_try(body, catch.as_ref(), finally.as_deref())?,
+            Stmt::Switch(discriminant, clauses) => self.lower_switch(discriminant, clauses)?,
             Stmt::Empty => RegisterFlow::Empty,
             _ => return None,
         };
@@ -2903,7 +2906,14 @@ impl RegisterLowerer {
 
     fn lower_loop_jump(&mut self, is_break: bool) -> Option<()> {
         use crate::engine::bytecode::Instruction;
-        let loop_state = self.loops.last()?;
+        // 14.12: `break` leaves the innermost breakable statement, `continue`
+        // the innermost iteration statement, which a `switch` is not.
+        let index = if is_break {
+            self.loops.len().checked_sub(1)?
+        } else {
+            self.loops.iter().rposition(|frame| !frame.is_switch)?
+        };
+        let loop_state = self.loops.get(index)?;
         if !register_bindings_fit(&self.bindings, &loop_state.bindings)
             || !self.loop_layouts_match(&loop_state.object_layouts)
         {
@@ -2915,13 +2925,126 @@ impl RegisterLowerer {
         }
         self.code.emit(Instruction::Star(result_register));
         let jump = self.code.emit(Instruction::Jump(0));
-        let loop_state = self.loops.last_mut()?;
+        let loop_state = self.loops.get_mut(index)?;
         if is_break {
             loop_state.breaks.push(jump);
         } else {
             loop_state.continues.push(jump);
         }
         Some(())
+    }
+
+    /// Lowers `switch (Expression) CaseBlock` of 14.12.
+    ///
+    /// Selectors are evaluated in source order — the clauses before the
+    /// `DefaultClause` first and the ones after it second — and only until one is
+    /// strictly equal to the discriminant. Execution then falls through the
+    /// remaining clause bodies in source order, accumulating the completion
+    /// value, which 14.12.2 updates to undefined when it stays empty.
+    fn lower_switch(
+        &mut self,
+        discriminant: &Expr,
+        clauses: &[(Option<Expr>, Vec<Stmt>)],
+    ) -> Option<RegisterFlow> {
+        use crate::engine::bytecode::Instruction;
+        // A lexical declaration in a CaseBlock is visible in every clause but
+        // is in its Temporal Dead Zone until its own clause runs, which the
+        // register lowering does not model.
+        if clauses.iter().any(|(_, body)| {
+            body.iter()
+                .any(|statement| matches!(statement, Stmt::Declare(_) | Stmt::Function(_, _)))
+        }) {
+            return None;
+        }
+        let result_register = self.allocate_register()?;
+        let input_register = self.allocate_register()?;
+        let selector_register = self.allocate_register()?;
+        self.code.emit(Instruction::LdaUndefined);
+        self.code.emit(Instruction::Star(result_register));
+        self.lower(discriminant)?;
+        self.code.emit(Instruction::Star(input_register));
+
+        let bindings_before = self.bindings.clone();
+        let layouts_before = self.object_layouts.clone();
+        let mut selected = Vec::new();
+        for (index, (test, _)) in clauses.iter().enumerate() {
+            let Some(test) = test else {
+                continue;
+            };
+            self.lower(test)?;
+            if self.bindings != bindings_before || self.object_layouts != layouts_before {
+                return None;
+            }
+            self.code.emit(Instruction::Star(selector_register));
+            self.code.emit(Instruction::Ldar(input_register));
+            self.code
+                .emit(Instruction::TestStrictEqual(selector_register));
+            selected.push((index, self.code.emit(Instruction::JumpIfTrue(0))));
+        }
+        let unmatched = self.code.emit(Instruction::Jump(0));
+
+        self.loops.push(RegisterLoop {
+            is_switch: true,
+            breaks: Vec::new(),
+            continues: Vec::new(),
+            result_register,
+            bindings: bindings_before.clone(),
+            completion_depth: self.completions.len(),
+            object_layouts: layouts_before.clone(),
+        });
+        self.completions.push(result_register);
+        let mut starts = Vec::new();
+        let mut value_type = RegisterType::Undefined;
+        for (_, body) in clauses {
+            starts.push(self.code.instructions.len());
+            // A clause is entered by a jump as well as by fallthrough, and in
+            // both cases the accumulator has to hold the value accumulated so
+            // far, not the discriminant the dispatch left behind.
+            self.code.emit(Instruction::Ldar(result_register));
+            for statement in body {
+                let flow = self.lower_statement(statement)?;
+                // Every clause body is an entry point of its own, so a body
+                // that changes a tracked binding type has no single type at the
+                // next one.
+                if self.bindings != bindings_before || self.object_layouts != layouts_before {
+                    return None;
+                }
+                match flow {
+                    RegisterFlow::Value(clause_type) => {
+                        value_type = value_type.merge(clause_type);
+                        self.code.emit(Instruction::Star(result_register));
+                    }
+                    RegisterFlow::Empty => {}
+                    RegisterFlow::Abrupt => break,
+                }
+            }
+        }
+        self.completions.pop()?;
+        let loop_state = self.loops.pop()?;
+
+        let done = self.code.instructions.len();
+        self.code.emit(Instruction::Ldar(result_register));
+        for (index, jump) in selected {
+            self.patch_jump(jump, *starts.get(index)?)?;
+        }
+        let default = clauses.iter().position(|(test, _)| test.is_none());
+        let fallback = match default {
+            Some(index) => *starts.get(index)?,
+            None => done,
+        };
+        self.patch_jump(unmatched, fallback)?;
+        for jump in loop_state.breaks {
+            self.patch_jump(jump, done)?;
+        }
+        if !loop_state.continues.is_empty() {
+            return None;
+        }
+        self.release_register(selector_register)?;
+        self.release_register(input_register)?;
+        self.release_register(result_register)?;
+        // 14.12.2 ends in UpdateEmpty(R, undefined), so the statement never
+        // completes empty and never keeps the value before it.
+        Some(RegisterFlow::Value(value_type))
     }
 
     fn lower_while(&mut self, condition: &Expr, body: &Stmt) -> Option<RegisterType> {
@@ -2940,6 +3063,7 @@ impl RegisterLowerer {
         let branch = self.code.emit(Instruction::JumpIfFalse(0));
         self.code.emit(Instruction::Ldar(result_register));
         self.loops.push(RegisterLoop {
+            is_switch: false,
             breaks: Vec::new(),
             continues: Vec::new(),
             result_register,
@@ -2997,6 +3121,7 @@ impl RegisterLowerer {
         let head = self.code.instructions.len();
         self.code.emit(Instruction::Ldar(result_register));
         self.loops.push(RegisterLoop {
+            is_switch: false,
             breaks: Vec::new(),
             continues: Vec::new(),
             result_register,
@@ -3124,6 +3249,7 @@ impl RegisterLowerer {
         };
         self.code.emit(Instruction::Ldar(result_register));
         self.loops.push(RegisterLoop {
+            is_switch: false,
             breaks: Vec::new(),
             continues: Vec::new(),
             result_register,
@@ -3831,6 +3957,11 @@ fn register_statement_var_names(
                 register_statement_var_names(statement, names, initialized_only)?;
             }
         }
+        Stmt::Switch(_, clauses) => {
+            for statement in clauses.iter().flat_map(|(_, body)| body) {
+                register_statement_var_names(statement, names, initialized_only)?;
+            }
+        }
         Stmt::Empty
         | Stmt::Expr(_)
         | Stmt::Declare(_)
@@ -3839,7 +3970,7 @@ fn register_statement_var_names(
         | Stmt::Throw(_)
         | Stmt::Break
         | Stmt::Continue => {}
-        Stmt::Switch(_, _) | Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
+        Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
     }
     Some(())
 }
@@ -3876,6 +4007,10 @@ fn register_statement_transfers_control(statement: &Stmt) -> bool {
             catch,
             finally,
         } => try_statements(body, catch.as_ref(), finally.as_deref())
+            .any(register_statement_transfers_control),
+        Stmt::Switch(_, clauses) => clauses
+            .iter()
+            .flat_map(|(_, body)| body)
             .any(register_statement_transfers_control),
         _ => false,
     }
@@ -3928,6 +4063,11 @@ fn infer_register_var_types(
                 infer_register_var_types(statement, bindings)?;
             }
         }
+        Stmt::Switch(_, clauses) => {
+            for statement in clauses.iter().flat_map(|(_, body)| body) {
+                infer_register_var_types(statement, bindings)?;
+            }
+        }
         Stmt::Empty
         | Stmt::Expr(_)
         | Stmt::Declare(_)
@@ -3936,7 +4076,7 @@ fn infer_register_var_types(
         | Stmt::Throw(_)
         | Stmt::Break
         | Stmt::Continue => {}
-        Stmt::Switch(_, _) | Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
+        Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
     }
     Some(())
 }
@@ -4052,8 +4192,20 @@ fn register_statement_writes_names(statement: &Stmt, names: &BTreeSet<String>) -
             }
             writes
         }
+        Stmt::Switch(discriminant, clauses) => {
+            let mut writes = register_expression_writes_names(discriminant, names)?;
+            for (test, body) in clauses {
+                if let Some(test) = test {
+                    writes = writes || register_expression_writes_names(test, names)?;
+                }
+                for statement in body {
+                    writes = writes || register_statement_writes_names(statement, names)?;
+                }
+            }
+            writes
+        }
         Stmt::Empty | Stmt::Return(None) | Stmt::Break | Stmt::Continue => false,
-        Stmt::Switch(_, _) | Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
+        Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
     })
 }
 
@@ -4539,9 +4691,56 @@ fn register_statement_references(
                 register_scoped_block_references(body, &BTreeSet::new(), names, nested_free_names)?;
             }
         }
+        Stmt::Switch(discriminant, clauses) => {
+            // 14.12: one CaseBlock is a single Block scope over every clause.
+            register_expression_references(discriminant, names, nested_free_names)?;
+            for (test, _) in clauses {
+                if let Some(test) = test {
+                    register_expression_references(test, names, nested_free_names)?;
+                }
+            }
+            let body: Vec<&Stmt> = clauses.iter().flat_map(|(_, body)| body).collect();
+            register_scoped_clause_references(&body, names, nested_free_names)?;
+        }
         Stmt::Empty | Stmt::Break | Stmt::Continue => {}
-        Stmt::Switch(_, _) | Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
+        Stmt::ForIn { .. } | Stmt::ForOf { .. } => return None,
     }
+    Some(())
+}
+
+/// Collects the free names of one `CaseBlock`, hiding its lexical bindings.
+fn register_scoped_clause_references(
+    body: &[&Stmt],
+    names: &mut BTreeSet<String>,
+    nested_free_names: &mut BTreeSet<String>,
+) -> Option<()> {
+    let mut local_names = BTreeSet::new();
+    for statement in body {
+        if let Stmt::Declare(bindings) = statement {
+            for (pattern, _, _) in bindings {
+                let mut bound = Vec::new();
+                pattern.names(&mut bound);
+                for name in bound {
+                    if !local_names.insert(name) {
+                        return None;
+                    }
+                }
+            }
+        }
+        if matches!(statement, Stmt::Function(_, _)) {
+            return None;
+        }
+    }
+    let mut direct = BTreeSet::new();
+    let mut nested = BTreeSet::new();
+    for statement in body {
+        register_statement_references(statement, &mut direct, &mut nested)?;
+    }
+    if nested.iter().any(|name| local_names.contains(name)) {
+        return None;
+    }
+    names.extend(direct.difference(&local_names).cloned());
+    nested_free_names.extend(nested.difference(&local_names).cloned());
     Some(())
 }
 
@@ -4599,6 +4798,7 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
             | Stmt::DoWhile(_, _)
             | Stmt::Throw(_)
             | Stmt::Try { .. }
+            | Stmt::Switch(_, _)
             | Stmt::For(_, _, _, _) => saw_expression = true,
             Stmt::Empty => {}
             _ => return None,
@@ -4614,6 +4814,9 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
 fn register_statement_has_lexical_block(statement: &Stmt) -> bool {
     match statement {
         Stmt::Block(body) => register_body_has_lexical_block(body),
+        Stmt::Switch(_, clauses) => clauses
+            .iter()
+            .any(|(_, body)| register_body_has_lexical_block(body)),
         Stmt::Try {
             body,
             catch,
@@ -4647,7 +4850,6 @@ fn register_statement_has_lexical_block(statement: &Stmt) -> bool {
         | Stmt::Return(_)
         | Stmt::Break
         | Stmt::Continue
-        | Stmt::Switch(_, _)
         | Stmt::ForIn { .. }
         | Stmt::ForOf { .. }
         | Stmt::Throw(_) => false,
@@ -4991,6 +5193,20 @@ fn register_statement_stack_requirement(statement: &Stmt) -> usize {
                 .max(register_statement_stack_requirement(body))
         }
         Stmt::Throw(value) => register_expression_stack_requirement(value),
+        Stmt::Switch(discriminant, clauses) => clauses.iter().fold(
+            register_expression_stack_requirement(discriminant),
+            |maximum, (test, body)| {
+                body.iter().fold(
+                    maximum.max(
+                        test.as_ref()
+                            .map_or(1, register_expression_stack_requirement),
+                    ),
+                    |maximum, statement| {
+                        maximum.max(register_statement_stack_requirement(statement))
+                    },
+                )
+            },
+        ),
         Stmt::Try {
             body,
             catch,

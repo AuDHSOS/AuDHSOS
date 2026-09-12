@@ -2276,3 +2276,50 @@ fn register_try_finally_runs_the_finally_block_on_both_paths() -> Result<(), Err
     }
     Ok(())
 }
+
+#[test]
+fn register_switch_falls_through_clauses_in_source_order() -> Result<(), Error> {
+    for source in [
+        "let x=0;switch(1){case 1:x=1;break;case 2:x=2;break}x",
+        "let x=0;switch(2){case 1:x=1;break;case 2:x=2;break}x",
+        "let x=0;switch(3){case 1:x=1;break;default:x=9;break}x",
+        "let x=0;switch(1){case 1:x+=1;case 2:x+=2;case 3:x+=4}x",
+        "let x=0;switch(9){case 1:x+=1;default:x+=2;case 3:x+=4}x",
+        "let x=0;switch('a'){case 'a':x=1;break;case 'b':x=2}x",
+        "let x=0;switch(1){}x",
+        "let x=0;switch(1){default:x=5}x",
+        "switch(1){case 1:42}",
+        "switch(2){case 1:42}",
+        "0;switch(2){case 1:42}",
+        "switch(1){case 1:1;case 2:2}",
+        "let n=0;let k=()=>{n++;return 1};switch(1){case k():n+=10;break;case k():n+=20}n",
+        "let n=0;switch(3){case (n+=1):break;case (n+=2):break;default:n+=100}n",
+        "let s=0;for(let i=0;i<4;i++){switch(i){case 1:continue;case 2:s+=10;break;default:s+=1}s+=100}s",
+        "let s=0;let i=0;while(i<3){i++;switch(i){case 2:continue;default:s+=i}}s",
+        // 14.12.4 accumulates V across clauses; a clause is entered without the
+        // discriminant in the completion.
+        "1;switch('a'){default:break}",
+        "2;switch('a'){default:{3;break}}",
+        "4;do{switch('a'){default:{continue}}}while(false)",
+        "5;do{switch('a'){default:{6;continue}}}while(false)",
+        "7;switch('a'){case 'a':break}",
+        "8;do{switch('a'){case 'a':{continue}}}while(false)",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn register_lowering_rejects_case_blocks_with_lexical_declarations() -> Result<(), Error> {
+    for source in [
+        "switch(1){case 1:let x=1;break}",
+        "switch(1){default:function f(){}}",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    Ok(())
+}
