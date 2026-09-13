@@ -13,6 +13,40 @@ use crate::error::Error;
 use crate::policy::{COVERAGE, CRATES, find};
 use crate::process::{Cmd, run_parallel, test_jobs};
 
+/// What the instrumentation counts.
+///
+/// `branch` counts every decision both ways. `condition` counts every
+/// operand of a compound decision as well, which is the part of
+/// modified condition/decision coverage this toolchain measures: the
+/// pin emits no MC/DC records, and document 15, section 15.7, says what
+/// that leaves open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Instrumentation {
+    /// Decisions only.
+    #[default]
+    Branch,
+    /// Decisions and the conditions they are made of.
+    Condition,
+}
+
+impl Instrumentation {
+    /// The `-Z coverage-options` value.
+    const fn options(self) -> &'static str {
+        match self {
+            Instrumentation::Branch => "branch",
+            Instrumentation::Condition => "branch,condition",
+        }
+    }
+
+    /// What the branch column counts under this mode.
+    pub(crate) const fn column(self) -> &'static str {
+        match self {
+            Instrumentation::Branch => "branches",
+            Instrumentation::Condition => "conditions",
+        }
+    }
+}
+
 /// Line and branch counts of one crate.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Totals {
@@ -55,14 +89,20 @@ fn percent(total: u64, missed: u64) -> f64 {
 }
 
 /// Builds instrumented tests, runs them, and returns the per-crate totals.
-pub(crate) fn measure(root: &Path) -> Result<BTreeMap<String, Totals>, Error> {
+pub(crate) fn measure(
+    root: &Path,
+    instrumentation: Instrumentation,
+) -> Result<BTreeMap<String, Totals>, Error> {
     let jobs = test_jobs()?;
     let target_dir = root.join("target").join("coverage-build");
     let profile_dir = root.join("target").join("coverage");
     let _ = std::fs::remove_dir_all(&profile_dir);
     std::fs::create_dir_all(&profile_dir)
         .map_err(|source| Error::io("creating the coverage directory", source))?;
-    let rustflags = "-C instrument-coverage -Z coverage-options=branch";
+    let rustflags = format!(
+        "-C instrument-coverage -Z coverage-options={}",
+        instrumentation.options()
+    );
     let build = crate::commands::exclude_cross(Cmd::cargo().cwd(root).args([
         "test",
         "--workspace",
@@ -178,8 +218,16 @@ pub(crate) fn crate_of(file: &Path, root: &Path) -> Option<&'static str> {
 }
 
 /// Formats the table and returns threshold violations.
-pub(crate) fn evaluate(totals: &BTreeMap<String, Totals>) -> (String, Vec<String>) {
-    let mut table = format!("{:<18} {:>8} {:>8}\n", "crate", "lines", "branches");
+pub(crate) fn evaluate(
+    totals: &BTreeMap<String, Totals>,
+    instrumentation: Instrumentation,
+) -> (String, Vec<String>) {
+    let mut table = format!(
+        "{:<18} {:>8} {:>10}\n",
+        "crate",
+        "lines",
+        instrumentation.column()
+    );
     let mut violations = Vec::new();
     for krate in CRATES {
         let Some(total) = totals.get(krate.name) else {
@@ -196,7 +244,7 @@ pub(crate) fn evaluate(totals: &BTreeMap<String, Totals>) -> (String, Vec<String
         };
         let _ = writeln!(
             table,
-            "{:<18} {lines:>7.2}% {branches:>7.2}%{gate}",
+            "{:<18} {lines:>7.2}% {branches:>9.2}%{gate}",
             krate.name
         );
         if krate.coverage_gate && find(krate.name).is_some() {
@@ -208,8 +256,10 @@ pub(crate) fn evaluate(totals: &BTreeMap<String, Totals>) -> (String, Vec<String
             }
             if branches < COVERAGE.branches {
                 violations.push(format!(
-                    "`{}` branch coverage {branches:.2}% is below {:.0}%",
-                    krate.name, COVERAGE.branches
+                    "`{}` {} coverage {branches:.2}% is below {:.0}%",
+                    krate.name,
+                    instrumentation.column(),
+                    COVERAGE.branches
                 ));
             }
         }

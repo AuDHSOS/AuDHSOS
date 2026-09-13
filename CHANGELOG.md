@@ -7,6 +7,28 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The configuration matrix of document 15, section 15.6, as a test: the
+  same three rows and the same index written by the shell under eleven
+  configurations — four page sizes, three text encodings, reserved space,
+  a file that has been in write-ahead logging, and both vacuum settings —
+  and read back through one set of assertions. `sh
+  tools/sqlite-fixtures.sh` writes them all, so that what the tests read
+  is reproducible rather than remembered. Catalog 6.6.75.
+
+- `sqlite_image`, a fuzz target over the SQLite reader: arbitrary bytes
+  through the header, every page, every cell, every tree the schema names
+  and every record, with the rows read and the payload assembled bounded
+  so that a file cannot ask for more than the fuzzer has. It found a cell
+  that hands back a child pointer of zero, which is a page no file has;
+  the reader now refuses it and the input is in the regression corpus.
+
+- `sh tools/xtask.sh coverage --condition` instruments every operand of a
+  compound decision and not only the decision, and holds the same
+  thresholds against that column. It is the part of MC/DC the pinned
+  toolchain measures: `-Z coverage-options` takes `block`, `branch` and
+  `condition`, and emits no MC/DC records, which document 15, section
+  15.7, states rather than claims away.
+
 - `db-sqlite`, the SQLite file format as logic and the first step of the
   port document 15 specifies: the hundred-byte header, the b-tree pages
   over it, the four cell shapes, the overflow chains a payload continues

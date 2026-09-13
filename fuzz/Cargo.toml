@@ -36,6 +36,7 @@ members = [
     "tls_handshake",
     "tls_record",
     "x509",
+    "sqlite_image",
 ]
 
 [workspace.package]
@@ -74,6 +75,7 @@ user-loader = { path = "../crates/user/loader" }
 jrs = { path = "../crates/jrs" }
 audhsos-regex = { path = "../crates/regex" }
 audhsos-regex-bt = { path = "../crates/regex-bt" }
+db-sqlite = { path = "../crates/db/sqlite" }
 
 [workspace.lints.rust]
 # `--cfg fuzzing` is set by `cargo xtask fuzz`, not by a Cargo feature.

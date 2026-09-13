@@ -232,7 +232,7 @@ impl<'a> Page<'a> {
         let cell = self.bytes.get(offset..self.usable).ok_or(Error::Overrun)?;
         match self.kind {
             Kind::InteriorTable => {
-                let child = u32_at(cell, 0).ok_or(Error::Overrun)?;
+                let child = child_page(u32_at(cell, 0).ok_or(Error::Overrun)?)?;
                 let (key, _) = varint(cell.get(4..).ok_or(Error::Overrun)?)?;
                 Ok(Cell::TableInterior {
                     child,
@@ -257,7 +257,7 @@ impl<'a> Page<'a> {
                 })
             }
             Kind::InteriorIndex => {
-                let child = u32_at(cell, 0).ok_or(Error::Overrun)?;
+                let child = child_page(u32_at(cell, 0).ok_or(Error::Overrun)?)?;
                 let rest = cell.get(4..).ok_or(Error::Overrun)?;
                 let (total, read) = varint(rest)?;
                 let after = rest.get(read..).ok_or(Error::Overrun)?;
@@ -295,6 +295,14 @@ impl<'a> Page<'a> {
             overflow: Some(page),
         })
     }
+}
+
+/// A child pointer, which is a page number and therefore never zero.
+const fn child_page(number: u32) -> Result<u32, Error> {
+    if number == 0 {
+        return Err(Error::Page(0));
+    }
+    Ok(number)
 }
 
 /// How many bytes of a payload of `total` bytes stay on the page.

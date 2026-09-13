@@ -1709,9 +1709,16 @@ pub(crate) fn regex_check(root: &Path, options: &[String]) -> Result<(), Error> 
 }
 
 /// Host coverage against the thresholds.
-pub(crate) fn coverage(root: &Path) -> Result<(), Error> {
-    let totals = coverage::measure(root)?;
-    let (table, violations) = coverage::evaluate(&totals);
+pub(crate) fn coverage(root: &Path, options: &[String]) -> Result<(), Error> {
+    let instrumentation = match options {
+        [] => coverage::Instrumentation::Branch,
+        [option] if option == "--condition" => coverage::Instrumentation::Condition,
+        _ => {
+            return Err(Error::Usage("coverage accepts only --condition".to_owned()));
+        }
+    };
+    let totals = coverage::measure(root, instrumentation)?;
+    let (table, violations) = coverage::evaluate(&totals, instrumentation);
     note_raw!("{table}");
     report("coverage", &violations);
     Error::from_violations(violations)
@@ -2006,7 +2013,7 @@ pub(crate) fn check(root: &Path, channel: &str, options: &[String]) -> Result<()
         ("check-deps", check_deps),
         ("unsafe-budget", unsafe_budget),
         ("test --host", |root| test(root, &["--host".to_owned()])),
-        ("coverage", coverage),
+        ("coverage", |root| coverage(root, &[])),
         ("miri", miri),
         ("doc", doc),
         ("test --qemu", |root| test(root, &["--qemu".to_owned()])),

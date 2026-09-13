@@ -124,18 +124,39 @@ The standard is the one SQLite holds itself to and documents in
 condition/decision coverage over every compound condition. Two things
 follow for this port.
 
-- The `coverage` step measures lines and branches today. MC/DC is measured
-  by the same instrumentation (`-Z coverage-options=mcdc`), and the xtask
-  grows a mode for it rather than a second tool.
+- The `coverage` step measures lines and branches. `sh tools/xtask.sh
+  coverage --condition` measures more: it builds with
+  `-Z coverage-options=branch,condition`, so that every operand of a
+  compound decision is counted and not only the decision, and the same
+  thresholds apply to that column. What the pinned toolchain does not
+  emit is LLVM's MC/DC records — `-Z coverage-options` takes `block`,
+  `branch` and `condition`, and `llvm-cov` reports no MC/DC pairs for
+  what it produces — so the independence half of MC/DC is not measured
+  today. Condition coverage is what is measured; the gap is named here
+  rather than claimed away, and it closes when the pin emits the
+  records.
 - Unreachable defensive code is a defect and not a line to exempt. Where a
   refusal cannot be reached by any input, either the refusal is dead and
   goes, or the input that reaches it exists and is missing from the tests.
   The gate for this crate rises as the tests do; the number in the policy
   table is the floor, not the goal.
 
-## 15.8 Where it stands
+## 15.8 The fixtures
+
+`sh tools/sqlite-fixtures.sh` writes every fixture the tests read, with the
+shell of `sh tools/sqlite.sh`. They are committed, because CI has no
+SQLite; the script is what makes them reproducible rather than
+remembered. Eleven of them are the matrix of 15.6 holding the same three
+rows and the same index, and the rest are the cases one test each reads:
+a table of every storage class, four hundred rows over 512-byte pages, text
+in UTF-16, a payload that overflows, and a table with two indexes.
+
+## 15.9 Where it stands
 
 Q1 is in `crates/db/sqlite`: a database is opened, its schema walked, its
 tables read in rowid order, its overflow chains followed, and its records
 decoded, over any page size and any of the three encodings, without
-allocating. What it cannot do is everything else in 15.3.
+allocating. The matrix of 15.6 is a test, the reader is fuzzed by
+`sqlite_image`, and the first bug that target found — a child pointer of
+zero, which is a page no file has — is in the regression corpus. What the
+crate cannot do is everything else in 15.3.

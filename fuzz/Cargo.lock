@@ -153,6 +153,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "db-sqlite"
+version = "0.1.0"
+
+[[package]]
 name = "der"
 version = "0.1.0"
 dependencies = [
@@ -418,6 +422,14 @@ name = "scancode"
 version = "0.1.0"
 dependencies = [
  "driver-i8042",
+ "fuzz-support",
+]
+
+[[package]]
+name = "sqlite_image"
+version = "0.1.0"
+dependencies = [
+ "db-sqlite",
  "fuzz-support",
 ]
 

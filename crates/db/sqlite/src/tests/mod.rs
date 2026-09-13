@@ -13,6 +13,7 @@
 mod bytes;
 mod header;
 mod image;
+mod matrix;
 mod page;
 mod record;
 

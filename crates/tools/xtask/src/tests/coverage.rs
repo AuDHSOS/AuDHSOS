@@ -3,7 +3,7 @@
 
 //! Tests of `crate::coverage`.
 
-use crate::coverage::{Totals, crate_of, evaluate, totals_by_crate};
+use crate::coverage::{Instrumentation, Totals, crate_of, evaluate, totals_by_crate};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -77,7 +77,7 @@ fn evaluation_flags_gated_crates_below_the_thresholds_and_missing_data() {
             missed_branches: 0,
         },
     );
-    let (table, violations) = evaluate(&totals);
+    let (table, violations) = evaluate(&totals, Instrumentation::Branch);
     assert!(table.contains("audhsos-abi"));
     assert!(table.contains("reported only"));
     assert!(

@@ -446,7 +446,7 @@ binaries (`cargo`, `rustc`, `rustfmt`, `cargo-clippy`, `cargo-miri`,
 | `check-deps` | verify that `Cargo.lock` and all manifests reference workspace members only |
 | `unsafe-budget` | count `unsafe` blocks and `asm!` sites per adapter crate against the policy table |
 | `fuzz [--target <name>] [--time <s>] [--regression] [--merge <directory>] [--minimize <file>]` | build fuzz targets with `-Zsanitizer=fuzzer` and run them; `--regression` replays the stored corpus instead, which is what `check` runs |
-| `coverage` | build host tests with `-C instrument-coverage`, merge profiles with `llvm-profdata`, export LCOV with `llvm-cov`, enforce thresholds |
+| `coverage [--condition]` | build host tests with `-C instrument-coverage`, merge profiles with `llvm-profdata`, export LCOV with `llvm-cov`, enforce thresholds; `--condition` instruments every operand of a compound decision as well, which is the part of MC/DC the pinned toolchain measures |
 | `miri` | run the tests of the `unsafe` modules of the host-executable adapter crates under Miri, after checking that no module holding `unsafe` is left out |
 | `doc` | build documentation with warnings as errors |
 | `pdf [options]` | every Markdown document of `docs/` and every standard beside them as a PDF under `target/pdf/`; the options go to the tool, which explains them with `--help` |

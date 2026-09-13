@@ -136,3 +136,47 @@ fn the_content_area_of_a_page_that_says_zero_is_the_largest_page_there_is() {
     let parsed = Page::parse(&page, 2, 4096).unwrap();
     assert_eq!(parsed.content_start(), 65536);
 }
+
+/// A page of `kind` with one cell, whose bytes are `cell`, laid out the
+/// way the format does: header, pointer array, then the cell at the end.
+fn one_cell(kind: u8, right_most: u32, cell: &[u8]) -> [u8; 512] {
+    let mut page = [0u8; 512];
+    let header = if kind == 2 || kind == 5 { 12 } else { 8 };
+    page[0] = kind;
+    page[3] = 0;
+    page[4] = 1;
+    let offset = 512 - cell.len();
+    page[5] = u8::try_from(offset >> 8).unwrap();
+    page[6] = u8::try_from(offset & 0xff).unwrap();
+    page[8..12].copy_from_slice(&right_most.to_be_bytes());
+    page[header] = u8::try_from(offset >> 8).unwrap();
+    page[header + 1] = u8::try_from(offset & 0xff).unwrap();
+    page[offset..].copy_from_slice(cell);
+    page
+}
+
+#[test]
+fn a_child_pointer_of_zero_names_a_page_no_file_has() {
+    // An interior table cell: four bytes of child, then a rowid.
+    let page = one_cell(5, 3, &[0, 0, 0, 0, 42]);
+    let parsed = Page::parse(&page, 2, 512).unwrap();
+    assert_eq!(parsed.kind(), Kind::InteriorTable);
+    assert_eq!(parsed.cell(0), Err(Error::Page(0)));
+
+    // An interior index cell: four bytes of child, a payload length, then
+    // the payload.
+    let page = one_cell(2, 3, &[0, 0, 0, 0, 2, 1, 9]);
+    let parsed = Page::parse(&page, 2, 512).unwrap();
+    assert_eq!(parsed.cell(0), Err(Error::Page(0)));
+
+    // The same cells with a child that exists read as cells.
+    let page = one_cell(5, 3, &[0, 0, 0, 4, 42]);
+    let parsed = Page::parse(&page, 2, 512).unwrap();
+    assert_eq!(
+        parsed.cell(0),
+        Ok(Cell::TableInterior {
+            child: 4,
+            rowid: 42
+        })
+    );
+}

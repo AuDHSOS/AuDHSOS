@@ -64,6 +64,11 @@ through it.
 sh tools/sqlite.sh --version 3.53.4
 ```
 
+`sh tools/sqlite-fixtures.sh` uses the same build: it writes the fixture
+databases of `db-sqlite` with the shell, so that what the tests read is
+the format as SQLite writes it. The fixtures are committed and the script
+is run when they change.
+
 `sh tools/xtask.sh norec` is what that build is for: the NoREC fuzzer of
 [`crates/tools/norec`](../crates/tools/norec/README.md) drives the
 `sqlite3` shell it left behind. It is not a step of `check` and needs no

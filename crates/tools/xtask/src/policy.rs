@@ -1139,6 +1139,9 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     },
     FuzzTarget { name: "tls_record" },
     FuzzTarget { name: "x509" },
+    FuzzTarget {
+        name: "sqlite_image",
+    },
 ];
 
 /// An external conformance suite: a checkout this project measures itself

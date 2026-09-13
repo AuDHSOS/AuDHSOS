@@ -123,6 +123,12 @@ within each target and skipping targets whose corpus directory is absent.
   for a target rather than for the host is not gated, and neither are
   `xtask` and `docpdf`, which are reported only. CI fails below the
   thresholds. Uncovered lines must be justified in review.
+- Condition coverage: `cargo xtask coverage --condition` builds the same
+  tests with `-Z coverage-options=branch,condition`, which counts every
+  operand of a compound decision and not only the decision. The same
+  thresholds apply to that column. It is not a step of `check`: it is the
+  measurement document 15, section 15.7, holds the SQLite port to, and the
+  reason it is not MC/DC is stated there.
 - QEMU coverage is not measured. Each adapter crate keeps a table that maps
   every public function to at least one QEMU test. `cargo xtask
   check-layering` verifies that every function and every test named in the
@@ -3002,6 +3008,26 @@ it.
   follows its page, and a buffer shorter than the payload is refused
   rather than filled; a root that names an index tree is refused by a walk
   of rows, and so is a root the file does not have.
+
+- The configuration matrix of document 15, section 15.6: the same three
+  rows and the same index, written by the shell under eleven
+  configurations — page sizes 512, 1024, 4096 and 65536, the three text
+  encodings, 32 reserved bytes per page, a file that has been in
+  write-ahead logging, and both vacuum settings — and read back through
+  the same four assertions. Each fixture holds the header it was written
+  under, names the same table and the same index, answers the same three
+  rows with the same values, and keeps its index entries in index pages in
+  the order the indexed column collates in. A configuration the shell
+  cannot write is not in the table: `PRAGMA legacy_file_format` is a no-op
+  in the version that writes these, so schema format 1 is reached by
+  editing a header rather than by writing a file.
+- `sqlite_image`, a fuzz target over the whole reader: arbitrary bytes to
+  `Image::open`, then every page, every cell, every tree the schema names,
+  and every record, with a bound on the rows read and on the payload
+  assembled. What it holds is that a file that lies is refused rather than
+  followed. It found a child pointer of zero — a page number no file has,
+  which the cell reader handed back — and that input is in the regression
+  corpus under the name it was fixed by.
 
 What is not tested here is everything the crate does not do: writing, the
 free list, pointer maps, the write-ahead log, and index walks. Document 15,

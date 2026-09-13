@@ -55,7 +55,9 @@ subcommands:
                    focused jrs formatting, tests, clippy and no_std cross-check
   regex-check [--fix-format]
                    focused Thompson regex checks and no_std cross-check
-  coverage         host coverage with thresholds
+  coverage [--condition]
+                   host coverage with thresholds; --condition counts every
+                   operand of a compound decision as well
   miri             run the host-executable adapter crates under Miri
   doc              build documentation with warnings as errors
   fuzz [--target <name>] [--time <seconds>] [--regression]
@@ -135,7 +137,7 @@ fn run() -> Result<(), Error> {
         "norec" => commands::norec(&root, options),
         "jrs-check" => commands::jrs_check(&root, options),
         "regex-check" => commands::regex_check(&root, options),
-        "coverage" => none(subcommand, options).and_then(|()| commands::coverage(&root)),
+        "coverage" => commands::coverage(&root, options),
         "miri" => none(subcommand, options).and_then(|()| commands::miri(&root)),
         "doc" => none(subcommand, options).and_then(|()| commands::doc(&root)),
         "fuzz" => commands::fuzz(&root, options),
