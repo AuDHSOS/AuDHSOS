@@ -90,11 +90,12 @@ written for a verifier and branched on the bits it was given, the decision
 carries the masked multiplication that signing now runs on. ECDSA signing
 stays behind `test-signing`.
 
-Steps S1 to S3 are built: the wire types, the binary packet, the
+Steps S1 to S4 are built: the wire types, the binary packet, the
 identification string, the negotiation, both key exchange methods, the
-exchange hash, the six keys, and the cipher. What is missing is the host
-key of S4, the authentication exchange of S5, the channel layer of S6,
-the re-exchange of S7, and the integration of S8. Two things are also
+exchange hash, the six keys, the cipher, and the host key with the
+signature over the exchange hash. What is missing is the authentication
+exchange of S5, the channel layer of S6, the re-exchange of S7, and the
+integration of S8. Two things are also
 missing that are not code, and 14.13 lists them.
 
 ## 14.4 The documents
@@ -209,7 +210,7 @@ writer, the sequence numbers, and the session identifier that the
 authentication signature is over. `audhsos-tls` is one crate with
 `record`, `handshake`, `keys` and `client` as modules, and this follows
 it: `wire`, `packet`, `ident`, `msg`, `kex`, `exchange`, `keys`,
-`cipher`, `auth`, `channel`, `client`. The small ones carry what every
+`cipher`, `hostkey`, `auth`, `channel`, `client`. The small ones carry what every
 layer above them cites: `ident` is the identification string of RFC 4253,
 section 4.2, which is neither a packet nor a key exchange and goes into
 the exchange hash of both, and `msg` is the message numbers of RFC 4250.
@@ -355,9 +356,10 @@ question and not a protocol one. There is no X11 forwarding.
 
 ## 14.10 Trusting a host key
 
-Which rule the client is given is open (14.13). The interface is decided:
-the client takes the rule at construction and judges no key on its own,
-so one place states which hosts this system will talk to.
+Which rule the client is given is open (14.13). The interface is built:
+`hostkey::Trust` is a parameter, `hostkey::accept` refuses a key no rule
+admits before it checks a signature, and the crate judges no key on its
+own, so one place states which hosts this system will talk to.
 
 SSH has no certificate chain, so a client trusts a host key because it
 read that key from a source it trusts. This system holds two such
@@ -366,7 +368,9 @@ sources.
 - A fingerprint in the image: costs nothing at run time, and reaches the
   hosts that were known when the image was built. It is compiled into the
   client, or it is a file of the boot volume, which this system reads and
-  does not write (document 15, decision D4).
+  does not write (document 15, decision D4). `hostkey::Fingerprint` is
+  that rule, over the SHA-256 of the blob that OpenSSH prints after
+  `SHA256:`.
 - A file on the scratch disk: `server-fs` creates, reads, writes and
   removes files, and a file written in one boot is found in the next with
   the same bytes (document 15, step S8, test 3), which is what trust on
@@ -441,7 +445,7 @@ listed against until that step is reached.
 
 | What is open | Where it is felt | Shape of the answer |
 |--------------|------------------|---------------------|
-| How a host key is trusted | step S4, and 14.10 | a rule the client is given at construction; the question is which of the two places of 14.10 it reads, the image or the volume |
+| Which host key rule a client is given | step S8, and 14.10 | the rule is a parameter of the crate and `hostkey::Fingerprint` is one; the question is which of the two places of 14.10 the program that constructs a client reads, the image or the volume |
 | Where the client's private key comes from | step S5 | a file of the boot volume the image writer puts there, a file on the scratch disk, or generated per boot, in which case the far side must already know the public half |
 
 Four questions that stood here are answered. Whether `ed25519::sign`
@@ -469,7 +473,7 @@ definition of done every phase and every track step uses.
 | S1 | `wire`, `packet` | M | implemented: the types of RFC 4251, section 5, encoded and decoded with the vectors of that section, and the binary packet framed, padded and read back, with the sequence numbers (catalog 6.6.68) |
 | S2 | `kex` | L | implemented: the identification string, the message numbers, `SSH_MSG_KEXINIT` and the negotiation rule (catalog 6.6.69); both key exchange methods over `crypto-dh` (D-122) and `crypto-ec::x25519`, the exchange hash, the six keys of section 7.2, `SSH_MSG_NEWKEYS`, and the aborts (catalog 6.6.70) |
 | S3 | the cipher | M | implemented: `chacha20-poly1305@openssh.com` over the packet layer, against the worked example of appendix A of the draft D-134 keeps (catalog 6.6.70) |
-| S4 | host keys | S-M | the `ssh-ed25519` blobs of RFC 8709, the signature over `H` verified, and the trust rule as a parameter |
+| S4 | host keys | S-M | implemented: the `ssh-ed25519` blobs of RFC 8709, sections 4 and 6, the signature over `H` verified, the fingerprint of a blob, and the trust rule as a parameter (catalog 6.6.75) |
 | S5 | `auth` | M | `publickey` with the signature of RFC 4252, section 7, the failure and success paths, and `ext-info-c` with `server-sig-algs` |
 | S6 | `channel` | L | the channel messages, the window, the session channel, `exec` and `shell`, extended data, `exit-status`, and the close sequence |
 | S7 | re-exchange | S-M | a re-exchange from either side, the byte and time thresholds, and the disconnect messages with the reason codes of RFC 4250 |

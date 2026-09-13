@@ -20,14 +20,15 @@ with the two phases of kernel and bus work that came first.
 
 One track is begun and not finished: Secure Shell as a client, which
 D-123 admits and [document 14](14-secure-shell-as-a-client.md)
-specifies, as track S of the roadmap. Steps S1 to S3 exist: the wire
+specifies, as track S of the roadmap. Steps S1 to S4 exist: the wire
 types and the binary packet of `audhsos-ssh`, the greeting and the
 negotiation, both key exchange methods with the exchange hash and the six
-keys, and the cipher over the packet layer, whose documents are in
-[openssh/](openssh) (D-134). Two questions inside that track are open —
-how a host key is trusted and where the client's private key comes from —
-and each is a precondition of one of its steps rather than of the track;
-section 14.13 names them.
+keys, the cipher over the packet layer, whose documents are in
+[openssh/](openssh) (D-134), and the host key with the signature over the
+exchange hash. Two questions inside that track are open — which host key
+rule a client is given and where its private key comes from — and each is
+a precondition of one of its steps rather than of the track; section
+14.13 names them.
 
 ## Reading order
 

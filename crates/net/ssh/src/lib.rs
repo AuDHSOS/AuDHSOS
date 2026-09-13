@@ -8,6 +8,7 @@
 pub mod cipher;
 pub mod error;
 pub mod exchange;
+pub mod hostkey;
 pub mod ident;
 pub mod kex;
 pub mod keys;
@@ -18,6 +19,7 @@ pub mod wire;
 pub use cipher::ChaChaPoly;
 pub use error::SshError;
 pub use exchange::{Ephemeral, HashInput, Method, Reply, exchange_hash};
+pub use hostkey::{Fingerprint, HostKey, Trust, accept};
 pub use ident::Greeting;
 pub use kex::{Choice, KexInit, Proposal, negotiate};
 pub use keys::{Key, derive};

@@ -2957,6 +2957,32 @@ answers three of twenty thousand cases two ways, each a `LEFT JOIN` whose
 unmatched row the `WHERE` clause drops and the sum keeps. The same cases
 agree on 3.53.4.
 
+### 6.6.75 The host key (`audhsos-ssh`)
+
+Step S4 of 8.26. RFC 8709 publishes no vector, so the blobs are built a
+second time in the tests and the signatures come from `crypto-ec`, whose
+own tests hold it to RFC 8032.
+
+- A key blob is the name and thirty-two octets (RFC 8709, section 4), and
+  a parsed key writes back the bytes it was read from; a buffer short by
+  one byte takes none of it.
+- A blob of another algorithm is refused, `ssh-rsa` and `ssh-ed448` among
+  them, and so is a key of another length, a byte after the key, and every
+  prefix of a whole blob.
+- The signature blob of section 6 verifies over the exchange hash; one
+  made under another host's key does not, and one bit of the hash decides
+  it.
+- A signature blob naming another algorithm, carrying other than
+  sixty-four octets, or holding a byte after them is refused before any
+  arithmetic runs, and an empty blob ends early.
+- The fingerprint is the SHA-256 of the blob, which is what OpenSSH prints
+  after `SHA256:`; a rule of one fingerprint admits the host it names and
+  no other.
+- What a client accepts is a key and a signature together: a key no rule
+  admits is refused before the signature is checked, a signature that is
+  not the peer's ends the exchange, and a blob that is no key ends it
+  before the rule is asked.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

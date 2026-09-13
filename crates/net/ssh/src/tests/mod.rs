@@ -7,6 +7,7 @@
 mod cipher;
 mod error;
 mod exchange;
+mod hostkey;
 mod ident;
 mod kex;
 mod keys;

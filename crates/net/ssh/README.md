@@ -3,8 +3,9 @@
 The SSH-2 client of [document 14](../../../docs/14-secure-shell-as-a-client.md),
 sans-I/O: it is given bytes that arrived and a buffer to write into, and
 it never reads a socket, allocates, or asks what time it is. What exists
-today is step S1 of track S, the two layers everything else is written
-in.
+today is steps S1 to S4 of track S: the two layers everything else is
+written in, the negotiation, both key exchange methods, the cipher, and
+the host key.
 
 ## `wire`
 
@@ -115,8 +116,21 @@ With this cipher the length field is outside the region the padding
 aligns, which the worked example of its draft shows: a packet of 76
 bytes whose length field names 72.
 
+## `hostkey`
+
+The `ssh-ed25519` blobs of RFC 8709, sections 4 and 6, and the rule that
+says which host key this client will talk to. [`hostkey::accept`] reads
+`K_S`, asks the rule, and checks the signature over the exchange hash, in
+that order, so a key from a host this client will not reach costs no
+signature check.
+
+SSH has no certificate chain, so the rule is a parameter and this crate
+judges no key of its own (document 14, section 14.10).
+[`hostkey::Fingerprint`] is the first of the two sources that section
+names, a SHA-256 the image carries; the second is a file, which a caller
+reads through the file system server and this crate does not.
+
 ## What is not here
 
-Everything above the transport: the host key blobs and the signature
-over the exchange hash (S4), the authentication (S5), the channels (S6),
-and the re-exchange (S7).
+Everything above the key exchange: the authentication (S5), the channels
+(S6), and the re-exchange (S7).

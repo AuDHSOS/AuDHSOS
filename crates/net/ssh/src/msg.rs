@@ -50,4 +50,9 @@ pub mod disconnect {
 
     /// `SSH_DISCONNECT_MAC_ERROR`, which a tag that does not check is.
     pub const MAC_ERROR: u32 = 5;
+
+    /// `SSH_DISCONNECT_HOST_KEY_NOT_VERIFIABLE`, for a host key no rule
+    /// admits and for a signature that is not the peer's over the
+    /// exchange hash.
+    pub const HOST_KEY_NOT_VERIFIABLE: u32 = 9;
 }

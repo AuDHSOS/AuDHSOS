@@ -7,6 +7,22 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Track S, step S4, the host key: `audhsos-ssh` gains `hostkey`, which
+  reads the `ssh-ed25519` blobs of RFC 8709, sections 4 and 6, checks the
+  signature over the exchange hash, and computes the SHA-256 fingerprint
+  of a blob that OpenSSH prints after `SHA256:`. SSH has no certificate
+  chain, so which key a client will talk to is a rule the crate is given
+  and never decides: `Trust` is a trait, `Fingerprint` is the one rule
+  this crate carries — the first of the two sources 14.10 names, a digest
+  the image holds — and `accept` reads the blob, asks the rule, and checks
+  the signature in that order, so a key from a host this client will not
+  reach costs no signature check. A blob of another algorithm, a key or a
+  signature of another length, and a byte after either are refused before
+  any arithmetic runs. Three refusals are new — a blob this client does
+  not read, a key no rule admits, and a signature that is not the peer's —
+  and `SSH_DISCONNECT_HOST_KEY_NOT_VERIFIABLE` of RFC 4250, section
+  4.2.2, is the reason code the last two carry. Catalog 6.6.75.
+
 - `norec`, a NoREC fuzzer: random SQL against a database engine, checked
   against the same query in a form that engine cannot optimize. One case
   is a random database, a random predicate, and two queries over it —

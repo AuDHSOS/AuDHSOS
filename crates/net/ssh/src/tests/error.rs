@@ -25,6 +25,9 @@ fn every_refusal_renders_a_sentence_of_its_own() {
         SshError::Identification,
         SshError::Negotiation("cipher"),
         SshError::KeyExchangeFailed,
+        SshError::HostKey,
+        SshError::HostKeyRejected,
+        SshError::Signature,
         SshError::Tag,
         SshError::Rng(RngError::Entropy(EntropyError::Unavailable)),
     ]
