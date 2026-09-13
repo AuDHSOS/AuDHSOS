@@ -15,7 +15,7 @@
 
 use alloc::vec::Vec;
 
-use crate::ast::{Arena, BinaryOp, ExprId, LikeOp, Literal, Node, UnaryOp};
+use crate::ast::{Arena, BinaryOp, ExprId, LikeOp, Literal, Node, SelectId, Span, UnaryOp};
 use crate::func::{self, Function};
 use crate::header::Encoding;
 use crate::number::{self, Outcome};
@@ -75,6 +75,22 @@ impl Answer {
     }
 }
 
+/// A statement an expression uses, which the engine that walks the
+/// rows answers and this module only names.
+#[derive(Clone, Copy, Debug)]
+pub enum Used {
+    /// `(SELECT ...)` as a value.
+    Value(SelectId),
+    /// `EXISTS (SELECT ...)`.
+    Exists(SelectId),
+    /// `x IN (SELECT ...)`: what is tested, where it is looked for, and
+    /// whether `NOT` precedes it.
+    In(ExprId, SelectId, bool),
+    /// `x IN table`: what is tested, the schema where one was named,
+    /// the table, and whether `NOT` precedes it.
+    InTable(ExprId, Option<Span>, Span, bool),
+}
+
 /// Where the value of a column comes from.
 pub trait Row {
     /// The column `column` of the table `table` of the schema `schema`,
@@ -108,6 +124,18 @@ pub trait Row {
     /// its name, so that two `count(*)` in one statement are one column
     /// each and this module needs to know nothing about grouping.
     fn aggregate(&self, _id: ExprId) -> Option<Value> {
+        None
+    }
+
+    /// What the statement written at `id` answered for this row, or
+    /// nothing where this row answers no statement.
+    ///
+    /// What the statement `used` answers for this row, or nothing where
+    /// this row answers no statement.
+    ///
+    /// A statement used as a value is answered by whatever walks the
+    /// rows, because this module reads one row and knows no tables.
+    fn answered(&self, _used: Used) -> Option<Value> {
         None
     }
 }
@@ -159,11 +187,24 @@ pub fn evaluate_collated(
     sql: &[u8],
     row: &dyn Row,
 ) -> Result<(Value, Collation), Error> {
+    let (value, _, written) = evaluate_compared(arena, id, sql, row)?;
+    Ok((value, written.unwrap_or(row.collation())))
+}
+
+/// The same, with the affinity a comparison converts under and the
+/// collation written on the expression, where one is.
+///
+/// # Errors
+///
+/// [`Error`] names what it could not answer and why.
+pub fn evaluate_compared(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    row: &dyn Row,
+) -> Result<(Value, Affinity, Option<Collation>), Error> {
     let answered = answer(arena, id, sql, row, 0)?;
-    Ok((
-        answered.value,
-        answered.collation.unwrap_or(row.collation()),
-    ))
+    Ok((answered.value, answered.affinity, answered.collation))
 }
 
 /// One node.
@@ -254,13 +295,28 @@ fn answer(
             escape,
             negated,
         } => like(arena, op, value, pattern, escape, negated, sql, row, deeper),
-        Node::Variable(_)
-        | Node::Row(_)
-        | Node::Subquery(_)
-        | Node::Exists(_)
-        | Node::InSelect { .. }
-        | Node::InTable { .. } => Err(Error::Unsupported),
+        Node::Subquery(select) => used(row, Used::Value(select)),
+        Node::Exists(select) => used(row, Used::Exists(select)),
+        Node::InSelect {
+            value,
+            select,
+            negated,
+        } => used(row, Used::In(value, select, negated)),
+        Node::InTable {
+            value,
+            schema,
+            table,
+            negated,
+        } => used(row, Used::InTable(value, schema, table, negated)),
+        Node::Variable(_) | Node::Row(_) => Err(Error::Unsupported),
     }
+}
+
+/// What a statement an expression uses answers, which is a refusal
+/// where the row answers no statement.
+fn used(row: &dyn Row, what: Used) -> Result<Answer, Error> {
+    row.answered(what)
+        .map_or(Err(Error::Unsupported), |value| Ok(Answer::plain(value)))
 }
 
 /// `name(args)`, which is a function where this engine has one.

@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- A statement used as a value in `db-sqlite`: `(SELECT ...)`, `EXISTS`,
+  `IN (SELECT ...)` and `IN table`, each answered where it is read and
+  not before, so an `ON`, a `WHERE`, a `HAVING` and the branch a `CASE`
+  takes read one and an untaken branch reads none. A statement that
+  names a column no side of its own `FROM` answers reads it from the row
+  of the statement that encloses it, which is a correlated statement
+  answered once per outer row. An `IN` is three-valued, converts under
+  the affinity of both sides together, and compares under the collation
+  written on the left or the looked-in column's.
+
 - A statement inside a statement in `db-sqlite`: a `SELECT` written
   inside a `FROM` and a `WITH` term, each answered once before the outer
   walk begins. A side of a `FROM` now carries the columns it answers —

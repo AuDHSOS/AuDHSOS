@@ -15,8 +15,15 @@
 //! A side of a `FROM` is a table of the schema, a statement written
 //! inside the `FROM`, or a `WITH` term. Each carries a shape — one
 //! name, one affinity and one written collation per column — so nothing
-//! below asks which of the three it is reading. Every shape of statement
-//! this engine does not answer refuses by name rather than answering
+//! below asks which of the three it is reading.
+//!
+//! An expression uses a statement in four shapes — `(SELECT ...)` as a
+//! value, `EXISTS`, `IN (SELECT ...)` and `IN table` — and each is
+//! answered where it is read, against the row the walk stands on. A
+//! statement that names a column no side of its own `FROM` answers
+//! reads it from the row of the statement that encloses it, at O(n·m)
+//! for `n` outer rows and `m` inner ones. Every shape of statement this
+//! engine does not answer refuses by name rather than answering
 //! something near it.
 
 use alloc::boxed::Box;
@@ -27,7 +34,7 @@ use crate::ast::{
     Arena, Compound, Distinct, ExprId, JoinKind, Literal, Node, Order, Range, ResultColumn, Select,
     SelectId, SourceKind, Span, UnaryOp,
 };
-use crate::eval::{self, evaluate_collated, evaluate_row};
+use crate::eval::{self, Used, evaluate_collated, evaluate_compared, evaluate_row};
 use crate::header::Encoding;
 use crate::image::Image;
 use crate::parse;
@@ -77,6 +84,9 @@ pub enum Error {
     /// A `WITH` term that writes more or fewer column names than its
     /// statement answers columns.
     Names,
+    /// A statement used as a value, or looked in by an `IN`, that
+    /// answers more than the one column either reads.
+    Columns,
     /// A shape of statement this engine does not answer yet: a `WITH`
     /// written `RECURSIVE`, a table-valued function.
     Unsupported,
@@ -174,6 +184,35 @@ struct Answered {
     answer: Answer,
     /// The columns.
     shape: Shape,
+}
+
+/// What a statement is answered against: the `WITH` terms it may name,
+/// and the row of the statement that encloses it.
+#[derive(Clone, Copy)]
+struct Scope<'a> {
+    /// The `WITH` terms in scope, each already answered.
+    terms: &'a [(Vec<u8>, Answered)],
+    /// The row the enclosing statement stands on, which a correlated
+    /// statement reads its columns from.
+    outer: Option<&'a dyn eval::Row>,
+}
+
+/// What a statement written inside an expression is answered by.
+///
+/// A cursor carries one so that `(SELECT ...)`, `EXISTS` and `IN` are
+/// answered where they are read and not before: an `ON` condition, a
+/// `WHERE` and a `HAVING` each read one, and a `CASE` reads only the
+/// branch it takes.
+#[derive(Clone, Copy)]
+struct Reach<'a> {
+    /// The database the statement reads.
+    database: &'a Database<'a>,
+    /// The tree the statement was parsed into.
+    arena: &'a Arena,
+    /// The text that tree points into.
+    sql: &'a [u8],
+    /// The `WITH` terms in scope, and the row that encloses this one.
+    scope: Scope<'a>,
 }
 
 /// Where a side of a `FROM` draws its rows.
@@ -348,7 +387,11 @@ impl<'a> Database<'a> {
     /// [`Error`] names what it could not answer and why.
     pub fn query(&self, sql: &[u8]) -> Result<Answer, Error> {
         let (arena, root) = parse::statement(sql)?;
-        Ok(self.statement(&arena, root, sql, &[])?.answer)
+        let scope = Scope {
+            terms: &[],
+            outer: None,
+        };
+        Ok(self.statement(&arena, root, sql, scope)?.answer)
     }
 
     /// A statement: one core, or several put together.
@@ -365,19 +408,23 @@ impl<'a> Database<'a> {
         arena: &Arena,
         id: SelectId,
         sql: &[u8],
-        outer: &[(Vec<u8>, Answered)],
+        scope: Scope<'_>,
     ) -> Result<Answered, Error> {
         let first = arena.select(id).ok_or(Error::Unsupported)?;
-        let terms = self.terms(arena, &first, sql, outer)?;
+        let held = self.terms(arena, &first, sql, scope)?;
+        let scope = Scope {
+            terms: &held,
+            outer: scope.outer,
+        };
         if first.compound.is_none() {
-            return self.core(arena, id, sql, true, &terms);
+            return self.core(arena, id, sql, true, scope);
         }
         let mut answers: Vec<Answered> = Vec::new();
         let mut operators: Vec<Compound> = Vec::new();
         let mut at = Some(id);
         while let Some(id) = at {
             let core = arena.select(id).ok_or(Error::Unsupported)?;
-            let mine = self.core(arena, id, sql, false, &terms)?;
+            let mine = self.core(arena, id, sql, false, scope)?;
             if answers
                 .first()
                 .is_some_and(|first: &Answered| first.answer.names.len() != mine.answer.names.len())
@@ -411,7 +458,14 @@ impl<'a> Database<'a> {
         if !keys.is_empty() {
             sort_by_keys(&mut answer.rows, &keys, &collations);
         }
-        limit(arena, &first, sql, &mut answer.rows)?;
+        let reach = Reach {
+            database: self,
+            arena,
+            sql,
+            scope,
+        };
+        let cursor = Cursor::new(self.collation(), self.encoding, reach);
+        limit(arena, &first, sql, &mut answer.rows, &cursor)?;
         Ok(Answered { answer, shape })
     }
 
@@ -433,13 +487,20 @@ impl<'a> Database<'a> {
         id: SelectId,
         sql: &[u8],
         whole: bool,
-        terms: &[(Vec<u8>, Answered)],
+        scope: Scope<'_>,
     ) -> Result<Answered, Error> {
         let select = arena.select(id).ok_or(Error::Unsupported)?;
+        let reach = Reach {
+            database: self,
+            arena,
+            sql,
+            scope,
+        };
         if !select.values.is_empty() {
-            return listed(arena, &select, sql);
+            let cursor = Cursor::new(self.collation(), self.encoding, reach);
+            return listed(arena, &select, sql, &cursor);
         }
-        let sides = self.sides(arena, &select, sql, terms)?;
+        let sides = self.sides(arena, &select, sql, scope)?;
         let shape = shape(arena, &select, sql, &sides)?;
         let collations = self.collations(&shape);
         let names: Vec<Vec<u8>> = shape
@@ -455,14 +516,14 @@ impl<'a> Database<'a> {
         let calls = aggregates(arena, &select, sql)?;
         let mut rows: Vec<Sorted> = Vec::new();
         if calls.is_empty() && select.group.is_empty() {
-            self.scan(&sides, arena, sql, &mut |cursor: &Cursor<'_>| {
+            self.scan(&sides, arena, sql, reach, &mut |cursor: &Cursor<'_>| {
                 if keep(arena, select.filter, sql, cursor)? {
                     rows.push(sorted(arena, &select, sql, cursor, &keys)?);
                 }
                 Ok(())
             })?;
         } else {
-            for group in self.groups(arena, &select, sql, &sides, &calls)? {
+            for group in self.groups(arena, &select, sql, &sides, &calls, reach)? {
                 rows.push(sorted(arena, &select, sql, &group, &keys)?);
             }
         }
@@ -474,7 +535,8 @@ impl<'a> Database<'a> {
             distinct(&mut rows, &collations);
         }
         if whole {
-            limit(arena, &select, sql, &mut rows)?;
+            let cursor = Cursor::new(self.collation(), self.encoding, reach);
+            limit(arena, &select, sql, &mut rows, &cursor)?;
         }
         Ok(Answered {
             answer: Answer { names, rows },
@@ -494,7 +556,7 @@ impl<'a> Database<'a> {
         arena: &Arena,
         select: &Select,
         sql: &'s [u8],
-        terms: &[(Vec<u8>, Answered)],
+        scope: Scope<'_>,
     ) -> Result<Vec<Side<'s>>, Error> {
         let mut out: Vec<Side<'s>> = Vec::new();
         for source in arena.sources(select.from) {
@@ -512,7 +574,8 @@ impl<'a> Database<'a> {
                     // with a schema in front of it is a table.
                     let found = match schema {
                         Some(_) => None,
-                        None => terms
+                        None => scope
+                            .terms
                             .iter()
                             .find(|(term, _)| term.eq_ignore_ascii_case(written)),
                     };
@@ -532,7 +595,7 @@ impl<'a> Database<'a> {
                     }
                 }
                 SourceKind::Select(id) => {
-                    let answered = self.statement(arena, id, sql, terms)?;
+                    let answered = self.statement(arena, id, sql, scope)?;
                     (
                         answered.shape,
                         Source::Rows(answered.answer.rows),
@@ -578,21 +641,98 @@ impl<'a> Database<'a> {
         Ok(out)
     }
 
+    /// What one statement written inside an expression answers for a
+    /// row: `(SELECT ...)` as a value, `EXISTS`, `IN (SELECT ...)` and
+    /// `IN table`.
+    ///
+    /// The statement is answered here and not before, so a correlated
+    /// one is answered once per row of the statement that encloses it:
+    /// O(n·m) for `n` outer rows and `m` inner ones.
+    fn answer(
+        &self,
+        arena: &Arena,
+        sql: &[u8],
+        used: Used,
+        scope: Scope<'_>,
+        row: &dyn eval::Row,
+    ) -> Result<Value, Error> {
+        let inner = Scope {
+            terms: scope.terms,
+            outer: Some(row),
+        };
+        match used {
+            Used::Value(select) => {
+                let answered = self.statement(arena, select, sql, inner)?;
+                one(&answered.shape)?;
+                // A statement that answers no row answers `NULL`, and
+                // one that answers several answers its first.
+                Ok(answered
+                    .answer
+                    .rows
+                    .first()
+                    .and_then(|first| first.first())
+                    .cloned()
+                    .unwrap_or(Value::Null))
+            }
+            Used::Exists(select) => {
+                let answered = self.statement(arena, select, sql, inner)?;
+                Ok(Value::Int(i64::from(!answered.answer.rows.is_empty())))
+            }
+            Used::In(value, select, negated) => {
+                let answered = self.statement(arena, select, sql, inner)?;
+                let column = one(&answered.shape)?;
+                contained(
+                    arena,
+                    value,
+                    sql,
+                    row,
+                    &answered.answer.rows,
+                    column,
+                    negated,
+                )
+            }
+            Used::InTable(value, schema, table, negated) => {
+                if schema.is_some_and(|span| !is_main(span.text(sql))) {
+                    return Err(Error::NoTable);
+                }
+                let stored = self.find(table.text(sql)).ok_or(Error::NoTable)?;
+                let side = Side {
+                    shape: shape_of(&stored.table),
+                    source: Source::Table(stored),
+                    name: Vec::new(),
+                    kind: JoinKind::Inner,
+                    on: None,
+                    using: Vec::new(),
+                };
+                let column = one(&side.shape)?;
+                let mut rows = Vec::new();
+                for step in self.feed(&side) {
+                    rows.push(step?.1);
+                }
+                contained(arena, value, sql, row, &rows, column, negated)
+            }
+        }
+    }
+
     /// The `WITH` terms of a statement, each answered once.
     fn terms(
         &self,
         arena: &Arena,
         select: &Select,
         sql: &[u8],
-        outer: &[(Vec<u8>, Answered)],
+        scope: Scope<'_>,
     ) -> Result<Vec<(Vec<u8>, Answered)>, Error> {
-        let mut out = outer.to_vec();
+        let mut out = scope.terms.to_vec();
         for cte in arena.ctes(select.ctes) {
             if select.recursive {
                 // A term that reads itself is a later step.
                 return Err(Error::Unsupported);
             }
-            let mut answered = self.statement(arena, cte.select, sql, &out)?;
+            let mine = Scope {
+                terms: &out,
+                outer: scope.outer,
+            };
+            let mut answered = self.statement(arena, cte.select, sql, mine)?;
             let written = arena.names(cte.columns);
             if !written.is_empty() {
                 if written.len() != answered.answer.names.len() {
@@ -620,9 +760,10 @@ impl<'a> Database<'a> {
         sides: &'b [Side<'b>],
         arena: &Arena,
         sql: &[u8],
+        reach: Reach<'b>,
         each: &mut dyn FnMut(&Cursor<'b>) -> Result<(), Error>,
     ) -> Result<(), Error> {
-        let mut cursor = Cursor::new(self.collation(), self.encoding);
+        let mut cursor = Cursor::new(self.collation(), self.encoding, reach);
         if sides.is_empty() {
             // A statement with no `FROM` reads one row of nothing.
             return each(&cursor);
@@ -762,10 +903,11 @@ impl<'a> Database<'a> {
         sql: &[u8],
         sides: &'b [Side<'b>],
         calls: &[Call],
+        reach: Reach<'b>,
     ) -> Result<Vec<Cursor<'b>>, Error> {
         let terms = grouping(arena, select, sql, sides)?;
         let mut groups: Vec<Group<'b>> = Vec::new();
-        self.scan(sides, arena, sql, &mut |cursor: &Cursor<'b>| {
+        self.scan(sides, arena, sql, reach, &mut |cursor: &Cursor<'b>| {
             if !keep(arena, select.filter, sql, cursor)? {
                 return Ok(());
             }
@@ -810,6 +952,7 @@ impl<'a> Database<'a> {
                 collation: self.collation(),
                 encoding: self.encoding,
                 aggregates: answers,
+                reach,
             };
             if keep(arena, select.having, sql, &cursor)? {
                 out.push(cursor);
@@ -820,7 +963,12 @@ impl<'a> Database<'a> {
 }
 
 /// A `VALUES`, which answers its rows and names them by their place.
-fn listed(arena: &Arena, select: &Select, sql: &[u8]) -> Result<Answered, Error> {
+fn listed(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    outer: &dyn eval::Row,
+) -> Result<Answered, Error> {
     let mut rows = Vec::new();
     for row in arena.children(select.values) {
         // The parser builds each row of a `VALUES` as a row node, so
@@ -832,7 +980,7 @@ fn listed(arena: &Arena, select: &Select, sql: &[u8]) -> Result<Answered, Error>
             .for_each(|node| arena.under(node, |item| items.push(item)));
         let mut values = Vec::new();
         for item in items {
-            values.push(evaluate_row(arena, item, sql, &eval::NoRow)?);
+            values.push(evaluate_row(arena, item, sql, outer)?);
         }
         if rows
             .first()
@@ -863,6 +1011,54 @@ fn listed(arena: &Arena, select: &Select, sql: &[u8]) -> Result<Answered, Error>
             key: None,
         },
     })
+}
+
+/// The one column a statement used as a value answers, which is a
+/// refusal where it answers any other number.
+const fn one(shape: &Shape) -> Result<&Column, Error> {
+    match shape.columns.as_slice() {
+        [column] => Ok(column),
+        _ => Err(Error::Columns),
+    }
+}
+
+/// Whether a value is among the rows a statement answered.
+///
+/// The answer is three-valued: a `NULL` on either side is neither in
+/// nor out, so an `IN` that matches nothing but read a `NULL` answers
+/// `NULL` and a `NOT IN` over it answers `NULL` as well. This is
+/// `sqlite3ExprCodeIN`, whose comparison converts under the affinity of
+/// the two sides together and compares under the collation written on
+/// the left, or the column's where the left writes none.
+fn contained(
+    arena: &Arena,
+    value: ExprId,
+    sql: &[u8],
+    row: &dyn eval::Row,
+    rows: &[Vec<Value>],
+    column: &Column,
+    negated: bool,
+) -> Result<Value, Error> {
+    let (left, left_affinity, written) = evaluate_compared(arena, value, sql, row)?;
+    let collation = written.or(column.collation).unwrap_or(row.collation());
+    let affinity = compare_affinity(left_affinity, column.affinity);
+    let mut unknown = false;
+    for held in rows {
+        let mut mine = left.clone();
+        let mut theirs = held.first().cloned().unwrap_or(Value::Null);
+        if mine == Value::Null || theirs == Value::Null {
+            unknown = true;
+            continue;
+        }
+        apply_comparison(&mut mine, &mut theirs, affinity);
+        if compare(&mine, &theirs, collation) == core::cmp::Ordering::Equal {
+            return Ok(Value::Int(i64::from(!negated)));
+        }
+    }
+    if unknown {
+        return Ok(Value::Null);
+    }
+    Ok(Value::Int(i64::from(negated)))
 }
 
 /// Whether the row the walk just read attaches to the ones above it:
@@ -1493,14 +1689,15 @@ fn limit(
     select: &Select,
     sql: &[u8],
     rows: &mut Vec<Vec<Value>>,
+    row: &dyn eval::Row,
 ) -> Result<(), Error> {
     let Some(limit) = select.limit else {
         return Ok(());
     };
-    let count = evaluate_row(arena, limit.count, sql, &eval::NoRow)?.to_integer();
+    let count = evaluate_row(arena, limit.count, sql, row)?.to_integer();
     let skip = match limit.offset {
         None => 0,
-        Some(offset) => evaluate_row(arena, offset, sql, &eval::NoRow)?.to_integer(),
+        Some(offset) => evaluate_row(arena, offset, sql, row)?.to_integer(),
     };
     let skip = usize::try_from(skip).unwrap_or(0);
     rows.drain(..skip.min(rows.len()));
@@ -2027,9 +2224,11 @@ struct Cursor<'a> {
     /// What each aggregate call of the statement answered, where the
     /// row stands for a group.
     aggregates: Vec<(ExprId, Value)>,
+    /// What a statement written inside an expression is answered by.
+    reach: Reach<'a>,
 }
 
-impl Cursor<'_> {
+impl<'a> Cursor<'a> {
     /// What the side at `at` answers for `column`, filled from the
     /// sides a `USING` or a `NATURAL` matched to it where its own value
     /// is `NULL`.
@@ -2050,14 +2249,15 @@ impl Cursor<'_> {
             .unwrap_or(Value::Null)
     }
 
-    /// A cursor that holds no table, which is a statement with no
+    /// A cursor that holds no side, which is a statement with no
     /// `FROM` before it reads its one row of nothing.
-    const fn new(collation: Collation, encoding: Encoding) -> Self {
+    const fn new(collation: Collation, encoding: Encoding, reach: Reach<'a>) -> Self {
         Cursor {
             held: Vec::new(),
             collation,
             encoding,
             aggregates: Vec::new(),
+            reach,
         }
     }
 }
@@ -2076,6 +2276,14 @@ impl eval::Row for Cursor<'_> {
             .iter()
             .find(|(call, _)| *call == id)
             .map(|(_, value)| value.clone())
+    }
+
+    fn answered(&self, used: Used) -> Option<Value> {
+        let reach = self.reach;
+        reach
+            .database
+            .answer(reach.arena, reach.sql, used, reach.scope, self)
+            .ok()
     }
 
     fn column(
@@ -2106,7 +2314,15 @@ impl eval::Row for Cursor<'_> {
             }
             found = Some((at, value, affinity, collation));
         }
-        let (at, value, affinity, collation) = found?;
+        let Some((at, value, affinity, collation)) = found else {
+            // A name no side of this statement answers is the enclosing
+            // statement's, which is what makes a statement correlated.
+            return self
+                .reach
+                .scope
+                .outer
+                .and_then(|outer| outer.column(schema, table, column));
+        };
         // A name written with its table is that table's value; only a
         // bare one is filled from the side a `USING` matched to it.
         let value = match table {

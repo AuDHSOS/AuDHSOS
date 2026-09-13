@@ -323,3 +323,39 @@ N|a|b	R|'x'|1	R|'y'|2
 N|t	R|'A'	R|'a'
 N|t	R|'A'	R|'b'
 N|x	R|1	R|2	R|3
+N|(SELECT max(a) FROM t)	R|2
+N|(SELECT 1)|(SELECT 2)	R|1|2
+N|(SELECT a FROM t WHERE a>99)	R|NULL
+!	sub-select returns 2 columns - expected 1
+N|a|(SELECT count(*) FROM t AS u WHERE u.a<t.a)	R|1|1	R|2|2	R|-3|0
+N|a	R|1
+N|a	R|1
+N|a	R|-3	R|2
+N|EXISTS (SELECT a, b FROM t)	R|1
+N|EXISTS (SELECT a FROM t WHERE 0)	R|0
+N|a	R|2
+N|a	R|-3	R|1
+N|a	R|1	R|2
+N|NULL IN (SELECT a FROM t)	R|NULL
+N|NULL IN (SELECT a FROM t WHERE 0)	R|0
+N|1 IN (SELECT a FROM t WHERE 0)	R|0
+N|1 NOT IN (SELECT a FROM t WHERE 0)	R|1
+!	sub-select returns 2 columns - expected 1
+!	sub-select returns 4 columns - expected 1
+!	no such table: nosuch
+!	no such table: temp.t
+N|column1	R|1
+N|a	R|1	R|2
+N|a	R|-3	R|1
+N|(SELECT p FROM x)	R|7
+N|m	R|2
+N|a	R|-3	R|1	R|2
+N|x	R|1
+N|x
+!	sub-select returns 2 columns - expected 1
+N|'A' IN (SELECT t FROM n)	R|1
+N|t	R|'A'	R|'a'
+N|a	R|'x'	R|'y'
+N|t
+N|t	R|'A'	R|'a'	R|'b'
+N|t

@@ -86,6 +86,18 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
             sql.extend_from_slice(&quoted);
             sql.extend_from_slice(b" LIMIT 4) ORDER BY 1 LIMIT 16");
             answers(&database, &sql);
+            // A statement used as a value, which is answered once per
+            // row of the statement that encloses it.
+            let mut sql = b"SELECT rowid, (SELECT count(*) FROM ".to_vec();
+            sql.extend_from_slice(&quoted);
+            sql.extend_from_slice(b" AS q WHERE q.rowid<p.rowid) FROM ");
+            sql.extend_from_slice(&quoted);
+            sql.extend_from_slice(b" AS p WHERE EXISTS (SELECT 1 FROM ");
+            sql.extend_from_slice(&quoted);
+            sql.extend_from_slice(b") AND p.rowid IN (SELECT rowid FROM ");
+            sql.extend_from_slice(&quoted);
+            sql.extend_from_slice(b") LIMIT 16");
+            answers(&database, &sql);
         }
     }
 

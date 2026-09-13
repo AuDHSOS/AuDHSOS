@@ -3571,6 +3571,34 @@ the `FROM` and a `WITH` term are read the way a table is.
   over every fuzzed file, so the rows a side holds are rows the file
   decides.
 
+### 6.6.93 A statement used as a value (`db-sqlite`)
+
+D-154. An expression uses a statement in four shapes, and the corpus
+puts each to the engine uncorrelated and correlated.
+
+- `(SELECT ...)` as a value answers the first column of its first row,
+  and `NULL` where it answers no row.
+- `EXISTS` answers one or zero whatever the statement answers columns,
+  so `EXISTS (SELECT a, b FROM t)` is not the refusal that
+  `(SELECT a, b FROM t)` is.
+- `IN` is three-valued: `NULL IN (SELECT a FROM t)` answers `NULL`,
+  `NULL IN (SELECT a FROM t WHERE 0)` answers zero, and a `NOT IN` over
+  a column holding one `NULL` answers no row at all.
+- The comparison an `IN` makes converts under the affinity of the two
+  sides together and compares under the collation written on the left,
+  or the looked-in column's where the left writes none, which
+  `SELECT 'A' IN (SELECT t FROM n)` reaches over a `NOCASE` column.
+- `IN table` reads a table of one column, so `t IN s` over
+  `fixtures/wide16.db` walks the table and `a IN t` over
+  `fixtures/small.db` refuses as SQLite refuses.
+- A correlated statement is answered once per row of the statement that
+  encloses it: `SELECT a, (SELECT count(*) FROM t AS u WHERE u.a<t.a)
+  FROM t` counts against the row the outer walk stands on.
+- A `VALUES` and a `LIMIT` read one as well, which is the row a
+  statement with no `FROM` stands on and not a row of nothing.
+- `sqlite_image` puts a correlated count, an `EXISTS` and an `IN` over
+  every fuzzed file in one statement.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
