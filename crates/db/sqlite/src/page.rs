@@ -304,6 +304,21 @@ impl<'a> Page<'a> {
         }
     }
 
+    /// The entry of cell `index`: the record an index page carries.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::PageKind`] where this is a table page, and the errors of
+    /// [`Page::cell`].
+    pub fn entry(&self, index: usize) -> Result<Payload<'a>, Error> {
+        match self.cell(index)? {
+            Cell::IndexLeaf { payload } | Cell::IndexInterior { payload, .. } => Ok(payload),
+            Cell::TableLeaf { .. } | Cell::TableInterior { .. } => {
+                Err(Error::PageKind(self.kind.byte()))
+            }
+        }
+    }
+
     /// The page cell `index` points at, for an interior page.
     ///
     /// # Errors

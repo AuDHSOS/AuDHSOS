@@ -83,8 +83,7 @@ fn answer(bytes: &[u8], sql: &str) -> Option<String> {
 #[test]
 fn every_statement_answers_what_the_c_library_answers() {
     // What is left is the shapes this engine refuses by name: a
-    // statement inside a `FROM`, a `WITH`, and a table whose rows live
-    // in the key's own tree.
+    // statement inside a `FROM`, and a `WITH`.
     let mut refused = 0;
     let cases = corpus();
     let answers = golden();
@@ -105,7 +104,7 @@ fn every_statement_answers_what_the_c_library_answers() {
         };
         assert_eq!(mine, theirs, "{sql} over {name}");
     }
-    assert_eq!(refused, 4, "what this engine does not answer yet");
+    assert_eq!(refused, 2, "what this engine does not answer yet");
 }
 
 #[test]
@@ -172,7 +171,7 @@ fn the_tables_of_a_file_are_the_ones_its_schema_names() {
         .tables()
         .map(|table| String::from_utf8_lossy(&table.name).into_owned())
         .collect();
-    assert_eq!(names, ["r", "w", "d"]);
+    assert_eq!(names, ["r", "w", "d", "u", "p", "q"]);
 }
 
 /// A database whose schema table holds exactly `records`, built by hand

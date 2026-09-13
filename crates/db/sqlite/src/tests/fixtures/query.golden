@@ -285,3 +285,15 @@ N|a|a|b|c|d	R|-3|-3|''|0.0|X'FF'	R|1|1|'one'|1.5|X'0102'	R|2|2|'two'|-2.5|NULL
 N|a|b|c	R|1|'31'|NULL	R|'x'|'78'|'x'
 N|x|y|count(*)	R|1|'one'|1	R|2|'two'|1	R|3|NULL|1
 N|x|y|z|count(*)	R|1|'one'|'B1'|2
+N|a|b|c|d	R|1|2|3|4	R|5|6|7|8
+N|a|b	R|'m'|1	R|'n'|2
+N|a|b|c	R|1.0|'x'|2.0	R|2.5|'y'|3.5
+N|typeof(a)|c	R|'real'|2.0	R|'real'|3.5
+!	no such column: rowid
+N|count(*)|max(a)|min(c)	R|2|5|3
+N|a|b|a|b|c|d	R|'x'|1|1|2|3|4
+N|a|b|c|d	R|1|2|3|4
+N|count(*)|min(k)|max(k)	R|400|'k1'|'k99'
+N|k|v	R|'k10'|10	R|'k11'|11	R|'k12'|12	R|'k13'|13	R|'k14'|14	R|'k15'|15	R|'k16'|16	R|'k17'|17	R|'k18'|18	R|'k19'|19
+N|k	R|'k1'	R|'k10'	R|'k100'	R|'k101'
+N|k|v	R|'k400'|400	R|'k399'|399	R|'k398'|398

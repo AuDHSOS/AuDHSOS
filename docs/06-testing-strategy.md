@@ -3339,7 +3339,7 @@ tree: the first statement this port answers end to end.
   statement per line, and `fixtures/query.golden` is the columns SQLite
   named and the rows it answered, each value quoted, written by
   `tools/sqlite-oracle.c`. The comparison is the name of every column
-  and the value of every field, over two hundred and eighty-seven statements
+  and the value of every field, over two hundred and ninety-nine statements
   against fourteen files — every page size of the matrix, reserved space, a file that has
   been through write-ahead logging, both kinds of auto-vacuum, a tree
   with an interior page, a row on overflow pages, a key that is the
@@ -3352,8 +3352,8 @@ tree: the first statement this port answers end to end.
   NOCASE` whole, because a collation written around a column stops it
   being one.
 - What the engine refuses by name is counted rather than asserted: a
-  statement inside a `FROM`, a `WITH`, and a table whose rows live in
-  the key's own tree. The count is held down so that it can only fall.
+  statement inside a `FROM`, and a `WITH`. The count is held down so
+  that it can only fall.
 - Text in UTF-16 is answered as well as text in UTF-8, both ways round,
   and the three places the stored encoding shows through are tested
   under both: `hex`, `octet_length` and a cast to a blob. So is the one
@@ -3513,6 +3513,31 @@ column's own place.
 - A `GROUP BY` that counts to a `*` counts the answered columns and not
   the result columns, so it reaches the table column the `*` stands for,
   a column a `USING` hides included.
+
+### 6.6.91 The key's own tree (`db-sqlite`)
+
+D-152. A table written `WITHOUT ROWID` keeps its rows in an index tree,
+so the walk of one is a walk of the other kind and the record puts the
+key's columns first.
+
+- The walk: an index tree carries an entry on every page and not only on
+  its leaves, so `fixtures/page512.db` holds four hundred rows in a key's
+  own tree, whose root is an interior page. The test holds the keys to
+  their sorted order, which is what descending, answering the entry
+  between two subtrees, and descending again produces.
+- The record: `fixtures/keys.db` holds one table whose key columns are
+  out of the order they were declared in, one naming a key column twice,
+  and one with a column the record does not hold, so the mapping from
+  storage place to column is tested where it is not the identity.
+- Such a table answers no `rowid`, `oid` or `_rowid_`, which SQLite
+  refuses as a column no table has.
+- The refusals a walk of an index tree makes: a root the file does not
+  have, a root that leads to a table page, a tree deeper than the walk
+  keeps frames for, an entry on a leaf whose cell reaches past its page,
+  and an entry between two subtrees whose length does not end. The last
+  two are pages laid out by hand.
+- `sqlite_image` walks every root of every fuzzed file as a table tree
+  and as an index tree, because a root is a number the file chooses.
 
 ## 6.7 CI pipeline
 

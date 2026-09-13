@@ -106,11 +106,22 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
         );
     }
 
-    // The schema, and then every tree it names.
+    // The schema, and then every tree it names, as a table tree and as
+    // an index tree: a root is a number the file chooses, and either
+    // walk of it must refuse rather than run away.
     let mut roots = Vec::new();
     walk(&image, 1, &mut roots);
     for root in roots.iter().take(32) {
         walk(&image, *root, &mut Vec::new());
+        for entry in image.entries(*root).take(MAX_ROWS) {
+            let Ok(entry) = entry else {
+                break;
+            };
+            assert!(
+                entry.local.len() <= entry.total,
+                "more of an entry on the page than the entry has"
+            );
+        }
     }
 });
 

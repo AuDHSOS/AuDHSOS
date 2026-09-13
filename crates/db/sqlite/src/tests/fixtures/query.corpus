@@ -285,3 +285,15 @@ small.db|SELECT *, count(*) FROM t GROUP BY 9
 generated.db|SELECT * FROM j
 joins.db|SELECT a.*, count(*) FROM a GROUP BY 1 ORDER BY 1
 joins.db|SELECT *, count(*) FROM a JOIN b USING(x) GROUP BY 2 ORDER BY 1
+keys.db|SELECT * FROM u
+keys.db|SELECT * FROM p
+keys.db|SELECT * FROM q
+keys.db|SELECT typeof(a), c FROM q
+keys.db|SELECT rowid FROM w
+keys.db|SELECT count(*), max(a), min(c) FROM u
+keys.db|SELECT * FROM w JOIN u ON w.b=u.a
+keys.db|SELECT * FROM u WHERE c=3
+page512.db|SELECT count(*), min(k), max(k) FROM deep
+page512.db|SELECT k, v FROM deep WHERE k LIKE 'k1_' ORDER BY k
+page512.db|SELECT k FROM deep LIMIT 4
+page512.db|SELECT * FROM deep ORDER BY v DESC LIMIT 3

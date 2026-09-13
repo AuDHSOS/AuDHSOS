@@ -69,9 +69,6 @@ pub enum Error {
     /// A computed column that names itself, or names a column no table
     /// has.
     Computed,
-    /// A table whose rows live in the key's own tree. Reading one is
-    /// reading an index, which is a later step.
-    WithoutRowid,
     /// A shape of statement this engine does not answer yet: a join, a
     /// grouping, a compound, a statement inside a statement.
     Unsupported,
@@ -113,6 +110,10 @@ struct Stored {
     sql: Vec<u8>,
     /// The tree that text was parsed into.
     arena: Arena,
+    /// Where each column's value stands in the record, which is not the
+    /// column's own place where a column is computed and not stored or
+    /// the table keeps its rows in the key's own tree.
+    places: Vec<usize>,
 }
 
 /// One table of a `FROM` clause, and how it attaches to the ones before
@@ -219,11 +220,13 @@ impl<'a> Database<'a> {
                     }
                 }
             }
+            let places = places(&table);
             tables.push(Stored {
                 table,
                 root: u32::try_from(root).unwrap_or(0),
                 sql,
                 arena,
+                places,
             });
         }
         Ok(Database {
@@ -397,11 +400,6 @@ impl<'a> Database<'a> {
                 return Err(Error::NoTable);
             }
             let stored = self.find(name.text(sql)).ok_or(Error::NoTable)?;
-            if stored.table.without_rowid {
-                // The rows of such a table live in the key's own tree,
-                // and reading one is reading an index.
-                return Err(Error::WithoutRowid);
-            }
             let written: Vec<Vec<u8>> = arena
                 .names(source.using)
                 .iter()
@@ -491,6 +489,16 @@ impl<'a> Database<'a> {
         Ok(())
     }
 
+    /// The rows of a table, whichever kind of tree holds them, each with
+    /// the rowid where the table has one.
+    const fn walk<'i>(&'i self, stored: &Stored) -> Walk<'i> {
+        if stored.table.without_rowid {
+            Walk::Index(self.image.entries(stored.root))
+        } else {
+            Walk::Table(self.image.rows(stored.root))
+        }
+    }
+
     /// One level of the nest: every row of `sides[at]` against what the
     /// levels above it hold.
     ///
@@ -520,21 +528,24 @@ impl<'a> Database<'a> {
         let deeper = at.saturating_add(1);
         let mut any = false;
         let mut payload = Vec::new();
-        for row in self.image.rows(side.stored.root) {
-            let row = row?;
-            if spare.is_some_and(|skip| skip.contains(&row.rowid)) {
+        let mut ordinal = 0i64;
+        for step in self.walk(side.stored) {
+            let (rowid, holds) = step?;
+            let at_row = ordinal;
+            ordinal = ordinal.saturating_add(1);
+            if spare.is_some_and(|skip| skip.contains(&at_row)) {
                 continue;
             }
-            read_payload(&self.image, &row.payload, &mut payload)?;
+            read_payload(&self.image, &holds, &mut payload)?;
             cursor.held.push(Held {
                 table: &side.stored.table,
                 alias: side.alias,
                 using: &side.using,
-                rowid: Some(row.rowid),
+                rowid,
                 values: values_of(
                     &payload,
                     side.stored,
-                    row.rowid,
+                    rowid,
                     self.encoding,
                     self.collation(),
                 )?,
@@ -545,7 +556,7 @@ impl<'a> Database<'a> {
             };
             if attached {
                 any = true;
-                mark(kept, at, row.rowid);
+                mark(kept, at, at_row);
                 self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
             }
             cursor.held.pop();
@@ -718,10 +729,69 @@ fn equal(cursor: &Cursor<'_>, name: &[u8]) -> bool {
     )
 }
 
-/// Records that the row `rowid` of the table at `at` was matched.
-fn mark(kept: &mut [Vec<i64>], at: usize, rowid: i64) {
+/// A walk of a table's rows: down a table tree by rowid, or down the
+/// key's own tree where the table keeps its rows there.
+enum Walk<'a> {
+    /// A table tree, which carries the rowid.
+    Table(crate::image::Rows<'a>),
+    /// An index tree, which carries none.
+    Index(crate::image::Entries<'a>),
+}
+
+impl<'a> Iterator for Walk<'a> {
+    type Item = Result<(Option<i64>, crate::page::Payload<'a>), error::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Walk::Table(rows) => rows
+                .next()
+                .map(|row| row.map(|row| (Some(row.rowid), row.payload))),
+            Walk::Index(entries) => entries.next().map(|entry| entry.map(|held| (None, held))),
+        }
+    }
+}
+
+/// Where each column's value stands in the record.
+///
+/// A column computed and not stored takes no place. A table that keeps
+/// its rows in the key's own tree puts the key's columns first, in the
+/// order the key names them, and the rest after them in the order the
+/// statement declares them, which is section 2.4 of the format.
+fn places(table: &Table) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..table.columns.len())
+        .filter(|at| {
+            table
+                .columns
+                .get(*at)
+                .is_some_and(|column| column.generated != Generated::Virtual)
+        })
+        .collect();
+    if table.without_rowid {
+        // A stable sort leaves the columns the key does not name in the
+        // order they were declared in.
+        order.sort_by_key(|at| {
+            table
+                .columns
+                .get(*at)
+                .map_or(u16::MAX, |column| match column.key {
+                    0 => u16::MAX,
+                    key => key,
+                })
+        });
+    }
+    let mut places = alloc::vec![usize::MAX; table.columns.len()];
+    for (place, at) in order.iter().enumerate() {
+        for slot in places.iter_mut().skip(*at).take(1) {
+            *slot = place;
+        }
+    }
+    places
+}
+
+/// Records that the row at `at_row` of the table at `at` was matched.
+fn mark(kept: &mut [Vec<i64>], at: usize, at_row: i64) {
     for slot in kept.iter_mut().skip(at).take(1) {
-        slot.push(rowid);
+        slot.push(at_row);
     }
 }
 
@@ -1503,19 +1573,23 @@ fn alike(left: &[(Value, Collation)], right: &[(Value, Collation)]) -> bool {
 fn values_of(
     payload: &[u8],
     stored: &Stored,
-    rowid: i64,
+    rowid: Option<i64>,
     encoding: Encoding,
     collation: Collation,
 ) -> Result<Vec<Value>, Error> {
     let record = record::Record::parse(payload)?;
     let table = &stored.table;
     let mut out: Vec<Option<Value>> = Vec::new();
-    let mut place = 0usize;
     for (at, column) in table.columns.iter().enumerate() {
-        if column.generated == Generated::Virtual {
+        let Some(place) = stored
+            .places
+            .get(at)
+            .copied()
+            .filter(|_| column.generated != Generated::Virtual)
+        else {
             out.push(None);
             continue;
-        }
+        };
         let mut value = match record.value(place)? {
             None | Some(record::Value::Null) => Value::Null,
             Some(record::Value::Int(number)) => Value::Int(number),
@@ -1523,7 +1597,6 @@ fn values_of(
             Some(record::Value::Text(bytes)) => Value::Text(decode(bytes, encoding)),
             Some(record::Value::Blob(bytes)) => Value::Blob(bytes.to_vec()),
         };
-        place = place.saturating_add(1);
         // A real that is a whole number is stored as an integer, and
         // `OP_RealAffinity` is what turns it back on the way out.
         if column.affinity == Affinity::Real
@@ -1532,9 +1605,10 @@ fn values_of(
             value = Value::Real(crate::value::integer_as_real(number));
         }
         // The column the rowid is another name for holds nothing of its
-        // own: the key is what it answers.
-        if table.rowid_alias == Some(at) {
-            value = Value::Int(rowid);
+        // own: the key is what it answers. A table that keeps its rows
+        // in the key's own tree has no such column.
+        if let Some(key) = rowid.filter(|_| table.rowid_alias == Some(at)) {
+            value = Value::Int(key);
         }
         out.push(Some(value));
     }
@@ -1713,12 +1787,12 @@ impl<'a> Held<'a> {
             .iter()
             .position(|held| held.name.eq_ignore_ascii_case(column));
         let Some(at) = at else {
-            // The three names the rowid answers to. A table with no
-            // rowid is refused before a row of it is read, so there is
-            // nothing to rule out here.
-            let rowid = column.eq_ignore_ascii_case(b"rowid")
-                || column.eq_ignore_ascii_case(b"oid")
-                || column.eq_ignore_ascii_case(b"_rowid_");
+            // The three names the rowid answers to, which a table that
+            // keeps its rows in the key's own tree does not answer.
+            let rowid = !self.table.without_rowid
+                && (column.eq_ignore_ascii_case(b"rowid")
+                    || column.eq_ignore_ascii_case(b"oid")
+                    || column.eq_ignore_ascii_case(b"_rowid_"));
             if rowid {
                 let value = self.rowid.map_or(Value::Null, Value::Int);
                 return Some((value, Affinity::Integer, Collation::Binary));

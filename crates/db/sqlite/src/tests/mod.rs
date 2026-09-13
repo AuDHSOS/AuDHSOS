@@ -38,7 +38,9 @@ pub(super) const SMALL: &[u8] = include_bytes!("fixtures/small.db");
 /// tree has an interior page and the walk has to descend.
 ///
 /// `PRAGMA page_size=512; CREATE TABLE wide(n INTEGER, s TEXT);` filled
-/// with `'row ' || i` for `i` in 1..=400.
+/// with `'row ' || i` for `i` in 1..=400, and `CREATE TABLE deep(k TEXT
+/// PRIMARY KEY, v) WITHOUT ROWID;` filled the same way, whose key tree
+/// has an interior page of its own.
 pub(super) const PAGE512: &[u8] = include_bytes!("fixtures/page512.db");
 
 /// Text in UTF-16, little-endian.
@@ -64,7 +66,12 @@ pub(super) const INDEXED: &[u8] = include_bytes!("fixtures/indexed.db");
 ///
 /// `CREATE TABLE r(id INTEGER PRIMARY KEY, v TEXT); CREATE TABLE w(a
 /// TEXT, b INT, PRIMARY KEY(a)) WITHOUT ROWID; CREATE TABLE d(k INTEGER
-/// PRIMARY KEY DESC, v);`
+/// PRIMARY KEY DESC, v); CREATE TABLE u(a, b, c, d, PRIMARY KEY(c,a))
+/// WITHOUT ROWID; CREATE TABLE p(a, b, PRIMARY KEY(a,a,b)) WITHOUT
+/// ROWID; CREATE TABLE q(a REAL, b, c AS (a+1), PRIMARY KEY(b)) WITHOUT
+/// ROWID;` — `u` keeps its key columns out of the order they were
+/// declared in, `p` names one of them twice, and `q` has a column the
+/// record does not hold.
 pub(super) const KEYS: &[u8] = include_bytes!("fixtures/keys.db");
 
 /// Two tables with computed columns: one with a column that is not
@@ -196,5 +203,23 @@ pub(super) fn interior_to(page_size: usize, child: u32) -> Vec<u8> {
     page[0] = 5;
     page[5..7].copy_from_slice(&u16::try_from(page_size).unwrap_or(0).to_be_bytes());
     page[8..12].copy_from_slice(&child.to_be_bytes());
+    page
+}
+
+/// An interior index page with no cells whose right-most pointer is
+/// `child`.
+pub(super) fn index_interior_to(page_size: usize, child: u32) -> Vec<u8> {
+    let mut page = interior_to(page_size, child);
+    page[0] = 2;
+    page
+}
+
+/// An index leaf page of one cell whose pointer reaches past the page.
+pub(super) fn index_leaf_past_the_page(page_size: usize) -> Vec<u8> {
+    let mut page = vec![0u8; page_size];
+    page[0] = 10;
+    page[3..5].copy_from_slice(&1u16.to_be_bytes());
+    page[5..7].copy_from_slice(&u16::try_from(page_size).unwrap_or(0).to_be_bytes());
+    page[8..10].copy_from_slice(&u16::try_from(page_size).unwrap_or(0).to_be_bytes());
     page
 }

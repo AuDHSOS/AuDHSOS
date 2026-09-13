@@ -84,6 +84,13 @@ impl<'a> Image<'a> {
         Rows::new(*self, root)
     }
 
+    /// The entries of the index whose tree begins at `root`, in key
+    /// order.
+    #[must_use]
+    pub const fn entries(&self, root: u32) -> Entries<'a> {
+        Entries::new(*self, root)
+    }
+
     /// How many bytes the file is, which is the most any one payload of
     /// it can be.
     #[must_use]
@@ -299,5 +306,125 @@ impl Rows<'_> {
         for frame in self.stack.iter_mut().skip(index).take(1) {
             frame.next = frame.next.saturating_add(1);
         }
+    }
+}
+
+/// The entries of one index tree, in key order.
+///
+/// An index tree carries an entry on every page and not only on its
+/// leaves, so the walk answers the entry between two subtrees after the
+/// first of them and before the second. The cost is the cost of
+/// [`Rows`]: O(n) steps and O(depth) memory.
+#[derive(Clone, Debug)]
+pub struct Entries<'a> {
+    /// The file being read.
+    image: Image<'a>,
+    /// The path from the root to where the walk stands.
+    stack: [Frame; MAX_DEPTH],
+    /// How much of the path is in use.
+    depth: usize,
+    /// Whether a refusal has ended the walk.
+    done: bool,
+}
+
+impl<'a> Entries<'a> {
+    /// A walk that has not begun, over the tree at `root`.
+    const fn new(image: Image<'a>, root: u32) -> Self {
+        Entries {
+            image,
+            stack: [Frame {
+                number: root,
+                next: 0,
+            }; MAX_DEPTH],
+            depth: 1,
+            done: false,
+        }
+    }
+
+    /// Ends the walk and answers the refusal that ended it.
+    const fn stop(&mut self, error: Error) -> Error {
+        self.done = true;
+        error
+    }
+
+    /// One entry, with a refusal ending the walk.
+    const fn carried(&mut self, held: Result<Payload<'a>, Error>) -> Result<Payload<'a>, Error> {
+        match held {
+            Ok(payload) => Ok(payload),
+            Err(error) => Err(self.stop(error)),
+        }
+    }
+
+    /// The frame the walk stands on, or nothing once it has climbed out.
+    fn top(&mut self) -> Option<&mut Frame> {
+        self.stack.iter_mut().take(self.depth).last()
+    }
+
+    /// Moves the top frame on one step.
+    fn bump(&mut self) {
+        let index = self.depth.saturating_sub(1);
+        for frame in self.stack.iter_mut().skip(index).take(1) {
+            frame.next = frame.next.saturating_add(1);
+        }
+    }
+
+    /// Descends into `child`.
+    fn push(&mut self, child: u32) -> Result<(), Error> {
+        let slot = self.stack.get_mut(self.depth).ok_or(Error::Depth)?;
+        *slot = Frame {
+            number: child,
+            next: 0,
+        };
+        self.depth = self.depth.saturating_add(1);
+        Ok(())
+    }
+}
+
+impl<'a> Iterator for Entries<'a> {
+    type Item = Result<Payload<'a>, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while !self.done {
+            let frame = *self.top()?;
+            let page = match self.image.page(frame.number) {
+                Ok(page) => page,
+                Err(error) => return Some(Err(self.stop(error))),
+            };
+            let cells = page.cells();
+            match page.kind() {
+                Kind::LeafIndex if frame.next < cells => {
+                    self.bump();
+                    return Some(self.carried(page.entry(frame.next)));
+                }
+                // An interior page alternates: the subtree before an
+                // entry, then the entry, and the right-most subtree
+                // after the last of them.
+                Kind::InteriorIndex if frame.next <= cells.saturating_mul(2) => {
+                    let at = frame.next / 2;
+                    self.bump();
+                    if frame.next % 2 == 1 {
+                        return Some(self.carried(page.entry(at)));
+                    }
+                    let child = if at == cells {
+                        page.right_most().ok_or(Error::Overrun)
+                    } else {
+                        page.child(at)
+                    };
+                    match child.and_then(|child| self.push(child)) {
+                        Ok(()) => {}
+                        Err(error) => return Some(Err(self.stop(error))),
+                    }
+                }
+                Kind::InteriorTable | Kind::LeafTable => {
+                    // An index tree holds no table page; a root that
+                    // leads to one is a root of the wrong tree.
+                    return Some(Err(self.stop(Error::PageKind(page.kind().byte()))));
+                }
+                Kind::InteriorIndex | Kind::LeafIndex => {
+                    self.depth = self.depth.saturating_sub(1);
+                }
+            }
+        }
+        None
     }
 }

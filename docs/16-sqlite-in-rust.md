@@ -77,7 +77,7 @@ Each rule is checkable, and each makes a later thing possible.
 
 | Module | What it holds | Decided in |
 |--------|---------------|------------|
-| `header`, `page`, `record`, `image`, `bytes` | The hundred-byte header, the four b-tree page types, the four cell shapes, overflow chains, the record format. | Q1 |
+| `header`, `page`, `record`, `image`, `bytes` | The hundred-byte header, the four b-tree page types, the four cell shapes, overflow chains, the record format, the walk of a table tree and of an index tree. | Q1 |
 | `token`, `keyword` | SQL text to tokens, the same character classes as `src/tokenize.c`. | Q4 |
 | `ast`, `parse` | Tokens to a tree: expressions, `SELECT`, `CREATE TABLE`, `CREATE INDEX`. | Q4 |
 | `schema` | The `CREATE` text of `sqlite_schema` to columns, affinities, collations and the rowid rules. | D-145, Q2 |
@@ -97,8 +97,8 @@ Each rule is checkable, and each makes a later thing possible.
 | A comma, `JOIN`, `INNER`, `CROSS`, `LEFT`, `RIGHT`, `FULL`, `ON`, `USING`, `NATURAL` | answered |
 | A table written with `main` in front of it | answered |
 | A column that is computed, stored or not | answered |
+| A table whose rows live in the key's own tree | answered |
 | A statement inside a `FROM`, a `WITH`, a window clause | refused by name |
-| A table whose rows live in the key's own tree | refused by name |
 
 ### What the tests hold it to
 
@@ -111,7 +111,7 @@ Each rule is checkable, and each makes a later thing possible.
 | Doubles as text | 8404, at three precisions | recorded oracle, `fp.corpus` |
 | Text as numbers | 215 | recorded oracle, `num.corpus` |
 | Expressions, answered | 17051 | recorded oracle, `eval.corpus` |
-| Statements, answered | 287 over 14 fixtures | recorded oracle, `query.corpus` |
+| Statements, answered | 299 over 14 fixtures | recorded oracle, `query.corpus` |
 | The format under every configuration | 11 fixtures, the same three rows and the same index | the matrix, 16.11 |
 | The readers against arbitrary bytes | 4 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval` |
 
@@ -123,7 +123,7 @@ of lines and 100 percent of branches, in both instrumentations.
 | # | What is missing | Which step |
 |---|-----------------|------------|
 | 1 | The pager: a page cache, the rollback journal a reader must ignore, the write-ahead log a reader must follow. | Q3 |
-| 2 | Index trees, read. A table whose rows live in the key's own tree needs them. | Q3 |
+| 2 | The secondary indexes, used rather than read: a `WHERE` that names an indexed column still scans. | Q6 |
 | 3 | The virtual machine and the code generator that replaces the tree walker. | Q6 |
 | 4 | Writing: the b-tree writer, transactions, the journal in four modes, the WAL. | Q7 |
 | 5 | The rest of the language: `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, triggers, views, subqueries, `WITH`. | Q8 |
@@ -244,11 +244,11 @@ CI has no SQLite.
 |---------|---------------|
 | `m-*.db`, eleven of them | The same three rows and the same index under every configuration of 16.11 the shell can write. |
 | `small.db` | One row of each storage class. |
-| `page512.db` | Four hundred rows over 512-byte pages, which makes an interior page. |
+| `page512.db` | Four hundred rows over 512-byte pages, which makes an interior page, in a table tree and in a key's own tree. |
 | `utf16.db`, `wide16.db` | Text in UTF-16, including the widths where the order of UTF-16 and the order of characters part. |
 | `overflow.db` | A payload that continues on overflow pages. |
 | `indexed.db` | One table with two indexes. |
-| `keys.db` | The three shapes a key takes: a rowid alias, a key written backwards, a table with no rowid. |
+| `keys.db` | The shapes a key takes: a rowid alias, a key written backwards, and three tables with no rowid — one whose key columns are out of the order they were declared in, one naming a key column twice, one with a column the record does not hold. |
 | `generated.db` | Computed columns: stored, not stored, one naming a column computed after it, and one of each declared type. |
 | `joins.db` | Three tables: two sharing a column named `x`, one sharing `y` and collating it without case. |
 
@@ -301,8 +301,8 @@ Size: L.
 3. Follow an overflow chain, bounded by the pages the file has.
 4. Decode a record: the header of serial types and the body they
    describe.
-5. Walk a table tree in rowid order, one frame per level, at most 32
-   levels, without allocating.
+5. Walk a table tree in rowid order, and an index tree in key order,
+   one frame per level, at most 32 levels, without allocating.
 
 ### Produces
 
@@ -360,13 +360,11 @@ Size: L.
 1. Read a page through a cache rather than out of a byte slice.
 2. Ignore a rollback journal, which a reader must.
 3. Follow a write-ahead log, which a reader must, including its index.
-4. Walk an index tree, which unlocks a table whose rows live in the key's
-   own tree.
 
 ### Done when
 
-A file in each of the six journal modes reads back the same rows; a
-`WITHOUT ROWID` table answers `SELECT`; the crate meets D4.
+A file in each of the six journal modes reads back the same rows; the
+crate meets D4.
 
 ## 16.18 Q4. The tokenizer and the parser
 
@@ -430,7 +428,7 @@ Size: L.
 
 ### Done when
 
-8404 doubles, 215 numbers, 17051 expressions and 287 statements agree
+8404 doubles, 215 numbers, 17051 expressions and 299 statements agree
 with the C library; `sqlite_eval` and `sqlite_image` replay their corpora
 without a panic; the crate meets D4.
 
@@ -454,7 +452,7 @@ Size: L.
 
 ### Done when
 
-The 287 recorded statements answer the same rows through the machine as
+The 299 recorded statements answer the same rows through the machine as
 through the walker; the crate meets D4.
 
 ## 16.21 Q7. Writing

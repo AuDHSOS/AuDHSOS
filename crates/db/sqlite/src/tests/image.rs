@@ -31,7 +31,7 @@ fn a_file_is_as_many_pages_as_it_is_long() {
     let image = Image::open(SMALL).unwrap();
     assert_eq!(image.pages(), 2);
     assert_eq!(image.header().page_size, 4096);
-    assert_eq!(Image::open(PAGE512).unwrap().pages(), 15);
+    assert_eq!(Image::open(PAGE512).unwrap().pages(), 26);
 }
 
 #[test]
@@ -297,4 +297,92 @@ fn a_payload_that_says_it_continues_at_page_zero_is_refused() {
 fn a_file_that_is_not_a_database_is_refused_by_opening_it() {
     assert_eq!(Image::open(&[]), Err(Error::Truncated));
     assert_eq!(Image::open(&[0u8; 200]), Err(Error::Magic));
+}
+
+#[test]
+fn the_entries_of_an_index_come_back_in_key_order_and_whole() {
+    // The key tree of a `WITHOUT ROWID` table of four hundred rows has
+    // an interior page, so the walk descends, answers the entry between
+    // two subtrees, and descends again.
+    let image = Image::open(PAGE512).unwrap();
+    let root = root_of(&image, b"deep");
+    let mut keys = Vec::new();
+    for entry in image.entries(root) {
+        let entry = entry.unwrap();
+        let record = crate::record::Record::parse(entry.local).unwrap();
+        let Some(Value::Text(key)) = record.value(0).unwrap() else {
+            panic!("an entry whose key is not text");
+        };
+        keys.push(String::from_utf8(key.to_vec()).unwrap());
+    }
+    assert_eq!(keys.len(), 400);
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert_eq!(keys, sorted, "the walk answers the keys out of order");
+}
+
+#[test]
+fn a_root_that_names_a_table_tree_is_refused_by_a_walk_of_entries() {
+    let image = Image::open(SMALL).unwrap();
+    let mut entries = image.entries(root_of(&image, b"t"));
+    // Thirteen is a leaf of a table tree.
+    assert_eq!(entries.next(), Some(Err(Error::PageKind(13))));
+    assert_eq!(entries.next(), None);
+}
+
+#[test]
+fn a_walk_of_entries_that_starts_past_the_file_ends_with_that() {
+    let image = Image::open(SMALL).unwrap();
+    let mut entries = image.entries(99);
+    assert_eq!(entries.next(), Some(Err(Error::Page(99))));
+    assert_eq!(entries.next(), None);
+}
+
+#[test]
+fn an_index_tree_deeper_than_the_walk_is_refused_at_the_depth_it_stops_at() {
+    let mut builder = crate::tests::Builder::new(512);
+    for page in 0..33u32 {
+        builder = builder.page(&crate::tests::index_interior_to(512, page + 3));
+    }
+    let bytes = builder.finish();
+    let image = Image::open(&bytes).unwrap();
+    let mut entries = image.entries(2);
+    assert_eq!(entries.next(), Some(Err(Error::Depth)));
+    assert_eq!(entries.next(), None);
+}
+
+#[test]
+fn an_index_cell_that_reaches_past_its_page_is_refused() {
+    let leaf = crate::tests::index_leaf_past_the_page(512);
+    let bytes = crate::tests::Builder::new(512).page(&leaf).finish();
+    let image = Image::open(&bytes).unwrap();
+    let mut entries = image.entries(2);
+    assert_eq!(entries.next(), Some(Err(Error::Overrun)));
+    assert_eq!(entries.next(), None);
+}
+
+#[test]
+fn an_entry_between_two_subtrees_is_refused_where_its_length_does_not_end() {
+    // Page 2 is an index leaf of no cells, so the walk descends into it
+    // and comes back; page 3 is the interior page above it, whose one
+    // cell carries a child pointer and then a varint that never ends.
+    let mut leaf = vec![0u8; 512];
+    leaf[0] = 10;
+    leaf[5..7].copy_from_slice(&512u16.to_be_bytes());
+    let mut interior = crate::tests::index_interior_to(512, 2);
+    interior[3..5].copy_from_slice(&1u16.to_be_bytes());
+    interior[5..7].copy_from_slice(&500u16.to_be_bytes());
+    interior[12..14].copy_from_slice(&500u16.to_be_bytes());
+    interior[500..504].copy_from_slice(&2u32.to_be_bytes());
+    for byte in interior.iter_mut().skip(504) {
+        *byte = 0x80;
+    }
+    let bytes = crate::tests::Builder::new(512)
+        .page(&leaf)
+        .page(&interior)
+        .finish();
+    let image = Image::open(&bytes).unwrap();
+    let mut entries = image.entries(3);
+    assert_eq!(entries.next(), Some(Err(Error::Varint)));
+    assert_eq!(entries.next(), None);
 }

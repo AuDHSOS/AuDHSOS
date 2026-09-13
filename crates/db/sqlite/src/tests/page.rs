@@ -373,3 +373,11 @@ fn an_interior_index_cell_whose_payload_is_short_is_refused() {
         Err(Error::Overrun)
     );
 }
+
+#[test]
+fn the_entry_of_a_table_page_is_refused_by_the_type_of_the_page() {
+    let image = crate::Image::open(super::SMALL).unwrap();
+    let page = image.page(2).unwrap();
+    assert_eq!(page.kind(), crate::Kind::LeafTable);
+    assert_eq!(page.entry(0), Err(crate::Error::PageKind(13)));
+}

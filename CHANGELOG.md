@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Index trees, read, in `db-sqlite`, which is what a table written
+  `WITHOUT ROWID` keeps its rows in. An index tree carries an entry on
+  every page, so the walk answers the entry between two subtrees after
+  the first of them. The record of such a table puts the key's columns
+  first, in the order the key names them, and one table of numbers
+  computed when the schema is read answers that rule and the rule a
+  computed column makes. Such a table answers no `rowid`.
 - Columns a record does not hold, in `db-sqlite`: a column computed and
   not stored is filled in after the record is read, by passes that
   repeat until none settles anything, so that one such column may name
