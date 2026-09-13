@@ -451,3 +451,105 @@ fn a_descent_into_an_index_tree_deeper_than_the_walk_is_refused() {
     let outcome = image.entries_from(2, &mut |_| Ok(true));
     assert_eq!(outcome.err(), Some(Error::Depth));
 }
+
+#[test]
+fn every_file_is_written_back_as_the_bytes_it_was_read_from() {
+    use crate::header::Header;
+    // Each fixture is taken apart into its pages, every b-tree page that
+    // was filled in one pass is built again out of its cells, and the
+    // file is written from the header and the pages. What comes out has
+    // to be the file that went in, which is the file the shell wrote.
+    let mut files = 0;
+    let mut rebuilt = 0;
+    let every = crate::tests::WRITTEN
+        .into_iter()
+        .chain(crate::tests::matrix::every());
+    for (name, bytes) in every {
+        let header = Header::parse(bytes).unwrap();
+        // Every fixture was written by the shell of `sh tools/sqlite.sh`,
+        // which is the library this crate is a port of, so the version
+        // it wrote is the version this crate writes.
+        assert_eq!(
+            header.library_version,
+            crate::header::LIBRARY_VERSION,
+            "{name} was written by another library"
+        );
+        let size = usize::try_from(header.page_size).unwrap();
+        let usable = usize::try_from(header.usable()).unwrap();
+        // A file whose header counts fewer pages than it holds is one a
+        // log or a journal carries the rest of, and is not this test's.
+        if usize::try_from(header.pages).unwrap() * size != bytes.len() {
+            continue;
+        }
+        let mut pages = Vec::new();
+        for (number, page) in bytes.chunks(size).enumerate() {
+            let number = u32::try_from(number).unwrap() + 1;
+            if let Some(built) = rebuilt_page(page, number, usable) {
+                rebuilt += 1;
+                pages.push(built);
+            } else {
+                let mut held = page.to_vec();
+                held.resize(size, 0);
+                pages.push(held);
+            }
+        }
+        let written = crate::image::write(&header, &pages);
+        assert_eq!(written.len(), bytes.len(), "{name}");
+        if let Some(at) = (0..bytes.len()).find(|at| written[*at] != bytes[*at]) {
+            panic!(
+                "{name}: byte {at} of page {} is {} and was {}",
+                at / size + 1,
+                written[at],
+                bytes[at]
+            );
+        }
+        files += 1;
+    }
+    assert!(files >= 27, "only {files} files were written back");
+    assert!(rebuilt > 100, "only {rebuilt} pages were built again");
+}
+
+/// One page built again out of its cells, or nothing where it was not
+/// filled in one pass and the bytes it lies in are the only ones that
+/// hold it.
+fn rebuilt_page(page: &[u8], number: u32, usable: usize) -> Option<Vec<u8>> {
+    use crate::page::{Page, write_cell};
+    let start = usize::from(number == 1) * crate::header::HEADER_LEN;
+    if page.get(start + 1) != Some(&0)
+        || page.get(start + 2) != Some(&0)
+        || page.get(start + 7) != Some(&0)
+    {
+        return None;
+    }
+    let read = Page::parse(page, number, u32::try_from(usable).ok()?).ok()?;
+    // What lies between the pointer array and the content is
+    // unallocated, and a page built from nothing leaves noughts there.
+    // A page that still holds what it held before it was rewritten
+    // cannot be built again, only kept.
+    let array = start + read.kind().header_len() + read.cells() * 2;
+    if page
+        .get(array..read.content_start())?
+        .iter()
+        .any(|byte| *byte != 0)
+    {
+        return None;
+    }
+    let mut cells = Vec::new();
+    let mut last = usable;
+    for at in 0..read.cells() {
+        let offset = read.cell_offset(at).ok()?;
+        if offset >= last {
+            return None;
+        }
+        last = offset;
+        cells.push(write_cell(&read.cell(at).ok()?));
+    }
+    crate::page::build(
+        read.kind(),
+        number,
+        page.len(),
+        usable,
+        &cells,
+        read.right_most(),
+    )
+}

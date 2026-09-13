@@ -33,6 +33,11 @@ struct Case {
     vacuums: bool,
 }
 
+/// Every matrix fixture, by the name it has on disk.
+pub(super) fn every() -> impl Iterator<Item = (&'static str, &'static [u8])> {
+    MATRIX.iter().map(|case| (case.name, case.bytes))
+}
+
 /// The bytes of one of the matrix fixtures, by the name it has on disk.
 pub(super) fn fixture(name: &str) -> Option<&'static [u8]> {
     MATRIX

@@ -3935,6 +3935,30 @@ decides for itself, and what holds it is the pages the C library wrote.
 - `sqlite_image` does the same against arbitrary bytes: a cell taken off
   a page a file decided the shape of, and a cell put on it.
 
+### 6.6.105 A file written back (`db-sqlite`)
+
+D-165, document 16 step Q7. `Header::written` and `image::write`, held
+to the files the shell wrote.
+
+- Twenty-seven files are taken apart into their pages, every b-tree page
+  that was filled in one pass is built again out of its cells, and the
+  file is written from the header and the pages. What comes out is the
+  file that went in, byte for byte. 108 of the pages are built again
+  rather than kept.
+- The twenty-seven are the eight the other tests read and the nineteen
+  of the configuration matrix, so a file is written back under five page
+  sizes from 512 to 65536, under UTF-8 and both orders of UTF-16, with
+  and without reserved bytes at the end of every page, after every
+  journal mode, and with the file vacuuming itself or not.
+- A page is built again only where the bytes between its pointer array
+  and its content are noughts. A page SQLite rewrote holds what it held
+  before in that space, which the format says nothing about and a writer
+  that starts from nothing cannot reproduce; such a page is kept as it
+  lies.
+- Every fixture asserts the library version in its header against
+  `header::LIBRARY_VERSION`, so a shell of another version is caught
+  here rather than in the four bytes of a file this crate writes.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

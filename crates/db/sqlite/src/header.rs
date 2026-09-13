@@ -66,6 +66,11 @@ impl Encoding {
     }
 }
 
+/// The version of the C library this crate is a port of, which is what
+/// it writes where SQLite writes `SQLITE_VERSION_NUMBER`: the format a
+/// file is written in is the format that library documents.
+pub const LIBRARY_VERSION: u32 = 3_053_004;
+
 /// The header of a database file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Header {
@@ -164,6 +169,66 @@ impl Header {
             version_valid_for: word(92),
             library_version: word(96),
         })
+    }
+}
+
+impl Header {
+    /// The hundred bytes the header is written as, which is the inverse
+    /// of [`Header::parse`].
+    ///
+    /// The twenty bytes section 1.3 reserves for expansion are noughts,
+    /// which is what SQLite writes. A file whose schema has never been
+    /// written says nought for its encoding, and this writes the one a
+    /// reader made of it, because a reader cannot tell the two apart.
+    #[must_use]
+    pub fn written(&self) -> [u8; HEADER_LEN] {
+        let mut out = [0u8; HEADER_LEN];
+        let put = |out: &mut [u8; HEADER_LEN], at: usize, bytes: &[u8]| {
+            for (slot, byte) in out.iter_mut().skip(at).zip(bytes) {
+                *slot = *byte;
+            }
+        };
+        let word = |out: &mut [u8; HEADER_LEN], at: usize, value: u32| {
+            for (slot, byte) in out.iter_mut().skip(at).zip(value.to_be_bytes()) {
+                *slot = byte;
+            }
+        };
+        put(&mut out, 0, MAGIC.as_slice());
+        // A page of 65536 bytes is written as 1, because the field is
+        // two bytes wide and the number is not.
+        let size = if self.page_size == MAX_PAGE_SIZE {
+            1
+        } else {
+            u16::try_from(self.page_size).unwrap_or(0)
+        };
+        put(&mut out, 16, &size.to_be_bytes());
+        put(
+            &mut out,
+            18,
+            &[
+                self.write_version,
+                self.read_version,
+                self.reserved,
+                64,
+                32,
+                32,
+            ],
+        );
+        word(&mut out, 24, self.change_counter);
+        word(&mut out, 28, self.pages);
+        word(&mut out, 32, self.freelist);
+        word(&mut out, 36, self.freelist_pages);
+        word(&mut out, 40, self.schema_cookie);
+        word(&mut out, 44, self.schema_format);
+        word(&mut out, 48, self.cache_size);
+        word(&mut out, 52, self.largest_root);
+        word(&mut out, 56, self.encoding.code());
+        word(&mut out, 60, self.user_version);
+        word(&mut out, 64, self.incremental_vacuum);
+        word(&mut out, 68, self.application_id);
+        word(&mut out, 92, self.version_valid_for);
+        word(&mut out, 96, self.library_version);
+        out
     }
 }
 

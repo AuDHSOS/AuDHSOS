@@ -19,6 +19,31 @@ pub const MAX_DEPTH: usize = 32;
 /// The page the schema table begins at.
 pub const SCHEMA_ROOT: u32 = 1;
 
+/// A file made of pages: page one carries the header in its first
+/// hundred bytes and every page follows the one before it.
+///
+/// The page count of the header is the number of pages given, because
+/// that is what the file holds; every other field is the caller's. A
+/// page shorter than the page size the header names is written as it is,
+/// so a caller that hands in one writes a file no reader reads.
+#[must_use]
+pub fn write(header: &crate::header::Header, pages: &[alloc::vec::Vec<u8>]) -> alloc::vec::Vec<u8> {
+    let mut out = alloc::vec::Vec::with_capacity(
+        pages
+            .len()
+            .saturating_mul(crate::bytes::size(u64::from(header.page_size))),
+    );
+    let mut header = *header;
+    header.pages = u32::try_from(pages.len()).unwrap_or(0);
+    for page in pages {
+        out.extend_from_slice(page);
+    }
+    for (slot, byte) in out.iter_mut().zip(header.written()) {
+        *slot = byte;
+    }
+    out
+}
+
 /// A database file, read without being copied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Image<'a> {
