@@ -598,7 +598,14 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Object.prototype methods (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/prototype --summary` | 248 | 494 | 284 (57.49%) | 202 (40.89%) | 8 (1.62%) |
 | Property accessors (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors --summary` | 21 | 42 | 32 (76.19%) | 10 (23.81%) | 0 (0.00%) |
 | String.prototype methods (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,708 (79.66%) | 382 (17.82%) | 54 (2.52%) |
-| Complete pinned suite, including staging and Intl | full | `68d0b12052d8867fee62c7644dabd9b54a369638` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite, including staging and Intl | full | `49211ba` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+
+Every number in this table is the stack backend's. `Realm::evaluate` compiles
+with `realm = true`, and in that mode the register lowering refuses every
+declaration, `var`, function and lexical block, so no Test262 file reaches the
+register engine under `crates/jrs/src/engine/`. Test262 becomes a measurement of
+that engine only after step G5 of the milestone group in
+[docs/jrs-architecture.md](../../docs/jrs-architecture.md).
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
