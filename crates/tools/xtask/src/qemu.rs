@@ -459,7 +459,9 @@ pub(crate) fn arguments(
             firmware.display()
         ),
         "-drive".to_owned(),
-        format!("format=raw,file={}", image.display()),
+        format!("if=none,id=boot,format=raw,file={}", image.display()),
+        "-device".to_owned(),
+        "virtio-blk-pci,drive=boot,disable-legacy=on,num-queues=1,addr=0x4".to_owned(),
         "-serial".to_owned(),
         "stdio".to_owned(),
         "-display".to_owned(),
@@ -524,7 +526,7 @@ fn scratch(disk: Option<&Path>) -> Vec<String> {
         "-drive".to_owned(),
         format!("if=none,id=s0,format=raw,file={}", disk.display()),
         "-device".to_owned(),
-        "virtio-blk-pci,drive=s0,disable-legacy=on,num-queues=1".to_owned(),
+        "virtio-blk-pci,drive=s0,disable-legacy=on,num-queues=1,addr=0x5".to_owned(),
     ]
 }
 

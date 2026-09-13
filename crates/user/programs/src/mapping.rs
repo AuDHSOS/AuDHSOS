@@ -76,6 +76,17 @@ impl Mapping {
         Ok(Mapping { address, len })
     }
 
+    /// The window of `len` bytes at `address`, which a caller holds
+    /// already: a map that failed part way left what it made behind, and
+    /// this is what takes that back.
+    ///
+    /// It maps nothing. What it answers stands for a region of the
+    /// address space and not for a memory object.
+    #[must_use]
+    pub const fn adopt(address: u64, len: u64) -> Self {
+        Mapping { address, len }
+    }
+
     /// Where the object lies.
     #[must_use]
     pub const fn address(&self) -> u64 {

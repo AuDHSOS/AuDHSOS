@@ -12,17 +12,31 @@ use user_loader::tar::{Builder, archive_len};
 
 use crate::error::Error;
 
-/// The programs of the archive, in the order the start table names them.
+/// The programs of the archive: the boot set, and nothing else.
+///
+/// The root task cannot read a file before the file system server runs,
+/// and that server is itself a file, so the programs that must start
+/// before a file is readable come from somewhere that needs no file
+/// system server. That somewhere is this archive. Every other program is
+/// on the volume ([`ON_THE_VOLUME`]).
 ///
 /// The order does not matter to the reader, which searches by name, and it
 /// is kept because a dump of the image is easier to read that way.
-pub(crate) const PROGRAMS: [&str; 14] = [
+pub(crate) const PROGRAMS: [&str; 4] = [
     "server-memory",
     "server-name",
     "server-console",
+    "server-fs",
+];
+
+/// The programs that lie on the volume, in the order the start table names
+/// them.
+///
+/// Each is written under `AUDHSOS/BIN/` as `user_loader::volume::file_name`
+/// spells it.
+pub(crate) const ON_THE_VOLUME: [&str; 10] = [
     "server-display",
     "server-input",
-    "server-fs",
     "app-hello",
     "app-checks",
     "app-paint",

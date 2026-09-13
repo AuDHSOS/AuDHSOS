@@ -776,6 +776,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "audhsos-abi",
             "audhsos-time",
             "fs-fat",
+            "fs-gpt",
             "user-proto",
             "test-support",
         ],
@@ -834,16 +835,17 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-programs",
         path: "crates/user/programs",
         // The bytes of the mapping `app-lspci` walks the bus through raised
-        // this from 33 (Phase 13). The five mappings of the disk track
-        // raised it from 34 to 39, named one by one in D2 of
+        // this from 33 (Phase 13). The mappings of the disk track raised it
+        // from 34 to 40, named one by one in D2 of
         // `docs/15-the-disk-on-the-machine.md`.
         kind: Kind::Adapter {
-            unsafe_budget: 39,
+            unsafe_budget: 40,
             asm_budget: 0,
         },
         deps: &[
             "app-canvas",
             "audhsos-abi",
+            "audhsos-collections",
             "audhsos-time",
             "driver-i8042",
             "driver-uart16550",

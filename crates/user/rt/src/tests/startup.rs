@@ -9,7 +9,7 @@ use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE};
 use audhsos_abi::startup::{Location, Role, Screen, StartupError, Writer};
 
 use crate::handle::Typed;
-use crate::startup::{MAX_RAM_OBJECTS, ReadError, Startup};
+use crate::startup::{MAX_BLOCK_DEVICES, MAX_RAM_OBJECTS, ReadError, Startup};
 
 /// A handle every table could hand out.
 fn handle(index: u32) -> Handle {
@@ -94,9 +94,10 @@ fn every_role_lands_in_the_field_it_names() {
     assert_eq!(startup.aux_interrupt.unwrap().handle(), handle(13));
     assert_eq!(startup.input_server.unwrap().handle(), handle(14));
     assert_eq!(startup.ecam.unwrap().handle(), handle(15));
-    assert_eq!(startup.block_registers.unwrap().handle(), handle(16));
-    assert_eq!(startup.block_interrupt.unwrap().handle(), handle(17));
-    assert_eq!(startup.block_notification.unwrap().handle(), handle(18));
+    let device = startup.blocks.iter().next().unwrap();
+    assert_eq!(device.registers.handle(), handle(16));
+    assert_eq!(device.interrupt.unwrap().handle(), handle(17));
+    assert_eq!(device.notification.unwrap().handle(), handle(18));
     // The name of this test is a promise, and a role added later would
     // break it silently otherwise: every role but `Ram`, which is a list
     // and has a test of its own, and the nine value roles, which carry no
@@ -294,9 +295,10 @@ fn the_four_structures_of_the_block_device_come_as_four_words() {
         ],
     )
     .unwrap();
-    assert_eq!(startup.block_structures(), Some(places));
-    assert_eq!(startup.block_notify_multiplier, Some(4));
-    assert_eq!(startup.block_vector_bit, Some(7));
+    let device = startup.blocks.iter().next().unwrap();
+    assert_eq!(device.structures(), Some(places));
+    assert_eq!(device.notify_multiplier, Some(4));
+    assert_eq!(device.vector_bit, Some(7));
 }
 
 #[test]
@@ -306,18 +308,18 @@ fn a_block_device_described_in_part_names_no_structures() {
         &[(Role::BlockCommon, Location { offset: 0, len: 56 }.word())],
     )
     .unwrap();
-    assert_eq!(startup.block_structures(), None);
+    let device = startup.blocks.iter().next().unwrap();
+    assert_eq!(device.structures(), None);
 }
 
 #[test]
-fn every_role_of_the_block_device_is_refused_a_second_time() {
-    let handles = [
-        Role::BlockRegisters,
-        Role::BlockInterrupt,
-        Role::BlockNotification,
-    ];
-    for role in handles {
-        let outcome = read(&[(role, handle(1)), (role, handle(2))]);
+fn every_role_of_one_block_device_is_refused_a_second_time() {
+    for role in [Role::BlockInterrupt, Role::BlockNotification] {
+        let outcome = read(&[
+            (Role::BlockRegisters, handle(1)),
+            (role, handle(2)),
+            (role, handle(3)),
+        ]);
         assert_eq!(outcome.unwrap_err(), ReadError::Duplicate(role));
     }
     let values = [
@@ -329,7 +331,68 @@ fn every_role_of_the_block_device_is_refused_a_second_time() {
         Role::BlockVectorBit,
     ];
     for role in values {
-        let outcome = read_mixed(&[], &[(role, 1), (role, 2)]);
+        let outcome = read_mixed(
+            &[(Role::BlockRegisters, handle(1))],
+            &[(role, 1), (role, 2)],
+        );
         assert_eq!(outcome.unwrap_err(), ReadError::Duplicate(role));
     }
+}
+
+#[test]
+fn the_nine_roles_of_a_second_device_describe_a_second_device() {
+    let first = Location { offset: 0, len: 56 };
+    let second = Location {
+        offset: 0x1000,
+        len: 64,
+    };
+    let mut bytes = [0u8; SIZE];
+    let mut view = BufferMut::new(&mut bytes);
+    let mut writer = Writer::new();
+    for (index, place) in [(16u32, first), (26, second)] {
+        writer
+            .give(&mut view, Role::BlockRegisters, handle(index))
+            .unwrap();
+        writer
+            .tell(&mut view, Role::BlockCommon, place.word())
+            .unwrap();
+        writer
+            .give(&mut view, Role::BlockInterrupt, handle(index + 1))
+            .unwrap();
+    }
+    writer.finish(&mut view).unwrap();
+    let startup = Startup::read(Buffer::new(&bytes)).unwrap();
+    assert_eq!(startup.blocks.len(), 2);
+    let devices: Vec<Handle> = startup
+        .blocks
+        .iter()
+        .map(|device| device.registers.handle())
+        .collect();
+    assert_eq!(devices, vec![handle(16), handle(26)]);
+    let commons: Vec<Option<u64>> = startup.blocks.iter().map(|device| device.common).collect();
+    assert_eq!(commons, vec![Some(first.word()), Some(second.word())]);
+}
+
+#[test]
+fn a_block_role_before_the_one_that_opens_a_device_is_refused() {
+    let outcome = read(&[(Role::BlockInterrupt, handle(1))]);
+    assert_eq!(
+        outcome.unwrap_err(),
+        ReadError::BlockWithoutRegisters(Role::BlockInterrupt)
+    );
+    let outcome = read_mixed(&[], &[(Role::BlockCommon, 1)]);
+    assert_eq!(
+        outcome.unwrap_err(),
+        ReadError::BlockWithoutRegisters(Role::BlockCommon)
+    );
+}
+
+#[test]
+fn more_block_devices_than_the_list_holds_are_refused() {
+    let mut pairs = Vec::new();
+    for index in 0..=MAX_BLOCK_DEVICES {
+        let raw = u32::try_from(index).unwrap().wrapping_add(1);
+        pairs.push((Role::BlockRegisters, handle(raw)));
+    }
+    assert_eq!(read(&pairs).unwrap_err(), ReadError::TooManyBlocks);
 }

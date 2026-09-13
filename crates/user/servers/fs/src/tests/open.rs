@@ -6,7 +6,7 @@
 use fs_fat::Dir;
 use user_proto::file::ROOT;
 
-use crate::open::{Clients, MAX_CLIENTS, MAX_OPEN, Opened};
+use crate::open::{Clients, MAX_CLIENTS, MAX_OPEN, Opened, Which};
 use crate::tests::support::volume;
 
 /// Something a client can hold open, which is the cheapest of the two.
@@ -14,6 +14,7 @@ fn directory(cluster: u32) -> Opened {
     let fs = volume();
     let dir = Dir::at(cluster);
     Opened::Dir {
+        volume: Which::Written,
         dir,
         walk: fs.entries(dir),
         handed: 0,

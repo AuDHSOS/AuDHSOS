@@ -38,12 +38,13 @@ use server_fs as _;
 use server_input as _;
 use server_memory as _;
 use server_name as _;
-use user_proto::parent;
+use user_proto::{file, parent};
 use virtio_queue as _;
 
 use audhsos_abi::layout::{MAX_MESSAGE_HANDLES, PAGE_SIZE};
 use audhsos_abi::startup::{BusRange, Location, Payload, Role, Screen, Writer};
 use audhsos_abi::{Error, Handle, Rights};
+use audhsos_collections::ArrayVec;
 use pci::address::{Address, BYTES_PER_BUS, Window};
 use pci::bar::{Bar, Space as BarSpace, probe};
 use pci::capability::{ID_MSIX, find, walk};
@@ -53,11 +54,13 @@ use pci::header::{COMMAND_BUS_MASTER, COMMAND_MEMORY, read_command, write_comman
 use pci::msix;
 use pci::virtio::{self, BLOCK_DEVICE, VIRTIO_VENDOR};
 use user_loader::tar::{Archive, Kind};
+use user_loader::volume;
 use user_loader::{Plan, STACK_PAGES};
-use user_programs::client::allocate;
+use user_programs::client::{allocate, release};
 use user_programs::config_space::MappedSpace;
 use user_programs::mapping::{Mapping, SCRATCH};
 use user_programs::{permissions, priority};
+use user_rt::startup::MAX_BLOCK_DEVICES;
 use user_rt::{
     EndpointHandle, InterruptHandle, IoPortHandle, Line, MemoryHandle, NotificationHandle,
     ProcessHandle, Startup, SystemControlHandle, Typed,
@@ -170,22 +173,6 @@ const PROGRAMS: [Program; 14] = [
         listens: false,
         reports: false,
     },
-    // The display server maps the framebuffer, which is four mebibytes on
-    // the reference machine, and one surface per client beside it, so its
-    // quota of frames is the largest of any program here.
-    Program {
-        name: b"server-display",
-        priority: priority::DRIVER,
-        handles: 64,
-        frames: 256,
-        objects: 64,
-        grant: Grant::Framebuffer,
-        names: true,
-        memory: true,
-        draws: false,
-        listens: false,
-        reports: false,
-    },
     // The file system server drives the block device: the register
     // window, the message interrupt, and the notification that interrupt
     // is bound to. It maps the window and one page the device reads and
@@ -199,6 +186,22 @@ const PROGRAMS: [Program; 14] = [
         frames: 64,
         objects: 64,
         grant: Grant::Block,
+        names: true,
+        memory: true,
+        draws: false,
+        listens: false,
+        reports: false,
+    },
+    // The display server maps the framebuffer, which is four mebibytes on
+    // the reference machine, and one surface per client beside it, so its
+    // quota of frames is the largest of any program here.
+    Program {
+        name: b"server-display",
+        priority: priority::DRIVER,
+        handles: 64,
+        frames: 256,
+        objects: 64,
+        grant: Grant::Framebuffer,
         names: true,
         memory: true,
         draws: false,
@@ -400,8 +403,10 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         display: None,
         input: None,
         console_for_self: None,
+        files_for_self: None,
+        bin: None,
         ecam: None,
-        block: None,
+        blocks: None,
         next_badge: 1,
     };
 
@@ -439,13 +444,21 @@ struct World {
     input: Option<EndpointHandle>,
     /// The same, badged for the root task's own lines.
     console_for_self: Option<EndpointHandle>,
+    /// The endpoint of the file system server, badged for the root task's
+    /// own requests. It is what the programs outside the boot set are
+    /// read through.
+    files_for_self: Option<EndpointHandle>,
+    /// The directory `AUDHSOS/BIN` of the volume the machine booted from,
+    /// opened once and kept for every program read out of it.
+    bin: Option<u32>,
     /// The configuration window of the PCI bus, made once: the root task
     /// enumerates through it and `app-lspci` is given a handle to the same
     /// object.
     ecam: Option<(MemoryHandle, BusRange)>,
-    /// The virtio block device, as the enumeration found and prepared it,
-    /// or nothing for a machine that carries none.
-    block: Option<Block>,
+    /// Every virtio block device the enumeration found and prepared, in
+    /// the order the bus has them: the disk the firmware read first, and
+    /// the disk the system writes after it (3.1.1).
+    blocks: Option<ArrayVec<Block, MAX_BLOCK_DEVICES>>,
     /// What the next child reports its faults under.
     next_badge: u64,
 }
@@ -488,22 +501,236 @@ fn start_everything(gate: &mut Gate, startup: &Startup, world: &mut World, image
     // of it; every other region goes to the memory server.
     let mut reserve = startup.ram.iter().copied().next();
     for program in PROGRAMS {
-        let found = archive.find(program.name);
-        let Ok(Some(entry)) = found else {
-            say(
-                gate,
-                world,
-                b"[init] a program of the table is not in the archive\n",
-            );
-            continue;
-        };
-        if entry.kind != Kind::File {
+        // The boot set comes out of the archive; everything else the file
+        // system server reads off the volume, which is what it was
+        // started for.
+        if in_the_boot_set(program.name) {
+            let found = archive.find(program.name);
+            let Ok(Some(entry)) = found else {
+                say(
+                    gate,
+                    world,
+                    b"[init] a program of the boot set is not in the archive\n",
+                );
+                continue;
+            };
+            if entry.kind != Kind::File {
+                continue;
+            }
+            let outcome = start(gate, startup, world, &program, entry.data, &mut reserve);
+            report(gate, world, program.name, outcome);
             continue;
         }
-        let outcome = start(gate, startup, world, &program, entry.data, &mut reserve);
+        let read = match read_program(gate, world, &mut reserve, program.name) {
+            Ok(read) => read,
+            Err(error) => {
+                report(
+                    gate,
+                    world,
+                    program.name,
+                    Err(Failure {
+                        step: "volume",
+                        error,
+                    }),
+                );
+                continue;
+            }
+        };
+        let (held, object) = read;
+        let outcome = start_from(gate, startup, world, &program, held, object, &mut reserve);
         report(gate, world, program.name, outcome);
     }
 }
+
+/// Starts a program whose bytes stand in `held`, and takes the mapping and
+/// the object `object` names back whatever came of it.
+fn start_from(
+    gate: &mut Gate,
+    startup: &Startup,
+    world: &mut World,
+    program: &Program,
+    mut held: Mapping,
+    object: MemoryHandle,
+    reserve: &mut Option<MemoryHandle>,
+) -> Result<(), Failure> {
+    // SAFETY: the object is mapped, it is memory of this process alone,
+    // and nothing else holds a reference to those bytes while `start`
+    // reads them.
+    let elf = unsafe { held.bytes() };
+    let outcome = start(gate, startup, world, program, elf, reserve);
+    let unmapped = held.unmap(gate, world.own).map_err(at("volume back"));
+    give_back(gate, world, object);
+    outcome?;
+    unmapped
+}
+
+/// Gives the object a program was read into back.
+///
+/// `start` copied every region of the program into an object of its own,
+/// so nothing reaches these bytes afterwards; without this the root task
+/// holds one object the size of every program it read for the life of the
+/// machine. A root task with no memory server of its own split the object
+/// off its reserve and has nobody to give it to.
+fn give_back(gate: &mut Gate, world: &World, object: MemoryHandle) {
+    let Some(memory) = world.memory_for_self else {
+        return;
+    };
+    let _released = release(gate, memory, object);
+}
+
+/// Whether `name` is a program of the boot set, which the archive holds.
+///
+/// The root task cannot read a file before the file system server runs,
+/// and the server is itself a file, so these four come from the archive
+/// and everything else from the volume.
+const fn in_the_boot_set(name: &[u8]) -> bool {
+    matches!(
+        name,
+        b"server-memory" | b"server-name" | b"server-console" | b"server-fs"
+    )
+}
+
+/// The bytes of `program`, read off the volume the machine booted from,
+/// and the object they stand in.
+///
+/// The file is read into a memory object of its own, which the caller
+/// unmaps and gives back and which the program's own regions are copied
+/// out of. It is mapped at [`PROGRAM`], clear of the archive and of the
+/// page every child's startup message is written into.
+fn read_program(
+    gate: &mut Gate,
+    world: &mut World,
+    reserve: &mut Option<MemoryHandle>,
+    name: &[u8],
+) -> Result<(Mapping, MemoryHandle), Error> {
+    let files = world.files_for_self.ok_or(Error::Unavailable)?;
+    // The directory is opened once and kept: every program after the first
+    // is one name away from it.
+    let bin = if let Some(handle) = world.bin {
+        handle
+    } else {
+        let mut parent = file::BOOT;
+        for step in volume::DIRECTORY {
+            parent = open_at(gate, files, parent, step.as_bytes())?.file;
+        }
+        world.bin = Some(parent);
+        parent
+    };
+    let (spelled, len) = volume::file_name(name).ok_or(Error::InvalidArgument)?;
+    let opened = open_at(gate, files, bin, spelled.get(..len).unwrap_or(&[]))?;
+    let bytes = u64::from(opened.size).max(1).next_multiple_of(PAGE_SIZE);
+    let object = take(gate, world, reserve, bytes, PAGE_SIZE)?;
+    // A map that failed part way leaves what it made behind, so the window
+    // is taken back before the next program asks for it.
+    let mut mapping = match Mapping::new(gate, world.own, object, PROGRAM, bytes) {
+        Ok(mapping) => mapping,
+        Err(error) => {
+            let _taken = unmap_window(gate, world.own, bytes);
+            give_back(gate, world, object);
+            return Err(error);
+        }
+    };
+    let outcome = fill(gate, files, opened.file, &mut mapping, opened.size);
+    let _closed = close_file(gate, files, opened.file);
+    match outcome {
+        Ok(()) => Ok((mapping, object)),
+        Err(error) => {
+            let _unmapped = mapping.unmap(gate, world.own);
+            give_back(gate, world, object);
+            Err(error)
+        }
+    }
+}
+
+/// Reads `size` bytes of `file` into `mapping`.
+fn fill(
+    gate: &mut Gate,
+    files: EndpointHandle,
+    file: u32,
+    mapping: &mut Mapping,
+    size: u32,
+) -> Result<(), Error> {
+    let mut done = 0u32;
+    while done < size {
+        let want = size.saturating_sub(done).min(MAX_READ);
+        let request = file::Request::Read {
+            file,
+            offset: done,
+            len: want,
+        };
+        let data = match call_files(gate, files, &request)? {
+            file::Reply::Read(outcome) => outcome?,
+            _ => return Err(Error::InvalidArgument),
+        };
+        if data.is_empty() {
+            return Err(Error::Unavailable);
+        }
+        // SAFETY: the object is mapped and nothing else of this program
+        // holds a reference to those bytes.
+        let bytes = unsafe { mapping.bytes() };
+        let at = usize::try_from(done).unwrap_or(0);
+        let end = at.saturating_add(data.len());
+        let slot = bytes.get_mut(at..end).ok_or(Error::BufferTooSmall)?;
+        slot.copy_from_slice(data.as_bytes());
+        done = done.saturating_add(u32::try_from(data.len()).unwrap_or(0));
+    }
+    Ok(())
+}
+
+/// Takes the window at [`PROGRAM`] back, whatever of it was mapped.
+fn unmap_window(gate: &mut Gate, own: ProcessHandle, bytes: u64) -> Result<(), Error> {
+    Mapping::adopt(PROGRAM, bytes).unmap(gate, own)
+}
+
+/// How many bytes one read of a program asks for, which is what one
+/// message carries.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "a few kibibytes, which the message area bounds from above, in a const"
+)]
+const MAX_READ: u32 = file::MAX_DATA as u32;
+
+/// Opens `name` in `parent` and answers what the server said of it.
+fn open_at(
+    gate: &mut Gate,
+    files: EndpointHandle,
+    parent: u32,
+    name: &[u8],
+) -> Result<file::Opened, Error> {
+    let request = file::Request::Open {
+        parent,
+        name: file::Name::new(name)?,
+    };
+    match call_files(gate, files, &request)? {
+        file::Reply::Opened(outcome) => outcome,
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+/// Gives a file handle back.
+fn close_file(gate: &mut Gate, files: EndpointHandle, file: u32) -> Result<(), Error> {
+    match call_files(gate, files, &file::Request::Close { file })? {
+        file::Reply::Closed(outcome) => outcome,
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+/// Sends one request to the file system server and reads the reply.
+fn call_files(
+    gate: &mut Gate,
+    files: EndpointHandle,
+    request: &file::Request,
+) -> Result<file::Reply, Error> {
+    request.encode(&mut gate.writer())?;
+    gate.ipc_call(files)?;
+    file::Reply::decode(gate.reader()).map_err(Error::from)
+}
+
+/// Where a program read off the volume is mapped while it is read and
+/// copied. It is clear of [`IMAGE`], which holds the archive, and of
+/// [`SCRATCH`], where a child's startup message is written.
+const PROGRAM: u64 = 0x0000_3000_0000_0000;
 
 /// Starts one program.
 fn start(
@@ -743,7 +970,10 @@ fn grant(
         // here, for the reason a machine without a window grants nothing
         // above: the program starts and reports that it was given none.
         Grant::Block => {
-            if let Some(block) = block_device(gate, world) {
+            // Every device, each as nine roles that begin with the
+            // register window: the driver takes a device to be opened by
+            // `BlockRegisters` and closed by `BlockVectorBit`.
+            for block in block_devices(gate, world) {
                 let handle = gate.process_install_handle(
                     child,
                     block.registers.handle(),
@@ -772,7 +1002,7 @@ fn grant(
                     ObjectRights::NOTIFY,
                 )?;
                 push(given, count, Role::BlockNotification, handle)?;
-                tell(given, count, Role::BlockVectorBit, BLOCK_VECTOR_BIT)?;
+                tell(given, count, Role::BlockVectorBit, block.bit)?;
             }
         }
         Grant::Input => {
@@ -983,6 +1213,9 @@ struct Block {
     interrupt: InterruptHandle,
     /// The notification that interrupt is bound to.
     notification: NotificationHandle,
+    /// The bit of that notification the interrupt sets. Each device has
+    /// one of its own, so a driver of two tells two wake-ups apart.
+    bit: u64,
     /// What the message table of the device says once the entry is
     /// written: where the table is, whether the function raises MSI-X,
     /// and the write a completion makes.
@@ -1001,8 +1234,9 @@ const STRUCTURES: [virtio::Kind; 4] = [
     virtio::Kind::Device,
 ];
 
-/// The bit of the notification the message interrupt of the block device
-/// sets. The notification carries this device alone, so it is the first.
+/// The bit of the notification the message interrupt of a block device
+/// sets. Each device is given a notification of its own, so the bit is
+/// the first of it.
 const BLOCK_VECTOR_BIT: u64 = 0;
 
 /// The entry of the MSI-X table the vector is written into. The driver
@@ -1024,15 +1258,18 @@ fn window(gate: &mut Gate, world: &mut World) -> Option<(MemoryHandle, BusRange)
 /// It is not done at the start of the machine, where every other object of
 /// the root task is made, because the console is not up there and a refusal
 /// would be a boot that says nothing.
-fn block_device<'a>(gate: &mut Gate, world: &'a mut World) -> Option<&'a Block> {
-    if world.block.is_none() {
-        match find_block(gate, world) {
+fn block_devices<'a>(
+    gate: &mut Gate,
+    world: &'a mut World,
+) -> &'a ArrayVec<Block, MAX_BLOCK_DEVICES> {
+    if world.blocks.is_none() {
+        match find_blocks(gate, world) {
             Ok(found) => {
-                // What the handover left behind, read back off the
+                // What the handover left behind, read back off each
                 // device: the risk this reduces is a message table that
                 // took the write and kept nothing, which no later step
                 // would name.
-                if let Some(block) = &found {
+                for block in &found {
                     let line: Line<160> = Line::of(format_args!(
                         "[init] block msix bar{}+{:#x} of {} vectors holds {:#x}/{:#x} masked={}\n",
                         block.table.table.bar,
@@ -1044,7 +1281,7 @@ fn block_device<'a>(gate: &mut Gate, world: &'a mut World) -> Option<&'a Block> 
                     ));
                     say(gate, world, line.as_bytes());
                 }
-                world.block = found;
+                world.blocks = Some(found);
             }
             Err(refused) => {
                 let (first, frames) = refused.about.unwrap_or((0, 0));
@@ -1054,37 +1291,48 @@ fn block_device<'a>(gate: &mut Gate, world: &'a mut World) -> Option<&'a Block> 
                     refused.step
                 ));
                 say(gate, world, line.as_bytes());
+                world.blocks = Some(ArrayVec::new());
             }
         }
     }
-    world.block.as_ref()
+    world.blocks.as_ref().unwrap_or(&EMPTY_BLOCKS)
 }
 
-/// The virtio block device of the machine, prepared for a driver, or
-/// nothing when the machine carries none.
+/// What `block_devices` answers for a machine whose enumeration refused.
+const EMPTY_BLOCKS: ArrayVec<Block, MAX_BLOCK_DEVICES> = ArrayVec::new();
+
+/// Every virtio block device of the machine, prepared for a driver.
 ///
 /// The window is mapped one bus at a time, as `app-lspci` maps it and for
 /// the same reason: one bus is one mebibyte of page tables (8.15).
-fn find_block(gate: &mut Gate, world: &mut World) -> Result<Option<Block>, Refused> {
+///
+/// They are handed over in the order the bus has them, which on the
+/// reference machine is the disk the firmware read and then the disk the
+/// system writes (3.1.1). The driver tells them apart by what is on them
+/// and not by that order: a disk that carries a partition table is one
+/// somebody else wrote.
+fn find_blocks(
+    gate: &mut Gate,
+    world: &mut World,
+) -> Result<ArrayVec<Block, MAX_BLOCK_DEVICES>, Refused> {
     let system = world.system.ok_or(Error::AccessDenied).step("system")?;
     let own = world.own;
+    let mut found = ArrayVec::new();
     let Some((memory, buses)) = window(gate, world) else {
-        return Ok(None);
+        return Ok(found);
     };
     for bus in buses.first_bus..=buses.last_bus {
         let offset = u64::from(bus.saturating_sub(buses.first_bus)).saturating_mul(BYTES_PER_BUS);
         let mut mapping =
             Mapping::window(gate, own, memory, BUS, offset, BYTES_PER_BUS).step("bus")?;
-        let outcome = on_one_bus(gate, system, own, &mut mapping, buses, bus);
+        let outcome = on_one_bus(gate, system, own, &mut mapping, buses, bus, &mut found);
         mapping.unmap(gate, own).step("bus back")?;
-        if let Some(block) = outcome? {
-            return Ok(Some(block));
-        }
+        outcome?;
     }
-    Ok(None)
+    Ok(found)
 }
 
-/// The device on this bus, prepared, or nothing when it is on another.
+/// Prepares every device of this bus and appends it to `found`.
 fn on_one_bus(
     gate: &mut Gate,
     system: SystemControlHandle,
@@ -1092,7 +1340,8 @@ fn on_one_bus(
     mapping: &mut Mapping,
     buses: BusRange,
     bus: u8,
-) -> Result<Option<Block>, Refused> {
+    found: &mut ArrayVec<Block, MAX_BLOCK_DEVICES>,
+) -> Result<(), Refused> {
     let window = Window::new(buses.segment, bus, bus)
         .map_err(pci_error)
         .step("window")?;
@@ -1101,21 +1350,27 @@ fn on_one_bus(
     // built here is the only one that reaches those bytes.
     let bytes = unsafe { mapping.bytes() };
     let mut space = MappedSpace::new(window, Mmio::of(bytes));
-    let mut found = None;
+    let mut addresses = [None; MAX_BLOCK_DEVICES];
+    let mut count = 0usize;
     enumerate(&space, window, |function| {
-        if found.is_none()
-            && function.header.vendor == VIRTIO_VENDOR
+        if function.header.vendor == VIRTIO_VENDOR
             && function.header.device == BLOCK_DEVICE
+            && let Some(slot) = addresses.get_mut(count)
         {
-            found = Some(function.address);
+            *slot = Some(function.address);
+            count = count.saturating_add(1);
         }
     })
     .map_err(pci_error)
     .step("enumerate")?;
-    match found {
-        Some(address) => prepare(gate, system, own, &mut space, address).map(Some),
-        None => Ok(None),
+    for address in addresses.into_iter().flatten() {
+        let block = prepare(gate, system, own, &mut space, address)?;
+        found
+            .push(block)
+            .map_err(|_| Error::QuotaExceeded)
+            .step("too many devices")?;
     }
+    Ok(())
 }
 
 /// Makes the objects a driver of `address` is given, and leaves the device
@@ -1203,6 +1458,7 @@ fn prepare(
         multiplier,
         interrupt: vector.interrupt,
         notification,
+        bit: BLOCK_VECTOR_BIT,
         table,
         back,
     })
@@ -1551,6 +1807,9 @@ fn remember(
         b"server-console" => {
             world.console = Some(endpoint);
             world.console_for_self = Some(gate.endpoint_badge(endpoint, INIT_BADGE)?);
+        }
+        b"server-fs" => {
+            world.files_for_self = Some(gate.endpoint_badge(endpoint, INIT_BADGE)?);
         }
         b"server-display" => world.display = Some(endpoint),
         b"server-input" => world.input = Some(endpoint),

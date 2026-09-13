@@ -38,14 +38,54 @@ pub type Name = Bytes<MAX_NAME>;
 
 /// How many bytes of a file one message carries.
 ///
-/// One sector, which is the unit the server moves anyway, and small
-/// enough to stand on the stack of everyone who handles it, as the
-/// console protocol bounds its chunk for the same reason. A client with
-/// more to move sends more messages.
-pub const MAX_DATA: usize = 512;
+/// Four sectors. The message area holds 3840 bytes, so this leaves room
+/// for the words of every request and reply beside the data; and it is
+/// what the root task needs to read a program off the volume in a
+/// reasonable time, a megabyte at one sector a message being two thousand
+/// round trips. A client with more to move sends more messages.
+pub const MAX_DATA: usize = 2048;
 
-/// The file handle of the root directory, which every client holds.
+/// How many times one message stands on the stack of a client that is
+/// handling it, with the margin the measurement leaves.
+///
+/// A request, a reply, and the bytes taken out of it are three copies in
+/// one call chain, and the chain stands on frames of its own.
+const COPIES_ON_THE_STACK: usize = 64;
+
+// The bulk of this protocol has to stand on the smallest stack in the
+// system, which is the root task's — it reads the programs outside the
+// boot set through this protocol. A bulk that does not fit faults the
+// root task into the guard page below its stack, and the root task being
+// its own fault handler, it faults without a word.
+//
+// Measured: 512 bytes stands on sixteen pages and 2048 does not, which is
+// what puts the number above where it is.
+#[expect(
+    clippy::as_conversions,
+    reason = "a bulk of a few kibibytes against a stack of a few pages, in a const the compiler checks"
+)]
+const BULK_ON_THE_STACK: u64 = (MAX_DATA * COPIES_ON_THE_STACK) as u64;
+
+const _: () = assert!(
+    BULK_ON_THE_STACK <= audhsos_abi::layout::ROOT_STACK_PAGES * audhsos_abi::layout::PAGE_SIZE,
+    "the bulk of the file protocol does not fit the stack of the root task"
+);
+
+/// The root directory of the volume the system writes, which every client
+/// holds without opening it.
 pub const ROOT: u32 = 0;
+
+/// The root directory of the volume the machine booted from, which every
+/// client holds and none may write.
+///
+/// The two volumes are two disks: the firmware read one and the system
+/// writes the other (D-136), so a handle names which. A server that
+/// mounted only one answers `NotFound` for the other.
+pub const BOOT: u32 = 1;
+
+/// The first handle the server chooses for itself; the two below it are
+/// the roots.
+pub const FIRST_FILE: u32 = 2;
 
 /// `open`: the handle of an entry that is there.
 pub const OPEN: u16 = 1;

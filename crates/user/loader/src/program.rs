@@ -24,7 +24,12 @@ use audhsos_abi::layout::{PAGE_SIZE, THREADS_PER_PROCESS, USER_SPACE_START, ipc_
 use audhsos_elf::{Constraints, ElfError, Image, MAX_SEGMENTS, Segment};
 
 /// How many pages the stack of a thread gets.
-pub const STACK_PAGES: u64 = 16;
+///
+/// Sixty-four kibibytes was enough until the file protocol carried four
+/// sectors in one message: a request, a reply and the buffer between them
+/// are three values of that size in one frame, and the file system server
+/// holds a table of open files beside them.
+pub const STACK_PAGES: u64 = 32;
 
 /// The first address the buffers of a process occupy. Nothing a program is
 /// linked at may reach it.

@@ -10,6 +10,7 @@
 // different part of the crates below, and the binaries are what reach
 // them. Naming them here is what the unused-dependency check asks for.
 use app_canvas as _;
+use audhsos_collections as _;
 use audhsos_time as _;
 use driver_i8042 as _;
 use driver_uart16550 as _;

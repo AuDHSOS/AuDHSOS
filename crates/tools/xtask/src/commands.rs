@@ -272,22 +272,58 @@ fn block_lines(output: &str) -> Vec<String> {
     for line in output.lines().filter(|line| line.starts_with("[init] no ")) {
         violations.push(format!("the root task refused the handover: {line}"));
     }
-    // The scratch disk is 64 MiB of 512-byte sectors, which the device
-    // reports as its capacity; a driver that read the wrong register
-    // reports something else.
-    if !output.contains(&format!("[files] disk of {SCRATCH_SECTORS} sectors")) {
-        violations.push(format!(
-            "the driver did not read {SCRATCH_SECTORS} sectors off the scratch disk"
-        ));
+    // Both disks are driven and both volumes are mounted: the one the
+    // firmware wrote, and the one the system formatted.
+    for name in ["boot", "scratch"] {
+        if !output.contains(&format!("[files] {name} volume: clusters=")) {
+            violations.push(format!("the file system server mounted no {name} volume"));
+        }
     }
-    if !output.contains("[files] clusters=") {
-        violations.push("the file system server mounted no volume".to_owned());
+    // The scratch volume is 64 MiB of one-sector clusters less what the
+    // tables and the reserved sectors take; a volume of the other disk's
+    // size would be the boot one twice.
+    if !output.contains(&format!(
+        "[files] scratch volume: clusters={SCRATCH_CLUSTERS}"
+    )) {
+        violations.push(format!(
+            "the scratch volume is not the {SCRATCH_CLUSTERS} clusters of a 64 MiB disk"
+        ));
     }
     violations
 }
 
-/// Sectors of the scratch disk, which is [`SCRATCH_SIZE`] of them.
-const SCRATCH_SECTORS: u64 = SCRATCH_SIZE / 512;
+/// Clusters of the scratch volume: [`SCRATCH_SIZE`] of 512-byte sectors,
+/// one sector to a cluster, less the reserved sectors and the two tables
+/// the format writes.
+const SCRATCH_CLUSTERS: u64 = 128_992;
+
+/// That the volume the server mounted is the boot one and that it was
+/// mounted rather than written over.
+///
+/// The boot volume carries the loader, the kernel and the boot image, so
+/// most of its clusters are taken. A disk this server had formatted would
+/// report all but one of them free, which is what this refuses.
+fn boot_volume_lines(output: &str) -> Vec<String> {
+    let Some(line) = output
+        .lines()
+        .find(|line| line.starts_with("[files] boot volume: clusters="))
+    else {
+        return vec!["the server said nothing of the volume it mounted".to_owned()];
+    };
+    let numbers: Vec<u32> = line
+        .split(|byte: char| !byte.is_ascii_digit())
+        .filter_map(|word| word.parse().ok())
+        .collect();
+    let (Some(clusters), Some(free)) = (numbers.first(), numbers.get(1)) else {
+        return vec![format!("the geometry names no cluster counts: {line}")];
+    };
+    if free.saturating_mul(2) >= *clusters {
+        return vec![format!(
+            "the boot volume was written over rather than mounted: {line}"
+        )];
+    }
+    Vec::new()
+}
 
 /// How many lines the second client writes while the first writes its own.
 ///
@@ -442,6 +478,26 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     test_without_a_network(&machine, &path)
 }
 
+/// What the second boot has to reach before anything is typed at it, in
+/// this order. Every program outside the boot set is read off the volume,
+/// so the run passes these one at a time rather than waiting once for the
+/// last of them.
+const SECOND_BOOT_LINES: [(&str, &str); 4] = [
+    (
+        "[files] boot volume: clusters=",
+        "the second boot mounted no boot volume",
+    ),
+    (
+        "[init] started server-display",
+        "the second boot read no program off the volume",
+    ),
+    (
+        "[init] started app-files",
+        "the second boot did not read every program off the volume",
+    ),
+    ("[hello] ready", "the second boot never said it was ready"),
+];
+
 /// The line the program that uses the volume writes last.
 const FILES_DONE: &str = "[files-app] entries=";
 
@@ -491,13 +547,20 @@ fn test_the_same_disk_again(machine: &Machine, path: &Path, root: &Path) -> Resu
         },
     )?;
     let mut violations = Vec::new();
-    // What is typed goes first: the line the program that reads the volume
-    // writes last comes after `[hello] ready`, and a wait for a line that
-    // has already gone past never ends.
-    if session.wait_for("[hello] ready", E2E_TIMEOUT) {
+    // The programs outside the boot set are read off the volume one
+    // message at a time, so the boot takes minutes rather than seconds and
+    // each line is waited for on its own. What is typed goes first: the
+    // line the program that reads the volume writes last comes after
+    // `[hello] ready`, and a wait for a line that has already gone past
+    // never ends.
+    for (needle, complaint) in SECOND_BOOT_LINES {
+        if !session.wait_for(needle, E2E_TIMEOUT) {
+            violations.push((*complaint).to_owned());
+            break;
+        }
+    }
+    if violations.is_empty() {
         session.send(b"typed\n")?;
-    } else {
-        violations.push("the second boot never said it was ready".to_owned());
     }
     if violations.is_empty() {
         if session.wait_for(FILES_DONE, E2E_TIMEOUT) {
@@ -1202,11 +1265,22 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Erro
             break;
         }
     }
-    // This run carries no scratch disk. The machine comes up regardless
-    // and the file system server says there is none, which is what a
-    // client that asks for a file has to hear.
-    if violations.is_empty() && !session.wait_for("[files] no disk", E2E_TIMEOUT) {
-        violations.push("a machine without a disk did not say so".to_owned());
+    // This run carries no scratch disk, so the only block device is the
+    // one the firmware booted from. The server mounts its volume and does
+    // not format it: a volume carrying the loader, the kernel and the
+    // boot image has far fewer clusters free than it has clusters, where
+    // one just formatted would have all but one.
+    if violations.is_empty() {
+        if session.wait_for("[files] boot volume: clusters=", E2E_TIMEOUT) {
+            violations.extend(boot_volume_lines(&session.output()));
+        } else {
+            violations.push("the machine without a scratch disk mounted no volume".to_owned());
+        }
+    }
+    // And it has nothing to write to, which it says rather than writing
+    // to the volume it must not.
+    if violations.is_empty() && !session.wait_for("[files] no scratch disk", E2E_TIMEOUT) {
+        violations.push("a machine with nothing to write to did not say so".to_owned());
     }
     if violations.is_empty() && session.wait_for("[hello] ready", E2E_TIMEOUT) {
         session.send(b"typed\n")?;
@@ -1269,7 +1343,18 @@ const NO_VGA_LINES: [(&str, &str); 4] = [
 
 /// The lines the run without the two network lines has to carry: the bus is
 /// walked, the device is not there, and the machine ends by itself.
-const NO_NETWORK_LINES: [(&str, &str); 3] = [
+const NO_NETWORK_LINES: [(&str, &str); 5] = [
+    // The bus walk is read off the volume like every program outside the
+    // boot set, so the run reaches it one program at a time rather than
+    // waiting once for a line minutes away.
+    (
+        "[files] boot volume: clusters=",
+        "the run without a network mounted no boot volume",
+    ),
+    (
+        "[init] started app-lspci",
+        "the run without a network read no bus walk off the volume",
+    ),
     (
         "[lspci] window segment=",
         "the program that walks the bus was given no window",
@@ -1484,6 +1569,31 @@ fn loader_bytes(root: &Path, profile: &str) -> Result<Vec<u8>, Error> {
             path.display()
         ))
     })
+}
+
+/// The programs that lie on the volume, each under the path
+/// `AUDHSOS/BIN/` gives it.
+///
+/// # Errors
+///
+/// The errors of reading what the build wrote, and [`Error::Usage`] for a
+/// program whose name is no 8.3 one.
+fn volume_programs(root: &Path, profile: &str) -> Result<Vec<(String, Vec<u8>)>, Error> {
+    let built = root.join("target/x86_64-unknown-none").join(profile);
+    let mut files = Vec::new();
+    for name in archive::ON_THE_VOLUME {
+        let (spelled, len) = user_loader::volume::file_name(name.as_bytes())
+            .ok_or_else(|| Error::Usage(format!("`{name}` is no name a volume holds")))?;
+        let spelled = std::str::from_utf8(spelled.get(..len).unwrap_or(&[]))
+            .map_err(|_| Error::Usage(format!("`{name}` spells no file name")))?;
+        let path = format!(
+            "{}/{}/{spelled}",
+            user_loader::volume::DIRECTORY[0],
+            user_loader::volume::DIRECTORY[1]
+        );
+        files.push((path, fs::read_bytes(&built.join(name))?));
+    }
+    Ok(files)
 }
 
 /// Where the loader lands.
@@ -2415,11 +2525,16 @@ pub(crate) fn image(root: &Path, options: &[String]) -> Result<(), Error> {
         .join("audhsos-kernel");
     check_userland(root)?;
     let boot = boot_image_of(root, profile)?;
-    let files = vec![
+    let mut files = vec![
         (disk::LOADER_PATH, fs::read_bytes(&loader)?),
         (disk::KERNEL_PATH, fs::read_bytes(&kernel)?),
         (disk::BOOT_IMAGE_PATH, boot.clone()),
     ];
+    let programs = volume_programs(root, profile)?;
+    for (path, bytes) in &programs {
+        files.push((path.as_str(), bytes.clone()));
+    }
+    note!("volume: {} programs under AUDHSOS/BIN/", programs.len());
     let image = disk::build(&files)?;
     let boot_path = target.join("boot.img");
     let disk_path = target.join("audhsos.img");

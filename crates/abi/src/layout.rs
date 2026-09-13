@@ -41,6 +41,19 @@ pub const KERNEL_BASE: u64 = 0xFFFF_FFFF_8000_0000;
 /// Virtual base the root task is linked at.
 pub const ROOT_TASK_BASE: u64 = 0x0000_0000_1000_0000;
 
+/// How many pages the stack of the root task gets.
+///
+/// It is here and not in the kernel alone because what it has to hold is a
+/// protocol's business: the root task reads the programs outside the boot
+/// set off the volume, and one message of the file protocol stands three
+/// times in that call chain — the request, the reply, and the bytes taken
+/// out of it. `user-proto` checks its own bulk size against this.
+///
+/// Measured: a bulk of 512 bytes stands on sixteen pages and one of 2048
+/// does not; the thread faults into the guard page below the stack, and
+/// the root task being its own fault handler, it faults silently.
+pub const ROOT_STACK_PAGES: u64 = 32;
+
 /// Address one past the boot stack; the stack grows down from here.
 pub const BOOT_STACK_TOP: u64 = KERNEL_BASE - 0x0100_0000;
 

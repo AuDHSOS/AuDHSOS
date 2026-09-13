@@ -5,17 +5,17 @@
 //!
 //! A file handle is a number this server chose, not a kernel object,
 //! because a file is not a kernel object. The number is an index into the
-//! client's own table plus one, so [`user_proto::file::ROOT`] stays the
-//! root directory and no handle of one client names anything of another.
+//! client's own table plus [`FIRST_FILE`], so the two roots — the volume
+//! the system writes and the volume it booted from — keep the numbers
+//! below it and no handle of one client names anything of another.
 //!
 //! The client is found by the badge on the endpoint the message came
 //! through, which is the only thing about a sender a server can trust. The
 //! display server finds a surface the same way.
 //!
 //! Invariants: a handle answers a slot of the client it was given to and
-//! of no other; the root directory is handle [`ROOT`] for every client and
-//! occupies no slot; a client that has closed everything occupies no
-//! table.
+//! of no other; the two roots occupy no slot; a client that has closed
+//! everything occupies no table.
 //!
 //! Known limit: a client that ends without closing keeps its table, and
 //! nothing here learns that it ended. Risk 7 of
@@ -23,7 +23,7 @@
 //! would take to lift.
 
 use fs_fat::{Dir, Entries, File, Name};
-use user_proto::file::ROOT;
+use user_proto::file::FIRST_FILE;
 
 /// How many clients the server keeps a table for.
 pub const MAX_CLIENTS: usize = 16;
@@ -31,12 +31,28 @@ pub const MAX_CLIENTS: usize = 16;
 /// How many entries one client may hold open at once.
 pub const MAX_OPEN: usize = 16;
 
+/// Which volume a handle belongs to.
+///
+/// A handle names a file of one volume and of no other, so the volume is
+/// part of what the handle stands for and not something a caller says
+/// again at every message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Which {
+    /// The volume the system writes, whose root is `user_proto::file::ROOT`.
+    Written,
+    /// The volume the machine booted from, whose root is
+    /// `user_proto::file::BOOT`.
+    Booted,
+}
+
 /// One thing a client holds open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Opened {
     /// A file, with the directory and the name that describe it, so that
     /// a stat reads the entry the file came from.
     File {
+        /// Which volume it is on.
+        volume: Which,
         /// The file as `fs-fat` tracks it, cursor and all.
         file: File,
         /// The directory it lies in.
@@ -47,6 +63,8 @@ pub enum Opened {
     /// A directory, with the walk over its entries and how many of them
     /// have been handed out.
     Dir {
+        /// Which volume it is on.
+        volume: Which,
         /// The directory.
         dir: Dir,
         /// Where the walk stands.
@@ -66,6 +84,14 @@ impl Opened {
             Opened::File { .. } => None,
         }
     }
+
+    /// Which volume this handle is on.
+    #[must_use]
+    pub const fn volume(&self) -> Which {
+        match self {
+            Opened::Dir { volume, .. } | Opened::File { volume, .. } => *volume,
+        }
+    }
 }
 
 /// The table of one client.
@@ -73,13 +99,14 @@ impl Opened {
 struct Client {
     badge: u64,
     slots: [Option<Opened>; MAX_OPEN],
-    /// Where the client's walk over the root directory stands, and how
-    /// many entries of it the client has been given.
+    /// Where the client's walk over each root directory stands, and how
+    /// many entries of it the client has been given: one per volume, in
+    /// the order the handles have them.
     ///
-    /// The root occupies no slot, so a client reads it without opening
+    /// A root occupies no slot, so a client reads it without opening
     /// anything; without this the walk would start again at every message
     /// and a listing would cost one pass of the directory per entry.
-    root: Option<(Entries, u64)>,
+    roots: [Option<(Entries, u64)>; ROOTS],
 }
 
 impl Client {
@@ -88,13 +115,13 @@ impl Client {
         Client {
             badge,
             slots: [None; MAX_OPEN],
-            root: None,
+            roots: [None; ROOTS],
         }
     }
 
     /// `true` when the client holds nothing open.
     fn is_idle(&self) -> bool {
-        self.slots.iter().all(Option::is_none) && self.root.is_none()
+        self.slots.iter().all(Option::is_none) && self.roots.iter().all(Option::is_none)
     }
 }
 
@@ -159,18 +186,20 @@ impl Clients {
         handle_of(index)
     }
 
-    /// Where `badge` stands in its walk over the root directory, made by
-    /// `fresh` when the client has none.
+    /// Where `badge` stands in its walk over the root directory of volume
+    /// `root`, made by `fresh` when the client has none.
     ///
     /// Answers `None` when the server keeps [`MAX_CLIENTS`] tables and
     /// this is a new client.
     pub fn root_walk(
         &mut self,
         badge: u64,
+        root: usize,
         fresh: impl FnOnce() -> Entries,
     ) -> Option<&mut (Entries, u64)> {
         let client = self.table(badge)?;
-        Some(client.root.get_or_insert_with(|| (fresh(), 0)))
+        let slot = client.roots.get_mut(root)?;
+        Some(slot.get_or_insert_with(|| (fresh(), 0)))
     }
 
     /// What `handle` of `badge` stands for.
@@ -222,20 +251,18 @@ impl Clients {
     }
 }
 
-/// The handle of the slot at `index`.
-///
-/// One above the index, because zero is [`ROOT`], which is every client's
-/// root directory and occupies no slot.
+/// How many volumes a client holds a root of.
+pub const ROOTS: usize = 2;
+
+/// The handle of the slot at `index`, which is [`FIRST_FILE`] above it:
+/// the numbers below belong to the roots, which occupy no slot.
 fn handle_of(index: usize) -> Option<u32> {
-    u32::try_from(index).ok()?.checked_add(1)
+    u32::try_from(index).ok()?.checked_add(FIRST_FILE)
 }
 
-/// The slot `handle` names, or `None` for [`ROOT`] and for a handle no
+/// The slot `handle` names, or `None` for a root and for a handle no
 /// table is that long for.
 fn index_of(handle: u32) -> Option<usize> {
-    if handle == ROOT {
-        return None;
-    }
-    let index = usize::try_from(handle.checked_sub(1)?).ok()?;
+    let index = usize::try_from(handle.checked_sub(FIRST_FILE)?).ok()?;
     (index < MAX_OPEN).then_some(index)
 }

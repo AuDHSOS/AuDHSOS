@@ -10,3 +10,4 @@ mod error;
 mod open;
 mod serve;
 mod support;
+mod volume;

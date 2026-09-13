@@ -13,15 +13,29 @@ use fs_fat::{ATTR_DIRECTORY, FileSystem};
 use user_proto::file::{Data, MAX_DATA, Name, ROOT, Reply, Request, START};
 
 use crate::open::Clients;
-use crate::serve::{answer, moment};
+use crate::serve::{Volumes, answer, moment};
 use crate::tests::support::{now, volume};
 
 /// The badge of the client every test speaks as.
 const CLIENT: u64 = 1;
 
-/// Answers `request` as [`CLIENT`].
+/// Answers `request` as [`CLIENT`], on a machine of one volume.
 fn ask(fs: &mut FileSystem<RamDisk>, clients: &mut Clients, request: &Request) -> Reply {
-    answer(fs, clients, CLIENT, request, now())
+    as_client(fs, clients, CLIENT, request)
+}
+
+/// The same, as whichever client `badge` names.
+fn as_client(
+    fs: &mut FileSystem<RamDisk>,
+    clients: &mut Clients,
+    badge: u64,
+    request: &Request,
+) -> Reply {
+    let mut volumes = Volumes {
+        written: Some(fs),
+        booted: None,
+    };
+    answer(&mut volumes, clients, badge, request, now())
 }
 
 /// The name `text` stands for.
@@ -281,7 +295,7 @@ fn a_handle_of_another_client_names_nothing_here() {
     let mut fs = volume();
     let mut clients = Clients::new();
     let file = make(&mut fs, &mut clients, b"MINE.TXT");
-    let theirs = answer(
+    let theirs = as_client(
         &mut fs,
         &mut clients,
         CLIENT + 1,
@@ -290,7 +304,6 @@ fn a_handle_of_another_client_names_nothing_here() {
             offset: 0,
             len: 4,
         },
-        now(),
     );
     assert_eq!(theirs, Reply::Read(Err(Error::InvalidHandle)));
 }
@@ -654,7 +667,7 @@ fn a_listing_of_the_root_walks_it_once_and_not_once_per_entry() {
     assert_eq!(names, vec![name(b"A.TXT"), name(b"B.TXT"), name(b"C.TXT")]);
     // The walk is the client's, so a second client starts its own at the
     // first entry rather than continuing this one.
-    let theirs = answer(
+    let theirs = as_client(
         &mut fs,
         &mut clients,
         CLIENT + 1,
@@ -662,7 +675,6 @@ fn a_listing_of_the_root_walks_it_once_and_not_once_per_entry() {
             dir: ROOT,
             cursor: START,
         },
-        now(),
     );
     let Reply::Entry(Ok(Some(entry))) = theirs else {
         panic!("the second client read no entry");

@@ -11,6 +11,7 @@
 
 use audhsos_abi::Error;
 use fs_fat::Error as FatError;
+use fs_gpt::Error as GptError;
 
 /// The refusal the protocol carries for `error`.
 ///
@@ -45,5 +46,33 @@ pub const fn refusal(error: FatError) -> Error {
         | FatError::ChainLoop(_)
         | FatError::EntryName
         | FatError::Time => Error::InvalidState,
+    }
+}
+
+/// The refusal the protocol carries for a partition table `error`.
+///
+/// Two groups, as above: a device that would not move a sector, and a
+/// table whose bytes disagree with the format. A caller can do nothing
+/// about either, and neither is a partition table it could have asked
+/// for differently.
+#[must_use]
+pub const fn table_refusal(error: GptError) -> Error {
+    match error {
+        GptError::Device(_) => Error::Unavailable,
+        GptError::Lba(_)
+        | GptError::NotProtective
+        | GptError::Signature
+        | GptError::Revision(_)
+        | GptError::HeaderSize(_)
+        | GptError::HeaderChecksum
+        | GptError::MyLba(_)
+        | GptError::EntrySize(_)
+        | GptError::ArrayRange
+        | GptError::ArrayChecksum
+        | GptError::Usable(_, _)
+        | GptError::TooSmall(_)
+        | GptError::Name
+        | GptError::Partition(_)
+        | GptError::Space(_) => Error::InvalidState,
     }
 }

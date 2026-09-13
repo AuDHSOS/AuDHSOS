@@ -107,6 +107,7 @@ bench = false
 [dependencies]
 app-canvas.workspace = true
 audhsos-abi.workspace = true
+audhsos-collections.workspace = true
 audhsos-time.workspace = true
 driver-i8042.workspace = true
 driver-uart16550.workspace = true

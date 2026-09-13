@@ -43,7 +43,11 @@ use kernel_syscall::environment::Environment;
 use kernel_types::{CachePolicy, Page, PhysFrame, PhysFrameRange, VirtAddr};
 
 /// How many pages the stack of the root task gets.
-pub const STACK_PAGES: u64 = 16;
+///
+/// The number is `audhsos_abi::layout`'s, because what the stack has to
+/// hold is what the protocols a client speaks put on it, and `user-proto`
+/// checks its own bulk size against the same constant.
+pub const STACK_PAGES: u64 = audhsos_abi::layout::ROOT_STACK_PAGES;
 
 /// The priority the root task runs at: the highest there is. It is the
 /// fault handler of every process it starts, and a fault handler that waits

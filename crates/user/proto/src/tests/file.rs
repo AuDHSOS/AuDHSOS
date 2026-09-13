@@ -38,160 +38,166 @@ fn name() -> Name {
 
 #[test]
 fn every_request_comes_back_as_it_went_out() {
-    let requests = [
-        Request::Open {
+    for request in requests() {
+        assert_eq!(round_trip(&request).unwrap(), request, "{request:?}");
+    }
+}
+
+/// One request of every kind, answered one at a time: a value of this
+/// protocol carries [`MAX_DATA`] bytes, so an array of them is kibibytes
+/// of stack.
+fn requests() -> impl Iterator<Item = Request> {
+    let cases = [
+        Case::Open,
+        Case::CreateDir,
+        Case::CreateFile,
+        Case::Read,
+        Case::Write,
+        Case::ReadDirStart,
+        Case::ReadDirEnd,
+        Case::Stat,
+        Case::Remove,
+        Case::Close,
+        Case::Flush,
+    ];
+    cases.into_iter().map(build)
+}
+
+/// What one case of [`requests`] stands for.
+#[derive(Clone, Copy, Debug)]
+enum Case {
+    Open,
+    CreateDir,
+    CreateFile,
+    Read,
+    Write,
+    ReadDirStart,
+    ReadDirEnd,
+    Stat,
+    Remove,
+    Close,
+    Flush,
+}
+
+/// The request `case` stands for.
+fn build(case: Case) -> Request {
+    match case {
+        Case::Open => Request::Open {
             parent: ROOT,
             name: name(),
         },
-        Request::Create {
+        Case::CreateDir => Request::Create {
             parent: ROOT,
             name: name(),
             directory: true,
         },
-        Request::Create {
+        Case::CreateFile => Request::Create {
             parent: 7,
             name: name(),
             directory: false,
         },
-        Request::Read {
+        Case::Read => Request::Read {
             file: 3,
             offset: 512,
             len: 64,
         },
-        Request::Write {
+        Case::Write => Request::Write {
             file: 3,
             offset: 0,
             data: Data::new(b"one line\n").unwrap(),
         },
-        Request::ReadDir {
+        Case::ReadDirStart => Request::ReadDir {
             dir: ROOT,
             cursor: START,
         },
-        Request::ReadDir {
+        Case::ReadDirEnd => Request::ReadDir {
             dir: ROOT,
             cursor: u64::MAX,
         },
-        Request::Stat { file: 3 },
-        Request::Remove {
+        Case::Stat => Request::Stat { file: 3 },
+        Case::Remove => Request::Remove {
             parent: ROOT,
             name: name(),
         },
-        Request::Close { file: 3 },
-        Request::Flush,
-    ];
-    for request in requests {
-        assert_eq!(round_trip(&request).unwrap(), request, "{request:?}");
+        Case::Close => Request::Close { file: 3 },
+        Case::Flush => Request::Flush,
     }
 }
 
 #[test]
 fn every_request_carries_the_message_number_of_its_kind() {
-    let cases = [
-        (
-            Request::Open {
-                parent: ROOT,
-                name: name(),
-            },
-            OPEN,
-        ),
-        (
-            Request::Create {
-                parent: ROOT,
-                name: name(),
-                directory: false,
-            },
-            CREATE,
-        ),
-        (
-            Request::Read {
-                file: 1,
-                offset: 0,
-                len: 1,
-            },
-            READ,
-        ),
-        (
-            Request::Write {
-                file: 1,
-                offset: 0,
-                data: Data::empty(),
-            },
-            WRITE,
-        ),
-        (
-            Request::ReadDir {
-                dir: ROOT,
-                cursor: START,
-            },
-            READ_DIR,
-        ),
-        (Request::Stat { file: 1 }, STAT),
-        (
-            Request::Remove {
-                parent: ROOT,
-                name: name(),
-            },
-            REMOVE,
-        ),
-        (Request::Close { file: 1 }, CLOSE),
-        (Request::Flush, FLUSH),
+    let numbers = [
+        (Case::Open, OPEN),
+        (Case::CreateDir, CREATE),
+        (Case::Read, READ),
+        (Case::Write, WRITE),
+        (Case::ReadDirStart, READ_DIR),
+        (Case::Stat, STAT),
+        (Case::Remove, REMOVE),
+        (Case::Close, CLOSE),
+        (Case::Flush, FLUSH),
     ];
-    for (request, message) in cases {
-        assert_eq!(request.label(), Label::new(Protocol::File, message));
+    for (case, message) in numbers {
+        assert_eq!(build(case).label(), Label::new(Protocol::File, message));
     }
 }
 
 #[test]
 fn every_reply_comes_back_as_it_went_out() {
-    let replies = [
-        Reply::Opened(Ok(Opened {
+    for reply in replies() {
+        assert_eq!(round_trip_reply(&reply).unwrap(), reply, "{reply:?}");
+    }
+}
+
+/// One reply of every kind, answered one at a time and for the reason
+/// [`requests`] is written that way.
+fn replies() -> impl Iterator<Item = Reply> {
+    (0u8..11).map(|index| match index {
+        0 => Reply::Opened(Ok(Opened {
             file: 4,
             size: 1234,
             directory: false,
         })),
-        Reply::Opened(Ok(Opened {
+        1 => Reply::Opened(Ok(Opened {
             file: ROOT,
             size: 0,
             directory: true,
         })),
-        Reply::Created(Ok(5)),
-        Reply::Read(Ok(Data::new(b"bytes").unwrap())),
-        Reply::Written(Ok(9)),
-        Reply::Entry(Ok(Some(DirEntry {
+        2 => Reply::Created(Ok(5)),
+        3 => Reply::Read(Ok(Data::new(b"bytes").unwrap())),
+        4 => Reply::Written(Ok(9)),
+        5 => Reply::Entry(Ok(Some(DirEntry {
             name: name(),
             size: 20,
             directory: false,
             cursor: 3,
         }))),
-        Reply::Entry(Ok(None)),
-        Reply::Stat(Ok(Stat {
+        6 => Reply::Entry(Ok(None)),
+        7 => Reply::Stat(Ok(Stat {
             size: 20,
             attributes: 0x20,
             modified: 1_700_000_000,
         })),
-        Reply::Removed(Ok(())),
-        Reply::Closed(Ok(())),
-        Reply::Flushed(Ok(())),
-    ];
-    for reply in replies {
-        assert_eq!(round_trip_reply(&reply).unwrap(), reply, "{reply:?}");
-    }
+        8 => Reply::Removed(Ok(())),
+        9 => Reply::Closed(Ok(())),
+        _ => Reply::Flushed(Ok(())),
+    })
 }
 
 #[test]
 fn every_reply_carries_a_refusal_back_under_its_own_message() {
-    let replies = [
-        Reply::Opened(Err(Error::NotFound)),
-        Reply::Created(Err(Error::AlreadyExists)),
-        Reply::Read(Err(Error::InvalidHandle)),
-        Reply::Written(Err(Error::AccessDenied)),
-        Reply::Entry(Err(Error::InvalidArgument)),
-        Reply::Stat(Err(Error::NotFound)),
-        Reply::Removed(Err(Error::NotFound)),
-        Reply::Closed(Err(Error::InvalidHandle)),
-        Reply::Flushed(Err(Error::Unsupported)),
-    ];
-    for reply in replies {
+    let refusals = (0u8..9).map(|index| match index {
+        0 => Reply::Opened(Err(Error::NotFound)),
+        1 => Reply::Created(Err(Error::AlreadyExists)),
+        2 => Reply::Read(Err(Error::InvalidHandle)),
+        3 => Reply::Written(Err(Error::AccessDenied)),
+        4 => Reply::Entry(Err(Error::InvalidArgument)),
+        5 => Reply::Stat(Err(Error::NotFound)),
+        6 => Reply::Removed(Err(Error::NotFound)),
+        7 => Reply::Closed(Err(Error::InvalidHandle)),
+        _ => Reply::Flushed(Err(Error::Unsupported)),
+    });
+    for reply in refusals {
         assert_eq!(round_trip_reply(&reply).unwrap(), reply, "{reply:?}");
     }
 }

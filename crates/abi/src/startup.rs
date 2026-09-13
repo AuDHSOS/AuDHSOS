@@ -138,7 +138,7 @@ roles! {
     InputServer = 17, handle => "The endpoint of the input server, badged with what that server is to know this process by. A program that listens receives one, exactly as a program that draws receives `DisplayServer`, and for the same reason (D-109).",
     Ecam = 18, handle => "A device memory object over the configuration window of the PCI bus. Only the program that enumerates the bus receives it.",
     EcamBuses = 19, value => "The segment group of that window in the high half of the word, its first bus in bits 15 to 8, and its last bus in bits 7 to 0. It comes with `Ecam`.",
-    BlockRegisters = 20, handle => "A device memory object over the base address register that carries the four structures of the virtio block device. Only the file system server receives it.",
+    BlockRegisters = 20, handle => "A device memory object over the base address register that carries the four structures of one virtio block device. It opens the description of that device: the eight roles below belong to the device this names, and a machine with two disks sends the nine of them twice. Only the file system server receives them.",
     BlockCommon = 21, value => "Where the common configuration structure lies in that window: its offset in the high half of the word, its length in the low half. It comes with `BlockRegisters`.",
     BlockNotify = 22, value => "The same two numbers for the notification structure.",
     BlockIsr = 23, value => "The same two numbers for the interrupt status structure.",
@@ -146,7 +146,7 @@ roles! {
     BlockNotifyMultiplier = 25, value => "The multiplier a queue index is scaled by inside the notification structure (virtio 4.1.4.4).",
     BlockInterrupt = 26, handle => "The message interrupt of that device. The driver acknowledges an interrupt through it.",
     BlockNotification = 27, handle => "The notification the message interrupt is bound to.",
-    BlockVectorBit = 28, value => "The bit of that notification the message interrupt sets.",
+    BlockVectorBit = 28, value => "The bit of that notification the message interrupt sets. It closes the description `BlockRegisters` opened.",
 }
 
 /// Why a startup message could not be read.

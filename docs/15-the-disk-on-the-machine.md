@@ -209,7 +209,7 @@ this loader does not use and works only where the firmware is UEFI.
 | S6 | The file system server answers clients | built | S4, S5 | M |
 | S7 | The machine carries the disk automatically | built | S4 | S |
 | S8 | The end-to-end tests | built | S6, S7 | M |
-| S9 | Programs move onto the volume | blocked, see D4 (15.19) | S6, S8 | L |
+| S9 | Programs move onto the volume | built | S6, S8, D4 (15.19) | L |
 
 S5 depends on nothing. It can be built at any time before S6. Every other
 step depends on the step before it.
@@ -538,6 +538,13 @@ free. It has no clients and no protocol at this point.
    up to 1980-01-01. Reason: `fs_fat::time::to_entry` refuses an odd
    second and a year before 1980 rather than rounding, so the server is
    where the rounding belongs — `server_fs::moment`.
+4. Which volume a disk carries is `server_fs::volume::mount`, and it is
+   host-tested over `RamDisk`. Case A and Case B are told apart by the
+   partition table and not by the volume: a disk that carries a table
+   holds a volume somebody else made, and is mounted and never formatted;
+   a disk with no table is formatted. Both answer a file system over a
+   `Partition`, which is the one addition and one bound that make a
+   partition a device of its own, so one type covers both cases.
 
 ## 15.14 S5. The file protocol
 
@@ -714,7 +721,7 @@ with 0.
 
 ## 15.18 S9. Programs move onto the volume
 
-Status: blocked, see D4 (15.19).
+Status: built.
 Depends on: S6, S8.
 Size: L.
 
@@ -755,29 +762,48 @@ also why S9 is the last step.
    the volume.
 3. The end-to-end test passes with the smaller archive.
 
-## 15.19 Decision D4: what S9 needs that this machine has not
-
-This decision is open. S9 cannot be built until it is made.
+## 15.19 Decision D4: how S9 reaches the boot disk
 
 **The problem.** S9 reads programs off the boot disk, because the firmware
 reads that disk and the system writes nothing to it (15.18, Two limits).
-The boot disk of the reference machine is attached with
-`-drive format=raw,file=…` and no interface
-(`crates/tools/xtask/src/qemu.rs`, line 461), which the `q35` machine puts
-on its AHCI controller — `00:1f.2`, class `01:06:01`, as `app-lspci`
-reports it. This system drives virtio block devices and no other kind, so
-nothing it has can read that disk.
+The boot disk was attached with `-drive format=raw,file=…` and no
+interface, which the `q35` machine puts on its AHCI controller —
+`00:1f.2`, class `01:06:01`. This system drives virtio block devices and
+no other kind, so nothing it had could read that disk.
 
-**The options.**
+**The decision: attach the boot disk as a `virtio-blk-pci` device too.**
+
+Reason 1: the firmware reads it either way. OVMF carries a virtio-blk
+driver and boots from one, which the reference machine now does.
+Reason 2: it costs no driver. The machine then carries two devices of the
+kind `driver-virtio-blk` already drives.
+Reason 3: the two are told apart by what is on them and not by the order
+the bus has them — a disk that carries a partition table is one somebody
+else wrote (15.13, decision 4). The machine pins the slots, `0x4` for the
+disk the firmware reads and `0x5` for the disk the system writes (3.1.1),
+so a dump of the bus is readable; nothing depends on that order.
+
+**The options not taken.**
 
 | # | Option | What it costs |
 |---|--------|---------------|
 | 1 | A driver for the AHCI controller. | A driver crate the size of `driver-virtio-blk`, its own host tests, and a second transport under `fs-fat`. |
-| 2 | Attach the boot disk as a second `virtio-blk-pci` device. | The reference machine changes (3.1.1, D-136); S1 hands over two devices instead of one, which is a second set of the nine roles or a role that appears twice; the server mounts two volumes and tells them apart. |
 | 3 | Put the programs on the scratch disk. | It contradicts D-136: the scratch disk is what the system writes and arrives blank, and the image writer would have to prepare it. |
 
-**Not decided here.** Which one is taken changes what S1 and S4 are, so it
-belongs to whoever owns the reference machine.
+**What it settled.**
+
+The machine boots from virtio, both disks are reachable by this system,
+and the file system server mounts either without writing over the one it
+must not — the partition table is what says which is which (15.13,
+`What was built`). A run that carries no scratch disk mounts the boot
+volume, and the end-to-end run reads the cluster counts back to see that
+it was mounted and not formatted.
+
+The handover S9 needed came with it: the root task hands over every device
+the enumeration found, as the nine roles of S1 appearing once per device,
+the way `Role::Ram` already appears once per region, and the server brings
+up one transport per device. S9 reads programs off the boot volume and
+writes to the scratch volume in the same boot.
 
 ## 15.20 Risks
 

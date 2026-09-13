@@ -194,11 +194,11 @@ fn a_program_linked_too_low_for_a_stack_is_refused() {
 
     // Room below it, but not enough: the stack would reach under the
     // lowest address this system maps.
-    let bytes = image(&[text(USER_SPACE_START + 16 * PAGE_SIZE, 100)]);
+    let bytes = image(&[text(USER_SPACE_START + STACK_PAGES * PAGE_SIZE, 100)]);
     assert_eq!(plan(&bytes).unwrap_err(), ProgramError::NoRoomForStack);
 
     // One page more, and it fits exactly.
-    let bytes = image(&[text(USER_SPACE_START + 17 * PAGE_SIZE, 100)]);
+    let bytes = image(&[text(USER_SPACE_START + (STACK_PAGES + 1) * PAGE_SIZE, 100)]);
     let plan = plan(&bytes).unwrap();
     assert_eq!(plan.stack_base, USER_SPACE_START);
 }

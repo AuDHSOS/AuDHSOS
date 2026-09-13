@@ -1,83 +1,156 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! One request of the file protocol, answered against a mounted volume.
+//! One request of the file protocol, answered against the volumes of the
+//! machine.
 //!
-//! Nothing here reaches the machine: [`answer`] takes the volume, the open
-//! files, the badge of the sender and the moment a new entry carries, and
-//! gives back the reply the server sends. The process around it brings the
-//! disk, the endpoint and the clock.
+//! Nothing here reaches the machine: [`answer`] takes the volumes, the
+//! open files, the badge of the sender and the moment a new entry carries,
+//! and gives back the reply the server sends. The process around it brings
+//! the disks, the endpoint and the clock.
+//!
+//! Two volumes, and a handle says which. `ROOT` is the root of the volume
+//! the system writes and `BOOT` the root of the volume the machine booted
+//! from; every handle the server chooses carries the volume it came from,
+//! so no message names one.
 //!
 //! Invariants: a handle is looked up under the badge it arrived with, so
-//! no client reaches what another opened; every refusal of `fs-fat` leaves
-//! the tables as they were.
+//! no client reaches what another opened; the volume the machine booted
+//! from is never written, whatever a client asks; every refusal of
+//! `fs-fat` leaves the tables as they were.
 
 use audhsos_abi::Error;
 use audhsos_time::UnixTime;
-use fs_fat::{ATTR_DIRECTORY, Dir, FileSystem, Name, SECTOR};
-use fs_fat::{BlockDevice, Entry};
+use fs_fat::{ATTR_DIRECTORY, BlockDevice, Dir, Entry, FileSystem, Name, SECTOR};
 use user_proto::file::{
-    Data, DirEntry, MAX_DATA, Name as ProtoName, Opened as ProtoOpened, ROOT, Reply, Request,
+    BOOT, Data, DirEntry, MAX_DATA, Name as ProtoName, Opened as ProtoOpened, ROOT, Reply, Request,
     START, Stat,
 };
 
 use crate::error::refusal;
-use crate::open::{Clients, Opened};
+use crate::open::{Clients, Opened, Which};
+
+/// How many bytes one sector holds, which is what a client's read is
+/// bounded by beside [`MAX_DATA`].
+pub const SECTOR_BYTES: usize = SECTOR;
+
+/// The volumes a server answers over.
+///
+/// Both are optional, because a machine may carry one disk or none, and
+/// which one it carries is not this crate's to know: a server answers
+/// `NotFound` for the root of a volume it has not, and for everything
+/// below it.
+pub struct Volumes<'a, D: BlockDevice> {
+    /// The volume the system writes, whose root is [`ROOT`].
+    pub written: Option<&'a mut FileSystem<D>>,
+    /// The volume the machine booted from, whose root is [`BOOT`].
+    pub booted: Option<&'a mut FileSystem<D>>,
+}
+
+impl<D: BlockDevice> Volumes<'_, D> {
+    /// The volume `which` names.
+    fn get(&self, which: Which) -> Option<&FileSystem<D>> {
+        match which {
+            Which::Written => self.written.as_deref(),
+            Which::Booted => self.booted.as_deref(),
+        }
+    }
+
+    /// The same, for a message that changes the volume.
+    ///
+    /// The volume the machine booted from answers `None`: it is the
+    /// firmware's and the loader's, and nothing in the system writes it
+    /// (D-136).
+    fn get_mut(&mut self, which: Which) -> Option<&mut FileSystem<D>> {
+        match which {
+            Which::Written => self.written.as_deref_mut(),
+            Which::Booted => None,
+        }
+    }
+}
 
 /// Answers `request`, which arrived under `badge`.
 ///
 /// `now` is what a new entry is stamped with; it comes from the wall clock
 /// of the process (D-137).
 pub fn answer<D: BlockDevice>(
-    fs: &mut FileSystem<D>,
+    volumes: &mut Volumes<'_, D>,
     clients: &mut Clients,
     badge: u64,
     request: &Request,
     now: UnixTime,
 ) -> Reply {
     match request {
-        Request::Open { parent, name } => Reply::Opened(open(fs, clients, badge, *parent, name)),
+        Request::Open { parent, name } => {
+            Reply::Opened(open(volumes, clients, badge, *parent, name))
+        }
         Request::Create {
             parent,
             name,
             directory,
-        } => Reply::Created(create(fs, clients, badge, *parent, name, *directory, now)),
+        } => Reply::Created(create(
+            volumes, clients, badge, *parent, name, *directory, now,
+        )),
         Request::Read { file, offset, len } => {
-            Reply::Read(read(fs, clients, badge, *file, *offset, *len))
+            Reply::Read(read(volumes, clients, badge, *file, *offset, *len))
         }
         Request::Write { file, offset, data } => {
-            Reply::Written(write(fs, clients, badge, *file, *offset, data))
+            Reply::Written(write(volumes, clients, badge, *file, *offset, data))
         }
         Request::ReadDir { dir, cursor } => {
-            Reply::Entry(read_dir(fs, clients, badge, *dir, *cursor))
+            Reply::Entry(read_dir(volumes, clients, badge, *dir, *cursor))
         }
-        Request::Stat { file } => Reply::Stat(stat(fs, clients, badge, *file)),
+        Request::Stat { file } => Reply::Stat(stat(volumes, clients, badge, *file)),
         Request::Remove { parent, name } => {
-            Reply::Removed(remove(fs, clients, badge, *parent, name))
+            Reply::Removed(remove(volumes, clients, badge, *parent, name))
         }
         Request::Close { file } => Reply::Closed(close(clients, badge, *file)),
-        Request::Flush => Reply::Flushed(fs.flush().map_err(refusal)),
+        Request::Flush => Reply::Flushed(flush(volumes)),
     }
 }
 
-/// The directory `handle` of `badge` stands for.
+/// `flush`: puts what was written onto the disk.
+fn flush<D: BlockDevice>(volumes: &mut Volumes<'_, D>) -> Result<(), Error> {
+    volumes
+        .get_mut(Which::Written)
+        .ok_or(Error::NotFound)?
+        .flush()
+        .map_err(refusal)
+}
+
+/// Which volume `handle` is on, and the directory it stands for.
 ///
-/// [`ROOT`] is the root of the volume, which every client holds without
-/// opening it.
+/// The two roots are the two volumes; every other handle carries the
+/// volume it was opened on.
 fn directory<D: BlockDevice>(
-    fs: &FileSystem<D>,
+    volumes: &Volumes<'_, D>,
     clients: &mut Clients,
     badge: u64,
     handle: u32,
-) -> Result<Dir, Error> {
-    if handle == ROOT {
-        return Ok(fs.root());
+) -> Result<(Which, Dir), Error> {
+    let which = match handle {
+        ROOT => Which::Written,
+        BOOT => Which::Booted,
+        other => {
+            let opened = clients.get(badge, other).ok_or(Error::InvalidHandle)?;
+            let dir = opened.as_dir().ok_or(Error::WrongObjectType)?;
+            return Ok((opened.volume(), dir));
+        }
+    };
+    let fs = volumes.get(which).ok_or(Error::NotFound)?;
+    Ok((which, fs.root()))
+}
+
+/// Which volume `handle` is on, for a handle that is no directory.
+fn volume_of(clients: &mut Clients, badge: u64, handle: u32) -> Result<Which, Error> {
+    match handle {
+        ROOT => Ok(Which::Written),
+        BOOT => Ok(Which::Booted),
+        other => Ok(clients
+            .get(badge, other)
+            .ok_or(Error::InvalidHandle)?
+            .volume()),
     }
-    clients
-        .get(badge, handle)
-        .ok_or(Error::InvalidHandle)?
-        .as_dir()
-        .ok_or(Error::WrongObjectType)
 }
 
 /// The name of the protocol as `fs-fat` spells it.
@@ -88,26 +161,30 @@ fn name_of(name: &ProtoName) -> Result<Name, Error> {
 
 /// `open`: the handle of an entry that is there.
 fn open<D: BlockDevice>(
-    fs: &FileSystem<D>,
+    volumes: &Volumes<'_, D>,
     clients: &mut Clients,
     badge: u64,
     parent: u32,
     name: &ProtoName,
 ) -> Result<ProtoOpened, Error> {
-    let dir = directory(fs, clients, badge, parent)?;
+    let (volume, dir) = directory(volumes, clients, badge, parent)?;
+    let fs = volumes.get(volume).ok_or(Error::NotFound)?;
     let wanted = name_of(name)?;
     let entry = fs
         .find(dir, &wanted)
         .map_err(refusal)?
         .ok_or(Error::NotFound)?;
     let opened = if entry.is_directory() {
+        let found = Dir::at(entry.first_cluster);
         Opened::Dir {
-            dir: Dir::at(entry.first_cluster),
-            walk: fs.entries(Dir::at(entry.first_cluster)),
+            volume,
+            dir: found,
+            walk: fs.entries(found),
             handed: START,
         }
     } else {
         Opened::File {
+            volume,
             file: fs.open(dir, &wanted).map_err(refusal)?,
             parent: dir,
             name: wanted,
@@ -123,7 +200,7 @@ fn open<D: BlockDevice>(
 
 /// `create`: the handle of an entry made now.
 fn create<D: BlockDevice>(
-    fs: &mut FileSystem<D>,
+    volumes: &mut Volumes<'_, D>,
     clients: &mut Clients,
     badge: u64,
     parent: u32,
@@ -131,17 +208,20 @@ fn create<D: BlockDevice>(
     directory: bool,
     now: UnixTime,
 ) -> Result<u32, Error> {
-    let dir = self::directory(fs, clients, badge, parent)?;
+    let (volume, dir) = self::directory(volumes, clients, badge, parent)?;
+    let fs = volumes.get_mut(volume).ok_or(Error::AccessDenied)?;
     let wanted = name_of(name)?;
     let opened = if directory {
         let made = fs.create_dir(dir, &wanted, now).map_err(refusal)?;
         Opened::Dir {
+            volume,
             dir: made,
             walk: fs.entries(made),
             handed: START,
         }
     } else {
         Opened::File {
+            volume,
             file: fs.create(dir, &wanted, now).map_err(refusal)?,
             parent: dir,
             name: wanted,
@@ -152,13 +232,15 @@ fn create<D: BlockDevice>(
 
 /// `read`: bytes out of a file.
 fn read<D: BlockDevice>(
-    fs: &FileSystem<D>,
+    volumes: &Volumes<'_, D>,
     clients: &mut Clients,
     badge: u64,
     handle: u32,
     offset: u32,
     len: u32,
 ) -> Result<Data, Error> {
+    let which = volume_of(clients, badge, handle)?;
+    let fs = volumes.get(which).ok_or(Error::NotFound)?;
     let wanted = usize::try_from(len).unwrap_or(MAX_DATA).min(MAX_DATA);
     let Opened::File { file, .. } = clients.get(badge, handle).ok_or(Error::InvalidHandle)? else {
         return Err(Error::WrongObjectType);
@@ -172,13 +254,15 @@ fn read<D: BlockDevice>(
 
 /// `write`: bytes into a file.
 fn write<D: BlockDevice>(
-    fs: &mut FileSystem<D>,
+    volumes: &mut Volumes<'_, D>,
     clients: &mut Clients,
     badge: u64,
     handle: u32,
     offset: u32,
     data: &Data,
 ) -> Result<u32, Error> {
+    let which = volume_of(clients, badge, handle)?;
+    let fs = volumes.get_mut(which).ok_or(Error::AccessDenied)?;
     let Opened::File { file, .. } = clients.get(badge, handle).ok_or(Error::InvalidHandle)? else {
         return Err(Error::WrongObjectType);
     };
@@ -192,24 +276,28 @@ fn write<D: BlockDevice>(
 /// is not where the walk stands starts the walk again and skips forward,
 /// so a client that asks twice for the same entry gets the same one.
 fn read_dir<D: BlockDevice>(
-    fs: &FileSystem<D>,
+    volumes: &Volumes<'_, D>,
     clients: &mut Clients,
     badge: u64,
     handle: u32,
     cursor: u64,
 ) -> Result<Option<DirEntry>, Error> {
-    let root = fs.root();
+    let (which, root) = directory(volumes, clients, badge, handle)?;
+    let fs = volumes.get(which).ok_or(Error::NotFound)?;
     let (dir, walk, handed) = match handle {
-        // The root occupies no slot, so the client's walk over it is kept
+        // A root occupies no slot, so the client's walk over it is kept
         // beside the table rather than in it.
-        ROOT => {
+        ROOT | BOOT => {
+            let index = usize::from(handle == BOOT);
             let held = clients
-                .root_walk(badge, || fs.entries(root))
+                .root_walk(badge, index, || fs.entries(root))
                 .ok_or(Error::OutOfHandles)?;
             (root, &mut held.0, &mut held.1)
         }
         other => match clients.get(badge, other).ok_or(Error::InvalidHandle)? {
-            Opened::Dir { dir, walk, handed } => (*dir, walk, handed),
+            Opened::Dir {
+                dir, walk, handed, ..
+            } => (*dir, walk, handed),
             Opened::File { .. } => return Err(Error::WrongObjectType),
         },
     };
@@ -237,27 +325,19 @@ fn read_dir<D: BlockDevice>(
 
 /// `stat`: what a file handle stands for.
 fn stat<D: BlockDevice>(
-    fs: &FileSystem<D>,
+    volumes: &Volumes<'_, D>,
     clients: &mut Clients,
     badge: u64,
     handle: u32,
 ) -> Result<Stat, Error> {
-    if handle == ROOT {
-        return Ok(Stat {
-            size: 0,
-            attributes: u32::from(ATTR_DIRECTORY),
-            modified: 0,
-        });
-    }
-    let (parent, name) = match clients.get(badge, handle).ok_or(Error::InvalidHandle)? {
-        Opened::File { parent, name, .. } => (*parent, *name),
-        Opened::Dir { .. } => {
-            return Ok(Stat {
-                size: 0,
-                attributes: u32::from(ATTR_DIRECTORY),
-                modified: 0,
-            });
-        }
+    let which = volume_of(clients, badge, handle)?;
+    let fs = volumes.get(which).ok_or(Error::NotFound)?;
+    let (parent, name) = match handle {
+        ROOT | BOOT => return Ok(a_directory()),
+        other => match clients.get(badge, other).ok_or(Error::InvalidHandle)? {
+            Opened::File { parent, name, .. } => (*parent, *name),
+            Opened::Dir { .. } => return Ok(a_directory()),
+        },
     };
     let entry = fs
         .find(parent, &name)
@@ -270,15 +350,33 @@ fn stat<D: BlockDevice>(
     })
 }
 
+/// The attribute byte of a directory, as the protocol carries it.
+#[expect(
+    clippy::as_conversions,
+    reason = "one byte of attributes widened into the word the protocol carries, in a const"
+)]
+const ATTR_DIRECTORY_WORD: u32 = ATTR_DIRECTORY as u32;
+
+/// What a stat of a directory answers. A directory has no size of its own
+/// and no entry this server reads a moment out of.
+const fn a_directory() -> Stat {
+    Stat {
+        size: 0,
+        attributes: ATTR_DIRECTORY_WORD,
+        modified: 0,
+    }
+}
+
 /// `remove`: take an entry off the volume.
 fn remove<D: BlockDevice>(
-    fs: &mut FileSystem<D>,
+    volumes: &mut Volumes<'_, D>,
     clients: &mut Clients,
     badge: u64,
     parent: u32,
     name: &ProtoName,
 ) -> Result<(), Error> {
-    let dir = directory(fs, clients, badge, parent)?;
+    let (volume, dir) = directory(volumes, clients, badge, parent)?;
+    let fs = volumes.get_mut(volume).ok_or(Error::AccessDenied)?;
     let wanted = name_of(name)?;
     fs.remove(dir, &wanted).map_err(refusal)?;
     Ok(())
@@ -323,10 +421,6 @@ fn trimmed(field: &[u8]) -> &[u8] {
 const fn dot(extension: &[u8]) -> &'static [u8] {
     if extension.is_empty() { &[] } else { b"." }
 }
-
-/// How many bytes one sector holds, which is what a client's read is
-/// bounded by beside [`MAX_DATA`].
-pub const SECTOR_BYTES: usize = SECTOR;
 
 /// The moment a new entry carries, from the microseconds the wall clock
 /// answers.

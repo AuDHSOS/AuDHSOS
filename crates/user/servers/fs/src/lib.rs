@@ -7,11 +7,15 @@
 
 pub mod error;
 pub mod open;
+pub mod partition;
 pub mod serve;
+pub mod volume;
 
-pub use error::refusal;
-pub use open::{Clients, MAX_CLIENTS, MAX_OPEN};
-pub use serve::{answer, moment};
+pub use error::{refusal, table_refusal};
+pub use open::{Clients, MAX_CLIENTS, MAX_OPEN, ROOTS, Which};
+pub use partition::Partition;
+pub use serve::{Volumes, answer, moment};
+pub use volume::{is_partitioned, mount};
 
 #[cfg(test)]
 mod tests;

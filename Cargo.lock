@@ -635,6 +635,7 @@ dependencies = [
  "audhsos-abi",
  "audhsos-time",
  "fs-fat",
+ "fs-gpt",
  "test-support",
  "user-proto",
 ]
@@ -686,6 +687,7 @@ version = "0.1.0"
 dependencies = [
  "app-canvas",
  "audhsos-abi",
+ "audhsos-collections",
  "audhsos-time",
  "driver-i8042",
  "driver-uart16550",

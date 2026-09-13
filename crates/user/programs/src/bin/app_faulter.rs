@@ -22,6 +22,7 @@
 // it depends on; these are the crates this one does not.
 use app_canvas as _;
 use audhsos_abi as _;
+use audhsos_collections as _;
 use audhsos_time as _;
 use driver_i8042 as _;
 use driver_uart16550 as _;
