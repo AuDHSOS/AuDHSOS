@@ -27,6 +27,7 @@ mod parse;
 mod record;
 mod schema;
 mod token;
+mod tree;
 mod utf8;
 mod value;
 mod wal;

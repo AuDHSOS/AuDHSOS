@@ -26,6 +26,7 @@ pub mod parse;
 pub mod record;
 pub mod schema;
 pub mod token;
+pub mod tree;
 pub mod utf8;
 pub mod value;
 pub mod wal;

@@ -3959,6 +3959,31 @@ to the files the shell wrote.
   `header::LIBRARY_VERSION`, so a shell of another version is caught
   here rather than in the four bytes of a file this crate writes.
 
+### 6.6.106 A database written from nothing (`db-sqlite`)
+
+D-166, document 16 step Q7. `tree::Pages` and `tree::insert`, held to
+the files the shell wrote rather than to a reading of section 1.6.
+
+- Four databases are built here out of a schema and its rows and
+  compared against the fixture byte for byte: `small.db`, whose table
+  holds the four storage classes; `utf16.db`, whose text and whose
+  schema are both in the encoding the file names; `joins.db`, which is
+  three tables, each created and then filled, so the file counts six
+  changes and three schemas; and `overflow.db`, whose one row is
+  eighteen thousand letters, of which four thousand stay on the leaf and
+  the rest is four overflow pages.
+- What the comparison says is that the C library reads what this engine
+  writes: the bytes are the bytes it wrote itself.
+- The descent is tested on a tree built by hand, because nothing else
+  makes an interior page yet: a row whose key an interior cell names
+  goes on the child that cell points at, and a key above every cell goes
+  on the page the right-most pointer names.
+- The refusals: a page size the format does not allow, a reserved tail
+  that leaves too little of a page, a tree of index pages, which holds
+  no key a row belongs under, and a tree of interior pages that never
+  reaches a leaf, which the descent stops in rather than following
+  forever.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
