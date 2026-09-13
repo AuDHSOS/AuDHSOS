@@ -655,12 +655,9 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
-test files that needs no TCL interpreter. Of 10 428 cases in 570 files,
-425 pass, 9 answer differently, and 9 994 name something the engine
-refuses. The first run of it answered 14 differently, and five of those
-were defects this crate carried; D-181 records them. Sixty files stopped
-at a `PRAGMA`, which D-182 answers. The matrix runs
-over the write path as the covering array of 16.11.
+test files that needs no TCL interpreter. Of 15 550 cases in 881 files,
+900 pass, 67 answer differently, and 14 583 name something the engine
+refuses.
 Depends on: Q7, Q8.
 Size: M.
 
@@ -668,14 +665,14 @@ Size: M.
 
 - An adapter that speaks the commands `testfixture` drives, which is
   where a C ABI would live. Built for the part written out in the file:
-  a `do_execsql_test` whose statements and whose answer carry no
-  substitution.
+  a `do_execsql_test`, a `do_test` whose body is one `execsql`, and the
+  `execsql` a file sets itself up with, each carrying no substitution.
 - The matrix of 16.11 in the test support. Built.
 
 ### Does
 
 1. Run SQLite's TCL suite under `research/sqlite/test` against the
-   engine. Built for 10 428 of its cases; the rest need the
+   engine. Built for 15 550 of its cases; the rest need the
    interpreter, because a substitution says what they run only once it
    has run.
 2. Run every level of this repository's own suite across the matrix
@@ -685,27 +682,34 @@ Size: M.
 
 ### How a case is counted
 
-A file keeps one database and its cases run against it in the order they
-are written, because each builds on the ones before it. A case the
-engine refuses stops the file, and the cases after it are refused with
-it, because the database is then short of what they read. A case that
-runs is counted passed where the list it answers is the list the file
-writes, element for element.
+A file keeps one database. An `execsql` outside a case is the file
+setting itself up: it runs so that the cases after it read what it
+wrote, and it is counted only by stopping the file where the engine
+refuses it. The cases run in the order they are written, because each
+builds on the ones before it. A case the engine refuses stops the file,
+and the cases after it are refused with it, because the database is then
+short of what they read. A case that runs is counted passed where the
+list it answers is the list the file writes, element for element.
 
-### The nine that answer differently
+`--why` counts what each refusal was for, by the first two words of the
+statement and what the engine answered, which is what says which missing
+feature stops the most files.
 
-| Case | What it shows |
-|------|---------------|
-| `gencol1-100` | `INSERT INTO t SELECT * FROM u` where both hold a computed column. |
-| `conflict3-1.2`, `-1.4` | No `UNIQUE` is kept, so a row SQLite refuses goes in. |
-| `autoindex4-1.0` | `ORDER BY +b` over equal keys, which names no order. |
-| `func-1.6` | The file writes `NULL` for nothing, which `db nullvalue` set. |
-| `fpconv1-1.1`, `-1.2`, `-1.3` | The file writes two answers for one statement, so it changes a setting between them. |
-| `icu-2.9` | `upper` over the ICU extension, which this build has not got. |
+### The sixty-seven that answer differently
 
-Two of the nine are the engine: `gencol1-100` and the `UNIQUE` of
-`conflict3`, which waits on the index trees. The other seven are the
-file, the order it leaves open, or the build.
+| File | Cases | What it shows |
+|------|-------|---------------|
+| `rowid.test` | 17 | A table with a column named `rowid`, which overrides the key of that name. |
+| `collate1.test` | 7 | A collation the file registers through the interpreter, which this harness cannot run. |
+| `collate8.test` | 2 | A column's own collation in an `ORDER BY`, and an explicit `COLLATE` that should beat a column's. |
+| `enc3.test`, `incrblob.test`, `check.test` | 9 | Three features: the encoding of a file opened again, a blob written a piece at a time, and `CHECK`. |
+| `conflict3.test` | 2 | No `UNIQUE` is kept, so a row SQLite refuses goes in. |
+| `gencol1.test` | 1 | `INSERT INTO t SELECT * FROM u` where both hold a computed column. |
+| `fpconv1.test` | 3 | The file writes two answers for one statement, so it changes a setting between them. |
+| `icu.test` | 2 | The ICU extension, which this build has not got. |
+| twelve more | 12 | One case each, not yet read. |
+
+### Done when
 
 ### Done when
 

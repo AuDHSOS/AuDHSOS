@@ -54,8 +54,9 @@ impl Score {
 
 /// One case: the statements and the answer the file writes for them.
 pub(crate) struct Case {
-    /// What the file calls it.
-    pub(crate) name: String,
+    /// What the file calls it, and nothing where the statements are
+    /// the file setting itself up rather than a case.
+    pub(crate) name: Option<String>,
     /// The statements, as written.
     pub(crate) sql: String,
     /// The answer, as the elements of the list `execsql` would have
@@ -162,34 +163,135 @@ fn files(dir: &Path) -> Result<Vec<PathBuf>, Error> {
 pub(crate) fn cases(text: &str) -> Vec<Case> {
     let mut out = Vec::new();
     let mut rest = text;
-    while let Some(at) = rest.find("do_execsql_test") {
-        let after = rest
-            .get(at.saturating_add("do_execsql_test".len())..)
-            .unwrap_or("");
+    while let Some((command, after)) = next_command(rest) {
         rest = after;
-        let Some((name, after)) = word(after) else {
-            continue;
-        };
-        let Some((sql, after)) = braced(after) else {
-            continue;
-        };
-        let Some((want, after)) = braced(after) else {
-            continue;
-        };
-        rest = after;
-        if [sql, want]
-            .iter()
-            .any(|text| text.contains('$') || text.contains('['))
-        {
-            continue;
+        match command {
+            // `execsql` outside a case is the file setting itself up,
+            // and the cases after it read what it wrote.
+            "execsql" => {
+                if let Some((sql, after)) = braced(rest) {
+                    rest = after;
+                    out.push(Case {
+                        name: None,
+                        sql: sql.to_owned(),
+                        want: Vec::new(),
+                    });
+                }
+            }
+            // A case that expects a refusal says so as a pair of a
+            // code and a message, which this does not answer; the
+            // block is read past so that the `execsql` inside it is
+            // not taken for setup.
+            "do_catchsql_test" => {
+                rest = past(rest, 2);
+            }
+            // `do_test NAME { execsql { SQL } } { ANSWER }` is the
+            // older way of writing `do_execsql_test`, and the only
+            // body this reads is one `execsql` and nothing else.
+            "do_test" => {
+                let Some((name, after)) = word(rest) else {
+                    continue;
+                };
+                let Some((body, after)) = braced(after) else {
+                    rest = after;
+                    continue;
+                };
+                let Some((want, after)) = braced(after) else {
+                    rest = after;
+                    continue;
+                };
+                rest = after;
+                let Some(inner) = body.trim().strip_prefix("execsql") else {
+                    continue;
+                };
+                let Some((sql, over)) = braced(inner) else {
+                    continue;
+                };
+                if !over.trim().is_empty() {
+                    continue;
+                }
+                push(&mut out, name, sql, want);
+            }
+            _ => {
+                let Some((name, after)) = word(rest) else {
+                    continue;
+                };
+                let Some((sql, after)) = braced(after) else {
+                    rest = after;
+                    continue;
+                };
+                let Some((want, after)) = braced(after) else {
+                    rest = after;
+                    continue;
+                };
+                rest = after;
+                push(&mut out, name, sql, want);
+            }
         }
-        out.push(Case {
-            name: name.to_owned(),
-            sql: sql.to_owned(),
-            want: elements(want),
-        });
     }
     out
+}
+
+/// Keeps a case whose statements and whose answer are both written out
+/// with no substitution left in either.
+///
+/// A case carrying `$` or `[` needs the TCL interpreter to say what it
+/// runs, so it is passed over rather than guessed at.
+fn push(out: &mut Vec<Case>, name: &str, sql: &str, want: &str) {
+    if [sql, want]
+        .iter()
+        .any(|text| text.contains('$') || text.contains('['))
+    {
+        return;
+    }
+    out.push(Case {
+        name: Some(name.to_owned()),
+        sql: sql.to_owned(),
+        want: elements(want),
+    });
+}
+
+/// The next of the four commands this reads, and what follows its name.
+fn next_command(text: &str) -> Option<(&'static str, &str)> {
+    const COMMANDS: [&str; 4] = ["do_execsql_test", "do_catchsql_test", "do_test", "execsql"];
+    let mut best: Option<(&'static str, usize)> = None;
+    for command in COMMANDS {
+        let mut from = 0;
+        while let Some(at) = text.get(from..).and_then(|rest| rest.find(command)) {
+            let at = from.saturating_add(at);
+            let before = text.get(..at).and_then(|head| head.chars().next_back());
+            let after = text.get(at.saturating_add(command.len())..);
+            let bare = !before.is_some_and(|character| {
+                character.is_alphanumeric() || character == '_' || character == '.'
+            }) && !after.is_some_and(|rest| {
+                rest.starts_with(|character: char| character.is_alphanumeric() || character == '_')
+            });
+            if bare {
+                if best.is_none_or(|(_, held)| at < held) {
+                    best = Some((command, at));
+                }
+                break;
+            }
+            from = at.saturating_add(command.len());
+        }
+    }
+    let (command, at) = best?;
+    Some((command, text.get(at.saturating_add(command.len())..)?))
+}
+
+/// What follows `count` braced blocks.
+fn past(text: &str, count: usize) -> &str {
+    let mut rest = text;
+    if let Some((_, after)) = word(rest) {
+        rest = after;
+    }
+    for _ in 0..count {
+        match braced(rest) {
+            Some((_, after)) => rest = after,
+            None => return rest,
+        }
+    }
+    rest
 }
 
 /// The next word and what follows it, where a word is what stands
@@ -245,6 +347,15 @@ fn score(file: &str, cases: &[Case]) -> Score {
     let show = SHOW.load(std::sync::atomic::Ordering::Relaxed);
     let mut stopped = false;
     for case in cases {
+        // The file setting itself up is not a case: it is run so that
+        // the cases after it read what it wrote, and it is counted
+        // only by stopping the file where the engine refuses it.
+        let Some(name) = case.name.as_deref() else {
+            if !stopped && answer(&mut writer, &case.sql).is_none() {
+                stopped = true;
+            }
+            continue;
+        };
         // A case the engine refused leaves the database short of what
         // the cases after it read, so the rest of the file is refused
         // with it rather than counted wrong.
@@ -264,8 +375,7 @@ fn score(file: &str, cases: &[Case]) -> Score {
                 score.failed = score.failed.saturating_add(1);
                 if show {
                     crate::out::note!(
-                        "{file} {}\n  sql  {}\n  mine {mine:?}\n  want {:?}",
-                        case.name,
+                        "{file} {name}\n  sql  {}\n  mine {mine:?}\n  want {:?}",
                         case.sql.split_whitespace().collect::<Vec<&str>>().join(" "),
                         case.want
                     );
@@ -289,9 +399,12 @@ fn answer(writer: &mut Writer, sql: &str) -> Option<Vec<String>> {
         if reads(text) {
             let bytes = writer.written();
             let database = Database::open(&bytes).ok()?;
-            let Ok(answered) = database.query(text.as_bytes()) else {
-                refused(&first_words(text));
-                return None;
+            let answered = match database.query(text.as_bytes()) {
+                Ok(answered) => answered,
+                Err(error) => {
+                    refused(&format!("{} {error:?}", first_words(text)));
+                    return None;
+                }
             };
             for row in &answered.rows {
                 for value in row {
@@ -299,9 +412,12 @@ fn answer(writer: &mut Writer, sql: &str) -> Option<Vec<String>> {
                 }
             }
         } else {
-            let Ok(rows) = writer.run(text.as_bytes()) else {
-                refused(&first_words(text));
-                return None;
+            let rows = match writer.run(text.as_bytes()) {
+                Ok(rows) => rows,
+                Err(error) => {
+                    refused(&format!("{} {error:?}", first_words(text)));
+                    return None;
+                }
             };
             for row in &rows {
                 for value in row {

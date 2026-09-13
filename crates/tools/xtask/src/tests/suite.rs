@@ -10,9 +10,38 @@ fn a_case_is_read_from_its_name_its_statements_and_its_answer() {
     let text = "do_execsql_test one-1.2 {\n  SELECT 1;\n} {1}\n";
     let read = cases(text);
     assert_eq!(read.len(), 1);
-    assert_eq!(read[0].name, "one-1.2");
+    assert_eq!(read[0].name.as_deref(), Some("one-1.2"));
     assert_eq!(read[0].sql.trim(), "SELECT 1;");
     assert_eq!(read[0].want, ["1"]);
+}
+
+#[test]
+fn the_older_way_of_writing_a_case_is_read_as_one() {
+    let text = "do_test two-1 {\n  execsql {\n    SELECT 2;\n  }\n} {2}\n";
+    let read = cases(text);
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].name.as_deref(), Some("two-1"));
+    assert_eq!(read[0].sql.trim(), "SELECT 2;");
+    assert_eq!(read[0].want, ["2"]);
+    // A body that runs more than the statements is not read.
+    assert!(cases("do_test a {\n  execsql {SELECT 1}\n  set x 1\n} {1}").is_empty());
+    assert!(cases("do_test a {\n  catchsql {SELECT 1}\n} {1}").is_empty());
+}
+
+#[test]
+fn statements_outside_a_case_are_the_file_setting_itself_up() {
+    let text = "execsql {\n  CREATE TABLE t(a);\n}\ndo_execsql_test one {SELECT 1} {1}\n";
+    let read = cases(text);
+    assert_eq!(read.len(), 2);
+    assert_eq!(read[0].name, None);
+    assert_eq!(read[0].sql.trim(), "CREATE TABLE t(a);");
+    assert_eq!(read[1].name.as_deref(), Some("one"));
+    // The `execsql` inside a case is the case, not setup.
+    assert_eq!(cases("do_test a {execsql {SELECT 1}} {1}").len(), 1);
+    // A case that expects a refusal is read past whole.
+    let read = cases("do_catchsql_test a {SELECT 1} {1 {oops}}\nexecsql {SELECT 2}");
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].sql.trim(), "SELECT 2");
 }
 
 #[test]

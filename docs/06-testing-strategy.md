@@ -4244,12 +4244,14 @@ matrix.
 D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 
 - The part of `research/sqlite/test` that needs no TCL interpreter: a
-  `do_execsql_test` whose statements and whose answer carry no
-  substitution, which is 10 428 of the 13 602 cases in 570 files.
-- 425 pass, 9 answer differently and 9 994 name something the engine
-  refuses. Document 16, section 16.23 lists the nine. The first run
-  answered 14 differently; five were defects, which D-181 records and
-  seventeen cases of `query.corpus` now hold to the C library.
+  `do_execsql_test`, a `do_test` whose body is one `execsql`, and the
+  `execsql` a file sets itself up with, each carrying no substitution.
+  That is 15 550 cases in 881 files.
+- 900 pass, 67 answer differently and 14 583 name something the engine
+  refuses. Document 16, section 16.23 groups the sixty-seven. An
+  earlier run over the `do_execsql_test` form alone answered 14
+  differently; five were defects, which D-181 records and seventeen
+  cases of `query.corpus` now hold to the C library.
 - `--why` counts what each refusal was for by the first two words of
   the statement, which is what says which missing feature stops the
   most files. It named a `PRAGMA` for sixty of them, and D-182 answers
