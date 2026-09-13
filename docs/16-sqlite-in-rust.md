@@ -1,6 +1,6 @@
-# 15. SQLite in Rust
+# 16. SQLite in Rust
 
-## 15.1 What is being built
+## 16.1 What is being built
 
 A database engine in this repository's Rust that is SQLite: the same file
 format, the same SQL, the same answers. It reads a file the C library
@@ -19,7 +19,7 @@ tooling has been given, and the tooling is what makes it possible: the
 `sqlite3` shell of `sh tools/sqlite.sh` is a reference implementation that
 answers questions, and `norec` already asks it some.
 
-## 15.2 What "the same" means
+## 16.2 What "the same" means
 
 Three claims, each of them testable, and no claim beyond them.
 
@@ -37,7 +37,7 @@ Three claims, each of them testable, and no claim beyond them.
 What is not claimed: the same query plans, the same file sizes for the
 same inserts, the same performance, or the loadable extensions.
 
-## 15.3 The architecture, and its layers
+## 16.3 The architecture, and its layers
 
 Nine rules the port is written to. They are not style; each one is what
 makes some later thing possible, and each is checkable.
@@ -79,7 +79,7 @@ makes some later thing possible, and each is checkable.
    that can hold it: fixtures for the format, a recorded oracle for the
    tokenizer, differential execution for the semantics, property tests for
    the algebra, fuzz targets for every parser, the configuration matrix of
-   15.6 for the run-time shapes, and complete coverage over all of it.
+   16.6 for the run-time shapes, and complete coverage over all of it.
 
 Bottom to top, each its own crate or module, each testable without the one
 above it:
@@ -99,7 +99,7 @@ above it:
 7. **The interface**: prepare, step, bind, column, and the shell that drives
    them, so that a person can type at it.
 
-## 15.4 The order of work
+## 16.4 The order of work
 
 Each step ends green: the checks pass, the coverage gate holds, and what
 the step claims is tested.
@@ -114,10 +114,10 @@ the step claims is tested.
 | Q6 | The virtual machine, and the code generator that replaces the walker. |
 | Q7 | Writing: the b-tree writer, transactions, the rollback journal in all four modes, then the WAL. |
 | Q8 | The rest of the language: `CREATE`, `ALTER`, `DROP`, triggers, views, the built-in functions. |
-| Q9 | The configuration matrix and the test suites of 15.5 run whole. |
-| Q10 | Coverage to the standard of 15.6. |
+| Q9 | The configuration matrix and the test suites of 16.5 run whole. |
+| Q10 | Coverage to the standard of 16.6. |
 
-## 15.5 How it is tested
+## 16.5 How it is tested
 
 Four sources of truth, in the order they were built:
 
@@ -132,7 +132,7 @@ Four sources of truth, in the order they were built:
   driving a `testfixture` that links the library. Running it against this
   engine needs a fixture that speaks the same commands; that is an adapter
   crate (rule R4 territory: it is where the C ABI would live), and the
-  order in 15.4 puts it after the engine can answer statements at all.
+  order in 16.4 puts it after the engine can answer statements at all.
   Until then the `.test` files are read as specifications — each names the
   behaviour it checks — and the ones that are pure SQL are run through the
   differential harness.
@@ -145,7 +145,7 @@ Four sources of truth, in the order they were built:
   parser this port has: the file format reader, the tokenizer, the
   parser, and the record decoder, each with a corpus under `fuzz/`.
 
-## 15.6 The configuration matrix
+## 16.6 The configuration matrix
 
 A test that ran under one configuration tested one configuration. What
 varies, and what every level of the suite runs across:
@@ -164,7 +164,7 @@ The matrix is a table in the test support, not a `for` loop in each test:
 a test names the dimensions it is sensitive to, and the harness runs it
 for every value of them.
 
-## 15.7 Coverage
+## 16.7 Coverage
 
 The standard is the one SQLite holds itself to and documents in
 `docs/sqlite/testing.html`: every branch taken both ways, and modified
@@ -191,12 +191,12 @@ follow for this port.
   rather than excused, and the ones that a file can reach are reached by a
   test, most of them by a database laid out by hand for that purpose.
 
-## 15.8 The fixtures
+## 16.8 The fixtures
 
 `sh tools/sqlite-fixtures.sh` writes every fixture the tests read, with the
 shell of `sh tools/sqlite.sh`. They are committed, because CI has no
 SQLite; the script is what makes them reproducible rather than
-remembered. Eleven of them are the matrix of 15.6 holding the same three
+remembered. Eleven of them are the matrix of 16.6 holding the same three
 rows and the same index, and the rest are the cases one test each reads:
 a table of every storage class, four hundred rows over 512-byte pages, text
 in UTF-16, a payload that overflows, and a table with two indexes. The
@@ -204,7 +204,7 @@ corpus files beside them are recorded oracles rather than databases:
 tokens, expressions, statements, and the doubles of `fp.corpus` with the
 text the C library prints each of them as.
 
-## 15.9 Where it stands
+## 16.9 Where it stands
 
 Q1, Q4 but for the window clauses, and the value semantics of Q5 are in
 `crates/db/sqlite`, and the crate is
@@ -214,7 +214,7 @@ both instrumentations.
 A database is opened, its schema walked, its
 tables read in rowid order, its overflow chains followed, and its records
 decoded, over any page size and any of the three encodings, without
-allocating. The matrix of 15.6 is a test, the reader is fuzzed by
+allocating. The matrix of 16.6 is a test, the reader is fuzzed by
 `sqlite_image`, and the first bug that target found — a child pointer of
 zero, which is a page no file has — is in the regression corpus. A statement is read
 into a tree that agrees with SQLite's parser over seven hundred and ninety
@@ -237,4 +237,4 @@ pattern of `LIKE` and `GLOB` against every subject. What refuses by name
 is a column, a statement inside an expression, and the functions that
 read a clock, a random source or the connection — with `printf` and the
 mathematical ones, which want a library this repository does not have
-yet. What the crate cannot do is everything else in 15.3.
+yet. What the crate cannot do is everything else in 16.3.

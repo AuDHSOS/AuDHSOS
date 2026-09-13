@@ -43,15 +43,20 @@
 
 // The package holds thirteen programs and each uses a different part of what
 // it depends on; these are the crates this one does not.
+use audhsos_time as _;
 use driver_i8042 as _;
 use driver_uart16550 as _;
+use driver_virtio_blk as _;
+use fs_fat as _;
 use pci as _;
 use server_console as _;
 use server_display as _;
+use server_fs as _;
 use server_input as _;
 use server_memory as _;
 use server_name as _;
 use user_loader as _;
+use virtio_queue as _;
 
 use app_canvas::{Canvas, Step};
 use audhsos_abi::layout::PAGE_SIZE;

@@ -8,7 +8,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 ### Added
 
 - Doubles as decimal text in `db-sqlite`, the first half of step Q5 of
-  document 15. `sqlite3FpDecode` is ported rather than approximated, so
+  document 16. `sqlite3FpDecode` is ported rather than approximated, so
   that a real prints digit for digit as SQLite prints it: the table of
   powers of ten, the 128-bit multiply that extracts eighteen significant
   digits, the rounding to seventeen, and the rule that tries a shorter
@@ -97,7 +97,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   `sqlite3ExprCheckHeight` does in the C. Thirty-three million executions
   after that found nothing. D-141, catalog 6.6.77.
 
-- The SQL tokenizer of `db-sqlite`, step Q4 of document 15 in its first
+- The SQL tokenizer of `db-sqlite`, step Q4 of document 16 in its first
   half: the character classes of `src/tokenize.c`, its rules, and its
   answers — including the ones that surprise. A comment that is never
   closed is a comment. An identifier may be quoted four ways, and the
@@ -117,7 +117,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   tokens partition the bytes, and none of them is empty. D-141, catalog
   6.6.76.
 
-- The nine rules document 15, section 15.3, now states, which the port is
+- The nine rules document 16, section 16.3, now states, which the port is
   written to rather than judged by afterwards: sans-I/O, one direction of
   dependency, reading without copying, refusals as data, total functions,
   bounded work, determinism, a recorded oracle rather than a trusted one,
@@ -126,7 +126,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - `db-sqlite` is held to complete coverage and meets it: every line, every
   region and every branch, under both instrumentations, which the policy
   table now states as `COMPLETE` rather than as the repository's floor of
-  91 and 86 percent. What it took is the rule document 15, section 15.7,
+  91 and 86 percent. What it took is the rule document 16, section 16.7,
   sets: a refusal no input can reach is a defect, so the unreachable ones
   were removed — the reads inside a hundred-byte header that cannot come
   back empty, the overflow arithmetic that cannot overflow, the cell slice
@@ -139,7 +139,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   so that asking a leaf for a child is a refusal a test can make rather
   than a branch no input reaches.
 
-- The configuration matrix of document 15, section 15.6, as a test: the
+- The configuration matrix of document 16, section 16.6, as a test: the
   same three rows and the same index written by the shell under eleven
   configurations — four page sizes, three text encodings, reserved space,
   a file that has been in write-ahead logging, and both vacuum settings —
@@ -158,11 +158,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   compound decision and not only the decision, and holds the same
   thresholds against that column. It is the part of MC/DC the pinned
   toolchain measures: `-Z coverage-options` takes `block`, `branch` and
-  `condition`, and emits no MC/DC records, which document 15, section
+  `condition`, and emits no MC/DC records, which document 16, section
   15.7, states rather than claims away.
 
 - `db-sqlite`, the SQLite file format as logic and the first step of the
-  port document 15 specifies: the hundred-byte header, the b-tree pages
+  port document 16 specifies: the hundred-byte header, the b-tree pages
   over it, the four cell shapes, the overflow chains a payload continues
   on, and the record format one row is. It reads a database where it lies
   — `no_std`, no allocation, no dependency, every value borrowed out of
@@ -175,11 +175,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   serial types the format reserves, a chain of overflow pages longer than
   the file has pages. The fixtures are five databases the shell itself
   wrote, committed beside the tests, each with the statement that produced
-  it. D-141, document 15, catalog 6.6.75.
+  it. D-141, document 16, catalog 6.6.75.
 
 - The SQLite documents in `docs/sqlite/`: the file format, the type
   system, the expression grammar, and *How SQLite Is Tested*, which is the
-  coverage standard document 15 holds the port to. SQLite's code and
+  coverage standard document 16 holds the port to. SQLite's code and
   documentation are public domain, which its own `copyright.html`, kept
   beside them, states; the first case of D-124, so there is nothing
   further to state. D-141.

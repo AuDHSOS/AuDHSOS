@@ -78,7 +78,7 @@ rm -f "$out/small.db" "$out/page512.db" "$out/utf16.db" "$out/overflow.db" "$out
 "$sqlite" "$out/overflow.db" "CREATE TABLE big(t TEXT); INSERT INTO big VALUES (replace(hex(zeroblob(9000)),'0','x'));"
 "$sqlite" "$out/indexed.db" "CREATE TABLE k(a INTEGER, b TEXT); CREATE INDEX ka ON k(a); CREATE UNIQUE INDEX kb ON k(b); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<100) INSERT INTO k SELECT i, 'v' || i FROM c;"
 
-# The matrix of document 15, section 15.6: the same rows written under
+# The matrix of document 16, section 16.6: the same rows written under
 # every configuration the shell can write them under.
 fixture m-utf8-512.db        "" "PRAGMA page_size=512;"
 fixture m-utf8-1024.db       "" "PRAGMA page_size=1024;"

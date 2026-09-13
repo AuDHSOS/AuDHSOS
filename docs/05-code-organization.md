@@ -100,7 +100,7 @@ AuDHSOS/
 │   │   ├── rng/               crypto-rng: Entropy and Rng traits, ChaCha20 generator
 │   │   └── rsa/               crypto-rsa: RSA verification, PKCS #1 v1.5 and PSS
 │   ├── db/
-│   │   └── sqlite/            db-sqlite: the SQLite file format, read where it lies (document 15)
+│   │   └── sqlite/            db-sqlite: the SQLite file format, read where it lies (document 16)
 │   ├── net/                   (documents 11, 12 and 14)
 │   │   ├── der/               audhsos-der: strict zero-copy DER reader
 │   │   ├── x509/              audhsos-x509: certificates, path validation, name matching

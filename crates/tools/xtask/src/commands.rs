@@ -259,6 +259,36 @@ fn virtio_lines(output: &str) -> Vec<String> {
     violations
 }
 
+/// What the file system server has to report of the disk it was handed:
+/// the capacity the device answered, and the volume it mounted or wrote.
+fn block_lines(output: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    if output.contains("[files] no disk") {
+        violations.push(
+            "the root task handed over no block device, though the machine carries one".to_owned(),
+        );
+        return violations;
+    }
+    for line in output.lines().filter(|line| line.starts_with("[init] no ")) {
+        violations.push(format!("the root task refused the handover: {line}"));
+    }
+    // The scratch disk is 64 MiB of 512-byte sectors, which the device
+    // reports as its capacity; a driver that read the wrong register
+    // reports something else.
+    if !output.contains(&format!("[files] disk of {SCRATCH_SECTORS} sectors")) {
+        violations.push(format!(
+            "the driver did not read {SCRATCH_SECTORS} sectors off the scratch disk"
+        ));
+    }
+    if !output.contains("[files] clusters=") {
+        violations.push("the file system server mounted no volume".to_owned());
+    }
+    violations
+}
+
+/// Sectors of the scratch disk, which is [`SCRATCH_SIZE`] of them.
+const SCRATCH_SECTORS: u64 = SCRATCH_SIZE / 512;
+
 /// How many lines the second client writes while the first writes its own.
 ///
 /// It repeats the number of the run in the text, so a line that lost bytes
@@ -302,6 +332,11 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
         &path,
         &qemu::Options {
             qmp: Some(socket.clone()),
+            // The end-to-end run carries a disk of its own, under its own
+            // name, so that what it writes survives into a second boot and
+            // meets no other run (D-136). It starts blank, so that what the
+            // second boot finds is what the first boot wrote.
+            scratch: Some(blank_scratch_image(root, "e2e")?),
             ..qemu::Options::plain()
         },
     )?;
@@ -315,6 +350,9 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     }
     if violations.is_empty() {
         violations.extend(virtio_lines(&session.output()));
+    }
+    if violations.is_empty() {
+        violations.extend(block_lines(&session.output()));
     }
     // The picture, while the machine still runs: `app-hello` is waiting to
     // be typed at, so nothing has ended yet. What is on the screen is
@@ -363,6 +401,15 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     if violations.is_empty() {
         violations.extend(torn_lines(&session.output()));
     }
+    // The file the first boot wrote, and a file whose length crosses a
+    // cluster, read back byte for byte.
+    if violations.is_empty() {
+        if session.wait_for(FILES_DONE, E2E_TIMEOUT) {
+            violations.extend(file_lines(&session.output(), true));
+        } else {
+            violations.push("the program that uses the volume did not finish".to_owned());
+        }
+    }
     // The run ends itself: the application reports to the root task, and
     // the root task writes to the exit device through its `SystemControl`.
     // A run this had to kill would say nothing about whether that works.
@@ -390,8 +437,111 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
         eprintln!("--- end ---");
     }
     Error::from_violations(violations)?;
+    test_the_same_disk_again(&machine, &path, root)?;
     test_without_a_framebuffer(&machine, &path)?;
     test_without_a_network(&machine, &path)
+}
+
+/// The line the program that uses the volume writes last.
+const FILES_DONE: &str = "[files-app] entries=";
+
+/// What that program has to report.
+///
+/// `first` says whether this is the boot that finds a blank volume: the
+/// first writes the file, the second finds it and compares the bytes.
+fn file_lines(output: &str, first: bool) -> Vec<String> {
+    let mut violations = Vec::new();
+    let wanted = if first {
+        "[files-app] first boot: wrote 30 bytes"
+    } else {
+        "[files-app] second boot: 30 bytes, same=true"
+    };
+    if !output.contains(wanted) {
+        violations.push(format!("the volume did not carry the file: no `{wanted}`"));
+    }
+    // The length crosses a cluster, which on this volume is one sector.
+    if !output.contains("[files-app] long file: wrote 700 read 700 same=true") {
+        violations.push(
+            "a file whose length crosses a cluster did not come back byte for byte".to_owned(),
+        );
+    }
+    if !output.contains("[files-app] entry BOOT.TXT") {
+        violations.push("the listing of the volume names no BOOT.TXT".to_owned());
+    }
+    violations
+}
+
+/// Boots the same disk a second time, which is the persistence test and
+/// the reason the scratch disk is kept across runs (D-136).
+///
+/// # Errors
+///
+/// [`Error::Violations`] when the second boot does not find what the first
+/// one wrote; the errors of the machine.
+fn test_the_same_disk_again(machine: &Machine, path: &Path, root: &Path) -> Result<(), Error> {
+    let socket = qemu::socket_path("audhsos-qmp-again")?;
+    let _ = std::fs::remove_file(&socket);
+    let mut session = Session::start(
+        machine,
+        path,
+        &qemu::Options {
+            qmp: Some(socket.clone()),
+            scratch: Some(scratch_image(root, "e2e")?),
+            ..qemu::Options::plain()
+        },
+    )?;
+    let mut violations = Vec::new();
+    // What is typed goes first: the line the program that reads the volume
+    // writes last comes after `[hello] ready`, and a wait for a line that
+    // has already gone past never ends.
+    if session.wait_for("[hello] ready", E2E_TIMEOUT) {
+        session.send(b"typed\n")?;
+    } else {
+        violations.push("the second boot never said it was ready".to_owned());
+    }
+    if violations.is_empty() {
+        if session.wait_for(FILES_DONE, E2E_TIMEOUT) {
+            violations.extend(file_lines(&session.output(), false));
+        } else {
+            violations.push("the second boot did not reach the volume".to_owned());
+        }
+    }
+    // The programs that listen report only once something was typed or
+    // moved at them, and the machine ends when every program that reports
+    // has reported. So the same events go in here as in the first boot.
+    if violations.is_empty() {
+        match inject_input(&socket, &mut session) {
+            Ok(()) => {}
+            Err(error) => violations.push(format!("nothing could be injected: {error}")),
+        }
+    }
+    if violations.is_empty() {
+        violations.extend(inject_canvas(&socket, &mut session, root));
+    }
+    if violations.is_empty() {
+        match session.wait_for_end(E2E_TIMEOUT) {
+            None => violations.push("the second boot did not end by itself".to_owned()),
+            status => {
+                let outcome = qemu::outcome_of(status, false);
+                if outcome != qemu::Outcome::Success {
+                    violations.push(format!("the machine reported a {}", outcome.name()));
+                }
+            }
+        }
+    }
+    let output = session.finish();
+    let _ = std::fs::remove_file(&socket);
+    note!(
+        "qemu the same disk again: {} line(s)",
+        output.lines().count()
+    );
+    report("the same disk again", &violations);
+    if !violations.is_empty() {
+        eprintln!("--- serial output of the second boot ---");
+        eprintln!("{output}");
+        eprintln!("--- end ---");
+    }
+    Error::from_violations(violations)
 }
 
 /// Where `app-paint` fills its rectangle and what it fills it with. It says
@@ -1052,6 +1202,12 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Erro
             break;
         }
     }
+    // This run carries no scratch disk. The machine comes up regardless
+    // and the file system server says there is none, which is what a
+    // client that asks for a file has to hear.
+    if violations.is_empty() && !session.wait_for("[files] no disk", E2E_TIMEOUT) {
+        violations.push("a machine without a disk did not say so".to_owned());
+    }
     if violations.is_empty() && session.wait_for("[hello] ready", E2E_TIMEOUT) {
         session.send(b"typed\n")?;
     }
@@ -1391,6 +1547,18 @@ pub(crate) fn scratch_path(root: &Path, name: &str) -> PathBuf {
     root.join("target")
         .join("qemu")
         .join(format!("{name}.scratch.img"))
+}
+
+/// The scratch disk of the run `name`, blank whatever was on it.
+///
+/// The end-to-end run boots twice and the second boot reads what the
+/// first wrote, so the pair says nothing unless it starts from a disk
+/// nothing wrote. A run a person starts keeps its disk instead
+/// ([`scratch_image`]).
+fn blank_scratch_image(root: &Path, name: &str) -> Result<PathBuf, Error> {
+    let path = scratch_path(root, name);
+    let _ = std::fs::remove_file(&path);
+    scratch_image(root, name)
 }
 
 /// The scratch disk of the run `name`, blank when it was not there and as

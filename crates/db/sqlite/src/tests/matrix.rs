@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! The configuration matrix of document 15, section 15.6.
+//! The configuration matrix of document 16, section 16.6.
 //!
 //! A test that ran under one configuration tested one configuration. Every
 //! fixture here holds the same three rows and the same index, written by

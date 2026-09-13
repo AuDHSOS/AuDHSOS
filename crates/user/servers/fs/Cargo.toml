@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "server-fs"
+description = "What the file system server decides: open files per client, the file protocol over a FAT32 volume, and the refusals it maps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+audhsos-abi.workspace = true
+audhsos-time.workspace = true
+fs-fat.workspace = true
+user-proto.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true
+
+[lints]
+workspace = true

@@ -1,6 +1,6 @@
 # Reference documents: SQLite
 
-The documents the port of [document 15](../15-sqlite-in-rust.md) is
+The documents the port of [document 16](../16-sqlite-in-rust.md) is
 written against. A structure of a file format is a claim about bytes, and a
 claim without the sentence it came from is one nobody can check.
 
@@ -52,7 +52,7 @@ copy — and there is nothing further to state.
   `keyword.rs` is that list; the source of the words is
   `tool/mkkeywordhash.c` of the checkout under `research/`, because the
   page names them without saying which token each becomes.
-- `testing.html` is the standard document 15, section 15.7, holds this
+- `testing.html` is the standard document 16, section 16.7, holds this
   port to: branch coverage and MC/DC over the whole of it, with the
   reasoning for why that is the bar.
 

@@ -18,7 +18,7 @@ use crate::process::{Cmd, run_parallel, test_jobs};
 /// `branch` counts every decision both ways. `condition` counts every
 /// operand of a compound decision as well, which is the part of
 /// modified condition/decision coverage this toolchain measures: the
-/// pin emits no MC/DC records, and document 15, section 15.7, says what
+/// pin emits no MC/DC records, and document 16, section 16.7, says what
 /// that leaves open.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Instrumentation {

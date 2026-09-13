@@ -124,13 +124,13 @@ within each target and skipping targets whose corpus directory is absent.
   `xtask` and `docpdf`, which are reported only. CI fails below the
   thresholds. Uncovered lines must be justified in review. A crate named
   in `COMPLETE` is held to all of it instead — 100 percent of lines and of
-  branches — which is what document 15, section 15.7, asks of the SQLite
+  branches — which is what document 16, section 16.7, asks of the SQLite
   port and what `db-sqlite` meets.
 - Condition coverage: `cargo xtask coverage --condition` builds the same
   tests with `-Z coverage-options=branch,condition`, which counts every
   operand of a compound decision and not only the decision. The same
   thresholds apply to that column. It is not a step of `check`: it is the
-  measurement document 15, section 15.7, holds the SQLite port to, and the
+  measurement document 16, section 16.7, holds the SQLite port to, and the
   reason it is not MC/DC is stated there.
 - QEMU coverage is not measured. Each adapter crate keeps a table that maps
   every public function to at least one QEMU test. `cargo xtask
@@ -2968,7 +2968,7 @@ agree on 3.53.4.
 
 ### 6.6.75 The SQLite file format, read (`db-sqlite`)
 
-D-141, document 15 step Q1. Five databases written by the `sqlite3` shell
+D-141, document 16 step Q1. Five databases written by the `sqlite3` shell
 are the fixtures: the format as it is, not as this crate reads it. Each is
 named in the test that reads it, together with the statement that produced
 it.
@@ -3012,7 +3012,7 @@ it.
   rather than filled; a root that names an index tree is refused by a walk
   of rows, and so is a root the file does not have.
 
-- The configuration matrix of document 15, section 15.6: the same three
+- The configuration matrix of document 16, section 16.6: the same three
   rows and the same index, written by the shell under eleven
   configurations — page sizes 512, 1024, 4096 and 65536, the three text
   encodings, 32 reserved bytes per page, a file that has been in
@@ -3038,7 +3038,7 @@ section 15.4, has the order they arrive in.
 
 ### 6.6.76 The SQL tokenizer (`db-sqlite`)
 
-D-141, document 15 step Q4, first half. The tokenizer is checked against
+D-141, document 16 step Q4, first half. The tokenizer is checked against
 the one it is a port of, and not against a reading of it.
 
 - The recorded oracle: `fixtures/tokens.corpus` holds nine hundred and
@@ -3071,7 +3071,7 @@ in is what it wrote. Document 15, section 15.3, rule 8, is the reasoning.
 
 ### 6.6.77 The expression parser (`db-sqlite`)
 
-D-141, document 15 step Q4, second half of the first half. The tree is
+D-141, document 16 step Q4, second half of the first half. The tree is
 built in an arena, so the tests hold two things: that the tree is the one
 the grammar says, and that what SQLite refuses this parser refuses too.
 
@@ -3114,7 +3114,7 @@ the grammar says, and that what SQLite refuses this parser refuses too.
 
 ### 6.6.78 The statement parser (`db-sqlite`)
 
-D-141, document 15 step Q4, finished. `SELECT`, `VALUES` and `WITH`, with
+D-141, document 16 step Q4, finished. `SELECT`, `VALUES` and `WITH`, with
 everything the grammar hangs off them, and the subqueries that let an
 expression hold a statement.
 
@@ -3152,7 +3152,7 @@ expression hold a statement.
 
 ### 6.6.79 Doubles as decimal text (`db-sqlite`)
 
-D-142, document 15 step Q5, first half. A double has no decimal spelling
+D-142, document 16 step Q5, first half. A double has no decimal spelling
 of its own, so two engines that pick differently disagree about what a
 query answers. `sqlite3FpDecode` is ported rather than approximated: the
 128-bit multiply against the table of powers of ten, the eighteen digits
@@ -3180,7 +3180,7 @@ rendering where the shorter one reads back as the same double.
 
 ### 6.6.80 Numbers out of text (`db-sqlite`)
 
-D-142, document 15 step Q5. Which text is a number decides what `'1x' + 1`
+D-142, document 16 step Q5. Which text is a number decides what `'1x' + 1`
 answers and whether `'10' < '9'` compares as text or as numbers, so
 `sqlite3AtoF` and `sqlite3Atoi64` are ported rather than approximated.
 
@@ -3200,7 +3200,7 @@ answers and whether `'10' < '9'` compares as text or as numbers, so
 
 ### 6.6.81 What an expression answers (`db-sqlite`)
 
-D-143, document 15 step Q5. Storage classes, affinity, collation and every
+D-143, document 16 step Q5. Storage classes, affinity, collation and every
 operator, checked against the engine rather than against a reading of
 `docs/sqlite/datatype3.html`, because the order of the conversions is the
 semantics and the prose does not give it.
@@ -3234,7 +3234,7 @@ semantics and the prose does not give it.
 
 ### 6.6.82 The scalar functions (`db-sqlite`)
 
-D-144, document 15 step Q5. Thirty-four names, and the pattern matching
+D-144, document 16 step Q5. Thirty-four names, and the pattern matching
 `LIKE` and `GLOB` are, taken from the routines of `src/func.c` rather
 than from the prose: the prose says `substr` counts characters, not that
 it counts bytes for a blob, that it has four rules for a start before the
