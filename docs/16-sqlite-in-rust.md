@@ -86,7 +86,7 @@ Each rule is checkable, and each makes a later thing possible.
 | `fp`, `number` | A double as decimal text and back: `sqlite3FpDecode`, the `%f`, `%e` and `%g` conversions it feeds, `sqlite3AtoF`, `sqlite3Atoi64`. | D-142, D-161, Q5 |
 | `value`, `utf8` | Storage classes, affinity, collation, comparison, the three text encodings. | D-143, D-147, Q5 |
 | `eval`, `func`, `agg` | An expression over a row; fifty scalar functions; seven aggregates; the four shapes of statement an expression uses. | D-143, D-144, D-148, D-154, D-160, Q5 |
-| `tree` | The pages of a database being written, and a row put in the tree its table begins at, with what does not fit on overflow pages. | D-166, Q7 |
+| `tree` | The pages of a database being written, a row put in the tree its table begins at with what does not fit on overflow pages, and the balance a tree filled in key order needs. | D-166, D-167, Q7 |
 | `format` | `format(F,...)` and `printf(F,...)`: the flags, the field width, the precision, and the twenty-three conversions of `sqlite3_str_vappendf`. `unistr(X)` reads the escapes `%#q` writes, and `quote(X)` of text is `%Q` of it. | D-161, Q8 |
 | `db` | A statement answered from a file by walking the sides of its `FROM` once, held to the rowids the `WHERE` leaves each. | D-146, D-149, D-150, D-153, D-158, Q5 |
 
@@ -127,7 +127,7 @@ Each rule is checkable, and each makes a later thing possible.
 | A cell written back, and a page built from its cells | 1663 cells, 56 pages | the fixtures the shell wrote |
 | A cell taken off a page and put back | 1333 cells | the fixtures the shell wrote |
 | A whole file written back, header and pages | 27 files, 108 pages built again | the fixtures the shell wrote |
-| A database written from a schema and its rows | 4 files, byte for byte | the fixtures the shell wrote |
+| A database written from a schema and its rows | 5 files, byte for byte, one of them a tree of 15 pages | the fixtures the shell wrote |
 | The readers against arbitrary bytes | 7 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval`, `sqlite_wal`, `sqlite_journal`, `sqlite_format` |
 
 The crate is `COMPLETE` in `crates/tools/xtask/src/policy.rs`: 100 percent
@@ -502,10 +502,10 @@ through the walker; the crate meets D4.
 
 ## 16.21 Q7. Writing
 
-Status: a database of one page per table is written from nothing and is
-the file the shell wrote, byte for byte; the balance that makes a table
-larger than one page is not built.
-Depends on: Q3, Q5. Recorded in D-162 to D-166.
+Status: a database whose tables are filled in key order is written from
+nothing and is the file the shell wrote, byte for byte, however many
+pages a table takes; the balance a row in the middle needs is not built.
+Depends on: Q3, Q5. Recorded in D-162 to D-167.
 Size: L.
 
 ### Needs
@@ -525,10 +525,13 @@ Size: L.
 4. Write the hundred-byte header and the file its pages make. Built.
 5. Put a row in the tree its table begins at, with what does not fit
    on overflow pages. Built.
-6. Balance a b-tree: split a page that will not hold a cell, and join
-   pages a delete has emptied.
-7. Keep the free list of the file and the pointer maps.
-8. Run a transaction through the rollback journal in each of its four
+6. Balance a tree that is filled in key order: a root that grows a
+   child under it, and a full right-most leaf that grows a sibling
+   beside it. Built.
+7. Balance a tree a row lands in the middle of, and join pages a
+   delete has emptied.
+8. Keep the free list of the file and the pointer maps.
+9. Run a transaction through the rollback journal in each of its four
    modes, then through the WAL.
 
 ### Done when

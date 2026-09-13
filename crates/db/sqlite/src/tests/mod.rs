@@ -38,6 +38,10 @@ mod wal;
 /// VALUES (1,'one',1.5,x'0102'), (2,'two',-2.5,NULL), (-3,'',0.0,x'ff');`
 pub(super) const SMALL: &[u8] = include_bytes!("fixtures/small.db");
 
+/// A table of four hundred rows over pages of five hundred and twelve
+/// bytes, which is one interior page over the leaves it split into.
+pub(super) const TALL: &[u8] = include_bytes!("fixtures/tall.db");
+
 /// Four hundred rows over 512-byte pages, which is small enough that the
 /// tree has an interior page and the walk has to descend.
 ///
@@ -269,11 +273,12 @@ pub(super) fn index_leaf_past_the_page(page_size: usize) -> Vec<u8> {
 
 /// The fixtures a test reads whole: every one the shell wrote that holds
 /// a table, and what each was written to hold.
-pub(crate) const WRITTEN: [(&str, &[u8]); 8] = [
+pub(crate) const WRITTEN: [(&str, &[u8]); 9] = [
     // Every serial type, every affinity, a header either side of the
     // size varint counting itself, a key's own tree and a rowid alias.
     ("records.db", include_bytes!("fixtures/records.db")),
     ("small.db", include_bytes!("fixtures/small.db")),
+    ("tall.db", include_bytes!("fixtures/tall.db")),
     ("page512.db", include_bytes!("fixtures/page512.db")),
     ("indexed.db", include_bytes!("fixtures/indexed.db")),
     ("joins.db", include_bytes!("fixtures/joins.db")),

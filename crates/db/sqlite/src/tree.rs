@@ -200,14 +200,18 @@ fn spilled<'a>(pages: &mut Pages, payload: &'a [u8]) -> (&'a [u8], Option<u32>) 
 
 /// Puts one row in the table tree that begins at `root`.
 ///
-/// Answers `false` where the leaf the row belongs on will not hold it,
-/// which is where SQLite balances the tree.
+/// A leaf that will not hold the cell is balanced: the root of a tree of
+/// one page grows a child under it, and a right-most leaf that is full
+/// grows a sibling beside it with a divider between them, which is
+/// `balance_deeper` and `balance_quick`.
 ///
 /// # Errors
 ///
-/// [`Error::Depth`] for a tree deeper than this crate walks, and
+/// [`Error::Balance`] for a cell that belongs anywhere but at the end of
+/// the right-most page, which is the balance this crate does not write
+/// yet; [`Error::Depth`] for a tree deeper than this crate walks; and
 /// whatever reading a page of it refuses.
-pub fn insert(pages: &mut Pages, root: u32, rowid: i64, record: &[u8]) -> Result<bool, Error> {
+pub fn insert(pages: &mut Pages, root: u32, rowid: i64, record: &[u8]) -> Result<(), Error> {
     let (local, overflow) = spilled(pages, record);
     let cell = write_cell(&Cell::TableLeaf {
         rowid,
@@ -217,13 +221,92 @@ pub fn insert(pages: &mut Pages, root: u32, rowid: i64, record: &[u8]) -> Result
             overflow,
         },
     });
-    let (leaf, at) = place(pages, root, rowid)?;
-    pages.writer(leaf)?.insert(at, &cell)
+    let path = place(pages, root, rowid)?;
+    let (leaf, at) = *path.last().ok_or(Error::Depth)?;
+    if pages.writer(leaf)?.insert(at, &cell)? {
+        return Ok(());
+    }
+    balance(pages, &path, &cell)
 }
 
-/// The leaf a key belongs on, and where on it: the same descent a reader
-/// makes, and then the first cell of the leaf whose key is above it.
-fn place(pages: &Pages, root: u32, rowid: i64) -> Result<(u32, usize), Error> {
+/// A leaf that will not hold a cell, balanced so that it does.
+///
+/// This is `balance` for the one shape this crate writes: a cell at the
+/// end of the right-most page of its tree. The root of a tree of one
+/// page grows a child under it, and the page that is full grows a
+/// sibling beside it.
+fn balance(pages: &mut Pages, path: &[(u32, usize)], cell: &[u8]) -> Result<(), Error> {
+    let (leaf, at) = *path.last().ok_or(Error::Depth)?;
+    if at != pages.page(leaf)?.cells() {
+        return Err(Error::Balance);
+    }
+    // A tree of one page: the root keeps its place in the file, so its
+    // cells move to a child and the root becomes the interior page above
+    // it. The cell then belongs on the child.
+    let (parent, above, page) = match path.split_last() {
+        Some((_, [.., (parent, above)])) => (*parent, *above, leaf),
+        _ => (leaf, 0, deepen(pages, leaf)?),
+    };
+    // The divider the sibling needs goes on the parent, so the parent has
+    // to be an interior page with room for it, and the page has to be the
+    // one every key above the last divider lives in.
+    if parent == crate::image::SCHEMA_ROOT || above != pages.page(parent)?.cells() {
+        return Err(Error::Balance);
+    }
+    quick(pages, parent, page, cell)
+}
+
+/// A root of one page grown into a root over one child, which is
+/// `balance_deeper`: the child takes the root's content and the root
+/// becomes the interior page above it.
+pub(crate) fn deepen(pages: &mut Pages, root: u32) -> Result<u32, Error> {
+    let kind = pages.page(root)?.kind();
+    if kind != Kind::LeafTable || root == crate::image::SCHEMA_ROOT {
+        return Err(Error::Balance);
+    }
+    let child = pages.add(kind)?;
+    // `copyNodeContent`: the child takes the page the root was, header
+    // and all, which it can because the two begin at the same byte of
+    // their pages. A root on page one begins a hundred bytes in and is
+    // the balance this crate does not write.
+    let bytes = pages.bytes(root)?.to_vec();
+    pages.put_page(child, &bytes)?;
+    let mut above = pages.writer(root)?;
+    above.zero(Kind::InteriorTable);
+    above.point(child)?;
+    Ok(child)
+}
+
+/// A full right-most leaf grown a sibling beside it, which is
+/// `balance_quick`: the cell that did not fit is the whole of the new
+/// page, and the parent gains a divider naming the page that was full
+/// and the largest key on it.
+pub(crate) fn quick(pages: &mut Pages, parent: u32, page: u32, cell: &[u8]) -> Result<(), Error> {
+    let last = pages
+        .page(page)?
+        .cells()
+        .checked_sub(1)
+        .ok_or(Error::Balance)?;
+    let Cell::TableLeaf { rowid, .. } = pages.page(page)?.cell(last)? else {
+        return Err(Error::Balance);
+    };
+    let sibling = pages.add(Kind::LeafTable)?;
+    if !pages.writer(sibling)?.insert(0, cell)? {
+        return Err(Error::Balance);
+    }
+    let divider = write_cell(&Cell::TableInterior { child: page, rowid });
+    let cells = pages.page(parent)?.cells();
+    if !pages.writer(parent)?.insert(cells, &divider)? {
+        return Err(Error::Balance);
+    }
+    pages.writer(parent)?.point(sibling)
+}
+
+/// The pages the descent to a key passes through, root first, each with
+/// where the key belongs on it: the same descent a reader makes, and
+/// then the first cell of the leaf whose key is above it.
+fn place(pages: &Pages, root: u32, rowid: i64) -> Result<Vec<(u32, usize)>, Error> {
+    let mut path = Vec::new();
     let mut number = root;
     for _ in 0..MAX_DEPTH {
         let page = pages.page(number)?;
@@ -241,8 +324,9 @@ fn place(pages: &Pages, root: u32, rowid: i64) -> Result<(u32, usize), Error> {
                 break;
             }
         }
+        path.push((number, at));
         if !page.kind().is_interior() {
-            return Ok((number, at));
+            return Ok(path);
         }
         number = if at == cells {
             page.right_most().ok_or(Error::Overrun)?

@@ -117,6 +117,12 @@ fixture m-reserved4.db       ".filectrl reserve_bytes 4" "PRAGMA page_size=1024;
 "$sqlite" "$out/m-wal.db" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null
 rm -f "$out"/*-wal "$out"/*-shm
 
+# A table that outgrows one page, filled in key order, which is the tree
+# a balance makes of it: one interior page over the leaves it split into.
+rm -f "$out/tall.db"
+"$sqlite" "$out/tall.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<400) INSERT INTO t SELECT i, 'row ' || i FROM c;"
+printf '%s\t%s bytes\n' tall.db "$(wc -c <"$out/tall.db" | tr -d ' ')"
+
 # Every serial type and every affinity, so that a record written by this
 # repository can be held to the bytes the C library writes. `wide` has a
 # header of exactly 127 code bytes and `wider` one of 130, which are the

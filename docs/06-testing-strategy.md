@@ -3978,11 +3978,18 @@ the files the shell wrote rather than to a reading of section 1.6.
   makes an interior page yet: a row whose key an interior cell names
   goes on the child that cell points at, and a key above every cell goes
   on the page the right-most pointer names.
+- `tall.db` is the fifth: four hundred rows over pages of five hundred
+  and twelve bytes, which is thirteen leaves under one root. What it
+  holds this crate to is the balance an append needs and the bytes
+  `zeroPage` leaves behind — the root still holds the first leaf's rows
+  in the space no cell is in, and so does the file this crate writes.
 - The refusals: a page size the format does not allow, a reserved tail
   that leaves too little of a page, a tree of index pages, which holds
-  no key a row belongs under, and a tree of interior pages that never
+  no key a row belongs under, a tree of interior pages that never
   reaches a leaf, which the descent stops in rather than following
-  forever.
+  forever, a row that belongs anywhere but at the end of the right-most
+  page, a schema of more than one page, and a tree whose dividers do not
+  name the largest key of the page under them.
 
 ## 6.7 CI pipeline
 

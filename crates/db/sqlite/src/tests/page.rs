@@ -994,3 +994,17 @@ fn what_a_page_refuses_where_its_own_numbers_do_not_allow_the_step() {
     let mut writer = Writer::open(&mut copy, 2, 256).unwrap();
     assert_eq!(writer.remove(0), Err(Error::Overrun));
 }
+
+#[test]
+fn a_leaf_has_no_pointer_to_point() {
+    use crate::page::{Writer, build};
+    // The right-most pointer is the eight bytes only an interior page's
+    // header is longer by.
+    let mut bytes = build(Kind::LeafTable, 2, 256, 256, &[], None).unwrap();
+    let mut writer = Writer::open(&mut bytes, 2, 256).unwrap();
+    assert_eq!(writer.point(3), Err(Error::PageKind(13)));
+    let mut bytes = build(Kind::InteriorTable, 2, 256, 256, &[], None).unwrap();
+    let mut writer = Writer::open(&mut bytes, 2, 256).unwrap();
+    assert_eq!(writer.point(3), Ok(()));
+    assert_eq!(writer.page().right_most(), Some(3));
+}

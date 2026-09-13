@@ -75,7 +75,7 @@ fn a_database_written_from_a_schema_and_its_rows_is_the_file_the_shell_wrote() {
     assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
     let sql = "CREATE TABLE t(a INTEGER, b TEXT, c REAL, d BLOB)";
     let row = schema_row("t", 2, sql, Encoding::Utf8);
-    assert!(insert(&mut pages, 1, 1, &row).unwrap());
+    insert(&mut pages, 1, 1, &row).unwrap();
     let columns = [
         Affinity::Integer,
         Affinity::Text,
@@ -105,7 +105,7 @@ fn a_database_written_from_a_schema_and_its_rows_is_the_file_the_shell_wrote() {
     for (at, values) in rows.iter().enumerate() {
         let rowid = i64::try_from(at).unwrap() + 1;
         let record = write(values, &columns, 4);
-        assert!(insert(&mut pages, 2, rowid, &record).unwrap());
+        insert(&mut pages, 2, rowid, &record).unwrap();
     }
     let written = pages.written(&header(4096, Encoding::Utf8, 2));
     let fixture = crate::tests::SMALL;
@@ -143,12 +143,12 @@ fn a_database_whose_text_is_utf16_is_written_as_the_shell_wrote_it() {
     let mut pages = Pages::new(4096, 0).unwrap();
     assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
     let row = schema_row("u", 2, "CREATE TABLE u(t TEXT)", encoding);
-    assert!(insert(&mut pages, 1, 1, &row).unwrap());
+    insert(&mut pages, 1, 1, &row).unwrap();
     for (at, text) in ["abc", "äöü"].iter().enumerate() {
         let value = Value::Text(crate::value::stored(text.as_bytes(), encoding));
         let record = write(&[value], &[Affinity::Text], 4);
         let rowid = i64::try_from(at).unwrap() + 1;
-        assert!(insert(&mut pages, 2, rowid, &record).unwrap());
+        insert(&mut pages, 2, rowid, &record).unwrap();
     }
     let written = pages.written(&header(4096, encoding, 2));
     same("utf16.db", &written, crate::tests::UTF16, 4096);
@@ -191,11 +191,11 @@ fn a_database_of_three_tables_is_written_as_the_shell_wrote_it() {
         assert_eq!(root, u32::try_from(at).unwrap() + 2);
         let schema = schema_row(name, i64::from(root), sql, encoding);
         let rowid = i64::try_from(at).unwrap() + 1;
-        assert!(insert(&mut pages, 1, rowid, &schema).unwrap());
+        insert(&mut pages, 1, rowid, &schema).unwrap();
         for (index, values) in rows[at].iter().enumerate() {
             let record = write(values, &columns[at], 4);
             let rowid = i64::try_from(index).unwrap() + 1;
-            assert!(insert(&mut pages, root, rowid, &record).unwrap());
+            insert(&mut pages, root, rowid, &record).unwrap();
         }
     }
     let mut written = header(4096, encoding, 6);
@@ -212,10 +212,10 @@ fn a_row_longer_than_a_page_runs_onto_the_overflow_pages_the_shell_wrote() {
     let mut pages = Pages::new(4096, 0).unwrap();
     assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
     let row = schema_row("big", 2, "CREATE TABLE big(t TEXT)", Encoding::Utf8);
-    assert!(insert(&mut pages, 1, 1, &row).unwrap());
+    insert(&mut pages, 1, 1, &row).unwrap();
     let text = Value::Text(alloc::vec![b'x'; 18_000]);
     let record = write(&[text], &[Affinity::Text], 4);
-    assert!(insert(&mut pages, 2, 1, &record).unwrap());
+    insert(&mut pages, 2, 1, &record).unwrap();
     assert_eq!(pages.count(), 6);
     let written = pages.written(&header(4096, Encoding::Utf8, 2));
     same("overflow.db", &written, crate::tests::OVERFLOW, 4096);
@@ -250,9 +250,9 @@ fn a_row_goes_on_the_leaf_the_descent_of_the_tree_finds() {
         pages.put_page(2, &bytes).unwrap();
     }
     let record = write(&[Value::Int(1)], &[Affinity::None], 4);
-    assert!(insert(&mut pages, 2, 5, &record).unwrap());
-    assert!(insert(&mut pages, 2, 10, &record).unwrap());
-    assert!(insert(&mut pages, 2, 11, &record).unwrap());
+    insert(&mut pages, 2, 5, &record).unwrap();
+    insert(&mut pages, 2, 10, &record).unwrap();
+    insert(&mut pages, 2, 11, &record).unwrap();
     assert_eq!(pages.page(3).unwrap().cells(), 2);
     assert_eq!(pages.page(4).unwrap().cells(), 1);
     // The two that went on the first leaf are in key order.
@@ -319,4 +319,201 @@ fn a_tree_that_is_not_a_table_and_a_tree_deeper_than_the_walk_are_refused() {
         above = number;
     }
     assert_eq!(insert(&mut pages, 2, 1, &record), Err(Error::Depth));
+}
+
+#[test]
+fn a_table_that_outgrows_one_page_is_the_tree_the_shell_wrote() {
+    // `PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT);` and four
+    // hundred rows in key order, which is `tall.db`: the leaf the rows go
+    // on fills, the root grows a child under it, and every leaf after
+    // that is a sibling with a divider on the root.
+    let mut pages = Pages::new(512, 0).unwrap();
+    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
+    let row = schema_row("t", 2, "CREATE TABLE t(n INTEGER, s TEXT)", Encoding::Utf8);
+    insert(&mut pages, 1, 1, &row).unwrap();
+    let columns = [Affinity::Integer, Affinity::Text];
+    for number in 1..=400_i64 {
+        let text = alloc::format!("row {number}");
+        let values = [Value::Int(number), Value::Text(text.into_bytes())];
+        let record = write(&values, &columns, 4);
+        insert(&mut pages, 2, number, &record).unwrap();
+    }
+    assert_eq!(pages.count(), 15);
+    let written = pages.written(&header(512, Encoding::Utf8, 2));
+    same("tall.db", &written, crate::tests::TALL, 512);
+}
+
+/// One row of the tall table, as its record.
+fn tall_row(number: i64) -> Vec<u8> {
+    let text = alloc::format!("row {number}");
+    write(
+        &[Value::Int(number), Value::Text(text.into_bytes())],
+        &[Affinity::Integer, Affinity::Text],
+        4,
+    )
+}
+
+#[test]
+fn a_row_that_does_not_go_at_the_end_of_the_tree_is_refused() {
+    use crate::error::Error;
+    // A table of five hundred rows over pages of five hundred and twelve
+    // bytes, which is a tree of one interior page over its leaves.
+    let mut pages = Pages::new(512, 0).unwrap();
+    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
+    for number in 1..=100_i64 {
+        insert(&mut pages, 2, number, &tall_row(number)).unwrap();
+    }
+    // A row that belongs on a leaf the tree has already left behind goes
+    // there while the leaf holds it, and is refused once the leaf is
+    // full, because making room for it is the balance this crate does
+    // not write.
+    let mut refused = 0;
+    for number in 1..=60_i64 {
+        let record = tall_row(number);
+        if insert(&mut pages, 2, number, &record) == Err(Error::Balance) {
+            refused += 1;
+        }
+    }
+    assert!(refused > 0, "a full leaf took every row it was given");
+    // A key between the last of one leaf and the first of the next
+    // belongs at the end of a leaf that is not the right-most one, which
+    // is the other half of the same refusal.
+    let root = pages.page(2).unwrap();
+    let crate::page::Cell::TableInterior { rowid: last, .. } = root.cell(0).unwrap() else {
+        panic!("a cell of another shape");
+    };
+    let between = tall_row(last);
+    assert_eq!(insert(&mut pages, 2, last, &between), Err(Error::Balance));
+}
+
+#[test]
+fn a_schema_larger_than_one_page_is_refused() {
+    use crate::error::Error;
+    // The schema table begins on page one, which carries the database
+    // header before its own, so growing it is the balance this crate
+    // does not write.
+    let mut pages = Pages::new(512, 0).unwrap();
+    let mut refused = 0;
+    for number in 1..=20_i64 {
+        let name = alloc::format!("t{number}");
+        let sql = alloc::format!("CREATE TABLE {name}(a, b, c, d, e, f, g, h)");
+        let row = schema_row(&name, number + 1, &sql, Encoding::Utf8);
+        if insert(&mut pages, 1, number, &row) == Err(Error::Balance) {
+            refused += 1;
+        }
+    }
+    assert!(refused > 0, "page one took every row it was given");
+}
+
+#[test]
+fn what_the_two_halves_of_the_balance_refuse() {
+    use crate::error::Error;
+    use crate::page::{Cell, Payload, write_cell};
+    use crate::tree::{deepen, quick};
+    // A tree of index pages has no key a divider names.
+    let mut pages = Pages::new(512, 0).unwrap();
+    let index = pages.add(Kind::LeafIndex).unwrap();
+    assert_eq!(deepen(&mut pages, index), Err(Error::Balance));
+    // The schema's own tree begins on the page the database header is
+    // on, so it cannot become the page above a child.
+    assert_eq!(deepen(&mut pages, 1), Err(Error::Balance));
+    // A page with no cell has no largest key to divide on.
+    let empty = pages.add(Kind::LeafTable).unwrap();
+    let parent = pages.add(Kind::InteriorTable).unwrap();
+    let cell = write_cell(&Cell::TableLeaf {
+        rowid: 1,
+        payload: Payload {
+            local: b"\x02\x09",
+            total: 2,
+            overflow: None,
+        },
+    });
+    assert_eq!(quick(&mut pages, parent, empty, &cell), Err(Error::Balance));
+    // A page whose last cell is not a row of a table names no key.
+    assert!(
+        pages
+            .writer(index)
+            .unwrap()
+            .insert(
+                0,
+                &write_cell(&Cell::IndexLeaf {
+                    payload: Payload {
+                        local: b"\x02\x09",
+                        total: 2,
+                        overflow: None,
+                    },
+                })
+            )
+            .unwrap()
+    );
+    assert_eq!(quick(&mut pages, parent, index, &cell), Err(Error::Balance));
+    // A cell of more than a page holds is one no sibling takes.
+    let leaf = pages.add(Kind::LeafTable).unwrap();
+    assert!(pages.writer(leaf).unwrap().insert(0, &cell).unwrap());
+    let big = write_cell(&Cell::TableLeaf {
+        rowid: 2,
+        payload: Payload {
+            local: &alloc::vec![7u8; 600],
+            total: 600,
+            overflow: None,
+        },
+    });
+    assert_eq!(quick(&mut pages, parent, leaf, &big), Err(Error::Balance));
+    // A parent with no room for the divider is one the tree cannot grow
+    // under either.
+    let full = pages.add(Kind::InteriorTable).unwrap();
+    let mut at = 0;
+    while pages
+        .writer(full)
+        .unwrap()
+        .insert(
+            at,
+            &write_cell(&Cell::TableInterior {
+                child: 2,
+                rowid: i64::try_from(at).unwrap(),
+            }),
+        )
+        .unwrap()
+    {
+        at += 1;
+    }
+    assert_eq!(quick(&mut pages, full, leaf, &cell), Err(Error::Balance));
+}
+
+#[test]
+fn a_tree_whose_dividers_do_not_name_its_leaves_is_refused() {
+    use crate::error::Error;
+    use crate::page::{Cell, write_cell};
+    use crate::tree::insert;
+    // A divider names the largest key of the page under it, so a row
+    // that belongs at the end of a page that is not the right-most one
+    // belongs under the next divider instead. A tree whose dividers say
+    // otherwise is one this crate refuses rather than writes into.
+    for root in [1_u32, 2] {
+        let mut pages = Pages::new(512, 0).unwrap();
+        while pages.count() < root {
+            pages.add(Kind::LeafTable).unwrap();
+        }
+        let above = crate::page::build(Kind::InteriorTable, root, 512, 512, &[], None).unwrap();
+        pages.put_page(root, &above).unwrap();
+        let left = pages.add(Kind::LeafTable).unwrap();
+        let right = pages.add(Kind::LeafTable).unwrap();
+        let divider = write_cell(&Cell::TableInterior {
+            child: left,
+            rowid: 100_000,
+        });
+        assert!(pages.writer(root).unwrap().insert(0, &divider).unwrap());
+        pages.writer(root).unwrap().point(right).unwrap();
+        // The left leaf is filled with keys the divider is far above, so
+        // a row of a key between them belongs at the end of it.
+        let mut number = 1;
+        while insert(&mut pages, root, number, &tall_row(number)).is_ok() {
+            number += 1;
+            assert!(number < 1000, "the leaf never filled");
+        }
+        assert_eq!(
+            insert(&mut pages, root, number, &tall_row(number)),
+            Err(Error::Balance)
+        );
+    }
 }

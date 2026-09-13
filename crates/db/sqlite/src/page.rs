@@ -954,6 +954,41 @@ impl<'a> Writer<'a> {
         Ok(true)
     }
 
+    /// The page emptied: the header says it holds no cell and the
+    /// content area is the whole of the usable part, and what the body
+    /// held is left where it lies.
+    ///
+    /// This is `zeroPage`, which empties the header and not the page,
+    /// so the bytes between the pointer array and the content are the
+    /// ones that were there. A page taken from the end of a file is
+    /// noughts, and a page that held a tree still holds what it held.
+    pub fn zero(&mut self, kind: Kind) {
+        let header = self.start;
+        self.kind = kind;
+        self.put8(header, usize::from(kind.byte()));
+        self.put16(header.saturating_add(1), 0);
+        self.put16(header.saturating_add(3), 0);
+        self.put16(header.saturating_add(5), self.usable);
+        self.put8(header.saturating_add(7), 0);
+    }
+
+    /// Points the page at the child every key above its last cell lives
+    /// in, which only an interior page has.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::PageKind`] for a leaf, which has no such pointer.
+    pub fn point(&mut self, child: u32) -> Result<(), Error> {
+        if !self.kind.is_interior() {
+            return Err(Error::PageKind(self.kind.byte()));
+        }
+        let at = self.start.saturating_add(8);
+        for (slot, byte) in self.bytes.iter_mut().skip(at).zip(child.to_be_bytes()) {
+            *slot = byte;
+        }
+        Ok(())
+    }
+
     /// Takes cell number `at` off the page, which is `dropCell`.
     ///
     /// # Errors
