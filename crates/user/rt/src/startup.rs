@@ -21,12 +21,12 @@
 //! first system call, because a call overwrites the buffer it stands in.
 
 use audhsos_abi::layout::MAX_BOOT_REGIONS;
-use audhsos_abi::startup::{BusRange, Payload, Role, Screen, StartupError};
+use audhsos_abi::startup::{BusRange, Location, Payload, Role, Screen, StartupError};
 use audhsos_abi::{Buffer, Handle};
 use audhsos_collections::ArrayVec;
 
 use crate::handle::{
-    EndpointHandle, InterruptHandle, IoPortHandle, MemoryHandle, ProcessHandle,
+    EndpointHandle, InterruptHandle, IoPortHandle, MemoryHandle, NotificationHandle, ProcessHandle,
     SystemControlHandle, Typed,
 };
 
@@ -110,6 +110,26 @@ pub struct Startup {
     /// The segment group and the bus range of that window, packed as
     /// [`Role::EcamBuses`] carries them.
     pub ecam_buses: Option<u64>,
+    /// The device memory over the registers of the virtio block device.
+    pub block_registers: Option<MemoryHandle>,
+    /// Where the common configuration structure lies in that window,
+    /// packed as [`Role::BlockCommon`] carries it.
+    pub block_common: Option<u64>,
+    /// The same for the notification structure.
+    pub block_notify: Option<u64>,
+    /// The same for the interrupt status structure.
+    pub block_isr: Option<u64>,
+    /// The same for the device configuration structure.
+    pub block_config: Option<u64>,
+    /// The multiplier a queue index is scaled by inside the notification
+    /// structure.
+    pub block_notify_multiplier: Option<u64>,
+    /// The message interrupt of that device.
+    pub block_interrupt: Option<InterruptHandle>,
+    /// The notification that interrupt is bound to.
+    pub block_notification: Option<NotificationHandle>,
+    /// The bit of that notification the interrupt sets.
+    pub block_vector_bit: Option<u64>,
 }
 
 impl Default for Startup {
@@ -142,7 +162,37 @@ impl Startup {
             framebuffer_line: None,
             ecam: None,
             ecam_buses: None,
+            block_registers: None,
+            block_common: None,
+            block_notify: None,
+            block_isr: None,
+            block_config: None,
+            block_notify_multiplier: None,
+            block_interrupt: None,
+            block_notification: None,
+            block_vector_bit: None,
         }
+    }
+
+    /// Where the four structures of the virtio block device lie, or `None`
+    /// when the process was given no device or an incomplete description
+    /// of one.
+    #[must_use]
+    pub const fn block_structures(&self) -> Option<[Location; 4]> {
+        let (Some(common), Some(notify), Some(isr), Some(config)) = (
+            self.block_common,
+            self.block_notify,
+            self.block_isr,
+            self.block_config,
+        ) else {
+            return None;
+        };
+        Some([
+            Location::from_word(common),
+            Location::from_word(notify),
+            Location::from_word(isr),
+            Location::from_word(config),
+        ])
     }
 
     /// The buses of the configuration window, or `None` when the process
@@ -186,6 +236,12 @@ impl Startup {
             Role::FramebufferGeometry => &mut self.framebuffer_geometry,
             Role::FramebufferLine => &mut self.framebuffer_line,
             Role::EcamBuses => &mut self.ecam_buses,
+            Role::BlockCommon => &mut self.block_common,
+            Role::BlockNotify => &mut self.block_notify,
+            Role::BlockIsr => &mut self.block_isr,
+            Role::BlockConfig => &mut self.block_config,
+            Role::BlockNotifyMultiplier => &mut self.block_notify_multiplier,
+            Role::BlockVectorBit => &mut self.block_vector_bit,
             _ => return Ok(()),
         };
         if field.is_some() {
@@ -213,7 +269,18 @@ impl Startup {
             Role::InputServer => once(&mut self.input_server, role, handle),
             Role::Framebuffer => once(&mut self.framebuffer, role, handle),
             Role::Ecam => once(&mut self.ecam, role, handle),
-            Role::FramebufferGeometry | Role::FramebufferLine | Role::EcamBuses => Ok(()),
+            Role::BlockRegisters => once(&mut self.block_registers, role, handle),
+            Role::BlockInterrupt => once(&mut self.block_interrupt, role, handle),
+            Role::BlockNotification => once(&mut self.block_notification, role, handle),
+            Role::FramebufferGeometry
+            | Role::FramebufferLine
+            | Role::EcamBuses
+            | Role::BlockCommon
+            | Role::BlockNotify
+            | Role::BlockIsr
+            | Role::BlockConfig
+            | Role::BlockNotifyMultiplier
+            | Role::BlockVectorBit => Ok(()),
             Role::Ram => self
                 .ram
                 .push(MemoryHandle::from_handle(handle))

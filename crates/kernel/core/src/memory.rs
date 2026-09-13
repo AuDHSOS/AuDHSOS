@@ -142,6 +142,9 @@ pub struct KernelMemory {
     ecam: Option<Ecam>,
     devices: DeviceRanges,
     device_count: usize,
+    described: DeviceRanges,
+    described_count: usize,
+    described_whole: bool,
 }
 
 impl KernelMemory {
@@ -193,15 +196,54 @@ impl KernelMemory {
         self.devices.get(..self.device_count).unwrap_or(&[])
     }
 
-    /// `true` when `frames` lies wholly inside one aperture the machine
-    /// reported as device memory. A range that does not is no device: the
-    /// root task may not turn an arbitrary physical range into a memory
-    /// object with it.
+    /// Every region of the firmware's memory map, rounded outward to whole
+    /// frames.
+    #[must_use]
+    pub fn described(&self) -> &[PhysFrameRange] {
+        self.described.get(..self.described_count).unwrap_or(&[])
+    }
+
+    /// Whether every region of the firmware's map fit the list above.
+    ///
+    /// A map that did not fit says nothing about what it could not hold,
+    /// so the second case of [`is_device_memory`](Self::is_device_memory)
+    /// is off for such a machine.
+    #[must_use]
+    pub const fn describes_the_whole_map(&self) -> bool {
+        self.described_whole
+    }
+
+    /// `true` when `frames` is device memory: it lies wholly inside one
+    /// aperture the machine reported, or no region of the firmware's
+    /// memory map reaches any frame of it.
+    ///
+    /// The second case is the window a bus puts a sixty-four bit base
+    /// address register in. The firmware describes the memory of the
+    /// machine and what it uses itself; it describes no window it leaves
+    /// to an operating system, and on the reference machine the register
+    /// of the block device lies in exactly such a gap. A range that meets
+    /// a described region is refused, whatever that region is for, and a
+    /// range that meets memory is refused before this is asked
+    /// (`meets_ram`).
+    ///
+    /// The second case needs the whole map. A machine that reported more
+    /// regions than [`described`](Self::described) holds has regions this
+    /// kernel cannot name, and one of them may be the kernel's own image,
+    /// which the loader appends after the firmware's regions; calling
+    /// such a range a window would hand it to a driver. So a map that did
+    /// not fit leaves the aperture as the only way in.
     #[must_use]
     pub fn is_device_memory(&self, frames: PhysFrameRange) -> bool {
-        self.devices()
+        let described = self
+            .described()
             .iter()
-            .any(|aperture| encloses(*aperture, frames))
+            .any(|region| overlaps(frames, *region));
+        let inside = self
+            .devices()
+            .iter()
+            .any(|aperture| encloses(*aperture, frames));
+        let undescribed = self.described_whole && !described;
+        !frames.is_empty() && (undescribed || inside)
     }
 
     /// The regions of the kernel address space.
@@ -682,6 +724,7 @@ where
     let Adopted { regions, boot_info } = adopt(&mapper, window_pages)?;
     let identity_pages = drop_identity(&mut mapper, identity)?;
     let (devices, device_count) = device_ranges(platform);
+    let (described, described_count, described_whole) = described_ranges(platform);
     Ok(KernelMemory {
         root,
         frames,
@@ -694,7 +737,39 @@ where
         ecam: platform.ecam(),
         devices,
         device_count,
+        described,
+        described_count,
+        described_whole,
     })
+}
+
+/// Every region of the firmware's memory map, rounded outward to whole
+/// frames, and whether all of them fit.
+///
+/// A region that is no range of frames of this machine is left out, as in
+/// [`device_ranges`]: it describes nothing that can be reached, and it is
+/// counted as having fit.
+///
+/// A platform may report more regions than this list holds — the loader
+/// appends its own ranges to the firmware's — and what is left out must
+/// not read as a gap in the map, so the count of what was offered is
+/// compared with the count of what was kept.
+fn described_ranges(platform: &impl Platform) -> (DeviceRanges, usize, bool) {
+    let mut ranges = [PhysFrameRange::EMPTY; MAX_BOOT_REGIONS + 1];
+    let mut count = 0usize;
+    let regions = platform.memory_regions();
+    let found = regions
+        .iter()
+        .filter_map(|region| frames_of(region.start.as_u64(), region.len));
+    for (slot, range) in ranges.iter_mut().zip(found) {
+        *slot = range;
+        count = count.saturating_add(1);
+    }
+    let offered = regions
+        .iter()
+        .filter(|region| frames_of(region.start.as_u64(), region.len).is_some())
+        .count();
+    (ranges, count, count == offered)
 }
 
 /// The apertures the machine reported as device memory, rounded outward to
@@ -734,6 +809,13 @@ fn frames_of(start: u64, len: u64) -> Option<PhysFrameRange> {
         .wrapping_div(PAGE_SIZE);
     let frame = PhysFrame::from_number(first).ok()?;
     PhysFrameRange::new(frame, last.saturating_sub(first)).ok()
+}
+
+/// `true` when the two ranges share a frame.
+const fn overlaps(first: PhysFrameRange, second: PhysFrameRange) -> bool {
+    let first_end = first.start().number().saturating_add(first.count());
+    let second_end = second.start().number().saturating_add(second.count());
+    first.start().number() < second_end && second.start().number() < first_end
 }
 
 /// `true` when `inner` lies wholly inside `outer`.

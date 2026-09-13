@@ -26,30 +26,44 @@
 // The package holds thirteen programs and each uses a different part of
 // what it depends on; these are the crates this one does not.
 use app_canvas as _;
+use audhsos_time as _;
 use driver_i8042 as _;
 use driver_uart16550 as _;
+use driver_virtio_blk as _;
+use fs_fat as _;
 use gfx as _;
-use pci as _;
 use server_console as _;
 use server_display as _;
+use server_fs as _;
 use server_input as _;
 use server_memory as _;
 use server_name as _;
 use user_proto::parent;
+use virtio_queue as _;
 
 use audhsos_abi::layout::{MAX_MESSAGE_HANDLES, PAGE_SIZE};
-use audhsos_abi::startup::{BusRange, Payload, Role, Screen, Writer};
+use audhsos_abi::startup::{BusRange, Location, Payload, Role, Screen, Writer};
 use audhsos_abi::{Error, Handle, Rights};
+use pci::address::{Address, BYTES_PER_BUS, Window};
+use pci::bar::{Bar, Space as BarSpace, probe};
+use pci::capability::{ID_MSIX, find, walk};
+use pci::enumerate::walk as enumerate;
+use pci::error::PciError;
+use pci::header::{COMMAND_BUS_MASTER, COMMAND_MEMORY, read_command, write_command};
+use pci::msix;
+use pci::virtio::{self, BLOCK_DEVICE, VIRTIO_VENDOR};
 use user_loader::tar::{Archive, Kind};
 use user_loader::{Plan, STACK_PAGES};
 use user_programs::client::allocate;
+use user_programs::config_space::MappedSpace;
 use user_programs::mapping::{Mapping, SCRATCH};
 use user_programs::{permissions, priority};
 use user_rt::{
-    EndpointHandle, InterruptHandle, IoPortHandle, Line, MemoryHandle, ProcessHandle, Startup,
-    SystemControlHandle, Typed,
+    EndpointHandle, InterruptHandle, IoPortHandle, Line, MemoryHandle, NotificationHandle,
+    ProcessHandle, Startup, SystemControlHandle, Typed,
 };
-use user_sys_x86_64::{self as sys, Gate};
+use user_sys_x86_64::gate::MessageInterrupt;
+use user_sys_x86_64::{self as sys, Gate, Mmio};
 
 sys::program!(main);
 
@@ -70,6 +84,9 @@ enum Grant {
     Input,
     /// The configuration window of the PCI bus and the buses it covers.
     Ecam,
+    /// The registers of the virtio block device, its message interrupt,
+    /// and the notification that interrupt is bound to.
+    Block,
 }
 
 /// One line of the start table: what to start, how, and with what.
@@ -113,7 +130,7 @@ struct Program {
 /// The quotas are what the programs measured out at need with room over
 /// them; a program that asks for more than its line says is refused by the
 /// kernel and not by this table.
-const PROGRAMS: [Program; 12] = [
+const PROGRAMS: [Program; 14] = [
     Program {
         name: b"server-memory",
         priority: priority::SERVER,
@@ -163,6 +180,25 @@ const PROGRAMS: [Program; 12] = [
         frames: 256,
         objects: 64,
         grant: Grant::Framebuffer,
+        names: true,
+        memory: true,
+        draws: false,
+        listens: false,
+        reports: false,
+    },
+    // The file system server drives the block device: the register
+    // window, the message interrupt, and the notification that interrupt
+    // is bound to. It maps the window and one page the device reads and
+    // writes, so its quota of frames is a driver's and not an
+    // application's. A machine without the device starts it all the same,
+    // and it answers that there is no disk.
+    Program {
+        name: b"server-fs",
+        priority: priority::DRIVER,
+        handles: 64,
+        frames: 64,
+        objects: 64,
+        grant: Grant::Block,
         names: true,
         memory: true,
         draws: false,
@@ -269,6 +305,21 @@ const PROGRAMS: [Program; 12] = [
         listens: false,
         reports: true,
     },
+    // The program that uses the file system server. It starts after the
+    // bus walk so that the lines of the two do not interleave.
+    Program {
+        name: b"app-files",
+        priority: priority::APPLICATION,
+        handles: 32,
+        frames: 32,
+        objects: 32,
+        grant: Grant::None,
+        names: true,
+        memory: true,
+        draws: false,
+        listens: false,
+        reports: true,
+    },
     // It faults and its thread stops there, so it never reports and the
     // machine does not wait for it.
     Program {
@@ -349,6 +400,8 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         display: None,
         input: None,
         console_for_self: None,
+        ecam: None,
+        block: None,
         next_badge: 1,
     };
 
@@ -386,6 +439,13 @@ struct World {
     input: Option<EndpointHandle>,
     /// The same, badged for the root task's own lines.
     console_for_self: Option<EndpointHandle>,
+    /// The configuration window of the PCI bus, made once: the root task
+    /// enumerates through it and `app-lspci` is given a handle to the same
+    /// object.
+    ecam: Option<(MemoryHandle, BusRange)>,
+    /// The virtio block device, as the enumeration found and prepared it,
+    /// or nothing for a machine that carries none.
+    block: Option<Block>,
     /// What the next child reports its faults under.
     next_badge: u64,
 }
@@ -535,7 +595,7 @@ struct Failure {
 fn install_all(
     gate: &mut Gate,
     startup: &Startup,
-    world: &World,
+    world: &mut World,
     program: &Program,
     child: ProcessHandle,
     endpoint: EndpointHandle,
@@ -636,7 +696,7 @@ fn install_all(
 fn grant(
     gate: &mut Gate,
     startup: &Startup,
-    world: &World,
+    world: &mut World,
     program: &Program,
     child: ProcessHandle,
     given: &mut [(Role, Payload); MAX_GIVEN],
@@ -672,11 +732,47 @@ fn grant(
         // A machine whose firmware published no window grants nothing here:
         // the program starts all the same and reports that there is none.
         Grant::Ecam => {
-            if let Some((memory, buses)) = ecam(gate, world)? {
+            if let Some((memory, buses)) = window(gate, world) {
                 let handle =
                     gate.process_install_handle(child, memory.handle(), ObjectRights::DEVICE)?;
                 push(given, count, Role::Ecam, handle)?;
                 tell(given, count, Role::EcamBuses, buses.word())?;
+            }
+        }
+        // A machine that carries no virtio block device grants nothing
+        // here, for the reason a machine without a window grants nothing
+        // above: the program starts and reports that it was given none.
+        Grant::Block => {
+            if let Some(block) = block_device(gate, world) {
+                let handle = gate.process_install_handle(
+                    child,
+                    block.registers.handle(),
+                    ObjectRights::DEVICE,
+                )?;
+                push(given, count, Role::BlockRegisters, handle)?;
+                tell(given, count, Role::BlockCommon, block.places[0].word())?;
+                tell(given, count, Role::BlockNotify, block.places[1].word())?;
+                tell(given, count, Role::BlockIsr, block.places[2].word())?;
+                tell(given, count, Role::BlockConfig, block.places[3].word())?;
+                tell(
+                    given,
+                    count,
+                    Role::BlockNotifyMultiplier,
+                    u64::from(block.multiplier),
+                )?;
+                let handle = gate.process_install_handle(
+                    child,
+                    block.interrupt.handle(),
+                    ObjectRights::MANAGE,
+                )?;
+                push(given, count, Role::BlockInterrupt, handle)?;
+                let handle = gate.process_install_handle(
+                    child,
+                    block.notification.handle(),
+                    ObjectRights::NOTIFY,
+                )?;
+                push(given, count, Role::BlockNotification, handle)?;
+                tell(given, count, Role::BlockVectorBit, BLOCK_VECTOR_BIT)?;
             }
         }
         Grant::Input => {
@@ -774,6 +870,10 @@ impl ObjectRights {
         .union(Rights::MAP)
         .union(Rights::INFO);
     const MANAGE: Rights = Rights::MANAGE;
+    /// A notification a driver was given: it waits on it, and what sets
+    /// the bit is the interrupt the root task bound to it. The driver
+    /// signals nothing and binds nothing, so it is given neither right.
+    const NOTIFY: Rights = Rights::WAIT;
 }
 
 /// The framebuffer of the machine as a memory object, with the mode the
@@ -831,6 +931,497 @@ fn ecam(gate: &mut Gate, world: &World) -> Result<Option<(MemoryHandle, BusRange
             last_bus: window.last_bus,
         },
     )))
+}
+
+/// Names the step a refusal of the handover came out of, so that a line
+/// the root task writes says where the handover stopped and not only that
+/// it did.
+trait Step<T> {
+    /// The value, or the refusal under the name of `step`.
+    fn step(self, step: &'static str) -> Result<T, Refused>;
+}
+
+impl<T> Step<T> for Result<T, Error> {
+    fn step(self, step: &'static str) -> Result<T, Refused> {
+        self.map_err(|error| Refused {
+            step,
+            error,
+            about: None,
+        })
+    }
+}
+
+/// A step of the handover that did not work, and the physical range it
+/// was about where there is one.
+#[derive(Clone, Copy, Debug)]
+struct Refused {
+    step: &'static str,
+    error: Error,
+    about: Option<(u64, u64)>,
+}
+
+impl From<Refused> for Error {
+    fn from(refused: Refused) -> Error {
+        refused.error
+    }
+}
+
+/// The virtio block device of the machine, as the root task found it and
+/// made it ready to be driven.
+struct Block {
+    /// Device memory over the base address register the four structures
+    /// lie in, aligned outward to whole frames.
+    registers: MemoryHandle,
+    /// Where each structure lies in that window, in the order
+    /// [`STRUCTURES`] names. The offsets count from the start of the
+    /// window and not from the base address register, so a register that
+    /// does not start at a frame is no special case for the driver.
+    places: [Location; 4],
+    /// The multiplier of virtio 4.1.4.4.
+    multiplier: u32,
+    /// The message interrupt of the device.
+    interrupt: InterruptHandle,
+    /// The notification that interrupt is bound to.
+    notification: NotificationHandle,
+    /// What the message table of the device says once the entry is
+    /// written: where the table is, whether the function raises MSI-X,
+    /// and the write a completion makes.
+    table: msix::MsiX,
+    /// What the entry of the message table reads back as, once it is
+    /// written.
+    back: msix::Entry,
+}
+
+/// The four structures a driver of this system needs, in the order the
+/// four value roles carry them.
+const STRUCTURES: [virtio::Kind; 4] = [
+    virtio::Kind::Common,
+    virtio::Kind::Notify,
+    virtio::Kind::Isr,
+    virtio::Kind::Device,
+];
+
+/// The bit of the notification the message interrupt of the block device
+/// sets. The notification carries this device alone, so it is the first.
+const BLOCK_VECTOR_BIT: u64 = 0;
+
+/// The entry of the MSI-X table the vector is written into. The driver
+/// uses one vector, so it is the first.
+const BLOCK_MSIX_ENTRY: u32 = 0;
+
+/// The configuration window of the PCI bus, made on the first ask and
+/// kept: the root task enumerates through it and `app-lspci` is given a
+/// handle to the same object.
+fn window(gate: &mut Gate, world: &mut World) -> Option<(MemoryHandle, BusRange)> {
+    if world.ecam.is_none() {
+        world.ecam = ecam(gate, world).ok().flatten();
+    }
+    world.ecam
+}
+
+/// The virtio block device, found and prepared on the first ask and kept.
+///
+/// It is not done at the start of the machine, where every other object of
+/// the root task is made, because the console is not up there and a refusal
+/// would be a boot that says nothing.
+fn block_device<'a>(gate: &mut Gate, world: &'a mut World) -> Option<&'a Block> {
+    if world.block.is_none() {
+        match find_block(gate, world) {
+            Ok(found) => {
+                // What the handover left behind, read back off the
+                // device: the risk this reduces is a message table that
+                // took the write and kept nothing, which no later step
+                // would name.
+                if let Some(block) = &found {
+                    let line: Line<160> = Line::of(format_args!(
+                        "[init] block msix bar{}+{:#x} of {} vectors holds {:#x}/{:#x} masked={}\n",
+                        block.table.table.bar,
+                        block.table.table.offset,
+                        block.table.vectors,
+                        block.back.address,
+                        block.back.data,
+                        block.back.masked
+                    ));
+                    say(gate, world, line.as_bytes());
+                }
+                world.block = found;
+            }
+            Err(refused) => {
+                let (first, frames) = refused.about.unwrap_or((0, 0));
+                let line: Line<160> = Line::of(format_args!(
+                    "[init] no block device: {} at {} ({first:#x}+{frames:#x})\n",
+                    refused.error.message(),
+                    refused.step
+                ));
+                say(gate, world, line.as_bytes());
+            }
+        }
+    }
+    world.block.as_ref()
+}
+
+/// The virtio block device of the machine, prepared for a driver, or
+/// nothing when the machine carries none.
+///
+/// The window is mapped one bus at a time, as `app-lspci` maps it and for
+/// the same reason: one bus is one mebibyte of page tables (8.15).
+fn find_block(gate: &mut Gate, world: &mut World) -> Result<Option<Block>, Refused> {
+    let system = world.system.ok_or(Error::AccessDenied).step("system")?;
+    let own = world.own;
+    let Some((memory, buses)) = window(gate, world) else {
+        return Ok(None);
+    };
+    for bus in buses.first_bus..=buses.last_bus {
+        let offset = u64::from(bus.saturating_sub(buses.first_bus)).saturating_mul(BYTES_PER_BUS);
+        let mut mapping =
+            Mapping::window(gate, own, memory, BUS, offset, BYTES_PER_BUS).step("bus")?;
+        let outcome = on_one_bus(gate, system, own, &mut mapping, buses, bus);
+        mapping.unmap(gate, own).step("bus back")?;
+        if let Some(block) = outcome? {
+            return Ok(Some(block));
+        }
+    }
+    Ok(None)
+}
+
+/// The device on this bus, prepared, or nothing when it is on another.
+fn on_one_bus(
+    gate: &mut Gate,
+    system: SystemControlHandle,
+    own: ProcessHandle,
+    mapping: &mut Mapping,
+    buses: BusRange,
+    bus: u8,
+) -> Result<Option<Block>, Refused> {
+    let window = Window::new(buses.segment, bus, bus)
+        .map_err(pci_error)
+        .step("window")?;
+    // SAFETY: the mapping stands until it is unmapped by the caller, it is
+    // one mebibyte of device memory of this process alone, and the value
+    // built here is the only one that reaches those bytes.
+    let bytes = unsafe { mapping.bytes() };
+    let mut space = MappedSpace::new(window, Mmio::of(bytes));
+    let mut found = None;
+    enumerate(&space, window, |function| {
+        if found.is_none()
+            && function.header.vendor == VIRTIO_VENDOR
+            && function.header.device == BLOCK_DEVICE
+        {
+            found = Some(function.address);
+        }
+    })
+    .map_err(pci_error)
+    .step("enumerate")?;
+    match found {
+        Some(address) => prepare(gate, system, own, &mut space, address).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Makes the objects a driver of `address` is given, and leaves the device
+/// able to raise its message interrupt.
+///
+/// The order is the order the specification asks for: the registers are
+/// probed while the function decodes nothing, the table entry is written
+/// while the vector is masked, and the function is enabled last.
+fn prepare(
+    gate: &mut Gate,
+    system: SystemControlHandle,
+    own: ProcessHandle,
+    space: &mut MappedSpace<'_>,
+    address: Address,
+) -> Result<Block, Refused> {
+    let header = pci::header::read(space, address)
+        .map_err(pci_error)
+        .step("header")?
+        .ok_or(Error::NotFound)
+        .step("header")?;
+    let capabilities = walk(space, address, &header)
+        .map_err(pci_error)
+        .step("capabilities")?;
+    let structures = virtio::structures(space, address, &capabilities)
+        .map_err(pci_error)
+        .step("structures")?;
+    let msix_capability = find(&capabilities, ID_MSIX)
+        .ok_or(Error::Unsupported)
+        .step("msix capability")?;
+    let table = msix::read(space, address, msix_capability.offset)
+        .map_err(pci_error)
+        .step("msix")?;
+    if table.vectors == 0 {
+        return Err(Error::Unsupported).step("vectors");
+    }
+    let bars = probe(space, address).map_err(pci_error).step("probe")?;
+    let (index, mut places, multiplier) = layout(&structures).step("layout")?;
+    let register = bar(&bars, index).step("register")?;
+    // The object covers whole frames, so a register that does not start at
+    // one leaves bytes below it inside the window. The driver counts from
+    // the window, which is what it is given; the shift is added once here
+    // rather than told to every driver as a fourth number.
+    let shift = window_offset(register);
+    for place in &mut places {
+        place.offset = place.offset.saturating_add(shift);
+    }
+    let registers = device_memory(gate, system, register)?;
+    // The decode bits go on before anything is written into a register of
+    // the device. `probe` leaves the command register as the firmware left
+    // it, and a firmware enables the decode of what it uses itself; the
+    // entry of the message table is written through a register, so a write
+    // before this reaches nothing at all. `COMMAND_BUS_MASTER` is what
+    // lets the device read the region the driver hands it and write the
+    // message that says it is done.
+    let command = read_command(space, address)
+        .map_err(pci_error)
+        .step("command")?;
+    write_command(
+        space,
+        address,
+        command | COMMAND_MEMORY | COMMAND_BUS_MASTER,
+    )
+    .map_err(pci_error)
+    .step("decode")?;
+
+    let vector = gate.interrupt_create_msi(system).step("vector")?;
+    let notification = gate.notification_create().step("notification")?;
+    gate.interrupt_bind(vector.interrupt, notification, BLOCK_VECTOR_BIT)
+        .step("bind")?;
+    let back = write_vector(gate, system, own, &bars, &table, &vector)?;
+
+    msix::set_function_mask(space, address, &table, false)
+        .map_err(pci_error)
+        .step("unmask")?;
+    msix::set_enabled(space, address, &table, true)
+        .map_err(pci_error)
+        .step("enable")?;
+
+    let table = msix::read(space, address, msix_capability.offset)
+        .map_err(pci_error)
+        .step("msix back")?;
+    Ok(Block {
+        registers,
+        places,
+        multiplier,
+        interrupt: vector.interrupt,
+        notification,
+        table,
+        back,
+    })
+}
+
+/// Which base address register the four structures lie in, where each of
+/// them lies in the window over that register, and what the notification
+/// structure scales a queue index by.
+///
+/// The four have to share one register: the driver is given one window,
+/// and a device that spread them over two is one this system does not
+/// drive.
+fn layout(
+    structures: &[Option<virtio::Structure>; virtio::MAX_STRUCTURES],
+) -> Result<(u8, [Location; 4], u32), Error> {
+    let mut places = [Location { offset: 0, len: 0 }; 4];
+    let mut register: Option<u8> = None;
+    let mut multiplier = 0u32;
+    for (slot, kind) in places.iter_mut().zip(STRUCTURES) {
+        let found = structures
+            .iter()
+            .flatten()
+            .find(|structure| structure.kind == kind)
+            .ok_or(Error::Unsupported)?;
+        if *register.get_or_insert(found.bar) != found.bar {
+            return Err(Error::Unsupported);
+        }
+        *slot = Location {
+            offset: found.offset,
+            len: found.len,
+        };
+        if let Some(scale) = found.multiplier {
+            multiplier = scale;
+        }
+    }
+    let index = register.ok_or(Error::Unsupported)?;
+    Ok((index, places, multiplier))
+}
+
+/// The memory register at `index`, or a refusal for one that decodes
+/// nothing or decodes ports.
+fn bar(bars: &[Option<Bar>; pci::bar::MAX_BARS], index: u8) -> Result<Bar, Error> {
+    let found = bars
+        .get(usize::from(index))
+        .copied()
+        .flatten()
+        .ok_or(Error::Unsupported)?;
+    match found.space {
+        BarSpace::Memory { .. } => Ok(found),
+        BarSpace::Io => Err(Error::Unsupported),
+    }
+}
+
+/// A device memory object over the whole of `register`, aligned outward to
+/// frames.
+fn device_memory(
+    gate: &mut Gate,
+    system: SystemControlHandle,
+    register: Bar,
+) -> Result<MemoryHandle, Refused> {
+    let (first, frames) = frames_of(register);
+    gate.memory_create_device(system, first, frames)
+        .map_err(|error| Refused {
+            step: "window",
+            error,
+            about: Some((first, frames)),
+        })
+}
+
+/// The first frame of `register` and how many frames cover it.
+fn frames_of(register: Bar) -> (u64, u64) {
+    let start = register.base & !PAGE_SIZE.wrapping_sub(1);
+    let end = register
+        .base
+        .wrapping_add(register.len)
+        .next_multiple_of(PAGE_SIZE);
+    let bytes = end.saturating_sub(start);
+    (
+        start.wrapping_div(PAGE_SIZE),
+        bytes.wrapping_div(PAGE_SIZE).max(1),
+    )
+}
+
+/// How far into the window over `register` the register itself begins.
+fn window_offset(register: Bar) -> u32 {
+    let start = register.base & !PAGE_SIZE.wrapping_sub(1);
+    u32::try_from(register.base.saturating_sub(start)).unwrap_or(0)
+}
+
+/// Writes the vector the kernel allocated into the entry of the MSI-X
+/// table, through a window the root task maps and takes back again.
+///
+/// The table is in a register of the device and not in its configuration
+/// space, so the bytes have to be reached through a mapping. It is often
+/// not the register the four structures lie in, which is why the object is
+/// made here and closed again rather than taken from the driver's window.
+fn write_vector(
+    gate: &mut Gate,
+    system: SystemControlHandle,
+    own: ProcessHandle,
+    bars: &[Option<Bar>; pci::bar::MAX_BARS],
+    table: &msix::MsiX,
+    vector: &MessageInterrupt,
+) -> Result<msix::Entry, Refused> {
+    let register = bar(bars, table.table.bar).step("msix register")?;
+    let memory = device_memory(gate, system, register)?;
+    let (_, frames) = frames_of(register);
+    let bytes = frames.saturating_mul(PAGE_SIZE);
+    let outcome = write_entry_into(gate, own, memory, bytes, register, table, vector);
+    let closed = gate.handle_close(memory.handle());
+    let back = outcome.step("entry")?;
+    closed.step("entry back")?;
+    Ok(back)
+}
+
+/// Maps that window, writes the entry, and takes the window back.
+///
+/// The sixteen bytes are computed into a buffer and then stored through
+/// [`Mmio`], one word at a time. That is what `pci::msix` asks of a
+/// caller: the table lies in a register of the device, and a register is
+/// read and written volatile or not at all — a store through a plain
+/// reference to it may be dropped, and the entry then reads back as the
+/// zeros the device reset it to.
+///
+/// The vector control word goes last, because it is what unmasks the
+/// vector, and the address and the data have to stand before the device
+/// may use them (*PCI Express Base Specification* 6.0, 7.7.2.3).
+fn write_entry_into(
+    gate: &mut Gate,
+    own: ProcessHandle,
+    memory: MemoryHandle,
+    bytes: u64,
+    register: Bar,
+    table: &msix::MsiX,
+    vector: &MessageInterrupt,
+) -> Result<msix::Entry, Error> {
+    let mut mapping = Mapping::new(gate, own, memory, MSIX, bytes)?;
+    let entry = msix::Entry {
+        address: vector.address,
+        data: vector.data,
+        masked: false,
+    };
+    let mut words = [0u8; msix::ENTRY_LEN];
+    let built = msix::write_entry(&mut words, &entry).map_err(pci_error);
+    let at = usize::try_from(
+        u64::from(window_offset(register))
+            .wrapping_add(u64::from(table.table.offset))
+            .wrapping_add(
+                u64::from(BLOCK_MSIX_ENTRY)
+                    .wrapping_mul(u64::try_from(msix::ENTRY_LEN).unwrap_or(0)),
+            ),
+    )
+    .unwrap_or(usize::MAX);
+    // SAFETY: the window is mapped, it is device memory of this process
+    // alone, and nothing else holds a reference to those bytes.
+    let slot = unsafe { mapping.bytes() };
+    let mut window = Mmio::of(slot);
+    let stored = built.and_then(|()| store_entry(&mut window, at, &words));
+    let back = read_back(&window, at);
+    let unmapped = mapping.unmap(gate, own);
+    stored?;
+    unmapped?;
+    Ok(back)
+}
+
+/// Stores the sixteen bytes of an entry at `at`, the control word last.
+fn store_entry(
+    window: &mut Mmio<'_>,
+    at: usize,
+    words: &[u8; msix::ENTRY_LEN],
+) -> Result<(), Error> {
+    for index in [0usize, 1, 2, 3] {
+        let from = index.saturating_mul(4);
+        let word = words
+            .get(from..from.saturating_add(4))
+            .and_then(|bytes| bytes.first_chunk::<4>().copied())
+            .map_or(0, u32::from_le_bytes);
+        if !window.write_u32(at.saturating_add(from), word) {
+            return Err(Error::InvalidArgument);
+        }
+    }
+    Ok(())
+}
+
+/// The entry the table holds at `at`, read back through the same window.
+fn read_back(window: &Mmio<'_>, at: usize) -> msix::Entry {
+    let mut words = [0u8; msix::ENTRY_LEN];
+    for index in [0usize, 1, 2, 3] {
+        let from = index.saturating_mul(4);
+        let word = window.read_u32(at.saturating_add(from)).unwrap_or(0);
+        if let Some(slot) = words.get_mut(from..from.saturating_add(4)) {
+            slot.copy_from_slice(&word.to_le_bytes());
+        }
+    }
+    msix::read_entry(&words).unwrap_or(msix::Entry {
+        address: 0,
+        data: 0,
+        masked: true,
+    })
+}
+
+/// Where one bus of the configuration window is mapped while it is
+/// enumerated, and where the MSI-X table is mapped while its entry is
+/// written.
+///
+/// Neither is [`SCRATCH`]: the enumeration runs while a child is being
+/// given what it starts with, and the page that becomes that child's IPC
+/// buffer is mapped at `SCRATCH` for as long as the startup message is
+/// written into it. The two also differ from each other, because the entry
+/// is written while the bus the device was found on is still mapped.
+const BUS: u64 = 0x0000_5000_0000_0000;
+const MSIX: u64 = 0x0000_5100_0000_0000;
+
+/// The error a refusal of the `pci` crate becomes. The bus is what the
+/// firmware left; a machine this program cannot read the bus of carries no
+/// device it can hand over, which is `Unsupported` and no fault of a
+/// caller.
+const fn pci_error(_error: PciError) -> Error {
+    Error::Unsupported
 }
 
 /// The ports of the PS/2 controller and the two lines its devices assert.

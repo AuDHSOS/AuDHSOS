@@ -8,6 +8,7 @@
 pub mod bytes;
 pub mod console;
 pub mod display;
+pub mod file;
 pub mod input;
 pub mod keyboard;
 pub mod label;

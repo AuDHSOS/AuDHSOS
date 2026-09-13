@@ -6,7 +6,7 @@
 use audhsos_abi::FramebufferFormat;
 use audhsos_abi::Handle;
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE};
-use audhsos_abi::startup::{Role, Screen, StartupError, Writer};
+use audhsos_abi::startup::{Location, Role, Screen, StartupError, Writer};
 
 use crate::handle::Typed;
 use crate::startup::{MAX_RAM_OBJECTS, ReadError, Startup};
@@ -74,6 +74,9 @@ fn every_role_lands_in_the_field_it_names() {
         (Role::AuxInterrupt, handle(13)),
         (Role::InputServer, handle(14)),
         (Role::Ecam, handle(15)),
+        (Role::BlockRegisters, handle(16)),
+        (Role::BlockInterrupt, handle(17)),
+        (Role::BlockNotification, handle(18)),
     ])
     .unwrap();
     assert_eq!(startup.own_process.unwrap().handle(), handle(1));
@@ -91,15 +94,19 @@ fn every_role_lands_in_the_field_it_names() {
     assert_eq!(startup.aux_interrupt.unwrap().handle(), handle(13));
     assert_eq!(startup.input_server.unwrap().handle(), handle(14));
     assert_eq!(startup.ecam.unwrap().handle(), handle(15));
+    assert_eq!(startup.block_registers.unwrap().handle(), handle(16));
+    assert_eq!(startup.block_interrupt.unwrap().handle(), handle(17));
+    assert_eq!(startup.block_notification.unwrap().handle(), handle(18));
     // The name of this test is a promise, and a role added later would
     // break it silently otherwise: every role but `Ram`, which is a list
-    // and has a test of its own, and the three value roles, which carry no
-    // handle and are read in `the_mode_of_the_framebuffer_comes_as_two_words`
-    // and `the_bus_range_of_the_configuration_window_comes_as_one_word`,
-    // is one field above.
+    // and has a test of its own, and the nine value roles, which carry no
+    // handle and are read in `the_mode_of_the_framebuffer_comes_as_two_words`,
+    // `the_bus_range_of_the_configuration_window_comes_as_one_word` and
+    // `the_four_structures_of_the_block_device_come_as_four_words`, is one
+    // field above.
     assert_eq!(
         Role::ALL.len(),
-        19,
+        28,
         "a role was added; give it a field and a line here"
     );
 }
@@ -252,4 +259,77 @@ fn a_value_role_may_not_appear_twice_either() {
         outcome.unwrap_err(),
         ReadError::Duplicate(Role::FramebufferLine)
     );
+}
+
+#[test]
+fn the_four_structures_of_the_block_device_come_as_four_words() {
+    let places = [
+        Location { offset: 0, len: 56 },
+        Location {
+            offset: 0x3000,
+            len: 0x1000,
+        },
+        Location {
+            offset: 0x1000,
+            len: 1,
+        },
+        Location {
+            offset: 0x2000,
+            len: 8,
+        },
+    ];
+    let startup = read_mixed(
+        &[
+            (Role::BlockRegisters, handle(3)),
+            (Role::BlockInterrupt, handle(4)),
+            (Role::BlockNotification, handle(5)),
+        ],
+        &[
+            (Role::BlockCommon, places[0].word()),
+            (Role::BlockNotify, places[1].word()),
+            (Role::BlockIsr, places[2].word()),
+            (Role::BlockConfig, places[3].word()),
+            (Role::BlockNotifyMultiplier, 4),
+            (Role::BlockVectorBit, 7),
+        ],
+    )
+    .unwrap();
+    assert_eq!(startup.block_structures(), Some(places));
+    assert_eq!(startup.block_notify_multiplier, Some(4));
+    assert_eq!(startup.block_vector_bit, Some(7));
+}
+
+#[test]
+fn a_block_device_described_in_part_names_no_structures() {
+    let startup = read_mixed(
+        &[(Role::BlockRegisters, handle(3))],
+        &[(Role::BlockCommon, Location { offset: 0, len: 56 }.word())],
+    )
+    .unwrap();
+    assert_eq!(startup.block_structures(), None);
+}
+
+#[test]
+fn every_role_of_the_block_device_is_refused_a_second_time() {
+    let handles = [
+        Role::BlockRegisters,
+        Role::BlockInterrupt,
+        Role::BlockNotification,
+    ];
+    for role in handles {
+        let outcome = read(&[(role, handle(1)), (role, handle(2))]);
+        assert_eq!(outcome.unwrap_err(), ReadError::Duplicate(role));
+    }
+    let values = [
+        Role::BlockCommon,
+        Role::BlockNotify,
+        Role::BlockIsr,
+        Role::BlockConfig,
+        Role::BlockNotifyMultiplier,
+        Role::BlockVectorBit,
+    ];
+    for role in values {
+        let outcome = read_mixed(&[], &[(role, 1), (role, 2)]);
+        assert_eq!(outcome.unwrap_err(), ReadError::Duplicate(role));
+    }
 }

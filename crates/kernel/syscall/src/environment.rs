@@ -229,10 +229,13 @@ pub trait Environment {
     /// map belong to the memory server.
     fn meets_ram(&self, frames: PhysFrameRange) -> bool;
 
-    /// `true` when `frames` lies wholly inside one aperture the machine
-    /// reported as device memory. `memory_create_device` makes an object
-    /// only over such a range: everything else is either memory of the
-    /// machine, which belongs to the memory server, or nothing at all.
+    /// `true` when `frames` is device memory: it lies wholly inside one
+    /// aperture the machine reported, or wholly above every region the
+    /// firmware's memory map describes, which is the window a bus puts a
+    /// sixty-four bit base address register in.
+    /// `memory_create_device` makes an object only over such a range:
+    /// everything else is memory of the machine, which belongs to the
+    /// memory server, or a region the firmware keeps for itself.
     fn is_device_memory(&self, frames: PhysFrameRange) -> bool;
 
     /// The framebuffer the loader described, if the machine has one.

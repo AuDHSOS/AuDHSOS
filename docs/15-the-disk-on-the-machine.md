@@ -51,21 +51,23 @@ Four more pieces are also finished:
 | `interrupt_create_msi`, `notification_wait_until` | Allocate a message interrupt; wait with a deadline. | Phase 12 |
 | The reference machine | It can carry a scratch disk when a run asks for one. | 3.1.1, D-136 |
 
-## 15.4 What is missing
+## 15.4 What was missing
 
-Five things are missing. Each one is in the root task or in the startup
-message. None is in a logic crate.
+Five things were missing when this document was written. Each one was in
+the root task or in the startup message; none was in a logic crate. Every
+one of them is built, and this table says where.
 
-| # | Missing | Why it is missing |
-|---|---------|-------------------|
-| 1 | A driver process cannot reach device registers. | The root task creates device memory only for what `system_info` reports. No code in the root task enumerates the PCI bus. |
-| 2 | A driver process cannot allocate a message interrupt. | `interrupt_create_msi` requires the system control handle. Only the root task receives `Role::SystemControl`. |
-| 3 | No implementation of `virtio_queue::QueueMemory` exists, except the test double `RamQueue`. | Nobody has written one. |
-| 4 | No implementation of `driver_virtio_blk::Registers` exists. | Nobody has written one. |
-| 5 | No file protocol exists in `user-proto`. | Nobody has written one. |
+| # | What was missing | Where it is now |
+|---|------------------|-----------------|
+| 1 | A driver process cannot reach device registers. | The root task enumerates the bus and makes the window: `find_block` in `crates/user/programs/src/bin/server_init.rs`. |
+| 2 | A driver process cannot allocate a message interrupt. | The root task allocates the vector and binds it, and hands the driver the interrupt and the notification: `prepare`, same file. |
+| 3 | No implementation of `virtio_queue::QueueMemory` exists, except the test double `RamQueue`. | `crates/user/programs/src/dma.rs`. |
+| 4 | No implementation of `driver_virtio_blk::Registers` exists. | `crates/user/programs/src/registers.rs`. |
+| 5 | No file protocol exists in `user-proto`. | `crates/user/proto/src/file.rs`. |
 
-One further gap is about the machine, not the code: no automatic run
-attaches the scratch disk. A person types `--scratch` by hand.
+A sixth gap was about the machine and not the code: no automatic run
+attached the scratch disk. `sh tools/xtask.sh test --e2e` now attaches one
+of its own, blank on every run.
 
 ## 15.5 Decision D1: who writes the MSI-X table entry
 
@@ -102,7 +104,7 @@ The chain of evidence has three links:
 1. The root task grants `Ram` objects to the memory server with
    `ObjectRights::MEMORY`. That rights set contains `INFO`.
 2. `memory_split` installs the second object with the rights of the
-   first. See `crates/kernel/syscall/src/calls/memory.rs`, line 356.
+   first. See `crates/kernel/syscall/src/calls/memory.rs`, line 358.
 3. An IPC transfer gives the receiver a handle with the same rights. See
    `crates/kernel/ipc/src/transfer.rs`, line 49.
 
@@ -114,27 +116,108 @@ needs no special case. D-115's requirement still holds, because a memory
 object is one contiguous physical range, so an offset into the mapping is
 the same offset into physical memory.
 
-## 15.7 The order of the steps
+## 15.7 Decision D2: the `unsafe` budget of `user-programs`
+
+This decision must be made before S1 starts. `user-programs` stands at
+thirty-four `unsafe` sites against a budget of thirty-four
+(`crates/tools/xtask/src/policy.rs`, line 825), so S1 fails
+`sh tools/xtask.sh unsafe-budget` on its first mapping.
+
+**The decision: raise the budget to thirty-nine, and name the five
+sites.**
+
+| Site | Step | What it maps |
+|------|------|--------------|
+| 1 | S1 | One bus of the configuration window, in the root task, for the enumeration. |
+| 2 | S1 | The register window, in the root task, for `pci::msix::write_entry`. |
+| 3 | S1 | The register window, in the program S1 ends with. |
+| 4 | S2 | The register window, in the file system server, for the `Registers` adapter. |
+| 5 | S3 | The DMA region, in the file system server, for the `QueueMemory` adapter. |
+
+Reason 1: each site is one `unsafe { mapping.bytes() }`, which
+`crates/user/programs/src/mapping.rs`, line 104, requires of every caller.
+Reason 2: neither adapter holds `unsafe` of its own; each takes the byte
+slice that call answers.
+Reason 3: a named count is checkable. A sixth site fails the budget, and
+is a change to this decision rather than to a number.
+
+**The option not taken: make `Mapping::bytes` safe.** Three facts give the
+call what it needs of the region: `Mapping::unmap` takes `self`
+(`crates/user/programs/src/mapping.rs`, line 169), `unmap_all` is private
+(line 207), and the kernel refuses a region that overlaps one the process
+holds (`crates/kernel/mm/src/address_space.rs`, line 287). A live
+`&mut Mapping` therefore names bytes that are mapped and that no second
+`Mapping` covers, and the budget would fall by twelve instead of rising by
+five. What the signature cannot give is the kind of object behind the
+bytes. A `Mapping` carries `Device` objects as well as `Ram` ones — the
+configuration window of `app-lspci`
+(`crates/user/programs/src/bin/app_lspci.rs`, line 136) and the
+framebuffer of `server-display`
+(`crates/user/programs/src/bin/server_display.rs`, line 247) — and a
+reference to device memory is read and written without `volatile`, which
+is what `Mmio` answers (D-113). Site 5 is worse: the device writes the DMA
+region while the program holds the slice. A safe `bytes` therefore costs a
+second type for device mappings and a rewrite of eleven call sites in
+seven files this track does not touch. It belongs in 8.18.
+
+## 15.8 Decision D3: what the kernel calls device memory
+
+This decision had to be made during S1. `memory_create_device` refused the
+base address register of the block device, and no driver can reach a
+register the root task cannot make an object over.
+
+**The decision: a range is device memory when it lies inside an aperture
+the firmware marked, or when no region of the firmware's memory map
+reaches any frame of it.**
+
+Reason 1: the reference machine puts the four structures in a sixty-four
+bit register at `0xc000004000`, and the firmware's map describes nothing
+between `0xf0000000` and `0xfd00000000`. The register lies in that gap.
+Reason 2: a firmware describes the memory of the machine and what it uses
+itself. A window it leaves to an operating system it does not describe, so
+an undescribed range is a window and nothing else.
+Reason 3: a range that meets memory is refused before this is asked, by
+`meets_ram`, so the rule gives away no memory.
+Reason 4: a range that meets a described region is still refused, whatever
+that region is for, so the ACPI tables and the firmware's own reserved
+ranges stay out of reach.
+
+Where: `crates/kernel/core/src/memory.rs`, `KernelMemory::is_device_memory`.
+The bring-up keeps every region of the map, rounded outward to frames,
+beside the apertures it already kept.
+
+**The option not taken: read the apertures of the host bridge from ACPI.**
+The `_CRS` of the bridge names them, which is the answer the firmware
+itself would give. It costs an AML interpreter in the kernel, which this
+system does not have and should not gain for one range.
+
+**The option not taken: add the apertures in the loader.** UEFI's
+`EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL` answers them, and the loader already
+adds an MMIO region for a framebuffer the firmware did not mark
+(`crates/boot/uefi-x86_64/src/bootinfo.rs`, line 118). It costs a protocol
+this loader does not use and works only where the firmware is UEFI.
+
+## 15.9 The order of the steps
 
 | Step | Name | Status | Depends on | Size |
 |------|------|--------|------------|------|
-| S1 | The root task finds the device and hands it over | not started | D1 (15.5) | L |
-| S2 | The register adapter | not started | S1 | M |
-| S3 | The queue memory adapter | not started | S1 | M |
-| S4 | The file system server reaches the disk | not started | S2, S3 | L |
-| S5 | The file protocol | not started | nothing | M |
-| S6 | The file system server answers clients | not started | S4, S5 | M |
-| S7 | The machine carries the disk automatically | part built | S4 | S |
-| S8 | The end-to-end tests | not started | S6, S7 | M |
-| S9 | Programs move onto the volume | not started | S6, S8 | L |
+| S1 | The root task finds the device and hands it over | built | D1 (15.5), D2 (15.7), D3 (15.8) | L |
+| S2 | The register adapter | built | S1 | M |
+| S3 | The queue memory adapter | built | S1 | M |
+| S4 | The file system server reaches the disk | built | S2, S3 | L |
+| S5 | The file protocol | built | nothing | M |
+| S6 | The file system server answers clients | built | S4, S5 | M |
+| S7 | The machine carries the disk automatically | built | S4 | S |
+| S8 | The end-to-end tests | built | S6, S7 | M |
+| S9 | Programs move onto the volume | blocked, see D4 (15.19) | S6, S8 | L |
 
 S5 depends on nothing. It can be built at any time before S6. Every other
 step depends on the step before it.
 
-## 15.8 S1. The root task finds the device and hands it over
+## 15.10 S1. The root task finds the device and hands it over
 
-Status: not started.
-Depends on: decision D1 (15.5).
+Status: built.
+Depends on: decisions D1 (15.5) and D2 (15.7).
 Size: L.
 
 ### Needs (already built)
@@ -178,21 +261,22 @@ Size: L.
     window. This is decision D1.
 14. Send the startup message with the roles below.
 
-### Produces: six new startup roles
+### Produces: nine new startup roles
 
-Add each role to the `roles!` table in `audhsos-abi::startup`.
+Add each role to the `roles!` table in `audhsos-abi::startup`, which ends
+at `EcamBuses = 19` today (`crates/abi/src/startup.rs`, line 140).
 
-| Role | Kind | Carries |
-|------|------|---------|
-| `BlockRegisters` | handle | The register window. |
-| `BlockCommon` | value | Offset of the common configuration structure in the high half of the word, its length in the low half. |
-| `BlockNotify` | value | The same two numbers for the notification structure. |
-| `BlockIsr` | value | The same two numbers for the interrupt status structure. |
-| `BlockConfig` | value | The same two numbers for the device configuration structure. |
-| `BlockNotifyMultiplier` | value | The multiplier of virtio 4.1.4.4. |
-| `BlockInterrupt` | handle | The interrupt object. The driver process acknowledges the interrupt through it. |
-| `BlockNotification` | handle | The notification the vector is bound to. |
-| `BlockVectorBit` | value | The bit of that notification. |
+| Number | Role | Kind | Carries |
+|--------|------|------|---------|
+| 20 | `BlockRegisters` | handle | The register window. |
+| 21 | `BlockCommon` | value | Offset of the common configuration structure in the high half of the word, its length in the low half. |
+| 22 | `BlockNotify` | value | The same two numbers for the notification structure. |
+| 23 | `BlockIsr` | value | The same two numbers for the interrupt status structure. |
+| 24 | `BlockConfig` | value | The same two numbers for the device configuration structure. |
+| 25 | `BlockNotifyMultiplier` | value | The multiplier of virtio 4.1.4.4. |
+| 26 | `BlockInterrupt` | handle | The interrupt object. The driver process acknowledges the interrupt through it. |
+| 27 | `BlockNotification` | handle | The notification the vector is bound to. |
+| 28 | `BlockVectorBit` | value | The bit of that notification. |
 
 Each role costs three things: one line in `roles!`, one match arm in
 `user_rt::Startup`, and one test. The test checks that the arm accepts
@@ -206,9 +290,40 @@ A program in the archive does all of the following and then ends:
 2. It reads the device status byte through the register window.
 3. It reports that the status byte is zero.
 
-## 15.9 S2. The register adapter
+### What was built, where it differs
 
-Status: not started.
+1. The enumeration runs when the program that receives the device is
+   started, and not at the start of the machine. Reason: the console
+   driver is not up at the start, so a refusal there is a boot that says
+   nothing. `crates/user/programs/src/bin/server_init.rs`,
+   `block_device`.
+2. The message table lies in another base address register than the four
+   structures — on this machine `bar1` and `bar4` — so the root task makes
+   a second device memory object over that register, writes the entry
+   through it, and closes it again. Step 8 assumed one register for both.
+3. The offsets the four value roles carry count from the start of the
+   window and not from the base address register. Reason: the window is
+   aligned outward to frames, so a register that does not begin at a frame
+   would otherwise cost every driver the same addition.
+4. `COMMAND_MEMORY` and `COMMAND_BUS_MASTER` go on **before** the entry of
+   the message table is written. Reason: `pci::bar::probe` leaves the
+   command register as the firmware left it, and a firmware enables the
+   decode of what it uses itself. The scratch disk is not the boot disk,
+   so its decode was off and the first write of the entry reached nothing.
+5. The entry is stored through `Mmio`, one word at a time, out of a buffer
+   `pci::msix::write_entry` filled. Reason: the table is a register of the
+   device, and a store through a plain reference to it is not volatile and
+   was dropped — the entry then read back as the zeros the device reset it
+   to.
+6. The program of `Done when` was `app-vblk` while the work was done. It
+   was replaced by the file system server itself, because two programs
+   that reset one device are two drivers of it. What it proved is now the
+   end-to-end run's `block_lines`, which reads the capacity and the
+   geometry off the machine.
+
+## 15.11 S2. The register adapter
+
+Status: built.
 Depends on: S1.
 Size: M.
 
@@ -228,22 +343,33 @@ startup message. For each call:
 3. Check the sum against that structure's length.
 4. Read or write through `Mmio` at the width, using a match on `Width`.
 
-`Mmio` already answers zero and writes nothing for an access outside the
-region.
+`Registers::read` answers `u64` and `Registers::write` answers nothing, so
+neither call carries a refusal. `Mmio` answers `None` for a read outside
+the region and `false` for a write
+(`crates/user/sys-x86_64/src/mmio.rs`, line 74). The adapter answers zero
+for the first and drops the second. Reason: step 3 refuses the access
+already, so the substitute stands only where step 3 is wrong.
 
 ### Produces
 
-No change to the `unsafe` budget. The adapter calls `Mmio` and contains
-no `unsafe` of its own.
+Site 4 of D2: the file system server maps the register window and hands
+the byte slice to `Mmio`. The adapter itself contains no `unsafe`.
 
 ### Done when
 
 The file system server can read the device status through the adapter.
 S1's program already proved the same read through a direct call.
 
-## 15.10 S3. The queue memory adapter
+### What was built, where it differs
 
-Status: not started.
+The adapter is `user_programs::registers::Window` and not a module of the
+server. Reason: the server is a binary of `user-programs`, and the mapping
+it works through is that crate's, so the adapter lives beside `Mapping`
+where both reach it.
+
+## 15.12 S3. The queue memory adapter
+
+Status: built.
 Depends on: S1.
 Size: M.
 
@@ -290,9 +416,16 @@ the same processor. The call is safe code.
 `Queue::new` succeeds over the adapter, and a chain added to the queue
 appears in the available ring at the right physical address.
 
-## 15.11 S4. The file system server reaches the disk
+### What was built, where it differs
 
-Status: not started.
+The adapter is `user_programs::dma::Dma`, beside the register adapter and
+for the same reason. The whole region is 1312 bytes, which is one page,
+and one of the two request slots is used: one thread has one request in
+flight, and the second slot is what a second thread would take.
+
+## 15.13 S4. The file system server reaches the disk
+
+Status: built.
 Depends on: S2, S3.
 Size: L.
 
@@ -349,9 +482,15 @@ Implement `fs_fat::BlockDevice` over the driver.
 
 | Method | What it does |
 |--------|--------------|
-| `sectors` | Answers `Blk::capacity`. |
+| `sectors` | Answers the sector count the server kept at mount. |
 | `read` | Submits one chain, waits, copies the sector out of the slot. |
 | `write` | Copies the sector into the slot, submits one chain, waits. |
+
+The capacity is read once, at mount, with
+`driver_virtio_blk::config::capacity`, which answers
+`Result<u64, BlkError>`. `BlockDevice::sectors` answers `u32` and carries
+no refusal, so the server keeps the number and mounts nothing when the
+read fails or the value exceeds `u32::MAX`.
 
 The copy is necessary because the caller owns its buffer and the device
 reads only the DMA region.
@@ -383,9 +522,26 @@ The server mounts the scratch disk and prints its geometry on the
 console: the cluster count, where the tables are, how many clusters are
 free. It has no clients and no protocol at this point.
 
-## 15.12 S5. The file protocol
+### What was built, where it differs
 
-Status: not started.
+1. The transport is held in one `RefCell`. Reason:
+   `fs_fat::BlockDevice::read` takes `&self`, and a read is a queue, a
+   register window and a wait — all of which need exclusive access. No
+   borrow is held across a call into `fs-fat`, and the read takes the
+   borrow with `try_borrow_mut` rather than panicking.
+2. The two windows are mapped in `main` and the gate is moved into the
+   transport. Reason: the byte slices live as long as the program and a
+   borrow cannot outlive the mapping it came from; and `Gate::adopt`
+   allows one gate per buffer, so the driver and the loop share the one
+   the program was started with.
+3. The moment a new entry carries is rounded down to an even second and
+   up to 1980-01-01. Reason: `fs_fat::time::to_entry` refuses an odd
+   second and a year before 1980 rather than rounding, so the server is
+   where the rounding belongs — `server_fs::moment`.
+
+## 15.14 S5. The file protocol
+
+Status: built.
 Depends on: nothing.
 Size: M.
 
@@ -427,15 +583,15 @@ protocol. It is not needed for this one.
 The protocol encodes and decodes every message above, and the host tests
 cover every refusal.
 
-## 15.13 S6. The file system server answers clients
+## 15.15 S6. The file system server answers clients
 
-Status: not started.
+Status: built.
 Depends on: S4, S5.
 Size: M.
 
 ### Does
 
-The loop of 15.11 gains four steps:
+The loop of 15.13 gains four steps:
 
 1. Decode the request.
 2. Find the client's table of open files by the badge.
@@ -457,9 +613,15 @@ A program in the archive performs this sequence and prints the result:
 5. Read the line back.
 6. Compare the line with what it wrote.
 
-## 15.14 S7. The machine carries the disk automatically
+### What was built
 
-Status: part built.
+`app-files` does that sequence, and two more: a file whose length crosses
+a cluster, written and read back byte for byte, and a listing of the root
+directory. The end-to-end run reads all three off the console.
+
+## 15.16 S7. The machine carries the disk automatically
+
+Status: built.
 Depends on: S4.
 Size: S.
 
@@ -488,9 +650,22 @@ Size: S.
 2. The same run without the disk reports no file system server and
    passes.
 
-## 15.15 S8. The tests
+### What was built, where it differs
 
-Status: not started.
+1. The root task starts the file system server whether or not the
+   enumeration found a device, and the server answers `Unavailable` to
+   every request when it was given none. Reason: it is what the display
+   server does for a machine without a screen, and a client that asks for
+   a file has to hear that there is none rather than find no server at
+   all. The run without a graphics adapter carries no scratch disk and is
+   where `[files] no disk` is read.
+2. The disk of the end-to-end run starts blank on every run, and the two
+   boots of one run are the pair that proves persistence. A run a person
+   starts with `--scratch` keeps its disk across runs, as D-136 has it.
+
+## 15.17 S8. The tests
+
+Status: built.
 Depends on: S6, S7.
 Size: M.
 
@@ -525,9 +700,21 @@ adapters exist to touch real hardware. The machine tests cover them.
 All five machine tests above pass, and `sh tools/xtask-check.sh` exits
 with 0.
 
-## 15.16 S9. Programs move onto the volume
+### What was built
 
-Status: not started.
+| # | Where |
+|---|-------|
+| 1 | `block_lines` in `crates/tools/xtask/src/commands.rs`: the capacity the device answered and the geometry the server mounted. |
+| 2 | `file_lines`: `app-files` writes 700 bytes, which crosses a cluster of one sector, and reads them back. |
+| 3 | `test_the_same_disk_again`: the second boot of one disk finds what the first wrote, byte for byte. |
+| 4 | `Blk::submit` refuses a request past the capacity, which `driver-virtio-blk` covers on the host; the adapter of S4 refuses the sector before it frames anything. |
+| 5 | The run without a graphics adapter carries no disk and reads `[files] no disk`. |
+
+`sh tools/xtask-check.sh` exits with 0.
+
+## 15.18 S9. Programs move onto the volume
+
+Status: blocked, see D4 (15.19).
 Depends on: S6, S8.
 Size: L.
 
@@ -568,13 +755,38 @@ also why S9 is the last step.
    the volume.
 3. The end-to-end test passes with the smaller archive.
 
-## 15.17 Risks
+## 15.19 Decision D4: what S9 needs that this machine has not
+
+This decision is open. S9 cannot be built until it is made.
+
+**The problem.** S9 reads programs off the boot disk, because the firmware
+reads that disk and the system writes nothing to it (15.18, Two limits).
+The boot disk of the reference machine is attached with
+`-drive format=raw,file=…` and no interface
+(`crates/tools/xtask/src/qemu.rs`, line 461), which the `q35` machine puts
+on its AHCI controller — `00:1f.2`, class `01:06:01`, as `app-lspci`
+reports it. This system drives virtio block devices and no other kind, so
+nothing it has can read that disk.
+
+**The options.**
+
+| # | Option | What it costs |
+|---|--------|---------------|
+| 1 | A driver for the AHCI controller. | A driver crate the size of `driver-virtio-blk`, its own host tests, and a second transport under `fs-fat`. |
+| 2 | Attach the boot disk as a second `virtio-blk-pci` device. | The reference machine changes (3.1.1, D-136); S1 hands over two devices instead of one, which is a second set of the nine roles or a role that appears twice; the server mounts two volumes and tells them apart. |
+| 3 | Put the programs on the scratch disk. | It contradicts D-136: the scratch disk is what the system writes and arrives blank, and the image writer would have to prepare it. |
+
+**Not decided here.** Which one is taken changes what S1 and S4 are, so it
+belongs to whoever owns the reference machine.
+
+## 15.20 Risks
 
 | # | Risk | Effect | What reduces it |
 |---|------|--------|-----------------|
 | 1 | The root task gains bus enumeration. | The process with the full authority grows larger. | The enumeration code is `pci`'s, not the root task's. S1 ends with a program that proves the handover before anything is built on top of it. |
 | 2 | The MSI-X handover is wrong, and no test catches it. | The server waits for an interrupt that never arrives. | S1's program reports every value it received. The first wait in S4 carries a deadline. |
-| 3 | One thread makes the server slow. | A client waits while another client's sector is in flight. | 15.11 states this cost. The second thread is a later version, not a repair. |
+| 3 | One thread makes the server slow. | A client waits while another client's sector is in flight. | 15.13 states this cost. The second thread is a later version, not a repair. |
 | 4 | A device fails part way through a request. | The server answers with wrong bytes. | The status byte is judged. The completion's length bounds the read. `virtio-queue` refuses a used element that names a descriptor it did not hand out. |
 | 5 | The server formats a blank disk. | A test passes on an empty disk and fails on a real volume. | The server reads where a volume exists and formats only where none does. The persistence test boots the same disk twice. |
 | 6 | An 8.3 name is too small for a program name. | File names are hard to read. | This is D-09's known limit. Long file names are 8.18's later work. |
+| 7 | The server keeps a table per client and learns of no client that ends. | Sixteen programs that open a file and exit take every table, and the seventeenth is answered `OutOfHandles` for as long as the machine runs. | Nothing yet. The display server watches a client through the process capability that client hands it (D-106), and the file protocol carries no handle at all, so this costs a message that gives one. It is the first thing to add to 15.14. |

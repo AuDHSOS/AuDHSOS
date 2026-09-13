@@ -4,13 +4,9 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
-mod bytes;
-mod console;
-mod display;
-mod file;
-mod input;
-mod keyboard;
-mod label;
-mod memory;
-mod name;
-mod parent;
+use test_support as _;
+
+mod error;
+mod open;
+mod serve;
+mod support;

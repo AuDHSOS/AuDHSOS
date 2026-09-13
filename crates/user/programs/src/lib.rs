@@ -10,19 +10,27 @@
 // different part of the crates below, and the binaries are what reach
 // them. Naming them here is what the unused-dependency check asks for.
 use app_canvas as _;
+use audhsos_time as _;
 use driver_i8042 as _;
 use driver_uart16550 as _;
+use driver_virtio_blk as _;
+use fs_fat as _;
 use gfx as _;
 use pci as _;
 use server_console as _;
 use server_display as _;
+use server_fs as _;
 use server_input as _;
 use server_memory as _;
 use server_name as _;
 use user_loader as _;
+use virtio_queue as _;
 
 pub mod client;
+pub mod config_space;
+pub mod dma;
 pub mod mapping;
+pub mod registers;
 pub mod serve;
 
 pub use client::{allocate, lookup, register, release, write_line};

@@ -5,7 +5,7 @@
 
 use crate::ipc_buffer::{Buffer, BufferMut, KERNEL_LABEL_BASE, SIZE, WORD, WORDS};
 use crate::layout::MAX_MESSAGE_WORDS;
-use crate::startup::{Given, Role, STARTUP_LABEL, Screen, StartupError, Writer, read};
+use crate::startup::{Given, Location, Role, STARTUP_LABEL, Screen, StartupError, Writer, read};
 use crate::{Error, FramebufferFormat, Handle};
 
 /// A buffer of zeros to work on.
@@ -258,7 +258,17 @@ fn a_role_carries_a_handle_or_a_value_and_says_which() {
         .collect();
     assert_eq!(
         values,
-        vec!["FramebufferGeometry", "FramebufferLine", "EcamBuses"]
+        vec![
+            "FramebufferGeometry",
+            "FramebufferLine",
+            "EcamBuses",
+            "BlockCommon",
+            "BlockNotify",
+            "BlockIsr",
+            "BlockConfig",
+            "BlockNotifyMultiplier",
+            "BlockVectorBit",
+        ]
     );
     assert!(!Role::Framebuffer.carries_value());
     assert!(!Role::DisplayServer.carries_value());
@@ -350,4 +360,37 @@ fn the_widest_mode_the_words_hold_reads_back() {
         Screen::from_words(screen.geometry(), screen.line()),
         Some(screen)
     );
+}
+
+#[test]
+fn a_structure_place_survives_the_word_it_is_packed_into() {
+    let cases = [
+        Location { offset: 0, len: 0 },
+        Location {
+            offset: 0x3000,
+            len: 0x1000,
+        },
+        Location {
+            offset: u32::MAX,
+            len: u32::MAX,
+        },
+    ];
+    for place in cases {
+        assert_eq!(Location::from_word(place.word()), place);
+    }
+}
+
+#[test]
+fn a_structure_fits_a_window_that_holds_its_last_byte_and_no_smaller_one() {
+    let place = Location {
+        offset: 0x3000,
+        len: 0x1000,
+    };
+    assert!(place.fits(0x4000));
+    assert!(!place.fits(0x3FFF));
+    let whole = Location {
+        offset: u32::MAX,
+        len: u32::MAX,
+    };
+    assert!(!whole.fits(u64::from(u32::MAX)));
 }

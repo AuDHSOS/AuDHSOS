@@ -26,15 +26,20 @@
 // The package holds thirteen programs and each uses a different part of
 // what it depends on; these are the crates this one does not.
 use app_canvas as _;
+use audhsos_time as _;
 use driver_i8042 as _;
 use driver_uart16550 as _;
+use driver_virtio_blk as _;
+use fs_fat as _;
 use gfx as _;
 use server_console as _;
 use server_display as _;
+use server_fs as _;
 use server_input as _;
 use server_memory as _;
 use server_name as _;
 use user_loader as _;
+use virtio_queue as _;
 
 use audhsos_abi::Error;
 use audhsos_abi::startup::BusRange;
@@ -45,9 +50,9 @@ use pci::enumerate::walk as enumerate;
 use pci::error::PciError;
 use pci::header::Kind;
 use pci::msix;
-use pci::space::ConfigSpace;
 use pci::virtio::{self, NETWORK_DEVICE, VIRTIO_VENDOR};
 use user_programs::client::{lookup, write_line};
+use user_programs::config_space::MappedSpace;
 use user_programs::mapping::{Mapping, SCRATCH};
 use user_proto::parent;
 use user_rt::{EndpointHandle, Line, Startup};
@@ -169,10 +174,7 @@ fn report_one_bus(
     // one mebibyte of device memory of this process alone, and the value
     // built here is the only one that reaches those bytes.
     let bytes = unsafe { mapping.bytes() };
-    let mut space = MappedSpace {
-        window,
-        mmio: Mmio::of(bytes),
-    };
+    let mut space = MappedSpace::new(window, Mmio::of(bytes));
     let mut addresses = [None; MAX_FUNCTIONS_PER_BUS];
     let mut count = 0usize;
     enumerate(&space, window, |function| {
@@ -327,33 +329,6 @@ const fn structure_name(kind: virtio::Kind) -> &'static str {
         virtio::Kind::PciConfig => "pci",
         virtio::Kind::SharedMemory => "shared",
         virtio::Kind::Vendor => "vendor",
-    }
-}
-
-/// The configuration space of one bus, over the mapping of that bus.
-///
-/// This is the whole of the adapter: the offset arithmetic is
-/// [`Window::offset_of`], the access is [`Mmio`], and nothing here knows
-/// either layout.
-struct MappedSpace<'a> {
-    window: Window,
-    mmio: Mmio<'a>,
-}
-
-impl ConfigSpace for MappedSpace<'_> {
-    fn read_u32(&self, address: Address, offset: u16) -> Option<u32> {
-        let at = self.window.offset_of(address, offset).ok()?;
-        self.mmio.read_u32(usize::try_from(at).ok()?)
-    }
-
-    fn write_u32(&mut self, address: Address, offset: u16, value: u32) {
-        let Ok(at) = self.window.offset_of(address, offset) else {
-            return;
-        };
-        let Ok(at) = usize::try_from(at) else {
-            return;
-        };
-        let _written = self.mmio.write_u32(at, value);
     }
 }
 
