@@ -968,6 +968,20 @@ impl GenerationalHeap {
         Ok(())
     }
 
+    /// Sets an Array's logical `length`, as the `length` own property of
+    /// 10.4.2.1 carries it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] unless `object` is a live Array.
+    pub fn set_array_length(&mut self, object: ObjectRef, length: u32) -> Result<(), HeapError> {
+        let ObjectKind::Array { length: current } = &mut self.object_mut(object)?.kind else {
+            return Err(HeapError::InvalidReference);
+        };
+        *current = length;
+        Ok(())
+    }
+
     /// Appends an indexed element and records an Old-to-Young edge.
     ///
     /// # Errors

@@ -347,6 +347,18 @@ impl ElementsKind {
         if index >= self.len() {
             return true;
         }
+        // Dropping the last index leaves no hole behind it, so a packed store
+        // stays packed.
+        if index == self.len().saturating_sub(1) {
+            match self {
+                Self::PackedSmi(vec) => drop(vec.pop()),
+                Self::PackedDouble(vec) => drop(vec.pop()),
+                Self::PackedValues(vec) => drop(vec.pop()),
+                Self::Holey(vec) => drop(vec.pop()),
+                Self::Dictionary(dict) => drop(dict.remove(&idx)),
+            }
+            return true;
+        }
         match self {
             Self::PackedSmi(vec) => {
                 let mut holey: Vec<Option<Value>> =
@@ -524,10 +536,29 @@ mod tests {
         assert!(matches!(smi, ElementsKind::Holey(_)));
         assert_eq!(smi.get(0), None);
 
-        let mut double = ElementsKind::PackedDouble(vec![1.0, 2.0]);
+        let mut double = ElementsKind::PackedDouble(vec![1.0, 2.0, 3.0]);
         assert!(double.delete(1));
         assert!(matches!(double, ElementsKind::Holey(_)));
         assert_eq!(double.get(1), None);
+
+        let mut values = ElementsKind::PackedValues(vec![Value::from_smi(1), Value::from_smi(2)]);
+        assert!(values.delete(0));
+        assert!(matches!(values, ElementsKind::Holey(_)));
+        assert_eq!(values.get(0), None);
+
+        // The last index leaves no hole behind it, so a packed store stays
+        // packed and one shorter.
+        for mut trailing in [
+            ElementsKind::PackedSmi(vec![1, 2]),
+            ElementsKind::PackedDouble(vec![1.0, 2.0]),
+            ElementsKind::PackedValues(vec![Value::from_smi(1), Value::from_smi(2)]),
+        ] {
+            let packed = core::mem::discriminant(&trailing);
+            assert!(trailing.delete(1));
+            assert_eq!(core::mem::discriminant(&trailing), packed);
+            assert_eq!(trailing.get(1), None);
+            assert_eq!(trailing.len(), 1);
+        }
 
         let mut holey = ElementsKind::Holey(vec![Some(Value::from_smi(1))]);
         assert!(holey.delete(0));

@@ -243,6 +243,10 @@ pub enum Intrinsic {
     ArrayPrototypeLastIndexOf,
     /// `Array.prototype.join` (23.1.3.18).
     ArrayPrototypeJoin,
+    /// `Array.prototype.pop` (23.1.3.22).
+    ArrayPrototypePop,
+    /// `Array.prototype.push` (23.1.3.23).
+    ArrayPrototypePush,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -260,7 +264,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 31] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -290,6 +294,8 @@ impl Intrinsic {
         Self::ArrayPrototypeIndexOf,
         Self::ArrayPrototypeLastIndexOf,
         Self::ArrayPrototypeJoin,
+        Self::ArrayPrototypePop,
+        Self::ArrayPrototypePush,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -323,7 +329,9 @@ impl Intrinsic {
             | Self::ArrayPrototypeIncludes
             | Self::ArrayPrototypeIndexOf
             | Self::ArrayPrototypeLastIndexOf
-            | Self::ArrayPrototypeJoin => IntrinsicHolder::ArrayPrototype,
+            | Self::ArrayPrototypeJoin
+            | Self::ArrayPrototypePop
+            | Self::ArrayPrototypePush => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
         }
     }
@@ -361,6 +369,8 @@ impl Intrinsic {
             Self::ArrayPrototypeIndexOf => 26,
             Self::ArrayPrototypeLastIndexOf => 27,
             Self::ArrayPrototypeJoin => 28,
+            Self::ArrayPrototypePop => 29,
+            Self::ArrayPrototypePush => 30,
         }
     }
 
@@ -396,6 +406,8 @@ impl Intrinsic {
             Self::ArrayPrototypeIndexOf => 26,
             Self::ArrayPrototypeLastIndexOf => 27,
             Self::ArrayPrototypeJoin => 28,
+            Self::ArrayPrototypePop => 29,
+            Self::ArrayPrototypePush => 30,
         }
     }
 
@@ -432,6 +444,8 @@ impl Intrinsic {
             26 => Some(Self::ArrayPrototypeIndexOf),
             27 => Some(Self::ArrayPrototypeLastIndexOf),
             28 => Some(Self::ArrayPrototypeJoin),
+            29 => Some(Self::ArrayPrototypePop),
+            30 => Some(Self::ArrayPrototypePush),
             _ => None,
         }
     }
@@ -465,6 +479,8 @@ impl Intrinsic {
             Self::ArrayPrototypeValues => "values",
             Self::ArrayIteratorPrototypeNext => "next",
             Self::ArrayPrototypeJoin => "join",
+            Self::ArrayPrototypePop => "pop",
+            Self::ArrayPrototypePush => "push",
         }
     }
 
@@ -482,7 +498,9 @@ impl Intrinsic {
             Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypeToString
             | Self::ArrayPrototypeValues
-            | Self::ArrayIteratorPrototypeNext => false,
+            | Self::ArrayIteratorPrototypeNext
+            | Self::ArrayPrototypePop
+            | Self::ArrayPrototypePush => false,
             // 20.1.3.2 and 20.1.3.4 apply ToPropertyKey to the first argument.
             Self::ObjectPrototypeHasOwnProperty | Self::ObjectPrototypePropertyIsEnumerable => {
                 index == 0
@@ -506,7 +524,8 @@ impl Intrinsic {
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart
             | Self::ArrayPrototypeValues
-            | Self::ArrayIteratorPrototypeNext => 0,
+            | Self::ArrayIteratorPrototypeNext
+            | Self::ArrayPrototypePop => 0,
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypePropertyIsEnumerable
@@ -527,7 +546,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeIncludes
             | Self::ArrayPrototypeIndexOf
             | Self::ArrayPrototypeLastIndexOf
-            | Self::ArrayPrototypeJoin => 1,
+            | Self::ArrayPrototypeJoin
+            | Self::ArrayPrototypePush => 1,
             Self::StringPrototypeSlice | Self::StringPrototypeSubstring => 2,
         }
     }

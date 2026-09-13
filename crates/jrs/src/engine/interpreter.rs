@@ -836,7 +836,9 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeIncludes
             | Intrinsic::ArrayPrototypeIndexOf
             | Intrinsic::ArrayPrototypeLastIndexOf
-            | Intrinsic::ArrayPrototypeJoin => {
+            | Intrinsic::ArrayPrototypeJoin
+            | Intrinsic::ArrayPrototypePop
+            | Intrinsic::ArrayPrototypePush => {
                 self.call_array_intrinsic(intrinsic, call, heap, realm)
             }
         }
@@ -854,6 +856,10 @@ impl RegisterVM {
     ///
     /// Returns [`VMError::Thrown`] for a receiver that is not an Object, and a
     /// heap error when an index name cannot be interned.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function keeps each method beside the clause it implements"
+    )]
     fn call_array_intrinsic(
         &self,
         intrinsic: Intrinsic,
@@ -941,6 +947,32 @@ impl RegisterVM {
                     return Err(VMError::StringLimit);
                 }
                 self.allocate_string(heap, &units)
+            }
+            // 23.1.3.23: each argument is written at the length reached so
+            // far, and the new length is the answer.
+            Intrinsic::ArrayPrototypePush => {
+                let mut next = length;
+                for offset in 0..call.arg_count {
+                    let index = u32::try_from(next).map_err(|_| VMError::PropertyLimit)?;
+                    heap.set_array_element(object, index, argument(self, offset)?)?;
+                    next = next.saturating_add(1);
+                }
+                Ok(index_value(next))
+            }
+            // 23.1.3.22: the last element leaves the Array, which is then one
+            // shorter; an empty Array only has its length set again.
+            Intrinsic::ArrayPrototypePop => {
+                let Ok(last) = u32::try_from(length.saturating_sub(1)) else {
+                    heap.set_array_length(object, 0)?;
+                    return Ok(VALUE_UNDEFINED);
+                };
+                let element = Self::element_at(heap, object, last)?.unwrap_or(VALUE_UNDEFINED);
+                if let Some(elements) = heap.get_object(object).ok_or(VMError::TypeError)?.elements
+                {
+                    heap.delete_element(elements, last)?;
+                }
+                heap.set_array_length(object, last)?;
+                Ok(element)
             }
             // 23.1.3.20: the same in descending order, from the last index
             // when no second argument is present.

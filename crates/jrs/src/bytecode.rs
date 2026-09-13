@@ -2064,6 +2064,7 @@ impl RegisterLowerer {
         // An intrinsic reads its arguments as values, so any lowered
         // expression may be one; only a bytecode callee needs typed parameters.
         let mut argument_registers = Vec::new();
+        let mut argument_types = Vec::new();
         for (index, argument) in arguments.iter().enumerate() {
             let argument_type = self.lower(argument)?;
             if !argument_type.is_primitive()
@@ -2074,6 +2075,7 @@ impl RegisterLowerer {
             let register = self.allocate_register()?;
             self.code.emit(Instruction::Star(register));
             argument_registers.push(register);
+            argument_types.push(argument_type);
         }
         let dummy = if argument_registers.is_empty() {
             let register = self.allocate_register()?;
@@ -2101,19 +2103,74 @@ impl RegisterLowerer {
         }
         self.release_register(function)?;
         self.release_register(receiver)?;
-        // 23.1.3.18 applies ToString to every element, which an intrinsic
-        // cannot do for an Object.
-        if intrinsic == crate::engine::realm::Intrinsic::ArrayPrototypeJoin
-            && !self.array_element_type(base_type)?.is_primitive()
-        {
-            return None;
+        self.intrinsic_call_result(intrinsic, base_type, &argument_types)
+    }
+
+    /// The type an intrinsic call answers, once the arguments have been
+    /// lowered, and the change it leaves on the receiver's layout.
+    ///
+    /// Most intrinsics answer a type the intrinsic alone fixes. The ones that
+    /// read or move elements answer a type only the receiver's layout carries,
+    /// and 23.1.3.22 and 23.1.3.23 change that layout.
+    fn intrinsic_call_result(
+        &mut self,
+        intrinsic: crate::engine::realm::Intrinsic,
+        base_type: RegisterType,
+        arguments: &[RegisterType],
+    ) -> Option<RegisterType> {
+        use crate::engine::realm::Intrinsic;
+        let property_limit = self.property_limit;
+        match intrinsic {
+            Intrinsic::ArrayPrototypeJoin => {
+                // 23.1.3.18 applies ToString to every element, which an
+                // intrinsic cannot do for an Object.
+                if !self.array_element_type(base_type)?.is_primitive() {
+                    return None;
+                }
+                Some(intrinsic_result_type(intrinsic))
+            }
+            // 23.1.3.1 answers an element of the receiver.
+            Intrinsic::ArrayPrototypeAt => self.array_element_type(base_type),
+            // 23.1.3.23 writes each argument at the length reached so far, so
+            // only a layout that knows that length knows where they land.
+            Intrinsic::ArrayPrototypePush => {
+                let (object_id, ..) = self.array_layout(base_type)?;
+                let RegisterObjectLayout::Array {
+                    length, elements, ..
+                } = self.object_layouts.get_mut(&object_id)?
+                else {
+                    return None;
+                };
+                if elements.len().saturating_add(arguments.len()) > property_limit {
+                    return None;
+                }
+                let mut next = (*length)?;
+                for argument in arguments {
+                    elements.insert(next, *argument);
+                    next = next.checked_add(1)?;
+                }
+                *length = Some(next);
+                Some(intrinsic_result_type(intrinsic))
+            }
+            // 23.1.3.22 takes the last element away, which leaves the layout
+            // one element shorter.
+            Intrinsic::ArrayPrototypePop => {
+                let (object_id, ..) = self.array_layout(base_type)?;
+                let RegisterObjectLayout::Array {
+                    length, elements, ..
+                } = self.object_layouts.get_mut(&object_id)?
+                else {
+                    return None;
+                };
+                let Some(last) = (*length)?.checked_sub(1) else {
+                    return Some(RegisterType::Undefined);
+                };
+                let element = elements.remove(&last).unwrap_or(RegisterType::Undefined);
+                *length = Some(last);
+                Some(element)
+            }
+            _ => Some(intrinsic_result_type(intrinsic)),
         }
-        if intrinsic == crate::engine::realm::Intrinsic::ArrayPrototypeAt {
-            // 23.1.3.1 answers an element of the receiver, whose type the
-            // layout the arguments left behind carries.
-            return self.array_element_type(base_type);
-        }
-        Some(intrinsic_result_type(intrinsic))
     }
 
     fn lower_member(&mut self, base: &Expr, key: &Expr) -> Option<RegisterType> {
@@ -4539,12 +4596,14 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // reads it there instead.
         crate::engine::realm::Intrinsic::ArrayPrototypeValues
         | crate::engine::realm::Intrinsic::ArrayIteratorPrototypeNext
-        | crate::engine::realm::Intrinsic::ArrayPrototypeAt => RegisterType::Unknown,
+        | crate::engine::realm::Intrinsic::ArrayPrototypeAt
+        | crate::engine::realm::Intrinsic::ArrayPrototypePop => RegisterType::Unknown,
         crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
         | crate::engine::realm::Intrinsic::StringPrototypeIndexOf
         | crate::engine::realm::Intrinsic::StringPrototypeLastIndexOf
         | crate::engine::realm::Intrinsic::ArrayPrototypeIndexOf
-        | crate::engine::realm::Intrinsic::ArrayPrototypeLastIndexOf => RegisterType::Number,
+        | crate::engine::realm::Intrinsic::ArrayPrototypeLastIndexOf
+        | crate::engine::realm::Intrinsic::ArrayPrototypePush => RegisterType::Number,
         // 22.1.3.1 and 22.1.3.4 answer undefined for an index outside the String.
         crate::engine::realm::Intrinsic::StringPrototypeAt
         | crate::engine::realm::Intrinsic::StringPrototypeCodePointAt => RegisterType::Primitive,
