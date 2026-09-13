@@ -174,6 +174,21 @@ pub enum Instruction {
     /// The same read for the operand of `typeof`, which 13.5.3 answers with
     /// undefined for an unresolvable Reference instead of throwing.
     LdaGlobalForTypeOf(u16),
+    /// `SetMutableBinding(strings[index], acc, strict)` of 9.1.1.4.5 on the
+    /// Realm's Global Environment Record.
+    StaGlobal {
+        /// Index of the name in the string constants.
+        name: u16,
+        /// Whether the assignment is evaluated under strict mode, which
+        /// 9.1.1.2.5 refuses for a name nothing binds.
+        strict: bool,
+    },
+    /// Step 4 of 16.1.7 for one `var` name: a lexical declaration of the same
+    /// name in this Realm is a `SyntaxError`.
+    VerifyGlobalVar(u16),
+    /// `CreateGlobalVarBinding(strings[index], false)` of 9.1.1.4.16, which
+    /// step 18 of 16.1.7 performs once every name has been verified.
+    DeclareGlobalVar(u16),
     /// `acc = undefined`
     LdaUndefined,
     /// `acc = null`
@@ -684,9 +699,12 @@ impl BytecodeFunction {
                 }
                 None
             }
-            Instruction::LdaString(index)
+            Instruction::StaGlobal { name: index, .. }
+            | Instruction::LdaString(index)
             | Instruction::LdaGlobal(index)
-            | Instruction::LdaGlobalForTypeOf(index) => {
+            | Instruction::LdaGlobalForTypeOf(index)
+            | Instruction::VerifyGlobalVar(index)
+            | Instruction::DeclareGlobalVar(index) => {
                 if usize::from(index) >= self.string_constants.len() {
                     return Err(VerificationError::StringConstantOutOfBounds { pc, index });
                 }

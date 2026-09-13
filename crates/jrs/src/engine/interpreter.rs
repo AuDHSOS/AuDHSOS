@@ -2328,6 +2328,52 @@ impl RegisterVM {
                         .get_binding_value(heap, name)?
                         .map_err(|outcome| Self::binding_error(heap, realm, outcome, units))?;
                 }
+                Instruction::StaGlobal {
+                    name: index,
+                    strict,
+                } => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    let value = self.acc;
+                    let units = units.clone();
+                    realm
+                        .global_environment()
+                        .set_mutable_binding(heap, name, value, strict)?
+                        .map_err(|outcome| Self::binding_error(heap, realm, outcome, &units))?;
+                }
+                Instruction::VerifyGlobalVar(index) => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    // 16.1.7 step 4: a lexical declaration of this Realm that
+                    // the name would shadow is a SyntaxError.
+                    if realm
+                        .global_environment()
+                        .has_lexical_declaration(heap, name)?
+                    {
+                        return Err(raise_message(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::SyntaxError,
+                            "a lexical declaration of this name already exists",
+                        ));
+                    }
+                }
+                Instruction::DeclareGlobalVar(index) => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    realm
+                        .global_environment()
+                        .create_global_var_binding(heap, name)?;
+                }
                 Instruction::LdaUndefined | Instruction::ToUndefined => {
                     self.acc = VALUE_UNDEFINED;
                 }

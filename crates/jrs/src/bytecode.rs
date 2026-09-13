@@ -679,6 +679,9 @@ struct RegisterLowerer {
     binding_type_hints: BTreeMap<String, RegisterType>,
     allow_return: bool,
     return_type: Option<RegisterType>,
+    /// Whether this Script runs in a persistent Realm, where a top-level `var`
+    /// is a binding of the Global Environment Record and not of the Script.
+    realm: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -783,6 +786,7 @@ impl RegisterLowerer {
             binding_type_hints: BTreeMap::new(),
             allow_return: false,
             return_type: None,
+            realm: false,
         }
     }
 
@@ -841,7 +845,22 @@ impl RegisterLowerer {
         expression: &Expr,
     ) -> Option<()> {
         if let Some(name) = pattern.identifier() {
-            let binding = *self.bindings.get(name)?;
+            let Some(binding) = self.bindings.get(name).copied() else {
+                // 16.1.7 created the binding on the Global Environment Record,
+                // so 14.3.2.1 writes the initializer there.
+                if !self.realm {
+                    return None;
+                }
+                let units: Vec<u16> = name.encode_utf16().collect();
+                let constant = self.string_constant(&units)?;
+                self.lower(expression)?;
+                self.code
+                    .emit(crate::engine::bytecode::Instruction::StaGlobal {
+                        name: constant,
+                        strict: expression.strict,
+                    });
+                return Some(());
+            };
             if binding.stable_function_identity {
                 return None;
             }
@@ -981,7 +1000,46 @@ impl RegisterLowerer {
         })
     }
 
+    /// `GlobalDeclarationInstantiation` of 16.1.7 for the `var` names of a
+    /// Script of a persistent Realm.
+    ///
+    /// Every name is verified before any is created, which is the order 16.1.7
+    /// gives: a Script that conflicts with an existing lexical declaration
+    /// leaves the Realm as it found it.
+    fn instantiate_global_declarations(&mut self, body: &[Stmt]) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        let mut names = Vec::new();
+        for statement in body {
+            // A lexical declaration or a function at the top level is not
+            // lowered yet, and neither is a Script that holds one.
+            if matches!(statement, Stmt::Declare(_) | Stmt::Function(_, _)) {
+                return None;
+            }
+            var_names(statement, &mut names);
+        }
+        names.dedup();
+        let constants: Vec<u16> = names
+            .iter()
+            .map(|name| {
+                let units: Vec<u16> = name.encode_utf16().collect();
+                self.string_constant(&units)
+            })
+            .collect::<Option<_>>()?;
+        for name in &constants {
+            self.code.emit(Instruction::VerifyGlobalVar(*name));
+        }
+        for name in &constants {
+            self.code.emit(Instruction::DeclareGlobalVar(*name));
+        }
+        Some(())
+    }
+
     fn prepare_var_bindings(&mut self, body: &[Stmt]) -> Option<()> {
+        if self.realm {
+            // 16.1.7 creates a top-level `var` on the Global Environment
+            // Record, which outlives this Script, so it is no binding of it.
+            return Some(());
+        }
         let names = register_body_var_names(body)?;
         let initialized_names = register_body_initialized_var_names(body)?;
         for (index, statement) in body.iter().enumerate() {
@@ -1273,7 +1331,7 @@ impl RegisterLowerer {
             ) => self.lower_short_circuit(*operator, left, right)?,
             ExprKind::Binary(operator, left, right) => self.lower_binary(*operator, left, right)?,
             ExprKind::Assign(name, operator, right) => {
-                self.lower_assignment(name, *operator, right)?
+                self.lower_assignment(name, *operator, right, expression.strict)?
             }
             ExprKind::Destructure(pattern, right) => {
                 self.lower_destructuring_assignment(pattern, right)?
@@ -4349,14 +4407,35 @@ impl RegisterLowerer {
         self.string_constant(&units)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function keeps every form of assignment beside the others"
+    )]
     fn lower_assignment(
         &mut self,
         name: &str,
         operator: Option<Binary>,
         right: &Expr,
+        strict: bool,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        let binding = *self.bindings.get(name)?;
+        let Some(binding) = self.bindings.get(name).copied() else {
+            // 9.1.1.4.5 writes a name no binding of this Script covers on the
+            // Global Environment Record. Outside a Realm there is no such
+            // Record to write to. A compound assignment would have to read the
+            // name first, which needs a register the lowering has not reserved.
+            if !self.realm || operator.is_some() {
+                return None;
+            }
+            let value_type = self.lower(right)?;
+            let units: Vec<u16> = name.encode_utf16().collect();
+            let constant = self.string_constant(&units)?;
+            self.code.emit(Instruction::StaGlobal {
+                name: constant,
+                strict,
+            });
+            return Some(value_type);
+        };
         if !binding.mutable || binding.value_type.is_none() || binding.stable_function_identity {
             return None;
         }
@@ -5745,7 +5824,6 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
                 }
             }
             Stmt::Function(_, _) if !realm => saw_function = true,
-            Stmt::Var(_) if !realm => {}
             Stmt::Expr(_)
             | Stmt::Block(_)
             | Stmt::If(_, _, _)
@@ -5757,7 +5835,7 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
             | Stmt::ForIn { .. }
             | Stmt::ForOf { .. }
             | Stmt::For(_, _, _, _) => saw_expression = true,
-            Stmt::Empty => {}
+            Stmt::Empty | Stmt::Var(_) => {}
             _ => return None,
         }
     }
@@ -5874,6 +5952,10 @@ fn lower_register_script(
         maximum.max(register_statement_stack_requirement(statement))
     });
     let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement, property_limit, 0);
+    lowerer.realm = realm;
+    if realm {
+        lowerer.instantiate_global_declarations(body)?;
+    }
     prepare_register_bindings(&mut lowerer, body, saw_declaration, saw_function)?;
     let result_register = lowerer.allocate_register()?;
     lowerer

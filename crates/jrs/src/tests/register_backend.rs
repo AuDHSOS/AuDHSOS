@@ -13,7 +13,7 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
 
     // The two paths hold separate object models, so a Script the lowering does
     // not take is refused instead of running on the stack path.
-    for source in ["let x=1", "var y=2", "function f(){}", "{ let z = 3 }"] {
+    for source in ["let x=1", "function f(){}", "{ let z = 3 }"] {
         assert!(
             matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
             "{source}"
@@ -124,6 +124,34 @@ fn a_realm_on_the_engine_backend_evaluates_and_refuses_without_poisoning() -> Re
         Err(Error::Unsupported { .. })
     ));
     assert_eq!(realm.evaluate("2*3")?, Value::Number(6.0));
+    Ok(())
+}
+
+#[test]
+fn a_var_of_a_realm_script_outlives_it() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut engine = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    let mut stack_host = SilentHost;
+    let mut stack = Realm::with_backend(Limits::default(), &mut stack_host, Backend::Stack)?;
+
+    // 16.1.7 creates the binding on the Global Environment Record, so a later
+    // Script of the same Realm reads and writes the same one.
+    for realm in [&mut engine, &mut stack] {
+        realm.evaluate("var x=1")?;
+        assert_eq!(realm.evaluate("x")?, Value::Number(1.0));
+        realm.evaluate("x=x+41")?;
+        assert_eq!(realm.evaluate("x")?, Value::Number(42.0));
+        // 9.1.1.4.16 leaves an existing binding alone.
+        realm.evaluate("var x")?;
+        assert_eq!(realm.evaluate("x")?, Value::Number(42.0));
+        // The property it created is enumerable on the global object, and a
+        // name nothing declared is still unresolvable.
+        assert_eq!(realm.evaluate("typeof x")?, Value::string("number"));
+        assert_eq!(realm.evaluate("typeof other")?, Value::string("undefined"));
+        // 9.1.1.2.5 creates the property for an assignment that is not strict.
+        realm.evaluate("created=7")?;
+        assert_eq!(realm.evaluate("created")?, Value::Number(7.0));
+    }
     Ok(())
 }
 
@@ -1938,8 +1966,10 @@ fn captured_var_uses_a_hoisted_heap_context() -> Result<(), Error> {
             resource: "binding slots"
         })
     );
+    // 16.1.7 puts a top-level `var` of a Realm Script on the Global
+    // Environment Record, which the lowering now takes.
     assert!(
-        !compile_script("var x=1;x", Limits::default())?
+        compile_script("var x=1;x", Limits::default())?
             .program
             .uses_register_backend()
     );
