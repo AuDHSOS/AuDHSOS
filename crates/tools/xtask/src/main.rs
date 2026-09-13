@@ -68,6 +68,10 @@ subcommands:
   qemu-runner <elf>
                    Cargo's runner for the kernel target: wrap a test kernel
                    into a disk image, run it, and read the serial protocol
+  membench [options]
+                   the bandwidth and the latency of the memory of this
+                   machine, measured in release mode; --help explains the
+                   options. Never a step of check
   symbolize <elf> <address>...
                    the function, file, and line of every address
   test-ext [--status] [<suite>...]
@@ -139,6 +143,7 @@ fn run() -> Result<(), Error> {
         "image" => commands::image(&root, options),
         "qemu-runner" => commands::qemu_runner(&root, options),
         "run" => commands::run(&root, options),
+        "membench" => commands::membench(&root, options),
         "symbolize" => symbolize::command(options),
         "test-ext" => test_ext::command(&root, options),
         "check" => commands::check(&root, &channel, options),

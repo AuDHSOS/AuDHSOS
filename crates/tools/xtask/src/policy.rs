@@ -921,6 +921,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "membench",
+        path: "crates/tools/membench",
+        kind: Kind::Host,
+        deps: &[],
+        coverage_gate: false,
+        target: Target::Host,
+    },
+    Crate {
         name: "xtask",
         path: "crates/tools/xtask",
         kind: Kind::Host,
