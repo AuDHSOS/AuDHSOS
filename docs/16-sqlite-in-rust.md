@@ -79,6 +79,7 @@ Each rule is checkable, and each makes a later thing possible.
 |--------|---------------|------------|
 | `header`, `page`, `record`, `image`, `bytes` | The hundred-byte header, the four b-tree page types, the four cell shapes, overflow chains, the record format, the walk of a table tree and of an index tree. | Q1 |
 | `wal` | The write-ahead log a reader must follow: the header, the frames, the checksum of section 4.2, and the newest committed frame of each page. | D-155, Q3 |
+| `journal` | The rollback journal a reader must play back: the headers, the records, the checksum of `pager_cksum`, and the content each page began with. | D-156, Q3 |
 | `token`, `keyword` | SQL text to tokens, the same character classes as `src/tokenize.c`. | Q4 |
 | `ast`, `parse` | Tokens to a tree: expressions, `SELECT`, `CREATE TABLE`, `CREATE INDEX`. | Q4 |
 | `schema` | The `CREATE` text of `sqlite_schema` to columns, affinities, collations and the rowid rules. | D-145, Q2 |
@@ -116,8 +117,9 @@ Each rule is checkable, and each makes a later thing possible.
 | Expressions, answered | 17051 | recorded oracle, `eval.corpus` |
 | Statements, answered | 361 over 14 fixtures | recorded oracle, `query.corpus` |
 | A database whose content is in its log | 26 cases over `logged.db` | the fixture and logs built by hand |
+| A database caught mid-transaction | 18 cases over `rollback.db` | the fixture and journals built by hand |
 | The format under every configuration | 11 fixtures, the same three rows and the same index | the matrix, 16.11 |
-| The readers against arbitrary bytes | 5 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval`, `sqlite_wal` |
+| The readers against arbitrary bytes | 6 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval`, `sqlite_wal`, `sqlite_journal` |
 
 The crate is `COMPLETE` in `crates/tools/xtask/src/policy.rs`: 100 percent
 of lines and 100 percent of branches, in both instrumentations.
@@ -126,7 +128,7 @@ of lines and 100 percent of branches, in both instrumentations.
 
 | # | What is missing | Which step |
 |---|-----------------|------------|
-| 1 | The pager: a page cache, and the rollback journal a reader must not read past. The write-ahead log is built. | Q3 |
+| 1 | The pager: a page cache. The write-ahead log and the rollback journal are built. | Q3 |
 | 2 | The secondary indexes, used rather than read: a `WHERE` that names an indexed column still scans. | Q6 |
 | 3 | The virtual machine and the code generator that replaces the tree walker. | Q6 |
 | 4 | Writing: the b-tree writer, transactions, the journal in four modes, the WAL. | Q7 |
@@ -274,7 +276,7 @@ CI has no SQLite.
 |------|------|--------|------------|------|
 | Q1 | The format, read | built | nothing | L |
 | Q2 | The schema as types | built | Q1 | M |
-| Q3 | The pager and the index trees | the log is built; the cache and the journal are open | Q1 | L |
+| Q3 | The pager and the index trees | the log and the journal are built; the cache is open | Q1 | L |
 | Q4 | The tokenizer and the parser | built but for the window clauses | nothing | L |
 | Q5 | Values, and a statement answered by walking | built | Q2, Q4 | L |
 | Q6 | The virtual machine | open | Q5 | L |
@@ -349,8 +351,8 @@ text, columns, affinities, collations and keys.
 
 ## 16.17 Q3. The pager and the index trees
 
-Status: the write-ahead log is built; the page cache and the rollback
-journal are open.
+Status: the write-ahead log and the rollback journal are built; the
+page cache is open.
 Depends on: Q1.
 Size: L.
 
@@ -358,6 +360,9 @@ Size: L.
 
 - Q1, for the page layout.
 - `docs/sqlite/fileformat2.html` section 4, for the write-ahead log.
+- `src/pager.c`, for the rollback journal, which that document does not
+  describe: `writeJournalHdr`, `readJournalHdr`, `pager_cksum`,
+  `pager_playback`.
 - The matrix of 16.11, for the journal modes.
 
 ### Does
@@ -365,20 +370,25 @@ Size: L.
 1. Follow a write-ahead log, which a reader must: the header, the
    frames, the checksum of section 4.2, and the newest committed frame
    of each page. Built.
-2. Read a page through a cache rather than out of a byte slice. Open.
-3. Refuse a database whose rollback journal is hot, which is a file
-   mid-write and not a file with rows in it. Open.
+2. Play back a hot rollback journal, which a reader must: the headers,
+   the records, the checksum of `pager_cksum`, and the page count the
+   database is truncated to. Built.
+3. Read a page through a cache rather than out of a byte slice. Open.
 
 ### Produces
 
-`wal` in `crates/db/sqlite/src`, and `Image::open_with_log` and
-`Database::open_with_log` beside the two that read a file alone.
+`wal` and `journal` in `crates/db/sqlite/src`, and
+`Image::open_with_log`, `Image::open_with_journal`,
+`Database::open_with_log` and `Database::open_with_journal` beside the
+two that read a file alone.
 
 ### Done when
 
 A file in each of the six journal modes reads back the same rows;
 `fixtures/logged.db`, whose file names no table, reads back the rows its
-log holds; the crate meets D4.
+log holds; `fixtures/rollback.db`, whose file holds a transaction half
+written, reads back the rows that transaction started from; the crate
+meets D4.
 
 ## 16.18 Q4. The tokenizer and the parser
 

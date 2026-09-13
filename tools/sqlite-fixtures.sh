@@ -146,6 +146,32 @@ if [ -f "$amalgamation" ]; then
     # The query cases read the fixtures written above, so they come last.
     "$oracle" query-corpus >"$out/query.corpus"
     "$oracle" query "$out" <"$out/query.corpus" >"$out/query.golden"
+
+    # A database caught between the sync of its journal and the sync of
+    # its own pages, which is the one state a rollback journal is hot in.
+    # The pair is built rather than caught: SQLite writes the journal's
+    # magic only once its records are on disk, so a crash reachable from
+    # a script leaves a journal that is not hot.
+    rm -f "$out/rollback.db" "$out/rollback.db-journal"
+    "$sqlite" "$out/rollback.db" \
+        "CREATE TABLE t(a INTEGER, b TEXT); INSERT INTO t VALUES (1,'one'),(2,'two'),(3,'three');" \
+        >/dev/null
+    cp "$out/rollback.db" "$(dirname "$oracle")/old.db"
+    "$sqlite" "$out/rollback.db" \
+        "UPDATE t SET b='changed'; INSERT INTO t VALUES (4,'four');" >/dev/null
+    printf 'rollback.db-journal\t%s\n' \
+        "$("$oracle" journal "$(dirname "$oracle")/old.db" "$out/rollback.db" \
+            "$out/rollback.db-journal")"
+    # What the C library does with the pair is what the tests hold this
+    # crate to: it rolls the journal back and answers the rows the
+    # transaction started from.
+    cp "$out/rollback.db" "$(dirname "$oracle")/check.db"
+    cp "$out/rollback.db-journal" "$(dirname "$oracle")/check.db-journal"
+    rolled="$("$sqlite" "$(dirname "$oracle")/check.db" "SELECT count(*) || ' ' || max(b) FROM t")"
+    if [ "$rolled" != "3 two" ]; then
+        echo "sqlite-fixtures: the journal did not roll back ($rolled)" >&2
+        exit 1
+    fi
     printf 'query.corpus\t%s cases\n' "$(wc -l <"$out/query.corpus" | tr -d ' ')"
     rm -rf "$(dirname "$oracle")"
 else

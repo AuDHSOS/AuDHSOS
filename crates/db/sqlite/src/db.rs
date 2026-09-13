@@ -319,6 +319,19 @@ impl<'a> Database<'a> {
         Self::read(Image::open_with_log(bytes, log)?)
     }
 
+    /// The same for a database whose rollback journal is hot, which a
+    /// reader must play back before it reads a row.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what it could not read and why.
+    pub fn open_with_journal(
+        bytes: &'a [u8],
+        journal: &'a crate::journal::Journal<'a>,
+    ) -> Result<Self, Error> {
+        Self::read(Image::open_with_journal(bytes, journal)?)
+    }
+
     /// Reads the schema of an open file.
     fn read(image: Image<'a>) -> Result<Self, Error> {
         let encoding = image.header().encoding;

@@ -3631,6 +3631,42 @@ empty or stale.
   the fixture, and asserts the page size it answers, the length of every
   frame it hands back, and that page zero is in no log.
 
+### 6.6.95 The rollback journal (`db-sqlite`)
+
+D-156. A database caught between the sync of its journal and the sync of
+its own pages holds a transaction half written, and the journal holds
+what each page began with.
+
+- `fixtures/rollback.db` holds four rows and the text `changed`;
+  `rollback.db-journal` holds the two pages the transaction began with,
+  so playing it back answers three rows and the text they started from.
+- The pair is built by `sqlite-oracle journal`, not caught: SQLite
+  writes the journal's magic only once its records are on disk, so a
+  crash reachable from a script leaves a journal that is not hot. Forty
+  attempts at killing the shell mid-transaction produced only journals
+  whose magic was zeroed. `sh tools/sqlite-fixtures.sh` checks the built
+  pair by opening it with the C library, which rolls it back and must
+  answer the three rows.
+- What the playback keeps: the first record of a page, because a page
+  journaled twice was journaled first with the content the transaction
+  started from. A page past the count the first header names is passed
+  over, which is the truncation.
+- Where the walk stops: a record naming page zero, a record whose
+  checksum is not its own, a record cut short in its page number, its
+  page or its checksum, and a header whose sector or page size is out of
+  range or not a power of two.
+- A journal whose magic is not the magic is not hot, and the database
+  beside it reads back as it stands.
+- A second header carries records of its own, at the next sector; the
+  first header is the one that says how large the database was. Records
+  that end exactly on a sector are followed by no padding.
+- A count of `0xffffffff` is what a process working without sync writes,
+  and the records are then however many the file holds.
+- `sqlite_journal` reads arbitrary bytes as a journal, alone and beside
+  the fixture, and asserts the page size it answers, the length of every
+  record it hands back, that page zero is in no journal, and that no
+  page past the truncation is restored.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

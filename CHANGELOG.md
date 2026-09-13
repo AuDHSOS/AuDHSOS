@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The rollback journal, played back, in `db-sqlite`: a database whose
+  `-journal` is hot holds a transaction half written, and the journal
+  holds what each page began with. A reader now plays it back in memory
+  and answers the rows the transaction started from, which is what the
+  C library answers for the same pair. The first record of a page wins,
+  which is the opposite of the log's rule, and a page past the count the
+  first header names is passed over. `Image::open_with_journal` and
+  `Database::open_with_journal` open a file beside its journal;
+  `fuzz/sqlite_journal` reads arbitrary bytes as one. The format is not
+  in `docs/sqlite/fileformat2.html`, so it is cited from `src/pager.c`.
+
 - The write-ahead log, read, in `db-sqlite`: a reader now follows the
   `-wal` file, taking the newest frame of each page up to the last
   commit frame and reading the database file only for pages the log does

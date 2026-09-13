@@ -450,6 +450,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlite_journal"
+version = "0.1.0"
+dependencies = [
+ "db-sqlite",
+ "fuzz-support",
+]
+
+[[package]]
 name = "sqlite_tokens"
 version = "0.1.0"
 dependencies = [

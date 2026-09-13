@@ -1246,6 +1246,120 @@ static int query_case(const char *line, const char *zDir) {
   return 0;
 }
 
+/* The magic a rollback journal begins with, from `aJournalMagic` of
+** `src/pager.c`. */
+static const unsigned char aJournalMagic[] = {
+  0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7
+};
+
+/* The sector a journal header is padded to. SQLite assumes 512 where the
+** device does not say otherwise, which is what `setSectorSize` does. */
+#define JOURNAL_SECTOR 512
+
+/* Writes a 32-bit value big-endian, which every field of a journal is. */
+static void put32(unsigned char *p, unsigned int v) {
+  p[0] = (unsigned char)(v >> 24);
+  p[1] = (unsigned char)(v >> 16);
+  p[2] = (unsigned char)(v >> 8);
+  p[3] = (unsigned char)(v);
+}
+
+/* The checksum of one page record, which is `pager_cksum` of
+** `src/pager.c`: the nonce plus every two-hundredth byte counting back
+** from the end of the page. */
+static unsigned int journal_cksum(unsigned int init, const unsigned char *aData,
+                                  int pageSize) {
+  unsigned int cksum = init;
+  int i = pageSize - 200;
+  while (i > 0) {
+    cksum += aData[i];
+    i -= 200;
+  }
+  return cksum;
+}
+
+/* Reads a whole file, or answers zero. */
+static unsigned char *slurp(const char *zName, long *pLen) {
+  FILE *f = fopen(zName, "rb");
+  unsigned char *p;
+  long n;
+  if (f == 0) return 0;
+  fseek(f, 0, SEEK_END);
+  n = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  p = (unsigned char *)malloc((size_t)(n > 0 ? n : 1));
+  if (p == 0 || fread(p, 1, (size_t)n, f) != (size_t)n) {
+    free(p);
+    fclose(f);
+    return 0;
+  }
+  fclose(f);
+  *pLen = n;
+  return p;
+}
+
+/* Writes the hot rollback journal that turns `zNew` back into `zOld`.
+**
+** A journal holds the content each page had before the transaction, so
+** the records are the pages of `zOld` that `zNew` does not match, and
+** the header's page count is how many pages `zOld` has. SQLite writes
+** such a journal only between the sync of its records and the sync of
+** the database, which a crash has to land inside; building it here is
+** what makes that state a fixture. The pair is checked afterwards by
+** opening it with the C library, which rolls it back. */
+static int journal_case(const char *zOld, const char *zNew, const char *zOut) {
+  long nOld = 0, nNew = 0;
+  unsigned char *aOld = slurp(zOld, &nOld);
+  unsigned char *aNew = slurp(zNew, &nNew);
+  unsigned char aHdr[JOURNAL_SECTOR];
+  unsigned int init = 0x5eed1234u;
+  int pageSize, pages, nRec = 0, i;
+  FILE *f;
+  if (aOld == 0 || aNew == 0) {
+    fprintf(stderr, "journal: cannot read %s or %s\n", zOld, zNew);
+    return 1;
+  }
+  pageSize = (aOld[16] << 8) | aOld[17];
+  if (pageSize == 1) pageSize = 65536;
+  pages = (int)(nOld / pageSize);
+  for (i = 1; i <= pages; i++) {
+    long at = (long)(i - 1) * pageSize;
+    if (at + pageSize > nNew || memcmp(aOld + at, aNew + at, (size_t)pageSize) != 0) {
+      nRec++;
+    }
+  }
+  memset(aHdr, 0, sizeof(aHdr));
+  memcpy(aHdr, aJournalMagic, sizeof(aJournalMagic));
+  put32(aHdr + 8, (unsigned int)nRec);
+  put32(aHdr + 12, init);
+  put32(aHdr + 16, (unsigned int)pages);
+  put32(aHdr + 20, JOURNAL_SECTOR);
+  put32(aHdr + 24, (unsigned int)pageSize);
+  f = fopen(zOut, "wb");
+  if (f == 0) {
+    fprintf(stderr, "journal: cannot write %s\n", zOut);
+    return 1;
+  }
+  fwrite(aHdr, 1, sizeof(aHdr), f);
+  for (i = 1; i <= pages; i++) {
+    long at = (long)(i - 1) * pageSize;
+    unsigned char aNum[4], aSum[4];
+    if (at + pageSize <= nNew && memcmp(aOld + at, aNew + at, (size_t)pageSize) == 0) {
+      continue;
+    }
+    put32(aNum, (unsigned int)i);
+    put32(aSum, journal_cksum(init, aOld + at, pageSize));
+    fwrite(aNum, 1, 4, f);
+    fwrite(aOld + at, 1, (size_t)pageSize, f);
+    fwrite(aSum, 1, 4, f);
+  }
+  fclose(f);
+  free(aOld);
+  free(aNew);
+  printf("%d records over %d pages of %d bytes\n", nRec, pages, pageSize);
+  return 0;
+}
+
 int main(int argc, char **argv) {
   char line[4096];
   if (argc < 2) {
@@ -1279,6 +1393,13 @@ int main(int argc, char **argv) {
       if (query_case(line, zDir) != 0) return 1;
     }
     return 0;
+  }
+  if (strcmp(argv[1], "journal") == 0) {
+    if (argc < 5) {
+      fprintf(stderr, "usage: sqlite-oracle journal <old.db> <new.db> <out>\n");
+      return 2;
+    }
+    return journal_case(argv[2], argv[3], argv[4]);
   }
   if (strcmp(argv[1], "schema-corpus") == 0) {
     schema_corpus();

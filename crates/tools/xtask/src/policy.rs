@@ -1183,6 +1183,9 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "x509" },
     FuzzTarget { name: "sqlite_wal" },
     FuzzTarget {
+        name: "sqlite_journal",
+    },
+    FuzzTarget {
         name: "sqlite_image",
     },
     FuzzTarget {

@@ -18,6 +18,7 @@ mod eval;
 mod fp;
 mod header;
 mod image;
+mod journal;
 mod matrix;
 mod number;
 mod page;
@@ -114,6 +115,18 @@ pub(super) const LOGGED: &[u8] = include_bytes!("fixtures/logged.db");
 
 /// The write-ahead log of [`LOGGED`].
 pub(super) const LOG: &[u8] = include_bytes!("fixtures/logged.db-wal");
+
+/// A database caught between the sync of its rollback journal and the
+/// sync of its own pages, which is the one state such a journal is hot
+/// in.
+///
+/// The file holds a transaction half written: `UPDATE t SET b='changed'`
+/// and a fourth row. The journal holds what its two pages began with, so
+/// playing it back answers the three rows the transaction started from.
+pub(super) const ROLLBACK: &[u8] = include_bytes!("fixtures/rollback.db");
+
+/// The rollback journal of [`ROLLBACK`].
+pub(super) const JOURNAL: &[u8] = include_bytes!("fixtures/rollback.db-journal");
 
 /// A varint, written the way section 1.6 describes, so that the reader is
 /// tested against something other than itself.

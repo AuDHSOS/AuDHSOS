@@ -17,6 +17,7 @@ pub mod fp;
 pub mod func;
 pub mod header;
 pub mod image;
+pub mod journal;
 pub mod keyword;
 pub mod number;
 pub mod page;

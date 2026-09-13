@@ -7,6 +7,7 @@
 use crate::bytes::{size, u32_at};
 use crate::error::Error;
 use crate::header::Header;
+use crate::journal::Journal;
 use crate::page::{Kind, Page, Payload};
 use crate::record::Record;
 use crate::wal::Wal;
@@ -28,6 +29,9 @@ pub struct Image<'a> {
     /// The write-ahead log, where the file has one a reader must
     /// follow.
     log: Option<&'a Wal<'a>>,
+    /// The rollback journal, where the file has a hot one a reader must
+    /// play back.
+    journal: Option<&'a Journal<'a>>,
 }
 
 impl<'a> Image<'a> {
@@ -42,6 +46,32 @@ impl<'a> Image<'a> {
             bytes,
             header,
             log: None,
+            journal: None,
+        })
+    }
+
+    /// The same, reading every page a hot rollback journal restores out
+    /// of the journal.
+    ///
+    /// A journal that is not hot changes nothing, so a file may always
+    /// be opened this way where a `-journal` sits beside it.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Header::parse`], and [`Error::PageSize`] where
+    /// the journal was written with a page size the header does not
+    /// name.
+    pub fn open_with_journal(bytes: &'a [u8], journal: &'a Journal<'a>) -> Result<Self, Error> {
+        let first = journal.page_bytes(1).unwrap_or(bytes);
+        let header = Header::parse(first)?;
+        if journal.hot() && journal.page_size() != header.page_size {
+            return Err(Error::PageSize(journal.page_size()));
+        }
+        Ok(Image {
+            bytes,
+            header,
+            log: None,
+            journal: Some(journal),
         })
     }
 
@@ -64,6 +94,7 @@ impl<'a> Image<'a> {
             bytes,
             header,
             log: Some(log),
+            journal: None,
         })
     }
 
@@ -83,6 +114,11 @@ impl<'a> Image<'a> {
         if let Some(pages) = self.log.map(Wal::pages).filter(|pages| *pages != 0) {
             return pages;
         }
+        // A hot journal says how many pages the database had when the
+        // transaction began, and the playback truncates it back to that.
+        if let Some(pages) = self.journal.map(Journal::pages).filter(|pages| *pages != 0) {
+            return pages;
+        }
         let size = u64::try_from(self.bytes.len()).unwrap_or(0);
         size.checked_div(u64::from(self.header.page_size))
             .and_then(|pages| u32::try_from(pages).ok())
@@ -100,6 +136,14 @@ impl<'a> Image<'a> {
         }
         if let Some(page) = self.log.and_then(|log| log.page_bytes(number)) {
             return Ok(page);
+        }
+        if let Some(page) = self.journal.and_then(|journal| journal.page_bytes(number)) {
+            return Ok(page);
+        }
+        if number > self.pages() {
+            // A page the truncation took away is no longer in the file,
+            // whatever the file's own length still is.
+            return Err(Error::Page(number));
         }
         let page_size = size(u64::from(self.header.page_size));
         let start = size(u64::from(number.saturating_sub(1))).saturating_mul(page_size);
