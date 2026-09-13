@@ -7,6 +7,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The math functions whose answers are exact, in `db-sqlite`: `pi`,
+  `degrees`, `radians`, `ceil`, `ceiling`, `floor`, `trunc` and
+  `zeroblob`. `ceil`, `floor` and `trunc` are computed out of the bits
+  of the double, because the crate has no math library to call. The
+  functions whose answers are not exact — `sqrt`, `exp`, `ln`, `log`,
+  `pow`, the trigonometric set, and `mod` — still refuse: IEEE 754 does
+  not require them to be correctly rounded, so no implementation is
+  bit-identical to the library the golden was recorded against.
+
 - The secondary indexes, used, in `db-sqlite`: a `WHERE` that holds an
   indexed column equal to a value is now answered out of the index's
   tree, O(log n) to find the first entry and O(log n) for each row it
@@ -820,6 +829,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   Catalog 6.6.59 and 6.6.60.
 
 ### Fixed
+
+- `tools/sqlite-fixtures.sh` built the recorded oracle without
+  `SQLITE_ENABLE_MATH_FUNCTIONS` while building the shell with it, so
+  the two disagreed about which functions exist. The oracle is built
+  with the same options now.
 
 - `db-sqlite` refused a database header whose text encoding field is
   zero, which is the field before anything sets it and which every

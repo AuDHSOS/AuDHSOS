@@ -103,8 +103,9 @@ fn what_is_not_written_yet_refuses_rather_than_guessing() {
     assert_eq!(refusal("'a' REGEXP 'b'"), Error::NoFunction);
     assert_eq!(refusal("'a' MATCH 'b'"), Error::NoFunction);
     assert_eq!(refusal("printf('%d',1)"), Error::NoFunction);
-    assert_eq!(refusal("zeroblob(2)"), Error::NoFunction);
     assert_eq!(refusal("random()"), Error::NoFunction);
+    assert_eq!(refusal("zeroblob(1000000001)"), Error::TooBig);
+    assert_eq!(refusal("zeroblob(9223372036854775807)"), Error::TooBig);
     assert_eq!(refusal("abs(1,2)"), Error::WrongArguments);
     assert_eq!(refusal("substr('a')"), Error::WrongArguments);
     assert_eq!(refusal("abs(-9223372036854775807-1)"), Error::Overflow);

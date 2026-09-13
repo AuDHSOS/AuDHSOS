@@ -50,6 +50,9 @@ pub enum Error {
     BadProbability,
     /// A `LIKE` or `GLOB` pattern longer than the engine takes.
     PatternTooBig,
+    /// A blob or a string longer than `SQLITE_MAX_LENGTH`, which is what
+    /// `zeroblob` of a large number asks for.
+    TooBig,
 }
 
 /// A value, with what a comparison against it would do.

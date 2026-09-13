@@ -3752,6 +3752,25 @@ changed.
   of every fuzzed file, with an integer, a text and a blob, so the index
   a file describes is walked with keys of every class.
 
+### 6.6.99 The math functions (`db-sqlite`)
+
+D-160. `eval.corpus` gains sixty-seven cases, and what they hold is that
+an answer is the same bits the C library answers.
+
+- The oracle is built with `SQLITE_ENABLE_MATH_FUNCTIONS`, which the
+  shell of `sh tools/sqlite.sh` is built with and the oracle was not: a
+  library without it has no `pi` and no `ceil`, so the golden recorded a
+  refusal the shell does not make. The two are the same library now.
+- What each case reaches: a whole number and a fraction, both signs, a
+  zero of each sign, the largest and smallest doubles, a number past
+  2^53 where a double holds no fraction, text that is a number and text
+  that is not, a blob, and `NULL`.
+- `zeroblob(NULL)` answers a blob of no bytes rather than `NULL`,
+  because `sqlite3_value_int64` of a `NULL` is nought. A count past
+  `SQLITE_MAX_LENGTH` refuses rather than asking for the room.
+- `ceil`, `floor` and `trunc` answer an integer argument as it stands,
+  which is `ceilingFunc` reading the numeric type first.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

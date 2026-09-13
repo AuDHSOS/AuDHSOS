@@ -29,8 +29,14 @@ use crate::value::{Collation, Value, apply_numeric, compare, stored};
 pub enum Function {
     /// `abs(X)`.
     Abs,
+    /// `ceil(X)` and `ceiling(X)`.
+    Ceil,
     /// `char(...)`.
     Char,
+    /// `degrees(X)`.
+    Degrees,
+    /// `floor(X)`.
+    Floor,
     /// `coalesce(X,Y,...)` and `ifnull(X,Y)`.
     Coalesce,
     /// `concat(...)`.
@@ -45,6 +51,14 @@ pub enum Function {
     Iif,
     /// `instr(X,Y)`.
     Instr,
+    /// `pi()`.
+    Pi,
+    /// `radians(X)`.
+    Radians,
+    /// `trunc(X)`.
+    Trunc,
+    /// `zeroblob(N)`.
+    Zeroblob,
     /// `length(X)`.
     Length,
     /// `like(P,X)` and `like(P,X,E)`, and the operator.
@@ -101,6 +115,17 @@ struct Entry {
     function: Function,
 }
 
+/// What a radian is in degrees, which is the constant `radToDeg`
+/// multiplies by.
+const DEGREES: f64 = 180.0 / core::f64::consts::PI;
+
+/// What a degree is in radians, which is the constant `degToRad`
+/// multiplies by.
+const RADIANS: f64 = core::f64::consts::PI / 180.0;
+
+/// The longest blob a value holds, which is `SQLITE_MAX_LENGTH`.
+const MAX_LENGTH: usize = 1_000_000_000;
+
 /// The table, which is `aBuiltinFunc` for what is written here.
 const TABLE: &[Entry] = &[
     Entry {
@@ -110,10 +135,34 @@ const TABLE: &[Entry] = &[
         function: Function::Abs,
     },
     Entry {
+        name: b"ceil",
+        least: 1,
+        most: Some(1),
+        function: Function::Ceil,
+    },
+    Entry {
+        name: b"ceiling",
+        least: 1,
+        most: Some(1),
+        function: Function::Ceil,
+    },
+    Entry {
         name: b"char",
         least: 0,
         most: None,
         function: Function::Char,
+    },
+    Entry {
+        name: b"degrees",
+        least: 1,
+        most: Some(1),
+        function: Function::Degrees,
+    },
+    Entry {
+        name: b"floor",
+        least: 1,
+        most: Some(1),
+        function: Function::Floor,
     },
     Entry {
         name: b"coalesce",
@@ -254,6 +303,18 @@ const TABLE: &[Entry] = &[
         function: Function::Rtrim,
     },
     Entry {
+        name: b"pi",
+        least: 0,
+        most: Some(0),
+        function: Function::Pi,
+    },
+    Entry {
+        name: b"radians",
+        least: 1,
+        most: Some(1),
+        function: Function::Radians,
+    },
+    Entry {
         name: b"sign",
         least: 1,
         most: Some(1),
@@ -302,10 +363,22 @@ const TABLE: &[Entry] = &[
         function: Function::Unlikely,
     },
     Entry {
+        name: b"trunc",
+        least: 1,
+        most: Some(1),
+        function: Function::Trunc,
+    },
+    Entry {
         name: b"upper",
         least: 1,
         most: Some(1),
         function: Function::Upper,
+    },
+    Entry {
+        name: b"zeroblob",
+        least: 1,
+        most: Some(1),
+        function: Function::Zeroblob,
     },
 ];
 
@@ -366,6 +439,40 @@ pub fn call(
                 stored(&other.text().unwrap_or_default(), encoding).len(),
             )),
         },
+        Function::Pi => Value::Real(core::f64::consts::PI),
+        // `math1Func`: a value that is not a number after the numeric
+        // affinity is one the function answers nothing for.
+        Function::Degrees => {
+            numeric(first).map_or(Value::Null, |number| Value::Real(number * DEGREES))
+        }
+        Function::Radians => {
+            numeric(first).map_or(Value::Null, |number| Value::Real(number * RADIANS))
+        }
+        // `ceilingFunc`: an integer is answered as it stands, because
+        // rounding it changes nothing and would lose its width.
+        Function::Ceil | Function::Floor | Function::Trunc => {
+            let mut value = first;
+            apply_numeric(&mut value, false);
+            match value {
+                Value::Int(number) => Value::Int(number),
+                Value::Real(number) => Value::Real(match function {
+                    Function::Ceil => ceiling(number),
+                    Function::Floor => flooring(number),
+                    _ => truncated(number),
+                }),
+                Value::Null | Value::Text(_) | Value::Blob(_) => Value::Null,
+            }
+        }
+        Function::Zeroblob => {
+            // `sqlite3_value_int64` of a `NULL` is nought, so a blob of
+            // no bytes is what `zeroblob(NULL)` answers.
+            let count = first.to_integer().max(0);
+            let count = usize::try_from(count).map_err(|_| Error::TooBig)?;
+            if count > MAX_LENGTH {
+                return Err(Error::TooBig);
+            }
+            Value::Blob(alloc::vec![0u8; count])
+        }
         Function::Abs => match first {
             Value::Null => Value::Null,
             Value::Int(number) => Value::Int(number.checked_abs().ok_or(Error::Overflow)?),
@@ -1102,4 +1209,56 @@ fn set(pattern: &[u8], from: &mut usize, subject: &[u8], at: &mut usize) -> bool
         *from = next;
     }
     c2 != 0 && seen != invert
+}
+
+/// A value as the double it is, where it is a number once the numeric
+/// affinity has been applied to it.
+///
+/// This is `sqlite3_value_numeric_type` answering `SQLITE_INTEGER` or
+/// `SQLITE_FLOAT`, which is what the math functions ask of an argument.
+fn numeric(value: Value) -> Option<f64> {
+    let mut value = value;
+    apply_numeric(&mut value, false);
+    match value {
+        Value::Int(_) | Value::Real(_) => Some(value.to_real()),
+        Value::Null | Value::Text(_) | Value::Blob(_) => None,
+    }
+}
+
+/// A double with its fractional part dropped, which is `trunc`.
+///
+/// The bits are what is read rather than a conversion to an integer: a
+/// double whose exponent is 52 or more is a whole number already, one
+/// whose exponent is below zero is under one, and every other one is the
+/// bits of its fraction masked off.
+fn truncated(number: f64) -> f64 {
+    let raw = number.to_bits();
+    let exponent = i64::try_from((raw >> 52) & 0x7ff)
+        .unwrap_or(0)
+        .saturating_sub(1023);
+    if exponent >= 52 {
+        // A whole number already, or an infinity, or a NaN.
+        return number;
+    }
+    if exponent < 0 {
+        // Under one, so the whole part is a zero of the same sign.
+        return f64::from_bits(raw & (1 << 63));
+    }
+    let shift = u32::try_from(52_i64.saturating_sub(exponent)).unwrap_or(52);
+    let fraction = 1u64.checked_shl(shift).unwrap_or(0).wrapping_sub(1);
+    f64::from_bits(raw & !fraction)
+}
+
+/// The smallest whole number that is not below `number`, which is
+/// `ceil`.
+fn ceiling(number: f64) -> f64 {
+    let whole = truncated(number);
+    if whole < number { whole + 1.0 } else { whole }
+}
+
+/// The largest whole number that is not above `number`, which is
+/// `floor`.
+fn flooring(number: f64) -> f64 {
+    let whole = truncated(number);
+    if whole > number { whole - 1.0 } else { whole }
 }

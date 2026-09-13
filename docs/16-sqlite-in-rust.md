@@ -85,7 +85,7 @@ Each rule is checkable, and each makes a later thing possible.
 | `schema` | The `CREATE` text of `sqlite_schema` to columns, affinities, collations, the rowid rules and the indexes. | D-145, D-159, Q2 |
 | `fp`, `number` | A double as decimal text and back: `sqlite3FpDecode`, `sqlite3AtoF`, `sqlite3Atoi64`. | D-142, Q5 |
 | `value`, `utf8` | Storage classes, affinity, collation, comparison, the three text encodings. | D-143, D-147, Q5 |
-| `eval`, `func`, `agg` | An expression over a row; thirty-four scalar functions; seven aggregates; the four shapes of statement an expression uses. | D-143, D-144, D-148, D-154, Q5 |
+| `eval`, `func`, `agg` | An expression over a row; forty-two scalar functions; seven aggregates; the four shapes of statement an expression uses. | D-143, D-144, D-148, D-154, D-160, Q5 |
 | `db` | A statement answered from a file by walking the sides of its `FROM` once, held to the rowids the `WHERE` leaves each. | D-146, D-149, D-150, D-153, D-158, Q5 |
 
 ### What a statement may hold
@@ -116,7 +116,7 @@ Each rule is checkable, and each makes a later thing possible.
 | Schemas | 169 | recorded oracle, `schema.corpus` |
 | Doubles as text | 8404, at three precisions | recorded oracle, `fp.corpus` |
 | Text as numbers | 215 | recorded oracle, `num.corpus` |
-| Expressions, answered | 17051 | recorded oracle, `eval.corpus` |
+| Expressions, answered | 17118 | recorded oracle, `eval.corpus` |
 | Statements, answered | 462 over 14 fixtures | recorded oracle, `query.corpus` |
 | A database whose content is in its log | 26 cases over `logged.db` | the fixture and logs built by hand |
 | A database caught mid-transaction | 18 cases over `rollback.db` | the fixture and journals built by hand |
@@ -135,9 +135,10 @@ of lines and 100 percent of branches, in both instrumentations.
 | 3 | Writing: the b-tree writer, transactions, the journal in four modes, the WAL. | Q7 |
 | 4 | The rest of the language: `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, triggers, views, a `WITH` written `RECURSIVE`. | Q8 |
 | 5 | The window clauses, which the parser refuses. | Q8 |
-| 6 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
-| 7 | The matrix run across every level of the suite rather than the format alone. | Q9 |
-| 8 | MC/DC, which the pinned toolchain does not emit. See D4 (16.9). | Q10 |
+| 6 | The functions whose answers are not exact: `sqrt`, `exp`, `ln`, `log`, `pow`, the trigonometric set, and `mod`, which needs `fmod`. See D-160. | Q8 |
+| 7 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
+| 8 | The matrix run across every level of the suite rather than the format alone. | Q9 |
+| 9 | MC/DC, which the pinned toolchain does not emit. See D4 (16.9). | Q10 |
 
 ## 16.7 Decision D1: the engine is a port of the routines
 

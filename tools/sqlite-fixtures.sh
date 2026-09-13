@@ -136,7 +136,12 @@ if [ -f "$amalgamation" ]; then
     oracle="$(mktemp -d)/oracle"
     # SQLITE_PRIVATE is defined away so that the routines the
     # amalgamation keeps to itself can be asked directly.
-    "${CC:-cc}" -O1 -DSQLITE_PRIVATE= -I "$(dirname "$amalgamation")" -o "$oracle" \
+    # The same options the shell of `sh tools/sqlite.sh` is built with,
+    # so that the two answer the same: a library without
+    # SQLITE_ENABLE_MATH_FUNCTIONS has no `pi` and no `ceil`, and the
+    # golden would record a refusal the shell does not make.
+    "${CC:-cc}" -O1 -DSQLITE_PRIVATE= -DSQLITE_ENABLE_MATH_FUNCTIONS \
+        -I "$(dirname "$amalgamation")" -o "$oracle" \
         tools/sqlite-oracle.c "$amalgamation" -lm -lpthread -ldl
     for mode in fp num schema; do
         "$oracle" "$mode-corpus" >"$out/$mode.corpus"
