@@ -1108,7 +1108,7 @@ impl RegisterVM {
                 heap.set_object_kind(
                     iterator,
                     ObjectKind::ArrayIterator {
-                        target: Some(target),
+                        target: Value::from_object(target),
                         index: 0,
                     },
                 )?;
@@ -1128,6 +1128,7 @@ impl RegisterVM {
                     ));
                 };
                 let value = target
+                    .as_object()
                     .filter(|target| heap.array_length(*target).is_some_and(|len| index < len))
                     .map(|target| {
                         heap.get_object(target)
@@ -1142,7 +1143,7 @@ impl RegisterVM {
                         index: index.saturating_add(1),
                     },
                     None => ObjectKind::ArrayIterator {
-                        target: None,
+                        target: VALUE_UNDEFINED,
                         index,
                     },
                 };
@@ -1662,25 +1663,35 @@ impl RegisterVM {
             let Some(object) = self.read_reg(object_slot)?.as_object() else {
                 return Ok(VALUE_UNDEFINED);
             };
-            let keys = if let Some(keys) = self.read_reg(keys_slot)?.as_object() {
-                keys
-            } else {
+            let Some(keys) = self.read_reg(keys_slot)?.as_object() else {
                 // 14.7.5.9 enumerates String keys only, so the Symbol keys of
                 // 10.1.11.1 are dropped before the level's Array is sized.
-                let own: Vec<_> = heap
+                let length = u32::try_from(
+                    heap.own_keys(object)?
+                        .into_iter()
+                        .filter(|(name, _)| name.as_string().is_some())
+                        .count(),
+                )
+                .map_err(|_| VMError::PropertyLimit)?;
+                // Allocating the Array is a Safe Point, so the object and its
+                // keys are read again after it and this level starts over.
+                let keys = self.allocate_array(code, heap, realm, length)?;
+                self.write_reg(keys_slot, Value::from_object(keys))?;
+                self.write_reg(index_slot, Value::from_smi(0))?;
+                let object = self
+                    .read_reg(object_slot)?
+                    .as_object()
+                    .ok_or(VMError::TypeError)?;
+                for (index, name) in heap
                     .own_keys(object)?
                     .into_iter()
                     .filter_map(|(name, _)| name.as_string())
-                    .collect();
-                let length = u32::try_from(own.len()).map_err(|_| VMError::PropertyLimit)?;
-                let keys = self.allocate_array(code, heap, realm, length)?;
-                for (index, name) in own.into_iter().enumerate() {
+                    .enumerate()
+                {
                     let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
                     heap.set_array_element(keys, index, Value::from_string(name))?;
                 }
-                self.write_reg(keys_slot, Value::from_object(keys))?;
-                self.write_reg(index_slot, Value::from_smi(0))?;
-                keys
+                continue;
             };
             let length = heap.array_length(keys).ok_or(VMError::TypeError)?;
             loop {
@@ -2510,6 +2521,10 @@ impl RegisterVM {
                     arg_count,
                     slot,
                 } => {
+                    // An intrinsic that allocates has no Safe Point of its own.
+                    if heap.nursery_is_full() {
+                        self.collect_young(active_code, heap)?;
+                    }
                     let receiver = self.read_reg(receiver)?;
                     if let Some(code_id) = self.enter_call(
                         code,
@@ -2532,6 +2547,11 @@ impl RegisterVM {
                     }
                 }
                 Instruction::IteratorNext { state } => {
+                    // 7.4.8 allocates its result object inside an intrinsic,
+                    // which has no Safe Point of its own.
+                    if heap.nursery_is_full() {
+                        self.collect_young(active_code, heap)?;
+                    }
                     self.acc = self.iterator_next(state, heap, realm)?;
                 }
                 Instruction::ForInNext { state } => {

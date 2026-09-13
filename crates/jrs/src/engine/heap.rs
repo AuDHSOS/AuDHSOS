@@ -1704,7 +1704,9 @@ impl<'heap> Evacuator<'heap> {
                 self.evacuate_value(value)?;
             }
         }
-        if let ObjectKind::StringWrapper(value) = &mut object.kind {
+        if let ObjectKind::StringWrapper(value) | ObjectKind::ArrayIterator { target: value, .. } =
+            &mut object.kind
+        {
             self.evacuate_value(value)?;
         }
         if let ObjectKind::Function { context, .. } = &mut object.kind
@@ -1908,7 +1910,11 @@ fn object_contains_young(object: &JSObject) -> bool {
             .out_of_line_slots
             .as_ref()
             .is_some_and(|slots| slots.iter().copied().any(value_is_young))
-        || matches!(&object.kind, ObjectKind::StringWrapper(value) if value_is_young(*value))
+        || matches!(
+            &object.kind,
+            ObjectKind::StringWrapper(value) | ObjectKind::ArrayIterator { target: value, .. }
+                if value_is_young(*value)
+        )
         || matches!(&object.kind, ObjectKind::Function { context: Some(context), .. } if context.is_young())
         || object.elements.is_some_and(ElementsRef::is_young)
 }
@@ -1962,7 +1968,9 @@ fn trace_object_work(object: &JSObject, work: &mut Vec<Work>) {
             push_value_work(work, *value);
         }
     }
-    if let ObjectKind::StringWrapper(value) = &object.kind {
+    if let ObjectKind::StringWrapper(value) | ObjectKind::ArrayIterator { target: value, .. } =
+        &object.kind
+    {
         push_value_work(work, *value);
     }
     if let ObjectKind::Function {
@@ -2054,6 +2062,44 @@ mod tests {
             heap.get_object(forwarded_second)
                 .and_then(|object| object.get_slot(0)),
             Some(Value::from_object(forwarded_first))
+        );
+    }
+
+    #[test]
+    fn an_array_iterator_keeps_the_array_it_iterates_across_a_collection() {
+        let mut heap = GenerationalHeap::with_nursery_capacity(4);
+        let shape = heap.shapes.root_shape();
+        heap.enter_scope();
+        let array = heap.allocate_array(1).unwrap();
+        heap.set_array_element(array, 0, Value::from_smi(7))
+            .unwrap();
+        let iterator = heap.allocate_object(shape, VALUE_NULL).unwrap();
+        heap.set_object_kind(
+            iterator,
+            ObjectKind::ArrayIterator {
+                target: Value::from_object(array),
+                index: 0,
+            },
+        )
+        .unwrap();
+        let root = heap.push_root(Value::from_object(iterator)).unwrap();
+
+        heap.scavenge().unwrap();
+
+        let forwarded = rooted_object(&heap, root);
+        let ObjectKind::ArrayIterator { target, index } = heap.get_object(forwarded).unwrap().kind
+        else {
+            panic!("the iterator lost its kind");
+        };
+        assert_eq!(index, 0);
+        let target = target.as_object().expect("the iterated Array");
+        assert_eq!(heap.array_length(target), Some(1));
+        assert_eq!(
+            heap.get_object(target)
+                .and_then(|object| object.elements)
+                .and_then(|elements| heap.get_elements(elements))
+                .and_then(|elements| elements.get(0)),
+            Some(Value::from_smi(7))
         );
     }
 

@@ -688,6 +688,15 @@ enum RegisterFlow {
     Abrupt,
 }
 
+/// An Array layout read out: its identifier, its length, the types of its
+/// indexed elements, and the type an index it does not hold yields.
+type RegisterArrayLayout<'a> = (
+    u32,
+    Option<u32>,
+    &'a BTreeMap<u32, RegisterType>,
+    Option<RegisterType>,
+);
+
 /// What a `for`-`in` or `for`-`of` head leaves for its body.
 #[derive(Clone, Copy)]
 struct IterationHead {
@@ -2318,12 +2327,10 @@ impl RegisterLowerer {
             if crate::engine::realm::array_prototype_owns(name) {
                 // The name is resolved on %Array.prototype%, so it is the
                 // intrinsic when one is implemented and unsupported otherwise.
-                // A dynamic key may have written the same name onto the Array,
-                // which would shadow it.
+                // An own property cannot shadow it: a key this lowering writes
+                // to an Array is a Number, whose ToPropertyKey never spells a
+                // method name.
                 let intrinsic = crate::engine::realm::array_prototype_intrinsic(name)?;
-                if dynamic.is_some() {
-                    return None;
-                }
                 let slot =
                     self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
                 let name = self.string_constant(name)?;
@@ -2378,28 +2385,51 @@ impl RegisterLowerer {
         Some(result_type)
     }
 
-    /// The Array layout `base_type` names: its identifier, the types of its
-    /// indexed elements, and the type an index outside them yields.
-    fn array_layout(
-        &self,
-        base_type: RegisterType,
-    ) -> Option<(u32, &BTreeMap<u32, RegisterType>, Option<RegisterType>)> {
+    /// The Array layout `base_type` names: its identifier, its length, the
+    /// types of its indexed elements, and the type an index it does not hold
+    /// yields.
+    fn array_layout(&self, base_type: RegisterType) -> Option<RegisterArrayLayout<'_>> {
         let RegisterType::Array(object_id) = base_type else {
             return None;
         };
         let RegisterObjectLayout::Array {
-            elements, dynamic, ..
+            length,
+            elements,
+            dynamic,
         } = self.object_layouts.get(&object_id)?
         else {
             return None;
         };
-        Some((object_id, elements, *dynamic))
+        Some((object_id, *length, elements, *dynamic))
+    }
+
+    /// The type one element of the Array `base_type` names has during the
+    /// iteration of 14.7.5.
+    ///
+    /// Unlike a read by index, an iteration only reaches the indices below the
+    /// length, so undefined joins the type only for a layout that leaves one
+    /// of them open.
+    fn array_iteration_type(&self, base_type: RegisterType) -> Option<RegisterType> {
+        let (_, length, elements, dynamic) = self.array_layout(base_type)?;
+        let complete = length.is_some_and(|length| usize::try_from(length) == Ok(elements.len()))
+            && dynamic.is_none();
+        let element = elements
+            .values()
+            .copied()
+            .chain(dynamic.iter().copied())
+            .reduce(RegisterType::merge)
+            .unwrap_or(RegisterType::Undefined);
+        Some(if complete {
+            element
+        } else {
+            element.merge(RegisterType::Undefined)
+        })
     }
 
     /// The type an indexed read of the Array `base_type` names answers, which
     /// is undefined for an index the layout does not hold.
     fn array_element_type(&self, base_type: RegisterType) -> Option<RegisterType> {
-        let (_, elements, dynamic) = self.array_layout(base_type)?;
+        let (_, _, elements, dynamic) = self.array_layout(base_type)?;
         Some(
             elements
                 .values()
@@ -2418,7 +2448,7 @@ impl RegisterLowerer {
         index: u32,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        let (_, elements, dynamic) = self.array_layout(base_type)?;
+        let (_, _, elements, dynamic) = self.array_layout(base_type)?;
         let static_type = elements
             .get(&index)
             .copied()
@@ -3929,7 +3959,7 @@ impl RegisterLowerer {
         // to a method the interpreter cannot call from a step.
         let object_type = self.lower(object)?;
         let (object_id, ..) = self.array_layout(object_type)?;
-        let element_type = self.array_element_type(object_type)?;
+        let element_type = self.array_iteration_type(object_type)?;
         if !element_type.is_primitive() {
             return None;
         }

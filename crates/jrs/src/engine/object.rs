@@ -13,7 +13,6 @@
 //! in-object capacity. All internal method operations (`[[Get]]`, `[[Set]]`,
 //! `[[DefineOwnProperty]]`) route through Shapes and Elements.
 
-use super::value::ObjectRef;
 use super::{
     context::ContextRef,
     elements::ElementsRef,
@@ -59,8 +58,8 @@ pub enum ObjectKind {
     Error,
     /// Array Iterator instance, the slots of 23.1.5.3.
     ArrayIterator {
-        /// `[[IteratedArrayLike]]`, or none once the iteration is done.
-        target: Option<ObjectRef>,
+        /// `[[IteratedArrayLike]]`, undefined once the iteration is done.
+        target: Value,
         /// `[[ArrayLikeNextIndex]]`.
         index: u32,
     },

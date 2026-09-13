@@ -2352,6 +2352,10 @@ fn register_for_in_walks_own_keys_before_the_prototype_chain() -> Result<(), Err
 fn register_for_of_iterates_an_array_through_its_iterator() -> Result<(), Error> {
     for source in [
         "let s=0;for(const x of [1,2,3]){s+=x}s",
+        "let s='';for(const x of ['a','b']){s+=x}s",
+        "let n=0;for(const x of ['a','bb']){n+=x.length}n",
+        // A hole leaves undefined in the element type.
+        "let n=0;for(const x of [1,,3]){n+=x}n",
         "let n=0;for(const x of []){n++}n",
         "let s=0;for(let x of [1,2,3]){s+=x;if(x===2)break}s",
         "let s=0;for(const x of [1,2,3]){if(x===2)continue;s+=x}s",
@@ -2403,6 +2407,11 @@ fn register_array_search_methods_answer_on_the_new_engine() -> Result<(), Error>
         // The receiver keeps its layout, so a later read still lowers.
         "let a=[1,2,3];let i=a.indexOf(3);a[i]",
         "let a=['x'];a.includes('x')?a.length:0",
+        // A written index leaves the length unknown but not the method.
+        "let a=[1,2];let i=1;a[i]=3;a.indexOf(3)",
+        "let a=[1,2];let i=1;a[i]=3;a.includes(3)",
+        "let a=[1,2];let i=1;a[i]=3;a.lastIndexOf(2)",
+        "let a=[1,2];let i=5;a[i]=3;a.at(1)",
     ] {
         differential(source)?;
     }
@@ -2427,6 +2436,7 @@ fn register_array_join_concatenates_the_elements() -> Result<(), Error> {
         "['a','b'].join('')",
         "[1.5,-0,NaN].join(',')",
         "[1,2].join(3)",
+        "let a=[1,2];let i=1;a[i]=3;a.join('-')",
     ] {
         differential(source)?;
     }
@@ -2481,6 +2491,20 @@ fn register_array_reverse_mirrors_the_indices() -> Result<(), Error> {
 }
 
 #[test]
+fn register_iteration_survives_a_collection() -> Result<(), Error> {
+    for source in [
+        // Every step of 7.4.8 allocates a result object and every level of
+        // 14.7.5.9 an Array of keys, so these loops cross a scavenge.
+        "let n=0;let i=0;while(i<400){for(const x of [1,2,3]){n+=x}i=i+1}n",
+        "let n=0;let i=0;while(i<400){for(const x of ['a','bb']){n+=x.length}i=i+1}n",
+        "let n=0;let i=0;while(i<400){for(const k in {a:1,b:2}){n=n+1}i=i+1}n",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<(), Error> {
     for source in [
         // An intrinsic runs without a call frame, so a user valueOf in a
@@ -2496,8 +2520,8 @@ fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<()
         // 23.1.3.22 and 23.1.3.23 need the length the layout starts from.
         "let a=[1];let i=0;a[i]=2;a.pop()",
         "let a=[1];let i=0;a[i]=2;a.reverse()",
-        // A name a dynamic key may have written onto the Array shadows the
-        // method, so the read is not the intrinsic.
+        "let a=[1];let i=0;a[i]=2;a.push(3)",
+        // A key that is not a Number is not lowered on an Array at all.
         "let a=[1];let k='indexOf';a[k]=1;a.indexOf",
     ] {
         let program = compile(source, Limits::default())?;
@@ -2527,8 +2551,6 @@ fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error>
         "for(const k of {}){}",
         "for(var k of [1]){}",
         "let k;for(k of [1]){}",
-        // The loop widens the accumulator's type, which the head fixed.
-        "let s='';for(const x of ['a','b']){s+=x}s",
         // A destructuring head is not lowered.
         "for(const [a] of [[1]]){}",
         // An element the loop cannot type as a primitive is not lowered.
