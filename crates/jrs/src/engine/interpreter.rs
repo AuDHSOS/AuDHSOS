@@ -1353,6 +1353,46 @@ impl RegisterVM {
         }
     }
 
+    /// The answer 10.1.8.1 gives when no object of the Prototype Chain has the
+    /// name.
+    ///
+    /// That is `undefined` only when the chain is complete. A prototype this
+    /// Realm has not finished building would have owned the name, so the miss
+    /// is a gap and never an answer.
+    fn absent_property(
+        target: Value,
+        name: &[u16],
+        heap: &GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        const GAP: VMError = VMError::Unsupported("a property of an unbuilt Prototype");
+        if target.is_string() {
+            if super::realm::string_prototype_owns(name) {
+                return Err(GAP);
+            }
+            return Ok(VALUE_UNDEFINED);
+        }
+        let kind = target
+            .as_object()
+            .and_then(|reference| heap.get_object(reference))
+            .map(|object| object.kind.clone());
+        match kind {
+            Some(ObjectKind::Array { .. }) if super::realm::array_prototype_owns(name) => Err(GAP),
+            // These reach a Prototype the Realm has not built at all, so every
+            // name it would own is a gap and the name itself says nothing.
+            Some(
+                ObjectKind::Function { .. }
+                | ObjectKind::NativeFunction { .. }
+                | ObjectKind::Error
+                | ObjectKind::StringWrapper(_)
+                | ObjectKind::NumberWrapper(_)
+                | ObjectKind::BooleanWrapper(_)
+                | ObjectKind::ArrayIterator { .. },
+            ) => Err(GAP),
+            _ if super::realm::object_prototype_owns(name) => Err(GAP),
+            _ => Ok(VALUE_UNDEFINED),
+        }
+    }
+
     /// Whether a value is one of the callables this engine knows (7.2.3).
     fn is_callable(value: Value, heap: &GenerationalHeap) -> bool {
         value.as_object().is_some_and(|reference| {
@@ -1946,9 +1986,10 @@ impl RegisterVM {
                 .string_prototype(heap)?
                 .as_object()
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-            return Ok(heap
-                .lookup_named(prototype, name)?
-                .map_or(VALUE_UNDEFINED, |property| property.value));
+            return match heap.lookup_named(prototype, name)? {
+                Some(property) => Ok(property.value),
+                None => Self::absent_property(value, &units, heap),
+            };
         };
         let Some(unit) = usize::try_from(index)
             .ok()
@@ -2784,10 +2825,14 @@ impl RegisterVM {
                         pc = (pc as isize + offset as isize) as usize;
                     }
                 }
-                Instruction::GetNamed { obj, name, slot } => {
+                Instruction::GetNamed {
+                    obj,
+                    name: name_index,
+                    slot,
+                } => {
                     let name = active_code
                         .string_constants
-                        .get(name as usize)
+                        .get(name_index as usize)
                         .ok_or(VMError::InvalidRegister)?;
                     let name = PropertyKey::String(heap.strings.intern_units(name)?);
                     let target = self.read_reg(obj)?;
@@ -2839,7 +2884,11 @@ impl RegisterVM {
                         }
                         self.acc = property.value;
                     } else {
-                        self.acc = VALUE_UNDEFINED;
+                        let units = active_code
+                            .string_constants
+                            .get(name_index as usize)
+                            .ok_or(VMError::InvalidRegister)?;
+                        self.acc = Self::absent_property(target, units, heap)?;
                     }
                 }
                 Instruction::SetNamed { obj, name, slot } => {
@@ -2938,12 +2987,16 @@ impl RegisterVM {
                             );
                             return Ok(None);
                         }
+                        let units = name;
                         let Some(name) = heap
                             .strings
-                            .lookup_interned_units(&name)
+                            .lookup_interned_units(&units)
                             .map(PropertyKey::String)
                         else {
-                            self.acc = VALUE_UNDEFINED;
+                            // A name no String of the Agent carries is owned by
+                            // no object, but a Prototype the Realm has not built
+                            // would have carried it.
+                            self.acc = Self::absent_property(target, &units, heap)?;
                             return Ok(None);
                         };
                         let shape_id = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
@@ -2977,7 +3030,7 @@ impl RegisterVM {
                             }
                             self.acc = property.value;
                         } else {
-                            self.acc = VALUE_UNDEFINED;
+                            self.acc = Self::absent_property(target, &units, heap)?;
                         }
                     }
                 }

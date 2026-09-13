@@ -277,6 +277,46 @@ fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
 }
 
 #[test]
+fn a_read_that_reaches_an_unbuilt_prototype_is_a_gap() -> Result<(), Error> {
+    // 10.1.8.1 answers undefined for a name no object of the Prototype Chain
+    // has. That is the answer only when the chain is complete: a name of
+    // 20.1.3, 22.1.3 or 23.1.3 this Realm has not built would have been found,
+    // so the miss is a gap. A static read is refused by the lowering; a
+    // computed one reaches the engine and used to answer undefined.
+    for source in [
+        "let o={a:1};let k='valueOf';typeof o[k]",
+        "let o={a:1};let k='constructor';typeof o[k]",
+        "let a=[1];let k='concat';typeof a[k]",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+
+    // A name no Prototype of the chain would own is absent on both paths.
+    for source in [
+        "let o={a:1};let k='nope';typeof o[k]",
+        // A name of 20.1.3 the Realm has built is answered, not refused.
+        "let o={a:1};let k='propertyIsEnumerable';typeof o[k]",
+        "let o={a:1};let k='hasOwnProperty';typeof o[k]",
+        "let o={a:1};let k='isPrototypeOf';typeof o[k]",
+        "let o={a:1};let k='a';o[k]",
+        "let a=[1,2];let k='length';a[k]",
+        "let a=[1,2];let k=1;a[k]",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn a_realm_on_the_stack_backend_takes_the_same_scripts() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Stack)?;
