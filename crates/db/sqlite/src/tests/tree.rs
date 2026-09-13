@@ -1410,7 +1410,8 @@ fn the_journal_mode_changes_what_lies_beside_the_file_and_not_what_is_in_it() {
     // read back out of it.
     let theirs = crate::tests::JOURNALLED;
     let run = |mode, nonce| {
-        let mut writer = Writer::journalling(512, 0, Encoding::Utf8, mode, nonce, 512).unwrap();
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        writer.journalling(mode, nonce, 512);
         writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
         writer.run(sql_of_rows().as_bytes()).unwrap();
         writer.run(b"DELETE FROM t WHERE rowid%4!=0").unwrap();
@@ -1445,7 +1446,8 @@ fn a_statement_run_in_logging_mode_writes_the_log_the_shell_wrote() {
     // back out of its header.
     let theirs = crate::tests::LOGGING_WAL;
     let word = |at: usize| u32::from_be_bytes(theirs[at..at + 4].try_into().unwrap());
-    let mut writer = Writer::logging(512, 0, Encoding::Utf8, (word(16), word(20))).unwrap();
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.logging((word(16), word(20)));
     same("logging.db", &writer.written(), crate::tests::LOGGING, 512);
     writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
     writer.run(sql_of_rows().as_bytes()).unwrap();
@@ -1482,7 +1484,8 @@ fn the_pointer_maps_a_file_that_vacuums_itself_keeps_are_the_ones_the_shell_wrot
     // free pages below them at the commit and is cut back; a file that
     // vacuums a step at a time keeps the free list instead.
     for (name, incremental, chained, taken, fixture) in crate::tests::VACUUMING {
-        let mut writer = Writer::vacuuming(512, 0, Encoding::Utf8, incremental).unwrap();
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        writer.vacuuming(incremental);
         writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
         let rows = if chained {
             sql_of_chained()
@@ -1611,6 +1614,142 @@ fn the_end_a_file_that_vacuums_itself_is_cut_back_to_is_the_one_the_c_library_co
         for free in 1..origin {
             let last = final_size(512, origin, free);
             assert_ne!(map_page(512, last), last, "{origin} {free}");
+        }
+    }
+}
+
+/// The nonce `theirs` was written with, which is what the checksum of
+/// its first record says once the sum of that page is taken off it. A
+/// journal this crate wrote with a nonce of nought holds that sum.
+///
+/// The header takes one sector and the record that follows it is a page
+/// number, the page, and the checksum.
+fn nonce_at(theirs: &[u8], plain: &[u8], sector: usize, page_size: usize) -> u32 {
+    let at = sector.saturating_add(4).saturating_add(page_size);
+    let word = |bytes: &[u8]| {
+        u32::from_be_bytes(
+            bytes
+                .get(at..at.saturating_add(4))
+                .and_then(|slice| slice.try_into().ok())
+                .unwrap_or([0; 4]),
+        )
+    };
+    word(theirs).wrapping_sub(word(plain))
+}
+
+#[test]
+fn every_pair_of_the_matrix_is_written_under_some_configuration() {
+    use crate::journal::Mode;
+    use crate::tests::{ARRAY, Keeping};
+    // Every value of every dimension appears, and every pair of values
+    // from two dimensions appears together, which is what makes thirty
+    // configurations stand for the eight hundred and ten the full cross
+    // of document 16, section 16.11, would hold.
+    let value = |row: &crate::tests::Configuration, dimension: usize| -> u32 {
+        match dimension {
+            0 => match row.encoding {
+                Encoding::Utf8 => 0,
+                Encoding::Utf16Le => 1,
+                Encoding::Utf16Be => 2,
+            },
+            1 => row.page_size,
+            2 => u32::from(row.reserved),
+            3 => match row.keeping {
+                Keeping::Journal(Mode::Delete) => 0,
+                Keeping::Journal(Mode::Truncate) => 1,
+                Keeping::Journal(Mode::Persist) => 2,
+                Keeping::Journal(Mode::Memory) => 3,
+                Keeping::Journal(Mode::Off) => 4,
+                Keeping::Log => 5,
+            },
+            _ => match row.vacuum {
+                None => 0,
+                Some(false) => 1,
+                Some(true) => 2,
+            },
+        }
+    };
+    let widths = [3, 5, 3, 6, 3];
+    let mut pairs = 0;
+    for one in 0..widths.len() {
+        for other in one.saturating_add(1)..widths.len() {
+            let mut seen: Vec<(u32, u32)> = Vec::new();
+            for row in &ARRAY {
+                let pair = (value(row, one), value(row, other));
+                if !seen.contains(&pair) {
+                    seen.push(pair);
+                }
+            }
+            let want =
+                widths.get(one).copied().unwrap_or(0) * widths.get(other).copied().unwrap_or(0);
+            assert_eq!(seen.len(), want, "dimensions {one} and {other}");
+            pairs += seen.len();
+        }
+    }
+    assert_eq!(pairs, 156);
+}
+
+#[test]
+fn the_covering_array_of_the_matrix_writes_the_files_the_shell_wrote() {
+    use crate::change::Writer;
+    use crate::journal::Mode;
+    use crate::tests::{ARRAY, Keeping};
+    // The write path under thirty configurations, each holding the same
+    // four hundred rows put in by a key that jumps about. The nonce of
+    // a journal and the two salts of a log come from SQLite's random
+    // source, so each is read back out of the file the shell wrote.
+    for row in &ARRAY {
+        let page_size = usize::try_from(row.page_size).unwrap();
+        let build = |nonce: u32| {
+            let mut writer = Writer::new(row.page_size, row.reserved, row.encoding).unwrap();
+            if let Some(incremental) = row.vacuum {
+                writer.vacuuming(incremental);
+            }
+            match row.keeping {
+                Keeping::Journal(mode) => writer.journalling(mode, nonce, 512),
+                Keeping::Log => {
+                    let word = |at: usize| {
+                        u32::from_be_bytes(
+                            row.beside
+                                .and_then(|bytes| bytes.get(at..at.saturating_add(4)))
+                                .and_then(|slice| slice.try_into().ok())
+                                .unwrap_or([0; 4]),
+                        )
+                    };
+                    writer.logging((word(16), word(20)));
+                }
+            }
+            writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+            writer.run(sql_of_rows().as_bytes()).unwrap();
+            writer
+        };
+        // A journal that keeps its records is written twice: once to
+        // read the nonce out of the file the shell wrote, and once with
+        // that nonce.
+        let writer = match (row.keeping, row.beside) {
+            (Keeping::Journal(Mode::Persist), Some(theirs)) => {
+                let plain = build(0);
+                let nonce = nonce_at(theirs, plain.journal().unwrap(), 512, page_size);
+                build(nonce)
+            }
+            _ => build(0),
+        };
+        same(row.name, &writer.written(), row.bytes, page_size);
+        match (row.keeping, row.beside) {
+            (Keeping::Log, Some(theirs)) => {
+                let name = alloc::format!("{}-wal", row.name);
+                same(&name, writer.log().unwrap(), theirs, page_size);
+            }
+            (Keeping::Journal(_), Some(theirs)) => {
+                let name = alloc::format!("{}-journal", row.name);
+                same(&name, writer.journal().unwrap(), theirs, page_size);
+            }
+            // A log is always read back, so a row that keeps one names
+            // the file it lies in.
+            (Keeping::Journal(_) | Keeping::Log, None) => {
+                assert_eq!(writer.journal(), None, "{}", row.name);
+                assert_eq!(writer.log(), None, "{}", row.name);
+            }
         }
     }
 }

@@ -67,6 +67,353 @@ pub(super) const CLEARED: &[u8] = include_bytes!("fixtures/cleared.db");
 /// taken out again, which frees the chains they ran onto.
 pub(super) const UNCHAINED: &[u8] = include_bytes!("fixtures/unchained.db");
 
+use crate::header::Encoding;
+use crate::journal::Mode;
+
+/// What a commit of the covering array leaves beside the file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Keeping {
+    /// A rollback journal under the mode given.
+    Journal(Mode),
+    /// A write-ahead log.
+    Log,
+}
+
+/// One row of the covering array: a configuration and the files the
+/// shell wrote under it.
+pub(crate) struct Configuration {
+    /// What the database file is called.
+    pub(crate) name: &'static str,
+    /// The encoding its text is in.
+    pub(crate) encoding: Encoding,
+    /// The page size it was written with.
+    pub(crate) page_size: u32,
+    /// How many bytes of every page the b-tree layer may not use.
+    pub(crate) reserved: u8,
+    /// What its commits leave beside the file.
+    pub(crate) keeping: Keeping,
+    /// Whether the file vacuums itself, and a step at a time where it
+    /// does.
+    pub(crate) vacuum: Option<bool>,
+    /// The database file the shell wrote.
+    pub(crate) bytes: &'static [u8],
+    /// The journal or the log beside it, where the mode leaves one.
+    pub(crate) beside: Option<&'static [u8]>,
+}
+
+/// The matrix of document 16, section 16.11, over the write path as a
+/// covering array: thirty configurations in which every value of every
+/// dimension appears and every pair of values from two dimensions
+/// appears together at least once.
+///
+/// The full cross of the five dimensions is 3 x 5 x 3 x 6 x 3 = 810.
+/// Thirty is the fewest rows a pair-covering array of them can have,
+/// because the two widest dimensions are five and six values wide, and
+/// `every_pair_of_the_matrix_is_written_under_some_configuration` is
+/// what says the thirty cover the pairs.
+pub(crate) const ARRAY: [Configuration; 30] = [
+    Configuration {
+        name: "x-01.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 512,
+        reserved: 32,
+        keeping: Keeping::Journal(Mode::Delete),
+        vacuum: Some(true),
+        bytes: include_bytes!("fixtures/x-01.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-02.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 512,
+        reserved: 4,
+        keeping: Keeping::Journal(Mode::Memory),
+        vacuum: None,
+        bytes: include_bytes!("fixtures/x-02.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-03.db",
+        encoding: Encoding::Utf16Be,
+        page_size: 512,
+        reserved: 32,
+        keeping: Keeping::Journal(Mode::Off),
+        vacuum: Some(true),
+        bytes: include_bytes!("fixtures/x-03.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-04.db",
+        encoding: Encoding::Utf8,
+        page_size: 512,
+        reserved: 0,
+        keeping: Keeping::Journal(Mode::Persist),
+        vacuum: None,
+        bytes: include_bytes!("fixtures/x-04.db"),
+        beside: Some(include_bytes!("fixtures/x-04.db-journal")),
+    },
+    Configuration {
+        name: "x-05.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 512,
+        reserved: 32,
+        keeping: Keeping::Journal(Mode::Truncate),
+        vacuum: None,
+        bytes: include_bytes!("fixtures/x-05.db"),
+        beside: Some(include_bytes!("fixtures/x-05.db-journal")),
+    },
+    Configuration {
+        name: "x-06.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 512,
+        reserved: 4,
+        keeping: Keeping::Log,
+        vacuum: Some(false),
+        bytes: include_bytes!("fixtures/x-06.db"),
+        beside: Some(include_bytes!("fixtures/x-06.db-wal")),
+    },
+    Configuration {
+        name: "x-07.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 1024,
+        reserved: 32,
+        keeping: Keeping::Journal(Mode::Delete),
+        vacuum: None,
+        bytes: include_bytes!("fixtures/x-07.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-08.db",
+        encoding: Encoding::Utf16Be,
+        page_size: 1024,
+        reserved: 0,
+        keeping: Keeping::Journal(Mode::Memory),
+        vacuum: Some(true),
+        bytes: include_bytes!("fixtures/x-08.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-09.db",
+        encoding: Encoding::Utf8,
+        page_size: 1024,
+        reserved: 32,
+        keeping: Keeping::Journal(Mode::Off),
+        vacuum: None,
+        bytes: include_bytes!("fixtures/x-09.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-10.db",
+        encoding: Encoding::Utf16Be,
+        page_size: 1024,
+        reserved: 32,
+        keeping: Keeping::Journal(Mode::Persist),
+        vacuum: None,
+        bytes: include_bytes!("fixtures/x-10.db"),
+        beside: Some(include_bytes!("fixtures/x-10.db-journal")),
+    },
+    Configuration {
+        name: "x-11.db",
+        encoding: Encoding::Utf8,
+        page_size: 1024,
+        reserved: 4,
+        keeping: Keeping::Journal(Mode::Truncate),
+        vacuum: Some(true),
+        bytes: include_bytes!("fixtures/x-11.db"),
+        beside: Some(include_bytes!("fixtures/x-11.db-journal")),
+    },
+    Configuration {
+        name: "x-12.db",
+        encoding: Encoding::Utf16Be,
+        page_size: 1024,
+        reserved: 0,
+        keeping: Keeping::Log,
+        vacuum: Some(false),
+        bytes: include_bytes!("fixtures/x-12.db"),
+        beside: Some(include_bytes!("fixtures/x-12.db-wal")),
+    },
+    Configuration {
+        name: "x-13.db",
+        encoding: Encoding::Utf16Be,
+        page_size: 4096,
+        reserved: 0,
+        keeping: Keeping::Journal(Mode::Delete),
+        vacuum: None,
+        bytes: include_bytes!("fixtures/x-13.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-14.db",
+        encoding: Encoding::Utf16Be,
+        page_size: 4096,
+        reserved: 0,
+        keeping: Keeping::Journal(Mode::Memory),
+        vacuum: Some(true),
+        bytes: include_bytes!("fixtures/x-14.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-15.db",
+        encoding: Encoding::Utf8,
+        page_size: 4096,
+        reserved: 4,
+        keeping: Keeping::Journal(Mode::Off),
+        vacuum: Some(false),
+        bytes: include_bytes!("fixtures/x-15.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-16.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 4096,
+        reserved: 32,
+        keeping: Keeping::Journal(Mode::Persist),
+        vacuum: Some(true),
+        bytes: include_bytes!("fixtures/x-16.db"),
+        beside: Some(include_bytes!("fixtures/x-16.db-journal")),
+    },
+    Configuration {
+        name: "x-17.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 4096,
+        reserved: 32,
+        keeping: Keeping::Journal(Mode::Truncate),
+        vacuum: Some(false),
+        bytes: include_bytes!("fixtures/x-17.db"),
+        beside: Some(include_bytes!("fixtures/x-17.db-journal")),
+    },
+    Configuration {
+        name: "x-18.db",
+        encoding: Encoding::Utf8,
+        page_size: 4096,
+        reserved: 32,
+        keeping: Keeping::Log,
+        vacuum: None,
+        bytes: include_bytes!("fixtures/x-18.db"),
+        beside: Some(include_bytes!("fixtures/x-18.db-wal")),
+    },
+    Configuration {
+        name: "x-19.db",
+        encoding: Encoding::Utf8,
+        page_size: 8192,
+        reserved: 0,
+        keeping: Keeping::Journal(Mode::Delete),
+        vacuum: Some(false),
+        bytes: include_bytes!("fixtures/x-19.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-20.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 8192,
+        reserved: 4,
+        keeping: Keeping::Journal(Mode::Memory),
+        vacuum: None,
+        bytes: include_bytes!("fixtures/x-20.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-21.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 8192,
+        reserved: 4,
+        keeping: Keeping::Journal(Mode::Off),
+        vacuum: None,
+        bytes: include_bytes!("fixtures/x-21.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-22.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 8192,
+        reserved: 32,
+        keeping: Keeping::Journal(Mode::Persist),
+        vacuum: Some(true),
+        bytes: include_bytes!("fixtures/x-22.db"),
+        beside: Some(include_bytes!("fixtures/x-22.db-journal")),
+    },
+    Configuration {
+        name: "x-23.db",
+        encoding: Encoding::Utf16Be,
+        page_size: 8192,
+        reserved: 32,
+        keeping: Keeping::Journal(Mode::Truncate),
+        vacuum: None,
+        bytes: include_bytes!("fixtures/x-23.db"),
+        beside: Some(include_bytes!("fixtures/x-23.db-journal")),
+    },
+    Configuration {
+        name: "x-24.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 8192,
+        reserved: 0,
+        keeping: Keeping::Log,
+        vacuum: Some(true),
+        bytes: include_bytes!("fixtures/x-24.db"),
+        beside: Some(include_bytes!("fixtures/x-24.db-wal")),
+    },
+    Configuration {
+        name: "x-25.db",
+        encoding: Encoding::Utf16Be,
+        page_size: 65536,
+        reserved: 4,
+        keeping: Keeping::Journal(Mode::Delete),
+        vacuum: Some(true),
+        bytes: include_bytes!("fixtures/x-25.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-26.db",
+        encoding: Encoding::Utf8,
+        page_size: 65536,
+        reserved: 32,
+        keeping: Keeping::Journal(Mode::Memory),
+        vacuum: Some(false),
+        bytes: include_bytes!("fixtures/x-26.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-27.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 65536,
+        reserved: 0,
+        keeping: Keeping::Journal(Mode::Off),
+        vacuum: None,
+        bytes: include_bytes!("fixtures/x-27.db"),
+        beside: None,
+    },
+    Configuration {
+        name: "x-28.db",
+        encoding: Encoding::Utf16Be,
+        page_size: 65536,
+        reserved: 4,
+        keeping: Keeping::Journal(Mode::Persist),
+        vacuum: Some(false),
+        bytes: include_bytes!("fixtures/x-28.db"),
+        beside: Some(include_bytes!("fixtures/x-28.db-journal")),
+    },
+    Configuration {
+        name: "x-29.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 65536,
+        reserved: 0,
+        keeping: Keeping::Journal(Mode::Truncate),
+        vacuum: Some(false),
+        bytes: include_bytes!("fixtures/x-29.db"),
+        beside: Some(include_bytes!("fixtures/x-29.db-journal")),
+    },
+    Configuration {
+        name: "x-30.db",
+        encoding: Encoding::Utf16Le,
+        page_size: 65536,
+        reserved: 32,
+        keeping: Keeping::Log,
+        vacuum: Some(true),
+        bytes: include_bytes!("fixtures/x-30.db"),
+        beside: Some(include_bytes!("fixtures/x-30.db-wal")),
+    },
+];
+
 /// The auto-vacuum dimension of document 16, section 16.11, over the
 /// write path: the same four hundred rows under both settings, chains
 /// that cross the second pointer-map page, the free pages a file that

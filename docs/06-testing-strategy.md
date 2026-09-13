@@ -4204,6 +4204,21 @@ matrix over the write path.
   cut back to, and a map that asks the free list for more pages than it
   holds.
 
+### 6.6.117 The covering array of the matrix (`db-sqlite`)
+
+D-178, document 16 section 16.11. The five dimensions the write path
+answers, put to it together.
+
+- Thirty configurations, `x-01.db` to `x-30.db`, in which every value of
+  the encoding, the page size, the reserved tail, the journal mode and
+  the auto-vacuum setting appears, and every pair of values from two of
+  them appears together at least once.
+- Each holds the same four hundred rows and is the file the shell wrote,
+  with the journal or the log the mode leaves beside it, byte for byte.
+- The pair property is counted rather than asserted: the test names the
+  hundred and fifty-six pairs and fails where a row no longer covers
+  one.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

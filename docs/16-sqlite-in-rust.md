@@ -293,6 +293,15 @@ reserved tail — with the same four hundred rows put in by a key that
 jumps about. Each is built here from the schema and the rows and is the
 file the shell wrote, byte for byte.
 
+Thirty more fixtures, `x-NN.db`, hold the five dimensions the write path
+answers as a covering array: every value of every dimension appears, and
+every pair of values from two dimensions appears together at least once.
+The full cross is 3 x 5 x 3 x 6 x 3 = 810, and thirty is the fewest rows
+such an array can have, because the two widest dimensions are five and
+six values wide. Each holds the same four hundred rows, and each is the
+file the shell wrote — with the journal or the log beside it where the
+mode leaves one — byte for byte.
+
 Six more fixtures, `v-*.db`, hold the auto-vacuum dimension over the
 write path: the same four hundred rows under `full` and under
 `incremental`, chains that cross the second pointer-map page, the free
@@ -313,9 +322,10 @@ The last two dimensions have no fixture: a schema format below four
 needs a database the shell will not write, and temporary storage is not
 a file.
 
-What is left of the matrix over the write path is the encoding and the
-reserved tail crossed with auto-vacuum, which the `v-*` fixtures hold at
-UTF-8 and no reserved tail alone.
+Nothing of the five is left over the write path. The two dimensions
+with no fixture at all stay as they are: a schema format below four
+needs a database the shell will not write, and temporary storage is not
+a file.
 
 ## 16.12 The fixtures
 
@@ -327,6 +337,7 @@ CI has no SQLite.
 |---------|---------------|
 | `m-*.db`, eleven of them | The same three rows and the same index under every configuration of 16.11 the shell can write. |
 | `v-*.db`, six of them | The auto-vacuum dimension over the write path: the pointer maps, the free pages `incremental` keeps, and the pages `full` moves down at the commit. |
+| `x-NN.db`, thirty of them | The covering array of 16.11 over the write path, each with the journal or the log the mode leaves beside it. |
 | `w-*.db`, nine of them | The same four hundred rows, put in by a key that jumps about, under every page size, every encoding and every reserved tail. |
 | `small.db` | One row of each storage class. |
 | `page512.db` | Four hundred rows over 512-byte pages, which makes an interior page, in a table tree and in a key's own tree. |

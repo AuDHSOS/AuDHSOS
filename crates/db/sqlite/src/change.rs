@@ -103,75 +103,47 @@ impl Writer {
         })
     }
 
-    /// The same, under the journal mode given, with the nonce every
-    /// checksum of the journal begins at and the sector its header
-    /// takes.
-    ///
-    /// # Errors
-    ///
-    /// [`Error`] names what the page size or the reserved tail breaks.
-    pub fn journalling(
-        page_size: u32,
-        reserved: u8,
-        encoding: Encoding,
-        mode: Mode,
-        nonce: u32,
-        sector: u32,
-    ) -> Result<Self, Error> {
-        let mut writer = Self::new(page_size, reserved, encoding)?;
-        writer.mode = mode;
-        writer.nonce = nonce;
-        writer.sector = sector;
-        Ok(writer)
+    /// `PRAGMA journal_mode`, with the nonce every checksum of the
+    /// journal begins at and the sector its header takes. The five
+    /// modes here are the ones that write the database file itself;
+    /// [`Writer::logging`] is the sixth.
+    pub const fn journalling(&mut self, mode: Mode, nonce: u32, sector: u32) {
+        self.mode = mode;
+        self.nonce = nonce;
+        self.sector = sector;
     }
 
-    /// The same, with pointer maps, which is what `PRAGMA auto_vacuum`
-    /// turns on before the first table is written: page two becomes the
-    /// first map page, so the first table takes page three.
+    /// `PRAGMA auto_vacuum`, which gives the file pointer maps: page two
+    /// becomes the first map page, so the first table takes page three.
     ///
-    /// # Errors
-    ///
-    /// [`Error`] names what the page size or the reserved tail breaks.
-    pub fn vacuuming(
-        page_size: u32,
-        reserved: u8,
-        encoding: Encoding,
-        incremental: bool,
-    ) -> Result<Self, Error> {
-        let mut writer = Self::new(page_size, reserved, encoding)?;
-        writer.pages.vacuums();
+    /// The pragma writes the file, so it stands before the first
+    /// statement and before [`Writer::logging`].
+    pub fn vacuuming(&mut self, incremental: bool) {
+        self.pages.vacuums();
         // The pragma is itself a change, and the largest root a file
         // with no table holds is page one.
-        writer.header.change_counter = 1;
-        writer.header.version_valid_for = 1;
-        writer.header.largest_root = 1;
-        writer.header.incremental_vacuum = u32::from(incremental);
-        Ok(writer)
+        self.header.change_counter = 1;
+        self.header.version_valid_for = 1;
+        self.header.largest_root = 1;
+        self.header.incremental_vacuum = u32::from(incremental);
     }
 
-    /// The same, in write-ahead logging mode: the commits write frames
-    /// into a log rather than pages into the file, and the file stays
-    /// as `PRAGMA journal_mode=wal` left it until a checkpoint runs.
+    /// `PRAGMA journal_mode=wal`: the commits write frames into a log
+    /// rather than pages into the file, and the file stays as the
+    /// pragma left it until a checkpoint runs.
     ///
-    /// # Errors
-    ///
-    /// [`Error`] names what the page size or the reserved tail breaks.
-    pub fn logging(
-        page_size: u32,
-        reserved: u8,
-        encoding: Encoding,
-        salt: (u32, u32),
-    ) -> Result<Self, Error> {
-        let mut writer = Self::new(page_size, reserved, encoding)?;
+    /// The two salts come from SQLite's random source.
+    pub fn logging(&mut self, salt: (u32, u32)) {
         // The pragma is itself a change, so the file it leaves counts
-        // one and names both versions two.
-        writer.header.write_version = 2;
-        writer.header.read_version = 2;
-        writer.header.change_counter = 1;
-        writer.header.version_valid_for = 1;
-        writer.origin = Some(writer.pages.written(&writer.header));
-        writer.log = Some(Log::new(page_size, salt, 0, false));
-        Ok(writer)
+        // one more and names both versions two. A file that vacuums
+        // itself counted the pragma that said so, so the two pragmas
+        // count two between them.
+        self.header.write_version = 2;
+        self.header.read_version = 2;
+        self.header.change_counter = self.header.change_counter.saturating_add(1);
+        self.header.version_valid_for = self.header.change_counter;
+        self.origin = Some(self.pages.written(&self.header));
+        self.log = Some(Log::new(self.header.page_size, salt, 0, false));
     }
 
     /// The file the statements so far have made. In write-ahead logging

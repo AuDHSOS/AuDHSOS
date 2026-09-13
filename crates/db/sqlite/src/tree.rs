@@ -340,9 +340,13 @@ impl Pages {
     /// does not hold.
     fn plain(&mut self, nearby: u32) -> Result<u32, Error> {
         let Some(number) = self.take(nearby)? else {
-            // `allocateBtreePage`: a page at the end of the file that
-            // falls where a pointer map lies makes that map page and the
-            // caller takes the page after it.
+            // `allocateBtreePage`: page one holds how many pages the
+            // database has, so growing the file writes page one, which
+            // is where the journal takes it.
+            self.keep(1);
+            // A page at the end of the file that falls where a pointer
+            // map lies makes that map page and the caller takes the
+            // page after it.
             let mut number = self.grow();
             if self.is_map(number) {
                 self.keep(number);
@@ -811,26 +815,23 @@ impl Pages {
     /// their numbers run.
     ///
     /// Page one is among them where the transaction changed how many
-    /// pages the database has, because the commit writes that count
-    /// into page one along with the change counter. `now` is the header
-    /// the commit writes, which this crate keeps beside the pages
-    /// rather than on page one; the page count and the free list of it
-    /// are the ones the pages hold, whatever the caller's header says.
+    /// pages the database has, because growing the file opens page one
+    /// to write. `now` is the header the commit writes, which this crate
+    /// keeps beside the pages rather than on page one; the page count
+    /// and the free list of it are the ones the pages hold, whatever
+    /// the caller's header says.
     #[must_use]
     pub fn frames(&self, now: &Header) -> Vec<(u32, Vec<u8>)> {
         let mut now = *now;
         now.pages = self.count();
         now.freelist = self.freelist;
         now.freelist_pages = self.freelist_count;
-        let mut numbers: Vec<u32> = (1..=self.count())
+        let numbers: Vec<u32> = (1..=self.count())
             .filter(|number| {
                 let at = size(u64::from(*number)).saturating_sub(1);
                 self.before.get(at).is_some_and(Option::is_some)
             })
             .collect();
-        if self.origin != self.count() && !numbers.contains(&1) {
-            numbers.insert(0, 1);
-        }
         numbers
             .into_iter()
             .map(|number| {

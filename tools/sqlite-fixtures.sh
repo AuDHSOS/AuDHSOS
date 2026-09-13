@@ -216,6 +216,98 @@ for case in "v-full.db:full:$rows400" \
     printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
 done
 
+# The matrix of document 16, section 16.11, over the write path as a
+# covering array: thirty configurations in which every value of every
+# dimension appears and every pair of values from two dimensions appears
+# together at least once. The full cross is 3 x 5 x 3 x 6 x 3 = 810;
+# thirty is the fewest rows a pair-covering array of these dimensions
+# can have, because the two widest are five and six values wide.
+#
+# Each row names the encoding, the page size, the reserved tail, the
+# journal mode and the auto-vacuum setting, and holds the same four
+# hundred rows put in by a key that jumps about.
+array_case() {
+    name="$1"
+    encoding="$2"
+    page="$3"
+    reserved="$4"
+    journal="$5"
+    vacuum="$6"
+    control=""
+    [ "$reserved" = 0 ] || control=".filectrl reserve_bytes $reserved"
+    encode=""
+    case "$encoding" in
+        utf16le) encode="PRAGMA encoding='UTF-16le';" ;;
+        utf16be) encode="PRAGMA encoding='UTF-16be';" ;;
+    esac
+    rm -f "$out/$name.db" "$out/$name.db-journal" "$out/$name.db-wal" "$out/$name.db-shm"
+    pragmas="PRAGMA page_size=$page; $encode PRAGMA auto_vacuum=$vacuum; PRAGMA journal_mode=$journal;"
+    if [ "$journal" = wal ]; then
+        # A connection that closes checkpoints the log and takes it
+        # away, so the pair is copied while the connection is open, and
+        # the reserved tail is set by that same connection.
+        "$sqlite" "$out/$name.db" >/dev/null <<ARRAY
+$control
+$pragmas
+PRAGMA wal_autocheckpoint=0;
+$rows400
+.system cp "$out/$name.db" "$out/$name-db.tmp"
+.system cp "$out/$name.db-wal" "$out/$name-wal.tmp"
+ARRAY
+        mv "$out/$name-db.tmp" "$out/$name.db"
+        mv "$out/$name-wal.tmp" "$out/$name.db-wal"
+        rm -f "$out/$name.db-shm"
+        printf '%s\t%s bytes, log %s bytes\n' "$name.db" \
+            "$(wc -c <"$out/$name.db" | tr -d ' ')" \
+            "$(wc -c <"$out/$name.db-wal" | tr -d ' ')"
+        return
+    fi
+    if [ -n "$control" ]; then
+        "$sqlite" "$out/$name.db" "$control" "$pragmas $rows400" >/dev/null
+    else
+        "$sqlite" "$out/$name.db" "$pragmas $rows400" >/dev/null
+    fi
+    printf '%s\t%s bytes\n' "$name.db" "$(wc -c <"$out/$name.db" | tr -d ' ')"
+}
+
+for case in \
+    "x-01:utf16le:512:32:delete:incremental" \
+    "x-02:utf16le:512:4:memory:none" \
+    "x-03:utf16be:512:32:off:incremental" \
+    "x-04:utf8:512:0:persist:none" \
+    "x-05:utf16le:512:32:truncate:none" \
+    "x-06:utf16le:512:4:wal:full" \
+    "x-07:utf16le:1024:32:delete:none" \
+    "x-08:utf16be:1024:0:memory:incremental" \
+    "x-09:utf8:1024:32:off:none" \
+    "x-10:utf16be:1024:32:persist:none" \
+    "x-11:utf8:1024:4:truncate:incremental" \
+    "x-12:utf16be:1024:0:wal:full" \
+    "x-13:utf16be:4096:0:delete:none" \
+    "x-14:utf16be:4096:0:memory:incremental" \
+    "x-15:utf8:4096:4:off:full" \
+    "x-16:utf16le:4096:32:persist:incremental" \
+    "x-17:utf16le:4096:32:truncate:full" \
+    "x-18:utf8:4096:32:wal:none" \
+    "x-19:utf8:8192:0:delete:full" \
+    "x-20:utf16le:8192:4:memory:none" \
+    "x-21:utf16le:8192:4:off:none" \
+    "x-22:utf16le:8192:32:persist:incremental" \
+    "x-23:utf16be:8192:32:truncate:none" \
+    "x-24:utf16le:8192:0:wal:incremental" \
+    "x-25:utf16be:65536:4:delete:incremental" \
+    "x-26:utf8:65536:32:memory:full" \
+    "x-27:utf16le:65536:0:off:none" \
+    "x-28:utf16be:65536:4:persist:full" \
+    "x-29:utf16le:65536:0:truncate:full" \
+    "x-30:utf16le:65536:32:wal:incremental" \
+    ; do
+    IFS=: read -r name encoding page reserved journal vacuum <<CASE
+$case
+CASE
+    array_case "$name" "$encoding" "$page" "$reserved" "$journal" "$vacuum"
+done
+
 rm -f "$out/unchained.db"
 "$sqlite" "$out/unchained.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<40) INSERT INTO t(rowid,n,s) SELECT (i*17)%41, i, replace(hex(zeroblob(i*30)),'0','x') FROM c; DELETE FROM t WHERE rowid%3!=0;"
 printf '%s\t%s bytes\n' unchained.db "$(wc -c <"$out/unchained.db" | tr -d ' ')"
