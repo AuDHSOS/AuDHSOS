@@ -64,6 +64,11 @@ through it.
 sh tools/sqlite.sh --version 3.53.4
 ```
 
+`sh tools/xtask.sh norec` is what that build is for: the NoREC fuzzer of
+[`crates/tools/norec`](../crates/tools/norec/README.md) drives the
+`sqlite3` shell it left behind. It is not a step of `check` and needs no
+network, only that build.
+
 ## 7.4 QEMU
 
 QEMU 11.1.1 from MacPorts is installed: `/opt/local/bin/qemu-system-x86_64`

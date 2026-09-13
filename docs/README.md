@@ -58,15 +58,19 @@ the ACPI tables the kernel finds its interrupt controllers through — and
 OpenSSH specified and no standards body did (D-134): the one cipher of
 the Secure Shell client, kept as the OpenSSH document it came from and
 the IETF draft that replaced it, and the private key format a client
-reads a key of its own from. Each directory has a `README.md`
+reads a key of its own from, and [acm/](acm) for the one research
+paper a tool of this repository implements: NoREC, which `norec`
+compares an optimized query against an unoptimized one by. Each
+directory has a `README.md`
 naming what belongs there and how it is fetched. Nothing under them is
 compiled, linked, or read at run time.
 
 D-124 states what decides whether a document is kept: whether it can be
 obtained, not whether its licence permits the copy. `rfc/`, `oasis/`,
 `w3c/`, `ecma/` and `openssh/` hold documents that may be redistributed.
-`itu/`, `cipa/`, `ti/` and `uefi/` hold documents that the ITU, CIPA,
-Texas Instruments and the UEFI Forum serve to anyone at no charge but do
+`itu/`, `cipa/`, `ti/`, `uefi/` and `acm/` hold documents that the ITU,
+CIPA, Texas Instruments, the UEFI Forum and, for the paper in `acm/`, its
+first author serve to anyone at no charge but do
 not licence for redistribution; the copies are kept regardless, and each
 of those READMEs quotes the restriction it stands against and states what
 follows from it. Two of them record something further. `ti/` does,
@@ -77,7 +81,10 @@ to the original were tried and what the substitution does and does not
 cover. `uefi/` does, because its two documents are the first here that a
 shell on the development machine cannot fetch: the Forum's site answers
 an automated request with a bot check, so they were downloaded by hand
-and the checksum is what stands in for the fetch.
+and the checksum is what stands in for the fetch. `acm/` does, because
+what is kept is the authors' accepted version rather than the published
+one: the ACM Digital Library answers an automated request with `403`, and
+the author serves the same paper.
 [pcisig/](pcisig) holds no document, because PCI-SIG releases the two
 specifications the crate `pci` cites only to members or against payment;
 it records instead which documents those are and what takes the place of

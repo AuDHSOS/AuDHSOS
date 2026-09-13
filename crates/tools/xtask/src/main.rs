@@ -49,6 +49,8 @@ subcommands:
                    target/pdf/; options are passed to the tool, which
                    explains them with --help
   jrs [options]    build and run the jrs host CLI in release mode
+  norec [options]  the NoREC fuzzer against the SQLite build under
+                   research/; --help describes its options
   jrs-check [--fix-format]
                    focused jrs formatting, tests, clippy and no_std cross-check
   regex-check [--fix-format]
@@ -126,6 +128,7 @@ fn run() -> Result<(), Error> {
         "test" => commands::test(&root, options),
         "pdf" => commands::pdf(&root, options),
         "jrs" => commands::jrs(&root, options),
+        "norec" => commands::norec(&root, options),
         "jrs-check" => commands::jrs_check(&root, options),
         "regex-check" => commands::regex_check(&root, options),
         "coverage" => none(subcommand, options).and_then(|()| commands::coverage(&root)),

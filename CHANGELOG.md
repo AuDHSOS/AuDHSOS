@@ -7,6 +7,39 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `norec`, a NoREC fuzzer: random SQL against a database engine, checked
+  against the same query in a form that engine cannot optimize. One case
+  is a random database, a random predicate, and two queries over it —
+  the predicate in a `WHERE` clause, where an optimizer works, and the
+  same predicate summed over every row of the same `FROM` clause, where
+  there is nothing to optimize. The two must count the same rows; when
+  they do not, the engine answered its own query two ways. The technique
+  needs no reference implementation and no model of SQL semantics, which
+  is what keeps the tool small. What it generates is what an optimizer
+  has something to do with: affinities and collations, indexes, partial
+  indexes, indexes over expressions, `ANALYZE`, and a second table joined
+  by a comma, a `JOIN` or a `LEFT JOIN`. What it never generates is what
+  section 3.4 of the paper excludes — a subquery, a function of the clock
+  or of a random source, `DISTINCT` and the aggregates — because each may
+  answer the two forms differently. A finding is shrunk to its smallest
+  form, every candidate strictly smaller than the last, and written as a
+  file the shell reproduces it from. It is not a step of `check`:
+  `sh tools/xtask.sh norec` runs it against the build
+  `sh tools/sqlite.sh` leaves under `research/`. SQLite 3.28.0, the
+  version the paper was evaluated against, answers three of twenty
+  thousand cases two ways, each a `LEFT JOIN` whose unmatched row the
+  `WHERE` clause drops and the sum keeps; 3.53.4 answers all twenty
+  thousand consistently. D-140, catalog 6.6.74, and the paper in
+  `docs/acm/`.
+
+- The NoREC paper in `docs/acm/`: Rigger and Su, *Detecting Optimization
+  Bugs in Database Engines via Non-Optimizing Reference Engine
+  Construction*, ESEC/FSE 2020, which `norec` implements and cites by
+  section. The authors' accepted version, because the ACM Digital Library
+  answers an automated request with `403` and the first author serves the
+  same paper; the second case of D-124, so the README records the terms
+  it is kept under. D-140.
+
 - `tools/sqlite.sh`, which clones SQLite, checks out one release tag, and
   builds it below `research/`, where `.gitignore` already keeps the other
   cloned operating systems out of this repository. The reason is reading:

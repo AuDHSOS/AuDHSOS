@@ -921,6 +921,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "norec",
+        path: "crates/tools/norec",
+        kind: Kind::Host,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "xtask",
         path: "crates/tools/xtask",
         kind: Kind::Host,
