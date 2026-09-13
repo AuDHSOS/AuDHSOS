@@ -2536,6 +2536,57 @@ fn register_array_slice_copies_a_range_into_a_new_array() -> Result<(), Error> {
 }
 
 #[test]
+fn an_if_branch_starts_its_completion_at_undefined() -> Result<(), Error> {
+    for source in [
+        // 14.6.2 answers UpdateEmpty(stmtCompletion, undefined), so a break
+        // that leaves an if carries undefined and not the value the enclosing
+        // statement list reached.
+        "let i=4;while(true){i++;if(i)break}",
+        "let i=4;while(true){i++;if(i){break}}",
+        "let i=4;while(true){i++;if(!i)0;else break}",
+        "let i=4;while(true){i++;if(i)if(i)break}",
+        // A value inside the branch is the one it carries.
+        "let i=4;while(true){i++;if(i){5;break}}",
+        "let i=4;while(true){i++;if(!i)0;else{5;break}}",
+        // A break that is not inside an if still carries the statement list.
+        "let i=4;while(true){i++;break}",
+        "let i=4;while(true){i++;{break}}",
+        // The same for continue, which the condition then ends.
+        "let i=0;while(i<3){i++;if(i)continue}",
+        "let i=0;while(i<3){i++;continue}",
+        // A branch that completes normally is unchanged.
+        "2;if(true){}",
+        "2;if(true){3}",
+        "2;if(false){3}",
+        "2;if(false){3}else{4}",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_compound_assignment_of_two_strings_only_concatenates_for_plus() -> Result<(), Error> {
+    for source in [
+        // 13.15.3: only + concatenates; every other operator applies
+        // ToNumeric to both operands first.
+        "let s;s='x';s+='x'",
+        "let s;s='x';s*='x'",
+        "let s;s='x';s-='x'",
+        "let s;s='x';s/='x'",
+        "let s;s='x';s%='x'",
+        "let s='2';s*='3'",
+        "let s='6';s%='4'",
+        "let s='6';s-='4'",
+        "let s='6';s/='4'",
+        "let s='2';s**='3'",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<(), Error> {
     for source in [
         // An intrinsic runs without a call frame, so a user valueOf in a

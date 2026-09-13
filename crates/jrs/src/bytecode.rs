@@ -4067,20 +4067,29 @@ impl RegisterLowerer {
         let branch = self.code.emit(Instruction::JumpIfFalse(0));
         let bindings_before = self.bindings.clone();
         let properties_before = self.object_layouts.clone();
-        self.code
-            .emit(crate::engine::bytecode::Instruction::LdaUndefined);
+        // 14.6.2 answers UpdateEmpty(stmtCompletion, undefined), so a branch
+        // starts from undefined and an abrupt completion inside it carries
+        // that, not the value the enclosing statement list reached.
+        let completion = self.allocate_register()?;
+        self.code.emit(Instruction::LdaUndefined);
+        self.code.emit(Instruction::Star(completion));
+        self.completions.push(completion);
         let yes_flow = self.lower_statement(yes)?;
+        self.completions.pop()?;
         let bindings_after_yes = self.bindings.clone();
         let properties_after_yes = self.object_layouts.clone();
         let jump = (yes_flow != RegisterFlow::Abrupt).then(|| self.code.emit(Instruction::Jump(0)));
         let no_start = self.code.instructions.len();
         self.bindings = bindings_before;
         self.object_layouts = properties_before;
-        self.code
-            .emit(crate::engine::bytecode::Instruction::LdaUndefined);
+        self.code.emit(Instruction::LdaUndefined);
+        self.code.emit(Instruction::Star(completion));
+        self.completions.push(completion);
         let no_flow = no.map_or(Some(RegisterFlow::Value(RegisterType::Undefined)), |no| {
             self.lower_statement(no)
         })?;
+        self.completions.pop()?;
+        self.release_register(completion)?;
         let bindings_after_no = self.bindings.clone();
         let end = self.code.instructions.len();
         self.patch_jump(branch, no_start)?;
@@ -4359,15 +4368,19 @@ impl RegisterLowerer {
             let right_register = self.allocate_register()?;
             self.code.emit(Instruction::Star(right_register));
             self.code.emit(Instruction::Ldar(left_register));
-            // Two operands whose types are primitive but not both numeric or
-            // both String are dispatched at run time through a feedback slot,
-            // exactly as the same operator is outside an assignment.
+            // Two operands the typed instruction does not cover are dispatched
+            // at run time through a feedback slot, exactly as the same
+            // operator is outside an assignment. Only 13.15.3 concatenates two
+            // Strings; every other operator applies ToNumeric to them first.
+            let concatenates = operator == Binary::Add
+                && left_type == RegisterType::String
+                && right_type == RegisterType::String;
             let generic = matches!(
                 operator,
                 Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
             ) && !(left_type.is_numeric_primitive()
                 && right_type.is_numeric_primitive())
-                && !(left_type == RegisterType::String && right_type == RegisterType::String);
+                && !concatenates;
             if generic {
                 let (instruction, generic_type) = self.feedback_binary(operator, right_register)?;
                 self.code.emit(instruction);
