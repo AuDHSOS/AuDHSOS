@@ -50,7 +50,11 @@ pub enum VMError {
     /// An object exceeds the configured own-property limit.
     PropertyLimit,
     /// An exception left the outermost frame without a handler (14.15).
-    Thrown(Value),
+    ///
+    /// An error the engine itself raised also names its type and message, so
+    /// that the embedding sees the error the specification names and not only
+    /// the object.
+    Thrown(Value, Option<(super::realm::NativeErrorKind, &'static str)>),
     /// Property lookup failed or target is not an object.
     TypeError,
     /// Instruction execution fell off bytecode bounds without Return.
@@ -830,7 +834,16 @@ impl RegisterVM {
             }
             Intrinsic::StringPrototypeCharAt
             | Intrinsic::StringPrototypeCharCodeAt
-            | Intrinsic::StringPrototypeIndexOf => {
+            | Intrinsic::StringPrototypeIndexOf
+            | Intrinsic::StringPrototypeAt
+            | Intrinsic::StringPrototypeConcat
+            | Intrinsic::StringPrototypeEndsWith
+            | Intrinsic::StringPrototypeIncludes
+            | Intrinsic::StringPrototypeLastIndexOf
+            | Intrinsic::StringPrototypeRepeat
+            | Intrinsic::StringPrototypeSlice
+            | Intrinsic::StringPrototypeStartsWith
+            | Intrinsic::StringPrototypeSubstring => {
                 self.call_string_intrinsic(intrinsic, call, heap, realm)
             }
         }
@@ -841,6 +854,10 @@ impl RegisterVM {
     /// # Errors
     ///
     /// Returns [`VMError::Thrown`] for a receiver that is not a String.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function keeps each method beside the clause it implements"
+    )]
     fn call_string_intrinsic(
         &self,
         intrinsic: Intrinsic,
@@ -896,6 +913,133 @@ impl RegisterVM {
                 Ok(found.map_or(Value::from_smi(-1), |index| {
                     i32::try_from(index).map_or(VALUE_NAN, Value::from_smi)
                 }))
+            }
+            // 22.1.3.1: a negative index counts from the end, and an index
+            // outside the String is undefined.
+            Intrinsic::StringPrototypeAt => {
+                let relative = integer_argument(argument(self, 0)?, heap)?;
+                let length = i64::try_from(units.len()).unwrap_or(i64::MAX);
+                let index = if relative < 0 {
+                    length.saturating_add(relative)
+                } else {
+                    relative
+                };
+                let unit = usize::try_from(index)
+                    .ok()
+                    .and_then(|index| units.get(index).copied());
+                match unit {
+                    Some(unit) => self.allocate_string(heap, &[unit]),
+                    None => Ok(VALUE_UNDEFINED),
+                }
+            }
+            // 22.1.3.5: every argument is appended in order.
+            Intrinsic::StringPrototypeConcat => {
+                let mut result = units;
+                for index in 0..call.arg_count {
+                    result.extend(property_name_units(argument(self, index)?, heap)?);
+                }
+                self.allocate_string(heap, &result)
+            }
+            // 22.1.3.7: the search ends at the clamped position.
+            Intrinsic::StringPrototypeEndsWith => {
+                let search = property_name_units(argument(self, 0)?, heap)?;
+                let end = match argument(self, 1)? {
+                    value if value.is_undefined() => units.len(),
+                    value => clamped_index(integer_argument(value, heap)?, units.len()),
+                };
+                let start = end.checked_sub(search.len());
+                Ok(Value::from_bool(start.is_some_and(|start| {
+                    units.get(start..end) == Some(search.as_slice())
+                })))
+            }
+            // 22.1.3.8: the search starts at the clamped position.
+            Intrinsic::StringPrototypeIncludes => {
+                let search = property_name_units(argument(self, 0)?, heap)?;
+                let start = clamped_index(integer_argument(argument(self, 1)?, heap)?, units.len());
+                Ok(Value::from_bool(
+                    find_units(&units, &search, start).is_some(),
+                ))
+            }
+            // 22.1.3.10: the last occurrence at or before the clamped position.
+            Intrinsic::StringPrototypeLastIndexOf => {
+                let search = property_name_units(argument(self, 0)?, heap)?;
+                let position = argument(self, 1)?;
+                let last = units.len().saturating_sub(search.len());
+                let end = if position.is_undefined() || primitive_number(position, heap)?.is_nan() {
+                    last
+                } else {
+                    clamped_index(integer_argument(position, heap)?, last)
+                };
+                let found = (0..=end)
+                    .rev()
+                    .filter(|_| search.len() <= units.len())
+                    .find(|index| {
+                        units.get(*index..index.saturating_add(search.len()))
+                            == Some(search.as_slice())
+                    });
+                Ok(found.map_or(Value::from_smi(-1), |index| {
+                    i32::try_from(index).map_or(VALUE_NAN, Value::from_smi)
+                }))
+            }
+            // 22.1.3.17: a negative or infinite count is a RangeError.
+            Intrinsic::StringPrototypeRepeat => {
+                // 22.1.3.17 steps 3 and 4: a negative or infinite count is a
+                // RangeError, before the String's own length is looked at.
+                if primitive_number(argument(self, 0)?, heap)? == f64::INFINITY {
+                    return Err(range_error(heap, realm, "repeat count is out of range"));
+                }
+                // ToIntegerOrInfinity truncates toward zero, so -0.5 is 0 and
+                // only a count that is negative after that is out of range.
+                let count = integer_argument(argument(self, 0)?, heap)?;
+                if count < 0 {
+                    return Err(range_error(heap, realm, "repeat count is out of range"));
+                }
+                if units.is_empty() {
+                    return self.allocate_string(heap, &[]);
+                }
+                let total = usize::try_from(count)
+                    .ok()
+                    .and_then(|count| count.checked_mul(units.len()))
+                    .filter(|total| *total <= self.string_units_limit)
+                    .ok_or(VMError::StringLimit)?;
+                let mut result = Vec::with_capacity(total);
+                for _ in 0..count {
+                    result.extend_from_slice(&units);
+                }
+                self.allocate_string(heap, &result)
+            }
+            // 22.1.3.22: both ends count from the end when negative, and an
+            // inverted range is the empty String.
+            Intrinsic::StringPrototypeSlice => {
+                let start =
+                    relative_index(integer_argument(argument(self, 0)?, heap)?, units.len());
+                let end = match argument(self, 1)? {
+                    value if value.is_undefined() => units.len(),
+                    value => relative_index(integer_argument(value, heap)?, units.len()),
+                };
+                let slice = units.get(start..end.max(start)).unwrap_or_default();
+                self.allocate_string(heap, slice)
+            }
+            // 22.1.3.24: the search starts at the clamped position.
+            Intrinsic::StringPrototypeStartsWith => {
+                let search = property_name_units(argument(self, 0)?, heap)?;
+                let start = clamped_index(integer_argument(argument(self, 1)?, heap)?, units.len());
+                let end = start.saturating_add(search.len());
+                Ok(Value::from_bool(
+                    units.get(start..end) == Some(search.as_slice()),
+                ))
+            }
+            // 22.1.3.25: both ends are clamped and then ordered.
+            Intrinsic::StringPrototypeSubstring => {
+                let first = clamped_index(integer_argument(argument(self, 0)?, heap)?, units.len());
+                let second = match argument(self, 1)? {
+                    value if value.is_undefined() => units.len(),
+                    value => clamped_index(integer_argument(value, heap)?, units.len()),
+                };
+                let slice = units
+                    .get(first.min(second)..first.max(second))
+                    .unwrap_or_default();
+                self.allocate_string(heap, slice)
             }
             _ => Err(VMError::InvalidFeedbackVector),
         }
@@ -1088,6 +1232,7 @@ impl RegisterVM {
         mut pc: usize,
         mut current_code_id: Option<u32>,
         value: Value,
+        native: Option<(super::realm::NativeErrorKind, &'static str)>,
     ) -> Result<(usize, Option<u32>), VMError> {
         loop {
             let active_code = code_unit(code, current_code_id).ok_or(VMError::InvalidBytecode(
@@ -1105,7 +1250,7 @@ impl RegisterVM {
                 self.fp = 0;
                 self.active_binding_count = 0;
                 self.current_context = None;
-                return Err(VMError::Thrown(value));
+                return Err(VMError::Thrown(value, native));
             };
             self.fp = frame.caller_fp;
             self.active_binding_count = frame.caller_binding_count;
@@ -1201,9 +1346,9 @@ impl RegisterVM {
                 Ok(Some(value)) => return Ok(value),
                 // 14.15: a thrown value looks for a handler from the throwing
                 // instruction outwards before it leaves the outermost frame.
-                Err(VMError::Thrown(value)) => {
+                Err(VMError::Thrown(value, native)) => {
                     let (next_pc, next_code_id) =
-                        self.unwind(code, pc.saturating_sub(1), current_code_id, value)?;
+                        self.unwind(code, pc.saturating_sub(1), current_code_id, value, native)?;
                     pc = next_pc;
                     current_code_id = next_code_id;
                 }
@@ -1879,7 +2024,7 @@ impl RegisterVM {
                 Instruction::ForInNext { state } => {
                     self.acc = self.for_in_next(active_code, state, heap, realm)?;
                 }
-                Instruction::Throw => return Err(VMError::Thrown(self.acc)),
+                Instruction::Throw => return Err(VMError::Thrown(self.acc, None)),
                 Instruction::Return => {
                     if let Some(frame) = self.frames.pop() {
                         self.fp = frame.caller_fp;
@@ -2044,9 +2189,63 @@ fn property_key(
 }
 
 /// Creates a `TypeError` of the Realm and raises it as an exception.
-fn type_error(heap: &mut GenerationalHeap, realm: &Realm, message: &str) -> VMError {
-    match realm.create_native_error(heap, super::realm::NativeErrorKind::TypeError, message) {
-        Ok(error) => VMError::Thrown(Value::from_object(error)),
+fn type_error(heap: &mut GenerationalHeap, realm: &Realm, message: &'static str) -> VMError {
+    raise(
+        heap,
+        realm,
+        super::realm::NativeErrorKind::TypeError,
+        message,
+    )
+}
+
+/// A position clamped into `0..=length`, as the String methods of 22.1.3 do
+/// before they index.
+fn clamped_index(position: i64, length: usize) -> usize {
+    usize::try_from(position.max(0))
+        .unwrap_or(usize::MAX)
+        .min(length)
+}
+
+/// A relative index: a negative one counts from the end, and both ends are
+/// clamped into `0..=length`.
+fn relative_index(position: i64, length: usize) -> usize {
+    let length_signed = i64::try_from(length).unwrap_or(i64::MAX);
+    let index = if position < 0 {
+        length_signed.saturating_add(position)
+    } else {
+        position
+    };
+    clamped_index(index, length)
+}
+
+/// The first index at or after `start` where `search` occurs.
+fn find_units(units: &[u16], search: &[u16], start: usize) -> Option<usize> {
+    if search.len() > units.len() {
+        return None;
+    }
+    (start..=units.len().saturating_sub(search.len()))
+        .find(|index| units.get(*index..index.saturating_add(search.len())) == Some(search))
+}
+
+/// Creates a `RangeError` of the Realm and raises it as an exception.
+fn range_error(heap: &mut GenerationalHeap, realm: &Realm, message: &'static str) -> VMError {
+    raise(
+        heap,
+        realm,
+        super::realm::NativeErrorKind::RangeError,
+        message,
+    )
+}
+
+/// Creates an error of the Realm and raises it as an exception.
+fn raise(
+    heap: &mut GenerationalHeap,
+    realm: &Realm,
+    kind: super::realm::NativeErrorKind,
+    message: &'static str,
+) -> VMError {
+    match realm.create_native_error(heap, kind, message) {
+        Ok(error) => VMError::Thrown(Value::from_object(error), Some((kind, message))),
         Err(error) => VMError::Heap(error),
     }
 }
@@ -2786,7 +2985,7 @@ mod tests {
         ));
         for nullish in [VALUE_UNDEFINED, VALUE_NULL] {
             let error = RegisterVM::coerce_object(nullish, &mut heap, &realm).unwrap_err();
-            let VMError::Thrown(value) = error else {
+            let VMError::Thrown(value, _) = error else {
                 panic!("expected a thrown TypeError, got {error:?}");
             };
             let thrown = value.as_object().unwrap();
@@ -2851,7 +3050,7 @@ mod tests {
         let error = vm
             .run(&code, &mut feedback, &mut heap, &realm)
             .expect_err("a Smi is not callable");
-        let VMError::Thrown(value) = error else {
+        let VMError::Thrown(value, _) = error else {
             panic!("expected a thrown TypeError, got {error:?}");
         };
         let thrown = value.as_object().unwrap();

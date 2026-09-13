@@ -4245,13 +4245,21 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
     match intrinsic {
         crate::engine::realm::Intrinsic::ObjectPrototypeHasOwnProperty
         | crate::engine::realm::Intrinsic::ObjectPrototypeIsPrototypeOf
-        | crate::engine::realm::Intrinsic::ObjectPrototypePropertyIsEnumerable => {
-            RegisterType::Boolean
-        }
+        | crate::engine::realm::Intrinsic::ObjectPrototypePropertyIsEnumerable
+        | crate::engine::realm::Intrinsic::StringPrototypeEndsWith
+        | crate::engine::realm::Intrinsic::StringPrototypeIncludes
+        | crate::engine::realm::Intrinsic::StringPrototypeStartsWith => RegisterType::Boolean,
         crate::engine::realm::Intrinsic::ObjectPrototypeToString
-        | crate::engine::realm::Intrinsic::StringPrototypeCharAt => RegisterType::String,
+        | crate::engine::realm::Intrinsic::StringPrototypeCharAt
+        | crate::engine::realm::Intrinsic::StringPrototypeConcat
+        | crate::engine::realm::Intrinsic::StringPrototypeRepeat
+        | crate::engine::realm::Intrinsic::StringPrototypeSlice
+        | crate::engine::realm::Intrinsic::StringPrototypeSubstring => RegisterType::String,
         crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
-        | crate::engine::realm::Intrinsic::StringPrototypeIndexOf => RegisterType::Number,
+        | crate::engine::realm::Intrinsic::StringPrototypeIndexOf
+        | crate::engine::realm::Intrinsic::StringPrototypeLastIndexOf => RegisterType::Number,
+        // 22.1.3.1 answers undefined for an index outside the String.
+        crate::engine::realm::Intrinsic::StringPrototypeAt => RegisterType::Primitive,
     }
 }
 

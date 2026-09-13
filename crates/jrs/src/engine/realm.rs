@@ -66,6 +66,24 @@ pub enum Intrinsic {
     StringPrototypeCharCodeAt,
     /// `String.prototype.indexOf` (22.1.3.9).
     StringPrototypeIndexOf,
+    /// `String.prototype.at` (22.1.3.1).
+    StringPrototypeAt,
+    /// `String.prototype.concat` (22.1.3.5).
+    StringPrototypeConcat,
+    /// `String.prototype.endsWith` (22.1.3.7).
+    StringPrototypeEndsWith,
+    /// `String.prototype.includes` (22.1.3.8).
+    StringPrototypeIncludes,
+    /// `String.prototype.lastIndexOf` (22.1.3.10).
+    StringPrototypeLastIndexOf,
+    /// `String.prototype.repeat` (22.1.3.17).
+    StringPrototypeRepeat,
+    /// `String.prototype.slice` (22.1.3.22).
+    StringPrototypeSlice,
+    /// `String.prototype.startsWith` (22.1.3.24).
+    StringPrototypeStartsWith,
+    /// `String.prototype.substring` (22.1.3.25).
+    StringPrototypeSubstring,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -79,7 +97,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 16] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -87,6 +105,15 @@ impl Intrinsic {
         Self::StringPrototypeCharAt,
         Self::StringPrototypeCharCodeAt,
         Self::StringPrototypeIndexOf,
+        Self::StringPrototypeAt,
+        Self::StringPrototypeConcat,
+        Self::StringPrototypeEndsWith,
+        Self::StringPrototypeIncludes,
+        Self::StringPrototypeLastIndexOf,
+        Self::StringPrototypeRepeat,
+        Self::StringPrototypeSlice,
+        Self::StringPrototypeStartsWith,
+        Self::StringPrototypeSubstring,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -99,7 +126,16 @@ impl Intrinsic {
             | Self::ObjectPrototypeToString => IntrinsicHolder::ObjectPrototype,
             Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
-            | Self::StringPrototypeIndexOf => IntrinsicHolder::StringPrototype,
+            | Self::StringPrototypeIndexOf
+            | Self::StringPrototypeAt
+            | Self::StringPrototypeConcat
+            | Self::StringPrototypeEndsWith
+            | Self::StringPrototypeIncludes
+            | Self::StringPrototypeLastIndexOf
+            | Self::StringPrototypeRepeat
+            | Self::StringPrototypeSlice
+            | Self::StringPrototypeStartsWith
+            | Self::StringPrototypeSubstring => IntrinsicHolder::StringPrototype,
         }
     }
 
@@ -114,6 +150,15 @@ impl Intrinsic {
             Self::StringPrototypeCharAt => 4,
             Self::StringPrototypeCharCodeAt => 5,
             Self::StringPrototypeIndexOf => 6,
+            Self::StringPrototypeAt => 7,
+            Self::StringPrototypeConcat => 8,
+            Self::StringPrototypeEndsWith => 9,
+            Self::StringPrototypeIncludes => 10,
+            Self::StringPrototypeLastIndexOf => 11,
+            Self::StringPrototypeRepeat => 12,
+            Self::StringPrototypeSlice => 13,
+            Self::StringPrototypeStartsWith => 14,
+            Self::StringPrototypeSubstring => 15,
         }
     }
 
@@ -127,6 +172,15 @@ impl Intrinsic {
             Self::StringPrototypeCharAt => 4,
             Self::StringPrototypeCharCodeAt => 5,
             Self::StringPrototypeIndexOf => 6,
+            Self::StringPrototypeAt => 7,
+            Self::StringPrototypeConcat => 8,
+            Self::StringPrototypeEndsWith => 9,
+            Self::StringPrototypeIncludes => 10,
+            Self::StringPrototypeLastIndexOf => 11,
+            Self::StringPrototypeRepeat => 12,
+            Self::StringPrototypeSlice => 13,
+            Self::StringPrototypeStartsWith => 14,
+            Self::StringPrototypeSubstring => 15,
         }
     }
 
@@ -141,6 +195,15 @@ impl Intrinsic {
             4 => Some(Self::StringPrototypeCharAt),
             5 => Some(Self::StringPrototypeCharCodeAt),
             6 => Some(Self::StringPrototypeIndexOf),
+            7 => Some(Self::StringPrototypeAt),
+            8 => Some(Self::StringPrototypeConcat),
+            9 => Some(Self::StringPrototypeEndsWith),
+            10 => Some(Self::StringPrototypeIncludes),
+            11 => Some(Self::StringPrototypeLastIndexOf),
+            12 => Some(Self::StringPrototypeRepeat),
+            13 => Some(Self::StringPrototypeSlice),
+            14 => Some(Self::StringPrototypeStartsWith),
+            15 => Some(Self::StringPrototypeSubstring),
             _ => None,
         }
     }
@@ -156,6 +219,15 @@ impl Intrinsic {
             Self::StringPrototypeCharAt => "charAt",
             Self::StringPrototypeCharCodeAt => "charCodeAt",
             Self::StringPrototypeIndexOf => "indexOf",
+            Self::StringPrototypeAt => "at",
+            Self::StringPrototypeConcat => "concat",
+            Self::StringPrototypeEndsWith => "endsWith",
+            Self::StringPrototypeIncludes => "includes",
+            Self::StringPrototypeLastIndexOf => "lastIndexOf",
+            Self::StringPrototypeRepeat => "repeat",
+            Self::StringPrototypeSlice => "slice",
+            Self::StringPrototypeStartsWith => "startsWith",
+            Self::StringPrototypeSubstring => "substring",
         }
     }
 
@@ -169,7 +241,15 @@ impl Intrinsic {
             | Self::ObjectPrototypePropertyIsEnumerable
             | Self::StringPrototypeCharAt
             | Self::StringPrototypeCharCodeAt
-            | Self::StringPrototypeIndexOf => 1,
+            | Self::StringPrototypeIndexOf
+            | Self::StringPrototypeAt
+            | Self::StringPrototypeConcat
+            | Self::StringPrototypeEndsWith
+            | Self::StringPrototypeIncludes
+            | Self::StringPrototypeLastIndexOf
+            | Self::StringPrototypeRepeat
+            | Self::StringPrototypeStartsWith => 1,
+            Self::StringPrototypeSlice | Self::StringPrototypeSubstring => 2,
         }
     }
 }

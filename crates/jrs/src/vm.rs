@@ -457,8 +457,20 @@ impl Execution<'_> {
     fn register_exception(
         &mut self,
         value: crate::engine::value::Value,
+        native: Option<(crate::engine::realm::NativeErrorKind, &'static str)>,
         agent: &crate::engine::agent::Agent,
     ) -> Error {
+        // An error the engine raised is the error the specification names, in
+        // the form the legacy backend reports for the same operation.
+        if let Some((kind, message)) = native {
+            return match kind {
+                crate::engine::realm::NativeErrorKind::TypeError => Error::Type { message },
+                crate::engine::realm::NativeErrorKind::RangeError => Error::Range { message },
+                _ => Error::Thrown {
+                    value: Value::string(message),
+                },
+            };
+        }
         if let Some(value) = register_primitive(value, &agent.heap) {
             return Error::Thrown { value };
         }
@@ -545,8 +557,8 @@ impl Execution<'_> {
         self.fuel = vm.fuel;
         let result = match result {
             Ok(value) => register_primitive(value, &agent.heap).ok_or(Error::InvalidBytecode),
-            Err(crate::engine::interpreter::VMError::Thrown(value)) => {
-                Err(self.register_exception(value, &agent))
+            Err(crate::engine::interpreter::VMError::Thrown(value, native)) => {
+                Err(self.register_exception(value, native, &agent))
             }
             Err(
                 crate::engine::interpreter::VMError::InvalidBytecode(_)

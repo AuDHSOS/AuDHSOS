@@ -2467,11 +2467,10 @@ fn an_engine_error_reaches_the_embedding_as_the_same_error_type() -> Result<(), 
     let error = realm
         .evaluate_compiled(&script)
         .expect_err("a Smi is not callable");
-    let Error::Thrown { value } = error else {
-        panic!("expected a thrown TypeError, got {error:?}");
-    };
-    let name = realm.get(&value, &Value::string("name"))?;
-    assert_eq!(name, Value::string("TypeError"));
+    assert!(
+        matches!(error, Error::Type { .. }),
+        "expected a TypeError, got {error:?}"
+    );
     Ok(())
 }
 
@@ -2514,6 +2513,28 @@ fn register_string_methods_run_as_native_intrinsics() -> Result<(), Error> {
         "''.indexOf('a')",
         "let s='hello';s.charAt(1)+s.charAt(0)",
         "let s='hello';s.indexOf('l')",
+        "'abc'.at(-1)",
+        "'abc'.at(0)",
+        "'abc'.at(9)",
+        "'ab'.concat('c','d')",
+        "'abc'.endsWith('c')",
+        "'abc'.endsWith('a')",
+        "'abc'.endsWith('a',1)",
+        "'abc'.includes('b')",
+        "'abc'.includes('z')",
+        "'abcabc'.lastIndexOf('b')",
+        "'abcabc'.lastIndexOf('b',2)",
+        "'ab'.repeat(3)",
+        "'ab'.repeat(0)",
+        "''.repeat(5)",
+        "'abcdef'.slice(1,3)",
+        "'abcdef'.slice(-2)",
+        "'abcdef'.slice(4,2)",
+        "'abc'.startsWith('ab')",
+        "'abc'.startsWith('b',1)",
+        "'abcdef'.substring(4,2)",
+        "'abcdef'.substring(1)",
+        "let s='hello world';s.slice(s.indexOf(' ')+1)",
     ] {
         differential(source)?;
     }
