@@ -83,9 +83,8 @@ fn answer(bytes: &[u8], sql: &str) -> Option<String> {
 #[test]
 fn every_statement_answers_what_the_c_library_answers() {
     // What is left is the shapes this engine refuses by name: a
-    // statement inside a `FROM`, a `WITH`, a table whose rows live in
-    // the key's own tree, a column that is computed and not stored, and
-    // a `GROUP BY` that counts to a `*`.
+    // statement inside a `FROM`, a `WITH`, and a table whose rows live
+    // in the key's own tree.
     let mut refused = 0;
     let cases = corpus();
     let answers = golden();
@@ -106,7 +105,7 @@ fn every_statement_answers_what_the_c_library_answers() {
         };
         assert_eq!(mine, theirs, "{sql} over {name}");
     }
-    assert_eq!(refused, 6, "what this engine does not answer yet");
+    assert_eq!(refused, 4, "what this engine does not answer yet");
 }
 
 #[test]
@@ -230,6 +229,25 @@ fn record(values: [Result<&str, i64>; 5]) -> Vec<u8> {
     out.extend_from_slice(&serials);
     out.extend_from_slice(&body);
     out
+}
+
+#[test]
+fn a_computed_column_that_cannot_be_computed_is_refused() {
+    use crate::db::Error;
+    // The table reads the schema page as its own rows, so that a row
+    // exists to compute a column of. Its last column names itself.
+    for text in [
+        "CREATE TABLE a(p,q,r,s,t,u AS (u+1))",
+        "CREATE TABLE a(p,q,r,s,t,u AS (nosuch))",
+    ] {
+        let file = schema_file(&[record([Ok("table"), Ok("a"), Ok("a"), Err(1), Ok(text)])]);
+        let database = Database::open(&file).unwrap();
+        assert_eq!(
+            database.query(b"SELECT * FROM a").unwrap_err(),
+            Error::Computed,
+            "{text}"
+        );
+    }
 }
 
 #[test]

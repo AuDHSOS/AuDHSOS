@@ -1102,7 +1102,22 @@ static const char *aQuery[] = {
   "joins.db|SELECT * FROM a FULL JOIN b ON a.x=b.x WHERE a.x IS NULL",
   "joins.db|SELECT * FROM a RIGHT JOIN b ON a.x=b.x WHERE b.x=4",
   "joins.db|SELECT abs(b.x) FROM a RIGHT JOIN b ON a.x=b.x",
-  "joins.db|SELECT abs(b.x) FROM a JOIN b ON a.x=b.x"
+  "joins.db|SELECT abs(b.x) FROM a JOIN b ON a.x=b.x",
+  "generated.db|SELECT b, c FROM g ORDER BY a",
+  "generated.db|SELECT * FROM g WHERE b>2",
+  "generated.db|SELECT * FROM f",
+  "generated.db|SELECT * FROM i",
+  "generated.db|SELECT typeof(a), typeof(b), typeof(c) FROM i",
+  "generated.db|SELECT count(*), sum(c), max(b) FROM g",
+  "generated.db|SELECT * FROM g JOIN h ON g.c=h.c",
+  "generated.db|SELECT * FROM g GROUP BY 2",
+  "generated.db|SELECT rowid, * FROM f",
+  "small.db|SELECT *, count(*) FROM t GROUP BY 2",
+  "small.db|SELECT a, * FROM t GROUP BY 3 ORDER BY 1",
+  "small.db|SELECT *, count(*) FROM t GROUP BY 9",
+  "generated.db|SELECT * FROM j",
+  "joins.db|SELECT a.*, count(*) FROM a GROUP BY 1 ORDER BY 1",
+  "joins.db|SELECT *, count(*) FROM a JOIN b USING(x) GROUP BY 2 ORDER BY 1"
 };
 
 /* The cases, one per line. */

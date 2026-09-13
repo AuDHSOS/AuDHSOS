@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Columns a record does not hold, in `db-sqlite`: a column computed and
+  not stored is filled in after the record is read, by passes that
+  repeat until none settles anything, so that one such column may name
+  another in either direction as SQLite allows. It takes its declared
+  affinity. The record is read by the storage place each column has,
+  because a computed column takes none. A `GROUP BY` that counts to a
+  `*` now counts the answered columns rather than the result columns,
+  and reaches the table column the `*` stands for.
 - `RIGHT JOIN` and `FULL JOIN` in `db-sqlite`, and document 16 rewritten
   into the planning form of document 15: terms, goal, what is built, what
   is missing, four numbered decisions, one section per step with Status,

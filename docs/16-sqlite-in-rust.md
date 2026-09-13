@@ -96,9 +96,9 @@ Each rule is checkable, and each makes a later thing possible.
 | `UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT`, `VALUES` | answered |
 | A comma, `JOIN`, `INNER`, `CROSS`, `LEFT`, `RIGHT`, `FULL`, `ON`, `USING`, `NATURAL` | answered |
 | A table written with `main` in front of it | answered |
+| A column that is computed, stored or not | answered |
 | A statement inside a `FROM`, a `WITH`, a window clause | refused by name |
 | A table whose rows live in the key's own tree | refused by name |
-| A column that is computed and not stored | refused by name |
 
 ### What the tests hold it to
 
@@ -111,7 +111,7 @@ Each rule is checkable, and each makes a later thing possible.
 | Doubles as text | 8404, at three precisions | recorded oracle, `fp.corpus` |
 | Text as numbers | 215 | recorded oracle, `num.corpus` |
 | Expressions, answered | 17051 | recorded oracle, `eval.corpus` |
-| Statements, answered | 272 over 14 fixtures | recorded oracle, `query.corpus` |
+| Statements, answered | 287 over 14 fixtures | recorded oracle, `query.corpus` |
 | The format under every configuration | 11 fixtures, the same three rows and the same index | the matrix, 16.11 |
 | The readers against arbitrary bytes | 4 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval` |
 
@@ -249,7 +249,7 @@ CI has no SQLite.
 | `overflow.db` | A payload that continues on overflow pages. |
 | `indexed.db` | One table with two indexes. |
 | `keys.db` | The three shapes a key takes: a rowid alias, a key written backwards, a table with no rowid. |
-| `generated.db` | Computed columns, stored and not stored. |
+| `generated.db` | Computed columns: stored, not stored, one naming a column computed after it, and one of each declared type. |
 | `joins.db` | Three tables: two sharing a column named `x`, one sharing `y` and collating it without case. |
 
 ## 16.13 The layers
@@ -417,7 +417,8 @@ Size: L.
 2. Answer an expression over a row, with affinity and collation applied
    as the comparison opcodes apply them.
 3. Walk one table's tree and answer `SELECT` over it, with `WHERE`,
-   `ORDER BY`, `LIMIT` and `DISTINCT`.
+   `ORDER BY`, `LIMIT` and `DISTINCT`, computing the columns the record
+   does not hold.
 4. Group the rows and accumulate the seven aggregates.
 5. Put several cores together with the four compound operators.
 6. Nest the loops for a join, one level per side.
@@ -429,7 +430,7 @@ Size: L.
 
 ### Done when
 
-8404 doubles, 215 numbers, 17051 expressions and 272 statements agree
+8404 doubles, 215 numbers, 17051 expressions and 287 statements agree
 with the C library; `sqlite_eval` and `sqlite_image` replay their corpora
 without a panic; the crate meets D4.
 
@@ -453,7 +454,7 @@ Size: L.
 
 ### Done when
 
-The 272 recorded statements answer the same rows through the machine as
+The 287 recorded statements answer the same rows through the machine as
 through the walker; the crate meets D4.
 
 ## 16.21 Q7. Writing

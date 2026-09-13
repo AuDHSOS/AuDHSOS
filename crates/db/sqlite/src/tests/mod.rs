@@ -71,7 +71,11 @@ pub(super) const KEYS: &[u8] = include_bytes!("fixtures/keys.db");
 /// stored, and one where every computed column is.
 ///
 /// `CREATE TABLE g(a, b AS (a+1), c AS (a*2) STORED); CREATE TABLE h(a,
-/// c AS (a*2) STORED);`
+/// c AS (a*2) STORED); CREATE TABLE f(a, b AS (c+1), c AS (a*2));
+/// CREATE TABLE i(a, b TEXT AS (a), c INT AS (a)); CREATE TABLE j(a, b
+/// AS (hex(a)), c AS (nullif(a,1)));` — `f` names a column computed
+/// after it, `i` gives each a declared type, and `j` computes one from
+/// the encoding and one from the collation.
 pub(super) const GENERATED: &[u8] = include_bytes!("fixtures/generated.db");
 
 /// Text in UTF-16 that reaches past the sixteen-bit range, which is

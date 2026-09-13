@@ -3339,7 +3339,7 @@ tree: the first statement this port answers end to end.
   statement per line, and `fixtures/query.golden` is the columns SQLite
   named and the rows it answered, each value quoted, written by
   `tools/sqlite-oracle.c`. The comparison is the name of every column
-  and the value of every field, over two hundred and seventy-two statements
+  and the value of every field, over two hundred and eighty-seven statements
   against fourteen files — every page size of the matrix, reserved space, a file that has
   been through write-ahead logging, both kinds of auto-vacuum, a tree
   with an interior page, a row on overflow pages, a key that is the
@@ -3352,10 +3352,8 @@ tree: the first statement this port answers end to end.
   NOCASE` whole, because a collation written around a column stops it
   being one.
 - What the engine refuses by name is counted rather than asserted: a
-  statement inside a `FROM`, a `WITH`, a table whose rows live in the
-  key's own tree, a column that is computed and not stored, and a
-  `GROUP BY` that counts to a `*`. The count is held down so that it can
-  only fall.
+  statement inside a `FROM`, a `WITH`, and a table whose rows live in
+  the key's own tree. The count is held down so that it can only fall.
 - Text in UTF-16 is answered as well as text in UTF-8, both ways round,
   and the three places the stored encoding shows through are tested
   under both: `hex`, `octet_length` and a cast to a blob. So is the one
@@ -3493,6 +3491,28 @@ and fifty-one statements over them.
 - `sqlite_image` joins every fuzzed table to itself with a `FULL JOIN`
   on a key that matches every row but one, so that the nest and the pass
   over what it matched nothing to are both walked over a file that lies.
+
+### 6.6.90 Columns a record does not hold (`db-sqlite`)
+
+D-151. A column computed and not stored takes no place in the record, so
+the record is read by the storage place each column has and not by the
+column's own place.
+
+- `fixtures/generated.db` holds four tables: one with a stored computed
+  column and one without, one whose computed column names a column
+  computed after it, one giving each computed column a declared type,
+  and one computing from the file's encoding and from the default
+  collation.
+- The order the passes settle in: a computed column that names a
+  computed column is settled by the pass after that one. A column that
+  names itself, and one that names a column no table has, both refuse —
+  neither is a table the shell will write, so both are hand-built
+  schemas whose table reads the schema page as its own rows.
+- A computed column takes its declared affinity, so `b TEXT AS (a)` over
+  an integer answers text.
+- A `GROUP BY` that counts to a `*` counts the answered columns and not
+  the result columns, so it reaches the table column the `*` stands for,
+  a column a `USING` hides included.
 
 ## 6.7 CI pipeline
 

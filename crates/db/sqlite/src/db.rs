@@ -66,6 +66,9 @@ pub enum Error {
     /// A `*` over two tables of one name, every column of which two
     /// tables would answer.
     Ambiguous,
+    /// A computed column that names itself, or names a column no table
+    /// has.
+    Computed,
     /// A table whose rows live in the key's own tree. Reading one is
     /// reading an index, which is a later step.
     WithoutRowid,
@@ -105,6 +108,11 @@ struct Stored {
     table: Table,
     /// The page its tree begins at.
     root: u32,
+    /// The `CREATE` text, which a computed column's expression points
+    /// into.
+    sql: Vec<u8>,
+    /// The tree that text was parsed into.
+    arena: Arena,
 }
 
 /// One table of a `FROM` clause, and how it attaches to the ones before
@@ -214,6 +222,8 @@ impl<'a> Database<'a> {
             tables.push(Stored {
                 table,
                 root: u32::try_from(root).unwrap_or(0),
+                sql,
+                arena,
             });
         }
         Ok(Database {
@@ -387,7 +397,11 @@ impl<'a> Database<'a> {
                 return Err(Error::NoTable);
             }
             let stored = self.find(name.text(sql)).ok_or(Error::NoTable)?;
-            readable(stored)?;
+            if stored.table.without_rowid {
+                // The rows of such a table live in the key's own tree,
+                // and reading one is reading an index.
+                return Err(Error::WithoutRowid);
+            }
             let written: Vec<Vec<u8>> = arena
                 .names(source.using)
                 .iter()
@@ -443,24 +457,51 @@ impl<'a> Database<'a> {
             return each(&cursor);
         }
         let mut kept: Vec<Vec<i64>> = alloc::vec![Vec::new(); sides.len()];
-        self.nest(sides, 0, &mut cursor, arena, sql, each, &mut kept)?;
+        self.nest(sides, 0, &mut cursor, arena, sql, each, &mut kept, None)?;
         // Then the rows a `RIGHT` or a `FULL` join keeps that the nest
         // matched nothing to, with the levels before them empty. They
         // come after every row the nest answered, which is the order
         // `sqlite3WhereRightJoinLoop` walks them in.
+        let mut ignored: Vec<Vec<i64>> = alloc::vec![Vec::new(); sides.len()];
         for (at, side) in sides.iter().enumerate() {
-            if matches!(side.kind, JoinKind::Right | JoinKind::Full) {
-                self.spare(sides, at, side, &kept, &mut cursor, arena, sql, each)?;
+            if !matches!(side.kind, JoinKind::Right | JoinKind::Full) {
+                continue;
             }
+            cursor.held.clear();
+            for before in sides.iter().take(at) {
+                cursor.held.push(Held::empty(
+                    &before.stored.table,
+                    before.alias,
+                    &before.using,
+                ));
+            }
+            let matched = kept.get(at).map_or(&[][..], Vec::as_slice);
+            self.nest(
+                sides,
+                at,
+                &mut cursor,
+                arena,
+                sql,
+                each,
+                &mut ignored,
+                Some(matched),
+            )?;
+            cursor.held.clear();
         }
         Ok(())
     }
 
     /// One level of the nest: every row of `sides[at]` against what the
     /// levels above it hold.
+    ///
+    /// `spare` names the rows of this level to pass over, and says that
+    /// the levels before it are empty: the join condition is not read,
+    /// and no row is kept for a `LEFT`. Finding whether a row was
+    /// matched is a walk of what was: O(n·m) for `n` rows against `m`
+    /// matches.
     #[expect(
         clippy::too_many_arguments,
-        reason = "the tables, where the walk stands, what it holds, the statement, and what it has matched"
+        reason = "the tables, where the walk stands, what it holds, the statement, what it has matched, and what it passes over"
     )]
     fn nest<'b>(
         &self,
@@ -471,6 +512,7 @@ impl<'a> Database<'a> {
         sql: &[u8],
         each: &mut dyn FnMut(&Cursor<'b>) -> Result<(), Error>,
         kept: &mut [Vec<i64>],
+        spare: Option<&[i64]>,
     ) -> Result<(), Error> {
         let Some(side) = sides.get(at) else {
             return each(cursor);
@@ -480,68 +522,7 @@ impl<'a> Database<'a> {
         let mut payload = Vec::new();
         for row in self.image.rows(side.stored.root) {
             let row = row?;
-            read_payload(&self.image, &row.payload, &mut payload)?;
-            cursor.held.push(Held {
-                table: &side.stored.table,
-                alias: side.alias,
-                using: &side.using,
-                rowid: Some(row.rowid),
-                values: values_of(&payload, &side.stored.table, row.rowid, self.encoding)?,
-            });
-            let attached = attached(arena, side, cursor, sql)?;
-            if attached {
-                any = true;
-                mark(kept, at, row.rowid);
-                self.nest(sides, deeper, cursor, arena, sql, each, kept)?;
-            }
-            cursor.held.pop();
-        }
-        if !any && matches!(side.kind, JoinKind::Left | JoinKind::Full) {
-            // A `LEFT JOIN` answers the row on the left once with
-            // nothing on the right where nothing on the right matched.
-            cursor
-                .held
-                .push(Held::empty(&side.stored.table, side.alias, &side.using));
-            self.nest(sides, deeper, cursor, arena, sql, each, kept)?;
-            cursor.held.pop();
-        }
-        Ok(())
-    }
-
-    /// The rows of `sides[at]` the nest matched nothing to, each with the
-    /// levels before it empty and the levels after it walked as usual.
-    ///
-    /// Finding whether a row was matched is a walk of what was: O(n·m)
-    /// for `n` rows against `m` matches.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the tables, which of them keeps its rows, what the nest matched, and the statement"
-    )]
-    fn spare<'b>(
-        &self,
-        sides: &'b [Side<'b>],
-        at: usize,
-        side: &'b Side<'b>,
-        kept: &[Vec<i64>],
-        cursor: &mut Cursor<'b>,
-        arena: &Arena,
-        sql: &[u8],
-        each: &mut dyn FnMut(&Cursor<'b>) -> Result<(), Error>,
-    ) -> Result<(), Error> {
-        let matched = kept.get(at).map_or(&[][..], Vec::as_slice);
-        cursor.held.clear();
-        for before in sides.iter().take(at) {
-            cursor.held.push(Held::empty(
-                &before.stored.table,
-                before.alias,
-                &before.using,
-            ));
-        }
-        let mut ignored: Vec<Vec<i64>> = alloc::vec![Vec::new(); sides.len()];
-        let mut payload = Vec::new();
-        for row in self.image.rows(side.stored.root) {
-            let row = row?;
-            if matched.contains(&row.rowid) {
+            if spare.is_some_and(|skip| skip.contains(&row.rowid)) {
                 continue;
             }
             read_payload(&self.image, &row.payload, &mut payload)?;
@@ -550,20 +531,34 @@ impl<'a> Database<'a> {
                 alias: side.alias,
                 using: &side.using,
                 rowid: Some(row.rowid),
-                values: values_of(&payload, &side.stored.table, row.rowid, self.encoding)?,
+                values: values_of(
+                    &payload,
+                    side.stored,
+                    row.rowid,
+                    self.encoding,
+                    self.collation(),
+                )?,
             });
-            self.nest(
-                sides,
-                at.saturating_add(1),
-                cursor,
-                arena,
-                sql,
-                each,
-                &mut ignored,
-            )?;
+            let attached = match spare {
+                Some(_) => true,
+                None => attached(arena, side, cursor, sql)?,
+            };
+            if attached {
+                any = true;
+                mark(kept, at, row.rowid);
+                self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
+            }
             cursor.held.pop();
         }
-        cursor.held.clear();
+        if spare.is_none() && !any && matches!(side.kind, JoinKind::Left | JoinKind::Full) {
+            // A `LEFT JOIN` answers the row on the left once with
+            // nothing on the right where nothing on the right matched.
+            cursor
+                .held
+                .push(Held::empty(&side.stored.table, side.alias, &side.using));
+            self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
+            cursor.held.pop();
+        }
         Ok(())
     }
 
@@ -586,7 +581,7 @@ impl<'a> Database<'a> {
             }
             let mut key = Vec::new();
             for term in &terms {
-                key.push(evaluate_collated(arena, *term, sql, cursor)?);
+                key.push(grouped(*term, arena, sql, cursor)?);
             }
             let found = groups.iter().position(|group| alike(&group.key, &key));
             let group = if let Some(at) = found {
@@ -730,28 +725,6 @@ fn mark(kept: &mut [Vec<i64>], at: usize, rowid: i64) {
     }
 }
 
-/// Whether the rows of a table are ones this engine reads.
-///
-/// This is its own function rather than two tests inside the walk
-/// because the walk is written once per shape of statement and this is
-/// the same answer for all of them.
-fn readable(stored: &Stored) -> Result<(), Error> {
-    if stored.table.without_rowid {
-        return Err(Error::WithoutRowid);
-    }
-    if stored
-        .table
-        .columns
-        .iter()
-        .any(|column| column.generated == Generated::Virtual)
-    {
-        // A virtual column is not in the row; computing one is a later
-        // step.
-        return Err(Error::Unsupported);
-    }
-    Ok(())
-}
-
 /// One aggregate call of a statement.
 struct Call {
     /// The node it was written as, which is what answers it: two
@@ -832,7 +805,52 @@ impl<'a> Group<'a> {
     }
 }
 
-/// The expressions a `GROUP BY` groups by.
+/// What a `GROUP BY` groups by.
+#[derive(Clone, Copy)]
+enum Term {
+    /// An expression over the row.
+    Expr(ExprId),
+    /// A column of one of the tables, which is what a place counting to
+    /// a `*` lands on.
+    Held(usize, usize),
+}
+
+/// What the statement answers at each place.
+///
+/// A `*` stands for the columns of its tables, so a place counts past
+/// one `*` to reach what follows it.
+fn answered(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Vec<Term> {
+    let mut out = Vec::new();
+    for column in arena.results(select.columns) {
+        match *column {
+            ResultColumn::Star => {
+                for (at, side) in sides.iter().enumerate() {
+                    for (place, column) in side.stored.table.columns.iter().enumerate() {
+                        if !side.hides(&column.name) {
+                            out.push(Term::Held(at, place));
+                        }
+                    }
+                }
+            }
+            ResultColumn::TableStar(span) => {
+                let called = span.text(sql);
+                for (at, side) in sides
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, side)| side.named(called))
+                {
+                    for place in 0..side.stored.table.columns.len() {
+                        out.push(Term::Held(at, place));
+                    }
+                }
+            }
+            ResultColumn::Expr { expr, .. } => out.push(Term::Expr(expr)),
+        }
+    }
+    out
+}
+
+/// The terms a `GROUP BY` groups by.
 ///
 /// A whole number counts the answered columns from one, and a name the
 /// table does not hold is looked for among the names the statement
@@ -844,21 +862,15 @@ fn grouping(
     select: &Select,
     sql: &[u8],
     sides: &[Side<'_>],
-) -> Result<Vec<ExprId>, Error> {
+) -> Result<Vec<Term>, Error> {
     let results = arena.results(select.columns);
+    let answers = answered(arena, select, sql, sides);
     let mut out = Vec::new();
     for term in arena.children(select.group) {
         if let Some(place) = whole_number(arena, *term, sql) {
             let at = usize::try_from(place.saturating_sub(1)).map_err(|_| Error::OrderRange)?;
-            match results.get(at) {
-                None => return Err(Error::OrderRange),
-                // A `*` stands for columns that have no expression to
-                // group by; reaching one of them is a later step.
-                Some(ResultColumn::Star | ResultColumn::TableStar(_)) => {
-                    return Err(Error::Unsupported);
-                }
-                Some(ResultColumn::Expr { expr, .. }) => out.push(*expr),
-            }
+            let found = answers.get(at).ok_or(Error::OrderRange)?;
+            out.push(*found);
             continue;
         }
         // A name is a column of the table where the table has one, and
@@ -867,9 +879,32 @@ fn grouping(
         let aliased = column_named(arena, *term)
             .filter(|name| !holds(sides, name.text(sql)))
             .and_then(|name| aliased(results, sql, name.text(sql)));
-        out.push(aliased.unwrap_or(*term));
+        out.push(Term::Expr(aliased.unwrap_or(*term)));
     }
     Ok(out)
+}
+
+/// What one `GROUP BY` term answers for a row, with the collation it
+/// compares under.
+fn grouped(
+    term: Term,
+    arena: &Arena,
+    sql: &[u8],
+    cursor: &Cursor<'_>,
+) -> Result<(Value, Collation), Error> {
+    match term {
+        Term::Expr(expr) => Ok(evaluate_collated(arena, expr, sql, cursor)?),
+        Term::Held(side, place) => {
+            let held = cursor.held.get(side).ok_or(Error::NoTable)?;
+            let value = held.values.get(place).cloned().unwrap_or(Value::Null);
+            let collation = held
+                .table
+                .columns
+                .get(place)
+                .map_or(cursor.collation, |column| column.collation);
+            Ok((value, collation))
+        }
+    }
 }
 
 /// Whether any of the tables has a column of this name.
@@ -1458,23 +1493,37 @@ fn alike(left: &[(Value, Collation)], right: &[(Value, Collation)]) -> bool {
     order_of_keys(left, right) == core::cmp::Ordering::Equal
 }
 
-/// The values of one row, with the rowid put where its alias stands.
+/// The values of one row: what the record holds, the rowid where its
+/// alias stands, and what a computed column computes.
+///
+/// A column that is computed and not stored takes no place in the
+/// record, so the record is read by the storage place
+/// `sqlite3TableColumnToStorage` gives each column and not by the
+/// column's own place.
 fn values_of(
     payload: &[u8],
-    table: &Table,
+    stored: &Stored,
     rowid: i64,
     encoding: Encoding,
+    collation: Collation,
 ) -> Result<Vec<Value>, Error> {
     let record = record::Record::parse(payload)?;
-    let mut out = Vec::new();
+    let table = &stored.table;
+    let mut out: Vec<Option<Value>> = Vec::new();
+    let mut place = 0usize;
     for (at, column) in table.columns.iter().enumerate() {
-        let mut value = match record.value(at)? {
+        if column.generated == Generated::Virtual {
+            out.push(None);
+            continue;
+        }
+        let mut value = match record.value(place)? {
             None | Some(record::Value::Null) => Value::Null,
             Some(record::Value::Int(number)) => Value::Int(number),
             Some(record::Value::Real(number)) => Value::Real(number),
             Some(record::Value::Text(bytes)) => Value::Text(decode(bytes, encoding)),
             Some(record::Value::Blob(bytes)) => Value::Blob(bytes.to_vec()),
         };
+        place = place.saturating_add(1);
         // A real that is a whole number is stored as an integer, and
         // `OP_RealAffinity` is what turns it back on the way out.
         if column.affinity == Affinity::Real
@@ -1487,9 +1536,102 @@ fn values_of(
         if table.rowid_alias == Some(at) {
             value = Value::Int(rowid);
         }
-        out.push(value);
+        out.push(Some(value));
     }
-    Ok(out)
+    compute(stored, &mut out, encoding, collation)?;
+    Ok(out
+        .into_iter()
+        .map(|value| value.unwrap_or(Value::Null))
+        .collect())
+}
+
+/// Fills in the columns that are computed and not stored.
+///
+/// One expression may name another such column, in either direction, so
+/// the passes run until none settles anything: at most one pass per
+/// computed column, which is O(k²) evaluations for `k` of them.
+fn compute(
+    stored: &Stored,
+    values: &mut [Option<Value>],
+    encoding: Encoding,
+    collation: Collation,
+) -> Result<(), Error> {
+    let table = &stored.table;
+    let waiting = values.iter().filter(|value| value.is_none()).count();
+    for _ in 0..waiting {
+        let mut settled: Vec<(usize, Value)> = Vec::new();
+        for (at, column) in table.columns.iter().enumerate() {
+            let unsettled = values.get(at).is_some_and(Option::is_none);
+            let Some(expr) = column.computed.filter(|_| unsettled) else {
+                continue;
+            };
+            let row = Computed {
+                table,
+                values,
+                encoding,
+                collation,
+            };
+            // A name this pass cannot answer yet refuses, and the next
+            // pass asks again.
+            if let Ok(mut value) = evaluate_row(&stored.arena, expr, &stored.sql, &row) {
+                crate::value::apply(&mut value, column.affinity);
+                settled.push((at, value));
+            }
+        }
+        if settled.is_empty() {
+            break;
+        }
+        for (at, value) in settled {
+            for slot in values.iter_mut().skip(at).take(1) {
+                *slot = Some(value.clone());
+            }
+        }
+    }
+    if values.iter().any(Option::is_none) {
+        // A computed column that names itself, or names a column no
+        // table has.
+        return Err(Error::Computed);
+    }
+    Ok(())
+}
+
+/// A row while its computed columns are being filled in: it answers the
+/// columns that are settled and refuses the ones that are not.
+struct Computed<'a> {
+    /// The table.
+    table: &'a Table,
+    /// What is settled so far, one per column.
+    values: &'a [Option<Value>],
+    /// What encoding the file keeps its text in.
+    encoding: Encoding,
+    /// What a comparison uses where nothing writes a collation.
+    collation: Collation,
+}
+
+impl eval::Row for Computed<'_> {
+    fn collation(&self) -> Collation {
+        self.collation
+    }
+
+    fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
+    fn column(
+        &self,
+        _schema: Option<&[u8]>,
+        _table: Option<&[u8]>,
+        column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)> {
+        let at = self
+            .table
+            .columns
+            .iter()
+            .position(|held| held.name.eq_ignore_ascii_case(column))?;
+        let held = self.table.columns.get(at)?;
+        let value = self.values.get(at)?.clone()?;
+        Some((value, held.affinity, held.collation))
+    }
 }
 
 /// What `BINARY` is over text the file keeps in this encoding.

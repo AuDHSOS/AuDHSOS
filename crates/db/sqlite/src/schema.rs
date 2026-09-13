@@ -94,6 +94,8 @@ pub struct Column {
     pub key: u16,
     /// Whether it is computed.
     pub generated: Generated,
+    /// What it is computed from, where it is computed.
+    pub computed: Option<ExprId>,
 }
 
 /// A table, as a statement describes it.
@@ -254,6 +256,7 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
             default: None,
             key: 0,
             generated: Generated::Never,
+            computed: None,
         };
         let mut own_key = None;
         for constraint in arena.column_constraints(written.constraints) {
@@ -271,8 +274,9 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
                     autoincrement,
                     ..
                 } => own_key = Some((order, autoincrement)),
-                ColumnConstraint::Generated { kind, .. } => {
+                ColumnConstraint::Generated { value, kind } => {
                     column.generated = generated_kind(kind, sql)?;
+                    column.computed = Some(value);
                 }
                 _ => {}
             }

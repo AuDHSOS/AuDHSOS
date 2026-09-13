@@ -270,3 +270,18 @@ N|x|y|x|z	R|NULL|NULL|4|'B4'	R|NULL|NULL|NULL|'Bn'	R|NULL|NULL|-9223372036854775
 N|x|y|x|z	R|NULL|NULL|4|'B4'
 N|abs(b.x)	R|1	R|1	R|4	R|NULL	!integer overflow
 N|abs(b.x)	R|1	R|1
+N|b|c	R|2|2	R|3|4
+N|a|b|c	R|2|3|4
+N|a|b|c	R|5|11|10	R|NULL|NULL|NULL
+N|a|b|c	R|'7'|'7'|7	R|8.5|'8.5'|8.5
+N|typeof(a)|typeof(b)|typeof(c)	R|'text'|'text'|'integer'	R|'real'|'text'|'real'
+N|count(*)|sum(c)|max(b)	R|2|6|3
+N|a|b|c|a|c
+N|a|b|c	R|1|2|2	R|2|3|4
+N|rowid|a|b|c	R|1|5|11|10	R|2|NULL|NULL|NULL
+N|a|b|c|d|count(*)	R|-3|''|0.0|X'FF'|1	R|1|'one'|1.5|X'0102'|1	R|2|'two'|-2.5|NULL|1
+N|a|a|b|c|d	R|-3|-3|''|0.0|X'FF'	R|1|1|'one'|1.5|X'0102'	R|2|2|'two'|-2.5|NULL
+!	1st GROUP BY term out of range - should be between 1 and 5
+N|a|b|c	R|1|'31'|NULL	R|'x'|'78'|'x'
+N|x|y|count(*)	R|1|'one'|1	R|2|'two'|1	R|3|NULL|1
+N|x|y|z|count(*)	R|1|'one'|'B1'|2
