@@ -82,9 +82,6 @@ fn answer(bytes: &[u8], sql: &str) -> Option<String> {
 
 #[test]
 fn every_statement_answers_what_the_c_library_answers() {
-    // What is left is the shapes this engine refuses by name: a
-    // statement inside a `FROM`, and a `WITH`.
-    let mut refused = 0;
     let cases = corpus();
     let answers = golden();
     assert_eq!(cases.len(), answers.len());
@@ -98,13 +95,21 @@ fn every_statement_answers_what_the_c_library_answers() {
             assert!(mine.is_none(), "{sql} over {name} is refused by SQLite");
             continue;
         }
-        let Some(mine) = mine else {
-            refused += 1;
-            continue;
-        };
+        let mine = mine.unwrap_or_else(|| panic!("{sql} over {name} is refused"));
         assert_eq!(mine, theirs, "{sql} over {name}");
     }
-    assert_eq!(refused, 2, "what this engine does not answer yet");
+}
+
+#[test]
+fn a_with_term_written_recursive_is_refused() {
+    use crate::db::Error;
+    let database = Database::open(super::SMALL).unwrap();
+    assert_eq!(
+        database
+            .query(b"WITH RECURSIVE x(i) AS (SELECT 1) SELECT * FROM x")
+            .unwrap_err(),
+        Error::Unsupported
+    );
 }
 
 #[test]

@@ -3539,6 +3539,38 @@ key's columns first.
 - `sqlite_image` walks every root of every fuzzed file as a table tree
   and as an index tree, because a root is a number the file chooses.
 
+### 6.6.92 A statement inside a statement (`db-sqlite`)
+
+D-153. A side of a `FROM` carries a shape, so a statement written inside
+the `FROM` and a `WITH` term are read the way a table is.
+
+- The shapes the corpus puts to the engine: a statement with no `FROM`,
+  a statement over a table, a statement inside a statement, a `VALUES`,
+  and a compound. Each is read once as a bare side, once with an alias,
+  and once joined to a table.
+- What the shape carries is tested where it differs from the default:
+  `SELECT * FROM (SELECT a FROM t) WHERE a='1'` answers a row only if
+  the side keeps the column's integer affinity, and a `WHERE` and a
+  `DISTINCT` over a side whose column was declared `COLLATE NOCASE`
+  answer only if the side keeps that collation.
+- A side with no name answers no qualified name, which
+  `SELECT a.x FROM a, (SELECT 1)` reaches: the walk asks the unnamed
+  side for `a.x` and it answers nothing.
+- A side that is not a table answers no `rowid`, `oid` or `_rowid_`,
+  which SQLite refuses as a column no table has.
+- A `WITH` term is reached by its bare name and a name written with a
+  schema in front of it is a table, so `WITH t(a) AS (SELECT 9)` over a
+  file that holds a table `t` answers the term for `t` and the table for
+  `main.t`.
+- The refusals: a `WITH` term that writes more column names than its
+  statement answers columns, two sides of one name under a `*` or under
+  a `name.*`, a `name.*` naming no side, and a table-valued function.
+- A `WITH` written `RECURSIVE` refuses, which is a unit test and not a
+  corpus case, because SQLite answers a term that does not read itself.
+- `sqlite_image` puts a `WITH` term and a statement inside the `FROM`
+  over every fuzzed file, so the rows a side holds are rows the file
+  decides.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

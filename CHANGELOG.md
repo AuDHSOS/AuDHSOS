@@ -7,6 +7,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- A statement inside a statement in `db-sqlite`: a `SELECT` written
+  inside a `FROM` and a `WITH` term, each answered once before the outer
+  walk begins. A side of a `FROM` now carries the columns it answers —
+  one name, one affinity and one written collation each, plus whether
+  the side answers `rowid` — so a table, a statement and a `WITH` term
+  are read the same way. A `WITH` term is reached by its bare name and a
+  name written with a schema in front of it is a table. A `WITH` written
+  `RECURSIVE` refuses, as does a table-valued function.
+
 - Index trees, read, in `db-sqlite`, which is what a table written
   `WITHOUT ROWID` keeps its rows in. An index tree carries an entry on
   every page, so the walk answers the entry between two subtrees after
@@ -747,6 +756,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   Catalog 6.6.59 and 6.6.60.
 
 ### Fixed
+
+- The `math_pow` fuzz target compared `audhsos_math::pow` against the host
+  library for a zero exponent, which the host answers with a quiet NaN for
+  a signaling base. ECMAScript raises every base to a zero exponent to one,
+  which is what the crate answers and what the target now expects.
 
 - A switch out of a thread that holds one of the kernel's cells leaves that
   cell borrowed by a thread that is no longer running, and nothing gets it

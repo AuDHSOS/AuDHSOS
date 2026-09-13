@@ -297,3 +297,29 @@ N|count(*)|min(k)|max(k)	R|400|'k1'|'k99'
 N|k|v	R|'k10'|10	R|'k11'|11	R|'k12'|12	R|'k13'|13	R|'k14'|14	R|'k15'|15	R|'k16'|16	R|'k17'|17	R|'k18'|18	R|'k19'|19
 N|k	R|'k1'	R|'k10'	R|'k100'	R|'k101'
 N|k|v	R|'k400'|400	R|'k399'|399	R|'k398'|398
+N|a	R|1	R|2	R|-3
+N|p	R|1	R|2	R|-3
+!	table x has 1 values for 2 columns
+N|a	R|9
+N|a|b|c|d	R|1|'one'|1.5|X'0102'	R|2|'two'|-2.5|NULL	R|-3|''|0.0|X'FF'
+N|a	R|1	R|2
+N|p	R|1
+!	ambiguous column name: *.x.1
+N|a	R|1	R|2	R|-3
+N|a	R|1
+!	no such column: rowid
+N|1|2	R|1|2
+N|1	R|1
+N|column1|column2	R|1|2
+N|a	R|-3	R|1	R|2	R|9
+N|a|count(*)	R|-3|1	R|1|1	R|2|1
+!	no such table: x
+!	no such table: nosuch
+!	ambiguous column name: main.a.x
+N|x|y|z	R|1|'one'|'B1'	R|1|'one'|'B1b'
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|2|'two'|NULL|NULL	R|3|NULL|NULL|NULL
+N|x|y|z	R|1|'one'|'B1'	R|1|'one'|'B1b'
+N|a|b	R|'x'|1	R|'y'|2
+N|t	R|'A'	R|'a'
+N|t	R|'A'	R|'b'
+N|x	R|1	R|2	R|3

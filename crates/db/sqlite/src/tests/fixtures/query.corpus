@@ -297,3 +297,29 @@ page512.db|SELECT count(*), min(k), max(k) FROM deep
 page512.db|SELECT k, v FROM deep WHERE k LIKE 'k1_' ORDER BY k
 page512.db|SELECT k FROM deep LIMIT 4
 page512.db|SELECT * FROM deep ORDER BY v DESC LIMIT 3
+small.db|WITH x AS (SELECT a FROM t) SELECT * FROM x
+small.db|WITH x(p) AS (SELECT a FROM t) SELECT p FROM x
+small.db|WITH x(p,q) AS (SELECT a FROM t) SELECT * FROM x
+small.db|WITH t(a) AS (SELECT 9) SELECT * FROM t
+small.db|WITH t(a) AS (SELECT 9) SELECT * FROM main.t
+small.db|WITH x AS (SELECT a, b FROM t) SELECT x.a FROM x WHERE x.a>0
+small.db|WITH x AS (SELECT 1 AS p) SELECT * FROM (SELECT p FROM x)
+small.db|WITH x AS (SELECT 1) SELECT * FROM x, x
+small.db|SELECT s.a FROM (SELECT a FROM t) AS s
+small.db|SELECT * FROM (SELECT a FROM t) WHERE a='1'
+small.db|SELECT rowid FROM (SELECT a FROM t)
+small.db|SELECT * FROM (SELECT 1), (SELECT 2)
+small.db|SELECT * FROM (SELECT * FROM (SELECT 1))
+small.db|SELECT * FROM (VALUES(1,2))
+small.db|SELECT * FROM (SELECT a FROM t UNION SELECT 9) ORDER BY 1
+small.db|SELECT a, count(*) FROM (SELECT a FROM t) GROUP BY a ORDER BY 1
+small.db|SELECT x.* FROM t
+small.db|SELECT * FROM nosuch(1)
+joins.db|SELECT a.* FROM a, a
+joins.db|SELECT * FROM a JOIN (SELECT x, z FROM b) USING(x)
+joins.db|SELECT * FROM a LEFT JOIN (SELECT x, z FROM b) AS s ON a.x=s.x
+joins.db|SELECT * FROM a NATURAL JOIN (SELECT x, z FROM b)
+keys.db|SELECT * FROM (SELECT a, b FROM w)
+wide16.db|SELECT * FROM (SELECT t FROM n) WHERE t='A'
+wide16.db|SELECT DISTINCT t FROM (SELECT t FROM n)
+joins.db|SELECT a.x FROM a, (SELECT 1) ORDER BY 1

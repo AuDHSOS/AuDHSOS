@@ -31,7 +31,9 @@ fn integer(bytes: &[u8]) {
 }
 fn check(x:f64,y:f64){
     let result=audhsos_math::pow(x,y);
-    let reference=if y.is_nan()||x.abs()==1.0&&y.is_infinite(){f64::NAN}else{x.powf(y)};
+    // ECMAScript raises every base to a zero exponent to one, a
+    // signaling NaN included, where a host library answers a quiet NaN.
+    let reference=if y==0.0{1.0}else if y.is_nan()||x.abs()==1.0&&y.is_infinite(){f64::NAN}else{x.powf(y)};
     if reference.is_nan(){assert!(result.is_nan(),"{x:?} ** {y:?}: {result:?}");}
     else{assert!(result.to_bits().abs_diff(reference.to_bits())<=4,"{x:?} ** {y:?}: {result:?} vs {reference:?}");}
 }

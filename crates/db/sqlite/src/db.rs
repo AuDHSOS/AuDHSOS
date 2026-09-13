@@ -5,16 +5,21 @@
 //!
 //! The file is read where it lies, its schema is read out of the
 //! `CREATE` text `sqlite_schema` holds, and a statement is answered by
-//! walking a table's tree once: O(n) in its rows for a scan, O(n log n)
+//! walking the sides of its `FROM` once: O(n) in the rows of one side
+//! for a scan, the product of the rows for a join of several, O(n log n)
 //! where an `ORDER BY` has to sort them, and O(n·g) where a `GROUP BY`
 //! has to find which of `g` groups each row belongs to. Nothing is
 //! compiled and no index is used yet, so the rows are right and the plan
 //! is not — which is the order document 16 puts them in.
 //!
-//! What is answered is one `SELECT` over one table, or over none, with
-//! or without a grouping. Every other shape refuses by name rather than
-//! answering something near it.
+//! A side of a `FROM` is a table of the schema, a statement written
+//! inside the `FROM`, or a `WITH` term. Each carries a shape — one
+//! name, one affinity and one written collation per column — so nothing
+//! below asks which of the three it is reading. Every shape of statement
+//! this engine does not answer refuses by name rather than answering
+//! something near it.
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::agg::{self, Accumulator, Aggregate};
@@ -69,8 +74,11 @@ pub enum Error {
     /// A computed column that names itself, or names a column no table
     /// has.
     Computed,
-    /// A shape of statement this engine does not answer yet: a join, a
-    /// grouping, a compound, a statement inside a statement.
+    /// A `WITH` term that writes more or fewer column names than its
+    /// statement answers columns.
+    Names,
+    /// A shape of statement this engine does not answer yet: a `WITH`
+    /// written `RECURSIVE`, a table-valued function.
     Unsupported,
 }
 
@@ -116,13 +124,78 @@ struct Stored {
     places: Vec<usize>,
 }
 
-/// One table of a `FROM` clause, and how it attaches to the ones before
+/// One column a statement answers, and what a comparison against it
+/// does.
+#[derive(Clone, Debug)]
+struct Column {
+    /// Its name.
+    name: Vec<u8>,
+    /// What is converted before it is compared.
+    affinity: Affinity,
+    /// How its text is compared, where anything was written about it.
+    collation: Option<Collation>,
+}
+
+/// The columns a side of a `FROM` answers.
+///
+/// A table of the schema, a statement written inside the `FROM` and a
+/// `WITH` term answer the same question here, so nothing below this
+/// asks which of the three it is reading.
+#[derive(Clone, Debug)]
+struct Shape {
+    /// The columns, in the order the side answers them.
+    columns: Vec<Column>,
+    /// Whether a bare `rowid`, `oid` or `_rowid_` reaches the side.
+    keyed: bool,
+    /// The name the key is answered under, where a column of the side
+    /// is another name for the rowid.
+    key: Option<Vec<u8>>,
+}
+
+impl Shape {
+    /// Where the column `name` stands, where the side has one.
+    fn place(&self, name: &[u8]) -> Option<usize> {
+        self.columns
+            .iter()
+            .position(|column| column.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Whether the side has a column of this name.
+    fn has(&self, name: &[u8]) -> bool {
+        self.place(name).is_some()
+    }
+}
+
+/// What a statement answered, and what a comparison against each of its
+/// columns does.
+#[derive(Clone, Debug)]
+struct Answered {
+    /// The names and the rows.
+    answer: Answer,
+    /// The columns.
+    shape: Shape,
+}
+
+/// Where a side of a `FROM` draws its rows.
+enum Source<'a> {
+    /// A table of the schema.
+    Table(&'a Stored),
+    /// The rows a statement answered, whether it was written inside the
+    /// `FROM` or named by a `WITH`.
+    Rows(Vec<Vec<Value>>),
+}
+
+/// One side of a `FROM` clause, and how it attaches to the ones before
 /// it.
 struct Side<'a> {
-    /// The table, and where its rows are.
-    stored: &'a Stored,
-    /// The name the statement gave it, where it gave one.
-    alias: Option<&'a [u8]>,
+    /// The columns it answers.
+    shape: Shape,
+    /// Where its rows come from.
+    source: Source<'a>,
+    /// What the statement calls it: its alias, or the name of the table
+    /// or the `WITH` term it reads, or nothing for a statement written
+    /// inside the `FROM` with no alias.
+    name: Vec<u8>,
     /// Which join attaches it.
     kind: JoinKind,
     /// The `ON` condition written on it.
@@ -133,23 +206,37 @@ struct Side<'a> {
 }
 
 impl Side<'_> {
-    /// What the statement calls this table, which is its alias where it
-    /// was given one and its own name otherwise.
-    fn calls(&self) -> &[u8] {
-        self.alias.unwrap_or(&self.stored.table.name)
-    }
-
-    /// Whether `named` is what the statement calls this table.
+    /// Whether `named` is what the statement calls this side.
     fn named(&self, named: &[u8]) -> bool {
-        self.calls().eq_ignore_ascii_case(named)
+        !self.name.is_empty() && self.name.eq_ignore_ascii_case(named)
     }
 
-    /// Whether a `*` leaves this table's column of that name out,
-    /// which it does for the side a `USING` or a `NATURAL` matched.
+    /// Whether a `*` leaves this side's column of that name out, which
+    /// it does for the side a `USING` or a `NATURAL` matched.
     fn hides(&self, column: &[u8]) -> bool {
         self.using
             .iter()
             .any(|name| name.eq_ignore_ascii_case(column))
+    }
+}
+
+/// The columns a table of the schema answers.
+fn shape_of(table: &Table) -> Shape {
+    Shape {
+        columns: table
+            .columns
+            .iter()
+            .map(|column| Column {
+                name: column.name.clone(),
+                affinity: column.affinity,
+                collation: Some(column.collation),
+            })
+            .collect(),
+        keyed: !table.without_rowid,
+        key: table
+            .rowid_alias
+            .and_then(|at| table.columns.get(at))
+            .map(|column| column.name.clone()),
     }
 }
 
@@ -261,7 +348,7 @@ impl<'a> Database<'a> {
     /// [`Error`] names what it could not answer and why.
     pub fn query(&self, sql: &[u8]) -> Result<Answer, Error> {
         let (arena, root) = parse::statement(sql)?;
-        self.statement(&arena, root, sql)
+        Ok(self.statement(&arena, root, sql, &[])?.answer)
     }
 
     /// A statement: one core, or several put together.
@@ -273,80 +360,92 @@ impl<'a> Database<'a> {
     /// statement of one core sorts and limits its own rows, because a
     /// term of that `ORDER BY` may be an expression over the row and the
     /// row is gone by the time the answer is put together.
-    fn statement(&self, arena: &Arena, id: SelectId, sql: &[u8]) -> Result<Answer, Error> {
+    fn statement(
+        &self,
+        arena: &Arena,
+        id: SelectId,
+        sql: &[u8],
+        outer: &[(Vec<u8>, Answered)],
+    ) -> Result<Answered, Error> {
         let first = arena.select(id).ok_or(Error::Unsupported)?;
+        let terms = self.terms(arena, &first, sql, outer)?;
         if first.compound.is_none() {
-            return Ok(self.core(arena, id, sql, true)?.0);
+            return self.core(arena, id, sql, true, &terms);
         }
-        let mut answers: Vec<Answer> = Vec::new();
+        let mut answers: Vec<Answered> = Vec::new();
         let mut operators: Vec<Compound> = Vec::new();
-        let mut written: Vec<Option<Collation>> = Vec::new();
         let mut at = Some(id);
         while let Some(id) = at {
             let core = arena.select(id).ok_or(Error::Unsupported)?;
-            let (answer, mine) = self.core(arena, id, sql, false)?;
-            match answers.first() {
-                None => written = mine,
-                Some(first) => {
-                    if first.names.len() != answer.names.len() {
-                        return Err(Error::Compound);
-                    }
-                    // A column compares under the collation of the first
-                    // core that writes one, which is
-                    // `multiSelectCollSeq`.
-                    for (slot, one) in written.iter_mut().zip(mine) {
-                        *slot = slot.or(one);
-                    }
-                }
+            let mine = self.core(arena, id, sql, false, &terms)?;
+            if answers
+                .first()
+                .is_some_and(|first: &Answered| first.answer.names.len() != mine.answer.names.len())
+            {
+                return Err(Error::Compound);
             }
-            answers.push(answer);
+            answers.push(mine);
             at = core.compound.map(|(operator, next)| {
                 operators.push(operator);
                 next
             });
         }
-        let collations: Vec<Collation> = written
-            .iter()
-            .map(|one| one.unwrap_or(self.collation()))
-            .collect();
         let mut rest = answers.into_iter();
-        let mut answer = rest.next().ok_or(Error::Unsupported)?;
-        for (operator, right) in operators.into_iter().zip(rest) {
-            combine(operator, &mut answer, right, &collations);
+        let Answered {
+            mut answer,
+            mut shape,
+        } = rest.next().ok_or(Error::Unsupported)?;
+        let others: Vec<Answered> = rest.collect();
+        // A column compares under the collation of the first core that
+        // writes one, which is `multiSelectCollSeq`.
+        for other in &others {
+            for (column, mine) in shape.columns.iter_mut().zip(&other.shape.columns) {
+                column.collation = column.collation.or(mine.collation);
+            }
+        }
+        let collations = self.collations(&shape);
+        for (operator, right) in operators.into_iter().zip(others) {
+            combine(operator, &mut answer, right.answer, &collations);
         }
         let keys = matched(arena, &first, sql, &answer.names)?;
         if !keys.is_empty() {
             sort_by_keys(&mut answer.rows, &keys, &collations);
         }
         limit(arena, &first, sql, &mut answer.rows)?;
-        Ok(answer)
+        Ok(Answered { answer, shape })
     }
 
-    /// One core of a statement, with the collation each of its columns
-    /// compares under. `whole` asks for the `ORDER BY` and the `LIMIT`,
-    /// which belong to a core only where it is the statement.
+    /// The collation each column of a shape compares under, which is
+    /// what it was written with where it was written with one.
+    fn collations(&self, shape: &Shape) -> Vec<Collation> {
+        shape
+            .columns
+            .iter()
+            .map(|column| column.collation.unwrap_or(self.collation()))
+            .collect()
+    }
+
+    /// One core of a statement. `whole` asks for the `ORDER BY` and the
+    /// `LIMIT`, which belong to a core only where it is the statement.
     fn core(
         &self,
         arena: &Arena,
         id: SelectId,
         sql: &[u8],
         whole: bool,
-    ) -> Result<(Answer, Vec<Option<Collation>>), Error> {
+        terms: &[(Vec<u8>, Answered)],
+    ) -> Result<Answered, Error> {
         let select = arena.select(id).ok_or(Error::Unsupported)?;
-        if !select.ctes.is_empty() {
-            // A `WITH` names a statement a statement may read, which is
-            // a later step.
-            return Err(Error::Unsupported);
-        }
         if !select.values.is_empty() {
             return listed(arena, &select, sql);
         }
-        let sides = self.sides(arena, &select, sql)?;
-        let names = names(arena, &select, sql, &sides)?;
-        let written = collations(arena, &select, sql, &sides);
-        let collations: Vec<Collation> = written
+        let sides = self.sides(arena, &select, sql, terms)?;
+        let shape = shape(arena, &select, sql, &sides)?;
+        let collations = self.collations(&shape);
+        let names: Vec<Vec<u8>> = shape
+            .columns
             .iter()
-            .map(|one| one.unwrap_or(self.collation()))
+            .map(|column| column.name.clone())
             .collect();
         let keys = if whole {
             keys(arena, &select, sql, &names)?
@@ -377,29 +476,71 @@ impl<'a> Database<'a> {
         if whole {
             limit(arena, &select, sql, &mut rows)?;
         }
-        Ok((Answer { names, rows }, written))
+        Ok(Answered {
+            answer: Answer { names, rows },
+            shape,
+        })
     }
 
-    /// The tables of a `FROM` clause, and how each attaches to the ones
+    /// The sides of a `FROM` clause, and how each attaches to the ones
     /// before it.
+    ///
+    /// A statement written inside the `FROM`, and a `WITH` term one of
+    /// them names, are answered here and their rows kept: SQLite has no
+    /// `LATERAL`, so neither can read the row the walk stands on and
+    /// neither is answered twice.
     fn sides<'s>(
         &'s self,
         arena: &Arena,
         select: &Select,
         sql: &'s [u8],
+        terms: &[(Vec<u8>, Answered)],
     ) -> Result<Vec<Side<'s>>, Error> {
         let mut out: Vec<Side<'s>> = Vec::new();
         for source in arena.sources(select.from) {
-            let SourceKind::Table { schema, name, .. } = source.kind else {
-                return Err(Error::Unsupported);
+            let alias = source.alias.map(|span| span.text(sql).to_vec());
+            let (shape, from, name) = match source.kind {
+                SourceKind::Table { schema, name, .. } => {
+                    if schema.is_some_and(|span| !is_main(span.text(sql))) {
+                        // Only the one schema a file holds is readable,
+                        // and a name in front of it that is not it names
+                        // no table rather than another database.
+                        return Err(Error::NoTable);
+                    }
+                    let written = name.text(sql);
+                    // A `WITH` term is reached by its bare name; a name
+                    // with a schema in front of it is a table.
+                    let found = match schema {
+                        Some(_) => None,
+                        None => terms
+                            .iter()
+                            .find(|(term, _)| term.eq_ignore_ascii_case(written)),
+                    };
+                    if let Some((term, answered)) = found {
+                        (
+                            answered.shape.clone(),
+                            Source::Rows(answered.answer.rows.clone()),
+                            term.clone(),
+                        )
+                    } else {
+                        let stored = self.find(written).ok_or(Error::NoTable)?;
+                        (
+                            shape_of(&stored.table),
+                            Source::Table(stored),
+                            stored.table.name.clone(),
+                        )
+                    }
+                }
+                SourceKind::Select(id) => {
+                    let answered = self.statement(arena, id, sql, terms)?;
+                    (
+                        answered.shape,
+                        Source::Rows(answered.answer.rows),
+                        Vec::new(),
+                    )
+                }
+                SourceKind::Function { .. } => return Err(Error::Unsupported),
             };
-            if schema.is_some_and(|span| !is_main(span.text(sql))) {
-                // Only the one schema a file holds is readable, and a
-                // name in front of it that is not it names no table
-                // rather than another database.
-                return Err(Error::NoTable);
-            }
-            let stored = self.find(name.text(sql)).ok_or(Error::NoTable)?;
             let written: Vec<Vec<u8>> = arena
                 .names(source.using)
                 .iter()
@@ -410,9 +551,8 @@ impl<'a> Database<'a> {
                     return Err(Error::Join);
                 }
                 // A `NATURAL` join matches by every name both sides
-                // hold, in the order the table read last holds them.
-                stored
-                    .table
+                // hold, in the order the side read last holds them.
+                shape
                     .columns
                     .iter()
                     .filter(|column| holds(&out, &column.name))
@@ -420,15 +560,16 @@ impl<'a> Database<'a> {
                     .collect()
             } else {
                 for name in &written {
-                    if !holds(&out, name) || !has(&stored.table, name) {
+                    if !holds(&out, name) || !shape.has(name) {
                         return Err(Error::Join);
                     }
                 }
                 written
             };
             out.push(Side {
-                stored,
-                alias: source.alias.map(|span| span.text(sql)),
+                shape,
+                source: from,
+                name: alias.unwrap_or(name),
                 kind: source.join.kind,
                 on: source.on,
                 using,
@@ -437,9 +578,41 @@ impl<'a> Database<'a> {
         Ok(out)
     }
 
+    /// The `WITH` terms of a statement, each answered once.
+    fn terms(
+        &self,
+        arena: &Arena,
+        select: &Select,
+        sql: &[u8],
+        outer: &[(Vec<u8>, Answered)],
+    ) -> Result<Vec<(Vec<u8>, Answered)>, Error> {
+        let mut out = outer.to_vec();
+        for cte in arena.ctes(select.ctes) {
+            if select.recursive {
+                // A term that reads itself is a later step.
+                return Err(Error::Unsupported);
+            }
+            let mut answered = self.statement(arena, cte.select, sql, &out)?;
+            let written = arena.names(cte.columns);
+            if !written.is_empty() {
+                if written.len() != answered.answer.names.len() {
+                    return Err(Error::Names);
+                }
+                for (column, span) in answered.shape.columns.iter_mut().zip(written) {
+                    column.name = span.text(sql).to_vec();
+                }
+                for (name, span) in answered.answer.names.iter_mut().zip(written) {
+                    *name = span.text(sql).to_vec();
+                }
+            }
+            out.push((cte.name.text(sql).to_vec(), answered));
+        }
+        Ok(out)
+    }
+
     /// Walks the rows a statement reads, once, and hands each to `each`.
     ///
-    /// One table costs O(n); a join of `k` tables is the loops nested,
+    /// One side costs O(n); a join of `k` sides is the loops nested,
     /// which is the product of their rows — no index is used yet, so the
     /// rows are right and the plan is not.
     fn scan<'b>(
@@ -467,11 +640,9 @@ impl<'a> Database<'a> {
             }
             cursor.held.clear();
             for before in sides.iter().take(at) {
-                cursor.held.push(Held::empty(
-                    &before.stored.table,
-                    before.alias,
-                    &before.using,
-                ));
+                cursor
+                    .held
+                    .push(Held::empty(&before.shape, &before.name, &before.using));
             }
             let matched = kept.get(at).map_or(&[][..], Vec::as_slice);
             self.nest(
@@ -489,9 +660,25 @@ impl<'a> Database<'a> {
         Ok(())
     }
 
+    /// The rows of one side of a `FROM`, each with the rowid where the
+    /// side is a table that keeps one.
+    fn feed<'f>(&self, side: &'f Side<'f>) -> Feed<'a, 'f> {
+        match &side.source {
+            Source::Table(stored) => Feed::Tree(Box::new(Tree {
+                image: self.image,
+                stored,
+                walk: self.walk(stored),
+                encoding: self.encoding,
+                collation: self.collation(),
+                payload: Vec::new(),
+            })),
+            Source::Rows(rows) => Feed::Rows(rows.iter()),
+        }
+    }
+
     /// The rows of a table, whichever kind of tree holds them, each with
     /// the rowid where the table has one.
-    const fn walk<'i>(&'i self, stored: &Stored) -> Walk<'i> {
+    const fn walk(&self, stored: &Stored) -> Walk<'a> {
         if stored.table.without_rowid {
             Walk::Index(self.image.entries(stored.root))
         } else {
@@ -527,28 +714,20 @@ impl<'a> Database<'a> {
         };
         let deeper = at.saturating_add(1);
         let mut any = false;
-        let mut payload = Vec::new();
         let mut ordinal = 0i64;
-        for step in self.walk(side.stored) {
-            let (rowid, holds) = step?;
+        for step in self.feed(side) {
+            let (rowid, values) = step?;
             let at_row = ordinal;
             ordinal = ordinal.saturating_add(1);
             if spare.is_some_and(|skip| skip.contains(&at_row)) {
                 continue;
             }
-            read_payload(&self.image, &holds, &mut payload)?;
             cursor.held.push(Held {
-                table: &side.stored.table,
-                alias: side.alias,
+                shape: &side.shape,
+                name: &side.name,
                 using: &side.using,
                 rowid,
-                values: values_of(
-                    &payload,
-                    side.stored,
-                    rowid,
-                    self.encoding,
-                    self.collation(),
-                )?,
+                values,
             });
             let attached = match spare {
                 Some(_) => true,
@@ -566,7 +745,7 @@ impl<'a> Database<'a> {
             // nothing on the right where nothing on the right matched.
             cursor
                 .held
-                .push(Held::empty(&side.stored.table, side.alias, &side.using));
+                .push(Held::empty(&side.shape, &side.name, &side.using));
             self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
             cursor.held.pop();
         }
@@ -623,7 +802,7 @@ impl<'a> Database<'a> {
             let held = group.magnet.clone().unwrap_or_else(|| {
                 sides
                     .iter()
-                    .map(|side| Held::empty(&side.stored.table, side.alias, &side.using))
+                    .map(|side| Held::empty(&side.shape, &side.name, &side.using))
                     .collect()
             });
             let cursor = Cursor {
@@ -641,11 +820,7 @@ impl<'a> Database<'a> {
 }
 
 /// A `VALUES`, which answers its rows and names them by their place.
-fn listed(
-    arena: &Arena,
-    select: &Select,
-    sql: &[u8],
-) -> Result<(Answer, Vec<Option<Collation>>), Error> {
+fn listed(arena: &Arena, select: &Select, sql: &[u8]) -> Result<Answered, Error> {
     let mut rows = Vec::new();
     for row in arena.children(select.values) {
         // The parser builds each row of a `VALUES` as a row node, so
@@ -669,12 +844,25 @@ fn listed(
     }
     let width = rows.first().map_or(0, Vec::len);
     let mut names = Vec::new();
+    let mut columns = Vec::new();
     for at in 1..=width {
         let mut name = b"column".to_vec();
         name.extend_from_slice(&number::integer_text(i64::try_from(at).unwrap_or(0)));
+        columns.push(Column {
+            name: name.clone(),
+            affinity: Affinity::None,
+            collation: None,
+        });
         names.push(name);
     }
-    Ok((Answer { names, rows }, alloc::vec![None; width]))
+    Ok(Answered {
+        answer: Answer { names, rows },
+        shape: Shape {
+            columns,
+            keyed: false,
+            key: None,
+        },
+    })
 }
 
 /// Whether the row the walk just read attaches to the ones above it:
@@ -708,13 +896,16 @@ fn attached(
 fn equal(cursor: &Cursor<'_>, name: &[u8]) -> bool {
     // Both sides hold the column: a `USING` that names one they do not
     // both hold is refused before the walk begins.
-    let mine = cursor.held.last().and_then(|held| held.column(name));
+    let mine = cursor
+        .held
+        .last()
+        .and_then(|held| held.column(name, cursor.collation));
     let theirs = cursor
         .held
         .iter()
         .rev()
         .skip(1)
-        .find_map(|held| held.column(name));
+        .find_map(|held| held.column(name, cursor.collation));
     mine.zip(theirs).is_some_and(
         |((mut right, right_affinity, _), (mut left, left_affinity, collation))| {
             if left == Value::Null || right == Value::Null {
@@ -727,6 +918,64 @@ fn equal(cursor: &Cursor<'_>, name: &[u8]) -> bool {
             compare(&left, &right, collation) == core::cmp::Ordering::Equal
         },
     )
+}
+
+/// The rows of one side of a `FROM`.
+enum Feed<'i, 'f> {
+    /// A table of the schema, read out of its tree, which carries a
+    /// frame per level and is boxed for it.
+    Tree(Box<Tree<'i, 'f>>),
+    /// The rows a statement answered, already read.
+    Rows(core::slice::Iter<'f, Vec<Value>>),
+}
+
+/// A table of the schema while its tree is being walked.
+struct Tree<'i, 'f> {
+    /// The file the tree is in.
+    image: Image<'i>,
+    /// The table, for the places its columns stand at.
+    stored: &'f Stored,
+    /// Where the walk stands.
+    walk: Walk<'i>,
+    /// What encoding the file keeps its text in.
+    encoding: Encoding,
+    /// What a comparison uses where nothing writes a collation.
+    collation: Collation,
+    /// The buffer one record is read into.
+    payload: Vec<u8>,
+}
+
+impl<'i> Tree<'i, '_> {
+    /// One step of the walk as the values of a row.
+    fn read(
+        &mut self,
+        step: Result<(Option<i64>, crate::page::Payload<'i>), error::Error>,
+    ) -> Result<(Option<i64>, Vec<Value>), Error> {
+        let (rowid, holds) = step?;
+        read_payload(&self.image, &holds, &mut self.payload)?;
+        let values = values_of(
+            &self.payload,
+            self.stored,
+            rowid,
+            self.encoding,
+            self.collation,
+        )?;
+        Ok((rowid, values))
+    }
+}
+
+impl Iterator for Feed<'_, '_> {
+    type Item = Result<(Option<i64>, Vec<Value>), Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Feed::Tree(tree) => {
+                let step = tree.walk.next()?;
+                Some(tree.read(step))
+            }
+            Feed::Rows(rows) => rows.next().map(|values| Ok((None, values.clone()))),
+        }
+    }
 }
 
 /// A walk of a table's rows: down a table tree by rowid, or down the
@@ -895,7 +1144,7 @@ fn answered(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> V
         match *column {
             ResultColumn::Star => {
                 for (at, side) in sides.iter().enumerate() {
-                    for (place, column) in side.stored.table.columns.iter().enumerate() {
+                    for (place, column) in side.shape.columns.iter().enumerate() {
                         if !side.hides(&column.name) {
                             out.push(Term::Held(at, place));
                         }
@@ -909,7 +1158,7 @@ fn answered(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> V
                     .enumerate()
                     .filter(|(_, side)| side.named(called))
                 {
-                    for place in 0..side.stored.table.columns.len() {
+                    for place in 0..side.shape.columns.len() {
                         out.push(Term::Held(at, place));
                     }
                 }
@@ -968,26 +1217,19 @@ fn grouped(
             let held = cursor.held.get(side).ok_or(Error::NoTable)?;
             let value = held.values.get(place).cloned().unwrap_or(Value::Null);
             let collation = held
-                .table
+                .shape
                 .columns
                 .get(place)
-                .map_or(cursor.collation, |column| column.collation);
+                .and_then(|column| column.collation)
+                .unwrap_or(cursor.collation);
             Ok((value, collation))
         }
     }
 }
 
-/// Whether any of the tables has a column of this name.
+/// Whether any of the sides answers a column of this name.
 fn holds(sides: &[Side<'_>], name: &[u8]) -> bool {
-    sides.iter().any(|side| has(&side.stored.table, name))
-}
-
-/// Whether the table has a column of this name.
-fn has(table: &Table, name: &[u8]) -> bool {
-    table
-        .columns
-        .iter()
-        .any(|column| column.name.eq_ignore_ascii_case(name))
+    sides.iter().any(|side| side.shape.has(name))
 }
 
 /// The expression a statement answers under `name`, where it answers
@@ -1095,64 +1337,67 @@ fn collect(
     deeper
 }
 
-/// The name SQLite gives each answered column.
-fn names(
-    arena: &Arena,
-    select: &Select,
-    sql: &[u8],
-    sides: &[Side<'_>],
-) -> Result<Vec<Vec<u8>>, Error> {
-    let mut names = Vec::new();
-    for column in arena.results(select.columns) {
-        match *column {
+/// The columns a statement answers: their names, and what a
+/// comparison against each of them does.
+fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Result<Shape, Error> {
+    let mut columns = Vec::new();
+    for result in arena.results(select.columns) {
+        match *result {
             ResultColumn::Star => {
                 if sides.is_empty() {
                     return Err(Error::NoTable);
                 }
                 for (at, side) in sides.iter().enumerate() {
-                    // A `*` stands for every column named by its table,
-                    // so two tables of one name make every column of
-                    // them a name two tables answer.
-                    if sides
-                        .iter()
-                        .take(at)
-                        .any(|before| before.named(side.calls()))
-                    {
+                    // A `*` stands for every column named by its side,
+                    // so two sides of one name make every column of
+                    // them a name two sides answer.
+                    if sides.iter().take(at).any(|before| before.named(&side.name)) {
                         return Err(Error::Ambiguous);
                     }
                     // The columns a `USING` or a `NATURAL` matched are
                     // answered once and not twice, which is the side
                     // that hides them leaving them out.
-                    for column in &side.stored.table.columns {
+                    for column in &side.shape.columns {
                         if !side.hides(&column.name) {
-                            names.push(column.name.clone());
+                            columns.push(column.clone());
                         }
                     }
                 }
             }
             ResultColumn::TableStar(span) => {
                 let called = span.text(sql);
-                let side = sides
-                    .iter()
-                    .find(|side| side.named(called))
-                    .ok_or(Error::NoTable)?;
-                for column in &side.stored.table.columns {
-                    names.push(column.name.clone());
+                let mut named = sides.iter().filter(|side| side.named(called));
+                let side = named.next().ok_or(Error::NoTable)?;
+                if named.next().is_some() {
+                    return Err(Error::Ambiguous);
                 }
+                columns.extend(side.shape.columns.iter().cloned());
             }
-            ResultColumn::Expr { expr, alias, text } => names.push(match alias {
-                Some(span) => span.text(sql).to_vec(),
-                // With no name written, a column answers under its
-                // own name and everything else under the text it was
-                // written as.
-                None => match column_named(arena, expr) {
-                    Some(name) => answered_name(name.text(sql), sides),
-                    None => text.text(sql).to_vec(),
-                },
-            }),
+            ResultColumn::Expr { expr, alias, text } => {
+                let name = match alias {
+                    Some(span) => span.text(sql).to_vec(),
+                    // With no name written, a column answers under its
+                    // own name and everything else under the text it
+                    // was written as.
+                    None => match column_named(arena, expr) {
+                        Some(name) => answered_name(name.text(sql), sides),
+                        None => text.text(sql).to_vec(),
+                    },
+                };
+                let (affinity, collation) = compared(arena, expr, sql, sides);
+                columns.push(Column {
+                    name,
+                    affinity,
+                    collation,
+                });
+            }
         }
     }
-    Ok(names)
+    Ok(Shape {
+        columns,
+        keyed: false,
+        key: None,
+    })
 }
 
 /// The values one row answers.
@@ -1393,54 +1638,30 @@ const fn is_main(name: &[u8]) -> bool {
     name.eq_ignore_ascii_case(b"main")
 }
 
-/// The collation each answered column compares under, which is what a
-/// `DISTINCT` and the set operators use.
-fn collations(
+/// What a comparison against an expression does: the affinity and the
+/// collation of the column it names, where it names one.
+///
+/// This is `sqlite3ExprAffinity` and `sqlite3ExprCollSeq` over the two
+/// nodes that carry either.
+fn compared(
     arena: &Arena,
-    select: &Select,
+    id: ExprId,
     sql: &[u8],
     sides: &[Side<'_>],
-) -> Vec<Option<Collation>> {
-    let mut out = Vec::new();
-    for column in arena.results(select.columns) {
-        match *column {
-            // A `*` this engine refuses has already been refused by the
-            // names, which are read first, so what is left here is the
-            // columns the names counted.
-            ResultColumn::Star => {
-                for side in sides {
-                    for column in &side.stored.table.columns {
-                        if !side.hides(&column.name) {
-                            out.push(Some(column.collation));
-                        }
-                    }
-                }
-            }
-            ResultColumn::TableStar(span) => {
-                let named = span.text(sql);
-                for side in sides.iter().filter(|side| side.named(named)) {
-                    for column in &side.stored.table.columns {
-                        out.push(Some(column.collation));
-                    }
-                }
-            }
-            ResultColumn::Expr { expr, .. } => out.push(written(arena, expr, sql, sides)),
-        }
-    }
-    out
-}
-
-/// The collation written on an expression, where one is, which is
-/// `sqlite3ExprCollSeq` over the two nodes that carry one.
-fn written(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<Collation> {
-    match arena.node(id)? {
-        Node::Collate { name, .. } => Collation::of_name(name.text(sql)),
-        Node::Column { column, .. } => sides
+) -> (Affinity, Option<Collation>) {
+    match arena.node(id) {
+        Some(Node::Collate { value, name }) => (
+            compared(arena, value, sql, sides).0,
+            Collation::of_name(name.text(sql)),
+        ),
+        Some(Node::Column { column, .. }) => sides
             .iter()
-            .flat_map(|side| &side.stored.table.columns)
+            .flat_map(|side| &side.shape.columns)
             .find(|held| held.name.eq_ignore_ascii_case(column.text(sql)))
-            .map(|held| held.collation),
-        _ => None,
+            .map_or((Affinity::None, None), |held| {
+                (held.affinity, held.collation)
+            }),
+        _ => (Affinity::None, None),
     }
 }
 
@@ -1466,7 +1687,7 @@ fn answered_name(name: &[u8], sides: &[Side<'_>]) -> Vec<u8> {
     }
     let held = sides
         .iter()
-        .flat_map(|side| &side.stored.table.columns)
+        .flat_map(|side| &side.shape.columns)
         .find(|column| column.name.eq_ignore_ascii_case(name));
     if let Some(column) = held {
         return column.name.clone();
@@ -1475,13 +1696,8 @@ fn answered_name(name: &[u8], sides: &[Side<'_>]) -> Vec<u8> {
     // the rowid's three names was written.
     sides
         .iter()
-        .find_map(|side| {
-            side.stored
-                .table
-                .rowid_alias
-                .and_then(|at| side.stored.table.columns.get(at))
-        })
-        .map_or_else(|| b"rowid".to_vec(), |column| column.name.clone())
+        .find_map(|side| side.shape.key.clone())
+        .unwrap_or_else(|| b"rowid".to_vec())
 }
 
 /// The whole number an expression is, where it is one.
@@ -1726,44 +1942,42 @@ fn decode(bytes: &[u8], encoding: Encoding) -> Vec<u8> {
     }
 }
 
-/// One table of the `FROM`, as one row of the walk holds it.
+/// One side of the `FROM`, as one row of the walk holds it.
 #[derive(Clone)]
 struct Held<'a> {
-    /// The table.
-    table: &'a Table,
-    /// What the statement calls it, where it calls it something.
-    alias: Option<&'a [u8]>,
+    /// The columns it answers.
+    shape: &'a Shape,
+    /// What the statement calls it, which is empty for a statement
+    /// written inside the `FROM` with no alias.
+    name: &'a [u8],
     /// The columns it does not answer a bare name with, which are the
     /// ones a `USING` or a `NATURAL` matched it by.
     using: &'a [Vec<u8>],
-    /// The rowid of the row, where it stands for one.
+    /// The rowid of the row, where the side stands for one.
     rowid: Option<i64>,
     /// Its values, one per column.
     values: Vec<Value>,
 }
 
 impl<'a> Held<'a> {
-    /// The table with no row of it, which is what a `LEFT JOIN` holds
+    /// The side with no row of it, which is what a `LEFT JOIN` holds
     /// where nothing matched.
-    fn empty(table: &'a Table, alias: Option<&'a [u8]>, using: &'a [Vec<u8>]) -> Self {
+    fn empty(shape: &'a Shape, name: &'a [u8], using: &'a [Vec<u8>]) -> Self {
         Held {
-            table,
-            alias,
+            shape,
+            name,
             using,
             rowid: None,
-            values: alloc::vec![Value::Null; table.columns.len()],
+            values: alloc::vec![Value::Null; shape.columns.len()],
         }
     }
 
-    /// Whether `named` is what the statement calls this table.
-    fn named(&self, named: &[u8]) -> bool {
-        self.alias.map_or_else(
-            || self.table.name.eq_ignore_ascii_case(named),
-            |alias| alias.eq_ignore_ascii_case(named),
-        )
+    /// Whether `named` is what the statement calls this side.
+    const fn named(&self, named: &[u8]) -> bool {
+        !self.name.is_empty() && self.name.eq_ignore_ascii_case(named)
     }
 
-    /// Whether a bare name reaches this table's column of that name,
+    /// Whether a bare name reaches this side's column of that name,
     /// which the side a `USING` matched does not answer.
     fn hides(&self, column: &[u8]) -> bool {
         self.using
@@ -1773,23 +1987,20 @@ impl<'a> Held<'a> {
 
     /// Calls `each` with the name and the value of every column.
     fn each(&self, mut each: impl FnMut(&[u8], &Value)) {
-        for (column, value) in self.table.columns.iter().zip(&self.values) {
+        for (column, value) in self.shape.columns.iter().zip(&self.values) {
             each(&column.name, value);
         }
     }
 
-    /// What this table answers for `column`, or nothing where it has no
-    /// such column.
-    fn column(&self, column: &[u8]) -> Option<(Value, Affinity, Collation)> {
-        let at = self
-            .table
-            .columns
-            .iter()
-            .position(|held| held.name.eq_ignore_ascii_case(column));
-        let Some(at) = at else {
-            // The three names the rowid answers to, which a table that
-            // keeps its rows in the key's own tree does not answer.
-            let rowid = !self.table.without_rowid
+    /// What this side answers for `column`, or nothing where it has no
+    /// such column. `default` is the collation of a column nothing was
+    /// written about.
+    fn column(&self, column: &[u8], default: Collation) -> Option<(Value, Affinity, Collation)> {
+        let Some(at) = self.shape.place(column) else {
+            // The three names the rowid answers to, which a statement
+            // inside the `FROM` and a table that keeps its rows in the
+            // key's own tree both refuse.
+            let rowid = self.shape.keyed
                 && (column.eq_ignore_ascii_case(b"rowid")
                     || column.eq_ignore_ascii_case(b"oid")
                     || column.eq_ignore_ascii_case(b"_rowid_"));
@@ -1799,9 +2010,9 @@ impl<'a> Held<'a> {
             }
             return None;
         };
-        let held = self.table.columns.get(at)?;
+        let held = self.shape.columns.get(at)?;
         let value = self.values.get(at).cloned().unwrap_or(Value::Null);
-        Some((value, held.affinity, held.collation))
+        Some((value, held.affinity, held.collation.unwrap_or(default)))
     }
 }
 
@@ -1834,7 +2045,7 @@ impl Cursor<'_> {
             .iter()
             .skip(at.saturating_add(1))
             .filter(|held| held.hides(column))
-            .filter_map(|held| held.column(column).map(|(value, ..)| value))
+            .filter_map(|held| held.column(column, self.collation).map(|(value, ..)| value))
             .find(|filled| *filled != Value::Null)
             .unwrap_or(Value::Null)
     }
@@ -1885,7 +2096,7 @@ impl eval::Row for Cursor<'_> {
                 None if held.hides(column) => continue,
                 _ => {}
             }
-            let Some((value, affinity, collation)) = held.column(column) else {
+            let Some((value, affinity, collation)) = held.column(column, self.collation) else {
                 continue;
             };
             if found.is_some() {

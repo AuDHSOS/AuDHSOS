@@ -77,6 +77,15 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
             sql.extend_from_slice(&quoted);
             sql.extend_from_slice(b" AS q ON p.rowid=q.rowid+1 LIMIT 16");
             answers(&database, &sql);
+            // A statement inside a statement, once written in the
+            // `FROM` and once named by a `WITH`, which answers its rows
+            // before the outer walk begins.
+            let mut sql = b"WITH s AS (SELECT * FROM ".to_vec();
+            sql.extend_from_slice(&quoted);
+            sql.extend_from_slice(b" LIMIT 16) SELECT * FROM s, (SELECT * FROM ");
+            sql.extend_from_slice(&quoted);
+            sql.extend_from_slice(b" LIMIT 4) ORDER BY 1 LIMIT 16");
+            answers(&database, &sql);
         }
     }
 

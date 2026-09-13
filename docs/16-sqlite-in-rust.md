@@ -84,7 +84,7 @@ Each rule is checkable, and each makes a later thing possible.
 | `fp`, `number` | A double as decimal text and back: `sqlite3FpDecode`, `sqlite3AtoF`, `sqlite3Atoi64`. | D-142, Q5 |
 | `value`, `utf8` | Storage classes, affinity, collation, comparison, the three text encodings. | D-143, D-147, Q5 |
 | `eval`, `func`, `agg` | An expression over a row; thirty-four scalar functions; seven aggregates. | D-143, D-144, D-148, Q5 |
-| `db` | A statement answered from a file by walking the tables once. | D-146, D-149, D-150, Q5 |
+| `db` | A statement answered from a file by walking the sides of its `FROM` once. | D-146, D-149, D-150, D-153, Q5 |
 
 ### What a statement may hold
 
@@ -98,7 +98,8 @@ Each rule is checkable, and each makes a later thing possible.
 | A table written with `main` in front of it | answered |
 | A column that is computed, stored or not | answered |
 | A table whose rows live in the key's own tree | answered |
-| A statement inside a `FROM`, a `WITH`, a window clause | refused by name |
+| A statement inside a `FROM`, a `WITH` that is not `RECURSIVE` | answered |
+| A `WITH` written `RECURSIVE`, a window clause, a table-valued function | refused by name |
 
 ### What the tests hold it to
 
@@ -111,7 +112,7 @@ Each rule is checkable, and each makes a later thing possible.
 | Doubles as text | 8404, at three precisions | recorded oracle, `fp.corpus` |
 | Text as numbers | 215 | recorded oracle, `num.corpus` |
 | Expressions, answered | 17051 | recorded oracle, `eval.corpus` |
-| Statements, answered | 299 over 14 fixtures | recorded oracle, `query.corpus` |
+| Statements, answered | 325 over 14 fixtures | recorded oracle, `query.corpus` |
 | The format under every configuration | 11 fixtures, the same three rows and the same index | the matrix, 16.11 |
 | The readers against arbitrary bytes | 4 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval` |
 
@@ -126,7 +127,7 @@ of lines and 100 percent of branches, in both instrumentations.
 | 2 | The secondary indexes, used rather than read: a `WHERE` that names an indexed column still scans. | Q6 |
 | 3 | The virtual machine and the code generator that replaces the tree walker. | Q6 |
 | 4 | Writing: the b-tree writer, transactions, the journal in four modes, the WAL. | Q7 |
-| 5 | The rest of the language: `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, triggers, views, subqueries, `WITH`. | Q8 |
+| 5 | The rest of the language: `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, triggers, views, a statement as a value, `EXISTS`, `IN (SELECT ...)`, a `WITH` written `RECURSIVE`. | Q8 |
 | 6 | The window clauses, which the parser refuses. | Q8 |
 | 7 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
 | 8 | The matrix run across every level of the suite rather than the format alone. | Q9 |
