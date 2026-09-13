@@ -3,9 +3,9 @@
 The SSH-2 client of [document 14](../../../docs/14-secure-shell-as-a-client.md),
 sans-I/O: it is given bytes that arrived and a buffer to write into, and
 it never reads a socket, allocates, or asks what time it is. What exists
-today is steps S1 to S5 of track S: the two layers everything else is
+today is steps S1 to S6 of track S: the two layers everything else is
 written in, the negotiation, both key exchange methods, the cipher, the
-host key, and the authentication exchange.
+host key, the authentication exchange, and the session channel.
 
 ## `wire`
 
@@ -153,7 +153,25 @@ the document holds that question open.
 keeps `server-sig-algs`, and skips every other extension whatever its
 value holds, which section 2.5 requires.
 
+## `channel`
+
+RFC 4254: one `session` channel, its window, and the requests that start
+a program. [`channel::Channel`] holds the two windows and what each side
+has said about the end of the channel; [`channel::Message`] is what
+arrived, and [`channel::Channel::apply`] is what that message changed.
+
+The window is a credit the sender spends and the receiver grants back
+with `SSH_MSG_CHANNEL_WINDOW_ADJUST`, never past 2^32 - 1. Extended data
+— stderr — spends the same window as ordinary data, which is why there is
+one window here and not two. A data message is refused above the window
+and above the maximum packet size the peer advertised, and a refused
+write spends nothing.
+
+The close sequence is section 5.3: a close may arrive with no end of file
+before it, a close is answered with a close unless one was sent already,
+and the channel is closed for this side only when it has both sent and
+received one.
+
 ## What is not here
 
-Everything above the authentication: the channels (S6) and the
-re-exchange (S7).
+The re-exchange of S7 and the client of S8.

@@ -52,6 +52,64 @@ pub const USERAUTH_SUCCESS: u8 = 52;
 /// `SSH_MSG_USERAUTH_BANNER`.
 pub const USERAUTH_BANNER: u8 = 53;
 
+/// `SSH_MSG_GLOBAL_REQUEST`.
+pub const GLOBAL_REQUEST: u8 = 80;
+
+/// `SSH_MSG_REQUEST_SUCCESS`.
+pub const REQUEST_SUCCESS: u8 = 81;
+
+/// `SSH_MSG_REQUEST_FAILURE`.
+pub const REQUEST_FAILURE: u8 = 82;
+
+/// `SSH_MSG_CHANNEL_OPEN`.
+pub const CHANNEL_OPEN: u8 = 90;
+
+/// `SSH_MSG_CHANNEL_OPEN_CONFIRMATION`.
+pub const CHANNEL_OPEN_CONFIRMATION: u8 = 91;
+
+/// `SSH_MSG_CHANNEL_OPEN_FAILURE`.
+pub const CHANNEL_OPEN_FAILURE: u8 = 92;
+
+/// `SSH_MSG_CHANNEL_WINDOW_ADJUST`.
+pub const CHANNEL_WINDOW_ADJUST: u8 = 93;
+
+/// `SSH_MSG_CHANNEL_DATA`.
+pub const CHANNEL_DATA: u8 = 94;
+
+/// `SSH_MSG_CHANNEL_EXTENDED_DATA`.
+pub const CHANNEL_EXTENDED_DATA: u8 = 95;
+
+/// `SSH_MSG_CHANNEL_EOF`.
+pub const CHANNEL_EOF: u8 = 96;
+
+/// `SSH_MSG_CHANNEL_CLOSE`.
+pub const CHANNEL_CLOSE: u8 = 97;
+
+/// `SSH_MSG_CHANNEL_REQUEST`.
+pub const CHANNEL_REQUEST: u8 = 98;
+
+/// `SSH_MSG_CHANNEL_SUCCESS`.
+pub const CHANNEL_SUCCESS: u8 = 99;
+
+/// `SSH_MSG_CHANNEL_FAILURE`.
+pub const CHANNEL_FAILURE: u8 = 100;
+
+/// The reason codes of an `SSH_MSG_CHANNEL_OPEN_FAILURE` (RFC 4250,
+/// section 4.3).
+pub mod open {
+    /// `SSH_OPEN_ADMINISTRATIVELY_PROHIBITED`.
+    pub const ADMINISTRATIVELY_PROHIBITED: u32 = 1;
+
+    /// `SSH_OPEN_CONNECT_FAILED`.
+    pub const CONNECT_FAILED: u32 = 2;
+
+    /// `SSH_OPEN_UNKNOWN_CHANNEL_TYPE`.
+    pub const UNKNOWN_CHANNEL_TYPE: u32 = 3;
+
+    /// `SSH_OPEN_RESOURCE_SHORTAGE`.
+    pub const RESOURCE_SHORTAGE: u32 = 4;
+}
+
 /// The reason codes of a `SSH_MSG_DISCONNECT` (RFC 4250, section 4.2.2),
 /// again only the ones the layers that are built name.
 pub mod disconnect {

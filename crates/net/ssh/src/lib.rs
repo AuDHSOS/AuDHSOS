@@ -6,6 +6,7 @@
 #![doc = include_str!("../README.md")]
 
 pub mod auth;
+pub mod channel;
 pub mod cipher;
 pub mod error;
 pub mod exchange;
@@ -18,6 +19,7 @@ pub mod packet;
 pub mod wire;
 
 pub use auth::{ClientKey, ExtInfo, Request, Response};
+pub use channel::{Channel, Event, Message};
 pub use cipher::ChaChaPoly;
 pub use error::SshError;
 pub use exchange::{Ephemeral, HashInput, Method, Reply, exchange_hash};

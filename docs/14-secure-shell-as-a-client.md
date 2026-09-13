@@ -90,11 +90,11 @@ written for a verifier and branched on the bits it was given, the decision
 carries the masked multiplication that signing now runs on. ECDSA signing
 stays behind `test-signing`.
 
-Steps S1 to S5 are built: the wire types, the binary packet, the
+Steps S1 to S6 are built: the wire types, the binary packet, the
 identification string, the negotiation, both key exchange methods, the
 exchange hash, the six keys, the cipher, the host key with the signature
-over the exchange hash, and the authentication exchange. What is missing
-is the channel layer of S6, the re-exchange of S7, and the integration of
+over the exchange hash, the authentication exchange, and the session
+channel. What is missing is the re-exchange of S7 and the integration of
 S8. Two things are also
 missing that are not code, and 14.13 lists them.
 
@@ -475,7 +475,7 @@ definition of done every phase and every track step uses.
 | S3 | the cipher | M | implemented: `chacha20-poly1305@openssh.com` over the packet layer, against the worked example of appendix A of the draft D-134 keeps (catalog 6.6.70) |
 | S4 | host keys | S-M | implemented: the `ssh-ed25519` blobs of RFC 8709, sections 4 and 6, the signature over `H` verified, the fingerprint of a blob, and the trust rule as a parameter (catalog 6.6.75) |
 | S5 | `auth` | M | implemented: the service request, `publickey` with the signature of RFC 4252, section 7, the failure, success, banner and `SSH_MSG_USERAUTH_PK_OK` answers, and the `SSH_MSG_EXT_INFO` that carries `server-sig-algs` (catalog 6.6.76) |
-| S6 | `channel` | L | the channel messages, the window, the session channel, `exec` and `shell`, extended data, `exit-status`, and the close sequence |
+| S6 | `channel` | L | implemented: the channel messages, the window in both directions, the session channel, `exec`, `shell` and `env`, extended data, `exit-status` and `exit-signal`, and the close sequence (catalog 6.6.77) |
 | S7 | re-exchange | S-M | a re-exchange from either side, the byte and time thresholds, and the disconnect messages with the reason codes of RFC 4250 |
 | S8 | integration | M | the client over a socket of `server-net`, a program of the image, and the interop acceptance of 14.12; needs Phase 14 |
 

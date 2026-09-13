@@ -5,6 +5,7 @@
 //! product code only.
 
 mod auth;
+mod channel;
 mod cipher;
 mod error;
 mod exchange;

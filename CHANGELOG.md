@@ -7,6 +7,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Track S, step S6, the session channel: `audhsos-ssh` gains `channel`,
+  which opens the one `session` channel of RFC 4254, section 6.1, carries
+  data and extended data under the window of section 5.2, sends the
+  `exec`, `shell` and `env` requests of sections 6.4 and 6.5, reads the
+  exit status and the exit signal of section 6.10, and runs the close
+  sequence of section 5.3. The window is a credit the sender spends and
+  the receiver grants back, in both directions and never past 2^32 - 1;
+  extended data spends the same window as ordinary data, which a second
+  window would have got wrong. Nothing is sent before the open is
+  confirmed, after a close, or — for data — after an end of file this
+  side sent; a write that does not fit its buffer spends no window. Two
+  refusals are new, one for a message this channel cannot take and one
+  for a window that cannot be what a message makes it. Catalog 6.6.77.
+
 - Track S, step S5, the authentication exchange: `audhsos-ssh` gains
   `auth`, which writes the service request of RFC 4252, section 5, the
   `publickey` query with the boolean false, and the request that

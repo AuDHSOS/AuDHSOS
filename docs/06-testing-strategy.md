@@ -3018,6 +3018,41 @@ with `crypto-ec`.
   says nothing about algorithms; a count larger than the message, another
   message number, and a list that is no name-list are each refused.
 
+### 6.6.77 The session channel (`audhsos-ssh`)
+
+Step S6 of 8.26. Every message is read back with a reader of this crate,
+and every rule of RFC 4254, sections 5.1 to 5.3, is checked against what
+the channel does with it.
+
+- The open names the type, this side's number, its window and its maximum
+  packet size; the confirmation gives the peer's number and the window to
+  send into; a second confirmation and a message for another channel are
+  each refused.
+- A refused open ends the channel without a close message, because there
+  is nothing to close.
+- Data spends the window and stops at it, and no data message is larger
+  than the maximum packet size the peer advertised. Extended data spends
+  the same window as ordinary data.
+- What arrives spends the window this side granted, and a byte past it is
+  refused.
+- A window adjust grants what it names, in both directions, and neither
+  window passes 2^32 - 1.
+- The requests that start a program carry what section 6.5 prints — the
+  command of `exec`, the bare `shell`, the name and value of `env` — and
+  a request spends no window.
+- The exit status and the exit signal read as what they are; another
+  request keeps its name and whether it wants an answer.
+- The close sequence is both directions: an end of file leaves the
+  channel open, a close may arrive with none before it, a close is sent
+  once, and the channel is closed for this side only when it has both
+  sent and received one.
+- Nothing is sent before the open is confirmed or after a close, and no
+  data after an end of file this side sent.
+- A buffer too small writes nothing and spends no window, in either
+  direction.
+- Every message of the layer reads; a number of another layer does not,
+  and a message that ends early is refused.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
