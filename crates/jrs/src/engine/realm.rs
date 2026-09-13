@@ -143,6 +143,63 @@ pub const OBJECT_PROTOTYPE_PROPERTIES: [&str; 12] = [
     "__lookupSetter__",
 ];
 
+/// The property names `%Array.prototype%` owns (23.1.3), excluding the two
+/// Symbol keys it also carries.
+///
+/// It serves the same purpose as [`OBJECT_PROTOTYPE_PROPERTIES`]: an Array read
+/// of one of these names is answered by the Prototype Chain.
+pub const ARRAY_PROTOTYPE_PROPERTIES: [&str; 39] = [
+    "at",
+    "concat",
+    "constructor",
+    "copyWithin",
+    "entries",
+    "every",
+    "fill",
+    "filter",
+    "find",
+    "findIndex",
+    "findLast",
+    "findLastIndex",
+    "flat",
+    "flatMap",
+    "forEach",
+    "includes",
+    "indexOf",
+    "join",
+    "keys",
+    "lastIndexOf",
+    "map",
+    "pop",
+    "push",
+    "reduce",
+    "reduceRight",
+    "reverse",
+    "shift",
+    "slice",
+    "some",
+    "sort",
+    "splice",
+    "toLocaleString",
+    "toReversed",
+    "toSorted",
+    "toSpliced",
+    "toString",
+    "unshift",
+    "values",
+    "with",
+];
+
+/// Whether `%Array.prototype%` or `%Object.prototype%` owns a property of this
+/// name, which an Array resolves on its Prototype Chain.
+#[must_use]
+pub fn array_prototype_owns(name: &[u16]) -> bool {
+    object_prototype_owns(name)
+        || ARRAY_PROTOTYPE_PROPERTIES
+            .into_iter()
+            .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
+
 /// Whether `%Object.prototype%` owns a property of this name.
 #[must_use]
 pub fn object_prototype_owns(name: &[u16]) -> bool {

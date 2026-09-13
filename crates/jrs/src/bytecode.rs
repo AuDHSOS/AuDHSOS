@@ -2120,7 +2120,7 @@ impl RegisterLowerer {
                 .unwrap_or(RegisterType::Undefined);
             dynamic.map_or(static_type, |dynamic| static_type.merge(dynamic))
         } else if let Some(name) = static_name.as_deref() {
-            if crate::engine::realm::object_prototype_owns(name) {
+            if crate::engine::realm::array_prototype_owns(name) {
                 return None;
             }
             elements

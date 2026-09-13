@@ -2410,8 +2410,12 @@ fn register_lowering_rejects_reads_the_prototype_chain_cannot_answer() -> Result
     for source in [
         // 20.1.3 names %Object.prototype% owns whose intrinsic does not exist yet.
         "let o={};o.valueOf",
-        // 23.1.3.36 gives an Array its own toString, which does not exist yet.
+        // 23.1.3 names %Array.prototype% owns, none of which exists yet.
         "let a=[1];a.toString()",
+        "let a=[1];a.concat",
+        "let a=[1];a.indexOf",
+        "let a=[1];a['push']",
+        "let a=[1];a.constructor",
         "let o={};o['toString']",
         // A key known only at run time can name one of them.
         "let o={x:42},key='x';o[key]",
