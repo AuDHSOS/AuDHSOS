@@ -52,14 +52,17 @@ pub enum Intrinsic {
     ObjectPrototypeIsPrototypeOf,
     /// `Object.prototype.propertyIsEnumerable` (20.1.3.4).
     ObjectPrototypePropertyIsEnumerable,
+    /// `Object.prototype.toString` (20.1.3.6).
+    ObjectPrototypeToString,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 3] = [
+    pub const ALL: [Self; 4] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
+        Self::ObjectPrototypeToString,
     ];
 
     /// The identifier carried by the function object.
@@ -69,6 +72,7 @@ impl Intrinsic {
             Self::ObjectPrototypeHasOwnProperty => 0,
             Self::ObjectPrototypeIsPrototypeOf => 1,
             Self::ObjectPrototypePropertyIsEnumerable => 2,
+            Self::ObjectPrototypeToString => 3,
         }
     }
 
@@ -78,6 +82,7 @@ impl Intrinsic {
             Self::ObjectPrototypeHasOwnProperty => 0,
             Self::ObjectPrototypeIsPrototypeOf => 1,
             Self::ObjectPrototypePropertyIsEnumerable => 2,
+            Self::ObjectPrototypeToString => 3,
         }
     }
 
@@ -88,6 +93,7 @@ impl Intrinsic {
             0 => Some(Self::ObjectPrototypeHasOwnProperty),
             1 => Some(Self::ObjectPrototypeIsPrototypeOf),
             2 => Some(Self::ObjectPrototypePropertyIsEnumerable),
+            3 => Some(Self::ObjectPrototypeToString),
             _ => None,
         }
     }
@@ -99,6 +105,7 @@ impl Intrinsic {
             Self::ObjectPrototypeHasOwnProperty => "hasOwnProperty",
             Self::ObjectPrototypeIsPrototypeOf => "isPrototypeOf",
             Self::ObjectPrototypePropertyIsEnumerable => "propertyIsEnumerable",
+            Self::ObjectPrototypeToString => "toString",
         }
     }
 
@@ -109,6 +116,7 @@ impl Intrinsic {
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypePropertyIsEnumerable => 1,
+            Self::ObjectPrototypeToString => 0,
         }
     }
 }
@@ -406,6 +414,7 @@ impl Realm {
         let prototype = self.native_error_prototype(heap, kind)?;
         let shape = heap.shapes.root_shape();
         let error = heap.allocate_object(shape, prototype)?;
+        heap.set_object_kind(error, super::object::ObjectKind::Error)?;
         if !message.is_empty() {
             let name = intern(heap, "message")?;
             let text = heap.strings.allocate_str(message)?;

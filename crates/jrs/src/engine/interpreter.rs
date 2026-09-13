@@ -797,6 +797,33 @@ impl RegisterVM {
                 let own = heap.own_named_flags(object, key)?;
                 Ok(Value::from_bool(own.is_some_and(|flags| flags.enumerable)))
             }
+            // 20.1.3.6: undefined and null answer before ToObject, and the
+            // builtin tag comes from the receiver's internal slots. No object
+            // of this engine carries @@toStringTag, so step 15 keeps that tag.
+            Intrinsic::ObjectPrototypeToString => {
+                let tag = if call.receiver.is_undefined() {
+                    "Undefined"
+                } else if call.receiver.is_null() {
+                    "Null"
+                } else {
+                    let object = Self::coerce_object(call.receiver, heap, realm)?;
+                    match heap.get_object(object).ok_or(VMError::TypeError)?.kind {
+                        ObjectKind::Array { .. } => "Array",
+                        ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. } => {
+                            "Function"
+                        }
+                        ObjectKind::Error => "Error",
+                        ObjectKind::BooleanWrapper(_) => "Boolean",
+                        ObjectKind::NumberWrapper(_) => "Number",
+                        ObjectKind::StringWrapper(_) => "String",
+                        ObjectKind::Ordinary => "Object",
+                    }
+                };
+                let mut units: Vec<u16> = "[object ".encode_utf16().collect();
+                units.extend(tag.encode_utf16());
+                units.push(0x5D);
+                self.allocate_string(heap, &units)
+            }
         }
     }
 

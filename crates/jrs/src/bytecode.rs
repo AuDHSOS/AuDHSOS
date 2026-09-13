@@ -4165,6 +4165,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectPrototypePropertyIsEnumerable => {
             RegisterType::Boolean
         }
+        crate::engine::realm::Intrinsic::ObjectPrototypeToString => RegisterType::String,
     }
 }
 

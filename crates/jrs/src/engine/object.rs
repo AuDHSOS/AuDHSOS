@@ -54,6 +54,8 @@ pub enum ObjectKind {
     NumberWrapper(f64),
     /// Boxed String primitive.
     StringWrapper(Value),
+    /// Error instance, the `[[ErrorData]]` slot of 20.5.4.
+    Error,
 }
 
 /// Compact representation of a JavaScript object in the heap.

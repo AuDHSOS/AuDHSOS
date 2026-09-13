@@ -2376,6 +2376,8 @@ fn register_object_prototype_methods_run_as_native_intrinsics() -> Result<(), Er
         "let o={undefined:1};o.hasOwnProperty(undefined)",
         "let o={a:1};o.hasOwnProperty('a')&&o.hasOwnProperty('a')",
         "let o={a:1};o.propertyIsEnumerable('a')",
+        "let o={};o.toString()",
+        "let o={};o.toString()==='[object Object]'",
         "let o={a:1};o.propertyIsEnumerable('b')",
         "let o={};o.propertyIsEnumerable('toString')",
         "let o={a:1};o.isPrototypeOf({})",
@@ -2407,11 +2409,10 @@ fn register_object_prototype_methods_run_as_native_intrinsics() -> Result<(), Er
 fn register_lowering_rejects_reads_the_prototype_chain_cannot_answer() -> Result<(), Error> {
     for source in [
         // 20.1.3 names %Object.prototype% owns whose intrinsic does not exist yet.
-        "let o={};o.toString",
-        "let o={};o.valueOf()",
-        "let o={x:1};o.valueOf",
+        "let o={};o.valueOf",
+        // 23.1.3.36 gives an Array its own toString, which does not exist yet.
+        "let a=[1];a.toString()",
         "let o={};o['toString']",
-        "let o={};o.toString()",
         // A key known only at run time can name one of them.
         "let o={x:42},key='x';o[key]",
         "let o={x:40,y:2},key=true?'x':'y';o[key]+2",
