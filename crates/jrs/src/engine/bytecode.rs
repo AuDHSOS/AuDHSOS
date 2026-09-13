@@ -189,6 +189,12 @@ pub enum Instruction {
     /// `CreateGlobalVarBinding(strings[index], false)` of 9.1.1.4.16, which
     /// step 18 of 16.1.7 performs once every name has been verified.
     DeclareGlobalVar(u16),
+    /// Step 9 of 16.1.7 for one function name: a global property that cannot
+    /// take the function is a `TypeError`.
+    VerifyGlobalFunction(u16),
+    /// `CreateGlobalFunctionBinding(strings[index], acc, false)` of 9.1.1.4.17,
+    /// which step 17 of 16.1.7 performs with the function object it made.
+    DeclareGlobalFunction(u16),
     /// `acc = undefined`
     LdaUndefined,
     /// `acc = null`
@@ -704,7 +710,9 @@ impl BytecodeFunction {
             | Instruction::LdaGlobal(index)
             | Instruction::LdaGlobalForTypeOf(index)
             | Instruction::VerifyGlobalVar(index)
-            | Instruction::DeclareGlobalVar(index) => {
+            | Instruction::DeclareGlobalVar(index)
+            | Instruction::VerifyGlobalFunction(index)
+            | Instruction::DeclareGlobalFunction(index) => {
                 if usize::from(index) >= self.string_constants.len() {
                     return Err(VerificationError::StringConstantOutOfBounds { pc, index });
                 }

@@ -1180,6 +1180,50 @@ impl GlobalEnvironment {
         Ok(())
     }
 
+    /// `CanDeclareGlobalFunction` of 9.1.1.4.15.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] for a stale root.
+    pub fn can_declare_global_function(
+        &self,
+        heap: &GenerationalHeap,
+        name: PropertyKey,
+    ) -> Result<bool, HeapError> {
+        let Some(flags) = heap.own_named_flags(self.global_object(heap)?, name)? else {
+            // No such property, and every object of this engine is extensible.
+            return Ok(true);
+        };
+        Ok(flags.configurable || (!flags.is_accessor && flags.writable && flags.enumerable))
+    }
+
+    /// `CreateGlobalFunctionBinding` of 9.1.1.4.17 with `deletable` false.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] when the property cannot be defined.
+    pub fn create_global_function_binding(
+        &self,
+        heap: &mut GenerationalHeap,
+        name: PropertyKey,
+        value: Value,
+    ) -> Result<(), HeapError> {
+        let global = self.global_object(heap)?;
+        // A property that is already there and cannot be configured keeps its
+        // attributes and takes only the value.
+        let flags = match heap.own_named_flags(global, name)? {
+            Some(flags) if !flags.configurable => flags,
+            _ => PropertyFlags {
+                writable: true,
+                enumerable: true,
+                configurable: false,
+                is_accessor: false,
+            },
+        };
+        heap.define_own_named(global, name, value, flags)?;
+        Ok(())
+    }
+
     /// `CreateMutableBinding` of 9.1.1.4.2 and `CreateImmutableBinding` of
     /// 9.1.1.4.3, which both put an uninitialized binding in the declarative
     /// record.

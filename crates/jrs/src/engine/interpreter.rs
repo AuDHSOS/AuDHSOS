@@ -2374,6 +2374,36 @@ impl RegisterVM {
                         .global_environment()
                         .create_global_var_binding(heap, name)?;
                 }
+                Instruction::VerifyGlobalFunction(index) => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    // 16.1.7 step 9: a global property that cannot take the
+                    // function is a TypeError.
+                    if !realm
+                        .global_environment()
+                        .can_declare_global_function(heap, name)?
+                    {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "a global property of this name cannot take a function",
+                        ));
+                    }
+                }
+                Instruction::DeclareGlobalFunction(index) => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    let value = self.acc;
+                    realm
+                        .global_environment()
+                        .create_global_function_binding(heap, name, value)?;
+                }
                 Instruction::LdaUndefined | Instruction::ToUndefined => {
                     self.acc = VALUE_UNDEFINED;
                 }

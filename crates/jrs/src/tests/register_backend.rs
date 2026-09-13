@@ -156,6 +156,45 @@ fn a_var_of_a_realm_script_outlives_it() -> Result<(), Error> {
 }
 
 #[test]
+fn a_callee_the_lowering_cannot_type_is_dispatched_at_run_time() -> Result<(), Error> {
+    // 7.3.14 dispatches on the callee, so a name resolved on the Global
+    // Environment Record is still callable. A name of clause 19 this Realm has
+    // not built is a gap, and it is reported as one rather than answered.
+    let program = compile("Number(1)", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    assert_eq!(
+        Runtime::new(Limits::default()).run(&program.legacy_only(), &mut SilentHost)?,
+        Value::Number(1.0)
+    );
+    Ok(())
+}
+
+#[test]
+fn a_catch_parameter_widens_when_the_range_can_throw_an_error_object() -> Result<(), Error> {
+    // Only `throw` carries a value the lowering saw. Every other instruction
+    // that throws raises an error object of the Realm, whose type it does not
+    // know, so a Block that can raise one is not lowered with a primitive
+    // parameter.
+    for source in [
+        "try{null.x}catch(e){e|5}",
+        "try{f}catch(e){e|5}",
+        "let o={};try{o.x.y}catch(e){e|5}",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    // A range that can only throw what it was given keeps the typed parameter.
+    differential("let s=0;for(let i=0;i<3;i++){try{if(i===1)throw i;s+=10}catch(e){s+=e}}s")?;
+    Ok(())
+}
+
+#[test]
 fn a_realm_on_the_stack_backend_takes_the_same_scripts() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Stack)?;
@@ -1145,7 +1184,6 @@ fn register_string_concatenation_preserves_string_unit_limit() -> Result<(), Err
 #[test]
 fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<(), Error> {
     for source in [
-        "Number(1)",
         "+({valueOf(){return 1}})",
         "-function(){}",
         "({}) & 1",

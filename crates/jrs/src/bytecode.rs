@@ -679,9 +679,14 @@ struct RegisterLowerer {
     binding_type_hints: BTreeMap<String, RegisterType>,
     allow_return: bool,
     return_type: Option<RegisterType>,
-    /// Whether this Script runs in a persistent Realm, where a top-level `var`
-    /// is a binding of the Global Environment Record and not of the Script.
+    /// Whether a name no binding covers is resolved on the Global Environment
+    /// Record. A function of a Realm Script resolves its free names there too,
+    /// so this is inherited by the lowering of every function it contains.
     realm: bool,
+    /// Whether the top-level `var` names of this unit belong to the Global
+    /// Environment Record rather than to the unit. Only a Realm Script does;
+    /// a function of one keeps its own var scope.
+    script_globals: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -787,6 +792,7 @@ impl RegisterLowerer {
             allow_return: false,
             return_type: None,
             realm: false,
+            script_globals: false,
         }
     }
 
@@ -1008,34 +1014,42 @@ impl RegisterLowerer {
     /// leaves the Realm as it found it.
     fn instantiate_global_declarations(&mut self, body: &[Stmt]) -> Option<()> {
         use crate::engine::bytecode::Instruction;
-        let mut names = Vec::new();
+        let mut variables = Vec::new();
         for statement in body {
-            // A lexical declaration or a function at the top level is not
-            // lowered yet, and neither is a Script that holds one.
+            // A lexical declaration at the top level is not lowered yet, and
+            // neither is a function: a function object holds the index of its
+            // code in the table of the Script that made it, so one that
+            // outlives its Script cannot be called from the next. Code
+            // identity has to become a property of the Realm first.
             if matches!(statement, Stmt::Declare(_) | Stmt::Function(_, _)) {
                 return None;
             }
-            var_names(statement, &mut names);
+            var_names(statement, &mut variables);
         }
-        names.dedup();
-        let constants: Vec<u16> = names
+        variables.dedup();
+        let variable_names: Vec<u16> = variables
             .iter()
-            .map(|name| {
-                let units: Vec<u16> = name.encode_utf16().collect();
-                self.string_constant(&units)
-            })
+            .map(|name| self.name_constant(name))
             .collect::<Option<_>>()?;
-        for name in &constants {
+        // Every name is verified before any binding is created, so a Script
+        // that conflicts leaves the Realm as it found it.
+        for name in &variable_names {
             self.code.emit(Instruction::VerifyGlobalVar(*name));
         }
-        for name in &constants {
+        for name in &variable_names {
             self.code.emit(Instruction::DeclareGlobalVar(*name));
         }
         Some(())
     }
 
+    /// The string constant of one declared name.
+    fn name_constant(&mut self, name: &str) -> Option<u16> {
+        let units: Vec<u16> = name.encode_utf16().collect();
+        self.string_constant(&units)
+    }
+
     fn prepare_var_bindings(&mut self, body: &[Stmt]) -> Option<()> {
-        if self.realm {
+        if self.script_globals {
             // 16.1.7 creates a top-level `var` on the Global Environment
             // Record, which outlives this Script, so it is no binding of it.
             return Some(());
@@ -1853,6 +1867,7 @@ impl RegisterLowerer {
             code_id.checked_add(1)?,
         );
         child.allow_return = true;
+        child.realm = self.realm;
         child.function_returns = self.function_returns.clone();
         child.function_parameters = self.function_parameters.clone();
         child.function_capture_effects = self.function_capture_effects.clone();
@@ -2031,8 +2046,14 @@ impl RegisterLowerer {
         if let ExprKind::Member(base, key) = &callee.kind {
             return self.lower_method_call(base, key, arguments);
         }
-        let RegisterType::Function(code_id) = self.lower(callee)? else {
-            return None;
+        let callee_type = self.lower(callee)?;
+        let RegisterType::Function(code_id) = callee_type else {
+            // 7.3.14 dispatches on the callee at run time, which the call
+            // instruction does for a value the lowering could not name.
+            if callee_type != RegisterType::Unknown {
+                return None;
+            }
+            return self.lower_dynamic_call(arguments);
         };
         if self
             .function_capture_effects
@@ -2103,6 +2124,48 @@ impl RegisterLowerer {
 
     /// Lowers a call whose callee is a property of an object, evaluating the
     /// base once and passing it as the `this` value (13.3.6.1).
+    /// Lowers a call whose callee the lowering could not name.
+    ///
+    /// The callee is already in the accumulator. 7.3.14 refuses a value that
+    /// is not callable at run time, which the call instruction does.
+    fn lower_dynamic_call(&mut self, arguments: &[Expr]) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let function = self.allocate_register()?;
+        self.code.emit(Instruction::Star(function));
+        let mut argument_registers = Vec::new();
+        for argument in arguments {
+            self.lower(argument)?;
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            argument_registers.push(register);
+        }
+        let dummy = if argument_registers.is_empty() {
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::LdaUndefined);
+            self.code.emit(Instruction::Star(register));
+            Some(register)
+        } else {
+            None
+        };
+        let arg_start = argument_registers.first().copied().or(dummy)?;
+        let arg_count = u16::try_from(arguments.len()).ok()?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::Call {
+            func: function,
+            arg_start,
+            arg_count,
+            slot,
+        });
+        if let Some(dummy) = dummy {
+            self.release_register(dummy)?;
+        }
+        for register in argument_registers.into_iter().rev() {
+            self.release_register(register)?;
+        }
+        self.release_register(function)?;
+        Some(RegisterType::Unknown)
+    }
+
     fn lower_method_call(
         &mut self,
         base: &Expr,
@@ -3183,7 +3246,7 @@ impl RegisterLowerer {
         if self.bindings != bindings_before || self.object_layouts != layouts_before {
             return None;
         }
-        let opaque = self.range_contains_call(start, end)?;
+        let opaque = self.range_throws_opaque(start, end)?;
         if body_flow != RegisterFlow::Abrupt {
             self.code.emit(Instruction::Star(result_register));
         }
@@ -3316,16 +3379,72 @@ impl RegisterLowerer {
 
     /// Whether a protected range calls a function, whose thrown value the
     /// lowerer cannot type.
-    fn range_contains_call(&self, start: usize, end: usize) -> Option<bool> {
+    /// Whether a protected range can throw a value this lowering cannot type.
+    ///
+    /// Only `Throw` carries a value the lowering saw. Every other instruction
+    /// that can throw raises an error object of the Realm, whose type the
+    /// lowering does not know, so the catch parameter has to widen to the top
+    /// type. The list below is therefore the instructions that cannot throw a
+    /// value at all: the typed arithmetic and comparison forms belong to it
+    /// because the lowering only emits them over operands it typed as
+    /// primitives. `TestEqual` does not: 7.2.15 converts, and an Object
+    /// operand reaches a method. Anything else makes the range opaque.
+    fn range_throws_opaque(&self, start: usize, end: usize) -> Option<bool> {
+        use crate::engine::bytecode::Instruction;
         Some(
             self.code
                 .instructions
                 .get(start..end)?
                 .iter()
                 .any(|instruction| {
-                    matches!(
+                    !matches!(
                         instruction,
-                        crate::engine::bytecode::Instruction::Call { .. }
+                        Instruction::LdaSmi(_)
+                            | Instruction::LdaConstant(_)
+                            | Instruction::LdaString(_)
+                            | Instruction::LdaUndefined
+                            | Instruction::LdaNull
+                            | Instruction::LdaTrue
+                            | Instruction::LdaFalse
+                            | Instruction::LogicalNot
+                            | Instruction::ToUndefined
+                            | Instruction::TypeOf
+                            | Instruction::Ldar(_)
+                            | Instruction::Star(_)
+                            | Instruction::Mov { .. }
+                            | Instruction::LoadContext { .. }
+                            | Instruction::StoreContext { .. }
+                            | Instruction::Jump(_)
+                            | Instruction::JumpIfTrue(_)
+                            | Instruction::JumpIfFalse(_)
+                            | Instruction::JumpIfNotNullish(_)
+                            | Instruction::JumpIfNotUndefined(_)
+                            | Instruction::CreateObject
+                            | Instruction::CreateArray(_)
+                            | Instruction::CreateClosure(_)
+                            | Instruction::GetArrayLength { .. }
+                            | Instruction::Negate
+                            | Instruction::ToNumber
+                            | Instruction::BitNot
+                            | Instruction::Add(_)
+                            | Instruction::Sub(_)
+                            | Instruction::Mul(_)
+                            | Instruction::Pow(_)
+                            | Instruction::Div(_)
+                            | Instruction::Mod(_)
+                            | Instruction::BitAnd(_)
+                            | Instruction::BitOr(_)
+                            | Instruction::BitXor(_)
+                            | Instruction::Shl(_)
+                            | Instruction::Shr(_)
+                            | Instruction::Ushr(_)
+                            | Instruction::TestStrictEqual(_)
+                            | Instruction::TestLessThan(_)
+                            | Instruction::TestLessThanOrEqual(_)
+                            | Instruction::TestGreaterThan(_)
+                            | Instruction::TestGreaterThanOrEqual(_)
+                            | Instruction::Throw
+                            | Instruction::Return
                     )
                 }),
         )
@@ -5839,7 +5958,10 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
             _ => return None,
         }
     }
+    // A Script of a Realm that only declares is still a Script the lowering
+    // takes: 16.1.7 is the work it does.
     (saw_expression
+        || realm
         || body
             .iter()
             .any(|statement| matches!(statement, Stmt::Var(_))))
@@ -5953,6 +6075,7 @@ fn lower_register_script(
     });
     let mut lowerer = RegisterLowerer::new(entry_fuel_cost, stack_requirement, property_limit, 0);
     lowerer.realm = realm;
+    lowerer.script_globals = realm;
     if realm {
         lowerer.instantiate_global_declarations(body)?;
     }

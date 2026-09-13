@@ -81,6 +81,76 @@ fn the_global_environment_asks_the_declarative_record_before_the_binding_object(
 }
 
 #[test]
+fn a_global_function_binding_replaces_a_var_and_keeps_a_fixed_property() {
+    let mut heap = GenerationalHeap::new();
+    let realm = Realm::new(&mut heap).unwrap();
+    let declared = PropertyKey::String(heap.strings.intern("declared").unwrap());
+    let fixed = PropertyKey::String(heap.strings.intern("fixed").unwrap());
+    let environment = realm.global_environment();
+    let global = environment.global_object(&heap).unwrap();
+
+    // 9.1.1.4.15 answers true for a name nothing carries and for one a var
+    // declared, which is writable and enumerable.
+    assert!(
+        environment
+            .can_declare_global_function(&heap, declared)
+            .unwrap()
+    );
+    environment
+        .create_global_var_binding(&mut heap, declared)
+        .unwrap();
+    assert!(
+        environment
+            .can_declare_global_function(&heap, declared)
+            .unwrap()
+    );
+
+    // 9.1.1.4.17 gives it the value and the attributes of a fresh binding.
+    environment
+        .create_global_function_binding(&mut heap, declared, Value::from_smi(1))
+        .unwrap();
+    let flags = heap.own_named_flags(global, declared).unwrap().unwrap();
+    assert!(flags.writable);
+    assert!(flags.enumerable);
+    assert!(!flags.configurable);
+    assert_eq!(
+        environment.get_binding_value(&heap, declared).unwrap(),
+        Ok(Value::from_smi(1))
+    );
+
+    // A property that is neither configurable nor writable takes no function.
+    heap.define_own_named(
+        global,
+        fixed,
+        Value::from_smi(2),
+        PropertyFlags {
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            is_accessor: false,
+        },
+    )
+    .unwrap();
+    assert!(
+        !environment
+            .can_declare_global_function(&heap, fixed)
+            .unwrap()
+    );
+
+    // 9.1.1.4.17 keeps such a property's attributes and takes only the value.
+    environment
+        .create_global_function_binding(&mut heap, fixed, Value::from_smi(3))
+        .unwrap();
+    let flags = heap.own_named_flags(global, fixed).unwrap().unwrap();
+    assert!(!flags.writable);
+    assert!(!flags.enumerable);
+    assert_eq!(
+        environment.get_binding_value(&heap, fixed).unwrap(),
+        Ok(Value::from_smi(3))
+    );
+}
+
+#[test]
 fn a_global_var_binding_is_writable_enumerable_and_not_configurable() {
     let mut heap = GenerationalHeap::new();
     let realm = Realm::new(&mut heap).unwrap();
