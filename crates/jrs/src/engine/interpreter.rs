@@ -1903,6 +1903,13 @@ impl RegisterVM {
                 return Err(VMError::UnexpectedEnd);
             };
             pc = pc.saturating_add(1);
+            // An instruction begins at a Safe Point: every live value is in a
+            // register, the accumulator or a context. Collection is never
+            // hidden inside allocation, so leaving room here is what lets an
+            // operation without a retry loop of its own allocate at all.
+            if heap.nursery_is_full() {
+                self.collect_young(active_code, heap)?;
+            }
             let active_feedback = feedback_unit_mut(feedback, current_code_id)
                 .ok_or(VMError::InvalidFeedbackVector)?;
 
@@ -2521,10 +2528,6 @@ impl RegisterVM {
                     arg_count,
                     slot,
                 } => {
-                    // An intrinsic that allocates has no Safe Point of its own.
-                    if heap.nursery_is_full() {
-                        self.collect_young(active_code, heap)?;
-                    }
                     let receiver = self.read_reg(receiver)?;
                     if let Some(code_id) = self.enter_call(
                         code,
@@ -2547,11 +2550,6 @@ impl RegisterVM {
                     }
                 }
                 Instruction::IteratorNext { state } => {
-                    // 7.4.8 allocates its result object inside an intrinsic,
-                    // which has no Safe Point of its own.
-                    if heap.nursery_is_full() {
-                        self.collect_young(active_code, heap)?;
-                    }
                     self.acc = self.iterator_next(state, heap, realm)?;
                 }
                 Instruction::ForInNext { state } => {
