@@ -12,7 +12,7 @@ use crate::{
     parser::{Binary, Unary},
     value::{Callable, FunctionValue},
 };
-use alloc::{collections::VecDeque, rc::Rc, rc::Weak, vec::Vec};
+use alloc::{collections::VecDeque, rc::Rc, vec::Vec};
 
 mod abort;
 mod arrays;
@@ -199,8 +199,7 @@ pub struct Runtime {
     intrinsic_code: Vec<(Builtin, Rc<FunctionCode>)>,
     register_vm: Option<crate::engine::interpreter::RegisterVM>,
     register_agent: Option<crate::engine::agent::Agent>,
-    register_feedback: Vec<RegisterFeedbackState>,
-    next_unit: u32,
+    register_code: Vec<RegisterCodeUnit>,
 }
 
 /// Converts a register-backend value into the legacy value the embedding sees.
@@ -232,22 +231,23 @@ fn register_primitive(
     None
 }
 
-struct RegisterFeedbackState {
-    code: Weak<crate::engine::bytecode::BytecodeFunction>,
-    /// A name for this code that no later code takes again, which every
-    /// function object it creates carries. The position in the list is not one:
-    /// a dropped Script's entry is pruned and the ones after it move.
-    unit: u32,
+/// One code unit of a Realm: the root bytecode of a Script it has run and the
+/// feedback gathered for it.
+///
+/// The Realm holds the code, because a function object of an earlier Script
+/// names its unit and stays callable. A unit is therefore never dropped, which
+/// is what makes its position in the list the name the function object carries.
+struct RegisterCodeUnit {
+    code: Rc<crate::engine::bytecode::BytecodeFunction>,
     vector: crate::engine::feedback::FeedbackVector,
     invocations: u64,
 }
 
-impl RegisterFeedbackState {
-    fn new(code: &Rc<crate::engine::bytecode::BytecodeFunction>, unit: u32) -> Self {
+impl RegisterCodeUnit {
+    fn new(code: &Rc<crate::engine::bytecode::BytecodeFunction>) -> Self {
         let vector = crate::engine::feedback::FeedbackVector::for_code(code);
         Self {
-            code: Rc::downgrade(code),
-            unit,
+            code: Rc::clone(code),
             vector,
             invocations: 0,
         }
@@ -336,8 +336,7 @@ struct Execution<'host> {
     reported_exceptions: Vec<Error>,
     register_vm: Option<crate::engine::interpreter::RegisterVM>,
     register_agent: Option<crate::engine::agent::Agent>,
-    register_feedback: Vec<RegisterFeedbackState>,
-    next_unit: u32,
+    register_code: Vec<RegisterCodeUnit>,
 }
 
 impl Runtime {
@@ -363,8 +362,7 @@ impl Runtime {
             intrinsic_code: Vec::new(),
             register_vm: None,
             register_agent: None,
-            register_feedback: Vec::new(),
-            next_unit: 0,
+            register_code: Vec::new(),
         }
     }
 
@@ -386,30 +384,28 @@ impl Runtime {
         execution.intrinsic_code = core::mem::take(&mut self.intrinsic_code);
         execution.register_vm = self.register_vm.take();
         execution.register_agent = self.register_agent.take();
-        execution.register_feedback = core::mem::take(&mut self.register_feedback);
-        execution.next_unit = self.next_unit;
+        execution.register_code = core::mem::take(&mut self.register_code);
         let result = execution.run(program);
         self.stack = execution.stack;
         self.intrinsic_code = execution.intrinsic_code;
         self.register_vm = execution.register_vm;
         self.register_agent = execution.register_agent;
-        self.register_feedback = execution.register_feedback;
-        self.next_unit = execution.next_unit;
+        self.register_code = execution.register_code;
         result
     }
 
     #[cfg(test)]
     pub(crate) fn register_feedback_invocations(&self, program: &Program) -> Option<u64> {
         let code = program.register_code.as_ref()?;
-        self.register_feedback
+        self.register_code
             .iter()
-            .find(|state| state.code.as_ptr() == Rc::as_ptr(code))
-            .map(|state| state.invocations)
+            .find(|unit| Rc::ptr_eq(&unit.code, code))
+            .map(|unit| unit.invocations)
     }
 
     #[cfg(test)]
     pub(crate) const fn register_feedback_count(&self) -> usize {
-        self.register_feedback.len()
+        self.register_code.len()
     }
 }
 
@@ -480,8 +476,7 @@ impl<'host> Execution<'host> {
             reported_exceptions: Vec::new(),
             register_vm: None,
             register_agent: None,
-            register_feedback: Vec::new(),
-            next_unit: 0,
+            register_code: Vec::new(),
         }
     }
 }
@@ -571,10 +566,47 @@ impl Execution<'_> {
         }
     }
 
+    /// Names the Realm's unit for `code`, entering it when the Realm has not
+    /// run this Script before.
+    ///
+    /// A unit is never dropped, so its position is a name a function object of
+    /// an earlier Script still resolves against.
+    fn register_unit(
+        &mut self,
+        code: &Rc<crate::engine::bytecode::BytecodeFunction>,
+    ) -> Result<u32, Error> {
+        let index = if let Some(index) = self
+            .register_code
+            .iter()
+            .position(|state| Rc::ptr_eq(&state.code, code))
+        {
+            index
+        } else {
+            let required = code.functions.len().saturating_add(1);
+            let used = self.register_code.iter().fold(0usize, |used, state| {
+                used.saturating_add(state.vector.vector_count())
+            });
+            if used.saturating_add(required) > self.limits.feedback_vectors {
+                return Err(Error::Limit {
+                    resource: "feedback vectors",
+                });
+            }
+            self.register_code.push(RegisterCodeUnit::new(code));
+            self.register_code.len().saturating_sub(1)
+        };
+        if let Some(state) = self.register_code.get_mut(index) {
+            state.invocations = state.invocations.saturating_add(1);
+        }
+        u32::try_from(index).map_err(|_| Error::Limit {
+            resource: "code units",
+        })
+    }
+
     fn execute_register_program(
         &mut self,
         code: &Rc<crate::engine::bytecode::BytecodeFunction>,
     ) -> Result<Value, Error> {
+        let unit = self.register_unit(code)?;
         let mut vm = self.register_vm.take().unwrap_or_else(|| {
             crate::engine::interpreter::RegisterVM::with_limits(
                 self.fuel,
@@ -594,40 +626,32 @@ impl Execution<'_> {
                 return Err(error);
             }
         };
-        self.register_feedback
-            .retain(|state| state.code.strong_count() != 0);
-        let feedback_index = if let Some(index) = self
-            .register_feedback
+        // Every unit of the Realm is handed to the run, so a call to a function
+        // of an earlier Script resolves in the table that Script was compiled
+        // into. The code is borrowed separately from the feedback because one
+        // run reads the code of every unit and writes the feedback of the one
+        // it is executing.
+        let roots: Vec<Rc<crate::engine::bytecode::BytecodeFunction>> = self
+            .register_code
             .iter()
-            .position(|state| state.code.as_ptr() == Rc::as_ptr(code))
-        {
-            index
-        } else {
-            let required = code.functions.len().saturating_add(1);
-            let used = self.register_feedback.iter().fold(0usize, |used, state| {
-                used.saturating_add(state.vector.vector_count())
-            });
-            if used.saturating_add(required) > self.limits.feedback_vectors {
-                self.register_vm = Some(vm);
-                self.register_agent = Some(agent);
-                return Err(Error::Limit {
-                    resource: "feedback vectors",
-                });
-            }
-            self.next_unit = self.next_unit.checked_add(1).ok_or(Error::Limit {
-                resource: "code units",
-            })?;
-            self.register_feedback
-                .push(RegisterFeedbackState::new(code, self.next_unit));
-            self.register_feedback.len().saturating_sub(1)
-        };
-        let feedback = self
-            .register_feedback
-            .get_mut(feedback_index)
-            .ok_or(Error::InvalidBytecode)?;
-        feedback.invocations = feedback.invocations.saturating_add(1);
-        vm.set_unit(feedback.unit);
-        let result = vm.run(code, &mut feedback.vector, &mut agent.heap, &agent.realm);
+            .map(|state| Rc::clone(&state.code))
+            .collect();
+        let roots: Vec<&crate::engine::bytecode::BytecodeFunction> =
+            roots.iter().map(Rc::as_ref).collect();
+        let mut vectors: Vec<&mut crate::engine::feedback::FeedbackVector> = self
+            .register_code
+            .iter_mut()
+            .map(|state| &mut state.vector)
+            .collect();
+        let result = vm.run_unit(
+            crate::engine::interpreter::CodeTable::new(&roots),
+            &mut vectors,
+            unit,
+            &[],
+            &mut agent.heap,
+            &agent.realm,
+        );
+        drop(vectors);
         self.fuel = vm.fuel;
         let result = match result {
             Ok(value) => register_primitive(value, &agent.heap).ok_or(Error::Unsupported {

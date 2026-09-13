@@ -81,9 +81,15 @@ impl From<StringError> for VMError {
     }
 }
 
-/// Bit that marks a call-site target as a native intrinsic rather than an
-/// index into the shared bytecode function table.
-const NATIVE_CALL_TARGET: u32 = 1 << 31;
+/// Bit that marks a call-site target as a native intrinsic rather than a
+/// function of a code unit.
+const NATIVE_CALL_TARGET: u64 = 1 << 63;
+
+/// Names a bytecode function at a call site: the unit it belongs to and its
+/// index in that unit. The same index in two units is two functions.
+const fn bytecode_call_target(unit: u32, code_id: u32) -> u64 {
+    ((unit as u64) << 32) | code_id as u64
+}
 
 /// Operands of one call site.
 #[derive(Clone, Copy, Debug)]
@@ -124,12 +130,35 @@ enum Conversion {
     Suspended(u32),
 }
 
-/// The two bytecode units an instruction works with: the root unit that owns
-/// the function table and the constants, and the unit the frame is executing.
+/// Every code unit of a Realm, under the name the Realm gave each.
+///
+/// A function object names the unit it was compiled with, so a call resolves
+/// the function's index in that unit and not in the Script that is running.
+/// A Realm never drops a unit, which is what makes the index a name.
+#[derive(Clone, Copy)]
+pub struct CodeTable<'a> {
+    roots: &'a [&'a BytecodeFunction],
+}
+
+impl<'a> CodeTable<'a> {
+    /// Names the roots of a Realm, in unit order.
+    #[must_use]
+    pub const fn new(roots: &'a [&'a BytecodeFunction]) -> Self {
+        Self { roots }
+    }
+
+    /// The root of one unit, or `None` when the Realm has no such unit.
+    fn root(self, unit: u32) -> Option<&'a BytecodeFunction> {
+        self.roots.get(unit as usize).copied()
+    }
+}
+
+/// What an instruction works with: every unit of the Realm, and the unit the
+/// active frame is executing.
 #[derive(Clone, Copy)]
 struct CodeUnits<'a> {
-    /// The root unit, which owns the nested functions.
-    root: &'a BytecodeFunction,
+    /// Every unit, so a call can reach a function of another Script.
+    table: CodeTable<'a>,
     /// The unit of the active frame.
     active: &'a BytecodeFunction,
 }
@@ -143,6 +172,8 @@ pub struct FrameHeader {
     pub return_pc: usize,
     /// Bytecode function active in the caller; `None` denotes the root unit.
     pub caller_code_id: Option<u32>,
+    /// Code unit the caller belongs to, which a call of another Script leaves.
+    pub caller_unit: u32,
     /// Active binding count to restore with the caller.
     pub caller_binding_count: usize,
     /// Lexical heap context to restore with the caller.
@@ -717,20 +748,12 @@ impl RegisterVM {
             .ok_or(VMError::Heap(HeapError::InvalidReference))?
             .kind
             .clone();
-        let (code_id, context) = match kind {
+        let (unit, code_id, context) = match kind {
             ObjectKind::Function {
                 unit,
                 code_id,
                 context,
-            } => {
-                // A function holds the code unit it was compiled with. One of
-                // another Script cannot be resolved against this one until code
-                // identity belongs to the Realm.
-                if unit != self.unit {
-                    return Err(VMError::Unsupported("a function of another Script"));
-                }
-                (code_id, context)
-            }
+            } => (unit, code_id, context),
             ObjectKind::NativeFunction { id, .. } => {
                 let intrinsic = Intrinsic::from_id(id).ok_or(VMError::TypeError)?;
                 // A native identifier and a bytecode index are separate
@@ -738,7 +761,7 @@ impl RegisterVM {
                 // operation opened has no call site and records nothing.
                 if call.resume.is_none() {
                     active_feedback
-                        .record_call(call.slot, NATIVE_CALL_TARGET | id)
+                        .record_call(call.slot, NATIVE_CALL_TARGET | u64::from(id))
                         .ok_or(VMError::InvalidFeedbackVector)?;
                 }
                 let value = self.call_intrinsic(intrinsic, call, heap, realm)?;
@@ -747,10 +770,12 @@ impl RegisterVM {
             }
             _ => return Err(type_error(heap, realm, "value is not callable")),
         };
+        // The function holds the unit it was compiled with, so its index is
+        // resolved there and not in the Script that is running.
         let callee = units
-            .root
-            .functions
-            .get(code_id as usize)
+            .table
+            .root(unit)
+            .and_then(|root| root.functions.get(code_id as usize))
             .ok_or(VMError::InvalidBytecode(
                 VerificationError::FunctionOutOfBounds {
                     pc: call.return_pc.saturating_sub(1),
@@ -778,17 +803,19 @@ impl RegisterVM {
         let next_frame = self.open_frame(units.active, callee, call, function_ref)?;
         if call.resume.is_none() {
             active_feedback
-                .record_call(call.slot, code_id)
+                .record_call(call.slot, bytecode_call_target(unit, code_id))
                 .ok_or(VMError::InvalidFeedbackVector)?;
         }
         self.frames.push(FrameHeader {
             caller_fp: self.fp,
             return_pc: call.return_pc,
             caller_code_id: call.caller_code_id,
+            caller_unit: self.unit,
             caller_binding_count: self.active_binding_count,
             caller_context: self.current_context,
             resume: call.resume,
         });
+        self.unit = unit;
         self.fp = next_frame;
         self.active_binding_count = callee_bindings;
         self.current_context = context;
@@ -2123,13 +2150,19 @@ impl RegisterVM {
     /// `pc` is the offset of the instruction that threw, not the next one.
     fn unwind(
         &mut self,
-        code: &BytecodeFunction,
+        table: CodeTable<'_>,
         mut pc: usize,
         mut current_code_id: Option<u32>,
         value: Value,
         native: Option<(super::realm::NativeErrorKind, &'static str)>,
     ) -> Result<(usize, Option<u32>), VMError> {
         loop {
+            let code = table.root(self.unit).ok_or(VMError::InvalidBytecode(
+                VerificationError::FunctionOutOfBounds {
+                    pc,
+                    index: self.unit,
+                },
+            ))?;
             let active_code = code_unit(code, current_code_id).ok_or(VMError::InvalidBytecode(
                 VerificationError::FunctionOutOfBounds {
                     pc,
@@ -2151,6 +2184,7 @@ impl RegisterVM {
             self.active_binding_count = frame.caller_binding_count;
             self.current_context = frame.caller_context;
             current_code_id = frame.caller_code_id;
+            self.unit = frame.caller_unit;
             // The saved offset resumes after the call, so the protected
             // instruction is the call itself.
             pc = frame.return_pc.saturating_sub(1);
@@ -2169,15 +2203,6 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         self.run_with_arguments(code, &[], feedback, heap, realm)
-    }
-
-    /// Names the code unit the next run executes.
-    ///
-    /// Every function object the run creates carries it, so that a call
-    /// resolves the function's index against the unit that compiled it and not
-    /// against whichever Script happens to be running.
-    pub const fn set_unit(&mut self, unit: u32) {
-        self.unit = unit;
     }
 
     /// Executes bytecode after copying supplied values into the formal-parameter
@@ -2199,11 +2224,47 @@ impl RegisterVM {
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
+        self.run_unit(
+            CodeTable::new(&[code]),
+            &mut [feedback],
+            0,
+            arguments,
+            heap,
+            realm,
+        )
+    }
+
+    /// Executes one unit of a Realm whose other units it may call into.
+    ///
+    /// `unit` names the entry, and every function object the run creates
+    /// carries the unit it was compiled with, so a later Script of the same
+    /// Realm resolves a call to it in the table it came from.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError`] on invalid bytecode, resource exhaustion, invalid
+    /// heap references, or an operation unsupported by the current bytecode.
+    pub fn run_unit(
+        &mut self,
+        units: CodeTable<'_>,
+        feedback: &mut [&mut FeedbackVector],
+        unit: u32,
+        arguments: &[Value],
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
         self.fp = 0;
         self.frames.clear();
         self.current_context = None;
+        self.unit = unit;
+        let code = units.root(unit).ok_or(VMError::InvalidBytecode(
+            VerificationError::FunctionOutOfBounds { pc: 0, index: unit },
+        ))?;
+        let entry_feedback = feedback
+            .get(unit as usize)
+            .ok_or(VMError::InvalidFeedbackVector)?;
         code.verify().map_err(VMError::InvalidBytecode)?;
-        if !feedback.matches_code(code) {
+        if !entry_feedback.matches_code(code) {
             return Err(VMError::InvalidFeedbackVector);
         }
         if code.entry_stack_requirement > self.operand_stack_limit {
@@ -2245,14 +2306,14 @@ impl RegisterVM {
         }
 
         loop {
-            match self.step(code, feedback, heap, realm, &mut pc, &mut current_code_id) {
+            match self.step(units, feedback, heap, realm, &mut pc, &mut current_code_id) {
                 Ok(None) => {}
                 Ok(Some(value)) => return Ok(value),
                 // 14.15: a thrown value looks for a handler from the throwing
                 // instruction outwards before it leaves the outermost frame.
                 Err(VMError::Thrown(value, native)) => {
                     let (next_pc, next_code_id) =
-                        self.unwind(code, pc.saturating_sub(1), current_code_id, value, native)?;
+                        self.unwind(units, pc.saturating_sub(1), current_code_id, value, native)?;
                     pc = next_pc;
                     current_code_id = next_code_id;
                 }
@@ -2270,8 +2331,8 @@ impl RegisterVM {
     #[expect(clippy::too_many_lines, reason = "central bytecode dispatch")]
     fn step(
         &mut self,
-        code: &BytecodeFunction,
-        feedback: &mut FeedbackVector,
+        table: CodeTable<'_>,
+        feedback: &mut [&mut FeedbackVector],
         heap: &mut GenerationalHeap,
         realm: &Realm,
         pc_out: &mut usize,
@@ -2280,6 +2341,12 @@ impl RegisterVM {
         let mut pc = *pc_out;
         let mut current_code_id = *code_id_out;
         let outcome = (|| -> Result<Option<Value>, VMError> {
+            let code = table.root(self.unit).ok_or(VMError::InvalidBytecode(
+                VerificationError::FunctionOutOfBounds {
+                    pc,
+                    index: self.unit,
+                },
+            ))?;
             let active_code = code_unit(code, current_code_id).ok_or(VMError::InvalidBytecode(
                 VerificationError::FunctionOutOfBounds {
                     pc,
@@ -2298,10 +2365,14 @@ impl RegisterVM {
                 self.collect_young(active_code, heap)?;
             }
             let units = CodeUnits {
-                root: code,
+                table,
                 active: active_code,
             };
-            let active_feedback = feedback_unit_mut(feedback, current_code_id)
+            let unit_feedback = feedback
+                .get_mut(self.unit as usize)
+                .ok_or(VMError::InvalidFeedbackVector)?;
+            let unit_feedback: &mut FeedbackVector = unit_feedback;
+            let active_feedback = feedback_unit_mut(unit_feedback, current_code_id)
                 .ok_or(VMError::InvalidFeedbackVector)?;
 
             match inst {
@@ -3100,18 +3171,29 @@ impl RegisterVM {
                         self.fp = frame.caller_fp;
                         pc = frame.return_pc;
                         current_code_id = frame.caller_code_id;
+                        self.unit = frame.caller_unit;
                         self.active_binding_count = frame.caller_binding_count;
                         self.current_context = frame.caller_context;
                         if let Some(resume) = frame.resume {
                             // An operation of the caller is waiting for this
-                            // answer, and runs again once it has one.
-                            let caller = code_unit(code, current_code_id).ok_or(
+                            // answer, and runs again once it has one. It belongs
+                            // to the caller's unit, which the frame restored.
+                            let caller_root = table.root(self.unit).ok_or(
+                                VMError::InvalidBytecode(VerificationError::FunctionOutOfBounds {
+                                    pc,
+                                    index: self.unit,
+                                }),
+                            )?;
+                            let caller = code_unit(caller_root, current_code_id).ok_or(
                                 VMError::InvalidBytecode(VerificationError::FunctionOutOfBounds {
                                     pc,
                                     index: current_code_id.unwrap_or(u32::MAX),
                                 }),
                             )?;
-                            let feedback = feedback_unit_mut(feedback, current_code_id)
+                            let unit_feedback: &mut FeedbackVector = feedback
+                                .get_mut(self.unit as usize)
+                                .ok_or(VMError::InvalidFeedbackVector)?;
+                            let feedback = feedback_unit_mut(unit_feedback, current_code_id)
                                 .ok_or(VMError::InvalidFeedbackVector)?;
                             let call = Call {
                                 receiver: VALUE_UNDEFINED,
@@ -3126,7 +3208,7 @@ impl RegisterVM {
                             if let Some(code_id) = self.finish_conversion(
                                 call,
                                 CodeUnits {
-                                    root: code,
+                                    table,
                                     active: caller,
                                 },
                                 feedback,

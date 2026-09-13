@@ -207,15 +207,72 @@ fn a_global_function_is_callable_in_the_script_that_declared_it() -> Result<(), 
         differential(source)?;
     }
 
-    // A function object names the code unit it was compiled with, so one of an
-    // earlier Script of the same Realm is a gap rather than a wrong answer.
-    let mut host = SilentHost;
-    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
-    realm.evaluate("function f(){return 1}")?;
-    assert!(matches!(
-        realm.evaluate("f()"),
-        Err(Error::Unsupported { .. })
-    ));
+    Ok(())
+}
+
+#[test]
+fn a_global_function_outlives_the_script_that_declared_it() -> Result<(), Error> {
+    // The Realm holds the code of every Script it has run, and a function
+    // object names its unit, so the call of the next Script resolves in the
+    // table the function was compiled into.
+    for scripts in [
+        &["function f(a){return a+1}", "f(41)"][..],
+        // A function of the third Script calls one of the first.
+        &[
+            "function f(a){return a+1}",
+            "function g(){return f(1)+1}",
+            "g()",
+        ][..],
+        // A call of another unit unwinds to a handler of this one.
+        &["function f(){throw 7}", "try{f()}catch(e){e+1}"][..],
+        // Recursion across two units.
+        &[
+            "function down(n){return n===0?0:up(n-1)+1}",
+            "function up(n){return down(n)+0}down(6)",
+        ][..],
+        // A conversion of an operand calls a method of another unit.
+        &[
+            "function two(){return 2+0}",
+            "var o={valueOf(){return two()+0}};1+o",
+        ][..],
+        // Enough allocation in a frame of another unit for the Nursery to fill.
+        &[
+            "function rep(n){let s=\"\";let i=0;while(i<n){s=s+\"x\";i=i+1}return s}",
+            "rep(400)+\"!\"",
+        ][..],
+    ] {
+        differential_scripts(scripts)?;
+    }
+    Ok(())
+}
+
+/// Runs the Scripts in order in one Realm on each backend and compares the
+/// completion of the last one.
+fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
+    let outcome = |backend| -> Result<Result<Value, Error>, Error> {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, backend)?;
+        let mut last = Ok(Value::Undefined);
+        for source in scripts {
+            last = realm.evaluate(source);
+            if last.is_err() {
+                break;
+            }
+        }
+        Ok(last)
+    };
+    let actual = outcome(Backend::Engine)?;
+    let expected = outcome(Backend::Stack)?;
+    match (&actual, &expected) {
+        (Ok(actual), Ok(expected))
+        | (Err(Error::Thrown { value: actual }), Err(Error::Thrown { value: expected })) => {
+            assert!(
+                same_value(actual, expected),
+                "{scripts:?}: {actual:?} != {expected:?}"
+            );
+        }
+        _ => panic!("{scripts:?}: {actual:?} != {expected:?}"),
+    }
     Ok(())
 }
 

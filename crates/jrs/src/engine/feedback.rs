@@ -147,32 +147,35 @@ impl BinaryOpFeedback {
     }
 }
 
-/// Monomorphic or bounded polymorphic bytecode-function targets observed at a call site.
+/// Monomorphic or bounded polymorphic call targets observed at a call site.
+///
+/// A target names the code unit as well as the function in it, because the
+/// same index in two units is two different functions.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub enum CallIC {
     /// The call site has not executed yet.
     #[default]
     Uninitialized,
-    /// Exactly one bytecode function has been observed.
-    Monomorphic(u32),
-    /// A bounded set of bytecode functions has been observed.
-    Polymorphic(Vec<u32>),
+    /// Exactly one target has been observed.
+    Monomorphic(u64),
+    /// A bounded set of targets has been observed.
+    Polymorphic(Vec<u64>),
     /// More targets were observed than the bounded cache retains.
     Megamorphic,
 }
 
 impl CallIC {
-    /// Records one bytecode-function target.
-    pub fn record(&mut self, code_id: u32) {
+    /// Records one call target.
+    pub fn record(&mut self, target: u64) {
         match self {
-            Self::Uninitialized => *self = Self::Monomorphic(code_id),
-            Self::Monomorphic(current) if *current == code_id => {}
+            Self::Uninitialized => *self = Self::Monomorphic(target),
+            Self::Monomorphic(current) if *current == target => {}
             Self::Monomorphic(current) => {
-                *self = Self::Polymorphic(alloc::vec![*current, code_id]);
+                *self = Self::Polymorphic(alloc::vec![*current, target]);
             }
-            Self::Polymorphic(targets) if targets.contains(&code_id) => {}
+            Self::Polymorphic(targets) if targets.contains(&target) => {}
             Self::Polymorphic(targets) if targets.len() < POLYMORPHIC_LIMIT => {
-                targets.push(code_id);
+                targets.push(target);
             }
             Self::Polymorphic(_) => *self = Self::Megamorphic,
             Self::Megamorphic => {}
@@ -279,8 +282,8 @@ impl FeedbackVector {
         }
     }
 
-    /// Records a bytecode-function target in a call feedback slot.
-    pub fn record_call(&mut self, slot: u16, code_id: u32) -> Option<()> {
+    /// Records a call target in a call feedback slot.
+    pub fn record_call(&mut self, slot: u16, target: u64) -> Option<()> {
         let slot = self.slots.get_mut(slot as usize)?;
         if matches!(slot, FeedbackSlot::Uninitialized) {
             *slot = FeedbackSlot::Call(CallIC::Uninitialized);
@@ -288,7 +291,7 @@ impl FeedbackVector {
         let FeedbackSlot::Call(call) = slot else {
             return None;
         };
-        call.record(code_id);
+        call.record(target);
         Some(())
     }
 
