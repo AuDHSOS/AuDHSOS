@@ -19,8 +19,8 @@ use crate::ast::{
     Action, Arena, BinaryOp, Change, ColumnConstraint, ColumnDef, Compound, Conflict, CreateIndex,
     CreateTable, Cte, CurrentTime, Definition, Delete, Distinct, ExprId, Foreign, Indexed, Insert,
     Join, JoinKind, LikeOp, Limit, Literal, Materialized, Node, Nulls, Order, OrderTerm, Range,
-    ResultColumn, Select, SelectId, Source, SourceKind, Span, TableBody, TableConstraint,
-    TableOptions, UnaryOp,
+    ResultColumn, Select, SelectId, Set, Source, SourceKind, Span, TableBody, TableConstraint,
+    TableOptions, UnaryOp, Update,
 };
 use crate::keyword::Keyword;
 use crate::token::{Kind, Lexer, Token};
@@ -77,6 +77,12 @@ pub enum Expected {
     Insert,
     /// `DELETE`.
     Delete,
+    /// `UPDATE`.
+    Update,
+    /// `SET`, after the table of an `UPDATE`.
+    Set,
+    /// `=`, after a column of a `SET`.
+    Eq,
     /// `INTO`, after `INSERT`.
     Into,
     /// `TABLE` or `INDEX`, after `CREATE`.
@@ -704,6 +710,14 @@ impl<'a> Parser<'a> {
         } else {
             (Range::default(), false)
         };
+        if self.at_keyword(Keyword::Update) {
+            let statement = self.update()?;
+            if !ctes.is_empty() {
+                return Err(self.error(None, Expected::Select));
+            }
+            let _ = recursive;
+            return Ok(Change::Update(statement));
+        }
         if self.at_keyword(Keyword::Delete) {
             let statement = self.delete()?;
             if !ctes.is_empty() {
@@ -762,6 +776,41 @@ impl<'a> Parser<'a> {
             name,
             columns,
             select,
+        })
+    }
+
+    /// `UPDATE name SET column = value, ... [WHERE filter]`.
+    fn update(&mut self) -> Result<Update, Error> {
+        self.expect_keyword(Keyword::Update, Expected::Update)?;
+        let conflict = if self.eat_keyword(Keyword::Or) {
+            self.or_conflict()?
+        } else {
+            Conflict::Unspecified
+        };
+        let (schema, name) = self.qualified_name()?;
+        self.expect_keyword(Keyword::Set, Expected::Set)?;
+        let mut sets = Vec::new();
+        loop {
+            let column = self.name()?;
+            self.expect(Kind::Eq, Expected::Eq)?;
+            let value = self.expression()?;
+            sets.push(Set { column, value });
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+        let sets = self.arena.push_sets(&sets);
+        let filter = if self.eat_keyword(Keyword::Where) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        Ok(Update {
+            conflict,
+            schema,
+            name,
+            sets,
+            filter,
         })
     }
 

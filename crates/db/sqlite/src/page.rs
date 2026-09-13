@@ -582,6 +582,13 @@ impl<'a> Writer<'a> {
         })
     }
 
+    /// Writes `bytes` at `at` of the page, which is what
+    /// `btreeOverwriteContent` does to a payload that is the length the
+    /// one it stands on was.
+    pub fn overwrite(&mut self, at: usize, bytes: &[u8]) {
+        self.put(at, bytes);
+    }
+
     /// A page to write whatever its bytes say now, which is what
     /// `zeroPage` is called on: a page off the free list, or one at the
     /// end of the file.

@@ -4136,6 +4136,25 @@ D-173, document 16 step Q8. `DELETE` run from its text.
   row does not belong to, a table the database does not hold, and a
   table whose rows are kept in the key's own tree.
 
+### 6.6.114 Rows written over by a statement (`db-sqlite`)
+
+D-174, document 16 step Q8. `UPDATE` run from its text.
+
+- `updated.db` writes over rows that keep, shrink and grow their
+  payloads, `overwritten.db` writes over a payload the length it was and
+  over a cell the length it was, `moved.db` moves the key under both of
+  its names and drops an overflow chain, and `keyed.db` writes over
+  every row of a table that holds no column the key is another name
+  for, each the fixture byte for byte.
+- The three paths of `tree::update`: the payload that lies where it lay
+  and keeps its chain, the cell that lies where it lay, and the cell
+  dropped from the leaf and put in again.
+- A key the table does not hold writes over no row, whether the key runs
+  past the last row or falls between two rows.
+- The refusals: a column the `SET` names that the table does not hold, a
+  key written as text that is not a number, a `WITH` before the
+  `UPDATE`, a `SET` without an `=`, and text after the statement.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

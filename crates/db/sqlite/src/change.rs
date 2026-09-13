@@ -94,6 +94,7 @@ impl Writer {
             match change {
                 Change::Insert(statement) => self.insert(&arena, &statement, sql)?,
                 Change::Delete(statement) => self.delete(&arena, &statement, sql)?,
+                Change::Update(statement) => self.update(&arena, &statement, sql)?,
             }
         }
         // A statement that wrote no page is one the commit has nothing
@@ -337,6 +338,109 @@ impl Writer {
         };
         for key in keys {
             crate::tree::remove(&mut self.pages, root, key)?;
+        }
+        Ok(())
+    }
+}
+
+impl Writer {
+    /// `UPDATE`: the rows the `WHERE` keeps, written again with the
+    /// columns the `SET` names.
+    ///
+    /// The rows are read first and written after, as a delete reads
+    /// them first, because a tree changes under a walk of it. A row
+    /// whose key the statement writes comes out and goes in again under
+    /// the key it was given; every other row is written where it lies.
+    fn update(
+        &mut self,
+        arena: &Arena,
+        statement: &crate::ast::Update,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        let name = crate::schema::dequote(statement.name.text(sql));
+        let sets = arena.sets(statement.sets);
+        let (root, alias, affinities, written) = {
+            let bytes = self.written();
+            let database = Database::open(&bytes)?;
+            let (table, root) = database.table(&name).ok_or(Error::NoTable)?;
+            let places: Vec<Option<usize>> = sets
+                .iter()
+                .map(|set| {
+                    let column = crate::schema::dequote(set.column.text(sql));
+                    match table
+                        .columns
+                        .iter()
+                        .position(|held| held.name.eq_ignore_ascii_case(&column))
+                    {
+                        Some(at) => Ok(Some(at)),
+                        // `rowid` names the column the key is another name
+                        // for, where the table has one.
+                        None if is_rowid(&column) => Ok(table.rowid_alias),
+                        None => Err(Error::Unsupported),
+                    }
+                })
+                .collect::<Result<_, Error>>()?;
+            let affinities: Vec<Affinity> =
+                table.columns.iter().map(|column| column.affinity).collect();
+            let mut written = Vec::new();
+            for (rowid, values) in database.rows_of(&name)? {
+                let held = Held {
+                    table,
+                    values: &values,
+                    rowid,
+                    encoding: self.header.encoding,
+                };
+                let keep = match statement.filter {
+                    None => true,
+                    Some(filter) => {
+                        crate::eval::evaluate_row(arena, filter, sql, &held)?.truth(false)
+                    }
+                };
+                if !keep {
+                    continue;
+                }
+                let mut next = values.clone();
+                let mut key = rowid;
+                for (at, set) in places.iter().zip(sets) {
+                    let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
+                    match at {
+                        Some(at) => {
+                            for slot in next.iter_mut().skip(*at).take(1) {
+                                *slot = stored(&value, self.header.encoding);
+                            }
+                        }
+                        None => match value {
+                            Value::Int(given) => key = given,
+                            _ => return Err(Error::Unsupported),
+                        },
+                    }
+                }
+                written.push((rowid, key, next));
+            }
+            (root, table.rowid_alias, affinities, written)
+        };
+        for (rowid, mut key, mut values) in written {
+            // The column the key is another name for says the key, so a
+            // statement that writes that column writes the key, and the
+            // row holds no value for that column.
+            if let Some(at) = alias {
+                let mut given = values.get(at).cloned().unwrap_or(Value::Null);
+                crate::value::apply(&mut given, Affinity::Integer);
+                match given {
+                    Value::Int(number) => key = number,
+                    _ => return Err(Error::Unsupported),
+                }
+                for slot in values.iter_mut().skip(at).take(1) {
+                    *slot = Value::Null;
+                }
+            }
+            let record = crate::record::write(&values, &affinities, 4);
+            if key == rowid {
+                crate::tree::update(&mut self.pages, root, rowid, &record)?;
+            } else {
+                crate::tree::remove(&mut self.pages, root, rowid)?;
+                insert(&mut self.pages, root, key, &record)?;
+            }
         }
         Ok(())
     }

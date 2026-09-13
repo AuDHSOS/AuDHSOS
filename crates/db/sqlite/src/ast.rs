@@ -534,6 +534,30 @@ pub struct Delete {
     pub filter: Option<ExprId>,
 }
 
+/// One `column = value` of an `UPDATE`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Set {
+    /// The column written.
+    pub column: Span,
+    /// What it is written with.
+    pub value: ExprId,
+}
+
+/// `UPDATE name SET column = value, ... [WHERE filter]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Update {
+    /// What `UPDATE OR ...` says to do where a constraint is broken.
+    pub conflict: Conflict,
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The table whose rows change.
+    pub name: Span,
+    /// The columns written, each with what it is written with.
+    pub sets: Range,
+    /// The `WHERE` clause, where one was written.
+    pub filter: Option<ExprId>,
+}
+
 /// One statement that changes what a database holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Change {
@@ -541,6 +565,8 @@ pub enum Change {
     Insert(Insert),
     /// `DELETE`.
     Delete(Delete),
+    /// `UPDATE`.
+    Update(Update),
 }
 
 /// One definition out of `sqlite_schema`.
@@ -789,6 +815,9 @@ pub struct Arena {
     heights: Vec<u32>,
     /// The children of the nodes that have a run of them.
     children: Vec<ExprId>,
+    /// The `column = value` of the statements that write columns, in
+    /// runs.
+    sets: Vec<Set>,
     /// Every statement.
     selects: Vec<Select>,
     /// The result columns of the statements, in runs.
@@ -818,6 +847,7 @@ impl Arena {
             nodes: Vec::new(),
             heights: Vec::new(),
             children: Vec::new(),
+            sets: Vec::new(),
             selects: Vec::new(),
             results: Vec::new(),
             sources: Vec::new(),
@@ -1122,6 +1152,25 @@ impl Arena {
     }
 
     /// Adds a run of `WITH` tables.
+    /// Keeps `sets` as a run and answers where it lies.
+    pub fn push_sets(&mut self, sets: &[Set]) -> Range {
+        let start = u32::try_from(self.sets.len()).unwrap_or(u32::MAX);
+        self.sets.extend_from_slice(sets);
+        Range {
+            start,
+            len: u32::try_from(sets.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// The run of `column = value` at `range`.
+    #[must_use]
+    pub fn sets(&self, range: Range) -> &[Set] {
+        let start = usize::try_from(range.start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(range.len());
+        self.sets.get(start..end).unwrap_or_default()
+    }
+
+    /// Keeps `ctes` as a run and answers where it lies.
     pub fn push_ctes(&mut self, ctes: &[Cte]) -> Range {
         let start = u32::try_from(self.ctes.len()).unwrap_or(u32::MAX);
         self.ctes.extend_from_slice(ctes);

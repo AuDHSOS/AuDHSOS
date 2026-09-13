@@ -150,6 +150,51 @@ for pair in "deleted.db:rowid%3=0" "emptied.db:rowid%4!=0" "cleared.db:rowid>0";
     printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
 done
 
+# Rows written over: one that stays the same length, one that grows into
+# the free space the page holds, and one that grows past it.
+rm -f "$out/updated.db"
+"$sqlite" "$out/updated.db" "PRAGMA page_size=512; $rows400 UPDATE t SET n=n+1000 WHERE rowid%5=0; UPDATE t SET s='x' WHERE rowid%7=0; UPDATE t SET s=s||'-longer-text-here' WHERE rowid%11=0;"
+printf '%s\t%s bytes\n' updated.db "$(wc -c <"$out/updated.db" | tr -d ' ')"
+
+# Rows written over where the key moves: a row whose payload doubles, a
+# row whose key column is set, a row whose overflow chain is dropped,
+# and a row whose key is set under the name `rowid`.
+rm -f "$out/moved.db"
+"$sqlite" "$out/moved.db" \
+    "PRAGMA page_size=512;" \
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, s TEXT);" \
+    "INSERT INTO t VALUES (1,'a'),(2,'bb'),(3,'ccc'),(4,replace(hex(zeroblob(600)),'0','y')),(5,'e');" \
+    "UPDATE t SET s=s||s WHERE id=2;" \
+    "UPDATE t SET id=id+100 WHERE id=3;" \
+    "UPDATE t SET s='short' WHERE id=4;" \
+    "UPDATE t SET rowid=9 WHERE id=5;"
+printf '%s\t%s bytes\n' moved.db "$(wc -c <"$out/moved.db" | tr -d ' ')"
+
+# Rows written over where the new payload is the length the old one was,
+# so the cell lies where it lay: one row whose payload runs onto three
+# overflow pages, and one whose cell is the length it was although the
+# payload grew past the leaf, which is the only way the two lengths meet.
+rm -f "$out/overwritten.db"
+"$sqlite" "$out/overwritten.db" \
+    "PRAGMA page_size=512;" \
+    "CREATE TABLE t(s TEXT);" \
+    "INSERT INTO t VALUES (replace(hex(zeroblob(600)),'0','y')), (substr(replace(hex(zeroblob(60)),'0','y'),1,97));" \
+    "UPDATE t SET s=replace(s,'y','z') WHERE rowid=1;" \
+    "UPDATE t SET s=replace(hex(zeroblob(300)),'0','z') WHERE rowid=2;"
+printf '%s\t%s bytes\n' overwritten.db "$(wc -c <"$out/overwritten.db" | tr -d ' ')"
+
+# Rows written over where the statement names no rows to leave out, and
+# a key set under the name `rowid` on a table that holds no column the
+# key is another name for.
+rm -f "$out/keyed.db"
+"$sqlite" "$out/keyed.db" \
+    "PRAGMA page_size=512;" \
+    "CREATE TABLE t(a INTEGER, b TEXT);" \
+    "INSERT INTO t VALUES (1,'one'),(2,'two'),(3,'three');" \
+    "UPDATE t SET b='all';" \
+    "UPDATE t SET rowid=rowid+10 WHERE a=2;"
+printf '%s\t%s bytes\n' keyed.db "$(wc -c <"$out/keyed.db" | tr -d ' ')"
+
 rm -f "$out/unchained.db"
 "$sqlite" "$out/unchained.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<40) INSERT INTO t(rowid,n,s) SELECT (i*17)%41, i, replace(hex(zeroblob(i*30)),'0','x') FROM c; DELETE FROM t WHERE rowid%3!=0;"
 printf '%s\t%s bytes\n' unchained.db "$(wc -c <"$out/unchained.db" | tr -d ' ')"

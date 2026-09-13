@@ -1255,3 +1255,146 @@ fn what_the_reader_of_a_delete_refuses() {
     // which this crate does not answer yet.
     assert!(change(b"WITH x AS (SELECT 1) DELETE FROM t").is_err());
 }
+
+#[test]
+fn what_the_reader_of_an_update_refuses() {
+    use crate::parse::change;
+    assert!(change(b"UPDATE t SET a = 1").is_ok());
+    assert!(change(b"UPDATE t SET a = 1, b = 2 WHERE c = 3").is_ok());
+    assert!(change(b"UPDATE OR REPLACE t SET a = 1").is_ok());
+    assert!(change(b"UPDATE t a = 1").is_err());
+    assert!(change(b"UPDATE t SET a 1").is_err());
+    assert!(change(b"UPDATE t SET a = 1 extra").is_err());
+    // A `WITH` before an `UPDATE` names tables its `WHERE` may read,
+    // which this crate does not answer yet.
+    assert!(change(b"WITH x AS (SELECT 1) UPDATE t SET a = 1").is_err());
+}
+
+#[test]
+fn a_statement_that_names_no_rows_to_leave_out_writes_over_every_row() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a INTEGER, b TEXT)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES (1,'one'),(2,'two'),(3,'three')")
+        .unwrap();
+    writer.run(b"UPDATE t SET b='all'").unwrap();
+    writer
+        .run(b"UPDATE t SET rowid=rowid+10 WHERE a=2")
+        .unwrap();
+    same("keyed.db", &writer.written(), crate::tests::KEYED, 512);
+}
+
+#[test]
+fn a_key_the_statement_writes_is_refused_where_it_is_not_a_number() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a INTEGER)").unwrap();
+    writer.run(b"INSERT INTO t VALUES (1)").unwrap();
+    assert!(writer.run(b"UPDATE t SET rowid = 'x'").is_err());
+    let mut keyed = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    keyed
+        .run(b"CREATE TABLE u(id INTEGER PRIMARY KEY, a)")
+        .unwrap();
+    keyed.run(b"INSERT INTO u VALUES (1,2)").unwrap();
+    // The column the key is another name for holds integers, so text
+    // that is not a number is refused rather than stored.
+    assert!(keyed.run(b"UPDATE u SET id = 'x'").is_err());
+    assert!(keyed.run(b"UPDATE u SET id = '7'").is_ok());
+}
+
+#[test]
+fn a_column_the_table_does_not_hold_is_not_written() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a INTEGER)").unwrap();
+    writer.run(b"INSERT INTO t VALUES (1)").unwrap();
+    assert!(writer.run(b"UPDATE t SET nosuch = 1").is_err());
+}
+
+#[test]
+fn rows_written_over_by_a_statement_leave_the_file_the_shell_left() {
+    use crate::change::Writer;
+    // The rows of `shuffled.db` written over three times: a row that
+    // keeps its length, a row that shrinks, and a row that grows past
+    // the free space its page holds.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+    writer.run(sql_of_rows().as_bytes()).unwrap();
+    for sql in [
+        "UPDATE t SET n=n+1000 WHERE rowid%5=0",
+        "UPDATE t SET s='x' WHERE rowid%7=0",
+        "UPDATE t SET s=s||'-longer-text-here' WHERE rowid%11=0",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    same("updated.db", &writer.written(), crate::tests::UPDATED, 512);
+}
+
+#[test]
+fn a_statement_that_writes_the_key_takes_the_row_out_and_puts_it_back() {
+    use crate::change::Writer;
+    // The key moves under both of its names, and the row whose payload
+    // ran onto an overflow page shrinks back onto its leaf, which frees
+    // the chain.
+    let long: alloc::string::String = core::iter::repeat_n('y', 1200).collect();
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(id INTEGER PRIMARY KEY, s TEXT)")
+        .unwrap();
+    writer
+        .run(
+            alloc::format!("INSERT INTO t VALUES (1,'a'),(2,'bb'),(3,'ccc'),(4,'{long}'),(5,'e')")
+                .as_bytes(),
+        )
+        .unwrap();
+    for sql in [
+        "UPDATE t SET s=s||s WHERE id=2",
+        "UPDATE t SET id=id+100 WHERE id=3",
+        "UPDATE t SET s='short' WHERE id=4",
+        "UPDATE t SET rowid=9 WHERE id=5",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    same("moved.db", &writer.written(), crate::tests::MOVED, 512);
+}
+
+#[test]
+fn a_new_payload_the_length_of_the_old_one_lies_where_the_old_one_lay() {
+    use crate::change::Writer;
+    // The first row keeps its payload length, so the cell and the chain
+    // it runs onto stay and only the bytes change. The second row grows
+    // past its leaf onto a chain, and the cell is the length it was
+    // because the four bytes of the chain make up for the payload the
+    // leaf no longer holds.
+    let long: alloc::string::String = core::iter::repeat_n('y', 1200).collect();
+    let short: alloc::string::String = core::iter::repeat_n('y', 97).collect();
+    let grown: alloc::string::String = core::iter::repeat_n('z', 600).collect();
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(s TEXT)").unwrap();
+    writer
+        .run(alloc::format!("INSERT INTO t VALUES ('{long}'), ('{short}')").as_bytes())
+        .unwrap();
+    writer
+        .run(b"UPDATE t SET s=replace(s,'y','z') WHERE rowid=1")
+        .unwrap();
+    writer
+        .run(alloc::format!("UPDATE t SET s='{grown}' WHERE rowid=2").as_bytes())
+        .unwrap();
+    same(
+        "overwritten.db",
+        &writer.written(),
+        crate::tests::OVERWRITTEN,
+        512,
+    );
+}
+
+#[test]
+fn a_key_the_table_does_not_hold_writes_over_no_row() {
+    use crate::tree::update;
+    let mut pages = filled(512);
+    let record = crate::record::write(&[Value::Int(1)], &[Affinity::Blob], 4);
+    assert!(!update(&mut pages, 2, 401, &record).unwrap());
+    assert!(crate::tree::remove(&mut pages, 2, 200).unwrap());
+    assert!(!update(&mut pages, 2, 200, &record).unwrap());
+}

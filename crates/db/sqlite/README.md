@@ -68,10 +68,11 @@ payload that overflows costs one page read per link of its chain.
 
 ## What is not here yet
 
-`CREATE TABLE`, `INSERT` and `DELETE` run from their text and write the
-file SQLite writes. Under them a table tree is written from nothing, a row
-lands anywhere in it, a row taken out gives its pages back to the free
-list, and a commit writes either the rollback journal or the frames of a
-write-ahead log. What is missing of writing is `UPDATE` as a
-statement, the pointer maps, the checkpoint, and the index b-trees
-beyond reading their pages.
+`CREATE TABLE`, `INSERT`, `DELETE` and `UPDATE` run from their text and
+write the file SQLite writes. Under them a table tree is written from
+nothing, a row lands anywhere in it, a row written over keeps its cell
+where the new payload is the length the old one was, a row taken out
+gives its pages back to the free list, and a commit writes either the
+rollback journal or the frames of a write-ahead log. What is missing of
+writing is `CREATE INDEX`, `DROP`, `ALTER`, the pointer maps, the
+checkpoint, and the index b-trees beyond reading their pages.

@@ -67,6 +67,25 @@ pub(super) const CLEARED: &[u8] = include_bytes!("fixtures/cleared.db");
 /// taken out again, which frees the chains they ran onto.
 pub(super) const UNCHAINED: &[u8] = include_bytes!("fixtures/unchained.db");
 
+/// The four hundred rows of `shuffled.db` written over three times: a
+/// row that keeps its length, a row that shrinks, and a row that grows.
+pub(super) const UPDATED: &[u8] = include_bytes!("fixtures/updated.db");
+
+/// Three rows written over by a statement that names no rows to leave
+/// out, with one key set under the name `rowid` on a table that holds no
+/// column the key is another name for.
+pub(super) const KEYED: &[u8] = include_bytes!("fixtures/keyed.db");
+
+/// Two rows written over where the new cell is the length the old one
+/// was: one whose payload runs onto three overflow pages, and one whose
+/// payload grows past the leaf without the cell changing length.
+pub(super) const OVERWRITTEN: &[u8] = include_bytes!("fixtures/overwritten.db");
+
+/// Five rows written over where the key moves: a payload that doubles, a
+/// key column that is set, an overflow chain that is dropped, and a key
+/// set under the name `rowid`.
+pub(super) const MOVED: &[u8] = include_bytes!("fixtures/moved.db");
+
 /// Four thousand rows with seven in eight taken out again and a thousand
 /// put in after that, so that the pages the delete freed are the ones
 /// the insert takes.

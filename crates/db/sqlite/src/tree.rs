@@ -603,6 +603,87 @@ pub fn insert(pages: &mut Pages, root: u32, rowid: i64, record: &[u8]) -> Result
     balance(pages, &path, alloc::vec![(at, cell)])
 }
 
+/// Puts a row that the tree already holds there again, and answers
+/// whether the tree held one.
+///
+/// This is `sqlite3BtreeInsert` over a cursor that stands on the row: a
+/// payload of the length the old one was is written where the old one
+/// lies, chain and all, and anything else frees the chain the row ran
+/// onto and writes the cell again, over the old one where the two are
+/// the same size and in its place where they are not.
+///
+/// # Errors
+///
+/// [`Error::Depth`] for a tree deeper than this crate walks, and
+/// whatever reading or writing a page of it refuses.
+pub fn update(pages: &mut Pages, root: u32, rowid: i64, record: &[u8]) -> Result<bool, Error> {
+    let path = place(pages, root, rowid)?;
+    let (leaf, at) = *path.last().ok_or(Error::Depth)?;
+    let (key, total, local_len, overflow, offset) = {
+        let page = pages.page(leaf)?;
+        if at >= page.cells() {
+            return Ok(false);
+        }
+        let (key, payload) = page.row(at)?;
+        (
+            key,
+            payload.total,
+            payload.local.len(),
+            payload.overflow,
+            page.cell_offset(at)?,
+        )
+    };
+    if key != rowid {
+        return Ok(false);
+    }
+    let head = crate::bytes::varint_len(u64::try_from(total).unwrap_or(u64::MAX))
+        .saturating_add(crate::bytes::varint_len(rowid.cast_unsigned()));
+    if total == record.len() {
+        // `btreeOverwriteCell`: the payload is the length the old one
+        // was, so the new bytes go where the old ones lie and the chain
+        // the row runs onto is the chain it keeps.
+        let local = record.get(..local_len).unwrap_or_default();
+        pages
+            .writer(leaf)?
+            .overwrite(offset.saturating_add(head), local);
+        let mut rest = record.get(local_len..).unwrap_or_default();
+        let mut number = overflow;
+        let span = pages.usable().saturating_sub(4);
+        while let Some(page) = number {
+            let taken = rest.get(..span.min(rest.len())).unwrap_or_default();
+            pages.put(page, 4, taken);
+            rest = rest.get(taken.len()..).unwrap_or_default();
+            let next = crate::bytes::u32_at(pages.bytes(page)?, 0).ok_or(Error::Overrun)?;
+            number = (next != 0).then_some(next);
+        }
+        return Ok(true);
+    }
+    // A payload of another length: the chain the row ran onto goes back
+    // on the free list and the cell is written again.
+    clear(pages, overflow)?;
+    let (local, spill) = spilled(pages, record)?;
+    let cell = write_cell(&Cell::TableLeaf {
+        rowid,
+        payload: Payload {
+            local,
+            total: record.len(),
+            overflow: spill,
+        },
+    });
+    // `sqlite3BtreeInsert`: a cell the length of the old one, where the
+    // old one held its whole payload, goes where the old one lies.
+    if overflow.is_none() && cell.len() == head.saturating_add(local_len) {
+        pages.writer(leaf)?.overwrite(offset, &cell);
+        return Ok(true);
+    }
+    pages.writer(leaf)?.remove(at)?;
+    if pages.put_cell(leaf, at, &cell)? {
+        return Ok(true);
+    }
+    balance(pages, &path, alloc::vec![(at, cell)])?;
+    Ok(true)
+}
+
 /// Takes the row of `rowid` out of the table tree that begins at `root`,
 /// and answers whether the tree held one.
 ///
