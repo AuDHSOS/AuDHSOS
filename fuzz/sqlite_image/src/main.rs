@@ -5,6 +5,10 @@
 //! panic, no walk may run forever, and nothing a reader hands back may
 //! reach past the page it came from.
 //!
+//! What a record holds is checked the other way as well: the values of
+//! every record are written back as a record, and reading that record
+//! answers the values it was written from.
+//!
 //! A database is a file of pointers — page numbers, cell offsets, payload
 //! lengths, overflow links — and every one of them is a number a file can
 //! lie about. What this target holds is that a lie is answered with a
@@ -12,6 +16,7 @@
 //! itself, a tree that points into itself.
 
 use db_sqlite::db::Database;
+use db_sqlite::value::Value as Owned;
 use db_sqlite::{Cell, Image, Kind, Record, Value};
 
 /// What is asked of every table the file names, before its name.
@@ -251,11 +256,49 @@ fn walk(image: &Image<'_>, root: u32, roots: &mut Vec<u32>) {
                 Err(_) => break,
             }
         }
+        written_back(&record);
         if let Ok(Some(Value::Int(page))) = record.value(3) {
             if let Ok(page) = u32::try_from(page) {
                 roots.push(page);
             }
         }
+    }
+}
+
+/// The values of a record, or nothing where one of them is refused.
+fn owned(record: &Record<'_>) -> Option<Vec<Owned>> {
+    let mut out = Vec::new();
+    for value in record.values() {
+        out.push(match value.ok()? {
+            Value::Null => Owned::Null,
+            Value::Int(number) => Owned::Int(number),
+            Value::Real(number) => Owned::Real(number),
+            Value::Text(bytes) => Owned::Text(bytes.to_vec()),
+            Value::Blob(bytes) => Owned::Blob(bytes.to_vec()),
+        });
+    }
+    Some(out)
+}
+
+/// The values of a record, written back as a record and read again: the
+/// two runs of values are the same, whatever serial types the file chose
+/// and whichever this engine chooses for them.
+fn written_back(record: &Record<'_>) {
+    let Some(values) = owned(record) else {
+        return;
+    };
+    let bytes = db_sqlite::record::write(&values, &[], 4);
+    let again = Record::parse(&bytes).expect("a record this engine wrote is one it reads");
+    let back = owned(&again).expect("every value of a record this engine wrote");
+    assert_eq!(back.len(), values.len(), "a record of another width");
+    for (was, now) in values.iter().zip(&back) {
+        // A double is compared by its bits, because a NaN is a value a
+        // file may hold and is equal to nothing, itself included.
+        let same = match (was, now) {
+            (Owned::Real(before), Owned::Real(after)) => before.to_bits() == after.to_bits(),
+            _ => was == now,
+        };
+        assert!(same, "a value that moved: {was:?} became {now:?}");
     }
 }
 

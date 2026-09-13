@@ -74,3 +74,44 @@ fn a_length_wider_than_this_machine_saturates_rather_than_wrapping() {
     assert_eq!(size(u64::from(u32::MAX)), 4_294_967_295);
     assert!(size(u64::MAX) >= usize::MAX / 2);
 }
+
+#[test]
+fn every_varint_written_reads_back_as_the_value_it_was_written_from() {
+    use crate::bytes::{put_varint, varint_len};
+    // The two sides of every group boundary, and the nine-byte form,
+    // whose ninth byte carries all eight of its bits.
+    let values = [
+        0,
+        1,
+        127,
+        128,
+        16_383,
+        16_384,
+        2_097_151,
+        2_097_152,
+        268_435_455,
+        268_435_456,
+        34_359_738_367,
+        34_359_738_368,
+        4_398_046_511_103,
+        4_398_046_511_104,
+        562_949_953_421_311,
+        562_949_953_421_312,
+        72_057_594_037_927_935,
+        72_057_594_037_927_936,
+        u64::MAX,
+    ];
+    for value in values {
+        let mut written = Vec::new();
+        put_varint(&mut written, value);
+        assert_eq!(varint(&written), Ok((value, written.len())), "{value}");
+        // The length the writer takes is the length the counter says,
+        // except past what eight groups of seven bits hold, where the
+        // counter answers ten and the writer takes nine.
+        assert_eq!(
+            written.len(),
+            varint_len(value).min(9),
+            "the length of {value}"
+        );
+    }
+}

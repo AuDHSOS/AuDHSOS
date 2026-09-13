@@ -3854,6 +3854,34 @@ they hold is that a format writes the bytes the C library writes.
   conversion of the format language under two flags, so a difference
   between them is a difference in `%Q`.
 
+### 6.6.102 A row as bytes (`db-sqlite`)
+
+D-162, document 16 step Q7. `record::write` is `OP_MakeRecord`, and what
+holds it is the bytes the C library wrote rather than a reading of
+section 2.1.
+
+- `records.db` is the fixture: every serial type in a column of no
+  affinity, every affinity against five classes of value, a header of
+  exactly 127 code bytes and one of 130, which are the two sides of the
+  size varint counting itself, a table that keeps its rows in the key's
+  own tree, and a rowid alias, whose column takes no place in the
+  record.
+- The test reads every row of eight fixtures, writes the values back and
+  compares byte for byte: 978 rows, of which the matrix and the overflow
+  fixtures contribute the rows a page does not hold whole.
+- What no fixture reaches is a unit test: an integer in a column of real
+  affinity that six bytes do not hold, which is stored as the double it
+  stands for, and a file written before the fourth schema format, which
+  has no serial type for a zero or a one.
+- `sqlite_image` holds the other direction: the values of every record
+  it reads are written back as a record, and reading that record answers
+  the same values. A double is compared by its bits, because a file may
+  hold a NaN and a NaN is equal to nothing.
+- `put_varint` is held to `varint`: every value either side of every
+  group boundary is written and read back, and the nine-byte form, whose
+  ninth byte carries all eight of its bits, is the one the record layer
+  never writes.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

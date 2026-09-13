@@ -1759,7 +1759,7 @@ impl<'a> Iterator for Walk<'a> {
 /// its rows in the key's own tree puts the key's columns first, in the
 /// order the key names them, and the rest after them in the order the
 /// statement declares them, which is section 2.4 of the format.
-fn places(table: &Table) -> Vec<usize> {
+pub(crate) fn places(table: &Table) -> Vec<usize> {
     let mut order: Vec<usize> = (0..table.columns.len())
         .filter(|at| {
             table

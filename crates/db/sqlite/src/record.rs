@@ -7,8 +7,11 @@
 //! is a header of serial types and a body of the values they describe, and
 //! the serial type is both the type and the length.
 
-use crate::bytes::{signed, size, varint};
+use alloc::vec::Vec;
+
+use crate::bytes::{put_varint, signed, size, varint, varint_len};
 use crate::error::Error;
+use crate::value::{self, Affinity};
 
 /// One value of a row. Text and blob borrow the bytes of the page they
 /// were read from; text is in the database's encoding, which the header
@@ -70,6 +73,25 @@ impl Serial {
         }
     }
 
+    /// The header code this serial type is written as, which is the
+    /// inverse of [`Serial::from_code`].
+    #[must_use]
+    pub fn code(self) -> u64 {
+        match self {
+            Serial::Null => 0,
+            Serial::Int(bytes) => match bytes {
+                1..=4 => u64::from(bytes),
+                6 => 5,
+                _ => 6,
+            },
+            Serial::Real => 7,
+            Serial::Zero => 8,
+            Serial::One => 9,
+            Serial::Blob(len) => wide(len).saturating_mul(2).saturating_add(12),
+            Serial::Text(len) => wide(len).saturating_mul(2).saturating_add(13),
+        }
+    }
+
     /// How many bytes of the body this value takes.
     #[must_use]
     pub fn len(self) -> usize {
@@ -107,6 +129,11 @@ impl Serial {
     }
 }
 
+/// A length as the number a header code is computed from.
+fn wide(len: usize) -> u64 {
+    u64::try_from(len).unwrap_or(u64::MAX)
+}
+
 /// A big-endian two's complement integer of one to eight bytes.
 fn integer(bytes: &[u8]) -> i64 {
     let negative = bytes.first().is_some_and(|byte| byte & 0x80 != 0);
@@ -127,6 +154,104 @@ fn double(bytes: &[u8]) -> u64 {
         *slot = *byte;
     }
     u64::from_be_bytes(wide)
+}
+
+/// One row as the bytes of a record, which is `OP_MakeRecord`.
+///
+/// The affinity of each column is applied first, as the opcode applies
+/// it, so a caller hands in the values an expression answered. `format`
+/// is the schema format number: below four there are no serial types 8
+/// and 9, so a zero and a one take a byte of the body each.
+#[must_use]
+pub fn write(values: &[value::Value], affinities: &[Affinity], format: u32) -> Vec<u8> {
+    let mut fields = Vec::with_capacity(values.len());
+    let mut codes: usize = 0;
+    let mut body: usize = 0;
+    for (at, value) in values.iter().enumerate() {
+        let mut value = value.clone();
+        let affinity = affinities.get(at).copied().unwrap_or(Affinity::None);
+        value::apply(&mut value, affinity);
+        let (serial, value) = stored_as(value, affinity, format);
+        codes = codes.saturating_add(varint_len(serial.code()));
+        body = body.saturating_add(serial.len());
+        fields.push((serial, value));
+    }
+    // The size varint counts itself, so a header of 126 code bytes or
+    // fewer takes one more byte and a longer one may take one further
+    // byte than the count without it did.
+    let mut header = codes;
+    if codes <= 126 {
+        header = header.saturating_add(1);
+    } else {
+        let first = varint_len(wide(codes));
+        header = header.saturating_add(first);
+        if first < varint_len(wide(header)) {
+            header = header.saturating_add(1);
+        }
+    }
+    let mut out = Vec::with_capacity(header.saturating_add(body));
+    put_varint(&mut out, wide(header));
+    for (serial, _) in &fields {
+        put_varint(&mut out, serial.code());
+    }
+    for (serial, value) in &fields {
+        put_body(&mut out, *serial, value);
+    }
+    out
+}
+
+/// The serial type a value is stored under, and the value as that type
+/// holds it: an integer in a column of real affinity that needs eight
+/// bytes is stored as the double it stands for, which is `MEM_IntReal`
+/// becoming `MEM_Real`.
+fn stored_as(value: value::Value, affinity: Affinity, format: u32) -> (Serial, value::Value) {
+    let serial = match &value {
+        value::Value::Null => Serial::Null,
+        value::Value::Real(_) => Serial::Real,
+        value::Value::Text(bytes) => Serial::Text(bytes.len()),
+        value::Value::Blob(bytes) => Serial::Blob(bytes.len()),
+        value::Value::Int(number) => {
+            let magnitude = if *number < 0 { !*number } else { *number };
+            match magnitude {
+                0..=127 if *number & 1 == *number && format >= 4 => {
+                    return (
+                        if *number == 0 {
+                            Serial::Zero
+                        } else {
+                            Serial::One
+                        },
+                        value,
+                    );
+                }
+                0..=127 => Serial::Int(1),
+                128..=32_767 => Serial::Int(2),
+                32_768..=8_388_607 => Serial::Int(3),
+                8_388_608..=2_147_483_647 => Serial::Int(4),
+                2_147_483_648..=140_737_488_355_327 => Serial::Int(6),
+                _ if affinity == Affinity::Real => {
+                    return (Serial::Real, value::Value::Real(value.to_real()));
+                }
+                _ => Serial::Int(8),
+            }
+        }
+    };
+    (serial, value)
+}
+
+/// The bytes one value takes in the body.
+fn put_body(out: &mut Vec<u8>, serial: Serial, value: &value::Value) {
+    match serial {
+        Serial::Null | Serial::Zero | Serial::One => {}
+        Serial::Int(bytes) => {
+            let wide = value.to_integer().cast_unsigned().to_be_bytes();
+            let start = 8usize.saturating_sub(usize::from(bytes));
+            out.extend_from_slice(wide.get(start..).unwrap_or_default());
+        }
+        Serial::Real => out.extend_from_slice(&value.to_real().to_bits().to_be_bytes()),
+        Serial::Blob(_) | Serial::Text(_) => {
+            out.extend_from_slice(value.bytes().unwrap_or_default());
+        }
+    }
 }
 
 /// One record: the serial types of its header, and the body they describe.

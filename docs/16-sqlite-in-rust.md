@@ -77,7 +77,7 @@ Each rule is checkable, and each makes a later thing possible.
 
 | Module | What it holds | Decided in |
 |--------|---------------|------------|
-| `header`, `page`, `record`, `image`, `bytes` | The hundred-byte header, the four b-tree page types, the four cell shapes, overflow chains, the record format, the walk of a table tree and of an index tree. | Q1 |
+| `header`, `page`, `record`, `image`, `bytes` | The hundred-byte header, the four b-tree page types, the four cell shapes, overflow chains, the record format read and written, the walk of a table tree and of an index tree. | Q1, D-162 |
 | `wal` | The write-ahead log a reader must follow: the header, the frames, the checksum of section 4.2, and the newest committed frame of each page. | D-155, Q3 |
 | `journal` | The rollback journal a reader must play back: the headers, the records, the checksum of `pager_cksum`, and the content each page began with. | D-156, Q3 |
 | `token`, `keyword` | SQL text to tokens, the same character classes as `src/tokenize.c`. | Q4 |
@@ -122,6 +122,7 @@ Each rule is checkable, and each makes a later thing possible.
 | A database whose content is in its log | 26 cases over `logged.db` | the fixture and logs built by hand |
 | A database caught mid-transaction | 19 cases over `rollback.db`, and the journals two modes leave behind | the fixture and journals built by hand |
 | The format under every configuration | 11 fixtures, the same three rows and the same index | the matrix, 16.11 |
+| A row written back as the bytes it was read from | 978 rows over 8 files | the fixtures the shell wrote |
 | The readers against arbitrary bytes | 7 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval`, `sqlite_wal`, `sqlite_journal`, `sqlite_format` |
 
 The crate is `COMPLETE` in `crates/tools/xtask/src/policy.rs`: 100 percent
@@ -133,7 +134,7 @@ of lines and 100 percent of branches, in both instrumentations.
 |---|-----------------|------------|
 | 1 | The plan that chooses between them: the first index whose column a `=` names is the one taken, and how many rows each would answer is not counted. | Q6 |
 | 2 | The virtual machine and the code generator that replaces the tree walker. | Q6 |
-| 3 | Writing: the b-tree writer, transactions, the journal in four modes, the WAL. `changes`, `total_changes` and `last_insert_rowid` answer nought until then, which is what a connection that has written nothing answers. | Q7 |
+| 3 | Writing past the record: the b-tree writer, transactions, the journal in four modes, the WAL. `changes`, `total_changes` and `last_insert_rowid` answer nought until then, which is what a connection that has written nothing answers. | Q7 |
 | 4 | The rest of the language: `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, triggers, views, a `WITH` written `RECURSIVE`. | Q8 |
 | 5 | The window clauses, which the parser refuses. | Q8 |
 | 6 | The functions whose answers are not exact: `sqrt`, `exp`, `ln`, `log`, `pow` and the trigonometric set. See D-160. | Q8 |
@@ -293,7 +294,7 @@ CI has no SQLite.
 | Q4 | The tokenizer and the parser | built but for the window clauses | nothing | L |
 | Q5 | Values, and a statement answered by walking | built | Q2, Q4 | L |
 | Q6 | The virtual machine | open | Q5 | L |
-| Q7 | Writing | open | Q3, Q6 | L |
+| Q7 | Writing | the record is written | Q3, Q5 | L |
 | Q8 | The rest of the language | open | Q6 | L |
 | Q9 | The suites run whole | open | Q7, Q8 | M |
 | Q10 | Coverage to the standard of D4 | open | Q9 | M |
@@ -496,20 +497,22 @@ through the walker; the crate meets D4.
 
 ## 16.21 Q7. Writing
 
-Status: open.
-Depends on: Q3, Q6.
+Status: the record is written; the b-tree writer is not.
+Depends on: Q3, Q5. Recorded in D-162.
 Size: L.
 
 ### Needs
 
 - Q3, for the pager and the journal.
-- Q6, for the opcodes that write.
+- Q5, for the affinity each column applies before a value is stored.
 
 ### Does
 
-1. Insert, delete and balance in a b-tree.
-2. Keep the free list and the pointer maps.
-3. Run a transaction through the rollback journal in each of its four
+1. Write a row as a record: the affinity of each column, a serial type
+   per value, the header of types and the body of values. Built.
+2. Insert, delete and balance in a b-tree.
+3. Keep the free list and the pointer maps.
+4. Run a transaction through the rollback journal in each of its four
    modes, then through the WAL.
 
 ### Done when

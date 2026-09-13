@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! Reading numbers out of a page. Every number of the format is
-//! big-endian, and every reader answers `None` where the bytes end first,
-//! so no read of a short page indexes past it.
+//! Numbers out of a page and back into one. Every number of the format
+//! is big-endian, and every reader answers `None` where the bytes end
+//! first, so no read of a short page indexes past it.
 
 use crate::error::Error;
 
@@ -47,6 +47,52 @@ pub(crate) fn varint(bytes: &[u8]) -> Result<(u64, usize), Error> {
     }
     let last = bytes.get(8).copied().ok_or(Error::Varint)?;
     Ok((value.wrapping_shl(8) | u64::from(last), 9))
+}
+
+/// A value written as a varint, appended to `out`, which is
+/// `sqlite3PutVarint`. O(1), at most nine steps.
+pub(crate) fn put_varint(out: &mut alloc::vec::Vec<u8>, value: u64) {
+    let low = |bits: u64| u8::try_from(bits & 0xff).unwrap_or(0);
+    if value & 0xff00_0000_0000_0000 != 0 {
+        // Nine bytes: eight of seven bits, then one of eight.
+        let mut groups = alloc::vec::Vec::with_capacity(8);
+        let mut rest = value >> 8;
+        for _ in 0..8 {
+            groups.push(low(rest & 0x7f) | 0x80);
+            rest >>= 7;
+        }
+        groups.reverse();
+        out.extend_from_slice(&groups);
+        out.push(low(value));
+        return;
+    }
+    // The lowest seven bits are written last and are the group without
+    // the continuation bit, so they go in first and the rest are turned
+    // around after them.
+    let mut groups = alloc::vec::Vec::with_capacity(8);
+    groups.push(low(value & 0x7f));
+    let mut rest = value >> 7;
+    while rest != 0 {
+        groups.push(low(rest & 0x7f) | 0x80);
+        rest >>= 7;
+    }
+    groups.reverse();
+    out.extend_from_slice(&groups);
+}
+
+/// How many bytes a varint of this value takes, which is
+/// `sqlite3VarintLen`. It answers ten for a value the ninth byte's own
+/// eight bits would hold, which no caller here writes.
+pub(crate) const fn varint_len(value: u64) -> usize {
+    let mut count = 1;
+    let mut rest = value;
+    loop {
+        rest >>= 7;
+        if rest == 0 {
+            return count;
+        }
+        count = count.saturating_add(1);
+    }
 }
 
 /// The same value read as a signed one, which is what a rowid is.

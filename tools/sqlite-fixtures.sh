@@ -117,6 +117,63 @@ fixture m-reserved4.db       ".filectrl reserve_bytes 4" "PRAGMA page_size=1024;
 "$sqlite" "$out/m-wal.db" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null
 rm -f "$out"/*-wal "$out"/*-shm
 
+# Every serial type and every affinity, so that a record written by this
+# repository can be held to the bytes the C library writes. `wide` has a
+# header of exactly 127 code bytes and `wider` one of 130, which are the
+# two sides of the size varint counting itself.
+wide_columns=""
+at=1
+while [ $at -le 130 ]; do
+    [ $at -gt 1 ] && wide_columns="$wide_columns,"
+    wide_columns="${wide_columns}c$at"
+    at=$((at + 1))
+done
+narrow_columns="$(printf '%s' "$wide_columns" | cut -d, -f1-127)"
+wide_values="$(printf '%s' "$wide_columns" | sed 's/c[0-9]*/1/g')"
+narrow_values="$(printf '%s' "$narrow_columns" | sed 's/c[0-9]*/2/g')"
+rm -f "$out/records.db"
+"$sqlite" "$out/records.db" >/dev/null <<RECORDS
+PRAGMA page_size=1024;
+CREATE TABLE plain(a, b, c, d);
+INSERT INTO plain VALUES
+ (NULL, 0, 1, -1),
+ (2, 127, 128, -128),
+ (-129, 32767, 32768, -32768),
+ (-32769, 8388607, 8388608, -8388608),
+ (-8388609, 2147483647, 2147483648, -2147483648),
+ (-2147483649, 140737488355327, 140737488355328, -140737488355328),
+ (-140737488355329, 9223372036854775807, -9223372036854775808, 0),
+ (2.5, -2.5, 1e300, -1e-300),
+ (0.0, -0.0, 9e999, -9e999),
+ ('', 'a', 'abc', x''),
+ (x'41', x'4142', CAST(x'00' AS TEXT), 'ä'),
+ (zeroblob(0), zeroblob(1), zeroblob(100), zeroblob(56)),
+ (hex(zeroblob(150)), hex(zeroblob(2000)), zeroblob(4000), 'end');
+CREATE TABLE typed(i INTEGER, t TEXT, r REAL, n NUMERIC, b BLOB);
+INSERT INTO typed VALUES (5, 5, 5, 5, 5);
+INSERT INTO typed VALUES ('5', '5', '5', '5', '5');
+INSERT INTO typed VALUES (2.5, 2.5, 2.5, 2.5, 2.5);
+INSERT INTO typed VALUES (NULL, NULL, NULL, NULL, NULL);
+INSERT INTO typed VALUES ('abc', 'abc', 'abc', 'abc', 'abc');
+INSERT INTO typed VALUES (x'41', x'41', x'41', x'41', x'41');
+INSERT INTO typed VALUES (9223372036854775807, 9223372036854775807,
+ 9223372036854775807, 9223372036854775807, 9223372036854775807);
+INSERT INTO typed VALUES (1e300, 1e300, 1e300, 1e300, 1e300);
+INSERT INTO typed VALUES (0, 0, 0, 0, 0);
+INSERT INTO typed VALUES (1, 1, 1, 1, 1);
+INSERT INTO typed VALUES (-0.0, -0.0, -0.0, -0.0, -0.0);
+INSERT INTO typed VALUES (4.0, 4.0, 4.0, 4.0, 4.0);
+CREATE TABLE narrow($narrow_columns);
+INSERT INTO narrow VALUES ($narrow_values);
+CREATE TABLE wide($wide_columns);
+INSERT INTO wide VALUES ($wide_values);
+CREATE TABLE keyed(a TEXT, b INTEGER, PRIMARY KEY(a)) WITHOUT ROWID;
+INSERT INTO keyed VALUES ('one', 1), ('two', 2), ('three', 3);
+CREATE TABLE aliased(k INTEGER PRIMARY KEY, v);
+INSERT INTO aliased VALUES (1, 'one'), (2, NULL), (3, 2.5);
+RECORDS
+printf '%s\t%s bytes\n' records.db "$(wc -c <"$out/records.db" | tr -d ' ')"
+
 # A database whose content is in the log and not in the file, which is
 # what a reader that does not follow the log reads back as empty. The
 # three files are copied while the connection is open, because closing
