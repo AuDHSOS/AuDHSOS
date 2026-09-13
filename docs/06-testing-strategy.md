@@ -4080,6 +4080,25 @@ held to the journals the shell left beside its databases.
   `truncate` an empty one, and `persist` the records under a header of
   noughts.
 
+### 6.6.111 The log a commit writes (`db-sqlite`)
+
+D-171, document 16 step Q7. `wal::Log`, held to the log the shell left
+beside a database in write-ahead logging mode.
+
+- `logging.db` is what `PRAGMA journal_mode=wal` left: one page, with
+  the write and the read version two, and nothing after it, because the
+  log was never checkpointed.
+- `logging.db-wal` holds three transactions in thirty-two frames: the
+  schema, four hundred rows, and a delete that frees no page.
+- The delete is what shows the rule for page one: the count of pages
+  does not change, so the log holds no page one for that transaction,
+  where the two before it do.
+- The two salts come from SQLite's random source, so the test reads them
+  out of the fixture's header and every checksum of every frame is what
+  says they are right.
+- The log this crate writes is one it reads back, under either byte
+  order of the checksum.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

@@ -178,8 +178,10 @@ impl Header {
     ///
     /// The twenty bytes section 1.3 reserves for expansion are noughts,
     /// which is what SQLite writes. A file whose schema has never been
-    /// written says nought for its encoding, and this writes the one a
-    /// reader made of it, because a reader cannot tell the two apart.
+    /// written says nought for its encoding as well as for its schema
+    /// format, because SQLite writes the two together when the first
+    /// table is created, so a header of format nought writes an
+    /// encoding of nought.
     #[must_use]
     pub fn written(&self) -> [u8; HEADER_LEN] {
         let mut out = [0u8; HEADER_LEN];
@@ -222,7 +224,12 @@ impl Header {
         word(&mut out, 44, self.schema_format);
         word(&mut out, 48, self.cache_size);
         word(&mut out, 52, self.largest_root);
-        word(&mut out, 56, self.encoding.code());
+        let encoding = if self.schema_format == 0 {
+            0
+        } else {
+            self.encoding.code()
+        };
+        word(&mut out, 56, encoding);
         word(&mut out, 60, self.user_version);
         word(&mut out, 64, self.incremental_vacuum);
         word(&mut out, 68, self.application_id);

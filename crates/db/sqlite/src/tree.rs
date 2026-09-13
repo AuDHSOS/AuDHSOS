@@ -479,6 +479,42 @@ impl Pages {
         crate::journal::write(&records, self.origin, nonce, sector)
     }
 
+    /// The frames the commit of this transaction writes into the
+    /// write-ahead log, which is `sqlite3PcacheDirtyList` and
+    /// `pagerWalFrames`: every page the transaction wrote, in the order
+    /// their numbers run.
+    ///
+    /// Page one is among them where the transaction changed how many
+    /// pages the database has, because the commit writes that count
+    /// into page one along with the change counter. `now` is the header
+    /// the commit writes, which this crate keeps beside the pages
+    /// rather than on page one.
+    #[must_use]
+    pub fn frames(&self, now: &Header) -> Vec<(u32, Vec<u8>)> {
+        let mut numbers: Vec<u32> = (1..=self.count())
+            .filter(|number| {
+                let at = size(u64::from(*number)).saturating_sub(1);
+                self.before.get(at).is_some_and(Option::is_some)
+            })
+            .collect();
+        if self.origin != self.count() && !numbers.contains(&1) {
+            numbers.insert(0, 1);
+        }
+        numbers
+            .into_iter()
+            .map(|number| {
+                let at = size(u64::from(number)).saturating_sub(1);
+                let mut page = self.held.get(at).cloned().unwrap_or_default();
+                if number == 1 {
+                    for (slot, byte) in page.iter_mut().zip(now.written()) {
+                        *slot = byte;
+                    }
+                }
+                (number, page)
+            })
+            .collect()
+    }
+
     /// The file the pages make, with the header written into the first
     /// hundred bytes of page one. The free list of the header is the one
     /// the pages hold, whatever the caller's header says.

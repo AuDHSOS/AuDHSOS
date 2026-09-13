@@ -78,7 +78,7 @@ Each rule is checkable, and each makes a later thing possible.
 | Module | What it holds | Decided in |
 |--------|---------------|------------|
 | `header`, `page`, `record`, `image`, `bytes` | The hundred-byte header, the four b-tree page types read and written, the four cell shapes, overflow chains, the record format read and written, the walk of a table tree and of an index tree. | Q1, D-162, D-163 |
-| `wal` | The write-ahead log a reader must follow: the header, the frames, the checksum of section 4.2, and the newest committed frame of each page. | D-155, Q3 |
+| `wal` | The write-ahead log a reader must follow and a commit must write: the header, the frames, the checksum of section 4.2, and the newest committed frame of each page. | D-155, D-171, Q3, Q7 |
 | `journal` | The rollback journal a reader must play back and a commit must write: the headers, the records, the checksum of `pager_cksum`, the content each page began with, and what each journal mode leaves behind. | D-156, D-170, Q3, Q7 |
 | `token`, `keyword` | SQL text to tokens, the same character classes as `src/tokenize.c`. | Q4 |
 | `ast`, `parse` | Tokens to a tree: expressions, `SELECT`, `CREATE TABLE`, `CREATE INDEX`. | Q4 |
@@ -512,9 +512,9 @@ through the walker; the crate meets D4.
 
 Status: a table is filled in any key order, emptied again, and filled
 from the pages the delete freed; the file and the rollback journal
-beside it are the ones the shell wrote, byte for byte. The pointer maps and
-the WAL are not built.
-Depends on: Q3, Q5. Recorded in D-162 to D-170.
+beside it are the ones the shell wrote, byte for byte. The pointer maps and the
+checkpoint are not built.
+Depends on: Q3, Q5. Recorded in D-162 to D-171.
 Size: L.
 
 ### Needs
@@ -546,7 +546,8 @@ Size: L.
 10. Write the rollback journal of a transaction and leave of it what
     the journal mode says. Built.
 11. Play a journal back over the file it belongs to. Built.
-12. Run a transaction through the WAL.
+12. Write the frames of a transaction into the write-ahead log. Built.
+13. Checkpoint a log back into the file it belongs to.
 
 ### Done when
 

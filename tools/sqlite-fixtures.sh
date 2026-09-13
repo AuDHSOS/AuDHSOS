@@ -179,6 +179,28 @@ cmp -s "$out/appended.db" "$out/shuffled.db" || {
 }
 rm -f "$out/appended.db"
 
+# The same rows written into a write-ahead log rather than the file: two
+# statements, each its own transaction, and no checkpoint, so the log
+# holds every page and the database holds the one page `PRAGMA
+# journal_mode=wal` left.
+rm -f "$out/logging.db" "$out/logging.db-wal" "$out/logging.db-shm"
+"$sqlite" "$out/logging.db" >/dev/null <<LOGGING
+PRAGMA page_size=512;
+PRAGMA journal_mode=wal;
+PRAGMA wal_autocheckpoint=0;
+CREATE TABLE t(n INTEGER, s TEXT);
+WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<400) INSERT INTO t(rowid,n,s) SELECT (i*137)%401, i, 'row ' || i FROM c;
+DELETE FROM t WHERE rowid%3=0;
+.system cp "$out/logging.db" "$out/logging-db.tmp"
+.system cp "$out/logging.db-wal" "$out/logging-wal.tmp"
+LOGGING
+mv "$out/logging-db.tmp" "$out/logging.db"
+mv "$out/logging-wal.tmp" "$out/logging.db-wal"
+rm -f "$out/logging.db-shm"
+printf '%s\t%s bytes, log %s bytes\n' logging.db \
+    "$(wc -c <"$out/logging.db" | tr -d ' ')" \
+    "$(wc -c <"$out/logging.db-wal" | tr -d ' ')"
+
 # Rows taken out and put in again, so that the pages the delete freed
 # are the ones the insert takes. Four thousand rows over 512-byte pages
 # leave a free list of two trunks.

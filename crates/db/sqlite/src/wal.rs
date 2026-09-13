@@ -154,6 +154,103 @@ impl<'a> Wal<'a> {
     }
 }
 
+/// The version of the format a log says it is in, which is
+/// `WAL_MAX_VERSION`.
+const VERSION: u32 = 3_007_000;
+
+/// A write-ahead log being written: the header, and a frame for every
+/// page each commit hands it.
+///
+/// The two salts and the checkpoint sequence come from the caller,
+/// because SQLite takes the salts from its random source and a reader
+/// reads them back out of the header.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Log {
+    /// The file so far.
+    bytes: Vec<u8>,
+    /// Bytes of one page.
+    page_size: u32,
+    /// The two salts every frame repeats.
+    salt: (u32, u32),
+    /// Whether the checksum reads its words big-endian.
+    big: bool,
+    /// The checksum the next frame carries on from.
+    running: (u32, u32),
+}
+
+impl Log {
+    /// A log of no frame, with the header written.
+    ///
+    /// `checkpoint` is how many times the log has been checkpointed,
+    /// which a fresh log says nought for.
+    #[must_use]
+    pub fn new(page_size: u32, salt: (u32, u32), checkpoint: u32, big: bool) -> Self {
+        let mut bytes = alloc::vec![0u8; HEADER];
+        let put = |bytes: &mut [u8], at: usize, value: u32| {
+            for (slot, byte) in bytes.iter_mut().skip(at).zip(value.to_be_bytes()) {
+                *slot = byte;
+            }
+        };
+        put(&mut bytes, 0, if big { BIG } else { LITTLE });
+        put(&mut bytes, 4, VERSION);
+        put(&mut bytes, 8, page_size);
+        put(&mut bytes, 12, checkpoint);
+        put(&mut bytes, 16, salt.0);
+        put(&mut bytes, 20, salt.1);
+        // The header carries the checksum of its own first 24 bytes,
+        // which is where the frames carry theirs on from.
+        let running = checksum((0, 0), bytes.get(..24).unwrap_or_default(), big);
+        put(&mut bytes, 24, running.0);
+        put(&mut bytes, 28, running.1);
+        Log {
+            bytes,
+            page_size,
+            salt,
+            big,
+            running,
+        }
+    }
+
+    /// One transaction written into the log: a frame for each page, the
+    /// last of them saying how many pages the database then has.
+    ///
+    /// One commit is O(n) in the bytes of the pages it holds.
+    pub fn commit(&mut self, frames: &[(u32, Vec<u8>)], pages: u32) {
+        let last = frames.len().saturating_sub(1);
+        for (index, (number, page)) in frames.iter().enumerate() {
+            let mut header = [0u8; FRAME];
+            let put = |header: &mut [u8; FRAME], at: usize, value: u32| {
+                for (slot, byte) in header.iter_mut().skip(at).zip(value.to_be_bytes()) {
+                    *slot = byte;
+                }
+            };
+            put(&mut header, 0, *number);
+            put(&mut header, 4, if index == last { pages } else { 0 });
+            put(&mut header, 8, self.salt.0);
+            put(&mut header, 12, self.salt.1);
+            let carried = checksum(self.running, header.get(..8).unwrap_or_default(), self.big);
+            let carried = checksum(carried, page, self.big);
+            put(&mut header, 16, carried.0);
+            put(&mut header, 20, carried.1);
+            self.running = carried;
+            self.bytes.extend_from_slice(&header);
+            self.bytes.extend_from_slice(page);
+        }
+    }
+
+    /// The file the log has become.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Bytes of one page, which every frame of the log holds.
+    #[must_use]
+    pub const fn page_size(&self) -> u32 {
+        self.page_size
+    }
+}
+
 /// Records that `frame` holds the newest copy of `page` so far.
 ///
 /// The list is kept sorted by page number, so a page the log already

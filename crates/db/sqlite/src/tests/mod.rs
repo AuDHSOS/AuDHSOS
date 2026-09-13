@@ -82,6 +82,14 @@ pub(super) const JOURNALLED: &[u8] = include_bytes!("fixtures/journalled.db-jour
 /// writes the change counter into and so puts in last.
 pub(super) const APPENDED: &[u8] = include_bytes!("fixtures/appended.db-journal");
 
+/// The database `PRAGMA journal_mode=wal` left: one page, with the write
+/// and the read version two.
+pub(super) const LOGGING: &[u8] = include_bytes!("fixtures/logging.db");
+
+/// The log beside it, which holds the two statements of `shuffled.db`
+/// as two transactions and was never checkpointed.
+pub(super) const LOGGING_WAL: &[u8] = include_bytes!("fixtures/logging.db-wal");
+
 /// The matrix of document 16, section 16.11, over the write path: the
 /// same four hundred rows under every page size, every encoding and
 /// every reserved tail the shell writes, each with the page size, the

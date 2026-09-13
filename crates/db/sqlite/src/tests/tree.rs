@@ -800,3 +800,81 @@ fn what_each_journal_mode_leaves_behind() {
     assert!(kept[..28].iter().all(|byte| *byte == 0));
     assert!(kept[28..].iter().all(|byte| *byte == 9));
 }
+
+#[test]
+fn a_table_written_into_a_log_is_the_log_the_shell_wrote() {
+    use crate::wal::{Log, Wal};
+    // The two statements of `shuffled.db` under a write-ahead log that
+    // was never checkpointed: the database holds the one page `PRAGMA
+    // journal_mode=wal` left and the log holds everything after it.
+    // The two salts come from SQLite's random source, so the ones the
+    // fixture was written with are read back out of its header; every
+    // checksum of every frame is then what says they are right.
+    let theirs = crate::tests::LOGGING_WAL;
+    let word = |at: usize| u32::from_be_bytes(theirs[at..at + 4].try_into().unwrap());
+    let mut log = Log::new(512, (word(16), word(20)), 0, false);
+    let mut pages = Pages::new(512, 0).unwrap();
+    let mut now = header(512, Encoding::Utf8, 1);
+    now.write_version = 2;
+    now.read_version = 2;
+    now.schema_cookie = 0;
+    now.schema_format = 0;
+    now.encoding = Encoding::Utf8;
+    now.version_valid_for = 1;
+    // What the database holds is the page that pragma left, because
+    // nothing after it was checkpointed.
+    same(
+        "logging.db",
+        &pages.written(&now),
+        crate::tests::LOGGING,
+        512,
+    );
+    // The first statement writes the schema, which is where the format
+    // and the encoding are written with it.
+    now.change_counter = 2;
+    now.version_valid_for = 2;
+    now.schema_cookie = 1;
+    now.schema_format = 4;
+    pages.begin();
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
+    let sql = "CREATE TABLE t(n INTEGER, s TEXT)";
+    insert(&mut pages, 1, 1, &schema_row("t", 2, sql, Encoding::Utf8)).unwrap();
+    now.pages = pages.count();
+    log.commit(&pages.frames(&now), pages.count());
+    pages.begin();
+    for number in 1..=400_i64 {
+        insert(&mut pages, 2, (number * 137) % 401, &tall_row(number)).unwrap();
+    }
+    now.pages = pages.count();
+    log.commit(&pages.frames(&now), pages.count());
+    // A third statement that takes rows out without freeing a page:
+    // the count does not change, so the log holds no page one for it.
+    pages.begin();
+    for rowid in 1..=400_i64 {
+        if rowid % 3 == 0 {
+            assert!(crate::tree::remove(&mut pages, 2, rowid).unwrap());
+        }
+    }
+    let frames = pages.frames(&now);
+    assert!(!frames.iter().any(|(number, _)| *number == 1));
+    log.commit(&frames, pages.count());
+    same("logging.db-wal", log.bytes(), theirs, 512);
+    // The log this crate wrote is one this crate reads back: the second
+    // transaction wrote every page, so every page comes back as that
+    // transaction left it.
+    let read = Wal::open(log.bytes()).unwrap();
+    assert_eq!(read.page_size(), log.page_size());
+    assert_eq!(read.pages(), pages.count());
+    for (number, page) in &frames {
+        assert_eq!(read.page_bytes(*number), Some(page.as_slice()));
+    }
+    // A log whose checksums read their words big-endian is the same
+    // file under the other magic, and reads back the same way.
+    let mut other = Log::new(512, (word(16), word(20)), 0, true);
+    other.commit(&frames, pages.count());
+    let read = Wal::open(other.bytes()).unwrap();
+    assert_eq!(read.pages(), pages.count());
+    for (number, page) in &frames {
+        assert_eq!(read.page_bytes(*number), Some(page.as_slice()));
+    }
+}
