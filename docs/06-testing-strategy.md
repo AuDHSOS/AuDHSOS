@@ -134,12 +134,13 @@ within each target and skipping targets whose corpus directory is absent.
   Each mode builds into its own target directory, so running both
   rebuilds the workspace once each rather than twice each.
 - MC/DC: `cargo xtask mcdc` reads the typed tree of every crate of
-  `COMPLETE` through `-Zunpretty=thir-tree` and reports every bitwise
-  `&`, `|` or `^` over booleans. Over decisions built only from `&&` and
-  `||`, condition coverage at 100 percent is masking MC/DC, which
-  document 16, decision D4, derives; a bitwise operator over booleans
-  evaluates both operands and so breaks that derivation. The pinned
-  toolchain refuses `-Z coverage-options=mcdc`, which is why the
+  `COMPLETE` through `-Zunpretty=thir-tree` and reports two things: a
+  bitwise `&`, `|` or `^` over booleans, and a decision that names one
+  condition twice. Over decisions that hold neither, condition coverage
+  at 100 percent is unique-cause MC/DC, which document 16, decision D4,
+  derives. A span the compiler wrote from a macro is passed over,
+  because a derived `PartialEq` compares each field under one span. The
+  pinned toolchain refuses `-Z coverage-options=mcdc`, which is why the
   objective is met by argument and check rather than by a report.
 - QEMU coverage is not measured. Each adapter crate keeps a table that maps
   every public function to at least one QEMU test. `cargo xtask

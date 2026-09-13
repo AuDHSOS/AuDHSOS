@@ -1879,13 +1879,20 @@ pub(crate) fn regex_check(root: &Path, options: &[String]) -> Result<(), Error> 
 /// The premise condition coverage stands as MC/DC on.
 pub(crate) fn mcdc(root: &Path) -> Result<(), Error> {
     let reports = mcdc::check(root)?;
-    note!("{:<18} {:>14} {:>7}", "crate", "short-circuit", "bitwise");
+    note!(
+        "{:<18} {:>14} {:>11} {:>7}",
+        "crate",
+        "short-circuit",
+        "conditions",
+        "broken"
+    );
     let mut violations = Vec::new();
     for entry in &reports {
         note!(
-            "{:<18} {:>14} {:>7}",
+            "{:<18} {:>14} {:>11} {:>7}",
             entry.name,
             entry.operators,
+            entry.conditions,
             entry.violations.len()
         );
         violations.extend(entry.violations.iter().cloned());
