@@ -460,3 +460,326 @@ N|rowid	R|5
 N|rowid	R|4
 N|rowid	R|1
 N|typeof(v)	R|'null'	R|'integer'	R|'real'	R|'text'	R|'blob'
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|6|'6F006E006500'|0
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|6|'6F006E006500'|0
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|6|'006F006E0065'|0
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|6|'006F006E0065'|0
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1
+N|count(*)	R|3
+N|i|t|r|quote(b)	R|1|'one'|1.5|'X''01'''	R|2|'two'|2.5|'X''0202'''	R|3|'three'|3.5|'X''030303'''
+N|t	R|'two'	R|'three'	R|'one'
+N|typeof(i)|typeof(t)|typeof(r)|typeof(b)	R|'integer'|'text'|'real'|'blob'
+N|length(t)|unicode(t)	R|3|111	R|3|116	R|5|116
+N|upper(t)|lower(t)	R|'TWO'|'two'
+N|sum(i)|avg(r)|min(t)|max(t)|group_concat(t,'-')	R|6|2.5|'one'|'two'|'one-two-three'
+N|t|count(*)	R|'one'|1	R|'three'|1	R|'two'|1
+N|rowid|i	R|2|2
+N|i	R|2	R|3
+N|i	R|2
+N|i	R|2	R|3
+N|i|i	R|1|2	R|2|3
+N|i|(SELECT count(*) FROM m AS u WHERE u.i<m.i)	R|1|0	R|2|1	R|3|2
+N|t	R|'three'	R|'two'
+N|i	R|2	R|3
+N|octet_length(t)|hex(t)|CAST(t AS BLOB)=x'6f6e65'	R|3|'6F6E65'|1

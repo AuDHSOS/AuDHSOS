@@ -3771,6 +3771,31 @@ an answer is the same bits the C library answers.
 - `ceil`, `floor` and `trunc` answer an integer argument as it stands,
   which is `ceilingFunc` reading the numeric type first.
 
+### 6.6.100 The engine under every configuration (`db-sqlite`)
+
+Document 16, section 16.11. A configuration changes how the rows are
+held and not what they are, so every configuration answers the same.
+
+- Nineteen fixtures: five page sizes, three encodings, three reserved
+  sizes, all six journal modes, and the three vacuum settings. Each
+  holds the same three rows and the same index.
+- Sixteen statements go to every one of them and the answers are held to
+  each other: the text out of the encoding, the numbers out of the
+  record, a walk of the table's tree and of the index's, a grouping, a
+  sort, a join of the table to itself, a statement used as a value, and
+  a `WHERE` that holds the walk to a rowid.
+- `query.corpus` records what the C library answers for each of the
+  seventeen statements under each of the nineteen fixtures, so the
+  answers are held to SQLite as well as to each other.
+- `hex`, `octet_length` and a cast to a blob are the three that answer
+  the bytes as they are stored, so they are held to the difference the
+  encoding makes rather than to sameness: three letters are three bytes
+  in UTF-8 and six in either UTF-16.
+- What the journal mode leaves in the file is the write version, which
+  is two once the file has been in write-ahead logging and one
+  otherwise. The journal itself is a second file, which 6.6.94 and
+  6.6.95 read.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

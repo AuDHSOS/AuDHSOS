@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The configuration matrix of `db-sqlite` grows from eleven fixtures to
+  nineteen — five page sizes, three encodings, three reserved sizes, all
+  six journal modes and the three vacuum settings — and the query engine
+  is now run across it rather than the format layer alone. Sixteen
+  statements go to every fixture and the answers are held to each other,
+  and `query.corpus` records what the C library answers for each of them
+  under each fixture. `hex`, `octet_length` and a cast to a blob answer
+  the bytes as they are stored, so they are held to the difference the
+  encoding makes rather than to sameness.
+
 - The math functions whose answers are exact, in `db-sqlite`: `pi`,
   `degrees`, `radians`, `ceil`, `ceiling`, `floor`, `trunc` and
   `zeroblob`. `ceil`, `floor` and `trunc` are computed out of the bits

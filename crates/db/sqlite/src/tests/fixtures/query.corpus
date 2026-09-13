@@ -460,3 +460,326 @@ indexed.db|SELECT rowid FROM f WHERE v=x'0102'
 indexed.db|SELECT rowid FROM f WHERE v='t'
 indexed.db|SELECT rowid FROM f WHERE v IS NULL
 indexed.db|SELECT typeof(v) FROM f ORDER BY rowid
+m-utf8-512.db|SELECT count(*) FROM m
+m-utf8-512.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-utf8-512.db|SELECT t FROM m ORDER BY t DESC
+m-utf8-512.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-utf8-512.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-utf8-512.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-utf8-512.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-utf8-512.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-utf8-512.db|SELECT rowid, i FROM m WHERE rowid=2
+m-utf8-512.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-utf8-512.db|SELECT i FROM m WHERE t='two'
+m-utf8-512.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-utf8-512.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-utf8-512.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-utf8-512.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-utf8-512.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-utf8-512.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-utf8-1024.db|SELECT count(*) FROM m
+m-utf8-1024.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-utf8-1024.db|SELECT t FROM m ORDER BY t DESC
+m-utf8-1024.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-utf8-1024.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-utf8-1024.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-utf8-1024.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-utf8-1024.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-utf8-1024.db|SELECT rowid, i FROM m WHERE rowid=2
+m-utf8-1024.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-utf8-1024.db|SELECT i FROM m WHERE t='two'
+m-utf8-1024.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-utf8-1024.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-utf8-1024.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-utf8-1024.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-utf8-1024.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-utf8-1024.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-utf8-4096.db|SELECT count(*) FROM m
+m-utf8-4096.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-utf8-4096.db|SELECT t FROM m ORDER BY t DESC
+m-utf8-4096.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-utf8-4096.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-utf8-4096.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-utf8-4096.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-utf8-4096.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-utf8-4096.db|SELECT rowid, i FROM m WHERE rowid=2
+m-utf8-4096.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-utf8-4096.db|SELECT i FROM m WHERE t='two'
+m-utf8-4096.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-utf8-4096.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-utf8-4096.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-utf8-4096.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-utf8-4096.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-utf8-4096.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-utf8-8192.db|SELECT count(*) FROM m
+m-utf8-8192.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-utf8-8192.db|SELECT t FROM m ORDER BY t DESC
+m-utf8-8192.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-utf8-8192.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-utf8-8192.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-utf8-8192.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-utf8-8192.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-utf8-8192.db|SELECT rowid, i FROM m WHERE rowid=2
+m-utf8-8192.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-utf8-8192.db|SELECT i FROM m WHERE t='two'
+m-utf8-8192.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-utf8-8192.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-utf8-8192.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-utf8-8192.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-utf8-8192.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-utf8-8192.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-utf8-65536.db|SELECT count(*) FROM m
+m-utf8-65536.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-utf8-65536.db|SELECT t FROM m ORDER BY t DESC
+m-utf8-65536.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-utf8-65536.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-utf8-65536.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-utf8-65536.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-utf8-65536.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-utf8-65536.db|SELECT rowid, i FROM m WHERE rowid=2
+m-utf8-65536.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-utf8-65536.db|SELECT i FROM m WHERE t='two'
+m-utf8-65536.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-utf8-65536.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-utf8-65536.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-utf8-65536.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-utf8-65536.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-utf8-65536.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-utf16le-512.db|SELECT count(*) FROM m
+m-utf16le-512.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-utf16le-512.db|SELECT t FROM m ORDER BY t DESC
+m-utf16le-512.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-utf16le-512.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-utf16le-512.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-utf16le-512.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-utf16le-512.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-utf16le-512.db|SELECT rowid, i FROM m WHERE rowid=2
+m-utf16le-512.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-utf16le-512.db|SELECT i FROM m WHERE t='two'
+m-utf16le-512.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-utf16le-512.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-utf16le-512.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-utf16le-512.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-utf16le-512.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-utf16le-512.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-utf16le-4096.db|SELECT count(*) FROM m
+m-utf16le-4096.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-utf16le-4096.db|SELECT t FROM m ORDER BY t DESC
+m-utf16le-4096.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-utf16le-4096.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-utf16le-4096.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-utf16le-4096.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-utf16le-4096.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-utf16le-4096.db|SELECT rowid, i FROM m WHERE rowid=2
+m-utf16le-4096.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-utf16le-4096.db|SELECT i FROM m WHERE t='two'
+m-utf16le-4096.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-utf16le-4096.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-utf16le-4096.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-utf16le-4096.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-utf16le-4096.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-utf16le-4096.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-utf16be-512.db|SELECT count(*) FROM m
+m-utf16be-512.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-utf16be-512.db|SELECT t FROM m ORDER BY t DESC
+m-utf16be-512.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-utf16be-512.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-utf16be-512.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-utf16be-512.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-utf16be-512.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-utf16be-512.db|SELECT rowid, i FROM m WHERE rowid=2
+m-utf16be-512.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-utf16be-512.db|SELECT i FROM m WHERE t='two'
+m-utf16be-512.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-utf16be-512.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-utf16be-512.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-utf16be-512.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-utf16be-512.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-utf16be-512.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-utf16be-4096.db|SELECT count(*) FROM m
+m-utf16be-4096.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-utf16be-4096.db|SELECT t FROM m ORDER BY t DESC
+m-utf16be-4096.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-utf16be-4096.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-utf16be-4096.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-utf16be-4096.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-utf16be-4096.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-utf16be-4096.db|SELECT rowid, i FROM m WHERE rowid=2
+m-utf16be-4096.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-utf16be-4096.db|SELECT i FROM m WHERE t='two'
+m-utf16be-4096.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-utf16be-4096.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-utf16be-4096.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-utf16be-4096.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-utf16be-4096.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-utf16be-4096.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-reserved4.db|SELECT count(*) FROM m
+m-reserved4.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-reserved4.db|SELECT t FROM m ORDER BY t DESC
+m-reserved4.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-reserved4.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-reserved4.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-reserved4.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-reserved4.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-reserved4.db|SELECT rowid, i FROM m WHERE rowid=2
+m-reserved4.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-reserved4.db|SELECT i FROM m WHERE t='two'
+m-reserved4.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-reserved4.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-reserved4.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-reserved4.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-reserved4.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-reserved4.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-reserved32.db|SELECT count(*) FROM m
+m-reserved32.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-reserved32.db|SELECT t FROM m ORDER BY t DESC
+m-reserved32.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-reserved32.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-reserved32.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-reserved32.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-reserved32.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-reserved32.db|SELECT rowid, i FROM m WHERE rowid=2
+m-reserved32.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-reserved32.db|SELECT i FROM m WHERE t='two'
+m-reserved32.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-reserved32.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-reserved32.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-reserved32.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-reserved32.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-reserved32.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-wal.db|SELECT count(*) FROM m
+m-wal.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-wal.db|SELECT t FROM m ORDER BY t DESC
+m-wal.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-wal.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-wal.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-wal.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-wal.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-wal.db|SELECT rowid, i FROM m WHERE rowid=2
+m-wal.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-wal.db|SELECT i FROM m WHERE t='two'
+m-wal.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-wal.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-wal.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-wal.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-wal.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-wal.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-autovacuum-full.db|SELECT count(*) FROM m
+m-autovacuum-full.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-autovacuum-full.db|SELECT t FROM m ORDER BY t DESC
+m-autovacuum-full.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-autovacuum-full.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-autovacuum-full.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-autovacuum-full.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-autovacuum-full.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-autovacuum-full.db|SELECT rowid, i FROM m WHERE rowid=2
+m-autovacuum-full.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-autovacuum-full.db|SELECT i FROM m WHERE t='two'
+m-autovacuum-full.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-autovacuum-full.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-autovacuum-full.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-autovacuum-full.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-autovacuum-full.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-autovacuum-full.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-autovacuum-incr.db|SELECT count(*) FROM m
+m-autovacuum-incr.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-autovacuum-incr.db|SELECT t FROM m ORDER BY t DESC
+m-autovacuum-incr.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-autovacuum-incr.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-autovacuum-incr.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-autovacuum-incr.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-autovacuum-incr.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-autovacuum-incr.db|SELECT rowid, i FROM m WHERE rowid=2
+m-autovacuum-incr.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-autovacuum-incr.db|SELECT i FROM m WHERE t='two'
+m-autovacuum-incr.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-autovacuum-incr.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-autovacuum-incr.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-autovacuum-incr.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-autovacuum-incr.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-autovacuum-incr.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-delete.db|SELECT count(*) FROM m
+m-delete.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-delete.db|SELECT t FROM m ORDER BY t DESC
+m-delete.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-delete.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-delete.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-delete.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-delete.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-delete.db|SELECT rowid, i FROM m WHERE rowid=2
+m-delete.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-delete.db|SELECT i FROM m WHERE t='two'
+m-delete.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-delete.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-delete.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-delete.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-delete.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-delete.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-truncate.db|SELECT count(*) FROM m
+m-truncate.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-truncate.db|SELECT t FROM m ORDER BY t DESC
+m-truncate.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-truncate.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-truncate.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-truncate.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-truncate.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-truncate.db|SELECT rowid, i FROM m WHERE rowid=2
+m-truncate.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-truncate.db|SELECT i FROM m WHERE t='two'
+m-truncate.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-truncate.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-truncate.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-truncate.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-truncate.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-truncate.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-persist.db|SELECT count(*) FROM m
+m-persist.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-persist.db|SELECT t FROM m ORDER BY t DESC
+m-persist.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-persist.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-persist.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-persist.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-persist.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-persist.db|SELECT rowid, i FROM m WHERE rowid=2
+m-persist.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-persist.db|SELECT i FROM m WHERE t='two'
+m-persist.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-persist.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-persist.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-persist.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-persist.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-persist.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-memory.db|SELECT count(*) FROM m
+m-memory.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-memory.db|SELECT t FROM m ORDER BY t DESC
+m-memory.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-memory.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-memory.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-memory.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-memory.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-memory.db|SELECT rowid, i FROM m WHERE rowid=2
+m-memory.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-memory.db|SELECT i FROM m WHERE t='two'
+m-memory.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-memory.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-memory.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-memory.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-memory.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-memory.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1
+m-off.db|SELECT count(*) FROM m
+m-off.db|SELECT i, t, r, quote(b) FROM m ORDER BY i
+m-off.db|SELECT t FROM m ORDER BY t DESC
+m-off.db|SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1
+m-off.db|SELECT length(t), unicode(t) FROM m ORDER BY i
+m-off.db|SELECT upper(t), lower(t) FROM m WHERE i=2
+m-off.db|SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m
+m-off.db|SELECT t, count(*) FROM m GROUP BY t ORDER BY t
+m-off.db|SELECT rowid, i FROM m WHERE rowid=2
+m-off.db|SELECT i FROM m WHERE rowid>1 ORDER BY i
+m-off.db|SELECT i FROM m WHERE t='two'
+m-off.db|SELECT i FROM m WHERE t>'one' ORDER BY i
+m-off.db|SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1
+m-off.db|SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i
+m-off.db|SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1
+m-off.db|SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1
+m-off.db|SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1

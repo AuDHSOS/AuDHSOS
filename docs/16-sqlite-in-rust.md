@@ -231,16 +231,26 @@ states it.
 | Dimension | Values |
 |-----------|--------|
 | Text encoding | UTF-8, UTF-16 little-endian, UTF-16 big-endian |
-| Page size | 512, 1024, 4096, 65536 |
-| Reserved bytes per page | 0, 32 |
+| Page size | 512, 1024, 4096, 8192, 65536 |
+| Reserved bytes per page | 0, 4, 32 |
 | Journal mode | `delete`, `truncate`, `persist`, `memory`, `wal`, `off` |
 | Auto-vacuum | off, full, incremental |
 | Schema format | 1 to 4 |
 | Temporary storage | file, memory |
 
-The matrix is a table in the test support and not a `for` loop in each
-test: a test names the dimensions it is sensitive to, and the harness
-runs it for every value of them.
+Nineteen fixtures hold one point of the matrix each, and every one of
+them holds the same three rows and the same index, so a difference in an
+answer is a difference the configuration made. Six tests read them: four
+over the format, one that puts sixteen statements to every fixture and
+holds the answers to each other, and one that holds `hex`,
+`octet_length` and a cast to a blob to the difference the encoding makes,
+because those three answer the bytes as they are stored. `query.corpus`
+records what the C library answers for all of them, so the answers are
+held to SQLite and to each other.
+
+The last two dimensions have no fixture: a schema format below four
+needs a database the shell will not write, and temporary storage is not
+a file.
 
 ## 16.12 The fixtures
 

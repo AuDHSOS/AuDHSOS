@@ -42,7 +42,7 @@ pub(super) fn fixture(name: &str) -> Option<&'static [u8]> {
 }
 
 /// Every configuration the shell can write the same rows under.
-const MATRIX: [Case; 11] = [
+const MATRIX: [Case; 19] = [
     Case {
         name: "m-utf8-512.db",
         bytes: include_bytes!("fixtures/m-utf8-512.db"),
@@ -141,6 +141,82 @@ const MATRIX: [Case; 11] = [
         reserved: 0,
         write_version: 1,
         vacuums: true,
+    },
+    // The journal modes. What the mode leaves in the file is the write
+    // version, which is two once the file has been in write-ahead
+    // logging and one for every other mode; the journal itself is a
+    // second file, which 6.6.94 and 6.6.95 read.
+    Case {
+        name: "m-delete.db",
+        bytes: include_bytes!("fixtures/m-delete.db"),
+        page_size: 4096,
+        encoding: Encoding::Utf8,
+        reserved: 0,
+        write_version: 1,
+        vacuums: false,
+    },
+    Case {
+        name: "m-truncate.db",
+        bytes: include_bytes!("fixtures/m-truncate.db"),
+        page_size: 4096,
+        encoding: Encoding::Utf8,
+        reserved: 0,
+        write_version: 1,
+        vacuums: false,
+    },
+    Case {
+        name: "m-persist.db",
+        bytes: include_bytes!("fixtures/m-persist.db"),
+        page_size: 4096,
+        encoding: Encoding::Utf8,
+        reserved: 0,
+        write_version: 1,
+        vacuums: false,
+    },
+    Case {
+        name: "m-memory.db",
+        bytes: include_bytes!("fixtures/m-memory.db"),
+        page_size: 4096,
+        encoding: Encoding::Utf8,
+        reserved: 0,
+        write_version: 1,
+        vacuums: false,
+    },
+    Case {
+        name: "m-off.db",
+        bytes: include_bytes!("fixtures/m-off.db"),
+        page_size: 4096,
+        encoding: Encoding::Utf8,
+        reserved: 0,
+        write_version: 1,
+        vacuums: false,
+    },
+    Case {
+        name: "m-utf16be-512.db",
+        bytes: include_bytes!("fixtures/m-utf16be-512.db"),
+        page_size: 512,
+        encoding: Encoding::Utf16Be,
+        reserved: 0,
+        write_version: 1,
+        vacuums: false,
+    },
+    Case {
+        name: "m-utf8-8192.db",
+        bytes: include_bytes!("fixtures/m-utf8-8192.db"),
+        page_size: 8192,
+        encoding: Encoding::Utf8,
+        reserved: 0,
+        write_version: 1,
+        vacuums: false,
+    },
+    Case {
+        name: "m-reserved4.db",
+        bytes: include_bytes!("fixtures/m-reserved4.db"),
+        page_size: 1024,
+        encoding: Encoding::Utf8,
+        reserved: 4,
+        write_version: 1,
+        vacuums: false,
     },
 ];
 
@@ -290,5 +366,109 @@ fn every_configuration_holds_its_index_entries_in_index_pages() {
         // The index is over the text column, so its entries are in the
         // order that column collates in, which is not the rowid order.
         assert_eq!(keys, ["one", "three", "two"], "{}", case.name);
+    }
+}
+
+/// The statements every configuration is put through.
+///
+/// Each reads the three rows the matrix holds, and between them they
+/// reach the parts of the engine a configuration can change: the text
+/// out of the encoding, the numbers out of the record, a walk of the
+/// table's tree and of the index's, a grouping, a sort, a join of the
+/// table to itself, a statement used as a value, and the rowid a
+/// `WHERE` holds the walk to.
+///
+/// The three that answer the bytes as they are stored are left out and
+/// held to their difference by
+/// [`the_three_that_show_the_stored_bytes_answer_the_encoding`].
+const STATEMENTS: [&str; 16] = [
+    "SELECT count(*) FROM m",
+    "SELECT i, t, r, quote(b) FROM m ORDER BY i",
+    "SELECT t FROM m ORDER BY t DESC",
+    "SELECT typeof(i), typeof(t), typeof(r), typeof(b) FROM m WHERE i=1",
+    "SELECT length(t), unicode(t) FROM m ORDER BY i",
+    "SELECT upper(t), lower(t) FROM m WHERE i=2",
+    "SELECT sum(i), avg(r), min(t), max(t), group_concat(t,'-') FROM m",
+    "SELECT t, count(*) FROM m GROUP BY t ORDER BY t",
+    "SELECT rowid, i FROM m WHERE rowid=2",
+    "SELECT i FROM m WHERE rowid>1 ORDER BY i",
+    "SELECT i FROM m WHERE t='two'",
+    "SELECT i FROM m WHERE t>'one' ORDER BY i",
+    "SELECT a.i, b.i FROM m AS a JOIN m AS b ON a.i=b.i-1 ORDER BY 1",
+    "SELECT i, (SELECT count(*) FROM m AS u WHERE u.i<m.i) FROM m ORDER BY i",
+    "SELECT * FROM (SELECT t FROM m WHERE i>1) ORDER BY 1",
+    "SELECT i FROM m WHERE i IN (SELECT i FROM m WHERE r>2.0) ORDER BY 1",
+];
+
+/// One answer as text, so that two configurations are compared by what
+/// they answer and not by how they hold it.
+fn written(answer: &crate::db::Answer) -> String {
+    use core::fmt::Write as _;
+    let mut out = String::new();
+    for name in &answer.names {
+        out.push_str(&String::from_utf8_lossy(name));
+        out.push('|');
+    }
+    for row in &answer.rows {
+        out.push('\n');
+        for value in row {
+            let _ = write!(out, "{value:?}|");
+        }
+    }
+    out
+}
+
+#[test]
+fn every_configuration_answers_every_statement_the_same() {
+    // A configuration changes how the rows are held and not what they
+    // are, so the answers are the same under all of them. The first is
+    // what the rest are compared against; what SQLite answers for it is
+    // `query.corpus`, which names these fixtures as well.
+    for sql in STATEMENTS {
+        let mut wanted: Option<String> = None;
+        for case in &MATRIX {
+            let database = crate::db::Database::open(case.bytes)
+                .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
+            let answer = database
+                .query(sql.as_bytes())
+                .unwrap_or_else(|error| panic!("{sql} over {}: {error:?}", case.name));
+            let answer = written(&answer);
+            match &wanted {
+                None => wanted = Some(answer),
+                Some(wanted) => assert_eq!(*wanted, answer, "{sql} over {}", case.name),
+            }
+        }
+    }
+}
+
+#[test]
+fn the_three_that_show_the_stored_bytes_answer_the_encoding() {
+    // `hex`, `octet_length` and a cast to a blob read the bytes the file
+    // holds rather than the text they spell, so these three are the ones
+    // a configuration is allowed to change. A text of three letters is
+    // three bytes in UTF-8 and six in either UTF-16.
+    for case in &MATRIX {
+        let database = crate::db::Database::open(case.bytes).unwrap();
+        let answer = database
+            .query(b"SELECT octet_length(t), hex(t), CAST(t AS BLOB)=x'6f6e65' FROM m WHERE i=1")
+            .unwrap();
+        let wanted = match case.encoding {
+            Encoding::Utf8 => alloc::vec![
+                crate::value::Value::Int(3),
+                crate::value::Value::Text(b"6F6E65".to_vec()),
+                crate::value::Value::Int(1),
+            ],
+            Encoding::Utf16Le => alloc::vec![
+                crate::value::Value::Int(6),
+                crate::value::Value::Text(b"6F006E006500".to_vec()),
+                crate::value::Value::Int(0),
+            ],
+            Encoding::Utf16Be => alloc::vec![
+                crate::value::Value::Int(6),
+                crate::value::Value::Text(b"006F006E0065".to_vec()),
+                crate::value::Value::Int(0),
+            ],
+        };
+        assert_eq!(answer.rows, [wanted], "{}", case.name);
     }
 }

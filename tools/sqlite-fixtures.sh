@@ -103,6 +103,14 @@ fixture m-reserved32.db      ".filectrl reserve_bytes 32" "PRAGMA page_size=4096
 fixture m-wal.db             "" "PRAGMA page_size=4096; PRAGMA journal_mode=wal;"
 fixture m-autovacuum-full.db "" "PRAGMA page_size=4096; PRAGMA auto_vacuum=FULL;"
 fixture m-autovacuum-incr.db "" "PRAGMA page_size=4096; PRAGMA auto_vacuum=INCREMENTAL;"
+fixture m-delete.db          "" "PRAGMA page_size=4096; PRAGMA journal_mode=delete;"
+fixture m-truncate.db        "" "PRAGMA page_size=4096; PRAGMA journal_mode=truncate;"
+fixture m-persist.db         "" "PRAGMA page_size=4096; PRAGMA journal_mode=persist;"
+fixture m-memory.db          "" "PRAGMA page_size=4096; PRAGMA journal_mode=memory;"
+fixture m-off.db             "" "PRAGMA page_size=4096; PRAGMA journal_mode=off;"
+fixture m-utf16be-512.db     "" "PRAGMA page_size=512; PRAGMA encoding='UTF-16be';"
+fixture m-utf8-8192.db       "" "PRAGMA page_size=8192;"
+fixture m-reserved4.db       ".filectrl reserve_bytes 4" "PRAGMA page_size=1024;"
 
 # The write-ahead log is merged back, so that what is committed is one
 # file and not three.
