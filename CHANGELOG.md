@@ -840,6 +840,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` refused a rollback journal too short to hold a header
+  instead of reading it as one that is not hot, so a database committed
+  under a journal mode of `truncate` — which leaves the journal file at
+  no bytes at all — could not be opened beside its journal.
+  `Journal::open` answers a journal rather than a refusal now, as
+  `readJournalHdr` answers `SQLITE_DONE`.
+
 - `tools/sqlite-fixtures.sh` built the recorded oracle without
   `SQLITE_ENABLE_MATH_FUNCTIONS` while building the shell with it, so
   the two disagreed about which functions exist. The oracle is built

@@ -3656,7 +3656,14 @@ what each page began with.
   page or its checksum, and a header whose sector or page size is out of
   range or not a power of two.
 - A journal whose magic is not the magic is not hot, and the database
-  beside it reads back as it stands.
+  beside it reads back as it stands. So is one too short to hold a
+  header and the sector it is padded to, which `readJournalHdr` answers
+  `SQLITE_DONE` for.
+- Two of the six journal modes leave the journal file behind when they
+  commit: `persist` zeroes its header and `truncate` cuts it to no
+  bytes. `fixtures/m-persist.db-journal` and
+  `fixtures/m-truncate.db-journal` are what the shell left, and the
+  databases beside them read back the three rows the matrix holds.
 - A second header carries records of its own, at the next sector; the
   first header is the one that says how large the database was. Records
   that end exactly on a sector are followed by no padding.

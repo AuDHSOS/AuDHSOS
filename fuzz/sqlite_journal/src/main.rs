@@ -28,9 +28,7 @@ const MAX_PAGES: u32 = 4096;
 fuzz_support::fuzz_target!(|bytes: &[u8]| {
     // The bytes as a journal on their own: whatever they say, the reader
     // answers a journal or a refusal and nothing else.
-    let Ok(journal) = Journal::open(bytes) else {
-        return;
-    };
+    let journal = Journal::open(bytes);
     assert_eq!(
         journal.hot(),
         journal.pages() != 0,
@@ -95,9 +93,8 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
         .get_mut(..head)
         .unwrap_or_default()
         .copy_from_slice(bytes.get(..head).unwrap_or_default());
-    if let Ok(journal) = Journal::open(&mixed)
-        && let Ok(database) = Database::open_with_journal(ROLLBACK, &journal)
-    {
+    let journal = Journal::open(&mixed);
+    if let Ok(database) = Database::open_with_journal(ROLLBACK, &journal) {
         drop(database.query(b"SELECT count(*), max(b) FROM t"));
     }
 });

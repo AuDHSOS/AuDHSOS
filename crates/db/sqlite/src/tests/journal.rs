@@ -71,7 +71,7 @@ fn sum(nonce: u32, page: &[u8]) -> u32 {
 
 /// What the fixture answers for `sql`, read with its journal.
 fn rolled(sql: &[u8]) -> Vec<Vec<Value>> {
-    let journal = Journal::open(super::JOURNAL).unwrap();
+    let journal = Journal::open(super::JOURNAL);
     let database = Database::open_with_journal(super::ROLLBACK, &journal).unwrap();
     database.query(sql).unwrap().rows
 }
@@ -109,7 +109,7 @@ fn every_row_reads_back_as_the_transaction_found_it() {
 
 #[test]
 fn the_journal_says_what_it_restores() {
-    let journal = Journal::open(super::JOURNAL).unwrap();
+    let journal = Journal::open(super::JOURNAL);
     assert!(journal.hot());
     assert_eq!(journal.page_size(), 4096);
     assert_eq!(journal.pages(), 2);
@@ -121,11 +121,15 @@ fn the_journal_says_what_it_restores() {
 }
 
 #[test]
-fn a_journal_shorter_than_its_magic_is_refused() {
-    assert_eq!(
-        Journal::open(&super::JOURNAL[..7]).unwrap_err(),
-        Error::Truncated
-    );
+fn a_journal_too_short_to_hold_a_header_is_not_hot() {
+    // What a journal mode of `truncate` leaves beside a database it
+    // committed is a file of no bytes, and `readJournalHdr` answers
+    // `SQLITE_DONE` for one rather than a refusal.
+    for short in [0usize, 7, 31] {
+        let journal = Journal::open(&super::JOURNAL[..short]);
+        assert!(!journal.hot(), "{short} bytes");
+        assert!(journal.page_bytes(1).is_none());
+    }
 }
 
 #[test]
@@ -133,7 +137,7 @@ fn a_journal_whose_magic_is_not_the_magic_is_not_hot() {
     // SQLite writes zeros there until the records are on disk, so such a
     // journal sits beside a database that was never changed.
     let bytes = changed(|bytes| bytes[0] = 0);
-    let journal = Journal::open(&bytes).unwrap();
+    let journal = Journal::open(&bytes);
     assert!(!journal.hot());
     assert_eq!(journal.pages(), 0);
     assert_eq!(journal.page_size(), 0);
@@ -164,14 +168,14 @@ fn a_header_whose_sizes_are_out_of_range_stops_the_playback() {
         ),
     ] {
         let bytes = changed(|bytes| bytes[at] = byte);
-        assert!(!Journal::open(&bytes).unwrap().hot(), "{why}");
+        assert!(!Journal::open(&bytes).hot(), "{why}");
     }
     // A sector past the largest, which is 0x01000000.
     let bytes = changed(|bytes| bytes[SECTOR] = 0x02);
-    assert!(!Journal::open(&bytes).unwrap().hot());
+    assert!(!Journal::open(&bytes).hot());
     // A page size past the largest, which is 65536.
     let bytes = changed(|bytes| bytes[PAGE_SIZE + 1] = 0x02);
-    assert!(!Journal::open(&bytes).unwrap().hot());
+    assert!(!Journal::open(&bytes).hot());
 }
 
 #[test]
@@ -185,7 +189,7 @@ fn a_count_that_names_no_number_reads_to_the_end_of_the_file() {
         None,
         &[(1, alloc::vec![7u8; 512]), (2, alloc::vec![9u8; 512])],
     );
-    let journal = Journal::open(&bytes).unwrap();
+    let journal = Journal::open(&bytes);
     assert!(journal.hot());
     assert_eq!(journal.page_bytes(1), Some([7u8; 512].as_slice()));
     assert_eq!(journal.page_bytes(2), Some([9u8; 512].as_slice()));
@@ -200,7 +204,7 @@ fn records_that_end_on_a_sector_are_followed_by_no_padding() {
         .collect();
     let bytes = built(32, 512, 4, Some(4), &records);
     assert_eq!(bytes.len() % 32, 0, "the records end on a sector");
-    let journal = Journal::open(&bytes).unwrap();
+    let journal = Journal::open(&bytes);
     assert_eq!(journal.page_bytes(4), Some([4u8; 512].as_slice()));
 }
 
@@ -210,7 +214,7 @@ fn what_follows_the_records_and_is_not_a_header_ends_the_playback() {
     // walk reads one and finds bytes that are not a magic.
     let mut bytes = super::JOURNAL.to_vec();
     bytes.resize(512 + 2 * 4104 + 1024, 0);
-    let journal = Journal::open(&bytes).unwrap();
+    let journal = Journal::open(&bytes);
     assert!(journal.page_bytes(1).is_some(), "the records still read");
     assert!(journal.page_bytes(2).is_some());
 }
@@ -233,7 +237,7 @@ fn a_second_header_carries_records_of_its_own() {
     let over = bytes.len() % 512;
     bytes.resize(bytes.len() + 512 - over, 0);
     bytes.extend_from_slice(&second);
-    let journal = Journal::open(&bytes).unwrap();
+    let journal = Journal::open(&bytes);
     assert_eq!(journal.pages(), 4, "the first header says how large it was");
     assert_eq!(journal.page_bytes(1), Some([7u8; 512].as_slice()));
     assert_eq!(journal.page_bytes(2), Some([8u8; 512].as_slice()));
@@ -241,14 +245,14 @@ fn a_second_header_carries_records_of_its_own() {
 
 #[test]
 fn a_record_whose_page_number_is_cut_off_stops_the_playback() {
-    let journal = Journal::open(&super::JOURNAL[..512 + 4104 + 2]).unwrap();
+    let journal = Journal::open(&super::JOURNAL[..512 + 4104 + 2]);
     assert!(journal.page_bytes(1).is_some());
     assert!(journal.page_bytes(2).is_none());
 }
 
 #[test]
 fn a_record_whose_checksum_is_cut_off_stops_the_playback() {
-    let journal = Journal::open(&super::JOURNAL[..512 + 4104 + 4 + 4096]).unwrap();
+    let journal = Journal::open(&super::JOURNAL[..512 + 4104 + 4 + 4096]);
     assert!(journal.page_bytes(1).is_some());
     assert!(journal.page_bytes(2).is_none());
 }
@@ -264,7 +268,7 @@ fn a_page_the_database_did_not_have_is_passed_over() {
         Some(2),
         &[(1, alloc::vec![7u8; 512]), (9, alloc::vec![9u8; 512])],
     );
-    let journal = Journal::open(&bytes).unwrap();
+    let journal = Journal::open(&bytes);
     assert_eq!(journal.pages(), 1);
     assert!(journal.page_bytes(1).is_some());
     assert!(journal.page_bytes(9).is_none());
@@ -281,7 +285,7 @@ fn a_page_journaled_twice_keeps_what_it_began_with() {
         Some(2),
         &[(1, alloc::vec![7u8; 512]), (1, alloc::vec![9u8; 512])],
     );
-    let journal = Journal::open(&bytes).unwrap();
+    let journal = Journal::open(&bytes);
     assert_eq!(journal.page_bytes(1), Some([7u8; 512].as_slice()));
 }
 
@@ -291,7 +295,7 @@ fn a_record_whose_checksum_is_not_its_own_stops_the_playback() {
     // checksum reads every two-hundredth byte back from the end.
     let at = 512 + 4 + 4096 - 200;
     let bytes = changed(|bytes| bytes[at] ^= 0xff);
-    let journal = Journal::open(&bytes).unwrap();
+    let journal = Journal::open(&bytes);
     assert!(journal.hot(), "the header is still a header");
     assert!(journal.page_bytes(1).is_none(), "no record was taken");
 }
@@ -304,7 +308,7 @@ fn a_record_naming_page_zero_stops_the_playback() {
         bytes[514] = 0;
         bytes[515] = 0;
     });
-    let journal = Journal::open(&bytes).unwrap();
+    let journal = Journal::open(&bytes);
     assert!(journal.page_bytes(1).is_none());
     assert!(journal.page_bytes(2).is_none());
 }
@@ -314,7 +318,7 @@ fn a_record_cut_short_stops_the_playback() {
     // The second record, whose page the file no longer reaches the end
     // of.
     let bytes = super::JOURNAL[..512 + 4104 + 8].to_vec();
-    let journal = Journal::open(&bytes).unwrap();
+    let journal = Journal::open(&bytes);
     assert!(journal.page_bytes(1).is_some(), "the first record is whole");
     assert!(journal.page_bytes(2).is_none(), "the second is not");
 }
@@ -328,9 +332,32 @@ fn a_page_size_the_header_does_not_name_is_refused() {
         bytes[PAGE_SIZE + 2] = 0x02;
         bytes[PAGE_SIZE + 3] = 0x00;
     });
-    let journal = Journal::open(&bytes).unwrap();
+    let journal = Journal::open(&bytes);
     assert_eq!(
         Database::open_with_journal(super::ROLLBACK, &journal).unwrap_err(),
         crate::db::Error::Image(Error::PageSize(512))
     );
+}
+
+#[test]
+fn the_journal_a_committed_transaction_leaves_changes_nothing() {
+    // Two of the six journal modes leave the file behind: `persist`
+    // zeroes its header and `truncate` cuts it to no bytes. Neither is
+    // hot, so the database beside it reads as it stands.
+    for (bytes, journal, name) in [
+        (super::PERSIST, super::PERSIST_JOURNAL, "persist"),
+        (super::TRUNCATE, super::TRUNCATE_JOURNAL, "truncate"),
+    ] {
+        let journal = Journal::open(journal);
+        assert!(!journal.hot(), "{name}");
+        let database = Database::open_with_journal(bytes, &journal).unwrap();
+        assert_eq!(
+            database
+                .query(b"SELECT count(*), max(t) FROM m")
+                .unwrap()
+                .rows,
+            [alloc::vec![Value::Int(3), Value::Text(b"two".to_vec())]],
+            "{name}"
+        );
+    }
 }

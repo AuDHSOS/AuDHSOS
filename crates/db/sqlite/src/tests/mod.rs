@@ -129,6 +129,20 @@ pub(super) const ROLLBACK: &[u8] = include_bytes!("fixtures/rollback.db");
 /// The rollback journal of [`ROLLBACK`].
 pub(super) const JOURNAL: &[u8] = include_bytes!("fixtures/rollback.db-journal");
 
+/// A database committed under a journal mode of `persist`, which leaves
+/// the journal file behind with its header zeroed.
+pub(super) const PERSIST: &[u8] = include_bytes!("fixtures/m-persist.db");
+
+/// The journal it left, which is not hot.
+pub(super) const PERSIST_JOURNAL: &[u8] = include_bytes!("fixtures/m-persist.db-journal");
+
+/// A database committed under a journal mode of `truncate`, which
+/// leaves the journal file behind at no bytes at all.
+pub(super) const TRUNCATE: &[u8] = include_bytes!("fixtures/m-truncate.db");
+
+/// The journal it left, which holds nothing.
+pub(super) const TRUNCATE_JOURNAL: &[u8] = include_bytes!("fixtures/m-truncate.db-journal");
+
 /// A varint, written the way section 1.6 describes, so that the reader is
 /// tested against something other than itself.
 pub(super) fn varint(value: u64) -> ([u8; 9], usize) {

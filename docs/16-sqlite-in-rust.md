@@ -117,9 +117,9 @@ Each rule is checkable, and each makes a later thing possible.
 | Doubles as text | 8404, at three precisions | recorded oracle, `fp.corpus` |
 | Text as numbers | 215 | recorded oracle, `num.corpus` |
 | Expressions, answered | 17118 | recorded oracle, `eval.corpus` |
-| Statements, answered | 462 over 14 fixtures | recorded oracle, `query.corpus` |
+| Statements, answered | 785 over 32 fixtures | recorded oracle, `query.corpus` |
 | A database whose content is in its log | 26 cases over `logged.db` | the fixture and logs built by hand |
-| A database caught mid-transaction | 18 cases over `rollback.db` | the fixture and journals built by hand |
+| A database caught mid-transaction | 19 cases over `rollback.db`, and the journals two modes leave behind | the fixture and journals built by hand |
 | The format under every configuration | 11 fixtures, the same three rows and the same index | the matrix, 16.11 |
 | The readers against arbitrary bytes | 6 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval`, `sqlite_wal`, `sqlite_journal` |
 

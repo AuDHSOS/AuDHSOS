@@ -27,7 +27,6 @@
 use alloc::vec::Vec;
 
 use crate::bytes::{size, u32_at};
-use crate::error::Error;
 
 /// What a journal begins with once its records are on disk. A journal
 /// whose first eight bytes are anything else was written by a process
@@ -64,26 +63,23 @@ impl<'a> Journal<'a> {
     /// Reads a `-journal` file and plays it back in memory.
     ///
     /// A file that does not begin with the magic answers a journal that
-    /// restores nothing, because such a file is not hot: `readJournalHdr`
-    /// stops there and `pager_playback` writes no page.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Truncated`] for a file shorter than the eight bytes the
-    /// magic takes.
-    pub fn open(bytes: &'a [u8]) -> Result<Self, Error> {
-        let head = bytes.get(..8).ok_or(Error::Truncated)?;
+    /// restores nothing, because such a file is not hot:
+    /// `readJournalHdr` stops there and `pager_playback` writes no page.
+    /// A file too short to hold a header is the same, which is what a
+    /// journal mode of `truncate` leaves beside a database it committed
+    /// and what `readJournalHdr` answers `SQLITE_DONE` for.
+    #[must_use]
+    pub fn open(bytes: &'a [u8]) -> Self {
         let mut journal = Journal {
             bytes,
             restored: Vec::new(),
             page_size: 0,
             pages: 0,
         };
-        if head != MAGIC {
-            return Ok(journal);
+        if bytes.get(..8) == Some(&MAGIC) {
+            journal.play();
         }
-        journal.play();
-        Ok(journal)
+        journal
     }
 
     /// The page size the journal was written with, or zero where it
@@ -165,6 +161,12 @@ impl<'a> Journal<'a> {
             || !(512..=65536).contains(&page_size)
             || !page_size.is_power_of_two()
         {
+            return None;
+        }
+        // `readJournalHdr` answers `SQLITE_DONE` where the file is
+        // shorter than the header and the sector it is padded to, which
+        // is a header a process crashed part way through writing.
+        if self.bytes.len() < at.saturating_add(size(u64::from(sector))) {
             return None;
         }
         if self.page_size == 0 {
