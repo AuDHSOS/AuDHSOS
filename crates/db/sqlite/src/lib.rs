@@ -20,6 +20,7 @@ pub mod number;
 pub mod page;
 pub mod parse;
 pub mod record;
+pub mod schema;
 pub mod token;
 pub mod utf8;
 pub mod value;

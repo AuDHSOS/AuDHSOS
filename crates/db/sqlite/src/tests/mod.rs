@@ -22,6 +22,7 @@ mod number;
 mod page;
 mod parse;
 mod record;
+mod schema;
 mod token;
 mod value;
 

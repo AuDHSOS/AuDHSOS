@@ -3295,6 +3295,40 @@ a database has to be read through before anything in it can be.
   expression a schema carries — a default, a check, a generated column, a
   term of an index and the rows it covers — is a tree the arena holds.
 
+### 6.6.84 The table a statement describes (`db-sqlite`)
+
+D-145, document 16 step Q2, finished. The columns of a table, with the
+affinity, collation, key and defaults each carries, built out of the
+`CREATE TABLE` text because that text is all a file keeps.
+
+- The oracle is the one `tests/definition.rs` reads: the same statements,
+  and the rows `pragma_table_list` and `pragma_table_xinfo` answered for
+  each. The test builds those rows out of the parsed statement and
+  compares them field for field, so a name, a type, a `NOT NULL`, a
+  default, a key place and a generated column are each checked against
+  what SQLite says rather than against a reading of the documentation.
+- The surprises are tested by hand, because the documentation does not
+  have them: a type name of three letters or more that matches one of
+  six is stored as that one in capitals and everything else verbatim; a
+  primary key is the rowid only where the type is spelled `INTEGER` and
+  not `INT`, is one column, and is not written backwards; `WITHOUT
+  ROWID` and `STRICT` each make the key columns `NOT NULL`, which
+  nothing in the statement said; `ANY` holds what it is given only in a
+  strict table; and a string where a key names a column is a name, with
+  or without a collation around it.
+- The refusals: two columns of one name, a collation no engine has, a
+  generated column in the key or a table of nothing but generated
+  columns, two primary keys, `AUTOINCREMENT` anywhere but on a rowid
+  key, `WITHOUT ROWID` with no key, `STRICT` with a type that is missing
+  or is not one of the six, and a key term that is an expression. What
+  is left over — a foreign key written with a collation, which SQLite
+  allows only while reading a schema back off a file, and a table whose
+  columns come from a statement, which a file never holds — is counted
+  rather than asserted.
+- `sqlite_expr` builds the table too, and holds what a built one must
+  be: a key place inside the columns, a rowid that is one of them and
+  not on a table without one, and no two columns of a name.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

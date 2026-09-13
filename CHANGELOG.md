@@ -15,6 +15,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   rendering where the shorter one reads back as the same double. The
   inverse — digits and a power back to the double nearest them — comes
   with it, and reading a number out of text will use it.
+- The table a statement describes, which finishes step Q2 of document
+  16: the columns of a table with the affinity, collation, key and
+  default each carries, built out of the `CREATE TABLE` text because
+  that text is all a file keeps. Compared field for field against the
+  rows `PRAGMA table_info` answers with. The rules that are not in the
+  documentation are the ones it gets right: a type name that matches one
+  of six is stored as that one in capitals, a primary key is the rowid
+  only where the type is spelled `INTEGER` and not `INT`, and `WITHOUT
+  ROWID` and `STRICT` each make the key columns `NOT NULL`.
 - The schema parser of `db-sqlite`, the first half of step Q2 of
   document 16: `CREATE TABLE` and `CREATE INDEX` with every constraint
   the grammar allows — primary keys, uniqueness, checks, defaults,

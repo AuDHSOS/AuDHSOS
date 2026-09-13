@@ -74,7 +74,7 @@ fn every_syntax_error_the_c_library_finds_is_found_here() {
         }
     }
     assert_eq!(
-        beyond_syntax, 13,
+        beyond_syntax, 14,
         "what the schema layer has left to refuse"
     );
 }

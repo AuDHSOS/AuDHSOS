@@ -206,8 +206,8 @@ text the C library prints each of them as.
 
 ## 16.9 Where it stands
 
-Q1, the schema parser of Q2, Q4 but for the window clauses, and the value
-semantics of Q5 are in `crates/db/sqlite`, and the crate is
+Q1, Q2, Q4 but for the window clauses, and the value semantics of Q5 are
+in `crates/db/sqlite`, and the crate is
 held to complete coverage: every line, every region and every branch, in
 both instrumentations.
 

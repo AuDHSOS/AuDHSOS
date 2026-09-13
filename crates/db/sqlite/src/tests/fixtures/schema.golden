@@ -106,6 +106,15 @@ table	T|t|1|0|0	C|0|x|y z|0|~|0|0
 !	syntax	near "(": syntax error
 !	other	duplicate column name: x
 table	T|t|3|0|0	C|0|x||0|~|0|0	C|1|y||0|~|0|2	C|2|z||0|~|0|2
+!	other	expressions prohibited in PRIMARY KEY and UNIQUE constraints
+table	T|t|1|0|0	C|0|x||0|~|1|0
+table	T|t|1|0|0	C|0|x||0|~|1|0
+table	T|t|1|0|0	C|0|x||0|~|1|0
+table	T|t|2|1|0	C|0|a||1|~|1|0	C|1|b||0|~|0|0
+table	T|t|1|0|0	C|0|x|aaaaaaaaaa|0|~|0|0
+table	T|t|1|0|0	C|0|x|ab|0|~|0|0
+table	T|t|1|0|0	C|0|x|my|0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
 index	I|i|0|c|0	X|0|a|0|BINARY|1	X|1|~|0|BINARY|0
 index	I|i|0|c|0	X|0|a|0|BINARY|1	X|1|b|0|BINARY|1	X|2|~|0|BINARY|0
 index	I|i|0|c|0	X|0|a|1|BINARY|1	X|1|b|0|BINARY|1	X|2|~|0|BINARY|0

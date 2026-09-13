@@ -24,6 +24,33 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
     // wrote.
     if let Ok((arena, definition)) = definition(bytes) {
         walk_definition(&arena, definition);
+        // And the table it describes, where it describes one: a schema
+        // read off a file is text the file decides.
+        if let Definition::Table(written) = definition
+            && let Ok(table) = db_sqlite::schema::table(&arena, &written, bytes)
+        {
+            assert!(
+                table.columns.iter().any(|column| column.key == 0)
+                    || table.columns.iter().all(|column| column.key > 0),
+                "a key that is neither some columns nor all of them"
+            );
+            if let Some(alias) = table.rowid_alias {
+                assert!(alias < table.columns.len(), "a rowid outside the columns");
+                assert!(!table.without_rowid, "a rowid on a table with none");
+            }
+            for (at, column) in table.columns.iter().enumerate() {
+                assert!(
+                    usize::from(column.key) <= table.columns.len(),
+                    "a key place past the columns"
+                );
+                assert!(
+                    !table.columns[..at]
+                        .iter()
+                        .any(|before| before.name.eq_ignore_ascii_case(&column.name)),
+                    "two columns of one name"
+                );
+            }
+        }
     }
     match expression(bytes) {
         Err(error) => {
