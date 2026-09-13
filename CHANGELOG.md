@@ -7,6 +7,32 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The SQL tokenizer of `db-sqlite`, step Q4 of document 15 in its first
+  half: the character classes of `src/tokenize.c`, its rules, and its
+  answers — including the ones that surprise. A comment that is never
+  closed is a comment. An identifier may be quoted four ways, and the
+  bracket form has no escape. A number with a letter stuck to it is one
+  illegal token and not two. A blob literal with an odd number of digits
+  is illegal and is still eaten to its closing quote. A variable may carry
+  a Tcl array index. The byte-order mark is whitespace. The keyword table
+  is the list `tool/mkkeywordhash.c` carries, a hundred and forty-eight
+  words, matched without regard to case by halving the table.
+  It borrows and allocates nothing: a token is a kind and a span.
+
+  What holds it to the original is a recorded oracle: nine hundred and
+  fifty-nine pieces of SQL, eight hundred of them out of SQLite's own test
+  suite, tokenized by a program that links the C library, with the answers
+  committed beside the test. CI has no SQLite and needs none. `sqlite_tokens`
+  fuzzes the same code and holds the property that matters most — the
+  tokens partition the bytes, and none of them is empty. D-141, catalog
+  6.6.76.
+
+- The nine rules document 15, section 15.3, now states, which the port is
+  written to rather than judged by afterwards: sans-I/O, one direction of
+  dependency, reading without copying, refusals as data, total functions,
+  bounded work, determinism, a recorded oracle rather than a trusted one,
+  and testing as part of the design.
+
 - `db-sqlite` is held to complete coverage and meets it: every line, every
   region and every branch, under both instrumentations, which the policy
   table now states as `COMPLETE` rather than as the repository's floor of

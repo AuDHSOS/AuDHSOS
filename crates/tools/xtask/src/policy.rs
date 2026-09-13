@@ -1163,6 +1163,9 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget {
         name: "sqlite_image",
     },
+    FuzzTarget {
+        name: "sqlite_tokens",
+    },
 ];
 
 /// An external conformance suite: a checkout this project measures itself

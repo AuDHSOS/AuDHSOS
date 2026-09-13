@@ -37,6 +37,7 @@ members = [
     "tls_record",
     "x509",
     "sqlite_image",
+    "sqlite_tokens",
 ]
 
 [workspace.package]

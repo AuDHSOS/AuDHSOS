@@ -17,6 +17,7 @@ mod image;
 mod matrix;
 mod page;
 mod record;
+mod token;
 
 /// One table, three rows, every storage class, page size 4096, UTF-8.
 ///

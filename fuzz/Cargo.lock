@@ -434,6 +434,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlite_tokens"
+version = "0.1.0"
+dependencies = [
+ "db-sqlite",
+ "fuzz-support",
+]
+
+[[package]]
 name = "tar"
 version = "0.1.0"
 dependencies = [

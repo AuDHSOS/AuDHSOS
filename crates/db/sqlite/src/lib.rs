@@ -9,8 +9,10 @@ mod bytes;
 pub mod error;
 pub mod header;
 pub mod image;
+pub mod keyword;
 pub mod page;
 pub mod record;
+pub mod token;
 
 #[cfg(test)]
 mod tests;
@@ -18,5 +20,7 @@ mod tests;
 pub use error::Error;
 pub use header::{Encoding, Header, MAX_PAGE_SIZE, MIN_PAGE_SIZE};
 pub use image::{Image, Row, Rows};
+pub use keyword::Keyword;
 pub use page::{Cell, Kind, Page, Payload};
 pub use record::{Record, Serial, Value, Values};
+pub use token::{Kind as TokenKind, Lexer, Token};

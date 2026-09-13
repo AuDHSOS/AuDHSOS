@@ -18,6 +18,7 @@ than the implementation.
 | `fileformat2.html` | *Database File Format* | 2026-09-13 | 110473 | `905067afacc30583c9ee86778b532094cc1830c7ec7b5f019bcfd2eb9ded97a2` |
 | `datatype3.html` | *Datatypes In SQLite* | 2026-09-13 | 38701 | `4eaab766411136c123d392b2a931c69106a60a616f5a52536eacc79729816fe1` |
 | `lang_expr.html` | *SQL Language Expressions* | 2026-09-13 | 379232 | `e2d855812998814eef43c4d009a19eade9511b990384400daf8895d25b5f02e8` |
+| `lang_keywords.html` | *SQLite Keywords* | 2026-09-13 | 9459 | `0cb8b8361365c28b9186d3358c27d73bcbbfa7902fe8cd6a57acb0d5adf91745` |
 | `testing.html` | *How SQLite Is Tested* | 2026-09-13 | 59623 | `d1a8b5c43a42e573f7165483fdf02b91c605076b869a823d924241fb308feb97` |
 | `copyright.html` | *SQLite Copyright* | 2026-09-13 | 8351 | `44ca9f793055c8e32fc65f65a4f5bcf813a33f5bdaaa084067dd617a4ed3cc70` |
 
@@ -46,6 +47,11 @@ copy — and there is nothing further to state.
   equals what. It is what the value layer is written against.
 - `lang_expr.html` is the expression grammar the parser will follow, and
   the operator precedence it has to reproduce.
+- `lang_keywords.html` is the list of words the language keeps for itself,
+  and the four ways a name may be quoted to use one anyway. The table in
+  `keyword.rs` is that list; the source of the words is
+  `tool/mkkeywordhash.c` of the checkout under `research/`, because the
+  page names them without saying which token each becomes.
 - `testing.html` is the standard document 15, section 15.7, holds this
   port to: branch coverage and MC/DC over the whole of it, with the
   reasoning for why that is the bar.

@@ -37,7 +37,49 @@ Three claims, each of them testable, and no claim beyond them.
 What is not claimed: the same query plans, the same file sizes for the
 same inserts, the same performance, or the loadable extensions.
 
-## 15.3 The layers
+## 15.3 The architecture, and its layers
+
+Nine rules the port is written to. They are not style; each one is what
+makes some later thing possible, and each is checkable.
+
+1. **Sans-I/O.** No layer opens a file, reads a clock, takes a lock or
+   starts a thread. A layer is a function of bytes and a state machine over
+   them; the I/O is at the edge, in whatever embeds the engine. This is
+   what `audhsos-tls` and `audhsos-ssh` already are, and it is why they can
+   be tested exhaustively on a host with no machine around them.
+2. **One direction.** Format, pager, b-tree, parser, planner, virtual
+   machine, interface: each layer knows only the ones below it. The check
+   `cargo xtask check-layering` holds the graph to the table, so a cycle
+   fails the build rather than the review.
+3. **Read without copying.** A value is a slice of the page it was stored
+   in, for as long as the page is there. The read path allocates nothing,
+   which is what lets the same code run in a kernel with no allocator and
+   in a shell with one.
+4. **Refusals are data.** Every error names the rule of the format or of
+   the language that was broken, as a variant and not a string. A caller
+   can act on it, a test can assert it, and a message can be written from
+   it in whatever language the caller prints in.
+5. **Total functions.** No panic, no unwrap, no index, no arithmetic that
+   can overflow unseen: the workspace lints forbid them, so a file that
+   lies produces a refusal and never a crash.
+6. **Bounded work.** Every walk of a structure a file describes carries its
+   own bound — the depth of a tree, the length of a chain, the size of a
+   payload — because the file chooses those numbers and the engine must
+   not be what they choose.
+7. **Determinism.** No global state, no ambient randomness, no clock. The
+   same database and the same statements answer the same rows, which is
+   what makes a differential test against the C library a test rather than
+   a hope.
+8. **The oracle is recorded, not trusted.** Where the C library is the
+   truth — the tokenizer's answers, the bytes of a file — what it answered
+   is committed beside the test, so the comparison runs where SQLite is not
+   installed. What generated it is written down; what it generated is
+   checked in.
+9. **Testing is part of the design.** Each layer is built with the test
+   that can hold it: fixtures for the format, a recorded oracle for the
+   tokenizer, differential execution for the semantics, property tests for
+   the algebra, fuzz targets for every parser, the configuration matrix of
+   15.6 for the run-time shapes, and complete coverage over all of it.
 
 Bottom to top, each its own crate or module, each testable without the one
 above it:
@@ -67,7 +109,7 @@ the step claims is tested.
 | Q1 | The format, read-only: header, pages, cells, overflow, records. **Done.** |
 | Q2 | Reading a schema into types: columns, affinities, indexes, and the `sqlite_schema` text parsed rather than handed on. |
 | Q3 | The pager reading: page cache, the journal a reader must ignore, the WAL a reader must follow. |
-| Q4 | The tokenizer and a parser for the read half of SQL: `SELECT`, expressions, `WHERE`, `ORDER BY`, `LIMIT`. |
+| Q4 | The tokenizer (**done**) and a parser for the read half of SQL: `SELECT`, expressions, `WHERE`, `ORDER BY`, `LIMIT`. |
 | Q5 | A tree walker that answers those statements from a file, with affinity and collation. Differential tests against the C shell begin here. |
 | Q6 | The virtual machine, and the code generator that replaces the walker. |
 | Q7 | Writing: the b-tree writer, transactions, the rollback journal in all four modes, then the WAL. |
@@ -156,10 +198,17 @@ in UTF-16, a payload that overflows, and a table with two indexes.
 
 ## 15.9 Where it stands
 
-Q1 is in `crates/db/sqlite`: a database is opened, its schema walked, its
+Q1 and the tokenizer of Q4 are in `crates/db/sqlite`, and the crate is
+held to complete coverage: every line, every region and every branch, in
+both instrumentations.
+
+A database is opened, its schema walked, its
 tables read in rowid order, its overflow chains followed, and its records
 decoded, over any page size and any of the three encodings, without
 allocating. The matrix of 15.6 is a test, the reader is fuzzed by
 `sqlite_image`, and the first bug that target found — a child pointer of
-zero, which is a page no file has — is in the regression corpus. What the
-crate cannot do is everything else in 15.3.
+zero, which is a page no file has — is in the regression corpus. SQL text is
+tokenized exactly as `src/tokenize.c` tokenizes it — the same character
+classes, the same rules, the same answers, checked against nine hundred
+and fifty-nine recorded cases of which eight hundred come out of SQLite's
+own test suite. What the crate cannot do is everything else in 15.3.
