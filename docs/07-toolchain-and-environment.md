@@ -49,6 +49,26 @@ None beyond the toolchain. The xtask calls `cargo`, `rustc`, `rustfmt`,
 and `qemu-system-x86_64`. Container software is never used, locally or in
 CI.
 
+`sh tools/sqlite.sh` is outside all of that. It clones SQLite, checks out
+one release tag, and builds it below `research/`, which `.gitignore` keeps
+out of the repository, so a reference implementation can be read and run
+beside our own. It needs `git`, `make` and a C compiler, and nothing this
+project builds depends on it. `--version X.Y.Z` picks the tag
+(`version-X.Y.Z`, 3.53.4 by default), `--dir` the checkout, `--jobs` the
+parallel compiler jobs, and `--clean` clones again. A second run on an
+existing checkout rebuilds only what changed. No `tclsh` is needed:
+SQLite's autosetup builds its own `jimsh` and runs every code generator
+through it.
+
+```bash
+sh tools/sqlite.sh --version 3.53.4
+```
+
+`sh tools/xtask.sh norec` is what that build is for: the NoREC fuzzer of
+[`crates/tools/norec`](../crates/tools/norec/README.md) drives the
+`sqlite3` shell it left behind. It is not a step of `check` and needs no
+network, only that build.
+
 ## 7.4 QEMU
 
 QEMU 11.1.1 from MacPorts is installed: `/opt/local/bin/qemu-system-x86_64`

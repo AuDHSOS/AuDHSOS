@@ -600,6 +600,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "norec"
+version = "0.1.0"
+
+[[package]]
 name = "pci"
 version = "0.1.0"
 dependencies = [

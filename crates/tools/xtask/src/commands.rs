@@ -1548,6 +1548,22 @@ pub(crate) fn membench(root: &Path, options: &[String]) -> Result<(), Error> {
         .run()
 }
 
+/// Runs the fuzzer of `norec` with the caller's options.
+///
+/// The engine it drives is not built here: `sh tools/sqlite.sh` clones and
+/// builds it, and the fuzzer refuses the run when it is missing.
+///
+/// # Errors
+///
+/// The errors of the build and of the run.
+pub(crate) fn norec(root: &Path, options: &[String]) -> Result<(), Error> {
+    Cmd::cargo()
+        .cwd(root)
+        .args(["run", "--release", "-p", "norec", "--"])
+        .args(options.iter().map(String::as_str))
+        .run()
+}
+
 /// Focused checks for the JavaScript runtime, still using the pinned tools.
 pub(crate) fn jrs_check(root: &Path, options: &[String]) -> Result<(), Error> {
     let fix_format = match options {

@@ -2897,6 +2897,66 @@ offset and every bit is tested against the section it came from.
   it, which is checked against the rules said a second time rather than
   against the driver.
 
+### 6.6.74 The NoREC fuzzer (`norec`)
+
+D-140. The tool finds bugs in another program, so what its own tests hold
+is that a case says what it means and that a finding is real: the
+generator, the two queries, the reading of an answer, and the reduction.
+The engine is a fake in every test but one group, because a test that
+needs SQLite is a test that does not run where SQLite is not.
+
+- Values and literals: a quote in text is doubled and nothing else is
+  escaped; a double keeps a decimal point, so it reads back as a double;
+  a double that is not finite is written as `NULL`, which the generator
+  never produces.
+- Expressions: every node is parenthesized when it is written, so the
+  text means what the tree says; a column is qualified in a query and
+  bare in an index term; a name the case does not have renders as `NULL`
+  rather than as nothing; children are listed in the order they are
+  written and replaced by position, and a position that is not there
+  changes nothing.
+- Candidates: every candidate of a tree is strictly smaller than the tree,
+  and a tree of one node offers none. This is what makes reduction
+  terminate.
+- The database: a column without a declared type is created without one;
+  a collation follows the type; an empty table has no `INSERT`; an index
+  carries its terms unqualified and its filter, and a `UNIQUE` one says
+  so.
+- The queries: the `FROM` clause writes each join as the form it is and
+  copies it into both queries; the optimized query counts by rows or by
+  `COUNT(*)`; the unoptimized one sums `IS TRUE` over the same clause.
+- The generator, over hundreds of seeds: the same seed generates the same
+  case; every table has a column and rows as wide as it; the predicate
+  names only tables the `FROM` clause has; every index term names a
+  column, which is what SQLite requires of one; a `UNIQUE` index is built
+  only over a single plain column without a collation; and no case calls a
+  function of the clock or of a random source, or writes `DISTINCT` or a
+  subquery, which section 3.4 of the paper excludes.
+- Reading an answer: equal counts agree and different ones are a finding;
+  a sum over no rows is `NULL` and counts as zero; a message on the error
+  stream refuses the case; a case the engine did not finish is refused and
+  not read; output without the markers, and a count that is not a number,
+  are errors rather than verdicts.
+- Reduction: a case that always disagrees is reduced to its smallest form;
+  what the disagreement needs — a column of the predicate, one of two
+  indexes — survives; a case that stops disagreeing is left as it was; and
+  the budget stops the search.
+- The run loop: a campaign over an engine that agrees finds nothing; what
+  the engine refuses is counted by the message it refused with; a
+  disagreement is written out under the seed it came from; `--stop` leaves
+  the rest unrun; and `--help` and `--script` need no engine at all.
+- The process: the tests of the engine drive `sh` and `cat` rather than a
+  database, because what is tested there is the child and its three
+  streams — what it printed, what it complained about, a script larger
+  than a pipe buffer, a run that had to be killed, and a program that
+  cannot be started.
+
+What the tool found is not a test of this repository and is not run by
+`check`: SQLite 3.28.0, built by `sh tools/sqlite.sh --version 3.28.0`,
+answers three of twenty thousand cases two ways, each a `LEFT JOIN` whose
+unmatched row the `WHERE` clause drops and the sum keeps. The same cases
+agree on 3.53.4.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
