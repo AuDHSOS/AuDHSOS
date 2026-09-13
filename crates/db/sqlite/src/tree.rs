@@ -766,6 +766,31 @@ pub(crate) fn quick(pages: &mut Pages, parent: u32, page: u32, cell: &[u8]) -> R
     pages.writer(parent)?.point(sibling)
 }
 
+/// The largest key the table tree at `root` holds, or nothing where the
+/// tree holds no row.
+///
+/// The walk follows the right-most pointer of every page, which is
+/// O(log n).
+///
+/// # Errors
+///
+/// [`Error::Depth`] for a tree deeper than this crate walks, and
+/// whatever reading a page of it refuses.
+pub fn largest(pages: &Pages, root: u32) -> Result<Option<i64>, Error> {
+    let mut number = root;
+    for _ in 0..MAX_DEPTH {
+        let page = pages.page(number)?;
+        if !page.kind().is_interior() {
+            let Some(last) = page.cells().checked_sub(1) else {
+                return Ok(None);
+            };
+            return page.row(last).map(|(rowid, _)| Some(rowid));
+        }
+        number = page.right_most().ok_or(Error::Overrun)?;
+    }
+    Err(Error::Depth)
+}
+
 /// The pages the descent to a key passes through, root first, each with
 /// where the key belongs on it: the same descent a reader makes, and
 /// then the first cell of the leaf whose key is above it.

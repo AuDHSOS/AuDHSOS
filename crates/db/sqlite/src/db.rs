@@ -521,6 +521,30 @@ impl<'a> Database<'a> {
         self.tables.iter().map(|stored| &stored.table)
     }
 
+    /// The table of `name` and the page its tree begins at, where the
+    /// database holds one.
+    #[must_use]
+    pub fn table(&self, name: &[u8]) -> Option<(&Table, u32)> {
+        self.tables
+            .iter()
+            .find(|stored| stored.table.name.eq_ignore_ascii_case(name))
+            .map(|stored| (&stored.table, stored.root))
+    }
+
+    /// The rows of a statement already read, which is what a statement
+    /// that puts rows in a table answers its rows from.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what it could not answer and why.
+    pub fn rows(&self, arena: &Arena, id: SelectId, sql: &[u8]) -> Result<Answer, Error> {
+        let scope = Scope {
+            terms: &[],
+            outer: None,
+        };
+        Ok(self.statement(arena, id, sql, scope)?.answer)
+    }
+
     /// What a comparison uses where nothing writes a collation, which
     /// is `BINARY` over the encoding the file keeps its text in.
     const fn collation(&self) -> Collation {

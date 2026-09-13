@@ -4099,6 +4099,26 @@ beside a database in write-ahead logging mode.
 - The log this crate writes is one it reads back, under either byte
   order of the checksum.
 
+### 6.6.112 A statement run from its text (`db-sqlite`)
+
+D-172, document 16 step Q8. `change::Writer`, held to the files the
+shell wrote from the same statements.
+
+- `small.db`, `utf16.db` and `joins.db` are built here by running the
+  statements the shell was given, and each is the fixture byte for byte:
+  the four storage classes, an encoding the text is stored in, and three
+  tables each created and then filled.
+- `stated.db` is the fourth: a table whose key is one of its columns,
+  rows with the key given and rows without, columns named in another
+  order, and rows read out of one table into another, which is
+  `INSERT ... SELECT`.
+- A statement is stored as its own text, so the space around it and the
+  semicolon that ends it make no difference to the file.
+- The refusals: a statement this crate does not write, a table the
+  database does not hold, a column the table does not have, a row of
+  another width, a key that is not a whole number, a table whose rows
+  are kept in the key's own tree, and a schema that outgrows page one.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

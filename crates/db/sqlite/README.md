@@ -68,8 +68,10 @@ payload that overflows costs one page read per link of its chain.
 
 ## What is not here yet
 
-A table tree is written from nothing, a row lands anywhere in it, a row
-taken out gives its pages back to the free list, and a commit writes
-either the rollback journal or the frames of a write-ahead log. What is
-missing of writing is the pointer maps, the checkpoint, and the index
-b-trees beyond reading their pages.
+`CREATE TABLE` and `INSERT` run from their text and write the file
+SQLite writes. Under them a table tree is written from nothing, a row
+lands anywhere in it, a row taken out gives its pages back to the free
+list, and a commit writes either the rollback journal or the frames of a
+write-ahead log. What is missing of writing is `UPDATE` and `DELETE` as
+statements, the pointer maps, the checkpoint, and the index b-trees
+beyond reading their pages.

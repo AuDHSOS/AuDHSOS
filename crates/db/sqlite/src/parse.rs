@@ -16,10 +16,11 @@
 use alloc::vec::Vec;
 
 use crate::ast::{
-    Action, Arena, BinaryOp, ColumnConstraint, ColumnDef, Compound, Conflict, CreateIndex,
-    CreateTable, Cte, CurrentTime, Definition, Distinct, ExprId, Foreign, Indexed, Join, JoinKind,
-    LikeOp, Limit, Literal, Materialized, Node, Nulls, Order, OrderTerm, Range, ResultColumn,
-    Select, SelectId, Source, SourceKind, Span, TableBody, TableConstraint, TableOptions, UnaryOp,
+    Action, Arena, BinaryOp, Change, ColumnConstraint, ColumnDef, Compound, Conflict, CreateIndex,
+    CreateTable, Cte, CurrentTime, Definition, Distinct, ExprId, Foreign, Indexed, Insert, Join,
+    JoinKind, LikeOp, Limit, Literal, Materialized, Node, Nulls, Order, OrderTerm, Range,
+    ResultColumn, Select, SelectId, Source, SourceKind, Span, TableBody, TableConstraint,
+    TableOptions, UnaryOp,
 };
 use crate::keyword::Keyword;
 use crate::token::{Kind, Lexer, Token};
@@ -72,6 +73,10 @@ pub enum Expected {
     Depth,
     /// `CREATE`.
     Create,
+    /// `INSERT` or `REPLACE`.
+    Insert,
+    /// `INTO`, after `INSERT`.
+    Into,
     /// `TABLE` or `INDEX`, after `CREATE`.
     Table,
     /// `KEY`, after `PRIMARY` or `FOREIGN`.
@@ -673,6 +678,104 @@ impl<'a> Parser<'a> {
     /// # Errors
     ///
     /// Where it is not one of the two, or something follows it.
+    /// One statement that changes a database and nothing after it.
+    ///
+    /// # Errors
+    ///
+    /// Where the statement is not one this crate writes, and where
+    /// anything but a semicolon follows it.
+    pub fn only_change(&mut self) -> Result<Change, Error> {
+        let change = self.change()?;
+        self.eat(Kind::Semi);
+        if let Some(token) = self.peek() {
+            return Err(self.error(Some(token), Expected::Eof));
+        }
+        Ok(change)
+    }
+
+    /// One statement that changes a database, with the `WITH` clause
+    /// that stands before it where one does: the tables that clause
+    /// names belong to the statement the rows come from.
+    fn change(&mut self) -> Result<Change, Error> {
+        let (ctes, recursive) = if self.eat_keyword(Keyword::With) {
+            self.with_clause()?
+        } else {
+            (Range::default(), false)
+        };
+        let mut statement = self.insert()?;
+        if !ctes.is_empty() {
+            let id = statement.select;
+            let mut select = self
+                .arena
+                .select(id)
+                .ok_or(self.error(None, Expected::Select))?;
+            select.ctes = ctes;
+            select.recursive = recursive;
+            statement.select = self.arena.push_select(select);
+        }
+        Ok(Change::Insert(statement))
+    }
+
+    /// `INSERT INTO name [(columns)] <select>`, and `REPLACE INTO`,
+    /// which is `INSERT OR REPLACE INTO`.
+    fn insert(&mut self) -> Result<Insert, Error> {
+        let conflict = if self.eat_keyword(Keyword::Replace) {
+            Conflict::Replace
+        } else {
+            self.expect_keyword(Keyword::Insert, Expected::Insert)?;
+            if self.eat_keyword(Keyword::Or) {
+                self.or_conflict()?
+            } else {
+                Conflict::Unspecified
+            }
+        };
+        self.expect_keyword(Keyword::Into, Expected::Into)?;
+        let (schema, name) = self.qualified_name()?;
+        let mut columns = Vec::new();
+        if self.at(Kind::Lp) {
+            self.bump();
+            loop {
+                columns.push(self.name()?);
+                if !self.eat(Kind::Comma) {
+                    break;
+                }
+            }
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+        }
+        let columns = self.arena.push_names(&columns);
+        let select = self.select()?;
+        Ok(Insert {
+            conflict,
+            schema,
+            name,
+            columns,
+            select,
+        })
+    }
+
+    /// What follows `INSERT OR`.
+    fn or_conflict(&mut self) -> Result<Conflict, Error> {
+        let Some(token) = self.peek() else {
+            return Err(self.error(None, Expected::Conflict));
+        };
+        let conflict = match token.kind {
+            Kind::Keyword(Keyword::Rollback) => Conflict::Rollback,
+            Kind::Keyword(Keyword::Abort) => Conflict::Abort,
+            Kind::Keyword(Keyword::Fail) => Conflict::Fail,
+            Kind::Keyword(Keyword::Ignore) => Conflict::Ignore,
+            Kind::Keyword(Keyword::Replace) => Conflict::Replace,
+            _ => return Err(self.error(Some(token), Expected::Conflict)),
+        };
+        self.bump();
+        Ok(conflict)
+    }
+
+    /// One `CREATE TABLE` or `CREATE INDEX` and nothing after it.
+    ///
+    /// # Errors
+    ///
+    /// Where the statement is not one of the two, and where anything
+    /// but a semicolon follows it.
     pub fn only_definition(&mut self) -> Result<Definition, Error> {
         let definition = self.definition()?;
         self.eat(Kind::Semi);
@@ -1965,6 +2068,17 @@ pub fn statement(sql: &[u8]) -> Result<(Arena, SelectId), Error> {
 pub fn definition(sql: &[u8]) -> Result<(Arena, Definition), Error> {
     let mut parser = Parser::new(sql);
     let root = parser.only_definition()?;
+    Ok((parser.into_arena(), root))
+}
+
+/// Reads one statement that changes a database out of `sql`.
+///
+/// # Errors
+///
+/// Where the statement is not one this crate writes.
+pub fn change(sql: &[u8]) -> Result<(Arena, Change), Error> {
+    let mut parser = Parser::new(sql);
+    let root = parser.only_change()?;
     Ok((parser.into_arena(), root))
 }
 

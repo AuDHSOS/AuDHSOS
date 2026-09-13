@@ -154,6 +154,19 @@ rm -f "$out/unchained.db"
 "$sqlite" "$out/unchained.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<40) INSERT INTO t(rowid,n,s) SELECT (i*17)%41, i, replace(hex(zeroblob(i*30)),'0','x') FROM c; DELETE FROM t WHERE rowid%3!=0;"
 printf '%s\t%s bytes\n' unchained.db "$(wc -c <"$out/unchained.db" | tr -d ' ')"
 
+# Statements this crate runs from their text: a table whose key is one
+# of its columns, rows with the key given and rows without, rows named
+# in another order, and rows read out of one table into another.
+rm -f "$out/stated.db"
+"$sqlite" "$out/stated.db" \
+    "CREATE TABLE r(id INTEGER PRIMARY KEY, v TEXT);" \
+    "INSERT INTO r VALUES (5,'five'),(2,'two'),(9,'nine');" \
+    "INSERT INTO r(v) VALUES ('ten');" \
+    "CREATE TABLE s(a, b);" \
+    "INSERT INTO s SELECT id, v FROM r;" \
+    "INSERT INTO s(b,a) VALUES ('x',1);"
+printf '%s\t%s bytes\n' stated.db "$(wc -c <"$out/stated.db" | tr -d ' ')"
+
 # The same rows and the same delete under a journal mode that leaves the
 # journal behind, so that the file the commit wrote is there to read.
 # The database is `emptied.db` byte for byte, because the journal mode

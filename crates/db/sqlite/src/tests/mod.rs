@@ -227,6 +227,12 @@ pub(super) const WIDE16: &[u8] = include_bytes!("fixtures/wide16.db");
 /// the smallest integer, which `abs` has no positive for.
 pub(super) const JOINS: &[u8] = include_bytes!("fixtures/joins.db");
 
+/// What six statements this crate runs from their text leave: a table
+/// whose key is one of its columns, rows with the key given and rows
+/// without, rows named in another order, and rows read out of one table
+/// into another.
+pub(super) const STATED: &[u8] = include_bytes!("fixtures/stated.db");
+
 /// A database whose content is in its write-ahead log and not in its
 /// file: the file holds one page and names no table, and the log holds
 /// the schema and the rows.

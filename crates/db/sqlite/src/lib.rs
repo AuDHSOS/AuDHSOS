@@ -10,6 +10,7 @@ extern crate alloc;
 pub mod agg;
 pub mod ast;
 mod bytes;
+pub mod change;
 pub mod db;
 pub mod error;
 pub mod eval;

@@ -319,6 +319,7 @@ fn a_tree_that_is_not_a_table_and_a_tree_deeper_than_the_walk_are_refused() {
         above = number;
     }
     assert_eq!(insert(&mut pages, 2, 1, &record), Err(Error::Depth));
+    assert_eq!(crate::tree::largest(&pages, 2), Err(Error::Depth));
 }
 
 #[test]
@@ -877,4 +878,212 @@ fn a_table_written_into_a_log_is_the_log_the_shell_wrote() {
     for (number, page) in &frames {
         assert_eq!(read.page_bytes(*number), Some(page.as_slice()));
     }
+}
+
+#[test]
+fn statements_run_from_their_text_write_the_file_the_shell_wrote() {
+    use crate::change::Writer;
+    // Four databases built by running the statements the shell was
+    // given, each held to the file the shell wrote.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(a INTEGER, b TEXT, c REAL, d BLOB)")
+        .unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES (1,'one',1.5,x'0102'), (2,'two',-2.5,NULL), (-3,'',0.0,x'ff')")
+        .unwrap();
+    same("small.db", &writer.written(), crate::tests::SMALL, 4096);
+
+    // The encoding the file names is the one the text is stored in.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf16Le).unwrap();
+    writer.run(b"CREATE TABLE u(t TEXT)").unwrap();
+    writer
+        .run("INSERT INTO u VALUES ('abc'), ('\u{e4}\u{f6}\u{fc}')".as_bytes())
+        .unwrap();
+    same("utf16.db", &writer.written(), crate::tests::UTF16, 4096);
+
+    // Three tables, each created and then filled, so the file counts
+    // six changes and three schema rows.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        "CREATE TABLE a(x INTEGER, y TEXT)",
+        "INSERT INTO a VALUES (1,'one'),(2,'two'),(3,NULL)",
+        "CREATE TABLE b(x INTEGER, z TEXT)",
+        "INSERT INTO b VALUES (1,'B1'),(1,'B1b'),(4,'B4'),(NULL,'Bn'),(-9223372036854775808,'Bmin')",
+        "CREATE TABLE c(y TEXT COLLATE NOCASE, w INTEGER)",
+        "INSERT INTO c VALUES ('ONE',10),('two',20)",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    same("joins.db", &writer.written(), crate::tests::JOINS, 4096);
+
+    // A key that is one of the columns, rows with it given and rows
+    // without, columns named in another order, and rows read out of one
+    // table into another.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        "CREATE TABLE r(id INTEGER PRIMARY KEY, v TEXT)",
+        "INSERT INTO r VALUES (5,'five'),(2,'two'),(9,'nine')",
+        "INSERT INTO r(v) VALUES ('ten')",
+        "CREATE TABLE s(a, b)",
+        "INSERT INTO s SELECT id, v FROM r",
+        "INSERT INTO s(b,a) VALUES ('x',1)",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    same("stated.db", &writer.written(), crate::tests::STATED, 4096);
+}
+
+#[test]
+fn what_a_statement_that_changes_a_database_refuses() {
+    use crate::change::Writer;
+    use crate::db::Error;
+    let refuse = |statements: &[&str]| -> Error {
+        let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+        let mut last = None;
+        for sql in statements {
+            last = Some(writer.run(sql.as_bytes()));
+        }
+        match last {
+            Some(Err(error)) => error,
+            _ => panic!("the statement was not refused"),
+        }
+    };
+    // A page size the format does not allow is refused before a
+    // statement is read at all.
+    assert!(Writer::new(500, 0, Encoding::Utf8).is_err());
+    // A statement this crate does not write.
+    assert!(matches!(refuse(&["SELECT 1"]), Error::Parse(_)));
+    assert!(matches!(
+        refuse(&["CREATE INDEX i ON t(a)"]),
+        Error::Unsupported
+    ));
+    assert!(matches!(
+        refuse(&["CREATE TABLE t AS SELECT 1"]),
+        Error::Unsupported
+    ));
+    // A table the database does not hold, a column the table does not
+    // have, and a row of another width.
+    assert!(matches!(
+        refuse(&["INSERT INTO nowhere VALUES (1)"]),
+        Error::Unsupported
+    ));
+    assert!(matches!(
+        refuse(&["CREATE TABLE t(a)", "INSERT INTO t(b) VALUES (1)"]),
+        Error::Unsupported
+    ));
+    assert!(matches!(
+        refuse(&["CREATE TABLE t(a)", "INSERT INTO t VALUES (1,2)"]),
+        Error::Unsupported
+    ));
+    // A key that is not a whole number.
+    assert!(matches!(
+        refuse(&["CREATE TABLE t(a)", "INSERT INTO t(rowid,a) VALUES ('x',1)"]),
+        Error::Unsupported
+    ));
+    // A table whose rows are kept in the key's own tree.
+    assert!(matches!(
+        refuse(&[
+            "CREATE TABLE w(a TEXT, b, PRIMARY KEY(a)) WITHOUT ROWID",
+            "INSERT INTO w VALUES ('x',1)",
+        ]),
+        Error::Unsupported
+    ));
+}
+
+#[test]
+fn a_statement_is_stored_as_its_own_text_without_what_ends_it() {
+    use crate::change::Writer;
+    // `sqlite_schema` holds the statement as it was written, with the
+    // space around it and the semicolon that ends it taken off, which
+    // is the span the parser read it from.
+    let written = |sql: &[u8]| {
+        let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+        writer.run(sql).unwrap();
+        writer.written()
+    };
+    assert_eq!(
+        written(b"  CREATE TABLE t(a) ;  "),
+        written(b"CREATE TABLE t(a)")
+    );
+}
+
+#[test]
+fn the_largest_key_of_a_tree_is_the_last_of_its_right_most_leaf() {
+    use crate::tree::largest;
+    // A tree of one page, and one deep enough that the walk follows an
+    // interior page's right-most pointer.
+    let mut pages = Pages::new(512, 0).unwrap();
+    let root = pages.add(Kind::LeafTable, 0).unwrap();
+    assert_eq!(largest(&pages, root).unwrap(), None);
+    let tall = filled(512);
+    assert_eq!(largest(&tall, 2).unwrap(), Some(400));
+    assert!(tall.page(2).unwrap().kind().is_interior());
+}
+
+#[test]
+fn a_key_given_by_name_is_the_key_the_row_is_put_in_under() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer
+        .run(b"INSERT INTO t(rowid,a) VALUES (7,'x')")
+        .unwrap();
+    writer.run(b"INSERT INTO t(a) VALUES ('y')").unwrap();
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    let answer = database.query(b"SELECT rowid, a FROM t").unwrap();
+    assert_eq!(
+        answer.rows,
+        alloc::vec![
+            alloc::vec![Value::Int(7), Value::Text(b"x".to_vec())],
+            alloc::vec![Value::Int(8), Value::Text(b"y".to_vec())],
+        ]
+    );
+}
+
+#[test]
+fn a_schema_that_outgrows_page_one_is_refused_by_the_statement() {
+    use crate::change::Writer;
+    use crate::db::Error;
+    // The schema table begins on the page the database header is on, so
+    // a root that outgrows it is the balance this crate does not write.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    let mut at = 0;
+    loop {
+        let name = alloc::format!("t{at}");
+        let sql = alloc::format!("CREATE TABLE {name}(a, b, c, d, e, f, g, h, i, j, k, l)");
+        match writer.run(sql.as_bytes()) {
+            Ok(()) => at += 1,
+            Err(error) => {
+                assert!(matches!(error, Error::Image(_)), "{error:?}");
+                assert!(at > 1, "the first statement was refused");
+                return;
+            }
+        }
+    }
+}
+
+#[test]
+fn what_the_reader_of_a_statement_that_changes_a_database_refuses() {
+    use crate::parse::change;
+    // A word after the statement, which nothing may follow.
+    assert!(change(b"INSERT INTO t VALUES (1) extra").is_err());
+    // `INSERT OR` and the five words that may follow it, and `REPLACE`,
+    // which is `INSERT OR REPLACE`.
+    for sql in [
+        "INSERT OR ROLLBACK INTO t VALUES (1)",
+        "INSERT OR ABORT INTO t VALUES (1)",
+        "INSERT OR FAIL INTO t VALUES (1)",
+        "INSERT OR IGNORE INTO t VALUES (1)",
+        "INSERT OR REPLACE INTO t VALUES (1)",
+        "REPLACE INTO t VALUES (1)",
+        "WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x",
+    ] {
+        assert!(change(sql.as_bytes()).is_ok(), "{sql}");
+    }
+    assert!(change(b"INSERT OR").is_err());
+    assert!(change(b"INSERT OR NOTHING INTO t VALUES (1)").is_err());
+    assert!(change(b"INSERT t VALUES (1)").is_err());
+    assert!(change(b"DELETE FROM t").is_err());
 }

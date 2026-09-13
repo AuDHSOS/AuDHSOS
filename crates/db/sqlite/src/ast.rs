@@ -506,6 +506,29 @@ pub struct CreateIndex {
     pub filter: Option<ExprId>,
 }
 
+/// `INSERT INTO name [(columns)] <select>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Insert {
+    /// What `INSERT OR ...` says to do where a row is already there.
+    pub conflict: Conflict,
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The table the rows go in.
+    pub name: Span,
+    /// The columns the rows are for, or an empty run for every column
+    /// of the table in the order the table was created with.
+    pub columns: Range,
+    /// Where the rows come from, which is a `VALUES` or a `SELECT`.
+    pub select: SelectId,
+}
+
+/// One statement that changes what a database holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Change {
+    /// `INSERT` and `REPLACE`.
+    Insert(Insert),
+}
+
 /// One definition out of `sqlite_schema`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Definition {
