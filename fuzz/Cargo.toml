@@ -18,6 +18,7 @@ members = [
     "http_response",
     "ipv4",
     "ipv6",
+    "jrs_backend",
     "jrs_source",
     "json_codec",
     "math_pow",

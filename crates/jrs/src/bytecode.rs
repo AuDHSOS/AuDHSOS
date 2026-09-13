@@ -444,6 +444,20 @@ impl Program {
     pub const fn uses_register_backend(&self) -> bool {
         self.register_code.is_some()
     }
+
+    /// The same Program with the Register backend withheld, so that the legacy
+    /// stack backend executes it.
+    ///
+    /// This exists for the differential testing the backend migration needs:
+    /// the two backends must answer a source identically. It goes away with the
+    /// legacy backend.
+    #[must_use]
+    pub fn legacy_only(&self) -> Self {
+        Self {
+            register_code: None,
+            ..self.clone()
+        }
+    }
 }
 
 /// Parses and compiles a script without executing any host operation.
