@@ -22,6 +22,11 @@
 **   expr-corpus writes the cases for the reader of expressions.
 **   expr        one SQL expression, answered as its type and its value
 **               quoted, or as the message SQLite refused it with.
+**   schema-corpus  writes the cases for the reader of schemas.
+**   schema      one CREATE statement, answered as what the schema holds
+**               after it: the table with its columns, or the index with
+**               its terms. A refusal is answered as "!" and whether it
+**               is a syntax error, which is what a parser alone decides.
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -521,6 +526,295 @@ static void expr_corpus(void) {
   }
 }
 
+/* The table every index case is written against. */
+static const char *zBase =
+  "CREATE TABLE base(a, b INTEGER, c TEXT COLLATE NOCASE, d REAL);";
+
+/* One query, its rows printed as tab-separated fields after `zTag`. */
+static int schema_dump(sqlite3 *db, const char *zTag, const char *zSql) {
+  sqlite3_stmt *stmt = 0;
+  int rc = sqlite3_prepare_v2(db, zSql, -1, &stmt, 0);
+  if (rc != SQLITE_OK) {
+    sqlite3_finalize(stmt);
+    return 1;
+  }
+  while (sqlite3_step(stmt) == SQLITE_ROW) {
+    int i, n = sqlite3_column_count(stmt);
+    printf("%s", zTag);
+    for (i = 0; i < n; i++) {
+      const unsigned char *text = sqlite3_column_text(stmt, i);
+      printf("|%s", text ? (const char *)text : "");
+    }
+  }
+  sqlite3_finalize(stmt);
+  return 0;
+}
+
+/* The name of the object the statement made, and its type, into zType
+** and zName. Answers 0 where it made none. */
+static int schema_made(sqlite3 *db, sqlite3_int64 before, char *zType,
+                       char *zName) {
+  static const char *azFrom[] = {"sqlite_schema", "sqlite_temp_schema"};
+  int at;
+  for (at = 0; at < 2; at++) {
+    sqlite3_stmt *stmt = 0;
+    char *sql = sqlite3_mprintf(
+        "SELECT type, name FROM %s WHERE rowid>%lld AND sql IS NOT NULL"
+        " ORDER BY rowid LIMIT 1", azFrom[at], (long long)(at ? 0 : before));
+    int found = 0;
+    if (sql == 0) return 0;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, 0) == SQLITE_OK
+     && sqlite3_step(stmt) == SQLITE_ROW) {
+      sqlite3_snprintf(64, zType, "%s", sqlite3_column_text(stmt, 0));
+      sqlite3_snprintf(256, zName, "%s", sqlite3_column_text(stmt, 1));
+      found = 1;
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_free(sql);
+    if (found) return 1;
+  }
+  return 0;
+}
+
+/* What the schema holds after one CREATE statement. */
+static int schema_case(const char *line) {
+  sqlite3 *db = 0;
+  char *message = 0;
+  char zType[64], zName[256], *sql;
+  sqlite3_int64 before = 0;
+  sqlite3_stmt *stmt = 0;
+  int rc;
+  if (sqlite3_open(":memory:", &db) != SQLITE_OK) return 1;
+  sqlite3_exec(db, zBase, 0, 0, 0);
+  if (sqlite3_prepare_v2(db, "SELECT max(rowid) FROM sqlite_schema", -1, &stmt,
+                         0) == SQLITE_OK
+   && sqlite3_step(stmt) == SQLITE_ROW) {
+    before = sqlite3_column_int64(stmt, 0);
+  }
+  sqlite3_finalize(stmt);
+  rc = sqlite3_exec(db, line, 0, 0, &message);
+  if (rc != SQLITE_OK) {
+    /* A refusal the grammar itself made says `near "X": syntax error`.
+    ** Everything else is a rule the grammar's actions apply, which a
+    ** parser alone does not decide. */
+    const char *kind = "other";
+    if (message && strncmp(message, "near \"", 6) == 0
+     && strstr(message, "syntax error") != 0) {
+      kind = "syntax";
+    }
+    printf("!\t%s\t%s\n", kind, message ? message : "");
+    sqlite3_free(message);
+    sqlite3_close(db);
+    return 0;
+  }
+  if (!schema_made(db, before, zType, zName)) {
+    printf("none\n");
+    sqlite3_close(db);
+    return 0;
+  }
+  printf("%s", zType);
+  if (strcmp(zType, "table") == 0) {
+    sql = sqlite3_mprintf(
+        "SELECT name, ncol, wr, strict FROM pragma_table_list WHERE name=%Q",
+        zName);
+    schema_dump(db, "\tT", sql);
+    sqlite3_free(sql);
+    sql = sqlite3_mprintf(
+        "SELECT cid, name, type, \"notnull\", ifnull(dflt_value,'~'), pk, hidden"
+        " FROM pragma_table_xinfo(%Q)", zName);
+    schema_dump(db, "\tC", sql);
+    sqlite3_free(sql);
+  } else if (strcmp(zType, "index") == 0) {
+    sql = sqlite3_mprintf(
+        "SELECT il.name, il.\"unique\", il.origin, il.partial"
+        " FROM sqlite_schema s JOIN pragma_index_list(s.tbl_name) il"
+        " ON il.name=s.name WHERE s.name=%Q", zName);
+    schema_dump(db, "\tI", sql);
+    sqlite3_free(sql);
+    sql = sqlite3_mprintf(
+        "SELECT seqno, ifnull(name,'~'), \"desc\", coll, key"
+        " FROM pragma_index_xinfo(%Q)", zName);
+    schema_dump(db, "\tX", sql);
+    sqlite3_free(sql);
+  }
+  printf("\n");
+  sqlite3_close(db);
+  return 0;
+}
+
+/* The cases: the shapes a schema is written in, and the ways of writing
+** each of them wrong. */
+static const char *aSchema[] = {
+  "CREATE TABLE t(x)",
+  "CREATE TABLE t(x INTEGER)",
+  "CREATE TABLE t(x INT, y TEXT, z BLOB, w REAL, v NUMERIC)",
+  "CREATE TABLE t(x VARCHAR(10))",
+  "CREATE TABLE t(x DECIMAL(10,5))",
+  "CREATE TABLE t(x UNSIGNED BIG INT)",
+  "CREATE TABLE t(x DOUBLE PRECISION)",
+  "CREATE TABLE t(x NATIVE CHARACTER(70))",
+  "CREATE TABLE t(x \"quoted type\")",
+  "CREATE TABLE t(x 'string type')",
+  "CREATE TABLE t(x generated)",
+  "CREATE TABLE t(x key)",
+  "CREATE TABLE t(x without)",
+  "CREATE TABLE t(generated)",
+  "CREATE TABLE t(\"select\")",
+  "CREATE TABLE t(x, y AS (x+1))",
+  "CREATE TABLE t(x, y AS (x+1) STORED)",
+  "CREATE TABLE t(x, y AS (x+1) VIRTUAL)",
+  "CREATE TABLE t(x, y GENERATED ALWAYS AS (x+1))",
+  "CREATE TABLE t(x, y GENERATED ALWAYS AS (x+1) STORED)",
+  "CREATE TABLE t(x, y AS (x+1) NONSENSE)",
+  "CREATE TABLE t(x GENERATED ALWAYS AS (1))",
+  "CREATE TABLE t(x INTEGER PRIMARY KEY)",
+  "CREATE TABLE t(x INTEGER PRIMARY KEY ASC)",
+  "CREATE TABLE t(x INTEGER PRIMARY KEY DESC)",
+  "CREATE TABLE t(x INTEGER PRIMARY KEY AUTOINCREMENT)",
+  "CREATE TABLE t(x PRIMARY KEY AUTOINCREMENT)",
+  "CREATE TABLE t(x INTEGER PRIMARY KEY ON CONFLICT ROLLBACK)",
+  "CREATE TABLE t(x INTEGER PRIMARY KEY ON CONFLICT ABORT AUTOINCREMENT)",
+  "CREATE TABLE t(x PRIMARY KEY)",
+  "CREATE TABLE t(x TEXT PRIMARY KEY)",
+  "CREATE TABLE t(x NOT NULL)",
+  "CREATE TABLE t(x NOT NULL ON CONFLICT FAIL)",
+  "CREATE TABLE t(x NULL)",
+  "CREATE TABLE t(x UNIQUE)",
+  "CREATE TABLE t(x UNIQUE ON CONFLICT IGNORE)",
+  "CREATE TABLE t(x CHECK(x>0))",
+  "CREATE TABLE t(x DEFAULT 1)",
+  "CREATE TABLE t(x DEFAULT -1)",
+  "CREATE TABLE t(x DEFAULT +1)",
+  "CREATE TABLE t(x DEFAULT 1.5)",
+  "CREATE TABLE t(x DEFAULT 'a')",
+  "CREATE TABLE t(x DEFAULT abc)",
+  "CREATE TABLE t(x DEFAULT NULL)",
+  "CREATE TABLE t(x DEFAULT x'41')",
+  "CREATE TABLE t(x DEFAULT (1+1))",
+  "CREATE TABLE t(x DEFAULT CURRENT_TIMESTAMP)",
+  "CREATE TABLE t(x DEFAULT 1+1)",
+  "CREATE TABLE t(x COLLATE NOCASE)",
+  "CREATE TABLE t(x COLLATE BINARY)",
+  "CREATE TABLE t(x COLLATE nosuch)",
+  "CREATE TABLE t(x REFERENCES base)",
+  "CREATE TABLE t(x REFERENCES base(a))",
+  "CREATE TABLE t(x REFERENCES base(a) ON DELETE CASCADE)",
+  "CREATE TABLE t(x REFERENCES base(a) ON UPDATE SET NULL ON DELETE RESTRICT)",
+  "CREATE TABLE t(x REFERENCES base(a) MATCH FULL ON DELETE NO ACTION)",
+  "CREATE TABLE t(x REFERENCES base(a) DEFERRABLE INITIALLY DEFERRED)",
+  "CREATE TABLE t(x REFERENCES base(a) NOT DEFERRABLE INITIALLY IMMEDIATE)",
+  "CREATE TABLE t(x REFERENCES base ON DELETE SET DEFAULT)",
+  "CREATE TABLE t(x CONSTRAINT c NOT NULL)",
+  "CREATE TABLE t(x, CONSTRAINT c CHECK(x>0))",
+  "CREATE TABLE t(x, PRIMARY KEY(x))",
+  "CREATE TABLE t(x, y, PRIMARY KEY(x, y))",
+  "CREATE TABLE t(x, y, PRIMARY KEY(x DESC, y ASC))",
+  "CREATE TABLE t(x, PRIMARY KEY(x) ON CONFLICT REPLACE)",
+  "CREATE TABLE t(x INTEGER, PRIMARY KEY(x AUTOINCREMENT))",
+  "CREATE TABLE t(x, y, UNIQUE(x, y))",
+  "CREATE TABLE t(x, y, UNIQUE(x) ON CONFLICT IGNORE)",
+  "CREATE TABLE t(x, y, FOREIGN KEY(x) REFERENCES base(a))",
+  "CREATE TABLE t(x, y, FOREIGN KEY(x, y) REFERENCES base(a, b) ON DELETE CASCADE)",
+  "CREATE TABLE t(x, CHECK(x>0), CHECK(x<10))",
+  "CREATE TABLE t(x PRIMARY KEY) WITHOUT ROWID",
+  "CREATE TABLE t(x INTEGER PRIMARY KEY) WITHOUT ROWID",
+  "CREATE TABLE t(x INT PRIMARY KEY) STRICT",
+  "CREATE TABLE t(x INT PRIMARY KEY) STRICT, WITHOUT ROWID",
+  "CREATE TABLE t(x INT PRIMARY KEY) WITHOUT ROWID, STRICT",
+  "CREATE TABLE t(x) WITHOUT ROWID",
+  "CREATE TABLE t(x) STRICT",
+  "CREATE TABLE t(x) NONSENSE",
+  "CREATE TABLE t(x) WITHOUT NONSENSE",
+  "CREATE TEMP TABLE t(x)",
+  "CREATE TEMPORARY TABLE t(x)",
+  "CREATE TABLE IF NOT EXISTS t(x)",
+  "CREATE TABLE main.t(x)",
+  "CREATE TABLE t AS SELECT 1 AS x, 'a' AS y",
+  "CREATE TABLE t AS SELECT a, b FROM base",
+  "CREATE TABLE t()",
+  "CREATE TABLE t",
+  "CREATE TABLE (x)",
+  "CREATE TABLE t(x,)",
+  "CREATE TABLE t(x y z)",
+  "CREATE TABLE t(x PRIMARY)",
+  "CREATE TABLE t(x NOT)",
+  "CREATE TABLE t(x DEFAULT)",
+  "CREATE TABLE t(x COLLATE)",
+  "CREATE TABLE t(x CHECK)",
+  "CREATE TABLE t(x CHECK(x)",
+  "CREATE TABLE t(x REFERENCES)",
+  "CREATE TABLE t(x ON CONFLICT ROLLBACK)",
+  "CREATE TABLE t(x UNIQUE ON CONFLICT NONSENSE)",
+  "CREATE TABLE t(x REFERENCES base ON DELETE NONSENSE)",
+  "CREATE TABLE t(x REFERENCES base ON NONSENSE CASCADE)",
+  "CREATE TABLE t(x, PRIMARY KEY)",
+  "CREATE TABLE t(x, PRIMARY KEY())",
+  "CREATE TABLE t(x, FOREIGN KEY(x))",
+  "CREATE TABLE t(x, FOREIGN(x) REFERENCES base)",
+  "CREATE TABLE t(x, x)",
+  "CREATE TABLE t(x, y AS (1), z AS (2))",
+  "CREATE INDEX i ON base(a)",
+  "CREATE INDEX i ON base(a, b)",
+  "CREATE INDEX i ON base(a DESC, b ASC)",
+  "CREATE INDEX i ON base(a COLLATE NOCASE)",
+  "CREATE INDEX i ON base(a+b)",
+  "CREATE INDEX i ON base(a) WHERE b > 0",
+  "CREATE UNIQUE INDEX i ON base(a)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS i ON base(a)",
+  "CREATE INDEX main.i ON base(a)",
+  "CREATE INDEX i ON base(a NULLS FIRST)",
+  "CREATE INDEX i ON nosuch(a)",
+  "CREATE INDEX i ON base(nosuch)",
+  "CREATE INDEX i ON base()",
+  "CREATE INDEX i ON base",
+  "CREATE INDEX i base(a)",
+  "CREATE INDEX ON base(a)",
+  "CREATE UNIQUE TABLE t(x)",
+  "CREATE TEMP INDEX i ON base(a)",
+  "CREATE VIEW v AS SELECT 1",
+  "CREATE TRIGGER tr AFTER INSERT ON base BEGIN SELECT 1; END",
+  "DROP TABLE base",
+  "SELECT 1",
+  "CREATE TABLE t(x, CHECK(x>0),)",
+  "CREATE TABLE t(x, CHECK(x>0) CHECK(x<9))",
+  "CREATE TABLE t(x, CONSTRAINT c UNIQUE(x) CONSTRAINT d CHECK(x>0))",
+  "CREATE TABLE t(x",
+  "CREATE TABLE t(x DEFERRABLE)",
+  "CREATE TABLE t(x NOT DEFERRABLE)",
+  "CREATE TABLE t(x DEFERRABLE INITIALLY DEFERRED)",
+  "CREATE TABLE t(x NOT DEFERRABLE INITIALLY IMMEDIATE)",
+  "CREATE TABLE t(x DEFERRABLE INITIALLY NONSENSE)",
+  "CREATE TABLE t(x DEFAULT",
+  "CREATE TABLE t(x DEFAULT CURRENT_TIME)",
+  "CREATE TABLE t(x DEFAULT CURRENT_DATE)",
+  "CREATE TABLE t(x DEFAULT key)",
+  "CREATE TABLE t(x DEFAULT SELECT)",
+  "CREATE TABLE t(x DEFAULT ())",
+  "CREATE TABLE t(x DEFAULT \"quoted\")",
+  "CREATE TABLE t(x UNIQUE ON DELETE CASCADE)",
+  "CREATE TABLE t(x UNIQUE ON CONFLICT",
+  "CREATE TABLE t(x REFERENCES base DEFERRABLE)",
+  "CREATE TABLE t(x REFERENCES base ON INSERT CASCADE)",
+  "CREATE TABLE t(x REFERENCES base NOT NULL)",
+  "CREATE TABLE t(x REFERENCES base ON UPDATE RESTRICT)",
+  "CREATE TABLE t(x REFERENCES base ON UPDATE SET",
+  "CREATE TABLE t(x, FOREIGN KEY(x COLLATE NOCASE) REFERENCES base(a))",
+  "CREATE TABLE t(x, FOREIGN KEY(x DESC) REFERENCES base(a ASC))",
+  "CREATE TABLE full(x)",
+  "CREATE TABLE t(left, indexed)",
+  "CREATE INDEX i ON base(a) WHERE",
+  "CREATE TABLE t(x INT PRIMARY KEY) STRICT, STRICT",
+  "CREATE TABLE t(x) WITHOUT ROWID, WITHOUT ROWID"
+};
+
+/* The cases, one per line. */
+static void schema_corpus(void) {
+  int i;
+  for (i = 0; i < (int)(sizeof(aSchema) / sizeof(aSchema[0])); i++) {
+    printf("%s\n", aSchema[i]);
+  }
+}
+
 int main(int argc, char **argv) {
   char line[4096];
   if (argc != 2) {
@@ -537,6 +831,21 @@ int main(int argc, char **argv) {
   }
   if (strcmp(argv[1], "expr-corpus") == 0) {
     expr_corpus();
+    return 0;
+  }
+  if (strcmp(argv[1], "schema-corpus") == 0) {
+    schema_corpus();
+    return 0;
+  }
+  if (strcmp(argv[1], "schema") == 0) {
+    while (fgets(line, sizeof(line), stdin) != 0) {
+      size_t len = strlen(line);
+      while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+        line[--len] = 0;
+      }
+      if (len == 0) continue;
+      if (schema_case(line) != 0) return 1;
+    }
     return 0;
   }
   if (strcmp(argv[1], "expr") == 0) {

@@ -15,6 +15,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   rendering where the shorter one reads back as the same double. The
   inverse — digits and a power back to the double nearest them — comes
   with it, and reading a number out of text will use it.
+- The schema parser of `db-sqlite`, the first half of step Q2 of
+  document 16: `CREATE TABLE` and `CREATE INDEX` with every constraint
+  the grammar allows — primary keys, uniqueness, checks, defaults,
+  collations, foreign keys with their actions and their deferral,
+  generated columns in both spellings, `WITHOUT ROWID` and `STRICT`, and
+  a table that takes its columns from a statement. It is what a row of
+  `sqlite_schema` holds, and a definition that is refused is a database
+  that cannot be opened. Held against SQLite's own syntax errors over
+  the shapes a schema is written in and the ways of writing each of them
+  wrong.
 - The scalar functions of `db-sqlite`: thirty-four names, from `abs` and
   `typeof` to `substr`, `replace`, `instr`, `unhex` and `round`, and the
   pattern matching `LIKE` and `GLOB` are, each taken from the routine of

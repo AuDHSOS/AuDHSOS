@@ -307,6 +307,214 @@ pub enum Node {
     },
 }
 
+/// What is done where a constraint is broken.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Conflict {
+    /// Nothing was written, so the statement's own choice stands.
+    #[default]
+    Unspecified,
+    /// `ROLLBACK`.
+    Rollback,
+    /// `ABORT`.
+    Abort,
+    /// `FAIL`.
+    Fail,
+    /// `IGNORE`.
+    Ignore,
+    /// `REPLACE`.
+    Replace,
+}
+
+/// What a foreign key does to this row where the row it points at
+/// changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Action {
+    /// Nothing was written, which is `NO ACTION`.
+    #[default]
+    Unspecified,
+    /// `SET NULL`.
+    SetNull,
+    /// `SET DEFAULT`.
+    SetDefault,
+    /// `CASCADE`.
+    Cascade,
+    /// `RESTRICT`.
+    Restrict,
+    /// `NO ACTION`.
+    NoAction,
+}
+
+/// `REFERENCES table(columns)` and what follows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Foreign {
+    /// The table pointed at.
+    pub table: Span,
+    /// Its columns, where any were named.
+    pub columns: Range,
+    /// What happens to this row when that one goes.
+    pub on_delete: Action,
+    /// What happens to this row when that one changes.
+    pub on_update: Action,
+    /// Whether the check waits until the transaction ends.
+    pub deferred: bool,
+}
+
+/// What may follow a column's name and type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ColumnConstraint {
+    /// `PRIMARY KEY`.
+    PrimaryKey {
+        /// `ASC` or `DESC`, where either was written.
+        order: Order,
+        /// Whether `AUTOINCREMENT` follows.
+        autoincrement: bool,
+        /// The conflict clause.
+        conflict: Conflict,
+    },
+    /// `NOT NULL`.
+    NotNull(Conflict),
+    /// `NULL`, which asks for nothing.
+    Null(Conflict),
+    /// `UNIQUE`.
+    Unique(Conflict),
+    /// `CHECK (expression)`.
+    Check(ExprId),
+    /// `DEFAULT value`.
+    Default {
+        /// What the column falls back to.
+        value: ExprId,
+        /// The text it was written as, which is what `sqlite_schema`
+        /// keeps and `PRAGMA table_info` answers with.
+        text: Span,
+    },
+    /// `COLLATE name`.
+    Collate(Span),
+    /// `REFERENCES ...`.
+    References(Foreign),
+    /// `GENERATED ALWAYS AS (expression)`, and `AS (expression)` written
+    /// short.
+    Generated {
+        /// What the column is computed from.
+        value: ExprId,
+        /// The word after it, where one was written: `STORED` or
+        /// `VIRTUAL`.
+        kind: Option<Span>,
+    },
+    /// `CONSTRAINT name`, which names whatever follows it.
+    Named(Span),
+}
+
+/// One column of a table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ColumnDef {
+    /// The name.
+    pub name: Span,
+    /// The declared type, where one was written.
+    pub ty: Option<Span>,
+    /// What follows it.
+    pub constraints: Range,
+}
+
+/// What may follow the columns of a table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TableConstraint {
+    /// `PRIMARY KEY (columns)`.
+    PrimaryKey {
+        /// The columns, each with its order.
+        columns: Range,
+        /// Whether `AUTOINCREMENT` follows them.
+        autoincrement: bool,
+        /// The conflict clause.
+        conflict: Conflict,
+    },
+    /// `UNIQUE (columns)`.
+    Unique {
+        /// The columns, each with its order.
+        columns: Range,
+        /// The conflict clause.
+        conflict: Conflict,
+    },
+    /// `CHECK (expression)`.
+    Check(ExprId),
+    /// `FOREIGN KEY (columns) REFERENCES ...`.
+    ForeignKey {
+        /// The columns of this table.
+        columns: Range,
+        /// What they point at.
+        foreign: Foreign,
+    },
+    /// `CONSTRAINT name`, which names whatever follows it.
+    Named(Span),
+}
+
+/// What a table is made of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TableBody {
+    /// Columns written out, with the constraints that follow them.
+    Columns {
+        /// The columns.
+        columns: Range,
+        /// The constraints of the table as a whole.
+        constraints: Range,
+    },
+    /// `AS SELECT ...`, which takes its columns from the statement.
+    Select(SelectId),
+}
+
+/// What may be written after a table's columns.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct TableOptions {
+    /// Whether `WITHOUT ROWID` was written.
+    pub without_rowid: bool,
+    /// Whether `STRICT` was written.
+    pub strict: bool,
+}
+
+/// `CREATE TABLE`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CreateTable {
+    /// Whether `TEMP` or `TEMPORARY` was written.
+    pub temporary: bool,
+    /// Whether `IF NOT EXISTS` was written.
+    pub if_not_exists: bool,
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The name.
+    pub name: Span,
+    /// What it is made of.
+    pub body: TableBody,
+    /// What follows the columns.
+    pub options: TableOptions,
+}
+
+/// `CREATE INDEX`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CreateIndex {
+    /// Whether `UNIQUE` was written.
+    pub unique: bool,
+    /// Whether `IF NOT EXISTS` was written.
+    pub if_not_exists: bool,
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The name.
+    pub name: Span,
+    /// The table it is over.
+    pub table: Span,
+    /// The terms, each with its order.
+    pub columns: Range,
+    /// The `WHERE` clause of a partial index, where one was written.
+    pub filter: Option<ExprId>,
+}
+
+/// One definition out of `sqlite_schema`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Definition {
+    /// `CREATE TABLE`.
+    Table(CreateTable),
+    /// `CREATE INDEX`.
+    Index(CreateIndex),
+}
+
 /// One statement in the arena.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SelectId(u32);
@@ -553,6 +761,12 @@ pub struct Arena {
     names: Vec<Span>,
     /// The tables of the `WITH` clauses, in runs.
     ctes: Vec<Cte>,
+    /// The columns of the tables, in runs.
+    columns: Vec<ColumnDef>,
+    /// What follows each column, in runs.
+    column_constraints: Vec<ColumnConstraint>,
+    /// What follows the columns of a table, in runs.
+    table_constraints: Vec<TableConstraint>,
 }
 
 impl Arena {
@@ -569,6 +783,9 @@ impl Arena {
             orders: Vec::new(),
             names: Vec::new(),
             ctes: Vec::new(),
+            columns: Vec::new(),
+            column_constraints: Vec::new(),
+            table_constraints: Vec::new(),
         }
     }
 
@@ -801,6 +1018,60 @@ impl Arena {
         let start = usize::try_from(range.start).unwrap_or(usize::MAX);
         let end = start.saturating_add(range.len());
         self.names.get(start..end).unwrap_or_default()
+    }
+
+    /// Appends a run of columns and answers where it went.
+    pub fn push_columns(&mut self, columns: &[ColumnDef]) -> Range {
+        let start = u32::try_from(self.columns.len()).unwrap_or(u32::MAX);
+        self.columns.extend_from_slice(columns);
+        Range {
+            start,
+            len: u32::try_from(columns.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// The columns of a run.
+    #[must_use]
+    pub fn columns(&self, range: Range) -> &[ColumnDef] {
+        let start = usize::try_from(range.start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(range.len());
+        self.columns.get(start..end).unwrap_or_default()
+    }
+
+    /// Appends a run of column constraints and answers where it went.
+    pub fn push_column_constraints(&mut self, constraints: &[ColumnConstraint]) -> Range {
+        let start = u32::try_from(self.column_constraints.len()).unwrap_or(u32::MAX);
+        self.column_constraints.extend_from_slice(constraints);
+        Range {
+            start,
+            len: u32::try_from(constraints.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// The column constraints of a run.
+    #[must_use]
+    pub fn column_constraints(&self, range: Range) -> &[ColumnConstraint] {
+        let start = usize::try_from(range.start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(range.len());
+        self.column_constraints.get(start..end).unwrap_or_default()
+    }
+
+    /// Appends a run of table constraints and answers where it went.
+    pub fn push_table_constraints(&mut self, constraints: &[TableConstraint]) -> Range {
+        let start = u32::try_from(self.table_constraints.len()).unwrap_or(u32::MAX);
+        self.table_constraints.extend_from_slice(constraints);
+        Range {
+            start,
+            len: u32::try_from(constraints.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// The table constraints of a run.
+    #[must_use]
+    pub fn table_constraints(&self, range: Range) -> &[TableConstraint] {
+        let start = usize::try_from(range.start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(range.len());
+        self.table_constraints.get(start..end).unwrap_or_default()
     }
 
     /// Adds a run of `WITH` tables.

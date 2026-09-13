@@ -3262,6 +3262,39 @@ pointer to read from.
   byte under is answered, and a pattern that branches at every one of a
   thousand steps still answers.
 
+### 6.6.83 The schema parser (`db-sqlite`)
+
+D-145, document 16 step Q2, first half. `CREATE TABLE` and `CREATE
+INDEX`, which is what a row of `sqlite_schema` holds and therefore what
+a database has to be read through before anything in it can be.
+
+- The recorded oracle: `fixtures/schema.corpus` is the shapes a schema is
+  written in and the ways of writing each of them wrong, one statement
+  per line — every column constraint and every table constraint, the
+  four ways a type name is spelled, both ways of writing a generated
+  column, `WITHOUT ROWID` and `STRICT` in either order, a table that
+  takes its columns from a statement, and forty refusals.
+  `fixtures/schema.golden` is what SQLite made of each, written by
+  `tools/sqlite-oracle.c`: the object it created and what the pragmas
+  then answer about it, or the message it refused it with.
+- What a parser alone decides is the syntax errors, and those are what it
+  is held to: a refusal the grammar itself made says `near "X": syntax
+  error`, and every one of them is refused here. What SQLite refuses for
+  a reason beyond syntax — a column named twice, a collation that is not
+  there, `AUTOINCREMENT` on a column that is not an integer key — this
+  parser accepts, and the count of those is a number the test holds down
+  until the schema layer refuses them.
+- The shapes by hand: where a type name ends and a constraint begins,
+  which is what `GENERATED` turns on — it is a type name unless `ALWAYS
+  AS` follows it; the text a `DEFAULT` was written as, which is what the
+  schema stores and the pragma answers with; the comma between two table
+  constraints, which may be left out and may not be left over; and
+  `TEMP`, which is the word only before `TABLE` and a name everywhere
+  else.
+- `sqlite_expr` walks definitions too, so the fuzzer holds that every
+  expression a schema carries — a default, a check, a generated column, a
+  term of an index and the rows it covers — is a tree the arena holds.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

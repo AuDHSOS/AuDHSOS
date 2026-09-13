@@ -1,0 +1,160 @@
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x|INTEGER|0|~|0|0
+table	T|t|5|0|0	C|0|x|INT|0|~|0|0	C|1|y|TEXT|0|~|0|0	C|2|z|BLOB|0|~|0|0	C|3|w|REAL|0|~|0|0	C|4|v|NUMERIC|0|~|0|0
+table	T|t|1|0|0	C|0|x|VARCHAR(10)|0|~|0|0
+table	T|t|1|0|0	C|0|x|DECIMAL(10,5)|0|~|0|0
+table	T|t|1|0|0	C|0|x|UNSIGNED BIG INT|0|~|0|0
+table	T|t|1|0|0	C|0|x|DOUBLE PRECISION|0|~|0|0
+table	T|t|1|0|0	C|0|x|NATIVE CHARACTER(70)|0|~|0|0
+table	T|t|1|0|0	C|0|x|quoted type|0|~|0|0
+table	T|t|1|0|0	C|0|x|string type|0|~|0|0
+table	T|t|1|0|0	C|0|x|generated|0|~|0|0
+table	T|t|1|0|0	C|0|x|key|0|~|0|0
+table	T|t|1|0|0	C|0|x|without|0|~|0|0
+table	T|t|1|0|0	C|0|generated||0|~|0|0
+table	T|t|1|0|0	C|0|select||0|~|0|0
+table	T|t|2|0|0	C|0|x||0|~|0|0	C|1|y||0|~|0|2
+table	T|t|2|0|0	C|0|x||0|~|0|0	C|1|y||0|~|0|3
+table	T|t|2|0|0	C|0|x||0|~|0|0	C|1|y||0|~|0|2
+table	T|t|2|0|0	C|0|x||0|~|0|0	C|1|y||0|~|0|2
+table	T|t|2|0|0	C|0|x||0|~|0|0	C|1|y||0|~|0|3
+!	other	error in generated column "y"
+!	other	must have at least one non-generated column
+table	T|t|1|0|0	C|0|x|INTEGER|0|~|1|0
+table	T|t|1|0|0	C|0|x|INTEGER|0|~|1|0
+table	T|t|1|0|0	C|0|x|INTEGER|0|~|1|0
+table	T|t|1|0|0	C|0|x|INTEGER|0|~|1|0
+!	other	AUTOINCREMENT is only allowed on an INTEGER PRIMARY KEY
+table	T|t|1|0|0	C|0|x|INTEGER|0|~|1|0
+table	T|t|1|0|0	C|0|x|INTEGER|0|~|1|0
+table	T|t|1|0|0	C|0|x||0|~|1|0
+table	T|t|1|0|0	C|0|x|TEXT|0|~|1|0
+table	T|t|1|0|0	C|0|x||1|~|0|0
+table	T|t|1|0|0	C|0|x||1|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|1|0|0
+table	T|t|1|0|0	C|0|x||0|-1|0|0
+table	T|t|1|0|0	C|0|x||0|+1|0|0
+table	T|t|1|0|0	C|0|x||0|1.5|0|0
+table	T|t|1|0|0	C|0|x||0|'a'|0|0
+table	T|t|1|0|0	C|0|x||0|abc|0|0
+table	T|t|1|0|0	C|0|x||0|NULL|0|0
+table	T|t|1|0|0	C|0|x||0|x'41'|0|0
+table	T|t|1|0|0	C|0|x||0|1+1|0|0
+table	T|t|1|0|0	C|0|x||0|CURRENT_TIMESTAMP|0|0
+!	syntax	near "+": syntax error
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+!	other	no such collation sequence: nosuch
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||1|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|1|0
+table	T|t|2|0|0	C|0|x||0|~|1|0	C|1|y||0|~|2|0
+table	T|t|2|0|0	C|0|x||0|~|1|0	C|1|y||0|~|2|0
+table	T|t|1|0|0	C|0|x||0|~|1|0
+table	T|t|1|0|0	C|0|x|INTEGER|0|~|1|0
+table	T|t|2|0|0	C|0|x||0|~|0|0	C|1|y||0|~|0|0
+table	T|t|2|0|0	C|0|x||0|~|0|0	C|1|y||0|~|0|0
+table	T|t|2|0|0	C|0|x||0|~|0|0	C|1|y||0|~|0|0
+table	T|t|2|0|0	C|0|x||0|~|0|0	C|1|y||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|1|0	C|0|x||1|~|1|0
+table	T|t|1|1|0	C|0|x|INTEGER|1|~|1|0
+table	T|t|1|0|1	C|0|x|INT|1|~|1|0
+table	T|t|1|1|1	C|0|x|INT|1|~|1|0
+table	T|t|1|1|1	C|0|x|INT|1|~|1|0
+!	other	PRIMARY KEY missing on table t
+!	other	missing datatype for t.x
+!	other	unknown table option: NONSENSE
+!	other	unknown table option: NONSENSE
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|2|0|0	C|0|x||0|~|0|0	C|1|y||0|~|0|0
+table	T|t|2|0|0	C|0|a||0|~|0|0	C|1|b|INT|0|~|0|0
+!	syntax	near ")": syntax error
+!	other	incomplete input
+!	syntax	near "(": syntax error
+!	syntax	near ")": syntax error
+table	T|t|1|0|0	C|0|x|y z|0|~|0|0
+!	syntax	near ")": syntax error
+!	syntax	near ")": syntax error
+!	syntax	near ")": syntax error
+!	syntax	near ")": syntax error
+!	syntax	near ")": syntax error
+!	other	incomplete input
+!	syntax	near ")": syntax error
+!	syntax	near "ON": syntax error
+!	syntax	near "NONSENSE": syntax error
+!	syntax	near "NONSENSE": syntax error
+!	syntax	near "NONSENSE": syntax error
+!	syntax	near ")": syntax error
+!	syntax	near ")": syntax error
+!	syntax	near ")": syntax error
+!	syntax	near "(": syntax error
+!	other	duplicate column name: x
+table	T|t|3|0|0	C|0|x||0|~|0|0	C|1|y||0|~|0|2	C|2|z||0|~|0|2
+index	I|i|0|c|0	X|0|a|0|BINARY|1	X|1|~|0|BINARY|0
+index	I|i|0|c|0	X|0|a|0|BINARY|1	X|1|b|0|BINARY|1	X|2|~|0|BINARY|0
+index	I|i|0|c|0	X|0|a|1|BINARY|1	X|1|b|0|BINARY|1	X|2|~|0|BINARY|0
+index	I|i|0|c|0	X|0|a|0|NOCASE|1	X|1|~|0|BINARY|0
+index	I|i|0|c|0	X|0|~|0|BINARY|1	X|1|~|0|BINARY|0
+index	I|i|0|c|1	X|0|a|0|BINARY|1	X|1|~|0|BINARY|0
+index	I|i|1|c|0	X|0|a|0|BINARY|1	X|1|~|0|BINARY|0
+index	I|i|1|c|0	X|0|a|0|BINARY|1	X|1|~|0|BINARY|0
+index	I|i|0|c|0	X|0|a|0|BINARY|1	X|1|~|0|BINARY|0
+!	other	unsupported use of NULLS FIRST
+!	other	no such table: main.nosuch
+!	other	no such column: nosuch
+!	syntax	near ")": syntax error
+!	other	incomplete input
+!	syntax	near "base": syntax error
+!	syntax	near "ON": syntax error
+!	syntax	near "TABLE": syntax error
+!	syntax	near "INDEX": syntax error
+view
+trigger
+none
+none
+!	syntax	near ")": syntax error
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+!	other	incomplete input
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+!	syntax	near "NONSENSE": syntax error
+!	other	incomplete input
+table	T|t|1|0|0	C|0|x||0|CURRENT_TIME|0|0
+table	T|t|1|0|0	C|0|x||0|CURRENT_DATE|0|0
+table	T|t|1|0|0	C|0|x||0|key|0|0
+!	syntax	near "SELECT": syntax error
+!	syntax	near ")": syntax error
+table	T|t|1|0|0	C|0|x||0|"quoted"|0|0
+!	syntax	near "DELETE": syntax error
+!	other	incomplete input
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+table	T|t|1|0|0	C|0|x||1|~|0|0
+table	T|t|1|0|0	C|0|x||0|~|0|0
+!	other	incomplete input
+!	other	syntax error after column name "x"
+!	other	syntax error after column name "x"
+table	T|full|1|0|0	C|0|x||0|~|0|0
+table	T|t|2|0|0	C|0|left||0|~|0|0	C|1|indexed||0|~|0|0
+!	other	incomplete input
+table	T|t|1|0|1	C|0|x|INT|1|~|1|0
+!	other	PRIMARY KEY missing on table t

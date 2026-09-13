@@ -9,8 +9,8 @@
 //! holds it: a statement of ten thousand brackets is refused rather than
 //! followed.
 
-use db_sqlite::ast::{Arena, ExprId, Node, SelectId};
-use db_sqlite::parse::{expression, statement};
+use db_sqlite::ast::{Arena, ColumnConstraint, Definition, ExprId, Node, SelectId, TableBody};
+use db_sqlite::parse::{definition, expression, statement};
 
 fuzz_support::fuzz_target!(|bytes: &[u8]| {
     // The same bytes as a statement: a `SELECT` is where the tree of
@@ -18,6 +18,12 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
     // deep that can go.
     if let Ok((arena, root)) = statement(bytes) {
         walk_select(&arena, root, 0);
+    }
+    // The same bytes as a definition: what a row of `sqlite_schema`
+    // holds, which is text a file decides and not a statement a program
+    // wrote.
+    if let Ok((arena, definition)) = definition(bytes) {
+        walk_definition(&arena, definition);
     }
     match expression(bytes) {
         Err(error) => {
@@ -35,6 +41,38 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
         }
     }
 });
+
+/// Reads every expression a definition holds, so that a definition is a
+/// tree as well.
+fn walk_definition(arena: &Arena, definition: Definition) {
+    match definition {
+        Definition::Table(table) => match table.body {
+            TableBody::Select(select) => walk_select(arena, select, 0),
+            TableBody::Columns { columns, .. } => {
+                for column in arena.columns(columns) {
+                    for constraint in arena.column_constraints(column.constraints) {
+                        match *constraint {
+                            ColumnConstraint::Check(expr)
+                            | ColumnConstraint::Default { value: expr, .. }
+                            | ColumnConstraint::Generated { value: expr, .. } => {
+                                walk(arena, expr, 0);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        },
+        Definition::Index(index) => {
+            for term in arena.orders(index.columns) {
+                walk(arena, term.expr, 0);
+            }
+            if let Some(filter) = index.filter {
+                walk(arena, filter, 0);
+            }
+        }
+    }
+}
 
 /// Reads every statement reachable from `id`, and every expression of
 /// each, so that a statement is a tree as well.

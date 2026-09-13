@@ -16,9 +16,10 @@
 use alloc::vec::Vec;
 
 use crate::ast::{
-    Arena, BinaryOp, Compound, Cte, CurrentTime, Distinct, ExprId, Indexed, Join, JoinKind, LikeOp,
-    Limit, Literal, Materialized, Node, Nulls, Order, OrderTerm, Range, ResultColumn, Select,
-    SelectId, Source, SourceKind, Span, UnaryOp,
+    Action, Arena, BinaryOp, ColumnConstraint, ColumnDef, Compound, Conflict, CreateIndex,
+    CreateTable, Cte, CurrentTime, Definition, Distinct, ExprId, Foreign, Indexed, Join, JoinKind,
+    LikeOp, Limit, Literal, Materialized, Node, Nulls, Order, OrderTerm, Range, ResultColumn,
+    Select, SelectId, Source, SourceKind, Span, TableBody, TableConstraint, TableOptions, UnaryOp,
 };
 use crate::keyword::Keyword;
 use crate::token::{Kind, Lexer, Token};
@@ -69,6 +70,22 @@ pub enum Expected {
     Eof,
     /// Nothing: the statement nests deeper than the parser walks.
     Depth,
+    /// `CREATE`.
+    Create,
+    /// `TABLE` or `INDEX`, after `CREATE`.
+    Table,
+    /// `KEY`, after `PRIMARY` or `FOREIGN`.
+    Key,
+    /// `NULL`, after `NOT`.
+    Null,
+    /// `WITHOUT ROWID` or `STRICT`, after a table's columns.
+    TableOption,
+    /// A way of resolving a conflict, after `ON CONFLICT`.
+    Conflict,
+    /// What a foreign key does, after `ON DELETE` or `ON UPDATE`.
+    Action,
+    /// `ON`, in a `CREATE INDEX`.
+    On,
 }
 
 /// Where the parser stopped, and what it wanted there.
@@ -525,16 +542,16 @@ impl<'a> Parser<'a> {
             return Ok(Range::default());
         }
         self.expect_keyword(Keyword::By, Expected::By)?;
+        self.sort_list()
+    }
+
+    /// `expr [ASC|DESC] [NULLS FIRST|LAST]`, comma separated, which is
+    /// `sortlist`: the body of an `ORDER BY` and of an index.
+    fn sort_list(&mut self) -> Result<Range, Error> {
         let mut terms = Vec::new();
         loop {
             let expr = self.expression()?;
-            let order = if self.eat_keyword(Keyword::Asc) {
-                Order::Ascending
-            } else if self.eat_keyword(Keyword::Desc) {
-                Order::Descending
-            } else {
-                Order::Unspecified
-            };
+            let order = self.sort_order();
             let nulls = if self.eat_keyword(Keyword::Nulls) {
                 if self.eat_keyword(Keyword::First) {
                     Nulls::First
@@ -551,6 +568,17 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(self.arena.push_orders(&terms))
+    }
+
+    /// `ASC`, `DESC`, or neither.
+    fn sort_order(&mut self) -> Order {
+        if self.eat_keyword(Keyword::Asc) {
+            Order::Ascending
+        } else if self.eat_keyword(Keyword::Desc) {
+            Order::Descending
+        } else {
+            Order::Unspecified
+        }
     }
 
     /// `LIMIT count`, `LIMIT count OFFSET skip`, and the older
@@ -622,12 +650,590 @@ impl<'a> Parser<'a> {
         self.ahead.get(at).copied().flatten()
     }
 
+    /// One `CREATE TABLE` or `CREATE INDEX` and nothing after it, which
+    /// is what a row of `sqlite_schema` holds.
+    ///
+    /// # Errors
+    ///
+    /// Where it is not one of the two, or something follows it.
+    pub fn only_definition(&mut self) -> Result<Definition, Error> {
+        let definition = self.definition()?;
+        self.eat(Kind::Semi);
+        if let Some(token) = self.peek() {
+            return Err(self.error(Some(token), Expected::Eof));
+        }
+        Ok(definition)
+    }
+
+    /// `CREATE TABLE` or `CREATE INDEX`.
+    fn definition(&mut self) -> Result<Definition, Error> {
+        self.expect_keyword(Keyword::Create, Expected::Create)?;
+        let temporary = self.at_temporary();
+        if temporary {
+            self.bump();
+        }
+        if self.eat_keyword(Keyword::Table) {
+            return Ok(Definition::Table(self.create_table(temporary)?));
+        }
+        let unique = self.eat_keyword(Keyword::Unique);
+        self.expect_keyword(Keyword::Index, Expected::Table)?;
+        Ok(Definition::Index(self.create_index(unique)?))
+    }
+
+    /// Whether `TEMP` or `TEMPORARY` stands here as the word and not as
+    /// a name, which the word after it decides.
+    fn at_temporary(&self) -> bool {
+        let temporary = matches!(
+            self.peek().map(|token| token.kind),
+            Some(Kind::Keyword(Keyword::Temp | Keyword::Temporary))
+        );
+        temporary
+            && matches!(
+                self.ahead(1).map(|token| token.kind),
+                Some(Kind::Keyword(Keyword::Table))
+            )
+    }
+
+    /// `IF NOT EXISTS`.
+    fn if_not_exists(&mut self) -> Result<bool, Error> {
+        if !self.eat_keyword(Keyword::If) {
+            return Ok(false);
+        }
+        self.expect_keyword(Keyword::Not, Expected::Name)?;
+        self.expect_keyword(Keyword::Exists, Expected::Name)?;
+        Ok(true)
+    }
+
+    /// `name` or `schema.name`.
+    fn qualified_name(&mut self) -> Result<(Option<Span>, Span), Error> {
+        let first = self.name()?;
+        if self.eat(Kind::Dot) {
+            return Ok((Some(first), self.name()?));
+        }
+        Ok((None, first))
+    }
+
+    /// What follows `CREATE TABLE`.
+    fn create_table(&mut self, temporary: bool) -> Result<CreateTable, Error> {
+        let if_not_exists = self.if_not_exists()?;
+        let (schema, name) = self.qualified_name()?;
+        if self.eat_keyword(Keyword::As) {
+            let select = self.select()?;
+            return Ok(CreateTable {
+                temporary,
+                if_not_exists,
+                schema,
+                name,
+                body: TableBody::Select(select),
+                options: TableOptions::default(),
+            });
+        }
+        self.expect(Kind::Lp, Expected::OpenParen)?;
+        let (columns, constraints) = self.column_list()?;
+        self.expect(Kind::Rp, Expected::CloseParen)?;
+        let options = self.table_options()?;
+        Ok(CreateTable {
+            temporary,
+            if_not_exists,
+            schema,
+            name,
+            body: TableBody::Columns {
+                columns,
+                constraints,
+            },
+            options,
+        })
+    }
+
+    /// The columns of a table, and the constraints that follow them.
+    fn column_list(&mut self) -> Result<(Range, Range), Error> {
+        let mut columns = Vec::new();
+        let mut constraints = Vec::new();
+        loop {
+            columns.push(self.column_def()?);
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+            if self.at_table_constraint() {
+                // `tconscomma ::= COMMA. | .` — the comma between two
+                // constraints may be left out, and one with nothing
+                // after it is left where it stands so that the bracket
+                // refuses it.
+                loop {
+                    constraints.push(self.table_constraint()?);
+                    let comma = self.at(Kind::Comma);
+                    if comma && !self.constraint_at(1) {
+                        break;
+                    }
+                    if comma {
+                        self.bump();
+                    }
+                    if !self.at_table_constraint() {
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        let columns = self.arena.push_columns(&columns);
+        Ok((columns, self.arena.push_table_constraints(&constraints)))
+    }
+
+    /// Whether what stands here belongs to the table rather than to a
+    /// column. None of the five words may be a name, so looking at one
+    /// is enough.
+    fn at_table_constraint(&self) -> bool {
+        self.constraint_at(0)
+    }
+
+    /// Whether the token `at` tokens ahead begins a table constraint.
+    fn constraint_at(&self, at: usize) -> bool {
+        matches!(
+            self.ahead(at).map(|token| token.kind),
+            Some(Kind::Keyword(
+                Keyword::Constraint
+                    | Keyword::Primary
+                    | Keyword::Unique
+                    | Keyword::Check
+                    | Keyword::Foreign
+            ))
+        )
+    }
+
+    /// One column: a name, a type where one is written, and whatever
+    /// follows.
+    fn column_def(&mut self) -> Result<ColumnDef, Error> {
+        let name = self.name()?;
+        let ty = if self.at_type_word() {
+            Some(self.type_name()?)
+        } else {
+            None
+        };
+        let mut constraints = Vec::new();
+        while let Some(constraint) = self.column_constraint()? {
+            constraints.push(constraint);
+        }
+        let constraints = self.arena.push_column_constraints(&constraints);
+        Ok(ColumnDef {
+            name,
+            ty,
+            constraints,
+        })
+    }
+
+    /// Whether a type name stands here.
+    ///
+    /// A type is a run of words, and every word a constraint begins with
+    /// is a word that may not be a name — but for `GENERATED`, which is
+    /// a type name unless `ALWAYS AS` follows it.
+    fn at_type_word(&self) -> bool {
+        let Some(token) = self.peek() else {
+            return false;
+        };
+        match token.kind {
+            Kind::Id | Kind::String => true,
+            Kind::Keyword(Keyword::Generated) => !matches!(
+                (
+                    self.ahead(1).map(|token| token.kind),
+                    self.ahead(2).map(|token| token.kind)
+                ),
+                (
+                    Some(Kind::Keyword(Keyword::Always)),
+                    Some(Kind::Keyword(Keyword::As))
+                )
+            ),
+            Kind::Keyword(keyword) => keyword.can_be_name(),
+            _ => false,
+        }
+    }
+
+    /// One thing that follows a column, or nothing where the column is
+    /// finished.
+    fn column_constraint(&mut self) -> Result<Option<ColumnConstraint>, Error> {
+        let Some(token) = self.peek() else {
+            return Ok(None);
+        };
+        let Kind::Keyword(keyword) = token.kind else {
+            return Ok(None);
+        };
+        Ok(Some(match keyword {
+            Keyword::Constraint => {
+                self.bump();
+                ColumnConstraint::Named(self.name()?)
+            }
+            Keyword::Primary => {
+                self.bump();
+                self.expect_keyword(Keyword::Key, Expected::Key)?;
+                let order = self.sort_order();
+                let conflict = self.conflict_clause()?;
+                let autoincrement = self.eat_keyword(Keyword::Autoincrement);
+                ColumnConstraint::PrimaryKey {
+                    order,
+                    autoincrement,
+                    conflict,
+                }
+            }
+            Keyword::Not => {
+                self.bump();
+                if self.eat_keyword(Keyword::Deferrable) {
+                    self.initially()?;
+                    return Ok(Some(ColumnConstraint::Null(Conflict::Unspecified)));
+                }
+                self.expect_keyword(Keyword::Null, Expected::Null)?;
+                ColumnConstraint::NotNull(self.conflict_clause()?)
+            }
+            Keyword::Null => {
+                self.bump();
+                ColumnConstraint::Null(self.conflict_clause()?)
+            }
+            Keyword::Unique => {
+                self.bump();
+                ColumnConstraint::Unique(self.conflict_clause()?)
+            }
+            Keyword::Check => {
+                self.bump();
+                ColumnConstraint::Check(self.parenthesized_expression()?)
+            }
+            Keyword::Default => {
+                self.bump();
+                let (value, text) = self.default_value()?;
+                ColumnConstraint::Default { value, text }
+            }
+            Keyword::Collate => {
+                self.bump();
+                ColumnConstraint::Collate(self.name()?)
+            }
+            Keyword::References => {
+                self.bump();
+                ColumnConstraint::References(self.foreign_key()?)
+            }
+            Keyword::Deferrable => {
+                self.bump();
+                self.initially()?;
+                ColumnConstraint::Null(Conflict::Unspecified)
+            }
+            Keyword::Generated | Keyword::As => {
+                self.bump();
+                if keyword == Keyword::Generated {
+                    self.expect_keyword(Keyword::Always, Expected::As)?;
+                    self.expect_keyword(Keyword::As, Expected::As)?;
+                }
+                let value = self.parenthesized_expression()?;
+                let kind = if self.at_name() {
+                    Some(self.name()?)
+                } else {
+                    None
+                };
+                ColumnConstraint::Generated { value, kind }
+            }
+            _ => return Ok(None),
+        }))
+    }
+
+    /// `( expression )`.
+    fn parenthesized_expression(&mut self) -> Result<ExprId, Error> {
+        self.expect(Kind::Lp, Expected::OpenParen)?;
+        let expr = self.expression()?;
+        self.expect(Kind::Rp, Expected::CloseParen)?;
+        Ok(expr)
+    }
+
+    /// What a column falls back to: a constant, a signed constant, an
+    /// expression in brackets, or a bare word, which SQLite reads as
+    /// text.
+    fn default_value(&mut self) -> Result<(ExprId, Span), Error> {
+        if self.at(Kind::Lp) {
+            self.bump();
+            let start = self.peek().map_or(0, |token| token.start);
+            let value = self.expression()?;
+            let end = self.peek().map_or(start, |token| token.start);
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            return Ok((
+                value,
+                Span {
+                    start,
+                    len: end.saturating_sub(start),
+                },
+            ));
+        }
+        let from = self.peek().map_or(0, |token| token.start);
+        let negative = if self.eat(Kind::Minus) {
+            true
+        } else {
+            self.eat(Kind::Plus);
+            false
+        };
+        let Some(token) = self.peek() else {
+            return Err(self.error(None, Expected::Expression));
+        };
+        let span = Span::of(token);
+        let literal = match token.kind {
+            Kind::Integer | Kind::QNumber => Literal::Integer(span),
+            Kind::Float => Literal::Float(span),
+            Kind::String | Kind::Id => Literal::Text(span),
+            Kind::Blob => Literal::Blob(span),
+            Kind::Keyword(Keyword::Null) => Literal::Null,
+            Kind::Keyword(Keyword::CurrentTime) => Literal::CurrentTime(CurrentTime::Time),
+            Kind::Keyword(Keyword::CurrentDate) => Literal::CurrentTime(CurrentTime::Date),
+            Kind::Keyword(Keyword::CurrentTimestamp) => {
+                Literal::CurrentTime(CurrentTime::Timestamp)
+            }
+            Kind::Keyword(keyword) if keyword.can_be_name() => Literal::Text(span),
+            _ => return Err(self.error(Some(token), Expected::Expression)),
+        };
+        self.bump();
+        let text = Span {
+            start: from,
+            len: span.start.saturating_add(span.len).saturating_sub(from),
+        };
+        let value = self.literal(literal)?;
+        if negative {
+            return Ok((self.unary(UnaryOp::Negate, value)?, text));
+        }
+        Ok((value, text))
+    }
+
+    /// `ON CONFLICT` and what to do.
+    fn conflict_clause(&mut self) -> Result<Conflict, Error> {
+        if !self.at_keyword(Keyword::On) {
+            return Ok(Conflict::Unspecified);
+        }
+        if !matches!(
+            self.ahead(1).map(|token| token.kind),
+            Some(Kind::Keyword(Keyword::Conflict))
+        ) {
+            return Ok(Conflict::Unspecified);
+        }
+        self.bump();
+        self.bump();
+        let Some(token) = self.peek() else {
+            return Err(self.error(None, Expected::Conflict));
+        };
+        let conflict = match token.kind {
+            Kind::Keyword(Keyword::Rollback) => Conflict::Rollback,
+            Kind::Keyword(Keyword::Abort) => Conflict::Abort,
+            Kind::Keyword(Keyword::Fail) => Conflict::Fail,
+            Kind::Keyword(Keyword::Ignore) => Conflict::Ignore,
+            Kind::Keyword(Keyword::Replace) => Conflict::Replace,
+            _ => return Err(self.error(Some(token), Expected::Conflict)),
+        };
+        self.bump();
+        Ok(conflict)
+    }
+
+    /// `INITIALLY DEFERRED` or `INITIALLY IMMEDIATE`, and answers
+    /// whether the check waits.
+    fn initially(&mut self) -> Result<bool, Error> {
+        if !self.eat_keyword(Keyword::Initially) {
+            return Ok(false);
+        }
+        if self.eat_keyword(Keyword::Deferred) {
+            return Ok(true);
+        }
+        self.expect_keyword(Keyword::Immediate, Expected::Action)?;
+        Ok(false)
+    }
+
+    /// What follows `REFERENCES`.
+    fn foreign_key(&mut self) -> Result<Foreign, Error> {
+        let table = self.name()?;
+        let columns = if self.eat(Kind::Lp) {
+            let names = self.indexed_names()?;
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            names
+        } else {
+            Range::default()
+        };
+        let mut on_delete = Action::Unspecified;
+        let mut on_update = Action::Unspecified;
+        loop {
+            if self.eat_keyword(Keyword::Match) {
+                self.name()?;
+                continue;
+            }
+            if !self.at_keyword(Keyword::On) {
+                break;
+            }
+            self.bump();
+            if self.eat_keyword(Keyword::Insert) {
+                self.reference_action()?;
+                continue;
+            }
+            if self.eat_keyword(Keyword::Delete) {
+                on_delete = self.reference_action()?;
+                continue;
+            }
+            self.expect_keyword(Keyword::Update, Expected::Action)?;
+            on_update = self.reference_action()?;
+        }
+        let mut deferred = false;
+        if self.eat_keyword(Keyword::Deferrable) {
+            deferred = self.initially()?;
+        } else if self.at_keyword(Keyword::Not)
+            && matches!(
+                self.ahead(1).map(|token| token.kind),
+                Some(Kind::Keyword(Keyword::Deferrable))
+            )
+        {
+            self.bump();
+            self.bump();
+            self.initially()?;
+        }
+        Ok(Foreign {
+            table,
+            columns,
+            on_delete,
+            on_update,
+            deferred,
+        })
+    }
+
+    /// What a foreign key does to a row.
+    fn reference_action(&mut self) -> Result<Action, Error> {
+        if self.eat_keyword(Keyword::Set) {
+            if self.eat_keyword(Keyword::Null) {
+                return Ok(Action::SetNull);
+            }
+            self.expect_keyword(Keyword::Default, Expected::Action)?;
+            return Ok(Action::SetDefault);
+        }
+        if self.eat_keyword(Keyword::Cascade) {
+            return Ok(Action::Cascade);
+        }
+        if self.eat_keyword(Keyword::Restrict) {
+            return Ok(Action::Restrict);
+        }
+        self.expect_keyword(Keyword::No, Expected::Action)?;
+        self.expect_keyword(Keyword::Action, Expected::Action)?;
+        Ok(Action::NoAction)
+    }
+
+    /// A list of names, each with the collation and the order the
+    /// grammar allows after it and nothing reads.
+    fn indexed_names(&mut self) -> Result<Range, Error> {
+        let mut names = Vec::new();
+        loop {
+            names.push(self.name()?);
+            if self.eat_keyword(Keyword::Collate) {
+                self.name()?;
+            }
+            self.sort_order();
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+        Ok(self.arena.push_names(&names))
+    }
+
+    /// One thing that follows the columns of a table.
+    fn table_constraint(&mut self) -> Result<TableConstraint, Error> {
+        if self.eat_keyword(Keyword::Constraint) {
+            return Ok(TableConstraint::Named(self.name()?));
+        }
+        if self.eat_keyword(Keyword::Primary) {
+            self.expect_keyword(Keyword::Key, Expected::Key)?;
+            self.expect(Kind::Lp, Expected::OpenParen)?;
+            let columns = self.sort_list()?;
+            let autoincrement = self.eat_keyword(Keyword::Autoincrement);
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            return Ok(TableConstraint::PrimaryKey {
+                columns,
+                autoincrement,
+                conflict: self.conflict_clause()?,
+            });
+        }
+        if self.eat_keyword(Keyword::Unique) {
+            self.expect(Kind::Lp, Expected::OpenParen)?;
+            let columns = self.sort_list()?;
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            return Ok(TableConstraint::Unique {
+                columns,
+                conflict: self.conflict_clause()?,
+            });
+        }
+        if self.eat_keyword(Keyword::Check) {
+            let check = self.parenthesized_expression()?;
+            self.conflict_clause()?;
+            return Ok(TableConstraint::Check(check));
+        }
+        self.expect_keyword(Keyword::Foreign, Expected::Key)?;
+        self.expect_keyword(Keyword::Key, Expected::Key)?;
+        self.expect(Kind::Lp, Expected::OpenParen)?;
+        let columns = self.indexed_names()?;
+        self.expect(Kind::Rp, Expected::CloseParen)?;
+        self.expect_keyword(Keyword::References, Expected::Name)?;
+        Ok(TableConstraint::ForeignKey {
+            columns,
+            foreign: self.foreign_key()?,
+        })
+    }
+
+    /// `WITHOUT ROWID` and `STRICT`, in either order and as many as are
+    /// written.
+    fn table_options(&mut self) -> Result<TableOptions, Error> {
+        let mut options = TableOptions::default();
+        loop {
+            if self.eat_keyword(Keyword::Without) {
+                let name = self.name()?;
+                if !name.text(self.sql).eq_ignore_ascii_case(b"rowid") {
+                    return Err(Error {
+                        at: name.start,
+                        len: name.len,
+                        expected: Expected::TableOption,
+                    });
+                }
+                options.without_rowid = true;
+            } else if self.at_name() {
+                let name = self.name()?;
+                if !name.text(self.sql).eq_ignore_ascii_case(b"strict") {
+                    return Err(Error {
+                        at: name.start,
+                        len: name.len,
+                        expected: Expected::TableOption,
+                    });
+                }
+                options.strict = true;
+            } else {
+                break;
+            }
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+        Ok(options)
+    }
+
+    /// What follows `CREATE [UNIQUE] INDEX`.
+    fn create_index(&mut self, unique: bool) -> Result<CreateIndex, Error> {
+        let if_not_exists = self.if_not_exists()?;
+        let (schema, name) = self.qualified_name()?;
+        self.expect_keyword(Keyword::On, Expected::On)?;
+        let table = self.name()?;
+        self.expect(Kind::Lp, Expected::OpenParen)?;
+        let columns = self.sort_list()?;
+        self.expect(Kind::Rp, Expected::CloseParen)?;
+        let filter = if self.eat_keyword(Keyword::Where) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        Ok(CreateIndex {
+            unique,
+            if_not_exists,
+            schema,
+            name,
+            table,
+            columns,
+            filter,
+        })
+    }
+
     /// Reads one expression, and nothing after it.
     ///
     /// # Errors
     ///
-    /// Where the tokens are not an expression, or where something follows
-    /// the expression.
+    /// Where the tokens are not an expression, or where something
+    /// follows the expression.
     pub fn only_expression(&mut self) -> Result<ExprId, Error> {
         let expr = self.expression()?;
         match self.peek() {
@@ -1084,7 +1690,15 @@ impl<'a> Parser<'a> {
                 self.bump();
                 Ok(Span::of(token.unwrap_or(EMPTY)))
             }
-            Some(Kind::Keyword(keyword)) if keyword.can_be_name() => {
+            // `idj ::= ID | INDEXED | JOIN_KW`: a word that names a
+            // join, and the word `INDEXED`, are names where a name is
+            // asked for outright. They are not names where one is only
+            // allowed, which is why an alias reads them differently.
+            Some(Kind::Keyword(keyword))
+                if keyword.can_be_name()
+                    || is_join_word(keyword)
+                    || keyword == Keyword::Indexed =>
+            {
                 self.bump();
                 Ok(Span::of(token.unwrap_or(EMPTY)))
             }
@@ -1322,6 +1936,17 @@ const fn join(left: Span, right: Span) -> Span {
 pub fn statement(sql: &[u8]) -> Result<(Arena, SelectId), Error> {
     let mut parser = Parser::new(sql);
     let root = parser.only_statement()?;
+    Ok((parser.into_arena(), root))
+}
+
+/// Reads one `CREATE TABLE` or `CREATE INDEX` out of `sql`.
+///
+/// # Errors
+///
+/// Where the statement is not one of the two.
+pub fn definition(sql: &[u8]) -> Result<(Arena, Definition), Error> {
+    let mut parser = Parser::new(sql);
+    let root = parser.only_definition()?;
     Ok((parser.into_arena(), root))
 }
 

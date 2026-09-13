@@ -107,7 +107,7 @@ the step claims is tested.
 | Step | What it delivers |
 |------|------------------|
 | Q1 | The format, read-only: header, pages, cells, overflow, records. **Done.** |
-| Q2 | Reading a schema into types: columns, affinities, indexes, and the `sqlite_schema` text parsed rather than handed on. |
+| Q2 | Reading a schema into types: the `CREATE` text parsed rather than handed on, then columns, affinities, collations and the rowid rules. |
 | Q3 | The pager reading: page cache, the journal a reader must ignore, the WAL a reader must follow. |
 | Q4 | The tokenizer, the expression parser and the statement parser for the read half of SQL. **Done**, but for the window clauses. |
 | Q5 | The value semantics — storage classes, affinity, collation, and the decimal spelling of a double — and a tree walker that answers those statements from a file. Differential tests against the C shell begin here. |
@@ -206,8 +206,8 @@ text the C library prints each of them as.
 
 ## 16.9 Where it stands
 
-Q1, Q4 but for the window clauses, and the value semantics of Q5 are in
-`crates/db/sqlite`, and the crate is
+Q1, the schema parser of Q2, Q4 but for the window clauses, and the value
+semantics of Q5 are in `crates/db/sqlite`, and the crate is
 held to complete coverage: every line, every region and every branch, in
 both instrumentations.
 

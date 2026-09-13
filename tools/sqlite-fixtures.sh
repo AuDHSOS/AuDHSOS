@@ -105,7 +105,7 @@ if [ -f "$amalgamation" ]; then
     # amalgamation keeps to itself can be asked directly.
     "${CC:-cc}" -O1 -DSQLITE_PRIVATE= -I "$(dirname "$amalgamation")" -o "$oracle" \
         tools/sqlite-oracle.c "$amalgamation" -lm -lpthread -ldl
-    for mode in fp num; do
+    for mode in fp num schema; do
         "$oracle" "$mode-corpus" >"$out/$mode.corpus"
         "$oracle" "$mode" <"$out/$mode.corpus" >"$out/$mode.golden"
         printf '%s.corpus\t%s cases\n' "$mode" \
