@@ -249,6 +249,8 @@ pub enum Intrinsic {
     ArrayPrototypePush,
     /// `Array.prototype.reverse` (23.1.3.26).
     ArrayPrototypeReverse,
+    /// `Array.prototype.slice` (23.1.3.28).
+    ArrayPrototypeSlice,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -266,7 +268,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 33] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -299,6 +301,7 @@ impl Intrinsic {
         Self::ArrayPrototypePop,
         Self::ArrayPrototypePush,
         Self::ArrayPrototypeReverse,
+        Self::ArrayPrototypeSlice,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -335,7 +338,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeJoin
             | Self::ArrayPrototypePop
             | Self::ArrayPrototypePush
-            | Self::ArrayPrototypeReverse => IntrinsicHolder::ArrayPrototype,
+            | Self::ArrayPrototypeReverse
+            | Self::ArrayPrototypeSlice => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
         }
     }
@@ -376,6 +380,7 @@ impl Intrinsic {
             Self::ArrayPrototypePop => 29,
             Self::ArrayPrototypePush => 30,
             Self::ArrayPrototypeReverse => 31,
+            Self::ArrayPrototypeSlice => 32,
         }
     }
 
@@ -414,6 +419,7 @@ impl Intrinsic {
             Self::ArrayPrototypePop => 29,
             Self::ArrayPrototypePush => 30,
             Self::ArrayPrototypeReverse => 31,
+            Self::ArrayPrototypeSlice => 32,
         }
     }
 
@@ -453,6 +459,7 @@ impl Intrinsic {
             29 => Some(Self::ArrayPrototypePop),
             30 => Some(Self::ArrayPrototypePush),
             31 => Some(Self::ArrayPrototypeReverse),
+            32 => Some(Self::ArrayPrototypeSlice),
             _ => None,
         }
     }
@@ -474,7 +481,6 @@ impl Intrinsic {
             Self::StringPrototypeIncludes | Self::ArrayPrototypeIncludes => "includes",
             Self::StringPrototypeLastIndexOf | Self::ArrayPrototypeLastIndexOf => "lastIndexOf",
             Self::StringPrototypeRepeat => "repeat",
-            Self::StringPrototypeSlice => "slice",
             Self::StringPrototypeStartsWith => "startsWith",
             Self::StringPrototypeSubstring => "substring",
             Self::StringPrototypeCodePointAt => "codePointAt",
@@ -489,6 +495,7 @@ impl Intrinsic {
             Self::ArrayPrototypePop => "pop",
             Self::ArrayPrototypePush => "push",
             Self::ArrayPrototypeReverse => "reverse",
+            Self::StringPrototypeSlice | Self::ArrayPrototypeSlice => "slice",
         }
     }
 
@@ -558,7 +565,9 @@ impl Intrinsic {
             | Self::ArrayPrototypeLastIndexOf
             | Self::ArrayPrototypeJoin
             | Self::ArrayPrototypePush => 1,
-            Self::StringPrototypeSlice | Self::StringPrototypeSubstring => 2,
+            Self::StringPrototypeSlice
+            | Self::StringPrototypeSubstring
+            | Self::ArrayPrototypeSlice => 2,
         }
     }
 }

@@ -839,7 +839,8 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeJoin
             | Intrinsic::ArrayPrototypePop
             | Intrinsic::ArrayPrototypePush
-            | Intrinsic::ArrayPrototypeReverse => {
+            | Intrinsic::ArrayPrototypeReverse
+            | Intrinsic::ArrayPrototypeSlice => {
                 self.call_array_intrinsic(intrinsic, call, heap, realm)
             }
         }
@@ -988,6 +989,32 @@ impl RegisterVM {
                     upper = upper.saturating_sub(1);
                 }
                 Ok(call.receiver)
+            }
+            // 23.1.3.28: the elements of a range, in a new Array. 10.4.2.3
+            // answers ArrayCreate here, because %Array.prototype% carries no
+            // "constructor" in this Realm and the species is undefined.
+            Intrinsic::ArrayPrototypeSlice => {
+                let start =
+                    absolute_index(integer_argument(search, heap)?, length).clamp(0, length);
+                let last = argument(self, 1)?;
+                let end = if last.is_undefined() {
+                    length
+                } else {
+                    absolute_index(integer_argument(last, heap)?, length).clamp(0, length)
+                };
+                let count = end.saturating_sub(start).max(0);
+                let result = realm.array(
+                    heap,
+                    u32::try_from(count).map_err(|_| VMError::PropertyLimit)?,
+                )?;
+                let mut target = 0u32;
+                for index in Self::scan_range(start, end) {
+                    if let Some(value) = Self::element_at(heap, object, index)? {
+                        heap.set_array_element(result, target, value)?;
+                    }
+                    target = target.saturating_add(1);
+                }
+                Ok(Value::from_object(result))
             }
             // 23.1.3.20: the same in descending order, from the last index
             // when no second argument is present.

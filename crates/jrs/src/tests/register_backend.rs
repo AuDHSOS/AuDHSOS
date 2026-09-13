@@ -2505,6 +2505,37 @@ fn register_iteration_survives_a_collection() -> Result<(), Error> {
 }
 
 #[test]
+fn register_array_slice_copies_a_range_into_a_new_array() -> Result<(), Error> {
+    for source in [
+        // 23.1.3.28: both ends are clamped and a negative one counts from
+        // the end.
+        "[1,2,3].slice(1).join('-')",
+        "[1,2,3].slice().join('-')",
+        "[1,2,3].slice(0,2).join('-')",
+        "[1,2,3].slice(-2).join('-')",
+        "[1,2,3].slice(1,-1).join('-')",
+        "[1,2,3].slice(5).join('-')",
+        "[1,2,3].slice(2,1).join('-')",
+        "[1,2,3].slice(-99,99).join('-')",
+        "[].slice(0).join('-')",
+        // A hole stays a hole in the copy.
+        "[1,,3].slice(0).join('-')",
+        "[1,,3].slice(1).length",
+        // The copy is an Array of the same Realm, so its own methods answer.
+        "[1,2,3].slice(1).indexOf(3)",
+        "let a=[1,2,3];let b=a.slice(1);b.length",
+        "let a=[1,2,3];let b=a.slice(1);a.join('-')",
+        "let a=['x','y'];a.slice(0).join('')",
+        // The elements are read, not shared: a later change to the receiver
+        // leaves the copy alone.
+        "let a=[1,2];let b=a.slice(0);a.pop();b.join('-')",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<(), Error> {
     for source in [
         // An intrinsic runs without a call frame, so a user valueOf in a

@@ -2161,6 +2161,22 @@ impl RegisterLowerer {
                 *length = Some(next);
                 Some(intrinsic_result_type(intrinsic))
             }
+            // 23.1.3.28 answers a new Array, whose length the arguments fix
+            // only at run time and whose elements come from the receiver.
+            Intrinsic::ArrayPrototypeSlice => {
+                let element = self.array_element_type(base_type)?;
+                let object_id = self.next_object_id;
+                self.next_object_id = self.next_object_id.checked_add(1)?;
+                self.object_layouts.insert(
+                    object_id,
+                    RegisterObjectLayout::Array {
+                        length: None,
+                        elements: BTreeMap::new(),
+                        dynamic: Some(element),
+                    },
+                );
+                Some(RegisterType::Array(object_id))
+            }
             // 23.1.3.26 answers the receiver with its indices mirrored.
             Intrinsic::ArrayPrototypeReverse => {
                 let (object_id, ..) = self.array_layout(base_type)?;
@@ -4646,7 +4662,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ArrayIteratorPrototypeNext
         | crate::engine::realm::Intrinsic::ArrayPrototypeAt
         | crate::engine::realm::Intrinsic::ArrayPrototypePop
-        | crate::engine::realm::Intrinsic::ArrayPrototypeReverse => RegisterType::Unknown,
+        | crate::engine::realm::Intrinsic::ArrayPrototypeReverse
+        | crate::engine::realm::Intrinsic::ArrayPrototypeSlice => RegisterType::Unknown,
         crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
         | crate::engine::realm::Intrinsic::StringPrototypeIndexOf
         | crate::engine::realm::Intrinsic::StringPrototypeLastIndexOf
