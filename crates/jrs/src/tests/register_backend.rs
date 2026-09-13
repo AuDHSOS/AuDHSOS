@@ -2365,6 +2365,71 @@ fn register_for_of_iterates_an_array_through_its_iterator() -> Result<(), Error>
 }
 
 #[test]
+fn register_array_search_methods_answer_on_the_new_engine() -> Result<(), Error> {
+    for source in [
+        // 23.1.3.17: IsStrictlyEqual, ascending, and -1 for no match.
+        "[1,2,3].indexOf(2)",
+        "[1,2,3].indexOf(4)",
+        "[1,2,3].indexOf(2,2)",
+        "[1,2,3].indexOf(3,-1)",
+        "[1,2,3].indexOf(1,-99)",
+        "[NaN].indexOf(NaN)",
+        "['a','b'].indexOf('b')",
+        "[].indexOf(undefined)",
+        "[undefined].indexOf(undefined)",
+        "[,1].indexOf(undefined)",
+        // 23.1.3.20: the same, descending, from the last index.
+        "[1,2,1].lastIndexOf(1)",
+        "[1,2,1].lastIndexOf(1,1)",
+        "[1,2,1].lastIndexOf(1,-1)",
+        "[1,2,1].lastIndexOf(1,-99)",
+        "[1,2,1].lastIndexOf(9)",
+        "[].lastIndexOf(1)",
+        // 23.1.3.16: SameValueZero, and a hole reads as undefined.
+        "[1,2,3].includes(2)",
+        "[1,2,3].includes(4)",
+        "[NaN].includes(NaN)",
+        "[0].includes(-0)",
+        "[1,2,3].includes(1,-2)",
+        "[,1].includes(undefined)",
+        "[].includes(undefined)",
+        // 23.1.3.1: a negative index counts from the end.
+        "[1,2,3].at(0)",
+        "[1,2,3].at(-1)",
+        "[1,2,3].at(1.7)",
+        "[1,2,3].at(-4)",
+        "[].at(0)",
+        "[1,2,3].at('1')",
+        // The receiver keeps its layout, so a later read still lowers.
+        "let a=[1,2,3];let i=a.indexOf(3);a[i]",
+        "let a=['x'];a.includes('x')?a.length:0",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<(), Error> {
+    for source in [
+        // An intrinsic runs without a call frame, so a user valueOf in a
+        // coerced argument position keeps the call on the legacy backend.
+        "let n=0;'abc'.charAt({valueOf(){n++;return 1}})",
+        "let n=0;[1,2].at({valueOf(){n++;return 0}})",
+        "let n=0;[1,2].indexOf(1,{valueOf(){n++;return 0}})",
+        "let n=0;({}).hasOwnProperty({toString(){n++;return 'a'}})",
+        // A name a dynamic key may have written onto the Array shadows the
+        // method, so the read is not the intrinsic.
+        "let a=[1];let k='indexOf';a[k]=1;a.indexOf",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(!program.uses_register_backend(), "{source}");
+        Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error> {
     for source in [
         // A `var` head shares one function-scoped binding.

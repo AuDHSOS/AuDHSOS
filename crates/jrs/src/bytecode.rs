@@ -2064,8 +2064,13 @@ impl RegisterLowerer {
         // An intrinsic reads its arguments as values, so any lowered
         // expression may be one; only a bytecode callee needs typed parameters.
         let mut argument_registers = Vec::new();
-        for argument in arguments {
-            self.lower(argument)?;
+        for (index, argument) in arguments.iter().enumerate() {
+            let argument_type = self.lower(argument)?;
+            if !argument_type.is_primitive()
+                && intrinsic.coerces_argument(u16::try_from(index).ok()?)
+            {
+                return None;
+            }
             let register = self.allocate_register()?;
             self.code.emit(Instruction::Star(register));
             argument_registers.push(register);
@@ -2096,6 +2101,11 @@ impl RegisterLowerer {
         }
         self.release_register(function)?;
         self.release_register(receiver)?;
+        if intrinsic == crate::engine::realm::Intrinsic::ArrayPrototypeAt {
+            // 23.1.3.1 answers an element of the receiver, whose type the
+            // layout the arguments left behind carries.
+            return self.array_element_type(base_type);
+        }
         Some(intrinsic_result_type(intrinsic))
     }
 
@@ -2224,7 +2234,23 @@ impl RegisterLowerer {
             dynamic.map_or(static_type, |dynamic| static_type.merge(dynamic))
         } else if let Some(name) = static_name.as_deref() {
             if crate::engine::realm::array_prototype_owns(name) {
-                return None;
+                // The name is resolved on %Array.prototype%, so it is the
+                // intrinsic when one is implemented and unsupported otherwise.
+                // A dynamic key may have written the same name onto the Array,
+                // which would shadow it.
+                let intrinsic = crate::engine::realm::array_prototype_intrinsic(name)?;
+                if dynamic.is_some() {
+                    return None;
+                }
+                let slot =
+                    self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+                let name = self.string_constant(name)?;
+                self.code.emit(Instruction::GetNamed {
+                    obj: object,
+                    name,
+                    slot,
+                });
+                return Some(RegisterType::NativeFunction(intrinsic));
             }
             elements
                 .values()
@@ -2286,6 +2312,21 @@ impl RegisterLowerer {
             return None;
         };
         Some((object_id, elements, *dynamic))
+    }
+
+    /// The type an indexed read of the Array `base_type` names answers, which
+    /// is undefined for an index the layout does not hold.
+    fn array_element_type(&self, base_type: RegisterType) -> Option<RegisterType> {
+        let (_, elements, dynamic) = self.array_layout(base_type)?;
+        Some(
+            elements
+                .values()
+                .copied()
+                .chain(dynamic.iter().copied())
+                .reduce(RegisterType::merge)
+                .unwrap_or(RegisterType::Undefined)
+                .merge(RegisterType::Undefined),
+        )
     }
 
     fn lower_array_index_from_register(
@@ -3805,14 +3846,8 @@ impl RegisterLowerer {
         // Only an Array is iterated: every other iterable resolves @@iterator
         // to a method the interpreter cannot call from a step.
         let object_type = self.lower(object)?;
-        let (object_id, elements, dynamic) = self.array_layout(object_type)?;
-        let element_type = elements
-            .values()
-            .copied()
-            .chain(dynamic.iter().copied())
-            .reduce(RegisterType::merge)
-            .unwrap_or(RegisterType::Undefined)
-            .merge(RegisterType::Undefined);
+        let (object_id, ..) = self.array_layout(object_type)?;
+        let element_type = self.array_element_type(object_type)?;
         if !element_type.is_primitive() {
             return None;
         }
@@ -4476,7 +4511,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectPrototypePropertyIsEnumerable
         | crate::engine::realm::Intrinsic::StringPrototypeEndsWith
         | crate::engine::realm::Intrinsic::StringPrototypeIncludes
-        | crate::engine::realm::Intrinsic::StringPrototypeStartsWith => RegisterType::Boolean,
+        | crate::engine::realm::Intrinsic::StringPrototypeStartsWith
+        | crate::engine::realm::Intrinsic::ArrayPrototypeIncludes => RegisterType::Boolean,
         crate::engine::realm::Intrinsic::ObjectPrototypeToString
         | crate::engine::realm::Intrinsic::StringPrototypeCharAt
         | crate::engine::realm::Intrinsic::StringPrototypeConcat
@@ -4490,12 +4526,17 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypeTrimStart => RegisterType::String,
 
         // 23.1.3.38 answers an Array Iterator and 23.1.5.2.1 a result object,
-        // neither of which has a tracked layout.
+        // neither of which has a tracked layout. 23.1.3.1 answers an element,
+        // whose type only the receiver's layout carries, so the call site
+        // reads it there instead.
         crate::engine::realm::Intrinsic::ArrayPrototypeValues
-        | crate::engine::realm::Intrinsic::ArrayIteratorPrototypeNext => RegisterType::Unknown,
+        | crate::engine::realm::Intrinsic::ArrayIteratorPrototypeNext
+        | crate::engine::realm::Intrinsic::ArrayPrototypeAt => RegisterType::Unknown,
         crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
         | crate::engine::realm::Intrinsic::StringPrototypeIndexOf
-        | crate::engine::realm::Intrinsic::StringPrototypeLastIndexOf => RegisterType::Number,
+        | crate::engine::realm::Intrinsic::StringPrototypeLastIndexOf
+        | crate::engine::realm::Intrinsic::ArrayPrototypeIndexOf
+        | crate::engine::realm::Intrinsic::ArrayPrototypeLastIndexOf => RegisterType::Number,
         // 22.1.3.1 and 22.1.3.4 answer undefined for an index outside the String.
         crate::engine::realm::Intrinsic::StringPrototypeAt
         | crate::engine::realm::Intrinsic::StringPrototypeCodePointAt => RegisterType::Primitive,

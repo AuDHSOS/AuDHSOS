@@ -751,7 +751,12 @@ impl GenerationalHeap {
         Ok(canonical_array_index(&units))
     }
 
-    fn intern_index(&mut self, index: u32) -> Result<StringRef, HeapError> {
+    /// The interned property name of a canonical array index.
+    ///
+    /// # Errors
+    ///
+    /// Returns a string error when the name cannot be interned.
+    pub fn intern_index(&mut self, index: u32) -> Result<StringRef, HeapError> {
         let mut digits = [0u16; 10];
         let mut written = 0;
         let mut value = index;

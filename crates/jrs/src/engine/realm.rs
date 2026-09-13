@@ -47,6 +47,12 @@ pub fn object_prototype_intrinsic(name: &[u16]) -> Option<Intrinsic> {
     holder_intrinsic(IntrinsicHolder::ObjectPrototype, name)
 }
 
+/// Whether an implemented intrinsic of `%Array.prototype%` has this name.
+#[must_use]
+pub fn array_prototype_intrinsic(name: &[u16]) -> Option<Intrinsic> {
+    holder_intrinsic(IntrinsicHolder::ArrayPrototype, name)
+}
+
 /// A well-known Symbol of table 1 in 6.1.5.1.
 ///
 /// Every Symbol the engine has is one of these: a user Symbol needs the
@@ -227,6 +233,14 @@ pub enum Intrinsic {
     ArrayPrototypeValues,
     /// `%ArrayIteratorPrototype%.next` (23.1.5.2.1).
     ArrayIteratorPrototypeNext,
+    /// `Array.prototype.at` (23.1.3.1).
+    ArrayPrototypeAt,
+    /// `Array.prototype.includes` (23.1.3.16).
+    ArrayPrototypeIncludes,
+    /// `Array.prototype.indexOf` (23.1.3.17).
+    ArrayPrototypeIndexOf,
+    /// `Array.prototype.lastIndexOf` (23.1.3.20).
+    ArrayPrototypeLastIndexOf,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -244,7 +258,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 28] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -269,6 +283,10 @@ impl Intrinsic {
         Self::StringPrototypeTrimStart,
         Self::ArrayPrototypeValues,
         Self::ArrayIteratorPrototypeNext,
+        Self::ArrayPrototypeAt,
+        Self::ArrayPrototypeIncludes,
+        Self::ArrayPrototypeIndexOf,
+        Self::ArrayPrototypeLastIndexOf,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -297,7 +315,11 @@ impl Intrinsic {
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart => IntrinsicHolder::StringPrototype,
-            Self::ArrayPrototypeValues => IntrinsicHolder::ArrayPrototype,
+            Self::ArrayPrototypeValues
+            | Self::ArrayPrototypeAt
+            | Self::ArrayPrototypeIncludes
+            | Self::ArrayPrototypeIndexOf
+            | Self::ArrayPrototypeLastIndexOf => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
         }
     }
@@ -330,6 +352,10 @@ impl Intrinsic {
             Self::StringPrototypeTrimStart => 21,
             Self::ArrayPrototypeValues => 22,
             Self::ArrayIteratorPrototypeNext => 23,
+            Self::ArrayPrototypeAt => 24,
+            Self::ArrayPrototypeIncludes => 25,
+            Self::ArrayPrototypeIndexOf => 26,
+            Self::ArrayPrototypeLastIndexOf => 27,
         }
     }
 
@@ -360,6 +386,10 @@ impl Intrinsic {
             Self::StringPrototypeTrimStart => 21,
             Self::ArrayPrototypeValues => 22,
             Self::ArrayIteratorPrototypeNext => 23,
+            Self::ArrayPrototypeAt => 24,
+            Self::ArrayPrototypeIncludes => 25,
+            Self::ArrayPrototypeIndexOf => 26,
+            Self::ArrayPrototypeLastIndexOf => 27,
         }
     }
 
@@ -391,6 +421,10 @@ impl Intrinsic {
             21 => Some(Self::StringPrototypeTrimStart),
             22 => Some(Self::ArrayPrototypeValues),
             23 => Some(Self::ArrayIteratorPrototypeNext),
+            24 => Some(Self::ArrayPrototypeAt),
+            25 => Some(Self::ArrayPrototypeIncludes),
+            26 => Some(Self::ArrayPrototypeIndexOf),
+            27 => Some(Self::ArrayPrototypeLastIndexOf),
             _ => None,
         }
     }
@@ -405,12 +439,12 @@ impl Intrinsic {
             Self::ObjectPrototypeToString => "toString",
             Self::StringPrototypeCharAt => "charAt",
             Self::StringPrototypeCharCodeAt => "charCodeAt",
-            Self::StringPrototypeIndexOf => "indexOf",
-            Self::StringPrototypeAt => "at",
+            Self::StringPrototypeIndexOf | Self::ArrayPrototypeIndexOf => "indexOf",
+            Self::StringPrototypeAt | Self::ArrayPrototypeAt => "at",
             Self::StringPrototypeConcat => "concat",
             Self::StringPrototypeEndsWith => "endsWith",
-            Self::StringPrototypeIncludes => "includes",
-            Self::StringPrototypeLastIndexOf => "lastIndexOf",
+            Self::StringPrototypeIncludes | Self::ArrayPrototypeIncludes => "includes",
+            Self::StringPrototypeLastIndexOf | Self::ArrayPrototypeLastIndexOf => "lastIndexOf",
             Self::StringPrototypeRepeat => "repeat",
             Self::StringPrototypeSlice => "slice",
             Self::StringPrototypeStartsWith => "startsWith",
@@ -423,6 +457,35 @@ impl Intrinsic {
             Self::StringPrototypeTrimStart => "trimStart",
             Self::ArrayPrototypeValues => "values",
             Self::ArrayIteratorPrototypeNext => "next",
+        }
+    }
+
+    /// Whether this method coerces the argument at `index` to a primitive.
+    ///
+    /// An intrinsic runs without a call frame, so it cannot run a user
+    /// `valueOf` or `toString`. An Object in such a position is therefore not
+    /// lowered; a position that only compares or stores its argument takes any
+    /// value.
+    #[must_use]
+    pub const fn coerces_argument(self, index: u16) -> bool {
+        match self {
+            // 20.1.3.3 compares, 20.1.3.6 and 23.1.3.38 read no argument, and
+            // 23.1.5.2.1 takes none.
+            Self::ObjectPrototypeIsPrototypeOf
+            | Self::ObjectPrototypeToString
+            | Self::ArrayPrototypeValues
+            | Self::ArrayIteratorPrototypeNext => false,
+            // 20.1.3.2 and 20.1.3.4 apply ToPropertyKey to the first argument.
+            Self::ObjectPrototypeHasOwnProperty | Self::ObjectPrototypePropertyIsEnumerable => {
+                index == 0
+            }
+            // 23.1.3.16, 23.1.3.17 and 23.1.3.20 compare the search element and
+            // coerce only the index that follows it.
+            Self::ArrayPrototypeIncludes
+            | Self::ArrayPrototypeIndexOf
+            | Self::ArrayPrototypeLastIndexOf => index > 0,
+            // 22.1.3 and 23.1.3.1 coerce every argument they read.
+            _ => true,
         }
     }
 
@@ -451,7 +514,11 @@ impl Intrinsic {
             | Self::StringPrototypeStartsWith
             | Self::StringPrototypeCodePointAt
             | Self::StringPrototypePadEnd
-            | Self::StringPrototypePadStart => 1,
+            | Self::StringPrototypePadStart
+            | Self::ArrayPrototypeAt
+            | Self::ArrayPrototypeIncludes
+            | Self::ArrayPrototypeIndexOf
+            | Self::ArrayPrototypeLastIndexOf => 1,
             Self::StringPrototypeSlice | Self::StringPrototypeSubstring => 2,
         }
     }

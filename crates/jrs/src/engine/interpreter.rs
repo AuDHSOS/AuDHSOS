@@ -832,7 +832,151 @@ impl RegisterVM {
             Intrinsic::ArrayPrototypeValues | Intrinsic::ArrayIteratorPrototypeNext => {
                 Self::call_iterator_intrinsic(intrinsic, call, heap, realm)
             }
+            Intrinsic::ArrayPrototypeAt
+            | Intrinsic::ArrayPrototypeIncludes
+            | Intrinsic::ArrayPrototypeIndexOf
+            | Intrinsic::ArrayPrototypeLastIndexOf => {
+                self.call_array_intrinsic(intrinsic, call, heap, realm)
+            }
         }
+    }
+
+    /// Runs one of the `%Array.prototype%` search methods of 23.1.3.
+    ///
+    /// Each one reads `length` first and then the indices below it, so a scan
+    /// bounded by the index space the Elements store addresses answers the
+    /// same: every index above it is absent, which `indexOf` and `lastIndexOf`
+    /// skip and `includes` reads as undefined, as it reads the absent index
+    /// the bounded scan already visits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] for a receiver that is not an Object, and a
+    /// heap error when an index name cannot be interned.
+    fn call_array_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let argument = |vm: &Self, index: u16| -> Result<Value, VMError> {
+            if index >= call.arg_count {
+                return Ok(VALUE_UNDEFINED);
+            }
+            let slot = vm
+                .fp
+                .checked_add(call.arg_start.0 as usize)
+                .and_then(|start| start.checked_add(index as usize))
+                .ok_or(VMError::InvalidRegister)?;
+            vm.stack.get(slot).copied().ok_or(VMError::InvalidRegister)
+        };
+        let object = Self::coerce_object(call.receiver, heap, realm)?;
+        let length = Self::array_like_length(heap, object)?;
+        let search = argument(self, 0)?;
+        match intrinsic {
+            // 23.1.3.1: an index outside the Array is undefined.
+            Intrinsic::ArrayPrototypeAt => {
+                let index = absolute_index(integer_argument(search, heap)?, length);
+                let index = u32::try_from(index).ok().filter(|_| index < length);
+                match index {
+                    Some(index) => {
+                        Ok(Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED))
+                    }
+                    None => Ok(VALUE_UNDEFINED),
+                }
+            }
+            // 23.1.3.16: SameValueZero, and a missing index reads as undefined.
+            Intrinsic::ArrayPrototypeIncludes => {
+                let from = integer_argument(argument(self, 1)?, heap)?;
+                let start = absolute_index(from, length).clamp(0, length);
+                for index in Self::scan_range(start, length) {
+                    let element = Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED);
+                    if same_value_zero(search, element, heap)? {
+                        return Ok(VALUE_TRUE);
+                    }
+                }
+                Ok(VALUE_FALSE)
+            }
+            // 23.1.3.17: IsStrictlyEqual, and a missing index is skipped.
+            Intrinsic::ArrayPrototypeIndexOf => {
+                let from = integer_argument(argument(self, 1)?, heap)?;
+                let start = absolute_index(from, length).clamp(0, length);
+                for index in Self::scan_range(start, length) {
+                    let Some(element) = Self::element_at(heap, object, index)? else {
+                        continue;
+                    };
+                    if Self::strictly_equals(search, element, heap)? {
+                        return Ok(index_value(i64::from(index)));
+                    }
+                }
+                Ok(Value::from_smi(-1))
+            }
+            // 23.1.3.20: the same in descending order, from the last index
+            // when no second argument is present.
+            _ => {
+                let from = if call.arg_count > 1 {
+                    absolute_index(integer_argument(argument(self, 1)?, heap)?, length)
+                        .min(length.saturating_sub(1))
+                } else {
+                    length.saturating_sub(1)
+                };
+                for index in Self::scan_range(0, from.saturating_add(1)).rev() {
+                    let Some(element) = Self::element_at(heap, object, index)? else {
+                        continue;
+                    };
+                    if Self::strictly_equals(search, element, heap)? {
+                        return Ok(index_value(i64::from(index)));
+                    }
+                }
+                Ok(Value::from_smi(-1))
+            }
+        }
+    }
+
+    /// The indices of `start..end` an Elements store can address.
+    fn scan_range(start: i64, end: i64) -> core::ops::Range<u32> {
+        let bound = |value: i64| u32::try_from(value.max(0)).unwrap_or(u32::MAX);
+        bound(start)..bound(end)
+    }
+
+    /// `LengthOfArrayLike` of 7.3.18.
+    fn array_like_length(heap: &GenerationalHeap, object: ObjectRef) -> Result<i64, VMError> {
+        if let Some(length) = heap.array_length(object) {
+            return Ok(i64::from(length));
+        }
+        let Some(name) = heap.strings.lookup_interned_units(&LENGTH_NAME) else {
+            return Ok(0);
+        };
+        let value = heap
+            .lookup_named(object, PropertyKey::String(name))?
+            .map_or(VALUE_UNDEFINED, |property| property.value);
+        // 7.1.20 ToLength clamps into 0..2^53-1; the scan is bounded again by
+        // the index space, so the clamp loses no reachable index.
+        Ok(integer_argument(value, heap)?.max(0))
+    }
+
+    /// `Get(O, ! ToString(𝔽(index)))` of 7.3.2, absent when `HasProperty` is
+    /// false: the Elements store answers an index it holds, and a name on the
+    /// Prototype Chain answers the rest.
+    fn element_at(
+        heap: &mut GenerationalHeap,
+        object: ObjectRef,
+        index: u32,
+    ) -> Result<Option<Value>, VMError> {
+        let elements = heap.get_object(object).ok_or(VMError::TypeError)?.elements;
+        if let Some(elements) = elements
+            && let Some(value) = heap
+                .get_elements(elements)
+                .ok_or(VMError::TypeError)?
+                .get(index)
+        {
+            return Ok(Some(value));
+        }
+        let key = PropertyKey::String(heap.intern_index(index)?);
+        Ok(heap
+            .lookup_named(object, key)?
+            .map(|property| property.value))
     }
 
     /// Runs one of the Array iterator intrinsics of 23.1.5.
@@ -2457,6 +2601,37 @@ fn type_error(heap: &mut GenerationalHeap, realm: &Realm, message: &'static str)
         realm,
         super::realm::NativeErrorKind::TypeError,
         message,
+    )
+}
+
+/// `ToAbsoluteIndex` of 7.1.25: a negative position counts from the end.
+const fn absolute_index(position: i64, length: i64) -> i64 {
+    if position < 0 {
+        length.saturating_add(position)
+    } else {
+        position
+    }
+}
+
+/// `SameValueZero` of 7.2.10: strict equality, except that NaN matches NaN.
+fn same_value_zero(left: Value, right: Value, heap: &GenerationalHeap) -> Result<bool, VMError> {
+    if left.as_f64().is_some_and(f64::is_nan) && right.as_f64().is_some_and(f64::is_nan) {
+        return Ok(true);
+    }
+    RegisterVM::strictly_equals(left, right, heap)
+}
+
+/// An index as the Number the Array search methods of 23.1.3 answer with.
+fn index_value(index: i64) -> Value {
+    i32::try_from(index).map_or_else(
+        |_| {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "an index is below 2^53, which binary64 represents exactly"
+            )]
+            Value::from_f64(index as f64)
+        },
+        Value::from_smi,
     )
 }
 
