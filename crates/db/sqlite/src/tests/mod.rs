@@ -12,6 +12,7 @@
 
 mod bytes;
 mod error;
+mod fp;
 mod header;
 mod image;
 mod matrix;

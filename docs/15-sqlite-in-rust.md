@@ -110,7 +110,7 @@ the step claims is tested.
 | Q2 | Reading a schema into types: columns, affinities, indexes, and the `sqlite_schema` text parsed rather than handed on. |
 | Q3 | The pager reading: page cache, the journal a reader must ignore, the WAL a reader must follow. |
 | Q4 | The tokenizer, the expression parser and the statement parser for the read half of SQL. **Done**, but for the window clauses. |
-| Q5 | A tree walker that answers those statements from a file, with affinity and collation. Differential tests against the C shell begin here. |
+| Q5 | The value semantics — storage classes, affinity, collation, and the decimal spelling of a double — and a tree walker that answers those statements from a file. Differential tests against the C shell begin here. |
 | Q6 | The virtual machine, and the code generator that replaces the walker. |
 | Q7 | Writing: the b-tree writer, transactions, the rollback journal in all four modes, then the WAL. |
 | Q8 | The rest of the language: `CREATE`, `ALTER`, `DROP`, triggers, views, the built-in functions. |
@@ -136,6 +136,11 @@ Four sources of truth, in the order they were built:
   Until then the `.test` files are read as specifications — each names the
   behaviour it checks — and the ones that are pure SQL are run through the
   differential harness.
+- **A program that links the C library.** `tools/sqlite-oracle.c` is
+  built against the amalgamation by `sh tools/sqlite-fixtures.sh`, asked
+  what SQLite answers, and its answers are committed. It is how a question
+  the shell cannot be asked in SQL — what text a particular double is
+  printed as — still has SQLite as its answer.
 - **Fuzzing.** The project's own engine (`crates/support/fuzz`) over every
   parser this port has: the file format reader, the tokenizer, the
   parser, and the record decoder, each with a corpus under `fuzz/`.
@@ -194,11 +199,15 @@ SQLite; the script is what makes them reproducible rather than
 remembered. Eleven of them are the matrix of 15.6 holding the same three
 rows and the same index, and the rest are the cases one test each reads:
 a table of every storage class, four hundred rows over 512-byte pages, text
-in UTF-16, a payload that overflows, and a table with two indexes.
+in UTF-16, a payload that overflows, and a table with two indexes. The
+corpus files beside them are recorded oracles rather than databases:
+tokens, expressions, statements, and the doubles of `fp.corpus` with the
+text the C library prints each of them as.
 
 ## 15.9 Where it stands
 
-Q1 and the tokenizer of Q4 are in `crates/db/sqlite`, and the crate is
+Q1, Q4 but for the window clauses, and the float rendering of Q5 are in
+`crates/db/sqlite`, and the crate is
 held to complete coverage: every line, every region and every branch, in
 both instrumentations.
 
@@ -215,4 +224,6 @@ and forty-one more, and SQL text is tokenized exactly as
 `src/tokenize.c` tokenizes it — the same character
 classes, the same rules, the same answers, checked against nine hundred
 and fifty-nine recorded cases of which eight hundred come out of SQLite's
-own test suite. What the crate cannot do is everything else in 15.3.
+own test suite. A double is spelled in decimal digit for digit as the C
+library spells it, over eight thousand four hundred recorded doubles at
+three precisions. What the crate cannot do is everything else in 15.3.

@@ -7,6 +7,21 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Doubles as decimal text in `db-sqlite`, the first half of step Q5 of
+  document 15. `sqlite3FpDecode` is ported rather than approximated, so
+  that a real prints digit for digit as SQLite prints it: the table of
+  powers of ten, the 128-bit multiply that extracts eighteen significant
+  digits, the rounding to seventeen, and the rule that tries a shorter
+  rendering where the shorter one reads back as the same double. The
+  inverse — digits and a power back to the double nearest them — comes
+  with it, and reading a number out of text will use it.
+- `tools/sqlite-oracle.c`, a program that links the SQLite amalgamation
+  and records what it answers. `sh tools/sqlite-fixtures.sh` builds and
+  runs it, which is how a question SQL cannot ask — what text a
+  particular double prints as — still has SQLite as its answer. Its
+  answers for eight thousand four hundred doubles at three precisions are
+  committed as `fp.corpus` and `fp.golden`.
+
 - The statement parser of `db-sqlite`, which finishes step Q4 of document
   15: `SELECT`, `VALUES` and `WITH`, with the clauses the grammar hangs
   off them — result columns and their names, `FROM` with all five joins

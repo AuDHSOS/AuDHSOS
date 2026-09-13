@@ -3150,6 +3150,34 @@ expression hold a statement.
   statement is a tree: every child a node the arena has, every subquery a
   statement the arena has, and nothing deeper than the parser walks.
 
+### 6.6.79 Doubles as decimal text (`db-sqlite`)
+
+D-142, document 15 step Q5, first half. A double has no decimal spelling
+of its own, so two engines that pick differently disagree about what a
+query answers. `sqlite3FpDecode` is ported rather than approximated: the
+128-bit multiply against the table of powers of ten, the eighteen digits
+it extracts, the rounding to seventeen, and the rule that tries a shorter
+rendering where the shorter one reads back as the same double.
+
+- The recorded oracle: `fixtures/fp.corpus` holds eight thousand four
+  hundred doubles, one per line as the sixteen hex digits of its bits —
+  the values a reader would pick by hand, every power of ten with two
+  neighbours of each, four hundred quotients, the powers of two across the
+  whole exponent range, and three thousand arbitrary bit patterns from a
+  fixed seed. `fixtures/fp.golden` is what `sqlite3_mprintf` answered for
+  each at three precisions, written by `tools/sqlite-oracle.c`, which
+  links the C library. The test compares all three, so a difference in any
+  digit fails it.
+- The round trip: every rendering reads back as the double it was written
+  from, which is the property seventeen digits are chosen for, and every
+  double taken apart into digits and a power is put back together as
+  itself.
+- The edges by hand: the two infinities, a NaN, both zeros, the smallest
+  and largest subnormal, the smallest normal, the largest finite, a
+  precision below and above the range there is, a power of ten past either
+  end of the table, and the rounding that carries into a digit that was
+  not asked for.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

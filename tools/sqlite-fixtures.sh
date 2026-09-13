@@ -6,6 +6,10 @@
 # this repository reads it. Runs without a shebang, so start it as
 # `sh tools/sqlite-fixtures.sh`; the SPDX header must be the first line.
 #
+# It also builds `tools/sqlite-oracle.c` against the amalgamation and
+# records what the C library answers, which is how the tests compare
+# against SQLite without SQLite being there when they run.
+#
 # The shell comes from `sh tools/sqlite.sh`; $NOREC_SQLITE or --sqlite
 # names another. The fixtures are committed, so this is run when they
 # change and not as part of a build.
@@ -92,5 +96,19 @@ fixture m-autovacuum-incr.db "" "PRAGMA page_size=4096; PRAGMA auto_vacuum=INCRE
 # file and not three.
 "$sqlite" "$out/m-wal.db" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null
 rm -f "$out"/*-wal "$out"/*-shm
+
+# The recorded oracle: doubles, and the text the C library prints them as.
+amalgamation="$(dirname "$sqlite")/sqlite3.c"
+if [ -f "$amalgamation" ]; then
+    oracle="$(mktemp -d)/oracle"
+    "${CC:-cc}" -O1 -I "$(dirname "$amalgamation")" -o "$oracle" \
+        tools/sqlite-oracle.c "$amalgamation" -lm -lpthread -ldl
+    "$oracle" fp-corpus >"$out/fp.corpus"
+    "$oracle" fp <"$out/fp.corpus" >"$out/fp.golden"
+    rm -rf "$(dirname "$oracle")"
+    printf 'fp.corpus\t%s cases\n' "$(wc -l <"$out/fp.corpus" | tr -d ' ')"
+else
+    echo "sqlite-fixtures: no $amalgamation; the oracle was not rebuilt" >&2
+fi
 
 echo "sqlite-fixtures: wrote $(ls "$out" | wc -l | tr -d ' ') files under $out"
