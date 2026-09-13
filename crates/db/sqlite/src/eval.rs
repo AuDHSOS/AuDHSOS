@@ -15,7 +15,8 @@
 
 use alloc::vec::Vec;
 
-use crate::ast::{Arena, BinaryOp, ExprId, Literal, Node, UnaryOp};
+use crate::ast::{Arena, BinaryOp, ExprId, LikeOp, Literal, Node, UnaryOp};
+use crate::func::{self, Function};
 use crate::number::{self, Outcome};
 use crate::parse::MAX_DEPTH;
 use crate::value::{Affinity, Collation, Value, apply_comparison, cast, compare, compare_affinity};
@@ -36,6 +37,17 @@ pub enum Error {
     /// A hex literal of more than sixteen digits, which SQLite refuses
     /// rather than reading as a real.
     HexTooBig,
+    /// A function called with a number of arguments it does not take.
+    WrongArguments,
+    /// `abs` of the smallest integer, which has no positive.
+    Overflow,
+    /// An `ESCAPE` that is not one character.
+    BadEscape,
+    /// The second argument of `likelihood` is not a fraction written as
+    /// a literal.
+    BadProbability,
+    /// A `LIKE` or `GLOB` pattern longer than the engine takes.
+    PatternTooBig,
 }
 
 /// A value, with what a comparison against it would do.
@@ -118,7 +130,46 @@ fn answer(arena: &Arena, id: ExprId, sql: &[u8], depth: u32) -> Result<Answer, E
             otherwise,
         } => case(arena, operand, branches, otherwise, sql, deeper),
         Node::Column { .. } => Err(Error::NoColumn),
-        Node::Call { .. } | Node::Like { .. } => Err(Error::NoFunction),
+        Node::Call {
+            name,
+            args,
+            distinct,
+            star,
+        } => {
+            if distinct || star {
+                // Both belong to an aggregate, which is a later step.
+                return Err(Error::Unsupported);
+            }
+            let mut values = Vec::new();
+            let mut collation = None;
+            for id in arena.children(args) {
+                let argument = answer(arena, *id, sql, deeper)?;
+                collation = collation.or(argument.collation);
+                values.push(argument.value);
+            }
+            let function = func::lookup(name.text(sql), values.len())?;
+            if function == Function::Unlikely && values.len() == 2 {
+                // `likelihood(X,Y)` tells the planner how often X holds,
+                // so Y has to be a fraction and has to be written out.
+                let second = arena
+                    .children(args)
+                    .get(1)
+                    .copied()
+                    .ok_or(Error::Malformed)?;
+                if !probability(arena, second, sql) {
+                    return Err(Error::BadProbability);
+                }
+            }
+            let value = func::call(function, &values, collation.unwrap_or_default())?;
+            Ok(Answer::plain(value))
+        }
+        Node::Like {
+            op,
+            value,
+            pattern,
+            escape,
+            negated,
+        } => like(arena, op, value, pattern, escape, negated, sql, deeper),
         Node::Variable(_)
         | Node::Row(_)
         | Node::Subquery(_)
@@ -142,6 +193,15 @@ fn literal_value(literal: Literal, sql: &[u8], negated: bool) -> Result<Value, E
         Literal::Blob(span) => Ok(Value::Blob(hex(span.text(sql)))),
         Literal::CurrentTime(_) => Err(Error::Unsupported),
     }
+}
+
+/// Whether the node is a fraction between zero and one written as a
+/// literal, which is what `exprProbability` asks of it.
+fn probability(arena: &Arena, id: ExprId, sql: &[u8]) -> bool {
+    let Some(Node::Literal(Literal::Float(span))) = arena.node(id) else {
+        return false;
+    };
+    number::real(&dequote(span.text(sql))).value <= 1.0
 }
 
 /// A number with the digit separators taken out, which is what
@@ -515,6 +575,46 @@ fn holds(op: BinaryOp, order: core::cmp::Ordering) -> bool {
         BinaryOp::Gt => order == Ordering::Greater,
         _ => order != Ordering::Less,
     }
+}
+
+/// `x LIKE y ESCAPE z`, and the three operators written like it.
+///
+/// The grammar has four; SQLite has a function for two of them and
+/// nothing for `REGEXP` and `MATCH`, which is why those refuse.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the node's own fields, which are what the operator is written with"
+)]
+fn like(
+    arena: &Arena,
+    op: LikeOp,
+    value: ExprId,
+    pattern: ExprId,
+    escape: Option<ExprId>,
+    negated: bool,
+    sql: &[u8],
+    depth: u32,
+) -> Result<Answer, Error> {
+    let function = match op {
+        LikeOp::Like => Function::Like,
+        LikeOp::Glob => Function::Glob,
+        LikeOp::Regexp | LikeOp::Match => return Err(Error::NoFunction),
+    };
+    // The pattern is the first argument and the value the second, which
+    // is how `A LIKE B` is written as `like(B,A)`.
+    let mut args = alloc::vec![
+        answer(arena, pattern, sql, depth)?.value,
+        answer(arena, value, sql, depth)?.value,
+    ];
+    if let Some(escape) = escape {
+        args.push(answer(arena, escape, sql, depth)?.value);
+    }
+    let answered = func::call(function, &args, Collation::default())?;
+    Ok(Answer::plain(match (negated, logic(&answered)) {
+        (_, None) => Value::Null,
+        (true, Some(truth)) => Value::Int(i64::from(!truth)),
+        (false, Some(truth)) => Value::Int(i64::from(truth)),
+    }))
 }
 
 /// `x BETWEEN low AND high`, which is two comparisons over one value.

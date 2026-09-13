@@ -286,6 +286,21 @@ pub enum Special {
 /// This is `sqlite3FpDecode` for the rounding `%!g` asks for.
 #[must_use]
 pub fn decode(r: f64, round: i32) -> Decoded {
+    decoded(r, round.clamp(1, MAX_DIGITS))
+}
+
+/// `r` as decimal digits, `decimals` of them to the right of the point.
+///
+/// This is `sqlite3FpDecode` for the rounding `%!f` asks for, which is
+/// what `round(X,Y)` is written with.
+#[must_use]
+pub fn decode_decimals(r: f64, decimals: i32) -> Decoded {
+    decoded(r, decimals.clamp(0, 30).wrapping_neg())
+}
+
+/// Both of the above: above zero `round` counts significant digits, and
+/// at or below it counts digits to the right of the point, negated.
+fn decoded(r: f64, round: i32) -> Decoded {
     let mut out = Decoded {
         negative: false,
         special: Special::None,
@@ -320,8 +335,11 @@ pub fn decode(r: f64, round: i32) -> Decoded {
         mantissa = (mantissa << 11) | (1 << 63);
         exponent -= 1086;
     }
-    let round = round.clamp(1, MAX_DIGITS);
-    let width = if round >= 18 { 18 } else { round + 1 };
+    let width = if round <= 0 || round >= 18 {
+        18
+    } else {
+        round + 1
+    };
     let (value10, power) = convert2_to_10(mantissa, exponent, width);
     let mut digits = Vec::new();
     let mut rest = value10;
@@ -332,7 +350,20 @@ pub fn decode(r: f64, round: i32) -> Decoded {
     digits.reverse();
     let mut count = i32::try_from(digits.len()).unwrap_or(0);
     out.point = count + power;
-    if round < count {
+    let mut round = round;
+    if round <= 0 {
+        // Digits to the right of the point become digits in all: where
+        // the first of them rounds up, one more is made room for.
+        round = out.point.saturating_sub(round);
+        if round == 0 && digits.first().is_some_and(|digit| *digit >= b'5') {
+            round = 1;
+            digits.insert(0, b'0');
+            count += 1;
+            out.point += 1;
+        }
+    }
+    let round = round.min(MAX_DIGITS);
+    if round > 0 && round < count {
         let mut round = round;
         if round == DIGITS {
             round = shorten(value, &digits, power, count);
@@ -415,35 +446,13 @@ fn shorten(value: f64, digits: &[u8], power: i32, count: i32) -> i32 {
     }
 }
 
-/// `r` as text, the way `%!.<significant>g` prints it, which is the way
-/// SQLite converts a real to a string.
-#[must_use]
-pub fn text(r: f64, significant: i32) -> Vec<u8> {
-    let mut precision = significant.clamp(1, MAX_DIGITS);
-    let decoded = decode(r, precision);
-    match decoded.special {
-        Special::NotANumber => return b"NaN".to_vec(),
-        Special::Infinity => {
-            return if decoded.negative {
-                b"-Inf".to_vec()
-            } else {
-                b"Inf".to_vec()
-            };
-        }
-        Special::None => {}
-    }
-    let mut out = Vec::new();
-    if decoded.negative {
-        out.push(b'-');
-    }
-    let exponent = decoded.point - 1;
-    precision -= 1;
-    let scientific = exponent < -4 || exponent > precision;
-    if !scientific {
-        precision -= exponent;
-    }
+/// The digits with the point in them, which is the same work for `%g`
+/// and for `%f` once the precision and the digits before the point are
+/// settled.
+fn write_digits(out: &mut Vec<u8>, decoded: &Decoded, precision: i32, before: i32) {
+    let mut precision = precision;
+    let mut before = before;
     let count = i32::try_from(decoded.digits.len()).unwrap_or(0);
-    let mut before = if scientific { 0 } else { decoded.point - 1 };
     let mut taken = 0;
     if before < 0 {
         out.push(b'0');
@@ -489,6 +498,37 @@ pub fn text(r: f64, significant: i32) -> Vec<u8> {
     if out.last() == Some(&b'.') {
         out.push(b'0');
     }
+}
+
+/// `r` as text, the way `%!.<significant>g` prints it, which is the way
+/// SQLite converts a real to a string.
+#[must_use]
+pub fn text(r: f64, significant: i32) -> Vec<u8> {
+    let mut precision = significant.clamp(1, MAX_DIGITS);
+    let decoded = decode(r, precision);
+    match decoded.special {
+        Special::NotANumber => return b"NaN".to_vec(),
+        Special::Infinity => {
+            return if decoded.negative {
+                b"-Inf".to_vec()
+            } else {
+                b"Inf".to_vec()
+            };
+        }
+        Special::None => {}
+    }
+    let mut out = Vec::new();
+    if decoded.negative {
+        out.push(b'-');
+    }
+    let exponent = decoded.point - 1;
+    precision -= 1;
+    let scientific = exponent < -4 || exponent > precision;
+    if !scientific {
+        precision -= exponent;
+    }
+    let before = if scientific { 0 } else { decoded.point - 1 };
+    write_digits(&mut out, &decoded, precision, before);
     if scientific {
         let mut rest = decoded.point - 1;
         out.push(b'e');
@@ -505,5 +545,32 @@ pub fn text(r: f64, significant: i32) -> Vec<u8> {
         out.push(b'0' + u8::try_from(rest / 10).unwrap_or(0));
         out.push(b'0' + u8::try_from(rest % 10).unwrap_or(0));
     }
+    out
+}
+
+/// `r` as text with `decimals` digits after the point, the way
+/// `%!.<decimals>f` prints it.
+///
+/// Trailing zeros go, and a point with nothing after it keeps one, so
+/// two decimals of `1.5` is `1.5` rather than `1.50`.
+#[must_use]
+pub fn fixed(r: f64, decimals: i32) -> Vec<u8> {
+    let decoded = decode_decimals(r, decimals);
+    match decoded.special {
+        Special::NotANumber => return b"NaN".to_vec(),
+        Special::Infinity => {
+            return if decoded.negative {
+                b"-Inf".to_vec()
+            } else {
+                b"Inf".to_vec()
+            };
+        }
+        Special::None => {}
+    }
+    let mut out = Vec::new();
+    if decoded.negative {
+        out.push(b'-');
+    }
+    write_digits(&mut out, &decoded, decimals.clamp(0, 30), decoded.point - 1);
     out
 }

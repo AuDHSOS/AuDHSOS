@@ -141,3 +141,19 @@ fn digits_and_a_power_read_back_as_the_double_they_came_from() {
         assert_eq!(back, value.abs(), "{:016x}", value.to_bits());
     }
 }
+
+#[test]
+fn a_fixed_rendering_names_the_specials_as_words() {
+    use crate::fp::fixed;
+    // `round(X,Y)` never reaches these, because it answers before it
+    // writes anything down where the number has no fraction to round.
+    assert_eq!(String::from_utf8(fixed(f64::NAN, 2)).unwrap(), "NaN");
+    assert_eq!(String::from_utf8(fixed(f64::INFINITY, 2)).unwrap(), "Inf");
+    assert_eq!(
+        String::from_utf8(fixed(f64::NEG_INFINITY, 2)).unwrap(),
+        "-Inf"
+    );
+    assert_eq!(String::from_utf8(fixed(1.5, 3)).unwrap(), "1.5");
+    assert_eq!(String::from_utf8(fixed(-0.125, 2)).unwrap(), "-0.13");
+    assert_eq!(String::from_utf8(fixed(1.0, 0)).unwrap(), "1.0");
+}

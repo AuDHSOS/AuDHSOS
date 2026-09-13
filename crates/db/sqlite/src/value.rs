@@ -190,6 +190,17 @@ impl Value {
         }
     }
 
+    /// The bytes `sqlite3_value_text` answers with: its own where it has
+    /// them, the text a number is written as, and nothing for `NULL`.
+    #[must_use]
+    pub fn text(&self) -> Option<Vec<u8>> {
+        match self {
+            Value::Null => None,
+            Value::Text(bytes) | Value::Blob(bytes) => Some(bytes.clone()),
+            other => other.stringify(),
+        }
+    }
+
     /// The text a number is written as, which is
     /// `sqlite3VdbeMemStringify`. Nothing for what is not a number.
     #[must_use]

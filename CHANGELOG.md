@@ -15,6 +15,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   rendering where the shorter one reads back as the same double. The
   inverse — digits and a power back to the double nearest them — comes
   with it, and reading a number out of text will use it.
+- The scalar functions of `db-sqlite`: thirty-four names, from `abs` and
+  `typeof` to `substr`, `replace`, `instr`, `unhex` and `round`, and the
+  pattern matching `LIKE` and `GLOB` are, each taken from the routine of
+  `src/func.c` it is named after. Seventeen thousand recorded
+  expressions now compare against the C library, and the port's own
+  `typeof` and `quote` are what the comparison is written in. The
+  functions that read a clock, a random source or the connection, along
+  with `printf` and the mathematical ones, refuse by name.
+- Doubles as text with a fixed number of decimals (`%!.*f`), which is
+  what `round(X,Y)` is written with, and a reader for UTF-8 as lenient
+  as the one SQLite counts characters with.
 - What an expression answers in `db-sqlite`, the rest of the value
   semantics of step Q5: the five storage classes, the six affinities and
   the conversions each asks for, the three built-in collations, and every

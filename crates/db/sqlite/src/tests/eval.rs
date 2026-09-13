@@ -15,9 +15,9 @@
 #![allow(clippy::arithmetic_side_effects)]
 
 use crate::eval::{Error, evaluate};
-use crate::fp::{DIGITS, text};
+use crate::func::{Function, call};
 use crate::parse::{MAX_DEPTH, expression};
-use crate::value::Value;
+use crate::value::{Collation, Value};
 
 /// The expressions.
 fn corpus() -> Vec<&'static str> {
@@ -25,77 +25,41 @@ fn corpus() -> Vec<&'static str> {
 }
 
 /// What SQLite answered: the type and the quoted value, or `!` and the
-/// message it refused with.
-fn golden() -> Vec<(&'static str, &'static str)> {
-    include_str!("fixtures/eval.golden")
-        .lines()
+/// message it refused with. It is read as bytes, because an expression
+/// may answer text that is not UTF-8 and `quote` writes it out as it is.
+fn golden() -> Vec<(&'static [u8], &'static [u8])> {
+    let bytes: &'static [u8] = include_bytes!("fixtures/eval.golden");
+    let mut lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
+    lines.pop();
+    lines
+        .into_iter()
         .map(|line| {
-            let mut fields = line.split('\t');
+            let mut fields = line.split(|byte| *byte == b'\t');
             let mut next = || fields.next().unwrap_or_default();
             (next(), next())
         })
         .collect()
 }
 
-/// The name `typeof` answers with.
-fn type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Int(_) => "integer",
-        Value::Real(_) => "real",
-        Value::Text(_) => "text",
-        Value::Blob(_) => "blob",
-    }
-}
-
-/// The text `quote` answers with, which is `%!0.17g` for a real: the
-/// zero flag is what shows an infinity as `9.0e+999`.
-fn quoted(value: &Value) -> String {
-    match value {
-        Value::Null => "NULL".to_owned(),
-        Value::Int(number) => format!("{number}"),
-        Value::Real(number) => {
-            if number.is_nan() {
-                "null".to_owned()
-            } else if number.is_infinite() {
-                let sign = if *number < 0.0 { "-" } else { "" };
-                format!("{sign}9.0e+999")
-            } else {
-                String::from_utf8(text(*number, DIGITS)).unwrap()
-            }
-        }
-        Value::Text(bytes) => {
-            // `quote` builds its answer from a C string, so text stops at
-            // the first NUL whatever follows it.
-            let bytes = bytes.split(|byte| *byte == 0).next().unwrap_or_default();
-            let mut out = String::from("'");
-            for byte in bytes {
-                if *byte == b'\'' {
-                    out.push('\'');
-                }
-                out.push(char::from(*byte));
-            }
-            out.push('\'');
-            out
-        }
-        Value::Blob(bytes) => {
-            use std::fmt::Write;
-            let mut out = String::from("X'");
-            for byte in bytes {
-                let _ = write!(out, "{byte:02X}");
-            }
-            out.push('\'');
-            out
-        }
-    }
+/// The name `typeof` answers with, and the text `quote` answers with,
+/// both from the port's own functions so that they are compared against
+/// the C library as well.
+fn shown(value: &Value) -> (Vec<u8>, Vec<u8>) {
+    let of = |function| {
+        call(function, core::slice::from_ref(value), Collation::Binary)
+            .expect("a function that always answers")
+            .text()
+            .unwrap_or_default()
+    };
+    (of(Function::Typeof), of(Function::Quote))
 }
 
 /// What this engine answers for one expression, or nothing where it
 /// refuses it.
-fn answer(sql: &str) -> Option<(&'static str, String)> {
+fn answer(sql: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     let (arena, root) = expression(sql.as_bytes()).ok()?;
     let value = evaluate(&arena, root, sql.as_bytes()).ok()?;
-    Some((type_name(&value), quoted(&value)))
+    Some(shown(&value))
 }
 
 #[test]
@@ -106,11 +70,16 @@ fn every_expression_answers_what_the_c_library_answers() {
     for (sql, (kind, value)) in cases.iter().zip(answers) {
         match answer(sql) {
             Some((mine, written)) => {
-                assert_ne!(kind, "!", "{sql} is refused by SQLite and answered here");
+                assert_ne!(kind, b"!", "{sql} is refused by SQLite and answered here");
                 assert_eq!(mine, kind, "the type of {sql}");
+                assert_eq!(
+                    String::from_utf8_lossy(&written),
+                    String::from_utf8_lossy(value),
+                    "the value of {sql}"
+                );
                 assert_eq!(written, value, "the value of {sql}");
             }
-            None => assert_eq!(kind, "!", "{sql} is answered by SQLite and refused here"),
+            None => assert_eq!(kind, b"!", "{sql} is answered by SQLite and refused here"),
         }
     }
 }
@@ -125,9 +94,19 @@ fn refusal(sql: &str) -> Error {
 fn what_is_not_written_yet_refuses_rather_than_guessing() {
     assert_eq!(refusal("a"), Error::NoColumn);
     assert_eq!(refusal("t.a"), Error::NoColumn);
-    assert_eq!(refusal("abs(1)"), Error::NoFunction);
-    assert_eq!(refusal("'a' LIKE 'b'"), Error::NoFunction);
-    assert_eq!(refusal("'a' GLOB 'b'"), Error::NoFunction);
+    assert_eq!(refusal("nosuchfunction(1)"), Error::NoFunction);
+    assert_eq!(refusal("'a' REGEXP 'b'"), Error::NoFunction);
+    assert_eq!(refusal("'a' MATCH 'b'"), Error::NoFunction);
+    assert_eq!(refusal("printf('%d',1)"), Error::NoFunction);
+    assert_eq!(refusal("zeroblob(2)"), Error::NoFunction);
+    assert_eq!(refusal("random()"), Error::NoFunction);
+    assert_eq!(refusal("abs(1,2)"), Error::WrongArguments);
+    assert_eq!(refusal("substr('a')"), Error::WrongArguments);
+    assert_eq!(refusal("abs(-9223372036854775807-1)"), Error::Overflow);
+    assert_eq!(refusal("'a' LIKE 'b' ESCAPE 'xy'"), Error::BadEscape);
+    assert_eq!(refusal("likelihood(1,0)"), Error::BadProbability);
+    assert_eq!(refusal("count(*)"), Error::Unsupported);
+    assert_eq!(refusal("count(DISTINCT 1)"), Error::Unsupported);
     assert_eq!(refusal("'{}' -> 'a'"), Error::NoFunction);
     assert_eq!(refusal("'{}' ->> 'a'"), Error::NoFunction);
     assert_eq!(refusal("CURRENT_TIME"), Error::Unsupported);
@@ -163,4 +142,31 @@ fn a_tree_deeper_than_the_walk_is_refused() {
         });
     }
     assert_eq!(evaluate(&arena, id, b"1"), Err(Error::TooDeep));
+}
+
+#[test]
+fn a_pattern_longer_than_the_engine_takes_is_refused() {
+    use crate::func::MAX_PATTERN;
+    // The limit is what bounds how deep the comparison recurses, which is
+    // why it is a refusal rather than a slow answer.
+    let long = "a".repeat(MAX_PATTERN + 1);
+    assert_eq!(refusal(&format!("'a' LIKE '{long}'")), Error::PatternTooBig);
+    assert_eq!(refusal(&format!("'a' GLOB '{long}'")), Error::PatternTooBig);
+    // One byte under it is answered.
+    let long = "a".repeat(MAX_PATTERN);
+    assert!(answer(&format!("'a' LIKE '{long}'")).is_some());
+}
+
+#[test]
+fn a_pattern_that_branches_at_every_step_still_answers() {
+    // Each wildcard is one more frame of the walk. A thousand of them is
+    // far past anything a statement would carry and well inside what the
+    // limit above allows.
+    let pattern = "%a".repeat(1000);
+    let subject = "a".repeat(1000);
+    let sql = format!("'{subject}' LIKE '{pattern}'");
+    assert_eq!(
+        answer(&sql).map(|(kind, _)| kind),
+        Some(b"integer".to_vec())
+    );
 }

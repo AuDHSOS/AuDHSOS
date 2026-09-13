@@ -366,12 +366,93 @@ static const char *aOther[] = {
   "'abc' COLLATE NOCASE COLLATE BINARY = 'ABC'",
   "'a' < 'b' COLLATE NOCASE", "x'41' = x'41'", "x'41' < x'42'",
   "x'41' < x'4100'", "'' < 'a'", "'a' < 'ab'",
+  "abs(-9223372036854775808)", "abs(9223372036854775807)",
+  "abs('abc')", "abs(x'32')", "substr('abcdef',-2)",
+  "substr('abcdef',0,2)", "substr('abcdef',2,-1)",
+  "substr(x'0102030405',2,2)", "substr('abcdef',-100,2)",
+  "substr('abcdef',-100,200)", "substr('abcdef',3)",
+  "substr('abcdef',-2,-1)", "substr('\u00e4\u00f6\u00fc',2,1)",
+  "round(2.5)", "round(-2.5)", "round(2.345,2)", "round(1e400)",
+  "round(2.5,-1)", "round(0.0004,2)", "round(123.456,30)",
+  "round(1e300,2)", "round(-0.5)", "round(0.5)", "round('abc')",
+  "trim('xxayyax','xya')", "trim('  a  ')", "ltrim('  a  ')",
+  "rtrim('  a  ')", "trim('\u00e4a\u00e4','\u00e4')",
+  "instr('abc','')", "instr(x'0102',x'02')", "instr('abc','c')",
+  "instr('\u00e4bc','b')", "unhex('4 1')", "unhex('zz')",
+  "unhex('4a')", "unhex('4 1',' ')", "unhex('')", "unhex('4')",
+  "char(65,66)", "char()", "char(-1)", "char(1114112)", "char(0)",
+  "unicode('\u00e4')", "unicode('')", "concat()", "coalesce(1)",
+  "abs(1,2)", "substr('abc')", "like('a','b','c','d')", "nosuchfunc(1)",
+  "'a' LIKE 'b' ESCAPE 'xy'", "'a' LIKE 'b' ESCAPE ''",
+  "'abc' REGEXP 'a'", "'abc' MATCH 'a'",
+  "min('a','B')", "max('a','B')", "min(1,'1')", "max(2,'10')",
+  "nullif('a','A')", "quote(x'00')",
+  "length(x'000102')", "octet_length(x'000102')",
+  "concat_ws('-',1,2)", "concat_ws('-',1,2,3)", "concat_ws('',1,2)",
+  "unhex('41 ',' ')", "unhex(' 41',' ')", "unhex('4 1 4 2',' ')",
+  "likelihood(1,0.5)", "likelihood('a',1.0)", "likelihood(1,0.0)",
+  "likelihood(1,1.5)", "likelihood(1,-0.5)",
+  "NULL LIKE 'a'", "'a' LIKE NULL", "NULL LIKE NULL", "NULL GLOB 'a'",
+  "'a' GLOB NULL", "NULL NOT LIKE 'a'",
+  "'a' LIKE 'b' ESCAPE NULL", "'a%b' LIKE 'a%b' ESCAPE '%'",
+  "'a_b' LIKE 'a_b' ESCAPE '_'", "'axb' LIKE 'a_b' ESCAPE '_'",
+  "'a' LIKE 'a\\' ESCAPE '\\'", "'A' LIKE '\\a' ESCAPE '\\'",
+  "'a' LIKE '\\A' ESCAPE '\\'", "'axb' LIKE 'a\\_b' ESCAPE '\\'",
+  "'a_b' LIKE 'a\\_b' ESCAPE '\\'", "'a' GLOB '*\\'",
+  "'a' LIKE '%\\' ESCAPE '\\'", "'ab' LIKE '%\\' ESCAPE '\\'",
+  "'a' LIKE '_%\\' ESCAPE '\\'",
+  "'ab' LIKE 'a%' ESCAPE '_'", "'ab' LIKE '%' ESCAPE '_'",
+  "'a_b' LIKE 'a%_b' ESCAPE '_'", "'ab' LIKE 'a%' ESCAPE '%'",
+  "'a' GLOB '[-a]'", "'-' GLOB '[-a]'", "'a' GLOB '[a-'",
+  "'-' GLOB '[a-'", "'a' GLOB '[a-]'", "'-' GLOB '[a-]'",
+  "'b' GLOB '[a-c]'", "'a' GLOB '[]a]'", "']' GLOB '[]a]'",
+  "'a' GLOB '[^]a]'", "'a' GLOB '[abc'",
+  "'ab' LIKE '%\\b' ESCAPE '\\'", "'a\\b' LIKE '%\\\\b' ESCAPE '\\'",
+  "'aXb' LIKE '%\\_b' ESCAPE '\\'",
+  "unicode(CAST(x'EDA080' AS TEXT))", "unicode(CAST(x'C081' AS TEXT))",
+  "unicode(CAST(x'EFBFBE' AS TEXT))", "unicode(CAST(x'80' AS TEXT))",
+  "length(CAST(x'EDA080' AS TEXT))", "char(200)", "char(70000)",
+  "char(2048)", "char(55296)", "round(0.06,1)", "round(0.04,1)",
+  "round(0.6,0)", "round(-0.06,1)", "round(9.95,1)", "round(0.005,2)",
   "-9223372036854775809", "-99999999999999999999", "-(1e400)",
   "5.5 % -1", "-5.5 % -1", "'5.5' % -1", "5.5 % 1", "2.5 % -2",
   "1 << -64", "1 >> -100", "-1 << -64", "1 << -63",
   "4 BETWEEN 1 AND 3", "2 BETWEEN 1 AND 1", "0 BETWEEN 1 AND 3",
   "'99999999999999999999abc' + 0", "'12abc' * 2", "' 12 ' + 0",
   "'9223372036854775808abc' + 0", "'0x10' + 0", "'1.5abc' + 0"
+};
+
+/* The functions of one argument. */
+static const char *aUnary[] = {
+  "typeof", "length", "octet_length", "abs", "sign", "hex", "unhex",
+  "unicode", "quote", "lower", "upper", "trim", "ltrim", "rtrim", "round",
+  "likely", "unlikely", "char", "min", "max", "concat"
+};
+
+/* The functions of two arguments. */
+static const char *aBinaryFunc[] = {
+  "instr", "substr", "nullif", "ifnull", "min", "max", "like", "glob",
+  "round", "trim", "ltrim", "rtrim", "unhex", "likelihood", "concat",
+  "concat_ws", "iif", "coalesce"
+};
+
+/* The values put to them, kept short so the cross product stays small. */
+static const char *aArg[] = {
+  "NULL", "0", "2", "-2", "2.5", "'abc'", "'2'", "''", "x'4142'", "x''",
+  "'AB'", "'  a  '"
+};
+
+/* Patterns and the strings they are matched against. */
+static const char *aPattern[] = {
+  "''", "'a'", "'A'", "'%'", "'_'", "'a%'", "'%a'", "'%a%'", "'a_c'",
+  "'%%'", "'_%'", "'%_'", "'a%b'", "'[abc]'", "'[a-c]'", "'[^a]'", "'*'",
+  "'?'", "'a*c'", "'['", "']'", "'[]]'", "'[a-]'", "'*[bc]*'", "'\\%'",
+  "'a\\%b'", "'%\\_%'", "'\u00e4'", "'%\u00e4%'", "'??'", "'a?c'"
+};
+
+static const char *aSubject[] = {
+  "''", "'a'", "'A'", "'abc'", "'ABC'", "'a%b'", "'a_b'", "'\u00e4'",
+  "'aa'", "'ab'", "'abcd'", "'[a]'", "']'", "'a-c'", "'%'"
 };
 
 /* The cases, as SQL text, one per line. */
@@ -401,6 +482,42 @@ static void expr_corpus(void) {
   }
   for (i = 0; i < (int)(sizeof(aOther) / sizeof(aOther[0])); i++) {
     printf("%s\n", aOther[i]);
+  }
+  {
+    int nArg = (int)(sizeof(aArg) / sizeof(aArg[0]));
+    int nUnary = (int)(sizeof(aUnary) / sizeof(aUnary[0]));
+    int nBinaryFunc = (int)(sizeof(aBinaryFunc) / sizeof(aBinaryFunc[0]));
+    int nPattern = (int)(sizeof(aPattern) / sizeof(aPattern[0]));
+    int nSubject = (int)(sizeof(aSubject) / sizeof(aSubject[0]));
+    for (i = 0; i < nUnary; i++) {
+      for (j = 0; j < nArg; j++) {
+        printf("%s(%s)\n", aUnary[i], aArg[j]);
+      }
+    }
+    for (i = 0; i < nBinaryFunc; i++) {
+      for (j = 0; j < nArg; j++) {
+        for (k = 0; k < nArg; k++) {
+          printf("%s(%s,%s)\n", aBinaryFunc[i], aArg[j], aArg[k]);
+        }
+      }
+    }
+    for (i = 0; i < nArg; i++) {
+      for (j = 0; j < nArg; j++) {
+        for (k = 0; k < nArg; k++) {
+          printf("substr(%s,%s,%s)\n", aArg[i], aArg[j], aArg[k]);
+          printf("replace(%s,%s,%s)\n", aArg[i], aArg[j], aArg[k]);
+          printf("iif(%s,%s,%s)\n", aArg[i], aArg[j], aArg[k]);
+        }
+      }
+    }
+    for (i = 0; i < nPattern; i++) {
+      for (j = 0; j < nSubject; j++) {
+        printf("%s LIKE %s\n", aSubject[j], aPattern[i]);
+        printf("%s GLOB %s\n", aSubject[j], aPattern[i]);
+        printf("%s NOT LIKE %s\n", aSubject[j], aPattern[i]);
+        printf("%s LIKE %s ESCAPE '\\'\n", aSubject[j], aPattern[i]);
+      }
+    }
   }
 }
 

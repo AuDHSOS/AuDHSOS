@@ -3232,6 +3232,36 @@ semantics and the prose does not give it.
   corpus — a zero is written without its sign, so a negative zero is the
   one double that does not come back as the bits it went out as.
 
+### 6.6.82 The scalar functions (`db-sqlite`)
+
+D-144, document 15 step Q5. Thirty-four names, and the pattern matching
+`LIKE` and `GLOB` are, taken from the routines of `src/func.c` rather
+than from the prose: the prose says `substr` counts characters, not that
+it counts bytes for a blob, that it has four rules for a start before the
+first character, and that an empty blob answers nothing because it has no
+pointer to read from.
+
+- The recorded oracle: `fixtures/eval.corpus` grows to seventeen thousand
+  expressions. Every function of one argument over twelve values, every
+  function of two over every pair of them, `substr`, `replace` and `iif`
+  over every triple, and every pattern of thirty-one against every
+  subject of fifteen under `LIKE`, `NOT LIKE`, `GLOB` and `LIKE` with an
+  escape. `fixtures/eval.golden` is what SQLite answered, written by
+  `tools/sqlite-oracle.c`, and it is read as bytes rather than as text
+  because an expression may answer text that is not UTF-8.
+- The type and the value are both compared through the port's own
+  `typeof` and `quote`, so those two are checked against the C library
+  along with everything they are asked about.
+- The edges by hand: `abs` of the smallest integer, a hex literal one
+  digit too long, an `ESCAPE` that is not one character, `likelihood`
+  whose second argument is not a fraction, a call with the wrong number
+  of arguments, and a name no function has — each refuses, and so does
+  every function that reads a clock, a random source or the connection.
+- The pattern length limit is what bounds how deep the comparison
+  recurses, so both sides of it are tested: one byte over is refused, one
+  byte under is answered, and a pattern that branches at every one of a
+  thousand steps still answers.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

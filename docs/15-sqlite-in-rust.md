@@ -229,7 +229,12 @@ library spells it, over eight thousand four hundred recorded doubles at
 three precisions, and text is read back into a number — which text is one,
 which prefix of it counts, and which digits are dropped — as
 `sqlite3AtoF` and `sqlite3Atoi64` read it. An expression over constants
-answers what SQLite answers, in the same storage class, over seven
+answers what SQLite answers, in the same storage class, over seventeen
 thousand recorded cases: every operator between every pair of sixteen
-operands, every cast over nineteen type names, and the edges of what an
-integer and a double hold. What the crate cannot do is everything else in 15.3.
+operands, every cast over nineteen type names, the edges of what an
+integer and a double hold, thirty-four of the scalar functions, and every
+pattern of `LIKE` and `GLOB` against every subject. What refuses by name
+is a column, a statement inside an expression, and the functions that
+read a clock, a random source or the connection — with `printf` and the
+mathematical ones, which want a library this repository does not have
+yet. What the crate cannot do is everything else in 15.3.
