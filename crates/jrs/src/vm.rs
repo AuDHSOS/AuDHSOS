@@ -247,9 +247,26 @@ impl RegisterFeedbackState {
     }
 }
 
+/// Which execution path a Realm uses for every Script it evaluates.
+///
+/// The choice belongs to the Realm, not to the single Script: a Realm whose
+/// Scripts were split between the two paths would let a program depend on
+/// which one compiled it. See section 17.1 of `docs/jrs-architecture.md`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Backend {
+    /// The stack bytecode interpreter, which is being decommissioned.
+    #[default]
+    Stack,
+    /// The register engine under `crates/jrs/src/engine/`, which is the
+    /// migration target. A Script it cannot lower is refused rather than run
+    /// on the other path.
+    Engine,
+}
+
 struct Execution<'host> {
     host: &'host mut dyn Host,
     limits: Limits,
+    backend: Backend,
     stack: Vec<Value>,
     heap: Heap,
     frames: Vec<Frame>,
@@ -371,6 +388,7 @@ impl<'host> Execution<'host> {
         Self {
             host,
             limits,
+            backend: Backend::Stack,
             stack: Vec::new(),
             intrinsic_code: Vec::new(),
             heap: Heap::default(),

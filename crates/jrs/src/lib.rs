@@ -30,7 +30,7 @@ pub use bytecode::{Script, compile_script};
 pub use error::Error;
 pub use symbol::SymbolValue;
 pub use value::{FunctionValue, ObjectValue, Value};
-pub use vm::{Host, Realm, Runtime, SilentHost};
+pub use vm::{Backend, Host, Realm, Runtime, SilentHost};
 
 /// Explicit limits for untrusted source and execution.
 ///

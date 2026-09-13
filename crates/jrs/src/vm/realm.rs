@@ -99,6 +99,22 @@ impl<'host> Realm<'host> {
             e.new_host_behavior(crate::heap::HostBehavior::StringPrint, "print", 1)
         })
     }
+    /// Refuses a Script the register lowering does not take while this realm
+    /// runs on the engine.
+    ///
+    /// Nothing has executed at this point, so the realm stays usable: the
+    /// refusal reports a gap in the migration, not a failure of the realm.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] for a Script only the stack backend can run.
+    fn refuse_unlowered(&self, program: &Program) -> Result<(), Error> {
+        if self.execution.backend == crate::Backend::Engine && program.register_code.is_none() {
+            return Err(Error::Unsupported {
+                feature: "a Script the register lowering does not take",
+            });
+        }
+        Ok(())
+    }
     /// Executes a precompiled global Script and performs its job checkpoint.
     /// Declaration instantiation errors belong to execution, not compilation.
     /// Compilation limits must equal the limits of this realm.
@@ -107,6 +123,7 @@ impl<'host> Realm<'host> {
     /// Limit mismatch, poisoned realm, declaration conflicts or execution errors.
     pub fn evaluate_compiled(&mut self, script: &crate::Script) -> Result<Value, Error> {
         self.available()?;
+        self.refuse_unlowered(&script.program)?;
         if script.limits != self.execution.limits {
             return Err(Error::Type {
                 message: "compiled Script limits differ from realm limits",
@@ -402,7 +419,24 @@ impl<'host> Realm<'host> {
     /// # Errors
     /// Returns a resource error if intrinsic/global initialization exceeds limits.
     pub fn new(limits: Limits, host: &'host mut impl Host) -> Result<Self, Error> {
+        Self::with_backend(limits, host, crate::Backend::Stack)
+    }
+    /// Creates a fresh realm that evaluates every Script on `backend`.
+    ///
+    /// A realm on [`crate::Backend::Engine`] refuses a Script the register
+    /// lowering cannot take, rather than running it on the stack path: the two
+    /// paths hold separate object models, so a realm split between them would
+    /// let a program depend on which one compiled it.
+    ///
+    /// # Errors
+    /// Returns a resource error if intrinsic/global initialization exceeds limits.
+    pub fn with_backend(
+        limits: Limits,
+        host: &'host mut impl Host,
+        backend: crate::Backend,
+    ) -> Result<Self, Error> {
         let mut execution = Execution::new(host, limits);
+        execution.backend = backend;
         execution.fuel = limits.fuel;
         execution.initialize_globals()?;
         Ok(Self {
@@ -432,6 +466,7 @@ impl<'host> Realm<'host> {
                 return Err(error);
             }
         };
+        self.refuse_unlowered(&program)?;
         let result = self.execution.evaluate_script(&program);
         if result
             .as_ref()

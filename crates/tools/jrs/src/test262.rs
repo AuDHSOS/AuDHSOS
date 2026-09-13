@@ -3,7 +3,7 @@
 //! Original Test262 inputs, explicit variants and fail-closed diagnostic accounting.
 //! Unsupported host/module operations and unproven parse negatives cannot pass.
 mod metadata;
-use jrs::{Error, Host, Limits, Realm, Script, Value, compile_script};
+use jrs::{Backend, Error, Host, Limits, Realm, Script, Value, compile_script};
 use metadata::{Metadata, Variant};
 use std::{
     cell::RefCell,
@@ -76,6 +76,7 @@ struct Counts {
 struct Runner {
     root: PathBuf,
     limits: Limits,
+    backend: Backend,
     harness: BTreeMap<String, Result<Rc<Script>, String>>,
     harness_bytes: usize,
 }
@@ -102,6 +103,7 @@ fn parse_negative_outcome(compiled: Result<Script, Error>, expected: &str) -> Ou
 pub(super) fn run(
     mut args: impl Iterator<Item = String>,
     limits: Limits,
+    backend: Backend,
     output: &mut impl Write,
 ) -> Result<(), String> {
     let root = PathBuf::from(
@@ -152,6 +154,7 @@ pub(super) fn run(
     let mut runner = Runner {
         root,
         limits,
+        backend,
         harness: BTreeMap::new(),
         harness_bytes: 0,
     };
@@ -353,7 +356,7 @@ impl Runner {
         };
         let mut report = Report::default();
         let state = report.0.clone();
-        let mut realm = match Realm::new(self.limits, &mut report) {
+        let mut realm = match Realm::with_backend(self.limits, &mut report, self.backend) {
             Ok(r) => r,
             Err(e) => return Outcome::Fail(format!("realm: {e}")),
         };

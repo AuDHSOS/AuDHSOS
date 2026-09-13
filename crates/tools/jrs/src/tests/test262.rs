@@ -32,7 +32,7 @@ impl Fixture {
         let mut out = Vec::new();
         let args = std::iter::once(self.0.display().to_string())
             .chain(args.iter().map(|s| (*s).to_owned()));
-        let result = run(args, Limits::default(), &mut out);
+        let result = run(args, Limits::default(), jrs::Backend::Stack, &mut out);
         (result, String::from_utf8(out).unwrap())
     }
 }
@@ -177,6 +177,7 @@ fn output_failure_and_tiny_fuel_are_not_conformance_passes() {
             fuel: 4000,
             ..Limits::default()
         },
+        jrs::Backend::Stack,
         &mut out,
     );
     assert!(r.is_err());
@@ -188,6 +189,7 @@ fn output_failure_and_tiny_fuel_are_not_conformance_passes() {
                 fuel: 100,
                 ..Limits::default()
             },
+            jrs::Backend::Stack,
             &mut Broken
         )
         .is_err()
@@ -314,5 +316,13 @@ fn additional_metadata_errors_and_host_failures_are_accounted() {
     std::fs::remove_file(f.0.join("harness/assert.js")).unwrap();
     assert!(f.run(&["--all"]).0.is_err());
     let mut out = Vec::new();
-    assert!(run(std::iter::empty(), Limits::default(), &mut out).is_err());
+    assert!(
+        run(
+            std::iter::empty(),
+            Limits::default(),
+            jrs::Backend::Stack,
+            &mut out
+        )
+        .is_err()
+    );
 }

@@ -1,7 +1,45 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-use crate::{Error, Limits, Realm, Runtime, SilentHost, Value, compile, compile_script};
+use crate::{Backend, Error, Limits, Realm, Runtime, SilentHost, Value, compile, compile_script};
+
+#[test]
+fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+
+    // An expression Script lowers, so the engine evaluates it.
+    assert_eq!(realm.evaluate("1+1")?, Value::Number(2.0));
+
+    // The two paths hold separate object models, so a Script the lowering does
+    // not take is refused instead of running on the stack path.
+    for source in ["let x=1", "var y=2", "function f(){}", "{ let z = 3 }"] {
+        assert!(
+            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+            "{source}"
+        );
+    }
+
+    // The refusal is not a language error, so it leaves the realm usable.
+    assert_eq!(realm.evaluate("2*3")?, Value::Number(6.0));
+    Ok(())
+}
+
+#[test]
+fn a_realm_on_the_stack_backend_takes_the_same_scripts() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Stack)?;
+    for source in [
+        "1+1",
+        "let x=1",
+        "var y=2",
+        "function f(){}",
+        "{ let z = 3 }",
+    ] {
+        assert!(realm.evaluate(source).is_ok(), "{source}");
+    }
+    Ok(())
+}
 
 fn same_value(left: &Value, right: &Value) -> bool {
     match (left, right) {
