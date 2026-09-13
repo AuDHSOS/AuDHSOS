@@ -1085,5 +1085,173 @@ fn what_the_reader_of_a_statement_that_changes_a_database_refuses() {
     assert!(change(b"INSERT OR").is_err());
     assert!(change(b"INSERT OR NOTHING INTO t VALUES (1)").is_err());
     assert!(change(b"INSERT t VALUES (1)").is_err());
-    assert!(change(b"DELETE FROM t").is_err());
+}
+
+/// The four hundred rows of `shuffled.db` as one statement.
+fn sql_of_rows() -> alloc::string::String {
+    use core::fmt::Write;
+    let mut sql = alloc::string::String::from("INSERT INTO t(rowid,n,s) VALUES ");
+    for number in 1..=400_i64 {
+        if number > 1 {
+            sql.push(',');
+        }
+        let _ = write!(
+            sql,
+            "({},{},'row {}')",
+            (number * 137) % 401,
+            number,
+            number
+        );
+    }
+    sql
+}
+
+#[test]
+fn rows_taken_out_by_a_statement_leave_the_file_the_shell_left() {
+    use crate::change::Writer;
+    // The rows of `shuffled.db` put in by one statement that names the
+    // key of each, and then three deletes: one that only evens the
+    // leaves out, one that frees pages, and one that takes every row
+    // out.
+    let filled = {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+        writer.run(sql_of_rows().as_bytes()).unwrap();
+        same(
+            "shuffled.db",
+            &writer.written(),
+            crate::tests::SHUFFLED,
+            512,
+        );
+        writer.written()
+    };
+    let cases: [(&str, &[u8], &str); 3] = [
+        (
+            "deleted.db",
+            crate::tests::DELETED,
+            "DELETE FROM t WHERE rowid%3=0",
+        ),
+        (
+            "emptied.db",
+            crate::tests::EMPTIED,
+            "DELETE FROM t WHERE rowid%4!=0",
+        ),
+        (
+            "cleared.db",
+            crate::tests::CLEARED,
+            "DELETE FROM t WHERE rowid>0",
+        ),
+    ];
+    for (name, fixture, sql) in cases {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+        writer.run(sql_of_rows().as_bytes()).unwrap();
+        assert_eq!(writer.written(), filled);
+        writer.run(sql.as_bytes()).unwrap();
+        same(name, &writer.written(), fixture, 512);
+    }
+}
+
+#[test]
+fn a_delete_reads_the_columns_of_the_row_it_is_asked_about() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a INTEGER, b TEXT)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES (1,'one'),(2,'two'),(3,'three'),(4,NULL)")
+        .unwrap();
+    // A column written with the table's name before it, a column
+    // written without, and the three names of the key.
+    writer.run(b"DELETE FROM t WHERE t.b = 'two'").unwrap();
+    writer.run(b"DELETE FROM t WHERE a = 3").unwrap();
+    writer.run(b"DELETE FROM t WHERE oid = 4").unwrap();
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    let answer = database.query(b"SELECT rowid, a, b FROM t").unwrap();
+    assert_eq!(
+        answer.rows,
+        alloc::vec![alloc::vec![
+            Value::Int(1),
+            Value::Int(1),
+            Value::Text(b"one".to_vec())
+        ]]
+    );
+    // A `WHERE` that answers nothing takes no row out, and one over a
+    // column the table does not have is refused.
+    writer.run(b"DELETE FROM t WHERE b = 'nine'").unwrap();
+    assert_eq!(writer.written(), written);
+    assert!(writer.run(b"DELETE FROM t WHERE nowhere = 1").is_err());
+    // A schema or a table the row does not belong to names no column
+    // of it.
+    assert!(writer.run(b"DELETE FROM t WHERE other.a = 1").is_err());
+    assert!(writer.run(b"DELETE FROM t WHERE temp.t.a = 1").is_err());
+    assert!(writer.run(b"DELETE FROM nowhere WHERE a = 1").is_err());
+    // The row the statement above named is still there, and a column
+    // written with its schema and its table before it takes it out.
+    assert!(writer.run(b"DELETE FROM t WHERE main.t.a = 1").is_ok());
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT count(*) FROM t").unwrap().rows,
+        alloc::vec![alloc::vec![Value::Int(0)]]
+    );
+    // A table that keeps its rows in the key's own tree is one this
+    // crate does not walk to change.
+    writer
+        .run(b"CREATE TABLE w(a TEXT, b, PRIMARY KEY(a)) WITHOUT ROWID")
+        .unwrap();
+    assert!(writer.run(b"DELETE FROM w").is_err());
+    // A statement with no `WHERE` takes every row out, and a `WHERE`
+    // that reads the bytes as they are stored reads them in the
+    // encoding the file names.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf16Le).unwrap();
+    writer.run(b"CREATE TABLE u(t TEXT)").unwrap();
+    writer
+        .run(b"INSERT INTO u VALUES ('abc'),('de'),('f')")
+        .unwrap();
+    writer
+        .run(b"DELETE FROM u WHERE octet_length(t) = 4")
+        .unwrap();
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    let answer = database.query(b"SELECT t FROM u").unwrap();
+    assert_eq!(
+        answer.rows,
+        alloc::vec![
+            alloc::vec![Value::Text(b"abc".to_vec())],
+            alloc::vec![Value::Text(b"f".to_vec())]
+        ]
+    );
+    writer.run(b"DELETE FROM u").unwrap();
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    assert!(database.query(b"SELECT t FROM u").unwrap().rows.is_empty());
+}
+
+#[test]
+fn a_row_that_is_not_a_record_is_refused_by_the_walk_of_a_table() {
+    // The walk a statement that changes rows reads is the one that
+    // answers what each column holds, so a row whose bytes are not a
+    // record is refused there rather than read as nothing.
+    let mut pages = Pages::new(512, 0).unwrap();
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
+    let sql = "CREATE TABLE t(a)";
+    insert(&mut pages, 1, 1, &schema_row("t", 2, sql, Encoding::Utf8)).unwrap();
+    // A record whose header says more bytes than the row holds.
+    insert(&mut pages, 2, 1, &[0xff, 0xff]).unwrap();
+    let written = pages.written(&header(512, Encoding::Utf8, 2));
+    let database = crate::db::Database::open(&written).unwrap();
+    assert!(database.rows_of(b"t").is_err());
+}
+
+#[test]
+fn what_the_reader_of_a_delete_refuses() {
+    use crate::parse::change;
+    assert!(change(b"DELETE FROM t").is_ok());
+    assert!(change(b"DELETE FROM t WHERE a = 1").is_ok());
+    assert!(change(b"DELETE t WHERE a = 1").is_err());
+    assert!(change(b"DELETE FROM t WHERE a = 1 extra").is_err());
+    // A `WITH` before a `DELETE` names tables its `WHERE` may read,
+    // which this crate does not answer yet.
+    assert!(change(b"WITH x AS (SELECT 1) DELETE FROM t").is_err());
 }

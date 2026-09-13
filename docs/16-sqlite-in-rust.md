@@ -89,7 +89,7 @@ Each rule is checkable, and each makes a later thing possible.
 | `tree` | The pages of a database being written, a row put in the tree its table begins at or taken out of it again, the balance any key order needs, and the free list the pages go on. | D-166 to D-169, Q7 |
 | `format` | `format(F,...)` and `printf(F,...)`: the flags, the field width, the precision, and the twenty-three conversions of `sqlite3_str_vappendf`. `unistr(X)` reads the escapes `%#q` writes, and `quote(X)` of text is `%Q` of it. | D-161, Q8 |
 | `db` | A statement answered from a file by walking the sides of its `FROM` once, held to the rowids the `WHERE` leaves each. | D-146, D-149, D-150, D-153, D-158, Q5 |
-| `change` | A statement that changes a database run from its text: the table a `CREATE TABLE` names, and the rows an `INSERT` puts in it. | D-172, Q8 |
+| `change` | A statement that changes a database run from its text: the table a `CREATE TABLE` names, the rows an `INSERT` puts in it, and the rows a `DELETE` takes out. | D-172, D-173, Q8 |
 
 ### What a statement may hold
 
@@ -558,15 +558,15 @@ do for the page size, the encoding and the reserved tail.
 
 ## 16.22 Q8. The rest of the language
 
-Status: `CREATE TABLE` and `INSERT` are run from their text and write
-the files the shell wrote; the rest is open.
-Depends on: Q6. Recorded in D-172.
+Status: `CREATE TABLE`, `INSERT` and `DELETE` are run from their text
+and write the files the shell wrote; the rest is open.
+Depends on: Q6. Recorded in D-172 and D-173.
 Size: L.
 
 ### Does
 
 1. `INSERT`, `UPDATE`, `DELETE`, `REPLACE`. `INSERT` is built, over
-   `VALUES` and over a `SELECT`.
+   `VALUES` and over a `SELECT`, and so is `DELETE`.
 2. `CREATE`, `ALTER`, `DROP` for tables, indexes, views and triggers.
    `CREATE TABLE` is built for a table of columns.
 3. Subqueries, `WITH`, and the window clauses the parser refuses.

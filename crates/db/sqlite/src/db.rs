@@ -531,6 +531,44 @@ impl<'a> Database<'a> {
             .map(|stored| (&stored.table, stored.root))
     }
 
+    /// Every row of the table of `name`, each with its key and the
+    /// values of its columns, which is what a statement that takes rows
+    /// out walks to find the rows it takes.
+    ///
+    /// One walk is O(n) in the rows of the table.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] where the database holds no such table,
+    /// [`Error::Unsupported`] where the table keeps its rows in the
+    /// key's own tree, and whatever reading a row of it refuses.
+    pub fn rows_of(&self, name: &[u8]) -> Result<Vec<(i64, Vec<Value>)>, Error> {
+        let stored = self
+            .tables
+            .iter()
+            .find(|stored| stored.table.name.eq_ignore_ascii_case(name))
+            .ok_or(Error::NoTable)?;
+        if stored.table.without_rowid {
+            return Err(Error::Unsupported);
+        }
+        let mut out = Vec::new();
+        let mut payload = Vec::new();
+        for step in self.walk(stored, (None, None)) {
+            let (rowid, held) = step?;
+            let rowid = rowid.ok_or(Error::Unsupported)?;
+            read_payload(&self.image, &held, &mut payload)?;
+            let values = values_of(
+                &payload,
+                stored,
+                Some(rowid),
+                self.encoding,
+                self.collation(),
+            )?;
+            out.push((rowid, values));
+        }
+        Ok(out)
+    }
+
     /// The rows of a statement already read, which is what a statement
     /// that puts rows in a table answers its rows from.
     ///

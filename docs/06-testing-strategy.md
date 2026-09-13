@@ -4119,6 +4119,23 @@ shell wrote from the same statements.
   another width, a key that is not a whole number, a table whose rows
   are kept in the key's own tree, and a schema that outgrows page one.
 
+### 6.6.113 Rows taken out by a statement (`db-sqlite`)
+
+D-173, document 16 step Q8. `DELETE` run from its text.
+
+- `shuffled.db` is written here by one statement that names the key of
+  every row, and `deleted.db`, `emptied.db` and `cleared.db` are the
+  three deletes over it, each the fixture byte for byte.
+- The `WHERE` is read against one row at a time: a column written with
+  the table's name before it, one written without, the three names of
+  the key, and a call that answers the bytes as they are stored, which
+  is the encoding the file names.
+- A statement that keeps no row writes no page, so the change counter
+  stands where it stood and the file does not change at all.
+- The refusals: a column the row does not have, a schema or a table the
+  row does not belong to, a table the database does not hold, and a
+  table whose rows are kept in the key's own tree.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

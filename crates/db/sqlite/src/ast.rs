@@ -522,11 +522,25 @@ pub struct Insert {
     pub select: SelectId,
 }
 
+/// `DELETE FROM name [WHERE filter]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Delete {
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The table the rows come out of.
+    pub name: Span,
+    /// The `WHERE` clause, where one was written; a statement without
+    /// one takes every row out.
+    pub filter: Option<ExprId>,
+}
+
 /// One statement that changes what a database holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Change {
     /// `INSERT` and `REPLACE`.
     Insert(Insert),
+    /// `DELETE`.
+    Delete(Delete),
 }
 
 /// One definition out of `sqlite_schema`.

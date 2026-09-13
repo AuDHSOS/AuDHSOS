@@ -17,8 +17,8 @@ use alloc::vec::Vec;
 
 use crate::ast::{
     Action, Arena, BinaryOp, Change, ColumnConstraint, ColumnDef, Compound, Conflict, CreateIndex,
-    CreateTable, Cte, CurrentTime, Definition, Distinct, ExprId, Foreign, Indexed, Insert, Join,
-    JoinKind, LikeOp, Limit, Literal, Materialized, Node, Nulls, Order, OrderTerm, Range,
+    CreateTable, Cte, CurrentTime, Definition, Delete, Distinct, ExprId, Foreign, Indexed, Insert,
+    Join, JoinKind, LikeOp, Limit, Literal, Materialized, Node, Nulls, Order, OrderTerm, Range,
     ResultColumn, Select, SelectId, Source, SourceKind, Span, TableBody, TableConstraint,
     TableOptions, UnaryOp,
 };
@@ -75,6 +75,8 @@ pub enum Expected {
     Create,
     /// `INSERT` or `REPLACE`.
     Insert,
+    /// `DELETE`.
+    Delete,
     /// `INTO`, after `INSERT`.
     Into,
     /// `TABLE` or `INDEX`, after `CREATE`.
@@ -702,6 +704,16 @@ impl<'a> Parser<'a> {
         } else {
             (Range::default(), false)
         };
+        if self.at_keyword(Keyword::Delete) {
+            let statement = self.delete()?;
+            if !ctes.is_empty() {
+                // A `WITH` before a `DELETE` names tables its `WHERE`
+                // may read, which this crate does not answer yet.
+                return Err(self.error(None, Expected::Select));
+            }
+            let _ = recursive;
+            return Ok(Change::Delete(statement));
+        }
         let mut statement = self.insert()?;
         if !ctes.is_empty() {
             let id = statement.select;
@@ -750,6 +762,23 @@ impl<'a> Parser<'a> {
             name,
             columns,
             select,
+        })
+    }
+
+    /// `DELETE FROM name [WHERE filter]`.
+    fn delete(&mut self) -> Result<Delete, Error> {
+        self.expect_keyword(Keyword::Delete, Expected::Delete)?;
+        self.expect_keyword(Keyword::From, Expected::From)?;
+        let (schema, name) = self.qualified_name()?;
+        let filter = if self.eat_keyword(Keyword::Where) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        Ok(Delete {
+            schema,
+            name,
+            filter,
         })
     }
 

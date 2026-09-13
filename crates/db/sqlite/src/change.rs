@@ -20,7 +20,7 @@ use crate::header::{Encoding, Header, LIBRARY_VERSION};
 use crate::page::Kind;
 use crate::schema::Table;
 use crate::tree::{Pages, insert, largest};
-use crate::value::{Affinity, Value};
+use crate::value::{Affinity, Collation, Value};
 
 /// The columns of `sqlite_schema`, which every row of it is written
 /// with: `type`, `name`, `tbl_name`, `rootpage` and `sql`.
@@ -87,14 +87,22 @@ impl Writer {
     /// [`Error`] names what it could not read, answer or write.
     pub fn run(&mut self, sql: &[u8]) -> Result<(), Error> {
         self.pages.begin();
-        self.header.change_counter = self.header.change_counter.saturating_add(1);
-        self.header.version_valid_for = self.header.change_counter;
         if let Ok((arena, definition)) = crate::parse::definition(sql) {
-            return self.define(&arena, definition, sql);
+            self.define(&arena, definition, sql)?;
+        } else {
+            let (arena, change) = crate::parse::change(sql)?;
+            match change {
+                Change::Insert(statement) => self.insert(&arena, &statement, sql)?,
+                Change::Delete(statement) => self.delete(&arena, &statement, sql)?,
+            }
         }
-        let (arena, change) = crate::parse::change(sql)?;
-        let Change::Insert(statement) = change;
-        self.insert(&arena, &statement, sql)
+        // A statement that wrote no page is one the commit has nothing
+        // to write for, so the change counter stands where it stood.
+        if self.pages.changed() {
+            self.header.change_counter = self.header.change_counter.saturating_add(1);
+            self.header.version_valid_for = self.header.change_counter;
+        }
+        Ok(())
     }
 
     /// `CREATE TABLE`: a page for the tree of the table and a row of
@@ -203,6 +211,57 @@ impl Writer {
     }
 }
 
+/// One row of a table, read against the `WHERE` of a statement that
+/// changes rows.
+struct Held<'a> {
+    /// The table it belongs to, because a column may be written with
+    /// the table's name before it.
+    table: &'a Table,
+    /// The value of each column, in the order the table was created
+    /// with.
+    values: &'a [Value],
+    /// The key of the row, which the three names of the key answer.
+    rowid: i64,
+    /// What encoding the file keeps its text in.
+    encoding: Encoding,
+}
+
+impl crate::eval::Row for Held<'_> {
+    fn column(
+        &self,
+        schema: Option<&[u8]>,
+        table: Option<&[u8]>,
+        column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)> {
+        if schema.is_some_and(|name| !name.eq_ignore_ascii_case(b"main")) {
+            return None;
+        }
+        if table.is_some_and(|name| !name.eq_ignore_ascii_case(&self.table.name)) {
+            return None;
+        }
+        let at = self
+            .table
+            .columns
+            .iter()
+            .position(|held| held.name.eq_ignore_ascii_case(column));
+        match at {
+            Some(at) => {
+                let held = self.table.columns.get(at)?;
+                let value = self.values.get(at)?.clone();
+                Some((value, held.affinity, held.collation))
+            }
+            None if is_rowid(column) => {
+                Some((Value::Int(self.rowid), Affinity::Integer, Collation::Binary))
+            }
+            None => None,
+        }
+    }
+
+    fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+}
+
 /// Where each value of a row belongs among the columns of the table, or
 /// nothing where the value is the key of the row.
 ///
@@ -235,6 +294,52 @@ fn is_rowid(name: &[u8]) -> bool {
     [b"rowid".as_slice(), b"oid", b"_rowid_"]
         .iter()
         .any(|word| name.eq_ignore_ascii_case(word))
+}
+
+impl Writer {
+    /// `DELETE`: the rows the `WHERE` keeps, taken out of the tree of
+    /// the table it names.
+    ///
+    /// The keys are found first and the rows are taken out after, which
+    /// is what `sqlite3DeleteFrom` does with its `RowSet`: a tree
+    /// changes under a walk of it.
+    fn delete(
+        &mut self,
+        arena: &Arena,
+        statement: &crate::ast::Delete,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        let name = crate::schema::dequote(statement.name.text(sql));
+        let (root, keys) = {
+            let bytes = self.written();
+            let database = Database::open(&bytes)?;
+            let (table, root) = database.table(&name).ok_or(Error::NoTable)?;
+            let rows = database.rows_of(&name)?;
+            let mut keys = Vec::new();
+            for (rowid, values) in &rows {
+                let held = Held {
+                    table,
+                    values,
+                    rowid: *rowid,
+                    encoding: self.header.encoding,
+                };
+                let keep = match statement.filter {
+                    None => true,
+                    Some(filter) => {
+                        crate::eval::evaluate_row(arena, filter, sql, &held)?.truth(false)
+                    }
+                };
+                if keep {
+                    keys.push(*rowid);
+                }
+            }
+            (root, keys)
+        };
+        for key in keys {
+            crate::tree::remove(&mut self.pages, root, key)?;
+        }
+        Ok(())
+    }
 }
 
 /// A value as the database stores it, which turns text into the

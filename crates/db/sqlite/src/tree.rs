@@ -179,6 +179,13 @@ impl Pages {
         Ok(number)
     }
 
+    /// Whether the transaction has opened any page to write, which is
+    /// what says the commit has anything to write at all.
+    #[must_use]
+    pub fn changed(&self) -> bool {
+        self.before.iter().any(Option::is_some)
+    }
+
     /// Commits what the transaction wrote and begins the next: a page
     /// the transaction freed onto a trunk keeps in the file what it held
     /// when the transaction began.
