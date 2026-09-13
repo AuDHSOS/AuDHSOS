@@ -2463,6 +2463,24 @@ fn register_array_push_and_pop_move_the_last_element() -> Result<(), Error> {
 }
 
 #[test]
+fn register_array_reverse_mirrors_the_indices() -> Result<(), Error> {
+    for source in [
+        // 23.1.3.26 mirrors the indices and answers the receiver.
+        "let a=[1,2,3];a.reverse();a.join('-')",
+        "let a=[1,2];a.reverse().join()",
+        "let a=[1];a.reverse().join()",
+        "let a=[];a.reverse().join()",
+        "let a=[1,,3];a.reverse().join('-')",
+        "let a=[1,2,'c'];a.reverse();a.at(0)",
+        // The layout follows the mirroring, so a later read still lowers.
+        "let a=[1,2,3];a.reverse();a.pop();a.push(9);a.join('-')",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<(), Error> {
     for source in [
         // An intrinsic runs without a call frame, so a user valueOf in a
@@ -2477,6 +2495,7 @@ fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<()
         "[[1]].join('-')",
         // 23.1.3.22 and 23.1.3.23 need the length the layout starts from.
         "let a=[1];let i=0;a[i]=2;a.pop()",
+        "let a=[1];let i=0;a[i]=2;a.reverse()",
         // A name a dynamic key may have written onto the Array shadows the
         // method, so the read is not the intrinsic.
         "let a=[1];let k='indexOf';a[k]=1;a.indexOf",

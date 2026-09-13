@@ -2152,6 +2152,24 @@ impl RegisterLowerer {
                 *length = Some(next);
                 Some(intrinsic_result_type(intrinsic))
             }
+            // 23.1.3.26 answers the receiver with its indices mirrored.
+            Intrinsic::ArrayPrototypeReverse => {
+                let (object_id, ..) = self.array_layout(base_type)?;
+                let RegisterObjectLayout::Array {
+                    length, elements, ..
+                } = self.object_layouts.get_mut(&object_id)?
+                else {
+                    return None;
+                };
+                let Some(last) = (*length)?.checked_sub(1) else {
+                    return Some(base_type);
+                };
+                *elements = core::mem::take(elements)
+                    .into_iter()
+                    .map(|(index, value_type)| Some((last.checked_sub(index)?, value_type)))
+                    .collect::<Option<_>>()?;
+                Some(base_type)
+            }
             // 23.1.3.22 takes the last element away, which leaves the layout
             // one element shorter.
             Intrinsic::ArrayPrototypePop => {
@@ -4597,7 +4615,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         crate::engine::realm::Intrinsic::ArrayPrototypeValues
         | crate::engine::realm::Intrinsic::ArrayIteratorPrototypeNext
         | crate::engine::realm::Intrinsic::ArrayPrototypeAt
-        | crate::engine::realm::Intrinsic::ArrayPrototypePop => RegisterType::Unknown,
+        | crate::engine::realm::Intrinsic::ArrayPrototypePop
+        | crate::engine::realm::Intrinsic::ArrayPrototypeReverse => RegisterType::Unknown,
         crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
         | crate::engine::realm::Intrinsic::StringPrototypeIndexOf
         | crate::engine::realm::Intrinsic::StringPrototypeLastIndexOf

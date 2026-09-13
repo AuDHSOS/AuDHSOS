@@ -838,7 +838,8 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeLastIndexOf
             | Intrinsic::ArrayPrototypeJoin
             | Intrinsic::ArrayPrototypePop
-            | Intrinsic::ArrayPrototypePush => {
+            | Intrinsic::ArrayPrototypePush
+            | Intrinsic::ArrayPrototypeReverse => {
                 self.call_array_intrinsic(intrinsic, call, heap, realm)
             }
         }
@@ -962,17 +963,31 @@ impl RegisterVM {
             // 23.1.3.22: the last element leaves the Array, which is then one
             // shorter; an empty Array only has its length set again.
             Intrinsic::ArrayPrototypePop => {
+                let elements = Self::array_elements(heap, object)?;
                 let Ok(last) = u32::try_from(length.saturating_sub(1)) else {
                     heap.set_array_length(object, 0)?;
                     return Ok(VALUE_UNDEFINED);
                 };
                 let element = Self::element_at(heap, object, last)?.unwrap_or(VALUE_UNDEFINED);
-                if let Some(elements) = heap.get_object(object).ok_or(VMError::TypeError)?.elements
-                {
-                    heap.delete_element(elements, last)?;
-                }
+                heap.delete_element(elements, last)?;
                 heap.set_array_length(object, last)?;
                 Ok(element)
+            }
+            // 23.1.3.26: the two ends swap until they meet, and an index that
+            // is absent stays absent at the position it moves to.
+            Intrinsic::ArrayPrototypeReverse => {
+                let elements = Self::array_elements(heap, object)?;
+                let mut lower = 0u32;
+                let mut upper = Self::scan_range(0, length).end.saturating_sub(1);
+                while lower < upper {
+                    let lower_value = Self::element_at(heap, object, lower)?;
+                    let upper_value = Self::element_at(heap, object, upper)?;
+                    Self::place_element(heap, object, elements, lower, upper_value)?;
+                    Self::place_element(heap, object, elements, upper, lower_value)?;
+                    lower = lower.saturating_add(1);
+                    upper = upper.saturating_sub(1);
+                }
+                Ok(call.receiver)
             }
             // 23.1.3.20: the same in descending order, from the last index
             // when no second argument is present.
@@ -994,6 +1009,36 @@ impl RegisterVM {
                 Ok(Value::from_smi(-1))
             }
         }
+    }
+
+    /// The Elements store of an Array receiver.
+    ///
+    /// The methods of 23.1.3 that move elements reach the engine only through
+    /// a call whose receiver the lowering typed as an Array, and an Array
+    /// always carries a store.
+    fn array_elements(
+        heap: &GenerationalHeap,
+        object: ObjectRef,
+    ) -> Result<super::elements::ElementsRef, VMError> {
+        heap.get_object(object)
+            .and_then(|object| object.elements)
+            .ok_or(VMError::TypeError)
+    }
+
+    /// `Set(O, ! ToString(𝔽(index)), value, true)` of 7.3.4, or
+    /// `DeletePropertyOrThrow` of 7.3.9 when the index it came from was absent.
+    fn place_element(
+        heap: &mut GenerationalHeap,
+        object: ObjectRef,
+        elements: super::elements::ElementsRef,
+        index: u32,
+        value: Option<Value>,
+    ) -> Result<(), VMError> {
+        match value {
+            Some(value) => heap.set_array_element(object, index, value)?,
+            None => drop(heap.delete_element(elements, index)?),
+        }
+        Ok(())
     }
 
     /// The indices of `start..end` an Elements store can address.

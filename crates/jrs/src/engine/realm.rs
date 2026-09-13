@@ -247,6 +247,8 @@ pub enum Intrinsic {
     ArrayPrototypePop,
     /// `Array.prototype.push` (23.1.3.23).
     ArrayPrototypePush,
+    /// `Array.prototype.reverse` (23.1.3.26).
+    ArrayPrototypeReverse,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -264,7 +266,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 32] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -296,6 +298,7 @@ impl Intrinsic {
         Self::ArrayPrototypeJoin,
         Self::ArrayPrototypePop,
         Self::ArrayPrototypePush,
+        Self::ArrayPrototypeReverse,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -331,7 +334,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeLastIndexOf
             | Self::ArrayPrototypeJoin
             | Self::ArrayPrototypePop
-            | Self::ArrayPrototypePush => IntrinsicHolder::ArrayPrototype,
+            | Self::ArrayPrototypePush
+            | Self::ArrayPrototypeReverse => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
         }
     }
@@ -371,6 +375,7 @@ impl Intrinsic {
             Self::ArrayPrototypeJoin => 28,
             Self::ArrayPrototypePop => 29,
             Self::ArrayPrototypePush => 30,
+            Self::ArrayPrototypeReverse => 31,
         }
     }
 
@@ -408,6 +413,7 @@ impl Intrinsic {
             Self::ArrayPrototypeJoin => 28,
             Self::ArrayPrototypePop => 29,
             Self::ArrayPrototypePush => 30,
+            Self::ArrayPrototypeReverse => 31,
         }
     }
 
@@ -446,6 +452,7 @@ impl Intrinsic {
             28 => Some(Self::ArrayPrototypeJoin),
             29 => Some(Self::ArrayPrototypePop),
             30 => Some(Self::ArrayPrototypePush),
+            31 => Some(Self::ArrayPrototypeReverse),
             _ => None,
         }
     }
@@ -481,6 +488,7 @@ impl Intrinsic {
             Self::ArrayPrototypeJoin => "join",
             Self::ArrayPrototypePop => "pop",
             Self::ArrayPrototypePush => "push",
+            Self::ArrayPrototypeReverse => "reverse",
         }
     }
 
@@ -500,7 +508,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeValues
             | Self::ArrayIteratorPrototypeNext
             | Self::ArrayPrototypePop
-            | Self::ArrayPrototypePush => false,
+            | Self::ArrayPrototypePush
+            | Self::ArrayPrototypeReverse => false,
             // 20.1.3.2 and 20.1.3.4 apply ToPropertyKey to the first argument.
             Self::ObjectPrototypeHasOwnProperty | Self::ObjectPrototypePropertyIsEnumerable => {
                 index == 0
@@ -525,7 +534,8 @@ impl Intrinsic {
             | Self::StringPrototypeTrimStart
             | Self::ArrayPrototypeValues
             | Self::ArrayIteratorPrototypeNext
-            | Self::ArrayPrototypePop => 0,
+            | Self::ArrayPrototypePop
+            | Self::ArrayPrototypeReverse => 0,
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypePropertyIsEnumerable
