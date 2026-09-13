@@ -2101,6 +2101,13 @@ impl RegisterLowerer {
         }
         self.release_register(function)?;
         self.release_register(receiver)?;
+        // 23.1.3.18 applies ToString to every element, which an intrinsic
+        // cannot do for an Object.
+        if intrinsic == crate::engine::realm::Intrinsic::ArrayPrototypeJoin
+            && !self.array_element_type(base_type)?.is_primitive()
+        {
+            return None;
+        }
         if intrinsic == crate::engine::realm::Intrinsic::ArrayPrototypeAt {
             // 23.1.3.1 answers an element of the receiver, whose type the
             // layout the arguments left behind carries.
@@ -4523,7 +4530,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypePadStart
         | crate::engine::realm::Intrinsic::StringPrototypeTrim
         | crate::engine::realm::Intrinsic::StringPrototypeTrimEnd
-        | crate::engine::realm::Intrinsic::StringPrototypeTrimStart => RegisterType::String,
+        | crate::engine::realm::Intrinsic::StringPrototypeTrimStart
+        | crate::engine::realm::Intrinsic::ArrayPrototypeJoin => RegisterType::String,
 
         // 23.1.3.38 answers an Array Iterator and 23.1.5.2.1 a result object,
         // neither of which has a tracked layout. 23.1.3.1 answers an element,

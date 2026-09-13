@@ -2410,6 +2410,30 @@ fn register_array_search_methods_answer_on_the_new_engine() -> Result<(), Error>
 }
 
 #[test]
+fn register_array_join_concatenates_the_elements() -> Result<(), Error> {
+    for source in [
+        // 23.1.3.18: the separator defaults to a comma.
+        "[1,2,3].join()",
+        "[1,2,3].join('-')",
+        "[1,2].join('')",
+        "[1].join('-')",
+        "[].join('-')",
+        // undefined, null and a hole contribute the empty String.
+        "[null,undefined,1].join()",
+        "[1,,3].join('-')",
+        "[,].join('-')",
+        // Every other element is converted with ToString.
+        "[true,false].join('|')",
+        "['a','b'].join('')",
+        "[1.5,-0,NaN].join(',')",
+        "[1,2].join(3)",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<(), Error> {
     for source in [
         // An intrinsic runs without a call frame, so a user valueOf in a
@@ -2418,6 +2442,10 @@ fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<()
         "let n=0;[1,2].at({valueOf(){n++;return 0}})",
         "let n=0;[1,2].indexOf(1,{valueOf(){n++;return 0}})",
         "let n=0;({}).hasOwnProperty({toString(){n++;return 'a'}})",
+        "let n=0;[1].join({toString(){n++;return '-'}})",
+        // 23.1.3.18 applies ToString to every element, which needs a frame.
+        "[{}].join('-')",
+        "[[1]].join('-')",
         // A name a dynamic key may have written onto the Array shadows the
         // method, so the read is not the intrinsic.
         "let a=[1];let k='indexOf';a[k]=1;a.indexOf",

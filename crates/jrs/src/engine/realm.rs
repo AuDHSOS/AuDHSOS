@@ -241,6 +241,8 @@ pub enum Intrinsic {
     ArrayPrototypeIndexOf,
     /// `Array.prototype.lastIndexOf` (23.1.3.20).
     ArrayPrototypeLastIndexOf,
+    /// `Array.prototype.join` (23.1.3.18).
+    ArrayPrototypeJoin,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -258,7 +260,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -287,6 +289,7 @@ impl Intrinsic {
         Self::ArrayPrototypeIncludes,
         Self::ArrayPrototypeIndexOf,
         Self::ArrayPrototypeLastIndexOf,
+        Self::ArrayPrototypeJoin,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -319,7 +322,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeAt
             | Self::ArrayPrototypeIncludes
             | Self::ArrayPrototypeIndexOf
-            | Self::ArrayPrototypeLastIndexOf => IntrinsicHolder::ArrayPrototype,
+            | Self::ArrayPrototypeLastIndexOf
+            | Self::ArrayPrototypeJoin => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
         }
     }
@@ -356,6 +360,7 @@ impl Intrinsic {
             Self::ArrayPrototypeIncludes => 25,
             Self::ArrayPrototypeIndexOf => 26,
             Self::ArrayPrototypeLastIndexOf => 27,
+            Self::ArrayPrototypeJoin => 28,
         }
     }
 
@@ -390,6 +395,7 @@ impl Intrinsic {
             Self::ArrayPrototypeIncludes => 25,
             Self::ArrayPrototypeIndexOf => 26,
             Self::ArrayPrototypeLastIndexOf => 27,
+            Self::ArrayPrototypeJoin => 28,
         }
     }
 
@@ -425,6 +431,7 @@ impl Intrinsic {
             25 => Some(Self::ArrayPrototypeIncludes),
             26 => Some(Self::ArrayPrototypeIndexOf),
             27 => Some(Self::ArrayPrototypeLastIndexOf),
+            28 => Some(Self::ArrayPrototypeJoin),
             _ => None,
         }
     }
@@ -457,6 +464,7 @@ impl Intrinsic {
             Self::StringPrototypeTrimStart => "trimStart",
             Self::ArrayPrototypeValues => "values",
             Self::ArrayIteratorPrototypeNext => "next",
+            Self::ArrayPrototypeJoin => "join",
         }
     }
 
@@ -518,7 +526,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeAt
             | Self::ArrayPrototypeIncludes
             | Self::ArrayPrototypeIndexOf
-            | Self::ArrayPrototypeLastIndexOf => 1,
+            | Self::ArrayPrototypeLastIndexOf
+            | Self::ArrayPrototypeJoin => 1,
             Self::StringPrototypeSlice | Self::StringPrototypeSubstring => 2,
         }
     }

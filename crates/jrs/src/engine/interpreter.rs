@@ -835,7 +835,8 @@ impl RegisterVM {
             Intrinsic::ArrayPrototypeAt
             | Intrinsic::ArrayPrototypeIncludes
             | Intrinsic::ArrayPrototypeIndexOf
-            | Intrinsic::ArrayPrototypeLastIndexOf => {
+            | Intrinsic::ArrayPrototypeLastIndexOf
+            | Intrinsic::ArrayPrototypeJoin => {
                 self.call_array_intrinsic(intrinsic, call, heap, realm)
             }
         }
@@ -911,6 +912,35 @@ impl RegisterVM {
                     }
                 }
                 Ok(Value::from_smi(-1))
+            }
+            // 23.1.3.18: undefined and null contribute the empty String, and
+            // the separator defaults to a comma.
+            Intrinsic::ArrayPrototypeJoin => {
+                let separator = if search.is_undefined() {
+                    alloc::vec![0x2C]
+                } else {
+                    property_name_units(search, heap)?
+                };
+                let scanned = length.min(i64::from(u32::MAX));
+                let mut units: Vec<u16> = Vec::new();
+                for index in Self::scan_range(0, scanned) {
+                    if index > 0 {
+                        units.extend_from_slice(&separator);
+                    }
+                    let element = Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED);
+                    if !element.is_undefined() && !element.is_null() {
+                        units.extend(property_name_units(element, heap)?);
+                    }
+                    if units.len() > self.string_units_limit {
+                        return Err(VMError::StringLimit);
+                    }
+                }
+                // Every index above that space is absent, so what remains is
+                // separators alone, which no string limit admits.
+                if length > scanned && !separator.is_empty() {
+                    return Err(VMError::StringLimit);
+                }
+                self.allocate_string(heap, &units)
             }
             // 23.1.3.20: the same in descending order, from the last index
             // when no second argument is present.
