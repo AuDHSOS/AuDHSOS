@@ -671,6 +671,9 @@ struct RegisterLowerer {
     max_binding_count: u16,
     bindings: BTreeMap<String, RegisterBinding>,
     loops: Vec<RegisterLoop>,
+    /// Which types a loop head starts from. Widened only for the second
+    /// attempt of [`Self::lower_loop`].
+    loop_head_types: RegisterLoopHead,
     completions: Vec<crate::engine::bytecode::Reg>,
     /// Types thrown lexically inside each enclosing protected range.
     thrown: Vec<Vec<RegisterType>>,
@@ -741,6 +744,15 @@ struct RegisterLoop {
     object_layouts: BTreeMap<u32, RegisterObjectLayout>,
 }
 
+/// Which types the head of a loop starts its bindings from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RegisterLoopHead {
+    /// The types the bindings hold where the loop begins.
+    Declared,
+    /// Those merged with the types the body's assignments produce.
+    Widened,
+}
+
 #[derive(Clone)]
 struct RegisterSnapshot {
     instructions: usize,
@@ -785,6 +797,7 @@ impl RegisterLowerer {
             bindings: BTreeMap::new(),
             loops: Vec::new(),
             completions: Vec::new(),
+            loop_head_types: RegisterLoopHead::Declared,
             thrown: Vec::new(),
             next_object_id: 0,
             object_layouts: BTreeMap::new(),
@@ -3126,16 +3139,6 @@ impl RegisterLowerer {
             Stmt::Expr(expression) => RegisterFlow::Value(self.lower(expression)?),
             Stmt::If(condition, yes, no) => self.lower_if(condition, yes, no.as_deref())?,
             Stmt::Block(body) => self.lower_block(body)?,
-            Stmt::While(condition, body) => RegisterFlow::Value(self.lower_while(condition, body)?),
-            Stmt::DoWhile(body, condition) => {
-                RegisterFlow::Value(self.lower_do_while(body, condition)?)
-            }
-            Stmt::For(initializer, condition, step, body) => RegisterFlow::Value(self.lower_for(
-                initializer,
-                condition.as_ref(),
-                step.as_ref(),
-                body,
-            )?),
             Stmt::Var(bindings) => {
                 self.initialize_vars(bindings)?;
                 RegisterFlow::Empty
@@ -3185,28 +3188,11 @@ impl RegisterLowerer {
                 finally,
             } => self.lower_try(body, catch.as_ref(), finally.as_deref())?,
             Stmt::Switch(discriminant, clauses) => self.lower_switch(discriminant, clauses)?,
-            Stmt::ForOf {
-                binding,
-                target,
-                object,
-                body,
-            } => RegisterFlow::Value(self.lower_for_of(
-                binding.as_ref(),
-                target.as_ref(),
-                object,
-                body,
-            )?),
-            Stmt::ForIn {
-                binding,
-                target,
-                object,
-                body,
-            } => RegisterFlow::Value(self.lower_for_in(
-                binding.as_ref(),
-                target.as_ref(),
-                object,
-                body,
-            )?),
+            Stmt::While(..)
+            | Stmt::DoWhile(..)
+            | Stmt::For(..)
+            | Stmt::ForOf { .. }
+            | Stmt::ForIn { .. } => RegisterFlow::Value(self.lower_loop(statement)?),
             Stmt::Empty => RegisterFlow::Empty,
             _ => return None,
         };
@@ -3720,13 +3706,67 @@ impl RegisterLowerer {
         Some(RegisterFlow::Value(value_type))
     }
 
+    /// Lowers a loop, and once more from the types its body's assignments
+    /// produce when the first attempt does not hold its bindings across the
+    /// back edge.
+    ///
+    /// The narrow types are what most loops need and what keeps their
+    /// operations specialized. The second attempt admits a loop whose binding a
+    /// call the lowering could not name widens. A loop that fails both is
+    /// refused, as before.
+    fn lower_loop(&mut self, statement: &Stmt) -> Option<RegisterType> {
+        if self.loop_head_types == RegisterLoopHead::Widened {
+            return self.lower_loop_once(statement);
+        }
+        let snapshot = self.snapshot();
+        let loops = self.loops.len();
+        let completions = self.completions.len();
+        if let Some(value) = self.lower_loop_once(statement) {
+            return Some(value);
+        }
+        self.restore(snapshot);
+        self.loops.truncate(loops);
+        self.completions.truncate(completions);
+        self.loop_head_types = RegisterLoopHead::Widened;
+        let value = self.lower_loop_once(statement);
+        self.loop_head_types = RegisterLoopHead::Declared;
+        value
+    }
+
+    fn lower_loop_once(&mut self, statement: &Stmt) -> Option<RegisterType> {
+        match statement {
+            Stmt::While(condition, body) => self.lower_while(condition, body),
+            Stmt::DoWhile(body, condition) => self.lower_do_while(body, condition),
+            Stmt::For(initializer, condition, step, body) => {
+                self.lower_for(initializer, condition.as_ref(), step.as_ref(), body)
+            }
+            Stmt::ForOf {
+                binding,
+                target,
+                object,
+                body,
+            } => self.lower_for_of(binding.as_ref(), target.as_ref(), object, body),
+            Stmt::ForIn {
+                binding,
+                target,
+                object,
+                body,
+            } => self.lower_for_in(binding.as_ref(), target.as_ref(), object, body),
+            _ => None,
+        }
+    }
+
     fn lower_while(&mut self, condition: &Expr, body: &Stmt) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         self.code.emit(Instruction::LdaUndefined);
         let result_register = self.allocate_register()?;
         self.code.emit(Instruction::Star(result_register));
         let mut bindings_at_head = self.bindings.clone();
-        infer_register_var_types_to_fixed_point(body, &mut bindings_at_head)?;
+        infer_register_var_types_to_fixed_point(
+            body,
+            &mut bindings_at_head,
+            self.loop_head_types == RegisterLoopHead::Widened,
+        )?;
         self.bindings = bindings_at_head.clone();
         let head = self.code.instructions.len();
         self.lower(condition)?;
@@ -3789,7 +3829,11 @@ impl RegisterLowerer {
         let result_register = self.allocate_register()?;
         self.code.emit(Instruction::Star(result_register));
         let mut bindings_at_head = self.bindings.clone();
-        infer_register_var_types_to_fixed_point(body, &mut bindings_at_head)?;
+        infer_register_var_types_to_fixed_point(
+            body,
+            &mut bindings_at_head,
+            self.loop_head_types == RegisterLoopHead::Widened,
+        )?;
         self.bindings = bindings_at_head.clone();
         let head = self.code.instructions.len();
         self.code.emit(Instruction::Ldar(result_register));
@@ -3908,7 +3952,11 @@ impl RegisterLowerer {
         let result_register = self.allocate_register()?;
         self.code.emit(Instruction::Star(result_register));
         let mut bindings_at_head = self.bindings.clone();
-        infer_register_var_types_to_fixed_point(body, &mut bindings_at_head)?;
+        infer_register_var_types_to_fixed_point(
+            body,
+            &mut bindings_at_head,
+            self.loop_head_types == RegisterLoopHead::Widened,
+        )?;
         self.bindings = bindings_at_head.clone();
         let head = self.code.instructions.len();
         let branch = if let Some(condition) = condition {
@@ -4065,7 +4113,11 @@ impl RegisterLowerer {
         );
 
         let mut bindings_at_head = self.bindings.clone();
-        infer_register_var_types_to_fixed_point(body, &mut bindings_at_head)?;
+        infer_register_var_types_to_fixed_point(
+            body,
+            &mut bindings_at_head,
+            self.loop_head_types == RegisterLoopHead::Widened,
+        )?;
         self.bindings = bindings_at_head.clone();
         let head = self.code.instructions.len();
         self.code.emit(Instruction::ForInNext { state });
@@ -4240,7 +4292,11 @@ impl RegisterLowerer {
         );
 
         let mut bindings_at_head = self.bindings.clone();
-        infer_register_var_types_to_fixed_point(body, &mut bindings_at_head)?;
+        infer_register_var_types_to_fixed_point(
+            body,
+            &mut bindings_at_head,
+            self.loop_head_types == RegisterLoopHead::Widened,
+        )?;
         self.bindings = bindings_at_head.clone();
         let head = self.code.instructions.len();
         self.code
@@ -5119,9 +5175,71 @@ fn register_statement_transfers_control(statement: &Stmt) -> bool {
     }
 }
 
+/// Merges the type of every assignment an expression performs into the binding
+/// it writes.
+///
+/// A target this cannot type widens to the unknown type, which every other
+/// type merges into, so a binding a loop body writes with a value the lowering
+/// could not name keeps that type across the back edge.
+fn infer_register_assignment_types(
+    expression: &Expr,
+    bindings: &mut BTreeMap<String, RegisterBinding>,
+) {
+    match &expression.kind {
+        ExprKind::Assign(name, operator, value) => {
+            infer_register_assignment_types(value, bindings);
+            // A compound assignment answers what its operator answers, not what
+            // its right side holds, so only a plain one is typed here.
+            let assigned = if operator.is_none() {
+                register_expression_type(value, bindings).unwrap_or(RegisterType::Unknown)
+            } else {
+                RegisterType::Unknown
+            };
+            if let Some(binding) = bindings.get_mut(name) {
+                binding.value_type =
+                    merge_optional_register_types(binding.value_type, Some(assigned));
+            }
+        }
+        ExprKind::Group(inner) | ExprKind::Unary(_, inner) => {
+            infer_register_assignment_types(inner, bindings);
+        }
+        ExprKind::Sequence(left, right) | ExprKind::Binary(_, left, right) => {
+            infer_register_assignment_types(left, bindings);
+            infer_register_assignment_types(right, bindings);
+        }
+        ExprKind::Conditional(condition, yes, no) => {
+            infer_register_assignment_types(condition, bindings);
+            infer_register_assignment_types(yes, bindings);
+            infer_register_assignment_types(no, bindings);
+        }
+        ExprKind::Call(callee, arguments) => {
+            infer_register_assignment_types(callee, bindings);
+            for argument in arguments {
+                infer_register_assignment_types(argument, bindings);
+            }
+        }
+        ExprKind::Member(base, key) => {
+            infer_register_assignment_types(base, bindings);
+            infer_register_assignment_types(key, bindings);
+        }
+        ExprKind::SetMember(base, _, value, _) => {
+            infer_register_assignment_types(base, bindings);
+            infer_register_assignment_types(value, bindings);
+        }
+        _ => {}
+    }
+}
+
+/// Widens the tracked type of every `var` a statement writes.
+///
+/// `widen` additionally follows the assignments of an expression statement, a
+/// return and a throw, so that a loop head can start from the types its body
+/// produces. It is a hint: the fit check across the back edge is what makes a
+/// loop sound, so a hint that is too narrow refuses and never miscompiles.
 fn infer_register_var_types(
     statement: &Stmt,
     bindings: &mut BTreeMap<String, RegisterBinding>,
+    widen: bool,
 ) -> Option<()> {
     match statement {
         Stmt::Var(declarations) => {
@@ -5141,24 +5259,24 @@ fn infer_register_var_types(
         }
         Stmt::Block(body) => {
             for statement in body {
-                infer_register_var_types(statement, bindings)?;
+                infer_register_var_types(statement, bindings, widen)?;
             }
         }
         Stmt::If(_, yes, no) => {
-            infer_register_var_types(yes, bindings)?;
+            infer_register_var_types(yes, bindings, widen)?;
             if let Some(no) = no {
-                infer_register_var_types(no, bindings)?;
+                infer_register_var_types(no, bindings, widen)?;
             }
         }
         Stmt::While(_, body)
         | Stmt::DoWhile(body, _)
         | Stmt::ForIn { body, .. }
         | Stmt::ForOf { body, .. } => {
-            infer_register_var_types(body, bindings)?;
+            infer_register_var_types(body, bindings, widen)?;
         }
         Stmt::For(initializer, _, _, body) => {
-            infer_register_var_types(initializer, bindings)?;
-            infer_register_var_types(body, bindings)?;
+            infer_register_var_types(initializer, bindings, widen)?;
+            infer_register_var_types(body, bindings, widen)?;
         }
         Stmt::Try {
             body,
@@ -5166,13 +5284,19 @@ fn infer_register_var_types(
             finally,
         } => {
             for statement in try_statements(body, catch.as_ref(), finally.as_deref()) {
-                infer_register_var_types(statement, bindings)?;
+                infer_register_var_types(statement, bindings, widen)?;
             }
         }
         Stmt::Switch(_, clauses) => {
             for statement in clauses.iter().flat_map(|(_, body)| body) {
-                infer_register_var_types(statement, bindings)?;
+                infer_register_var_types(statement, bindings, widen)?;
             }
+        }
+        Stmt::Expr(expression) | Stmt::Throw(expression) if widen => {
+            infer_register_assignment_types(expression, bindings);
+        }
+        Stmt::Return(Some(expression)) if widen => {
+            infer_register_assignment_types(expression, bindings);
         }
         Stmt::Empty
         | Stmt::Expr(_)
@@ -5193,7 +5317,7 @@ fn infer_register_body_var_types_to_fixed_point(
     loop {
         let before = bindings.clone();
         for statement in body {
-            infer_register_var_types(statement, bindings)?;
+            infer_register_var_types(statement, bindings, false)?;
         }
         if *bindings == before {
             return Some(());
@@ -5204,10 +5328,11 @@ fn infer_register_body_var_types_to_fixed_point(
 fn infer_register_var_types_to_fixed_point(
     statement: &Stmt,
     bindings: &mut BTreeMap<String, RegisterBinding>,
+    widen: bool,
 ) -> Option<()> {
     loop {
         let before = bindings.clone();
-        infer_register_var_types(statement, bindings)?;
+        infer_register_var_types(statement, bindings, widen)?;
         if *bindings == before {
             return Some(());
         }

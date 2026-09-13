@@ -235,6 +235,11 @@ fn a_global_function_outlives_the_script_that_declared_it() -> Result<(), Error>
             "function two(){return 2}",
             "var o={valueOf(){return two()}};1+o",
         ][..],
+        // A call of another unit in the body of a loop.
+        &[
+            "function inc(x){return x+1}",
+            "function sum(n){let s=0;for(let i=0;i<n;i++){s=inc(s)}return s}sum(20)",
+        ][..],
         // Enough allocation in a frame of another unit for the Nursery to fill.
         &[
             "function rep(n){let s=\"\";let i=0;while(i<n){s=s+\"x\";i=i+1}return s}",
@@ -2447,11 +2452,30 @@ fn register_while_checks_fuel_at_back_edges() -> Result<(), Error> {
 
 #[test]
 fn register_loop_lowering_rejects_unstable_or_abrupt_bodies() -> Result<(), Error> {
-    for source in ["let x=1;while(false)x=true;x", "let x=1;while(x=true)x"] {
-        assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
-            "{source}"
-        );
+    // The condition of this one assigns, so the loop never leaves the head.
+    let source = "let x=1;while(x=true)x";
+    assert!(
+        !compile(source, Limits::default())?.uses_register_backend(),
+        "{source}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_loop_whose_body_changes_the_type_of_a_binding_lowers() -> Result<(), Error> {
+    // The head starts from the types the body's assignments produce, so a
+    // binding the body widens holds its type across the back edge. The fit
+    // check is unchanged: it is what makes either set of types sound.
+    for source in [
+        "let x=1;while(false)x=true;x",
+        "let x=1;while(true){x=true;break}x",
+        "let x=1;let i=0;while(i<3){x=(i===1)?'s':x;i++}x",
+        "let x=1;for(let i=0;i<3;i++){x=i<2?x:'done'}x",
+        // A loop whose bindings do hold their types keeps them.
+        "let x=1;for(let i=0;i<3;i++){x=x+1}x",
+        "let s=0;for(let i=0;i<3;i++){s+=i}s",
+    ] {
+        differential(source)?;
     }
     Ok(())
 }
@@ -2496,7 +2520,6 @@ fn register_for_lowering_rejects_unstable_or_observable_lexical_cases() -> Resul
         "for(const i=0;i<2;i++){}",
         "for(let i=0;i<2;i++){(()=>i)}",
         "for(let {i}={i:0};i<2;i++){(()=>i)}",
-        "let x=1;while(true){x=true;break}x",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
