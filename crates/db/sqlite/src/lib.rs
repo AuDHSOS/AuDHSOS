@@ -26,6 +26,7 @@ pub mod schema;
 pub mod token;
 pub mod utf8;
 pub mod value;
+pub mod wal;
 
 #[cfg(test)]
 mod tests;

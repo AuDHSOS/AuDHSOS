@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The write-ahead log, read, in `db-sqlite`: a reader now follows the
+  `-wal` file, taking the newest frame of each page up to the last
+  commit frame and reading the database file only for pages the log does
+  not hold. The walk stops at the first frame whose salts are not the
+  header's or whose checksums are not the running one. The `-shm` file
+  is not read, because section 4.6 leaves its layout to the host machine
+  and a reader rebuilds the index from the log in the one pass it makes
+  anyway. `Image::open_with_log` and `Database::open_with_log` open a
+  file beside its log; `fuzz/sqlite_wal` reads arbitrary bytes as one.
+
 - A statement used as a value in `db-sqlite`: `(SELECT ...)`, `EXISTS`,
   `IN (SELECT ...)` and `IN table`, each answered where it is read and
   not before, so an `ON`, a `WHERE`, a `HAVING` and the branch a `CASE`
@@ -766,6 +776,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   Catalog 6.6.59 and 6.6.60.
 
 ### Fixed
+
+- `db-sqlite` refused a database header whose text encoding field is
+  zero, which is the field before anything sets it and which every
+  database has until its schema is first written. It reads as UTF-8 now,
+  as `sqlite3InitOne` reads it.
 
 - The `math_pow` fuzz target compared `audhsos_math::pow` against the host
   library for a zero exponent, which the host answers with a quiet NaN for

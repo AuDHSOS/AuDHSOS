@@ -27,6 +27,7 @@ mod schema;
 mod token;
 mod utf8;
 mod value;
+mod wal;
 
 /// One table, three rows, every storage class, page size 4096, UTF-8.
 ///
@@ -100,6 +101,19 @@ pub(super) const WIDE16: &[u8] = include_bytes!("fixtures/wide16.db");
 /// TEXT); CREATE TABLE c(y TEXT COLLATE NOCASE, w INTEGER);` `b` holds
 /// the smallest integer, which `abs` has no positive for.
 pub(super) const JOINS: &[u8] = include_bytes!("fixtures/joins.db");
+
+/// A database whose content is in its write-ahead log and not in its
+/// file: the file holds one page and names no table, and the log holds
+/// the schema and the rows.
+///
+/// It was written with the same three rows as the matrix, then changed
+/// three ways — a text updated, a row deleted, a row inserted — so that
+/// a reader that takes the newest committed frame of a page reads
+/// something the file never held.
+pub(super) const LOGGED: &[u8] = include_bytes!("fixtures/logged.db");
+
+/// The write-ahead log of [`LOGGED`].
+pub(super) const LOG: &[u8] = include_bytes!("fixtures/logged.db-wal");
 
 /// A varint, written the way section 1.6 describes, so that the reader is
 /// tested against something other than itself.

@@ -78,6 +78,7 @@ Each rule is checkable, and each makes a later thing possible.
 | Module | What it holds | Decided in |
 |--------|---------------|------------|
 | `header`, `page`, `record`, `image`, `bytes` | The hundred-byte header, the four b-tree page types, the four cell shapes, overflow chains, the record format, the walk of a table tree and of an index tree. | Q1 |
+| `wal` | The write-ahead log a reader must follow: the header, the frames, the checksum of section 4.2, and the newest committed frame of each page. | D-155, Q3 |
 | `token`, `keyword` | SQL text to tokens, the same character classes as `src/tokenize.c`. | Q4 |
 | `ast`, `parse` | Tokens to a tree: expressions, `SELECT`, `CREATE TABLE`, `CREATE INDEX`. | Q4 |
 | `schema` | The `CREATE` text of `sqlite_schema` to columns, affinities, collations and the rowid rules. | D-145, Q2 |
@@ -114,8 +115,9 @@ Each rule is checkable, and each makes a later thing possible.
 | Text as numbers | 215 | recorded oracle, `num.corpus` |
 | Expressions, answered | 17051 | recorded oracle, `eval.corpus` |
 | Statements, answered | 361 over 14 fixtures | recorded oracle, `query.corpus` |
+| A database whose content is in its log | 26 cases over `logged.db` | the fixture and logs built by hand |
 | The format under every configuration | 11 fixtures, the same three rows and the same index | the matrix, 16.11 |
-| The readers against arbitrary bytes | 4 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval` |
+| The readers against arbitrary bytes | 5 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval`, `sqlite_wal` |
 
 The crate is `COMPLETE` in `crates/tools/xtask/src/policy.rs`: 100 percent
 of lines and 100 percent of branches, in both instrumentations.
@@ -124,7 +126,7 @@ of lines and 100 percent of branches, in both instrumentations.
 
 | # | What is missing | Which step |
 |---|-----------------|------------|
-| 1 | The pager: a page cache, the rollback journal a reader must ignore, the write-ahead log a reader must follow. | Q3 |
+| 1 | The pager: a page cache, and the rollback journal a reader must not read past. The write-ahead log is built. | Q3 |
 | 2 | The secondary indexes, used rather than read: a `WHERE` that names an indexed column still scans. | Q6 |
 | 3 | The virtual machine and the code generator that replaces the tree walker. | Q6 |
 | 4 | Writing: the b-tree writer, transactions, the journal in four modes, the WAL. | Q7 |
@@ -272,7 +274,7 @@ CI has no SQLite.
 |------|------|--------|------------|------|
 | Q1 | The format, read | built | nothing | L |
 | Q2 | The schema as types | built | Q1 | M |
-| Q3 | The pager and the index trees | open | Q1 | L |
+| Q3 | The pager and the index trees | the log is built; the cache and the journal are open | Q1 | L |
 | Q4 | The tokenizer and the parser | built but for the window clauses | nothing | L |
 | Q5 | Values, and a statement answered by walking | built | Q2, Q4 | L |
 | Q6 | The virtual machine | open | Q5 | L |
@@ -347,7 +349,8 @@ text, columns, affinities, collations and keys.
 
 ## 16.17 Q3. The pager and the index trees
 
-Status: open.
+Status: the write-ahead log is built; the page cache and the rollback
+journal are open.
 Depends on: Q1.
 Size: L.
 
@@ -359,14 +362,23 @@ Size: L.
 
 ### Does
 
-1. Read a page through a cache rather than out of a byte slice.
-2. Ignore a rollback journal, which a reader must.
-3. Follow a write-ahead log, which a reader must, including its index.
+1. Follow a write-ahead log, which a reader must: the header, the
+   frames, the checksum of section 4.2, and the newest committed frame
+   of each page. Built.
+2. Read a page through a cache rather than out of a byte slice. Open.
+3. Refuse a database whose rollback journal is hot, which is a file
+   mid-write and not a file with rows in it. Open.
+
+### Produces
+
+`wal` in `crates/db/sqlite/src`, and `Image::open_with_log` and
+`Database::open_with_log` beside the two that read a file alone.
 
 ### Done when
 
-A file in each of the six journal modes reads back the same rows; the
-crate meets D4.
+A file in each of the six journal modes reads back the same rows;
+`fixtures/logged.db`, whose file names no table, reads back the rows its
+log holds; the crate meets D4.
 
 ## 16.18 Q4. The tokenizer and the parser
 

@@ -46,7 +46,8 @@ fn the_encoding_travels_in_the_header_and_not_in_the_rows() {
     assert_eq!(Encoding::Utf16Le.code(), 2);
     assert_eq!(Encoding::Utf16Be.code(), 3);
     assert_eq!(Encoding::from_code(3), Ok(Encoding::Utf16Be));
-    assert_eq!(Encoding::from_code(0), Err(Error::Encoding(0)));
+    // Zero is the field before anything sets it, which is UTF-8.
+    assert_eq!(Encoding::from_code(0), Ok(Encoding::Utf8));
     assert_eq!(Encoding::from_code(4), Err(Error::Encoding(4)));
 }
 

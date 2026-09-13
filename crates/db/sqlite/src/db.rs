@@ -306,7 +306,21 @@ impl<'a> Database<'a> {
     ///
     /// [`Error`] names what it could not read and why.
     pub fn open(bytes: &'a [u8]) -> Result<Self, Error> {
-        let image = Image::open(bytes)?;
+        Self::read(Image::open(bytes)?)
+    }
+
+    /// The same for a database whose newest pages are in its
+    /// write-ahead log, which a reader must follow.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what it could not read and why.
+    pub fn open_with_log(bytes: &'a [u8], log: &'a crate::wal::Wal<'a>) -> Result<Self, Error> {
+        Self::read(Image::open_with_log(bytes, log)?)
+    }
+
+    /// Reads the schema of an open file.
+    fn read(image: Image<'a>) -> Result<Self, Error> {
         let encoding = image.header().encoding;
         let mut tables = Vec::new();
         let mut payload = Vec::new();

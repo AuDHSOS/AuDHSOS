@@ -9,6 +9,7 @@ use crate::error::Error;
 use crate::header::Header;
 use crate::page::{Kind, Page, Payload};
 use crate::record::Record;
+use crate::wal::Wal;
 
 /// How deep a tree this crate walks. SQLite's own cursor stops at twenty;
 /// a tree deeper than this is a file that points into itself.
@@ -22,8 +23,11 @@ pub const SCHEMA_ROOT: u32 = 1;
 pub struct Image<'a> {
     /// The whole file.
     bytes: &'a [u8],
-    /// Its header.
+    /// Its header, read from page one wherever page one now is.
     header: Header,
+    /// The write-ahead log, where the file has one a reader must
+    /// follow.
+    log: Option<&'a Wal<'a>>,
 }
 
 impl<'a> Image<'a> {
@@ -34,7 +38,33 @@ impl<'a> Image<'a> {
     /// The errors of [`Header::parse`].
     pub fn open(bytes: &'a [u8]) -> Result<Self, Error> {
         let header = Header::parse(bytes)?;
-        Ok(Image { bytes, header })
+        Ok(Image {
+            bytes,
+            header,
+            log: None,
+        })
+    }
+
+    /// The same, reading every page the log holds out of the log.
+    ///
+    /// The header is read from page one wherever page one now is, which
+    /// is the log for a database whose whole content the log holds.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Header::parse`], and [`Error::PageSize`] where
+    /// the log was written with a page size the header does not name.
+    pub fn open_with_log(bytes: &'a [u8], log: &'a Wal<'a>) -> Result<Self, Error> {
+        let first = log.page_bytes(1).unwrap_or(bytes);
+        let header = Header::parse(first)?;
+        if log.pages() != 0 && log.page_size() != header.page_size {
+            return Err(Error::PageSize(log.page_size()));
+        }
+        Ok(Image {
+            bytes,
+            header,
+            log: Some(log),
+        })
     }
 
     /// The header.
@@ -48,6 +78,11 @@ impl<'a> Image<'a> {
     /// written, and what can be read is what is there.
     #[must_use]
     pub fn pages(&self) -> u32 {
+        // A log that holds a commit frame says how many pages the
+        // database has, and the file's own length is then stale.
+        if let Some(pages) = self.log.map(Wal::pages).filter(|pages| *pages != 0) {
+            return pages;
+        }
         let size = u64::try_from(self.bytes.len()).unwrap_or(0);
         size.checked_div(u64::from(self.header.page_size))
             .and_then(|pages| u32::try_from(pages).ok())
@@ -62,6 +97,9 @@ impl<'a> Image<'a> {
     pub fn page_bytes(&self, number: u32) -> Result<&'a [u8], Error> {
         if number == 0 {
             return Err(Error::Page(0));
+        }
+        if let Some(page) = self.log.and_then(|log| log.page_bytes(number)) {
+            return Ok(page);
         }
         let page_size = size(u64::from(self.header.page_size));
         let start = size(u64::from(number.saturating_sub(1))).saturating_mul(page_size);
@@ -94,8 +132,10 @@ impl<'a> Image<'a> {
     /// How many bytes the file is, which is the most any one payload of
     /// it can be.
     #[must_use]
-    pub const fn size(&self) -> usize {
-        self.bytes.len()
+    pub fn size(&self) -> usize {
+        // What a payload may be is bounded by the pages there are, which
+        // a log makes more than the file itself holds.
+        size(u64::from(self.pages())).saturating_mul(size(u64::from(self.header.page_size)))
     }
 
     /// The rows of the schema table, which is the tree at page 1: one row

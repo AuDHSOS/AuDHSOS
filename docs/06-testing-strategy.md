@@ -3599,6 +3599,38 @@ puts each to the engine uncorrelated and correlated.
 - `sqlite_image` puts a correlated count, an `EXISTS` and an `IN` over
   every fuzzed file in one statement.
 
+### 6.6.94 The write-ahead log (`db-sqlite`)
+
+D-155. A database in write-ahead logging keeps its newest pages in its
+log, so a reader that does not follow the log reads a file that is
+empty or stale.
+
+- `fixtures/logged.db` is 4096 bytes and names no table; its log holds
+  the schema, the rows, and three changes made after them — a text
+  updated, a row deleted, a row inserted. The shell checkpoints a log
+  away when the last connection closes, so the two files are copied
+  while the connection is open.
+- What the reader takes: the newest frame of each page up to the last
+  commit frame, which is the row set the last commit left and not the
+  three rows the first one wrote.
+- Where the walk stops: a frame whose salt-1 or salt-2 is not the
+  header's, and a frame whose checksums are not the running one. Either
+  leaves the log holding nothing, because the frames after such a frame
+  were written before the last reset.
+- The refusals: a file shorter than the 32-byte header, a magic number
+  that is neither `0x377f0682` nor `0x377f0683`, a page size that is not
+  a power of two in 512..=65536, and a log whose page size is not the
+  one the database header names.
+- The shell writes only logs whose checksum is computed little-endian,
+  so the big-endian half of section 4.2 is reached by logs the test
+  builds itself, which also compute the checksum for themselves rather
+  than calling the reader.
+- A frame may name page zero; no reader may ask for it, because section
+  1.2 numbers pages from one. `sqlite_wal` found this by asserting it.
+- `sqlite_wal` reads arbitrary bytes as a log on their own and beside
+  the fixture, and asserts the page size it answers, the length of every
+  frame it hands back, and that page zero is in no log.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

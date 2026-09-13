@@ -104,6 +104,27 @@ fixture m-autovacuum-incr.db "" "PRAGMA page_size=4096; PRAGMA auto_vacuum=INCRE
 "$sqlite" "$out/m-wal.db" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null
 rm -f "$out"/*-wal "$out"/*-shm
 
+# A database whose content is in the log and not in the file, which is
+# what a reader that does not follow the log reads back as empty. The
+# three files are copied while the connection is open, because closing
+# the last one checkpoints the log away.
+rm -f "$out/m-logged.db" "$out/m-logged.db-wal" "$out/logged.db" "$out/logged.db-wal"
+"$sqlite" "$out/m-logged.db" >/dev/null <<LOGGED
+PRAGMA page_size=4096;
+PRAGMA journal_mode=wal;
+PRAGMA wal_autocheckpoint=0;
+$content
+UPDATE m SET t='ONE' WHERE i=1;
+DELETE FROM m WHERE i=3;
+INSERT INTO m VALUES (4,'four',4.5,x'04040404');
+.system cp "$out/m-logged.db" "$out/logged.db"
+.system cp "$out/m-logged.db-wal" "$out/logged.db-wal"
+LOGGED
+rm -f "$out/m-logged.db" "$out/m-logged.db-wal" "$out/m-logged.db-shm"
+printf '%s\t%s bytes, log %s bytes\n' logged.db \
+    "$(wc -c <"$out/logged.db" | tr -d ' ')" \
+    "$(wc -c <"$out/logged.db-wal" | tr -d ' ')"
+
 # The recorded oracle: what the C library answers where SQL cannot ask.
 amalgamation="$(dirname "$sqlite")/sqlite3.c"
 if [ -f "$amalgamation" ]; then

@@ -55,7 +55,10 @@ impl Encoding {
     /// [`Error::Encoding`] for anything but 1, 2 and 3.
     pub const fn from_code(code: u32) -> Result<Self, Error> {
         match code {
-            1 => Ok(Encoding::Utf8),
+            // Zero is the field before anything sets it, which every
+            // database has until its schema is first written, and which
+            // `sqlite3InitOne` reads as UTF-8.
+            0 | 1 => Ok(Encoding::Utf8),
             2 => Ok(Encoding::Utf16Le),
             3 => Ok(Encoding::Utf16Be),
             other => Err(Error::Encoding(other)),
