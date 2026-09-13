@@ -73,6 +73,29 @@ impl Answer {
     }
 }
 
+/// Where the value of a column comes from.
+pub trait Row {
+    /// The column `column` of the table `table`, with the affinity and
+    /// the collation it was declared with, or nothing where this row has
+    /// no such column.
+    fn column(&self, table: Option<&[u8]>, column: &[u8]) -> Option<(Value, Affinity, Collation)>;
+}
+
+/// A row with no columns, which is what a constant expression is read
+/// against.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoRow;
+
+impl Row for NoRow {
+    fn column(
+        &self,
+        _table: Option<&[u8]>,
+        _column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)> {
+        None
+    }
+}
+
 /// What the expression `id` of `arena` answers, where `sql` is the
 /// statement its spans point into.
 ///
@@ -80,11 +103,42 @@ impl Answer {
 ///
 /// [`Error`] names what it could not answer and why.
 pub fn evaluate(arena: &Arena, id: ExprId, sql: &[u8]) -> Result<Value, Error> {
-    Ok(answer(arena, id, sql, 0)?.value)
+    evaluate_row(arena, id, sql, &NoRow)
+}
+
+/// The same, against a row whose columns the expression may name.
+///
+/// # Errors
+///
+/// [`Error`] names what it could not answer and why.
+pub fn evaluate_row(arena: &Arena, id: ExprId, sql: &[u8], row: &dyn Row) -> Result<Value, Error> {
+    Ok(answer(arena, id, sql, row, 0)?.value)
+}
+
+/// The same, with the collation a comparison against the answer would
+/// use.
+///
+/// # Errors
+///
+/// [`Error`] names what it could not answer and why.
+pub fn evaluate_collated(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    row: &dyn Row,
+) -> Result<(Value, Collation), Error> {
+    let answered = answer(arena, id, sql, row, 0)?;
+    Ok((answered.value, answered.collation.unwrap_or_default()))
 }
 
 /// One node.
-fn answer(arena: &Arena, id: ExprId, sql: &[u8], depth: u32) -> Result<Answer, Error> {
+fn answer(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    row: &dyn Row,
+    depth: u32,
+) -> Result<Answer, Error> {
     if depth > MAX_DEPTH {
         return Err(Error::TooDeep);
     }
@@ -92,35 +146,35 @@ fn answer(arena: &Arena, id: ExprId, sql: &[u8], depth: u32) -> Result<Answer, E
     let deeper = depth.saturating_add(1);
     match node {
         Node::Literal(literal) => literal_value(literal, sql, false).map(Answer::plain),
-        Node::Unary { op, operand } => unary(arena, op, operand, sql, deeper),
-        Node::Binary { op, left, right } => binary(arena, op, left, right, sql, deeper),
+        Node::Unary { op, operand } => unary(arena, op, operand, sql, row, deeper),
+        Node::Binary { op, left, right } => binary(arena, op, left, right, sql, row, deeper),
         Node::Between {
             value,
             low,
             high,
             negated,
-        } => between(arena, value, low, high, negated, sql, deeper),
+        } => between(arena, value, low, high, negated, sql, row, deeper),
         Node::InList {
             value,
             list,
             negated,
         } => {
-            let left = answer(arena, value, sql, deeper)?;
+            let left = answer(arena, value, sql, row, deeper)?;
             let mut list_answers = Vec::new();
             for member in arena.children(list) {
-                list_answers.push(answer(arena, *member, sql, deeper)?);
+                list_answers.push(answer(arena, *member, sql, row, deeper)?);
             }
             Ok(Answer::plain(in_list(&left, &list_answers, negated)))
         }
         Node::Cast { value, ty } => {
-            let mut inner = answer(arena, value, sql, deeper)?;
+            let mut inner = answer(arena, value, sql, row, deeper)?;
             let affinity = Affinity::of_type(ty.text(sql));
             cast(&mut inner.value, affinity);
             inner.affinity = affinity;
             Ok(inner)
         }
         Node::Collate { value, name } => {
-            let mut inner = answer(arena, value, sql, deeper)?;
+            let mut inner = answer(arena, value, sql, row, deeper)?;
             inner.collation = Collation::of_name(name.text(sql)).or(inner.collation);
             Ok(inner)
         }
@@ -128,8 +182,17 @@ fn answer(arena: &Arena, id: ExprId, sql: &[u8], depth: u32) -> Result<Answer, E
             operand,
             branches,
             otherwise,
-        } => case(arena, operand, branches, otherwise, sql, deeper),
-        Node::Column { .. } => Err(Error::NoColumn),
+        } => case(arena, operand, branches, otherwise, sql, row, deeper),
+        Node::Column { table, column, .. } => {
+            let (value, affinity, collation) = row
+                .column(table.map(|span| span.text(sql)), column.text(sql))
+                .ok_or(Error::NoColumn)?;
+            Ok(Answer {
+                value,
+                affinity,
+                collation: Some(collation),
+            })
+        }
         Node::Call {
             name,
             args,
@@ -143,7 +206,7 @@ fn answer(arena: &Arena, id: ExprId, sql: &[u8], depth: u32) -> Result<Answer, E
             let mut values = Vec::new();
             let mut collation = None;
             for id in arena.children(args) {
-                let argument = answer(arena, *id, sql, deeper)?;
+                let argument = answer(arena, *id, sql, row, deeper)?;
                 collation = collation.or(argument.collation);
                 values.push(argument.value);
             }
@@ -169,7 +232,7 @@ fn answer(arena: &Arena, id: ExprId, sql: &[u8], depth: u32) -> Result<Answer, E
             pattern,
             escape,
             negated,
-        } => like(arena, op, value, pattern, escape, negated, sql, deeper),
+        } => like(arena, op, value, pattern, escape, negated, sql, row, deeper),
         Node::Variable(_)
         | Node::Row(_)
         | Node::Subquery(_)
@@ -309,6 +372,7 @@ fn unary(
     op: UnaryOp,
     operand: ExprId,
     sql: &[u8],
+    row: &dyn Row,
     depth: u32,
 ) -> Result<Answer, Error> {
     if op == UnaryOp::Negate {
@@ -320,7 +384,7 @@ fn unary(
             return literal_value(literal, sql, true).map(Answer::plain);
         }
     }
-    let inner = answer(arena, operand, sql, depth)?;
+    let inner = answer(arena, operand, sql, row, depth)?;
     let value = inner.value;
     Ok(match op {
         // A sign before anything else is a subtraction from zero.
@@ -356,10 +420,11 @@ fn binary(
     left: ExprId,
     right: ExprId,
     sql: &[u8],
+    row: &dyn Row,
     depth: u32,
 ) -> Result<Answer, Error> {
-    let left = answer(arena, left, sql, depth)?;
-    let right = answer(arena, right, sql, depth)?;
+    let left = answer(arena, left, sql, row, depth)?;
+    let right = answer(arena, right, sql, row, depth)?;
     let value = match op {
         BinaryOp::Or | BinaryOp::And => {
             let (first, second) = (logic(&left.value), logic(&right.value));
@@ -593,6 +658,7 @@ fn like(
     escape: Option<ExprId>,
     negated: bool,
     sql: &[u8],
+    row: &dyn Row,
     depth: u32,
 ) -> Result<Answer, Error> {
     let function = match op {
@@ -603,11 +669,11 @@ fn like(
     // The pattern is the first argument and the value the second, which
     // is how `A LIKE B` is written as `like(B,A)`.
     let mut args = alloc::vec![
-        answer(arena, pattern, sql, depth)?.value,
-        answer(arena, value, sql, depth)?.value,
+        answer(arena, pattern, sql, row, depth)?.value,
+        answer(arena, value, sql, row, depth)?.value,
     ];
     if let Some(escape) = escape {
-        args.push(answer(arena, escape, sql, depth)?.value);
+        args.push(answer(arena, escape, sql, row, depth)?.value);
     }
     let answered = func::call(function, &args, Collation::default())?;
     Ok(Answer::plain(match (negated, logic(&answered)) {
@@ -618,6 +684,10 @@ fn like(
 }
 
 /// `x BETWEEN low AND high`, which is two comparisons over one value.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the node's own fields, and the walk the tree is read with"
+)]
 fn between(
     arena: &Arena,
     value: ExprId,
@@ -625,11 +695,12 @@ fn between(
     high: ExprId,
     negated: bool,
     sql: &[u8],
+    row: &dyn Row,
     depth: u32,
 ) -> Result<Answer, Error> {
-    let middle = answer(arena, value, sql, depth)?;
-    let low = answer(arena, low, sql, depth)?;
-    let high = answer(arena, high, sql, depth)?;
+    let middle = answer(arena, value, sql, row, depth)?;
+    let low = answer(arena, low, sql, row, depth)?;
+    let high = answer(arena, high, sql, row, depth)?;
     let above = logic(&comparison(BinaryOp::Ge, &middle, &low));
     let below = logic(&comparison(BinaryOp::Le, &middle, &high));
     let inside = if above == Some(false) || below == Some(false) {
@@ -679,27 +750,28 @@ fn case(
     branches: crate::ast::Range,
     otherwise: Option<ExprId>,
     sql: &[u8],
+    row: &dyn Row,
     depth: u32,
 ) -> Result<Answer, Error> {
     let subject = match operand {
-        Some(id) => Some(answer(arena, id, sql, depth)?),
+        Some(id) => Some(answer(arena, id, sql, row, depth)?),
         None => None,
     };
     let children = arena.children(branches);
     let mut at = 0;
     while let (Some(when), Some(then)) = (children.get(at), children.get(at.saturating_add(1))) {
-        let condition = answer(arena, *when, sql, depth)?;
+        let condition = answer(arena, *when, sql, row, depth)?;
         let taken = match &subject {
             Some(subject) => logic(&comparison(BinaryOp::Eq, subject, &condition)),
             None => logic(&condition.value),
         };
         if taken == Some(true) {
-            return answer(arena, *then, sql, depth);
+            return answer(arena, *then, sql, row, depth);
         }
         at = at.saturating_add(2);
     }
     match otherwise {
-        Some(id) => answer(arena, id, sql, depth),
+        Some(id) => answer(arena, id, sql, row, depth),
         None => Ok(Answer::plain(Value::Null)),
     }
 }

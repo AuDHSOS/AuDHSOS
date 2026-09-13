@@ -3329,6 +3329,47 @@ affinity, collation, key and defaults each carries, built out of the
   be: a key place inside the columns, a rowid that is one of them and
   not on a table without one, and no two columns of a name.
 
+### 6.6.85 A statement answered from a file (`db-sqlite`)
+
+D-146, document 16 step Q5, finished. A database is opened, its schema is
+read, and a `SELECT` over one table is answered by walking that table's
+tree: the first statement this port answers end to end.
+
+- The recorded oracle: `fixtures/query.corpus` is a fixture and a
+  statement per line, and `fixtures/query.golden` is the columns SQLite
+  named and the rows it answered, each value quoted, written by
+  `tools/sqlite-oracle.c`. The comparison is the name of every column
+  and the value of every field, over ninety statements against eleven
+  files — every page size of the matrix, reserved space, a file that has
+  been through write-ahead logging, both kinds of auto-vacuum, a tree
+  with an interior page, a row on overflow pages, a key that is the
+  rowid, a key written backwards, and computed columns.
+- The names are checked as closely as the rows, because SQLite's rule
+  for them is not obvious: an alias wins, a bare column answers under
+  its own name, the rowid answers under the name of the column it is an
+  alias for, and everything else answers under the text it was written
+  as — `a + 1` with its spaces, `'lit'` with its quotes, and `a COLLATE
+  NOCASE` whole, because a collation written around a column stops it
+  being one.
+- What the engine refuses by name is counted rather than asserted: an
+  aggregate, a grouping, a compound, `VALUES`, a schema-qualified name, a
+  table whose rows live in the key's own tree, a column that is computed
+  and not stored, and text that is not UTF-8. The count is held down so
+  that it can only fall.
+- The refusals that are the engine's own: a file that is not a database,
+  a statement that is not one, a table the schema does not name, an
+  `ORDER BY` that counts past the answer, and a schema this crate cannot
+  read — the last built by patching one byte of a fixture, because a
+  file is not obliged to hold a schema anyone can read.
+- A schema of five rows the shell would never write is built by hand: a
+  row whose type is not text, one that is not a table, one whose root
+  page is not a number, one with no statement, and one that calls itself
+  a table and holds an index. The reader walks past all five.
+- `sqlite_image` now opens every fuzzed file as a database and answers a
+  statement over each table it finds. The first thing that found is in
+  the regression corpus: a row whose length is a number no machine
+  holds, which is now refused before the room for it is asked for.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

@@ -23,6 +23,10 @@
 **   expr        one SQL expression, answered as its type and its value
 **               quoted, or as the message SQLite refused it with.
 **   schema-corpus  writes the cases for the reader of schemas.
+**   query-corpus   writes the cases for the engine that answers a query.
+**   query       a fixture and a statement, separated by a bar, answered
+**               as the rows the statement makes of that file. The
+**               second argument names the directory the fixtures are in.
 **   schema      one CREATE statement, answered as what the schema holds
 **               after it: the table with its columns, or the index with
 **               its terms. A refusal is answered as "!" and whether it
@@ -37,6 +41,7 @@
 ** SQLITE_PRIVATE to nothing so that they can be asked directly. */
 extern int sqlite3AtoF(const char *, double *);
 extern int sqlite3Atoi64(const char *, sqlite3_int64 *, int, unsigned char);
+extern void sqlite3QuoteValue(sqlite3_str *, sqlite3_value *, int);
 
 /* A double from sixteen hex digits, and the text SQLite prints it as. */
 static int fp_case(const char *line) {
@@ -824,9 +829,155 @@ static void schema_corpus(void) {
   }
 }
 
+/* The statements put to the fixture databases. */
+static const char *aQuery[] = {
+  "small.db|SELECT * FROM t",
+  "small.db|SELECT a FROM t",
+  "small.db|SELECT a, b FROM t WHERE a>1",
+  "small.db|SELECT rowid, a FROM t",
+  "small.db|SELECT oid, _rowid_ FROM t",
+  "small.db|SELECT * FROM t ORDER BY a DESC",
+  "small.db|SELECT * FROM t ORDER BY a",
+  "small.db|SELECT b FROM t ORDER BY 1",
+  "small.db|SELECT a AS x FROM t ORDER BY x DESC",
+  "small.db|SELECT a+1, b||'x' FROM t",
+  "small.db|SELECT DISTINCT typeof(d) FROM t",
+  "small.db|SELECT * FROM t LIMIT 2",
+  "small.db|SELECT * FROM t LIMIT 1 OFFSET 1",
+  "small.db|SELECT * FROM t LIMIT -1",
+  "small.db|SELECT * FROM t LIMIT 1, 2",
+  "small.db|SELECT * FROM t WHERE b LIKE 't%'",
+  "small.db|SELECT * FROM t WHERE b GLOB 't*'",
+  "small.db|SELECT typeof(a), typeof(b), typeof(c), typeof(d) FROM t",
+  "small.db|SELECT * FROM t AS x WHERE x.a=1",
+  "small.db|SELECT t.a FROM t",
+  "small.db|SELECT a FROM t WHERE a IN (1,2)",
+  "small.db|SELECT a FROM t WHERE b IS NULL",
+  "small.db|SELECT a FROM t WHERE d IS NOT NULL",
+  "small.db|SELECT count(*) FROM t",
+  "small.db|SELECT a FROM t GROUP BY a",
+  "small.db|SELECT a FROM t GROUP BY a HAVING a>1",
+  "small.db|WITH x AS (SELECT 1) SELECT * FROM t",
+  "small.db|SELECT * FROM nosuch",
+  "small.db|SELECT a FROM t ORDER BY 99",
+  "small.db|SELECT a, b FROM t ORDER BY 2",
+  "keys.db|SELECT * FROM r",
+  "keys.db|SELECT id, v FROM r ORDER BY id",
+  "keys.db|SELECT rowid, id FROM r",
+  "keys.db|SELECT * FROM r WHERE id=9",
+  "keys.db|SELECT * FROM w",
+  "keys.db|SELECT a FROM w ORDER BY a DESC",
+  "keys.db|SELECT rowid FROM w",
+  "keys.db|SELECT * FROM d",
+  "keys.db|SELECT k, rowid FROM d",
+  "generated.db|SELECT * FROM g",
+  "generated.db|SELECT a, c FROM h",
+  "generated.db|SELECT * FROM h ORDER BY c DESC",
+  "small.db|SELECT * FROM t, t",
+  "small.db|SELECT 1 UNION SELECT 2",
+  "small.db|VALUES(1)",
+  "small.db|SELECT 1",
+  "small.db|SELECT 1 WHERE 0",
+  "small.db|SELECT 'a' WHERE 1",
+  "small.db|SELECT hex(d) FROM t",
+  "small.db|SELECT a FROM t WHERE c > 0.0",
+  "small.db|SELECT quote(c) FROM t",
+  "small.db|SELECT main.t.a FROM t",
+  "small.db|SELECT * FROM main.t",
+  "small.db|SELECT z.a FROM t",
+  "small.db|SELECT x",
+  "small.db|SELECT a COLLATE NOCASE FROM t",
+  "small.db|SELECT b FROM t ORDER BY b COLLATE NOCASE",
+  "small.db|SELECT a FROM t ORDER BY 1, 1",
+  "small.db|SELECT 1 FROM t ORDER BY 1",
+  "small.db|SELECT a FROM t ORDER BY -1",
+  "small.db|SELECT a FROM t ORDER BY b, a",
+  "small.db|SELECT a FROM t WHERE a=1 ORDER BY a",
+  "small.db|SELECT DISTINCT a>0 FROM t",
+  "small.db|SELECT * FROM t WHERE 0",
+  "small.db|SELECT a FROM t LIMIT 0",
+  "small.db|SELECT a FROM t LIMIT 99",
+  "small.db|SELECT a FROM t LIMIT 2 OFFSET 99",
+  "small.db|SELECT t.rowid FROM t",
+  "small.db|SELECT nosuchfn(a) FROM t",
+  "small.db|SELECT * FROM t WHERE nosuch=1",
+  "page512.db|SELECT n, s FROM wide WHERE n BETWEEN 100 AND 103",
+  "page512.db|SELECT s FROM wide ORDER BY n DESC LIMIT 3",
+  "page512.db|SELECT n FROM wide LIMIT 4",
+  "page512.db|SELECT n FROM wide WHERE n%97=0",
+  "indexed.db|SELECT a, b FROM k WHERE b='v50'",
+  "indexed.db|SELECT a FROM k ORDER BY b LIMIT 5",
+  "indexed.db|SELECT b FROM k WHERE a<4 ORDER BY a DESC",
+  "overflow.db|SELECT length(t) FROM big",
+  "overflow.db|SELECT substr(t,1,10) FROM big",
+  "m-utf8-512.db|SELECT * FROM m",
+  "m-utf8-1024.db|SELECT i, t FROM m WHERE r>2",
+  "m-utf8-4096.db|SELECT * FROM m ORDER BY t",
+  "m-utf8-65536.db|SELECT * FROM m",
+  "m-reserved32.db|SELECT * FROM m",
+  "m-wal.db|SELECT * FROM m",
+  "m-autovacuum-full.db|SELECT * FROM m",
+  "m-autovacuum-incr.db|SELECT * FROM m",
+  "m-utf16le-512.db|SELECT * FROM m",
+  "m-utf16be-4096.db|SELECT * FROM m",
+  "utf16.db|SELECT * FROM u"
+};
+
+/* The cases, one per line. */
+static void query_corpus(void) {
+  int i;
+  for (i = 0; i < (int)(sizeof(aQuery) / sizeof(aQuery[0])); i++) {
+    printf("%s\n", aQuery[i]);
+  }
+}
+
+/* The rows one statement makes of one file. */
+static int query_case(const char *line, const char *zDir) {
+  const char *bar = strchr(line, '|');
+  char *path, *sql;
+  sqlite3 *db = 0;
+  sqlite3_stmt *stmt = 0;
+  int rc, i, n;
+  if (bar == 0) return 1;
+  path = sqlite3_mprintf("%s/%.*s", zDir, (int)(bar - line), line);
+  sql = sqlite3_mprintf("%s", bar + 1);
+  if (path == 0 || sql == 0) return 1;
+  rc = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, 0);
+  if (rc == SQLITE_OK) rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+  if (rc != SQLITE_OK) {
+    printf("!\t%s\n", sqlite3_errmsg(db));
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+    sqlite3_free(path);
+    sqlite3_free(sql);
+    return 0;
+  }
+  n = sqlite3_column_count(stmt);
+  printf("N");
+  for (i = 0; i < n; i++) printf("|%s", sqlite3_column_name(stmt, i));
+  while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+    printf("\tR");
+    for (i = 0; i < n; i++) {
+      sqlite3_str *str = sqlite3_str_new(db);
+      char *text;
+          sqlite3QuoteValue(str, sqlite3_column_value(stmt, i), 0);
+      text = sqlite3_str_finish(str);
+      printf("|%s", text ? text : "");
+      sqlite3_free(text);
+    }
+  }
+  if (rc != SQLITE_DONE) printf("\t!%s", sqlite3_errmsg(db));
+  printf("\n");
+  sqlite3_finalize(stmt);
+  sqlite3_close(db);
+  sqlite3_free(path);
+  sqlite3_free(sql);
+  return 0;
+}
+
 int main(int argc, char **argv) {
   char line[4096];
-  if (argc != 2) {
+  if (argc < 2) {
     fprintf(stderr, "usage: sqlite-oracle <mode>; see the head of this file\n");
     return 2;
   }
@@ -840,6 +991,22 @@ int main(int argc, char **argv) {
   }
   if (strcmp(argv[1], "expr-corpus") == 0) {
     expr_corpus();
+    return 0;
+  }
+  if (strcmp(argv[1], "query-corpus") == 0) {
+    query_corpus();
+    return 0;
+  }
+  if (strcmp(argv[1], "query") == 0) {
+    const char *zDir = argc > 2 ? argv[2] : ".";
+    while (fgets(line, sizeof(line), stdin) != 0) {
+      size_t len = strlen(line);
+      while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+        line[--len] = 0;
+      }
+      if (len == 0) continue;
+      if (query_case(line, zDir) != 0) return 1;
+    }
     return 0;
   }
   if (strcmp(argv[1], "schema-corpus") == 0) {

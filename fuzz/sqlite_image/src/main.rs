@@ -11,6 +11,7 @@
 //! refusal: a cell that reaches past its page, a chain that turns back on
 //! itself, a tree that points into itself.
 
+use db_sqlite::db::Database;
 use db_sqlite::{Cell, Image, Kind, Record, Value};
 
 /// The most rows a walk reads. A file can describe more; reading them adds
@@ -22,6 +23,35 @@ const MAX_ROWS: usize = 4096;
 const MAX_PAYLOAD: usize = 1 << 20;
 
 fuzz_support::fuzz_target!(|bytes: &[u8]| {
+    // The schema of a file is text the file decides, and a statement
+    // over it is a walk the file decides the shape of. Neither may
+    // panic and neither may run forever.
+    if let Ok(database) = Database::open(bytes) {
+        let names: Vec<Vec<u8>> = database
+            .tables()
+            .map(|table| table.name.clone())
+            .collect();
+        for name in names.iter().take(4) {
+            let mut sql = b"SELECT * FROM \"".to_vec();
+            for byte in name {
+                if *byte == b'"' {
+                    sql.push(b'"');
+                }
+                sql.push(*byte);
+            }
+            sql.extend_from_slice(b"\" ORDER BY 1 LIMIT 64");
+            if let Ok(answer) = database.query(&sql) {
+                for row in &answer.rows {
+                    assert_eq!(
+                        row.len(),
+                        answer.names.len(),
+                        "a row of another width than the answer"
+                    );
+                }
+            }
+        }
+    }
+
     let Ok(image) = Image::open(bytes) else {
         return;
     };

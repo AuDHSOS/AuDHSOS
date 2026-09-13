@@ -305,7 +305,7 @@ fn write_select(arena: &Arena, id: crate::ast::SelectId, sql: &[u8], out: &mut S
                 out.push_str(&text(table));
                 out.push_str(".*");
             }
-            ResultColumn::Expr { expr, alias } => {
+            ResultColumn::Expr { expr, alias, .. } => {
                 write(arena, expr, sql, out);
                 if let Some(alias) = alias {
                     out.push_str(" as ");

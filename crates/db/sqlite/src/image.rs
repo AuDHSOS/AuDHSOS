@@ -84,6 +84,13 @@ impl<'a> Image<'a> {
         Rows::new(*self, root)
     }
 
+    /// How many bytes the file is, which is the most any one payload of
+    /// it can be.
+    #[must_use]
+    pub const fn size(&self) -> usize {
+        self.bytes.len()
+    }
+
     /// The rows of the schema table, which is the tree at page 1: one row
     /// per table, index, view and trigger, as section 2.6 describes.
     #[must_use]

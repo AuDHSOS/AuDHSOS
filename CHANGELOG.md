@@ -15,6 +15,21 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   rendering where the shorter one reads back as the same double. The
   inverse — digits and a power back to the double nearest them — comes
   with it, and reading a number out of text will use it.
+- A statement answered from a file, which finishes step Q5 of document
+  16: a database is opened, its schema is read out of the `CREATE` text
+  it holds, and a `SELECT` over one table — with its `WHERE`, its
+  `ORDER BY`, its `DISTINCT` and its `LIMIT` — is answered by walking
+  that table's tree. Ninety statements over eleven files answer the same
+  columns under the same names with the same values as the C library.
+  What it does not answer yet refuses by name: a join, an aggregate, a
+  grouping, a compound, `VALUES`, a table whose rows live in the key's
+  own tree, a column computed and not stored, and text that is not
+  UTF-8.
+- Two fixtures for it, `keys.db` and `generated.db`, and `sqlite_image`
+  now opens every fuzzed file as a database and answers a statement over
+  each table it finds. The first thing that found is fixed: a row whose
+  length is a number no machine holds is refused before the room for it
+  is asked for.
 - The table a statement describes, which finishes step Q2 of document
   16: the columns of a table with the affinity, collation, key and
   default each carries, built out of the `CREATE TABLE` text because

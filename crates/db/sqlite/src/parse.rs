@@ -111,6 +111,9 @@ pub struct Parser<'a> {
     /// what `t.*` needs, which is the longest thing the grammar decides
     /// by looking rather than by reading.
     ahead: [Option<Token>; 3],
+    /// One past the last byte of the last token read, which is where
+    /// the text of an expression ends.
+    end: usize,
     /// The tree so far.
     arena: Arena,
     /// How deep the walk stands.
@@ -125,6 +128,7 @@ impl<'a> Parser<'a> {
             sql,
             lexer: Lexer::new(sql),
             ahead: [None, None, None],
+            end: 0,
             arena: Arena::new(),
             depth: 0,
         };
@@ -364,13 +368,18 @@ impl<'a> Parser<'a> {
             self.bump();
             return Ok(ResultColumn::TableStar(Span::of(first)));
         }
+        let start = self.peek().map_or(self.end, |token| token.start);
         let expr = self.expression()?;
+        let text = Span {
+            start,
+            len: self.end.saturating_sub(start),
+        };
         let alias = if self.eat_keyword(Keyword::As) {
             Some(self.name()?)
         } else {
             self.optional_name()
         };
-        Ok(ResultColumn::Expr { expr, alias })
+        Ok(ResultColumn::Expr { expr, alias, text })
     }
 
     /// The tables of a `FROM` clause, with the joins between them.
@@ -1816,6 +1825,7 @@ impl<'a> Parser<'a> {
     /// Takes the next token.
     fn bump(&mut self) -> Option<Token> {
         let token = self.peek();
+        self.end = token.map_or(self.end, |token| token.start.saturating_add(token.len));
         self.ahead = [
             self.ahead.get(1).copied().flatten(),
             self.ahead.get(2).copied().flatten(),

@@ -1,0 +1,90 @@
+small.db|SELECT * FROM t
+small.db|SELECT a FROM t
+small.db|SELECT a, b FROM t WHERE a>1
+small.db|SELECT rowid, a FROM t
+small.db|SELECT oid, _rowid_ FROM t
+small.db|SELECT * FROM t ORDER BY a DESC
+small.db|SELECT * FROM t ORDER BY a
+small.db|SELECT b FROM t ORDER BY 1
+small.db|SELECT a AS x FROM t ORDER BY x DESC
+small.db|SELECT a+1, b||'x' FROM t
+small.db|SELECT DISTINCT typeof(d) FROM t
+small.db|SELECT * FROM t LIMIT 2
+small.db|SELECT * FROM t LIMIT 1 OFFSET 1
+small.db|SELECT * FROM t LIMIT -1
+small.db|SELECT * FROM t LIMIT 1, 2
+small.db|SELECT * FROM t WHERE b LIKE 't%'
+small.db|SELECT * FROM t WHERE b GLOB 't*'
+small.db|SELECT typeof(a), typeof(b), typeof(c), typeof(d) FROM t
+small.db|SELECT * FROM t AS x WHERE x.a=1
+small.db|SELECT t.a FROM t
+small.db|SELECT a FROM t WHERE a IN (1,2)
+small.db|SELECT a FROM t WHERE b IS NULL
+small.db|SELECT a FROM t WHERE d IS NOT NULL
+small.db|SELECT count(*) FROM t
+small.db|SELECT a FROM t GROUP BY a
+small.db|SELECT a FROM t GROUP BY a HAVING a>1
+small.db|WITH x AS (SELECT 1) SELECT * FROM t
+small.db|SELECT * FROM nosuch
+small.db|SELECT a FROM t ORDER BY 99
+small.db|SELECT a, b FROM t ORDER BY 2
+keys.db|SELECT * FROM r
+keys.db|SELECT id, v FROM r ORDER BY id
+keys.db|SELECT rowid, id FROM r
+keys.db|SELECT * FROM r WHERE id=9
+keys.db|SELECT * FROM w
+keys.db|SELECT a FROM w ORDER BY a DESC
+keys.db|SELECT rowid FROM w
+keys.db|SELECT * FROM d
+keys.db|SELECT k, rowid FROM d
+generated.db|SELECT * FROM g
+generated.db|SELECT a, c FROM h
+generated.db|SELECT * FROM h ORDER BY c DESC
+small.db|SELECT * FROM t, t
+small.db|SELECT 1 UNION SELECT 2
+small.db|VALUES(1)
+small.db|SELECT 1
+small.db|SELECT 1 WHERE 0
+small.db|SELECT 'a' WHERE 1
+small.db|SELECT hex(d) FROM t
+small.db|SELECT a FROM t WHERE c > 0.0
+small.db|SELECT quote(c) FROM t
+small.db|SELECT main.t.a FROM t
+small.db|SELECT * FROM main.t
+small.db|SELECT z.a FROM t
+small.db|SELECT x
+small.db|SELECT a COLLATE NOCASE FROM t
+small.db|SELECT b FROM t ORDER BY b COLLATE NOCASE
+small.db|SELECT a FROM t ORDER BY 1, 1
+small.db|SELECT 1 FROM t ORDER BY 1
+small.db|SELECT a FROM t ORDER BY -1
+small.db|SELECT a FROM t ORDER BY b, a
+small.db|SELECT a FROM t WHERE a=1 ORDER BY a
+small.db|SELECT DISTINCT a>0 FROM t
+small.db|SELECT * FROM t WHERE 0
+small.db|SELECT a FROM t LIMIT 0
+small.db|SELECT a FROM t LIMIT 99
+small.db|SELECT a FROM t LIMIT 2 OFFSET 99
+small.db|SELECT t.rowid FROM t
+small.db|SELECT nosuchfn(a) FROM t
+small.db|SELECT * FROM t WHERE nosuch=1
+page512.db|SELECT n, s FROM wide WHERE n BETWEEN 100 AND 103
+page512.db|SELECT s FROM wide ORDER BY n DESC LIMIT 3
+page512.db|SELECT n FROM wide LIMIT 4
+page512.db|SELECT n FROM wide WHERE n%97=0
+indexed.db|SELECT a, b FROM k WHERE b='v50'
+indexed.db|SELECT a FROM k ORDER BY b LIMIT 5
+indexed.db|SELECT b FROM k WHERE a<4 ORDER BY a DESC
+overflow.db|SELECT length(t) FROM big
+overflow.db|SELECT substr(t,1,10) FROM big
+m-utf8-512.db|SELECT * FROM m
+m-utf8-1024.db|SELECT i, t FROM m WHERE r>2
+m-utf8-4096.db|SELECT * FROM m ORDER BY t
+m-utf8-65536.db|SELECT * FROM m
+m-reserved32.db|SELECT * FROM m
+m-wal.db|SELECT * FROM m
+m-autovacuum-full.db|SELECT * FROM m
+m-autovacuum-incr.db|SELECT * FROM m
+m-utf16le-512.db|SELECT * FROM m
+m-utf16be-4096.db|SELECT * FROM m
+utf16.db|SELECT * FROM u

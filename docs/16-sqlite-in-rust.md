@@ -110,7 +110,7 @@ the step claims is tested.
 | Q2 | Reading a schema into types: the `CREATE` text parsed rather than handed on, then columns, affinities, collations and the rowid rules. |
 | Q3 | The pager reading: page cache, the journal a reader must ignore, the WAL a reader must follow. |
 | Q4 | The tokenizer, the expression parser and the statement parser for the read half of SQL. **Done**, but for the window clauses. |
-| Q5 | The value semantics — storage classes, affinity, collation, and the decimal spelling of a double — and a tree walker that answers those statements from a file. Differential tests against the C shell begin here. |
+| Q5 | The value semantics — storage classes, affinity, collation, and the decimal spelling of a double — and a tree walker that answers those statements from a file. **Done** for one table at a time. |
 | Q6 | The virtual machine, and the code generator that replaces the walker. |
 | Q7 | Writing: the b-tree writer, transactions, the rollback journal in all four modes, then the WAL. |
 | Q8 | The rest of the language: `CREATE`, `ALTER`, `DROP`, triggers, views, the built-in functions. |
@@ -206,7 +206,7 @@ text the C library prints each of them as.
 
 ## 16.9 Where it stands
 
-Q1, Q2, Q4 but for the window clauses, and the value semantics of Q5 are
+Q1, Q2, Q4 but for the window clauses, and Q5 for one table at a time are
 in `crates/db/sqlite`, and the crate is
 held to complete coverage: every line, every region and every branch, in
 both instrumentations.

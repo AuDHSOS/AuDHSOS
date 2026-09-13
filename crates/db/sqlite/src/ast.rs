@@ -544,6 +544,10 @@ pub enum ResultColumn {
         expr: ExprId,
         /// The name after `AS`, or the one written without it.
         alias: Option<Span>,
+        /// The text of the expression as it stands in the statement,
+        /// which is the name it is answered under where none is written
+        /// and it is not a column.
+        text: Span,
     },
 }
 

@@ -11,6 +11,7 @@
 #![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 
 mod bytes;
+mod db;
 mod definition;
 mod error;
 mod eval;
@@ -56,6 +57,21 @@ pub(super) const OVERFLOW: &[u8] = include_bytes!("fixtures/overflow.db");
 /// `CREATE TABLE k(a INTEGER, b TEXT); CREATE INDEX ka ON k(a); CREATE
 /// UNIQUE INDEX kb ON k(b);` filled with a hundred rows.
 pub(super) const INDEXED: &[u8] = include_bytes!("fixtures/indexed.db");
+
+/// A table whose key is the rowid, one whose rows live in the key's own
+/// tree, and one whose key is written backwards.
+///
+/// `CREATE TABLE r(id INTEGER PRIMARY KEY, v TEXT); CREATE TABLE w(a
+/// TEXT, b INT, PRIMARY KEY(a)) WITHOUT ROWID; CREATE TABLE d(k INTEGER
+/// PRIMARY KEY DESC, v);`
+pub(super) const KEYS: &[u8] = include_bytes!("fixtures/keys.db");
+
+/// Two tables with computed columns: one with a column that is not
+/// stored, and one where every computed column is.
+///
+/// `CREATE TABLE g(a, b AS (a+1), c AS (a*2) STORED); CREATE TABLE h(a,
+/// c AS (a*2) STORED);`
+pub(super) const GENERATED: &[u8] = include_bytes!("fixtures/generated.db");
 
 /// A varint, written the way section 1.6 describes, so that the reader is
 /// tested against something other than itself.

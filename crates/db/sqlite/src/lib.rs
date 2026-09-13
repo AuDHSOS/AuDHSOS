@@ -9,6 +9,7 @@ extern crate alloc;
 
 pub mod ast;
 mod bytes;
+pub mod db;
 pub mod error;
 pub mod eval;
 pub mod fp;

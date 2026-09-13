@@ -1,0 +1,90 @@
+N|a|b|c|d	R|1|'one'|1.5|X'0102'	R|2|'two'|-2.5|NULL	R|-3|''|0.0|X'FF'
+N|a	R|1	R|2	R|-3
+N|a|b	R|2|'two'
+N|rowid|a	R|1|1	R|2|2	R|3|-3
+N|rowid|rowid	R|1|1	R|2|2	R|3|3
+N|a|b|c|d	R|2|'two'|-2.5|NULL	R|1|'one'|1.5|X'0102'	R|-3|''|0.0|X'FF'
+N|a|b|c|d	R|-3|''|0.0|X'FF'	R|1|'one'|1.5|X'0102'	R|2|'two'|-2.5|NULL
+N|b	R|''	R|'one'	R|'two'
+N|x	R|2	R|1	R|-3
+N|a+1|b||'x'	R|2|'onex'	R|3|'twox'	R|-2|'x'
+N|typeof(d)	R|'blob'	R|'null'
+N|a|b|c|d	R|1|'one'|1.5|X'0102'	R|2|'two'|-2.5|NULL
+N|a|b|c|d	R|2|'two'|-2.5|NULL
+N|a|b|c|d	R|1|'one'|1.5|X'0102'	R|2|'two'|-2.5|NULL	R|-3|''|0.0|X'FF'
+N|a|b|c|d	R|2|'two'|-2.5|NULL	R|-3|''|0.0|X'FF'
+N|a|b|c|d	R|2|'two'|-2.5|NULL
+N|a|b|c|d	R|2|'two'|-2.5|NULL
+N|typeof(a)|typeof(b)|typeof(c)|typeof(d)	R|'integer'|'text'|'real'|'blob'	R|'integer'|'text'|'real'|'null'	R|'integer'|'text'|'real'|'blob'
+N|a|b|c|d	R|1|'one'|1.5|X'0102'
+N|a	R|1	R|2	R|-3
+N|a	R|1	R|2
+N|a
+N|a	R|1	R|-3
+N|count(*)	R|3
+N|a	R|-3	R|1	R|2
+N|a	R|2
+N|a|b|c|d	R|1|'one'|1.5|X'0102'	R|2|'two'|-2.5|NULL	R|-3|''|0.0|X'FF'
+!	no such table: nosuch
+!	1st ORDER BY term out of range - should be between 1 and 1
+N|a|b	R|-3|''	R|1|'one'	R|2|'two'
+N|id|v	R|2|'two'	R|5|'five'	R|9|'nine'
+N|id|v	R|2|'two'	R|5|'five'	R|9|'nine'
+N|id|id	R|2|2	R|5|5	R|9|9
+N|id|v	R|9|'nine'
+N|a|b	R|'x'|1	R|'y'|2
+N|a	R|'y'	R|'x'
+!	no such column: rowid
+N|k|v	R|1|'a'
+N|k|rowid	R|1|1
+N|a|b|c	R|1|2|2	R|2|3|4
+N|a|c	R|3|6	R|4|8
+N|a|c	R|4|8	R|3|6
+!	ambiguous column name: main.t.a
+N|1	R|1	R|2
+N|column1	R|1
+N|1	R|1
+N|1
+N|'a'	R|'a'
+N|hex(d)	R|'0102'	R|''	R|'FF'
+N|a	R|1
+N|quote(c)	R|'1.5'	R|'-2.5'	R|'0.0'
+N|a	R|1	R|2	R|-3
+N|a|b|c|d	R|1|'one'|1.5|X'0102'	R|2|'two'|-2.5|NULL	R|-3|''|0.0|X'FF'
+!	no such column: z.a
+!	no such column: x
+N|a COLLATE NOCASE	R|1	R|2	R|-3
+N|b	R|''	R|'one'	R|'two'
+N|a	R|-3	R|1	R|2
+N|1	R|1	R|1	R|1
+!	1st ORDER BY term out of range - should be between 1 and 1
+N|a	R|-3	R|1	R|2
+N|a	R|1
+N|a>0	R|1	R|0
+N|a|b|c|d
+N|a
+N|a	R|1	R|2	R|-3
+N|a
+N|rowid	R|1	R|2	R|3
+!	no such function: nosuchfn
+!	no such column: nosuch
+N|n|s	R|100|'row 100'	R|101|'row 101'	R|102|'row 102'	R|103|'row 103'
+N|s	R|'row 400'	R|'row 399'	R|'row 398'
+N|n	R|1	R|2	R|3	R|4
+N|n	R|97	R|194	R|291	R|388
+N|a|b	R|50|'v50'
+N|a	R|1	R|10	R|100	R|11	R|12
+N|b	R|'v3'	R|'v2'	R|'v1'
+N|length(t)	R|18000
+N|substr(t,1,10)	R|'xxxxxxxxxx'
+N|i|t|r|b	R|1|'one'|1.5|X'01'	R|2|'two'|2.5|X'0202'	R|3|'three'|3.5|X'030303'
+N|i|t	R|2|'two'	R|3|'three'
+N|i|t|r|b	R|1|'one'|1.5|X'01'	R|3|'three'|3.5|X'030303'	R|2|'two'|2.5|X'0202'
+N|i|t|r|b	R|1|'one'|1.5|X'01'	R|2|'two'|2.5|X'0202'	R|3|'three'|3.5|X'030303'
+N|i|t|r|b	R|1|'one'|1.5|X'01'	R|2|'two'|2.5|X'0202'	R|3|'three'|3.5|X'030303'
+N|i|t|r|b	R|1|'one'|1.5|X'01'	R|2|'two'|2.5|X'0202'	R|3|'three'|3.5|X'030303'
+N|i|t|r|b	R|1|'one'|1.5|X'01'	R|2|'two'|2.5|X'0202'	R|3|'three'|3.5|X'030303'
+N|i|t|r|b	R|1|'one'|1.5|X'01'	R|2|'two'|2.5|X'0202'	R|3|'three'|3.5|X'030303'
+N|i|t|r|b	R|1|'one'|1.5|X'01'	R|2|'two'|2.5|X'0202'	R|3|'three'|3.5|X'030303'
+N|i|t|r|b	R|1|'one'|1.5|X'01'	R|2|'two'|2.5|X'0202'	R|3|'three'|3.5|X'030303'
+N|t	R|'abc'	R|'äöü'

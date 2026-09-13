@@ -33,6 +33,14 @@ struct Case {
     vacuums: bool,
 }
 
+/// The bytes of one of the matrix fixtures, by the name it has on disk.
+pub(super) fn fixture(name: &str) -> Option<&'static [u8]> {
+    MATRIX
+        .iter()
+        .find(|case| case.name == name)
+        .map(|case| case.bytes)
+}
+
 /// Every configuration the shell can write the same rows under.
 const MATRIX: [Case; 11] = [
     Case {
