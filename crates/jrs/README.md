@@ -604,8 +604,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Loop statements on the register engine (focused) | focused | `24d6a88` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for test/language/statements/while test/language/statements/do-while --summary` | 459 | 900 | 107 (11.89%) | 619 (68.78%) | 174 (19.33%) |
 | Property reads over the Prototype Chain (focused) | focused | `a240620` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/built-ins/Object/prototype test/built-ins/Array/prototype --summary` | 3,080 | 6,119 | 5,060 (82.69%) | 1,021 (16.69%) | 38 (0.62%) |
 | Property reads over the Prototype Chain on the register engine (focused) | focused | `a240620` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/built-ins/Object/prototype test/built-ins/Array/prototype --summary` | 3,080 | 6,119 | 2 (0.03%) | 6,099 (99.67%) | 18 (0.29%) |
-| Complete pinned suite, including staging and Intl | full | `45916c9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `45916c9` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 2,770 (2.69%) | 64,429 (62.60%) | 35,726 (34.71%) |
+| Property reads, writes and `Function.prototype` (focused) | focused | `30b9dc3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/language/expressions/assignment test/built-ins/Function/prototype --summary` | 815 | 1,494 | 1,077 (72.09%) | 73 (4.89%) | 344 (23.03%) |
+| Property reads, writes and `Function.prototype` on the register engine (focused) | focused | `30b9dc3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/language/expressions/assignment test/built-ins/Function/prototype --summary` | 815 | 1,494 | 60 (4.02%) | 1,100 (73.63%) | 334 (22.36%) |
+| Complete pinned suite, including staging and Intl | full | `30b9dc3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `30b9dc3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 2,770 (2.69%) | 64,429 (62.60%) | 35,726 (34.71%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -620,9 +622,10 @@ is what the milestone group in
 Test262 file reaches the engine yet. Code identity belongs to the Realm, so a
 function declared in one Script is callable from the next, and a call of a
 global name is lowered where it is returned and inside the body of a loop, which
-`harness/compareArray.js` needs. `this` is the receiver of the call, and a method
-call reaches a function of the Script and not only an intrinsic. What the
-remaining harness files need is `new`.
+`harness/compareArray.js` needs. `this` is the receiver of the call, a method
+call reaches a function of the Script and not only an intrinsic, and a property
+of a value the lowering could not name is read and written. What the remaining
+harness files need is `new`.
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
@@ -652,9 +655,9 @@ same suite measured before it, variant for variant. The Array search run was mea
 `19054962f1f93e409f7b0d5dad173b74d5eb1d88`, the iteration run at tree
 `769107adb8c6f8b0f87d7dfe0f348df4531d0ce0`, the slice run at tree
 `e873e530ad100efc4492e5a0a4ce68c824503cae`, and the property-read runs at tree
-`e946d0f5655a3f90d2abe1986bcff7cdc9765072`. The loop runs at tree
-`24a00c502d96c127a9f3c885ed1a49a047c28db7`, and the function, call and `this`
-runs together with both full runs at tree `94023436def77fc0433c7d67f6bc9b70c2455b5d`.
+`e946d0f5655a3f90d2abe1986bcff7cdc9765072`. The function, call and `this` runs at tree
+`94023436def77fc0433c7d67f6bc9b70c2455b5d`, and the property runs together with both full runs at tree
+`c1f2a4fab7808f3b5c8b0824f8a8ed3eaf11dc59`.
 
 ### Historical Test262 baseline
 
