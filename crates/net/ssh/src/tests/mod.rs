@@ -15,6 +15,7 @@ mod kex;
 mod keys;
 mod msg;
 mod packet;
+mod rekey;
 mod wire;
 
 /// One `string` of RFC 4251, section 5, built a second time so that a

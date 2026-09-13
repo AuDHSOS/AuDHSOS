@@ -7,6 +7,23 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Track S, step S7, the re-exchange: `audhsos-ssh` gains `rekey`, which
+  says when this client asks for a key re-exchange, what the peer's
+  `SSH_MSG_KEXINIT` asks of it, and what may be sent while one runs. One
+  is due after a gigabyte carried or an hour of connection time, which
+  RFC 4253, section 9, recommends, and at half the sequence number space,
+  which is this crate's: the number of section 6.4 wraps at 2^32 and a
+  re-exchange has to happen before it does. Time is a parameter and no
+  clock is read here (D-46). The roles do not change and the session
+  identifier does not change; what the new keys reset is the byte count
+  and not the packet count, because the sequence number they stand for is
+  not reset either. While an exchange runs only messages below 50 may be
+  sent, so the authentication of RFC 4252 and the channels of RFC 4254
+  wait for the new keys. Beside it `msg` gains `Disconnect`, the message
+  of section 11.1 with the reason codes RFC 4250, section 4.2.2, assigns.
+  Catalog 6.6.78. Every layer of the protocol is now built; what is left
+  of the track is the client over a socket, which needs Phase 14.
+
 - Track S, step S6, the session channel: `audhsos-ssh` gains `channel`,
   which opens the one `session` channel of RFC 4254, section 6.1, carries
   data and extended data under the window of section 5.2, sends the

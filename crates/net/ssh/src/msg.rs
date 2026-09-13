@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! The message numbers of RFC 4250, section 4.1.2.
+//! The message numbers of RFC 4250, section 4.1.2, and the one message
+//! that is a number and text.
 //!
 //! Section 4.1.1 puts them in ranges: 1 to 19 transport generic, 20 to 29
 //! algorithm negotiation, 30 to 49 specific to a key exchange method, 50
@@ -12,6 +13,9 @@
 //!
 //! What is here is what the steps that are built use. The rest arrive
 //! with the layer that sends them.
+
+use crate::error::SshError;
+use crate::wire::{Reader, Writer};
 
 /// `SSH_MSG_DISCONNECT`.
 pub const DISCONNECT: u8 = 1;
@@ -125,4 +129,54 @@ pub mod disconnect {
     /// admits and for a signature that is not the peer's over the
     /// exchange hash.
     pub const HOST_KEY_NOT_VERIFIABLE: u32 = 9;
+}
+
+/// A `SSH_MSG_DISCONNECT` (RFC 4253, section 11.1), which ends the
+/// connection for both sides: after it neither may send and neither may
+/// accept anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Disconnect<'a> {
+    /// Why, as one of the codes in [`disconnect`].
+    pub reason: u32,
+    /// The text, which a peer wrote and which is bytes until something
+    /// decides to show it.
+    pub description: &'a [u8],
+    /// The language tag, which may be empty.
+    pub language: &'a [u8],
+}
+
+impl<'a> Disconnect<'a> {
+    /// Reads one from a packet payload.
+    ///
+    /// # Errors
+    ///
+    /// [`SshError::Message`] when the payload is another message and
+    /// [`SshError::OutOfBounds`] when it ends early.
+    pub fn read(payload: &'a [u8]) -> Result<Disconnect<'a>, SshError> {
+        let mut reader = Reader::new(payload);
+        let number = reader.read_byte()?;
+        if number != DISCONNECT {
+            return Err(SshError::Message(number));
+        }
+        Ok(Disconnect {
+            reason: reader.read_u32()?,
+            description: reader.read_string()?,
+            language: reader.read_string()?,
+        })
+    }
+
+    /// Writes one, with no language tag, which section 11.1 permits and
+    /// which is what a client with no text of its own to localize sends.
+    ///
+    /// # Errors
+    ///
+    /// [`SshError::OutOfBounds`] when `out` is too small.
+    pub fn write(&self, out: &mut [u8]) -> Result<usize, SshError> {
+        let mut writer = Writer::new(out);
+        writer.write_byte(DISCONNECT)?;
+        writer.write_u32(self.reason)?;
+        writer.write_string(self.description)?;
+        writer.write_string(self.language)?;
+        Ok(writer.position())
+    }
 }

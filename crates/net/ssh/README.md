@@ -3,9 +3,9 @@
 The SSH-2 client of [document 14](../../../docs/14-secure-shell-as-a-client.md),
 sans-I/O: it is given bytes that arrived and a buffer to write into, and
 it never reads a socket, allocates, or asks what time it is. What exists
-today is steps S1 to S6 of track S: the two layers everything else is
-written in, the negotiation, both key exchange methods, the cipher, the
-host key, the authentication exchange, and the session channel.
+today is steps S1 to S7 of track S: every layer of the protocol. What is
+left is the client that drives them over a socket, which is step S8 and
+waits on the network on the machine.
 
 ## `wire`
 
@@ -172,6 +172,24 @@ before it, a close is answered with a close unless one was sent already,
 and the channel is closed for this side only when it has both sent and
 received one.
 
+## `rekey`
+
+RFC 4253, section 9: when this client asks for a re-exchange, what the
+peer's `SSH_MSG_KEXINIT` asks of it, and what may be sent while one runs.
+[`rekey::Rekey`] counts the bytes since the last exchange and the packets
+since the connection began, and [`rekey::Rekey::due`] is given the moment
+it is asked about, because no logic crate here reads a clock (D-46).
+
+One is due after a gigabyte, after an hour, or at half the sequence
+number space — the third is this crate's, because the sequence number of
+section 6.4 wraps at 2^32 and a re-exchange must happen before it does.
+While an exchange runs only the transport layer may send, so the
+authentication and the channels wait for the new keys.
+
+[`msg::Disconnect`] is the message of section 11.1, with the reason codes
+of RFC 4250 beside it in [`msg::disconnect`].
+
 ## What is not here
 
-The re-exchange of S7 and the client of S8.
+The client of S8: the state machine over a socket, which needs the
+network on the machine.

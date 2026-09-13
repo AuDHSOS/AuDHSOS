@@ -3053,6 +3053,34 @@ the channel does with it.
 - Every message of the layer reads; a number of another layer does not,
   and a message that ends early is refused.
 
+### 6.6.78 The re-exchange and the disconnect (`audhsos-ssh`)
+
+Step S7 of 8.26.
+
+- A connection begins inside its first key exchange, so nothing above the
+  transport may be sent before the first `SSH_MSG_NEWKEYS`.
+- A gigabyte carried, an hour of connection time, or half the sequence
+  number space each ask for a re-exchange; a clock that went backwards
+  asks for nothing, and half the sequence number space is below where the
+  number of section 6.4 wraps.
+- This side asks once: a second `SSH_MSG_KEXINIT` while one is running is
+  refused, and the peer's answer ends the asking.
+- The peer may start one, in which case this side owes a
+  `SSH_MSG_KEXINIT` of its own; when this side started, the peer's
+  message is the reply and nothing is owed. A third one in one exchange
+  is refused.
+- The new keys end the exchange and start the counting again: the bytes
+  go back to zero, the packets do not, because the sequence number they
+  stand for is not reset. A `SSH_MSG_NEWKEYS` with no exchange running is
+  refused.
+- While an exchange runs, only messages below 50 may be sent: the
+  authentication requests of RFC 4252 and the channel messages of RFC
+  4254 wait for the new keys.
+- A disconnect carries the reason code, the description and the language
+  tag of RFC 4253, section 11.1, and reads back as what was written;
+  another message number is no disconnect, a payload that ends early is
+  refused, and a buffer too small writes nothing.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

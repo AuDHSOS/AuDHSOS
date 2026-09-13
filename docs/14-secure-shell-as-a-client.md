@@ -90,12 +90,12 @@ written for a verifier and branched on the bits it was given, the decision
 carries the masked multiplication that signing now runs on. ECDSA signing
 stays behind `test-signing`.
 
-Steps S1 to S6 are built: the wire types, the binary packet, the
-identification string, the negotiation, both key exchange methods, the
-exchange hash, the six keys, the cipher, the host key with the signature
-over the exchange hash, the authentication exchange, and the session
-channel. What is missing is the re-exchange of S7 and the integration of
-S8. Two things are also
+Steps S1 to S7 are built, which is every layer of the protocol: the wire
+types, the binary packet, the identification string, the negotiation,
+both key exchange methods, the exchange hash, the six keys, the cipher,
+the host key with the signature over the exchange hash, the
+authentication exchange, the session channel, and the re-exchange. What
+is missing is S8, the client over a socket, which waits on Phase 14. Two things are also
 missing that are not code, and 14.13 lists them.
 
 ## 14.4 The documents
@@ -210,7 +210,7 @@ writer, the sequence numbers, and the session identifier that the
 authentication signature is over. `audhsos-tls` is one crate with
 `record`, `handshake`, `keys` and `client` as modules, and this follows
 it: `wire`, `packet`, `ident`, `msg`, `kex`, `exchange`, `keys`,
-`cipher`, `hostkey`, `auth`, `channel`, `client`. The small ones carry what every
+`cipher`, `hostkey`, `auth`, `channel`, `rekey`, `client`. The small ones carry what every
 layer above them cites: `ident` is the identification string of RFC 4253,
 section 4.2, which is neither a packet nor a key exchange and goes into
 the exchange hash of both, and `msg` is the message numbers of RFC 4250.
@@ -476,7 +476,7 @@ definition of done every phase and every track step uses.
 | S4 | host keys | S-M | implemented: the `ssh-ed25519` blobs of RFC 8709, sections 4 and 6, the signature over `H` verified, the fingerprint of a blob, and the trust rule as a parameter (catalog 6.6.75) |
 | S5 | `auth` | M | implemented: the service request, `publickey` with the signature of RFC 4252, section 7, the failure, success, banner and `SSH_MSG_USERAUTH_PK_OK` answers, and the `SSH_MSG_EXT_INFO` that carries `server-sig-algs` (catalog 6.6.76) |
 | S6 | `channel` | L | implemented: the channel messages, the window in both directions, the session channel, `exec`, `shell` and `env`, extended data, `exit-status` and `exit-signal`, and the close sequence (catalog 6.6.77) |
-| S7 | re-exchange | S-M | a re-exchange from either side, the byte and time thresholds, and the disconnect messages with the reason codes of RFC 4250 |
+| S7 | re-exchange | S-M | implemented: a re-exchange from either side, the byte, time and sequence number thresholds, what may be sent while one runs, and the disconnect message with the reason codes of RFC 4250 (catalog 6.6.78) |
 | S8 | integration | M | the client over a socket of `server-net`, a program of the image, and the interop acceptance of 14.12; needs Phase 14 |
 
 S1 to S7 need nothing from another track and are built between phases, as

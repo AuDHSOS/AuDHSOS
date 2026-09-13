@@ -16,6 +16,7 @@ pub mod kex;
 pub mod keys;
 pub mod msg;
 pub mod packet;
+pub mod rekey;
 pub mod wire;
 
 pub use auth::{ClientKey, ExtInfo, Request, Response};
@@ -27,7 +28,9 @@ pub use hostkey::{Fingerprint, HostKey, Trust, accept};
 pub use ident::Greeting;
 pub use kex::{Choice, KexInit, Proposal, negotiate};
 pub use keys::{Key, derive};
+pub use msg::Disconnect;
 pub use packet::{Decoded, Decoder, Encoder, SequenceNumber};
+pub use rekey::{Answer, Exchange, Rekey};
 pub use wire::{Mpint, NameList, Names, Reader, Writer};
 
 #[cfg(test)]
