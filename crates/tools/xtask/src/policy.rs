@@ -557,6 +557,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "db-sqlite",
+        path: "crates/db/sqlite",
+        kind: Kind::Logic,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "kernel-x86-tables",
         path: "crates/kernel/x86-tables",
         kind: Kind::Logic,

@@ -44,6 +44,7 @@ rather than of the track; section 14.13 names them.
 | 12 | [Work parallel to the kernel phases](12-parallel-work.md) | The admission test for parallel work; the network stack, the shared foundations, the device logic, the tooling; what may be pulled forward |
 | 13 | [The network on the machine](13-the-network-on-the-machine.md) | What has to exist before a network driver can be written: a clock and a deadline, entropy, MSI-X, PCI, DMA; then the driver, the server, and the socket protocol |
 | 14 | [Secure Shell as a client](14-secure-shell-as-a-client.md) | The SSH-2 client: the algorithm set and what is refused, the crate, the three layers of the protocol, trusting a host key, testing against an implementation from outside |
+| 15 | [SQLite in Rust](15-sqlite-in-rust.md) | The port: what "the same" means, the layers, the order of work, the four test sources, the configuration matrix, the coverage standard |
 
 Beside the documents lie the standards they cite, verbatim and with
 their checksums, one directory per body that publishes them:
@@ -58,16 +59,20 @@ the ACPI tables the kernel finds its interrupt controllers through — and
 OpenSSH specified and no standards body did (D-134): the one cipher of
 the Secure Shell client, kept as the OpenSSH document it came from and
 the IETF draft that replaced it, and the private key format a client
-reads a key of its own from, and [acm/](acm) for the one research
+reads a key of its own from, [acm/](acm) for the one research
 paper a tool of this repository implements: NoREC, which `norec`
-compares an optimized query against an unoptimized one by. Each
+compares an optimized query against an unoptimized one by, and
+[sqlite/](sqlite) for the documents the port of document 15 is written
+against. Each
 directory has a `README.md`
 naming what belongs there and how it is fetched. Nothing under them is
 compiled, linked, or read at run time.
 
 D-124 states what decides whether a document is kept: whether it can be
 obtained, not whether its licence permits the copy. `rfc/`, `oasis/`,
-`w3c/`, `ecma/` and `openssh/` hold documents that may be redistributed.
+`w3c/`, `ecma/`, `openssh/` and `sqlite/` hold documents that may be
+redistributed; SQLite's are in the public domain, which its own
+`copyright.html` states and which is kept beside them.
 `itu/`, `cipa/`, `ti/`, `uefi/` and `acm/` hold documents that the ITU,
 CIPA, Texas Instruments, the UEFI Forum and, for the paper in `acm/`, its
 first author serve to anyone at no charge but do

@@ -7,6 +7,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite`, the SQLite file format as logic and the first step of the
+  port document 15 specifies: the hundred-byte header, the b-tree pages
+  over it, the four cell shapes, the overflow chains a payload continues
+  on, and the record format one row is. It reads a database where it lies
+  — `no_std`, no allocation, no dependency, every value borrowed out of
+  the page it was stored in — so a file the `sqlite3` shell wrote is
+  opened, its schema walked, its tables read in rowid order through the
+  interior pages that hold them, and its values decoded, over any page
+  size and any of the three text encodings. A refusal names the rule of
+  the format that was broken rather than a symptom: a cell pointer outside
+  the usable part of a page, a varint that does not end, one of the two
+  serial types the format reserves, a chain of overflow pages longer than
+  the file has pages. The fixtures are five databases the shell itself
+  wrote, committed beside the tests, each with the statement that produced
+  it. D-141, document 15, catalog 6.6.75.
+
+- The SQLite documents in `docs/sqlite/`: the file format, the type
+  system, the expression grammar, and *How SQLite Is Tested*, which is the
+  coverage standard document 15 holds the port to. SQLite's code and
+  documentation are public domain, which its own `copyright.html`, kept
+  beside them, states; the first case of D-124, so there is nothing
+  further to state. D-141.
+
 - `norec`, a NoREC fuzzer: random SQL against a database engine, checked
   against the same query in a form that engine cannot optimize. One case
   is a random database, a random predicate, and two queries over it —

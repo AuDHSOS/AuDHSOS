@@ -52,6 +52,7 @@ members = [
     "crates/virtio/queue",
     "crates/fs/fat",
     "crates/fs/gpt",
+    "crates/db/sqlite",
     "crates/user/apps/canvas",
     "crates/user/loader",
     "crates/user/programs",
@@ -148,6 +149,7 @@ virtio-queue = { path = "crates/virtio/queue" }
 driver-virtio-blk = { path = "crates/drivers/virtio-blk" }
 fs-fat = { path = "crates/fs/fat" }
 fs-gpt = { path = "crates/fs/gpt" }
+db-sqlite = { path = "crates/db/sqlite" }
 server-console = { path = "crates/user/servers/console" }
 app-canvas = { path = "crates/user/apps/canvas" }
 server-display = { path = "crates/user/servers/display" }

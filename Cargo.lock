@@ -253,6 +253,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "db-sqlite"
+version = "0.1.0"
+
+[[package]]
 name = "doc-html"
 version = "0.1.0"
 dependencies = [

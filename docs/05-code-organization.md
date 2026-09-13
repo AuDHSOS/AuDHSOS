@@ -99,6 +99,8 @@ AuDHSOS/
 │   │   ├── dh/                crypto-dh: finite-field Diffie-Hellman over the MODP groups of RFC 3526
 │   │   ├── rng/               crypto-rng: Entropy and Rng traits, ChaCha20 generator
 │   │   └── rsa/               crypto-rsa: RSA verification, PKCS #1 v1.5 and PSS
+│   ├── db/
+│   │   └── sqlite/            db-sqlite: the SQLite file format, read where it lies (document 15)
 │   ├── net/                   (documents 11, 12 and 14)
 │   │   ├── der/               audhsos-der: strict zero-copy DER reader
 │   │   ├── x509/              audhsos-x509: certificates, path validation, name matching
@@ -156,6 +158,7 @@ AuDHSOS/
 | `driver-virtio-blk` | 2 | all | no | yes | `virtio-queue` (feature `test-doubles` as a dev-dependency); `test-support` as a dev-dependency; feature `test-doubles` |
 | `fs-fat` | 1 | all | no | yes | `audhsos-time`; `test-support` as a dev-dependency; feature `test-doubles` |
 | `fs-gpt` | 1 | all | no | yes | `fs-fat`, for the block device trait it reads through; `test-support` and `fs-fat` with `test-doubles` as dev-dependencies |
+| `db-sqlite` | 1 | all | no | yes | none |
 | `kernel-mm` | 2 | all | no | yes | `kernel-types`, `kernel-hal-api`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-objects` | 2 | all | no | yes | `kernel-types`, `kernel-mm`, `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-sched` | 2 | all | no | yes | `kernel-objects`, `audhsos-abi` |

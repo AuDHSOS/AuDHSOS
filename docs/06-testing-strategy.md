@@ -2957,6 +2957,56 @@ answers three of twenty thousand cases two ways, each a `LEFT JOIN` whose
 unmatched row the `WHERE` clause drops and the sum keeps. The same cases
 agree on 3.53.4.
 
+### 6.6.75 The SQLite file format, read (`db-sqlite`)
+
+D-141, document 15 step Q1. Five databases written by the `sqlite3` shell
+are the fixtures: the format as it is, not as this crate reads it. Each is
+named in the test that reads it, together with the statement that produced
+it.
+
+- Numbers: a reader answers nothing where the bytes end first, at any
+  offset including one no page has; a varint reads back what section 1.6's
+  own encoding wrote, over the whole range and at both ends of every
+  length; nine bytes is the longest varint there is; one that does not end
+  inside its bytes is refused; a rowid is the same bits read as a signed
+  number.
+- The header: the fields of a file the shell wrote are the fields the
+  shell wrote, page size, encoding, versions and counters; a page size of
+  512 and one of 65536, which the field writes as 1, are both read; a
+  first sixteen bytes that are not the header string, a file shorter than
+  the header, a page size that is not a power of two in range, reserved
+  space that leaves a page too small, the three fixed fractions, and an
+  encoding code the format does not have are each refused by name.
+- Pages: every page type is the byte the format gives it and nothing else
+  is; an interior page has the longer header and the right-most pointer; a
+  leaf has neither; page 1 carries the database header before its own; a
+  cell pointer array that does not fit the page, a pointer that points
+  outside it, and a cell index the page does not have are each refused; a
+  content area written as zero is the largest page there is.
+- Records: every serial code is the type and the length the format gives
+  it, including the two the format reserves; an integer is read at the
+  width it was stored in and keeps its sign, at one, two, three, six and
+  eight bytes; the two constants take no bytes; text and blob borrow the
+  bytes they were stored in; a header that reaches past the payload and a
+  value that runs past the body are refused, and the walk that found one
+  ends rather than repeating it.
+- Reading a file: a file is as many pages as it is long; page zero and a
+  page past the end are refused; the schema names the tables; the rows of
+  a table come back as the shell wrote them, with the storage class each
+  value was stored in — a real with no fractional part is an integer on
+  disk, which section 2.1 calls an internal optimization and which reading
+  it back as a real needs the column's affinity for; four hundred rows over
+  512-byte pages are walked in rowid order through the interior pages that
+  hold them; text comes back in the encoding the header names, UTF-16
+  included; an eighteen-thousand-byte value is read off the chain that
+  follows its page, and a buffer shorter than the payload is refused
+  rather than filled; a root that names an index tree is refused by a walk
+  of rows, and so is a root the file does not have.
+
+What is not tested here is everything the crate does not do: writing, the
+free list, pointer maps, the write-ahead log, and index walks. Document 15,
+section 15.4, has the order they arrive in.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

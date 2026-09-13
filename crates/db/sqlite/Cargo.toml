@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "db-sqlite"
+description = "The SQLite file format as logic: the header, b-tree pages, cells, overflow chains, and the record format"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

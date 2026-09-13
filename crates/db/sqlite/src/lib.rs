@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 Manuel Baesler and contributors
+
+#![cfg_attr(not(test), no_std)]
+#![forbid(unsafe_code)]
+#![doc = include_str!("../README.md")]
+
+mod bytes;
+pub mod error;
+pub mod header;
+pub mod image;
+pub mod page;
+pub mod record;
+
+#[cfg(test)]
+mod tests;
+
+pub use error::Error;
+pub use header::{Encoding, Header, MAX_PAGE_SIZE, MIN_PAGE_SIZE};
+pub use image::{Image, Row, Rows};
+pub use page::{Cell, Kind, Page, Payload};
+pub use record::{Record, Serial, Value, Values};
