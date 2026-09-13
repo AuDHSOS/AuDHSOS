@@ -13,6 +13,7 @@
 //! in-object capacity. All internal method operations (`[[Get]]`, `[[Set]]`,
 //! `[[DefineOwnProperty]]`) route through Shapes and Elements.
 
+use super::value::ObjectRef;
 use super::{
     context::ContextRef,
     elements::ElementsRef,
@@ -56,6 +57,13 @@ pub enum ObjectKind {
     StringWrapper(Value),
     /// Error instance, the `[[ErrorData]]` slot of 20.5.4.
     Error,
+    /// Array Iterator instance, the slots of 23.1.5.3.
+    ArrayIterator {
+        /// `[[IteratedArrayLike]]`, or none once the iteration is done.
+        target: Option<ObjectRef>,
+        /// `[[ArrayLikeNextIndex]]`.
+        index: u32,
+    },
 }
 
 /// Compact representation of a JavaScript object in the heap.

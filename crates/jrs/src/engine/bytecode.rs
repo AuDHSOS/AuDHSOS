@@ -349,6 +349,15 @@ pub enum Instruction {
         /// First register of the four-register enumeration window.
         state: Reg,
     },
+    /// Advances an iterator by one step (7.4.8) and unpacks its result.
+    ///
+    /// `state` names the first of two consecutive registers holding the
+    /// iterator and the value a step produced. The accumulator receives true
+    /// while the iterator produced a value and false once it is done.
+    IteratorNext {
+        /// First register of the two-register iteration window.
+        state: Reg,
+    },
     /// Throws `acc` as an exception (14.14.1).
     Throw,
     /// Return `acc` to caller.
@@ -700,6 +709,18 @@ impl BytecodeFunction {
             | Instruction::CreateArray(_)
             | Instruction::Throw
             | Instruction::Return => None,
+            Instruction::IteratorNext { state } => {
+                for offset in 0..2 {
+                    let register = state.0.checked_add(offset).ok_or(
+                        VerificationError::RegisterOutOfBounds {
+                            pc,
+                            register: state,
+                        },
+                    )?;
+                    self.verify_register(pc, Reg(register))?;
+                }
+                None
+            }
             Instruction::ForInNext { state } => {
                 for offset in 0..4 {
                     let register = state.0.checked_add(offset).ok_or(

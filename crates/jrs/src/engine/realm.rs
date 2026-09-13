@@ -222,6 +222,11 @@ pub enum Intrinsic {
     StringPrototypeTrimEnd,
     /// `String.prototype.trimStart` (22.1.3.34).
     StringPrototypeTrimStart,
+    /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
+    /// (23.1.3.38 and 23.1.3.40).
+    ArrayPrototypeValues,
+    /// `%ArrayIteratorPrototype%.next` (23.1.5.2.1).
+    ArrayIteratorPrototypeNext,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -231,11 +236,15 @@ pub enum IntrinsicHolder {
     ObjectPrototype,
     /// `%String.prototype%`.
     StringPrototype,
+    /// `%Array.prototype%`.
+    ArrayPrototype,
+    /// `%ArrayIteratorPrototype%`.
+    ArrayIteratorPrototype,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 24] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -258,6 +267,8 @@ impl Intrinsic {
         Self::StringPrototypeTrim,
         Self::StringPrototypeTrimEnd,
         Self::StringPrototypeTrimStart,
+        Self::ArrayPrototypeValues,
+        Self::ArrayIteratorPrototypeNext,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -286,6 +297,8 @@ impl Intrinsic {
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
             | Self::StringPrototypeTrimStart => IntrinsicHolder::StringPrototype,
+            Self::ArrayPrototypeValues => IntrinsicHolder::ArrayPrototype,
+            Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
         }
     }
 
@@ -315,6 +328,8 @@ impl Intrinsic {
             Self::StringPrototypeTrim => 19,
             Self::StringPrototypeTrimEnd => 20,
             Self::StringPrototypeTrimStart => 21,
+            Self::ArrayPrototypeValues => 22,
+            Self::ArrayIteratorPrototypeNext => 23,
         }
     }
 
@@ -343,6 +358,8 @@ impl Intrinsic {
             Self::StringPrototypeTrim => 19,
             Self::StringPrototypeTrimEnd => 20,
             Self::StringPrototypeTrimStart => 21,
+            Self::ArrayPrototypeValues => 22,
+            Self::ArrayIteratorPrototypeNext => 23,
         }
     }
 
@@ -372,6 +389,8 @@ impl Intrinsic {
             19 => Some(Self::StringPrototypeTrim),
             20 => Some(Self::StringPrototypeTrimEnd),
             21 => Some(Self::StringPrototypeTrimStart),
+            22 => Some(Self::ArrayPrototypeValues),
+            23 => Some(Self::ArrayIteratorPrototypeNext),
             _ => None,
         }
     }
@@ -402,6 +421,8 @@ impl Intrinsic {
             Self::StringPrototypeTrim => "trim",
             Self::StringPrototypeTrimEnd => "trimEnd",
             Self::StringPrototypeTrimStart => "trimStart",
+            Self::ArrayPrototypeValues => "values",
+            Self::ArrayIteratorPrototypeNext => "next",
         }
     }
 
@@ -412,7 +433,9 @@ impl Intrinsic {
             Self::ObjectPrototypeToString
             | Self::StringPrototypeTrim
             | Self::StringPrototypeTrimEnd
-            | Self::StringPrototypeTrimStart => 0,
+            | Self::StringPrototypeTrimStart
+            | Self::ArrayPrototypeValues
+            | Self::ArrayIteratorPrototypeNext => 0,
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypePropertyIsEnumerable
@@ -657,6 +680,7 @@ pub struct Realm {
     function_prototype: Root,
     array_prototype: Root,
     string_prototype: Root,
+    array_iterator_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
     intrinsics: [Root; Intrinsic::ALL.len()],
@@ -691,6 +715,15 @@ impl Realm {
         // [[Prototype]] is %Object.prototype%.
         let string_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let string_prototype = heap.push_root(Value::from_object(string_prototype))?;
+
+        // 23.1.5.2: %ArrayIteratorPrototype% inherits from %IteratorPrototype%,
+        // which is an ordinary object of %Object.prototype% until the Iterator
+        // intrinsics exist.
+        let iterator_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let array_iterator_prototype =
+            heap.allocate_immortal_object(root_shape, Value::from_object(iterator_prototype))?;
+        let array_iterator_prototype =
+            heap.push_root(Value::from_object(array_iterator_prototype))?;
 
         // 20.5.3: %Error.prototype% is an ordinary object with "message" and
         // "name", not an Error instance.
@@ -733,11 +766,25 @@ impl Realm {
             let holder = match intrinsic.holder() {
                 IntrinsicHolder::ObjectPrototype => Self::rooted(heap, object_prototype)?,
                 IntrinsicHolder::StringPrototype => Self::rooted(heap, string_prototype)?,
+                IntrinsicHolder::ArrayPrototype => Self::rooted(heap, array_prototype)?,
+                IntrinsicHolder::ArrayIteratorPrototype => {
+                    Self::rooted(heap, array_iterator_prototype)?
+                }
             }
             .as_object()
             .ok_or(HeapError::InvalidReference)?;
             let key = PropertyKey::String(heap.strings.intern(intrinsic.name())?);
             heap.define_own_named(holder, key, Value::from_object(function), builtin_data())?;
+            // 23.1.3.40: %Array.prototype%[@@iterator] is the same function
+            // object as `values`.
+            if intrinsic == Intrinsic::ArrayPrototypeValues {
+                heap.define_own_named(
+                    holder,
+                    WellKnownSymbol::Iterator.key(),
+                    Value::from_object(function),
+                    builtin_data(),
+                )?;
+            }
         }
 
         Ok(Self {
@@ -745,6 +792,7 @@ impl Realm {
             function_prototype,
             array_prototype,
             string_prototype,
+            array_iterator_prototype,
             error_prototype,
             native_error_prototypes,
             intrinsics,
@@ -802,6 +850,15 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] when the root was discarded.
     pub fn string_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.string_prototype)
+    }
+
+    /// %`ArrayIteratorPrototype`%.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root was discarded.
+    pub fn array_iterator_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.array_iterator_prototype)
     }
 
     /// %Error.prototype%.

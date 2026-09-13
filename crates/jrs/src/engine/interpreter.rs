@@ -829,7 +829,102 @@ impl RegisterVM {
             | Intrinsic::StringPrototypeTrimStart => {
                 self.call_string_intrinsic(intrinsic, call, heap, realm)
             }
+            Intrinsic::ArrayPrototypeValues | Intrinsic::ArrayIteratorPrototypeNext => {
+                Self::call_iterator_intrinsic(intrinsic, call, heap, realm)
+            }
         }
+    }
+
+    /// Runs one of the Array iterator intrinsics of 23.1.5.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] for a receiver that is not one, and a heap
+    /// error when the iterator or its result cannot be allocated.
+    fn call_iterator_intrinsic(
+        intrinsic: Intrinsic,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        match intrinsic {
+            // 23.1.3.38: the iterator holds the Array and the next index.
+            Intrinsic::ArrayPrototypeValues => {
+                let target = Self::coerce_object(call.receiver, heap, realm)?;
+                let prototype = realm.array_iterator_prototype(heap)?;
+                let shape = heap.shapes.root_shape();
+                let iterator = heap.allocate_object(shape, prototype)?;
+                heap.set_object_kind(
+                    iterator,
+                    ObjectKind::ArrayIterator {
+                        target: Some(target),
+                        index: 0,
+                    },
+                )?;
+                Ok(Value::from_object(iterator))
+            }
+            // 23.1.5.2.1: the length is read again at every step, and the
+            // iterator is exhausted once the index reaches it.
+            Intrinsic::ArrayIteratorPrototypeNext => {
+                let iterator = call.receiver.as_object().ok_or(VMError::TypeError)?;
+                let ObjectKind::ArrayIterator { target, index } =
+                    heap.get_object(iterator).ok_or(VMError::TypeError)?.kind
+                else {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "next called on a value that is not an Array Iterator",
+                    ));
+                };
+                let value = target
+                    .filter(|target| heap.array_length(*target).is_some_and(|len| index < len))
+                    .map(|target| {
+                        heap.get_object(target)
+                            .and_then(|object| object.elements)
+                            .and_then(|elements| heap.get_elements(elements))
+                            .and_then(|elements| elements.get(index))
+                            .unwrap_or(VALUE_UNDEFINED)
+                    });
+                let next = match value {
+                    Some(_) => ObjectKind::ArrayIterator {
+                        target,
+                        index: index.saturating_add(1),
+                    },
+                    None => ObjectKind::ArrayIterator {
+                        target: None,
+                        index,
+                    },
+                };
+                heap.set_object_kind(iterator, next)?;
+                Self::iterator_result(value, heap, realm)
+            }
+            _ => Err(VMError::InvalidFeedbackVector),
+        }
+    }
+
+    /// `CreateIterResultObject` of 7.4.14: an ordinary object with an own
+    /// `value` and an own `done`.
+    fn iterator_result(
+        value: Option<Value>,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let result = realm.ordinary_object(heap)?;
+        let value_key = PropertyKey::String(heap.strings.intern("value")?);
+        heap.define_own_named(
+            result,
+            value_key,
+            value.unwrap_or(VALUE_UNDEFINED),
+            PropertyFlags::ordinary_data(),
+        )?;
+        let done_key = PropertyKey::String(heap.strings.intern("done")?);
+        heap.define_own_named(
+            result,
+            done_key,
+            Value::from_bool(value.is_none()),
+            PropertyFlags::ordinary_data(),
+        )?;
+        Ok(Value::from_object(result))
     }
 
     /// `Object.prototype.toString` of 20.1.3.6.
@@ -856,7 +951,9 @@ impl RegisterVM {
                 ObjectKind::BooleanWrapper(_) => "Boolean",
                 ObjectKind::NumberWrapper(_) => "Number",
                 ObjectKind::StringWrapper(_) => "String",
-                ObjectKind::Ordinary => "Object",
+                // 23.1.5.2.2 tags the Array Iterator through @@toStringTag, so
+                // its builtin tag is the ordinary one.
+                ObjectKind::Ordinary | ObjectKind::ArrayIterator { .. } => "Object",
             }
         };
         let mut units: Vec<u16> = "[object ".encode_utf16().collect();
@@ -1233,6 +1330,63 @@ impl RegisterVM {
         Ok(boxed)
     }
 
+    /// Advances an iterator by one step (7.4.8) and unpacks its result.
+    ///
+    /// The two registers at `state` hold the iterator and the value a step
+    /// produced. An iterator whose `next` is not a native intrinsic is refused:
+    /// calling a bytecode `next` from here needs a frame this operation does
+    /// not open.
+    fn iterator_next(
+        &mut self,
+        state: Reg,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let value_slot = Reg(state.0.checked_add(1).ok_or(VMError::InvalidRegister)?);
+        let iterator = self.read_reg(state)?;
+        let Some(reference) = iterator.as_object() else {
+            return Err(type_error(heap, realm, "iterator is not an object"));
+        };
+        let next_key = PropertyKey::String(heap.strings.intern("next")?);
+        let next = heap
+            .lookup_named(reference, next_key)?
+            .map(|property| property.value)
+            .and_then(Value::as_object)
+            .and_then(|next| heap.get_object(next))
+            .map(|next| next.kind.clone());
+        let Some(ObjectKind::NativeFunction { id, .. }) = next else {
+            return Err(type_error(heap, realm, "iterator next is not callable"));
+        };
+        let intrinsic = Intrinsic::from_id(id).ok_or(VMError::TypeError)?;
+        let result = self.call_intrinsic(
+            intrinsic,
+            Call {
+                receiver: iterator,
+                func: state,
+                arg_start: state,
+                arg_count: 0,
+                slot: 0,
+                return_pc: 0,
+                caller_code_id: None,
+            },
+            heap,
+            realm,
+        )?;
+        let result = result
+            .as_object()
+            .ok_or_else(|| type_error(heap, realm, "iterator result is not an object"))?;
+        let done_key = PropertyKey::String(heap.strings.intern("done")?);
+        let done = heap
+            .lookup_named(result, done_key)?
+            .is_some_and(|property| property.value.to_boolean());
+        let value_key = PropertyKey::String(heap.strings.intern("value")?);
+        let value = heap
+            .lookup_named(result, value_key)?
+            .map_or(VALUE_UNDEFINED, |property| property.value);
+        self.write_reg(value_slot, if done { VALUE_UNDEFINED } else { value })?;
+        Ok(Value::from_bool(!done))
+    }
+
     /// Produces the next key of a for-in enumeration, or undefined when the
     /// Prototype Chain is spent (14.7.5.9).
     ///
@@ -1260,15 +1414,16 @@ impl RegisterVM {
             let keys = if let Some(keys) = self.read_reg(keys_slot)?.as_object() {
                 keys
             } else {
-                let own = heap.own_keys(object)?;
-                let length = u32::try_from(own.len()).map_err(|_| VMError::PropertyLimit)?;
-                let keys = self.allocate_array(code, heap, realm, length)?;
-                // 14.7.5.9 enumerates String keys only.
-                for (index, name) in own
+                // 14.7.5.9 enumerates String keys only, so the Symbol keys of
+                // 10.1.11.1 are dropped before the level's Array is sized.
+                let own: Vec<_> = heap
+                    .own_keys(object)?
                     .into_iter()
                     .filter_map(|(name, _)| name.as_string())
-                    .enumerate()
-                {
+                    .collect();
+                let length = u32::try_from(own.len()).map_err(|_| VMError::PropertyLimit)?;
+                let keys = self.allocate_array(code, heap, realm, length)?;
+                for (index, name) in own.into_iter().enumerate() {
                     let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
                     heap.set_array_element(keys, index, Value::from_string(name))?;
                 }
@@ -2124,6 +2279,9 @@ impl RegisterVM {
                         current_code_id = Some(code_id);
                         pc = 0;
                     }
+                }
+                Instruction::IteratorNext { state } => {
+                    self.acc = self.iterator_next(state, heap, realm)?;
                 }
                 Instruction::ForInNext { state } => {
                     self.acc = self.for_in_next(active_code, state, heap, realm)?;
@@ -3227,6 +3385,146 @@ mod tests {
         assert_eq!(
             vm.run(&code, &mut feedback, &mut heap, &realm),
             Ok(VALUE_TRUE)
+        );
+    }
+
+    #[test]
+    fn an_array_iterator_yields_every_element_and_then_reports_done() {
+        // 23.1.3.38 and 23.1.5.2.1, driven by IteratorNext over two registers.
+        let mut code = BytecodeFunction::new(4, 0);
+        let array = Reg(0);
+        let method = Reg(1);
+        let iterator = Reg(2);
+        let value = Reg(3);
+        let values = code.add_string_constant("values".encode_utf16().collect());
+        let get = code.allocate_feedback_slot(FeedbackKind::NamedAccess);
+        let call = code.allocate_feedback_slot(FeedbackKind::Call);
+
+        code.emit(Instruction::CreateArray(0));
+        code.emit(Instruction::Star(array));
+        code.emit(Instruction::LdaSmi(7));
+        code.emit(Instruction::Star(value));
+        code.emit(Instruction::LdaSmi(0));
+        code.emit(Instruction::Star(method));
+        code.emit(Instruction::Ldar(value));
+        code.emit(Instruction::SetByValue {
+            obj: array,
+            key: method,
+            slot: get,
+        });
+        code.emit(Instruction::GetNamed {
+            obj: array,
+            name: values,
+            slot: get,
+        });
+        code.emit(Instruction::Star(method));
+        code.emit(Instruction::CallMethod {
+            receiver: array,
+            func: method,
+            arg_start: method,
+            arg_count: 0,
+            slot: call,
+        });
+        code.emit(Instruction::Star(iterator));
+        code.emit(Instruction::LdaUndefined);
+        code.emit(Instruction::Star(value));
+        code.emit(Instruction::IteratorNext { state: iterator });
+        code.emit(Instruction::JumpIfFalse(2));
+        code.emit(Instruction::Ldar(value));
+        code.emit(Instruction::Return);
+        code.emit(Instruction::LdaNull);
+        code.emit(Instruction::Return);
+
+        let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
+        let mut feedback = FeedbackVector::for_code(&code);
+        let mut vm = RegisterVM::new(1000);
+        assert_eq!(
+            vm.run(&code, &mut feedback, &mut heap, &realm),
+            Ok(Value::from_smi(7))
+        );
+    }
+
+    #[test]
+    fn iterator_next_refuses_what_it_cannot_step() {
+        let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
+        let mut vm = RegisterVM::with_limits(1000, 8, 8);
+
+        // A primitive is not an iterator.
+        vm.write_reg(Reg(0), Value::from_smi(1)).unwrap();
+        assert!(matches!(
+            vm.iterator_next(Reg(0), &mut heap, &realm),
+            Err(VMError::Thrown(
+                _,
+                Some((super::super::realm::NativeErrorKind::TypeError, _))
+            ))
+        ));
+
+        // An object without a callable `next` is not one either.
+        let plain = realm.ordinary_object(&mut heap).unwrap();
+        vm.write_reg(Reg(0), Value::from_object(plain)).unwrap();
+        assert!(matches!(
+            vm.iterator_next(Reg(0), &mut heap, &realm),
+            Err(VMError::Thrown(
+                _,
+                Some((super::super::realm::NativeErrorKind::TypeError, _))
+            ))
+        ));
+
+        // 23.1.5.2.1 refuses a receiver that is not an Array Iterator.
+        let next = realm
+            .intrinsic(&heap, Intrinsic::ArrayIteratorPrototypeNext)
+            .unwrap();
+        let key = super::super::value::PropertyKey::String(heap.strings.intern("next").unwrap());
+        heap.define_own_named(plain, key, next, PropertyFlags::ordinary_data())
+            .unwrap();
+        assert!(matches!(
+            vm.iterator_next(Reg(0), &mut heap, &realm),
+            Err(VMError::Thrown(
+                _,
+                Some((super::super::realm::NativeErrorKind::TypeError, _))
+            ))
+        ));
+    }
+
+    #[test]
+    fn an_intrinsic_group_refuses_an_intrinsic_of_another_group() {
+        // Each group's dispatch is exhaustive over its own members; a member of
+        // another group is not one of them.
+        let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
+        let vm = RegisterVM::new(100);
+        let call = Call {
+            receiver: VALUE_UNDEFINED,
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 0,
+            slot: 0,
+            return_pc: 0,
+            caller_code_id: None,
+        };
+        assert_eq!(
+            RegisterVM::call_iterator_intrinsic(
+                Intrinsic::ObjectPrototypeToString,
+                call,
+                &mut heap,
+                &realm
+            ),
+            Err(VMError::InvalidFeedbackVector)
+        );
+        let string_call = Call {
+            receiver: vm.allocate_string(&mut heap, &[0x61]).unwrap(),
+            ..call
+        };
+        assert_eq!(
+            vm.call_string_intrinsic(
+                Intrinsic::ObjectPrototypeToString,
+                string_call,
+                &mut heap,
+                &realm
+            ),
+            Err(VMError::InvalidFeedbackVector)
         );
     }
 }

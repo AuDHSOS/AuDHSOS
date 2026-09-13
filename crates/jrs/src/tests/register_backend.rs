@@ -1814,6 +1814,14 @@ fn captured_var_mutations_wait_for_deoptimization() -> Result<(), Error> {
         "function f(){var x=1;function g(){return x}[x='a'];return g()}f()",
         "function f(){var x=1,o={};function g(){return x}o.x=(x='a');return g()}f()",
         "function f(){var x=1;function g(){return x}let h=function(){return x='a'};return g()}f()",
+        "function f(){var x=1;function g(){return x}if(false)0;else x='a';return g()}f()",
+        "function f(){var x=1;function g(){return x}do{x='a'}while(false);return g()}f()",
+        "function f(){var x=1;function g(){return x}switch(0){case 0:x='a'}return g()}f()",
+        "function f(){var x=1;function g(){return x}switch(0){case (x='a'):break}return g()}f()",
+        "function f(){var x=1;function g(){return x}try{x='a'}catch(e){}return g()}f()",
+        "function f(){var x=1;function g(){return x}for(const k in {a:1}){x='a'}return g()}f()",
+        "function f(){var x=1;function g(){return x}for(const k in (x='a')){}return g()}f()",
+        "function f(){var x=1;function g(){return x}for(const v of [1]){x='a'}return g()}f()",
     ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
@@ -2341,6 +2349,22 @@ fn register_for_in_walks_own_keys_before_the_prototype_chain() -> Result<(), Err
 }
 
 #[test]
+fn register_for_of_iterates_an_array_through_its_iterator() -> Result<(), Error> {
+    for source in [
+        "let s=0;for(const x of [1,2,3]){s+=x}s",
+        "let n=0;for(const x of []){n++}n",
+        "let s=0;for(let x of [1,2,3]){s+=x;if(x===2)break}s",
+        "let s=0;for(const x of [1,2,3]){if(x===2)continue;s+=x}s",
+        "let a=[1,2];let s=0;for(const x of a){s+=x}s",
+        "for(const x of [7]){x}",
+        "let n=0;for(const x of [1,2]){}n",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error> {
     for source in [
         // A `var` head shares one function-scoped binding.
@@ -2354,8 +2378,25 @@ fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error>
         "for(const k in null){}",
         // A captured per-iteration binding needs a context of its own.
         "for(const k in {a:1}){(()=>k)}",
-        // for-of still needs the iterator protocol.
-        "for(const k of [1]){}",
+        // A for-of over a value that is not an Array resolves @@iterator to a
+        // method the interpreter cannot call from a step.
+        "for(const k of 'ab'){}",
+        "for(const k of {}){}",
+        "for(var k of [1]){}",
+        "let k;for(k of [1]){}",
+        // The loop widens the accumulator's type, which the head fixed.
+        "let s='';for(const x of ['a','b']){s+=x}s",
+        // A destructuring head is not lowered.
+        "for(const [a] of [[1]]){}",
+        // An element the loop cannot type as a primitive is not lowered.
+        "for(const x of [{}]){}",
+        "for(const x of [[1]]){}",
+        // A per-iteration binding captured by a closure needs a context.
+        "for(const x of [1]){(()=>x)}",
+        // A head that shadows a binding of the enclosing scope is not lowered.
+        "let x=1;for(const x of [2]){}x",
+        // The body must not change the Array's tracked layout.
+        "let a=[1];for(const x of a){a[1]='s'}",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
