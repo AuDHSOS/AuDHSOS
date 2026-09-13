@@ -1022,6 +1022,19 @@ static const char *aQuery[] = {
   "small.db|SELECT 'abc'==('ABC'||CASE WHEN 1=1 THEN '' COLLATE binary ELSE '' COLLATE nocase END)",
   "small.db|SELECT 'abc'==('ABC'||CASE WHEN 1=1 THEN '' ELSE '' END)",
   "small.db|SELECT 'abc'==('ABC'|| -('' COLLATE nocase))",
+  /* A column's own collation orders the answer, and a `COLLATE`
+  ** written on either side of a comparison beats it. A collation the
+  ** connection does not hold is refused. */
+  "wide16.db|SELECT t FROM n ORDER BY t",
+  "wide16.db|SELECT t FROM n ORDER BY t COLLATE binary",
+  "wide16.db|SELECT t FROM n ORDER BY t DESC",
+  "wide16.db|SELECT rowid FROM n WHERE t<'b' ORDER BY 1",
+  "wide16.db|SELECT rowid FROM n WHERE t<'b' COLLATE binary ORDER BY 1",
+  "wide16.db|SELECT rowid FROM n WHERE t COLLATE binary <'b' ORDER BY 1",
+  "wide16.db|SELECT t FROM n ORDER BY t COLLATE nosuch",
+  "wide16.db|SELECT t, upper(t) FROM n ORDER BY upper(t), t",
+  "wide16.db|SELECT 'abc'==('ABC'||max('a','' COLLATE nocase))",
+  "wide16.db|SELECT rowid FROM n WHERE max(t,'b')<'b' ORDER BY 1",
   "affinity.db|SELECT rowid, xt==+xi, xt==xi, xt==xb FROM t ORDER BY rowid",
   "affinity.db|SELECT rowid, xi==xt, xi==xb, xi==+xt FROM t ORDER BY rowid",
   "affinity.db|SELECT rowid, xr==xt, xr==xb, xr==+xt FROM t ORDER BY rowid",

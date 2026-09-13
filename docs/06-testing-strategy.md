@@ -4247,11 +4247,15 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
   `do_execsql_test`, a `do_test` whose body is one `execsql`, and the
   `execsql` a file sets itself up with, each carrying no substitution.
   That is 15 550 cases in 881 files.
-- 900 pass, 67 answer differently and 14 583 name something the engine
-  refuses. Document 16, section 16.23 groups the sixty-seven. An
-  earlier run over the `do_execsql_test` form alone answered 14
-  differently; five were defects, which D-181 records and seventeen
-  cases of `query.corpus` now hold to the C library.
+- A step this harness cannot run — a body that runs more than
+  statements, or statements a substitution stands in — stops the file
+  the way a refusal does, because the database is then short of what
+  the cases after it read.
+- 552 pass, 16 answer differently and 14 982 are refused or stopped.
+  Document 16, section 16.23 groups the sixteen. Earlier runs answered
+  14 and then 27 differently; eight were defects, which D-181 and D-184
+  record and twenty-eight cases of `query.corpus` now hold to the C
+  library.
 - `--why` counts what each refusal was for by the first two words of
   the statement, which is what says which missing feature stops the
   most files. It named a `PRAGMA` for sixty of them, and D-182 answers

@@ -52,16 +52,26 @@ impl Score {
     }
 }
 
-/// One case: the statements and the answer the file writes for them.
-pub(crate) struct Case {
-    /// What the file calls it, and nothing where the statements are
-    /// the file setting itself up rather than a case.
-    pub(crate) name: Option<String>,
-    /// The statements, as written.
-    pub(crate) sql: String,
-    /// The answer, as the elements of the list `execsql` would have
-    /// answered.
-    pub(crate) want: Vec<String>,
+/// One step of a file.
+pub(crate) enum Step {
+    /// Statements the file runs to set itself up, which the cases after
+    /// it read what was written by.
+    Setup(String),
+    /// A case: what the file calls it, the statements, and the answer
+    /// it writes for them as the elements of a list.
+    Case {
+        /// What the file calls it.
+        name: String,
+        /// The statements, as written.
+        sql: String,
+        /// The answer the file writes.
+        want: Vec<String>,
+    },
+    /// Something the file runs that this harness cannot: a body that
+    /// runs more than statements, or statements a substitution stands
+    /// in. It leaves the database short of what the cases after it
+    /// read, so it stops the file the way a refusal does.
+    Opaque,
 }
 
 /// What the engine refused, counted by the first word of the statement
@@ -160,7 +170,7 @@ fn files(dir: &Path) -> Result<Vec<PathBuf>, Error> {
 ///
 /// A case carrying `$` or `[` needs the TCL interpreter to say what it
 /// runs, so it is passed over rather than guessed at.
-pub(crate) fn cases(text: &str) -> Vec<Case> {
+pub(crate) fn cases(text: &str) -> Vec<Step> {
     let mut out = Vec::new();
     let mut rest = text;
     while let Some((command, after)) = next_command(rest) {
@@ -171,11 +181,7 @@ pub(crate) fn cases(text: &str) -> Vec<Case> {
             "execsql" => {
                 if let Some((sql, after)) = braced(rest) {
                     rest = after;
-                    out.push(Case {
-                        name: None,
-                        sql: sql.to_owned(),
-                        want: Vec::new(),
-                    });
+                    out.push(Step::Setup(sql.to_owned()));
                 }
             }
             // A case that expects a refusal says so as a pair of a
@@ -184,6 +190,7 @@ pub(crate) fn cases(text: &str) -> Vec<Case> {
             // not taken for setup.
             "do_catchsql_test" => {
                 rest = past(rest, 2);
+                out.push(Step::Opaque);
             }
             // `do_test NAME { execsql { SQL } } { ANSWER }` is the
             // older way of writing `do_execsql_test`, and the only
@@ -194,23 +201,24 @@ pub(crate) fn cases(text: &str) -> Vec<Case> {
                 };
                 let Some((body, after)) = braced(after) else {
                     rest = after;
+                    out.push(Step::Opaque);
                     continue;
                 };
                 let Some((want, after)) = braced(after) else {
                     rest = after;
+                    out.push(Step::Opaque);
                     continue;
                 };
                 rest = after;
-                let Some(inner) = body.trim().strip_prefix("execsql") else {
-                    continue;
-                };
-                let Some((sql, over)) = braced(inner) else {
-                    continue;
-                };
-                if !over.trim().is_empty() {
-                    continue;
+                let read = body
+                    .trim()
+                    .strip_prefix("execsql")
+                    .and_then(braced)
+                    .filter(|(_, over)| over.trim().is_empty());
+                match read {
+                    Some((sql, _)) => push(&mut out, name, sql, want),
+                    None => out.push(Step::Opaque),
                 }
-                push(&mut out, name, sql, want);
             }
             _ => {
                 let Some((name, after)) = word(rest) else {
@@ -218,10 +226,12 @@ pub(crate) fn cases(text: &str) -> Vec<Case> {
                 };
                 let Some((sql, after)) = braced(after) else {
                     rest = after;
+                    out.push(Step::Opaque);
                     continue;
                 };
                 let Some((want, after)) = braced(after) else {
                     rest = after;
+                    out.push(Step::Opaque);
                     continue;
                 };
                 rest = after;
@@ -236,16 +246,17 @@ pub(crate) fn cases(text: &str) -> Vec<Case> {
 /// with no substitution left in either.
 ///
 /// A case carrying `$` or `[` needs the TCL interpreter to say what it
-/// runs, so it is passed over rather than guessed at.
-fn push(out: &mut Vec<Case>, name: &str, sql: &str, want: &str) {
+/// runs, so it stops the file rather than being guessed at.
+fn push(out: &mut Vec<Step>, name: &str, sql: &str, want: &str) {
     if [sql, want]
         .iter()
         .any(|text| text.contains('$') || text.contains('['))
     {
+        out.push(Step::Opaque);
         return;
     }
-    out.push(Case {
-        name: Some(name.to_owned()),
+    out.push(Step::Case {
+        name: name.to_owned(),
         sql: sql.to_owned(),
         want: elements(want),
     });
@@ -339,45 +350,49 @@ pub(crate) fn braced(text: &str) -> Option<(&str, &str)> {
 
 /// Runs one file's cases in order against one database and counts how
 /// each ended.
-fn score(file: &str, cases: &[Case]) -> Score {
+fn score(file: &str, cases: &[Step]) -> Score {
     let mut score = Score::default();
     let Ok(mut writer) = Writer::new(4096, 0, Encoding::Utf8) else {
         return score;
     };
     let show = SHOW.load(std::sync::atomic::Ordering::Relaxed);
     let mut stopped = false;
-    for case in cases {
-        // The file setting itself up is not a case: it is run so that
-        // the cases after it read what it wrote, and it is counted
-        // only by stopping the file where the engine refuses it.
-        let Some(name) = case.name.as_deref() else {
-            if !stopped && answer(&mut writer, &case.sql).is_none() {
+    for step in cases {
+        let (name, sql, want) = match step {
+            Step::Opaque => {
                 stopped = true;
+                continue;
             }
-            continue;
+            Step::Setup(sql) => {
+                if !stopped && answer(&mut writer, sql).is_none() {
+                    stopped = true;
+                }
+                continue;
+            }
+            Step::Case { name, sql, want } => (name, sql, want),
         };
-        // A case the engine refused leaves the database short of what
-        // the cases after it read, so the rest of the file is refused
-        // with it rather than counted wrong.
+        // A case the engine refused, and a step this harness could not
+        // run, each leave the database short of what the cases after
+        // them read, so the rest of the file is refused with them
+        // rather than counted wrong.
         if stopped {
             score.refused = score.refused.saturating_add(1);
             continue;
         }
-        match answer(&mut writer, &case.sql) {
+        match answer(&mut writer, sql) {
             None => {
                 score.refused = score.refused.saturating_add(1);
                 stopped = true;
             }
-            Some(ref mine) if *mine == case.want => {
+            Some(ref mine) if mine == want => {
                 score.passed = score.passed.saturating_add(1);
             }
             Some(mine) => {
                 score.failed = score.failed.saturating_add(1);
                 if show {
                     crate::out::note!(
-                        "{file} {name}\n  sql  {}\n  mine {mine:?}\n  want {:?}",
-                        case.sql.split_whitespace().collect::<Vec<&str>>().join(" "),
-                        case.want
+                        "{file} {name}\n  sql  {}\n  mine {mine:?}\n  want {want:?}",
+                        sql.split_whitespace().collect::<Vec<&str>>().join(" ")
                     );
                 }
             }

@@ -1,3 +1,15 @@
+### The sixteen that answer differently
+
+| File | Cases | What it shows |
+|------|-------|---------------|
+| `fpconv1.test` | 3 | The file writes two answers for one statement, so it changes a setting between them. |
+| `enc3.test` | 3 | The encoding of a file opened again. |
+| `tkt3997.test` | 2 | A collation the file registers through the interpreter. |
+| `conflict3.test` | 1 | No `UNIQUE` is kept, so a row SQLite refuses goes in. |
+| `gencol1.test` | 1 | `INSERT INTO t SELECT * FROM u` where both hold a computed column. |
+| `autoindex4.test` | 1 | `ORDER BY +b` over equal keys, which names no order. |
+| five more | 5 | One case each, not yet read. |
+
 # 16. SQLite in Rust
 
 ## 16.0 How to read this document
@@ -655,9 +667,9 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
-test files that needs no TCL interpreter. Of 15 550 cases in 881 files,
-900 pass, 67 answer differently, and 14 583 name something the engine
-refuses.
+test files that needs no TCL interpreter. Of 15 550 cases in 1 165
+files, 552 pass, 16 answer differently, and 14 982 name something the
+engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.
 

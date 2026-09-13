@@ -19,6 +19,16 @@ N|'abc'==('ABC'||CASE WHEN 1=2 THEN '' COLLATE binary ELSE '' COLLATE nocase END
 N|'abc'==('ABC'||CASE WHEN 1=1 THEN '' COLLATE binary ELSE '' COLLATE nocase END)	R|0
 N|'abc'==('ABC'||CASE WHEN 1=1 THEN '' ELSE '' END)	R|0
 N|'abc'==('ABC'|| -('' COLLATE nocase))	R|0
+N|t	R|'A'	R|'a'	R|'b'
+N|t	R|'A'	R|'a'	R|'b'
+N|t	R|'b'	R|'A'	R|'a'
+N|rowid	R|1	R|3
+N|rowid	R|1	R|3
+N|rowid	R|1	R|3
+!	no such collation sequence: nosuch
+N|t|upper(t)	R|'A'|'A'	R|'a'|'A'	R|'b'|'B'
+N|'abc'==('ABC'||max('a','' COLLATE nocase))	R|0
+N|rowid
 N|rowid|xt==+xi|xt==xi|xt==xb	R|1|1|1|0	R|2|1|1|1	R|3|0|1|1
 N|rowid|xi==xt|xi==xb|xi==+xt	R|1|1|1|1	R|2|1|1|1	R|3|1|1|1
 N|rowid|xr==xt|xr==xb|xr==+xt	R|1|1|1|1	R|2|1|1|1	R|3|1|1|1

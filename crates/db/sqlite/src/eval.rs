@@ -29,6 +29,10 @@ pub enum Error {
     NoColumn,
     /// A function this engine does not have.
     NoFunction,
+    /// A collation the connection does not hold, which is what a
+    /// `COLLATE` naming one the C library would have been given
+    /// through its API names.
+    NoCollation,
     /// A shape of expression this engine does not answer yet.
     Unsupported,
     /// The tree names a node the arena does not hold.
@@ -67,6 +71,27 @@ struct Answer {
     affinity: Affinity,
     /// The collation written on it, where one was.
     collation: Option<Collation>,
+    /// Whether a `COLLATE` wrote that collation rather than a column
+    /// carrying it, which is `EP_Collate`: a comparison takes a written
+    /// collation from either side before it takes a column's from
+    /// either side.
+    written: bool,
+}
+
+/// The collation a comparison between two answers uses, which is
+/// `sqlite3BinaryCompareCollSeq`: a `COLLATE` on the left, else one on
+/// the right, else the collation the left carries, else the right's.
+const fn compared_under(left: &Answer, right: &Answer) -> Option<Collation> {
+    if left.written {
+        return left.collation;
+    }
+    if right.written {
+        return right.collation;
+    }
+    match left.collation {
+        Some(collation) => Some(collation),
+        None => right.collation,
+    }
 }
 
 impl Answer {
@@ -77,6 +102,7 @@ impl Answer {
             value,
             affinity: Affinity::None,
             collation: None,
+            written: false,
         }
     }
 }
@@ -240,19 +266,7 @@ fn answer(
             value,
             list,
             negated,
-        } => {
-            let left = answer(arena, value, sql, row, deeper)?;
-            let mut list_answers = Vec::new();
-            for member in arena.children(list) {
-                list_answers.push(answer(arena, *member, sql, row, deeper)?);
-            }
-            Ok(Answer::plain(in_list(
-                &left,
-                &list_answers,
-                negated,
-                row.collation(),
-            )))
-        }
+        } => listed(arena, value, list, negated, sql, row, deeper),
         Node::Cast { value, ty } => {
             let mut inner = answer(arena, value, sql, row, deeper)?;
             let affinity = Affinity::of_type(ty.text(sql));
@@ -262,7 +276,11 @@ fn answer(
         }
         Node::Collate { value, name } => {
             let mut inner = answer(arena, value, sql, row, deeper)?;
-            inner.collation = Collation::of_name(name.text(sql)).or(inner.collation);
+            // A name no collation of this crate answers is refused, as
+            // `sqlite3GetCollSeq` refuses one the connection was never
+            // given.
+            inner.collation = Some(Collation::of_name(name.text(sql)).ok_or(Error::NoCollation)?);
+            inner.written = true;
             Ok(inner)
         }
         Node::Case {
@@ -291,6 +309,7 @@ fn answer(
                 value,
                 affinity,
                 collation: Some(collation),
+                written: false,
             })
         }
         Node::Call {
@@ -353,10 +372,22 @@ fn called(
         return Err(Error::Unsupported);
     }
     let mut values = Vec::new();
-    let mut collation = None;
+    // The collation the call compares under is the first argument that
+    // carries one, which is what `sqlite3ExprCodeTarget` gives a
+    // function that needs one. The collation the call answers with is
+    // the first argument a `COLLATE` was written on, because
+    // `sqlite3ExprCollSeq` reaches an argument only along a path a
+    // `COLLATE` marked.
+    let mut inside = None;
+    let mut outward = None;
     for id in arena.children(args) {
         let argument = answer(arena, *id, sql, row, deeper)?;
-        collation = collation.or(argument.collation);
+        if inside.is_none() {
+            inside = argument.collation;
+        }
+        if outward.is_none() && argument.written {
+            outward = argument.collation;
+        }
         values.push(argument.value);
     }
     let function = func::lookup(name.text(sql), values.len())?;
@@ -375,16 +406,14 @@ fn called(
     let value = func::call(
         function,
         &values,
-        collation.unwrap_or(row.collation()),
+        inside.unwrap_or(row.collation()),
         row.encoding(),
     )?;
-    // The first argument carrying a `COLLATE` is the collation the call
-    // answers with, which is the argument list `sqlite3ExprCollSeq`
-    // walks.
     Ok(Answer {
         value,
         affinity: Affinity::None,
-        collation,
+        collation: outward,
+        written: outward.is_some(),
     })
 }
 
@@ -538,6 +567,7 @@ fn unary(
         value,
         affinity: Affinity::None,
         collation: inner.collation,
+        written: inner.written,
     };
     Ok(match op {
         // A sign before anything else is a subtraction from zero.
@@ -560,6 +590,29 @@ fn unary(
         UnaryOp::IsNull => carried(Value::Int(i64::from(value == Value::Null))),
         UnaryOp::NotNull => carried(Value::Int(i64::from(value != Value::Null))),
     })
+}
+
+/// `X IN (a, b, ...)`, and `X NOT IN` where `negated`.
+fn listed(
+    arena: &Arena,
+    value: ExprId,
+    list: crate::ast::Range,
+    negated: bool,
+    sql: &[u8],
+    row: &dyn Row,
+    deeper: u32,
+) -> Result<Answer, Error> {
+    let left = answer(arena, value, sql, row, deeper)?;
+    let mut members = Vec::new();
+    for member in arena.children(list) {
+        members.push(answer(arena, *member, sql, row, deeper)?);
+    }
+    Ok(Answer::plain(in_list(
+        &left,
+        &members,
+        negated,
+        row.collation(),
+    )))
 }
 
 /// The collation written under `id`, which is the `COLLATE` on the
@@ -670,7 +723,8 @@ fn binary(
     Ok(Answer {
         value,
         affinity: Affinity::None,
-        collation: left.collation.or(right.collation),
+        collation: compared_under(&left, &right),
+        written: left.written || right.written,
     })
 }
 
@@ -830,7 +884,7 @@ fn comparison(op: BinaryOp, left: &Answer, right: &Answer, default: Collation) -
     } else {
         let affinity = compare_affinity(left.affinity, right.affinity);
         apply_comparison(&mut first, &mut second, affinity);
-        let collation = left.collation.or(right.collation).unwrap_or(default);
+        let collation = compared_under(left, right).unwrap_or(default);
         let order = compare(&first, &second, collation);
         return Value::Int(i64::from(holds(op, order)));
     };
@@ -937,6 +991,7 @@ fn in_list(left: &Answer, list: &[Answer], negated: bool, default: Collation) ->
             value: member.value.clone(),
             affinity: left.affinity,
             collation: member.collation,
+            written: member.written,
         };
         match logic(&comparison(BinaryOp::Eq, left, &against, default)) {
             Some(true) => return Value::Int(i64::from(!negated)),

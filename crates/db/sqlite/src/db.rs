@@ -725,7 +725,7 @@ impl<'a> Database<'a> {
         for (operator, right) in operators.into_iter().zip(others) {
             combine(operator, &mut answer, right.answer, &collations);
         }
-        let keys = matched(arena, &first, sql, &answer.names)?;
+        let keys = matched(arena, &first, sql, &answer.names, &collations)?;
         if !keys.is_empty() {
             sort_by_keys(&mut answer.rows, &keys, &collations);
         }
@@ -781,7 +781,7 @@ impl<'a> Database<'a> {
             .map(|column| column.name.clone())
             .collect();
         let keys = if whole {
-            keys(arena, &select, sql, &names)?
+            keys(arena, &select, sql, &names, &collations)?
         } else {
             Vec::new()
         };
@@ -2315,10 +2315,13 @@ fn sorted(
     let mut sort = Vec::new();
     for key in keys {
         sort.push(match key {
-            Key::Place(at, _) => (
-                values.get(*at).cloned().unwrap_or(Value::Null),
-                cursor.collation,
-            ),
+            // The collation of a column the answer holds is the one
+            // the column was declared with, which is what
+            // `sqlite3ExprCollSeq` reads off the expression the answer
+            // came from.
+            Key::Place(at, _, collation) => {
+                (values.get(*at).cloned().unwrap_or(Value::Null), *collation)
+            }
             Key::Expr(expr, _) => evaluate_collated(arena, *expr, sql, cursor)?,
         });
     }
@@ -2327,7 +2330,13 @@ fn sorted(
 
 /// What each `ORDER BY` term sorts by: a place in the answer, or an
 /// expression over the row.
-fn keys(arena: &Arena, select: &Select, sql: &[u8], names: &[Vec<u8>]) -> Result<Vec<Key>, Error> {
+fn keys(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    names: &[Vec<u8>],
+    collations: &[Collation],
+) -> Result<Vec<Key>, Error> {
     let mut keys = Vec::new();
     for term in arena.orders(select.order) {
         let descending = term.order == Order::Descending;
@@ -2339,7 +2348,7 @@ fn keys(arena: &Arena, select: &Select, sql: &[u8], names: &[Vec<u8>]) -> Result
             if at >= names.len() {
                 return Err(Error::OrderRange);
             }
-            keys.push(Key::Place(at, descending));
+            keys.push(Key::Place(at, descending, collation_at(collations, at)));
             continue;
         }
         // `resolveOrderGroupBy` matches the term against the answered
@@ -2352,7 +2361,11 @@ fn keys(arena: &Arena, select: &Select, sql: &[u8], names: &[Vec<u8>]) -> Result
                 .iter()
                 .position(|answered| answered.eq_ignore_ascii_case(name))
             {
-                keys.push(Key::Place(at, descending));
+                // A `COLLATE` on the term is the collation the sort
+                // uses, whatever the column was declared with.
+                let written = term_collation(arena, term.expr, sql)?;
+                let collation = written.unwrap_or_else(|| collation_at(collations, at));
+                keys.push(Key::Place(at, descending, collation));
                 continue;
             }
         }
@@ -2497,11 +2510,12 @@ fn matched(
     select: &Select,
     sql: &[u8],
     names: &[Vec<u8>],
+    collations: &[Collation],
 ) -> Result<Vec<(usize, bool)>, Error> {
     let mut out = Vec::new();
-    for key in keys(arena, select, sql, names)? {
+    for key in keys(arena, select, sql, names, collations)? {
         match key {
-            Key::Place(at, descending) => out.push((at, descending)),
+            Key::Place(at, descending, _) => out.push((at, descending)),
             Key::Expr(..) => return Err(Error::OrderMatch),
         }
     }
@@ -2595,6 +2609,21 @@ fn whole_number(arena: &Arena, id: ExprId, sql: &[u8]) -> Option<i64> {
 /// A collation written around it counts as something else, which is why
 /// `SELECT a COLLATE NOCASE` is answered under that whole text and not
 /// under `a`.
+/// The collation the outermost `COLLATE` on an `ORDER BY` term names,
+/// or nothing where the term carries none.
+///
+/// `sqlite3ExprCollSeq` stops at the first `COLLATE` it reaches from
+/// the top, so a term written with two names sorts under the outer one,
+/// and a name no collation of this crate answers is refused there.
+fn term_collation(arena: &Arena, id: ExprId, sql: &[u8]) -> Result<Option<Collation>, Error> {
+    let Some(Node::Collate { name, .. }) = arena.node(id) else {
+        return Ok(None);
+    };
+    let named = crate::schema::dequote(name.text(sql));
+    let collation = Collation::of_name(&named).ok_or(eval::Error::NoCollation)?;
+    Ok(Some(collation))
+}
+
 /// The expression under every `COLLATE` written on it, which is
 /// `sqlite3ExprSkipCollateAndLikely` for the half of it that stands
 /// while names are being resolved.
@@ -2624,10 +2653,17 @@ struct Sorted {
 /// What an `ORDER BY` term sorts by.
 enum Key {
     /// The column of the answer at this place, backwards where the flag
-    /// says so.
-    Place(usize, bool),
+    /// says so, compared under the collation that column was declared
+    /// with.
+    Place(usize, bool, Collation),
     /// An expression over the row.
     Expr(ExprId, bool),
+}
+
+/// The collation of the answered column at `at`, which is `BINARY`
+/// where the answer holds no such column.
+fn collation_at(collations: &[Collation], at: usize) -> Collation {
+    collations.get(at).copied().unwrap_or(Collation::Binary)
 }
 
 /// Where two rows stand against each other under the terms.
@@ -2638,7 +2674,7 @@ fn order_of(
 ) -> core::cmp::Ordering {
     for ((first, second), key) in left.iter().zip(right).zip(keys) {
         let descending = match key {
-            Key::Place(_, descending) | Key::Expr(_, descending) => *descending,
+            Key::Place(_, descending, _) | Key::Expr(_, descending) => *descending,
         };
         let order = compare(&first.0, &second.0, first.1);
         if order != core::cmp::Ordering::Equal {

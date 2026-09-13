@@ -3,55 +3,80 @@
 
 //! The reader of SQLite's own test files.
 
-use crate::suite::{braced, cases, elements, statements};
+use crate::suite::{Step, braced, cases, elements, statements};
+
+/// The name, the statements and the answer of one step, or `None`
+/// where the step is not a case.
+fn read(step: &Step) -> Option<(&str, &str, &[String])> {
+    match step {
+        Step::Case { name, sql, want } => Some((name, sql, want)),
+        _ => None,
+    }
+}
 
 #[test]
 fn a_case_is_read_from_its_name_its_statements_and_its_answer() {
     let text = "do_execsql_test one-1.2 {\n  SELECT 1;\n} {1}\n";
-    let read = cases(text);
-    assert_eq!(read.len(), 1);
-    assert_eq!(read[0].name.as_deref(), Some("one-1.2"));
-    assert_eq!(read[0].sql.trim(), "SELECT 1;");
-    assert_eq!(read[0].want, ["1"]);
+    let steps = cases(text);
+    assert_eq!(steps.len(), 1);
+    let (name, sql, want) = read(&steps[0]).unwrap();
+    assert_eq!(name, "one-1.2");
+    assert_eq!(sql.trim(), "SELECT 1;");
+    assert_eq!(want, ["1"]);
 }
 
 #[test]
 fn the_older_way_of_writing_a_case_is_read_as_one() {
     let text = "do_test two-1 {\n  execsql {\n    SELECT 2;\n  }\n} {2}\n";
-    let read = cases(text);
-    assert_eq!(read.len(), 1);
-    assert_eq!(read[0].name.as_deref(), Some("two-1"));
-    assert_eq!(read[0].sql.trim(), "SELECT 2;");
-    assert_eq!(read[0].want, ["2"]);
-    // A body that runs more than the statements is not read.
-    assert!(cases("do_test a {\n  execsql {SELECT 1}\n  set x 1\n} {1}").is_empty());
-    assert!(cases("do_test a {\n  catchsql {SELECT 1}\n} {1}").is_empty());
+    let steps = cases(text);
+    assert_eq!(steps.len(), 1);
+    let (name, sql, want) = read(&steps[0]).unwrap();
+    assert_eq!(name, "two-1");
+    assert_eq!(sql.trim(), "SELECT 2;");
+    assert_eq!(want, ["2"]);
+    // A body that runs more than the statements is not a case, and
+    // stops the file, because what it wrote is not written.
+    for text in [
+        "do_test a {\n  execsql {SELECT 1}\n  set x 1\n} {1}",
+        "do_test a {\n  catchsql {SELECT 1}\n} {1}",
+    ] {
+        let steps = cases(text);
+        assert_eq!(steps.len(), 1);
+        assert!(matches!(steps[0], Step::Opaque));
+    }
 }
 
 #[test]
 fn statements_outside_a_case_are_the_file_setting_itself_up() {
     let text = "execsql {\n  CREATE TABLE t(a);\n}\ndo_execsql_test one {SELECT 1} {1}\n";
-    let read = cases(text);
-    assert_eq!(read.len(), 2);
-    assert_eq!(read[0].name, None);
-    assert_eq!(read[0].sql.trim(), "CREATE TABLE t(a);");
-    assert_eq!(read[1].name.as_deref(), Some("one"));
+    let steps = cases(text);
+    assert_eq!(steps.len(), 2);
+    assert!(matches!(&steps[0], Step::Setup(sql) if sql.trim() == "CREATE TABLE t(a);"));
+    assert_eq!(read(&steps[1]).unwrap().0, "one");
     // The `execsql` inside a case is the case, not setup.
     assert_eq!(cases("do_test a {execsql {SELECT 1}} {1}").len(), 1);
-    // A case that expects a refusal is read past whole.
-    let read = cases("do_catchsql_test a {SELECT 1} {1 {oops}}\nexecsql {SELECT 2}");
-    assert_eq!(read.len(), 1);
-    assert_eq!(read[0].sql.trim(), "SELECT 2");
+    // A case that expects a refusal is read past whole, and stops the
+    // file, because this harness does not run it.
+    let steps = cases("do_catchsql_test a {SELECT 1} {1 {oops}}\nexecsql {SELECT 2}");
+    assert_eq!(steps.len(), 2);
+    assert!(matches!(steps[0], Step::Opaque));
+    assert!(matches!(&steps[1], Step::Setup(sql) if sql.trim() == "SELECT 2"));
 }
 
 #[test]
 fn a_case_whose_text_is_left_to_the_interpreter_is_passed_over() {
     // A substitution says what runs only once the interpreter has run,
-    // so neither the statements nor the answer are known here.
-    assert!(cases("do_execsql_test a {SELECT $x} {1}").is_empty());
-    assert!(cases("do_execsql_test a {SELECT 1} {[expr 1]}").is_empty());
-    // A case with no answer written after it is not a case.
-    assert!(cases("do_execsql_test a {SELECT 1}\n").is_empty());
+    // so neither the statements nor the answer are known here, and the
+    // file stops where one stands.
+    for text in [
+        "do_execsql_test a {SELECT $x} {1}",
+        "do_execsql_test a {SELECT 1} {[expr 1]}",
+        "do_execsql_test a {SELECT 1}\n",
+    ] {
+        let steps = cases(text);
+        assert_eq!(steps.len(), 1, "{text}");
+        assert!(matches!(steps[0], Step::Opaque), "{text}");
+    }
     assert!(cases("do_execsql_test\n").is_empty());
 }
 
