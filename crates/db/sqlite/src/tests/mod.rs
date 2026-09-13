@@ -42,6 +42,15 @@ pub(super) const SMALL: &[u8] = include_bytes!("fixtures/small.db");
 /// bytes, which is one interior page over the leaves it split into.
 pub(super) const TALL: &[u8] = include_bytes!("fixtures/tall.db");
 
+/// The same rows put in by a key that jumps about, so that every insert
+/// lands in the middle of a page.
+pub(super) const SHUFFLED: &[u8] = include_bytes!("fixtures/shuffled.db");
+
+/// Four thousand rows put in by a key that jumps about, which fills the
+/// root of the tree, grows a third level under it, and then balances the
+/// interior pages of that level against each other.
+pub(super) const DEEP: &[u8] = include_bytes!("fixtures/deep.db");
+
 /// Four hundred rows over 512-byte pages, which is small enough that the
 /// tree has an interior page and the walk has to descend.
 ///
@@ -273,7 +282,7 @@ pub(super) fn index_leaf_past_the_page(page_size: usize) -> Vec<u8> {
 
 /// The fixtures a test reads whole: every one the shell wrote that holds
 /// a table, and what each was written to hold.
-pub(crate) const WRITTEN: [(&str, &[u8]); 9] = [
+pub(crate) const WRITTEN: [(&str, &[u8]); 10] = [
     // Every serial type, every affinity, a header either side of the
     // size varint counting itself, a key's own tree and a rowid alias.
     ("records.db", include_bytes!("fixtures/records.db")),
@@ -285,4 +294,5 @@ pub(crate) const WRITTEN: [(&str, &[u8]); 9] = [
     ("keys.db", include_bytes!("fixtures/keys.db")),
     ("overflow.db", include_bytes!("fixtures/overflow.db")),
     ("utf16.db", include_bytes!("fixtures/utf16.db")),
+    ("deep.db", include_bytes!("fixtures/deep.db")),
 ];

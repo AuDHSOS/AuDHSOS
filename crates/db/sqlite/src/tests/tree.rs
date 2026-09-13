@@ -354,39 +354,6 @@ fn tall_row(number: i64) -> Vec<u8> {
 }
 
 #[test]
-fn a_row_that_does_not_go_at_the_end_of_the_tree_is_refused() {
-    use crate::error::Error;
-    // A table of five hundred rows over pages of five hundred and twelve
-    // bytes, which is a tree of one interior page over its leaves.
-    let mut pages = Pages::new(512, 0).unwrap();
-    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
-    for number in 1..=100_i64 {
-        insert(&mut pages, 2, number, &tall_row(number)).unwrap();
-    }
-    // A row that belongs on a leaf the tree has already left behind goes
-    // there while the leaf holds it, and is refused once the leaf is
-    // full, because making room for it is the balance this crate does
-    // not write.
-    let mut refused = 0;
-    for number in 1..=60_i64 {
-        let record = tall_row(number);
-        if insert(&mut pages, 2, number, &record) == Err(Error::Balance) {
-            refused += 1;
-        }
-    }
-    assert!(refused > 0, "a full leaf took every row it was given");
-    // A key between the last of one leaf and the first of the next
-    // belongs at the end of a leaf that is not the right-most one, which
-    // is the other half of the same refusal.
-    let root = pages.page(2).unwrap();
-    let crate::page::Cell::TableInterior { rowid: last, .. } = root.cell(0).unwrap() else {
-        panic!("a cell of another shape");
-    };
-    let between = tall_row(last);
-    assert_eq!(insert(&mut pages, 2, last, &between), Err(Error::Balance));
-}
-
-#[test]
 fn a_schema_larger_than_one_page_is_refused() {
     use crate::error::Error;
     // The schema table begins on page one, which carries the database
@@ -481,39 +448,126 @@ fn what_the_two_halves_of_the_balance_refuse() {
 }
 
 #[test]
-fn a_tree_whose_dividers_do_not_name_its_leaves_is_refused() {
+fn a_table_filled_by_a_key_that_jumps_about_is_the_tree_the_shell_wrote() {
+    // The rows of `shuffled.db`, put in by a key that lands in the
+    // middle of a page every time, so that the page and its siblings are
+    // written again rather than appended to.
+    let mut pages = Pages::new(512, 0).unwrap();
+    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
+    let row = schema_row("t", 2, "CREATE TABLE t(n INTEGER, s TEXT)", Encoding::Utf8);
+    insert(&mut pages, 1, 1, &row).unwrap();
+    for number in 1..=400_i64 {
+        let rowid = (number * 137) % 401;
+        insert(&mut pages, 2, rowid, &tall_row(number)).unwrap();
+    }
+    let written = pages.written(&header(512, Encoding::Utf8, 2));
+    same("shuffled.db", &written, crate::tests::SHUFFLED, 512);
+}
+
+#[test]
+fn a_tree_that_grows_a_third_level_is_the_tree_the_shell_wrote() {
+    // The rows of `deep.db`: enough of them that the root fills, the
+    // tree grows a third level, and the interior pages of that level are
+    // balanced against each other, which runs the balance up from the
+    // leaf to the root.
+    let mut pages = Pages::new(512, 0).unwrap();
+    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
+    let row = schema_row("t", 2, "CREATE TABLE t(n INTEGER, s TEXT)", Encoding::Utf8);
+    insert(&mut pages, 1, 1, &row).unwrap();
+    for number in 1..=4000_i64 {
+        let rowid = (number * 1373) % 4201;
+        insert(&mut pages, 2, rowid, &tall_row(number)).unwrap();
+    }
+    let written = pages.written(&header(512, Encoding::Utf8, 2));
+    same("deep.db", &written, crate::tests::DEEP, 512);
+}
+
+#[test]
+fn a_swap_of_pages_the_database_does_not_hold_is_refused() {
+    use crate::error::Error;
+    let mut pages = Pages::new(512, 0).unwrap();
+    pages.add(Kind::LeafTable).unwrap();
+    assert_eq!(pages.swap(1, 3), Err(Error::Page(0)));
+    assert_eq!(pages.swap(3, 1), Err(Error::Page(0)));
+    assert_eq!(pages.swap(0, 1), Err(Error::Page(0)));
+    assert_eq!(pages.swap(1, 2), Ok(()));
+}
+
+/// Fills the leaf `number` with rows of `payload` bytes, `step` apart in
+/// key from `first`, and answers how many of them it took.
+fn fill(pages: &mut Pages, number: u32, first: i64, step: i64, payload: usize) -> i64 {
+    use crate::page::{Cell, Payload, write_cell};
+    let mut rowid = first;
+    loop {
+        let cell = write_cell(&Cell::TableLeaf {
+            rowid,
+            payload: Payload {
+                local: &alloc::vec![7u8; payload],
+                total: payload,
+                overflow: None,
+            },
+        });
+        let at = pages.page(number).unwrap().cells();
+        if !pages.writer(number).unwrap().insert(at, &cell).unwrap() {
+            return rowid;
+        }
+        rowid += step;
+    }
+}
+
+#[test]
+fn a_balance_over_siblings_of_two_kinds_is_refused() {
     use crate::error::Error;
     use crate::page::{Cell, write_cell};
-    use crate::tree::insert;
-    // A divider names the largest key of the page under it, so a row
-    // that belongs at the end of a page that is not the right-most one
-    // belongs under the next divider instead. A tree whose dividers say
-    // otherwise is one this crate refuses rather than writes into.
-    for root in [1_u32, 2] {
-        let mut pages = Pages::new(512, 0).unwrap();
-        while pages.count() < root {
-            pages.add(Kind::LeafTable).unwrap();
-        }
-        let above = crate::page::build(Kind::InteriorTable, root, 512, 512, &[], None).unwrap();
-        pages.put_page(root, &above).unwrap();
-        let left = pages.add(Kind::LeafTable).unwrap();
-        let right = pages.add(Kind::LeafTable).unwrap();
-        let divider = write_cell(&Cell::TableInterior {
-            child: left,
-            rowid: 100_000,
-        });
-        assert!(pages.writer(root).unwrap().insert(0, &divider).unwrap());
-        pages.writer(root).unwrap().point(right).unwrap();
-        // The left leaf is filled with keys the divider is far above, so
-        // a row of a key between them belongs at the end of it.
-        let mut number = 1;
-        while insert(&mut pages, root, number, &tall_row(number)).is_ok() {
-            number += 1;
-            assert!(number < 1000, "the leaf never filled");
-        }
-        assert_eq!(
-            insert(&mut pages, root, number, &tall_row(number)),
-            Err(Error::Balance)
-        );
+    // A parent whose right-most child belongs to an index tree, which
+    // the balance of the leaf beside it reads as a sibling.
+    let mut pages = Pages::new(512, 0).unwrap();
+    let parent = pages.add(Kind::InteriorTable).unwrap();
+    let leaf = pages.add(Kind::LeafTable).unwrap();
+    let other = pages.add(Kind::LeafIndex).unwrap();
+    let divider = write_cell(&Cell::TableInterior {
+        child: leaf,
+        rowid: 10_000,
+    });
+    assert!(pages.writer(parent).unwrap().insert(0, &divider).unwrap());
+    point(&mut pages, parent, other);
+    fill(&mut pages, leaf, 2, 2, 20);
+    assert_eq!(
+        insert(&mut pages, parent, 3, &tall_row(3)),
+        Err(Error::Balance)
+    );
+}
+
+#[test]
+fn a_balance_that_would_free_a_page_is_refused() {
+    use crate::error::Error;
+    use crate::page::{Cell, Payload, write_cell};
+    // Three siblings holding between them less than three pages of
+    // cells, so that the balance writes fewer pages than it read.
+    let mut pages = Pages::new(512, 0).unwrap();
+    let parent = pages.add(Kind::InteriorTable).unwrap();
+    let one = pages.add(Kind::LeafTable).unwrap();
+    let two = pages.add(Kind::LeafTable).unwrap();
+    let three = pages.add(Kind::LeafTable).unwrap();
+    for (at, (child, rowid)) in [(one, 100_i64), (two, 200)].into_iter().enumerate() {
+        let divider = write_cell(&Cell::TableInterior { child, rowid });
+        assert!(pages.writer(parent).unwrap().insert(at, &divider).unwrap());
     }
+    point(&mut pages, parent, three);
+    for (number, rowid) in [(one, 50_i64), (two, 150)] {
+        let cell = write_cell(&Cell::TableLeaf {
+            rowid,
+            payload: Payload {
+                local: b"\x02\x09",
+                total: 2,
+                overflow: None,
+            },
+        });
+        assert!(pages.writer(number).unwrap().insert(0, &cell).unwrap());
+    }
+    fill(&mut pages, three, 210, 10, 100);
+    // A row the right-most sibling has no room for, which is what asks
+    // for the balance.
+    let row = write(&[Value::Blob(alloc::vec![7u8; 90])], &[Affinity::None], 4);
+    assert_eq!(insert(&mut pages, parent, 215, &row), Err(Error::Balance));
 }

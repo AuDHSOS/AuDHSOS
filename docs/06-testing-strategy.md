@@ -3987,9 +3987,30 @@ the files the shell wrote rather than to a reading of section 1.6.
   that leaves too little of a page, a tree of index pages, which holds
   no key a row belongs under, a tree of interior pages that never
   reaches a leaf, which the descent stops in rather than following
-  forever, a row that belongs anywhere but at the end of the right-most
-  page, a schema of more than one page, and a tree whose dividers do not
-  name the largest key of the page under them.
+  forever, a schema of more than one page, and a tree whose dividers do
+  not name the largest key of the page under them.
+
+### 6.6.107 A row that lands in the middle of a tree (`db-sqlite`)
+
+D-168, document 16 step Q7. `tree::balance_nonroot` and the balance that
+runs up to the root, held to the files the shell wrote.
+
+- `shuffled.db` puts four hundred rows in by a key that jumps about, so
+  that every insert lands in the middle of a page and the page and its
+  siblings are written again rather than appended to.
+- `deep.db` puts four thousand in the same way, which fills the root,
+  grows a third level under it, and then balances the interior pages of
+  that level against each other.
+- Each is the fixture byte for byte, and so was every one of the four
+  thousand prefixes of `deep.db` while the port was written, which is
+  what found the stale pointer `editPage` leaves and the noughts
+  `copyNodeContent` does not copy over.
+- The refusals: a balance whose siblings are not of one kind, a balance
+  whose cells fit on fewer pages than they lie on, which frees a page
+  and needs the free list, a page that gives back more cells than it
+  holds, a page whose content area begins past the bytes the b-tree may
+  use, a page smaller than the cells it is to hold, and a page whose
+  free list says a block longer than the page.
 
 ## 6.7 CI pipeline
 

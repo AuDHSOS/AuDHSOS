@@ -123,6 +123,20 @@ rm -f "$out/tall.db"
 "$sqlite" "$out/tall.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<400) INSERT INTO t SELECT i, 'row ' || i FROM c;"
 printf '%s\t%s bytes\n' tall.db "$(wc -c <"$out/tall.db" | tr -d ' ')"
 
+# The same rows put in by a key that jumps about, so that every insert
+# lands in the middle of a page and the tree is balanced rather than
+# appended to.
+rm -f "$out/shuffled.db"
+"$sqlite" "$out/shuffled.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<400) INSERT INTO t(rowid,n,s) SELECT (i*137)%401, i, 'row ' || i FROM c;"
+printf '%s\t%s bytes\n' shuffled.db "$(wc -c <"$out/shuffled.db" | tr -d ' ')"
+
+# Enough of the same rows that the root of the tree fills and the tree
+# grows a third level, so that the balance is one of interior pages and
+# runs up from the leaf to the root.
+rm -f "$out/deep.db"
+"$sqlite" "$out/deep.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<4000) INSERT INTO t(rowid,n,s) SELECT (i*1373)%4201, i, 'row ' || i FROM c;"
+printf '%s\t%s bytes\n' deep.db "$(wc -c <"$out/deep.db" | tr -d ' ')"
+
 # Every serial type and every affinity, so that a record written by this
 # repository can be held to the bytes the C library writes. `wide` has a
 # header of exactly 127 code bytes and `wider` one of 130, which are the

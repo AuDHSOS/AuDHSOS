@@ -41,8 +41,8 @@ pub enum Error {
     /// A list of freeblocks that leaves the page, turns back on itself,
     /// or says a size the page does not hold.
     FreeBlock,
-    /// A tree that needs a balance this crate does not write yet: a cell
-    /// that belongs anywhere but at the end of the right-most page.
+    /// A balance this crate does not write: one that frees a page, which
+    /// needs the free list of the file, or one over pages of two kinds.
     Balance,
 }
 

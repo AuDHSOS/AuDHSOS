@@ -20,6 +20,12 @@ fn every_page_type_is_the_byte_the_format_gives_it() {
     for byte in [0u8, 1, 3, 4, 6, 9, 11, 12, 14, 255] {
         assert_eq!(Kind::from_byte(byte), Err(Error::PageKind(byte)));
     }
+    // The kind a page of the same tree has when it has children, which
+    // is the byte without its leaf bit.
+    assert_eq!(Kind::LeafTable.interior(), Kind::InteriorTable);
+    assert_eq!(Kind::InteriorTable.interior(), Kind::InteriorTable);
+    assert_eq!(Kind::LeafIndex.interior(), Kind::InteriorIndex);
+    assert_eq!(Kind::InteriorIndex.interior(), Kind::InteriorIndex);
 }
 
 #[test]
@@ -1007,4 +1013,119 @@ fn a_leaf_has_no_pointer_to_point() {
     let mut writer = Writer::open(&mut bytes, 2, 256).unwrap();
     assert_eq!(writer.point(3), Ok(()));
     assert_eq!(writer.page().right_most(), Some(3));
+}
+
+#[test]
+fn a_leaf_has_no_cell_that_names_a_child() {
+    use crate::page::{Writer, build};
+    let mut bytes = build(Kind::LeafTable, 2, 256, 256, &[], None).unwrap();
+    let mut writer = Writer::open(&mut bytes, 2, 256).unwrap();
+    assert!(writer.insert(0, &leaf_cell(1, 10)).unwrap());
+    assert_eq!(writer.point_child(0, 3), Err(Error::PageKind(13)));
+}
+
+#[test]
+fn what_writing_a_page_again_refuses() {
+    use crate::page::{Source, Writer, build};
+    // Four cells on the page and a header that says three, so that the
+    // page gives back more cells than it holds.
+    let mut bytes = build(Kind::LeafTable, 2, 512, 512, &[], None).unwrap();
+    {
+        let mut writer = Writer::open(&mut bytes, 2, 512).unwrap();
+        for at in 0..4 {
+            assert!(
+                writer
+                    .insert(at, &leaf_cell(i64::try_from(at).unwrap() + 1, 30))
+                    .unwrap()
+            );
+        }
+    }
+    let cells: Vec<Vec<u8>> = (0..4)
+        .map(|at| {
+            let page = Page::parse(&bytes, 2, 512).unwrap();
+            let Cell::TableLeaf { .. } = page.cell(at).unwrap() else {
+                panic!("a cell of another shape")
+            };
+            crate::page::write_cell(&page.cell(at).unwrap())
+        })
+        .collect();
+    let sources: Vec<Source<'_>> = (0..4)
+        .map(|at| {
+            let page = Page::parse(&bytes, 2, 512).unwrap();
+            Source {
+                bytes: &cells[at],
+                from: Some((2, page.cell_offset(at).unwrap())),
+            }
+        })
+        .collect();
+    let mut short = bytes.clone();
+    short[4] = 3;
+    let mut writer = Writer::open(&mut short, 2, 512).unwrap();
+    assert_eq!(writer.edit(0, 4, 0, &sources, &[]), Err(Error::FreeBlock));
+
+    // A page whose content area begins past the bytes the b-tree may
+    // use is written again from the cells it is to hold.
+    let mut past = bytes.clone();
+    past[5] = 2;
+    past[6] = 2;
+    let mut writer = Writer::open(&mut past, 2, 512).unwrap();
+    assert_eq!(writer.edit(0, 0, 4, &sources, &[]), Ok(()));
+    assert_eq!(Page::parse(&past, 2, 512).unwrap().cells(), 4);
+
+    // And where the cells are more than the page holds, the page
+    // refuses them.
+    let wide: Vec<Vec<u8>> = (0..6).map(|at| leaf_cell(i64::from(at) + 1, 100)).collect();
+    let sources: Vec<Source<'_>> = wide
+        .iter()
+        .map(|cell| Source {
+            bytes: cell,
+            from: None,
+        })
+        .collect();
+    let mut past = bytes.clone();
+    past[5] = 2;
+    past[6] = 2;
+    let mut writer = Writer::open(&mut past, 2, 512).unwrap();
+    assert_eq!(writer.edit(0, 0, 6, &sources, &[]), Err(Error::Balance));
+
+    // A page whose free list says a block longer than the page holds is
+    // one the cells cannot be written onto.
+    let mut broken = build(Kind::LeafTable, 2, 512, 512, &[], None).unwrap();
+    {
+        let mut writer = Writer::open(&mut broken, 2, 512).unwrap();
+        for at in 0..5 {
+            assert!(
+                writer
+                    .insert(at, &leaf_cell(i64::try_from(at).unwrap() + 1, 30))
+                    .unwrap()
+            );
+        }
+        writer.remove(3).unwrap();
+        writer.remove(1).unwrap();
+    }
+    let held: Vec<Vec<u8>> = (0..3)
+        .map(|at| {
+            let page = Page::parse(&broken, 2, 512).unwrap();
+            crate::page::write_cell(&page.cell(at).unwrap())
+        })
+        .collect();
+    let added = leaf_cell(9, 30);
+    let mut sources: Vec<Source<'_>> = (0..3)
+        .map(|at| {
+            let page = Page::parse(&broken, 2, 512).unwrap();
+            Source {
+                bytes: &held[at],
+                from: Some((2, page.cell_offset(at).unwrap())),
+            }
+        })
+        .collect();
+    sources.push(Source {
+        bytes: &added,
+        from: None,
+    });
+    let first = usize::from(u16::from_be_bytes([broken[1], broken[2]]));
+    broken[first + 2] = 1;
+    broken[first + 3] = 244;
+    let mut writer = Writer::open(&mut broken, 2, 512).unwrap();
+    assert_eq!(writer.edit(0, 0, 4, &sources, &[]), Err(Error::FreeBlock));
 }

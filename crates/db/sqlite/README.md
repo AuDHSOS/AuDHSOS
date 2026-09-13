@@ -68,6 +68,7 @@ payload that overflows costs one page read per link of its chain.
 
 ## What is not here yet
 
-Writing, the free list, pointer maps, the write-ahead log, and the index
-b-trees beyond reading their pages. The cursor walks a table tree in rowid
-order; an index walk, the pager, and everything above it come next.
+A table tree is written from nothing and a row lands anywhere in it, so
+what is missing of writing is the free list, the pointer maps, the
+transactions through the journal and the log, and the index b-trees
+beyond reading their pages.

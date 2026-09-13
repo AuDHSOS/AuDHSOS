@@ -72,6 +72,16 @@ impl Kind {
         matches!(self, Kind::InteriorTable | Kind::LeafTable)
     }
 
+    /// The kind a page of this tree has when the page has children,
+    /// which is the kind byte without its leaf bit.
+    #[must_use]
+    pub const fn interior(self) -> Self {
+        match self {
+            Kind::InteriorIndex | Kind::LeafIndex => Kind::InteriorIndex,
+            Kind::InteriorTable | Kind::LeafTable => Kind::InteriorTable,
+        }
+    }
+
     /// Bytes of b-tree header: eight, and four more for the right-most
     /// pointer of an interior page.
     #[must_use]
@@ -506,6 +516,8 @@ fn put16(out: &mut [u8], at: usize, value: u16) {
 pub struct Writer<'a> {
     /// The page, reserved tail and all.
     bytes: &'a mut [u8],
+    /// The number the page has in its file.
+    number: u32,
     /// Where the b-tree header begins.
     start: usize,
     /// Bytes of the page the b-tree may use.
@@ -523,6 +535,7 @@ impl<'a> Writer<'a> {
     pub fn open(bytes: &'a mut [u8], number: u32, usable: u32) -> Result<Self, Error> {
         let kind = Page::parse(bytes, number, usable)?.kind();
         Ok(Writer {
+            number,
             start: if number == 1 { HEADER_LEN } else { 0 },
             usable: size(u64::from(usable)),
             kind,
@@ -989,6 +1002,22 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
+    /// Points cell `at` of an interior page at `child`, which is the
+    /// four bytes every such cell begins with.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Overrun`] for a cell the page does not have, and
+    /// [`Error::PageKind`] for a leaf, whose cells name no child.
+    pub fn point_child(&mut self, at: usize, child: u32) -> Result<(), Error> {
+        if !self.kind.is_interior() {
+            return Err(Error::PageKind(self.kind.byte()));
+        }
+        let offset = self.page().cell_offset(at)?;
+        self.put(offset, &child.to_be_bytes());
+        Ok(())
+    }
+
     /// Takes cell number `at` off the page, which is `dropCell`.
     ///
     /// # Errors
@@ -1023,6 +1052,240 @@ impl<'a> Writer<'a> {
             cells.saturating_sub(at).saturating_sub(1).saturating_mul(2),
         );
         self.put16(header.saturating_add(3), cells.saturating_sub(1));
+        Ok(())
+    }
+}
+
+/// One cell a page is being written from: its bytes, and where it lies
+/// now, which is nothing for a cell that is on no page.
+#[derive(Clone, Copy, Debug)]
+pub struct Source<'a> {
+    /// The bytes of the cell.
+    pub bytes: &'a [u8],
+    /// The page it lies on, and where on it.
+    pub from: Option<(u32, usize)>,
+}
+
+/// Where a page being written stands: the content area, and the byte the
+/// pointer array ends at, which the content may not reach.
+struct Filling {
+    /// Where the content area begins.
+    data: usize,
+    /// Where the pointer array ends.
+    begin: usize,
+}
+
+impl Writer<'_> {
+    /// The page holding the cells `cells[new..new + count]` where it held
+    /// those from `old` on, which is `editPage`.
+    ///
+    /// `extra` names the cells the page holds that lie on no page,
+    /// counted among the ones it held. What the page held where no cell
+    /// was stays where it is, so a page written again is the page SQLite
+    /// writes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::FreeBlock`] where the page does not count up, and
+    /// [`Error::Balance`] where the cells do not fit on it at all.
+    pub fn edit(
+        &mut self,
+        old: usize,
+        new: usize,
+        count: usize,
+        cells: &[Source<'_>],
+        extra: &[usize],
+    ) -> Result<(), Error> {
+        let array = self.array();
+        let mut held = self.cells();
+        let on_page = held.saturating_add(extra.len());
+        let old_end = old.saturating_add(on_page);
+        let new_end = new.saturating_add(count);
+        let mut filling = Filling {
+            data: 0,
+            begin: array.saturating_add(count.saturating_mul(2)),
+        };
+        // The cells that are no longer on the page go first, from its
+        // front and from its end, and the pointers of the front ones
+        // with them.
+        if old < new {
+            let shift = self.free_array(cells, old, new.saturating_sub(old))?;
+            if shift > held {
+                return Err(Error::FreeBlock);
+            }
+            let at = array;
+            // As many pointers as the page held, not as many as stay on
+            // it: `editPage` moves the array by whole entries and reads
+            // `shift` of them from past its end, which writes the bytes
+            // a page keeps after its last pointer.
+            self.slide(
+                at.saturating_add(shift.saturating_mul(2)),
+                at,
+                held.saturating_mul(2),
+            );
+            held = held.saturating_sub(shift);
+        }
+        if new_end < old_end {
+            let tail = self.free_array(cells, new_end, old_end.saturating_sub(new_end))?;
+            held = held.saturating_sub(tail);
+        }
+        filling.data = self.content();
+        if filling.data < filling.begin || filling.data > self.usable {
+            return self.rebuild(cells, new, count);
+        }
+        // Then the cells that were not on it: the ones before what it
+        // held, the one it could not hold, and the ones after them.
+        if new < old {
+            let add = count.min(old.saturating_sub(new));
+            self.slide(
+                array,
+                array.saturating_add(add.saturating_mul(2)),
+                held.saturating_mul(2),
+            );
+            if self.insert_array(&mut filling, 0, cells, new, add)? {
+                return self.rebuild(cells, new, count);
+            }
+            held = held.saturating_add(add);
+        }
+        for index in extra {
+            let place = old.saturating_add(*index);
+            if place >= new && place < new_end {
+                let slot = place.saturating_sub(new);
+                if held > slot {
+                    let at = array.saturating_add(slot.saturating_mul(2));
+                    self.slide(
+                        at,
+                        at.saturating_add(2),
+                        held.saturating_sub(slot).saturating_mul(2),
+                    );
+                }
+                held = held.saturating_add(1);
+                if self.insert_array(&mut filling, slot, cells, place, 1)? {
+                    return self.rebuild(cells, new, count);
+                }
+            }
+        }
+        if self.insert_array(
+            &mut filling,
+            held,
+            cells,
+            new.saturating_add(held),
+            count.saturating_sub(held),
+        )? {
+            return self.rebuild(cells, new, count);
+        }
+        let header = self.start;
+        self.put16(header.saturating_add(3), count);
+        self.put16(header.saturating_add(5), filling.data);
+        Ok(())
+    }
+
+    /// The space of the cells of `cells[first..first + count]` that lie
+    /// on this page, given back to it, which is `pageFreeArray`. Answers
+    /// how many of them were on it.
+    ///
+    /// Runs that touch are given back as one, and ten of them at a time,
+    /// because the order the space is given back in is the order the
+    /// free list ends up in.
+    fn free_array(
+        &mut self,
+        cells: &[Source<'_>],
+        first: usize,
+        count: usize,
+    ) -> Result<usize, Error> {
+        let mut freed: usize = 0;
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for cell in cells.iter().skip(first).take(count) {
+            let Some((_, at)) = cell.from.filter(|(number, _)| *number == self.number) else {
+                continue;
+            };
+            let after = at.saturating_add(cell.bytes.len());
+            let mut joined = false;
+            for run in &mut runs {
+                if run.0 == after {
+                    run.0 = at;
+                    joined = true;
+                    break;
+                }
+                if run.1 == at {
+                    run.1 = after;
+                    joined = true;
+                    break;
+                }
+            }
+            if !joined {
+                if runs.len() >= 10 {
+                    for (start, end) in core::mem::take(&mut runs) {
+                        self.release(start, end.saturating_sub(start))?;
+                    }
+                }
+                runs.push((at, after));
+            }
+            freed = freed.saturating_add(1);
+        }
+        for (start, end) in runs {
+            self.release(start, end.saturating_sub(start))?;
+        }
+        Ok(freed)
+    }
+
+    /// The cells of `cells[first..first + count]` written onto the page,
+    /// their pointers from `slot` on, which is `pageInsertArray`.
+    /// Answers whether the page would not hold them.
+    fn insert_array(
+        &mut self,
+        filling: &mut Filling,
+        slot: usize,
+        cells: &[Source<'_>],
+        first: usize,
+        count: usize,
+    ) -> Result<bool, Error> {
+        let array = self.array();
+        for (step, cell) in cells.iter().skip(first).take(count).enumerate() {
+            let size = cell.bytes.len();
+            let taken = if self.get16(self.start.saturating_add(1)) == 0 {
+                None
+            } else {
+                self.slot(size)?
+            };
+            let offset = if let Some(offset) = taken {
+                offset
+            } else if filling.data.saturating_sub(filling.begin) < size {
+                return Ok(true);
+            } else {
+                filling.data = filling.data.saturating_sub(size);
+                filling.data
+            };
+            self.put(offset, cell.bytes);
+            self.put16(
+                array.saturating_add(slot.saturating_add(step).saturating_mul(2)),
+                offset,
+            );
+        }
+        Ok(false)
+    }
+
+    /// The page written again from the cells it is to hold, which is
+    /// `rebuildPage` and is what `edit` answers where it cannot move the
+    /// cells about.
+    fn rebuild(&mut self, cells: &[Source<'_>], first: usize, count: usize) -> Result<(), Error> {
+        let mut content = self.usable;
+        let array = self.array();
+        for (step, cell) in cells.iter().skip(first).take(count).enumerate() {
+            content = content
+                .checked_sub(cell.bytes.len())
+                .ok_or(Error::Balance)?;
+            if content < array.saturating_add(count.saturating_mul(2)) {
+                return Err(Error::Balance);
+            }
+            self.put(content, cell.bytes);
+            self.put16(array.saturating_add(step.saturating_mul(2)), content);
+        }
+        let header = self.start;
+        self.put16(header.saturating_add(1), 0);
+        self.put16(header.saturating_add(3), count);
+        self.put16(header.saturating_add(5), content);
+        self.put8(header.saturating_add(7), 0);
         Ok(())
     }
 }
