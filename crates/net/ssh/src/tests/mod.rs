@@ -7,6 +7,7 @@
 mod auth;
 mod channel;
 mod cipher;
+mod client;
 mod error;
 mod exchange;
 mod hostkey;

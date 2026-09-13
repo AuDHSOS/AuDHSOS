@@ -27,10 +27,12 @@ methods with the exchange hash and the six keys, the cipher over the
 packet layer, whose documents are in [openssh/](openssh) (D-134), the
 host key with the signature over the exchange hash, the authentication
 exchange with `publickey`, the session channel with its window, and the
-re-exchange with its thresholds. Step S8 is the client over a socket and
-waits on Phase 14; the two questions the track holds open — which host
-key rule a client is given and where its private key comes from — belong
-to the program that constructs it, and section 14.13 names them.
+re-exchange with its thresholds. The client that drives them is built
+too, and is host-tested against a server written in the tests. What is
+left of step S8 waits on Phase 14: the socket, the program of the image,
+and the handshake against an OpenSSH. The two questions the track holds
+open — which host key rule a client is given and where its private key
+comes from — belong to that program, and section 14.13 names them.
 
 ## Reading order
 

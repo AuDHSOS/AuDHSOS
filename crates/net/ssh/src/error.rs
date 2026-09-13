@@ -82,6 +82,11 @@ pub enum SshError {
     /// `SSH_MSG_KEXINIT` while an exchange runs, or a `SSH_MSG_NEWKEYS`
     /// with none running (RFC 4253, section 9).
     Exchange,
+    /// A server that refused the key this client authenticates with, or
+    /// that answered a query for another key (RFC 4252, section 7). This
+    /// client has one method and one key, so a refusal is the end of the
+    /// connection.
+    Authentication,
     /// A Poly1305 tag that is not the tag of what arrived. Nothing was
     /// decrypted, and RFC 4250, section 4.2.2, has a reason code of its
     /// own for it.
@@ -115,6 +120,7 @@ impl fmt::Display for SshError {
             SshError::Channel => f.write_str("this channel cannot take that message"),
             SshError::Window => f.write_str("the window cannot be what the message makes it"),
             SshError::Exchange => f.write_str("no key exchange is at that point"),
+            SshError::Authentication => f.write_str("the server refused this key"),
             SshError::Tag => f.write_str("the tag is not the tag of this packet"),
             SshError::Rng(error) => write!(f, "the padding has no randomness: {error}"),
         }

@@ -3,9 +3,10 @@
 The SSH-2 client of [document 14](../../../docs/14-secure-shell-as-a-client.md),
 sans-I/O: it is given bytes that arrived and a buffer to write into, and
 it never reads a socket, allocates, or asks what time it is. What exists
-today is steps S1 to S7 of track S: every layer of the protocol. What is
-left is the client that drives them over a socket, which is step S8 and
-waits on the network on the machine.
+today is steps S1 to S7 of track S — every layer of the protocol — and
+the client that drives them, which is the logic half of step S8. What
+waits on the network on the machine is the socket under that client, the
+program around it, and the handshake against an OpenSSH.
 
 ## `wire`
 
@@ -189,7 +190,27 @@ authentication and the channels wait for the new keys.
 [`msg::Disconnect`] is the message of section 11.1, with the reason codes
 of RFC 4250 beside it in [`msg::disconnect`].
 
+## `client`
+
+One state machine over every layer below it, with no I/O:
+[`client::Connection`] is given bytes that arrived and a buffer to write
+into, and it answers with what it wants sent, what it has to give its
+caller, and what it is waiting for. The generator, the private key, the
+rule that admits a host key and the moment are all parameters.
+
+What it does, in order: the identification string, the negotiation and
+the key exchange, `publickey` authentication, one `session` channel with
+`exec` or `shell`, and a re-exchange whenever either side asks for one.
+[`client::Event`] is what the caller acts on — bytes to send, bytes to
+read, the command started, data on either stream, the exit status, the
+end.
+
+Its buffers are the caller's and their minimum is the packet size RFC
+4253, section 6.1, makes mandatory, which is what one connection costs.
+
 ## What is not here
 
-The client of S8: the state machine over a socket, which needs the
-network on the machine.
+The socket under the client and the program around it, which are the rest
+of step S8 and need the network on the machine, and the handshake against
+an OpenSSH that measures this client against an implementation this
+project did not write.

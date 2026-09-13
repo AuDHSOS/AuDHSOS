@@ -7,6 +7,28 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Track S, the client of step S8: `audhsos-ssh` gains `client`, one state
+  machine over every layer below it with no I/O. It is given bytes that
+  arrived and a buffer to write into, and it answers with what it wants
+  sent, what it has to give its caller, and what it waits for; the
+  generator, the private key, the rule that admits a host key and the
+  moment are parameters (D-46, D-49). What it does, in order: the
+  identification string of RFC 4253, section 4.2, the negotiation and the
+  key exchange of sections 7 and 8, `publickey` authentication with the
+  query first and the signature after it, one `session` channel with
+  `exec` or `shell`, the window granted back as it is spent, and a
+  re-exchange whenever either side asks for one. Its buffers are the
+  caller's and their minimum is the packet size section 6.1 makes
+  mandatory, which is what one connection costs. No document publishes a
+  complete SSH handshake with the keys that made it, so the machine is
+  driven end to end against a server written in the tests over the same
+  layers: it reaches a command, reads both of its streams, takes its exit
+  status, and answers the close; a re-exchange the server starts changes
+  the keys and not the session identifier; a host key no rule admits and
+  a server that refuses the key each end the connection. Catalog 6.6.79.
+  What is left of S8 is the socket of `server-net`, the program of the
+  image, and the handshake against an OpenSSH, all of which need Phase 14.
+
 - Track S, step S7, the re-exchange: `audhsos-ssh` gains `rekey`, which
   says when this client asks for a key re-exchange, what the peer's
   `SSH_MSG_KEXINIT` asks of it, and what may be sent while one runs. One

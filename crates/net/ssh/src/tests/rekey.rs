@@ -26,11 +26,12 @@ fn settled() -> Rekey {
 
 #[test]
 fn a_connection_begins_inside_its_first_key_exchange() {
-    let rekey = Rekey::new(START);
+    let mut rekey = Rekey::new(START);
 
-    assert_eq!(rekey.state(), Exchange::Running);
+    assert_eq!(rekey.state(), Exchange::Asked);
     assert!(rekey.is_running());
     assert!(!rekey.due(START + MICROSECONDS));
+    assert_eq!(rekey.peer_asked(), Ok(Answer::Nothing));
 }
 
 #[test]

@@ -31,6 +31,7 @@ fn every_refusal_renders_a_sentence_of_its_own() {
         SshError::Channel,
         SshError::Window,
         SshError::Exchange,
+        SshError::Authentication,
         SshError::Tag,
         SshError::Rng(RngError::Entropy(EntropyError::Unavailable)),
     ]

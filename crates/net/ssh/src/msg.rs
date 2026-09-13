@@ -129,6 +129,9 @@ pub mod disconnect {
     /// admits and for a signature that is not the peer's over the
     /// exchange hash.
     pub const HOST_KEY_NOT_VERIFIABLE: u32 = 9;
+
+    /// `SSH_DISCONNECT_BY_APPLICATION`, which a client that is done sends.
+    pub const BY_APPLICATION: u32 = 11;
 }
 
 /// A `SSH_MSG_DISCONNECT` (RFC 4253, section 11.1), which ends the

@@ -3081,6 +3081,31 @@ Step S7 of 8.26.
   another message number is no disconnect, a payload that ends early is
   refused, and a buffer too small writes nothing.
 
+### 6.6.79 The client end to end (`audhsos-ssh`)
+
+The state machine of step S8, host-tested. No document publishes a
+complete SSH handshake with the keys that made it, so what the client is
+driven against is a server written in the tests over the same layers: the
+greeting, both messages of the key exchange, the signature over the
+exchange hash, the six keys, the authentication and one session channel.
+The handshake against an OpenSSH is the acceptance of the step and needs
+the network on the machine.
+
+- The client reaches a command: it greets, negotiates, verifies the host
+  key, authenticates with `publickey`, opens the session channel, runs
+  `exec`, reads what the command wrote on both streams, takes the exit
+  status, and answers the server's close with one of its own.
+- What the client sends reaches the command, and the end of file after it
+  says this side will write no more.
+- A re-exchange the server starts changes the keys and not the session
+  identifier: the command's output arrives after it, under the new keys.
+- A host key no rule admits ends the connection, and so does a server
+  that refuses the key this client authenticates with.
+- The buffers are the ones RFC 4253, section 6.1, makes mandatory: one
+  byte short of either is refused before anything is written, and a user
+  name longer than the buffer the signature is taken over is refused with
+  it.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

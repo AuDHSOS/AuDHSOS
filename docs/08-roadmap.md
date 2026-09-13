@@ -44,7 +44,8 @@ forward. Of the tracks of documents 11 and 12 everything but the two
 integration steps is finished, and those two are Phases 14 and 15; what
 the four phases from 12 on need beyond them is specified in
 [document 13](13-the-network-on-the-machine.md). Track S is begun: steps
-S1 to S7 are built and S8 waits on Phase 14 (D-123).
+S1 to S7 and the client of S8 are built, and what is left of S8 waits on
+Phase 14 (D-123).
 
 ## 8.2 Phase 0: Project foundation
 
@@ -651,9 +652,11 @@ methods over `crypto-dh` (D-122) and `crypto-ec::x25519` with the
 exchange hash and the six keys, the cipher over the packet layer, the
 host key with the signature over the exchange hash, the authentication
 exchange with `publickey`, the session channel with its window, and the
-re-exchange with its thresholds. What is left is S8, the client over a
-socket, which needs Phase 14 and which the two open questions of 14.13
-belong to.
+re-exchange with its thresholds. The client of S8 is built with them and
+is driven end to end against a server written in the tests. What is left
+of S8 needs Phase 14: the socket of `server-net`, the program of the
+image, and the handshake against an OpenSSH, which is also where the two
+open questions of 14.13 belong.
 
 The track is a client for SSH-2 and not a server, for the reason D-123
 gives. It offers `curve25519-sha256` and `diffie-hellman-group14-sha256`
@@ -671,13 +674,14 @@ build. What it refuses, and why each name is refused, is section 14.5.
 | S5 | `auth` | M | implemented: the service request, `publickey` with the signature of RFC 4252, section 7, the four answers a server sends, and `server-sig-algs` out of an `SSH_MSG_EXT_INFO` (catalog 6.6.76) |
 | S6 | `channel` | L | implemented: channels, the window in both directions, the session channel, `exec`, `shell` and `env`, extended data, and the exit status (catalog 6.6.77) |
 | S7 | re-exchange | S-M | implemented: a re-exchange from either side, its three thresholds, what may be sent while one runs, and the disconnect with the reason codes of RFC 4250 (catalog 6.6.78) |
-| S8 | integration | M | the client over a socket of `server-net`, a program of the image, and a handshake against a live OpenSSH; needs Phase 14 |
+| S8 | the client, and its integration | M | implemented: the state machine over every layer below it, against a server written in the tests (catalog 6.6.79). Waiting on Phase 14: the socket of `server-net`, the program of the image, and the handshake against a live OpenSSH |
 
 S1 to S7 depended on no phase and were built between them, as the whole
-of track C was. S8 needs the network on the machine.
+of track C was, and so did the client. What is left of S8 needs the
+network on the machine.
 
-Tests: catalog 6.6.66, 6.6.68, 6.6.69, 6.6.70 and 6.6.75 to 6.6.78 are
-written, for the arithmetic of S2 and the whole of S1 to S7; the rest are written
+Tests: catalog 6.6.66, 6.6.68, 6.6.69, 6.6.70 and 6.6.75 to 6.6.79 are
+written, for the arithmetic of S2, the whole of S1 to S7, and the client; the rest are written
 with the step that owns each. There is no RFC 8448 for this protocol — no document publishes a
 complete handshake with the keys that made it — so the check from outside
 is the interop test of S8 and not a replay, which is the one way this

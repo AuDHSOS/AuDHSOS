@@ -66,18 +66,19 @@ pub struct Rekey {
 }
 
 impl Rekey {
-    /// A connection whose first key exchange is running, begun at `now`.
+    /// A connection whose first key exchange has begun at `now`.
     ///
-    /// The first exchange is the one that makes the session identifier,
-    /// and it starts with both sides sending `SSH_MSG_KEXINIT`, which is
-    /// why a new connection stands in [`Exchange::Running`].
+    /// The first exchange makes the session identifier, and this side
+    /// sends its `SSH_MSG_KEXINIT` as soon as it has sent its
+    /// identification string, so a new connection stands in
+    /// [`Exchange::Asked`] and the peer's message is the reply to it.
     #[must_use]
     pub const fn new(now: u64) -> Rekey {
         Rekey {
             bytes: 0,
             since: now,
             packets: 0,
-            state: Exchange::Running,
+            state: Exchange::Asked,
         }
     }
 
