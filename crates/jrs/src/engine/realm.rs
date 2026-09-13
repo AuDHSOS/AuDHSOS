@@ -799,6 +799,22 @@ pub struct Realm {
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
     intrinsics: [Root; Intrinsic::ALL.len()],
+    global: GlobalEnvironment,
+}
+
+/// Global Environment Record of 9.1.1.4.
+///
+/// The `[[DeclarativeRecord]]` is an object of the heap rather than a map beside
+/// it, so that the collector reaches its bindings the way it reaches every other
+/// property. It is empty until `let`, `const` and `class` create bindings in it.
+pub struct GlobalEnvironment {
+    /// `[[ObjectRecord]]`: the Object Environment Record whose binding object
+    /// is the global object.
+    object_record: Root,
+    /// `[[GlobalThisValue]]`.
+    this_value: Root,
+    /// `[[DeclarativeRecord]]`.
+    declarative_record: Root,
 }
 
 impl Realm {
@@ -902,6 +918,20 @@ impl Realm {
             }
         }
 
+        // 9.1.1.4: the Global Environment Record binds the global object and
+        // the declarations of every Script of this Realm. 19.1.1: `globalThis`
+        // is the [[GlobalThisValue]] with the attributes of 17.
+        let global_object = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let declarative = heap.allocate_immortal_object(root_shape, VALUE_NULL)?;
+        let global_this = Value::from_object(global_object);
+        let global_this_name = PropertyKey::String(heap.strings.intern("globalThis")?);
+        heap.define_own_named(global_object, global_this_name, global_this, builtin_data())?;
+        let global = GlobalEnvironment {
+            object_record: heap.push_root(global_this)?,
+            this_value: heap.push_root(global_this)?,
+            declarative_record: heap.push_root(Value::from_object(declarative))?,
+        };
+
         Ok(Self {
             object_prototype,
             function_prototype,
@@ -911,9 +941,103 @@ impl Realm {
             error_prototype,
             native_error_prototypes,
             intrinsics,
+            global,
         })
     }
 
+    /// The Global Environment Record of this Realm (9.1.1.4).
+    #[must_use]
+    pub const fn global_environment(&self) -> &GlobalEnvironment {
+        &self.global
+    }
+}
+
+impl GlobalEnvironment {
+    /// `[[GlobalThisValue]]`, the value `globalThis` of 19.1.1 answers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root was discarded.
+    pub fn this_value(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Realm::rooted(heap, self.this_value)
+    }
+
+    /// The binding object of the `[[ObjectRecord]]`, which is the global object.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root was discarded or
+    /// no longer names an object.
+    pub fn global_object(&self, heap: &GenerationalHeap) -> Result<ObjectRef, HeapError> {
+        Realm::rooted(heap, self.object_record)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)
+    }
+
+    /// The binding object of the `[[DeclarativeRecord]]`, which holds the
+    /// bindings `let`, `const` and `class` create at the top level of a Script.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root was discarded or
+    /// no longer names an object.
+    pub fn declarative_object(&self, heap: &GenerationalHeap) -> Result<ObjectRef, HeapError> {
+        Realm::rooted(heap, self.declarative_record)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)
+    }
+
+    /// `HasBinding` of 9.1.1.4.1: the declarative record first, then the
+    /// binding object.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] for a stale root or a malformed Prototype Chain.
+    pub fn has_binding(
+        &self,
+        heap: &GenerationalHeap,
+        name: PropertyKey,
+    ) -> Result<bool, HeapError> {
+        if heap
+            .own_named_flags(self.declarative_object(heap)?, name)?
+            .is_some()
+        {
+            return Ok(true);
+        }
+        // 9.1.1.2.1 asks HasProperty, so the Prototype Chain of the global
+        // object counts.
+        Ok(heap
+            .lookup_named(self.global_object(heap)?, name)?
+            .is_some())
+    }
+
+    /// `GetBindingValue` of 9.1.1.4.6, which reaches 9.1.1.2.7 for a name the
+    /// declarative record does not bind.
+    ///
+    /// Answers `None` where 9.1.1.2.7 throws a `ReferenceError`, so that the
+    /// caller raises it with the `Realm` the running execution belongs to.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] for a stale root or a malformed Prototype Chain.
+    pub fn get_binding_value(
+        &self,
+        heap: &GenerationalHeap,
+        name: PropertyKey,
+    ) -> Result<Option<Value>, HeapError> {
+        let declarative = self.declarative_object(heap)?;
+        if let Some(property) = heap.lookup_named(declarative, name)?
+            && property.holder_depth == 0
+        {
+            return Ok(Some(property.value));
+        }
+        Ok(heap
+            .lookup_named(self.global_object(heap)?, name)?
+            .map(|property| property.value))
+    }
+}
+
+impl Realm {
     /// The function object of one native intrinsic.
     ///
     /// # Errors

@@ -12,10 +12,70 @@ use super::{
     feedback::{FeedbackVector, NamedAccessIC},
     heap::GenerationalHeap,
     interpreter::RegisterVM,
-    realm::Realm,
+    realm::{Realm, builtin_data},
     shape::PropertyFlags,
     value::{PropertyKey, VALUE_NULL, Value},
 };
+
+#[test]
+fn the_global_object_carries_global_this_with_the_attributes_of_nineteen_one_one() {
+    let mut heap = GenerationalHeap::new();
+    let realm = Realm::new(&mut heap).unwrap();
+    let environment = realm.global_environment();
+    let name = PropertyKey::String(heap.strings.intern("globalThis").unwrap());
+
+    let global = environment.global_object(&heap).unwrap();
+    let flags = heap.own_named_flags(global, name).unwrap().unwrap();
+
+    assert_eq!(
+        environment.this_value(&heap).unwrap(),
+        Value::from_object(global)
+    );
+    assert_eq!(
+        environment.get_binding_value(&heap, name).unwrap(),
+        Some(Value::from_object(global))
+    );
+    assert!(flags.writable);
+    assert!(!flags.enumerable);
+    assert!(flags.configurable);
+    assert!(!flags.is_accessor);
+}
+
+#[test]
+fn the_global_environment_asks_the_declarative_record_before_the_binding_object() {
+    let mut heap = GenerationalHeap::new();
+    let realm = Realm::new(&mut heap).unwrap();
+    let shared = PropertyKey::String(heap.strings.intern("shared").unwrap());
+    let only_global = PropertyKey::String(heap.strings.intern("onlyGlobal").unwrap());
+    let unbound = PropertyKey::String(heap.strings.intern("unbound").unwrap());
+    let environment = realm.global_environment();
+    let global = environment.global_object(&heap).unwrap();
+    let declarative = environment.declarative_object(&heap).unwrap();
+
+    // 9.1.1.4.1 and 9.1.1.4.6 read the declarative record first, so a name it
+    // binds shadows the same name on the binding object.
+    heap.define_own_named(global, shared, Value::from_smi(1), builtin_data())
+        .unwrap();
+    heap.define_own_named(global, only_global, Value::from_smi(2), builtin_data())
+        .unwrap();
+    heap.define_own_named(declarative, shared, Value::from_smi(3), builtin_data())
+        .unwrap();
+
+    assert!(environment.has_binding(&heap, shared).unwrap());
+    assert!(environment.has_binding(&heap, only_global).unwrap());
+    assert!(!environment.has_binding(&heap, unbound).unwrap());
+
+    assert_eq!(
+        environment.get_binding_value(&heap, shared).unwrap(),
+        Some(Value::from_smi(3))
+    );
+    assert_eq!(
+        environment.get_binding_value(&heap, only_global).unwrap(),
+        Some(Value::from_smi(2))
+    );
+    // 9.1.1.2.7 throws a ReferenceError here, which the caller raises.
+    assert_eq!(environment.get_binding_value(&heap, unbound).unwrap(), None);
+}
 
 #[test]
 fn end_to_end_shape_transitions_and_shared_shapes() {
