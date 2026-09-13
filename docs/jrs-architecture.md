@@ -517,6 +517,7 @@ und deshalb erreicht ihn keine Test262-Datei. Die Reihenfolge folgt daraus:
 | G2 | `LdaGlobal`/`StaGlobal` mit Property-Cell-Caches und Invalidation. | Differential gegen den Stack-Pfad über Lesen, Schreiben, Löschen und Shadowing. |
 | G3 | GlobalDeclarationInstantiation (16.1.7) für `var`, `function`, `let`, `const` samt Redeklarationsfehlern. | Bindungen überleben mehrere `Realm::evaluate`-Aufrufe; Fehlerfälle von 16.1.7 sind geprüft. |
 | G4 | Backend-Auswahl pro Realm statt pro Script. | Ein Realm läuft vollständig auf einem Pfad; ein Programm kann nicht mehr davon abhängen, welcher Pfad es kompiliert hat. |
+| G5a | Code-Identität gehört dem Realm: ein Funktionsobjekt hält heute den Index seines Codes in der Tabelle des Scripts, das es erzeugt hat. | `function f(){}` in einem Script, `f()` im nächsten desselben Realms antwortet wie im Stack-Backend. |
 | G5 | Funktionsobjekte, die den Script-Lauf überleben, und Aufrufe mit `this`. | Der Test262-Harness lädt im Engine-Core; ab hier sind Test262-Zahlen für diesen Pfad überhaupt messbar. |
 
 G0 steht vorn, weil G2 und G3 ohne ihn nicht fertig werden können. Das Lowering
