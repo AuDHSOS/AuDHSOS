@@ -350,6 +350,45 @@ impl<'a> Page<'a> {
         }
     }
 
+    /// How many bytes of the page no cell holds, which is
+    /// `btreeComputeFreeSpace`: the gap between the pointer array and
+    /// the content, every freeblock, and the bytes too few to be one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::FreeBlock`] where the list leaves the page or does not
+    /// count up.
+    pub fn free(&self) -> Result<usize, Error> {
+        let array = self.start.saturating_add(self.kind.header_len());
+        let first = array.saturating_add(self.cells().saturating_mul(2));
+        let top = self.content_start();
+        if top < first || top > self.usable {
+            return Err(Error::FreeBlock);
+        }
+        let byte = |at: usize| usize::from(u8_at(self.bytes, at).unwrap_or(0));
+        let word = |at: usize| usize::from(u16_at(self.bytes, at).unwrap_or(0));
+        let mut free = top.saturating_sub(first);
+        free = free.saturating_add(byte(self.start.saturating_add(7)));
+        let mut at = word(self.start.saturating_add(1));
+        let mut last = 0;
+        while at > 0 {
+            if at <= last || at > self.usable.saturating_sub(4) {
+                return Err(Error::FreeBlock);
+            }
+            let size = word(at.saturating_add(2));
+            if at.saturating_add(size) > self.usable {
+                return Err(Error::FreeBlock);
+            }
+            free = free.saturating_add(size);
+            last = at;
+            at = word(at);
+        }
+        if free > self.usable {
+            return Err(Error::FreeBlock);
+        }
+        Ok(free)
+    }
+
     /// Every cell of the page, in the order the pointer array names them.
     pub fn cells_iter(&self) -> impl Iterator<Item = Result<Cell<'a>, Error>> + '_ {
         (0..self.cells()).map(move |index| self.cell(index))
@@ -635,31 +674,7 @@ impl<'a> Writer<'a> {
     /// [`Error::FreeBlock`] where the list leaves the page or does not
     /// count up.
     pub fn free(&self) -> Result<usize, Error> {
-        let first = self.array().saturating_add(self.cells().saturating_mul(2));
-        let top = self.content();
-        if top < first || top > self.usable {
-            return Err(Error::FreeBlock);
-        }
-        let mut free = top.saturating_sub(first);
-        free = free.saturating_add(self.get8(self.start.saturating_add(7)));
-        let mut at = self.get16(self.start.saturating_add(1));
-        let mut last = 0;
-        while at > 0 {
-            if at <= last || at > self.usable.saturating_sub(4) {
-                return Err(Error::FreeBlock);
-            }
-            let size = self.get16(at.saturating_add(2));
-            if at.saturating_add(size) > self.usable {
-                return Err(Error::FreeBlock);
-            }
-            free = free.saturating_add(size);
-            last = at;
-            at = self.get16(at);
-        }
-        if free > self.usable {
-            return Err(Error::FreeBlock);
-        }
-        Ok(free)
+        self.page().free()
     }
 
     /// Puts `size` bytes beginning at `at` back on the free list, which

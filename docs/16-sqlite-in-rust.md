@@ -79,7 +79,7 @@ Each rule is checkable, and each makes a later thing possible.
 |--------|---------------|------------|
 | `header`, `page`, `record`, `image`, `bytes` | The hundred-byte header, the four b-tree page types read and written, the four cell shapes, overflow chains, the record format read and written, the walk of a table tree and of an index tree. | Q1, D-162, D-163 |
 | `wal` | The write-ahead log a reader must follow: the header, the frames, the checksum of section 4.2, and the newest committed frame of each page. | D-155, Q3 |
-| `journal` | The rollback journal a reader must play back: the headers, the records, the checksum of `pager_cksum`, and the content each page began with. | D-156, Q3 |
+| `journal` | The rollback journal a reader must play back and a commit must write: the headers, the records, the checksum of `pager_cksum`, the content each page began with, and what each journal mode leaves behind. | D-156, D-170, Q3, Q7 |
 | `token`, `keyword` | SQL text to tokens, the same character classes as `src/tokenize.c`. | Q4 |
 | `ast`, `parse` | Tokens to a tree: expressions, `SELECT`, `CREATE TABLE`, `CREATE INDEX`. | Q4 |
 | `schema` | The `CREATE` text of `sqlite_schema` to columns, affinities, collations, the rowid rules and the indexes. | D-145, D-159, Q2 |
@@ -510,10 +510,10 @@ through the walker; the crate meets D4.
 ## 16.21 Q7. Writing
 
 Status: a table is filled in any key order, emptied again, and filled
-from the pages the delete freed, and the file is the one the shell
-wrote, byte for byte; the pointer maps and the transactions are not
-built.
-Depends on: Q3, Q5. Recorded in D-162 to D-169.
+from the pages the delete freed; the file and the rollback journal
+beside it are the ones the shell wrote, byte for byte. The pointer maps,
+playing a journal back, and the WAL are not built.
+Depends on: Q3, Q5. Recorded in D-162 to D-170.
 Size: L.
 
 ### Needs
@@ -542,8 +542,10 @@ Size: L.
 8. Take a row out again: the overflow chain it ran onto, the pages a
    delete has emptied, and the free list they go on. Built.
 9. Keep the pointer maps of a file that vacuums itself.
-10. Run a transaction through the rollback journal in each of its four
-    modes, then through the WAL.
+10. Write the rollback journal of a transaction and leave of it what
+    the journal mode says. Built.
+11. Play a journal back over the file it belongs to, and run a
+    transaction through the WAL.
 
 ### Done when
 

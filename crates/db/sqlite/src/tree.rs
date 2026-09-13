@@ -54,6 +54,13 @@ pub struct Pages {
     /// page the free list gives back comes as noughts unless this
     /// transaction is the one that put it there.
     freed: Vec<bool>,
+    /// How many pages the database held when the transaction began,
+    /// which is `dbOrigSize`.
+    origin: u32,
+    /// The pages the transaction has opened to write that the database
+    /// already held, in the order it opened them, which is the order the
+    /// rollback journal holds their records in.
+    journalled: Vec<u32>,
     /// How many pages the free list holds, which the header holds at
     /// offset 36.
     freelist_count: u32,
@@ -89,6 +96,8 @@ impl Pages {
             before: alloc::vec![None],
             skipped: alloc::vec![None],
             freed: alloc::vec![false],
+            origin: 1,
+            journalled: Vec::new(),
             freelist_count: 0,
         })
     }
@@ -176,6 +185,8 @@ impl Pages {
     pub fn begin(&mut self) {
         self.before.fill(None);
         self.freed.fill(false);
+        self.journalled.clear();
+        self.origin = self.count();
     }
 
     /// Opens page `number` to write, which is `sqlite3PagerWrite`: what
@@ -186,10 +197,18 @@ impl Pages {
         let at = size(u64::from(number)).saturating_sub(1);
         let held = self.held.get(at).cloned();
         one(&mut self.skipped, at, &None);
+        let mut first = false;
         for slot in self.before.iter_mut().skip(at).take(1) {
             if slot.is_none() {
                 slot.clone_from(&held);
+                first = true;
             }
+        }
+        // A page the database did not hold when the transaction began
+        // is not in the journal, because rolling back shortens the file
+        // to the pages it held.
+        if first && number <= self.origin {
+            self.journalled.push(number);
         }
     }
 
@@ -200,6 +219,9 @@ impl Pages {
         if held == 0 {
             return Ok(None);
         }
+        // Page one holds how many pages the free list has, so taking one
+        // writes page one.
+        self.keep(1);
         self.freelist_count = held.saturating_sub(1);
         let trunk = self.freelist;
         let leaves = self.word(trunk, 4)?;
@@ -251,6 +273,9 @@ impl Pages {
             return Err(Error::Page(number));
         }
         let held = self.freelist_count;
+        // Page one holds how many pages the free list has, so freeing
+        // one writes page one.
+        self.keep(1);
         self.freelist_count = held.saturating_add(1);
         let trunk = self.freelist;
         if held != 0 {
@@ -361,6 +386,27 @@ impl Pages {
         Ok(())
     }
 
+    /// Opens page `number` to write without writing anything of it,
+    /// which is `sqlite3PagerWrite`: the journal of the transaction
+    /// holds the page from here on.
+    pub fn open(&mut self, number: u32) {
+        self.keep(number);
+    }
+
+    /// Puts `cell` at `at` of page `number` and answers whether the page
+    /// had room for it, which is `insertCell`: a page with no room is
+    /// not opened to write, so the journal does not hold it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading or writing the page refuses.
+    pub fn put_cell(&mut self, number: u32, at: usize, cell: &[u8]) -> Result<bool, Error> {
+        if self.page(number)?.free()? < cell.len().saturating_add(2) {
+            return Ok(false);
+        }
+        self.writer(number)?.insert(at, cell)
+    }
+
     /// Writes a whole page, which is what a caller that built one out of
     /// its own bytes hands back.
     ///
@@ -389,6 +435,48 @@ impl Pages {
                 *slot = *byte;
             }
         }
+    }
+
+    /// The rollback journal the commit of this transaction writes, which
+    /// holds every page the transaction changed as it was before it.
+    ///
+    /// `was` is the header the last commit wrote, because the record of
+    /// page one holds the header as it was and this crate keeps that
+    /// header beside the pages rather than on page one.
+    ///
+    /// Page one is in every journal: the commit writes the change
+    /// counter into it, which is `pager_incr_changecounter`, so a
+    /// transaction that never touched page one still holds it last.
+    ///
+    /// `nonce` and `sector` are what [`crate::journal::write`] takes.
+    #[must_use]
+    pub fn journal(&self, was: &Header, nonce: u32, sector: u32) -> Vec<u8> {
+        let content = |number: u32| -> Vec<u8> {
+            let at = size(u64::from(number)).saturating_sub(1);
+            let mut page = self
+                .before
+                .get(at)
+                .and_then(Clone::clone)
+                .or_else(|| self.held.get(at).cloned())
+                .unwrap_or_default();
+            if number == 1 {
+                for (slot, byte) in page.iter_mut().zip(was.written()) {
+                    *slot = byte;
+                }
+            }
+            page
+        };
+        let mut numbers = self.journalled.clone();
+        if !numbers.contains(&1) {
+            numbers.push(1);
+        }
+        let pages: Vec<Vec<u8>> = numbers.iter().copied().map(content).collect();
+        let records: Vec<(u32, &[u8])> = numbers
+            .iter()
+            .copied()
+            .zip(pages.iter().map(Vec::as_slice))
+            .collect();
+        crate::journal::write(&records, self.origin, nonce, sector)
     }
 
     /// The file the pages make, with the header written into the first
@@ -466,7 +554,7 @@ pub fn insert(pages: &mut Pages, root: u32, rowid: i64, record: &[u8]) -> Result
     });
     let path = place(pages, root, rowid)?;
     let (leaf, at) = *path.last().ok_or(Error::Depth)?;
-    if pages.writer(leaf)?.insert(at, &cell)? {
+    if pages.put_cell(leaf, at, &cell)? {
         return Ok(());
     }
     balance(pages, &path, alloc::vec![(at, cell)])
@@ -495,8 +583,10 @@ pub fn remove(pages: &mut Pages, root: u32, rowid: i64) -> Result<bool, Error> {
         return Ok(false);
     }
     let overflow = payload.overflow;
-    // `clearCell` before `dropCell`, which is the order the pages come
-    // onto the free list in.
+    // `sqlite3PagerWrite` on the leaf comes first, then `clearCell` and
+    // `dropCell`, which is the order the pages come onto the free list
+    // in and the order the journal holds them in.
+    pages.open(leaf);
     clear(pages, overflow)?;
     pages.writer(leaf)?.remove(at)?;
     balance(pages, &path, Vec::new())?;
@@ -547,7 +637,7 @@ fn balance(pages: &mut Pages, path: &[(u32, usize)], mut spill: Vec<Spill>) -> R
     // d costs O(d) balances.
     loop {
         let (page, at) = *stack.last().ok_or(Error::Depth)?;
-        if spill.is_empty() && pages.writer(page)?.free()? <= least {
+        if spill.is_empty() && pages.page(page)?.free()? <= least {
             return Ok(());
         }
         let over = stack
@@ -579,6 +669,7 @@ fn balance(pages: &mut Pages, path: &[(u32, usize)], mut spill: Vec<Spill>) -> R
             let (_, bytes) = spill.first().ok_or(Error::Balance)?;
             return quick(pages, parent, page, bytes);
         }
+        pages.open(parent);
         spill = balance_nonroot(pages, parent, above, &spill, stack.len() == 2)?;
         stack.pop();
     }
@@ -628,12 +719,12 @@ pub(crate) fn quick(pages: &mut Pages, parent: u32, page: u32, cell: &[u8]) -> R
         return Err(Error::Balance);
     };
     let sibling = pages.add(Kind::LeafTable, 0)?;
-    if !pages.writer(sibling)?.insert(0, cell)? {
+    if !pages.put_cell(sibling, 0, cell)? {
         return Err(Error::Balance);
     }
     let divider = write_cell(&Cell::TableInterior { child: page, rowid });
     let cells = pages.page(parent)?.cells();
-    if !pages.writer(parent)?.insert(cells, &divider)? {
+    if !pages.put_cell(parent, cells, &divider)? {
         return Err(Error::Balance);
     }
     pages.writer(parent)?.point(sibling)
@@ -943,6 +1034,9 @@ fn allocate(
     let mut near = taken.old.first().copied().unwrap_or(0);
     for index in 0..k {
         let number = if let Some(number) = taken.old.get(index) {
+            // `sqlite3PagerWrite`: a sibling the balance writes again is
+            // opened here, which is where the journal takes it.
+            pages.open(*number);
             *number
         } else {
             old_at.set(index, cells.len());
@@ -1156,7 +1250,7 @@ fn balance_nonroot(
     let mut sizes: Row<i64> = Row::default();
     let mut counts: Row<usize> = Row::default();
     for (index, number) in taken.old.iter().copied().enumerate() {
-        let mut used = room.saturating_sub(count_of(pages.writer(number)?.free()?));
+        let mut used = room.saturating_sub(count_of(pages.page(number)?.free()?));
         if index == taken.full {
             for (_, bytes) in spill {
                 used = used.saturating_add(count_of(bytes.len()).saturating_add(2));
@@ -1200,7 +1294,7 @@ fn balance_nonroot(
     let mut out: Vec<Spill> = Vec::new();
     let mut rest = built.into_iter();
     for (place, divider) in rest.by_ref() {
-        if !pages.writer(parent)?.insert(place, &divider)? {
+        if !pages.put_cell(parent, place, &divider)? {
             out.push((place, divider));
             break;
         }

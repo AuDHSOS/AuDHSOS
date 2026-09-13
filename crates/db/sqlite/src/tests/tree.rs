@@ -720,3 +720,83 @@ fn an_overflow_chain_that_turns_back_on_itself_is_refused() {
     pages.put_page(last, &bytes).unwrap();
     assert_eq!(remove(&mut pages, 2, 1), Err(Error::Overflow(last)));
 }
+
+#[test]
+fn the_journal_a_commit_leaves_is_the_one_the_shell_left() {
+    use crate::journal::{Journal, Mode, committed};
+    use crate::tree::remove;
+    // The delete of `emptied.db` under a journal mode that keeps the
+    // file. The nonce every checksum begins at comes from SQLite's
+    // random source, so the one the fixture was written with is read
+    // back out of it: the first record says the nonce and the eight
+    // after it say the nonce is right.
+    let mut pages = filled(512);
+    let mut was = header(512, Encoding::Utf8, 2);
+    was.pages = pages.count();
+    for rowid in 1..=400_i64 {
+        if rowid % 4 != 0 {
+            remove(&mut pages, 2, rowid).unwrap();
+        }
+    }
+    let theirs = crate::tests::JOURNALLED;
+    let nonce = nonce_of(theirs, &pages.journal(&was, 0, 512));
+    let mine = committed(&pages.journal(&was, nonce, 512), Mode::Persist).unwrap();
+    same("journalled.db-journal", &mine, theirs, 512);
+    // The journal this crate wrote is one this crate reads back: every
+    // page it holds is the page the transaction began with.
+    let hot = pages.journal(&was, nonce, 512);
+    let read = Journal::open(&hot);
+    assert!(read.hot());
+    assert_eq!(read.page_size(), 512);
+    assert_eq!(read.pages(), was.pages);
+    assert_eq!(
+        read.page_bytes(2),
+        Some(&hot[512 + 520 + 4..512 + 520 + 516])
+    );
+}
+
+/// The nonce `theirs` was written with, which is what its first record
+/// says once the sum of that page is taken off it. A journal this crate
+/// wrote with a nonce of nought holds that sum.
+fn nonce_of(theirs: &[u8], plain: &[u8]) -> u32 {
+    let at = 512 + 512 + 4;
+    let sum = u32::from_be_bytes(plain[at..at + 4].try_into().unwrap());
+    u32::from_be_bytes(theirs[at..at + 4].try_into().unwrap()).wrapping_sub(sum)
+}
+
+#[test]
+fn a_commit_puts_page_one_in_the_journal_last() {
+    use crate::journal::{Mode, committed};
+    // The four hundred rows of `shuffled.db` put in by one statement,
+    // which writes no cell of page one: the journal holds the leaf and
+    // then page one, which the commit writes the change counter into.
+    let mut pages = Pages::new(512, 0).unwrap();
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
+    let sql = "CREATE TABLE t(n INTEGER, s TEXT)";
+    insert(&mut pages, 1, 1, &schema_row("t", 2, sql, Encoding::Utf8)).unwrap();
+    let mut was = header(512, Encoding::Utf8, 1);
+    was.pages = pages.count();
+    was.schema_cookie = 1;
+    pages.begin();
+    for number in 1..=400_i64 {
+        insert(&mut pages, 2, (number * 137) % 401, &tall_row(number)).unwrap();
+    }
+    let theirs = crate::tests::APPENDED;
+    let nonce = nonce_of(theirs, &pages.journal(&was, 0, 512));
+    let mine = committed(&pages.journal(&was, nonce, 512), Mode::Persist).unwrap();
+    same("appended.db-journal", &mine, theirs, 512);
+}
+
+#[test]
+fn what_each_journal_mode_leaves_behind() {
+    use crate::journal::{Mode, committed};
+    let journal = alloc::vec![9u8; 600];
+    assert_eq!(committed(&journal, Mode::Delete), None);
+    assert_eq!(committed(&journal, Mode::Memory), None);
+    assert_eq!(committed(&journal, Mode::Off), None);
+    assert_eq!(committed(&journal, Mode::Truncate), Some(Vec::new()));
+    let kept = committed(&journal, Mode::Persist).unwrap();
+    assert_eq!(kept.len(), 600);
+    assert!(kept[..28].iter().all(|byte| *byte == 0));
+    assert!(kept[28..].iter().all(|byte| *byte == 9));
+}

@@ -59,6 +59,101 @@ pub struct Journal<'a> {
     pages: u32,
 }
 
+/// What a commit leaves of the rollback journal, which is the journal
+/// mode the connection was opened in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Mode {
+    /// The journal file is deleted, which is the default.
+    Delete,
+    /// The journal file is shortened to nothing.
+    Truncate,
+    /// The first twenty-eight bytes of the journal are written over
+    /// with noughts, and the rest of the file stays.
+    Persist,
+    /// The journal is never a file, so a commit leaves none.
+    Memory,
+    /// No journal is written at all, so a crash leaves the database
+    /// half written.
+    Off,
+}
+
+/// The magic and the four fields a commit writes over in `persist`
+/// mode, which is `zeroJournalHdr`.
+const ZEROED: usize = 28;
+
+/// A journal written for `pages` pages of `page_size` bytes, holding
+/// `records` of a page number, the page as it was, and a checksum.
+///
+/// `nonce` is the number every checksum begins at, which SQLite takes
+/// from its random source and which a reader reads back out of the
+/// header, so a caller holding a journal to the bytes SQLite wrote
+/// passes the nonce that journal was written with.
+///
+/// `sector` is what the header is padded to, which is 512 for every
+/// file whose device says a write of one sector cannot damage another,
+/// and that is every file on a system built with
+/// `SQLITE_POWERSAFE_OVERWRITE`, which is the default.
+///
+/// One journal is O(n) in the bytes of the pages it holds.
+#[must_use]
+pub fn write(records: &[(u32, &[u8])], pages: u32, nonce: u32, sector: u32) -> Vec<u8> {
+    let page_size = records.first().map_or(0, |(_, page)| page.len());
+    let sector = size(u64::from(sector));
+    let mut out: Vec<u8> = Vec::with_capacity(
+        sector.saturating_add(records.len().saturating_mul(page_size.saturating_add(8))),
+    );
+    let mut header = alloc::vec![0u8; sector];
+    let put = |header: &mut [u8], at: usize, value: u32| {
+        for (slot, byte) in header.iter_mut().skip(at).zip(value.to_be_bytes()) {
+            *slot = byte;
+        }
+    };
+    for (slot, byte) in header.iter_mut().zip(MAGIC) {
+        *slot = byte;
+    }
+    put(
+        &mut header,
+        8,
+        u32::try_from(records.len()).unwrap_or(TO_THE_END),
+    );
+    put(&mut header, 12, nonce);
+    put(&mut header, 16, pages);
+    put(&mut header, 20, u32::try_from(sector).unwrap_or(0));
+    put(&mut header, 24, u32::try_from(page_size).unwrap_or(0));
+    // `writeJournalHdr` fills the sector with as many copies of the
+    // header as the page size takes to cover it, because one write of
+    // the whole sector is faster than a write of the header and a gap.
+    let stride = page_size.min(sector).max(1);
+    let mut written = 0;
+    while written < sector {
+        out.extend_from_slice(header.get(..stride).unwrap_or_default());
+        written = written.saturating_add(stride);
+    }
+    out.truncate(sector);
+    for (number, page) in records {
+        out.extend_from_slice(&number.to_be_bytes());
+        out.extend_from_slice(page);
+        out.extend_from_slice(&checksum(nonce, page).to_be_bytes());
+    }
+    out
+}
+
+/// What `mode` leaves of `journal` once the transaction is committed.
+#[must_use]
+pub fn committed(journal: &[u8], mode: Mode) -> Option<Vec<u8>> {
+    match mode {
+        Mode::Delete | Mode::Memory | Mode::Off => None,
+        Mode::Truncate => Some(Vec::new()),
+        Mode::Persist => {
+            let mut out = journal.to_vec();
+            for slot in out.iter_mut().take(ZEROED) {
+                *slot = 0;
+            }
+            Some(out)
+        }
+    }
+}
+
 impl<'a> Journal<'a> {
     /// Reads a `-journal` file and plays it back in memory.
     ///

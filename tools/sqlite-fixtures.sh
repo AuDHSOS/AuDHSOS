@@ -154,6 +154,31 @@ rm -f "$out/unchained.db"
 "$sqlite" "$out/unchained.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<40) INSERT INTO t(rowid,n,s) SELECT (i*17)%41, i, replace(hex(zeroblob(i*30)),'0','x') FROM c; DELETE FROM t WHERE rowid%3!=0;"
 printf '%s\t%s bytes\n' unchained.db "$(wc -c <"$out/unchained.db" | tr -d ' ')"
 
+# The same rows and the same delete under a journal mode that leaves the
+# journal behind, so that the file the commit wrote is there to read.
+# The database is `emptied.db` byte for byte, because the journal mode
+# changes what is beside the file and not what is in it.
+rm -f "$out/journalled.db" "$out/journalled.db-journal"
+"$sqlite" "$out/journalled.db" "PRAGMA page_size=512; PRAGMA journal_mode=persist; $rows400 DELETE FROM t WHERE rowid%4!=0;" >/dev/null
+printf '%s\t%s bytes\n' journalled.db-journal "$(wc -c <"$out/journalled.db-journal" | tr -d ' ')"
+cmp -s "$out/journalled.db" "$out/emptied.db" || {
+    echo "sqlite-fixtures: journalled.db is not emptied.db" >&2
+    exit 1
+}
+rm -f "$out/journalled.db"
+
+# The same under a statement that only puts rows in, so that the commit
+# is what puts page one in the journal and puts it last. The database is
+# `shuffled.db` byte for byte.
+rm -f "$out/appended.db" "$out/appended.db-journal"
+"$sqlite" "$out/appended.db" "PRAGMA page_size=512; PRAGMA journal_mode=persist; $rows400" >/dev/null
+printf '%s\t%s bytes\n' appended.db-journal "$(wc -c <"$out/appended.db-journal" | tr -d ' ')"
+cmp -s "$out/appended.db" "$out/shuffled.db" || {
+    echo "sqlite-fixtures: appended.db is not shuffled.db" >&2
+    exit 1
+}
+rm -f "$out/appended.db"
+
 # Rows taken out and put in again, so that the pages the delete freed
 # are the ones the insert takes. Four thousand rows over 512-byte pages
 # leave a free list of two trunks.

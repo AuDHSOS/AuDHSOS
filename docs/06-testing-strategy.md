@@ -4057,6 +4057,28 @@ rules of the pager the file shows.
   database does not hold, and an overflow chain that turns back on
   itself.
 
+### 6.6.110 The journal a commit writes (`db-sqlite`)
+
+D-170, document 16 step Q7. `journal::write` and `journal::committed`,
+held to the journals the shell left beside its databases.
+
+- `journalled.db-journal` is what the delete that makes `emptied.db`
+  wrote: nine records, the pages the delete changed, in the order it
+  opened them.
+- `appended.db-journal` is what the insert that makes `shuffled.db`
+  wrote: the leaf the rows went on and then page one, which the commit
+  writes the change counter into.
+- The nonce every checksum begins at comes from SQLite's random source,
+  so each test reads the nonce out of the fixture's first record and the
+  records after it are what say the nonce is right.
+- Each journal is written here and is the fixture byte for byte, the
+  noughts `persist` mode writes over the header included.
+- The journal this crate writes is one it reads back: the pages
+  `Journal::open` restores are the pages the transaction began with.
+- The five journal modes: `delete`, `memory` and `off` leave no file,
+  `truncate` an empty one, and `persist` the records under a header of
+  noughts.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

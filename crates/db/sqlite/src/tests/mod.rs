@@ -72,6 +72,16 @@ pub(super) const UNCHAINED: &[u8] = include_bytes!("fixtures/unchained.db");
 /// the insert takes.
 pub(super) const REUSED: &[u8] = include_bytes!("fixtures/reused.db");
 
+/// The journal the commit of `emptied.db` left behind, under a journal
+/// mode that keeps the file: the header written over with noughts and
+/// the records of every page the delete changed.
+pub(super) const JOURNALLED: &[u8] = include_bytes!("fixtures/journalled.db-journal");
+
+/// The journal the commit of `shuffled.db` left behind: one record for
+/// the leaf the rows went on and one for page one, which the commit
+/// writes the change counter into and so puts in last.
+pub(super) const APPENDED: &[u8] = include_bytes!("fixtures/appended.db-journal");
+
 /// The matrix of document 16, section 16.11, over the write path: the
 /// same four hundred rows under every page size, every encoding and
 /// every reserved tail the shell writes, each with the page size, the
