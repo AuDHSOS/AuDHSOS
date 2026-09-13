@@ -586,21 +586,23 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 
 | Scope | Run | Implementation commit | Command | Files | Variants | Passed | Failed | Unsupported |
 |---|---|---|---|---:|---:|---:|---:|---:|
-| Throw statements (focused) | focused | `e040682db6ff724258979bf867a08bcb0454cf5c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/throw --summary` | 14 | 28 | 28 (100.00%) | 0 (0.00%) | 0 (0.00%) |
-| Try statements (focused) | focused | `e040682db6ff724258979bf867a08bcb0454cf5c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/try --summary` | 201 | 388 | 334 (86.08%) | 5 (1.29%) | 49 (12.63%) |
-| Switch statements (focused) | focused | `e040682db6ff724258979bf867a08bcb0454cf5c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/switch --summary` | 111 | 216 | 135 (62.50%) | 11 (5.09%) | 70 (32.41%) |
-| For-in statements (focused) | focused | `e040682db6ff724258979bf867a08bcb0454cf5c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for-in --summary` | 119 | 206 | 168 (81.55%) | 7 (3.40%) | 31 (15.05%) |
-| Complete pinned suite, including staging and Intl | full | `e040682db6ff724258979bf867a08bcb0454cf5c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Throw statements (focused) | focused | `30fdc677b6c80accd0ab319202285a5e9baf50e9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/throw --summary` | 14 | 28 | 28 (100.00%) | 0 (0.00%) | 0 (0.00%) |
+| Try statements (focused) | focused | `30fdc677b6c80accd0ab319202285a5e9baf50e9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/try --summary` | 201 | 388 | 334 (86.08%) | 5 (1.29%) | 49 (12.63%) |
+| Switch statements (focused) | focused | `30fdc677b6c80accd0ab319202285a5e9baf50e9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/switch --summary` | 111 | 216 | 135 (62.50%) | 11 (5.09%) | 70 (32.41%) |
+| For-in statements (focused) | focused | `30fdc677b6c80accd0ab319202285a5e9baf50e9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for-in --summary` | 119 | 206 | 168 (81.55%) | 7 (3.40%) | 31 (15.05%) |
+| Object.prototype methods (focused) | focused | `30fdc677b6c80accd0ab319202285a5e9baf50e9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/prototype --summary` | 248 | 494 | 284 (57.49%) | 202 (40.89%) | 8 (1.62%) |
+| Complete pinned suite, including staging and Intl | full | `30fdc677b6c80accd0ab319202285a5e9baf50e9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
 full runs remain open work.
 
-The four focused families are the statements the register backend gained in
-this migration step. Each produces the counts the legacy stack backend
-produces for the same family, which is what a backend migration has to show:
-the full-suite counts are unchanged against the same suite measured before it.
+The focused families are what the register backend gained in this migration
+step: the four statements, and the methods of %Object.prototype% it now answers
+itself. Each produces the counts the legacy stack backend produces for the same
+family, which is what a backend migration has to show: the full-suite counts are
+unchanged against the same suite measured before it, variant for variant.
 
 ### Historical Test262 baseline
 
