@@ -60,7 +60,17 @@ const FIRMWARE_RELATIVES: [&str; 4] = [
 
 /// The port inside the guest the forwarded host port reaches, which is the
 /// echo port of a listener Phase 14 brings up.
-const GUEST_PORT: u16 = 7;
+pub(crate) const GUEST_PORT: u16 = 7;
+
+/// The hardware address the command line gives the device.
+///
+/// It is written down rather than left to QEMU's default so that the line
+/// the driver reports can be checked against something the run asked for.
+pub(crate) const GUEST_MAC: &str = "52:54:00:12:34:56";
+
+/// The address QEMU's user-mode network hands the guest first, which the
+/// address configuration client of the guest therefore leases.
+pub(crate) const GUEST_ADDRESS: &str = "10.0.2.15";
 
 /// Time limit of one run in seconds.
 const DEFAULT_TIMEOUT: u64 = 60;
@@ -491,8 +501,8 @@ pub(crate) fn arguments(
 /// `disable-legacy=on` makes it a non-transitional virtio 1.0 device, whose
 /// device identifier is then `0x1041` and not the transitional `0x1000`;
 /// `mq=off` is the default and is written down because the driver depends on
-/// it. The forwarded port reaches a listener inside the guest and needs no
-/// host network and no privileges.
+/// it; `mac=` is what the driver reports back. The forwarded port reaches a
+/// listener inside the guest and needs no host network and no privileges.
 fn network(host_port: Option<u16>) -> Vec<String> {
     let Some(port) = host_port else {
         return Vec::new();
@@ -501,7 +511,7 @@ fn network(host_port: Option<u16>) -> Vec<String> {
         "-netdev".to_owned(),
         format!("user,id=n0,hostfwd=tcp:127.0.0.1:{port}-:{GUEST_PORT}"),
         "-device".to_owned(),
-        "virtio-net-pci,netdev=n0,disable-legacy=on,mq=off".to_owned(),
+        format!("virtio-net-pci,netdev=n0,disable-legacy=on,mq=off,mac={GUEST_MAC}"),
     ]
 }
 

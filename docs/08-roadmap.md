@@ -31,6 +31,8 @@ design documents reflect the code, the changelog is updated. The
 [implementation plan](10-implementation-plan.md) specifies the work of
 each phase down to crates, types, algorithms, and tests.
 
+Phases 0 to 14 are implemented; Phase 15 is what is left.
+
 Beside the phases run tracks that depend on none of them: the
 cryptography and TLS crates of section 8.21, specified in
 [document 11](11-cryptography-and-tls.md), the tracks of sections 8.22
@@ -40,12 +42,13 @@ Shell client of section 8.26, specified in
 system server are off the phases as well, built and specified in
 [document 15](15-the-disk-on-the-machine.md). Section 8.27 states how
 many of them may be active at once and which phase work may be pulled
-forward. Of the tracks of documents 11 and 12 everything but the two
-integration steps is finished, and those two are Phases 14 and 15; what
-the four phases from 12 on need beyond them is specified in
+forward. Of the tracks of documents 11 and 12 everything but the
+integration of track C is finished, and that is Phase 15; track D's own
+integration is Phase 14 and is done. What the four phases from 12 on need
+beyond them is specified in
 [document 13](13-the-network-on-the-machine.md). Track S is begun: steps
-S1 to S7 and the client of S8 are built, and what is left of S8 waits on
-Phase 14 (D-123).
+S1 to S7 and the client of S8 are built, and what is left of S8 is the
+program of the image and the handshake against a live OpenSSH (D-123).
 
 ## 8.2 Phase 0: Project foundation
 
@@ -414,6 +417,8 @@ bytes.
 
 ## 8.16 Phase 14: The network on the machine
 
+Status: implemented.
+
 Deliverables: `driver-virtio-net` over a register trait with a scripted
 double, negotiating `VIRTIO_F_VERSION_1` and `VIRTIO_NET_F_MAC` and
 refusing every other offered bit by name — mergeable receive buffers, the
@@ -428,11 +433,12 @@ physical address `memory_info` answers; `server-net` around
 `net-stack`, driving `poll` with the frames the driver hands it and
 sleeping until `poll_at` on the notification that carries the MSI-X
 vector and its clients; the socket protocol in `user-proto` with one ring
-per socket in a shared memory object, as the input protocol of Phase 10
-has one; `server-init` creates the ECAM device object, the DMA object and
-the MSI vector and grants them; a client program that uses the protocol.
-The reference machine needs nothing further: Phase 13 already put the
-device on it.
+per direction per socket in a shared memory object, as the input protocol
+of Phase 10 has one; `server-init` creates the ECAM device object, the DMA
+object and the MSI vector and grants them; a client program that uses the
+protocol. The reference machine needs nothing further beyond the hardware
+address written onto the device line: Phase 13 already put the device on
+it.
 
 Tests: catalog 6.6.62, 6.6.63, 6.6.64, and the fuzz target
 `virtio_net_rx`.
@@ -445,6 +451,22 @@ forwarded port carries a payload both ways and closes cleanly, and that
 an HTTP `GET` over it returns a response the client parses; and then runs
 the same image without the two network lines, where the server reports no
 interface and the run ends by itself.
+
+Done: every call of the socket protocol is answered at once, and what is
+not ready yet is `WouldBlock` (D-142), because a server of this system
+holds one reply capability at a time and a held reply stalls every other
+client. A listener becomes the connection a peer opened and keeps its
+number (D-143), `net-tcp` opening one connection in `LISTEN` and turning
+that same connection into an open one. The receive path copies the frame
+into the caller's buffer before it puts the buffer back into the available
+ring: a slice of the buffer itself would be memory the device may write
+into from the moment the buffer is available again. The driver's tables
+are indexed by descriptor, one pair per queue, so which buffer a used
+element names is read out of the driver rather than out of the descriptor
+the device wrote nothing into. `server-net` runs the three threads 13.10
+names, and the deadline between the serving thread and the timer thread is
+one `static` word of the program rather than a memory object, the two
+being threads of one process.
 
 ## 8.17 Phase 15: TLS over the network
 
@@ -506,6 +528,7 @@ image writer.
 | More than one side track is active at once | phases slip and no track finishes | at most one side track beside the cryptography track (D-45); document 12 fixes the order |
 | The shared foundations of 8.23 arrive after their consumers | the same containers and time arithmetic are written twice | track E is scheduled before the tracks and phases that need it, and is small |
 | Phase 14 is XL and the network stalls in it | the release slips while three crates are half-finished | the driver, the server, and the protocol are separate crates with separate catalog items; the driver and the crate `pci` are logic over a trait and can be finished before the phase that integrates them |
+| A receive buffer goes back into the available ring while a caller still reads the frame in it | the next frame lands on the one being read | the receive path copies the frame into the caller's buffer before the buffer goes back, which is what makes the two independent |
 | The kernel grows a deadline queue in the tick handler | every interrupt costs more | the list is ordered by instant, the walk stops at the first deadline that has not passed, and its length is bounded by the thread count |
 | MSI-X cannot be masked by the kernel | a device that raises interrupts faster than its driver services them keeps a core busy | the driver suppresses through the used ring flag `virtio-queue` implements; the limit is written down in 13.5 rather than discovered |
 | PCI-SIG specifications cannot be obtained and so are not kept beside the code | a layout constant is wrong and D-59's check does not exist for it | every constant names its document and revision; a configuration space captured from a real machine is a fixture of the crate's tests (D-124) |
@@ -564,9 +587,9 @@ changelog is updated.
 
 ## 8.22 Track D: the network stack
 
-Status: D1 to D9 implemented, which is every step but the integration.
-D10 is Phase 14, specified in
-[document 13](13-the-network-on-the-machine.md).
+Status: D1 to D10 implemented. D10 is Phase 14, specified in
+[document 13](13-the-network-on-the-machine.md); what is left of it is the
+TLS transport of Phase 15.
 
 Sans-I/O logic crates that consume and produce frames, take time and
 randomness as parameters, allocate nothing, and depend on no kernel,
@@ -584,7 +607,7 @@ bytes are Phase 14.
 | D7 | `net-dns`, `net-dhcp` | M | implemented: the RFC 1035 message format with name compression bounded three ways, a stub resolver that asks `A` and `AAAA` at once over `net-udp` with retry, server rotation and a deadline, alias chains followed across messages under one budget of eight; and the RFC 2131 client with the four-message exchange, the strict option walk of RFC 2132, and the lease timers with T1 renewal, T2 rebinding and expiry |
 | D8 | `net-http` | S | implemented: the request writer with every field checked before a byte of it goes down, and an incremental response decoder that takes one line of the head per call, decides its framing once under RFC 9112 section 6.3, and refuses every message that two parsers could read differently |
 | D9 | `net-stack` | L | implemented: one interface, one `poll`, one `poll_at`, generation-checked handles, an outgoing frame queue in the caller's memory, the demultiplexer down both families, DHCP and router advertisements wired to the address table and the routes, duplicate address detection, the resolver, and the address selection of RFC 6724 |
-| D10 | integration | XL | Phase 14 and Phase 15: the virtio-net driver, the network server, the socket protocol, and the `random_bytes` system call, and then the TLS transport jointly with T8 of 8.21; what has to exist under all of it is [document 13](13-the-network-on-the-machine.md) |
+| D10 | integration | XL | Phase 14 implemented: the virtio-net driver, the network server, the socket protocol and the client of the image; Phase 15 adds the TLS transport jointly with T8 of 8.21. What has to exist under all of it is [document 13](13-the-network-on-the-machine.md) |
 
 The stack carries IPv4 and IPv6 together (D-69), which supersedes the
 first clause of D-50. An address is an `IpAddr` above `net-wire`, so the

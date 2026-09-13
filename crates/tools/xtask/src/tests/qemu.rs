@@ -334,7 +334,7 @@ fn the_network_of_the_reference_machine_is_one_netdev_and_one_device() {
     assert!(
         line.ends_with(
             "-netdev user,id=n0,hostfwd=tcp:127.0.0.1:52000-:7 \
-             -device virtio-net-pci,netdev=n0,disable-legacy=on,mq=off"
+             -device virtio-net-pci,netdev=n0,disable-legacy=on,mq=off,mac=52:54:00:12:34:56"
         ),
         "{line}"
     );

@@ -48,12 +48,14 @@ members = [
     "crates/drivers/uart16550",
     "crates/drivers/i8042",
     "crates/drivers/virtio-blk",
+    "crates/drivers/virtio-net",
     "crates/pci",
     "crates/virtio/queue",
     "crates/fs/fat",
     "crates/fs/gpt",
     "crates/user/apps/canvas",
     "crates/user/loader",
+    "crates/user/net-programs",
     "crates/user/programs",
     "crates/user/servers/console",
     "crates/user/servers/display",
@@ -61,6 +63,7 @@ members = [
     "crates/user/servers/input",
     "crates/user/servers/memory",
     "crates/user/servers/name",
+    "crates/user/servers/net",
     "crates/user/proto",
     "crates/user/rt",
     "crates/user/sys-x86_64",
@@ -147,6 +150,7 @@ driver-i8042 = { path = "crates/drivers/i8042" }
 pci = { path = "crates/pci" }
 virtio-queue = { path = "crates/virtio/queue" }
 driver-virtio-blk = { path = "crates/drivers/virtio-blk" }
+driver-virtio-net = { path = "crates/drivers/virtio-net" }
 fs-fat = { path = "crates/fs/fat" }
 fs-gpt = { path = "crates/fs/gpt" }
 server-console = { path = "crates/user/servers/console" }
@@ -154,9 +158,11 @@ app-canvas = { path = "crates/user/apps/canvas" }
 server-display = { path = "crates/user/servers/display" }
 server-fs = { path = "crates/user/servers/fs" }
 server-input = { path = "crates/user/servers/input" }
+user-net-programs = { path = "crates/user/net-programs" }
 user-programs = { path = "crates/user/programs" }
 server-memory = { path = "crates/user/servers/memory" }
 server-name = { path = "crates/user/servers/name" }
+server-net = { path = "crates/user/servers/net" }
 user-loader = { path = "crates/user/loader" }
 user-proto = { path = "crates/user/proto" }
 user-rt = { path = "crates/user/rt" }

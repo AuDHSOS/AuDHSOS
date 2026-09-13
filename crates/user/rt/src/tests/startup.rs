@@ -77,6 +77,10 @@ fn every_role_lands_in_the_field_it_names() {
         (Role::BlockRegisters, handle(16)),
         (Role::BlockInterrupt, handle(17)),
         (Role::BlockNotification, handle(18)),
+        (Role::NetRegisters, handle(19)),
+        (Role::NetInterrupt, handle(20)),
+        (Role::NetNotification, handle(21)),
+        (Role::NetServer, handle(22)),
     ])
     .unwrap();
     assert_eq!(startup.own_process.unwrap().handle(), handle(1));
@@ -98,16 +102,23 @@ fn every_role_lands_in_the_field_it_names() {
     assert_eq!(device.registers.handle(), handle(16));
     assert_eq!(device.interrupt.unwrap().handle(), handle(17));
     assert_eq!(device.notification.unwrap().handle(), handle(18));
+    let net = startup.net.unwrap();
+    assert_eq!(net.registers.handle(), handle(19));
+    assert_eq!(net.interrupt.unwrap().handle(), handle(20));
+    assert_eq!(net.notification.unwrap().handle(), handle(21));
+    assert_eq!(startup.net_server.unwrap().handle(), handle(22));
     // The name of this test is a promise, and a role added later would
     // break it silently otherwise: every role but `Ram`, which is a list
-    // and has a test of its own, and the nine value roles, which carry no
-    // handle and are read in `the_mode_of_the_framebuffer_comes_as_two_words`,
-    // `the_bus_range_of_the_configuration_window_comes_as_one_word` and
-    // `the_four_structures_of_the_block_device_come_as_four_words`, is one
-    // field above.
+    // and has a test of its own, and the fifteen value roles, which carry
+    // no handle and are read in
+    // `the_mode_of_the_framebuffer_comes_as_two_words`,
+    // `the_bus_range_of_the_configuration_window_comes_as_one_word`,
+    // `the_four_structures_of_the_block_device_come_as_four_words` and
+    // `the_four_structures_of_the_network_device_come_as_four_words`, is
+    // one field above.
     assert_eq!(
         Role::ALL.len(),
-        28,
+        38,
         "a role was added; give it a field and a line here"
     );
 }
@@ -299,6 +310,66 @@ fn the_four_structures_of_the_block_device_come_as_four_words() {
     assert_eq!(device.structures(), Some(places));
     assert_eq!(device.notify_multiplier, Some(4));
     assert_eq!(device.vector_bit, Some(7));
+}
+
+#[test]
+fn the_four_structures_of_the_network_device_come_as_four_words() {
+    let places = [
+        Location { offset: 0, len: 56 },
+        Location {
+            offset: 0x3000,
+            len: 0x1000,
+        },
+        Location {
+            offset: 0x1000,
+            len: 1,
+        },
+        Location {
+            offset: 0x2000,
+            len: 8,
+        },
+    ];
+    let startup = read_mixed(
+        &[
+            (Role::NetRegisters, handle(3)),
+            (Role::NetInterrupt, handle(4)),
+            (Role::NetNotification, handle(5)),
+        ],
+        &[
+            (Role::NetCommon, places[0].word()),
+            (Role::NetNotify, places[1].word()),
+            (Role::NetIsr, places[2].word()),
+            (Role::NetConfig, places[3].word()),
+            (Role::NetNotifyMultiplier, 4),
+            (Role::NetVectorBit, 0),
+        ],
+    )
+    .unwrap();
+    let device = startup.net.unwrap();
+    assert_eq!(device.structures(), Some(places));
+    assert_eq!(device.notify_multiplier, Some(4));
+    assert_eq!(device.vector_bit, Some(0));
+}
+
+#[test]
+fn a_role_of_the_network_device_before_its_window_is_refused() {
+    let outcome = read(&[(Role::NetInterrupt, handle(2))]);
+    assert_eq!(
+        outcome.unwrap_err(),
+        ReadError::DeviceWithoutRegisters(Role::NetInterrupt)
+    );
+}
+
+#[test]
+fn a_second_network_device_is_refused() {
+    let outcome = read(&[
+        (Role::NetRegisters, handle(1)),
+        (Role::NetRegisters, handle(2)),
+    ]);
+    assert_eq!(
+        outcome.unwrap_err(),
+        ReadError::Duplicate(Role::NetRegisters)
+    );
 }
 
 #[test]

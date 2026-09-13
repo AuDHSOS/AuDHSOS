@@ -41,7 +41,7 @@ AuDHSOS/
 │   │   ├── uart16550/         driver-uart16550: register logic over a port access trait
 │   │   ├── i8042/             driver-i8042: PS/2 controller and decoder logic over a port access trait
 │   │   ├── virtio-blk/        driver-virtio-blk: virtio 1.x block device logic over a register trait
-│   │   └── virtio-net/        driver-virtio-net: virtio 1.0 network device logic over a register trait (document 13, Phase 14)
+│   │   └── virtio-net/        driver-virtio-net: virtio 1.0 network device logic over a register trait (document 13)
 │   ├── support/
 │   │   ├── testing/           test-support: property-test engine, builders, strategies, model-test runner
 │   │   └── fuzz/              fuzz-support: fuzzer entry glue and corpus replay (unsafe allowed, host only)
@@ -76,7 +76,7 @@ AuDHSOS/
 │   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor
 │   │   │   ├── input/         server-input: subscribers, the two decoders, event rings
 │   │   │   ├── fs/            server-fs: open files per client, the file protocol over a FAT32 volume (document 15)
-│   │   │   └── net/           server-net: the device, the stack, the sockets (document 13, Phase 14)
+│   │   │   └── net/           server-net: the socket table of every client, the two rings of every socket, the loop around net-stack (document 13)
 │   │   ├── programs/          user-programs: every program of the system as one
 │   │   │   │                  binary each of one crate, because a program is a
 │   │   │   │                  loop around a logic crate and seven crates of a
@@ -88,6 +88,11 @@ AuDHSOS/
 │   │   │                      app-checks, app-paint, app-input,
 │   │   │                      app-canvas, app-faulter, app-lspci,
 │   │   │                      app-files
+│   │   ├── net-programs/      user-net-programs: server-net and app-net, and what
+│   │   │                      only they need — the region the device reads and
+│   │   │                      writes, and its registers. A package of its own so
+│   │   │                      that no other program carries the network stack
+│   │   │                      (D-144)
 │   │   └── apps/              the logic of the applications, as servers/ is
 │   │                          for the servers: host-tested, no system call
 │   │       └── canvas/        app-canvas: the drawing state of the graphical
@@ -154,7 +159,7 @@ AuDHSOS/
 | `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf`; `test-support` as a dev-dependency |
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
 | `pci` | 1 | all | no | yes, fuzz | - (feature `test-doubles`); `test-support` as a dev-dependency |
-| `driver-virtio-net` (Phase 14) | 2 | all | no | yes, fuzz | `pci`, `virtio-queue` (feature `test-doubles`) |
+| `driver-virtio-net` | 2 | all | no | yes, fuzz | `virtio-queue` (feature `test-doubles` as a dev-dependency); `test-support` as a dev-dependency; feature `test-doubles`. It parses no capability, so it needs `pci` no more than `driver-virtio-blk` does (D-139) |
 | `driver-virtio-blk` | 2 | all | no | yes | `virtio-queue` (feature `test-doubles` as a dev-dependency); `test-support` as a dev-dependency; feature `test-doubles` |
 | `fs-fat` | 1 | all | no | yes | `audhsos-time`; `test-support` as a dev-dependency; feature `test-doubles` |
 | `fs-gpt` | 1 | all | no | yes | `fs-fat`, for the block device trait it reads through; `test-support` and `fs-fat` with `test-doubles` as dev-dependencies |
@@ -171,7 +176,7 @@ AuDHSOS/
 | `user-rt` | u0 | all | no | yes | `audhsos-abi`, `audhsos-collections`; `test-support` as a dev-dependency |
 | `user-sys-x86_64` | u1 | `x86_64-unknown-none` | allowlisted | through the programs of `user-test-programs` in QEMU | `audhsos-abi`, `user-rt` |
 | `user-test-programs` | u1 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-rt`, `user-sys-x86_64` |
-| `user-proto` | u1 | all | no | yes | `audhsos-abi`, `driver-i8042`, `gfx`, `user-rt` |
+| `user-proto` | u1 | all | no | yes | `audhsos-abi`, `driver-i8042`, `gfx`, `net-wire`, `user-rt` |
 | `user-loader` | u2 | all | no | yes, fuzz | `audhsos-abi`, `audhsos-elf`; `test-support` behind the feature `test-strategies` |
 | `server-name` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `user-proto` |
 | `server-memory` | u2 | all | no | yes, against a recording `Pages` | `audhsos-abi`, `audhsos-collections`; feature `test-doubles` |
@@ -179,8 +184,9 @@ AuDHSOS/
 | `server-display` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `gfx`, `user-proto` |
 | `server-input` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `driver-i8042`, `user-proto`; feature `test-doubles` |
 | `server-fs` | u2 | all | no | yes | `audhsos-abi`, `audhsos-time`, `fs-fat`, `fs-gpt`, `user-proto`; `test-support` as a dev-dependency |
-| `server-net` (Phase 14) | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `net-stack`, `pci`, `user-proto` |
-| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | every server logic crate, `app-canvas`, `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `driver-i8042`, `driver-uart16550`, `driver-virtio-blk`, `fs-fat`, `gfx`, `pci`, `virtio-queue`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
+| `server-net` | u2 | all | no | yes | `audhsos-abi`, `audhsos-time`, `crypto-rng`, `net-dns`, `net-stack`, `net-tcp`, `net-wire`, `user-proto`; `net-dhcp`, `net-eth`, `net-ip`, `net-udp` and `crypto-rng` with `test-doubles` as dev-dependencies, for the station the tests answer with. The device is the binary's: this crate takes frames in and hands frames out |
+| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | every server logic crate but `server-net`, `app-canvas`, `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `driver-i8042`, `driver-uart16550`, `driver-virtio-blk`, `fs-fat`, `gfx`, `pci`, `virtio-queue`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
+| `user-net-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | `audhsos-abi`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `net-http`, `net-stack`, `net-wire`, `server-net`, `user-programs`, `user-proto`, `user-rt`, `user-sys-x86_64`, `virtio-queue` |
 | `crypto-ct` | c0 | all | no | yes | - |
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
 | `crypto-hash` | c1 | all | no | yes | `crypto-ct` |
@@ -286,15 +292,15 @@ remains separate. The independent fuzz target is `json_codec`.
     reach them. `fs-gpt` is the one exception to the layer-0 rule: it
     depends on `fs-fat`, which is layer 1, because the block device trait
     it reads through is defined there (D-138).
-12. `driver-virtio-blk` is a logic crate at layer 2, and
-    `driver-virtio-net` will be another, because a driver of a virtio
-    device stands above the queue logic it drives the device through.
-    `driver-virtio-blk` depends on `virtio-queue` and on nothing else: it
-    reaches registers through a trait of its own and parses no capability,
-    so it needs nothing of `pci` (D-139). `driver-virtio-net` needs both,
-    and neither depends on the network crates of rule 10: it hands frames
-    out and takes them in as byte slices, and what a frame means belongs
-    to `server-net` (D-114).
+12. `driver-virtio-blk` and `driver-virtio-net` are logic crates at layer
+    2, because a driver of a virtio device stands above the queue logic it
+    drives the device through. Each depends on `virtio-queue` and on
+    nothing else: each reaches registers through a trait of its own and
+    parses no capability, so neither needs anything of `pci` (D-139). The
+    capabilities are read by the root task, which hands a driver the four
+    places it found. Neither depends on the network crates of rule 10:
+    `driver-virtio-net` hands frames out and takes them in as byte slices,
+    and what a frame means belongs to `server-net` (D-114).
 
 ## 5.4 Workspace configuration
 

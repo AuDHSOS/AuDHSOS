@@ -2297,24 +2297,28 @@ what the kernel dispatches on, so the check is what the kernel saw.
   a device without that queue and is refused; the MSI-X vector is
   configured per queue and the device's rejection of a vector is read back
   and reported.
-- Receive: every buffer is in the available ring after initialization; a
-  used element yields the frame behind its twelve-byte header; the buffer
-  is back in the available ring in the call that took it, so the device is
-  never left with fewer buffers than the driver believes; a used element
-  whose length is below the header, one whose length exceeds the buffer,
-  and one naming a descriptor that is free are each refused and the
-  element still consumed.
+- Receive: every buffer is in the available ring after the fill; a used
+  element yields the frame behind its twelve-byte header, copied into the
+  caller's buffer; the buffer is back in the available ring in the call
+  that took it, so the device is never left with fewer buffers than the
+  driver believes; a used element whose length is below the header and one
+  longer than the caller's buffer are refused with the buffer back in the
+  ring, and one whose length exceeds the buffer it names and one naming a
+  descriptor that is free are refused by the queue, which consumes the
+  element either way.
 - Transmit: a frame goes out behind a zeroed header as one chain; the
   notify write lands at the queue's own offset with the multiplier
   applied; completions are drained before the next send; a send with no
   free buffer is refused and changes nothing, so the caller may retry;
   a frame longer than a buffer is refused before anything is written.
 - The device configuration: the MAC address is the six bytes at the
-  offset the specification states; a device that did not offer
-  `VIRTIO_NET_F_MAC` yields none rather than six zeroes.
+  offset the specification states, read between two reads of the
+  configuration generation; a device that did not offer
+  `VIRTIO_NET_F_MAC` yields none rather than six zeroes; a configuration
+  that will not stand still is reported rather than spun on.
 - Fuzz target `virtio_net_rx`: a used element and a buffer of arbitrary
-  bytes; the driver yields a frame or refuses, and never reads outside the
-  buffer.
+  bytes; the driver yields a frame or refuses, never reads outside the
+  buffer, and never loses more than the one buffer it refused.
 
 ### 6.6.63 The network server and the socket protocol (`server-net`, `user-proto`)
 
@@ -2323,24 +2327,29 @@ what the kernel dispatches on, so the check is what the kernel saw.
   buffer, and one with a kind byte the protocol does not have are each
   refused; a socket handle of a generation that has passed is refused
   rather than answered for the socket that reused the slot.
-- The ring: a write and a read of one record; a ring exactly full; a
-  reader that stops and a writer that therefore stops; sequence numbers
-  that wrap; a capacity that is not a power of two is refused at creation.
-- The loop: a frame in produces the frames out that the stack produces; a
-  poll that yields nothing does not wake the server again before the
-  deadline `poll_at` gave; a client request and a device interrupt arrive
-  under different badges and are told apart by them; a device that reports
-  no link at startup makes the server report no interface and exit.
-- The deadline word: a deadline written while the timer thread sleeps on a
-  later one wakes it and is the one it then keeps; a deadline written
-  while it sleeps on an earlier one does not move that wake earlier and
-  the tick it sends is answered with a poll that finds nothing to do; a
-  deadline that has already passed makes the tick immediate; `poll_at`
-  answering `None` parks the timer thread with no deadline at all.
-- Against the network double of `net-stack` and a scripted device: a
-  lease is taken and renewed, a name is resolved, a connection is opened,
-  carries bytes both ways and closes, each with the clock advanced by the
-  test rather than by a machine.
+- The ring: a write and a read of one run of bytes; a ring exactly full,
+  which counts what it could not take rather than overwriting what is
+  waiting; a reader that stops and a writer that therefore stops; bytes
+  that come back in order across the wrap; a header that does not carry
+  the fixed capacity makes the ring take and answer nothing.
+- The loop: a frame in produces the frames out that the stack produces;
+  `poll_at` names no instant for a stack with nothing to do; a client
+  request and a device interrupt arrive under different badges and are
+  told apart by them; a machine with no device makes the server report no
+  interface and answer `Unavailable` to everything.
+- The deadline word, which is one `static` of the program and not a
+  memory object, the serving thread and the timer thread being threads of
+  one process: a deadline written while the timer thread sleeps on a later
+  one wakes it and is the one it then keeps; a deadline that has already
+  passed makes the tick immediate; `poll_at` answering `None` parks the
+  timer thread with no deadline at all. These are the loop of the binary
+  and are checked by the end-to-end run of 6.6.64.
+- Against a second server on the same link and a station that answers a
+  discover, a request and one name: a lease is taken and renewed at its
+  first timer, a name is resolved and a name with no address is not found,
+  a connection is opened, carries bytes both ways and closes, and a
+  connection to a port nobody listens on is refused — each with the clock
+  advanced by the test rather than by a machine.
 - Back pressure: a client that never reads fills its ring, the window
   stops advancing, and nothing in the server grows; the same client
   reading again lets the connection continue.
@@ -2354,8 +2363,10 @@ what the kernel dispatches on, so the check is what the kernel saw.
 - A DNS query the forwarder answers comes back with an address.
 - A TCP connection through the forwarded port carries a payload both ways
   and closes cleanly, with the close seen from both ends.
-- An HTTP `GET` over that connection returns a response the client parses
-  into a status line and a body.
+- An HTTP `GET` over that same connection returns a response the client
+  parses into a status line and a body: the machine has one port forwarded
+  into it, so the runner answers the request over the connection it
+  opened.
 - With the two network lines dropped, the server reports no interface and
   the run ends by itself, as the display server ends on a machine with no
   framebuffer.

@@ -49,6 +49,9 @@ pub enum ReadError {
     /// A role that describes a block device stood before the
     /// [`Role::BlockRegisters`] that opens one.
     BlockWithoutRegisters(Role),
+    /// A role that describes a device stood before the register window
+    /// that opens one.
+    DeviceWithoutRegisters(Role),
 }
 
 impl From<StartupError> for ReadError {
@@ -66,7 +69,7 @@ impl core::fmt::Display for ReadError {
             ReadError::TooManyBlocks => {
                 write!(f, "more than {MAX_BLOCK_DEVICES} block devices")
             }
-            ReadError::BlockWithoutRegisters(role) => {
+            ReadError::BlockWithoutRegisters(role) | ReadError::DeviceWithoutRegisters(role) => {
                 write!(f, "the role {} names no device yet", role.name())
             }
         }
@@ -122,7 +125,11 @@ pub struct Startup {
     /// [`Role::EcamBuses`] carries them.
     pub ecam_buses: Option<u64>,
     /// One entry per virtio block device the process was given.
-    pub blocks: ArrayVec<Block, MAX_BLOCK_DEVICES>,
+    pub blocks: ArrayVec<Device, MAX_BLOCK_DEVICES>,
+    /// The virtio network device, where the process was given one.
+    pub net: Option<Device>,
+    /// The endpoint of the network server.
+    pub net_server: Option<EndpointHandle>,
 }
 
 /// How many virtio block devices a process can be given. The reference
@@ -130,14 +137,15 @@ pub struct Startup {
 /// writes (3.1.1).
 pub const MAX_BLOCK_DEVICES: usize = 2;
 
-/// One virtio block device, as the nine roles of `BlockRegisters` and what
-/// follows it describe one.
+/// One virtio device, as the nine roles that open with a register window
+/// describe one.
 ///
-/// The roles of one device arrive together, `BlockRegisters` first: it is
-/// what opens a device, and the eight after it belong to the device it
-/// opened. A machine with two disks sends the nine twice.
+/// The roles of one device arrive together, the register window first: it
+/// is what opens a device, and the eight after it belong to the device it
+/// opened. A machine with two disks sends the nine of the block device
+/// twice, and the network device sends nine of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Block {
+pub struct Device {
     /// The device memory over the registers of the device.
     pub registers: MemoryHandle,
     /// Where the common configuration structure lies in that window,
@@ -160,10 +168,10 @@ pub struct Block {
     pub vector_bit: Option<u64>,
 }
 
-impl Block {
+impl Device {
     /// A device nothing but its register window is known of yet.
     const fn new(registers: MemoryHandle) -> Self {
-        Block {
+        Device {
             registers,
             common: None,
             notify: None,
@@ -225,12 +233,14 @@ impl Startup {
             ecam: None,
             ecam_buses: None,
             blocks: ArrayVec::new(),
+            net: None,
+            net_server: None,
         }
     }
 
     /// The device the block roles that arrive now belong to, which is the
     /// last one `BlockRegisters` opened.
-    fn block(&mut self) -> Option<&mut Block> {
+    fn block(&mut self) -> Option<&mut Device> {
         let last = self.blocks.len().checked_sub(1)?;
         self.blocks.get_mut(last)
     }
@@ -289,6 +299,28 @@ impl Startup {
         Ok(())
     }
 
+    /// Puts one number into the field of the network device.
+    fn learn_of_net(&mut self, role: Role, value: u64) -> Result<(), ReadError> {
+        let device = self
+            .net
+            .as_mut()
+            .ok_or(ReadError::DeviceWithoutRegisters(role))?;
+        let field = match role {
+            Role::NetCommon => &mut device.common,
+            Role::NetNotify => &mut device.notify,
+            Role::NetIsr => &mut device.isr,
+            Role::NetConfig => &mut device.config,
+            Role::NetNotifyMultiplier => &mut device.notify_multiplier,
+            Role::NetVectorBit => &mut device.vector_bit,
+            _ => return Ok(()),
+        };
+        if field.is_some() {
+            return Err(ReadError::Duplicate(role));
+        }
+        *field = Some(value);
+        Ok(())
+    }
+
     /// Puts one number into the field its role names.
     fn learn(&mut self, role: Role, value: u64) -> Result<(), ReadError> {
         let field = match role {
@@ -301,6 +333,12 @@ impl Startup {
             | Role::BlockConfig
             | Role::BlockNotifyMultiplier
             | Role::BlockVectorBit => return self.learn_of_block(role, value),
+            Role::NetCommon
+            | Role::NetNotify
+            | Role::NetIsr
+            | Role::NetConfig
+            | Role::NetNotifyMultiplier
+            | Role::NetVectorBit => return self.learn_of_net(role, value),
             _ => return Ok(()),
         };
         if field.is_some() {
@@ -330,7 +368,7 @@ impl Startup {
             Role::Ecam => once(&mut self.ecam, role, handle),
             Role::BlockRegisters => self
                 .blocks
-                .push(Block::new(MemoryHandle::from_handle(handle)))
+                .push(Device::new(MemoryHandle::from_handle(handle)))
                 .map_err(|_| ReadError::TooManyBlocks),
             Role::BlockInterrupt => {
                 let device = self.block().ok_or(ReadError::BlockWithoutRegisters(role))?;
@@ -340,6 +378,28 @@ impl Startup {
                 let device = self.block().ok_or(ReadError::BlockWithoutRegisters(role))?;
                 once(&mut device.notification, role, handle)
             }
+            Role::NetRegisters => {
+                if self.net.is_some() {
+                    return Err(ReadError::Duplicate(role));
+                }
+                self.net = Some(Device::new(MemoryHandle::from_handle(handle)));
+                Ok(())
+            }
+            Role::NetInterrupt => {
+                let device = self
+                    .net
+                    .as_mut()
+                    .ok_or(ReadError::DeviceWithoutRegisters(role))?;
+                once(&mut device.interrupt, role, handle)
+            }
+            Role::NetNotification => {
+                let device = self
+                    .net
+                    .as_mut()
+                    .ok_or(ReadError::DeviceWithoutRegisters(role))?;
+                once(&mut device.notification, role, handle)
+            }
+            Role::NetServer => once(&mut self.net_server, role, handle),
             Role::FramebufferGeometry
             | Role::FramebufferLine
             | Role::EcamBuses
@@ -348,7 +408,13 @@ impl Startup {
             | Role::BlockIsr
             | Role::BlockConfig
             | Role::BlockNotifyMultiplier
-            | Role::BlockVectorBit => Ok(()),
+            | Role::BlockVectorBit
+            | Role::NetCommon
+            | Role::NetNotify
+            | Role::NetIsr
+            | Role::NetConfig
+            | Role::NetNotifyMultiplier
+            | Role::NetVectorBit => Ok(()),
             Role::Ram => self
                 .ram
                 .push(MemoryHandle::from_handle(handle))

@@ -34,7 +34,7 @@ pub(crate) const PROGRAMS: [&str; 4] = [
 ///
 /// Each is written under `AUDHSOS/BIN/` as `user_loader::volume::file_name`
 /// spells it.
-pub(crate) const ON_THE_VOLUME: [&str; 10] = [
+pub(crate) const ON_THE_VOLUME: [&str; 12] = [
     "server-display",
     "server-input",
     "app-hello",
@@ -43,6 +43,8 @@ pub(crate) const ON_THE_VOLUME: [&str; 10] = [
     "app-input",
     "app-canvas",
     "app-lspci",
+    "server-net",
+    "app-net",
     "app-files",
     "app-faulter",
 ];

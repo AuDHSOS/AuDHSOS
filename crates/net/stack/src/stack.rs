@@ -333,6 +333,24 @@ impl<'a, const SOCKETS: usize, const CONNECTIONS: usize> Stack<'a, SOCKETS, CONN
 }
 
 impl<'a, const SOCKETS: usize, const CONNECTIONS: usize> Stack<'a, SOCKETS, CONNECTIONS> {
+    /// Whether a datagram socket already holds `port`.
+    ///
+    /// A caller that lends the buffer of a socket asks this first: the
+    /// buffer travels into [`bind`](Stack::bind) and a refusal does not
+    /// bring it back.
+    #[must_use]
+    pub fn is_bound(&self, port: Port) -> bool {
+        self.sockets.is_bound(port)
+    }
+
+    /// Whether a connection is listening on `port`.
+    ///
+    /// Asked for the same reason as [`is_bound`](Stack::is_bound).
+    #[must_use]
+    pub fn listens_on(&self, port: Port) -> bool {
+        self.connections.listens_on(port)
+    }
+
     /// Opens a UDP socket on `port`, receiving into `buffer`.
     ///
     /// # Errors

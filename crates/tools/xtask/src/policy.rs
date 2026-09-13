@@ -549,6 +549,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "driver-virtio-net",
+        path: "crates/drivers/virtio-net",
+        kind: Kind::Logic,
+        deps: &["virtio-queue", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "fs-gpt",
         path: "crates/fs/gpt",
         kind: Kind::Logic,
@@ -724,7 +732,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-proto",
         path: "crates/user/proto",
         kind: Kind::Logic,
-        deps: &["audhsos-abi", "driver-i8042", "gfx", "user-rt"],
+        deps: &["audhsos-abi", "driver-i8042", "gfx", "net-wire", "user-rt"],
         coverage_gate: true,
         target: Target::Host,
     },
@@ -784,6 +792,27 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "server-net",
+        path: "crates/user/servers/net",
+        kind: Kind::Logic,
+        deps: &[
+            "audhsos-abi",
+            "audhsos-time",
+            "crypto-rng",
+            "net-dhcp",
+            "net-dns",
+            "net-eth",
+            "net-ip",
+            "net-stack",
+            "net-tcp",
+            "net-udp",
+            "net-wire",
+            "user-proto",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "server-input",
         path: "crates/user/servers/input",
         kind: Kind::Logic,
@@ -837,9 +866,10 @@ pub(crate) const CRATES: &[Crate] = &[
         // The bytes of the mapping `app-lspci` walks the bus through raised
         // this from 33 (Phase 13). The mappings of the disk track raised it
         // from 34 to 40, named one by one in D2 of
-        // `docs/15-the-disk-on-the-machine.md`.
+        // `docs/15-the-disk-on-the-machine.md`. Phase 14 added the socket
+        // page of `Mapping`, which is one site more.
         kind: Kind::Adapter {
-            unsafe_budget: 40,
+            unsafe_budget: 42,
             asm_budget: 0,
         },
         deps: &[
@@ -860,6 +890,39 @@ pub(crate) const CRATES: &[Crate] = &[
             "server-memory",
             "server-name",
             "user-loader",
+            "user-proto",
+            "user-rt",
+            "user-sys-x86_64",
+            "virtio-queue",
+        ],
+        coverage_gate: false,
+        target: Target::X86_64None,
+    },
+    // The two programs of the network are a package of their own, because
+    // a binary of this workspace names every dependency of its package and
+    // the stack under these two is megabytes of an image every other
+    // program is read out of one message at a time (D-144).
+    Crate {
+        name: "user-net-programs",
+        path: "crates/user/net-programs",
+        // The register window, the region the device reads and writes, the
+        // memory the stack writes into and the four socket pages of
+        // `server-net`, the entry points of its two threads and the gate
+        // each adopts, and the socket page of `app-net`.
+        kind: Kind::Adapter {
+            unsafe_budget: 14,
+            asm_budget: 0,
+        },
+        deps: &[
+            "audhsos-abi",
+            "audhsos-time",
+            "crypto-rng",
+            "driver-virtio-net",
+            "net-http",
+            "net-stack",
+            "net-wire",
+            "server-net",
+            "user-programs",
             "user-proto",
             "user-rt",
             "user-sys-x86_64",
@@ -1157,6 +1220,9 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
         name: "tls_handshake",
     },
     FuzzTarget { name: "tls_record" },
+    FuzzTarget {
+        name: "virtio_net_rx",
+    },
     FuzzTarget { name: "x509" },
 ];
 

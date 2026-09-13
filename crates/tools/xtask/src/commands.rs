@@ -143,7 +143,13 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
 }
 
 /// How long an end-to-end run waits for a line before it gives up.
-const E2E_TIMEOUT: Duration = Duration::from_secs(60);
+///
+/// Every program outside the boot set is read off the volume one message
+/// of two kibibytes at a time (D-92), so what a line waits on is often a
+/// program being read and not the work behind the line. Phase 14 put two
+/// more programs on the volume, and three minutes is what leaves room for
+/// that on a machine where the emulator translates every instruction.
+const E2E_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// What the run has to see, in this order, for the system to have worked.
 ///
@@ -152,7 +158,7 @@ const E2E_TIMEOUT: Duration = Duration::from_secs(60);
 /// archive, the memory server answered, the name server answered, the
 /// console driver took the port, and the application found it and said
 /// something through it.
-const E2E_LINES: [(&str, &str); 19] = [
+const E2E_LINES: [(&str, &str); 22] = [
     (
         "[init] started server-memory",
         "the memory server did not start",
@@ -217,6 +223,18 @@ const E2E_LINES: [(&str, &str); 19] = [
     (
         " 1af4:1041 class=02:00:00",
         "the bus walk did not find the virtio network device of the machine",
+    ),
+    (
+        "[init] started server-net",
+        "the network server did not start",
+    ),
+    (
+        "[net] device mac=",
+        "the network driver did not bring the device up",
+    ),
+    (
+        "[init] started app-net",
+        "the program that uses a socket did not start",
     ),
     (
         "[faulter] about to write to nowhere",
@@ -363,19 +381,17 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     let path = root.join("target").join("audhsos.img");
     let socket = qemu::socket_path("audhsos-qmp")?;
     let _ = std::fs::remove_file(&socket);
-    let mut session = Session::start(
-        &machine,
-        &path,
-        &qemu::Options {
-            qmp: Some(socket.clone()),
-            // The end-to-end run carries a disk of its own, under its own
-            // name, so that what it writes survives into a second boot and
-            // meets no other run (D-136). It starts blank, so that what the
-            // second boot finds is what the first boot wrote.
-            scratch: Some(blank_scratch_image(root, "e2e")?),
-            ..qemu::Options::plain()
-        },
-    )?;
+    let run = qemu::Options {
+        qmp: Some(socket.clone()),
+        // The end-to-end run carries a disk of its own, under its own
+        // name, so that what it writes survives into a second boot and
+        // meets no other run (D-136). It starts blank, so that what the
+        // second boot finds is what the first boot wrote.
+        scratch: Some(blank_scratch_image(root, "e2e")?),
+        ..qemu::Options::plain()
+    };
+    let forwarded = run.network;
+    let mut session = Session::start(&machine, &path, &run)?;
 
     let mut violations = Vec::new();
     for (needle, complaint) in E2E_LINES {
@@ -389,6 +405,18 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     }
     if violations.is_empty() {
         violations.extend(block_lines(&session.output()));
+    }
+    // The network, before anything else this run drives: the program of
+    // the image takes the connection the forwarded port opens, sends back
+    // what it was sent, and then makes an HTTP request over the same
+    // connection, which this answers. It waits for the connection with a
+    // deadline of its own, so the runner opens it as soon as the program
+    // says it is listening.
+    if violations.is_empty() {
+        violations.extend(exchange_over_the_network(forwarded, &mut session));
+    }
+    if violations.is_empty() {
+        violations.extend(network_lines(&session.output()));
     }
     // The picture, while the machine still runs: `app-hello` is waiting to
     // be typed at, so nothing has ended yet. What is on the screen is
@@ -482,7 +510,7 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
 /// this order. Every program outside the boot set is read off the volume,
 /// so the run passes these one at a time rather than waiting once for the
 /// last of them.
-const SECOND_BOOT_LINES: [(&str, &str); 4] = [
+const SECOND_BOOT_LINES: [(&str, &str); 7] = [
     (
         "[files] boot volume: clusters=",
         "the second boot mounted no boot volume",
@@ -490,6 +518,18 @@ const SECOND_BOOT_LINES: [(&str, &str); 4] = [
     (
         "[init] started server-display",
         "the second boot read no program off the volume",
+    ),
+    (
+        "[init] started app-canvas",
+        "the second boot stopped before the program that draws",
+    ),
+    (
+        "[init] started server-net",
+        "the second boot stopped before the network server",
+    ),
+    (
+        "[init] started app-net",
+        "the second boot stopped before the network client",
     ),
     (
         "[init] started app-files",
@@ -523,6 +563,153 @@ fn file_lines(output: &str, first: bool) -> Vec<String> {
     }
     if !output.contains("[files-app] entry BOOT.TXT") {
         violations.push("the listing of the volume names no BOOT.TXT".to_owned());
+    }
+    violations
+}
+
+/// What the runner sends through the forwarded port, which comes back
+/// byte for byte.
+const ECHO: &[u8] = b"a line from the development machine\n";
+
+/// What the runner answers the request with.
+const RESPONSE: &[u8] =
+    b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\nConnection: close\r\n\r\nhello, world\n";
+
+/// How many bytes of the body that response carries.
+const RESPONSE_BODY: usize = 13;
+
+/// How long the runner waits for one read of the connection.
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Opens the forwarded port, exchanges bytes both ways, and answers the
+/// request the program of the image makes over the same connection.
+///
+/// The connection carries two exchanges because the machine has one port
+/// forwarded into it: the echo first, then a request and its answer. What
+/// is checked here is what crossed the link; what the program made of it
+/// is checked in [`network_lines`].
+fn exchange_over_the_network(port: Option<u16>, session: &mut Session) -> Vec<String> {
+    let Some(port) = port else {
+        return vec!["the run forwarded no port".to_owned()];
+    };
+    if !session.wait_for("[net-app] listening on", E2E_TIMEOUT) {
+        return vec!["the program of the image never listened".to_owned()];
+    }
+    let mut violations = match speak(port) {
+        Ok(violations) => violations,
+        Err(error) => vec![format!("the forwarded port refused: {error}")],
+    };
+    // The bytes crossed the link; what the program made of them is a line
+    // it writes after the connection is closed, and the checks that read
+    // those lines run as soon as this returns.
+    if violations.is_empty() && !session.wait_for("[net-app] closed", E2E_TIMEOUT) {
+        violations.push("the program of the image never closed the connection".to_owned());
+    }
+    violations
+}
+
+/// The exchange itself, over one connection.
+fn speak(port: u16) -> std::io::Result<Vec<String>> {
+    use std::io::{Read, Write};
+    let mut violations = Vec::new();
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))?;
+    stream.set_read_timeout(Some(NETWORK_TIMEOUT))?;
+    stream.set_write_timeout(Some(NETWORK_TIMEOUT))?;
+    stream.write_all(ECHO)?;
+    let mut back = vec![0u8; ECHO.len()];
+    stream.read_exact(&mut back)?;
+    if back != ECHO {
+        violations.push(format!(
+            "what came back is not what went out: {:?}",
+            String::from_utf8_lossy(&back)
+        ));
+    }
+    // The request the program makes over the same connection, read up to
+    // the empty line that ends its head.
+    let mut request = Vec::new();
+    let mut byte = [0u8; 1];
+    while !request.ends_with(b"\r\n\r\n") {
+        let read = stream.read(&mut byte)?;
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&byte);
+        if request.len() > 4096 {
+            break;
+        }
+    }
+    let head = String::from_utf8_lossy(&request).into_owned();
+    if !head.starts_with("GET / HTTP/1.1\r\n") {
+        violations.push(format!("the request is not a GET: {head:?}"));
+    }
+    if !head.to_ascii_lowercase().contains("host:") {
+        violations.push(format!("the request names no host: {head:?}"));
+    }
+    stream.write_all(RESPONSE)?;
+    stream.flush()?;
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    Ok(violations)
+}
+
+/// What the network server and its client have to report.
+fn network_lines(output: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    if output.contains("[net] no interface") {
+        violations.push(
+            "the root task handed over no network device, though the machine carries one"
+                .to_owned(),
+        );
+        return violations;
+    }
+    for (needle, complaint) in [
+        (
+            format!("[net] device mac={}", qemu::GUEST_MAC),
+            "the driver did not report the address the command line gave the device".to_owned(),
+        ),
+        (
+            format!("[net] lease address={}", qemu::GUEST_ADDRESS),
+            "the address configuration client reached no lease".to_owned(),
+        ),
+        (
+            "[net-app] lease=yes".to_owned(),
+            "the client was told of no lease".to_owned(),
+        ),
+        (
+            "gateway=10.0.2.2".to_owned(),
+            "the gateway of the link never reached the client".to_owned(),
+        ),
+        (
+            "[net-app] resolved example.com:".to_owned(),
+            "the name was not resolved".to_owned(),
+        ),
+        (
+            format!("[net-app] echo {} bytes", ECHO.len()),
+            "the program did not echo what was sent to it".to_owned(),
+        ),
+        (
+            format!("[net-app] http status=200 body={RESPONSE_BODY}"),
+            "the answer to the request was not parsed".to_owned(),
+        ),
+        (
+            "[net-app] closed".to_owned(),
+            "the connection was not closed cleanly".to_owned(),
+        ),
+    ] {
+        if !output.contains(&needle) {
+            violations.push(format!("{complaint}: no `{needle}`"));
+        }
+    }
+    // A resolution that answered no address is a line with nothing after
+    // the colon, which the check above would take for a success.
+    if let Some(line) = output
+        .lines()
+        .find(|line| line.contains("[net-app] resolved example.com:"))
+        && line
+            .split(':')
+            .nth(1)
+            .is_none_or(|rest| rest.trim().is_empty())
+    {
+        violations.push(format!("the resolution named no address: {line}"));
     }
     violations
 }
@@ -1343,7 +1530,7 @@ const NO_VGA_LINES: [(&str, &str); 4] = [
 
 /// The lines the run without the two network lines has to carry: the bus is
 /// walked, the device is not there, and the machine ends by itself.
-const NO_NETWORK_LINES: [(&str, &str); 5] = [
+const NO_NETWORK_LINES: [(&str, &str); 7] = [
     // The bus walk is read off the volume like every program outside the
     // boot set, so the run reaches it one program at a time rather than
     // waiting once for a line minutes away.
@@ -1366,6 +1553,14 @@ const NO_NETWORK_LINES: [(&str, &str); 5] = [
     (
         "[lspci] no virtio device",
         "the bus walk did not report that there is no virtio device",
+    ),
+    (
+        "[net] no interface",
+        "the network server did not report that there is no interface",
+    ),
+    (
+        "[net-app] no interface",
+        "the program that uses a socket was not told there is none",
     ),
 ];
 

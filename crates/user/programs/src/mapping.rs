@@ -144,6 +144,31 @@ impl Mapping {
         Some(unsafe { &*pointer })
     }
 
+    /// A shared socket page, without manufacturing an exclusive byte
+    /// slice.
+    ///
+    /// # Safety
+    ///
+    /// This mapping must be live and backed by a socket page, or by a
+    /// private zeroed page about to be initialized. Every peer must reach
+    /// the two rings atomically, and the mapping may not be taken back
+    /// while the reference stands.
+    #[must_use]
+    pub unsafe fn socket_page(&self) -> Option<&user_proto::ring::SocketPage> {
+        use user_proto::ring::SocketPage;
+        let address = usize::try_from(self.address).ok()?;
+        if self.len < u64::try_from(core::mem::size_of::<SocketPage>()).ok()?
+            || !address.is_multiple_of(core::mem::align_of::<SocketPage>())
+        {
+            return None;
+        }
+        let pointer = core::ptr::without_provenance::<SocketPage>(address);
+        // SAFETY: the caller guarantees the live mapping and exclusively
+        // atomic shared access. Every bit pattern of the atomic fields is
+        // valid.
+        Some(unsafe { &*pointer })
+    }
+
     /// Fills the mapping with zeros.
     ///
     /// # Safety

@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "user-net-programs"
+description = "The two programs of the network: the server that drives the device and the client that uses a socket"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "user_net_programs"
+path = "src/lib.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "server-net"
+path = "src/bin/server_net.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "app-net"
+path = "src/bin/app_net.rs"
+test = false
+bench = false
+
+[dependencies]
+audhsos-abi.workspace = true
+audhsos-time.workspace = true
+crypto-rng.workspace = true
+driver-virtio-net.workspace = true
+net-http.workspace = true
+net-stack.workspace = true
+net-wire.workspace = true
+server-net.workspace = true
+user-programs.workspace = true
+user-proto.workspace = true
+user-rt.workspace = true
+user-sys-x86_64.workspace = true
+virtio-queue.workspace = true
+
+[lints]
+workspace = true

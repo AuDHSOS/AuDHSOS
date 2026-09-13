@@ -60,7 +60,7 @@ use user_programs::mapping::Mapping;
 use user_programs::registers::{BLOCK_WINDOW, Window};
 use user_programs::serve::{Serving, receive};
 use user_proto::file::{Reply, Request};
-use user_rt::startup::{Block, MAX_BLOCK_DEVICES};
+use user_rt::startup::{Device, MAX_BLOCK_DEVICES};
 use user_rt::{
     EndpointHandle, InterruptHandle, Line, MemoryHandle, NotificationHandle, ProcessHandle, Startup,
 };
@@ -300,7 +300,7 @@ struct Given {
 impl Given {
     /// What the nine roles of one device say, or nothing when they say it
     /// only in part.
-    fn of(block: &Block) -> Option<Self> {
+    fn of(block: &Device) -> Option<Self> {
         let places = block.structures()?;
         let mut end = 0u64;
         for place in &places {
