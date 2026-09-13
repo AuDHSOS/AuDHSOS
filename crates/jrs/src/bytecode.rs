@@ -2524,7 +2524,9 @@ impl RegisterLowerer {
         if base_type == RegisterType::String {
             return self.lower_string_member(key);
         }
-        if base_type == RegisterType::Unknown {
+        // A function object carries no layout this lowering tracks, so its
+        // properties are read the way a base it could not name is read.
+        if matches!(base_type, RegisterType::Unknown | RegisterType::Function(_)) {
             return self.lower_unknown_member(key);
         }
         if !base_type.is_object() {
@@ -3061,10 +3063,94 @@ impl RegisterLowerer {
         if operator.is_some() {
             return None;
         }
+        let (base, key) = target.member()?;
+        if let Some(value_type) = self.lower_unknown_member_assignment(base, key, value)? {
+            return Some(value_type);
+        }
         let prepared = self.prepare_member_assignment(target)?;
         let value_type = self.lower(value)?;
         self.finish_member_assignment(prepared, value_type)?;
         Some(value_type)
+    }
+
+    /// Lowers a write to a property of a base this lowering could not name.
+    ///
+    /// Answers `None` for a base it did name, so the layout-tracking path takes
+    /// it instead; `Some(None)` never occurs, and an error in either direction
+    /// refuses the Script as before.
+    ///
+    /// A name that a Prototype this Realm has not built would own is refused:
+    /// 10.1.9.1 consults the chain before it creates an own property, and the
+    /// missing part of the chain could hold an accessor or a property that is
+    /// not writable.
+    #[expect(clippy::option_option, reason = "the outer None means a typed base")]
+    fn lower_unknown_member_assignment(
+        &mut self,
+        base: &Expr,
+        key: &Expr,
+        value: &Expr,
+    ) -> Option<Option<RegisterType>> {
+        use crate::engine::bytecode::Instruction;
+        let snapshot = self.snapshot();
+        let base_type = self.lower(base)?;
+        if !matches!(base_type, RegisterType::Unknown | RegisterType::Function(_)) {
+            self.restore(snapshot);
+            return Some(None);
+        }
+        let object = self.allocate_register()?;
+        self.code.emit(Instruction::Star(object));
+        let static_name = Self::static_property_name(key)
+            .map(<[u16]>::to_vec)
+            .or_else(|| self.static_key_units(key));
+        let keyed = match static_name.as_deref() {
+            Some(name) if Self::names_an_unbuilt_prototype(name) => return None,
+            Some(name) => {
+                let constant = self.string_constant(name)?;
+                Some(constant)
+            }
+            None if self.key_reaches_prototype(key) => return None,
+            None => None,
+        };
+        let key_register = if keyed.is_some() {
+            None
+        } else {
+            if !self.lower(key)?.is_primitive() {
+                return None;
+            }
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            Some(register)
+        };
+        let value_type = self.lower(value)?;
+        if !value_type.is_primitive() && !value_type.is_object() {
+            return None;
+        }
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        if let Some(name) = keyed {
+            self.code.emit(Instruction::SetNamed {
+                obj: object,
+                name,
+                slot,
+            });
+        } else {
+            let register = key_register?;
+            self.code.emit(Instruction::SetByValue {
+                obj: object,
+                key: register,
+                slot,
+            });
+            self.release_register(register)?;
+        }
+        self.release_register(object)?;
+        Some(Some(value_type))
+    }
+
+    /// Whether a Prototype this Realm has not finished building would own this
+    /// name, on whichever kind of object the base turns out to be.
+    fn names_an_unbuilt_prototype(name: &[u16]) -> bool {
+        crate::engine::realm::function_prototype_owns(name)
+            || crate::engine::realm::array_prototype_owns(name)
+            || crate::engine::realm::string_prototype_owns(name)
     }
 
     fn prepare_member_assignment(&mut self, target: &Expr) -> Option<RegisterMemberAssignment> {

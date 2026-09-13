@@ -1384,12 +1384,18 @@ impl RegisterVM {
             .map(|object| object.kind.clone());
         match kind {
             Some(ObjectKind::Array { .. }) if super::realm::array_prototype_owns(name) => Err(GAP),
-            // These reach a Prototype the Realm has not built at all, so every
-            // name it would own is a gap and the name itself says nothing.
+            Some(ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. })
+                if super::realm::function_prototype_owns(name) =>
+            {
+                Err(GAP)
+            }
+            Some(ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. }) => {
+                Ok(VALUE_UNDEFINED)
+            }
+            // These reach a Prototype the Realm has not built at all, and it
+            // owns names no list here carries, so every miss is a gap.
             Some(
-                ObjectKind::Function { .. }
-                | ObjectKind::NativeFunction { .. }
-                | ObjectKind::Error
+                ObjectKind::Error
                 | ObjectKind::StringWrapper(_)
                 | ObjectKind::NumberWrapper(_)
                 | ObjectKind::BooleanWrapper(_)

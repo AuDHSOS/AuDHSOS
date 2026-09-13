@@ -805,6 +805,33 @@ pub fn array_prototype_owns(name: &[u16]) -> bool {
             .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
 }
 
+/// The property names 10.2 gives an ordinary function object and 20.2.3 gives
+/// `%Function.prototype%`, excluding the one Symbol key the latter carries.
+///
+/// It serves the same purpose as [`OBJECT_PROTOTYPE_PROPERTIES`]: neither exists
+/// yet, so a read of one of these names off a function object is a gap and a
+/// write of one would shadow a property that is not writable.
+pub const FUNCTION_PROPERTIES: [&str; 8] = [
+    "apply",
+    "bind",
+    "call",
+    "constructor",
+    "length",
+    "name",
+    "prototype",
+    "toString",
+];
+
+/// Whether a function object or `%Function.prototype%` owns a property of this
+/// name, which a function resolves on its Prototype Chain.
+#[must_use]
+pub fn function_prototype_owns(name: &[u16]) -> bool {
+    object_prototype_owns(name)
+        || FUNCTION_PROPERTIES
+            .into_iter()
+            .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
+
 /// Whether `%Object.prototype%` owns a property of this name.
 #[must_use]
 pub fn object_prototype_owns(name: &[u16]) -> bool {

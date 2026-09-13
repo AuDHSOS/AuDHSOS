@@ -358,6 +358,45 @@ fn this_is_the_receiver_of_the_call() -> Result<(), Error> {
 }
 
 #[test]
+fn a_property_of_a_function_object_is_read_and_written() -> Result<(), Error> {
+    // A function object is an ordinary object with a Prototype, so it carries
+    // own properties like any other. The lowering tracks no layout for it, so
+    // the generic instruction reads and writes them.
+    for source in [
+        "var f=function(){};f.z=1;f.z",
+        "var f=function(){};f.z=1;typeof f.z",
+        "var f=function(){};f.a=1;f.b=2;f.a+f.b",
+        "var f=function(){};typeof f.nope",
+        // The same instruction serves a base the lowering could not name.
+        "let o={a:1,g:function(){this.b=2;return this.b}};o.g()",
+        "let o={g:function(){this.b='x';return this.b+'y'}};o.g()",
+    ] {
+        differential(source)?;
+    }
+
+    // 10.2 and 20.2.3 name the properties a function object and
+    // %Function.prototype% own. Neither exists yet, so a read of one is a gap
+    // and a write of one is refused: it would shadow what is not writable.
+    let program = compile("var f=function(){};f.name", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    for source in [
+        "var f=function(){};f.name=1;1",
+        "var f=function(){};f.prototype=1;1",
+        "let o={g:function(){this.call=1;return 2}};o.g()",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_read_that_reaches_an_unbuilt_prototype_is_a_gap() -> Result<(), Error> {
     // 10.1.8.1 answers undefined for a name no object of the Prototype Chain
     // has. That is the answer only when the chain is complete: a name of
