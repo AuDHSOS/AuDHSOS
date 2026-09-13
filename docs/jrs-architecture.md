@@ -3,11 +3,13 @@
 
 # jrs: Zielarchitektur und Migrationsplan
 
-Stand: 9. September 2026. Status: Architekturvorschlag, noch keine Implementierungsfreigabe für sämtliche beschriebenen Erweiterungen.
+Stand: 9. September 2026, ergänzt am 13. September 2026 um die Migrationsrichtung in Abschnitt 17.1. Status: Architekturvorschlag, noch keine Implementierungsfreigabe für sämtliche beschriebenen Erweiterungen.
 
 Dieses Dokument beschreibt eine wartbare, erweiterbare, testbare und auf hohe Performance ausgerichtete Architektur für jrs. Es basiert auf einer lesenden Prüfung des vorhandenen Workspaces. Es verändert nicht dessen laufende Implementierung. Die Konformitäts- und Performance-Ziele bleiben bestehen; die frühere Beschränkung auf eine reine Automaton-Engine ist durch die ausdrückliche Freigabe von `regex-bt` ersetzt. Vorgeschlagene Crates, Typen und APIs sind ausdrücklich Zielzustand, sofern sie nicht als vorhanden bezeichnet werden.
 
 Die Architekturentscheidung lautet: **ein semantisch einheitlicher ECMAScript-Core mit klarer Agent-/Realm-Zuordnung, einem gemeinsamen Objektmodell, expliziten Ausführungsfortsetzungen und getrennten Host-/Webplattform-Adaptern**. Optimierungen setzen auf diesen Verträgen auf und dürfen keine zweite, abweichende Sprachsemantik etablieren.
+
+Dieser Core entsteht im registerbasierten Engine-Pfad unter `crates/jrs/src/engine/`. Das Stack-Backend unter `crates/jrs/src/vm.rs` ist die Quelle der zu übernehmenden Semantik und wird vollständig stillgelegt, nicht dauerhaft gepflegt. Dass beide Pfade heute nebeneinander existieren, ist ein befristeter Migrationszustand mit den Regeln aus Abschnitt 17.1, kein Architekturziel.
 
 ## 1. Ziele, Grenzen und offene Produktentscheidungen
 
@@ -58,7 +60,7 @@ Diese Aussagen sind keine Behauptung, dass jeder aktuelle Pfad fehlerhaft ist. S
 
 ## 3. Architekturregeln
 
-1. **Eine Semantik:** Script, Module, `eval`, dynamische Function-Constructors, Host-Aufrufe und optimierte Ausführung benutzen dieselben abstrakten Operationen und Completion-Regeln.
+1. **Eine Semantik:** Script, Module, `eval`, dynamische Function-Constructors, Host-Aufrufe und optimierte Ausführung benutzen dieselben abstrakten Operationen und Completion-Regeln. Jede Klausel hat am Ende genau eine Implementierung; während der Migration gilt Abschnitt 17.1.
 2. **Ein Besitzer pro Ressource:** Heap, Source, Code, Handles, Tasks und externe Buffer haben jeweils einen expliziten Owner und ein explizites Budget.
 3. **Kein verstecktes JavaScript:** Jede Operation, die Getter, Proxy-Traps, Constructor oder Callbacks ausführen kann, ist als solcher Effekt erkennbar und kann suspendieren.
 4. **Keine Borrow über Reentry:** Über einen möglichen JavaScript-Aufruf hinweg bleiben nur IDs, Kopien und registrierte Roots bestehen, keine Referenzen auf veränderbare Heap-Inhalte.
@@ -224,7 +226,7 @@ Diese Module gehören zunächst in dasselbe Engine-Crate. Ihre API-Sichtbarkeit 
 
 ## 8. Ausführung, Completions und Builtin-Continuations
 
-Der Interpreter bleibt zunächst die portable Referenzausführung. Das bestehende Stack-Bytecode ist der Migrationsstart. Ein kompakter registerbasierter Lowering-Pfad kann später Operandenkopien und Dispatch reduzieren; er wird nur nach einem A/B-Nachweis Standard. Dauerhaft gepflegt wird ein produktives Format, nicht eine beliebig wachsende Sammlung gleichberechtigter Interpreter.
+Die Ausführung des Ziel-Cores ist der registerbasierte Interpreter unter `crates/jrs/src/engine/`. Das bestehende Stack-Bytecode ist der Migrationsstart und die Quelle der zu übernehmenden Semantik, nicht das Ziel: Jede Familie wird dorthin überführt und danach aus `vm.rs` entfernt. Dauerhaft gepflegt wird ein produktives Format, nicht eine beliebig wachsende Sammlung gleichberechtigter Interpreter.
 
 Ausführung besteht aus expliziten Frames:
 
@@ -468,13 +470,36 @@ Jede Phase besteht aus kleinen Änderungen. Das bestehende `jrs`-API bleibt zun�
 | M5 – Fortsetzbare Builtins | Callback-/Getter-/Proxy-fähige Native-Pfade auf explizite Frames und zentrale Dispatch-Schleife migrieren. | Tiefe JS/Builtin/Host-Ketten wachsen nicht auf dem Rust-Stack; Await/Generator-/Exception-Reentry teilt dieselben Frame-/Budget-Regeln. |
 | M6 – Sprachfundament vervollständigen | Proxy, BigInt, Buffer/TypedArrays, vollständige Bindings, eval, Module und Generatoren auf den neuen Verträgen implementieren; `regex-bt` explizit anbinden und fehlende RegExp-Semantik vervollständigen. | Vollständige jeweilige Testfamilien einschließlich Fehlerpfaden, GC und Ressourcenfällen bestehen; RegExp-Arbeit teilt die Agent-Budgets. Verbleibende Familien bleiben sichtbar. |
 | M7 – Host/Web ausgliedern | Vorhandene Events und Timer nach `jrs-web`; Native-State-Tracing, I/O-Requests und OS-Adapter stabilisieren. | Der ECMAScript-Core benötigt keine Web-Typen. Bestehende WPT-/E2E-Fälle bestehen über den neuen Adapter, inklusive Cancellation und Shutdown. |
-| M8 – Interpreter optimieren | Shapes/Elements, Inline Caches, Code-/Value-Layout und gegebenenfalls neues Lowering einführen. | Optimized-on/off-Differential, Cache-Invalidation und Performance-Gates bestehen. Keine neue Semantikimplementierung nur für Fast Paths. |
+| M8 – Interpreter optimieren | Shapes/Elements, Inline Caches sowie Code-/Value-Layout im Engine-Core ausbauen und messen. | Optimized-on/off-Differential, Cache-Invalidation und Performance-Gates bestehen. Keine neue Semantikimplementierung nur für Fast Paths. |
 | M9 – Webplattform ausbauen | Browser-Subsysteme und echten WPT-Produktadapter entlang ihrer Dependencies implementieren. | Jede neu behauptete Umgebung hat reale WPT-Ausführung. DOM-/Origin-/Lifecycle-/Rendering-Lücken sind nicht durch Shell-Pässe verdeckt. |
 | M10 – Release-Audit | Gesamtes ursprüngliches Requirements-Inventar gegen finale Artefakte prüfen. | Alle vereinbarten vollständigen Konformitäts-, Sicherheits-, Abhängigkeits- und Performance-Nachweise liegen vor; offene Konflikte verhindern die vollständige Fertigmeldung. |
 
 M6 kann in unabhängigen Feature-Strängen bearbeitet werden, sobald die jeweils benötigten Verträge stabil sind. M8 beginnt mit frühem Profiling, aktiviert seine strukturellen Optimierungen aber erst nach M3/M5. M7 braucht für Cross-Realm-Webobjekte M4. M9 ersetzt nicht die noch offene ECMAScript-Vervollständigung.
 
 Termine werden erst nach M0/M1 und einem gemessenen Pilotumbau geschätzt. Bestehende Pass-Zahlen sind keine Aufwandsschätzung. Vollständige Sprach- und Browser-Funktionalität ist kein seriös zusagbares Nebenprodukt einer Folge kleiner Builtin-Erweiterungen.
+
+### 17.1 Migrationsrichtung und Stilllegung des Stack-Backends
+
+Zielzustand: jrs führt jedes Programm über den Engine-Core aus. `crates/jrs/src/vm.rs` und die dort liegenden Builtins sind entfernt, nicht deaktiviert.
+
+Weg dorthin: Die Phasen M1 bis M7 werden im Engine-Core gebaut, nicht mehr im Stack-Backend. Vorhandene Semantik wird dabei übernommen, wo sie brauchbar ist; sie wird gelesen, portiert und gegen den alten Pfad geprüft, nicht neu erraten. Was nicht übernehmbar ist, wird als solches benannt und neu implementiert.
+
+Je Familie in dieser Reihenfolge:
+
+1. Den entsprechenden Code im Stack-Backend lesen und die Semantik, Auswertungsreihenfolge, Fehlerfälle, GC-Regeln und Budgets übernehmen.
+2. Differential gegen den alten Pfad, bis beide für jedes Programm, das beide ausführen können, dasselbe Ergebnis liefern.
+3. Fokussierter Test262-Lauf der Familie.
+4. Den alten Pfad entfernen, sobald ihn kein Ausführungsweg mehr erreicht.
+5. Vollständiger Test262-Lauf.
+
+Regeln für den Zwischenzustand, solange beide Pfade existieren:
+
+- **Gleichheitspflicht:** Für jedes Programm, das beide Pfade ausführen können, liefern sie dasselbe Ergebnis. Eine Abweichung ist ein Fehler und wird vor der nächsten Familie behoben, nicht dokumentiert und stehengelassen.
+- **Kein einseitiger Zuwachs:** Ein Feature, das der Stack-Pfad nicht hat, wird nicht allein im Engine-Core ergänzt, solange der Stack-Pfad noch Programme ausführt. Sonst hängt das Verhalten davon ab, welcher Pfad das Programm kompiliert hat.
+- **Befristete Doppelung:** Die Doppelung einer Familie endet mit dem Migrationsschritt, der sie überführt. Eine Familie bleibt nicht dauerhaft in beiden Pfaden.
+- **Ein Einstieg:** `Runtime::run`, `Realm::evaluate` und das Embedding benutzen denselben Lowering-Pfad. Ein Ausführungsweg, den der Engine-Core nicht erreicht, ist eine Migrationslücke und wird als solche geführt.
+
+Die Doppelung ist damit ein Zustand mit Ablaufdatum, kein paralleler Semantikpfad im Sinn von Abschnitt 3 Regel 1.
 
 ## 18. Erster umsetzbarer Arbeitsauftrag nach Freigabe
 
@@ -488,7 +513,9 @@ Der nächste Architektur-Arbeitsschritt sollte keine neue große Sprachfunktion 
 
 Der Pilot ist fertig, wenn der gemeinsame Vertrag funktioniert und die bestehenden Tests ohne verdeckte Ausnahmen weiterlaufen. Er ist nicht gleichbedeutend mit dem Abschluss des gesamten Goals.
 
-Schritt 1 ist erledigt: [jrs-inventory.md](jrs-inventory.md) hält den Ausgangsstand fest. Der Befund dieses Inventars ist, dass der vorhandene registerbasierte Pfad unter `crates/jrs/src/engine/` eine zweite Sprachsemantik mit eigenem Objektmodell, eigenem Heap und eigenen Intrinsics ist und keine Test262-Datei ausführt. Er gehört nach M8 und darf vor M1 bis M5 nicht weiter wachsen.
+Schritt 1 ist erledigt: [jrs-inventory.md](jrs-inventory.md) hält den Ausgangsstand fest. Der Befund dieses Inventars ist, dass der vorhandene registerbasierte Pfad unter `crates/jrs/src/engine/` eine zweite Sprachsemantik mit eigenem Objektmodell, eigenem Heap und eigenen Intrinsics ist und keine Test262-Datei ausführt.
+
+Die Entscheidung dazu lautet: Dieser Pfad ist das Ziel, keine spätere Optimierung. Die Doppelung wird nicht eingefroren, sondern nach Abschnitt 17.1 aufgelöst, indem die Semantik des Stack-Backends dorthin überführt und der alte Pfad entfernt wird. Die erste zu schließende Lücke ist der Einstieg: `Realm::evaluate` kompiliert mit `realm = true` und lehnt in diesem Modus jede Deklaration, jedes `var`, jede Funktion und jeden lexikalischen Block ab, weshalb der Test262-Runner den Engine-Core nie erreicht. Bis diese Lücke geschlossen ist, misst jede Test262-Zahl in [crates/jrs/README.md](../crates/jrs/README.md) ausschließlich das Stack-Backend.
 
 ## 19. Review- und Änderungsregeln
 
