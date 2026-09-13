@@ -501,6 +501,26 @@ Regeln für den Zwischenzustand, solange beide Pfade existieren:
 
 Die Doppelung ist damit ein Zustand mit Ablaufdatum, kein paralleler Semantikpfad im Sinn von Abschnitt 3 Regel 1.
 
+#### Erste Meilensteingruppe: Realm-Zustand im Engine-Core
+
+Der Engine-Core besitzt heute einen eigenen Heap und ein eigenes Objektmodell,
+die vom Realm des Stack-Backends getrennt sind. Über diese Grenze kommen nur
+Primitive: `register_primitive` kennt undefined, null, Boolean, Number und
+String, kein Objekt. Deshalb kann der Engine-Core keinen Realm-Zustand halten,
+deshalb lehnt `register_script_features` im Realm-Modus jede Deklaration ab,
+und deshalb erreicht ihn keine Test262-Datei. Die Reihenfolge folgt daraus:
+
+| Schritt | Inhalt | Exit-Kriterium |
+|---|---|---|
+| G1 | Globales Objekt und Global Environment Record (9.1.1.4) im Engine-Realm; `globalThis`; ReferenceError für nicht auflösbare Namen. | Ein nicht deklarierter Name wirft dieselbe ReferenceError wie im Stack-Backend. |
+| G2 | `LdaGlobal`/`StaGlobal` mit Property-Cell-Caches und Invalidation. | Differential gegen den Stack-Pfad über Lesen, Schreiben, Löschen und Shadowing. |
+| G3 | GlobalDeclarationInstantiation (16.1.7) für `var`, `function`, `let`, `const` samt Redeklarationsfehlern. | Bindungen überleben mehrere `Realm::evaluate`-Aufrufe; Fehlerfälle von 16.1.7 sind geprüft. |
+| G4 | Backend-Auswahl pro Realm statt pro Script. | Ein Realm läuft vollständig auf einem Pfad; ein Programm kann nicht mehr davon abhängen, welcher Pfad es kompiliert hat. |
+| G5 | Funktionsobjekte, die den Script-Lauf überleben, und Aufrufe mit `this`. | Der Test262-Harness lädt im Engine-Core; ab hier sind Test262-Zahlen für diesen Pfad überhaupt messbar. |
+
+Vor G5 misst kein Test262-Lauf den Engine-Core. Zahlen, die vorher entstehen,
+werden als Zahlen des Stack-Backends ausgewiesen.
+
 ## 18. Erster umsetzbarer Arbeitsauftrag nach Freigabe
 
 Der nächste Architektur-Arbeitsschritt sollte keine neue große Sprachfunktion sein, sondern ein begrenzter Pilot:
