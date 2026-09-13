@@ -3812,6 +3812,37 @@ held and not what they are, so every configuration answers the same.
   otherwise. The journal itself is a second file, which 6.6.94 and
   6.6.95 read.
 
+### 6.6.101 The format language (`db-sqlite`)
+
+D-161. `eval.corpus` grows by six thousand six hundred cases, and what
+they hold is that a format writes the bytes the C library writes.
+
+- The cases: a hundred and fourteen formats against twenty-seven values
+  and against every pair of five, so each flag, width and precision
+  meets every storage class; twelve formats whose width or precision is
+  an argument of its own, against seven of them, two of which a cast to
+  `int` turns around; and the shapes no cross product writes, among them
+  a `%` at the end of a format, a flag with nothing after it, and `%,`
+  after a width, which is a conversion character that does not exist.
+- A format that writes nothing answers `NULL` rather than empty text,
+  and `%n`, which writes no byte, answers empty text. What separates the
+  two is whether a conversion wrote and not whether the answer is empty,
+  so both are cases.
+- Seventeen cases ask for a field wider than an answer holds. Each is
+  refused by both engines and neither takes the memory it names: a width
+  of two thousand million is refused before the buffer, and a precision
+  of more than a hundred million digits is that many, which is
+  `SQLITE_FP_PRECISION_LIMIT`. A width the C library does fill —
+  `%999999900.5f` of a small number is a gigabyte of spaces — is left
+  out, because a case is only worth what it costs to record.
+- `sqlite_format` is the fuzz target: no format may panic, no format may
+  answer more than a value holds, and a format with no conversion in it
+  answers itself. It skips a format asking for more than a hundred
+  thousand bytes, which the recorded cases above cover instead.
+- What no statement reaches is a unit test beside the corpus: `%0f` of a
+  NaN, which writes `null`, because a NaN is a `NULL` before it is a
+  value of any statement.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

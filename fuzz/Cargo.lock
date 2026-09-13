@@ -442,6 +442,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlite_format"
+version = "0.1.0"
+dependencies = [
+ "db-sqlite",
+ "fuzz-support",
+]
+
+[[package]]
 name = "sqlite_image"
 version = "0.1.0"
 dependencies = [

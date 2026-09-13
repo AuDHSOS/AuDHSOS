@@ -30,6 +30,10 @@ pub const DIGITS: i32 = 17;
 /// `!` flag.
 pub const MAX_DIGITS: i32 = 20;
 
+/// The most digits a conversion of a double asks for, which is
+/// `SQLITE_FP_PRECISION_LIMIT`. A precision above it is that many.
+pub const MAX_PRECISION: i32 = 100_000_000;
+
 /// The smallest power of ten the table holds.
 const FIRST_POWER: i32 = -348;
 
@@ -281,26 +285,13 @@ pub enum Special {
     NotANumber,
 }
 
-/// `r` as decimal digits, `round` of them, at most [`MAX_DIGITS`].
+/// `r` as decimal digits: above zero `round` counts significant digits,
+/// and at or below it counts digits to the right of the point, negated.
+/// `most` bounds how many digits are kept, which is `mxRound`.
 ///
-/// This is `sqlite3FpDecode` for the rounding `%!g` asks for.
+/// This is `sqlite3FpDecode`.
 #[must_use]
-pub fn decode(r: f64, round: i32) -> Decoded {
-    decoded(r, round.clamp(1, MAX_DIGITS))
-}
-
-/// `r` as decimal digits, `decimals` of them to the right of the point.
-///
-/// This is `sqlite3FpDecode` for the rounding `%!f` asks for, which is
-/// what `round(X,Y)` is written with.
-#[must_use]
-pub fn decode_decimals(r: f64, decimals: i32) -> Decoded {
-    decoded(r, decimals.clamp(0, 30).wrapping_neg())
-}
-
-/// Both of the above: above zero `round` counts significant digits, and
-/// at or below it counts digits to the right of the point, negated.
-fn decoded(r: f64, round: i32) -> Decoded {
+pub fn decode(r: f64, round: i32, most: i32) -> Decoded {
     let mut out = Decoded {
         negative: false,
         special: Special::None,
@@ -362,9 +353,8 @@ fn decoded(r: f64, round: i32) -> Decoded {
             out.point += 1;
         }
     }
-    let round = round.min(MAX_DIGITS);
-    if round > 0 && round < count {
-        let mut round = round;
+    if round > 0 && (round < count || count > most) {
+        let mut round = round.min(most);
         if round == DIGITS {
             round = shorten(value, &digits, power, count);
         }
@@ -446,106 +436,296 @@ fn shorten(value: f64, digits: &[u8], power: i32, count: i32) -> i32 {
     }
 }
 
-/// The digits with the point in them, which is the same work for `%g`
-/// and for `%f` once the precision and the digits before the point are
-/// settled.
-fn write_digits(out: &mut Vec<u8>, decoded: &Decoded, precision: i32, before: i32) {
-    let mut precision = precision;
+/// Which of `%f`, `%e` and `%g` writes the double.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Shape {
+    /// `%f`: the digits either side of the point, and no exponent.
+    #[default]
+    Fixed,
+    /// `%e`: one digit, the point, and an exponent.
+    Exponential,
+    /// `%g`: whichever of the two the exponent asks for.
+    Shortest,
+}
+
+/// What the conversion asks of the rendering, which is every flag of
+/// `sqlite3_str_vappendf` that a double reads.
+#[derive(Clone, Copy, Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one field per flag of the conversion, which is what the reader of a format sets"
+)]
+pub struct Style {
+    /// Which of the three conversions writes it.
+    pub shape: Shape,
+    /// How many digits the conversion counts; below zero counts six.
+    pub precision: i32,
+    /// `!`: twenty digits rather than sixteen, and trailing zeros go.
+    pub wide: bool,
+    /// `#`: a point where no digit follows it, and for `%g` the trailing
+    /// zeros stay.
+    pub alternate: bool,
+    /// `,`: a comma between each three digits left of the point.
+    pub thousands: bool,
+    /// `E` rather than `e` before the exponent.
+    pub upper: bool,
+    /// The byte before a number at or above zero, `+` or a space.
+    pub sign: Option<u8>,
+    /// `0`: a NaN writes `null` and an infinity writes a thousand digits.
+    pub zeros: bool,
+}
+
+/// One rendered double.
+#[derive(Clone, Debug)]
+pub struct Rendered {
+    /// The bytes, without the field width.
+    pub bytes: Vec<u8>,
+    /// Where a `0` goes that fills the field width, which is after the
+    /// sign; nothing where only a space fills it.
+    pub zeros: Option<usize>,
+}
+
+/// What a double is written as: the word a special takes, or the digits
+/// and where the point goes.
+enum Decimal {
+    /// The word, which no field of zeros is written around.
+    Word(Vec<u8>),
+    /// The digits, and where the point goes.
+    Digits(Vec<u8>, i32),
+}
+
+/// What the conversion writes the decoded double as.
+fn taken_apart(decoded: Decoded, style: &Style) -> Decimal {
+    match decoded.special {
+        Special::NotANumber => {
+            let word: &[u8] = if style.zeros { b"null" } else { b"NaN" };
+            Decimal::Word(word.to_vec())
+        }
+        Special::Infinity if !style.zeros => {
+            let mut bytes = Vec::new();
+            if decoded.negative {
+                bytes.push(b'-');
+            } else if let Some(sign) = style.sign {
+                bytes.push(sign);
+            }
+            bytes.extend_from_slice(b"Inf");
+            Decimal::Word(bytes)
+        }
+        // `%0f` of an infinity writes the largest number the reader of
+        // the text will take, which is what JSON asks for.
+        Special::Infinity => Decimal::Digits(alloc::vec![b'9'], 1000),
+        Special::None => Decimal::Digits(decoded.digits, decoded.point),
+    }
+}
+
+/// The digits left of the point. Answers how many digits they took and
+/// what is left of `before`, which is below zero once the point is
+/// reached.
+fn integral(bytes: &mut Vec<u8>, digits: &[u8], before: i32, thousands: bool) -> (i32, i32) {
+    let count = i32::try_from(digits.len()).unwrap_or(0);
     let mut before = before;
-    let count = i32::try_from(decoded.digits.len()).unwrap_or(0);
     let mut taken = 0;
     if before < 0 {
-        out.push(b'0');
+        bytes.push(b'0');
+    } else if thousands {
+        while before >= 0 {
+            let digit = digits.get(usize::try_from(taken).unwrap_or(0)).copied();
+            bytes.push(digit.unwrap_or(b'0'));
+            if digit.is_some() {
+                taken += 1;
+            }
+            if before % 3 == 0 && before > 1 {
+                bytes.push(b',');
+            }
+            before -= 1;
+        }
     } else {
         taken = (before + 1).min(count);
-        out.extend(
-            decoded
-                .digits
-                .iter()
-                .take(usize::try_from(taken).unwrap_or(0)),
-        );
+        bytes.extend(digits.iter().take(usize::try_from(taken).unwrap_or(0)));
         before -= taken;
         if before >= 0 {
-            out.extend(core::iter::repeat_n(
+            bytes.extend(core::iter::repeat_n(
                 b'0',
                 usize::try_from(before + 1).unwrap_or(0),
             ));
             before = -1;
         }
     }
-    out.push(b'.');
-    // Zeros between the point and the first digit. There is always room
-    // for them: a point that far left leaves the precision that wide.
-    if before < -1 {
-        let zeros = (-1 - before).min(precision);
-        out.extend(core::iter::repeat_n(
+    (taken, before)
+}
+
+/// The digits right of the point: the zeros between the point and the
+/// first of them, the digits themselves, and the zeros a precision the
+/// digits do not fill asks for.
+fn fractional(
+    bytes: &mut Vec<u8>,
+    digits: &[u8],
+    taken: i32,
+    before: i32,
+    precision: i32,
+    strip: bool,
+) {
+    let count = i32::try_from(digits.len()).unwrap_or(0);
+    let mut precision = precision;
+    if before < -1 && precision > 0 {
+        let pad = (-1 - before).min(precision);
+        bytes.extend(core::iter::repeat_n(
             b'0',
-            usize::try_from(zeros).unwrap_or(0),
+            usize::try_from(pad).unwrap_or(0),
         ));
-        precision -= zeros;
+        precision -= pad;
     }
-    if precision > 0 && count > taken {
-        out.extend(
-            decoded
-                .digits
+    if precision <= 0 {
+        return;
+    }
+    let rest = (count - taken).min(precision);
+    if rest > 0 {
+        bytes.extend(
+            digits
                 .iter()
-                .skip(usize::try_from(taken).unwrap_or(0)),
+                .skip(usize::try_from(taken).unwrap_or(0))
+                .take(usize::try_from(rest).unwrap_or(0)),
         );
+        precision -= rest;
     }
-    // Nothing before the point can be a zero that has to go: `decode`
-    // answers no trailing zero, and what is padded in is always to the
-    // left of it. What is left is a point with nothing after it.
-    if out.last() == Some(&b'.') {
-        out.push(b'0');
+    if precision > 0 && !strip {
+        bytes.extend(core::iter::repeat_n(
+            b'0',
+            usize::try_from(precision).unwrap_or(0),
+        ));
     }
+}
+
+/// The `e` and the exponent after the digits.
+fn exponent(bytes: &mut Vec<u8>, point: i32, upper: bool) {
+    let mut rest = point - 1;
+    bytes.push(if upper { b'E' } else { b'e' });
+    if rest < 0 {
+        bytes.push(b'-');
+        rest = -rest;
+    } else {
+        bytes.push(b'+');
+    }
+    if rest >= 100 {
+        bytes.push(b'0' + u8::try_from(rest / 100).unwrap_or(0));
+        rest %= 100;
+    }
+    bytes.push(b'0' + u8::try_from(rest / 10).unwrap_or(0));
+    bytes.push(b'0' + u8::try_from(rest % 10).unwrap_or(0));
+}
+
+/// `r` as decimal text, the way `%f`, `%e` and `%g` write it.
+///
+/// Answers nothing where the rendering wants more than `limit` bytes,
+/// which is `szBufNeeded` past what the accumulator holds.
+#[must_use]
+pub fn render(r: f64, style: &Style, limit: i64) -> Option<Rendered> {
+    let mut precision = if style.precision < 0 {
+        6
+    } else {
+        style.precision.min(MAX_PRECISION)
+    };
+    // The digits right of the point alone are already more than the
+    // caller may hold. Refusing here also keeps every count below
+    // inside an `i32`, because `limit` is a length and a length is
+    // under two thousand million.
+    if i64::from(precision) > limit {
+        return None;
+    }
+    let round = match style.shape {
+        Shape::Fixed => -precision,
+        Shape::Exponential => precision + 1,
+        Shape::Shortest => {
+            if precision == 0 {
+                precision = 1;
+            }
+            precision
+        }
+    };
+    let decoded = decode(r, round, if style.wide { MAX_DIGITS } else { 16 });
+    let negative = decoded.negative;
+    let (digits, point) = match taken_apart(decoded, style) {
+        Decimal::Word(bytes) => return Some(Rendered { bytes, zeros: None }),
+        Decimal::Digits(digits, point) => (digits, point),
+    };
+    let prefix = if negative {
+        // `%#f` of a value that shows as zero drops the minus, where no
+        // sign was asked for.
+        if style.alternate && style.sign.is_none() && style.shape == Shape::Fixed && point <= round
+        {
+            None
+        } else {
+            Some(b'-')
+        }
+    } else {
+        style.sign
+    };
+    // `%g` is one of the other two, picked by the exponent.
+    let (shape, precision, strip) = match style.shape {
+        Shape::Shortest => {
+            let precision = precision - 1;
+            let strip = !style.alternate;
+            if point - 1 < -4 || point - 1 > precision {
+                (Shape::Exponential, precision, strip)
+            } else {
+                (Shape::Fixed, precision - (point - 1), strip)
+            }
+        }
+        shape => (shape, precision, style.wide),
+    };
+    let start = if shape == Shape::Exponential {
+        0
+    } else {
+        point - 1
+    };
+    if i64::from(start.max(0)) + i64::from(precision) + 10 > limit {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    if let Some(byte) = prefix {
+        bytes.push(byte);
+    }
+    let (taken, before) = integral(&mut bytes, &digits, start, style.thousands);
+    let shown = precision > 0 || style.alternate || style.wide;
+    if shown {
+        bytes.push(b'.');
+    }
+    fractional(&mut bytes, &digits, taken, before, precision, strip);
+    // The point stops the run of zeros, so the digits before it stay.
+    if strip && shown {
+        while bytes.last() == Some(&b'0') {
+            bytes.pop();
+        }
+        if bytes.last() == Some(&b'.') {
+            if style.wide {
+                bytes.push(b'0');
+            } else {
+                bytes.pop();
+            }
+        }
+    }
+    if shape == Shape::Exponential {
+        exponent(&mut bytes, point, style.upper);
+    }
+    Some(Rendered {
+        bytes,
+        zeros: Some(usize::from(prefix.is_some())),
+    })
 }
 
 /// `r` as text, the way `%!.<significant>g` prints it, which is the way
 /// SQLite converts a real to a string.
 #[must_use]
 pub fn text(r: f64, significant: i32) -> Vec<u8> {
-    let mut precision = significant.clamp(1, MAX_DIGITS);
-    let decoded = decode(r, precision);
-    match decoded.special {
-        Special::NotANumber => return b"NaN".to_vec(),
-        Special::Infinity => {
-            return if decoded.negative {
-                b"-Inf".to_vec()
-            } else {
-                b"Inf".to_vec()
-            };
-        }
-        Special::None => {}
-    }
-    let mut out = Vec::new();
-    if decoded.negative {
-        out.push(b'-');
-    }
-    let exponent = decoded.point - 1;
-    precision -= 1;
-    let scientific = exponent < -4 || exponent > precision;
-    if !scientific {
-        precision -= exponent;
-    }
-    let before = if scientific { 0 } else { decoded.point - 1 };
-    write_digits(&mut out, &decoded, precision, before);
-    if scientific {
-        let mut rest = decoded.point - 1;
-        out.push(b'e');
-        if rest < 0 {
-            out.push(b'-');
-            rest = -rest;
-        } else {
-            out.push(b'+');
-        }
-        if rest >= 100 {
-            out.push(b'0' + u8::try_from(rest / 100).unwrap_or(0));
-            rest %= 100;
-        }
-        out.push(b'0' + u8::try_from(rest / 10).unwrap_or(0));
-        out.push(b'0' + u8::try_from(rest % 10).unwrap_or(0));
-    }
-    out
+    rendering(
+        r,
+        &Style {
+            shape: Shape::Shortest,
+            precision: significant.clamp(1, MAX_DIGITS),
+            wide: true,
+            ..Style::default()
+        },
+    )
 }
 
 /// `r` as text with `decimals` digits after the point, the way
@@ -555,22 +735,20 @@ pub fn text(r: f64, significant: i32) -> Vec<u8> {
 /// two decimals of `1.5` is `1.5` rather than `1.50`.
 #[must_use]
 pub fn fixed(r: f64, decimals: i32) -> Vec<u8> {
-    let decoded = decode_decimals(r, decimals);
-    match decoded.special {
-        Special::NotANumber => return b"NaN".to_vec(),
-        Special::Infinity => {
-            return if decoded.negative {
-                b"-Inf".to_vec()
-            } else {
-                b"Inf".to_vec()
-            };
-        }
-        Special::None => {}
-    }
-    let mut out = Vec::new();
-    if decoded.negative {
-        out.push(b'-');
-    }
-    write_digits(&mut out, &decoded, decimals.clamp(0, 30), decoded.point - 1);
-    out
+    rendering(
+        r,
+        &Style {
+            shape: Shape::Fixed,
+            precision: decimals.clamp(0, 30),
+            wide: true,
+            ..Style::default()
+        },
+    )
+}
+
+/// The bytes of a rendering the engine asks for itself. The precision
+/// is at most twenty digits and the point at most three hundred and
+/// nine, so a limit of a thousand is never reached.
+fn rendering(r: f64, style: &Style) -> Vec<u8> {
+    render(r, style, 1024).map_or_else(Vec::new, |rendered| rendered.bytes)
 }

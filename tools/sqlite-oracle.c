@@ -496,6 +496,114 @@ static const char *aSubject[] = {
   "'aa'", "'ab'", "'abcd'", "'[a]'", "']'", "'a-c'", "'%'"
 };
 
+/* The formats `format(F,...)` is put through. */
+static const char *aFormat[] = {
+  "'%d'", "'%i'", "'%u'", "'%5d'", "'%-5d'", "'%05d'", "'%+d'", "'% d'",
+  "'%.3d'", "'%.0d'", "'%,d'", "'%,.10d'", "'%8,d'", "'%09,d'",
+  "'%x'", "'%X'", "'%#x'", "'%#X'", "'%08x'", "'%o'", "'%#o'", "'%p'",
+  "'%r'", "'%-8r'", "'%.5r'", "'%+r'",
+  "'%f'", "'%.0f'", "'%.10f'", "'%!f'", "'%#.0f'", "'%,f'", "'%012.2f'",
+  "'%-12.2f'", "'%+.2f'", "'%0f'", "'%#f'", "'%!.3f'", "'%,.3f'",
+  "'%e'", "'%E'", "'%.0e'", "'%!e'", "'%+15.4e'", "'%-15.4E'", "'%,e'",
+  "'%g'", "'%G'", "'%.1g'", "'%.17g'", "'%!.20g'", "'%#g'", "'%20.3g'",
+  "'%.0g'", "'%,g'", "'%030.8g'", "'%!g'",
+  "'%s'", "'%10s'", "'%-10s'", "'%.2s'", "'%!.2s'", "'%!6s'", "'%z'",
+  "'%.0s'", "'%!-6s'", "'%08s'",
+  "'%q'", "'%Q'", "'%w'", "'%#q'", "'%#Q'", "'%#w'", "'%.2q'", "'%8q'",
+  "'%!.2Q'", "'%-9w'", "'%.0Q'",
+  "'%c'", "'%3c'", "'%.3c'", "'%-6.3c'", "'%6.3c'", "'%.1c'", "'%2.4c'",
+  "'%%'", "'%5%'", "'%n'", "'%y'", "'a%Tb'", "'a%Sb'", "'%'", "'%l'",
+  "'%ld'", "'%lld'", "'%.3lf'", "'%5.2lld'", "'%.l'", "'%5l'",
+  "'[%s][%d]'", "'%5.2f%%'", "'%s%s'", "'%d%d%d'", "'no conversion'", "''",
+  "'%,x'", "'%-'", "'%+'", "'%!c'", "'%!q'", "'%!.4c'", "'%+#f'", "'% #g'",
+  "'%+#e'"
+};
+
+/* The values the formats are put to. */
+static const char *aFormatArg[] = {
+  "NULL", "0", "1", "-1", "10", "255", "1000000", "-9223372036854775808",
+  "9223372036854775807", "2.5", "-0.0625", "1e300", "1e-300", "9e999",
+  "-9e999", "'abc'", "''", "'a''b'", "'\\'", "x'414243'", "'käse'",
+  "char(1)||'x'", "'123abc'", "0.0", "char(17)||'x'", "'äbc'",
+  "'𝄞x'"
+};
+
+/* The values every pair of arguments is drawn from. */
+static const char *aFormatPair[] = {"1", "-5", "2.5", "'abc'", "NULL"};
+
+/* The formats whose width or precision is an argument of its own. */
+static const char *aFormatStar[] = {
+  "'%*d'", "'%-*d'", "'%.*f'", "'%*.*f'", "'%*s'", "'%.*s'", "'%*.*g'",
+  "'%*c'", "'%.*q'", "'%0*d'", "'%*ld'", "'%.*lf'"
+};
+
+/* The widths and precisions handed to them. */
+static const char *aFormatWidth[] = {
+  "0", "1", "8", "-8", "2147483648", "-2147483648", "NULL"
+};
+
+/* The values handed to them. */
+static const char *aFormatValue[] = {"1", "-2.5", "'abcdef'"};
+
+/* The cases whose width or precision is more than any answer holds.
+** Each is refused, and neither engine allocates what it asks for; a
+** width the C library does fill, such as `%999999900.5f` of a small
+** number, would write a gigabyte and is left out. */
+static const char *aFormatHuge[] = {
+  "format('%2000000000d',1)", "format('%-2000000000d',1)",
+  "format('%2000000000s','abc')", "format('%2000000000c','a')",
+  "format('%2000000000q','a''b')", "format('%900000000.100000000f',1.5)",
+  "format('%2000000000.2e',1.5)", "format('%900000000.100000000g',1.5)",
+  "format('%02000000000d',-1)", "format('%2000000000%')",
+  "format('%999999900.5f',1e300)", "format('%0999999900f',9e999)",
+  "format('%900000000.1000000000e',1.5)", "format('%2000000000x',255)",
+  "format('%.2000000000c','a')", "format('%.2000000000q','ab')",
+  "format('%2000000000.5c','a')"
+};
+
+/* The cases for the format language, as SQL text, one per line. */
+static void format_corpus(void) {
+  int i, j, k;
+  int nFormat = (int)(sizeof(aFormat) / sizeof(aFormat[0]));
+  int nArg = (int)(sizeof(aFormatArg) / sizeof(aFormatArg[0]));
+  int nPair = (int)(sizeof(aFormatPair) / sizeof(aFormatPair[0]));
+  int nStar = (int)(sizeof(aFormatStar) / sizeof(aFormatStar[0]));
+  int nWidth = (int)(sizeof(aFormatWidth) / sizeof(aFormatWidth[0]));
+  int nValue = (int)(sizeof(aFormatValue) / sizeof(aFormatValue[0]));
+  for (i = 0; i < nFormat; i++) {
+    printf("format(%s)\n", aFormat[i]);
+    for (j = 0; j < nArg; j++) {
+      printf("format(%s,%s)\n", aFormat[i], aFormatArg[j]);
+    }
+    for (j = 0; j < nPair; j++) {
+      for (k = 0; k < nPair; k++) {
+        printf("format(%s,%s,%s)\n", aFormat[i], aFormatPair[j],
+               aFormatPair[k]);
+      }
+    }
+  }
+  for (i = 0; i < nStar; i++) {
+    for (j = 0; j < nWidth; j++) {
+      for (k = 0; k < nValue; k++) {
+        printf("format(%s,%s,%s)\n", aFormatStar[i], aFormatWidth[j],
+               aFormatValue[k]);
+        printf("format(%s,%s,3,%s)\n", aFormatStar[i], aFormatWidth[j],
+               aFormatValue[k]);
+      }
+    }
+  }
+  /* The same function under its other name, and the format itself as a
+  ** value of every class. */
+  for (i = 0; i < nArg; i++) {
+    printf("printf('%%d %%s',%s,%s)\n", aFormatArg[i], aFormatArg[i]);
+    printf("format(%s,1,2)\n", aFormatArg[i]);
+  }
+  for (i = 0; i < (int)(sizeof(aFormatHuge) / sizeof(aFormatHuge[0])); i++) {
+    printf("%s\n", aFormatHuge[i]);
+  }
+  printf("format()\n");
+}
+
 /* The cases, as SQL text, one per line. */
 static void expr_corpus(void) {
   int i, j, k;
@@ -524,6 +632,7 @@ static void expr_corpus(void) {
   for (i = 0; i < (int)(sizeof(aOther) / sizeof(aOther[0])); i++) {
     printf("%s\n", aOther[i]);
   }
+  format_corpus();
   {
     int nArg = (int)(sizeof(aArg) / sizeof(aArg[0]));
     int nUnary = (int)(sizeof(aUnary) / sizeof(aUnary[0]));

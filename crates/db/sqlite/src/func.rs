@@ -11,9 +11,10 @@
 //! after.
 //!
 //! What is not here: the functions that read a clock or a random source,
-//! the ones that answer something about the connection, `printf` and its
-//! whole format language, and the mathematical ones, which want a
-//! library this repository does not have. Each refuses by name.
+//! the ones that answer something about the connection, and the
+//! mathematical ones, which want a library this repository does not
+//! have. Each refuses by name. `format` and its whole format language
+//! are in [`crate::format`].
 
 use alloc::vec::Vec;
 
@@ -37,6 +38,8 @@ pub enum Function {
     Degrees,
     /// `floor(X)`.
     Floor,
+    /// `format(F,...)` and `printf(F,...)`.
+    Format,
     /// `coalesce(X,Y,...)` and `ifnull(X,Y)`.
     Coalesce,
     /// `concat(...)`.
@@ -129,7 +132,7 @@ const DEGREES: f64 = 180.0 / core::f64::consts::PI;
 const RADIANS: f64 = core::f64::consts::PI / 180.0;
 
 /// The longest blob a value holds, which is `SQLITE_MAX_LENGTH`.
-const MAX_LENGTH: usize = 1_000_000_000;
+pub const MAX_LENGTH: usize = 1_000_000_000;
 
 /// The table, which is `aBuiltinFunc` for what is written here.
 const TABLE: &[Entry] = &[
@@ -168,6 +171,18 @@ const TABLE: &[Entry] = &[
         least: 1,
         most: Some(1),
         function: Function::Floor,
+    },
+    Entry {
+        name: b"format",
+        least: 0,
+        most: None,
+        function: Function::Format,
+    },
+    Entry {
+        name: b"printf",
+        least: 0,
+        most: None,
+        function: Function::Format,
     },
     Entry {
         name: b"coalesce",
@@ -469,6 +484,7 @@ pub fn call(
             )),
         },
         Function::Pi => Value::Real(core::f64::consts::PI),
+        Function::Format => crate::format::format(args)?,
         // This engine reads and does not write, so no statement of it
         // has ever changed a row or made a rowid. Q7 of document 16 is
         // where these stop being nought.

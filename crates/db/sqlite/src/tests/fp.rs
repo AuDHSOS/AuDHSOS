@@ -81,21 +81,30 @@ fn a_precision_outside_the_range_is_pulled_into_it() {
 
 #[test]
 fn the_specials_are_told_apart() {
-    assert_eq!(decode(f64::NAN, DIGITS).special, Special::NotANumber);
-    assert_eq!(decode(f64::INFINITY, DIGITS).special, Special::Infinity);
-    assert_eq!(decode(f64::NEG_INFINITY, DIGITS).special, Special::Infinity);
-    assert!(decode(f64::NEG_INFINITY, DIGITS).negative);
-    assert_eq!(decode(1.5, DIGITS).special, Special::None);
+    assert_eq!(
+        decode(f64::NAN, DIGITS, MAX_DIGITS).special,
+        Special::NotANumber
+    );
+    assert_eq!(
+        decode(f64::INFINITY, DIGITS, MAX_DIGITS).special,
+        Special::Infinity
+    );
+    assert_eq!(
+        decode(f64::NEG_INFINITY, DIGITS, MAX_DIGITS).special,
+        Special::Infinity
+    );
+    assert!(decode(f64::NEG_INFINITY, DIGITS, MAX_DIGITS).negative);
+    assert_eq!(decode(1.5, DIGITS, MAX_DIGITS).special, Special::None);
 }
 
 #[test]
 fn zero_is_one_digit_with_the_point_after_it() {
-    let zero = decode(0.0, DIGITS);
+    let zero = decode(0.0, DIGITS, MAX_DIGITS);
     assert_eq!(zero.digits, b"0");
     assert_eq!(zero.point, 1);
     assert!(!zero.negative);
     // Negative zero is a double but not a sign: SQLite prints "0.0".
-    assert!(!decode(-0.0, DIGITS).negative);
+    assert!(!decode(-0.0, DIGITS, MAX_DIGITS).negative);
 }
 
 #[test]
@@ -104,7 +113,7 @@ fn rounding_up_the_last_digit_can_carry_into_a_new_one() {
     // which is one digit more than was asked for.
     assert_eq!(rendered(0.999, 2), "1.0");
     assert_eq!(rendered(9.99, 2), "10.0");
-    assert_eq!(decode(0.999, 2).point, 1);
+    assert_eq!(decode(0.999, 2, MAX_DIGITS).point, 1);
 }
 
 #[test]
@@ -131,7 +140,7 @@ fn digits_and_a_power_read_back_as_the_double_they_came_from() {
         if !value.is_finite() || value == 0.0 {
             continue;
         }
-        let decoded = decode(value, DIGITS);
+        let decoded = decode(value, DIGITS, MAX_DIGITS);
         let mut digits: u64 = 0;
         for byte in &decoded.digits {
             digits = digits * 10 + u64::from(byte - b'0');
@@ -156,4 +165,20 @@ fn a_fixed_rendering_names_the_specials_as_words() {
     assert_eq!(String::from_utf8(fixed(1.5, 3)).unwrap(), "1.5");
     assert_eq!(String::from_utf8(fixed(-0.125, 2)).unwrap(), "-0.13");
     assert_eq!(String::from_utf8(fixed(1.0, 0)).unwrap(), "1.0");
+}
+
+#[test]
+fn a_conversion_that_pads_with_zeros_writes_the_specials_as_json_reads_them() {
+    use crate::fp::{Shape, Style, render};
+    // No statement reaches a NaN, which is a `NULL` before it is a
+    // value, so the word `%0f` writes for one is tested here.
+    let style = Style {
+        shape: Shape::Fixed,
+        precision: 2,
+        zeros: true,
+        ..Style::default()
+    };
+    let rendered = render(f64::NAN, &style, 1024).expect("a rendering of four bytes");
+    assert_eq!(rendered.bytes, b"null");
+    assert_eq!(rendered.zeros, None);
 }

@@ -301,8 +301,12 @@ fn truncate(number: f64) -> i64 {
     } else {
         (fraction | (1 << 52), exponent.saturating_sub(1075))
     };
+    // A shift of 64 or more is every bit gone, which a shift instruction
+    // does not answer.
     let magnitude = if shift >= 0 {
         mantissa.wrapping_shl(u32::try_from(shift).unwrap_or(0))
+    } else if shift <= -64 {
+        0
     } else {
         mantissa.wrapping_shr(u32::try_from(shift.wrapping_neg()).unwrap_or(64))
     };

@@ -13,6 +13,7 @@ mod bytes;
 pub mod db;
 pub mod error;
 pub mod eval;
+pub mod format;
 pub mod fp;
 pub mod func;
 pub mod header;
