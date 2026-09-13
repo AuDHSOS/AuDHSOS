@@ -3667,6 +3667,19 @@ what each page began with.
   record it hands back, that page zero is in no journal, and that no
   page past the truncation is restored.
 
+### 6.6.96 The page a walk stands on (`db-sqlite`)
+
+D-157. A walk parsed its page again for every cell of it; it holds the
+page it stands on now.
+
+- Nothing new is asserted: the walk answers the same rows, so every test
+  of 6.6.1 onwards holds it to the same answers, and `sqlite_image`
+  replays the same corpus. What changed is how often `Page::parse` runs,
+  which no answer depends on.
+- The two branches the hold adds are reached by the corpus as it stands:
+  a leaf of two cells or more reads the page it already holds, and a
+  descent or a climb reads one it does not.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

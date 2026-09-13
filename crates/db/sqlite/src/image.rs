@@ -268,6 +268,8 @@ pub struct Rows<'a> {
     depth: usize,
     /// Whether a refusal has ended the walk.
     done: bool,
+    /// The page the walk stands on, and which page it is.
+    held: Option<(u32, Page<'a>)>,
 }
 
 impl<'a> Rows<'a> {
@@ -281,6 +283,7 @@ impl<'a> Rows<'a> {
             }; MAX_DEPTH],
             depth: 1,
             done: false,
+            held: None,
         }
     }
 
@@ -288,6 +291,23 @@ impl<'a> Rows<'a> {
     const fn stop(&mut self, error: Error) -> Error {
         self.done = true;
         error
+    }
+    /// The page the walk stands on, parsed where it is not the one the
+    /// walk already holds.
+    ///
+    /// A walk reads one page for every cell of it, so parsing the page
+    /// once per cell is O(n) parses for `n` rows where one per page is
+    /// O(p) for `p` pages. The walk only ever stands on one page, so one
+    /// is all it holds.
+    fn page(&mut self, number: u32) -> Result<Page<'a>, Error> {
+        if let Some((held, page)) = self.held
+            && held == number
+        {
+            return Ok(page);
+        }
+        let page = self.image.page(number)?;
+        self.held = Some((number, page));
+        Ok(page)
     }
 
     /// The frame the walk stands on, or nothing once it has climbed out.
@@ -339,7 +359,7 @@ impl<'a> Iterator for Rows<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         while !self.done {
             let frame = *self.top()?;
-            let page = match self.image.page(frame.number) {
+            let page = match self.page(frame.number) {
                 Ok(page) => page,
                 Err(error) => return Some(Err(self.stop(error))),
             };
@@ -409,6 +429,8 @@ pub struct Entries<'a> {
     depth: usize,
     /// Whether a refusal has ended the walk.
     done: bool,
+    /// The page the walk stands on, and which page it is.
+    held: Option<(u32, Page<'a>)>,
 }
 
 impl<'a> Entries<'a> {
@@ -422,6 +444,7 @@ impl<'a> Entries<'a> {
             }; MAX_DEPTH],
             depth: 1,
             done: false,
+            held: None,
         }
     }
 
@@ -429,6 +452,23 @@ impl<'a> Entries<'a> {
     const fn stop(&mut self, error: Error) -> Error {
         self.done = true;
         error
+    }
+    /// The page the walk stands on, parsed where it is not the one the
+    /// walk already holds.
+    ///
+    /// A walk reads one page for every cell of it, so parsing the page
+    /// once per cell is O(n) parses for `n` rows where one per page is
+    /// O(p) for `p` pages. The walk only ever stands on one page, so one
+    /// is all it holds.
+    fn page(&mut self, number: u32) -> Result<Page<'a>, Error> {
+        if let Some((held, page)) = self.held
+            && held == number
+        {
+            return Ok(page);
+        }
+        let page = self.image.page(number)?;
+        self.held = Some((number, page));
+        Ok(page)
     }
 
     /// One entry, with a refusal ending the walk.
@@ -470,7 +510,7 @@ impl<'a> Iterator for Entries<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         while !self.done {
             let frame = *self.top()?;
-            let page = match self.image.page(frame.number) {
+            let page = match self.page(frame.number) {
                 Ok(page) => page,
                 Err(error) => return Some(Err(self.stop(error))),
             };

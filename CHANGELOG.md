@@ -5,6 +5,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- A walk of a b-tree in `db-sqlite` holds the page it stands on rather
+  than parsing it again for every cell, which is one parse per page
+  visited where it was one per row. Over `fixtures/page512.db` that is
+  about five percent of a scan; the parse is a handful of byte reads, so
+  the win is the O(n) to O(p) and not the constant. No cache keyed by
+  page number is kept: the file is already in memory, so a lookup would
+  cost more than the slice it saves.
+
 ### Added
 
 - The rollback journal, played back, in `db-sqlite`: a database whose

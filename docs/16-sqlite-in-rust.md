@@ -128,15 +128,14 @@ of lines and 100 percent of branches, in both instrumentations.
 
 | # | What is missing | Which step |
 |---|-----------------|------------|
-| 1 | The pager: a page cache. The write-ahead log and the rollback journal are built. | Q3 |
-| 2 | The secondary indexes, used rather than read: a `WHERE` that names an indexed column still scans. | Q6 |
-| 3 | The virtual machine and the code generator that replaces the tree walker. | Q6 |
-| 4 | Writing: the b-tree writer, transactions, the journal in four modes, the WAL. | Q7 |
-| 5 | The rest of the language: `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, triggers, views, a `WITH` written `RECURSIVE`. | Q8 |
-| 6 | The window clauses, which the parser refuses. | Q8 |
-| 7 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
-| 8 | The matrix run across every level of the suite rather than the format alone. | Q9 |
-| 9 | MC/DC, which the pinned toolchain does not emit. See D4 (16.9). | Q10 |
+| 1 | The secondary indexes, used rather than read: a `WHERE` that names an indexed column still scans. | Q6 |
+| 2 | The virtual machine and the code generator that replaces the tree walker. | Q6 |
+| 3 | Writing: the b-tree writer, transactions, the journal in four modes, the WAL. | Q7 |
+| 4 | The rest of the language: `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, triggers, views, a `WITH` written `RECURSIVE`. | Q8 |
+| 5 | The window clauses, which the parser refuses. | Q8 |
+| 6 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
+| 7 | The matrix run across every level of the suite rather than the format alone. | Q9 |
+| 8 | MC/DC, which the pinned toolchain does not emit. See D4 (16.9). | Q10 |
 
 ## 16.7 Decision D1: the engine is a port of the routines
 
@@ -276,7 +275,7 @@ CI has no SQLite.
 |------|------|--------|------------|------|
 | Q1 | The format, read | built | nothing | L |
 | Q2 | The schema as types | built | Q1 | M |
-| Q3 | The pager and the index trees | the log and the journal are built; the cache is open | Q1 | L |
+| Q3 | The pager and the index trees | built | Q1 | L |
 | Q4 | The tokenizer and the parser | built but for the window clauses | nothing | L |
 | Q5 | Values, and a statement answered by walking | built | Q2, Q4 | L |
 | Q6 | The virtual machine | open | Q5 | L |
@@ -351,8 +350,7 @@ text, columns, affinities, collations and keys.
 
 ## 16.17 Q3. The pager and the index trees
 
-Status: the write-ahead log and the rollback journal are built; the
-page cache is open.
+Status: built.
 Depends on: Q1.
 Size: L.
 
@@ -372,8 +370,10 @@ Size: L.
    of each page. Built.
 2. Play back a hot rollback journal, which a reader must: the headers,
    the records, the checksum of `pager_cksum`, and the page count the
-   database is truncated to. Built.
-3. Read a page through a cache rather than out of a byte slice. Open.
+   database is truncated to.
+3. Hold the page a walk stands on rather than parsing it once per cell,
+   which is what a page cache is worth over a file already in memory.
+   See D-157.
 
 ### Produces
 
@@ -387,7 +387,8 @@ two that read a file alone.
 A file in each of the six journal modes reads back the same rows;
 `fixtures/logged.db`, whose file names no table, reads back the rows its
 log holds; `fixtures/rollback.db`, whose file holds a transaction half
-written, reads back the rows that transaction started from; the crate
+written, reads back the rows that transaction started from; a walk
+parses each page it visits once rather than once per cell; the crate
 meets D4.
 
 ## 16.18 Q4. The tokenizer and the parser
