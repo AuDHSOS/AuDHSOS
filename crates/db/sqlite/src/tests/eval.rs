@@ -46,10 +46,15 @@ fn golden() -> Vec<(&'static [u8], &'static [u8])> {
 /// the C library as well.
 fn shown(value: &Value) -> (Vec<u8>, Vec<u8>) {
     let of = |function| {
-        call(function, core::slice::from_ref(value), Collation::Binary)
-            .expect("a function that always answers")
-            .text()
-            .unwrap_or_default()
+        call(
+            function,
+            core::slice::from_ref(value),
+            Collation::Binary,
+            crate::header::Encoding::Utf8,
+        )
+        .expect("a function that always answers")
+        .text()
+        .unwrap_or_default()
     };
     (of(Function::Typeof), of(Function::Quote))
 }

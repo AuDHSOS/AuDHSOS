@@ -19,9 +19,10 @@ use alloc::vec::Vec;
 
 use crate::eval::Error;
 use crate::fp;
+use crate::header::Encoding;
 use crate::number;
 use crate::utf8;
-use crate::value::{Collation, Value, apply_numeric, compare};
+use crate::value::{Collation, Value, apply_numeric, compare, stored};
 
 /// A function this engine has.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -342,7 +343,12 @@ pub fn lookup(name: &[u8], count: usize) -> Result<Function, Error> {
     clippy::too_many_lines,
     reason = "one arm per function, each of them short, kept in one table so that the list reads as a list"
 )]
-pub fn call(function: Function, args: &[Value], collation: Collation) -> Result<Value, Error> {
+pub fn call(
+    function: Function,
+    args: &[Value],
+    collation: Collation,
+    encoding: Encoding,
+) -> Result<Value, Error> {
     let arg = |at: usize| args.get(at).cloned().unwrap_or(Value::Null);
     let first = arg(0);
     Ok(match function {
@@ -354,7 +360,11 @@ pub fn call(function: Function, args: &[Value], collation: Collation) -> Result<
         },
         Function::OctetLength => match &first {
             Value::Null => Value::Null,
-            other => Value::Int(count_of(other.text().unwrap_or_default().len())),
+            // Bytes as the database holds them, not as this engine does.
+            Value::Blob(bytes) => Value::Int(count_of(bytes.len())),
+            other => Value::Int(count_of(
+                stored(&other.text().unwrap_or_default(), encoding).len(),
+            )),
         },
         Function::Abs => match first {
             Value::Null => Value::Null,
@@ -463,7 +473,11 @@ pub fn call(function: Function, args: &[Value], collation: Collation) -> Result<
             Value::Null => Value::Text(Vec::new()),
             other => {
                 let mut out = Vec::new();
-                for byte in other.text().unwrap_or_default() {
+                let bytes = match &other {
+                    Value::Blob(bytes) => bytes.clone(),
+                    _ => stored(&other.text().unwrap_or_default(), encoding),
+                };
+                for byte in bytes {
                     out.push(hex_digit(byte >> 4));
                     out.push(hex_digit(byte & 0x0f));
                 }

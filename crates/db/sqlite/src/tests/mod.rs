@@ -25,6 +25,7 @@ mod parse;
 mod record;
 mod schema;
 mod token;
+mod utf8;
 mod value;
 
 /// One table, three rows, every storage class, page size 4096, UTF-8.
@@ -72,6 +73,14 @@ pub(super) const KEYS: &[u8] = include_bytes!("fixtures/keys.db");
 /// `CREATE TABLE g(a, b AS (a+1), c AS (a*2) STORED); CREATE TABLE h(a,
 /// c AS (a*2) STORED);`
 pub(super) const GENERATED: &[u8] = include_bytes!("fixtures/generated.db");
+
+/// Text in UTF-16 that reaches past the sixteen-bit range, which is
+/// where the order of UTF-16 and the order of its characters part.
+///
+/// `PRAGMA encoding='UTF-16le'; CREATE TABLE s(t TEXT);` filled with
+/// `char(57344)`, `char(65536)`, `'z'`, `char(65533)`, `char(55296)` and
+/// `char(65536)||'a'`.
+pub(super) const WIDE16: &[u8] = include_bytes!("fixtures/wide16.db");
 
 /// A varint, written the way section 1.6 describes, so that the reader is
 /// tested against something other than itself.

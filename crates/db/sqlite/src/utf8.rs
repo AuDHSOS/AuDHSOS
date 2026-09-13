@@ -74,6 +74,81 @@ pub fn count(bytes: &[u8]) -> usize {
     characters
 }
 
+/// The UTF-16 code units the text would be written as, in order.
+pub fn units(bytes: &[u8]) -> impl Iterator<Item = u32> + '_ {
+    let mut at: usize = 0;
+    let mut low = None;
+    core::iter::from_fn(move || {
+        if let Some(unit) = low.take() {
+            return Some(unit);
+        }
+        if at >= bytes.len() {
+            return None;
+        }
+        let (value, next) = read(bytes, at);
+        at = next;
+        if value >= 0x1_0000 {
+            let rest = value.saturating_sub(0x1_0000);
+            low = Some(0xdc00 | (rest & 0x3ff));
+            return Some(0xd800 | (rest >> 10));
+        }
+        Some(value)
+    })
+}
+
+/// UTF-8 as UTF-16, which is what a database that keeps its text that
+/// way holds.
+#[must_use]
+pub fn to_utf16(bytes: &[u8], big_endian: bool) -> alloc::vec::Vec<u8> {
+    let mut out = alloc::vec::Vec::new();
+    for unit in units(bytes) {
+        let high = u8::try_from((unit >> 8) & 0xff).unwrap_or(0);
+        let low = u8::try_from(unit & 0xff).unwrap_or(0);
+        if big_endian {
+            out.push(high);
+            out.push(low);
+        } else {
+            out.push(low);
+            out.push(high);
+        }
+    }
+    out
+}
+
+/// UTF-16 as UTF-8, which is the second half of
+/// `sqlite3VdbeMemTranslate`.
+///
+/// A surrogate is joined with whatever code unit follows it, whether or
+/// not that one is the other half of a pair, because that is what the
+/// C library does when it is not built to replace invalid text.
+#[must_use]
+pub fn from_utf16(bytes: &[u8], big_endian: bool) -> alloc::vec::Vec<u8> {
+    let unit = |at: usize| {
+        let first = u32::from(bytes.get(at).copied().unwrap_or(0));
+        let second = u32::from(bytes.get(at.saturating_add(1)).copied().unwrap_or(0));
+        if big_endian {
+            (first << 8) | second
+        } else {
+            (second << 8) | first
+        }
+    };
+    let mut out = alloc::vec::Vec::new();
+    let mut at: usize = 0;
+    while at.saturating_add(1) < bytes.len() {
+        let mut value = unit(at);
+        at = at.saturating_add(2);
+        if (0xd800..0xe000).contains(&value) && at.saturating_add(1) < bytes.len() {
+            let low = unit(at);
+            at = at.saturating_add(2);
+            value = (low & 0x03ff)
+                .wrapping_add((value & 0x003f) << 10)
+                .wrapping_add(((value & 0x03c0).wrapping_add(0x0040)) << 10);
+        }
+        write(&mut out, value);
+    }
+    out
+}
+
 /// A character written out, appended to `out`.
 pub fn write(out: &mut alloc::vec::Vec<u8>, value: u32) {
     let byte = |bits: u32| u8::try_from(bits & 0xff).unwrap_or(0);

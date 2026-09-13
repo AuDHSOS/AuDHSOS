@@ -88,3 +88,21 @@ m-autovacuum-incr.db|SELECT * FROM m
 m-utf16le-512.db|SELECT * FROM m
 m-utf16be-4096.db|SELECT * FROM m
 utf16.db|SELECT * FROM u
+utf16.db|SELECT * FROM u ORDER BY t
+utf16.db|SELECT t, length(t), hex(t) FROM u
+utf16.db|SELECT t FROM u WHERE t = 'abc'
+utf16.db|SELECT typeof(t), t||'!' FROM u
+utf16.db|SELECT substr(t,2,1) FROM u
+utf16.db|SELECT DISTINCT t FROM u
+m-utf16le-4096.db|SELECT * FROM m ORDER BY t DESC
+m-utf16be-4096.db|SELECT t FROM m WHERE t > 'one' ORDER BY i
+m-utf16le-512.db|SELECT i, t, r, b FROM m ORDER BY t
+wide16.db|SELECT t FROM s ORDER BY t
+wide16.db|SELECT hex(t), length(t) FROM s
+wide16.db|SELECT t FROM s ORDER BY t DESC LIMIT 2
+wide16.db|SELECT t FROM s WHERE t > char(65533)
+wide16.db|SELECT t FROM n ORDER BY t
+wide16.db|SELECT t FROM n WHERE t='A' ORDER BY rowid
+m-utf16be-4096.db|SELECT hex(t), octet_length(t) FROM m ORDER BY i
+m-utf16be-4096.db|SELECT quote(CAST(t AS BLOB)) FROM m ORDER BY i
+m-utf16le-4096.db|SELECT hex(t), octet_length(t) FROM m ORDER BY i

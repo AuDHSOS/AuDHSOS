@@ -3353,9 +3353,16 @@ tree: the first statement this port answers end to end.
   being one.
 - What the engine refuses by name is counted rather than asserted: an
   aggregate, a grouping, a compound, `VALUES`, a schema-qualified name, a
-  table whose rows live in the key's own tree, a column that is computed
-  and not stored, and text that is not UTF-8. The count is held down so
-  that it can only fall.
+  table whose rows live in the key's own tree, and a column that is
+  computed and not stored. The count is held down so that it can only
+  fall.
+- Text in UTF-16 is answered as well as text in UTF-8, both ways round,
+  and the three places the stored encoding shows through are tested
+  under both: `hex`, `octet_length` and a cast to a blob. So is the one
+  place the order differs — `BINARY` compares the bytes as the file
+  holds them, so with the little end first a `z` sorts after a character
+  written as a pair beginning with a zero byte. `fixtures/wide16.db`
+  holds the six pieces of text that show it.
 - The refusals that are the engine's own: a file that is not a database,
   a statement that is not one, a table the schema does not name, an
   `ORDER BY` that counts past the answer, and a schema this crate cannot
@@ -3369,6 +3376,22 @@ tree: the first statement this port answers end to end.
   statement over each table it finds. The first thing that found is in
   the regression corpus: a row whose length is a number no machine
   holds, which is now refused before the room for it is asked for.
+
+### 6.6.86 Reading UTF-8 and UTF-16 alike (`db-sqlite`)
+
+D-147. `crate::utf8` is the reader and writer of both, and the tests are
+the text a file may hold that the shell will not write.
+
+- The pairs: a surrogate joined with whatever follows it, a surrogate
+  with nothing after it, an odd number of bytes, and a round trip both
+  ways round for every string the crate holds.
+- The sequences that are not: overlong, a surrogate written as three
+  bytes, the two characters that are not characters, and a continuation
+  byte with nothing in front of it — each read the way `sqlite3Utf8Read`
+  reads it, which is leniently, because a reader that refuses where
+  SQLite does not answers a different `length` and a different `substr`.
+- The lengths: every character written in as few bytes as it takes, and
+  a count that stops at a NUL as a C string does.
 
 ## 6.7 CI pipeline
 

@@ -39,9 +39,6 @@ pub enum Error {
     Schema(schema::Error),
     /// An expression could not be answered.
     Eval(eval::Error),
-    /// The text is not UTF-8. The engine reads one encoding so far; the
-    /// format reader reads all three.
-    Encoding,
     /// A table the statement names is not in the schema.
     NoTable,
     /// An `ORDER BY` that counts to a column the answer does not have.
@@ -94,6 +91,8 @@ pub struct Database<'a> {
     image: Image<'a>,
     /// Its tables.
     tables: Vec<Stored>,
+    /// What encoding its text is in.
+    encoding: Encoding,
 }
 
 /// What a statement answered.
@@ -113,9 +112,7 @@ impl<'a> Database<'a> {
     /// [`Error`] names what it could not read and why.
     pub fn open(bytes: &'a [u8]) -> Result<Self, Error> {
         let image = Image::open(bytes)?;
-        if image.header().encoding != Encoding::Utf8 {
-            return Err(Error::Encoding);
-        }
+        let encoding = image.header().encoding;
         let mut tables = Vec::new();
         let mut payload = Vec::new();
         for row in image.schema() {
@@ -124,7 +121,7 @@ impl<'a> Database<'a> {
             let record = record::Record::parse(&payload)?;
             let text = |at: usize| -> Result<Vec<u8>, Error> {
                 Ok(match record.value(at)? {
-                    Some(record::Value::Text(bytes)) => bytes.to_vec(),
+                    Some(record::Value::Text(bytes)) => decode(bytes, encoding),
                     _ => Vec::new(),
                 })
             };
@@ -142,17 +139,39 @@ impl<'a> Database<'a> {
             let crate::ast::Definition::Table(written) = definition else {
                 continue;
             };
+            let mut table = schema::table(&arena, &written, &sql)?;
+            // `BINARY` is the same collation under the same name
+            // whatever the encoding, and it answers by the bytes the
+            // file holds.
+            let binary = binary_of(encoding);
+            if binary != Collation::Binary {
+                for column in &mut table.columns {
+                    if column.collation == Collation::Binary {
+                        column.collation = binary;
+                    }
+                }
+            }
             tables.push(Stored {
-                table: schema::table(&arena, &written, &sql)?,
+                table,
                 root: u32::try_from(root).unwrap_or(0),
             });
         }
-        Ok(Database { image, tables })
+        Ok(Database {
+            image,
+            tables,
+            encoding,
+        })
     }
 
     /// The tables of the schema, in the order the file holds them.
     pub fn tables(&self) -> impl Iterator<Item = &Table> {
         self.tables.iter().map(|stored| &stored.table)
+    }
+
+    /// What a comparison uses where nothing writes a collation, which
+    /// is `BINARY` over the encoding the file keeps its text in.
+    const fn collation(&self) -> Collation {
+        binary_of(self.encoding)
     }
 
     /// The table `name` names.
@@ -198,7 +217,7 @@ impl<'a> Database<'a> {
         let mut rows: Vec<Sorted> = Vec::new();
         match stored {
             None => {
-                let cursor = Cursor::none();
+                let cursor = Cursor::none(self.collation(), self.encoding);
                 if keep(arena, &select, sql, &cursor)? {
                     rows.push(sorted(arena, &select, sql, &cursor, &keys)?);
                 }
@@ -224,8 +243,10 @@ impl<'a> Database<'a> {
                     let cursor = Cursor {
                         table: Some(&stored.table),
                         alias: alias.as_deref(),
+                        collation: self.collation(),
+                        encoding: self.encoding,
+                        values: values_of(&payload, &stored.table, row.rowid, self.encoding)?,
                         rowid: row.rowid,
-                        values: values_of(&payload, &stored.table, row.rowid)?,
                     };
                     if keep(arena, &select, sql, &cursor)? {
                         rows.push(sorted(arena, &select, sql, &cursor, &keys)?);
@@ -239,8 +260,9 @@ impl<'a> Database<'a> {
         let mut rows: Vec<Vec<Value>> = rows.into_iter().map(|row| row.values).collect();
         if select.distinct == Distinct::Distinct {
             let mut seen: Vec<Vec<Value>> = Vec::new();
+            let collation = self.collation();
             rows.retain(|row| {
-                let fresh = !seen.iter().any(|kept| same(kept, row));
+                let fresh = !seen.iter().any(|kept| same(kept, row, collation));
                 if fresh {
                     seen.push(row.clone());
                 }
@@ -320,7 +342,7 @@ fn sorted(
         sort.push(match key {
             Key::Place(at, _) => (
                 values.get(*at).cloned().unwrap_or(Value::Null),
-                Collation::Binary,
+                cursor.collation,
             ),
             Key::Expr(expr, _) => evaluate_collated(arena, *expr, sql, cursor)?,
         });
@@ -404,11 +426,11 @@ fn read_payload(
 }
 
 /// Whether two rows hold the same values, which is what `DISTINCT` asks.
-fn same(left: &[Value], right: &[Value]) -> bool {
+fn same(left: &[Value], right: &[Value], collation: Collation) -> bool {
     // Two rows of one answer always hold the same number of values.
-    left.iter().zip(right).all(|(first, second)| {
-        compare(first, second, Collation::Binary) == core::cmp::Ordering::Equal
-    })
+    left.iter()
+        .zip(right)
+        .all(|(first, second)| compare(first, second, collation) == core::cmp::Ordering::Equal)
 }
 
 /// Whether the `WHERE` clause keeps this row.
@@ -519,7 +541,12 @@ fn order_of(
 }
 
 /// The values of one row, with the rowid put where its alias stands.
-fn values_of(payload: &[u8], table: &Table, rowid: i64) -> Result<Vec<Value>, Error> {
+fn values_of(
+    payload: &[u8],
+    table: &Table,
+    rowid: i64,
+    encoding: Encoding,
+) -> Result<Vec<Value>, Error> {
     let record = record::Record::parse(payload)?;
     let mut out = Vec::new();
     for (at, column) in table.columns.iter().enumerate() {
@@ -527,7 +554,7 @@ fn values_of(payload: &[u8], table: &Table, rowid: i64) -> Result<Vec<Value>, Er
             None | Some(record::Value::Null) => Value::Null,
             Some(record::Value::Int(number)) => Value::Int(number),
             Some(record::Value::Real(number)) => Value::Real(number),
-            Some(record::Value::Text(bytes)) => Value::Text(bytes.to_vec()),
+            Some(record::Value::Text(bytes)) => Value::Text(decode(bytes, encoding)),
             Some(record::Value::Blob(bytes)) => Value::Blob(bytes.to_vec()),
         };
         // A real that is a whole number is stored as an integer, and
@@ -547,12 +574,34 @@ fn values_of(payload: &[u8], table: &Table, rowid: i64) -> Result<Vec<Value>, Er
     Ok(out)
 }
 
+/// What `BINARY` is over text the file keeps in this encoding.
+const fn binary_of(encoding: Encoding) -> Collation {
+    match encoding {
+        Encoding::Utf8 => Collation::Binary,
+        Encoding::Utf16Le => Collation::Binary16Le,
+        Encoding::Utf16Be => Collation::Binary16Be,
+    }
+}
+
+/// Text as the engine holds it, which is UTF-8 whatever the file keeps.
+fn decode(bytes: &[u8], encoding: Encoding) -> Vec<u8> {
+    match encoding {
+        Encoding::Utf8 => bytes.to_vec(),
+        Encoding::Utf16Le => crate::utf8::from_utf16(bytes, false),
+        Encoding::Utf16Be => crate::utf8::from_utf16(bytes, true),
+    }
+}
+
 /// Where a walk stands: one row of one table, with its values read.
 struct Cursor<'a> {
     /// The table, where the statement names one.
     table: Option<&'a Table>,
     /// The name the statement gave it, where it gave one.
     alias: Option<&'a [u8]>,
+    /// What a comparison uses where nothing writes a collation.
+    collation: Collation,
+    /// What encoding the file keeps its text in.
+    encoding: Encoding,
     /// The rowid of the row.
     rowid: i64,
     /// Its values, one per column.
@@ -561,10 +610,12 @@ struct Cursor<'a> {
 
 impl Cursor<'_> {
     /// A cursor over no table, which is a statement with no `FROM`.
-    const fn none() -> Self {
+    const fn none(collation: Collation, encoding: Encoding) -> Self {
         Cursor {
             table: None,
             alias: None,
+            collation,
+            encoding,
             rowid: 0,
             values: Vec::new(),
         }
@@ -572,6 +623,14 @@ impl Cursor<'_> {
 }
 
 impl eval::Row for Cursor<'_> {
+    fn collation(&self) -> Collation {
+        self.collation
+    }
+
+    fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
     fn column(&self, table: Option<&[u8]>, column: &[u8]) -> Option<(Value, Affinity, Collation)> {
         let mine = self.table?;
         if let Some(named) = table {

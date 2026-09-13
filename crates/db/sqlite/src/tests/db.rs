@@ -43,6 +43,7 @@ fn fixture(name: &str) -> Option<&'static [u8]> {
         "indexed.db" => super::INDEXED,
         "keys.db" => super::KEYS,
         "generated.db" => super::GENERATED,
+        "wide16.db" => super::WIDE16,
         _ => return super::matrix::fixture(name),
     })
 }
@@ -53,6 +54,7 @@ fn quoted(value: &Value) -> String {
         Function::Quote,
         core::slice::from_ref(value),
         Collation::Binary,
+        crate::header::Encoding::Utf8,
     )
     .expect("a function that always answers");
     String::from_utf8_lossy(&answer.text().unwrap_or_default()).into_owned()
@@ -81,9 +83,8 @@ fn answer(bytes: &[u8], sql: &str) -> Option<String> {
 fn every_statement_answers_what_the_c_library_answers() {
     // What is left is the shapes this engine refuses by name: an
     // aggregate, a grouping, a compound, `VALUES`, a name with a schema
-    // in front of it, a table whose rows live in the key's own tree, a
-    // column that is computed and not stored, and text that is not
-    // UTF-8.
+    // in front of it, a table whose rows live in the key's own tree, and
+    // a column that is computed and not stored.
     let mut refused = 0;
     let cases = corpus();
     let answers = golden();
@@ -101,7 +102,7 @@ fn every_statement_answers_what_the_c_library_answers() {
         };
         assert_eq!(mine, theirs, "{sql} over {name}");
     }
-    assert_eq!(refused, 13, "what this engine does not answer yet");
+    assert_eq!(refused, 10, "what this engine does not answer yet");
 }
 
 #[test]

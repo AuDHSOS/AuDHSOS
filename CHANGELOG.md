@@ -15,6 +15,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   rendering where the shorter one reads back as the same double. The
   inverse — digits and a power back to the double nearest them — comes
   with it, and reading a number out of text will use it.
+- Text in UTF-16 read as well as text in UTF-8, both byte orders: the
+  engine holds text as UTF-8 whatever the file keeps, and the four
+  places that shows through are handled rather than hidden — `hex`,
+  `octet_length` and a cast to a blob answer the bytes the file holds,
+  and `BINARY` compares those bytes, which on a little-endian file puts
+  `z` after a character written as a pair beginning with a zero byte.
 - A statement answered from a file, which finishes step Q5 of document
   16: a database is opened, its schema is read out of the `CREATE` text
   it holds, and a `SELECT` over one table — with its `WHERE`, its

@@ -88,3 +88,21 @@ N|i|t|r|b	R|1|'one'|1.5|X'01'	R|2|'two'|2.5|X'0202'	R|3|'three'|3.5|X'030303'
 N|i|t|r|b	R|1|'one'|1.5|X'01'	R|2|'two'|2.5|X'0202'	R|3|'three'|3.5|X'030303'
 N|i|t|r|b	R|1|'one'|1.5|X'01'	R|2|'two'|2.5|X'0202'	R|3|'three'|3.5|X'030303'
 N|t	R|'abc'	R|'äöü'
+N|t	R|'abc'	R|'äöü'
+N|t|length(t)|hex(t)	R|'abc'|3|'610062006300'	R|'äöü'|3|'E400F600FC00'
+N|t	R|'abc'
+N|typeof(t)|t||'!'	R|'text'|'abc!'	R|'text'|'äöü!'
+N|substr(t,2,1)	R|'b'	R|'ö'
+N|t	R|'abc'	R|'äöü'
+N|i|t|r|b	R|2|'two'|2.5|X'0202'	R|3|'three'|3.5|X'030303'	R|1|'one'|1.5|X'01'
+N|t	R|'two'	R|'three'
+N|i|t|r|b	R|1|'one'|1.5|X'01'	R|3|'three'|3.5|X'030303'	R|2|'two'|2.5|X'0202'
+N|t	R|'𐀀'	R|'𐀀a'	R|''	R|'z'	R|'�'	R|'�'
+N|hex(t)|length(t)	R|'00E0'|1	R|'00D800DC'|1	R|'7A00'|1	R|'FDFF'|1	R|'FDFF'|1	R|'00D800DC6100'|2
+N|t	R|'�'	R|'�'
+N|t
+N|t	R|'A'	R|'a'	R|'b'
+N|t	R|'A'	R|'a'
+N|hex(t)|octet_length(t)	R|'006F006E0065'|6	R|'00740077006F'|6	R|'00740068007200650065'|10
+N|quote(CAST(t AS BLOB))	R|'X''006F006E0065'''	R|'X''00740077006F'''	R|'X''00740068007200650065'''
+N|hex(t)|octet_length(t)	R|'6F006E006500'|6	R|'740077006F00'|6	R|'74006800720065006500'|10

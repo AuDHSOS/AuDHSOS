@@ -17,6 +17,7 @@ use alloc::vec::Vec;
 
 use crate::ast::{Arena, BinaryOp, ExprId, LikeOp, Literal, Node, UnaryOp};
 use crate::func::{self, Function};
+use crate::header::Encoding;
 use crate::number::{self, Outcome};
 use crate::parse::MAX_DEPTH;
 use crate::value::{Affinity, Collation, Value, apply_comparison, cast, compare, compare_affinity};
@@ -79,6 +80,20 @@ pub trait Row {
     /// the collation it was declared with, or nothing where this row has
     /// no such column.
     fn column(&self, table: Option<&[u8]>, column: &[u8]) -> Option<(Value, Affinity, Collation)>;
+
+    /// The collation a comparison uses where nothing writes one, which
+    /// is `BINARY` over whatever encoding the database keeps its text
+    /// in.
+    fn collation(&self) -> Collation {
+        Collation::Binary
+    }
+
+    /// The encoding the database keeps its text in, which three things
+    /// answer differently under: `hex`, `octet_length` and a cast to a
+    /// blob, each of which shows the bytes as they are stored.
+    fn encoding(&self) -> Encoding {
+        Encoding::Utf8
+    }
 }
 
 /// A row with no columns, which is what a constant expression is read
@@ -128,7 +143,10 @@ pub fn evaluate_collated(
     row: &dyn Row,
 ) -> Result<(Value, Collation), Error> {
     let answered = answer(arena, id, sql, row, 0)?;
-    Ok((answered.value, answered.collation.unwrap_or_default()))
+    Ok((
+        answered.value,
+        answered.collation.unwrap_or(row.collation()),
+    ))
 }
 
 /// One node.
@@ -164,12 +182,17 @@ fn answer(
             for member in arena.children(list) {
                 list_answers.push(answer(arena, *member, sql, row, deeper)?);
             }
-            Ok(Answer::plain(in_list(&left, &list_answers, negated)))
+            Ok(Answer::plain(in_list(
+                &left,
+                &list_answers,
+                negated,
+                row.collation(),
+            )))
         }
         Node::Cast { value, ty } => {
             let mut inner = answer(arena, value, sql, row, deeper)?;
             let affinity = Affinity::of_type(ty.text(sql));
-            cast(&mut inner.value, affinity);
+            cast(&mut inner.value, affinity, row.encoding());
             inner.affinity = affinity;
             Ok(inner)
         }
@@ -198,34 +221,7 @@ fn answer(
             args,
             distinct,
             star,
-        } => {
-            if distinct || star {
-                // Both belong to an aggregate, which is a later step.
-                return Err(Error::Unsupported);
-            }
-            let mut values = Vec::new();
-            let mut collation = None;
-            for id in arena.children(args) {
-                let argument = answer(arena, *id, sql, row, deeper)?;
-                collation = collation.or(argument.collation);
-                values.push(argument.value);
-            }
-            let function = func::lookup(name.text(sql), values.len())?;
-            if function == Function::Unlikely && values.len() == 2 {
-                // `likelihood(X,Y)` tells the planner how often X holds,
-                // so Y has to be a fraction and has to be written out.
-                let second = arena
-                    .children(args)
-                    .get(1)
-                    .copied()
-                    .ok_or(Error::Malformed)?;
-                if !probability(arena, second, sql) {
-                    return Err(Error::BadProbability);
-                }
-            }
-            let value = func::call(function, &values, collation.unwrap_or_default())?;
-            Ok(Answer::plain(value))
-        }
+        } => called(arena, name, args, distinct, star, sql, row, deeper),
         Node::Like {
             op,
             value,
@@ -240,6 +236,54 @@ fn answer(
         | Node::InSelect { .. }
         | Node::InTable { .. } => Err(Error::Unsupported),
     }
+}
+
+/// `name(args)`, which is a function where this engine has one.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the node's own fields, and the walk the tree is read with"
+)]
+fn called(
+    arena: &Arena,
+    name: crate::ast::Span,
+    args: crate::ast::Range,
+    distinct: bool,
+    star: bool,
+    sql: &[u8],
+    row: &dyn Row,
+    deeper: u32,
+) -> Result<Answer, Error> {
+    if distinct || star {
+        // Both belong to an aggregate, which is a later step.
+        return Err(Error::Unsupported);
+    }
+    let mut values = Vec::new();
+    let mut collation = None;
+    for id in arena.children(args) {
+        let argument = answer(arena, *id, sql, row, deeper)?;
+        collation = collation.or(argument.collation);
+        values.push(argument.value);
+    }
+    let function = func::lookup(name.text(sql), values.len())?;
+    if function == Function::Unlikely && values.len() == 2 {
+        // `likelihood(X,Y)` tells the planner how often X holds,
+        // so Y has to be a fraction and has to be written out.
+        let second = arena
+            .children(args)
+            .get(1)
+            .copied()
+            .ok_or(Error::Malformed)?;
+        if !probability(arena, second, sql) {
+            return Err(Error::BadProbability);
+        }
+    }
+    let value = func::call(
+        function,
+        &values,
+        collation.unwrap_or(row.collation()),
+        row.encoding(),
+    )?;
+    Ok(Answer::plain(value))
 }
 
 /// A constant, with `negated` for the minus sign the parser leaves as a
@@ -460,7 +504,7 @@ fn binary(
         | BinaryOp::Gt
         | BinaryOp::Ge
         | BinaryOp::Is
-        | BinaryOp::IsNot => comparison(op, &left, &right),
+        | BinaryOp::IsNot => comparison(op, &left, &right, row.collation()),
         BinaryOp::Extract | BinaryOp::ExtractText => return Err(Error::NoFunction),
     };
     Ok(Answer::plain(value))
@@ -610,7 +654,7 @@ fn shift(value: i64, count: i64, mut left: bool) -> i64 {
 }
 
 /// The six comparisons, and the two that treat nothing as a value.
-fn comparison(op: BinaryOp, left: &Answer, right: &Answer) -> Value {
+fn comparison(op: BinaryOp, left: &Answer, right: &Answer, default: Collation) -> Value {
     let null_equals = matches!(op, BinaryOp::Is | BinaryOp::IsNot);
     let (mut first, mut second) = (left.value.clone(), right.value.clone());
     let missing = first == Value::Null || second == Value::Null;
@@ -622,7 +666,7 @@ fn comparison(op: BinaryOp, left: &Answer, right: &Answer) -> Value {
     } else {
         let affinity = compare_affinity(left.affinity, right.affinity);
         apply_comparison(&mut first, &mut second, affinity);
-        let collation = left.collation.or(right.collation).unwrap_or_default();
+        let collation = left.collation.or(right.collation).unwrap_or(default);
         let order = compare(&first, &second, collation);
         return Value::Int(i64::from(holds(op, order)));
     };
@@ -675,7 +719,7 @@ fn like(
     if let Some(escape) = escape {
         args.push(answer(arena, escape, sql, row, depth)?.value);
     }
-    let answered = func::call(function, &args, Collation::default())?;
+    let answered = func::call(function, &args, row.collation(), row.encoding())?;
     Ok(Answer::plain(match (negated, logic(&answered)) {
         (_, None) => Value::Null,
         (true, Some(truth)) => Value::Int(i64::from(!truth)),
@@ -701,8 +745,8 @@ fn between(
     let middle = answer(arena, value, sql, row, depth)?;
     let low = answer(arena, low, sql, row, depth)?;
     let high = answer(arena, high, sql, row, depth)?;
-    let above = logic(&comparison(BinaryOp::Ge, &middle, &low));
-    let below = logic(&comparison(BinaryOp::Le, &middle, &high));
+    let above = logic(&comparison(BinaryOp::Ge, &middle, &low, row.collation()));
+    let below = logic(&comparison(BinaryOp::Le, &middle, &high, row.collation()));
     let inside = if above == Some(false) || below == Some(false) {
         Some(false)
     } else {
@@ -717,7 +761,7 @@ fn between(
 
 /// `x IN (a, b)`. An empty list answers false whatever is looked for in
 /// it, nothing included.
-fn in_list(left: &Answer, list: &[Answer], negated: bool) -> Value {
+fn in_list(left: &Answer, list: &[Answer], negated: bool, default: Collation) -> Value {
     if list.is_empty() {
         return Value::Int(i64::from(negated));
     }
@@ -730,7 +774,7 @@ fn in_list(left: &Answer, list: &[Answer], negated: bool) -> Value {
             affinity: left.affinity,
             collation: member.collation,
         };
-        match logic(&comparison(BinaryOp::Eq, left, &against)) {
+        match logic(&comparison(BinaryOp::Eq, left, &against, default)) {
             Some(true) => return Value::Int(i64::from(!negated)),
             Some(false) => {}
             None => unknown = true,
@@ -762,7 +806,12 @@ fn case(
     while let (Some(when), Some(then)) = (children.get(at), children.get(at.saturating_add(1))) {
         let condition = answer(arena, *when, sql, row, depth)?;
         let taken = match &subject {
-            Some(subject) => logic(&comparison(BinaryOp::Eq, subject, &condition)),
+            Some(subject) => logic(&comparison(
+                BinaryOp::Eq,
+                subject,
+                &condition,
+                row.collation(),
+            )),
             None => logic(&condition.value),
         };
         if taken == Some(true) {

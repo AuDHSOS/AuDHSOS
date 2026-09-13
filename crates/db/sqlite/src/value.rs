@@ -17,6 +17,7 @@
 use alloc::vec::Vec;
 
 use crate::fp;
+use crate::header::Encoding;
 use crate::number::{self, Outcome};
 
 /// A value, as an expression computes with it.
@@ -128,6 +129,17 @@ pub enum Collation {
     NoCase,
     /// Byte by byte with trailing spaces ignored.
     Rtrim,
+    /// `BINARY` over text the database keeps in UTF-16, little end
+    /// first.
+    ///
+    /// It is the same collation under the same name, and it answers
+    /// differently, because it is the bytes as the database holds them
+    /// that are compared: with the little end first, `z` — one code
+    /// unit of `007A` — sorts after a character written as the pair
+    /// `D800 DC00`, whose first byte is zero.
+    Binary16Le,
+    /// `BINARY` over text the database keeps in UTF-16, big end first.
+    Binary16Be,
 }
 
 /// The collation a name spells, where it spells one.
@@ -415,14 +427,21 @@ pub fn apply(value: &mut Value, affinity: Affinity) {
 /// Converts the value whatever it costs, which is what `CAST` does.
 ///
 /// This is `sqlite3VdbeMemCast`.
-pub fn cast(value: &mut Value, affinity: Affinity) {
+pub fn cast(value: &mut Value, affinity: Affinity, encoding: Encoding) {
     if *value == Value::Null {
         return;
     }
     match affinity {
         Affinity::None | Affinity::Blob => {
+            // A blob is the bytes as the database holds them, which is
+            // the one place the encoding shows through.
+            let text = matches!(value, Value::Text(_));
             let bytes = take_bytes(value);
-            *value = Value::Blob(bytes);
+            *value = Value::Blob(if text {
+                stored(&bytes, encoding)
+            } else {
+                bytes
+            });
         }
         Affinity::Text => {
             let bytes = take_bytes(value);
@@ -431,6 +450,16 @@ pub fn cast(value: &mut Value, affinity: Affinity) {
         Affinity::Numeric => numerify(value),
         Affinity::Integer => *value = Value::Int(value.to_integer()),
         Affinity::Real => *value = Value::Real(value.to_real()),
+    }
+}
+
+/// Text as the database holds it, which is what a blob made of it is.
+#[must_use]
+pub fn stored(bytes: &[u8], encoding: Encoding) -> Vec<u8> {
+    match encoding {
+        Encoding::Utf8 => bytes.to_vec(),
+        Encoding::Utf16Le => crate::utf8::to_utf16(bytes, false),
+        Encoding::Utf16Be => crate::utf8::to_utf16(bytes, true),
     }
 }
 
@@ -548,6 +577,21 @@ fn integer_against_real(left: i64, right: f64) -> core::cmp::Ordering {
     order(integer_as_real(left), right)
 }
 
+/// Two pieces of text in the order the same two would be in were they
+/// written as UTF-16, byte by byte as the database holds them.
+fn utf16_order(left: &[u8], right: &[u8], big_endian: bool) -> core::cmp::Ordering {
+    utf16_bytes(left, big_endian).cmp(utf16_bytes(right, big_endian))
+}
+
+/// The bytes text is held as, without writing them down.
+fn utf16_bytes(bytes: &[u8], big_endian: bool) -> impl Iterator<Item = u8> + '_ {
+    crate::utf8::units(bytes).flat_map(move |unit| {
+        let high = u8::try_from((unit >> 8) & 0xff).unwrap_or(0);
+        let low = u8::try_from(unit & 0xff).unwrap_or(0);
+        if big_endian { [high, low] } else { [low, high] }
+    })
+}
+
 /// The bytes with trailing spaces dropped.
 fn trimmed(bytes: &[u8]) -> &[u8] {
     let mut end = bytes.len();
@@ -572,5 +616,7 @@ fn collate(left: &[u8], right: &[u8], collation: Collation) -> core::cmp::Orderi
             binary(&fold(left), &fold(right))
         }
         Collation::Rtrim => binary(trimmed(left), trimmed(right)),
+        Collation::Binary16Le => utf16_order(left, right, false),
+        Collation::Binary16Be => utf16_order(left, right, true),
     }
 }
