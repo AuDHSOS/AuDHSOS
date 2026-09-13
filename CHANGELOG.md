@@ -7,6 +7,19 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `tools/sqlite.sh`, which clones SQLite, checks out one release tag, and
+  builds it below `research/`, where `.gitignore` already keeps the other
+  cloned operating systems out of this repository. The reason is reading:
+  a database engine that has been maintained for twenty-five years answers
+  questions about file formats, journaling and page caches that no
+  document does. The default is 3.53.4 and `--version X.Y.Z` picks another
+  tag; `--dir`, `--jobs` and `--clean` are the rest. The clone is shallow
+  and a different tag is fetched the same way, because one commit is all a
+  depth-1 clone carries. Which tag is checked out is read from the tags
+  that point at `HEAD`, not from `git describe`, which returns `release`
+  for these commits. No `tclsh` is needed: SQLite's autosetup builds its
+  own `jimsh`. 07 section 7.3 has it.
+
 - `driver-virtio-blk`, the virtio block device of virtio 5.2 as logic:
   what the registers of one mean, which features it asks for, how a
   request is framed, and the order the device is brought up in. Registers
