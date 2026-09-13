@@ -86,7 +86,7 @@ Each rule is checkable, and each makes a later thing possible.
 | `fp`, `number` | A double as decimal text and back: `sqlite3FpDecode`, the `%f`, `%e` and `%g` conversions it feeds, `sqlite3AtoF`, `sqlite3Atoi64`. | D-142, D-161, Q5 |
 | `value`, `utf8` | Storage classes, affinity, collation, comparison, the three text encodings. | D-143, D-147, Q5 |
 | `eval`, `func`, `agg` | An expression over a row; fifty scalar functions; seven aggregates; the four shapes of statement an expression uses. | D-143, D-144, D-148, D-154, D-160, Q5 |
-| `tree` | The pages of a database being written, a row put in the tree its table begins at with what does not fit on overflow pages, and the balance any key order needs. | D-166, D-167, D-168, Q7 |
+| `tree` | The pages of a database being written, a row put in the tree its table begins at or taken out of it again, the balance any key order needs, and the free list the pages go on. | D-166 to D-169, Q7 |
 | `format` | `format(F,...)` and `printf(F,...)`: the flags, the field width, the precision, and the twenty-three conversions of `sqlite3_str_vappendf`. `unistr(X)` reads the escapes `%#q` writes, and `quote(X)` of text is `%Q` of it. | D-161, Q8 |
 | `db` | A statement answered from a file by walking the sides of its `FROM` once, held to the rowids the `WHERE` leaves each. | D-146, D-149, D-150, D-153, D-158, Q5 |
 
@@ -509,11 +509,11 @@ through the walker; the crate meets D4.
 
 ## 16.21 Q7. Writing
 
-Status: a database whose table is filled in any key order is written
-from nothing and is the file the shell wrote, byte for byte, however
-many pages the table takes and however deep the tree grows; the free
-list, the pointer maps and the transactions are not built.
-Depends on: Q3, Q5. Recorded in D-162 to D-168.
+Status: a table is filled in any key order, emptied again, and filled
+from the pages the delete freed, and the file is the one the shell
+wrote, byte for byte; the pointer maps and the transactions are not
+built.
+Depends on: Q3, Q5. Recorded in D-162 to D-169.
 Size: L.
 
 ### Needs
@@ -539,10 +539,11 @@ Size: L.
 7. Balance a tree a row lands in the middle of: the page and its
    siblings written again, the dividers on the parent, and the balance
    run up to the root. Built.
-8. Join pages a delete has emptied, and keep the free list of the file
-   and the pointer maps.
-9. Run a transaction through the rollback journal in each of its four
-   modes, then through the WAL.
+8. Take a row out again: the overflow chain it ran onto, the pages a
+   delete has emptied, and the free list they go on. Built.
+9. Keep the pointer maps of a file that vacuums itself.
+10. Run a transaction through the rollback journal in each of its four
+    modes, then through the WAL.
 
 ### Done when
 

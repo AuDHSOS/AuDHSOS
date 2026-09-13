@@ -4032,6 +4032,31 @@ writes.
   byte for byte, so the configuration changes the file and not what the
   engine writes into it.
 
+### 6.6.109 A row taken out again (`db-sqlite`)
+
+D-169, document 16 step Q7. `tree::remove`, the free list, and the two
+rules of the pager the file shows.
+
+- `deleted.db` takes every third row out, which evens the leaves out and
+  frees no page; `emptied.db` takes three in four out, which joins
+  leaves and puts ten pages on the free list; `cleared.db` takes every
+  row out, which leaves the root of the table a leaf with no cell.
+- `unchained.db` holds forty rows whose payloads run onto overflow
+  pages, two in three of them taken out again, so the chains go back on
+  the free list.
+- `reused.db` is three statements: four thousand rows, seven in eight
+  taken out, and a thousand put in after that, so the pages the delete
+  freed are the ones the insert takes. It is what shows the two rules
+  the pager keeps — a page freed onto a trunk stays in the file as the
+  transaction found it, and a page the free list gives back in a later
+  transaction reads as noughts.
+- Each is built here from the same statements and is the fixture byte
+  for byte, and so was every one of the four hundred prefixes of
+  `emptied.db` while the port was written.
+- The refusals: a free list asked for page one or for a page the
+  database does not hold, and an overflow chain that turns back on
+  itself.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

@@ -23,6 +23,14 @@ use crate::header::Header;
 use crate::image::MAX_DEPTH;
 use crate::page::{Cell, Kind, Page, Payload, Source, Writer, build, local_len, write_cell};
 
+/// Writes `value` where `at` names a slot of `list`, and writes nothing
+/// where the list is shorter, which no caller of this is.
+fn one<T: Clone>(list: &mut [T], at: usize, value: &T) {
+    for slot in list.iter_mut().skip(at).take(1) {
+        slot.clone_from(value);
+    }
+}
+
 /// The pages of a database being written, page one first.
 pub struct Pages {
     /// Bytes per page.
@@ -31,6 +39,24 @@ pub struct Pages {
     usable: usize,
     /// The pages themselves.
     held: Vec<Vec<u8>>,
+    /// The first trunk page of the free list, or nought, which the
+    /// header holds at offset 32.
+    freelist: u32,
+    /// What a page held when the transaction began, kept for the pages
+    /// the transaction has opened to write.
+    before: Vec<Option<Vec<u8>>>,
+    /// What the file holds for a page a commit left out, which is a page
+    /// freed onto a trunk: `sqlite3PagerDontWrite` keeps it out of every
+    /// commit until the page is written again, so the file and the cache
+    /// part ways until then.
+    skipped: Vec<Option<Vec<u8>>>,
+    /// Which pages this transaction freed, which is `pHasContent`: a
+    /// page the free list gives back comes as noughts unless this
+    /// transaction is the one that put it there.
+    freed: Vec<bool>,
+    /// How many pages the free list holds, which the header holds at
+    /// offset 36.
+    freelist_count: u32,
 }
 
 impl Pages {
@@ -59,6 +85,11 @@ impl Pages {
             page_size,
             usable,
             held: alloc::vec![first],
+            freelist: 0,
+            before: alloc::vec![None],
+            skipped: alloc::vec![None],
+            freed: alloc::vec![false],
+            freelist_count: 0,
         })
     }
 
@@ -74,25 +105,199 @@ impl Pages {
         self.usable
     }
 
-    /// A page of `kind` added at the end, and the number it has.
+    /// A page of `kind`, taken off the free list where the list holds
+    /// one and added at the end of the file where it does not, and the
+    /// number the page has.
+    ///
+    /// The body of a page off the free list keeps the bytes it held,
+    /// because `zeroPage` writes the header and nothing else.
     ///
     /// # Errors
     ///
-    /// [`Error::Overrun`] where the page is too small for the kind's own
-    /// header.
-    pub fn add(&mut self, kind: Kind) -> Result<u32, Error> {
-        let number = self.count().saturating_add(1);
-        let page =
-            build(kind, number, self.page_size, self.usable, &[], None).ok_or(Error::Overrun)?;
-        self.held.push(page);
+    /// [`Error::Page`] where the free list names a page the database
+    /// does not hold, and [`Error::Overrun`] where the page is too small
+    /// for the kind's own header.
+    pub fn add(&mut self, kind: Kind, nearby: u32) -> Result<u32, Error> {
+        let number = self.plain(nearby)?;
+        self.keep(number);
+        let usable = u32::try_from(self.usable).unwrap_or(0);
+        let at = size(u64::from(number)).saturating_sub(1);
+        let bytes = self.held.get_mut(at).ok_or(Error::Page(number))?;
+        Writer::fresh(bytes, number, usable, kind).zero(kind);
         Ok(number)
     }
 
     /// A page of no kind at all, which is what an overflow page is, and
     /// the number it has.
-    pub fn add_plain(&mut self) -> u32 {
-        self.held.push(alloc::vec![0u8; self.page_size]);
-        self.count()
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Page`] where the free list names a page the database
+    /// does not hold.
+    pub fn add_plain(&mut self, nearby: u32) -> Result<u32, Error> {
+        self.plain(nearby)
+    }
+
+    /// One page with nothing written on it, which is `allocateBtreePage`
+    /// for a caller that asks for no page in particular: the first leaf
+    /// of the first trunk of the free list, the trunk itself where the
+    /// trunk holds no leaf, and a page at the end of the file where the
+    /// list is empty.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Page`] where the free list names a page the database
+    /// does not hold.
+    fn plain(&mut self, nearby: u32) -> Result<u32, Error> {
+        let Some(number) = self.take(nearby)? else {
+            self.held.push(alloc::vec![0u8; self.page_size]);
+            self.before.push(None);
+            self.skipped.push(None);
+            self.freed.push(false);
+            return Ok(self.count());
+        };
+        self.keep(number);
+        // `PAGER_GET_NOCONTENT`: a page the free list gives back is
+        // noughts, because nothing of what it held is needed, unless
+        // this transaction is the one that freed it, which the pager
+        // has the bytes of in hand.
+        let at = size(u64::from(number)).saturating_sub(1);
+        if !self.freed.get(at).copied().unwrap_or(false) {
+            for page in self.held.iter_mut().skip(at).take(1) {
+                page.fill(0);
+            }
+        }
+        Ok(number)
+    }
+
+    /// Commits what the transaction wrote and begins the next: a page
+    /// the transaction freed onto a trunk keeps in the file what it held
+    /// when the transaction began.
+    pub fn begin(&mut self) {
+        self.before.fill(None);
+        self.freed.fill(false);
+    }
+
+    /// Opens page `number` to write, which is `sqlite3PagerWrite`: what
+    /// the page holds now is kept, so that freeing it can leave it out of
+    /// the commit, and a page an earlier commit left out is written
+    /// again.
+    fn keep(&mut self, number: u32) {
+        let at = size(u64::from(number)).saturating_sub(1);
+        let held = self.held.get(at).cloned();
+        one(&mut self.skipped, at, &None);
+        for slot in self.before.iter_mut().skip(at).take(1) {
+            if slot.is_none() {
+                slot.clone_from(&held);
+            }
+        }
+    }
+
+    /// The page the free list gives up, or nothing where the list is
+    /// empty.
+    fn take(&mut self, nearby: u32) -> Result<Option<u32>, Error> {
+        let held = self.freelist_count;
+        if held == 0 {
+            return Ok(None);
+        }
+        self.freelist_count = held.saturating_sub(1);
+        let trunk = self.freelist;
+        let leaves = self.word(trunk, 4)?;
+        if leaves == 0 {
+            // A trunk with no leaf of its own is the page.
+            self.freelist = self.word(trunk, 0)?;
+            return Ok(Some(trunk));
+        }
+        // The leaf nearest the page the caller named, which keeps a
+        // tree it grows out of pages that lie near each other.
+        let slot = |index: u32| size(u64::from(index)).saturating_mul(4).saturating_add(8);
+        let mut closest = 0;
+        if nearby > 0 {
+            let mut dist = self.word(trunk, slot(0))?.abs_diff(nearby);
+            for index in 1..leaves {
+                let other = self.word(trunk, slot(index))?.abs_diff(nearby);
+                if other < dist {
+                    closest = index;
+                    dist = other;
+                }
+            }
+        }
+        let number = self.word(trunk, slot(closest))?;
+        // The last leaf takes the place of the one that was taken, which
+        // is what `allocateBtreePage` does to leave the array whole.
+        let last = self.word(trunk, slot(leaves.saturating_sub(1)))?;
+        self.put(trunk, slot(closest), &last.to_be_bytes());
+        self.put(trunk, 4, &leaves.saturating_sub(1).to_be_bytes());
+        Ok(Some(number))
+    }
+
+    /// One page put on the free list, which is `freePage2`: a leaf of
+    /// the first trunk where that trunk has room, and the new first
+    /// trunk where it has not.
+    ///
+    /// Nothing of the page itself is written where the page becomes a
+    /// leaf, so a page the free list holds keeps the bytes it held.
+    ///
+    /// The list this walks is one this crate wrote, so the checks the C
+    /// library makes against a corrupt one are not written here, which
+    /// D-164 records the reason for.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Page`] for page one, which no free list holds, and for a
+    /// page the database does not hold.
+    pub fn release(&mut self, number: u32) -> Result<(), Error> {
+        if number < 2 || number > self.count() {
+            return Err(Error::Page(number));
+        }
+        let held = self.freelist_count;
+        self.freelist_count = held.saturating_add(1);
+        let trunk = self.freelist;
+        if held != 0 {
+            let leaves = self.word(trunk, 4)?;
+            let most = u32::try_from(self.usable.saturating_div(4)).unwrap_or(0);
+            if leaves < most.saturating_sub(8) {
+                let at = size(u64::from(leaves)).saturating_mul(4).saturating_add(8);
+                self.put(trunk, 4, &leaves.saturating_add(1).to_be_bytes());
+                self.put(trunk, at, &number.to_be_bytes());
+                self.skip(number);
+                one(
+                    &mut self.freed,
+                    size(u64::from(number)).saturating_sub(1),
+                    &true,
+                );
+                return Ok(());
+            }
+        }
+        // The page becomes the trunk the list begins at, naming the one
+        // that began it.
+        self.put(number, 0, &trunk.to_be_bytes());
+        self.put(number, 4, &0_u32.to_be_bytes());
+        self.freelist = number;
+        Ok(())
+    }
+
+    /// Leaves page `number` out of what the commit writes, which is
+    /// `sqlite3PagerDontWrite`: the file keeps what the page held when
+    /// the transaction began.
+    fn skip(&mut self, number: u32) {
+        let at = size(u64::from(number)).saturating_sub(1);
+        let was = self
+            .before
+            .get(at)
+            .and_then(Clone::clone)
+            .or_else(|| self.held.get(at).cloned());
+        one(&mut self.skipped, at, &was);
+    }
+
+    /// Four bytes of a page, big-endian.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Page`] for a page the database does not hold, and
+    /// [`Error::Overrun`] where the four bytes are not on it.
+    fn word(&self, number: u32, at: usize) -> Result<u32, Error> {
+        crate::bytes::u32_at(self.bytes(number)?, at).ok_or(Error::Overrun)
     }
 
     /// One page, to read.
@@ -114,6 +319,7 @@ impl Pages {
     /// whatever [`Writer::open`] refuses the page with.
     pub fn writer(&mut self, number: u32) -> Result<Writer<'_>, Error> {
         let usable = u32::try_from(self.usable).unwrap_or(0);
+        self.keep(number);
         let at = size(u64::from(number))
             .checked_sub(1)
             .ok_or(Error::Page(0))?;
@@ -176,6 +382,7 @@ impl Pages {
     /// a page they have just added, so the number is one the database
     /// holds.
     fn put(&mut self, number: u32, at: usize, bytes: &[u8]) {
+        self.keep(number);
         let index = size(u64::from(number)).saturating_sub(1);
         for page in self.held.iter_mut().skip(index).take(1) {
             for (slot, byte) in page.iter_mut().skip(at).zip(bytes) {
@@ -185,24 +392,41 @@ impl Pages {
     }
 
     /// The file the pages make, with the header written into the first
-    /// hundred bytes of page one.
+    /// hundred bytes of page one. The free list of the header is the one
+    /// the pages hold, whatever the caller's header says.
     #[must_use]
     pub fn written(&self, header: &Header) -> Vec<u8> {
-        crate::image::write(header, &self.held)
+        let mut header = *header;
+        header.freelist = self.freelist;
+        header.freelist_pages = self.freelist_count;
+        let pages: Vec<Vec<u8>> = self
+            .held
+            .iter()
+            .enumerate()
+            .map(
+                |(at, page)| match self.skipped.get(at).and_then(Option::as_ref) {
+                    Some(bytes) => bytes.clone(),
+                    None => page.clone(),
+                },
+            )
+            .collect();
+        crate::image::write(&header, &pages)
     }
 }
 
 /// What of a payload stays on the page, with the rest written onto
 /// overflow pages.
-fn spilled<'a>(pages: &mut Pages, payload: &'a [u8]) -> (&'a [u8], Option<u32>) {
+fn spilled<'a>(pages: &mut Pages, payload: &'a [u8]) -> Result<(&'a [u8], Option<u32>), Error> {
     let local = local_len(payload.len(), pages.usable(), Kind::LeafTable);
     let held = payload.get(..local).unwrap_or_default();
     let mut rest = payload.get(local..).unwrap_or_default();
     if rest.is_empty() {
-        return (held, None);
+        return Ok((held, None));
     }
     let span = pages.usable().saturating_sub(4);
-    let first = pages.add_plain();
+    // Each page of the chain is taken near the one before it, which is
+    // the page `fillInCell` names when it asks for the next.
+    let first = pages.add_plain(0)?;
     let mut number = first;
     // The chain is walked once, and every page but the last is filled,
     // so the whole of it is O(n) in the bytes that run on.
@@ -213,11 +437,11 @@ fn spilled<'a>(pages: &mut Pages, payload: &'a [u8]) -> (&'a [u8], Option<u32>) 
         if rest.is_empty() {
             break;
         }
-        let next = pages.add_plain();
+        let next = pages.add_plain(number)?;
         pages.put(number, 0, &next.to_be_bytes());
         number = next;
     }
-    (held, Some(first))
+    Ok((held, Some(first)))
 }
 
 /// Puts one row in the table tree that begins at `root`.
@@ -231,7 +455,7 @@ fn spilled<'a>(pages: &mut Pages, payload: &'a [u8]) -> (&'a [u8], Option<u32>) 
 /// one that frees a page; [`Error::Depth`] for a tree deeper than this
 /// crate walks; and whatever reading a page of it refuses.
 pub fn insert(pages: &mut Pages, root: u32, rowid: i64, record: &[u8]) -> Result<(), Error> {
-    let (local, overflow) = spilled(pages, record);
+    let (local, overflow) = spilled(pages, record)?;
     let cell = write_cell(&Cell::TableLeaf {
         rowid,
         payload: Payload {
@@ -245,7 +469,60 @@ pub fn insert(pages: &mut Pages, root: u32, rowid: i64, record: &[u8]) -> Result
     if pages.writer(leaf)?.insert(at, &cell)? {
         return Ok(());
     }
-    balance(pages, &path, &cell)
+    balance(pages, &path, alloc::vec![(at, cell)])
+}
+
+/// Takes the row of `rowid` out of the table tree that begins at `root`,
+/// and answers whether the tree held one.
+///
+/// The overflow pages of the row go on the free list, and a leaf left
+/// more than two thirds empty is balanced against its siblings, which is
+/// what joins the pages a delete has emptied.
+///
+/// # Errors
+///
+/// [`Error::Depth`] for a tree deeper than this crate walks, and
+/// whatever reading or writing a page of it refuses.
+pub fn remove(pages: &mut Pages, root: u32, rowid: i64) -> Result<bool, Error> {
+    let path = place(pages, root, rowid)?;
+    let (leaf, at) = *path.last().ok_or(Error::Depth)?;
+    let page = pages.page(leaf)?;
+    if at >= page.cells() {
+        return Ok(false);
+    }
+    let (key, payload) = page.row(at)?;
+    if key != rowid {
+        return Ok(false);
+    }
+    let overflow = payload.overflow;
+    // `clearCell` before `dropCell`, which is the order the pages come
+    // onto the free list in.
+    clear(pages, overflow)?;
+    pages.writer(leaf)?.remove(at)?;
+    balance(pages, &path, Vec::new())?;
+    Ok(true)
+}
+
+/// The overflow chain a cell ran onto put back on the free list, which
+/// is `clearCell`. One chain is O(n) in the pages it holds.
+///
+/// # Errors
+///
+/// [`Error::Overflow`] for a chain that reaches more pages than the
+/// database holds, and whatever freeing a page of it refuses.
+fn clear(pages: &mut Pages, first: Option<u32>) -> Result<(), Error> {
+    let mut number = first;
+    let mut read = 0_u32;
+    while let Some(page) = number {
+        read = read.saturating_add(1);
+        if read > pages.count() {
+            return Err(Error::Overflow(page));
+        }
+        let next = crate::bytes::u32_at(pages.bytes(page)?, 0).ok_or(Error::Overrun)?;
+        pages.release(page)?;
+        number = (next != 0).then_some(next);
+    }
+    Ok(())
 }
 
 /// A cell a page holds that does not lie on it, which is `apOvfl` and
@@ -261,19 +538,28 @@ type Spill = (usize, Vec<u8>);
 /// This is `balance`: the root of a tree of one page grows a child under
 /// it, a cell at the end of the right-most page grows a sibling beside
 /// it, and every other cell is the general balance.
-fn balance(pages: &mut Pages, path: &[(u32, usize)], cell: &[u8]) -> Result<(), Error> {
-    let (_, at) = *path.last().ok_or(Error::Depth)?;
+fn balance(pages: &mut Pages, path: &[(u32, usize)], mut spill: Vec<Spill>) -> Result<(), Error> {
     let mut stack = path.to_vec();
-    let mut spill: Vec<Spill> = alloc::vec![(at, cell.to_vec())];
+    // A page more than two thirds empty is balanced as well, so that a
+    // delete joins pages rather than leaving a tree of empty ones.
+    let least = pages.usable().saturating_mul(2).saturating_div(3);
     // One turn per level, from the leaf to the root, so a tree of depth
     // d costs O(d) balances.
     loop {
-        let (page, _) = *stack.last().ok_or(Error::Depth)?;
+        let (page, at) = *stack.last().ok_or(Error::Depth)?;
+        if spill.is_empty() && pages.writer(page)?.free()? <= least {
+            return Ok(());
+        }
         let over = stack
             .len()
             .checked_sub(2)
             .and_then(|level| stack.get(level));
         let Some(&(parent, above)) = over else {
+            if spill.is_empty() {
+                // A root has no sibling to even out against, however
+                // empty it is.
+                return Ok(());
+            }
             // A tree of one page: the root keeps its place in the file,
             // so the cells of the root move to a child and the root
             // becomes the interior page above it. The root holds no cell
@@ -293,11 +579,8 @@ fn balance(pages: &mut Pages, path: &[(u32, usize)], cell: &[u8]) -> Result<(), 
             let (_, bytes) = spill.first().ok_or(Error::Balance)?;
             return quick(pages, parent, page, bytes);
         }
-        spill = balance_nonroot(pages, parent, above, &spill)?;
+        spill = balance_nonroot(pages, parent, above, &spill, stack.len() == 2)?;
         stack.pop();
-        if spill.is_empty() {
-            return Ok(());
-        }
     }
 }
 
@@ -309,7 +592,7 @@ pub(crate) fn deepen(pages: &mut Pages, root: u32) -> Result<u32, Error> {
     if !kind.is_table() || root == crate::image::SCHEMA_ROOT {
         return Err(Error::Balance);
     }
-    let child = pages.add(kind)?;
+    let child = pages.add(kind, root)?;
     // `copyNodeContent`: the child takes the header and the pointer
     // array of the root, and the content area of the root, which it can
     // because the two pages begin at the same byte. The bytes between
@@ -344,7 +627,7 @@ pub(crate) fn quick(pages: &mut Pages, parent: u32, page: u32, cell: &[u8]) -> R
     let Cell::TableLeaf { rowid, .. } = pages.page(page)?.cell(last)? else {
         return Err(Error::Balance);
     };
-    let sibling = pages.add(Kind::LeafTable)?;
+    let sibling = pages.add(Kind::LeafTable, 0)?;
     if !pages.writer(sibling)?.insert(0, cell)? {
         return Err(Error::Balance);
     }
@@ -637,6 +920,62 @@ fn packing(
     (k, counts)
 }
 
+/// The pages a balance writes: the siblings it read again, and one more
+/// for every page the cells now take, in the order their numbers run.
+///
+/// A page that changes place in the file takes what is on it with it, so
+/// where every cell of the two lies changes as well.
+///
+/// # Errors
+///
+/// Whatever adding a page or moving one refuses.
+fn allocate(
+    pages: &mut Pages,
+    taken: &Siblings,
+    cells: &mut [Held],
+    old_at: &mut Row<usize>,
+    k: usize,
+    kind: Kind,
+) -> Result<Vec<u32>, Error> {
+    let mut new: Vec<u32> = Vec::new();
+    // A page the balance adds is taken near the one before it, and the
+    // first near the left-most of the siblings.
+    let mut near = taken.old.first().copied().unwrap_or(0);
+    for index in 0..k {
+        let number = if let Some(number) = taken.old.get(index) {
+            *number
+        } else {
+            old_at.set(index, cells.len());
+            near = pages.add(kind, near)?;
+            near
+        };
+        new.push(number);
+    }
+    for index in 0..k.saturating_sub(1) {
+        let mut least = index;
+        for other in index.saturating_add(1)..k {
+            if number_at(&new, other) < number_at(&new, least) {
+                least = other;
+            }
+        }
+        if least != index {
+            let (one, other) = (number_at(&new, index), number_at(&new, least));
+            pages.swap(one, other)?;
+            for cell in cells.iter_mut() {
+                if let Some((number, _)) = &mut cell.from {
+                    if *number == one {
+                        *number = other;
+                    } else if *number == other {
+                        *number = one;
+                    }
+                }
+            }
+            new.swap(index, least);
+        }
+    }
+    Ok(new)
+}
+
 /// The page number at `index` among the pages a balance writes.
 fn number_at(new: &[u32], index: usize) -> u32 {
     new.get(index).copied().unwrap_or(0)
@@ -776,19 +1115,23 @@ fn write_pages(pages: &mut Pages, cells: &[Held], plan: &Plan<'_>) -> Result<(),
 /// of it, and the dividers between them, written again so that every
 /// cell fits and the parent names them, which is `balance_nonroot`.
 ///
+/// `topmost` says the parent is the root of its tree, which is the one
+/// parent that may be left with no cell at all and then takes the
+/// content of its only child.
+///
 /// Answers the dividers the parent would not hold, which the caller
 /// balances the parent for.
 ///
 /// # Errors
 ///
-/// [`Error::Balance`] where the cells would fit on fewer pages than they
-/// lie on, which frees a page and is the free list this crate does not
-/// write yet, and where a sibling is not of the kind the first one is.
+/// [`Error::Balance`] where a sibling is not of the kind the first one
+/// is, and whatever reading or writing one of the pages refuses.
 fn balance_nonroot(
     pages: &mut Pages,
     parent: u32,
     at: usize,
     spill: &[Spill],
+    topmost: bool,
 ) -> Result<Vec<Spill>, Error> {
     let usable = pages.usable();
     let held_by_parent = pages.page(parent)?.cells();
@@ -823,48 +1166,7 @@ fn balance_nonroot(
         counts.set(index, old_at.get(index));
     }
     let (k, counts) = packing(&cells, sizes, counts, old_count, room, leaf_data);
-    if k < old_count {
-        // Fewer pages than there were frees one, which needs the free
-        // list of the file.
-        return Err(Error::Balance);
-    }
-    // The pages themselves: the old ones again, and one more for each
-    // page the cells now take, in the order their numbers run.
-    let mut new: Vec<u32> = Vec::new();
-    for index in 0..k {
-        let number = if let Some(number) = taken.old.get(index) {
-            *number
-        } else {
-            old_at.set(index, cells.len());
-            pages.add(kind)?
-        };
-        new.push(number);
-    }
-    for index in 0..k.saturating_sub(1) {
-        let mut least = index;
-        for other in index.saturating_add(1)..k {
-            if number_at(&new, other) < number_at(&new, least) {
-                least = other;
-            }
-        }
-        if least != index {
-            // The two pages change places in the file, so what is on
-            // them changes with them, and so does where every cell of
-            // them lies.
-            let (one, other) = (number_at(&new, index), number_at(&new, least));
-            pages.swap(one, other)?;
-            for cell in &mut cells {
-                if let Some((number, _)) = &mut cell.from {
-                    if *number == one {
-                        *number = other;
-                    } else if *number == other {
-                        *number = one;
-                    }
-                }
-            }
-            new.swap(index, least);
-        }
-    }
+    let new = allocate(pages, &taken, &mut cells, &mut old_at, k, kind)?;
     let last = number_at(&new, k.saturating_sub(1));
     // The pointer the last of the pages hangs from, which is written
     // before the dividers are, because inserting a cell moves no other
@@ -875,9 +1177,19 @@ fn balance_nonroot(
         pages.writer(parent)?.point_child(taken.next, last)?;
     }
     // The right pointer of the last of the old pages is the right
-    // pointer of the last of the new ones.
+    // pointer of the last of the new ones. Where the balance writes
+    // more pages than it read, that page is one of the new ones, whose
+    // number the sort above may have changed; where it writes fewer, it
+    // is one of the pages the balance is about to free.
     if !leaf && old_count != k {
-        let from = number_at(&new, old_count.saturating_sub(1));
+        let from = if k > old_count {
+            number_at(&new, old_count.saturating_sub(1))
+        } else {
+            *taken
+                .old
+                .get(old_count.saturating_sub(1))
+                .ok_or(Error::Balance)?
+        };
         let child = pages.page(from)?.right_most().ok_or(Error::Balance)?;
         pages.writer(last)?.point(child)?;
     }
@@ -903,7 +1215,46 @@ fn balance_nonroot(
         old_count,
         leaf_data,
     };
-    write_pages(pages, &cells, &plan).map(|()| out)
+    write_pages(pages, &cells, &plan)?;
+    // A root left with no cell at all takes the content of its only
+    // child, which is the balance that makes a tree one level shorter.
+    // A root on page one begins a hundred bytes in and is the balance
+    // this crate does not write, so the root always has room for what
+    // its child holds.
+    let first = number_at(&new, 0);
+    if topmost && pages.page(parent)?.cells() == 0 {
+        shallower(pages, parent, first)?;
+    }
+    // The pages the balance no longer needs go on the free list.
+    for number in taken.old.iter().copied().skip(k) {
+        pages.release(number)?;
+    }
+    Ok(out)
+}
+
+/// A root that holds no cell given the content of its only child, which
+/// is `balance-shallower`: the child is moved together first, because a
+/// root on page one has a hundred bytes fewer and the space has to be in
+/// one piece at the front.
+///
+/// # Errors
+///
+/// Whatever moving the child together or freeing it refuses.
+fn shallower(pages: &mut Pages, root: u32, child: u32) -> Result<(), Error> {
+    pages.writer(child)?.defragment(None)?;
+    let usable = pages.usable();
+    let page = pages.page(child)?;
+    let kind = page.kind();
+    let array_end = kind
+        .header_len()
+        .saturating_add(page.cells().saturating_mul(2));
+    let data = page.content_start();
+    let bytes = pages.bytes(child)?.to_vec();
+    let header =
+        usize::from(root == crate::image::SCHEMA_ROOT).saturating_mul(crate::header::HEADER_LEN);
+    pages.put(root, header, bytes.get(..array_end).ok_or(Error::Overrun)?);
+    pages.put(root, data, bytes.get(data..usable).ok_or(Error::Overrun)?);
+    pages.release(child)
 }
 
 /// A count of bytes as the signed number the packing loops keep.

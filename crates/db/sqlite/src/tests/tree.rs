@@ -72,7 +72,7 @@ fn a_database_written_from_a_schema_and_its_rows_is_the_file_the_shell_wrote() {
     // rows of `small.db`, which `sh tools/sqlite-fixtures.sh` wrote with
     // two statements, so the file counts two changes.
     let mut pages = Pages::new(4096, 0).unwrap();
-    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
     let sql = "CREATE TABLE t(a INTEGER, b TEXT, c REAL, d BLOB)";
     let row = schema_row("t", 2, sql, Encoding::Utf8);
     insert(&mut pages, 1, 1, &row).unwrap();
@@ -141,7 +141,7 @@ fn a_database_whose_text_is_utf16_is_written_as_the_shell_wrote_it() {
     // are both in the encoding the file names.
     let encoding = Encoding::Utf16Le;
     let mut pages = Pages::new(4096, 0).unwrap();
-    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
     let row = schema_row("u", 2, "CREATE TABLE u(t TEXT)", encoding);
     insert(&mut pages, 1, 1, &row).unwrap();
     for (at, text) in ["abc", "äöü"].iter().enumerate() {
@@ -187,7 +187,7 @@ fn a_database_of_three_tables_is_written_as_the_shell_wrote_it() {
         alloc::vec![[text("ONE"), Value::Int(10)], [text("two"), Value::Int(20)],],
     ];
     for (at, (name, sql)) in statements.iter().enumerate() {
-        let root = pages.add(Kind::LeafTable).unwrap();
+        let root = pages.add(Kind::LeafTable, 0).unwrap();
         assert_eq!(root, u32::try_from(at).unwrap() + 2);
         let schema = schema_row(name, i64::from(root), sql, encoding);
         let rowid = i64::try_from(at).unwrap() + 1;
@@ -210,7 +210,7 @@ fn a_row_longer_than_a_page_runs_onto_the_overflow_pages_the_shell_wrote() {
     // thousand letters);` which is `overflow.db`: four thousand of the
     // record stay on the leaf and the rest is four overflow pages.
     let mut pages = Pages::new(4096, 0).unwrap();
-    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
     let row = schema_row("big", 2, "CREATE TABLE big(t TEXT)", Encoding::Utf8);
     insert(&mut pages, 1, 1, &row).unwrap();
     let text = Value::Text(alloc::vec![b'x'; 18_000]);
@@ -229,9 +229,9 @@ fn a_row_goes_on_the_leaf_the_descent_of_the_tree_finds() {
     // names goes on the child it points at, and a key above it goes on
     // the page every key above the last cell lives in.
     let mut pages = Pages::new(4096, 0).unwrap();
-    assert_eq!(pages.add(Kind::InteriorTable).unwrap(), 2);
-    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 3);
-    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 4);
+    assert_eq!(pages.add(Kind::InteriorTable, 0).unwrap(), 2);
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 3);
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 4);
     {
         let mut writer = pages.writer(2).unwrap();
         let cell = write_cell(&Cell::TableInterior {
@@ -293,7 +293,7 @@ fn a_tree_that_is_not_a_table_and_a_tree_deeper_than_the_walk_are_refused() {
     let record = write(&[Value::Int(1)], &[Affinity::None], 4);
     // A tree of index pages holds no key a row belongs under.
     let mut pages = Pages::new(512, 0).unwrap();
-    let root = pages.add(Kind::LeafIndex).unwrap();
+    let root = pages.add(Kind::LeafIndex, 0).unwrap();
     let cell = write_cell(&Cell::IndexLeaf {
         payload: Payload {
             local: b"\x02\x09",
@@ -312,7 +312,7 @@ fn a_tree_that_is_not_a_table_and_a_tree_deeper_than_the_walk_are_refused() {
     let mut pages = Pages::new(512, 0).unwrap();
     let mut above = 0;
     for _ in 0..34 {
-        let number = pages.add(Kind::InteriorTable).unwrap();
+        let number = pages.add(Kind::InteriorTable, 0).unwrap();
         if above != 0 {
             point(&mut pages, above, number);
         }
@@ -328,7 +328,7 @@ fn a_table_that_outgrows_one_page_is_the_tree_the_shell_wrote() {
     // on fills, the root grows a child under it, and every leaf after
     // that is a sibling with a divider on the root.
     let mut pages = Pages::new(512, 0).unwrap();
-    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
     let row = schema_row("t", 2, "CREATE TABLE t(n INTEGER, s TEXT)", Encoding::Utf8);
     insert(&mut pages, 1, 1, &row).unwrap();
     let columns = [Affinity::Integer, Affinity::Text];
@@ -379,14 +379,14 @@ fn what_the_two_halves_of_the_balance_refuse() {
     use crate::tree::{deepen, quick};
     // A tree of index pages has no key a divider names.
     let mut pages = Pages::new(512, 0).unwrap();
-    let index = pages.add(Kind::LeafIndex).unwrap();
+    let index = pages.add(Kind::LeafIndex, 0).unwrap();
     assert_eq!(deepen(&mut pages, index), Err(Error::Balance));
     // The schema's own tree begins on the page the database header is
     // on, so it cannot become the page above a child.
     assert_eq!(deepen(&mut pages, 1), Err(Error::Balance));
     // A page with no cell has no largest key to divide on.
-    let empty = pages.add(Kind::LeafTable).unwrap();
-    let parent = pages.add(Kind::InteriorTable).unwrap();
+    let empty = pages.add(Kind::LeafTable, 0).unwrap();
+    let parent = pages.add(Kind::InteriorTable, 0).unwrap();
     let cell = write_cell(&Cell::TableLeaf {
         rowid: 1,
         payload: Payload {
@@ -415,7 +415,7 @@ fn what_the_two_halves_of_the_balance_refuse() {
     );
     assert_eq!(quick(&mut pages, parent, index, &cell), Err(Error::Balance));
     // A cell of more than a page holds is one no sibling takes.
-    let leaf = pages.add(Kind::LeafTable).unwrap();
+    let leaf = pages.add(Kind::LeafTable, 0).unwrap();
     assert!(pages.writer(leaf).unwrap().insert(0, &cell).unwrap());
     let big = write_cell(&Cell::TableLeaf {
         rowid: 2,
@@ -428,7 +428,7 @@ fn what_the_two_halves_of_the_balance_refuse() {
     assert_eq!(quick(&mut pages, parent, leaf, &big), Err(Error::Balance));
     // A parent with no room for the divider is one the tree cannot grow
     // under either.
-    let full = pages.add(Kind::InteriorTable).unwrap();
+    let full = pages.add(Kind::InteriorTable, 0).unwrap();
     let mut at = 0;
     while pages
         .writer(full)
@@ -453,7 +453,7 @@ fn a_table_filled_by_a_key_that_jumps_about_is_the_tree_the_shell_wrote() {
     // middle of a page every time, so that the page and its siblings are
     // written again rather than appended to.
     let mut pages = Pages::new(512, 0).unwrap();
-    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
     let row = schema_row("t", 2, "CREATE TABLE t(n INTEGER, s TEXT)", Encoding::Utf8);
     insert(&mut pages, 1, 1, &row).unwrap();
     for number in 1..=400_i64 {
@@ -471,7 +471,7 @@ fn a_tree_that_grows_a_third_level_is_the_tree_the_shell_wrote() {
     // balanced against each other, which runs the balance up from the
     // leaf to the root.
     let mut pages = Pages::new(512, 0).unwrap();
-    assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
     let row = schema_row("t", 2, "CREATE TABLE t(n INTEGER, s TEXT)", Encoding::Utf8);
     insert(&mut pages, 1, 1, &row).unwrap();
     for number in 1..=4000_i64 {
@@ -486,7 +486,7 @@ fn a_tree_that_grows_a_third_level_is_the_tree_the_shell_wrote() {
 fn a_swap_of_pages_the_database_does_not_hold_is_refused() {
     use crate::error::Error;
     let mut pages = Pages::new(512, 0).unwrap();
-    pages.add(Kind::LeafTable).unwrap();
+    pages.add(Kind::LeafTable, 0).unwrap();
     assert_eq!(pages.swap(1, 3), Err(Error::Page(0)));
     assert_eq!(pages.swap(3, 1), Err(Error::Page(0)));
     assert_eq!(pages.swap(0, 1), Err(Error::Page(0)));
@@ -522,9 +522,9 @@ fn a_balance_over_siblings_of_two_kinds_is_refused() {
     // A parent whose right-most child belongs to an index tree, which
     // the balance of the leaf beside it reads as a sibling.
     let mut pages = Pages::new(512, 0).unwrap();
-    let parent = pages.add(Kind::InteriorTable).unwrap();
-    let leaf = pages.add(Kind::LeafTable).unwrap();
-    let other = pages.add(Kind::LeafIndex).unwrap();
+    let parent = pages.add(Kind::InteriorTable, 0).unwrap();
+    let leaf = pages.add(Kind::LeafTable, 0).unwrap();
+    let other = pages.add(Kind::LeafIndex, 0).unwrap();
     let divider = write_cell(&Cell::TableInterior {
         child: leaf,
         rowid: 10_000,
@@ -539,47 +539,13 @@ fn a_balance_over_siblings_of_two_kinds_is_refused() {
 }
 
 #[test]
-fn a_balance_that_would_free_a_page_is_refused() {
-    use crate::error::Error;
-    use crate::page::{Cell, Payload, write_cell};
-    // Three siblings holding between them less than three pages of
-    // cells, so that the balance writes fewer pages than it read.
-    let mut pages = Pages::new(512, 0).unwrap();
-    let parent = pages.add(Kind::InteriorTable).unwrap();
-    let one = pages.add(Kind::LeafTable).unwrap();
-    let two = pages.add(Kind::LeafTable).unwrap();
-    let three = pages.add(Kind::LeafTable).unwrap();
-    for (at, (child, rowid)) in [(one, 100_i64), (two, 200)].into_iter().enumerate() {
-        let divider = write_cell(&Cell::TableInterior { child, rowid });
-        assert!(pages.writer(parent).unwrap().insert(at, &divider).unwrap());
-    }
-    point(&mut pages, parent, three);
-    for (number, rowid) in [(one, 50_i64), (two, 150)] {
-        let cell = write_cell(&Cell::TableLeaf {
-            rowid,
-            payload: Payload {
-                local: b"\x02\x09",
-                total: 2,
-                overflow: None,
-            },
-        });
-        assert!(pages.writer(number).unwrap().insert(0, &cell).unwrap());
-    }
-    fill(&mut pages, three, 210, 10, 100);
-    // A row the right-most sibling has no room for, which is what asks
-    // for the balance.
-    let row = write(&[Value::Blob(alloc::vec![7u8; 90])], &[Affinity::None], 4);
-    assert_eq!(insert(&mut pages, parent, 215, &row), Err(Error::Balance));
-}
-
-#[test]
 fn the_write_path_under_every_configuration_is_the_file_the_shell_wrote() {
     // The matrix of document 16, section 16.11, over writing: the same
     // four hundred rows under every page size, every encoding and every
     // reserved tail, each held to the file the shell wrote under it.
     for (name, page_size, reserved, encoding, fixture) in crate::tests::CONFIGURED {
         let mut pages = Pages::new(page_size, reserved).unwrap();
-        assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
+        assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
         let sql = "CREATE TABLE t(n INTEGER, s TEXT)";
         insert(&mut pages, 1, 1, &schema_row("t", 2, sql, encoding)).unwrap();
         for number in 1..=400_i64 {
@@ -605,4 +571,152 @@ fn the_write_path_under_every_configuration_is_the_file_the_shell_wrote() {
             crate::bytes::size(u64::from(page_size)),
         );
     }
+}
+
+/// The four hundred rows of `shuffled.db` in a table on page two, with
+/// the schema row of that table on page one.
+fn filled(page_size: u32) -> Pages {
+    let mut pages = Pages::new(page_size, 0).unwrap();
+    pages.add(Kind::LeafTable, 0).unwrap();
+    let sql = "CREATE TABLE t(n INTEGER, s TEXT)";
+    let row = schema_row("t", 2, sql, Encoding::Utf8);
+    insert(&mut pages, 1, 1, &row).unwrap();
+    for number in 1..=400_i64 {
+        let rowid = (number * 137) % 401;
+        insert(&mut pages, 2, rowid, &tall_row(number)).unwrap();
+    }
+    pages.begin();
+    pages
+}
+
+#[test]
+fn rows_taken_out_again_leave_the_file_the_shell_left() {
+    use crate::tree::remove;
+    // Three deletes over the rows of `shuffled.db`: one that only evens
+    // the leaves out, one that frees pages, and one that takes every row
+    // out. Each is one statement of the shell, so the file counts three
+    // changes.
+    /// One delete: the file it leaves, and which keys it takes out.
+    type Delete = (&'static str, &'static [u8], fn(i64) -> bool);
+    let cases: [Delete; 3] = [
+        ("deleted.db", crate::tests::DELETED, |rowid| rowid % 3 == 0),
+        ("emptied.db", crate::tests::EMPTIED, |rowid| rowid % 4 != 0),
+        ("cleared.db", crate::tests::CLEARED, |_| true),
+    ];
+    for (name, fixture, goes) in cases {
+        let mut pages = filled(512);
+        for rowid in 1..=400_i64 {
+            if goes(rowid) {
+                assert!(remove(&mut pages, 2, rowid).unwrap());
+            }
+        }
+        let written = pages.written(&header(512, Encoding::Utf8, 3));
+        same(name, &written, fixture, 512);
+    }
+}
+
+#[test]
+fn a_row_that_ran_onto_overflow_pages_gives_them_back() {
+    use crate::tree::remove;
+    // The rows of `unchained.db`: forty of them, each longer than the
+    // one before, so that the later ones run onto chains of pages the
+    // delete has to give back.
+    let mut pages = Pages::new(512, 0).unwrap();
+    pages.add(Kind::LeafTable, 0).unwrap();
+    let sql = "CREATE TABLE t(n INTEGER, s TEXT)";
+    insert(&mut pages, 1, 1, &schema_row("t", 2, sql, Encoding::Utf8)).unwrap();
+    for number in 1..=40_i64 {
+        let text = "x".repeat(usize::try_from(number).unwrap() * 60);
+        let row = write(
+            &[Value::Int(number), Value::Text(text.into_bytes())],
+            &[Affinity::Integer, Affinity::Text],
+            4,
+        );
+        insert(&mut pages, 2, (number * 17) % 41, &row).unwrap();
+    }
+    pages.begin();
+    for rowid in 1..=40_i64 {
+        if rowid % 3 != 0 {
+            assert!(remove(&mut pages, 2, rowid).unwrap());
+        }
+    }
+    let written = pages.written(&header(512, Encoding::Utf8, 3));
+    same("unchained.db", &written, crate::tests::UNCHAINED, 512);
+}
+
+#[test]
+fn a_key_the_table_does_not_hold_takes_no_row_out() {
+    use crate::tree::remove;
+    let mut pages = filled(512);
+    assert!(!remove(&mut pages, 2, 0).unwrap());
+    assert!(!remove(&mut pages, 2, 401).unwrap());
+    assert!(remove(&mut pages, 2, 200).unwrap());
+    assert!(!remove(&mut pages, 2, 200).unwrap());
+}
+
+#[test]
+fn the_pages_a_delete_freed_are_the_ones_the_next_insert_takes() {
+    use crate::tree::remove;
+    // The three statements of `reused.db`, each its own transaction, so
+    // the file counts four changes: the schema, four thousand rows,
+    // seven in eight taken out again, and a thousand put in after that.
+    let mut pages = Pages::new(512, 0).unwrap();
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
+    let sql = "CREATE TABLE t(n INTEGER, s TEXT)";
+    insert(&mut pages, 1, 1, &schema_row("t", 2, sql, Encoding::Utf8)).unwrap();
+    for number in 1..=4000_i64 {
+        insert(&mut pages, 2, (number * 1373) % 4201, &tall_row(number)).unwrap();
+    }
+    pages.begin();
+    for rowid in 1..=4200_i64 {
+        if rowid % 8 != 0 {
+            remove(&mut pages, 2, rowid).unwrap();
+        }
+    }
+    pages.begin();
+    for number in 1..=1000_i64 {
+        let text = alloc::format!("more {number}");
+        let row = write(
+            &[Value::Int(number), Value::Text(text.into_bytes())],
+            &[Affinity::Integer, Affinity::Text],
+            4,
+        );
+        insert(&mut pages, 2, 5000 + (number * 379) % 1009, &row).unwrap();
+    }
+    let written = pages.written(&header(512, Encoding::Utf8, 4));
+    same("reused.db", &written, crate::tests::REUSED, 512);
+}
+
+#[test]
+fn what_the_free_list_refuses() {
+    use crate::error::Error;
+    let mut pages = Pages::new(512, 0).unwrap();
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
+    // Page one holds the header of the database and is on no free list,
+    // and a page the database does not hold is on none either.
+    assert_eq!(pages.release(1), Err(Error::Page(1)));
+    assert_eq!(pages.release(9), Err(Error::Page(9)));
+    assert_eq!(pages.release(2), Ok(()));
+    // The page comes back off the list as noughts, because the pager
+    // reads nothing for a page nothing needs.
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
+    assert_eq!(pages.page(2).unwrap().cells(), 0);
+}
+
+#[test]
+fn an_overflow_chain_that_turns_back_on_itself_is_refused() {
+    use crate::error::Error;
+    use crate::tree::remove;
+    // A row of eight hundred bytes, which runs onto a chain of overflow
+    // pages, with the first of them pointed back at itself.
+    let mut pages = Pages::new(512, 0).unwrap();
+    assert_eq!(pages.add(Kind::LeafTable, 0).unwrap(), 2);
+    let row = write(&[Value::Blob(alloc::vec![7u8; 2000])], &[Affinity::None], 4);
+    insert(&mut pages, 2, 1, &row).unwrap();
+    let last = pages.count();
+    assert!(last > 3);
+    let mut bytes = pages.bytes(last).unwrap().to_vec();
+    bytes[0..4].copy_from_slice(&last.to_be_bytes());
+    pages.put_page(last, &bytes).unwrap();
+    assert_eq!(remove(&mut pages, 2, 1), Err(Error::Overflow(last)));
 }

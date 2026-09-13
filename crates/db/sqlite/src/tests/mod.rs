@@ -51,6 +51,27 @@ pub(super) const SHUFFLED: &[u8] = include_bytes!("fixtures/shuffled.db");
 /// interior pages of that level against each other.
 pub(super) const DEEP: &[u8] = include_bytes!("fixtures/deep.db");
 
+/// The same four hundred rows with every third one taken out again,
+/// which evens the leaves out and frees no page.
+pub(super) const DELETED: &[u8] = include_bytes!("fixtures/deleted.db");
+
+/// The same four hundred rows with three in four taken out again, which
+/// joins leaves and puts the pages it frees on the free list.
+pub(super) const EMPTIED: &[u8] = include_bytes!("fixtures/emptied.db");
+
+/// The same four hundred rows with every one taken out again, which
+/// leaves the root of the table a leaf with no cell on it.
+pub(super) const CLEARED: &[u8] = include_bytes!("fixtures/cleared.db");
+
+/// Forty rows whose payloads run onto overflow pages, with two in three
+/// taken out again, which frees the chains they ran onto.
+pub(super) const UNCHAINED: &[u8] = include_bytes!("fixtures/unchained.db");
+
+/// Four thousand rows with seven in eight taken out again and a thousand
+/// put in after that, so that the pages the delete freed are the ones
+/// the insert takes.
+pub(super) const REUSED: &[u8] = include_bytes!("fixtures/reused.db");
+
 /// The matrix of document 16, section 16.11, over the write path: the
 /// same four hundred rows under every page size, every encoding and
 /// every reserved tail the shell writes, each with the page size, the

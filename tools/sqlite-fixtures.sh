@@ -137,6 +137,30 @@ rm -f "$out/deep.db"
 "$sqlite" "$out/deep.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<4000) INSERT INTO t(rowid,n,s) SELECT (i*1373)%4201, i, 'row ' || i FROM c;"
 printf '%s\t%s bytes\n' deep.db "$(wc -c <"$out/deep.db" | tr -d ' ')"
 
+# Rows taken out again: one delete that only evens the leaves out, one
+# that empties enough of them to put pages on the free list, one that
+# takes every row out, and one over rows whose payload runs onto
+# overflow pages.
+rows400="CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<400) INSERT INTO t(rowid,n,s) SELECT (i*137)%401, i, 'row ' || i FROM c;"
+for pair in "deleted.db:rowid%3=0" "emptied.db:rowid%4!=0" "cleared.db:rowid>0"; do
+    name="${pair%%:*}"
+    where="${pair#*:}"
+    rm -f "$out/$name"
+    "$sqlite" "$out/$name" "PRAGMA page_size=512; $rows400 DELETE FROM t WHERE $where;"
+    printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
+done
+
+rm -f "$out/unchained.db"
+"$sqlite" "$out/unchained.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<40) INSERT INTO t(rowid,n,s) SELECT (i*17)%41, i, replace(hex(zeroblob(i*30)),'0','x') FROM c; DELETE FROM t WHERE rowid%3!=0;"
+printf '%s\t%s bytes\n' unchained.db "$(wc -c <"$out/unchained.db" | tr -d ' ')"
+
+# Rows taken out and put in again, so that the pages the delete freed
+# are the ones the insert takes. Four thousand rows over 512-byte pages
+# leave a free list of two trunks.
+rm -f "$out/reused.db"
+"$sqlite" "$out/reused.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<4000) INSERT INTO t(rowid,n,s) SELECT (i*1373)%4201, i, 'row ' || i FROM c; DELETE FROM t WHERE rowid%8!=0; WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<1000) INSERT INTO t(rowid,n,s) SELECT 5000+(i*379)%1009, i, 'more ' || i FROM c;"
+printf '%s\t%s bytes\n' reused.db "$(wc -c <"$out/reused.db" | tr -d ' ')"
+
 # The matrix of document 16, section 16.11, over the write path: the
 # same four hundred rows put in by a key that jumps about, under every
 # page size, every encoding and every reserved tail the shell writes.

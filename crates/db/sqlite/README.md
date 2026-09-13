@@ -68,7 +68,7 @@ payload that overflows costs one page read per link of its chain.
 
 ## What is not here yet
 
-A table tree is written from nothing and a row lands anywhere in it, so
-what is missing of writing is the free list, the pointer maps, the
-transactions through the journal and the log, and the index b-trees
-beyond reading their pages.
+A table tree is written from nothing, a row lands anywhere in it, and a
+row taken out gives its pages back to the free list. What is missing of
+writing is the pointer maps, the transactions through the journal and
+the log, and the index b-trees beyond reading their pages.

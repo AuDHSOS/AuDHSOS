@@ -536,11 +536,32 @@ impl<'a> Writer<'a> {
         let kind = Page::parse(bytes, number, usable)?.kind();
         Ok(Writer {
             number,
-            start: if number == 1 { HEADER_LEN } else { 0 },
+            start: Writer::begins(number),
             usable: size(u64::from(usable)),
             kind,
             bytes,
         })
+    }
+
+    /// A page to write whatever its bytes say now, which is what
+    /// `zeroPage` is called on: a page off the free list, or one at the
+    /// end of the file.
+    #[must_use]
+    pub fn fresh(bytes: &'a mut [u8], number: u32, usable: u32, kind: Kind) -> Self {
+        let start = Writer::begins(number);
+        Writer {
+            number,
+            start,
+            usable: size(u64::from(usable)),
+            kind,
+            bytes,
+        }
+    }
+
+    /// Where the b-tree header of a page begins, which is a hundred
+    /// bytes in on page one, where the database header is.
+    const fn begins(number: u32) -> usize {
+        if number == 1 { HEADER_LEN } else { 0 }
     }
 
     /// The page as a reader sees it.
@@ -779,12 +800,13 @@ impl<'a> Writer<'a> {
     ///
     /// [`Error::FreeBlock`] where the page does not count up, and
     /// whatever reading a cell refuses.
-    pub(crate) fn defragment(&mut self, most_fragments: usize) -> Result<(), Error> {
+    pub(crate) fn defragment(&mut self, most_fragments: Option<usize>) -> Result<(), Error> {
         let header = self.start;
         let cells = self.cells();
         let first = self.array().saturating_add(cells.saturating_mul(2));
         let free = self.free()?;
-        let top = if self.get8(header.saturating_add(7)) <= most_fragments {
+        let fragments = self.get8(header.saturating_add(7));
+        let top = if most_fragments.is_some_and(|most| fragments <= most) {
             self.closed()?
         } else {
             None
@@ -925,7 +947,7 @@ impl<'a> Writer<'a> {
         if gap.saturating_add(2).saturating_add(want) > top {
             let free = self.free()?;
             let most = free.saturating_sub(want.saturating_add(2)).min(4);
-            self.defragment(most)?;
+            self.defragment(Some(most))?;
             top = self.content();
             if gap.saturating_add(2).saturating_add(want) > top {
                 return Err(Error::FreeBlock);
