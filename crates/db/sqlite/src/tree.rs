@@ -64,7 +64,56 @@ pub struct Pages {
     /// How many pages the free list holds, which the header holds at
     /// offset 36.
     freelist_count: u32,
+    /// Whether the file keeps pointer maps, which is what a file that
+    /// vacuums itself needs to say which page names each other page.
+    vacuum: bool,
 }
+
+/// What a pointer map says one page is, which is `PTRMAP_ROOTPAGE` and
+/// the four after it in `src/btree.c`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Point {
+    /// The root of a tree, which no page names.
+    Root,
+    /// A page on the free list, which no page names.
+    Free,
+    /// The first page of an overflow chain, named by the page holding
+    /// the cell the chain belongs to.
+    Head,
+    /// A later page of an overflow chain, named by the page before it.
+    Tail,
+    /// A page of a tree that is not its root, named by its parent.
+    Branch,
+}
+
+impl Point {
+    /// What a pointer-map byte says, or nothing where it says nothing a
+    /// page can be.
+    const fn of(byte: u8) -> Option<Self> {
+        match byte {
+            1 => Some(Point::Root),
+            2 => Some(Point::Free),
+            3 => Some(Point::Head),
+            4 => Some(Point::Tail),
+            5 => Some(Point::Branch),
+            _ => None,
+        }
+    }
+
+    /// The byte a pointer map holds for it.
+    const fn byte(self) -> u8 {
+        match self {
+            Point::Root => 1,
+            Point::Free => 2,
+            Point::Head => 3,
+            Point::Tail => 4,
+            Point::Branch => 5,
+        }
+    }
+}
+
+/// How many bytes one pointer-map entry takes.
+const ENTRY: usize = 5;
 
 impl Pages {
     /// A database of one page: page one, which is the leaf the schema
@@ -99,7 +148,132 @@ impl Pages {
             origin: 1,
             journalled: Vec::new(),
             freelist_count: 0,
+            vacuum: false,
         })
+    }
+
+    /// Keeps pointer maps from here on, which is what `PRAGMA
+    /// auto_vacuum` turns on before the first table is written.
+    pub const fn vacuums(&mut self) {
+        self.vacuum = true;
+    }
+
+    /// The pointer-map page that carries the entry for `number`, which
+    /// is `ptrmapPageno`, and nought where the file keeps no maps or
+    /// where `number` is page one.
+    #[must_use]
+    pub fn map_of(&self, number: u32) -> u32 {
+        if !self.vacuum || number < 2 {
+            return 0;
+        }
+        map_page(self.usable, number)
+    }
+
+    /// Whether `number` is a pointer-map page rather than a page a tree
+    /// or a chain may take.
+    #[must_use]
+    pub fn is_map(&self, number: u32) -> bool {
+        self.map_of(number) == number
+    }
+
+    /// What the pointer map says about `number`, which is `ptrmapGet`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Page`] where the map page lies outside the file, and
+    /// [`Error::PageKind`] for an entry no kind of page answers.
+    pub fn point_of(&self, number: u32) -> Result<(Point, u32), Error> {
+        let map = self.map_of(number);
+        if map == 0 {
+            return Err(Error::Page(number));
+        }
+        let at =
+            size(u64::from(number.saturating_sub(map).saturating_sub(1))).saturating_mul(ENTRY);
+        let entry = self
+            .bytes(map)?
+            .get(at..at.saturating_add(ENTRY))
+            .ok_or(Error::Page(map))?;
+        let byte = entry.first().copied().unwrap_or(0);
+        let kind = Point::of(byte).ok_or(Error::PageKind(byte))?;
+        Ok((kind, crate::bytes::u32_at(entry, 1).ok_or(Error::Overrun)?))
+    }
+
+    /// Writes what the pointer map says about every page the cells of
+    /// `number` name: the child of each cell of a page that has
+    /// children, the page to its right, and the first page of the chain
+    /// each row that runs onto one begins.
+    ///
+    /// This is `ptrmapPut` of `insertCell` and of `balance_nonroot`
+    /// together. The C library writes an entry only where it cannot
+    /// tell the entry already stands; writing every one of them leaves
+    /// the same file, because a map page is opened only where the entry
+    /// it holds changes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what reading the page or its cells refused.
+    pub fn point_cells(&mut self, number: u32) -> Result<(), Error> {
+        if !self.vacuum {
+            return Ok(());
+        }
+        let mut named: Vec<(u32, Point)> = Vec::new();
+        {
+            let page = self.page(number)?;
+            if page.kind().is_interior() {
+                for index in 0..page.cells() {
+                    named.push((page.child(index)?, Point::Branch));
+                }
+                named.extend(page.right_most().map(|child| (child, Point::Branch)));
+            } else {
+                for index in 0..page.cells() {
+                    named.extend(page.row(index)?.1.overflow.map(|head| (head, Point::Head)));
+                }
+            }
+        }
+        for (child, kind) in named {
+            self.point(child, kind, number)?;
+        }
+        Ok(())
+    }
+
+    /// The first page from `number` on that no pointer map lies at,
+    /// which is the page `fillInCell` asks for when it takes the next
+    /// page of a chain.
+    #[must_use]
+    pub fn after_maps(&self, number: u32) -> u32 {
+        let mut number = number.saturating_add(1);
+        while self.is_map(number) {
+            number = number.saturating_add(1);
+        }
+        number
+    }
+
+    /// Writes what the pointer map says about `number`, which is
+    /// `ptrmapPut`: the page is left alone where it already says this,
+    /// so a transaction that changes nothing opens no map page.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Page`] where the map page lies outside the file.
+    pub fn point(&mut self, number: u32, kind: Point, parent: u32) -> Result<(), Error> {
+        let map = self.map_of(number);
+        if map == 0 {
+            return Ok(());
+        }
+        let at =
+            size(u64::from(number.saturating_sub(map).saturating_sub(1))).saturating_mul(ENTRY);
+        let [one, two, three, four] = parent.to_be_bytes();
+        let entry = [kind.byte(), one, two, three, four];
+        let held = self
+            .bytes(map)?
+            .get(at..at.saturating_add(ENTRY))
+            .ok_or(Error::Page(map))?;
+        if held == entry {
+            return Ok(());
+        }
+        self.keep(map);
+        self.put(map, at, &entry);
+        Ok(())
     }
 
     /// How many pages the database holds.
@@ -166,11 +340,15 @@ impl Pages {
     /// does not hold.
     fn plain(&mut self, nearby: u32) -> Result<u32, Error> {
         let Some(number) = self.take(nearby)? else {
-            self.held.push(alloc::vec![0u8; self.page_size]);
-            self.before.push(None);
-            self.skipped.push(None);
-            self.freed.push(false);
-            return Ok(self.count());
+            // `allocateBtreePage`: a page at the end of the file that
+            // falls where a pointer map lies makes that map page and the
+            // caller takes the page after it.
+            let mut number = self.grow();
+            if self.is_map(number) {
+                self.keep(number);
+                number = self.grow();
+            }
+            return Ok(number);
         };
         self.keep(number);
         // `PAGER_GET_NOCONTENT`: a page the free list gives back is
@@ -184,6 +362,137 @@ impl Pages {
             }
         }
         Ok(number)
+    }
+
+    /// Moves the pages at the end of the file into the free pages below
+    /// them and shortens the file, which is `autoVacuumCommit` for a
+    /// file that does not vacuum a step at a time.
+    ///
+    /// The free list is dropped whole, because every page on it either
+    /// took a page from the end or lies past the end the file is cut
+    /// back to.
+    ///
+    /// Each page is moved once and its parent written once, so the whole
+    /// of it is O(n) in the pages the file gives up.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Balance`] where the free list runs out before the pages
+    /// past the end do, and whatever reading or writing a page refuses.
+    pub fn vacuum_commit(&mut self) -> Result<(), Error> {
+        let origin = self.count();
+        let free = self.freelist_count;
+        if !self.vacuum || free == 0 {
+            return Ok(());
+        }
+        let last = final_size(self.usable, origin, free);
+        for number in (last.saturating_add(1)..=origin).rev() {
+            self.vacuum_step(last, number)?;
+        }
+        self.keep(1);
+        self.freelist = 0;
+        self.freelist_count = 0;
+        self.held.truncate(size(u64::from(last)));
+        self.before.truncate(size(u64::from(last)));
+        self.skipped.truncate(size(u64::from(last)));
+        self.freed.truncate(size(u64::from(last)));
+        Ok(())
+    }
+
+    /// One page past the end the file is cut back to moved into a free
+    /// page below it, which is `incrVacuumStep` at a commit.
+    fn vacuum_step(&mut self, last: u32, number: u32) -> Result<(), Error> {
+        if self.is_map(number) || self.freelist_count == 0 {
+            return Ok(());
+        }
+        let (kind, parent) = self.point_of(number)?;
+        match kind {
+            // A free page past the end is dropped with the end, and the
+            // free list is dropped whole afterwards.
+            Point::Free => return Ok(()),
+            Point::Root => return Err(Error::Page(number)),
+            Point::Head | Point::Tail | Point::Branch => {}
+        }
+        // The free pages are taken in turn until one lies below the end
+        // the file is cut back to. A page past that end is one the file
+        // gives up, so the free list runs out only where the end was
+        // counted wrong.
+        let mut into = last.saturating_add(1);
+        while into > last {
+            if self.freelist_count == 0 {
+                return Err(Error::Balance);
+            }
+            into = self.plain(0)?;
+        }
+        self.relocate(number, kind, parent, into)
+    }
+
+    /// One page written where another lay, with every page that names it
+    /// and every page it names written again, which is `relocatePage`.
+    fn relocate(&mut self, from: u32, kind: Point, parent: u32, into: u32) -> Result<(), Error> {
+        let bytes = self.bytes(from)?.to_vec();
+        self.keep(into);
+        self.put_page(into, &bytes)?;
+        if kind == Point::Branch {
+            self.point_cells(into)?;
+        } else {
+            let next = crate::bytes::u32_at(&bytes, 0).ok_or(Error::Overrun)?;
+            if next != 0 {
+                self.point(next, Point::Tail, into)?;
+            }
+        }
+        self.repoint(parent, from, into, kind)?;
+        self.point(into, kind, parent)
+    }
+
+    /// The pointer on `parent` that named `from` written to name `into`,
+    /// which is `modifyPagePointer`.
+    fn repoint(&mut self, parent: u32, from: u32, into: u32, kind: Point) -> Result<(), Error> {
+        if kind == Point::Tail {
+            self.put(parent, 0, &into.to_be_bytes());
+            return Ok(());
+        }
+        let at = {
+            let page = self.page(parent)?;
+            let mut found = None;
+            for index in 0..page.cells() {
+                if kind == Point::Head {
+                    let (rowid, payload) = page.row(index)?;
+                    if payload.overflow != Some(from) {
+                        continue;
+                    }
+                    let head =
+                        crate::bytes::varint_len(u64::try_from(payload.total).unwrap_or(u64::MAX))
+                            .saturating_add(crate::bytes::varint_len(rowid.cast_unsigned()));
+                    found = Some(
+                        page.cell_offset(index)?
+                            .saturating_add(head)
+                            .saturating_add(payload.local.len()),
+                    );
+                    break;
+                }
+                if page.child(index)? == from {
+                    found = Some(page.cell_offset(index)?);
+                    break;
+                }
+            }
+            match found {
+                Some(at) => at,
+                // No cell names it, so the page to the right does.
+                None => page.kind().header_len().saturating_sub(4),
+            }
+        };
+        self.put(parent, at, &into.to_be_bytes());
+        Ok(())
+    }
+
+    /// One more page at the end of the file, and the number it has.
+    fn grow(&mut self) -> u32 {
+        self.held.push(alloc::vec![0u8; self.page_size]);
+        self.before.push(None);
+        self.skipped.push(None);
+        self.freed.push(false);
+        self.count()
     }
 
     /// Whether the transaction has opened any page to write, which is
@@ -291,6 +600,7 @@ impl Pages {
         // one writes page one.
         self.keep(1);
         self.freelist_count = held.saturating_add(1);
+        self.point(number, Point::Free, 0)?;
         let trunk = self.freelist;
         if held != 0 {
             let leaves = self.word(trunk, 4)?;
@@ -418,7 +728,9 @@ impl Pages {
         if self.page(number)?.free()? < cell.len().saturating_add(2) {
             return Ok(false);
         }
-        self.writer(number)?.insert(at, cell)
+        let put = self.writer(number)?.insert(at, cell)?;
+        self.point_cells(number)?;
+        Ok(put)
     }
 
     /// Writes a whole page, which is what a caller that built one out of
@@ -557,6 +869,45 @@ impl Pages {
     }
 }
 
+/// How many pages a file of `origin` pages with `free` of them free is
+/// cut back to, which is `finalDbSize`.
+///
+/// The count of map pages the file gives up is taken with the wrapping
+/// the C library takes it with, because `free` is fewer than `origin`
+/// and the subtraction is over unsigned numbers there as here.
+///
+/// `finalDbSize` steps the answer back past a pointer-map page it lands
+/// on. The count of map pages given up is what makes it land past the
+/// last of them, so no page size, no file length and no free list
+/// reaches that step, and D4 has an unreachable branch deleted rather
+/// than exempted.
+pub(crate) fn final_size(usable: usize, origin: u32, free: u32) -> u32 {
+    let entries = u32::try_from(usable.saturating_div(ENTRY))
+        .unwrap_or(1)
+        .max(1);
+    let maps = free
+        .wrapping_sub(origin)
+        .wrapping_add(map_page(usable, origin))
+        .wrapping_add(entries)
+        .checked_div(entries)
+        .unwrap_or(0);
+    origin.saturating_sub(free).saturating_sub(maps)
+}
+
+/// The pointer-map page that carries the entry for `number` over pages
+/// of `usable` bytes, which is `ptrmapPageno` of `src/btree.c`.
+///
+/// One map page carries one entry per five of its usable bytes and one
+/// more for itself, so the map pages lie at page two and every that many
+/// pages after it. A file of a gibibyte or more holds the lock page as
+/// well, which this crate does not write and so does not step over.
+pub(crate) fn map_page(usable: usize, number: u32) -> u32 {
+    let span = u32::try_from(usable.saturating_div(ENTRY)).unwrap_or(0);
+    let span = span.saturating_add(1);
+    let which = number.saturating_sub(2).checked_div(span).unwrap_or(0);
+    which.saturating_mul(span).saturating_add(2)
+}
+
 /// What of a payload stays on the page, with the rest written onto
 /// overflow pages.
 fn spilled<'a>(pages: &mut Pages, payload: &'a [u8]) -> Result<(&'a [u8], Option<u32>), Error> {
@@ -568,8 +919,13 @@ fn spilled<'a>(pages: &mut Pages, payload: &'a [u8]) -> Result<(&'a [u8], Option
     }
     let span = pages.usable().saturating_sub(4);
     // Each page of the chain is taken near the one before it, which is
-    // the page `fillInCell` names when it asks for the next.
-    let first = pages.add_plain(0)?;
+    // the page `fillInCell` names when it asks for the next, stepped
+    // past every pointer map on the way.
+    let first = pages.add_plain(pages.after_maps(0))?;
+    // The first page of a chain is written into the map with no page
+    // naming it, because the cell it belongs to is not placed yet;
+    // `insertCell` writes the page that holds the cell over it.
+    pages.point(first, Point::Head, 0)?;
     let mut number = first;
     // The chain is walked once, and every page but the last is filled,
     // so the whole of it is O(n) in the bytes that run on.
@@ -580,7 +936,8 @@ fn spilled<'a>(pages: &mut Pages, payload: &'a [u8]) -> Result<(&'a [u8], Option
         if rest.is_empty() {
             break;
         }
-        let next = pages.add_plain(number)?;
+        let next = pages.add_plain(pages.after_maps(number))?;
+        pages.point(next, Point::Tail, number)?;
         pages.put(number, 0, &next.to_be_bytes());
         number = next;
     }
@@ -838,6 +1195,8 @@ pub(crate) fn deepen(pages: &mut Pages, root: u32) -> Result<u32, Error> {
     let mut above = pages.writer(root)?;
     above.zero(kind.interior());
     above.point(child)?;
+    pages.point(child, Point::Branch, root)?;
+    pages.point_cells(child)?;
     Ok(child)
 }
 
@@ -863,7 +1222,9 @@ pub(crate) fn quick(pages: &mut Pages, parent: u32, page: u32, cell: &[u8]) -> R
     if !pages.put_cell(parent, cells, &divider)? {
         return Err(Error::Balance);
     }
-    pages.writer(parent)?.point(sibling)
+    pages.writer(parent)?.point(sibling)?;
+    pages.point(sibling, Point::Branch, parent)?;
+    pages.point_cells(sibling)
 }
 
 /// The largest key the table tree at `root` holds, or nothing where the
@@ -1471,6 +1832,13 @@ fn balance_nonroot(
         leaf_data,
     };
     write_pages(pages, &cells, &plan)?;
+    // Every page the balance wrote names other pages again, so the
+    // pointer maps are written again for the parent and for each of the
+    // siblings.
+    pages.point_cells(parent)?;
+    for number in &new {
+        pages.point_cells(*number)?;
+    }
     // A root left with no cell at all takes the content of its only
     // child, which is the balance that makes a tree one level shorter.
     // A root on page one begins a hundred bytes in and is the balance
@@ -1509,6 +1877,7 @@ fn shallower(pages: &mut Pages, root: u32, child: u32) -> Result<(), Error> {
         usize::from(root == crate::image::SCHEMA_ROOT).saturating_mul(crate::header::HEADER_LEN);
     pages.put(root, header, bytes.get(..array_end).ok_or(Error::Overrun)?);
     pages.put(root, data, bytes.get(data..usable).ok_or(Error::Overrun)?);
+    pages.point_cells(root)?;
     pages.release(child)
 }
 

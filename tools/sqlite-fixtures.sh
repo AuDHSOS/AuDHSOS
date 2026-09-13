@@ -195,6 +195,27 @@ rm -f "$out/keyed.db"
     "UPDATE t SET rowid=rowid+10 WHERE a=2;"
 printf '%s\t%s bytes\n' keyed.db "$(wc -c <"$out/keyed.db" | tr -d ' ')"
 
+# The auto-vacuum dimension of document 16, section 16.11, over the write
+# path: the same rows under both settings, chains that cross the second
+# pointer-map page, free pages a file that vacuums a step at a time
+# keeps, and the pages a file that vacuums itself whole moves down and
+# gives up at the commit.
+chained="CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<40) INSERT INTO t(rowid,n,s) SELECT (i*17)%41, i, replace(hex(zeroblob(i*30)),'0','x') FROM c;"
+for case in "v-full.db:full:$rows400" \
+    "v-incremental.db:incremental:$rows400" \
+    "v-chained.db:full:$chained" \
+    "v-freed.db:incremental:$rows400 DELETE FROM t WHERE rowid%4!=0;" \
+    "v-moved.db:full:$rows400 DELETE FROM t WHERE rowid%4!=0;" \
+    "v-moved-chained.db:full:$chained DELETE FROM t WHERE rowid%3!=0;"; do
+    name="${case%%:*}"
+    rest="${case#*:}"
+    mode="${rest%%:*}"
+    sql="${rest#*:}"
+    rm -f "$out/$name"
+    "$sqlite" "$out/$name" "PRAGMA page_size=512; PRAGMA auto_vacuum=$mode; $sql"
+    printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
+done
+
 rm -f "$out/unchained.db"
 "$sqlite" "$out/unchained.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<40) INSERT INTO t(rowid,n,s) SELECT (i*17)%41, i, replace(hex(zeroblob(i*30)),'0','x') FROM c; DELETE FROM t WHERE rowid%3!=0;"
 printf '%s\t%s bytes\n' unchained.db "$(wc -c <"$out/unchained.db" | tr -d ' ')"

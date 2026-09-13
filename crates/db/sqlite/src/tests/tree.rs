@@ -1454,3 +1454,163 @@ fn a_statement_run_in_logging_mode_writes_the_log_the_shell_wrote() {
     // The file is the one the pragma left, whatever the log holds.
     same("logging.db", &writer.written(), crate::tests::LOGGING, 512);
 }
+
+/// The forty rows whose payloads run onto overflow chains, put in by
+/// one statement that names the key of each.
+fn sql_of_chained() -> alloc::string::String {
+    use core::fmt::Write as _;
+    let mut sql = alloc::string::String::from("INSERT INTO t(rowid,n,s) VALUES ");
+    for number in 1..=40_i64 {
+        if number > 1 {
+            sql.push(',');
+        }
+        let wide: alloc::string::String =
+            core::iter::repeat_n('x', usize::try_from(number.saturating_mul(60)).unwrap_or(0))
+                .collect();
+        let _ = write!(sql, "({},{},'{}')", (number * 17) % 41, number, wide);
+    }
+    sql
+}
+
+#[test]
+fn the_pointer_maps_a_file_that_vacuums_itself_keeps_are_the_ones_the_shell_wrote() {
+    use crate::change::Writer;
+    // The auto-vacuum dimension of document 16, section 16.11: page two
+    // is the first pointer map, so the first table takes page three,
+    // and every page a tree or a chain holds is named in a map. A file
+    // that vacuums itself whole moves the pages at its end into the
+    // free pages below them at the commit and is cut back; a file that
+    // vacuums a step at a time keeps the free list instead.
+    for (name, incremental, chained, taken, fixture) in crate::tests::VACUUMING {
+        let mut writer = Writer::vacuuming(512, 0, Encoding::Utf8, incremental).unwrap();
+        writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+        let rows = if chained {
+            sql_of_chained()
+        } else {
+            sql_of_rows()
+        };
+        writer.run(rows.as_bytes()).unwrap();
+        if !taken.is_empty() {
+            writer.run(taken.as_bytes()).unwrap();
+        }
+        same(name, &writer.written(), fixture, 512);
+    }
+}
+
+#[test]
+fn the_page_a_pointer_map_lies_at_is_the_one_the_c_library_counts() {
+    use crate::tree::map_page;
+    // `ptrmapPageno` over pages of 512 usable bytes: one map page
+    // carries one entry per five bytes and one more for itself, so the
+    // maps lie at page two and every hundred and third page after it.
+    assert_eq!(map_page(512, 2), 2);
+    assert_eq!(map_page(512, 3), 2);
+    assert_eq!(map_page(512, 104), 2);
+    assert_eq!(map_page(512, 105), 105);
+    assert_eq!(map_page(512, 106), 105);
+    // A page size the reserved tail cuts into moves them.
+    assert_eq!(map_page(480, 98), 2);
+    assert_eq!(map_page(480, 99), 99);
+}
+
+#[test]
+fn a_chain_steps_past_the_page_a_pointer_map_lies_at() {
+    let mut pages = Pages::new(512, 0).unwrap();
+    // A file that keeps no pointer maps steps past none.
+    assert_eq!(pages.after_maps(104), 105);
+    assert!(!pages.is_map(105));
+    pages.vacuums();
+    assert_eq!(pages.after_maps(1), 2 + 1);
+    assert_eq!(pages.after_maps(103), 104);
+    assert_eq!(pages.after_maps(104), 106);
+    assert!(pages.is_map(105));
+}
+
+#[test]
+fn what_a_pointer_map_says_about_a_page_reads_back() {
+    use crate::tree::Point;
+    let mut pages = Pages::new(512, 0).unwrap();
+    pages.vacuums();
+    // Page two is the map, page three the root of the first tree.
+    for _ in 0..4 {
+        pages.add(Kind::LeafTable, 0).unwrap();
+    }
+    for (number, kind, parent) in [
+        (3, Point::Root, 0),
+        (4, Point::Branch, 3),
+        (5, Point::Head, 4),
+        (6, Point::Tail, 5),
+    ] {
+        pages.point(number, kind, parent).unwrap();
+        assert_eq!(pages.point_of(number).unwrap(), (kind, parent));
+    }
+    // A page the map holds no entry for yet is no kind of page.
+    assert!(matches!(
+        pages.point_of(7),
+        Err(crate::error::Error::PageKind(0))
+    ));
+    // A page freed is named by no page.
+    pages.release(6).unwrap();
+    assert_eq!(pages.point_of(6).unwrap(), (Point::Free, 0));
+}
+
+#[test]
+fn the_vacuum_refuses_a_pointer_map_it_cannot_act_on() {
+    use crate::tree::Point;
+    let mut pages = Pages::new(512, 0).unwrap();
+    pages.vacuums();
+    // Page two is the map and the seven after it are pages of a tree,
+    // so the file holds nine.
+    for _ in 0..7 {
+        pages.add(Kind::LeafTable, 0).unwrap();
+    }
+    pages.point(3, Point::Root, 0).unwrap();
+    for number in 4..=9 {
+        pages.point(number, Point::Branch, 3).unwrap();
+    }
+    // Two free pages leave the file cut back to page seven, and the
+    // map says a root lies past that, which no file holds.
+    pages.release(8).unwrap();
+    pages.release(9).unwrap();
+    pages.point(9, Point::Root, 0).unwrap();
+    assert!(matches!(
+        pages.vacuum_commit(),
+        Err(crate::error::Error::Page(9))
+    ));
+    // The map saying every page past the end is a page of a tree asks
+    // the free list for more pages than it holds.
+    pages.point(9, Point::Branch, 3).unwrap();
+    pages.point(8, Point::Branch, 3).unwrap();
+    assert!(matches!(
+        pages.vacuum_commit(),
+        Err(crate::error::Error::Balance)
+    ));
+}
+
+#[test]
+fn a_page_no_pointer_map_carries_an_entry_for_is_refused() {
+    let mut pages = Pages::new(512, 0).unwrap();
+    // A file that keeps no maps answers for no page.
+    assert!(pages.point_of(3).is_err());
+    pages.vacuums();
+    // Page one is named by no map, because the maps begin at page two.
+    assert!(pages.point_of(1).is_err());
+}
+
+#[test]
+fn the_end_a_file_that_vacuums_itself_is_cut_back_to_is_the_one_the_c_library_counts() {
+    use crate::tree::{final_size, map_page};
+    // `finalDbSize` over pages of 512 usable bytes: the file gives up
+    // its free pages and the map pages those free pages leave with no
+    // entry to carry.
+    assert_eq!(final_size(512, 17, 10), 7);
+    assert_eq!(final_size(512, 111, 75), 35);
+    // The count of map pages given up is what puts the end past the
+    // last of them, so no file is cut back to a page a map lies at.
+    for origin in 3..600_u32 {
+        for free in 1..origin {
+            let last = final_size(512, origin, free);
+            assert_ne!(map_page(512, last), last, "{origin} {free}");
+        }
+    }
+}

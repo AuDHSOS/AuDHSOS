@@ -4183,6 +4183,27 @@ matrix over the write path.
   carries and one, because no checkpoint writes the file, which is what
   the second and third transactions of the log show.
 
+### 6.6.116 The pointer maps a file that vacuums itself keeps (`db-sqlite`)
+
+D-177, document 16 section 16.11. The auto-vacuum dimension of the
+matrix over the write path.
+
+- `v-full.db` and `v-incremental.db` hold the same four hundred rows
+  under the two settings, `v-chained.db` holds chains that cross the
+  second pointer-map page, `v-freed.db` holds the free pages
+  `incremental` keeps, and `v-moved.db` and `v-moved-chained.db` hold
+  the pages `full` moves down and gives up at the commit, each the
+  fixture byte for byte.
+- Page two is the first map page and the first table takes page three;
+  a page taken at the end of the file that falls where a map lies makes
+  that map page and the caller takes the page after it.
+- The kinds a map holds read back: a root, a page of a tree, the first
+  page of a chain, a later page of one, and a page on the free list.
+- The refusals: a page no map carries an entry for, an entry that says
+  no kind of page, a map that says a root lies past the end the file is
+  cut back to, and a map that asks the free list for more pages than it
+  holds.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

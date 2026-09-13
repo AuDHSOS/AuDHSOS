@@ -293,6 +293,13 @@ reserved tail — with the same four hundred rows put in by a key that
 jumps about. Each is built here from the schema and the rows and is the
 file the shell wrote, byte for byte.
 
+Six more fixtures, `v-*.db`, hold the auto-vacuum dimension over the
+write path: the same four hundred rows under `full` and under
+`incremental`, chains that cross the second pointer-map page, the free
+pages `incremental` keeps, and the pages `full` moves down and gives up
+at the commit, one of them cutting a file of a hundred and eleven pages
+back to thirty-five. Each is the file the shell wrote, byte for byte.
+
 The journal-mode dimension needs no fixture of its own, because the mode
 changes what lies beside the file and not what is in it: `change::Writer`
 runs the same three statements under `delete`, `truncate`, `persist`,
@@ -306,6 +313,10 @@ The last two dimensions have no fixture: a schema format below four
 needs a database the shell will not write, and temporary storage is not
 a file.
 
+What is left of the matrix over the write path is the encoding and the
+reserved tail crossed with auto-vacuum, which the `v-*` fixtures hold at
+UTF-8 and no reserved tail alone.
+
 ## 16.12 The fixtures
 
 `sh tools/sqlite-fixtures.sh` writes every fixture and every corpus the
@@ -315,6 +326,7 @@ CI has no SQLite.
 | Fixture | What it holds |
 |---------|---------------|
 | `m-*.db`, eleven of them | The same three rows and the same index under every configuration of 16.11 the shell can write. |
+| `v-*.db`, six of them | The auto-vacuum dimension over the write path: the pointer maps, the free pages `incremental` keeps, and the pages `full` moves down at the commit. |
 | `w-*.db`, nine of them | The same four hundred rows, put in by a key that jumps about, under every page size, every encoding and every reserved tail. |
 | `small.db` | One row of each storage class. |
 | `page512.db` | Four hundred rows over 512-byte pages, which makes an interior page, in a table tree and in a key's own tree. |
@@ -331,7 +343,7 @@ CI has no SQLite.
 |---|-------|---------------|--------|
 | L1 | The format | Header, b-tree pages, cells, overflow chains, records. | built |
 | L2 | The pager | Pages in and out of a file, the journal in five modes, the WAL, locking, the free list. | built but for locking and the checkpoint |
-| L3 | The b-tree writer | Insert, delete, balance, the pointer maps auto-vacuum needs. | built but for the pointer maps and the index trees |
+| L3 | The b-tree writer | Insert, delete, balance, the pointer maps auto-vacuum needs. | built but for the index trees |
 | L4 | The tokenizer and parser | SQL text to a tree. | built but for the window clauses |
 | L5 | The code generator and virtual machine | The tree to opcodes, and the register machine that runs them. | missing |
 | L6 | The semantics | Affinity, comparison, collation, the built-in functions, `NULL`. | built for the read half |

@@ -125,6 +125,30 @@ impl Writer {
         Ok(writer)
     }
 
+    /// The same, with pointer maps, which is what `PRAGMA auto_vacuum`
+    /// turns on before the first table is written: page two becomes the
+    /// first map page, so the first table takes page three.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the page size or the reserved tail breaks.
+    pub fn vacuuming(
+        page_size: u32,
+        reserved: u8,
+        encoding: Encoding,
+        incremental: bool,
+    ) -> Result<Self, Error> {
+        let mut writer = Self::new(page_size, reserved, encoding)?;
+        writer.pages.vacuums();
+        // The pragma is itself a change, and the largest root a file
+        // with no table holds is page one.
+        writer.header.change_counter = 1;
+        writer.header.version_valid_for = 1;
+        writer.header.largest_root = 1;
+        writer.header.incremental_vacuum = u32::from(incremental);
+        Ok(writer)
+    }
+
     /// The same, in write-ahead logging mode: the commits write frames
     /// into a log rather than pages into the file, and the file stays
     /// as `PRAGMA journal_mode=wal` left it until a checkpoint runs.
@@ -205,6 +229,12 @@ impl Writer {
         // A statement that wrote no page is one the commit has nothing
         // to write for, so the change counter stands where it stood.
         if self.pages.changed() {
+            // `autoVacuumCommit`: a file that vacuums itself whole moves
+            // the pages at its end into the free pages below them and is
+            // cut back before the commit writes anything.
+            if self.header.incremental_vacuum == 0 {
+                self.pages.vacuum_commit()?;
+            }
             self.header.pages = self.pages.count();
             (self.header.freelist, self.header.freelist_pages) = self.pages.freelist();
             // `pager_write_changecounter`: a frame of page one holds
@@ -237,6 +267,12 @@ impl Writer {
             return Err(Error::Unsupported);
         }
         let root = self.pages.add(Kind::LeafTable, 0)?;
+        // `sqlite3BtreeCreateTable`: the root of a tree is named by no
+        // page, and page one holds the largest root the file has.
+        self.pages.point(root, crate::tree::Point::Root, 0)?;
+        if self.header.largest_root != 0 {
+            self.header.largest_root = root;
+        }
         let name = crate::schema::dequote(table.name.text(sql));
         let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
         let row = crate::record::write(

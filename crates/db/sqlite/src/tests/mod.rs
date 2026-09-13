@@ -67,6 +67,59 @@ pub(super) const CLEARED: &[u8] = include_bytes!("fixtures/cleared.db");
 /// taken out again, which frees the chains they ran onto.
 pub(super) const UNCHAINED: &[u8] = include_bytes!("fixtures/unchained.db");
 
+/// The auto-vacuum dimension of document 16, section 16.11, over the
+/// write path: the same four hundred rows under both settings, chains
+/// that cross the second pointer-map page, the free pages a file that
+/// vacuums a step at a time keeps, and the pages a file that vacuums
+/// itself whole moves down and gives up at the commit.
+///
+/// Each case names whether the file vacuums a step at a time, whether
+/// its rows run onto chains, and what is taken out after they are in.
+pub(crate) const VACUUMING: [(&str, bool, bool, &str, &[u8]); 6] = [
+    (
+        "v-full.db",
+        false,
+        false,
+        "",
+        include_bytes!("fixtures/v-full.db"),
+    ),
+    (
+        "v-incremental.db",
+        true,
+        false,
+        "",
+        include_bytes!("fixtures/v-incremental.db"),
+    ),
+    (
+        "v-chained.db",
+        false,
+        true,
+        "",
+        include_bytes!("fixtures/v-chained.db"),
+    ),
+    (
+        "v-freed.db",
+        true,
+        false,
+        "DELETE FROM t WHERE rowid%4!=0",
+        include_bytes!("fixtures/v-freed.db"),
+    ),
+    (
+        "v-moved.db",
+        false,
+        false,
+        "DELETE FROM t WHERE rowid%4!=0",
+        include_bytes!("fixtures/v-moved.db"),
+    ),
+    (
+        "v-moved-chained.db",
+        false,
+        true,
+        "DELETE FROM t WHERE rowid%3!=0",
+        include_bytes!("fixtures/v-moved-chained.db"),
+    ),
+];
+
 /// The four hundred rows of `shuffled.db` written over three times: a
 /// row that keeps its length, a row that shrinks, and a row that grows.
 pub(super) const UPDATED: &[u8] = include_bytes!("fixtures/updated.db");
