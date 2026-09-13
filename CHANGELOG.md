@@ -7,6 +7,28 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The expression parser of `db-sqlite`: recursive descent with the
+  precedence table of `src/parse.y` as a climb, over an arena where a node
+  is an index rather than a pointer — one allocation that grows, four
+  words a node, and a subtree that borrows nothing. Names and literals are
+  spans into the statement, so nothing is copied.
+
+  What holds it to SQLite is a second recorded oracle: five hundred and
+  forty-one expressions with, for each, whether SQLite's own parser
+  accepted it. Everything it refuses, this parser refuses; everything it
+  accepts, this parser accepts, but for six that wait for `SELECT` and are
+  named in the test. Two of them taught something: `CAST('1' AS)` is a
+  cast to no type, which the grammar allows, and `t.*` is not an
+  expression at all but a result column.
+
+  `sqlite_expr` fuzzes it, and found the bug that mattered: a chain of
+  left-associative operators builds a tree as tall as it is long while the
+  parser never recurses once, so a bound on the parser's own nesting is
+  not a bound on the tree. The arena now carries the height of every node
+  and the parser refuses a tree taller than two hundred, which is what
+  `sqlite3ExprCheckHeight` does in the C. Thirty-three million executions
+  after that found nothing. D-141, catalog 6.6.77.
+
 - The SQL tokenizer of `db-sqlite`, step Q4 of document 15 in its first
   half: the character classes of `src/tokenize.c`, its rules, and its
   answers — including the ones that surprise. A comment that is never

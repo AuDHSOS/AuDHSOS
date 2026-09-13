@@ -38,6 +38,7 @@ members = [
     "x509",
     "sqlite_image",
     "sqlite_tokens",
+    "sqlite_expr",
 ]
 
 [workspace.package]

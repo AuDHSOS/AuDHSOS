@@ -5,12 +5,16 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+extern crate alloc;
+
+pub mod ast;
 mod bytes;
 pub mod error;
 pub mod header;
 pub mod image;
 pub mod keyword;
 pub mod page;
+pub mod parse;
 pub mod record;
 pub mod token;
 

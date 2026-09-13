@@ -507,3 +507,95 @@ fn compare(word: &[u8], keyword: &[u8]) -> core::cmp::Ordering {
     }
     word.len().cmp(&keyword.len())
 }
+
+impl Keyword {
+    /// Whether the word may also be used as a name.
+    ///
+    /// SQL has more keywords than it can afford to reserve, so the grammar
+    /// of `parse.y` lets most of them fall back to being identifiers where
+    /// a name is expected. This is that list, `%fallback ID`, for a build
+    /// with the default features.
+    #[must_use]
+    pub const fn can_be_name(self) -> bool {
+        matches!(
+            self,
+            Keyword::Abort
+                | Keyword::Action
+                | Keyword::After
+                | Keyword::Always
+                | Keyword::Analyze
+                | Keyword::Asc
+                | Keyword::Attach
+                | Keyword::Before
+                | Keyword::Begin
+                | Keyword::By
+                | Keyword::Cascade
+                | Keyword::Cast
+                | Keyword::Column
+                | Keyword::Conflict
+                | Keyword::Current
+                | Keyword::CurrentDate
+                | Keyword::CurrentTime
+                | Keyword::CurrentTimestamp
+                | Keyword::Database
+                | Keyword::Deferred
+                | Keyword::Desc
+                | Keyword::Detach
+                | Keyword::Do
+                | Keyword::Each
+                | Keyword::End
+                | Keyword::Exclude
+                | Keyword::Exclusive
+                | Keyword::Explain
+                | Keyword::Fail
+                | Keyword::First
+                | Keyword::Following
+                | Keyword::For
+                | Keyword::Generated
+                | Keyword::Glob
+                | Keyword::Groups
+                | Keyword::If
+                | Keyword::Ignore
+                | Keyword::Immediate
+                | Keyword::Initially
+                | Keyword::Instead
+                | Keyword::Key
+                | Keyword::Last
+                | Keyword::Like
+                | Keyword::Match
+                | Keyword::Materialized
+                | Keyword::No
+                | Keyword::Nulls
+                | Keyword::Of
+                | Keyword::Offset
+                | Keyword::Others
+                | Keyword::Partition
+                | Keyword::Plan
+                | Keyword::Pragma
+                | Keyword::Preceding
+                | Keyword::Query
+                | Keyword::Raise
+                | Keyword::Range
+                | Keyword::Recursive
+                | Keyword::Regexp
+                | Keyword::Reindex
+                | Keyword::Release
+                | Keyword::Rename
+                | Keyword::Replace
+                | Keyword::Restrict
+                | Keyword::Rollback
+                | Keyword::Row
+                | Keyword::Rows
+                | Keyword::Savepoint
+                | Keyword::Temp
+                | Keyword::Ties
+                | Keyword::Trigger
+                | Keyword::Unbounded
+                | Keyword::Vacuum
+                | Keyword::View
+                | Keyword::Virtual
+                | Keyword::With
+                | Keyword::Without
+        )
+    }
+}

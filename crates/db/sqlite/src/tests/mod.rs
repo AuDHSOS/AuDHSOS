@@ -16,6 +16,7 @@ mod header;
 mod image;
 mod matrix;
 mod page;
+mod parse;
 mod record;
 mod token;
 
