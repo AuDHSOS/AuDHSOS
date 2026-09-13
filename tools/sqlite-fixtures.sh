@@ -518,6 +518,16 @@ if [ -f "$amalgamation" ]; then
     printf 'format4.db\tschema format %s\n' \
         "$("$sqlite" "$out/format4.db" "PRAGMA schema_version" >/dev/null; \
             od -An -tu1 -j47 -N1 "$out/format4.db" | tr -d ' ')"
+    # The five affinities in one table, each holding the same three
+    # values, which is what document 16, section 16.11 calls the
+    # comparison rules of `sqlite3BinaryCompareCollSeq`.
+    rm -f "$out/affinity.db"
+    "$sqlite" "$out/affinity.db" \
+        "CREATE TABLE t(xi INTEGER, xr REAL, xb BLOB, xn NUMERIC, xt TEXT);" \
+        "INSERT INTO t(rowid,xi,xr,xb,xn,xt) VALUES(1,1,1,1,1,1);" \
+        "INSERT INTO t(rowid,xi,xr,xb,xn,xt) VALUES(2,'2','2','2','2','2');" \
+        "INSERT INTO t(rowid,xi,xr,xb,xn,xt) VALUES(3,'03','03','03','03','03');"
+    printf 'affinity.db\t%s bytes\n' "$(wc -c <"$out/affinity.db" | tr -d ' ')"
     "$sqlite" "$out/defaults.db" \
         "CREATE TABLE t(a, b DEFAULT 7, c TEXT DEFAULT 'z'); INSERT INTO t(a) VALUES(1);"
     printf 'defaults.db\t%s bytes\n' "$(wc -c <"$out/defaults.db" | tr -d ' ')"

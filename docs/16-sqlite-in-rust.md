@@ -655,9 +655,10 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 10 428 cases in 570 files,
-408 pass, 14 answer differently, and 10 006 name something the engine
-refuses. The matrix runs over the write path as the covering array of
-16.11.
+413 pass, 9 answer differently, and 10 006 name something the engine
+refuses. The first run of it answered 14 differently, and five of those
+were defects this crate carried; D-181 records them. The matrix runs
+over the write path as the covering array of 16.11.
 Depends on: Q7, Q8.
 Size: M.
 
@@ -689,19 +690,20 @@ it, because the database is then short of what they read. A case that
 runs is counted passed where the list it answers is the list the file
 writes, element for element.
 
-### The fourteen that answer differently
+### The nine that answer differently
 
 | Case | What it shows |
 |------|---------------|
-| `collate8-3.1`, `-3.2`, `-3.4` | A `COLLATE` on one operand does not carry through `||`, `max` or `CASE`. |
-| `resolver01-4.1` | `ORDER BY m COLLATE binary` names the column where SQLite names the result column of that name. |
-| `gencol1-100` | `INSERT INTO t SELECT * FROM u` carries the computed column of `u` into `t`. |
-| `affinity2-300` | One comparison of text against a blob. |
+| `gencol1-100` | `INSERT INTO t SELECT * FROM u` where both hold a computed column. |
 | `conflict3-1.2`, `-1.4` | No `UNIQUE` is kept, so a row SQLite refuses goes in. |
 | `autoindex4-1.0` | `ORDER BY +b` over equal keys, which names no order. |
 | `func-1.6` | The file writes `NULL` for nothing, which `db nullvalue` set. |
 | `fpconv1-1.1`, `-1.2`, `-1.3` | The file writes two answers for one statement, so it changes a setting between them. |
 | `icu-2.9` | `upper` over the ICU extension, which this build has not got. |
+
+Two of the nine are the engine: `gencol1-100` and the `UNIQUE` of
+`conflict3`, which waits on the index trees. The other seven are the
+file, the order it leaves open, or the build.
 
 ### Done when
 

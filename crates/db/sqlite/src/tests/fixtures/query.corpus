@@ -10,6 +10,23 @@ format4.db|SELECT a, b, c, d FROM t
 format4.db|SELECT typeof(a), typeof(b) FROM t
 format4.db|SELECT d FROM t WHERE a=0
 format4.db|SELECT d, e, typeof(e) FROM t
+small.db|SELECT 'abc'==('ABC'||'')
+small.db|SELECT 'abc'==('ABC'||'' COLLATE nocase)
+small.db|SELECT 'abc'==(('ABC' COLLATE nocase)||'')
+small.db|SELECT 'abc'==('ABC'||upper('' COLLATE nocase))
+small.db|SELECT 'abc'==('ABC'||max('' COLLATE nocase,'' COLLATE binary))
+small.db|SELECT 'abc'==('ABC'||CASE WHEN 1=2 THEN '' COLLATE binary ELSE '' COLLATE nocase END)
+small.db|SELECT 'abc'==('ABC'||CASE WHEN 1=1 THEN '' COLLATE binary ELSE '' COLLATE nocase END)
+small.db|SELECT 'abc'==('ABC'||CASE WHEN 1=1 THEN '' ELSE '' END)
+small.db|SELECT 'abc'==('ABC'|| -('' COLLATE nocase))
+affinity.db|SELECT rowid, xt==+xi, xt==xi, xt==xb FROM t ORDER BY rowid
+affinity.db|SELECT rowid, xi==xt, xi==xb, xi==+xt FROM t ORDER BY rowid
+affinity.db|SELECT rowid, xr==xt, xr==xb, xr==+xt FROM t ORDER BY rowid
+affinity.db|SELECT rowid, xn==xt, xn==xb, xn==+xt FROM t ORDER BY rowid
+affinity.db|SELECT typeof(+xi), typeof(+xt) FROM t ORDER BY rowid
+affinity.db|SELECT '1', substr(xt,2) AS xt FROM t ORDER BY xt
+affinity.db|SELECT '2', substr(xt,2) AS xt FROM t ORDER BY xt COLLATE binary
+affinity.db|SELECT '3', substr(xt,2) AS xt FROM t ORDER BY lower(xt)
 defaults.db|SELECT a, b, c FROM t
 defaults.db|SELECT typeof(b), typeof(c) FROM t
 small.db|SELECT * FROM t

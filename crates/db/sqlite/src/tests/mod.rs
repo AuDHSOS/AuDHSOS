@@ -120,6 +120,10 @@ pub(super) const FORMAT3: &[u8] = include_bytes!("fixtures/format3.db");
 /// same added columns, with 0 and 1 stored as serial types 8 and 9.
 pub(super) const FORMAT4: &[u8] = include_bytes!("fixtures/format4.db");
 
+/// The five affinities in one table, each column holding the same three
+/// values, which is what the comparison rules are read against.
+pub(super) const AFFINITY: &[u8] = include_bytes!("fixtures/affinity.db");
+
 /// Columns that fall back, with a row that names one of the three, so
 /// the other two hold what they fall back to rather than nothing.
 pub(super) const DEFAULTS: &[u8] = include_bytes!("fixtures/defaults.db");

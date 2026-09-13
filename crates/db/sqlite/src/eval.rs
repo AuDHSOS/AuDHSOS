@@ -269,7 +269,15 @@ fn answer(
             operand,
             branches,
             otherwise,
-        } => case(arena, operand, branches, otherwise, sql, row, deeper),
+        } => {
+            let mut answered = case(arena, operand, branches, otherwise, sql, row, deeper)?;
+            // `sqlite3ExprCollSeq` reads the collation of a `CASE` off
+            // the tree and not off the branch a row takes, so a
+            // `COLLATE` written in a branch no row takes is still the
+            // collation the `CASE` compares with.
+            answered.collation = written_collation(arena, id, sql);
+            Ok(answered)
+        }
         Node::Column {
             schema,
             table,
@@ -370,7 +378,14 @@ fn called(
         collation.unwrap_or(row.collation()),
         row.encoding(),
     )?;
-    Ok(Answer::plain(value))
+    // The first argument carrying a `COLLATE` is the collation the call
+    // answers with, which is the argument list `sqlite3ExprCollSeq`
+    // walks.
+    Ok(Answer {
+        value,
+        affinity: Affinity::None,
+        collation,
+    })
 }
 
 /// A constant, with `negated` for the minus sign the parser leaves as a
@@ -517,22 +532,76 @@ fn unary(
     }
     let inner = answer(arena, operand, sql, row, depth)?;
     let value = inner.value;
+    // A `COLLATE` written under the operator is the collation it
+    // answers with, as it is under a binary operator.
+    let carried = |value: Value| Answer {
+        value,
+        affinity: Affinity::None,
+        collation: inner.collation,
+    };
     Ok(match op {
         // A sign before anything else is a subtraction from zero.
-        UnaryOp::Negate => Answer::plain(arithmetic(BinaryOp::Subtract, &Value::Int(0), &value)),
-        UnaryOp::Identity => Answer { value, ..inner },
-        UnaryOp::Not => Answer::plain(match logic(&value) {
+        UnaryOp::Negate => carried(arithmetic(BinaryOp::Subtract, &Value::Int(0), &value)),
+        // `sqlite3ExprAffinity`: a sign written before an expression
+        // has no affinity of its own and does not carry the affinity of
+        // what it precedes, so `xt == +xi` compares a text column with
+        // a number that takes text affinity from it rather than the
+        // other way about. The collation does carry.
+        UnaryOp::Identity => carried(value),
+        UnaryOp::Not => carried(match logic(&value) {
             Some(truth) => Value::Int(i64::from(!truth)),
             None => Value::Null,
         }),
-        UnaryOp::BitNot => Answer::plain(if value == Value::Null {
+        UnaryOp::BitNot => carried(if value == Value::Null {
             Value::Null
         } else {
             Value::Int(!value.to_integer())
         }),
-        UnaryOp::IsNull => Answer::plain(Value::Int(i64::from(value == Value::Null))),
-        UnaryOp::NotNull => Answer::plain(Value::Int(i64::from(value != Value::Null))),
+        UnaryOp::IsNull => carried(Value::Int(i64::from(value == Value::Null))),
+        UnaryOp::NotNull => carried(Value::Int(i64::from(value != Value::Null))),
     })
+}
+
+/// The collation written under `id`, which is the `COLLATE` on the
+/// expression itself or the first one written under it, left to right.
+///
+/// This reads the tree rather than the answer, because an expression
+/// carries the collation of a branch no row takes. A column under it
+/// carries none, because the walk of `sqlite3ExprCollSeq` reaches a
+/// column only along a path a `COLLATE` marked.
+///
+/// The walk is O(n) in the nodes under `id`.
+fn written_collation(arena: &Arena, id: ExprId, sql: &[u8]) -> Option<Collation> {
+    let node = arena.node(id)?;
+    if let Node::Collate { name, .. } = node {
+        return Collation::of_name(name.text(sql));
+    }
+    // A `CASE` is read in the order it was written, because the first
+    // `COLLATE` written under it is the one it answers with, and
+    // `Arena::under` names the `ELSE` before the branches.
+    let mut found = None;
+    let mut first = |child: ExprId| {
+        if found.is_none() {
+            found = written_collation(arena, child, sql);
+        }
+    };
+    if let Node::Case {
+        operand,
+        branches,
+        otherwise,
+    } = node
+    {
+        for child in operand
+            .into_iter()
+            .chain(arena.children(branches).iter().copied())
+            .chain(otherwise)
+        {
+            first(child);
+        }
+        return found;
+    }
+    arena.under(node, first);
+    found
 }
 
 /// Whether a value is true, false, or neither.
@@ -594,7 +663,15 @@ fn binary(
         | BinaryOp::IsNot => comparison(op, &left, &right, row.collation()),
         BinaryOp::Extract | BinaryOp::ExtractText => return Err(Error::NoFunction),
     };
-    Ok(Answer::plain(value))
+    // `sqlite3ExprCollSeq`: a `COLLATE` written under an operator is
+    // the collation the operator answers with, the left operand before
+    // the right, so `'ABC' || ('' COLLATE nocase)` compares without
+    // case.
+    Ok(Answer {
+        value,
+        affinity: Affinity::None,
+        collation: left.collation.or(right.collation),
+    })
 }
 
 /// `+`, `-`, `*`, `/` and `%`, which count in integers where both sides

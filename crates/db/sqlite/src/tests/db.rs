@@ -49,6 +49,7 @@ fn fixture(name: &str) -> Option<&'static [u8]> {
         "format3.db" => super::FORMAT3,
         "format4.db" => super::FORMAT4,
         "defaults.db" => super::DEFAULTS,
+        "affinity.db" => super::AFFINITY,
         _ => return super::matrix::fixture(name),
     })
 }

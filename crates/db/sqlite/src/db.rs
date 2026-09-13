@@ -2315,7 +2315,11 @@ fn keys(arena: &Arena, select: &Select, sql: &[u8], names: &[Vec<u8>]) -> Result
             keys.push(Key::Place(at, descending));
             continue;
         }
-        if let Some(name) = column_named(arena, term.expr) {
+        // `resolveOrderGroupBy` matches the term against the answered
+        // names with any `COLLATE` on it taken off first, so
+        // `ORDER BY m COLLATE binary` sorts by the column answered
+        // under the name `m` and not by the column of that name.
+        if let Some(name) = column_named(arena, uncollated(arena, term.expr)) {
             let name = name.text(sql);
             if let Some(at) = names
                 .iter()
@@ -2564,6 +2568,17 @@ fn whole_number(arena: &Arena, id: ExprId, sql: &[u8]) -> Option<i64> {
 /// A collation written around it counts as something else, which is why
 /// `SELECT a COLLATE NOCASE` is answered under that whole text and not
 /// under `a`.
+/// The expression under every `COLLATE` written on it, which is
+/// `sqlite3ExprSkipCollateAndLikely` for the half of it that stands
+/// while names are being resolved.
+fn uncollated(arena: &Arena, id: ExprId) -> ExprId {
+    let mut id = id;
+    while let Some(Node::Collate { value, .. }) = arena.node(id) {
+        id = value;
+    }
+    id
+}
+
 fn column_named(arena: &Arena, id: ExprId) -> Option<Span> {
     match arena.node(id)? {
         Node::Column { column, .. } => Some(column),

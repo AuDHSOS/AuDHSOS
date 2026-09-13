@@ -4246,8 +4246,10 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - The part of `research/sqlite/test` that needs no TCL interpreter: a
   `do_execsql_test` whose statements and whose answer carry no
   substitution, which is 10 428 of the 13 602 cases in 570 files.
-- 408 pass, 14 answer differently and 10 006 name something the engine
-  refuses. Document 16, section 16.23 lists the fourteen.
+- 413 pass, 9 answer differently and 10 006 name something the engine
+  refuses. Document 16, section 16.23 lists the nine. The first run
+  answered 14 differently; five were defects, which D-181 records and
+  seventeen cases of `query.corpus` now hold to the C library.
 - The checkout is not part of this repository, so this is never a step
   of `cargo xtask check`; `sh tools/sqlite.sh` brings it and
   `--file <name>` runs one file. `--show` prints each case that did not

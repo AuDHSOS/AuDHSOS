@@ -10,6 +10,23 @@ N|a|b|c|d	R|0|1|'x'|7	R|2|3|'y'|7
 N|typeof(a)|typeof(b)	R|'integer'|'integer'	R|'integer'|'integer'
 N|d	R|7
 N|d|e|typeof(e)	R|7|NULL|'null'	R|7|NULL|'null'
+N|'abc'==('ABC'||'')	R|0
+N|'abc'==('ABC'||'' COLLATE nocase)	R|1
+N|'abc'==(('ABC' COLLATE nocase)||'')	R|1
+N|'abc'==('ABC'||upper('' COLLATE nocase))	R|1
+N|'abc'==('ABC'||max('' COLLATE nocase,'' COLLATE binary))	R|1
+N|'abc'==('ABC'||CASE WHEN 1=2 THEN '' COLLATE binary ELSE '' COLLATE nocase END)	R|0
+N|'abc'==('ABC'||CASE WHEN 1=1 THEN '' COLLATE binary ELSE '' COLLATE nocase END)	R|0
+N|'abc'==('ABC'||CASE WHEN 1=1 THEN '' ELSE '' END)	R|0
+N|'abc'==('ABC'|| -('' COLLATE nocase))	R|0
+N|rowid|xt==+xi|xt==xi|xt==xb	R|1|1|1|0	R|2|1|1|1	R|3|0|1|1
+N|rowid|xi==xt|xi==xb|xi==+xt	R|1|1|1|1	R|2|1|1|1	R|3|1|1|1
+N|rowid|xr==xt|xr==xb|xr==+xt	R|1|1|1|1	R|2|1|1|1	R|3|1|1|1
+N|rowid|xn==xt|xn==xb|xn==+xt	R|1|1|1|1	R|2|1|1|1	R|3|1|1|1
+N|typeof(+xi)|typeof(+xt)	R|'integer'|'text'	R|'integer'|'text'	R|'integer'|'text'
+N|'1'|xt	R|'1'|''	R|'1'|''	R|'1'|'3'
+N|'2'|xt	R|'2'|''	R|'2'|''	R|'2'|'3'
+N|'3'|xt	R|'3'|'3'	R|'3'|''	R|'3'|''
 N|a|b|c	R|1|7|'z'
 N|typeof(b)|typeof(c)	R|'integer'|'text'
 N|a|b|c|d	R|1|'one'|1.5|X'0102'	R|2|'two'|-2.5|NULL	R|-3|''|0.0|X'FF'
