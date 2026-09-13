@@ -7,6 +7,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- D-141: the client of step S8 is built off the phases, and what is left
+  of that step is the integration alone. D-123 put the whole of S8 behind
+  Phase 14 because the step was written as the client over a socket; two
+  of the three things it names need no socket, since 14.6 makes the client
+  a state machine with no I/O and 14.12 checks most of it on the host. The
+  decision records what that changed and what it did not: the step keeps
+  its number and its size, and the socket of `server-net`, the program of
+  the image and the handshake against a live OpenSSH still wait on Phase
+  14. It also records the two smaller things the first end-to-end run
+  settled — that a connection begins in `Exchange::Asked`, because this
+  side sends its `SSH_MSG_KEXINIT` as soon as it has sent its
+  identification string, and that the client's buffers are the caller's at
+  the size RFC 4253, section 6.1, makes mandatory.
+
 - Two fuzz targets for the Secure Shell client, which 14.12 named and
   which now exist. `ssh_packet` reads arbitrary bytes as a binary packet
   with the cipher in use and without it — a packet that is read lies

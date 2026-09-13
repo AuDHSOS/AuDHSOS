@@ -95,10 +95,11 @@ types, the binary packet, the identification string, the negotiation,
 both key exchange methods, the exchange hash, the six keys, the cipher,
 the host key with the signature over the exchange hash, the
 authentication exchange, the session channel, and the re-exchange. The
-client of S8 is built as well, and is driven end to end against a server
-written in the tests. What is missing is what that client stands on: the
-socket of `server-net`, the program of the image, and the handshake
-against an OpenSSH, all three of which wait on Phase 14. Two things are also
+client of S8 is built as well, off the phases and under D-141, and is
+driven end to end against a server written in the tests. What is missing
+is what that client stands on: the socket of `server-net`, the program of
+the image, and the handshake against an OpenSSH, all three of which wait
+on Phase 14. Two things are also
 missing that are not code, and 14.13 lists them.
 
 ## 14.4 The documents
@@ -482,7 +483,7 @@ definition of done every phase and every track step uses.
 | S5 | `auth` | M | implemented: the service request, `publickey` with the signature of RFC 4252, section 7, the failure, success, banner and `SSH_MSG_USERAUTH_PK_OK` answers, and the `SSH_MSG_EXT_INFO` that carries `server-sig-algs` (catalog 6.6.76) |
 | S6 | `channel` | L | implemented: the channel messages, the window in both directions, the session channel, `exec`, `shell` and `env`, extended data, `exit-status` and `exit-signal`, and the close sequence (catalog 6.6.77) |
 | S7 | re-exchange | S-M | implemented: a re-exchange from either side, the byte, time and sequence number thresholds, what may be sent while one runs, and the disconnect message with the reason codes of RFC 4250 (catalog 6.6.78) |
-| S8 | the client, and its integration | M | implemented: the state machine of 14.6 over every layer below it, driven end to end against a server written in the tests (catalog 6.6.79). Waiting on Phase 14: the socket of `server-net`, the program of the image, and the interop acceptance of 14.12 |
+| S8 | the client, and its integration | M | implemented (D-141): the state machine of 14.6 over every layer below it, driven end to end against a server written in the tests (catalog 6.6.79). Waiting on Phase 14: the socket of `server-net`, the program of the image, and the interop acceptance of 14.12 |
 
 S1 to S7 needed nothing from another track and were built between phases,
 as the whole of document 11 was. The client of S8 needs nothing either,

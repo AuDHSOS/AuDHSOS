@@ -652,8 +652,9 @@ methods over `crypto-dh` (D-122) and `crypto-ec::x25519` with the
 exchange hash and the six keys, the cipher over the packet layer, the
 host key with the signature over the exchange hash, the authentication
 exchange with `publickey`, the session channel with its window, and the
-re-exchange with its thresholds. The client of S8 is built with them and
-is driven end to end against a server written in the tests. What is left
+re-exchange with its thresholds. The client of S8 is built with them
+under D-141 and is driven end to end against a server written in the
+tests. What is left
 of S8 needs Phase 14: the socket of `server-net`, the program of the
 image, and the handshake against an OpenSSH, which is also where the two
 open questions of 14.13 belong.
@@ -674,11 +675,12 @@ build. What it refuses, and why each name is refused, is section 14.5.
 | S5 | `auth` | M | implemented: the service request, `publickey` with the signature of RFC 4252, section 7, the four answers a server sends, and `server-sig-algs` out of an `SSH_MSG_EXT_INFO` (catalog 6.6.76) |
 | S6 | `channel` | L | implemented: channels, the window in both directions, the session channel, `exec`, `shell` and `env`, extended data, and the exit status (catalog 6.6.77) |
 | S7 | re-exchange | S-M | implemented: a re-exchange from either side, its three thresholds, what may be sent while one runs, and the disconnect with the reason codes of RFC 4250 (catalog 6.6.78) |
-| S8 | the client, and its integration | M | implemented: the state machine over every layer below it, against a server written in the tests (catalog 6.6.79). Waiting on Phase 14: the socket of `server-net`, the program of the image, and the handshake against a live OpenSSH |
+| S8 | the client, and its integration | M | implemented (D-141): the state machine over every layer below it, against a server written in the tests (catalog 6.6.79). Waiting on Phase 14: the socket of `server-net`, the program of the image, and the handshake against a live OpenSSH |
 
 S1 to S7 depended on no phase and were built between them, as the whole
-of track C was, and so did the client. What is left of S8 needs the
-network on the machine.
+of track C was, and so did the client, which D-141 admits under the
+admission test of 8.27. What is left of S8 needs the network on the
+machine.
 
 Tests: catalog 6.6.66, 6.6.68, 6.6.69, 6.6.70 and 6.6.75 to 6.6.79 are
 written, for the arithmetic of S2, the whole of S1 to S7, and the client,
@@ -708,6 +710,9 @@ track differs in kind from track C.
   Phases 12 to 15 add two more of that kind, and section 13.14 marks
   them: the crate `pci` of step N5 and the crate `driver-virtio-net` of
   step N7 are logic over a trait with a double and need no kernel, so
-  either may be written before the phase that integrates it. Every other
+  either may be written before the phase that integrates it. The client
+  of step S8 was pulled forward the same way and for the same reason
+  (D-141): it is a state machine with no I/O and is checked against a
+  server written in the tests. Every other
   step of those phases changes the kernel, the reference machine, or the
   root task and is therefore phase work throughout.
