@@ -32,12 +32,18 @@ pub enum NativeErrorKind {
     UriError,
 }
 
+/// The implemented intrinsic of one holder that has this name.
+#[must_use]
+pub fn holder_intrinsic(holder: IntrinsicHolder, name: &[u16]) -> Option<Intrinsic> {
+    Intrinsic::ALL.into_iter().find(|intrinsic| {
+        intrinsic.holder() == holder && intrinsic.name().encode_utf16().eq(name.iter().copied())
+    })
+}
+
 /// Whether an implemented intrinsic of `%Object.prototype%` has this name.
 #[must_use]
 pub fn object_prototype_intrinsic(name: &[u16]) -> Option<Intrinsic> {
-    Intrinsic::ALL
-        .into_iter()
-        .find(|intrinsic| intrinsic.name().encode_utf16().eq(name.iter().copied()))
+    holder_intrinsic(IntrinsicHolder::ObjectPrototype, name)
 }
 
 /// A native function of the standard library.
@@ -54,16 +60,48 @@ pub enum Intrinsic {
     ObjectPrototypePropertyIsEnumerable,
     /// `Object.prototype.toString` (20.1.3.6).
     ObjectPrototypeToString,
+    /// `String.prototype.charAt` (22.1.3.1).
+    StringPrototypeCharAt,
+    /// `String.prototype.charCodeAt` (22.1.3.2).
+    StringPrototypeCharCodeAt,
+    /// `String.prototype.indexOf` (22.1.3.9).
+    StringPrototypeIndexOf,
+}
+
+/// The intrinsic object a native function is installed on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntrinsicHolder {
+    /// `%Object.prototype%`.
+    ObjectPrototype,
+    /// `%String.prototype%`.
+    StringPrototype,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 7] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
         Self::ObjectPrototypeToString,
+        Self::StringPrototypeCharAt,
+        Self::StringPrototypeCharCodeAt,
+        Self::StringPrototypeIndexOf,
     ];
+
+    /// The intrinsic object this function is installed on.
+    #[must_use]
+    pub const fn holder(self) -> IntrinsicHolder {
+        match self {
+            Self::ObjectPrototypeHasOwnProperty
+            | Self::ObjectPrototypeIsPrototypeOf
+            | Self::ObjectPrototypePropertyIsEnumerable
+            | Self::ObjectPrototypeToString => IntrinsicHolder::ObjectPrototype,
+            Self::StringPrototypeCharAt
+            | Self::StringPrototypeCharCodeAt
+            | Self::StringPrototypeIndexOf => IntrinsicHolder::StringPrototype,
+        }
+    }
 
     /// The identifier carried by the function object.
     #[must_use]
@@ -73,6 +111,9 @@ impl Intrinsic {
             Self::ObjectPrototypeIsPrototypeOf => 1,
             Self::ObjectPrototypePropertyIsEnumerable => 2,
             Self::ObjectPrototypeToString => 3,
+            Self::StringPrototypeCharAt => 4,
+            Self::StringPrototypeCharCodeAt => 5,
+            Self::StringPrototypeIndexOf => 6,
         }
     }
 
@@ -83,6 +124,9 @@ impl Intrinsic {
             Self::ObjectPrototypeIsPrototypeOf => 1,
             Self::ObjectPrototypePropertyIsEnumerable => 2,
             Self::ObjectPrototypeToString => 3,
+            Self::StringPrototypeCharAt => 4,
+            Self::StringPrototypeCharCodeAt => 5,
+            Self::StringPrototypeIndexOf => 6,
         }
     }
 
@@ -94,6 +138,9 @@ impl Intrinsic {
             1 => Some(Self::ObjectPrototypeIsPrototypeOf),
             2 => Some(Self::ObjectPrototypePropertyIsEnumerable),
             3 => Some(Self::ObjectPrototypeToString),
+            4 => Some(Self::StringPrototypeCharAt),
+            5 => Some(Self::StringPrototypeCharCodeAt),
+            6 => Some(Self::StringPrototypeIndexOf),
             _ => None,
         }
     }
@@ -106,6 +153,9 @@ impl Intrinsic {
             Self::ObjectPrototypeIsPrototypeOf => "isPrototypeOf",
             Self::ObjectPrototypePropertyIsEnumerable => "propertyIsEnumerable",
             Self::ObjectPrototypeToString => "toString",
+            Self::StringPrototypeCharAt => "charAt",
+            Self::StringPrototypeCharCodeAt => "charCodeAt",
+            Self::StringPrototypeIndexOf => "indexOf",
         }
     }
 
@@ -113,10 +163,13 @@ impl Intrinsic {
     #[must_use]
     pub const fn length(self) -> u32 {
         match self {
+            Self::ObjectPrototypeToString => 0,
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
-            | Self::ObjectPrototypePropertyIsEnumerable => 1,
-            Self::ObjectPrototypeToString => 0,
+            | Self::ObjectPrototypePropertyIsEnumerable
+            | Self::StringPrototypeCharAt
+            | Self::StringPrototypeCharCodeAt
+            | Self::StringPrototypeIndexOf => 1,
         }
     }
 }
@@ -343,6 +396,7 @@ pub struct Realm {
     object_prototype: Root,
     function_prototype: Root,
     array_prototype: Root,
+    string_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
     intrinsics: [Root; Intrinsic::ALL.len()],
@@ -372,6 +426,11 @@ impl Realm {
         // 23.1.3: %Array.prototype% is an Array exotic object.
         let array_prototype = heap.allocate_immortal_array(ordinary, 0)?;
         let array_prototype = heap.push_root(Value::from_object(array_prototype))?;
+
+        // 22.1.3: %String.prototype% is a String exotic object whose
+        // [[Prototype]] is %Object.prototype%.
+        let string_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let string_prototype = heap.push_root(Value::from_object(string_prototype))?;
 
         // 20.5.3: %Error.prototype% is an ordinary object with "message" and
         // "name", not an Error instance.
@@ -411,9 +470,12 @@ impl Realm {
                 .get_mut(intrinsic.index())
                 .ok_or(HeapError::InvalidReference)? =
                 heap.push_root(Value::from_object(function))?;
-            let holder = Self::rooted(heap, object_prototype)?
-                .as_object()
-                .ok_or(HeapError::InvalidReference)?;
+            let holder = match intrinsic.holder() {
+                IntrinsicHolder::ObjectPrototype => Self::rooted(heap, object_prototype)?,
+                IntrinsicHolder::StringPrototype => Self::rooted(heap, string_prototype)?,
+            }
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
             let key = heap.strings.intern(intrinsic.name())?;
             heap.define_own_named(holder, key, Value::from_object(function), builtin_data())?;
         }
@@ -422,6 +484,7 @@ impl Realm {
             object_prototype,
             function_prototype,
             array_prototype,
+            string_prototype,
             error_prototype,
             native_error_prototypes,
             intrinsics,
@@ -470,6 +533,15 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] when the root was discarded.
     pub fn array_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.array_prototype)
+    }
+
+    /// %String.prototype%.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root was discarded.
+    pub fn string_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.string_prototype)
     }
 
     /// %Error.prototype%.

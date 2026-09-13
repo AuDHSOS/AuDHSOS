@@ -2498,11 +2498,33 @@ fn register_string_members_answer_length_and_indices() -> Result<(), Error> {
 }
 
 #[test]
+fn register_string_methods_run_as_native_intrinsics() -> Result<(), Error> {
+    for source in [
+        "'abc'.charAt(0)",
+        "'abc'.charAt(2)",
+        "'abc'.charAt(3)",
+        "'abc'.charAt(-1)",
+        "'abc'.charAt()",
+        "'abc'.charCodeAt(0)",
+        "'abc'.charCodeAt(9)",
+        "'abc'.indexOf('b')",
+        "'abc'.indexOf('z')",
+        "'abcabc'.indexOf('b',2)",
+        "'abc'.indexOf('')",
+        "''.indexOf('a')",
+        "let s='hello';s.charAt(1)+s.charAt(0)",
+        "let s='hello';s.indexOf('l')",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn register_lowering_rejects_string_methods_that_do_not_exist_yet() -> Result<(), Error> {
     for source in [
-        // 22.1.3 names %String.prototype% owns.
-        "'abc'.charAt",
-        "'abc'.indexOf",
+        // 22.1.3 names %String.prototype% owns whose intrinsic is missing.
+        "'abc'.slice",
         "'abc'.toString",
         "'abc'['slice']",
         // A String key can name one of them.

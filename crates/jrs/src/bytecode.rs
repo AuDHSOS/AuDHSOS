@@ -2007,17 +2007,37 @@ impl RegisterLowerer {
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let base_type = self.lower(base)?;
-        if !base_type.is_object() {
+        if !base_type.is_object() && base_type != RegisterType::String {
             return None;
         }
         let receiver = self.allocate_register()?;
         self.code.emit(Instruction::Star(receiver));
-        let keyed = matches!(base_type, RegisterType::Object(_))
-            && Self::static_property_name(key).is_none();
-        let callee_type =
-            self.lower_property_from_register(receiver, base_type, key, keyed, true)?;
-        let RegisterType::NativeFunction(intrinsic) = callee_type else {
-            return None;
+        let intrinsic = if base_type == RegisterType::String {
+            // 22.1.3: the method is resolved on %String.prototype%.
+            let name = Self::static_property_name(key)
+                .map(<[u16]>::to_vec)
+                .or_else(|| self.static_key_units(key))?;
+            let intrinsic = crate::engine::realm::holder_intrinsic(
+                crate::engine::realm::IntrinsicHolder::StringPrototype,
+                &name,
+            )?;
+            let constant = self.string_constant(&name)?;
+            let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: receiver,
+                name: constant,
+                slot,
+            });
+            intrinsic
+        } else {
+            let keyed = matches!(base_type, RegisterType::Object(_))
+                && Self::static_property_name(key).is_none();
+            let callee_type =
+                self.lower_property_from_register(receiver, base_type, key, keyed, true)?;
+            let RegisterType::NativeFunction(intrinsic) = callee_type else {
+                return None;
+            };
+            intrinsic
         };
         let function = self.allocate_register()?;
         self.code.emit(Instruction::Star(function));
@@ -4228,7 +4248,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectPrototypePropertyIsEnumerable => {
             RegisterType::Boolean
         }
-        crate::engine::realm::Intrinsic::ObjectPrototypeToString => RegisterType::String,
+        crate::engine::realm::Intrinsic::ObjectPrototypeToString
+        | crate::engine::realm::Intrinsic::StringPrototypeCharAt => RegisterType::String,
+        crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
+        | crate::engine::realm::Intrinsic::StringPrototypeIndexOf => RegisterType::Number,
     }
 }
 

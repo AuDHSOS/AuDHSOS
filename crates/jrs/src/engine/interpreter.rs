@@ -24,7 +24,7 @@ use super::{
     realm::{Intrinsic, Realm},
     shape::{PropertyFlags, ShapeId},
     string::StringError,
-    value::{ObjectRef, VALUE_FALSE, VALUE_NULL, VALUE_TRUE, VALUE_UNDEFINED, Value},
+    value::{ObjectRef, VALUE_FALSE, VALUE_NAN, VALUE_NULL, VALUE_TRUE, VALUE_UNDEFINED, Value},
 };
 use alloc::vec::Vec;
 
@@ -828,7 +828,99 @@ impl RegisterVM {
                 units.push(0x5D);
                 self.allocate_string(heap, &units)
             }
+            Intrinsic::StringPrototypeCharAt
+            | Intrinsic::StringPrototypeCharCodeAt
+            | Intrinsic::StringPrototypeIndexOf => {
+                self.call_string_intrinsic(intrinsic, call, heap, realm)
+            }
         }
+    }
+
+    /// Runs one `%String.prototype%` method.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] for a receiver that is not a String.
+    fn call_string_intrinsic(
+        &self,
+        intrinsic: Intrinsic,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let argument = |vm: &Self, index: u16| -> Result<Value, VMError> {
+            if index >= call.arg_count {
+                return Ok(VALUE_UNDEFINED);
+            }
+            let slot = vm
+                .fp
+                .checked_add(call.arg_start.0 as usize)
+                .and_then(|start| start.checked_add(index as usize))
+                .ok_or(VMError::InvalidRegister)?;
+            vm.stack.get(slot).copied().ok_or(VMError::InvalidRegister)
+        };
+        let units = Self::receiver_units(call.receiver, heap, realm)?;
+        match intrinsic {
+            // 22.1.3.1: an index outside the String is the empty String.
+            Intrinsic::StringPrototypeCharAt => {
+                let position = integer_argument(argument(self, 0)?, heap)?;
+                let unit = usize::try_from(position)
+                    .ok()
+                    .and_then(|position| units.get(position).copied());
+                match unit {
+                    Some(unit) => self.allocate_string(heap, &[unit]),
+                    None => self.allocate_string(heap, &[]),
+                }
+            }
+            // 22.1.3.2: an index outside the String is NaN.
+            Intrinsic::StringPrototypeCharCodeAt => {
+                let position = integer_argument(argument(self, 0)?, heap)?;
+                Ok(usize::try_from(position)
+                    .ok()
+                    .and_then(|position| units.get(position).copied())
+                    .map_or(VALUE_NAN, |unit| Value::from_smi(i32::from(unit))))
+            }
+            // 22.1.3.9: the search starts at the clamped position and -1 says
+            // the String does not occur.
+            Intrinsic::StringPrototypeIndexOf => {
+                let search = property_name_units(argument(self, 0)?, heap)?;
+                let start = integer_argument(argument(self, 1)?, heap)?
+                    .clamp(0, i64::try_from(units.len()).unwrap_or(i64::MAX));
+                let start = usize::try_from(start).unwrap_or(0);
+                let found = (start..=units.len().saturating_sub(search.len()))
+                    .filter(|_| search.len() <= units.len())
+                    .find(|index| {
+                        units.get(*index..index.saturating_add(search.len()))
+                            == Some(search.as_slice())
+                    });
+                Ok(found.map_or(Value::from_smi(-1), |index| {
+                    i32::try_from(index).map_or(VALUE_NAN, Value::from_smi)
+                }))
+            }
+            _ => Err(VMError::InvalidFeedbackVector),
+        }
+    }
+
+    /// The code units of a String receiver.
+    ///
+    /// Every `%String.prototype%` method begins with `RequireObjectCoercible`
+    /// and `ToString` of the `this` value (22.1.3). The lowering only emits a
+    /// call on a String, so this refuses anything else rather than guessing.
+    fn receiver_units(
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Vec<u16>, VMError> {
+        if !receiver.is_string() {
+            return Err(type_error(
+                heap,
+                realm,
+                "String method called on a value that is not a String",
+            ));
+        }
+        heap.strings
+            .to_utf16(receiver)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))
     }
 
     /// The value a String answers for one property name.
@@ -842,6 +934,7 @@ impl RegisterVM {
         value: Value,
         name: super::value::StringRef,
         heap: &mut GenerationalHeap,
+        realm: &Realm,
     ) -> Result<Value, VMError> {
         let length = heap
             .strings
@@ -856,7 +949,14 @@ impl RegisterVM {
             return Ok(Value::from_smi(length));
         }
         let Some(index) = string_index(&units) else {
-            return Ok(VALUE_UNDEFINED);
+            // Anything that is not an index is resolved on %String.prototype%.
+            let prototype = realm
+                .string_prototype(heap)?
+                .as_object()
+                .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+            return Ok(heap
+                .lookup_named(prototype, name)?
+                .map_or(VALUE_UNDEFINED, |property| property.value));
         };
         let Some(unit) = usize::try_from(index)
             .ok()
@@ -1415,7 +1515,7 @@ impl RegisterVM {
                     // 10.4.3: a String answers "length" and its indices from the
                     // exotic object ToObject would produce, without producing it.
                     if target.is_string() {
-                        self.acc = self.string_member(target, name, heap)?;
+                        self.acc = self.string_member(target, name, heap, realm)?;
                         return Ok(None);
                     }
                     let Some(oref) = target.as_object() else {
@@ -1531,7 +1631,7 @@ impl RegisterVM {
                     if target.is_string() {
                         let key = self.read_reg(key)?;
                         let name = property_key(key, heap)?;
-                        self.acc = self.string_member(target, name, heap)?;
+                        self.acc = self.string_member(target, name, heap, realm)?;
                         return Ok(None);
                     }
                     let Some(oref) = target.as_object() else {
@@ -1949,6 +2049,23 @@ fn type_error(heap: &mut GenerationalHeap, realm: &Realm, message: &str) -> VMEr
         Ok(error) => VMError::Thrown(Value::from_object(error)),
         Err(error) => VMError::Heap(error),
     }
+}
+
+/// The largest integer a binary64 represents exactly, which bounds every index.
+const INTEGER_LIMIT: f64 = 9_007_199_254_740_992.0;
+
+/// `ToIntegerOrInfinity` of 7.1.5 for a primitive argument, clamped to the
+/// range an index can occupy.
+fn integer_argument(value: Value, heap: &GenerationalHeap) -> Result<i64, VMError> {
+    let number = primitive_number(value, heap)?;
+    if number.is_nan() {
+        return Ok(0);
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the value is clamped into the index range before truncation"
+    )]
+    Ok(number.clamp(-INTEGER_LIMIT, INTEGER_LIMIT) as i64)
 }
 
 /// UTF-16 code units of the property name `"length"`.
