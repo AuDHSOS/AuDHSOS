@@ -97,16 +97,21 @@ fixture m-autovacuum-incr.db "" "PRAGMA page_size=4096; PRAGMA auto_vacuum=INCRE
 "$sqlite" "$out/m-wal.db" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null
 rm -f "$out"/*-wal "$out"/*-shm
 
-# The recorded oracle: doubles, and the text the C library prints them as.
+# The recorded oracle: what the C library answers where SQL cannot ask.
 amalgamation="$(dirname "$sqlite")/sqlite3.c"
 if [ -f "$amalgamation" ]; then
     oracle="$(mktemp -d)/oracle"
-    "${CC:-cc}" -O1 -I "$(dirname "$amalgamation")" -o "$oracle" \
+    # SQLITE_PRIVATE is defined away so that the routines the
+    # amalgamation keeps to itself can be asked directly.
+    "${CC:-cc}" -O1 -DSQLITE_PRIVATE= -I "$(dirname "$amalgamation")" -o "$oracle" \
         tools/sqlite-oracle.c "$amalgamation" -lm -lpthread -ldl
-    "$oracle" fp-corpus >"$out/fp.corpus"
-    "$oracle" fp <"$out/fp.corpus" >"$out/fp.golden"
+    for mode in fp num; do
+        "$oracle" "$mode-corpus" >"$out/$mode.corpus"
+        "$oracle" "$mode" <"$out/$mode.corpus" >"$out/$mode.golden"
+        printf '%s.corpus\t%s cases\n' "$mode" \
+            "$(wc -l <"$out/$mode.corpus" | tr -d ' ')"
+    done
     rm -rf "$(dirname "$oracle")"
-    printf 'fp.corpus\t%s cases\n' "$(wc -l <"$out/fp.corpus" | tr -d ' ')"
 else
     echo "sqlite-fixtures: no $amalgamation; the oracle was not rebuilt" >&2
 fi

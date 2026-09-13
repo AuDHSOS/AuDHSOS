@@ -16,6 +16,7 @@ mod fp;
 mod header;
 mod image;
 mod matrix;
+mod number;
 mod page;
 mod parse;
 mod record;

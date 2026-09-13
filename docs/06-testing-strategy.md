@@ -3178,6 +3178,26 @@ rendering where the shorter one reads back as the same double.
   end of the table, and the rounding that carries into a digit that was
   not asked for.
 
+### 6.6.80 Numbers out of text (`db-sqlite`)
+
+D-142, document 15 step Q5. Which text is a number decides what `'1x' + 1`
+answers and whether `'10' < '9'` compares as text or as numbers, so
+`sqlite3AtoF` and `sqlite3Atoi64` are ported rather than approximated.
+
+- The recorded oracle: `fixtures/num.corpus` holds two hundred and fifteen
+  pieces of text, one per line as `x` and the bytes in hex so that a
+  space, a tab or a NUL is a case like any other — every rule of the two
+  routines by hand, both ways of writing a sign, an exponent with no
+  digits after it, the words that are numbers in other languages and not
+  in this one, the edge of the mantissa, the nineteen digits where an
+  integer may or may not hold the number, digit strings of every length
+  from one to twenty-five, and a point at every place of one.
+  `fixtures/num.golden` is what the two routines answered, written by
+  `tools/sqlite-oracle.c`. The test compares the code each returned, the
+  double, and the integer, so a difference in any rule fails it.
+- The round trip: every integer a reader would pick is written and read
+  back as itself, the two ends of the range included.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

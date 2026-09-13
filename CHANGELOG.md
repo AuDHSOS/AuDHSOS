@@ -15,12 +15,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   rendering where the shorter one reads back as the same double. The
   inverse — digits and a power back to the double nearest them — comes
   with it, and reading a number out of text will use it.
+- Numbers out of text in `db-sqlite`: `sqlite3AtoF` and `sqlite3Atoi64`
+  ported, so that which text is a number, which prefix of it counts and
+  which digits are dropped are what SQLite decides rather than what the
+  language's own parser decides. Two hundred and fifteen recorded cases
+  compare the code each routine returns, the double, and the integer.
 - `tools/sqlite-oracle.c`, a program that links the SQLite amalgamation
   and records what it answers. `sh tools/sqlite-fixtures.sh` builds and
   runs it, which is how a question SQL cannot ask — what text a
   particular double prints as — still has SQLite as its answer. Its
-  answers for eight thousand four hundred doubles at three precisions are
-  committed as `fp.corpus` and `fp.golden`.
+  answers for eight thousand four hundred doubles at three precisions, and
+  for the text put to the two readers of numbers, are committed beside the
+  tests that read them.
 
 - The statement parser of `db-sqlite`, which finishes step Q4 of document
   15: `SELECT`, `VALUES` and `WITH`, with the clauses the grammar hangs

@@ -14,6 +14,7 @@ pub mod fp;
 pub mod header;
 pub mod image;
 pub mod keyword;
+pub mod number;
 pub mod page;
 pub mod parse;
 pub mod record;
