@@ -110,7 +110,7 @@ the step claims is tested.
 | Q2 | Reading a schema into types: the `CREATE` text parsed rather than handed on, then columns, affinities, collations and the rowid rules. |
 | Q3 | The pager reading: page cache, the journal a reader must ignore, the WAL a reader must follow. |
 | Q4 | The tokenizer, the expression parser and the statement parser for the read half of SQL. **Done**, but for the window clauses. |
-| Q5 | The value semantics — storage classes, affinity, collation, and the decimal spelling of a double — and a tree walker that answers those statements from a file. **Done** for one table at a time. |
+| Q5 | The value semantics — storage classes, affinity, collation, and the decimal spelling of a double — and a tree walker that answers those statements from a file. **Done** for one table at a time, grouping and aggregates included. |
 | Q6 | The virtual machine, and the code generator that replaces the walker. |
 | Q7 | Writing: the b-tree writer, transactions, the rollback journal in all four modes, then the WAL. |
 | Q8 | The rest of the language: `CREATE`, `ALTER`, `DROP`, triggers, views, the built-in functions. |
@@ -199,10 +199,13 @@ SQLite; the script is what makes them reproducible rather than
 remembered. Eleven of them are the matrix of 16.6 holding the same three
 rows and the same index, and the rest are the cases one test each reads:
 a table of every storage class, four hundred rows over 512-byte pages, text
-in UTF-16, a payload that overflows, and a table with two indexes. The
-corpus files beside them are recorded oracles rather than databases:
-tokens, expressions, statements, and the doubles of `fp.corpus` with the
-text the C library prints each of them as.
+in UTF-16, a payload that overflows, a table with two indexes, the three
+shapes a key takes, a table with generated columns, and text that needs
+every width UTF-16 has. The corpus files beside them are recorded oracles
+rather than databases: tokens, expressions, statements, schemas, the
+statements of `query.corpus` with the rows the C library answered them
+with, and the doubles of `fp.corpus` with the text it prints each of them
+as.
 
 ## 16.9 Where it stands
 
@@ -237,4 +240,15 @@ pattern of `LIKE` and `GLOB` against every subject. What refuses by name
 is a column, a statement inside an expression, and the functions that
 read a clock, a random source or the connection — with `printf` and the
 mathematical ones, which want a library this repository does not have
-yet. What the crate cannot do is everything else in 16.3.
+yet.
+
+A statement is answered from a file: one table or none, with `WHERE`,
+`ORDER BY`, `LIMIT`, `DISTINCT`, a `GROUP BY` and a `HAVING`, and the
+seven aggregates — `count`, `sum`, `total`, `avg`, `min`, `max` and
+`group_concat`, each of them with `DISTINCT`. The answer is checked
+against a hundred and eighty-six statements the C library answered over
+those fixtures, the name of every column and the value of every field,
+under all three encodings. What refuses by name is a join, a compound, a
+`VALUES`, a `WITH`, a name with a schema in front of it, a table whose
+rows live in the key's own tree, and a column that is computed and not
+stored. What the crate cannot do is everything else in 16.3.

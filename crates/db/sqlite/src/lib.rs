@@ -7,6 +7,7 @@
 
 extern crate alloc;
 
+pub mod agg;
 pub mod ast;
 mod bytes;
 pub mod db;

@@ -3339,8 +3339,8 @@ tree: the first statement this port answers end to end.
   statement per line, and `fixtures/query.golden` is the columns SQLite
   named and the rows it answered, each value quoted, written by
   `tools/sqlite-oracle.c`. The comparison is the name of every column
-  and the value of every field, over ninety statements against eleven
-  files — every page size of the matrix, reserved space, a file that has
+  and the value of every field, over a hundred and eighty-six statements
+  against thirteen files — every page size of the matrix, reserved space, a file that has
   been through write-ahead logging, both kinds of auto-vacuum, a tree
   with an interior page, a row on overflow pages, a key that is the
   rowid, a key written backwards, and computed columns.
@@ -3351,11 +3351,11 @@ tree: the first statement this port answers end to end.
   as — `a + 1` with its spaces, `'lit'` with its quotes, and `a COLLATE
   NOCASE` whole, because a collation written around a column stops it
   being one.
-- What the engine refuses by name is counted rather than asserted: an
-  aggregate, a grouping, a compound, `VALUES`, a schema-qualified name, a
-  table whose rows live in the key's own tree, and a column that is
-  computed and not stored. The count is held down so that it can only
-  fall.
+- What the engine refuses by name is counted rather than asserted: a
+  compound, `VALUES`, a `WITH`, a schema-qualified name, a table whose
+  rows live in the key's own tree, a column that is computed and not
+  stored, and a `GROUP BY` that counts to a `*`. The count is held down
+  so that it can only fall.
 - Text in UTF-16 is answered as well as text in UTF-8, both ways round,
   and the three places the stored encoding shows through are tested
   under both: `hex`, `octet_length` and a cast to a blob. So is the one
@@ -3392,6 +3392,43 @@ the text a file may hold that the shell will not write.
   SQLite does not answers a different `length` and a different `substr`.
 - The lengths: every character written in as few bytes as it takes, and
   a count that stops at a NUL as a C string does.
+
+### 6.6.87 Grouping and the aggregates (`db-sqlite`)
+
+D-148, document 16 step Q5. The seven aggregates, `GROUP BY` and
+`HAVING`, tested through the same recorded oracle as the statements they
+belong to.
+
+- The accumulation: `count`, `sum`, `total`, `avg`, `min`, `max` and
+  `group_concat` over every storage class a column holds, each of them
+  also with `DISTINCT`, and each over no rows at all — where `count`
+  answers zero, `total` answers `0.0` and the rest answer `NULL`.
+- The three answers of `sum` that a port cannot guess: an integer while
+  the integers hold it, a double once one of the values is one, and the
+  refusal `integer overflow` where the integers stopped holding it and
+  no double came after. `total` over the same column answers a double
+  and never refuses, which is the pair that shows the difference.
+- The sum is a Kahan-Babuska-Neumaier one once it is a double, so the
+  cases include a value too large for a double to hold exactly, which is
+  split before it is added, and a value of infinity, whose compensation
+  term is not a number and is dropped rather than added back.
+- The bare columns of a group come from a definite row: the first row of
+  the group, unless a `min` or a `max` says otherwise, and both are
+  tested beside each other — `SELECT b, max(a)`, `SELECT b, min(a)` and
+  `SELECT a, count(*)` over the same three rows answer three different
+  rows.
+- What a `GROUP BY` term is: an expression, a whole number that counts
+  the answered columns from one, or a name the statement answers under
+  where the table has no column of that name. `GROUP BY 1` and `GROUP BY
+  2-1` are different groupings and both are cases.
+- The refusals: an aggregate in a `WHERE`, in a `GROUP BY`, in an
+  `ORDER BY` of a statement that does not group, and inside another
+  aggregate; a `HAVING` on a statement that groups nothing; a `DISTINCT`
+  aggregate with more than one argument; and a `GROUP BY` that counts
+  past the answer or before it.
+- `sqlite_image` asks every table of every fuzzed file for the
+  aggregates over its key, grouped, so that an accumulator reached from
+  a file that lies is reached the same way a scan is.
 
 ## 6.7 CI pipeline
 

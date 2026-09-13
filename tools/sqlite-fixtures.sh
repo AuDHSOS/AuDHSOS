@@ -116,6 +116,14 @@ if [ -f "$amalgamation" ]; then
         printf '%s.corpus\t%s cases\n' "$mode" \
             "$(wc -l <"$out/$mode.corpus" | tr -d ' ')"
     done
+    # The expression cases are named after the module that answers them.
+    "$oracle" expr-corpus >"$out/eval.corpus"
+    "$oracle" expr <"$out/eval.corpus" >"$out/eval.golden"
+    printf 'eval.corpus\t%s cases\n' "$(wc -l <"$out/eval.corpus" | tr -d ' ')"
+    # The query cases read the fixtures written above, so they come last.
+    "$oracle" query-corpus >"$out/query.corpus"
+    "$oracle" query "$out" <"$out/query.corpus" >"$out/query.golden"
+    printf 'query.corpus\t%s cases\n' "$(wc -l <"$out/query.corpus" | tr -d ' ')"
     rm -rf "$(dirname "$oracle")"
 else
     echo "sqlite-fixtures: no $amalgamation; the oracle was not rebuilt" >&2

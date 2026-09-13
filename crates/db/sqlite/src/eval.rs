@@ -40,7 +40,8 @@ pub enum Error {
     HexTooBig,
     /// A function called with a number of arguments it does not take.
     WrongArguments,
-    /// `abs` of the smallest integer, which has no positive.
+    /// A number that is not one: `abs` of the smallest integer, which
+    /// has no positive, and a `sum` the integers stopped holding.
     Overflow,
     /// An `ESCAPE` that is not one character.
     BadEscape,
@@ -93,6 +94,16 @@ pub trait Row {
     /// blob, each of which shows the bytes as they are stored.
     fn encoding(&self) -> Encoding {
         Encoding::Utf8
+    }
+
+    /// What the aggregate call `id` answered for the group this row
+    /// stands for, or nothing where the call is not an aggregate.
+    ///
+    /// An aggregate is answered by the call it was written as and not by
+    /// its name, so that two `count(*)` in one statement are one column
+    /// each and this module needs to know nothing about grouping.
+    fn aggregate(&self, _id: ExprId) -> Option<Value> {
+        None
     }
 }
 
@@ -221,7 +232,10 @@ fn answer(
             args,
             distinct,
             star,
-        } => called(arena, name, args, distinct, star, sql, row, deeper),
+        } => match row.aggregate(id) {
+            Some(value) => Ok(Answer::plain(value)),
+            None => called(arena, name, args, distinct, star, sql, row, deeper),
+        },
         Node::Like {
             op,
             value,

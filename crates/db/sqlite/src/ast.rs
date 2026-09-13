@@ -830,10 +830,17 @@ impl Arena {
     /// The height a node would have, from the children it names.
     fn height_of(&self, node: Node) -> u32 {
         let mut tallest = 0;
-        let mut under = |id: ExprId| tallest = tallest.max(self.height(id));
+        self.under(node, |id| tallest = tallest.max(self.height(id)));
+        tallest.saturating_add(1)
+    }
+
+    /// Calls `under` with every expression one node names.
+    ///
+    /// A statement under a node is a tree of its own, walked and bounded
+    /// on its own, so nothing here descends into one.
+    pub fn under(&self, node: Node, mut under: impl FnMut(ExprId)) {
         match node {
-            // A leaf has no children, and a statement is a tree of its
-            // own, walked and bounded on its own.
+            // A leaf names none.
             Node::Literal(_)
             | Node::Column { .. }
             | Node::Variable(_)
@@ -896,7 +903,6 @@ impl Arena {
             | Node::InSelect { value, .. }
             | Node::InTable { value, .. } => under(value),
         }
-        tallest.saturating_add(1)
     }
 
     /// Adds a run of children and answers where it went.

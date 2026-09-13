@@ -14,6 +14,13 @@
 use db_sqlite::db::Database;
 use db_sqlite::{Cell, Image, Kind, Record, Value};
 
+/// What is asked of every table the file names, before its name.
+const SHAPES: [&[u8]; 2] = [
+    b"SELECT * FROM ",
+    b"SELECT count(*), sum(rowid), total(rowid), avg(rowid), min(rowid), \
+      max(rowid), group_concat(rowid) FROM ",
+];
+
 /// The most rows a walk reads. A file can describe more; reading them adds
 /// no coverage and costs the fuzzer its time.
 const MAX_ROWS: usize = 4096;
@@ -32,21 +39,34 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
             .map(|table| table.name.clone())
             .collect();
         for name in names.iter().take(4) {
-            let mut sql = b"SELECT * FROM \"".to_vec();
+            let mut quoted = b"\"".to_vec();
             for byte in name {
                 if *byte == b'"' {
-                    sql.push(b'"');
+                    quoted.push(b'"');
                 }
-                sql.push(*byte);
+                quoted.push(*byte);
             }
-            sql.extend_from_slice(b"\" ORDER BY 1 LIMIT 64");
-            if let Ok(answer) = database.query(&sql) {
-                for row in &answer.rows {
-                    assert_eq!(
-                        row.len(),
-                        answer.names.len(),
-                        "a row of another width than the answer"
-                    );
+            quoted.push(b'"');
+            // A scan and a grouping, over the columns the file names and
+            // over the key it does not: the second is where every
+            // aggregate accumulates.
+            for shape in SHAPES {
+                for tail in [
+                    b" ORDER BY 1 LIMIT 64".as_slice(),
+                    b" GROUP BY rowid%4 ORDER BY 1 LIMIT 64".as_slice(),
+                ] {
+                    let mut sql = shape.to_vec();
+                    sql.extend_from_slice(&quoted);
+                    sql.extend_from_slice(tail);
+                    if let Ok(answer) = database.query(&sql) {
+                        for row in &answer.rows {
+                            assert_eq!(
+                                row.len(),
+                                answer.names.len(),
+                                "a row of another width than the answer"
+                            );
+                        }
+                    }
                 }
             }
         }

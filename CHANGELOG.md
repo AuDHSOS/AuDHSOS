@@ -7,6 +7,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Grouping and the aggregates in `db-sqlite`: `GROUP BY`, `HAVING` and
+  the seven aggregate functions — `count`, `sum`, `total`, `avg`, `min`,
+  `max` and `group_concat`, each of them with `DISTINCT`. `sum` keeps an
+  integer until one overflows and then carries on as a
+  Kahan-Babuska-Neumaier sum, so that `sum` refuses what `total` answers
+  and both are right, and a bare column of a group comes from the row
+  `updateAccumulator` would have taken: the first of the group, or the
+  row a `min` or a `max` settled on. A `GROUP BY` term is an expression,
+  a number that counts the answered columns, or a name the statement
+  answers under. The evaluator gained one hook for it — a row may answer
+  a function call by the node it was written as — and knows nothing else
+  about groups.
 - Doubles as decimal text in `db-sqlite`, the first half of step Q5 of
   document 16. `sqlite3FpDecode` is ported rather than approximated, so
   that a real prints digit for digit as SQLite prints it: the table of

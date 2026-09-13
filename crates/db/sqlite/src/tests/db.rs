@@ -81,10 +81,10 @@ fn answer(bytes: &[u8], sql: &str) -> Option<String> {
 
 #[test]
 fn every_statement_answers_what_the_c_library_answers() {
-    // What is left is the shapes this engine refuses by name: an
-    // aggregate, a grouping, a compound, `VALUES`, a name with a schema
-    // in front of it, a table whose rows live in the key's own tree, and
-    // a column that is computed and not stored.
+    // What is left is the shapes this engine refuses by name: a
+    // compound, `VALUES`, a `WITH`, a name with a schema in front of it,
+    // a table whose rows live in the key's own tree, a column that is
+    // computed and not stored, and a `GROUP BY` that counts to a `*`.
     let mut refused = 0;
     let cases = corpus();
     let answers = golden();
@@ -92,7 +92,10 @@ fn every_statement_answers_what_the_c_library_answers() {
     for ((name, sql), theirs) in cases.iter().zip(answers) {
         let bytes = fixture(name).unwrap_or_else(|| panic!("no fixture {name}"));
         let mine = answer(bytes, sql);
-        if theirs.starts_with('!') {
+        // A refusal before the first row is a line of its own; one
+        // after some rows is a field at the end of the line. Either way
+        // this engine answers the whole statement or none of it.
+        if theirs.starts_with('!') || theirs.contains("\t!") {
             assert!(mine.is_none(), "{sql} over {name} is refused by SQLite");
             continue;
         }
@@ -102,7 +105,7 @@ fn every_statement_answers_what_the_c_library_answers() {
         };
         assert_eq!(mine, theirs, "{sql} over {name}");
     }
-    assert_eq!(refused, 10, "what this engine does not answer yet");
+    assert_eq!(refused, 8, "what this engine does not answer yet");
 }
 
 #[test]
