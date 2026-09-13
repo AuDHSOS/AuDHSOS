@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `mod` in `db-sqlite`, whose answer is exact: the divisor is doubled up
+  to the dividend and halved back down, and every subtraction is one the
+  format rounds nothing in, so no math library is needed and the answer
+  is the bits `fmod` answers. `changes`, `total_changes` and
+  `last_insert_rowid` answer nought, which is what a connection that has
+  written nothing answers.
+
 - The configuration matrix of `db-sqlite` grows from eleven fixtures to
   nineteen — five page sizes, three encodings, three reserved sizes, all
   six journal modes and the three vacuum settings — and the query engine

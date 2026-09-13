@@ -3777,6 +3777,15 @@ an answer is the same bits the C library answers.
   `SQLITE_MAX_LENGTH` refuses rather than asking for the room.
 - `ceil`, `floor` and `trunc` answer an integer argument as it stands,
   which is `ceilingFunc` reading the numeric type first.
+- `mod` is `fmod`, whose answer is exact: the divisor is doubled up to
+  the dividend and halved back down, and every subtraction is one the
+  format rounds nothing in. The cases reach both signs of each operand,
+  a divisor of nought, a dividend and a divisor at the ends of the range
+  including the smallest subnormal against the largest normal, and an
+  infinity, which has no remainder.
+- `changes`, `total_changes` and `last_insert_rowid` answer nought,
+  which is what a connection that has written nothing answers and what
+  this engine will answer until Q7.
 
 ### 6.6.100 The engine under every configuration (`db-sqlite`)
 

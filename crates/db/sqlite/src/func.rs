@@ -59,6 +59,11 @@ pub enum Function {
     Trunc,
     /// `zeroblob(N)`.
     Zeroblob,
+    /// `changes()`, `total_changes()` and `last_insert_rowid()`, each
+    /// of which is nought for a connection that has written nothing.
+    Written,
+    /// `mod(X,Y)`.
+    Modulo,
     /// `length(X)`.
     Length,
     /// `like(P,X)` and `like(P,X,E)`, and the operator.
@@ -303,6 +308,24 @@ const TABLE: &[Entry] = &[
         function: Function::Rtrim,
     },
     Entry {
+        name: b"changes",
+        least: 0,
+        most: Some(0),
+        function: Function::Written,
+    },
+    Entry {
+        name: b"last_insert_rowid",
+        least: 0,
+        most: Some(0),
+        function: Function::Written,
+    },
+    Entry {
+        name: b"mod",
+        least: 2,
+        most: Some(2),
+        function: Function::Modulo,
+    },
+    Entry {
         name: b"pi",
         least: 0,
         most: Some(0),
@@ -361,6 +384,12 @@ const TABLE: &[Entry] = &[
         least: 1,
         most: Some(1),
         function: Function::Unlikely,
+    },
+    Entry {
+        name: b"total_changes",
+        least: 0,
+        most: Some(0),
+        function: Function::Written,
     },
     Entry {
         name: b"trunc",
@@ -440,6 +469,17 @@ pub fn call(
             )),
         },
         Function::Pi => Value::Real(core::f64::consts::PI),
+        // This engine reads and does not write, so no statement of it
+        // has ever changed a row or made a rowid. Q7 of document 16 is
+        // where these stop being nought.
+        Function::Written => Value::Int(0),
+        // `math2Func`: either value not a number after the numeric
+        // affinity answers nothing, and a remainder that is not a number
+        // answers nothing as well.
+        Function::Modulo => match (numeric(first), numeric(arg(1))) {
+            (Some(left), Some(right)) => real(remainder(left, right)),
+            _ => Value::Null,
+        },
         // `math1Func`: a value that is not a number after the numeric
         // affinity is one the function answers nothing for.
         Function::Degrees => {
@@ -1211,6 +1251,18 @@ fn set(pattern: &[u8], from: &mut usize, subject: &[u8], at: &mut usize) -> bool
     c2 != 0 && seen != invert
 }
 
+/// A double as a value, which is nothing where the double is not a
+/// number.
+///
+/// `sqlite3VdbeMemSetDouble` answers `NULL` for a NaN, so a function
+/// whose answer is one answers nothing.
+const fn real(number: f64) -> Value {
+    if number.is_nan() {
+        return Value::Null;
+    }
+    Value::Real(number)
+}
+
 /// A value as the double it is, where it is a number once the numeric
 /// affinity has been applied to it.
 ///
@@ -1261,4 +1313,47 @@ fn ceiling(number: f64) -> f64 {
 fn flooring(number: f64) -> f64 {
     let whole = truncated(number);
     if whole > number { whole - 1.0 } else { whole }
+}
+
+/// What is left of `left` after taking `right` out of it as many whole
+/// times as it goes, which is `fmod`.
+///
+/// The divisor is doubled until one more doubling would pass the
+/// dividend, then halved back down, and what fits is taken out at every
+/// step. Each subtraction is exact: the loop holds the divisor at no
+/// more than what is left and more than half of it, which is where a
+/// subtraction of two doubles rounds nothing.
+fn remainder(left: f64, right: f64) -> f64 {
+    // An infinite dividend has no remainder, and neither has a divisor
+    // of nought. Neither operand is ever a NaN: SQLite keeps one as a
+    // `NULL` and this engine holds no value that is one.
+    if !left.is_finite() || right == 0.0 {
+        return f64::NAN;
+    }
+    let mut rest = left.abs();
+    let divisor = right.abs();
+    if rest < divisor {
+        // Under the divisor already, and an infinite divisor as well:
+        // what is left is the whole of it.
+        return left;
+    }
+    let mut scaled = divisor;
+    let mut doublings = 0u32;
+    while scaled * 2.0 <= rest {
+        scaled *= 2.0;
+        doublings = doublings.saturating_add(1);
+    }
+    loop {
+        if scaled <= rest {
+            rest -= scaled;
+        }
+        if doublings == 0 {
+            break;
+        }
+        scaled /= 2.0;
+        doublings = doublings.saturating_sub(1);
+    }
+    // What is left carries the sign of what it was taken out of, which a
+    // zero carries as well.
+    if left.is_sign_negative() { -rest } else { rest }
 }
