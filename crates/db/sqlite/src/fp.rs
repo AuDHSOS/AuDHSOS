@@ -746,6 +746,23 @@ pub fn fixed(r: f64, decimals: i32) -> Vec<u8> {
     )
 }
 
+/// `r` as text, the way `%!0.17g` prints it, which is the way `quote`
+/// writes a real: an infinity is the largest number a reader takes
+/// rather than a word, because a word is no SQL literal.
+#[must_use]
+pub fn quoted(r: f64) -> Vec<u8> {
+    rendering(
+        r,
+        &Style {
+            shape: Shape::Shortest,
+            precision: DIGITS,
+            wide: true,
+            zeros: true,
+            ..Style::default()
+        },
+    )
+}
+
 /// The bytes of a rendering the engine asks for itself. The precision
 /// is at most twenty digits and the point at most three hundred and
 /// nine, so a limit of a thousand is never reached.

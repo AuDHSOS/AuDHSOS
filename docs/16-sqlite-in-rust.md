@@ -85,8 +85,8 @@ Each rule is checkable, and each makes a later thing possible.
 | `schema` | The `CREATE` text of `sqlite_schema` to columns, affinities, collations, the rowid rules and the indexes. | D-145, D-159, Q2 |
 | `fp`, `number` | A double as decimal text and back: `sqlite3FpDecode`, the `%f`, `%e` and `%g` conversions it feeds, `sqlite3AtoF`, `sqlite3Atoi64`. | D-142, D-161, Q5 |
 | `value`, `utf8` | Storage classes, affinity, collation, comparison, the three text encodings. | D-143, D-147, Q5 |
-| `eval`, `func`, `agg` | An expression over a row; forty-eight scalar functions; seven aggregates; the four shapes of statement an expression uses. | D-143, D-144, D-148, D-154, D-160, Q5 |
-| `format` | `format(F,...)` and `printf(F,...)`: the flags, the field width, the precision, and the twenty-three conversions of `sqlite3_str_vappendf`. | D-161, Q8 |
+| `eval`, `func`, `agg` | An expression over a row; fifty scalar functions; seven aggregates; the four shapes of statement an expression uses. | D-143, D-144, D-148, D-154, D-160, Q5 |
+| `format` | `format(F,...)` and `printf(F,...)`: the flags, the field width, the precision, and the twenty-three conversions of `sqlite3_str_vappendf`. `unistr(X)` reads the escapes `%#q` writes, and `quote(X)` of text is `%Q` of it. | D-161, Q8 |
 | `db` | A statement answered from a file by walking the sides of its `FROM` once, held to the rowids the `WHERE` leaves each. | D-146, D-149, D-150, D-153, D-158, Q5 |
 
 ### What a statement may hold
@@ -117,7 +117,7 @@ Each rule is checkable, and each makes a later thing possible.
 | Schemas | 169 | recorded oracle, `schema.corpus` |
 | Doubles as text | 8404, at three precisions | recorded oracle, `fp.corpus` |
 | Text as numbers | 215 | recorded oracle, `num.corpus` |
-| Expressions, answered | 23610 | recorded oracle, `eval.corpus` |
+| Expressions, answered | 23836 | recorded oracle, `eval.corpus` |
 | Statements, answered | 785 over 32 fixtures | recorded oracle, `query.corpus` |
 | A database whose content is in its log | 26 cases over `logged.db` | the fixture and logs built by hand |
 | A database caught mid-transaction | 19 cases over `rollback.db`, and the journals two modes leave behind | the fixture and journals built by hand |
@@ -137,10 +137,9 @@ of lines and 100 percent of branches, in both instrumentations.
 | 4 | The rest of the language: `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, triggers, views, a `WITH` written `RECURSIVE`. | Q8 |
 | 5 | The window clauses, which the parser refuses. | Q8 |
 | 6 | The functions whose answers are not exact: `sqrt`, `exp`, `ln`, `log`, `pow` and the trigonometric set. See D-160. | Q8 |
-| 7 | `unistr`, and the escapes `%#q` writes for it to read. | Q8 |
-| 8 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
-| 9 | The matrix run across every level of the suite rather than the format alone. | Q9 |
-| 10 | MC/DC, which the pinned toolchain does not emit. See D4 (16.9). | Q10 |
+| 7 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
+| 8 | The matrix run across every level of the suite rather than the format alone. | Q9 |
+| 9 | MC/DC, which the pinned toolchain does not emit. See D4 (16.9). | Q10 |
 
 ## 16.7 Decision D1: the engine is a port of the routines
 

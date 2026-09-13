@@ -3,13 +3,14 @@
 
 //! The format language against arbitrary bytes: no format may panic, no
 //! format may answer more bytes than a value holds, and a format with no
-//! conversion in it answers itself.
+//! conversion in it answers itself. `unistr` reads the same bytes, and
+//! answers at most as many as it was given.
 //!
 //! A format reader is where a width, a precision and a count of copies
 //! meet arithmetic on the bytes they describe, and every one of those is
 //! a panic in Rust rather than a wrong answer.
 
-use db_sqlite::format::format;
+use db_sqlite::format::{format, quoted_text, unistr};
 use db_sqlite::func::MAX_LENGTH;
 use db_sqlite::value::Value;
 
@@ -64,6 +65,25 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
     let Some((pick, rest)) = bytes.split_first() else {
         return;
     };
+    // Every escape `unistr` reads is longer than the character it
+    // names, so the answer is never longer than the argument.
+    if let Ok(read) = unistr(rest) {
+        assert!(
+            read.len() <= rest.len(),
+            "a `unistr` answer longer than what it read"
+        );
+    }
+    // A literal holds the text, the quotes around it and what it
+    // escapes, which is at most six bytes for each byte read.
+    for escapes in [false, true] {
+        let Ok(literal) = quoted_text(rest, escapes) else {
+            continue;
+        };
+        assert!(
+            literal.len() <= rest.len() * 6 + 11,
+            "a literal longer than the escapes allow"
+        );
+    }
     if wide(rest) {
         return;
     }

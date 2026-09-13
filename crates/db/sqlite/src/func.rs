@@ -103,6 +103,10 @@ pub enum Function {
     Unhex,
     /// `unicode(X)`.
     Unicode,
+    /// `unistr(X)`.
+    Unistr,
+    /// `unistr_quote(X)`.
+    UnistrQuote,
     /// `likely(X)`, `unlikely(X)` and `likelihood(X,Y)`, which answer
     /// their first argument and tell the planner what to expect.
     Unlikely,
@@ -303,6 +307,18 @@ const TABLE: &[Entry] = &[
         least: 1,
         most: Some(1),
         function: Function::Quote,
+    },
+    Entry {
+        name: b"unistr",
+        least: 1,
+        most: Some(1),
+        function: Function::Unistr,
+    },
+    Entry {
+        name: b"unistr_quote",
+        least: 1,
+        most: Some(1),
+        function: Function::UnistrQuote,
     },
     Entry {
         name: b"replace",
@@ -667,7 +683,14 @@ pub fn call(
             }
             _ => Value::Null,
         },
-        Function::Quote => Value::Text(quote(&first)),
+        Function::Quote => Value::Text(quote(&first, false)?),
+        Function::UnistrQuote => Value::Text(quote(&first, true)?),
+        // A value with no text answers nothing, and a `\` that names no
+        // character refuses.
+        Function::Unistr => match first.text() {
+            Some(text) => Value::Text(crate::format::unistr(&text)?),
+            None => Value::Null,
+        },
         Function::Round => round(&first, args.get(1)),
         Function::Concat => {
             let mut out = Vec::new();
@@ -941,32 +964,15 @@ fn nibble(digit: u8) -> u8 {
     u8::try_from(char::from(digit).to_digit(16).unwrap_or(0)).unwrap_or(0)
 }
 
-/// `quote(X)`, which is what `sqlite3QuoteValue` writes.
-fn quote(value: &Value) -> Vec<u8> {
-    match value {
+/// `quote(X)`, which is what `sqlite3QuoteValue` writes. With `escapes`
+/// a control character in text is written as the escape `unistr` reads,
+/// which is `unistr_quote(X)`.
+fn quote(value: &Value, escapes: bool) -> Result<Vec<u8>, Error> {
+    Ok(match value {
         Value::Null => b"NULL".to_vec(),
         Value::Int(number) => number::integer_text(*number),
-        // The zero flag is what shows an infinity as `9.0e+999`.
-        Value::Real(number) if number.is_infinite() => {
-            if *number < 0.0 {
-                b"-9.0e+999".to_vec()
-            } else {
-                b"9.0e+999".to_vec()
-            }
-        }
-        Value::Real(number) => fp::text(*number, fp::DIGITS),
-        Value::Text(bytes) => {
-            let mut out = alloc::vec![b'\''];
-            // The text is built from a C string, so it stops at a NUL.
-            for byte in bytes.split(|byte| *byte == 0).next().unwrap_or_default() {
-                if *byte == b'\'' {
-                    out.push(b'\'');
-                }
-                out.push(*byte);
-            }
-            out.push(b'\'');
-            out
-        }
+        Value::Real(number) => fp::quoted(*number),
+        Value::Text(bytes) => crate::format::quoted_text(bytes, escapes)?,
         Value::Blob(bytes) => {
             let mut out = alloc::vec![b'X', b'\''];
             for byte in bytes {
@@ -976,7 +982,7 @@ fn quote(value: &Value) -> Vec<u8> {
             out.push(b'\'');
             out
         }
-    }
+    })
 }
 
 /// `round(X)` and `round(X,Y)`.

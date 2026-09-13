@@ -3812,9 +3812,9 @@ held and not what they are, so every configuration answers the same.
   otherwise. The journal itself is a second file, which 6.6.94 and
   6.6.95 read.
 
-### 6.6.101 The format language (`db-sqlite`)
+### 6.6.101 The format language and `unistr` (`db-sqlite`)
 
-D-161. `eval.corpus` grows by six thousand six hundred cases, and what
+D-161. `eval.corpus` grows by six thousand eight hundred cases, and what
 they hold is that a format writes the bytes the C library writes.
 
 - The cases: a hundred and fourteen formats against twenty-seven values
@@ -3842,6 +3842,17 @@ they hold is that a format writes the bytes the C library writes.
 - What no statement reaches is a unit test beside the corpus: `%0f` of a
   NaN, which writes `null`, because a NaN is a `NULL` before it is a
   value of any statement.
+- `unistr` has a case per form it reads — `\XXXX`, `\+XXXXXX`, `\uXXXX`,
+  `\UXXXXXXXX` and `\\` — and a case per way of writing one wrong: too
+  few digits for the form, a character that is no digit, a backslash at
+  the end, and a code point past what a character is. A pair of
+  surrogates is written as two characters of three bytes each, which is
+  what the C library writes; `quote` of the answer is how the test sees
+  it.
+- `quote` and `unistr_quote` are held to the same corpus as everything
+  else, because every case is compared through `quote`: the two are one
+  conversion of the format language under two flags, so a difference
+  between them is a difference in `%Q`.
 
 ## 6.7 CI pipeline
 

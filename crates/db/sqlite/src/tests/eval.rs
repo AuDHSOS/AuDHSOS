@@ -109,6 +109,7 @@ fn what_is_not_written_yet_refuses_rather_than_guessing() {
     assert_eq!(refusal("substr('a')"), Error::WrongArguments);
     assert_eq!(refusal("abs(-9223372036854775807-1)"), Error::Overflow);
     assert_eq!(refusal("'a' LIKE 'b' ESCAPE 'xy'"), Error::BadEscape);
+    assert_eq!(refusal("unistr('\\xyz')"), Error::BadUnicode);
     assert_eq!(refusal("likelihood(1,0)"), Error::BadProbability);
     assert_eq!(refusal("count(*)"), Error::Unsupported);
     assert_eq!(refusal("count(DISTINCT 1)"), Error::Unsupported);

@@ -45,6 +45,9 @@ pub enum Error {
     Overflow,
     /// An `ESCAPE` that is not one character.
     BadEscape,
+    /// A `\` in the argument of `unistr` that no run of hex digits
+    /// follows.
+    BadUnicode,
     /// The second argument of `likelihood` is not a fraction written as
     /// a literal.
     BadProbability,

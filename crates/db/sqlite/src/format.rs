@@ -16,12 +16,17 @@
 //!
 //! Every conversion writes a bounded number of bytes per byte of the
 //! format and per argument, so one call is O(n) in what it writes.
+//!
+//! `unistr(X)` is here as well, because it reads the escapes `%#q` and
+//! `%#Q` write, and `quote(X)` is `%Q` of its argument where that
+//! argument is text.
 
 use alloc::vec::Vec;
 
 use crate::eval::Error;
 use crate::fp::{self, Shape, Style};
 use crate::func::MAX_LENGTH;
+use crate::utf8;
 use crate::value::Value;
 
 /// The longest buffer a conversion takes for itself, which is
@@ -60,6 +65,90 @@ pub fn format(args: &[Value]) -> Result<Value, Error> {
     } else {
         Ok(Value::Null)
     }
+}
+
+/// Text as the SQL literal `%Q` writes it, and with `escapes` as `%#Q`
+/// writes it, which is what `quote(X)` and `unistr_quote(X)` answer for
+/// text.
+///
+/// # Errors
+///
+/// [`Error::TooBig`] where the literal would pass what a value holds.
+pub fn quoted_text(text: &[u8], escapes: bool) -> Result<Vec<u8>, Error> {
+    let value = Value::Text(text.to_vec());
+    let mut out = Out {
+        bytes: Vec::new(),
+        touched: false,
+    };
+    let mut args = Arguments {
+        values: core::slice::from_ref(&value),
+        used: 0,
+    };
+    let field = Field {
+        alternate: escapes,
+        ..Field::default()
+    };
+    escape(&mut out, &field, b'Q', &mut args)?;
+    Ok(out.bytes)
+}
+
+/// `unistr(X)`: `\XXXX`, `\+XXXXXX`, `\uXXXX` and `\UXXXXXXXX` read as
+/// the characters they name, `\\` as one backslash, and every other
+/// byte as itself.
+///
+/// This is `unistrFunc`, which is PostgreSQL's function of that name.
+///
+/// # Errors
+///
+/// [`Error::BadUnicode`] where a `\` is followed by neither a `\` nor a
+/// run of hex digits long enough for the form it names.
+pub fn unistr(text: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < text.len() {
+        let rest = text.get(at..).unwrap_or_default();
+        // `strchr` stops at a nought, so a backslash behind one in the
+        // same value is not one this reads.
+        let Some(step) = cropped(rest).iter().position(|byte| *byte == b'\\') else {
+            out.extend_from_slice(rest);
+            break;
+        };
+        out.extend_from_slice(rest.get(..step).unwrap_or_default());
+        at = at.saturating_add(step);
+        let next = text.get(at.saturating_add(1)).copied().unwrap_or(0);
+        let (from, digits, width) = if next == b'\\' {
+            out.push(b'\\');
+            at = at.saturating_add(2);
+            continue;
+        } else if next.is_ascii_hexdigit() {
+            (1, 4, 5)
+        } else if next == b'+' {
+            (2, 6, 8)
+        } else if next == b'u' {
+            (2, 4, 6)
+        } else if next == b'U' {
+            (2, 8, 10)
+        } else {
+            return Err(Error::BadUnicode);
+        };
+        let value = point(text, at.saturating_add(from), digits)?;
+        utf8::write(&mut out, value);
+        at = at.saturating_add(width);
+    }
+    Ok(out)
+}
+
+/// The value of `digits` hex digits at `at`, which is `isNHex`. A byte
+/// the value does not hold is read as the nought the C string ends in,
+/// which is no hex digit.
+fn point(text: &[u8], at: usize, digits: usize) -> Result<u32, Error> {
+    let mut value: u32 = 0;
+    for step in 0..digits {
+        let byte = text.get(at.saturating_add(step)).copied().unwrap_or(0);
+        let digit = char::from(byte).to_digit(16).ok_or(Error::BadUnicode)?;
+        value = value.wrapping_shl(4).wrapping_add(digit);
+    }
+    Ok(value)
 }
 
 /// The bytes up to the first nought, which is what `strlen` counts of

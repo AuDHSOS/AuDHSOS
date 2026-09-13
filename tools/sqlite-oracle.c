@@ -349,6 +349,21 @@ static const char *aOther[] = {
   "ceil(1.2)", "ceil(-1.2)", "ceil(1.0)", "ceil(-0.5)", "ceil(0.5)",
   "ceil(0.0)", "ceil(-0.0)", "ceil(7)", "ceil(-7)", "ceil('2.5')",
   "ceil('x')", "ceil(NULL)", "ceil(x'01')", "ceil(9007199254740993.0)",
+  /* `unistr` reads the escapes `%#q` writes, one form per line. */
+  "unistr('\\0041')", "unistr('\\u0041')", "unistr('\\U00000041')",
+  "unistr('\\+000041')", "unistr('\\\\')", "unistr('a\\\\b')",
+  "unistr('\\00e4')", "unistr('\\d83d\\de00')", "unistr('\\U0001d11e')",
+  "unistr('\\U7fffffff')", "unistr('\\0000')", "unistr('a\\0041b')",
+  "unistr('\\0041\\0042')", "unistr('x')", "unistr('')",
+  "unistr('\\xyz')", "unistr('\\')", "unistr('\\004')", "unistr('\\u12')",
+  "unistr('\\+00')", "unistr('\\U1234')", "unistr('\\uABCD')",
+  "unistr('\\uabcd')", "unistr('a\\')", "unistr(5)", "unistr(2.5)",
+  "unistr(NULL)", "unistr(x'5C753030343100')",
+  "unistr_quote('a''b')", "unistr_quote(char(1)||'x')",
+  "unistr_quote('a\\\\b')", "unistr_quote(2.5)", "unistr_quote(NULL)",
+  "unistr_quote(x'41')", "unistr_quote(9e999)", "unistr_quote(-9e999)",
+  "unistr_quote('')", "quote(char(1)||'x')", "quote(9e999)",
+  "unistr(unistr_quote('a'))",
   "ceil(1e308)", "ceil(-1e308)", "ceil(4503599627370495.5)",
   "ceiling(1.2)", "ceiling(-1.2)",
   "floor(1.2)", "floor(-1.2)", "floor(1.0)", "floor(-0.5)", "floor(0.5)",
@@ -466,8 +481,9 @@ static const char *aOther[] = {
 /* The functions of one argument. */
 static const char *aUnary[] = {
   "typeof", "length", "octet_length", "abs", "sign", "hex", "unhex",
-  "unicode", "quote", "lower", "upper", "trim", "ltrim", "rtrim", "round",
-  "likely", "unlikely", "char", "min", "max", "concat"
+  "unicode", "quote", "unistr", "unistr_quote", "lower", "upper", "trim",
+  "ltrim", "rtrim", "round", "likely", "unlikely", "char", "min", "max",
+  "concat"
 };
 
 /* The functions of two arguments. */

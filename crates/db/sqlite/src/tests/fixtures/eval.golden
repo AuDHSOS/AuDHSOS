@@ -6920,6 +6920,46 @@ null	NULL
 null	NULL
 null	NULL
 real	9007199254740992.0
+text	'A'
+text	'A'
+text	'A'
+text	'A'
+text	'\'
+text	'a\b'
+text	'√§'
+text	'Ì†ΩÌ∏Ä'
+text	'ùÑû'
+text	'˜øøø'
+text	''
+text	'aAb'
+text	'AB'
+text	'x'
+text	''
+!	invalid Unicode escape
+!	invalid Unicode escape
+!	invalid Unicode escape
+!	invalid Unicode escape
+!	invalid Unicode escape
+!	invalid Unicode escape
+text	'ÍØç'
+text	'ÍØç'
+!	invalid Unicode escape
+text	'5'
+text	'2.5'
+null	NULL
+text	'A'
+text	'''a''''b'''
+text	'unistr(''\u0001x'')'
+text	'''a\\b'''
+text	'2.5'
+text	'NULL'
+text	'X''41'''
+text	'9.0e+999'
+text	'-9.0e+999'
+text	''''''
+text	'''x'''
+text	'9.0e+999'
+text	'''a'''
 real	1.0e+308
 real	-1.0e+308
 real	4503599627370496.0
@@ -13978,6 +14018,30 @@ integer	65
 null	NULL
 integer	65
 integer	32
+text	'NULL'
+text	'0'
+text	'2'
+text	'-2'
+text	'2.5'
+text	'''abc'''
+text	'''2'''
+text	''''''
+text	'X''4142'''
+text	'X'''''
+text	'''AB'''
+text	'''  a  '''
+null	NULL
+text	'0'
+text	'2'
+text	'-2'
+text	'2.5'
+text	'abc'
+text	'2'
+text	''
+text	'AB'
+text	''
+text	'AB'
+text	'  a  '
 text	'NULL'
 text	'0'
 text	'2'
