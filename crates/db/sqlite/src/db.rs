@@ -31,8 +31,8 @@ use alloc::vec::Vec;
 
 use crate::agg::{self, Accumulator, Aggregate};
 use crate::ast::{
-    Arena, Compound, Distinct, ExprId, JoinKind, Literal, Node, Order, Range, ResultColumn, Select,
-    SelectId, SourceKind, Span, UnaryOp,
+    Arena, BinaryOp, Compound, Distinct, ExprId, JoinKind, Literal, Node, Order, Range,
+    ResultColumn, Select, SelectId, SourceKind, Span, UnaryOp,
 };
 use crate::eval::{self, Used, evaluate_collated, evaluate_compared, evaluate_row};
 use crate::header::Encoding;
@@ -242,6 +242,9 @@ struct Side<'a> {
     /// The columns a `USING` or a `NATURAL` matches it by, which are
     /// also the columns it does not answer a bare name with.
     using: Vec<Vec<u8>>,
+    /// The rowids the walk is held to, where the `WHERE` names them: the
+    /// smallest it descends to and the largest it ends past.
+    range: (Option<i64>, Option<i64>),
 }
 
 impl Side<'_> {
@@ -527,7 +530,8 @@ impl<'a> Database<'a> {
             let cursor = Cursor::new(self.collation(), self.encoding, reach);
             return listed(arena, &select, sql, &cursor);
         }
-        let sides = self.sides(arena, &select, sql, scope)?;
+        let mut sides = self.sides(arena, &select, sql, scope)?;
+        held_to(arena, select.filter, sql, &mut sides);
         let shape = shape(arena, &select, sql, &sides)?;
         let collations = self.collations(&shape);
         let names: Vec<Vec<u8>> = shape
@@ -663,6 +667,7 @@ impl<'a> Database<'a> {
                 kind: source.join.kind,
                 on: source.on,
                 using,
+                range: (None, None),
             });
         }
         Ok(out)
@@ -730,6 +735,7 @@ impl<'a> Database<'a> {
                     kind: JoinKind::Inner,
                     on: None,
                     using: Vec::new(),
+                    range: (None, None),
                 };
                 let column = one(&side.shape)?;
                 let mut rows = Vec::new();
@@ -835,7 +841,7 @@ impl<'a> Database<'a> {
             Source::Table(stored) => Feed::Tree(Box::new(Tree {
                 image: self.image,
                 stored,
-                walk: self.walk(stored),
+                walk: self.walk(stored, side.range),
                 encoding: self.encoding,
                 collation: self.collation(),
                 payload: Vec::new(),
@@ -846,11 +852,11 @@ impl<'a> Database<'a> {
 
     /// The rows of a table, whichever kind of tree holds them, each with
     /// the rowid where the table has one.
-    const fn walk(&self, stored: &Stored) -> Walk<'a> {
+    const fn walk(&self, stored: &Stored, range: (Option<i64>, Option<i64>)) -> Walk<'a> {
         if stored.table.without_rowid {
             Walk::Index(self.image.entries(stored.root))
         } else {
-            Walk::Table(self.image.rows(stored.root))
+            Walk::Table(self.image.rows_between(stored.root, range.0, range.1))
         }
     }
 
@@ -1038,6 +1044,144 @@ fn listed(
             key: None,
         },
     })
+}
+
+/// Holds each side's walk to the rowids the `WHERE` leaves it.
+///
+/// Only the terms a top-level `AND` spine holds are read, because a term
+/// under an `OR` or a `NOT` does not have to be true of every row the
+/// statement answers. A row the range leaves out is a row that same term
+/// would refuse, so the answer is what a scan of the whole tree answers
+/// and the cost is O(log n + k) for the `k` rows the range holds.
+fn held_to(arena: &Arena, filter: Option<ExprId>, sql: &[u8], sides: &mut [Side<'_>]) {
+    let Some(filter) = filter else {
+        return;
+    };
+    let mut terms = alloc::vec![filter];
+    while let Some(id) = terms.pop() {
+        let Some(Node::Binary { op, left, right }) = arena.node(id) else {
+            continue;
+        };
+        if op == BinaryOp::And {
+            terms.push(left);
+            terms.push(right);
+            continue;
+        }
+        // `a < 5` and `5 > a` say the same thing about `a`, so the
+        // operator turns over with the operands.
+        let Some((at, op, bound)) = pinned(arena, op, left, right, sql, sides)
+            .or_else(|| pinned(arena, flipped(op), right, left, sql, sides))
+        else {
+            continue;
+        };
+        for side in sides.iter_mut().skip(at).take(1) {
+            narrow(&mut side.range, op, bound);
+        }
+    }
+}
+
+/// What a term says about one side's rowid: which side, which way, and
+/// the number it is held to.
+fn pinned(
+    arena: &Arena,
+    op: BinaryOp,
+    column: ExprId,
+    value: ExprId,
+    sql: &[u8],
+    sides: &[Side<'_>],
+) -> Option<(usize, BinaryOp, i64)> {
+    if !matches!(
+        op,
+        BinaryOp::Eq | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+    ) {
+        return None;
+    }
+    let at = keyed(arena, column, sql, sides)?;
+    // A term that names a column is a term about the row, and the row is
+    // what the walk is being planned for, so only a value the walk needs
+    // no row to read is one it can be held to.
+    let Ok(Value::Int(bound)) = evaluate_row(arena, value, sql, &eval::NoRow) else {
+        // A value that is not a whole number holds the walk to nothing:
+        // a scan answers it, more slowly and just as rightly.
+        return None;
+    };
+    Some((at, op, bound))
+}
+
+/// Which side's rowid an expression names, where it names one.
+fn keyed(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<usize> {
+    let Node::Column {
+        schema,
+        table,
+        column,
+    } = arena.node(id)?
+    else {
+        return None;
+    };
+    if schema.is_some_and(|span| !is_main(span.text(sql))) {
+        return None;
+    }
+    let named = table.map(|span| span.text(sql));
+    let column = column.text(sql);
+    let mut found = None;
+    for (at, side) in sides.iter().enumerate() {
+        if named.is_some_and(|named| !side.named(named)) {
+            continue;
+        }
+        // The three names the rowid answers to reach a table that keeps
+        // one; a column of the side that is another name for the rowid
+        // reaches it as well.
+        let keyed = side.shape.keyed
+            && (column.eq_ignore_ascii_case(b"rowid")
+                || column.eq_ignore_ascii_case(b"oid")
+                || column.eq_ignore_ascii_case(b"_rowid_")
+                || side
+                    .shape
+                    .key
+                    .as_ref()
+                    .is_some_and(|key| key.eq_ignore_ascii_case(column)));
+        if !keyed && !side.shape.has(column) {
+            continue;
+        }
+        if found.is_some() {
+            // A name two sides answer is ambiguous, and the statement
+            // refuses it later; nothing is planned for it here.
+            return None;
+        }
+        found = keyed.then_some(at);
+    }
+    found
+}
+
+/// The operator that says the same thing with its operands the other way
+/// round.
+const fn flipped(op: BinaryOp) -> BinaryOp {
+    match op {
+        BinaryOp::Lt => BinaryOp::Gt,
+        BinaryOp::Le => BinaryOp::Ge,
+        BinaryOp::Gt => BinaryOp::Lt,
+        BinaryOp::Ge => BinaryOp::Le,
+        other => other,
+    }
+}
+
+/// Narrows a range by one term, which never widens it: two terms about
+/// one rowid both hold.
+fn narrow(range: &mut (Option<i64>, Option<i64>), op: BinaryOp, bound: i64) {
+    let (first, last) = match op {
+        BinaryOp::Eq => (Some(bound), Some(bound)),
+        BinaryOp::Ge => (Some(bound), None),
+        BinaryOp::Gt => (bound.checked_add(1), None),
+        BinaryOp::Le => (None, Some(bound)),
+        // Every operator but the five is refused before this is reached.
+        _ => (None, bound.checked_sub(1)),
+    };
+    if let Some(first) = first {
+        range.0 = Some(range.0.map_or(first, |held| held.max(first)));
+    }
+    if let Some(last) = last {
+        range.1 = Some(range.1.map_or(last, |held| held.min(last)));
+    }
 }
 
 /// The one column a statement used as a value answers, which is a

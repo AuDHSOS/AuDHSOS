@@ -386,3 +386,53 @@ fn an_entry_between_two_subtrees_is_refused_where_its_length_does_not_end() {
     assert_eq!(entries.next(), Some(Err(Error::Varint)));
     assert_eq!(entries.next(), None);
 }
+
+#[test]
+fn a_walk_between_two_rowids_answers_what_a_scan_of_them_would() {
+    // `page512.db` holds four hundred rows at a page size of 512, so its
+    // tree has interior pages and the descent has somewhere to go.
+    let image = Image::open(super::PAGE512).unwrap();
+    let root = root_of(&image, b"wide");
+    let every: Vec<i64> = image.rows(root).map(|row| row.unwrap().rowid).collect();
+    assert_eq!(every.len(), 400);
+    for (first, last) in [
+        (None, None),
+        (Some(1), None),
+        (Some(200), Some(210)),
+        (Some(1), Some(1)),
+        (Some(400), Some(400)),
+        (Some(399), None),
+        (None, Some(3)),
+        (Some(0), Some(0)),
+        (Some(401), None),
+        (Some(210), Some(200)),
+        (Some(i64::MIN), Some(i64::MAX)),
+    ] {
+        let walked: Vec<i64> = image
+            .rows_between(root, first, last)
+            .map(|row| row.unwrap().rowid)
+            .collect();
+        let wanted: Vec<i64> = every
+            .iter()
+            .copied()
+            .filter(|rowid| first.is_none_or(|first| *rowid >= first))
+            .filter(|rowid| last.is_none_or(|last| *rowid <= last))
+            .collect();
+        assert_eq!(walked, wanted, "between {first:?} and {last:?}");
+    }
+}
+
+#[test]
+fn a_walk_between_two_rowids_refuses_the_tree_of_the_wrong_kind() {
+    // The descent reads the keys of a page, which an index page has none
+    // of, so a root that leads to one is refused rather than read.
+    let image = Image::open(super::PAGE512).unwrap();
+    let root = root_of(&image, b"deep");
+    let mut walk = image.rows_between(root, Some(1), None);
+    assert_eq!(
+        walk.next().map(|step| step.map(|row| row.rowid)),
+        Some(Err(crate::error::Error::PageKind(
+            crate::page::Kind::InteriorIndex.byte()
+        )))
+    );
+}

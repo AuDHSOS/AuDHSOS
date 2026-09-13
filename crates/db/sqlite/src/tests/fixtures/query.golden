@@ -359,3 +359,56 @@ N|a	R|'x'	R|'y'
 N|t
 N|t	R|'A'	R|'a'	R|'b'
 N|t
+N|a	R|2
+N|a	R|2
+N|a	R|2
+N|a	R|2
+N|a	R|-3	R|2
+N|a	R|-3	R|2
+N|a	R|1
+N|a	R|1
+N|a	R|2
+N|a
+N|a
+N|a
+N|a
+N|a
+N|a
+N|a	R|1
+N|a	R|2
+N|a	R|-3	R|1
+N|a	R|-3	R|2
+N|a	R|-3	R|1
+N|a	R|2
+N|a	R|2
+N|a	R|2
+!	no such column: temp.t.rowid
+N|a	R|2
+!	no such column: y.rowid
+N|a	R|2
+N|id|v	R|5|'five'
+N|id|v	R|5|'five'	R|9|'nine'
+N|id|v	R|9|'nine'
+N|k|v	R|1|'a'
+N|a|b	R|'x'|1
+!	no such column: rowid
+N|x|y|x|z	R|1|'one'|1|'B1b'
+N|x|y|x|z	R|1|'one'|1|'B1'
+N|x|y|x|z	R|3|NULL|NULL|NULL
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'
+!	ambiguous column name: rowid
+N|x|y|x|z	R|1|'one'|1|'B1'	R|2|'two'|1|'B1b'	R|3|NULL|4|'B4'
+N|n	R|399
+N|n	R|398	R|399	R|400
+N|count(*)	R|5
+!	no such column: rowid
+N|a	R|1	R|2
+N|a	R|1
+N|a	R|-3
+N|a	R|-3	R|2
+N|a	R|-3
+N|a	R|-3
+N|a	R|1
+N|a	R|1
+N|a	R|2
+N|a

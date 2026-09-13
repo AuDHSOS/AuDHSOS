@@ -98,6 +98,22 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
             sql.extend_from_slice(&quoted);
             sql.extend_from_slice(b") LIMIT 16");
             answers(&database, &sql);
+            // A `WHERE` that names the rowid, which holds the walk to a
+            // range instead of scanning the tree. The rows it answers
+            // have to be the rows the same statement answers without the
+            // range, which the terms below bracket.
+            for held in [
+                b"rowid=3".as_slice(),
+                b"rowid>=2 AND rowid<=4".as_slice(),
+                b"rowid>9223372036854775806".as_slice(),
+                b"rowid<-9223372036854775807".as_slice(),
+            ] {
+                let mut sql = b"SELECT count(*), min(rowid), max(rowid) FROM ".to_vec();
+                sql.extend_from_slice(&quoted);
+                sql.extend_from_slice(b" WHERE ");
+                sql.extend_from_slice(held);
+                answers(&database, &sql);
+            }
         }
     }
 

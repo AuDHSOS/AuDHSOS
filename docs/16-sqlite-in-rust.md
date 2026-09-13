@@ -86,7 +86,7 @@ Each rule is checkable, and each makes a later thing possible.
 | `fp`, `number` | A double as decimal text and back: `sqlite3FpDecode`, `sqlite3AtoF`, `sqlite3Atoi64`. | D-142, Q5 |
 | `value`, `utf8` | Storage classes, affinity, collation, comparison, the three text encodings. | D-143, D-147, Q5 |
 | `eval`, `func`, `agg` | An expression over a row; thirty-four scalar functions; seven aggregates; the four shapes of statement an expression uses. | D-143, D-144, D-148, D-154, Q5 |
-| `db` | A statement answered from a file by walking the sides of its `FROM` once. | D-146, D-149, D-150, D-153, Q5 |
+| `db` | A statement answered from a file by walking the sides of its `FROM` once, held to the rowids the `WHERE` leaves each. | D-146, D-149, D-150, D-153, D-158, Q5 |
 
 ### What a statement may hold
 
@@ -100,6 +100,7 @@ Each rule is checkable, and each makes a later thing possible.
 | A table written with `main` in front of it | answered |
 | A column that is computed, stored or not | answered |
 | A table whose rows live in the key's own tree | answered |
+| A `WHERE` that names the rowid, which the walk descends to rather than scanning past | answered |
 | A statement inside a `FROM`, a `WITH` that is not `RECURSIVE` | answered |
 | `(SELECT ...)` as a value, `EXISTS`, `IN (SELECT ...)`, `IN table`, correlated or not | answered |
 | A `WITH` written `RECURSIVE`, a window clause, a table-valued function | refused by name |
@@ -115,7 +116,7 @@ Each rule is checkable, and each makes a later thing possible.
 | Doubles as text | 8404, at three precisions | recorded oracle, `fp.corpus` |
 | Text as numbers | 215 | recorded oracle, `num.corpus` |
 | Expressions, answered | 17051 | recorded oracle, `eval.corpus` |
-| Statements, answered | 361 over 14 fixtures | recorded oracle, `query.corpus` |
+| Statements, answered | 414 over 14 fixtures | recorded oracle, `query.corpus` |
 | A database whose content is in its log | 26 cases over `logged.db` | the fixture and logs built by hand |
 | A database caught mid-transaction | 18 cases over `rollback.db` | the fixture and journals built by hand |
 | The format under every configuration | 11 fixtures, the same three rows and the same index | the matrix, 16.11 |
@@ -128,7 +129,7 @@ of lines and 100 percent of branches, in both instrumentations.
 
 | # | What is missing | Which step |
 |---|-----------------|------------|
-| 1 | The secondary indexes, used rather than read: a `WHERE` that names an indexed column still scans. | Q6 |
+| 1 | The secondary indexes, used rather than read: a `WHERE` that names an indexed column still scans, where one that names the rowid no longer does. | Q6 |
 | 2 | The virtual machine and the code generator that replaces the tree walker. | Q6 |
 | 3 | Writing: the b-tree writer, transactions, the journal in four modes, the WAL. | Q7 |
 | 4 | The rest of the language: `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, triggers, views, a `WITH` written `RECURSIVE`. | Q8 |

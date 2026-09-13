@@ -3680,6 +3680,40 @@ page it stands on now.
   a leaf of two cells or more reads the page it already holds, and a
   descent or a climb reads one it does not.
 
+### 6.6.97 The rowids a `WHERE` leaves a walk (`db-sqlite`)
+
+D-158. A walk held to a range answers what a scan answers, so the
+corpus holds it to the same rows and the timing is what changed.
+
+- The shapes the corpus puts to the engine: each of `=`, `<`, `<=`, `>`
+  and `>=`, each of them written the other way round, two terms that
+  narrow the same end, two that narrow both, and two that leave an empty
+  range.
+- What must not be planned: a term under an `OR`, a term under a `NOT`,
+  `<>`, a bound that is text or a real, a bound in a statement used as a
+  value, a column that is not the rowid, a name two sides answer, a name
+  written with a schema that is not `main`, and a name written with a
+  table the statement does not have.
+- What the rowid is: the three names it answers to, and a column
+  declared `INTEGER PRIMARY KEY` which is another name for it. A column
+  declared `INTEGER PRIMARY KEY DESC` is not, and a table that keeps its
+  rows in the key's own tree answers no rowid at all, so neither is
+  planned for.
+- The bounds at the ends of the range: `rowid=0`, `rowid=-1`,
+  `rowid=9223372036854775807`, `rowid>9223372036854775807` and
+  `rowid<-9223372036854775808`, which are where a bound one past the
+  written one does not exist.
+- The joins: a comma join with a term on each side, a `LEFT JOIN` with a
+  term on the left and one on the right, and a `RIGHT JOIN`, because a
+  side held to a range is a side that answers fewer rows to match
+  against.
+- `Image::rows_between` is held against a scan of the same fixture
+  filtered by the same bounds, over eleven pairs of bounds including
+  reversed ones and ones outside the table, so the walk and the filter
+  answer the same rowids.
+- `sqlite_image` puts four such ranges over every fuzzed file and reads
+  the count, the smallest rowid and the largest.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

@@ -8,7 +8,7 @@ use crate::bytes::{size, u32_at};
 use crate::error::Error;
 use crate::header::Header;
 use crate::journal::Journal;
-use crate::page::{Kind, Page, Payload};
+use crate::page::{Cell, Kind, Page, Payload};
 use crate::record::Record;
 use crate::wal::Wal;
 
@@ -163,7 +163,19 @@ impl<'a> Image<'a> {
     /// The rows of the table whose tree begins at `root`, in rowid order.
     #[must_use]
     pub const fn rows(&self, root: u32) -> Rows<'a> {
-        Rows::new(*self, root)
+        Rows::new(*self, root, None, None)
+    }
+
+    /// The rows whose rowid is at least `first` and at most `last`, each
+    /// bound left out where it is nothing.
+    ///
+    /// The walk descends to the first row rather than reading the ones
+    /// before it, which is `sqlite3BtreeTableMoveto`: O(log n) to reach
+    /// the row and O(k) for the `k` rows the range holds, where a scan
+    /// of the same range costs O(n).
+    #[must_use]
+    pub const fn rows_between(&self, root: u32, first: Option<i64>, last: Option<i64>) -> Rows<'a> {
+        Rows::new(*self, root, first, last)
     }
 
     /// The entries of the index whose tree begins at `root`, in key
@@ -243,6 +255,32 @@ fn copy<'b>(room: &'b mut [u8], from: &[u8]) -> (&'b mut [u8], usize) {
     (rest, len)
 }
 
+/// The first cell of `page` that may hold `key`.
+///
+/// An interior page names the largest key of each subtree and a leaf
+/// names the key of each row, so both are sorted and both answer the
+/// same question. The walk of the page is a binary search, which is
+/// `sqlite3BtreeTableMoveto`: O(log c) for `c` cells.
+fn position(page: &Page<'_>, cells: usize, key: i64) -> Result<usize, Error> {
+    let mut low = 0usize;
+    let mut high = cells;
+    while low < high {
+        let middle = low.saturating_add(high.saturating_sub(low) / 2);
+        let held = match page.cell(middle)? {
+            Cell::TableInterior { rowid, .. } | Cell::TableLeaf { rowid, .. } => rowid,
+            Cell::IndexInterior { .. } | Cell::IndexLeaf { .. } => {
+                return Err(Error::PageKind(page.kind().byte()));
+            }
+        };
+        if held < key {
+            low = middle.saturating_add(1);
+        } else {
+            high = middle;
+        }
+    }
+    Ok(low)
+}
+
 /// Where a walk stands on one page.
 #[derive(Clone, Copy, Debug)]
 struct Frame {
@@ -270,11 +308,15 @@ pub struct Rows<'a> {
     done: bool,
     /// The page the walk stands on, and which page it is.
     held: Option<(u32, Page<'a>)>,
+    /// The rowid the walk descends to, until it has.
+    first: Option<i64>,
+    /// The rowid the walk ends past.
+    last: Option<i64>,
 }
 
 impl<'a> Rows<'a> {
     /// A walk that has not begun, over the tree at `root`.
-    const fn new(image: Image<'a>, root: u32) -> Self {
+    const fn new(image: Image<'a>, root: u32, first: Option<i64>, last: Option<i64>) -> Self {
         Rows {
             image,
             stack: [Frame {
@@ -284,7 +326,27 @@ impl<'a> Rows<'a> {
             depth: 1,
             done: false,
             held: None,
+            first,
+            last,
         }
+    }
+
+    /// Moves the frame the walk stands on to the first cell that may
+    /// hold the rowid it is descending to.
+    fn descend(&mut self, page: &Page<'a>, cells: usize, key: i64) -> Result<(), Error> {
+        let at = position(page, cells, key)?;
+        let index = self.depth.saturating_sub(1);
+        for frame in self.stack.iter_mut().skip(index).take(1) {
+            if frame.next < at {
+                frame.next = at;
+            }
+        }
+        if !page.kind().is_interior() {
+            // The descent ends at the leaf the row is in; every row
+            // after it is read in order.
+            self.first = None;
+        }
+        Ok(())
     }
 
     /// Ends the walk and answers the refusal that ended it.
@@ -364,13 +426,26 @@ impl<'a> Iterator for Rows<'a> {
                 Err(error) => return Some(Err(self.stop(error))),
             };
             let cells = page.cells();
+            if let Some(key) = self.first
+                && let Err(error) = self.descend(&page, cells, key)
+            {
+                return Some(Err(self.stop(error)));
+            }
+            let frame = *self.top()?;
             match page.kind() {
                 Kind::LeafTable if frame.next < cells => {
                     self.bump();
-                    return Some(match page.row(frame.next) {
-                        Ok((rowid, payload)) => Ok(Row { rowid, payload }),
-                        Err(error) => Err(self.stop(error)),
-                    });
+                    let (rowid, payload) = match page.row(frame.next) {
+                        Ok(row) => row,
+                        Err(error) => return Some(Err(self.stop(error))),
+                    };
+                    if self.last.is_some_and(|last| rowid > last) {
+                        // Every row after this one has a larger rowid,
+                        // so the range is read out.
+                        self.done = true;
+                        return None;
+                    }
+                    return Some(Ok(Row { rowid, payload }));
                 }
                 Kind::InteriorTable if frame.next <= cells => {
                     self.bump();

@@ -5,6 +5,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- A `WHERE` that names a side's rowid in `db-sqlite` now holds the walk
+  to a range of rowids, which it descends to rather than scanning past:
+  O(log n + k) where a scan is O(n). Over `fixtures/page512.db`, two
+  thousand answers of `WHERE rowid=399` fell from 221 ms to 4 ms and of
+  `WHERE rowid>200 AND rowid<=205` from 333 ms to 10 ms; a scan of the
+  whole table is unchanged. Only the terms a top-level `AND` spine holds
+  are read, and never an `ON`, so the rows answered are the rows a scan
+  answers. `Image::rows_between` is the walk that descends.
+
 ### Changed
 
 - A walk of a b-tree in `db-sqlite` holds the page it stands on rather
