@@ -868,6 +868,13 @@ impl RegisterVM {
                 .ok_or(VMError::StackOverflow)? = Value::from_object(function);
         }
         if let Some(this_register) = callee.this_register {
+            // 10.2.1.2 binds `this` to the receiver of the call. A call without
+            // one takes the global object for a non-strict function and stays
+            // undefined for a strict one; the code unit does not yet say which,
+            // so that case is a gap rather than a guess.
+            if call.receiver.is_undefined() || call.receiver.is_null() {
+                return Err(VMError::Unsupported("this of a call without a receiver"));
+            }
             *self
                 .stack
                 .get_mut(next_frame.saturating_add(this_register.0 as usize))

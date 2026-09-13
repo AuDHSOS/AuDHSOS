@@ -538,6 +538,12 @@ fn compile_parsed(body: &[Stmt], limits: Limits, realm: bool) -> Result<Program,
     Ok(compiler.program)
 }
 
+/// The binding a frame holds its `this` value in.
+///
+/// No program can declare it: `this` is a keyword, so the name cannot collide
+/// with one a Script writes.
+const THIS_BINDING: &str = "this";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RegisterType {
     Array(u32),
@@ -1296,6 +1302,15 @@ impl RegisterLowerer {
                     return None;
                 }
             },
+            // 9.4.5 resolves `this` on the Function Environment Record of the
+            // call, which the frame carries in a register of its own. A Script
+            // has no such record, so its `this` is not this binding.
+            ExprKind::This => {
+                let binding = self.bindings.get(THIS_BINDING).copied()?;
+                let value_type = binding.value_type?;
+                self.load_binding(binding);
+                value_type
+            }
             ExprKind::Name(name) => {
                 if let Some(binding) = self.bindings.get(name).copied() {
                     let value_type = binding.value_type?;
@@ -1318,6 +1333,10 @@ impl RegisterLowerer {
                             self.code.emit(Instruction::LdaConstant(index));
                             RegisterType::Number
                         }
+                        // 10.4.4 binds `arguments` in every ordinary function,
+                        // so inside one it is never the Realm's global of that
+                        // name. The object does not exist yet.
+                        "arguments" if self.allow_return => return None,
                         // 9.1.1.4.6 resolves every other name on the Realm's
                         // Global Environment Record. A name of clause 19 this
                         // Realm has not built is reported there as a gap, so
@@ -1889,6 +1908,10 @@ impl RegisterLowerer {
             })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one function prepares every binding a call frame starts with"
+    )]
     fn register_function_child(
         &self,
         function: &Function,
@@ -1962,6 +1985,23 @@ impl RegisterLowerer {
         } else {
             None
         };
+        if register_body_reads_this(&function.body) {
+            // An arrow function has no Function Environment Record of its own
+            // (10.2.1.1), so its `this` is the one of the enclosing function
+            // and not the receiver of its call.
+            if function.arrow {
+                return None;
+            }
+            child.declare(THIS_BINDING, false)?;
+            let RegisterBindingStorage::Register(register) =
+                child.bindings.get(THIS_BINDING)?.storage
+            else {
+                return None;
+            };
+            // The receiver of the call; the lowering can name no type for it.
+            child.bindings.get_mut(THIS_BINDING)?.value_type = Some(RegisterType::Unknown);
+            child.code.this_register = Some(register);
+        }
         for statement in &function.body {
             match statement {
                 Stmt::Declare(bindings) => {
@@ -2239,10 +2279,17 @@ impl RegisterLowerer {
                 && Self::static_property_name(key).is_none();
             let callee_type =
                 self.lower_property_from_register(receiver, base_type, key, keyed, true)?;
-            let RegisterType::NativeFunction(intrinsic) = callee_type else {
-                return None;
-            };
-            intrinsic
+            match callee_type {
+                RegisterType::NativeFunction(intrinsic) => intrinsic,
+                // 13.3.6.1 passes the base as the `this` value of the call,
+                // which is what a bytecode callee reading `this` needs.
+                RegisterType::Function(code_id) => {
+                    let result = self.lower_method_call_bytecode(receiver, code_id, arguments)?;
+                    self.release_register(receiver)?;
+                    return Some(result);
+                }
+                _ => return None,
+            }
         };
         let function = self.allocate_register()?;
         self.code.emit(Instruction::Star(function));
@@ -2289,6 +2336,85 @@ impl RegisterLowerer {
         self.release_register(function)?;
         self.release_register(receiver)?;
         self.intrinsic_call_result(intrinsic, base_type, &argument_types)
+    }
+
+    /// Lowers a method call whose callee is a function of this unit.
+    ///
+    /// The callee is in the accumulator and `receiver` holds the base, which
+    /// 13.3.6.1 passes as the `this` value of the call.
+    fn lower_method_call_bytecode(
+        &mut self,
+        receiver: crate::engine::bytecode::Reg,
+        code_id: u32,
+        arguments: &[Expr],
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        if self
+            .function_capture_effects
+            .get(&code_id)
+            .is_some_and(|effects| {
+                effects.keys().any(|name| {
+                    self.bindings
+                        .get(name)
+                        .is_some_and(|binding| binding.value_type.is_none())
+                })
+            })
+        {
+            return None;
+        }
+        let function = self.allocate_register()?;
+        self.code.emit(Instruction::Star(function));
+        let parameter_types = self.function_parameters.get(&code_id)?.clone();
+        let mut argument_registers = Vec::new();
+        for (index, argument) in arguments.iter().enumerate() {
+            let argument_type = self.lower(argument)?;
+            if !argument_type.is_primitive()
+                || parameter_types
+                    .get(index)
+                    .is_some_and(|parameter| !parameter.accepts(argument_type))
+            {
+                return None;
+            }
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            argument_registers.push(register);
+        }
+        let dummy = if argument_registers.is_empty() {
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::LdaUndefined);
+            self.code.emit(Instruction::Star(register));
+            Some(register)
+        } else {
+            None
+        };
+        let arg_start = argument_registers.first().copied().or(dummy)?;
+        let arg_count = u16::try_from(arguments.len()).ok()?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver,
+            func: function,
+            arg_start,
+            arg_count,
+            slot,
+        });
+        if let Some(dummy) = dummy {
+            self.release_register(dummy)?;
+        }
+        for register in argument_registers.into_iter().rev() {
+            self.release_register(register)?;
+        }
+        self.release_register(function)?;
+        if let Some(effects) = self.function_capture_effects.get(&code_id).cloned() {
+            for (name, effect) in effects {
+                if let Some(binding) = self.bindings.get_mut(&name) {
+                    binding.value_type = Some(binding.value_type?.merge(effect));
+                }
+            }
+        }
+        if let Some(effects) = self.function_layout_effects.get(&code_id).cloned() {
+            self.object_layouts.extend(effects);
+        }
+        self.function_returns.get(&code_id).copied()
     }
 
     /// The type an intrinsic call answers, once the arguments have been
@@ -2398,6 +2524,9 @@ impl RegisterLowerer {
         if base_type == RegisterType::String {
             return self.lower_string_member(key);
         }
+        if base_type == RegisterType::Unknown {
+            return self.lower_unknown_member(key);
+        }
         if !base_type.is_object() {
             return None;
         }
@@ -2408,6 +2537,44 @@ impl RegisterLowerer {
         let result = self.lower_property_from_register(object, base_type, key, keyed, true)?;
         self.release_register(object)?;
         Some(result)
+    }
+
+    /// Lowers a property read whose base the lowering could not name.
+    ///
+    /// 10.1.8.1 walks the Prototype Chain at run time, which the instruction
+    /// does: a base that is not an `Object` is a `TypeError` there, and a name
+    /// no object of the chain has is `undefined` or, where the chain reaches a
+    /// Prototype this Realm has not built, a gap.
+    fn lower_unknown_member(&mut self, key: &Expr) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let object = self.allocate_register()?;
+        self.code.emit(Instruction::Star(object));
+        let static_name = Self::static_property_name(key)
+            .map(<[u16]>::to_vec)
+            .or_else(|| self.static_key_units(key));
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        if let Some(name) = static_name.as_deref() {
+            let name = self.string_constant(name)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: object,
+                name,
+                slot,
+            });
+        } else {
+            if !self.lower(key)?.is_primitive() {
+                return None;
+            }
+            let key = self.allocate_register()?;
+            self.code.emit(Instruction::Star(key));
+            self.code.emit(Instruction::GetByValue {
+                obj: object,
+                key,
+                slot,
+            });
+            self.release_register(key)?;
+        }
+        self.release_register(object)?;
+        Some(RegisterType::Unknown)
     }
 
     /// Lowers a property read whose base is a String.
@@ -4600,6 +4767,9 @@ impl RegisterLowerer {
         };
         if self.bindings.contains_key(name)
             || matches!(name.as_str(), "undefined" | "NaN" | "Infinity")
+            // 10.4.4 binds `arguments` in every ordinary function, so inside
+            // one it never names the Realm's global of that name.
+            || (name == "arguments" && self.allow_return)
         {
             return None;
         }
@@ -5469,6 +5639,122 @@ fn register_scoped_statement_writes_names(
     })
 }
 
+/// Whether a function body resolves `this` on its own Function Environment
+/// Record (9.4.5).
+///
+/// A nested ordinary function has a record of its own, so the walk stops there.
+/// An arrow function has none and takes the one of this body, so the walk
+/// follows it.
+fn register_body_reads_this(body: &[Stmt]) -> bool {
+    body.iter().any(register_statement_reads_this)
+}
+
+fn register_statement_reads_this(statement: &Stmt) -> bool {
+    match statement {
+        Stmt::Expr(expression) | Stmt::Throw(expression) => {
+            register_expression_reads_this(expression)
+        }
+        Stmt::Return(expression) => expression
+            .as_ref()
+            .is_some_and(register_expression_reads_this),
+        Stmt::Block(body) => register_body_reads_this(body),
+        Stmt::Declare(bindings) => bindings
+            .iter()
+            .filter_map(|(_, _, initializer)| initializer.as_ref())
+            .any(register_expression_reads_this),
+        Stmt::Var(bindings) => bindings
+            .iter()
+            .filter_map(|(_, initializer)| initializer.as_ref())
+            .any(register_expression_reads_this),
+        Stmt::If(condition, yes, no) => {
+            register_expression_reads_this(condition)
+                || register_statement_reads_this(yes)
+                || no.as_deref().is_some_and(register_statement_reads_this)
+        }
+        Stmt::While(condition, body) | Stmt::DoWhile(body, condition) => {
+            register_expression_reads_this(condition) || register_statement_reads_this(body)
+        }
+        Stmt::For(initializer, condition, step, body) => {
+            register_statement_reads_this(initializer)
+                || condition
+                    .as_ref()
+                    .is_some_and(register_expression_reads_this)
+                || step.as_ref().is_some_and(register_expression_reads_this)
+                || register_statement_reads_this(body)
+        }
+        Stmt::ForIn { object, body, .. } | Stmt::ForOf { object, body, .. } => {
+            register_expression_reads_this(object) || register_statement_reads_this(body)
+        }
+        Stmt::Switch(discriminant, clauses) => {
+            register_expression_reads_this(discriminant)
+                || clauses.iter().any(|(test, body)| {
+                    test.as_ref().is_some_and(register_expression_reads_this)
+                        || register_body_reads_this(body)
+                })
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            register_body_reads_this(body)
+                || catch
+                    .as_ref()
+                    .is_some_and(|(_, body)| register_body_reads_this(body))
+                || finally.as_deref().is_some_and(register_body_reads_this)
+        }
+        Stmt::Function(_, function) => function.arrow && register_body_reads_this(&function.body),
+        Stmt::Empty | Stmt::Break | Stmt::Continue => false,
+    }
+}
+
+fn register_expression_reads_this(expression: &Expr) -> bool {
+    match &expression.kind {
+        // A class body the lowering does not take at all.
+        ExprKind::This
+        | ExprKind::Super
+        | ExprKind::DefaultSuper
+        | ExprKind::NewTarget
+        | ExprKind::Class(_) => true,
+        ExprKind::Literal(_) | ExprKind::Name(_) | ExprKind::Regex(_, _) | ExprKind::Update(..) => {
+            false
+        }
+        ExprKind::Group(inner)
+        | ExprKind::Unary(_, inner)
+        | ExprKind::Await(inner)
+        | ExprKind::Spread(inner)
+        | ExprKind::Assign(_, _, inner)
+        | ExprKind::Destructure(_, inner)
+        | ExprKind::UpdateMember(inner, _, _, _) => register_expression_reads_this(inner),
+        ExprKind::Sequence(left, right)
+        | ExprKind::Binary(_, left, right)
+        | ExprKind::Member(left, right) => {
+            register_expression_reads_this(left) || register_expression_reads_this(right)
+        }
+        ExprKind::SetMember(target, _, value, _) => {
+            register_expression_reads_this(target) || register_expression_reads_this(value)
+        }
+        ExprKind::Conditional(condition, yes, no) => {
+            register_expression_reads_this(condition)
+                || register_expression_reads_this(yes)
+                || register_expression_reads_this(no)
+        }
+        ExprKind::Call(callee, arguments) | ExprKind::Construct(callee, arguments) => {
+            register_expression_reads_this(callee)
+                || arguments.iter().any(register_expression_reads_this)
+        }
+        ExprKind::Template(_, parts) => parts
+            .iter()
+            .any(|(expression, _)| register_expression_reads_this(expression)),
+        ExprKind::Object(properties) => properties.iter().any(|property| {
+            register_expression_reads_this(&property.key)
+                || register_expression_reads_this(&property.value)
+        }),
+        ExprKind::Array(items) => items.iter().flatten().any(register_expression_reads_this),
+        ExprKind::Function(function) => function.arrow && register_body_reads_this(&function.body),
+    }
+}
+
 fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>) -> Option<bool> {
     Some(match &expression.kind {
         ExprKind::Assign(name, _, value) => {
@@ -5523,7 +5809,9 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
                 || register_expression_writes_names(value, names)?
         }
         ExprKind::Function(function) => register_function_writes_names(function, names)?,
-        ExprKind::Literal(_) | ExprKind::Name(_) => false,
+        // `this` is resolved on the Function Environment Record, so it writes
+        // and names no binding of this analysis.
+        ExprKind::Literal(_) | ExprKind::Name(_) | ExprKind::This => false,
         ExprKind::Destructure(pattern, right) => {
             register_expression_writes_names(right, names)?
                 || register_assignment_pattern_writes_names(pattern, names)?
@@ -5536,7 +5824,6 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         | ExprKind::Super
         | ExprKind::NewTarget
         | ExprKind::DefaultSuper
-        | ExprKind::This
         | ExprKind::Spread(_)
         | ExprKind::UpdateMember(_, _, _, _) => return None,
     })
@@ -5762,7 +6049,9 @@ fn register_expression_references(
         ExprKind::Function(function) => {
             nested_free_names.extend(register_function_scope(function)?.free_names);
         }
-        ExprKind::Literal(_) => {}
+        // `this` is resolved on the Function Environment Record, so it is free
+        // of every name this analysis collects.
+        ExprKind::Literal(_) | ExprKind::This => {}
         ExprKind::Destructure(pattern, right) => {
             register_expression_references(right, names, nested_free_names)?;
             register_assignment_pattern_references(pattern, names, nested_free_names)?;
@@ -5775,7 +6064,6 @@ fn register_expression_references(
         | ExprKind::Super
         | ExprKind::NewTarget
         | ExprKind::DefaultSuper
-        | ExprKind::This
         | ExprKind::Spread(_)
         | ExprKind::UpdateMember(_, _, _, _) => return None,
     }

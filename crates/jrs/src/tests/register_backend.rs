@@ -298,6 +298,66 @@ fn a_call_the_lowering_could_not_type_is_returnable() -> Result<(), Error> {
 }
 
 #[test]
+fn arguments_inside_a_function_is_never_a_global() -> Result<(), Error> {
+    // 10.4.4 binds `arguments` in every ordinary function. Resolving it on the
+    // Global Environment Record answered a ReferenceError where the stack
+    // backend answers the arguments object, so inside a function it is refused
+    // until the object exists.
+    for source in [
+        "function f(){return typeof arguments}f()",
+        "function f(){return arguments.length}f()",
+        "function f(){arguments=1;return 2}f()",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+
+    // A binding of that name is an ordinary binding, inside a function and out.
+    for source in [
+        "var arguments=1;typeof arguments",
+        "function f(){var arguments=2;return arguments}f()",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn this_is_the_receiver_of_the_call() -> Result<(), Error> {
+    // 10.2.1.2 binds `this` to the receiver, which 13.3.6.1 takes from the
+    // base of a method call.
+    for source in [
+        "let o={g:function(){return 1}};o.g()",
+        "let o={a:1,g:function(){return this.a}};o.g()",
+        "let o={a:'x',g:function(){return this.a+'y'}};o.g()",
+        "let o={a:2,g:function(n){return this.a*n}};o.g(21)",
+        "let o={g:function(){return this}};typeof o.g()",
+        // The same function answers the receiver it was called on.
+        "let o={a:1,g:function(){return this.a}};let p={a:2,g:o.g};p.g()",
+        // A name the receiver does not have is undefined, as on any object.
+        "let o={g:function(){return this.nope}};typeof o.g()",
+    ] {
+        differential(source)?;
+    }
+
+    // A call without a receiver takes the global object for a non-strict
+    // function and stays undefined for a strict one. The code unit does not
+    // say which yet, so it is a gap rather than a guess.
+    let program = compile("function f(){return this}f()", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+
+    // An arrow function has no `this` of its own (10.2.1.1).
+    assert!(!compile("let o={g:()=>this};o.g()", Limits::default())?.uses_register_backend());
+    Ok(())
+}
+
+#[test]
 fn a_read_that_reaches_an_unbuilt_prototype_is_a_gap() -> Result<(), Error> {
     // 10.1.8.1 answers undefined for a name no object of the Prototype Chain
     // has. That is the answer only when the chain is complete: a name of
@@ -1648,7 +1708,6 @@ fn returned_closures_outlive_register_frames_and_keep_distinct_contexts() -> Res
 )]
 fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> Result<(), Error> {
     for source in [
-        "function f(){return this}f()",
         "function f(){return arguments.length}f()",
         "function f(){return {x:1}}f()",
         "async function f(){return 1}f()",
