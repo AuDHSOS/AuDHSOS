@@ -19,7 +19,7 @@ use alloc::vec::Vec;
 
 use crate::agg::{self, Accumulator, Aggregate};
 use crate::ast::{
-    Arena, Distinct, ExprId, Literal, Node, Order, Range, ResultColumn, Select, SelectId,
+    Arena, Compound, Distinct, ExprId, Literal, Node, Order, Range, ResultColumn, Select, SelectId,
     SourceKind, Span, UnaryOp,
 };
 use crate::eval::{self, evaluate_collated, evaluate_row};
@@ -52,6 +52,13 @@ pub enum Error {
     Aggregate,
     /// A `HAVING` on a statement that groups nothing.
     Having,
+    /// Two sides of a compound that answer different numbers of columns.
+    Compound,
+    /// An `ORDER BY` of a compound that names none of its columns, which
+    /// is the only thing one may name.
+    OrderMatch,
+    /// A `VALUES` whose rows are not all the same width.
+    Values,
     /// A table whose rows live in the key's own tree. Reading one is
     /// reading an index, which is a later step.
     WithoutRowid,
@@ -197,23 +204,95 @@ impl<'a> Database<'a> {
     /// [`Error`] names what it could not answer and why.
     pub fn query(&self, sql: &[u8]) -> Result<Answer, Error> {
         let (arena, root) = parse::statement(sql)?;
-        self.select(&arena, root, sql)
+        self.statement(&arena, root, sql)
     }
 
-    /// One statement of a parsed tree.
-    fn select(&self, arena: &Arena, id: SelectId, sql: &[u8]) -> Result<Answer, Error> {
+    /// A statement: one core, or several put together.
+    ///
+    /// A compound is answered core by core and then merged left to
+    /// right, which is the shape `multiSelect` compiles: every operator
+    /// but `UNION ALL` answers its rows sorted and each of them once.
+    /// Its `ORDER BY` and its `LIMIT` belong to the whole of it; a
+    /// statement of one core sorts and limits its own rows, because a
+    /// term of that `ORDER BY` may be an expression over the row and the
+    /// row is gone by the time the answer is put together.
+    fn statement(&self, arena: &Arena, id: SelectId, sql: &[u8]) -> Result<Answer, Error> {
+        let first = arena.select(id).ok_or(Error::Unsupported)?;
+        if first.compound.is_none() {
+            return Ok(self.core(arena, id, sql, true)?.0);
+        }
+        let mut answers: Vec<Answer> = Vec::new();
+        let mut operators: Vec<Compound> = Vec::new();
+        let mut written: Vec<Option<Collation>> = Vec::new();
+        let mut at = Some(id);
+        while let Some(id) = at {
+            let core = arena.select(id).ok_or(Error::Unsupported)?;
+            let (answer, mine) = self.core(arena, id, sql, false)?;
+            match answers.first() {
+                None => written = mine,
+                Some(first) => {
+                    if first.names.len() != answer.names.len() {
+                        return Err(Error::Compound);
+                    }
+                    // A column compares under the collation of the first
+                    // core that writes one, which is
+                    // `multiSelectCollSeq`.
+                    for (slot, one) in written.iter_mut().zip(mine) {
+                        *slot = slot.or(one);
+                    }
+                }
+            }
+            answers.push(answer);
+            at = core.compound.map(|(operator, next)| {
+                operators.push(operator);
+                next
+            });
+        }
+        let collations: Vec<Collation> = written
+            .iter()
+            .map(|one| one.unwrap_or(self.collation()))
+            .collect();
+        let mut rest = answers.into_iter();
+        let mut answer = rest.next().ok_or(Error::Unsupported)?;
+        for (operator, right) in operators.into_iter().zip(rest) {
+            combine(operator, &mut answer, right, &collations);
+        }
+        let keys = matched(arena, &first, sql, &answer.names)?;
+        if !keys.is_empty() {
+            sort_by_keys(&mut answer.rows, &keys, &collations);
+        }
+        limit(arena, &first, sql, &mut answer.rows)?;
+        Ok(answer)
+    }
+
+    /// One core of a statement, with the collation each of its columns
+    /// compares under. `whole` asks for the `ORDER BY` and the `LIMIT`,
+    /// which belong to a core only where it is the statement.
+    fn core(
+        &self,
+        arena: &Arena,
+        id: SelectId,
+        sql: &[u8],
+        whole: bool,
+    ) -> Result<(Answer, Vec<Option<Collation>>), Error> {
         let select = arena.select(id).ok_or(Error::Unsupported)?;
         refuse_what_is_not_written_yet(arena, &select)?;
+        if !select.values.is_empty() {
+            return listed(arena, &select, sql);
+        }
         let sources = arena.sources(select.from);
         let stored = match sources.first() {
             None => None,
             Some(source) => {
-                let SourceKind::Table {
-                    schema: None, name, ..
-                } = source.kind
-                else {
+                let SourceKind::Table { schema, name, .. } = source.kind else {
                     return Err(Error::Unsupported);
                 };
+                if schema.is_some_and(|span| !is_main(span.text(sql))) {
+                    // Only the one schema a file holds is readable, and
+                    // a name in front of it that is not it names no
+                    // table rather than another database.
+                    return Err(Error::NoTable);
+                }
                 Some(self.find(name.text(sql)).ok_or(Error::NoTable)?)
             }
         };
@@ -222,7 +301,16 @@ impl<'a> Database<'a> {
             .and_then(|source| source.alias)
             .map(|span| span.text(sql).to_vec());
         let names = names(arena, &select, sql, stored)?;
-        let keys = keys(arena, &select, sql, &names)?;
+        let written = collations(arena, &select, sql, stored);
+        let collations: Vec<Collation> = written
+            .iter()
+            .map(|one| one.unwrap_or(self.collation()))
+            .collect();
+        let keys = if whole {
+            keys(arena, &select, sql, &names)?
+        } else {
+            Vec::new()
+        };
         let calls = aggregates(arena, &select, sql)?;
         let mut rows: Vec<Sorted> = Vec::new();
         if calls.is_empty() && select.group.is_empty() {
@@ -242,18 +330,12 @@ impl<'a> Database<'a> {
         }
         let mut rows: Vec<Vec<Value>> = rows.into_iter().map(|row| row.values).collect();
         if select.distinct == Distinct::Distinct {
-            let mut seen: Vec<Vec<Value>> = Vec::new();
-            let collation = self.collation();
-            rows.retain(|row| {
-                let fresh = !seen.iter().any(|kept| same(kept, row, collation));
-                if fresh {
-                    seen.push(row.clone());
-                }
-                fresh
-            });
+            distinct(&mut rows, &collations);
         }
-        limit(arena, &select, sql, &mut rows)?;
-        Ok(Answer { names, rows })
+        if whole {
+            limit(arena, &select, sql, &mut rows)?;
+        }
+        Ok((Answer { names, rows }, written))
     }
 
     /// Walks the rows a statement reads, once, in the order the file
@@ -354,6 +436,43 @@ impl<'a> Database<'a> {
         }
         Ok(out)
     }
+}
+
+/// A `VALUES`, which answers its rows and names them by their place.
+fn listed(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+) -> Result<(Answer, Vec<Option<Collation>>), Error> {
+    let mut rows = Vec::new();
+    for row in arena.children(select.values) {
+        // The parser builds each row of a `VALUES` as a row node, so
+        // what the node names is what the row holds.
+        let mut items = Vec::new();
+        arena
+            .node(*row)
+            .into_iter()
+            .for_each(|node| arena.under(node, |item| items.push(item)));
+        let mut values = Vec::new();
+        for item in items {
+            values.push(evaluate_row(arena, item, sql, &eval::NoRow)?);
+        }
+        if rows
+            .first()
+            .is_some_and(|first: &Vec<Value>| first.len() != values.len())
+        {
+            return Err(Error::Values);
+        }
+        rows.push(values);
+    }
+    let width = rows.first().map_or(0, Vec::len);
+    let mut names = Vec::new();
+    for at in 1..=width {
+        let mut name = b"column".to_vec();
+        name.extend_from_slice(&number::integer_text(i64::try_from(at).unwrap_or(0)));
+        names.push(name);
+    }
+    Ok((Answer { names, rows }, alloc::vec![None; width]))
 }
 
 /// Whether the rows of a table are ones this engine reads.
@@ -765,12 +884,153 @@ fn read_payload(
     Ok(())
 }
 
-/// Whether two rows hold the same values, which is what `DISTINCT` asks.
-fn same(left: &[Value], right: &[Value], collation: Collation) -> bool {
-    // Two rows of one answer always hold the same number of values.
+/// Whether two rows hold the same values, which is what `DISTINCT` and
+/// the set operators ask.
+fn same(left: &[Value], right: &[Value], collations: &[Collation]) -> bool {
+    // Two rows of one answer always hold the same number of values, and
+    // there is one collation per column.
     left.iter()
         .zip(right)
-        .all(|(first, second)| compare(first, second, collation) == core::cmp::Ordering::Equal)
+        .zip(collations)
+        .all(|((first, second), collation)| {
+            compare(first, second, *collation) == core::cmp::Ordering::Equal
+        })
+}
+
+/// Drops the rows another row already holds.
+fn distinct(rows: &mut Vec<Vec<Value>>, collations: &[Collation]) {
+    let mut seen: Vec<Vec<Value>> = Vec::new();
+    rows.retain(|row| {
+        let fresh = !seen.iter().any(|kept| same(kept, row, collations));
+        if fresh {
+            seen.push(row.clone());
+        }
+        fresh
+    });
+}
+
+/// Puts two answers together.
+///
+/// `UNION ALL` is the rows of one after the rows of the other, in the
+/// order they were answered. The other three go through the merge
+/// `multiSelectOrderBy` compiles: each side sorted by every column and
+/// holding each row once, then walked together. Which of two rows that
+/// compare equal but are not the same bytes comes out is decided there
+/// and not by chance — the first of them inside one side, and the right
+/// side's where a `UNION` finds one on both.
+fn combine(operator: Compound, left: &mut Answer, right: Answer, collations: &[Collation]) {
+    if operator == Compound::UnionAll {
+        left.rows.extend(right.rows);
+        return;
+    }
+    ordered(&mut left.rows, collations);
+    let mut theirs = right.rows;
+    ordered(&mut theirs, collations);
+    let wanted = matches!(operator, Compound::Intersect);
+    left.rows.retain(|row| {
+        let shared = theirs.iter().any(|other| same(other, row, collations));
+        shared == wanted
+    });
+    if operator == Compound::Union {
+        left.rows.extend(theirs);
+        arrange(&mut left.rows, collations);
+    }
+}
+
+/// Sorts rows by every column and drops the ones another row already
+/// holds, which is what each side of a set operator goes through.
+fn ordered(rows: &mut Vec<Vec<Value>>, collations: &[Collation]) {
+    arrange(rows, collations);
+    rows.dedup_by(|left, right| same(left, right, collations));
+}
+
+/// Sorts rows by every column, which is the order a set operator
+/// answers in.
+fn arrange(rows: &mut [Vec<Value>], collations: &[Collation]) {
+    let every: Vec<(usize, bool)> = (0..collations.len()).map(|at| (at, false)).collect();
+    sort_by_keys(rows, &every, collations);
+}
+
+/// Sorts the rows of an answer under terms that each count to a column
+/// of it, backwards where the flag says so.
+fn sort_by_keys(rows: &mut [Vec<Value>], terms: &[(usize, bool)], collations: &[Collation]) {
+    rows.sort_by(|left, right| {
+        for (at, descending) in terms.iter().copied() {
+            let collation = collations.get(at).copied().unwrap_or(Collation::Binary);
+            let first = left.get(at).unwrap_or(&Value::Null);
+            let second = right.get(at).unwrap_or(&Value::Null);
+            let order = compare(first, second, collation);
+            if order != core::cmp::Ordering::Equal {
+                return if descending { order.reverse() } else { order };
+            }
+        }
+        core::cmp::Ordering::Equal
+    });
+}
+
+/// The `ORDER BY` of a compound, whose every term has to count or name
+/// a column of the answer: there is no row left to read an expression
+/// against.
+fn matched(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    names: &[Vec<u8>],
+) -> Result<Vec<(usize, bool)>, Error> {
+    let mut out = Vec::new();
+    for key in keys(arena, select, sql, names)? {
+        match key {
+            Key::Place(at, descending) => out.push((at, descending)),
+            Key::Expr(..) => return Err(Error::OrderMatch),
+        }
+    }
+    Ok(out)
+}
+
+/// Whether a schema name is the one a file holds.
+const fn is_main(name: &[u8]) -> bool {
+    name.eq_ignore_ascii_case(b"main")
+}
+
+/// The collation each answered column compares under, which is what a
+/// `DISTINCT` and the set operators use.
+fn collations(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    stored: Option<&Stored>,
+) -> Vec<Option<Collation>> {
+    let mut out = Vec::new();
+    for column in arena.results(select.columns) {
+        match *column {
+            ResultColumn::Star | ResultColumn::TableStar(_) => {
+                // A `*` with no table has already been refused by the
+                // names, which are read first.
+                for column in stored.iter().flat_map(|stored| &stored.table.columns) {
+                    out.push(Some(column.collation));
+                }
+            }
+            ResultColumn::Expr { expr, .. } => out.push(written(arena, expr, sql, stored)),
+        }
+    }
+    out
+}
+
+/// The collation written on an expression, where one is, which is
+/// `sqlite3ExprCollSeq` over the two nodes that carry one.
+fn written(arena: &Arena, id: ExprId, sql: &[u8], stored: Option<&Stored>) -> Option<Collation> {
+    match arena.node(id)? {
+        Node::Collate { name, .. } => Collation::of_name(name.text(sql)),
+        Node::Column { column, .. } => stored.and_then(|stored| {
+            stored
+                .table
+                .columns
+                .iter()
+                .find(|held| held.name.eq_ignore_ascii_case(column.text(sql)))
+                .map(|held| held.collation)
+        }),
+        _ => None,
+    }
 }
 
 /// Whether a `WHERE` or a `HAVING` keeps this row.
@@ -788,11 +1048,7 @@ fn keep(
 
 /// The shapes this engine does not answer.
 fn refuse_what_is_not_written_yet(arena: &Arena, select: &Select) -> Result<(), Error> {
-    if arena.sources(select.from).len() > 1
-        || select.compound.is_some()
-        || !select.values.is_empty()
-        || !select.ctes.is_empty()
-    {
+    if arena.sources(select.from).len() > 1 || !select.ctes.is_empty() {
         return Err(Error::Unsupported);
     }
     Ok(())
@@ -1002,8 +1258,16 @@ impl eval::Row for Cursor<'_> {
             .map(|(_, value)| value.clone())
     }
 
-    fn column(&self, table: Option<&[u8]>, column: &[u8]) -> Option<(Value, Affinity, Collation)> {
+    fn column(
+        &self,
+        schema: Option<&[u8]>,
+        table: Option<&[u8]>,
+        column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)> {
         let mine = self.table?;
+        if schema.is_some_and(|named| !is_main(named)) {
+            return None;
+        }
         if let Some(named) = table {
             let matches = self.alias.map_or_else(
                 || mine.name.eq_ignore_ascii_case(named),

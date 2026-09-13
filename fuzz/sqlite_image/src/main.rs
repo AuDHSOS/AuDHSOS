@@ -58,17 +58,17 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
                     let mut sql = shape.to_vec();
                     sql.extend_from_slice(&quoted);
                     sql.extend_from_slice(tail);
-                    if let Ok(answer) = database.query(&sql) {
-                        for row in &answer.rows {
-                            assert_eq!(
-                                row.len(),
-                                answer.names.len(),
-                                "a row of another width than the answer"
-                            );
-                        }
-                    }
+                    answers(&database, &sql);
                 }
             }
+            // A compound, which sorts and merges whatever the two sides
+            // answered.
+            let mut sql = b"SELECT * FROM ".to_vec();
+            sql.extend_from_slice(&quoted);
+            sql.extend_from_slice(b" UNION SELECT * FROM ");
+            sql.extend_from_slice(&quoted);
+            sql.extend_from_slice(b" LIMIT 64");
+            answers(&database, &sql);
         }
     }
 
@@ -105,6 +105,21 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
         walk(&image, *root, &mut Vec::new());
     }
 });
+
+/// Answers one statement, where it is one this engine answers, and holds
+/// every row it answers to the width of the answer.
+fn answers(database: &Database<'_>, sql: &[u8]) {
+    let Ok(answer) = database.query(sql) else {
+        return;
+    };
+    for row in &answer.rows {
+        assert_eq!(
+            row.len(),
+            answer.names.len(),
+            "a row of another width than the answer"
+        );
+    }
+}
 
 /// Walks one table tree, reading every record it holds and collecting the
 /// root pages the records name.

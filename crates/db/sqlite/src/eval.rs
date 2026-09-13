@@ -77,10 +77,15 @@ impl Answer {
 
 /// Where the value of a column comes from.
 pub trait Row {
-    /// The column `column` of the table `table`, with the affinity and
-    /// the collation it was declared with, or nothing where this row has
-    /// no such column.
-    fn column(&self, table: Option<&[u8]>, column: &[u8]) -> Option<(Value, Affinity, Collation)>;
+    /// The column `column` of the table `table` of the schema `schema`,
+    /// with the affinity and the collation it was declared with, or
+    /// nothing where this row has no such column.
+    fn column(
+        &self,
+        schema: Option<&[u8]>,
+        table: Option<&[u8]>,
+        column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)>;
 
     /// The collation a comparison uses where nothing writes one, which
     /// is `BINARY` over whatever encoding the database keeps its text
@@ -115,6 +120,7 @@ pub struct NoRow;
 impl Row for NoRow {
     fn column(
         &self,
+        _schema: Option<&[u8]>,
         _table: Option<&[u8]>,
         _column: &[u8],
     ) -> Option<(Value, Affinity, Collation)> {
@@ -217,9 +223,14 @@ fn answer(
             branches,
             otherwise,
         } => case(arena, operand, branches, otherwise, sql, row, deeper),
-        Node::Column { table, column, .. } => {
+        Node::Column {
+            schema,
+            table,
+            column,
+        } => {
+            let text = |span: crate::ast::Span| span.text(sql);
             let (value, affinity, collation) = row
-                .column(table.map(|span| span.text(sql)), column.text(sql))
+                .column(schema.map(text), table.map(text), column.text(sql))
                 .ok_or(Error::NoColumn)?;
             Ok(Answer {
                 value,

@@ -189,6 +189,14 @@ impl<'a> Parser<'a> {
             operators.push(operator);
             cores.push(self.select_core()?);
         }
+        // `VALUES` is a core and not a statement of its own, so nothing
+        // of the whole may follow one: `oneselect` carries the
+        // `ORDER BY` and the `LIMIT`, and `values` is the other rule.
+        if cores.last().is_some_and(|core| !core.values.is_empty())
+            && (self.at_keyword(Keyword::Order) || self.at_keyword(Keyword::Limit))
+        {
+            return Err(self.error(self.peek(), Expected::Eof));
+        }
         let order = self.order_by()?;
         let limit = self.limit()?;
         // The chain is built from the back, so that each core can name

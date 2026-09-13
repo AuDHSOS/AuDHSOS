@@ -245,10 +245,12 @@ yet.
 A statement is answered from a file: one table or none, with `WHERE`,
 `ORDER BY`, `LIMIT`, `DISTINCT`, a `GROUP BY` and a `HAVING`, and the
 seven aggregates — `count`, `sum`, `total`, `avg`, `min`, `max` and
-`group_concat`, each of them with `DISTINCT`. The answer is checked
-against a hundred and eighty-six statements the C library answered over
-those fixtures, the name of every column and the value of every field,
-under all three encodings. What refuses by name is a join, a compound, a
-`VALUES`, a `WITH`, a name with a schema in front of it, a table whose
-rows live in the key's own tree, and a column that is computed and not
-stored. What the crate cannot do is everything else in 16.3.
+`group_concat`, each of them with `DISTINCT`. Several such statements are
+put together with `UNION`, `UNION ALL`, `INTERSECT` and `EXCEPT`, a
+`VALUES` answers its own rows, and a name with `main` in front of it is
+the table it names. The answer is checked against two hundred and twenty
+statements the C library answered over those fixtures, the name of every
+column and the value of every field, under all three encodings. What
+refuses by name is a join, a statement inside a `FROM`, a `WITH`, a table
+whose rows live in the key's own tree, and a column that is computed and
+not stored. What the crate cannot do is everything else in 16.3.

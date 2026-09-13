@@ -184,3 +184,37 @@ N|p|q|count(*)	R|0|''|1	R|1|'one'|1	R|1|'two'|1
 N|count(*)	R|1
 N|a|count(*)	R|-3|1	R|1|1
 N|group_concat(v,'')	R|'fivenine'	R|'two'
+N|a	R|-3	R|1	R|2	R|9
+N|a	R|1	R|2	R|-3	R|9
+N|a	R|-3	R|1
+N|a	R|2
+N|a	R|9	R|2	R|1	R|-3
+N|x	R|-3	R|1	R|2	R|9
+N|a	R|2	R|7
+N|a	R|1	R|2
+N|a	R|-3	R|0	R|1	R|2
+N|a|b	R|-3|''	R|1|'one'	R|2|'two'	R|9|'z'
+N|b	R|9	R|''	R|'one'	R|'two'
+N|count(*)	R|1	R|3
+!	SELECTs to the left and right of UNION do not have the same number of result columns
+!	1st ORDER BY term does not match any column in the result set
+!	1st ORDER BY term out of range - should be between 1 and 1
+N|column1	R|1	R|2
+N|column1|column2	R|3|'a'	R|1|'b'
+!	all VALUES must have the same number of terms
+N|column1	R|1	R|2
+!	near "ORDER": syntax error
+!	no such column: a
+!	no such table: temp.t
+!	no such column: temp.t.a
+N|a	R|1	R|2	R|-3
+N|t	R|'a'	R|'b'
+N|t	R|'A'	R|'b'
+N|'z'	R|'A'	R|'b'	R|'z'
+N|t	R|'a'	R|'b'
+N|t	R|'A'
+N|t	R|'A'	R|'b'
+N|t	R|'A'	R|'a'	R|'a'	R|'b'
+N|t	R|'A'	R|'b'
+!	near "LIMIT": syntax error
+N|1	R|1

@@ -3339,7 +3339,7 @@ tree: the first statement this port answers end to end.
   statement per line, and `fixtures/query.golden` is the columns SQLite
   named and the rows it answered, each value quoted, written by
   `tools/sqlite-oracle.c`. The comparison is the name of every column
-  and the value of every field, over a hundred and eighty-six statements
+  and the value of every field, over two hundred and twenty statements
   against thirteen files — every page size of the matrix, reserved space, a file that has
   been through write-ahead logging, both kinds of auto-vacuum, a tree
   with an interior page, a row on overflow pages, a key that is the
@@ -3352,10 +3352,10 @@ tree: the first statement this port answers end to end.
   NOCASE` whole, because a collation written around a column stops it
   being one.
 - What the engine refuses by name is counted rather than asserted: a
-  compound, `VALUES`, a `WITH`, a schema-qualified name, a table whose
-  rows live in the key's own tree, a column that is computed and not
-  stored, and a `GROUP BY` that counts to a `*`. The count is held down
-  so that it can only fall.
+  join, a statement inside a `FROM`, a `WITH`, a table whose rows live in
+  the key's own tree, a column that is computed and not stored, and a
+  `GROUP BY` that counts to a `*`. The count is held down so that it can
+  only fall.
 - Text in UTF-16 is answered as well as text in UTF-8, both ways round,
   and the three places the stored encoding shows through are tested
   under both: `hex`, `octet_length` and a cast to a blob. So is the one
@@ -3429,6 +3429,35 @@ belong to.
 - `sqlite_image` asks every table of every fuzzed file for the
   aggregates over its key, grouped, so that an accumulator reached from
   a file that lies is reached the same way a scan is.
+
+### 6.6.88 Statements put together (`db-sqlite`)
+
+D-149. `UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT` and `VALUES`, tested
+through the same recorded oracle.
+
+- Which of two rows that compare equal but are not the same bytes comes
+  out of a set operator is not a detail a port may leave to chance, and
+  `fixtures/wide16.db` is where it is pinned: a `NOCASE` column holding
+  `A`, `b` and `a`. Six cases hold the rule the merge of
+  `multiSelectOrderBy` gives — the first of them inside one side, the
+  right side's where a `UNION` finds one on both, and the left side's for
+  an `INTERSECT` and an `EXCEPT`.
+- The order: everything but `UNION ALL` answers sorted by every column,
+  `UNION ALL` answers one side after the other, and an `ORDER BY` over
+  the whole re-sorts what came out.
+- The collation a column compares under is the first side that writes
+  one, which is `multiSelectCollSeq`, so a `NOCASE` column on the left
+  makes a literal on the right compare without case.
+- The refusals: sides that answer different numbers of columns, an
+  `ORDER BY` term that is an expression rather than a column of the
+  answer, and a `VALUES` whose rows are not all the same width.
+- `VALUES` is a core and not a statement, so an `ORDER BY` or a `LIMIT`
+  after one is a syntax error — the parser now refuses it where SQLite
+  does, and a `VALUES` inside a compound still takes the `ORDER BY` of
+  the `SELECT` beside it.
+- A table may be written with `main` in front of it and is the same
+  table; any other schema names no table, which the column `main.t.a`
+  tests as well as the table `main.t`.
 
 ## 6.7 CI pipeline
 

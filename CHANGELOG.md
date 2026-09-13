@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Statements put together in `db-sqlite`: `UNION`, `UNION ALL`,
+  `INTERSECT`, `EXCEPT`, `VALUES`, and a table written with `main` in
+  front of it. The set operators are the merge SQLite compiles rather
+  than an insert into one index, so which of two rows that compare equal
+  but are not the same bytes comes out is the row SQLite answers with,
+  and the collation a column compares under is the first side that
+  writes one. The parser now refuses an `ORDER BY` or a `LIMIT` after a
+  trailing `VALUES`, which SQLite's grammar has no rule for.
 - Grouping and the aggregates in `db-sqlite`: `GROUP BY`, `HAVING` and
   the seven aggregate functions — `count`, `sum`, `total`, `avg`, `min`,
   `max` and `group_concat`, each of them with `DISTINCT`. `sum` keeps an
