@@ -84,6 +84,18 @@ pub enum Intrinsic {
     StringPrototypeStartsWith,
     /// `String.prototype.substring` (22.1.3.25).
     StringPrototypeSubstring,
+    /// `String.prototype.codePointAt` (22.1.3.4).
+    StringPrototypeCodePointAt,
+    /// `String.prototype.padEnd` (22.1.3.15).
+    StringPrototypePadEnd,
+    /// `String.prototype.padStart` (22.1.3.16).
+    StringPrototypePadStart,
+    /// `String.prototype.trim` (22.1.3.32).
+    StringPrototypeTrim,
+    /// `String.prototype.trimEnd` (22.1.3.33).
+    StringPrototypeTrimEnd,
+    /// `String.prototype.trimStart` (22.1.3.34).
+    StringPrototypeTrimStart,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -97,7 +109,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 22] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -114,6 +126,12 @@ impl Intrinsic {
         Self::StringPrototypeSlice,
         Self::StringPrototypeStartsWith,
         Self::StringPrototypeSubstring,
+        Self::StringPrototypeCodePointAt,
+        Self::StringPrototypePadEnd,
+        Self::StringPrototypePadStart,
+        Self::StringPrototypeTrim,
+        Self::StringPrototypeTrimEnd,
+        Self::StringPrototypeTrimStart,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -135,7 +153,13 @@ impl Intrinsic {
             | Self::StringPrototypeRepeat
             | Self::StringPrototypeSlice
             | Self::StringPrototypeStartsWith
-            | Self::StringPrototypeSubstring => IntrinsicHolder::StringPrototype,
+            | Self::StringPrototypeSubstring
+            | Self::StringPrototypeCodePointAt
+            | Self::StringPrototypePadEnd
+            | Self::StringPrototypePadStart
+            | Self::StringPrototypeTrim
+            | Self::StringPrototypeTrimEnd
+            | Self::StringPrototypeTrimStart => IntrinsicHolder::StringPrototype,
         }
     }
 
@@ -159,6 +183,12 @@ impl Intrinsic {
             Self::StringPrototypeSlice => 13,
             Self::StringPrototypeStartsWith => 14,
             Self::StringPrototypeSubstring => 15,
+            Self::StringPrototypeCodePointAt => 16,
+            Self::StringPrototypePadEnd => 17,
+            Self::StringPrototypePadStart => 18,
+            Self::StringPrototypeTrim => 19,
+            Self::StringPrototypeTrimEnd => 20,
+            Self::StringPrototypeTrimStart => 21,
         }
     }
 
@@ -181,6 +211,12 @@ impl Intrinsic {
             Self::StringPrototypeSlice => 13,
             Self::StringPrototypeStartsWith => 14,
             Self::StringPrototypeSubstring => 15,
+            Self::StringPrototypeCodePointAt => 16,
+            Self::StringPrototypePadEnd => 17,
+            Self::StringPrototypePadStart => 18,
+            Self::StringPrototypeTrim => 19,
+            Self::StringPrototypeTrimEnd => 20,
+            Self::StringPrototypeTrimStart => 21,
         }
     }
 
@@ -204,6 +240,12 @@ impl Intrinsic {
             13 => Some(Self::StringPrototypeSlice),
             14 => Some(Self::StringPrototypeStartsWith),
             15 => Some(Self::StringPrototypeSubstring),
+            16 => Some(Self::StringPrototypeCodePointAt),
+            17 => Some(Self::StringPrototypePadEnd),
+            18 => Some(Self::StringPrototypePadStart),
+            19 => Some(Self::StringPrototypeTrim),
+            20 => Some(Self::StringPrototypeTrimEnd),
+            21 => Some(Self::StringPrototypeTrimStart),
             _ => None,
         }
     }
@@ -228,6 +270,12 @@ impl Intrinsic {
             Self::StringPrototypeSlice => "slice",
             Self::StringPrototypeStartsWith => "startsWith",
             Self::StringPrototypeSubstring => "substring",
+            Self::StringPrototypeCodePointAt => "codePointAt",
+            Self::StringPrototypePadEnd => "padEnd",
+            Self::StringPrototypePadStart => "padStart",
+            Self::StringPrototypeTrim => "trim",
+            Self::StringPrototypeTrimEnd => "trimEnd",
+            Self::StringPrototypeTrimStart => "trimStart",
         }
     }
 
@@ -235,7 +283,10 @@ impl Intrinsic {
     #[must_use]
     pub const fn length(self) -> u32 {
         match self {
-            Self::ObjectPrototypeToString => 0,
+            Self::ObjectPrototypeToString
+            | Self::StringPrototypeTrim
+            | Self::StringPrototypeTrimEnd
+            | Self::StringPrototypeTrimStart => 0,
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypePropertyIsEnumerable
@@ -248,7 +299,10 @@ impl Intrinsic {
             | Self::StringPrototypeIncludes
             | Self::StringPrototypeLastIndexOf
             | Self::StringPrototypeRepeat
-            | Self::StringPrototypeStartsWith => 1,
+            | Self::StringPrototypeStartsWith
+            | Self::StringPrototypeCodePointAt
+            | Self::StringPrototypePadEnd
+            | Self::StringPrototypePadStart => 1,
             Self::StringPrototypeSlice | Self::StringPrototypeSubstring => 2,
         }
     }

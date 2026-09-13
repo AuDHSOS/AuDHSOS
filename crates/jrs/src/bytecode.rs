@@ -4254,12 +4254,19 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypeConcat
         | crate::engine::realm::Intrinsic::StringPrototypeRepeat
         | crate::engine::realm::Intrinsic::StringPrototypeSlice
-        | crate::engine::realm::Intrinsic::StringPrototypeSubstring => RegisterType::String,
+        | crate::engine::realm::Intrinsic::StringPrototypeSubstring
+        | crate::engine::realm::Intrinsic::StringPrototypePadEnd
+        | crate::engine::realm::Intrinsic::StringPrototypePadStart
+        | crate::engine::realm::Intrinsic::StringPrototypeTrim
+        | crate::engine::realm::Intrinsic::StringPrototypeTrimEnd
+        | crate::engine::realm::Intrinsic::StringPrototypeTrimStart => RegisterType::String,
+
         crate::engine::realm::Intrinsic::StringPrototypeCharCodeAt
         | crate::engine::realm::Intrinsic::StringPrototypeIndexOf
         | crate::engine::realm::Intrinsic::StringPrototypeLastIndexOf => RegisterType::Number,
-        // 22.1.3.1 answers undefined for an index outside the String.
-        crate::engine::realm::Intrinsic::StringPrototypeAt => RegisterType::Primitive,
+        // 22.1.3.1 and 22.1.3.4 answer undefined for an index outside the String.
+        crate::engine::realm::Intrinsic::StringPrototypeAt
+        | crate::engine::realm::Intrinsic::StringPrototypeCodePointAt => RegisterType::Primitive,
     }
 }
 

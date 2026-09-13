@@ -843,7 +843,13 @@ impl RegisterVM {
             | Intrinsic::StringPrototypeRepeat
             | Intrinsic::StringPrototypeSlice
             | Intrinsic::StringPrototypeStartsWith
-            | Intrinsic::StringPrototypeSubstring => {
+            | Intrinsic::StringPrototypeSubstring
+            | Intrinsic::StringPrototypeCodePointAt
+            | Intrinsic::StringPrototypePadEnd
+            | Intrinsic::StringPrototypePadStart
+            | Intrinsic::StringPrototypeTrim
+            | Intrinsic::StringPrototypeTrimEnd
+            | Intrinsic::StringPrototypeTrimStart => {
                 self.call_string_intrinsic(intrinsic, call, heap, realm)
             }
         }
@@ -1040,6 +1046,72 @@ impl RegisterVM {
                     .get(first.min(second)..first.max(second))
                     .unwrap_or_default();
                 self.allocate_string(heap, slice)
+            }
+            // 22.1.3.4: the code point at an index, which pairs a surrogate
+            // with the one after it.
+            Intrinsic::StringPrototypeCodePointAt => {
+                let position = integer_argument(argument(self, 0)?, heap)?;
+                let Ok(position) = usize::try_from(position) else {
+                    return Ok(VALUE_UNDEFINED);
+                };
+                let Some(first) = units.get(position).copied() else {
+                    return Ok(VALUE_UNDEFINED);
+                };
+                Ok(Value::from_smi(code_point_at(&units, position, first)))
+            }
+            // 22.1.3.15 and 22.1.3.16: the filler is repeated and cut to the
+            // width the String is short of, and an empty filler pads nothing.
+            Intrinsic::StringPrototypePadStart | Intrinsic::StringPrototypePadEnd => {
+                let width = integer_argument(argument(self, 0)?, heap)?;
+                let width = usize::try_from(width).unwrap_or(0);
+                let filler = match argument(self, 1)? {
+                    value if value.is_undefined() => alloc::vec![0x20],
+                    value => property_name_units(value, heap)?,
+                };
+                if width <= units.len() || filler.is_empty() {
+                    return self.allocate_string(heap, &units);
+                }
+                if width > self.string_units_limit {
+                    return Err(VMError::StringLimit);
+                }
+                let missing = width.saturating_sub(units.len());
+                let mut pad = Vec::with_capacity(missing);
+                while pad.len() < missing {
+                    let take = missing.saturating_sub(pad.len()).min(filler.len());
+                    pad.extend_from_slice(filler.get(..take).unwrap_or_default());
+                }
+                let mut result = Vec::with_capacity(width);
+                if intrinsic == Intrinsic::StringPrototypePadStart {
+                    result.extend_from_slice(&pad);
+                    result.extend_from_slice(&units);
+                } else {
+                    result.extend_from_slice(&units);
+                    result.extend_from_slice(&pad);
+                }
+                self.allocate_string(heap, &result)
+            }
+            // 22.1.3.32 to 22.1.3.34: TrimString removes the white space and
+            // line terminators of 11.2 and 11.3 from the named ends.
+            Intrinsic::StringPrototypeTrim
+            | Intrinsic::StringPrototypeTrimStart
+            | Intrinsic::StringPrototypeTrimEnd => {
+                let start = if intrinsic == Intrinsic::StringPrototypeTrimEnd {
+                    0
+                } else {
+                    units.iter().take_while(|unit| trimmable(**unit)).count()
+                };
+                let end = if intrinsic == Intrinsic::StringPrototypeTrimStart {
+                    units.len()
+                } else {
+                    units.len()
+                        - units
+                            .iter()
+                            .rev()
+                            .take_while(|unit| trimmable(**unit))
+                            .count()
+                };
+                let trimmed = units.get(start..end.max(start)).unwrap_or_default();
+                self.allocate_string(heap, trimmed)
             }
             _ => Err(VMError::InvalidFeedbackVector),
         }
@@ -2248,6 +2320,33 @@ fn raise(
         Ok(error) => VMError::Thrown(Value::from_object(error), Some((kind, message))),
         Err(error) => VMError::Heap(error),
     }
+}
+
+/// The code point at one index, pairing a leading surrogate with the trailing
+/// one after it (11.1.4).
+fn code_point_at(units: &[u16], position: usize, first: u16) -> i32 {
+    let leading = (0xD800..0xDC00).contains(&first);
+    let trailing = position
+        .checked_add(1)
+        .and_then(|next| units.get(next).copied())
+        .filter(|unit| (0xDC00..0xE000).contains(unit));
+    match (leading, trailing) {
+        (true, Some(second)) => {
+            let high = i32::from(first)
+                .saturating_sub(0xD800)
+                .saturating_mul(0x400);
+            high.saturating_add(i32::from(second).saturating_sub(0xDC00))
+                .saturating_add(0x1_0000)
+        }
+        _ => i32::from(first),
+    }
+}
+
+/// Whether one code unit is trimmed from a String's ends: the white space of
+/// 11.2 or the line terminators of 11.3.
+fn trimmable(unit: u16) -> bool {
+    char::from_u32(u32::from(unit))
+        .is_some_and(|ch| crate::value::whitespace(ch) || crate::value::line_terminator(ch))
 }
 
 /// The largest integer a binary64 represents exactly, which bounds every index.

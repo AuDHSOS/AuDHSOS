@@ -2535,6 +2535,21 @@ fn register_string_methods_run_as_native_intrinsics() -> Result<(), Error> {
         "'abcdef'.substring(4,2)",
         "'abcdef'.substring(1)",
         "let s='hello world';s.slice(s.indexOf(' ')+1)",
+        "'abc'.codePointAt(0)",
+        "'abc'.codePointAt(9)",
+        "'\\u{1f600}x'.codePointAt(0)",
+        "'\\u{1f600}x'.codePointAt(1)",
+        "'5'.padStart(3,'0')",
+        "'5'.padStart(3)",
+        "'5'.padStart(1,'0')",
+        "'5'.padEnd(4,'ab')",
+        "'5'.padEnd(4,'')",
+        "'  ab  '.trim()",
+        "'  ab  '.trimStart()",
+        "'  ab  '.trimEnd()",
+        "'\\n\\tab'.trim()",
+        "'   '.trim()",
+        "''.trim()",
     ] {
         differential(source)?;
     }
