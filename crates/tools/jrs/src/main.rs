@@ -116,7 +116,7 @@ fn run(
     let start = Instant::now();
     let program = compile(&source, limits).map_err(|e| e.to_string())?;
     let compiled = start.elapsed();
-    let mut runtime = Runtime::new(limits);
+    let mut runtime = Runtime::with_backend(limits, backend);
     let start = Instant::now();
     let mut value = Value::Undefined;
     for _ in 0..iterations {

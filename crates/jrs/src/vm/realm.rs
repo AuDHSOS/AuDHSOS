@@ -519,7 +519,7 @@ impl Execution<'_> {
         result
     }
     fn execute_nested_script(&mut self, program: Program) -> Result<Value, Error> {
-        if program.register_code.is_some() {
+        if self.uses_register(&program) {
             return self.execute_program_body(&program, self.frames.len());
         }
         self.check_frame_limit()?;
@@ -719,7 +719,7 @@ impl Execution<'_> {
     }
     fn evaluate_script(&mut self, program: &Program) -> Result<Value, Error> {
         self.instantiate_globals(program)?;
-        let result = if program.register_code.is_some() {
+        let result = if self.uses_register(program) {
             self.execute_program_body(program, 0)
         } else {
             self.start_script_frame(program)?;

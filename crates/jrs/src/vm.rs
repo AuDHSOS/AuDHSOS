@@ -194,6 +194,7 @@ impl Host for SilentHost {
 /// An isolated, fuel-limited bytecode executor. Buffers are reused between runs.
 pub struct Runtime {
     limits: Limits,
+    backend: Backend,
     stack: Vec<Value>,
     intrinsic_code: Vec<(Builtin, Rc<FunctionCode>)>,
     register_vm: Option<crate::engine::interpreter::RegisterVM>,
@@ -336,8 +337,21 @@ impl Runtime {
     /// Creates an executor with explicit resource limits.
     #[must_use]
     pub const fn new(limits: Limits) -> Self {
+        Self::with_backend(limits, Backend::Stack)
+    }
+
+    /// Creates an executor that runs every program on `backend`.
+    ///
+    /// The choice belongs to the executor, not to the single program: the two
+    /// paths hold separate object models, so choosing per program would let a
+    /// program depend on which one compiled it. A program the register
+    /// lowering did not take is refused on [`Backend::Engine`] rather than run
+    /// on the other path.
+    #[must_use]
+    pub const fn with_backend(limits: Limits, backend: Backend) -> Self {
         Self {
             limits,
+            backend,
             stack: Vec::new(),
             intrinsic_code: Vec::new(),
             register_vm: None,
@@ -353,7 +367,13 @@ impl Runtime {
     /// # Errors
     /// Returns reference/type errors, resource exhaustion, or host failure.
     pub fn run(&mut self, program: &Program, host: &mut impl Host) -> Result<Value, Error> {
+        if self.backend == Backend::Engine && program.register_code.is_none() {
+            return Err(Error::Unsupported {
+                feature: "a Script the register lowering does not take",
+            });
+        }
         let mut execution = Execution::new(host, self.limits);
+        execution.backend = self.backend;
         execution.stack = core::mem::take(&mut self.stack);
         execution.intrinsic_code = core::mem::take(&mut self.intrinsic_code);
         execution.register_vm = self.register_vm.take();
@@ -611,11 +631,23 @@ impl Execution<'_> {
         result
     }
 
+    /// Whether this execution runs `program` on the register engine.
+    ///
+    /// The lowering is produced for every program, but only a realm or an
+    /// executor on [`Backend::Engine`] runs it. Choosing per program would let
+    /// a program depend on which path compiled it.
+    fn uses_register(&self, program: &Program) -> bool {
+        self.backend == Backend::Engine && program.register_code.is_some()
+    }
+
     fn execute_program_body(&mut self, program: &Program, boundary: usize) -> Result<Value, Error> {
-        if let Some(code) = &program.register_code {
-            self.execute_register_program(code)
-        } else {
-            self.execute(program, boundary)
+        match program
+            .register_code
+            .as_ref()
+            .filter(|_| self.uses_register(program))
+        {
+            Some(code) => self.execute_register_program(code),
+            None => self.execute(program, boundary),
         }
     }
 
@@ -628,7 +660,7 @@ impl Execution<'_> {
         self.array_proto = None;
         self.fuel = self.limits.fuel;
         self.owner = Rc::new(());
-        self.binding_slots = if program.register_code.is_some() {
+        self.binding_slots = if self.uses_register(program) {
             0
         } else {
             program.slots.len()
@@ -643,7 +675,7 @@ impl Execution<'_> {
                 resource: "bytecode instructions",
             });
         }
-        if program.register_code.is_none() {
+        if !self.uses_register(program) {
             self.frames.push(Frame::script(program, 0));
             self.top_program = Some(Rc::new(program.clone()));
         }

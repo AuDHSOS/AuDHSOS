@@ -110,7 +110,8 @@ fn fresh_array_binding_patterns_use_dense_elements() -> Result<(), Error> {
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -194,7 +195,8 @@ fn static_object_binding_patterns_and_defaults_use_register_property_caches() ->
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -253,7 +255,8 @@ fn fresh_object_rest_bindings_copy_shape_slots() -> Result<(), Error> {
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -284,7 +287,8 @@ fn identifier_destructuring_assignments_use_register_storage() -> Result<(), Err
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -316,7 +320,8 @@ fn member_destructuring_targets_use_shape_and_elements_storage() -> Result<(), E
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -337,7 +342,8 @@ fn dynamic_object_writes_keep_subsequent_reads_conservative() -> Result<(), Erro
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -351,7 +357,7 @@ fn dynamic_object_writes_keep_subsequent_reads_conservative() -> Result<(), Erro
     let program = compile("let target={x:1},key='y';target[key]=42;target.x", limits)?;
     assert!(program.uses_register_backend());
     assert_eq!(
-        Runtime::new(limits).run(&program, &mut SilentHost),
+        Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "object properties"
         })
@@ -370,7 +376,8 @@ fn observable_destructuring_assignments_stay_on_legacy_backend() -> Result<(), E
     ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
-        let _ = Runtime::new(Limits::default()).run(&program, &mut SilentHost);
+        let _ = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost);
     }
     Ok(())
 }
@@ -418,7 +425,8 @@ fn primitive_expressions_run_through_register_bytecode_and_match_legacy() -> Res
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -456,7 +464,8 @@ fn primitive_unary_numeric_conversion_runs_through_register_bytecode() -> Result
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -490,7 +499,8 @@ fn primitive_loose_equality_runs_through_register_bytecode() -> Result<(), Error
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert_eq!(actual, expected, "{source}");
     }
     Ok(())
@@ -522,7 +532,8 @@ fn primitive_bitwise_operations_run_through_register_bytecode() -> Result<(), Er
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -558,7 +569,8 @@ fn short_circuit_expressions_run_through_register_bytecode() -> Result<(), Error
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -591,7 +603,8 @@ fn primitive_exponentiation_runs_through_register_bytecode() -> Result<(), Error
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -618,7 +631,8 @@ fn string_expressions_run_through_heap_independent_register_bytecode() -> Result
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -651,7 +665,8 @@ fn typeof_runs_through_register_bytecode_and_matches_legacy() -> Result<(), Erro
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert_eq!(actual, expected, "{source}");
     }
 
@@ -662,7 +677,7 @@ fn typeof_runs_through_register_bytecode_and_matches_legacy() -> Result<(), Erro
     let program = compile("typeof 1", limits)?;
     assert!(program.uses_register_backend());
     assert_eq!(
-        Runtime::new(limits).run(&program, &mut SilentHost),
+        Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "string units"
         })
@@ -678,11 +693,11 @@ fn string_constants_are_reusable_across_independent_agent_heaps() -> Result<(), 
 
     let expected = Value::string("hello 世界");
     assert_eq!(
-        Runtime::new(Limits::default()).run(&program, &mut SilentHost)?,
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost)?,
         expected
     );
     assert_eq!(
-        Runtime::new(Limits::default()).run(&program, &mut SilentHost)?,
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost)?,
         expected
     );
     Ok(())
@@ -703,7 +718,8 @@ fn ordinary_named_properties_run_through_shapes_and_inline_caches() -> Result<()
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -741,7 +757,8 @@ fn computed_object_data_properties_use_keyed_shape_storage() -> Result<(), Error
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -786,7 +803,8 @@ fn array_literals_and_indices_run_through_dense_elements() -> Result<(), Error> 
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -845,7 +863,8 @@ fn missing_ordinary_properties_produce_undefined_in_register_bytecode() -> Resul
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -874,7 +893,8 @@ fn ordinary_objects_read_primitive_bracket_keys_through_keyed_caches() -> Result
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -896,7 +916,7 @@ fn register_array_elements_preserve_property_limits() -> Result<(), Error> {
     let program = compile("let a=[];a.length", limits)?;
     assert!(program.uses_register_backend());
     assert_eq!(
-        Runtime::new(limits).run(&program, &mut SilentHost)?,
+        Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost)?,
         Value::Number(0.0)
     );
     assert!(
@@ -911,7 +931,7 @@ fn register_array_elements_preserve_property_limits() -> Result<(), Error> {
     let program = compile("let a=[];let i=0;while(i<2){a[i]=i;i++}0", limits)?;
     assert!(program.uses_register_backend());
     assert_eq!(
-        Runtime::new(limits).run(&program, &mut SilentHost),
+        Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "object properties"
         })
@@ -927,7 +947,8 @@ fn named_property_bytecode_is_reusable_across_independent_agent_heaps() -> Resul
 
     for _ in 0..2 {
         assert_eq!(
-            Runtime::new(Limits::default()).run(&program, &mut SilentHost)?,
+            Runtime::with_backend(Limits::default(), Backend::Engine)
+                .run(&program, &mut SilentHost)?,
             Value::Number(42.0)
         );
     }
@@ -943,7 +964,7 @@ fn feedback_vectors_persist_per_code_identity_and_obey_the_agent_quota() -> Resu
     let first = compile("let o={x:1};o.x", limits)?;
     let second = compile("let o={y:2};o.y", limits)?;
     let third = compile("let o={z:3};o.z", limits)?;
-    let mut runtime = Runtime::new(limits);
+    let mut runtime = Runtime::with_backend(limits, Backend::Engine);
 
     assert_eq!(runtime.run(&first, &mut SilentHost)?, Value::Number(1.0));
     assert_eq!(runtime.run(&first, &mut SilentHost)?, Value::Number(1.0));
@@ -983,7 +1004,7 @@ fn register_string_concatenation_preserves_string_unit_limit() -> Result<(), Err
     let program = compile("'ab' + 'cd'", limits)?;
     assert!(program.uses_register_backend());
     assert_eq!(
-        Runtime::new(limits).run(&program, &mut SilentHost),
+        Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "string units"
         })
@@ -1027,7 +1048,7 @@ fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<
         crate::engine::bytecode::Reg(register.register_count),
     );
     assert_eq!(
-        Runtime::new(Limits::default()).run(&program, &mut SilentHost),
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::InvalidBytecode)
     );
     Ok(())
@@ -1077,7 +1098,8 @@ fn simple_functions_use_contiguous_register_call_frames() -> Result<(), Error> {
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -1106,7 +1128,8 @@ fn register_functions_return_gc_owned_objects_and_layouts() -> Result<(), Error>
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -1148,7 +1171,8 @@ fn object_identity_equality_runs_without_coercion() -> Result<(), Error> {
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert_eq!(actual, expected, "{source}");
     }
 
@@ -1235,7 +1259,8 @@ fn closures_share_captured_context_bindings_in_register_bytecode() -> Result<(),
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -1271,7 +1296,8 @@ fn nested_functions_use_flat_code_and_lexical_context_tables() -> Result<(), Err
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -1295,7 +1321,8 @@ fn returned_closures_outlive_register_frames_and_keep_distinct_contexts() -> Res
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -1305,6 +1332,10 @@ fn returned_closures_outlive_register_frames_and_keep_distinct_contexts() -> Res
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one function keeps the refused forms beside the limits they share"
+)]
 fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> Result<(), Error> {
     for source in [
         "function f(){return this}f()",
@@ -1335,7 +1366,7 @@ fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> R
     let program = compile("function f(){return 42}f()", limits)?;
     assert!(program.uses_register_backend());
     assert_eq!(
-        Runtime::new(limits).run(&program, &mut SilentHost),
+        Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "call frames"
         })
@@ -1351,7 +1382,7 @@ fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> R
     )?;
     assert!(program.uses_register_backend());
     assert_eq!(
-        Runtime::new(limits).run(&program, &mut SilentHost),
+        Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "call frames"
         })
@@ -1364,7 +1395,7 @@ fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> R
     let program = compile("function f(){return 42}f()", limits)?;
     assert!(program.uses_register_backend());
     assert_eq!(
-        Runtime::new(limits).run(&program, &mut SilentHost),
+        Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "feedback vectors"
         })
@@ -1393,18 +1424,24 @@ fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> R
     let program = compile("function f(){return 42}f()", base)?;
     let exact = u64::try_from(program.instruction_count()).unwrap();
     assert_eq!(
-        Runtime::new(Limits {
-            fuel: exact,
-            ..base
-        })
+        Runtime::with_backend(
+            Limits {
+                fuel: exact,
+                ..base
+            },
+            Backend::Engine,
+        )
         .run(&program, &mut SilentHost)?,
         Value::Number(42.0)
     );
     assert_eq!(
-        Runtime::new(Limits {
-            fuel: exact.saturating_sub(1),
-            ..base
-        })
+        Runtime::with_backend(
+            Limits {
+                fuel: exact.saturating_sub(1),
+                ..base
+            },
+            Backend::Engine,
+        )
         .run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "execution fuel"
@@ -1439,7 +1476,8 @@ fn register_backend_preserves_public_fuel_and_stack_limits() -> Result<(), Error
         })
     );
     assert_eq!(
-        Runtime::new(Limits { stack: 1, ..base }).run(&program, &mut SilentHost),
+        Runtime::with_backend(Limits { stack: 1, ..base }, Backend::Engine)
+            .run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "operand stack"
         })
@@ -1455,7 +1493,7 @@ fn realm_executes_register_backend_without_legacy_bytecode() -> Result<(), Error
     script.program.code.clear();
 
     let mut host = SilentHost;
-    let mut realm = Realm::new(limits, &mut host)?;
+    let mut realm = Realm::with_backend(limits, &mut host, Backend::Engine)?;
     assert_eq!(realm.evaluate_compiled(&script)?, Value::Number(42.0));
     assert_eq!(realm.evaluate_compiled(&script)?, Value::Number(42.0));
     Ok(())
@@ -1480,7 +1518,8 @@ fn local_bindings_and_assignments_match_legacy_execution() -> Result<(), Error> 
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -1516,7 +1555,8 @@ fn block_lexical_bindings_use_scoped_registers() -> Result<(), Error> {
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -1542,14 +1582,17 @@ fn block_registers_count_towards_the_binding_budget() -> Result<(), Error> {
         2
     );
     assert_eq!(
-        Runtime::new(two).run(&nested, &mut SilentHost)?,
+        Runtime::with_backend(two, Backend::Engine).run(&nested, &mut SilentHost)?,
         Value::Number(42.0)
     );
     assert_eq!(
-        Runtime::new(Limits {
-            binding_slots: 1,
-            ..Limits::default()
-        })
+        Runtime::with_backend(
+            Limits {
+                binding_slots: 1,
+                ..Limits::default()
+            },
+            Backend::Engine
+        )
         .run(&nested, &mut SilentHost),
         Err(Error::Limit {
             resource: "binding slots"
@@ -1566,10 +1609,13 @@ fn block_registers_count_towards_the_binding_budget() -> Result<(), Error> {
         1
     );
     assert_eq!(
-        Runtime::new(Limits {
-            binding_slots: 1,
-            ..Limits::default()
-        })
+        Runtime::with_backend(
+            Limits {
+                binding_slots: 1,
+                ..Limits::default()
+            },
+            Backend::Engine
+        )
         .run(&sequential, &mut SilentHost)?,
         Value::Number(2.0)
     );
@@ -1585,10 +1631,13 @@ fn block_registers_count_towards_the_binding_budget() -> Result<(), Error> {
         .ok_or(Error::InvalidBytecode)?;
     assert_eq!(body.binding_count, 3);
     assert_eq!(
-        Runtime::new(Limits {
-            binding_slots: 2,
-            ..Limits::default()
-        })
+        Runtime::with_backend(
+            Limits {
+                binding_slots: 2,
+                ..Limits::default()
+            },
+            Backend::Engine
+        )
         .run(&function, &mut SilentHost),
         Err(Error::Limit {
             resource: "binding slots"
@@ -1609,7 +1658,8 @@ fn observable_block_scope_cases_stay_on_legacy_backend() -> Result<(), Error> {
     ] {
         let program = compile(source, Limits::default())?;
         assert!(!program.uses_register_backend(), "{source}");
-        let _ = Runtime::new(Limits::default()).run(&program, &mut SilentHost);
+        let _ = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost);
     }
     assert!(
         !compile_script("{let x=1;x}", Limits::default())?
@@ -1655,7 +1705,8 @@ fn var_bindings_are_hoisted_in_register_frames() -> Result<(), Error> {
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -1672,7 +1723,8 @@ fn sibling_function_capture_requires_an_available_runtime_type() -> Result<(), E
     let mut legacy = program.clone();
     legacy.register_code = None;
     let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-    let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+    let actual =
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost)?;
     assert!(same_value(&actual, &expected));
 
     // The var initializer gives `g` a primitive type hint while declaration
@@ -1742,7 +1794,8 @@ fn captured_var_uses_a_hoisted_heap_context() -> Result<(), Error> {
     let mut legacy = program.clone();
     legacy.register_code = None;
     let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-    let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+    let actual =
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost)?;
     assert!(same_value(&actual, &expected));
 
     let source = "let a=1;function outer(){var b=2;function middle(){var c=3;return function(){return a+b+c}}return middle()}outer()()";
@@ -1770,7 +1823,8 @@ fn captured_var_uses_a_hoisted_heap_context() -> Result<(), Error> {
     let mut legacy = program.clone();
     legacy.register_code = None;
     let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-    let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+    let actual =
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost)?;
     assert!(same_value(&actual, &expected));
 
     let limits = Limits {
@@ -1780,7 +1834,7 @@ fn captured_var_uses_a_hoisted_heap_context() -> Result<(), Error> {
     let program = compile("var x=1,y=2;x+y", limits)?;
     assert!(program.uses_register_backend());
     assert_eq!(
-        Runtime::new(limits).run(&program, &mut SilentHost),
+        Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "binding slots"
         })
@@ -1884,7 +1938,8 @@ fn destructuring_other_bindings_preserves_captured_register_contexts() -> Result
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -1904,7 +1959,8 @@ fn loop_var_type_inference_reaches_a_fixed_point() -> Result<(), Error> {
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -1928,7 +1984,8 @@ fn conditional_expressions_match_legacy_execution() -> Result<(), Error> {
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -1954,7 +2011,8 @@ fn conditional_statements_match_legacy_execution() -> Result<(), Error> {
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -2002,7 +2060,8 @@ fn blocks_updates_and_while_loops_match_legacy_execution() -> Result<(), Error> 
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -2028,7 +2087,8 @@ fn do_while_loops_match_legacy_completion_and_control_flow() -> Result<(), Error
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -2046,7 +2106,7 @@ fn register_do_while_checks_fuel_at_the_condition_back_edge() -> Result<(), Erro
     let program = compile("do{}while(true)", limits)?;
     assert!(program.uses_register_backend());
     assert_eq!(
-        Runtime::new(limits).run(&program, &mut SilentHost),
+        Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "execution fuel"
         })
@@ -2063,7 +2123,7 @@ fn register_while_checks_fuel_at_back_edges() -> Result<(), Error> {
     let program = compile("let i=0;while(true)i++", limits)?;
     assert!(program.uses_register_backend());
     assert_eq!(
-        Runtime::new(limits).run(&program, &mut SilentHost),
+        Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "execution fuel"
         })
@@ -2071,7 +2131,7 @@ fn register_while_checks_fuel_at_back_edges() -> Result<(), Error> {
     let program = compile("while(true)continue", limits)?;
     assert!(program.uses_register_backend());
     assert_eq!(
-        Runtime::new(limits).run(&program, &mut SilentHost),
+        Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Limit {
             resource: "execution fuel"
         })
@@ -2109,7 +2169,8 @@ fn classic_for_loops_match_legacy_execution() -> Result<(), Error> {
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost);
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost);
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost);
         match (&actual, &expected) {
             (Ok(actual), Ok(expected)) => assert!(
                 same_value(actual, expected),
@@ -2163,7 +2224,8 @@ fn register_loops_patch_break_and_continue_targets() -> Result<(), Error> {
         let mut legacy = program.clone();
         legacy.register_code = None;
         let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost)?;
-        let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost)?;
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost)?;
         assert!(
             same_value(&actual, &expected),
             "{source}: {actual:?} != {expected:?}"
@@ -2178,7 +2240,8 @@ fn differential(source: &str) -> Result<(), Error> {
     let mut legacy = program.clone();
     legacy.register_code = None;
     let expected = Runtime::new(Limits::default()).run(&legacy, &mut SilentHost);
-    let actual = Runtime::new(Limits::default()).run(&program, &mut SilentHost);
+    let actual =
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost);
     match (&actual, &expected) {
         (Ok(actual), Ok(expected)) => assert!(
             same_value(actual, expected),
@@ -2789,7 +2852,7 @@ fn an_engine_error_reaches_the_embedding_as_the_same_error_type() -> Result<(), 
     let mut script = compile_script("1", Limits::default())?;
     script.program.register_code = Some(alloc::rc::Rc::new(code));
     let mut host = SilentHost;
-    let mut realm = Realm::new(Limits::default(), &mut host)?;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
     let error = realm
         .evaluate_compiled(&script)
         .expect_err("a Smi is not callable");

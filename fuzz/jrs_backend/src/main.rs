@@ -10,7 +10,7 @@
 //! a refusal.
 #![forbid(unsafe_code)]
 
-use jrs::{Error, Limits, Runtime, SilentHost, Value, compile};
+use jrs::{Backend, Error, Limits, Runtime, SilentHost, Value, compile};
 
 fn same_value(left: &Value, right: &Value) -> bool {
     match (left, right) {
@@ -62,7 +62,7 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
         return;
     }
     let legacy = program.legacy_only();
-    let actual = Runtime::new(limits).run(&program, &mut SilentHost);
+    let actual = Runtime::with_backend(limits, Backend::Engine).run(&program, &mut SilentHost);
     let expected = Runtime::new(limits).run(&legacy, &mut SilentHost);
     assert!(
         !matches!(actual, Err(Error::InvalidBytecode)),
