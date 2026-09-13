@@ -126,13 +126,21 @@ within each target and skipping targets whose corpus directory is absent.
   in `COMPLETE` is held to all of it instead — 100 percent of lines and of
   branches — which is what document 16, decision D4, asks of the SQLite
   port and what `db-sqlite` meets.
-- Condition coverage: the coverage step of `cargo xtask check` builds the
-  tests with `-Z coverage-options=branch,condition`, which counts every
-  operand of a compound decision and not only the decision, so a decision
-  whose second operand no test settles fails the check. The same
-  thresholds apply to that column. It is the measurement document 16,
-  decision D4, holds the SQLite port to, and the reason it is not MC/DC
-  is stated there. `cargo xtask coverage` alone counts decisions only.
+- Condition coverage: `cargo xtask check` runs the coverage step twice,
+  once with `-Z coverage-options=branch` and once with
+  `branch,condition`, which counts every operand of a compound decision
+  and not only the decision, so a decision whose second operand no test
+  settles fails the check. The same thresholds apply to both columns.
+  Each mode builds into its own target directory, so running both
+  rebuilds the workspace once each rather than twice each.
+- MC/DC: `cargo xtask mcdc` reads the typed tree of every crate of
+  `COMPLETE` through `-Zunpretty=thir-tree` and reports every bitwise
+  `&`, `|` or `^` over booleans. Over decisions built only from `&&` and
+  `||`, condition coverage at 100 percent is masking MC/DC, which
+  document 16, decision D4, derives; a bitwise operator over booleans
+  evaluates both operands and so breaks that derivation. The pinned
+  toolchain refuses `-Z coverage-options=mcdc`, which is why the
+  objective is met by argument and check rather than by a report.
 - QEMU coverage is not measured. Each adapter crate keeps a table that maps
   every public function to at least one QEMU test. `cargo xtask
   check-layering` verifies that every function and every test named in the

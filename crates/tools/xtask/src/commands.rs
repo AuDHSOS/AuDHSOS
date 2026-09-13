@@ -16,7 +16,7 @@ use crate::qemu::{self, Machine, Run};
 use crate::qmp::{Button, Qmp};
 use crate::session::Session;
 use crate::symbolize;
-use crate::{artifacts, coverage, deps, fs, layering, linker, spdx, unsafe_budget};
+use crate::{artifacts, coverage, deps, fs, layering, linker, mcdc, spdx, unsafe_budget};
 
 /// `rustfmt --check`, `clippy -D warnings` per target group, SPDX headers.
 pub(crate) fn lint(root: &Path) -> Result<(), Error> {
@@ -1876,6 +1876,24 @@ pub(crate) fn regex_check(root: &Path, options: &[String]) -> Result<(), Error> 
         .run()
 }
 
+/// The premise condition coverage stands as MC/DC on.
+pub(crate) fn mcdc(root: &Path) -> Result<(), Error> {
+    let reports = mcdc::check(root)?;
+    note!("{:<18} {:>14} {:>7}", "crate", "short-circuit", "bitwise");
+    let mut violations = Vec::new();
+    for entry in &reports {
+        note!(
+            "{:<18} {:>14} {:>7}",
+            entry.name,
+            entry.operators,
+            entry.violations.len()
+        );
+        violations.extend(entry.violations.iter().cloned());
+    }
+    report("mcdc premise", &violations);
+    Error::from_violations(violations)
+}
+
 /// Host coverage against the thresholds.
 pub(crate) fn coverage(root: &Path, options: &[String]) -> Result<(), Error> {
     let instrumentation = match options {
@@ -2175,15 +2193,17 @@ pub(crate) fn check(root: &Path, channel: &str, options: &[String]) -> Result<()
         }
     }
     note!("toolchain: {channel}");
-    let steps: [(&str, Step); 11] = [
+    let steps: [(&str, Step); 13] = [
         ("lint", lint),
         ("check-layering", check_layering),
         ("check-deps", check_deps),
         ("unsafe-budget", unsafe_budget),
         ("test --host", |root| test(root, &["--host".to_owned()])),
-        ("coverage", |root| {
+        ("coverage", |root| coverage(root, &[])),
+        ("coverage --condition", |root| {
             coverage(root, &["--condition".to_owned()])
         }),
+        ("mcdc", mcdc),
         ("miri", miri),
         ("doc", doc),
         ("test --qemu", |root| test(root, &["--qemu".to_owned()])),

@@ -146,7 +146,7 @@ of lines and 100 percent of branches, in both instrumentations.
 | 6 | The functions whose answers are not exact: `sqrt`, `exp`, `ln`, `log`, `pow` and the trigonometric set. See D-160. | Q8 |
 | 7 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
 | 8 | The matrix run across every level of the suite rather than the format alone. | Q9 |
-| 9 | MC/DC, which the pinned toolchain refuses the option for. Condition coverage is gated at 100 percent instead. See D4 (16.9). | Q10 |
+| 9 | Unique-cause MC/DC, which differs from the masking MC/DC of D4 only for a decision naming one condition twice. The pinned toolchain refuses `-Z coverage-options=mcdc`. See D4 (16.10). | Q10 |
 
 ## 16.7 Decision D1: the engine is a port of the routines
 
@@ -214,26 +214,47 @@ toolchain in CI and an `unsafe` boundary in a crate that has none.
 ## 16.10 Decision D4: what coverage means here
 
 **The decision: the engine is held to 100 percent of lines and 100
-percent of branches in both instrumentations, unreachable defensive code
-is deleted rather than exempted, and MC/DC is named as not measured.**
+percent of branches under both instrumentations, unreachable defensive
+code is deleted rather than exempted, and masking MC/DC is claimed from
+condition coverage over decisions `cargo xtask mcdc` holds to the
+short-circuit operators.**
 
 Reason 1: `docs/sqlite/testing.html` is the standard SQLite holds itself
 to, and a port that claims the file format should claim the testing too.
+
 Reason 2: a refusal no input reaches is either dead code or a missing
 test. Both are defects, and an exemption hides which one it is.
-Reason 3: the pinned toolchain takes `-Z coverage-options=block`,
-`branch` and `condition`, refuses `mcdc`, and `llvm-cov` reports no
-MC/DC pairs for what it emits. Condition coverage is what `cargo xtask
-check` gates on, which is `sh tools/xtask.sh coverage --condition`; the
-independence half of MC/DC is not measured.
 
-**The option not taken: claim MC/DC from condition coverage.** Condition
-coverage counts each operand both ways. It does not show that each
-operand alone decides the outcome, which is the half that finds a
-condition masked by another.
+Reason 3: `&&` and `||` evaluate their right operand only where the left
+one does not settle the answer, so an operand is evaluated only where
+every operand that could mask it has taken the value that does not mask
+it, and it decides the outcome wherever it is evaluated. Two evaluations
+of one operand with opposite values are then the pair MC/DC asks for.
+Condition coverage at 100 percent says every operand was evaluated both
+ways, so over such decisions it is masking MC/DC, which is the form
+DO-178C accepts for the objective.
 
-The gap closes when the pin emits the records. Until then this document
-states it.
+Reason 4: a bitwise `&`, `|` or `^` over booleans breaks reason 3,
+because both operands are evaluated whatever the first says and the
+toolchain records no condition for either. `cargo xtask mcdc` reads the
+typed tree of every crate of `COMPLETE` through `-Zunpretty=thir-tree`
+and reports each one by its span; `db-sqlite` holds 408 short-circuit
+operators and no bitwise operator over booleans. A reading of the source
+would answer nothing, because `&` there is a reference as often as an
+operator.
+
+Reason 5: `cargo xtask check` runs `coverage`, `coverage --condition`
+and `mcdc`, so a decision whose second operand no test settles, and a
+decision written with an operator that hides its operands, each fail the
+check.
+
+**The option not taken: wait for `-Z coverage-options=mcdc`.** The pin
+takes `block`, `branch` and `condition` and refuses `mcdc`, and a goal
+does not become measured by waiting for a toolchain.
+
+What this does not claim is unique-cause MC/DC, which differs from
+masking MC/DC only for a decision naming one condition twice, and which
+`cargo xtask mcdc` does not look for.
 
 ## 16.11 The configuration matrix
 
@@ -615,23 +636,26 @@ The TCL suite reports no failure that is not a documented omission.
 ## 16.24 Q10. Coverage to the standard of D4
 
 Status: `db-sqlite` is at 100 percent of lines and 100 percent of
-conditions, and `cargo xtask check` runs the condition instrumentation,
-so a decision whose second operand no test settles fails the check. What
-is left is MC/DC, which the pinned toolchain does not emit.
+branches under both instrumentations, and `cargo xtask check` runs
+`coverage`, `coverage --condition` and `mcdc`, so the crate meets
+masking MC/DC by D4's argument. What is left is unique-cause MC/DC.
 Depends on: Q9.
-Size: M.
+Size: S.
 
 ### Does
 
 1. Hold every crate of the port to 100 percent of lines and branches in
    both instrumentations. Built.
-2. Measure MC/DC when the pinned toolchain emits the records, and raise
-   the gate to it.
+2. Hold every decision of those crates to the short-circuit operators,
+   which is what makes condition coverage masking MC/DC. Built.
+3. Report a decision that names one condition twice, which is where
+   unique-cause MC/DC parts from masking MC/DC.
 
 ### Done when
 
-`sh tools/xtask.sh coverage --condition` reports 100 percent for every
-crate of the port, and D4's named gap is closed or restated.
+`sh tools/xtask.sh coverage`, `sh tools/xtask.sh coverage --condition`
+and `sh tools/xtask.sh mcdc` each report no violation for every crate of
+the port, and no decision of those crates names one condition twice.
 
 ## 16.25 Risks
 
@@ -643,4 +667,4 @@ crate of the port, and D4's named gap is closed or restated.
 | 4 | Coverage is met by deleting a test's reach rather than by reaching. | A branch counted covered by one input that no file produces. | D4 forbids exemptions. A branch no input reaches is deleted, which shows in the diff as deleted code. |
 | 5 | The matrix is a `for` loop copied into each test. | A dimension added in one test and forgotten in ten. | 16.11 puts the matrix in the test support and has the test name its dimensions. |
 | 6 | The fuzz corpora grow until the regression replay is slow. | The check takes longer than three minutes and is skipped. | `sh tools/xtask.sh fuzz --merge` keeps one input per feature. Hash-named files are not committed; named regression entries are. |
-| 7 | MC/DC never becomes measurable on the pinned toolchain. | Goal 5 of 16.2 cannot be met as written. | D4 states the gap rather than claiming it away. Condition coverage is measured and gated today. |
+| 7 | MC/DC never becomes measurable on the pinned toolchain. | Goal 5 of 16.2 cannot be met by reading a report. | D4 derives masking MC/DC from condition coverage and checks the premise with `cargo xtask mcdc`, so the goal is met by argument and by check rather than by a report the pin does not emit. |

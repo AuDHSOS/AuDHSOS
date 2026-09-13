@@ -15,6 +15,7 @@ mod image;
 mod json;
 mod layering;
 mod linker;
+mod mcdc;
 mod out;
 mod policy;
 mod ppm;
@@ -58,6 +59,9 @@ subcommands:
   coverage [--condition]
                    host coverage with thresholds; --condition counts every
                    operand of a compound decision as well
+  mcdc             hold every decision of the completely covered crates to
+                   the short-circuit operators, which is what makes
+                   condition coverage masking MC/DC
   miri             run the host-executable adapter crates under Miri
   doc              build documentation with warnings as errors
   fuzz [--target <name>] [--time <seconds>] [--regression]
@@ -138,6 +142,7 @@ fn run() -> Result<(), Error> {
         "jrs-check" => commands::jrs_check(&root, options),
         "regex-check" => commands::regex_check(&root, options),
         "coverage" => commands::coverage(&root, options),
+        "mcdc" => none(subcommand, options).and_then(|()| commands::mcdc(&root)),
         "miri" => none(subcommand, options).and_then(|()| commands::miri(&root)),
         "doc" => none(subcommand, options).and_then(|()| commands::doc(&root)),
         "fuzz" => commands::fuzz(&root, options),

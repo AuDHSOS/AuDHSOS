@@ -38,6 +38,15 @@ impl Instrumentation {
         }
     }
 
+    /// Where the instrumented build goes, which is one directory per
+    /// mode so that running both does not rebuild the workspace twice.
+    const fn directory(self) -> &'static str {
+        match self {
+            Instrumentation::Branch => "coverage-build",
+            Instrumentation::Condition => "coverage-build-condition",
+        }
+    }
+
     /// What the branch column counts under this mode.
     pub(crate) const fn column(self) -> &'static str {
         match self {
@@ -94,7 +103,7 @@ pub(crate) fn measure(
     instrumentation: Instrumentation,
 ) -> Result<BTreeMap<String, Totals>, Error> {
     let jobs = test_jobs()?;
-    let target_dir = root.join("target").join("coverage-build");
+    let target_dir = root.join("target").join(instrumentation.directory());
     let profile_dir = root.join("target").join("coverage");
     let _ = std::fs::remove_dir_all(&profile_dir);
     std::fs::create_dir_all(&profile_dir)
