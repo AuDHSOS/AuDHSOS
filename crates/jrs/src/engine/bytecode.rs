@@ -455,6 +455,9 @@ pub struct BytecodeFunction {
     /// Whether this function has a `[[Construct]]` method, which 10.2.5 gives an
     /// ordinary function and withholds from a method and an arrow.
     pub constructible: bool,
+    /// Whether this function is strict, which 10.2.1.2 reads to decide what a
+    /// call without a receiver binds `this` to.
+    pub strict: bool,
     /// Own heap-context slot count, when this frame creates a lexical context.
     pub own_context_slot_count: Option<u16>,
     /// Slot counts expected in each captured outer lexical context.
@@ -484,6 +487,7 @@ impl BytecodeFunction {
             self_register: None,
             this_register: None,
             constructible: false,
+            strict: false,
             own_context_slot_count: None,
             outer_context_slot_counts: Vec::new(),
             feedback_slots: Vec::new(),

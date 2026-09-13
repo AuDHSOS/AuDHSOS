@@ -342,15 +342,17 @@ fn this_is_the_receiver_of_the_call() -> Result<(), Error> {
         differential(source)?;
     }
 
-    // A call without a receiver takes the global object for a non-strict
-    // function and stays undefined for a strict one. The code unit does not
-    // say which yet, so it is a gap rather than a guess.
-    let program = compile("function f(){return this}f()", Limits::default())?;
-    assert!(program.uses_register_backend());
-    assert!(matches!(
-        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
-        Err(Error::Unsupported { .. })
-    ));
+    // 10.2.1.2 gives a call without a receiver the global object when the
+    // function is not strict, and leaves it undefined when it is.
+    for source in [
+        "function f(){return typeof this}f()",
+        "function f(){'use strict';return typeof this}f()",
+        "function f(){return typeof this.nope}f()",
+        // A primitive receiver of a non-strict function is boxed by ToObject.
+        "let o={g:function(){return typeof this}};o.g()",
+    ] {
+        differential(source)?;
+    }
 
     // An arrow function has no `this` of its own (10.2.1.1).
     assert!(!compile("let o={g:()=>this};o.g()", Limits::default())?.uses_register_backend());
@@ -411,8 +413,12 @@ fn a_constructor_and_a_method_of_a_global_are_reached_at_run_time() -> Result<()
             "function T(m){if(!(this instanceof T))return new T(m);this.message=m||''}",
             "var t=new T('x');t.message",
         ][..],
-        // Calling that constructor without `new` still needs the `this` of a
-        // call without a receiver, which is a gap.
+        // The same constructor called without `new`, which its guard turns
+        // into a construction.
+        &[
+            "function T(m){if(!(this instanceof T))return new T(m);this.message=m||''}",
+            "var t=T('x');t.message",
+        ][..],
         // A thrown Object a handler of the same Script catches never reaches
         // the boundary.
         &[

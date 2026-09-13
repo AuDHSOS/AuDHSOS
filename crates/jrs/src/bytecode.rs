@@ -1861,6 +1861,7 @@ impl RegisterLowerer {
         child.code.binding_count = child.max_binding_count;
         child.code.self_register = self_register;
         child.code.constructible = child_constructible;
+        child.code.strict = function.strict;
         let nested_functions = core::mem::take(&mut child.code.functions);
         self.code.functions.push(child.code);
         self.code.functions.extend(nested_functions);

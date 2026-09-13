@@ -414,6 +414,31 @@ impl RegisterVM {
         }
     }
 
+    /// `OrdinaryCallBindThis` of 10.2.1.2: what the callee sees as `this`.
+    ///
+    /// A strict function is given the receiver as it stands. A non-strict one
+    /// sees the global object where the call had no receiver, and the object
+    /// `ToObject` makes of a primitive one.
+    fn bind_this(
+        receiver: Value,
+        strict: bool,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if strict {
+            return Ok(receiver);
+        }
+        if receiver.is_undefined() || receiver.is_null() {
+            return Ok(realm.global_environment().this_value(heap)?);
+        }
+        if receiver.as_object().is_some() {
+            return Ok(receiver);
+        }
+        Ok(Value::from_object(Self::coerce_object(
+            receiver, heap, realm,
+        )?))
+    }
+
     /// `OrdinaryHasInstance` of 7.3.22, which 13.10.2 reaches because no
     /// `@@hasInstance` exists on any object of this Realm yet.
     ///
@@ -923,6 +948,10 @@ impl RegisterVM {
             .fuel
             .checked_sub(callee.entry_fuel_cost)
             .ok_or(VMError::OutOfFuel)?;
+        let mut call = call;
+        if callee.this_register.is_some() {
+            call.receiver = Self::bind_this(call.receiver, callee.strict, heap, realm)?;
+        }
         let next_frame = self.open_frame(units.active, callee, call, function_ref)?;
         if call.resume.is_none() {
             active_feedback
@@ -992,13 +1021,6 @@ impl RegisterVM {
                 .ok_or(VMError::StackOverflow)? = Value::from_object(function);
         }
         if let Some(this_register) = callee.this_register {
-            // 10.2.1.2 binds `this` to the receiver of the call. A call without
-            // one takes the global object for a non-strict function and stays
-            // undefined for a strict one; the code unit does not yet say which,
-            // so that case is a gap rather than a guess.
-            if call.receiver.is_undefined() || call.receiver.is_null() {
-                return Err(VMError::Unsupported("this of a call without a receiver"));
-            }
             *self
                 .stack
                 .get_mut(next_frame.saturating_add(this_register.0 as usize))
