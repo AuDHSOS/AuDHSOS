@@ -89,7 +89,8 @@ Each rule is checkable, and each makes a later thing possible.
 | `tree` | The pages of a database being written, a row put in the tree its table begins at or taken out of it again, the balance any key order needs, and the free list the pages go on. | D-166 to D-169, Q7 |
 | `format` | `format(F,...)` and `printf(F,...)`: the flags, the field width, the precision, and the twenty-three conversions of `sqlite3_str_vappendf`. `unistr(X)` reads the escapes `%#q` writes, and `quote(X)` of text is `%Q` of it. | D-161, Q8 |
 | `db` | A statement answered from a file by walking the sides of its `FROM` once, held to the rowids the `WHERE` leaves each. | D-146, D-149, D-150, D-153, D-158, Q5 |
-| `change` | A statement that changes a database run from its text: the table a `CREATE TABLE` names, the rows an `INSERT` puts in it, the rows a `DELETE` takes out, the rows an `UPDATE` writes over, and what the journal mode leaves beside the file. | D-172, D-173, D-174, D-175, Q8 |
+| `change` | A statement that changes a database run from its text: the table a `CREATE TABLE` names, the rows an `INSERT` puts in it, the rows a `DELETE` takes out, the rows an `UPDATE` writes over, what the journal mode leaves beside the file, and what a `PRAGMA` configures. | D-172, D-173, D-174, D-175, D-182, Q8 |
+| `pragma` | The settings the file itself holds, which a reader answers out of the header and a writer applies before the first table. | D-182, Q8 |
 
 ### What a statement may hold
 
@@ -655,9 +656,10 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 10 428 cases in 570 files,
-413 pass, 9 answer differently, and 10 006 name something the engine
+425 pass, 9 answer differently, and 9 994 name something the engine
 refuses. The first run of it answered 14 differently, and five of those
-were defects this crate carried; D-181 records them. The matrix runs
+were defects this crate carried; D-181 records them. Sixty files stopped
+at a `PRAGMA`, which D-182 answers. The matrix runs
 over the write path as the covering array of 16.11.
 Depends on: Q7, Q8.
 Size: M.

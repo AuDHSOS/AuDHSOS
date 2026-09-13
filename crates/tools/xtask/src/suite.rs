@@ -63,6 +63,40 @@ pub(crate) struct Case {
     pub(crate) want: Vec<String>,
 }
 
+/// What the engine refused, counted by the first word of the statement
+/// it refused, which `--why` answers.
+static WHY: std::sync::Mutex<Option<BTreeMap<String, usize>>> = std::sync::Mutex::new(None);
+
+/// Counts what each refusal was for from here on.
+pub(crate) fn why() {
+    if let Ok(mut held) = WHY.lock() {
+        *held = Some(BTreeMap::new());
+    }
+}
+
+/// What the refusals were for, most first.
+pub(crate) fn reasons() -> Vec<(String, usize)> {
+    let Ok(held) = WHY.lock() else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, usize)> = held
+        .as_ref()
+        .map(|counts| counts.iter().map(|(k, v)| (k.clone(), *v)).collect())
+        .unwrap_or_default();
+    out.sort_by(|one, other| other.1.cmp(&one.1).then_with(|| one.0.cmp(&other.0)));
+    out
+}
+
+/// Records that `what` was refused.
+fn refused(what: &str) {
+    if let Ok(mut held) = WHY.lock()
+        && let Some(counts) = held.as_mut()
+    {
+        let count = counts.entry(what.to_owned()).or_insert(0);
+        *count = count.saturating_add(1);
+    }
+}
+
 /// Whether a case that did not pass is printed with what each side
 /// answered, which `--show` turns on.
 static SHOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -255,14 +289,25 @@ fn answer(writer: &mut Writer, sql: &str) -> Option<Vec<String>> {
         if reads(text) {
             let bytes = writer.written();
             let database = Database::open(&bytes).ok()?;
-            let answered = database.query(text.as_bytes()).ok()?;
+            let Ok(answered) = database.query(text.as_bytes()) else {
+                refused(&first_words(text));
+                return None;
+            };
             for row in &answered.rows {
                 for value in row {
                     out.push(listed(value));
                 }
             }
         } else {
-            writer.run(text.as_bytes()).ok()?;
+            let Ok(rows) = writer.run(text.as_bytes()) else {
+                refused(&first_words(text));
+                return None;
+            };
+            for row in &rows {
+                for value in row {
+                    out.push(listed(value));
+                }
+            }
         }
     }
     Some(out)
@@ -309,12 +354,26 @@ pub(crate) fn elements(text: &str) -> Vec<String> {
     out
 }
 
+/// The first two words of a statement in capitals, which is enough to
+/// say what kind of statement the engine refused.
+fn first_words(sql: &str) -> String {
+    sql.split_whitespace()
+        .take(2)
+        .map(str::to_uppercase)
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
 /// Whether the statement answers rows rather than changing them.
+///
+/// A `PRAGMA` that sets something changes the file; one that sets
+/// nothing answers what the file holds.
 fn reads(sql: &str) -> bool {
     let word = sql.split_whitespace().next().unwrap_or("");
     word.eq_ignore_ascii_case("select")
         || word.eq_ignore_ascii_case("values")
         || word.eq_ignore_ascii_case("with")
+        || (word.eq_ignore_ascii_case("pragma") && !sql.contains('='))
 }
 
 /// The statements of one case, split on the semicolons that stand

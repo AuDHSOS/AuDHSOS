@@ -1890,6 +1890,7 @@ pub(crate) fn sqlite_suite(root: &Path, options: &[String]) -> Result<(), Error>
                 );
             }
             "--show" => suite::show(),
+            "--why" => suite::why(),
             other => {
                 return Err(Error::Usage(format!(
                     "unknown option `{other}` for sqlite-suite"
@@ -1917,6 +1918,9 @@ pub(crate) fn sqlite_suite(root: &Path, options: &[String]) -> Result<(), Error>
             );
         }
         total.and(*score);
+    }
+    for (what, count) in suite::reasons().iter().take(30) {
+        note!("{count:>6}  {what}");
     }
     note!(
         "{} files, {} cases: {} passed, {} failed, {} refused",

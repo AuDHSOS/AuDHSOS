@@ -79,6 +79,8 @@ pub enum Expected {
     Delete,
     /// `UPDATE`.
     Update,
+    /// The word `PRAGMA`.
+    Pragma,
     /// `SET`, after the table of an `UPDATE`.
     Set,
     /// `=`, after a column of a `SET`.
@@ -903,6 +905,57 @@ impl<'a> Parser<'a> {
     }
 
     /// `name` or `schema.name`.
+    /// `PRAGMA [schema.]name [= value | (value)]`. The value is one
+    /// word, one number or one string, which is every value the
+    /// pragmas this crate answers take.
+    fn pragma(&mut self) -> Result<crate::ast::Pragma, Error> {
+        self.expect_keyword(Keyword::Pragma, Expected::Pragma)?;
+        let (schema, name) = self.qualified_name()?;
+        let value = if self.eat(Kind::Eq) {
+            Some(self.pragma_value()?)
+        } else if self.eat(Kind::Lp) {
+            let value = self.pragma_value()?;
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            Some(value)
+        } else {
+            None
+        };
+        Ok(crate::ast::Pragma {
+            schema,
+            name,
+            value,
+        })
+    }
+
+    /// What a `PRAGMA` is set to: a word, a number with an optional
+    /// sign, or a string.
+    fn pragma_value(&mut self) -> Result<Span, Error> {
+        // A sign stands before a number, which is what the cache size
+        // is written with.
+        let sign = self.peek().filter(|token| token.kind == Kind::Minus);
+        if sign.is_some() {
+            self.bump();
+        }
+        let token = self.peek();
+        let value = match token.map(|found| found.kind) {
+            Some(Kind::Integer | Kind::Float | Kind::Blob) => {
+                self.bump();
+                Span::of(token.unwrap_or(EMPTY))
+            }
+            _ => self.name()?,
+        };
+        Ok(match sign {
+            Some(sign) => Span {
+                start: sign.start,
+                len: value
+                    .start
+                    .saturating_add(value.len)
+                    .saturating_sub(sign.start),
+            },
+            None => value,
+        })
+    }
+
     fn qualified_name(&mut self) -> Result<(Option<Span>, Span), Error> {
         let first = self.name()?;
         if self.eat(Kind::Dot) {
@@ -2147,6 +2200,22 @@ pub fn definition(sql: &[u8]) -> Result<(Arena, Definition), Error> {
     let mut parser = Parser::new(sql);
     let root = parser.only_definition()?;
     Ok((parser.into_arena(), root))
+}
+
+/// Reads one `PRAGMA` out of `sql`.
+///
+/// # Errors
+///
+/// Where the statement is not a `PRAGMA`, or where more is written
+/// after it than a semicolon.
+pub fn pragma(sql: &[u8]) -> Result<crate::ast::Pragma, Error> {
+    let mut parser = Parser::new(sql);
+    let read = parser.pragma()?;
+    parser.eat(Kind::Semi);
+    if let Some(token) = parser.peek() {
+        return Err(parser.error(Some(token), Expected::Eof));
+    }
+    Ok(read)
 }
 
 /// Reads one statement that changes a database out of `sql`.

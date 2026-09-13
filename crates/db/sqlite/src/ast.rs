@@ -558,6 +558,18 @@ pub struct Update {
     pub filter: Option<ExprId>,
 }
 
+/// `PRAGMA [schema.]name [= value | (value)]`, which says how a
+/// connection is configured or answers how it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Pragma {
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// What it configures.
+    pub name: Span,
+    /// What it is set to, where the statement sets it.
+    pub value: Option<Span>,
+}
+
 /// One statement that changes what a database holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Change {

@@ -630,12 +630,39 @@ impl<'a> Database<'a> {
     ///
     /// [`Error`] names what it could not answer and why.
     pub fn query(&self, sql: &[u8]) -> Result<Answer, Error> {
+        if let Ok(asked) = parse::pragma(sql) {
+            return self.pragma(&asked, sql);
+        }
         let (arena, root) = parse::statement(sql)?;
         let scope = Scope {
             terms: &[],
             outer: None,
         };
         Ok(self.statement(&arena, root, sql, scope)?.answer)
+    }
+
+    /// What a `PRAGMA` answers out of the header, which is one row of
+    /// one column named after the pragma, and no row at all for a
+    /// pragma the file does not hold.
+    ///
+    /// A `PRAGMA` that sets something answers nothing here, because a
+    /// file being read is not being configured.
+    fn pragma(&self, asked: &crate::ast::Pragma, sql: &[u8]) -> Result<Answer, Error> {
+        let name = crate::schema::dequote(asked.name.text(sql));
+        let setting = crate::pragma::of_name(&name).ok_or(Error::Unsupported)?;
+        // A file being read is not being configured, and a pragma the
+        // file does not hold has no answer to read out of it.
+        if asked.value.is_some() {
+            return Err(Error::Unsupported);
+        }
+        let value = setting
+            .read(self.image.header())
+            .ok_or(Error::Unsupported)?;
+        let rows = alloc::vec![alloc::vec![value]];
+        Ok(Answer {
+            names: alloc::vec![name],
+            rows,
+        })
     }
 
     /// A statement: one core, or several put together.

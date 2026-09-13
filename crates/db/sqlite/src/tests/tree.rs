@@ -1054,7 +1054,7 @@ fn a_schema_that_outgrows_page_one_is_refused_by_the_statement() {
         let name = alloc::format!("t{at}");
         let sql = alloc::format!("CREATE TABLE {name}(a, b, c, d, e, f, g, h, i, j, k, l)");
         match writer.run(sql.as_bytes()) {
-            Ok(()) => at += 1,
+            Ok(_) => at += 1,
             Err(error) => {
                 assert!(matches!(error, Error::Image(_)), "{error:?}");
                 assert!(at > 1, "the first statement was refused");
@@ -1806,4 +1806,146 @@ fn the_schema_format_a_file_names_is_the_one_its_rows_were_written_under() {
             .rows
     };
     assert_eq!(rows(crate::tests::FORMAT1), rows(crate::tests::FORMAT4));
+}
+
+#[test]
+fn the_pragmas_that_configure_a_file_write_what_the_calls_write() {
+    use crate::change::Writer;
+    // `PRAGMA` is how SQLite is configured, and the three calls that
+    // stand where the pragmas stand write the same file, so every
+    // configuration of the covering array that needs no salt is
+    // written both ways and the two are held to each other.
+    for (name, incremental, chained, taken, fixture) in crate::tests::VACUUMING {
+        let vacuum = if incremental { "incremental" } else { "full" };
+        let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+        assert!(writer.run(b"PRAGMA page_size=512").unwrap().is_empty());
+        assert!(writer.run(b"PRAGMA encoding='UTF-8'").unwrap().is_empty());
+        assert!(
+            writer
+                .run(alloc::format!("PRAGMA auto_vacuum={vacuum}").as_bytes())
+                .unwrap()
+                .is_empty()
+        );
+        writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+        let rows = if chained {
+            sql_of_chained()
+        } else {
+            sql_of_rows()
+        };
+        writer.run(rows.as_bytes()).unwrap();
+        if !taken.is_empty() {
+            writer.run(taken.as_bytes()).unwrap();
+        }
+        same(name, &writer.written(), fixture, 512);
+    }
+}
+
+#[test]
+fn what_a_pragma_answers_out_of_a_file() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    // The journal mode is the one pragma that answers the mode it left
+    // the connection in.
+    assert_eq!(
+        writer.run(b"PRAGMA journal_mode=memory").unwrap(),
+        alloc::vec![alloc::vec![Value::Text(b"memory".to_vec())]]
+    );
+    // One the file does not hold is answered and changes nothing.
+    assert!(writer.run(b"PRAGMA cache_size=-4000").unwrap().is_empty());
+    writer.run(b"PRAGMA page_size=512").unwrap();
+    writer.run(b"PRAGMA encoding='UTF-16le'").unwrap();
+    writer.run(b"PRAGMA auto_vacuum=incremental").unwrap();
+    writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    let asked = |sql: &[u8]| database.query(sql).unwrap().rows;
+    assert_eq!(asked(b"PRAGMA page_size"), [[Value::Int(512)]]);
+    assert_eq!(
+        asked(b"PRAGMA encoding"),
+        [[Value::Text(b"UTF-16le".to_vec())]]
+    );
+    assert_eq!(asked(b"PRAGMA auto_vacuum"), [[Value::Int(2)]]);
+    assert_eq!(
+        asked(b"PRAGMA journal_mode"),
+        [[Value::Text(b"delete".to_vec())]]
+    );
+    assert_eq!(asked(b"PRAGMA page_count"), [[Value::Int(3)]]);
+    assert_eq!(asked(b"PRAGMA freelist_count"), [[Value::Int(0)]]);
+    assert_eq!(asked(b"PRAGMA schema_version"), [[Value::Int(1)]]);
+    assert_eq!(asked(b"PRAGMA user_version"), [[Value::Int(0)]]);
+    assert_eq!(asked(b"PRAGMA application_id"), [[Value::Int(0)]]);
+    assert_eq!(asked(b"PRAGMA schema_format"), [[Value::Int(4)]]);
+    assert_eq!(asked(b"PRAGMA reserved_bytes"), [[Value::Int(0)]]);
+    // The three encodings, and the setting that turns the vacuuming
+    // off, which is what a file with no pointer maps is written under.
+    for (written, read) in [
+        ("'UTF-8'", b"UTF-8".as_slice()),
+        ("'UTF-16be'", b"UTF-16be"),
+        ("'utf16le'", b"UTF-16le"),
+    ] {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        writer
+            .run(alloc::format!("PRAGMA encoding={written}").as_bytes())
+            .unwrap();
+        writer.run(b"PRAGMA auto_vacuum=none").unwrap();
+        // A pragma that sets nothing is read out of the file and not
+        // out of the connection, so it answers no row here.
+        assert!(writer.run(b"PRAGMA page_size").unwrap().is_empty());
+        writer.run(b"CREATE TABLE t(a)").unwrap();
+        let written = writer.written();
+        let database = crate::db::Database::open(&written).unwrap();
+        assert_eq!(
+            database.query(b"PRAGMA encoding").unwrap().rows,
+            [[Value::Text(read.to_vec())]]
+        );
+        assert_eq!(
+            database.query(b"PRAGMA auto_vacuum").unwrap().rows,
+            [[Value::Int(0)]]
+        );
+    }
+    // A file that has been in write-ahead logging says so.
+    let mut logged = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    logged.logging((1, 2));
+    let written = logged.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"PRAGMA journal_mode").unwrap().rows,
+        [[Value::Text(b"wal".to_vec())]]
+    );
+}
+
+#[test]
+fn what_a_pragma_refuses() {
+    use crate::change::Writer;
+    use crate::parse::pragma;
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    // A pragma this crate does not answer, and a value it does not
+    // name.
+    assert!(writer.run(b"PRAGMA nosuch=1").is_err());
+    assert!(writer.run(b"PRAGMA auto_vacuum=sometimes").is_err());
+    assert!(writer.run(b"PRAGMA journal_mode=wal").is_err());
+    assert!(writer.run(b"PRAGMA encoding='UTF-32'").is_err());
+    assert!(writer.run(b"PRAGMA page_size=five").is_err());
+    assert!(writer.run(b"PRAGMA page_size=99999999999").is_err());
+    // The page count is what the file holds, not what a statement sets.
+    assert!(writer.run(b"PRAGMA page_count=7").is_err());
+    // The three that say how the first table is written stand before
+    // it.
+    writer.run(b"PRAGMA auto_vacuum=full").unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    assert!(writer.run(b"PRAGMA page_size=512").is_err());
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    // A file being read is not being configured.
+    assert!(database.query(b"PRAGMA page_size=1024").is_err());
+    assert!(database.query(b"PRAGMA nosuch").is_err());
+    assert!(database.query(b"PRAGMA cache_size").is_err());
+    // What the reader of a pragma refuses.
+    assert!(pragma(b"PRAGMA main.page_size").is_ok());
+    assert!(pragma(b"PRAGMA page_size(512)").is_ok());
+    assert!(pragma(b"PRAGMA page_size;").is_ok());
+    assert!(pragma(b"PRAGMA").is_err());
+    assert!(pragma(b"PRAGMA page_size(512").is_err());
+    assert!(pragma(b"PRAGMA page_size extra").is_err());
+    assert!(pragma(b"SELECT 1").is_err());
 }

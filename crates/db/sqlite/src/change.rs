@@ -178,14 +178,23 @@ impl Writer {
         self.log.as_ref().map(Log::bytes)
     }
 
-    /// Runs one statement, which is one transaction.
+    /// Runs one statement, which is one transaction, and answers the
+    /// rows it makes.
+    ///
+    /// Only a `PRAGMA` that sets the journal mode answers a row here,
+    /// which is the mode it left the connection in; every statement
+    /// that writes rows answers none, and a statement that reads them
+    /// is what [`crate::db::Database::query`] answers.
     ///
     /// # Errors
     ///
     /// [`Error`] names what it could not read, answer or write.
-    pub fn run(&mut self, sql: &[u8]) -> Result<(), Error> {
+    pub fn run(&mut self, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
         // The header as the transaction begins, which is the one the
         // record of page one in the journal holds.
+        if let Ok(asked) = crate::parse::pragma(sql) {
+            return self.pragma(&asked, sql);
+        }
         let was = self.header;
         self.pages.begin();
         if let Ok((arena, definition)) = crate::parse::definition(sql) {
@@ -226,7 +235,68 @@ impl Writer {
                 self.journal = crate::journal::committed(&written, self.mode);
             }
         }
-        Ok(())
+        Ok(Vec::new())
+    }
+
+    /// `PRAGMA name = value`, which says how the file is written.
+    ///
+    /// The page size, the encoding and the auto-vacuum setting are what
+    /// the first table is written under, so a statement that sets one
+    /// after a table is there is refused rather than answered, which is
+    /// what SQLite does for the first two and by `VACUUM` for the
+    /// third. A pragma the file does not hold is accepted and changes
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] for a pragma this crate does not write,
+    /// for a value it does not name, and for one written after the
+    /// first table.
+    fn pragma(&mut self, asked: &crate::ast::Pragma, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
+        let name = crate::schema::dequote(asked.name.text(sql));
+        let setting = crate::pragma::of_name(&name).ok_or(Error::Unsupported)?;
+        let Some(value) = asked.value else {
+            // Reading one is what `db::Database` answers.
+            return Ok(Vec::new());
+        };
+        let text = value.text(sql);
+        if setting == crate::pragma::Setting::Ignored {
+            return Ok(Vec::new());
+        }
+        if self.header.schema_cookie != 0 {
+            return Err(Error::Unsupported);
+        }
+        match setting {
+            crate::pragma::Setting::PageSize => {
+                let size = crate::pragma::whole_number(text).ok_or(Error::Unsupported)?;
+                self.pages = Pages::new(size, self.header.reserved)?;
+                self.header.page_size = size;
+            }
+            crate::pragma::Setting::Encoding => {
+                self.header.encoding =
+                    crate::pragma::encoding_of(text).ok_or(Error::Unsupported)?;
+            }
+            crate::pragma::Setting::AutoVacuum => {
+                match crate::pragma::vacuum_of(text).ok_or(Error::Unsupported)? {
+                    0 => {}
+                    which => self.vacuuming(which == 2),
+                }
+            }
+            crate::pragma::Setting::JournalMode => {
+                // A write-ahead log carries two salts from SQLite's
+                // random source, which a statement does not name, so
+                // `Writer::logging` is what turns that mode on.
+                let mode = crate::pragma::mode_of(text).ok_or(Error::Unsupported)?;
+                self.mode = mode;
+                // The mode the connection is left in is the one row
+                // this pragma answers, which no other setting does.
+                return Ok(alloc::vec![alloc::vec![Value::Text(
+                    crate::schema::dequote(text).to_ascii_lowercase()
+                )]]);
+            }
+            _ => return Err(Error::Unsupported),
+        }
+        Ok(Vec::new())
     }
 
     /// `CREATE TABLE`: a page for the tree of the table and a row of

@@ -4246,10 +4246,34 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - The part of `research/sqlite/test` that needs no TCL interpreter: a
   `do_execsql_test` whose statements and whose answer carry no
   substitution, which is 10 428 of the 13 602 cases in 570 files.
-- 413 pass, 9 answer differently and 10 006 name something the engine
+- 425 pass, 9 answer differently and 9 994 name something the engine
   refuses. Document 16, section 16.23 lists the nine. The first run
   answered 14 differently; five were defects, which D-181 records and
   seventeen cases of `query.corpus` now hold to the C library.
+- `--why` counts what each refusal was for by the first two words of
+  the statement, which is what says which missing feature stops the
+  most files. It named a `PRAGMA` for sixty of them, and D-182 answers
+  those.
+
+### 6.6.120 The pragmas that configure a file (`db-sqlite`)
+
+D-182, document 16 step Q8.
+
+- The six files of the auto-vacuum dimension are written a second time
+  with `PRAGMA page_size`, `PRAGMA encoding` and `PRAGMA auto_vacuum`
+  in place of the three calls, and each is the same fixture byte for
+  byte, which is what says the two ways of configuring a file agree.
+- What each pragma answers out of a header: the page size, the reserved
+  tail, the encoding, the auto-vacuum setting, the journal mode, the
+  page count, the free list count, the schema version, the user
+  version, the application id and the schema format.
+- `PRAGMA journal_mode=X` answers the mode it left the connection in,
+  which is the one setting that answers a row.
+- The refusals: a pragma this crate does not answer, a value it does
+  not name, `wal` where no statement carries the two salts, a setting
+  that says how the first table is written after a table is there, a
+  pragma that sets something put to a file being read, and a pragma the
+  file does not hold read back.
 - The checkout is not part of this repository, so this is never a step
   of `cargo xtask check`; `sh tools/sqlite.sh` brings it and
   `--file <name>` runs one file. `--show` prints each case that did not
