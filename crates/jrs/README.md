@@ -600,8 +600,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | String.prototype methods (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,708 (79.66%) | 382 (17.82%) | 54 (2.52%) |
 | Function declarations (focused) | focused | `61be13c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/function --summary` | 451 | 783 | 677 (86.46%) | 4 (0.51%) | 102 (13.03%) |
 | Function declarations on the register engine (focused) | focused | `61be13c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/function --summary` | 451 | 783 | 73 (9.32%) | 608 (77.65%) | 102 (13.03%) |
+| Property reads over the Prototype Chain (focused) | focused | `a240620` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/built-ins/Object/prototype test/built-ins/Array/prototype --summary` | 3,080 | 6,119 | 5,060 (82.69%) | 1,021 (16.69%) | 38 (0.62%) |
+| Property reads over the Prototype Chain on the register engine (focused) | focused | `a240620` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/built-ins/Object/prototype test/built-ins/Array/prototype --summary` | 3,080 | 6,119 | 2 (0.03%) | 6,099 (99.67%) | 18 (0.29%) |
 | Complete pinned suite, including staging and Intl | full | `61be13c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `61be13c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 2,770 (2.69%) | 64,429 (62.60%) | 35,726 (34.71%) |
+| Complete pinned suite on the register engine | full | `a240620` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 2,770 (2.69%) | 64,429 (62.60%) | 35,726 (34.71%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -623,6 +625,12 @@ executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
 full runs remain open work.
 
+A read of a name no object of the Prototype Chain has used to answer undefined
+on the engine where the chain reached a Prototype this Realm has not finished
+building. It now names the gap, which is why the engine row of the property-read
+family is almost entirely refusals. The full run is unchanged against the run
+before it, so no pass depended on the wrong answer.
+
 The focused families are what the register backend gained in this migration
 step: the five statements, the methods of %Object.prototype% it now answers
 itself, the property accessors, which reach a String's own "length" and indices
@@ -641,7 +649,8 @@ same suite measured before it, variant for variant. The Array search run was mea
 `19054962f1f93e409f7b0d5dad173b74d5eb1d88`, the iteration run at tree
 `769107adb8c6f8b0f87d7dfe0f348df4531d0ce0`, the slice run at tree
 `e873e530ad100efc4492e5a0a4ce68c824503cae`, and the function-declaration runs
-and both full runs at tree `d44a3270a4c88824b6b9bb1d63a4d6ea7e9d9ff1`.
+and the full run of the stack backend at tree `d44a3270a4c88824b6b9bb1d63a4d6ea7e9d9ff1`. The property-read runs and
+the full run of the register engine were measured at tree `e946d0f5655a3f90d2abe1986bcff7cdc9765072`.
 
 ### Historical Test262 baseline
 

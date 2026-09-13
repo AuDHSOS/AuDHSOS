@@ -498,6 +498,7 @@ Regeln für den Zwischenzustand, solange beide Pfade existieren:
 - **Kein einseitiger Zuwachs:** Ein Feature, das der Stack-Pfad nicht hat, wird nicht allein im Engine-Core ergänzt, solange der Stack-Pfad noch Programme ausführt. Sonst hängt das Verhalten davon ab, welcher Pfad das Programm kompiliert hat.
 - **Befristete Doppelung:** Die Doppelung einer Familie endet mit dem Migrationsschritt, der sie überführt. Eine Familie bleibt nicht dauerhaft in beiden Pfaden.
 - **Ein Einstieg:** `Runtime::run`, `Realm::evaluate` und das Embedding benutzen denselben Lowering-Pfad. Ein Ausführungsweg, den der Engine-Core nicht erreicht, ist eine Migrationslücke und wird als solche geführt.
+- **Lücke statt Antwort:** Was der Engine-Core noch nicht gebaut hat, wird als `Unsupported` benannt und nie als Wert beantwortet. Ein Name, den eine noch nicht gebaute Intrinsic besäße, ist deshalb kein `undefined`: die Namenslisten von Klausel 19, 20.1.3, 22.1.3 und 23.1.3 liegen im Realm, damit ein Fehltreffer die Lücke nennt. Eine Lücke kostet einen Test, eine falsche Antwort kostet das Vertrauen in jede Zahl.
 
 Die Doppelung ist damit ein Zustand mit Ablaufdatum, kein paralleler Semantikpfad im Sinn von Abschnitt 3 Regel 1.
 
