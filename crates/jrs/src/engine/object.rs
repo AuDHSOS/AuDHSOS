@@ -36,6 +36,10 @@ pub enum ObjectKind {
     },
     /// Bytecode-compiled callable function.
     Function {
+        /// The code unit this function was compiled with. A call resolves
+        /// `code_id` against that unit, not against whichever Script happens to
+        /// be running.
+        unit: u32,
         /// Bytecode function index.
         code_id: u32,
         /// Heap context for captured variables.

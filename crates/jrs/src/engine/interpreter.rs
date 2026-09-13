@@ -183,6 +183,9 @@ pub struct RegisterVM {
     fp: usize,
     /// Accumulator register.
     acc: Value,
+    /// The code unit being executed, which every function object it creates
+    /// carries so that a call resolves against the unit that compiled it.
+    unit: u32,
     /// Fuel remaining for bounded execution.
     pub fuel: u64,
     /// Public operand-stack limit preserved across backend migration.
@@ -231,6 +234,7 @@ impl RegisterVM {
             stack: alloc::vec![VALUE_UNDEFINED; register_capacity],
             fp: 0,
             acc: VALUE_UNDEFINED,
+            unit: 0,
             fuel,
             operand_stack_limit,
             string_units_limit: usize::MAX,
@@ -362,7 +366,7 @@ impl RegisterVM {
                 None
             };
             let prototype = realm.function_prototype(heap)?;
-            match heap.allocate_function(code_id, context) {
+            match heap.allocate_function(self.unit, code_id, context) {
                 Ok(reference) => {
                     heap.set_object_prototype(reference, prototype)?;
                     return Ok(reference);
@@ -714,7 +718,19 @@ impl RegisterVM {
             .kind
             .clone();
         let (code_id, context) = match kind {
-            ObjectKind::Function { code_id, context } => (code_id, context),
+            ObjectKind::Function {
+                unit,
+                code_id,
+                context,
+            } => {
+                // A function holds the code unit it was compiled with. One of
+                // another Script cannot be resolved against this one until code
+                // identity belongs to the Realm.
+                if unit != self.unit {
+                    return Err(VMError::Unsupported("a function of another Script"));
+                }
+                (code_id, context)
+            }
             ObjectKind::NativeFunction { id, .. } => {
                 let intrinsic = Intrinsic::from_id(id).ok_or(VMError::TypeError)?;
                 // A native identifier and a bytecode index are separate
@@ -2153,6 +2169,15 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         self.run_with_arguments(code, &[], feedback, heap, realm)
+    }
+
+    /// Names the code unit the next run executes.
+    ///
+    /// Every function object the run creates carries it, so that a call
+    /// resolves the function's index against the unit that compiled it and not
+    /// against whichever Script happens to be running.
+    pub const fn set_unit(&mut self, unit: u32) {
+        self.unit = unit;
     }
 
     /// Executes bytecode after copying supplied values into the formal-parameter

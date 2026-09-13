@@ -13,7 +13,7 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
 
     // The two paths hold separate object models, so a Script the lowering does
     // not take is refused instead of running on the stack path.
-    for source in ["let x=1", "function f(){}", "{ let z = 3 }"] {
+    for source in ["let x=1", "{ let z = 3 }"] {
         assert!(
             matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
             "{source}"
@@ -191,6 +191,31 @@ fn a_catch_parameter_widens_when_the_range_can_throw_an_error_object() -> Result
     }
     // A range that can only throw what it was given keeps the typed parameter.
     differential("let s=0;for(let i=0;i<3;i++){try{if(i===1)throw i;s+=10}catch(e){s+=e}}s")?;
+    Ok(())
+}
+
+#[test]
+fn a_global_function_is_callable_in_the_script_that_declared_it() -> Result<(), Error> {
+    // 16.1.7 binds the function on the Global Environment Record, and 7.3.14
+    // dispatches on it at the call.
+    for source in [
+        "function f(){return 1}f()",
+        "function f(){return 1}function f(){return 2}f()",
+        "var x=2;function f(){return x}f()",
+        "function f(a,b){return a+b}f(20,22)",
+    ] {
+        differential(source)?;
+    }
+
+    // A function object names the code unit it was compiled with, so one of an
+    // earlier Script of the same Realm is a gap rather than a wrong answer.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    realm.evaluate("function f(){return 1}")?;
+    assert!(matches!(
+        realm.evaluate("f()"),
+        Err(Error::Unsupported { .. })
+    ));
     Ok(())
 }
 

@@ -1017,16 +1017,28 @@ impl RegisterLowerer {
         let mut variables = Vec::new();
         for statement in body {
             // A lexical declaration at the top level is not lowered yet, and
-            // neither is a function: a function object holds the index of its
-            // code in the table of the Script that made it, so one that
-            // outlives its Script cannot be called from the next. Code
-            // identity has to become a property of the Realm first.
-            if matches!(statement, Stmt::Declare(_) | Stmt::Function(_, _)) {
+            // neither is a Script that holds one.
+            if matches!(statement, Stmt::Declare(_)) {
                 return None;
             }
             var_names(statement, &mut variables);
         }
         variables.dedup();
+        // 16.1.7 takes the last declaration of each function name.
+        let mut functions: Vec<(&String, &Function)> = Vec::new();
+        for statement in body {
+            if let Stmt::Function(name, function) = statement {
+                if self.bindings.contains_key(name) {
+                    return None;
+                }
+                functions.retain(|(declared, _)| *declared != name);
+                functions.push((name, function));
+            }
+        }
+        let function_names: Vec<u16> = functions
+            .iter()
+            .map(|(name, _)| self.name_constant(name))
+            .collect::<Option<_>>()?;
         let variable_names: Vec<u16> = variables
             .iter()
             .map(|name| self.name_constant(name))
@@ -1035,6 +1047,14 @@ impl RegisterLowerer {
         // that conflicts leaves the Realm as it found it.
         for name in &variable_names {
             self.code.emit(Instruction::VerifyGlobalVar(*name));
+        }
+        for name in &function_names {
+            self.code.emit(Instruction::VerifyGlobalFunction(*name));
+        }
+        for ((_, function), constant) in functions.iter().zip(&function_names) {
+            self.lower_function(function)?;
+            self.code
+                .emit(Instruction::DeclareGlobalFunction(*constant));
         }
         for name in &variable_names {
             self.code.emit(Instruction::DeclareGlobalVar(*name));
@@ -5942,7 +5962,8 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
                     }
                 }
             }
-            Stmt::Function(_, _) if !realm => saw_function = true,
+            Stmt::Function(_, _) if realm => {}
+            Stmt::Function(_, _) => saw_function = true,
             Stmt::Expr(_)
             | Stmt::Block(_)
             | Stmt::If(_, _, _)

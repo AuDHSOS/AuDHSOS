@@ -440,6 +440,7 @@ impl GenerationalHeap {
     /// [`HeapError::ReferenceSpaceExhausted`] when no tagged index remains.
     pub fn allocate_function(
         &mut self,
+        unit: u32,
         code_id: u32,
         context: Option<ContextRef>,
     ) -> Result<ObjectRef, HeapError> {
@@ -447,7 +448,11 @@ impl GenerationalHeap {
             return Err(HeapError::InvalidReference);
         }
         let reference = self.allocate_object(self.shapes.root_shape(), VALUE_NULL)?;
-        self.object_mut(reference)?.kind = ObjectKind::Function { code_id, context };
+        self.object_mut(reference)?.kind = ObjectKind::Function {
+            unit,
+            code_id,
+            context,
+        };
         Ok(reference)
     }
 
@@ -2188,7 +2193,7 @@ mod tests {
         let child = heap.allocate_context(Some(parent), 1).unwrap();
         heap.set_context_slot(parent, 0, 0, Value::from_smi(41))
             .unwrap();
-        let function = heap.allocate_function(7, Some(child)).unwrap();
+        let function = heap.allocate_function(0, 7, Some(child)).unwrap();
         heap.enter_scope();
         let root = heap.push_root(Value::from_object(function)).unwrap();
 
@@ -2223,7 +2228,7 @@ mod tests {
         let mut heap = GenerationalHeap::with_nursery_capacity(3);
         heap.enter_scope();
         let context = heap.allocate_context(None, 1).unwrap();
-        let function = heap.allocate_function(0, Some(context)).unwrap();
+        let function = heap.allocate_function(0, 0, Some(context)).unwrap();
         let root = heap.push_root(Value::from_object(function)).unwrap();
         heap.scavenge().unwrap();
         heap.scavenge().unwrap();
@@ -2281,7 +2286,7 @@ mod tests {
             Err(HeapError::InvalidReference)
         );
         assert_eq!(
-            heap.allocate_function(0, Some(context)),
+            heap.allocate_function(0, 0, Some(context)),
             Err(HeapError::InvalidReference)
         );
         assert_eq!(heap.context_slot(context, 0, 0), None);
@@ -2296,7 +2301,7 @@ mod tests {
         let mut heap = GenerationalHeap::with_nursery_capacity(2);
         heap.enter_scope();
         let context = heap.allocate_context(None, 1).unwrap();
-        let function = heap.allocate_function(0, Some(context)).unwrap();
+        let function = heap.allocate_function(0, 0, Some(context)).unwrap();
         heap.push_root(Value::from_object(function)).unwrap();
         heap.scavenge().unwrap();
         heap.scavenge().unwrap();
@@ -2313,7 +2318,7 @@ mod tests {
 
         heap.enter_scope();
         let replacement = heap.allocate_context(None, 1).unwrap();
-        let replacement_function = heap.allocate_function(1, Some(replacement)).unwrap();
+        let replacement_function = heap.allocate_function(0, 1, Some(replacement)).unwrap();
         heap.push_root(Value::from_object(replacement_function))
             .unwrap();
         heap.scavenge().unwrap();
@@ -2354,7 +2359,7 @@ mod tests {
         let context = heap.allocate_context(None, 1).unwrap();
         heap.set_context_slot(context, 0, 0, Value::from_object(object))
             .unwrap();
-        let function = heap.allocate_function(0, Some(context)).unwrap();
+        let function = heap.allocate_function(0, 0, Some(context)).unwrap();
         heap.push_root(Value::from_object(function)).unwrap();
         let stats = heap.collect_old().unwrap();
         assert_eq!(stats.marked_objects, 1);
@@ -2367,9 +2372,10 @@ mod tests {
         let stale = minor.allocate_context(None, 0).unwrap();
         minor.scavenge().unwrap();
         let function = minor
-            .allocate_function(0, None)
+            .allocate_function(0, 0, None)
             .expect("valid function without context");
         minor.object_mut(function).unwrap().kind = ObjectKind::Function {
+            unit: 0,
             code_id: 0,
             context: Some(stale),
         };
@@ -2380,8 +2386,9 @@ mod tests {
         let mut major = GenerationalHeap::with_nursery_capacity(2);
         let stale = major.allocate_context(None, 0).unwrap();
         major.scavenge().unwrap();
-        let function = major.allocate_function(0, None).unwrap();
+        let function = major.allocate_function(0, 0, None).unwrap();
         major.object_mut(function).unwrap().kind = ObjectKind::Function {
+            unit: 0,
             code_id: 0,
             context: Some(stale),
         };
@@ -2395,8 +2402,8 @@ mod tests {
         let mut heap = GenerationalHeap::with_nursery_capacity(3);
         heap.enter_scope();
         let context = heap.allocate_context(None, 1).unwrap();
-        let first = heap.allocate_function(0, Some(context)).unwrap();
-        let second = heap.allocate_function(1, Some(context)).unwrap();
+        let first = heap.allocate_function(0, 0, Some(context)).unwrap();
+        let second = heap.allocate_function(0, 1, Some(context)).unwrap();
         heap.push_root(Value::from_object(first)).unwrap();
         heap.push_root(Value::from_object(second)).unwrap();
 
@@ -2418,7 +2425,7 @@ mod tests {
         minor.scavenge().unwrap();
         let live = minor.allocate_context(None, 0).unwrap();
         minor.context_mut(live).unwrap().parent = Some(stale);
-        let function = minor.allocate_function(0, Some(live)).unwrap();
+        let function = minor.allocate_function(0, 0, Some(live)).unwrap();
         minor.enter_scope();
         minor.push_root(Value::from_object(function)).unwrap();
         assert_eq!(minor.scavenge(), Err(HeapError::InvalidReference));
@@ -2428,7 +2435,7 @@ mod tests {
         major.scavenge().unwrap();
         let live = major.allocate_context(None, 0).unwrap();
         major.context_mut(live).unwrap().parent = Some(stale);
-        let function = major.allocate_function(0, Some(live)).unwrap();
+        let function = major.allocate_function(0, 0, Some(live)).unwrap();
         major.enter_scope();
         major.push_root(Value::from_object(function)).unwrap();
         assert_eq!(major.collect_old(), Err(HeapError::InvalidReference));
@@ -2441,7 +2448,10 @@ mod tests {
             .allocate_object(full.shapes.root_shape(), VALUE_NULL)
             .unwrap();
         assert_eq!(full.allocate_array(0), Err(HeapError::NurseryFull));
-        assert_eq!(full.allocate_function(0, None), Err(HeapError::NurseryFull));
+        assert_eq!(
+            full.allocate_function(0, 0, None),
+            Err(HeapError::NurseryFull)
+        );
         assert_eq!(
             full.set_array_element(ordinary, 0, VALUE_NULL),
             Err(HeapError::InvalidReference)

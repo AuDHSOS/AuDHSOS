@@ -200,6 +200,7 @@ pub struct Runtime {
     register_vm: Option<crate::engine::interpreter::RegisterVM>,
     register_agent: Option<crate::engine::agent::Agent>,
     register_feedback: Vec<RegisterFeedbackState>,
+    next_unit: u32,
 }
 
 /// Converts a register-backend value into the legacy value the embedding sees.
@@ -233,15 +234,20 @@ fn register_primitive(
 
 struct RegisterFeedbackState {
     code: Weak<crate::engine::bytecode::BytecodeFunction>,
+    /// A name for this code that no later code takes again, which every
+    /// function object it creates carries. The position in the list is not one:
+    /// a dropped Script's entry is pruned and the ones after it move.
+    unit: u32,
     vector: crate::engine::feedback::FeedbackVector,
     invocations: u64,
 }
 
 impl RegisterFeedbackState {
-    fn new(code: &Rc<crate::engine::bytecode::BytecodeFunction>) -> Self {
+    fn new(code: &Rc<crate::engine::bytecode::BytecodeFunction>, unit: u32) -> Self {
         let vector = crate::engine::feedback::FeedbackVector::for_code(code);
         Self {
             code: Rc::downgrade(code),
+            unit,
             vector,
             invocations: 0,
         }
@@ -331,6 +337,7 @@ struct Execution<'host> {
     register_vm: Option<crate::engine::interpreter::RegisterVM>,
     register_agent: Option<crate::engine::agent::Agent>,
     register_feedback: Vec<RegisterFeedbackState>,
+    next_unit: u32,
 }
 
 impl Runtime {
@@ -357,6 +364,7 @@ impl Runtime {
             register_vm: None,
             register_agent: None,
             register_feedback: Vec::new(),
+            next_unit: 0,
         }
     }
 
@@ -379,12 +387,14 @@ impl Runtime {
         execution.register_vm = self.register_vm.take();
         execution.register_agent = self.register_agent.take();
         execution.register_feedback = core::mem::take(&mut self.register_feedback);
+        execution.next_unit = self.next_unit;
         let result = execution.run(program);
         self.stack = execution.stack;
         self.intrinsic_code = execution.intrinsic_code;
         self.register_vm = execution.register_vm;
         self.register_agent = execution.register_agent;
         self.register_feedback = execution.register_feedback;
+        self.next_unit = execution.next_unit;
         result
     }
 
@@ -471,6 +481,7 @@ impl<'host> Execution<'host> {
             register_vm: None,
             register_agent: None,
             register_feedback: Vec::new(),
+            next_unit: 0,
         }
     }
 }
@@ -603,8 +614,11 @@ impl Execution<'_> {
                     resource: "feedback vectors",
                 });
             }
+            self.next_unit = self.next_unit.checked_add(1).ok_or(Error::Limit {
+                resource: "code units",
+            })?;
             self.register_feedback
-                .push(RegisterFeedbackState::new(code));
+                .push(RegisterFeedbackState::new(code, self.next_unit));
             self.register_feedback.len().saturating_sub(1)
         };
         let feedback = self
@@ -612,6 +626,7 @@ impl Execution<'_> {
             .get_mut(feedback_index)
             .ok_or(Error::InvalidBytecode)?;
         feedback.invocations = feedback.invocations.saturating_add(1);
+        vm.set_unit(feedback.unit);
         let result = vm.run(code, &mut feedback.vector, &mut agent.heap, &agent.realm);
         self.fuel = vm.fuel;
         let result = match result {
