@@ -92,15 +92,31 @@ path = "src/bin/app_lspci.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "app-files"
+path = "src/bin/app_files.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "server-fs"
+path = "src/bin/server_fs.rs"
+test = false
+bench = false
+
 [dependencies]
 app-canvas.workspace = true
 audhsos-abi.workspace = true
+audhsos-time.workspace = true
 driver-i8042.workspace = true
 driver-uart16550.workspace = true
+driver-virtio-blk.workspace = true
+fs-fat.workspace = true
 gfx.workspace = true
 pci.workspace = true
 server-console.workspace = true
 server-display.workspace = true
+server-fs.workspace = true
 server-input.workspace = true
 server-memory.workspace = true
 server-name.workspace = true
@@ -108,6 +124,7 @@ user-loader.workspace = true
 user-proto.workspace = true
 user-rt.workspace = true
 user-sys-x86_64.workspace = true
+virtio-queue.workspace = true
 
 [lints]
 workspace = true

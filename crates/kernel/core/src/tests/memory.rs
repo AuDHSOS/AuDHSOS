@@ -675,14 +675,22 @@ fn the_bring_up_keeps_the_framebuffer_and_the_apertures_of_the_machine() {
         !memory.is_device_memory(across),
         "it runs past the aperture"
     );
-    let elsewhere = PhysFrameRange::from_numbers(0x5_0000, 0x5_0001).unwrap();
-    assert!(!memory.is_device_memory(elsewhere), "no aperture holds it");
+    let elsewhere = PhysFrameRange::from_numbers(0x100, 0x101).unwrap();
+    assert!(
+        !memory.is_device_memory(elsewhere),
+        "the map describes it and no aperture holds it"
+    );
+    let gap = PhysFrameRange::from_numbers(0x5_0000, 0x5_0001).unwrap();
+    assert!(
+        memory.is_device_memory(gap),
+        "the map describes nothing of it, so it is a window left to this system"
+    );
     let nothing = PhysFrameRange::new(frame(0xE0000), 0).unwrap();
     assert!(!memory.is_device_memory(nothing), "an empty range is none");
 }
 
 #[test]
-fn a_machine_that_reported_no_aperture_has_no_device_memory() {
+fn a_machine_that_reported_no_aperture_has_device_memory_only_where_it_described_nothing() {
     let mut machine = Machine::full();
     let mut tlb = RecordingTlb::new();
     let memory =
@@ -690,8 +698,16 @@ fn a_machine_that_reported_no_aperture_has_no_device_memory() {
             .unwrap();
     assert_eq!(memory.framebuffer(), None);
     assert!(memory.devices().is_empty());
-    let range = PhysFrameRange::from_numbers(0xE0000, 0xE0001).unwrap();
-    assert!(!memory.is_device_memory(range));
+    let inside = PhysFrameRange::from_numbers(0x100, 0x101).unwrap();
+    assert!(
+        !memory.is_device_memory(inside),
+        "a frame the map describes belongs to no aperture"
+    );
+    let gap = PhysFrameRange::from_numbers(0xE0000, 0xE0001).unwrap();
+    assert!(
+        memory.is_device_memory(gap),
+        "a frame the map describes nothing of is a window left to this system"
+    );
 }
 
 #[test]
@@ -702,14 +718,23 @@ fn the_configuration_window_is_an_aperture_whether_the_memory_map_marked_it_or_n
         first_bus: 0,
         last_bus: 1,
     };
-    let platform = platform().ecam(window);
+    // A region above the window, so that what refuses the frame beyond it
+    // is the aperture and not the top of the map.
+    let platform =
+        platform()
+            .ecam(window)
+            .region(address(0xE020_0000), PAGE_SIZE, MemoryRegionKind::Reserved);
     let mut machine = Machine::full();
     let mut tlb = RecordingTlb::new();
     let memory =
         bring_up::<X86Entry, _, _, _>(&platform, machine.root, &mut machine.access, &mut tlb, 0)
             .unwrap();
     assert_eq!(memory.ecam(), Some(window));
-    assert_eq!(memory.devices().len(), 1, "the map marked no region at all");
+    assert_eq!(
+        memory.devices().len(),
+        1,
+        "the map marked no region of the window at all"
+    );
     let whole = PhysFrameRange::from_numbers(0xE0000, 0xE0200).unwrap();
     assert!(
         memory.is_device_memory(whole),
@@ -718,7 +743,7 @@ fn the_configuration_window_is_an_aperture_whether_the_memory_map_marked_it_or_n
     let beyond = PhysFrameRange::from_numbers(0xE0200, 0xE0201).unwrap();
     assert!(
         !memory.is_device_memory(beyond),
-        "the frame above the window belongs to no aperture"
+        "the frame above the window is described and belongs to no aperture"
     );
 }
 
@@ -764,4 +789,31 @@ fn an_aperture_the_address_space_cannot_hold_is_left_out() {
         bring_up::<X86Entry, _, _, _>(&platform, machine.root, &mut machine.access, &mut tlb, 0)
             .unwrap();
     assert!(memory.devices().is_empty());
+}
+
+#[test]
+fn a_map_that_did_not_fit_leaves_the_aperture_as_the_only_way_in() {
+    // One region per slot of the list and one more, which is what a
+    // machine with a fragmented map and the ranges the loader appends
+    // comes to. What the list could not hold must not read as a gap.
+    let mut platform = platform();
+    for index in 0..=audhsos_abi::layout::MAX_BOOT_REGIONS {
+        let start = 0x1_0000_0000_u64
+            .saturating_add(u64::try_from(index).unwrap().saturating_mul(PAGE_SIZE * 2));
+        platform = platform.region(address(start), PAGE_SIZE, MemoryRegionKind::Reserved);
+    }
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let memory =
+        bring_up::<X86Entry, _, _, _>(&platform, machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    assert!(
+        !memory.describes_the_whole_map(),
+        "the list is shorter than the map"
+    );
+    let gap = PhysFrameRange::from_numbers(0xE0000, 0xE0001).unwrap();
+    assert!(
+        !memory.is_device_memory(gap),
+        "a frame the kernel cannot say anything about is no window"
+    );
 }

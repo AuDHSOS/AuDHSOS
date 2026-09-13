@@ -769,6 +769,20 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "server-fs",
+        path: "crates/user/servers/fs",
+        kind: Kind::Logic,
+        deps: &[
+            "audhsos-abi",
+            "audhsos-time",
+            "fs-fat",
+            "user-proto",
+            "test-support",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "server-input",
         path: "crates/user/servers/input",
         kind: Kind::Logic,
@@ -820,20 +834,26 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-programs",
         path: "crates/user/programs",
         // The bytes of the mapping `app-lspci` walks the bus through raised
-        // this from 33 (Phase 13).
+        // this from 33 (Phase 13). The five mappings of the disk track
+        // raised it from 34 to 39, named one by one in D2 of
+        // `docs/15-the-disk-on-the-machine.md`.
         kind: Kind::Adapter {
-            unsafe_budget: 34,
+            unsafe_budget: 39,
             asm_budget: 0,
         },
         deps: &[
             "app-canvas",
             "audhsos-abi",
+            "audhsos-time",
             "driver-i8042",
             "driver-uart16550",
+            "driver-virtio-blk",
+            "fs-fat",
             "gfx",
             "pci",
             "server-console",
             "server-display",
+            "server-fs",
             "server-input",
             "server-memory",
             "server-name",
@@ -841,6 +861,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "user-proto",
             "user-rt",
             "user-sys-x86_64",
+            "virtio-queue",
         ],
         coverage_gate: false,
         target: Target::X86_64None,

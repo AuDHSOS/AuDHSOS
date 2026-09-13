@@ -629,6 +629,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "server-fs"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-time",
+ "fs-fat",
+ "test-support",
+ "user-proto",
+]
+
+[[package]]
 name = "server-input"
 version = "0.1.0"
 dependencies = [
@@ -675,12 +686,16 @@ version = "0.1.0"
 dependencies = [
  "app-canvas",
  "audhsos-abi",
+ "audhsos-time",
  "driver-i8042",
  "driver-uart16550",
+ "driver-virtio-blk",
+ "fs-fat",
  "gfx",
  "pci",
  "server-console",
  "server-display",
+ "server-fs",
  "server-input",
  "server-memory",
  "server-name",
@@ -688,6 +703,7 @@ dependencies = [
  "user-proto",
  "user-rt",
  "user-sys-x86_64",
+ "virtio-queue",
 ]
 
 [[package]]

@@ -57,6 +57,7 @@ members = [
     "crates/user/programs",
     "crates/user/servers/console",
     "crates/user/servers/display",
+    "crates/user/servers/fs",
     "crates/user/servers/input",
     "crates/user/servers/memory",
     "crates/user/servers/name",
@@ -151,6 +152,7 @@ fs-gpt = { path = "crates/fs/gpt" }
 server-console = { path = "crates/user/servers/console" }
 app-canvas = { path = "crates/user/apps/canvas" }
 server-display = { path = "crates/user/servers/display" }
+server-fs = { path = "crates/user/servers/fs" }
 server-input = { path = "crates/user/servers/input" }
 user-programs = { path = "crates/user/programs" }
 server-memory = { path = "crates/user/servers/memory" }
