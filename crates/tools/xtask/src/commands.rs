@@ -1531,10 +1531,31 @@ pub(crate) fn jrs(root: &Path, options: &[String]) -> Result<(), Error> {
         .run()
 }
 
+/// The memory benchmark of the development machine.
+///
+/// It is built with optimizations and never from the `dev` profile: a
+/// benchmark of unoptimized code measures the bounds checks, not the
+/// machine.
+///
+/// # Errors
+///
+/// The errors of the build and of the run.
+pub(crate) fn membench(root: &Path, options: &[String]) -> Result<(), Error> {
+    Cmd::cargo()
+        .cwd(root)
+        .args(["run", "--release", "-p", "membench", "--"])
+        .args(options.iter().map(String::as_str))
+        .run()
+}
+
 /// Runs the fuzzer of `norec` with the caller's options.
 ///
 /// The engine it drives is not built here: `sh tools/sqlite.sh` clones and
 /// builds it, and the fuzzer refuses the run when it is missing.
+///
+/// # Errors
+///
+/// The errors of the build and of the run.
 pub(crate) fn norec(root: &Path, options: &[String]) -> Result<(), Error> {
     Cmd::cargo()
         .cwd(root)

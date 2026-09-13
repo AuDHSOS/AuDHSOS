@@ -122,6 +122,7 @@ AuDHSOS/
 │       ├── svg/               doc-svg: the SVG figures of those documents, as marks of a page
 │       ├── pdf/               doc-pdf: a PDF 1.7 writer, pages, fonts, outline
 │       ├── docpdf/            the tool `xtask pdf` starts: every document as a PDF
+│       ├── membench/          the tool `xtask membench` starts: the bandwidth and the latency of the memory of the development machine
 │       └── norec/             the tool `xtask norec` starts: a NoREC fuzzer for SQLite
 ├── fuzz/                      fuzz target crates and corpora
 ├── research/                  source of other projects, kept to be read; the checks never descend into it
@@ -207,6 +208,7 @@ AuDHSOS/
 | `doc-pdf` | host | host | no | yes | `audhsos-deflate` |
 | `doc-svg` | host | host | no | yes | `doc-html`, `doc-pdf` |
 | `docpdf` | host | host | no | yes, without a coverage gate, as `xtask` | `doc-html`, `doc-markdown`, `doc-pdf`, `doc-svg` |
+| `membench` | host | host | no | yes, without a coverage gate, as `xtask`; the measurements themselves are not tested, only what they are built from | - |
 | `norec` | host | host | no | yes | - (drives the `sqlite3` shell as a child process) |
 | `jrs` | logic | all, with an allocator supplied by the embedding | no | yes, property and fuzz | `audhsos-regex`, `audhsos-event-target`, `audhsos-timer-queue`, `audhsos-json`, `audhsos-math`, `audhsos-utf16`; `test-support` as a dev-dependency |
 | `jrs-cli` | host | host | no | yes | `jrs`, `doc-html` (WPT script extraction) |
