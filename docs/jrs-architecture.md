@@ -520,7 +520,8 @@ und deshalb erreicht ihn keine Test262-Datei. Die Reihenfolge folgt daraus:
 | G4 | Backend-Auswahl pro Realm statt pro Script. | Ein Realm läuft vollständig auf einem Pfad; ein Programm kann nicht mehr davon abhängen, welcher Pfad es kompiliert hat. |
 | G5a | Code-Identität gehört dem Realm: der Realm hält den Code jedes Scripts, das er ausgeführt hat, und ein Funktionsobjekt nennt seine Unit. Erledigt. | `function f(){}` in einem Script, `f()` im nächsten desselben Realms antwortet wie im Stack-Backend. |
 | G5b | Das Lowering nimmt einen Aufruf eines globalen Namens auch dort, wo sein Ergebnis statisch nicht typisierbar ist: als Rückgabewert und im Rumpf einer Schleife, deren Kopf dafür von den Typen der Zuweisungen des Rumpfes ausgeht. Erledigt. | Ein Aufruf eines globalen Namens wird an jeder Stelle übersetzt, an der der Stack-Pfad ihn ausführt. |
-| G5 | Aufrufe mit `this` und `new`. | Der Test262-Harness lädt im Engine-Core; ab hier sind Test262-Zahlen für diesen Pfad überhaupt messbar. |
+| G5c | `this` ist der Receiver des Aufrufs (10.2.1.2), und ein Methodenaufruf erreicht eine Funktion des Scripts, nicht nur eine Intrinsic. Erledigt. Ein Aufruf ohne Receiver ist eine Lücke, bis die Code-Unit die Strictness nennt; ein Arrow mit `this` wird abgelehnt (10.2.1.1). | `let o={a:1,g:function(){return this.a}};o.g()` antwortet wie im Stack-Backend. |
+| G5 | `new`: [[Construct]] (10.2.2), `OrdinaryCreateFromConstructor` (10.1.13) und die `prototype`-Property eines Funktionsobjekts (10.2.5). | Der Test262-Harness lädt im Engine-Core; ab hier sind Test262-Zahlen für diesen Pfad überhaupt messbar. |
 
 G0 steht vorn, weil G2 und G3 ohne ihn nicht fertig werden können. Das Lowering
 typisiert jeden Wert statisch und lehnt ab, was es nicht typisieren kann. Der
@@ -530,6 +531,15 @@ das ein `valueOf` des Benutzers aufrufen kann. Eine Operation des Engine-Cores
 kann heute keinen Frame öffnen: `primitive_binary` erreicht `primitive_number`,
 das für ein Object mit einem TypeError endet. Solange das so ist, kann ein
 globaler Name gelesen, aber mit nichts verrechnet werden.
+
+Zwei falsche Antworten, die auf diesem Weg gefunden wurden, zeigen, wofür die
+Regel "Lücke statt Antwort" da ist: ein Fehltreffer auf einer noch nicht
+gebauten Prototype antwortete `undefined`, und `arguments` wurde auf dem Global
+Environment Record aufgelöst statt nach 10.4.4 in der Funktion. Beide waren vom
+Lowering verdeckt und wurden erst sichtbar, als es weiter reichte. Jede
+Erweiterung des Lowerings deckt deshalb Stellen auf, die vorher unerreichbar
+waren; der Differential-Fuzzer und der variantengenaue Test262-Vergleich sind
+die Werkzeuge, die sie finden.
 
 Vor G5 misst kein Test262-Lauf den Engine-Core. Zahlen, die vorher entstehen,
 werden als Zahlen des Stack-Backends ausgewiesen.
