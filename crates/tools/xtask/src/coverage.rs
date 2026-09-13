@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::artifacts;
 use crate::error::Error;
-use crate::policy::{COVERAGE, CRATES, find};
+use crate::policy::{CRATES, find, thresholds};
 use crate::process::{Cmd, run_parallel, test_jobs};
 
 /// What the instrumentation counts.
@@ -247,19 +247,20 @@ pub(crate) fn evaluate(
             "{:<18} {lines:>7.2}% {branches:>9.2}%{gate}",
             krate.name
         );
+        let gate_at = thresholds(krate.name);
         if krate.coverage_gate && find(krate.name).is_some() {
-            if lines < COVERAGE.lines {
+            if lines < gate_at.lines {
                 violations.push(format!(
                     "`{}` line coverage {lines:.2}% is below {:.0}%",
-                    krate.name, COVERAGE.lines
+                    krate.name, gate_at.lines
                 ));
             }
-            if branches < COVERAGE.branches {
+            if branches < gate_at.branches {
                 violations.push(format!(
                     "`{}` {} coverage {branches:.2}% is below {:.0}%",
                     krate.name,
                     instrumentation.column(),
-                    COVERAGE.branches
+                    gate_at.branches
                 ));
             }
         }

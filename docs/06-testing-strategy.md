@@ -122,7 +122,10 @@ within each target and skipping targets whose corpus directory is absent.
   lines and 86 percent of branches per gated crate. A crate that is built
   for a target rather than for the host is not gated, and neither are
   `xtask` and `docpdf`, which are reported only. CI fails below the
-  thresholds. Uncovered lines must be justified in review.
+  thresholds. Uncovered lines must be justified in review. A crate named
+  in `COMPLETE` is held to all of it instead — 100 percent of lines and of
+  branches — which is what document 15, section 15.7, asks of the SQLite
+  port and what `db-sqlite` meets.
 - Condition coverage: `cargo xtask coverage --condition` builds the same
   tests with `-Z coverage-options=branch,condition`, which counts every
   operand of a compound decision and not only the decision. The same

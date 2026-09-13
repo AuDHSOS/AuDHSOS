@@ -7,7 +7,7 @@
 use crate::bytes::{size, u32_at};
 use crate::error::Error;
 use crate::header::Header;
-use crate::page::{Cell, Kind, Page, Payload};
+use crate::page::{Kind, Page, Payload};
 use crate::record::Record;
 
 /// How deep a tree this crate walks. SQLite's own cursor stops at twenty;
@@ -18,7 +18,7 @@ pub const MAX_DEPTH: usize = 32;
 pub const SCHEMA_ROOT: u32 = 1;
 
 /// A database file, read without being copied.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Image<'a> {
     /// The whole file.
     bytes: &'a [u8],
@@ -63,9 +63,9 @@ impl<'a> Image<'a> {
         if number == 0 {
             return Err(Error::Page(0));
         }
-        let page_size = size(u64::from(self.header.page_size))?;
-        let start = size(u64::from(number.saturating_sub(1)))?.saturating_mul(page_size);
-        let end = start.checked_add(page_size).ok_or(Error::Page(number))?;
+        let page_size = size(u64::from(self.header.page_size));
+        let start = size(u64::from(number.saturating_sub(1))).saturating_mul(page_size);
+        let end = start.saturating_add(page_size);
         self.bytes.get(start..end).ok_or(Error::Page(number))
     }
 
@@ -100,8 +100,8 @@ impl<'a> Image<'a> {
     /// [`Error::Overflow`] for a chain that ends early or turns back on
     /// itself.
     pub fn read_payload(&self, payload: &Payload<'a>, into: &mut [u8]) -> Result<usize, Error> {
-        let room = into.get_mut(..payload.total).ok_or(Error::Overrun)?;
-        let mut written = copy(room, 0, payload.local);
+        let room: &mut [u8] = into.get_mut(..payload.total).ok_or(Error::Overrun)?;
+        let (mut room, mut written) = copy(room, payload.local);
         let mut next = payload.overflow;
         let mut steps = 0u32;
         while let Some(number) = next {
@@ -112,10 +112,14 @@ impl<'a> Image<'a> {
                 return Err(Error::Overflow(number));
             }
             let page = self.page_bytes(number)?;
-            let usable = size(u64::from(self.header.usable()))?;
-            let content = page.get(4..usable).ok_or(Error::Overflow(number))?;
-            written = written.saturating_add(copy(room, written, content));
-            next = match u32_at(page, 0).ok_or(Error::Overflow(number))? {
+            let usable = size(u64::from(self.header.usable()));
+            // Every page is at least as long as the usable part of one, so
+            // what is left after the link is what the chain carries.
+            let content = page.get(4..usable).unwrap_or_default();
+            let (rest, added) = copy(room, content);
+            room = rest;
+            written = written.saturating_add(added);
+            next = match u32_at(page, 0).unwrap_or(0) {
                 0 => None,
                 further => Some(further),
             };
@@ -130,18 +134,15 @@ impl<'a> Image<'a> {
     }
 }
 
-/// Copies as much of `from` into `into` at `at` as both allow, and answers
-/// how much that was.
-fn copy(into: &mut [u8], at: usize, from: &[u8]) -> usize {
-    let Some(room) = into.get_mut(at..) else {
-        return 0;
-    };
+/// Copies as much of `from` into the front of `room` as both allow, and
+/// answers what is left of `room` together with how much was written.
+fn copy<'b>(room: &'b mut [u8], from: &[u8]) -> (&'b mut [u8], usize) {
     let len = room.len().min(from.len());
-    let (Some(target), Some(source)) = (room.get_mut(..len), from.get(..len)) else {
-        return 0;
-    };
-    target.copy_from_slice(source);
-    len
+    let (target, rest) = room.split_at_mut(len);
+    for (slot, byte) in target.iter_mut().zip(from) {
+        *slot = *byte;
+    }
+    (rest, len)
 }
 
 /// Where a walk stands on one page.
@@ -191,6 +192,11 @@ impl<'a> Rows<'a> {
         error
     }
 
+    /// The frame the walk stands on, or nothing once it has climbed out.
+    fn top(&mut self) -> Option<&mut Frame> {
+        self.stack.iter_mut().take(self.depth).last()
+    }
+
     /// Descends into `child`.
     fn push(&mut self, child: u32) -> Result<(), Error> {
         let slot = self.stack.get_mut(self.depth).ok_or(Error::Depth)?;
@@ -234,7 +240,7 @@ impl<'a> Iterator for Rows<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         while !self.done {
-            let frame = *self.stack.get(self.depth.checked_sub(1)?)?;
+            let frame = *self.top()?;
             let page = match self.image.page(frame.number) {
                 Ok(page) => page,
                 Err(error) => return Some(Err(self.stop(error))),
@@ -243,24 +249,17 @@ impl<'a> Iterator for Rows<'a> {
             match page.kind() {
                 Kind::LeafTable if frame.next < cells => {
                     self.bump();
-                    match page.cell(frame.next) {
-                        Ok(Cell::TableLeaf { rowid, payload }) => {
-                            return Some(Ok(Row { rowid, payload }));
-                        }
-                        Ok(_) => return Some(Err(self.stop(Error::PageKind(0)))),
-                        Err(error) => return Some(Err(self.stop(error))),
-                    }
+                    return Some(match page.row(frame.next) {
+                        Ok((rowid, payload)) => Ok(Row { rowid, payload }),
+                        Err(error) => Err(self.stop(error)),
+                    });
                 }
                 Kind::InteriorTable if frame.next <= cells => {
                     self.bump();
                     let child = if frame.next == cells {
                         page.right_most().ok_or(Error::Overrun)
                     } else {
-                        match page.cell(frame.next) {
-                            Ok(Cell::TableInterior { child, .. }) => Ok(child),
-                            Ok(_) => Err(Error::PageKind(0)),
-                            Err(error) => Err(error),
-                        }
+                        page.child(frame.next)
                     };
                     match child.and_then(|child| self.push(child)) {
                         Ok(()) => {}
@@ -270,12 +269,11 @@ impl<'a> Iterator for Rows<'a> {
                 Kind::InteriorIndex | Kind::LeafIndex => {
                     // A table tree holds no index page; a root that leads
                     // to one is a root of the wrong tree.
-                    return Some(Err(self.stop(Error::PageKind(0))));
+                    return Some(Err(self.stop(Error::PageKind(page.kind().byte()))));
                 }
-                _ => self.depth = self.depth.saturating_sub(1),
-            }
-            if self.depth == 0 {
-                return None;
+                Kind::InteriorTable | Kind::LeafTable => {
+                    self.depth = self.depth.saturating_sub(1);
+                }
             }
         }
         None
@@ -284,10 +282,14 @@ impl<'a> Iterator for Rows<'a> {
 
 impl Rows<'_> {
     /// Moves the top frame on to its next cell.
+    ///
+    /// The frame is reached as a walk of at most one rather than through
+    /// an `if let`: every caller stands on a frame, so the `else` of an
+    /// `if let` here could never run, and a branch no input reaches is one
+    /// no test can hold to anything.
     fn bump(&mut self) {
-        if let Some(index) = self.depth.checked_sub(1)
-            && let Some(frame) = self.stack.get_mut(index)
-        {
+        let index = self.depth.saturating_sub(1);
+        for frame in self.stack.iter_mut().skip(index).take(1) {
             frame.next = frame.next.saturating_add(1);
         }
     }

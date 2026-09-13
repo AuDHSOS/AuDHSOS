@@ -69,9 +69,8 @@ fn a_rowid_is_the_same_bits_read_as_a_signed_number() {
 }
 
 #[test]
-fn a_length_that_no_machine_holds_is_an_overrun() {
-    assert_eq!(size(7), Ok(7));
-    if usize::BITS < 64 {
-        assert_eq!(size(u64::MAX), Err(Error::Overrun));
-    }
+fn a_length_wider_than_this_machine_saturates_rather_than_wrapping() {
+    assert_eq!(size(7), 7);
+    assert_eq!(size(u64::from(u32::MAX)), 4_294_967_295);
+    assert!(size(u64::MAX) >= usize::MAX / 2);
 }

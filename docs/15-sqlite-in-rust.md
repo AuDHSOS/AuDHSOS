@@ -138,8 +138,11 @@ follow for this port.
 - Unreachable defensive code is a defect and not a line to exempt. Where a
   refusal cannot be reached by any input, either the refusal is dead and
   goes, or the input that reaches it exists and is missing from the tests.
-  The gate for this crate rises as the tests do; the number in the policy
-  table is the floor, not the goal.
+  `db-sqlite` is held to all of it — `COMPLETE` in the policy table, 100
+  percent of lines and 100 percent of branches, in both instrumentations —
+  and it meets it: the refusals that no file could reach were removed
+  rather than excused, and the ones that a file can reach are reached by a
+  test, most of them by a database laid out by hand for that purpose.
 
 ## 15.8 The fixtures
 

@@ -148,3 +148,12 @@ fn a_reserved_type_inside_a_record_ends_the_walk_once() {
     assert_eq!(values.next(), Some(Err(Error::SerialType(10))));
     assert_eq!(values.next(), None);
 }
+
+#[test]
+fn a_header_whose_last_serial_type_does_not_end_is_refused_once() {
+    // A header of one byte that is the start of a varint and nothing else.
+    let parsed = Record::parse(&[2, 0x81]).unwrap();
+    let mut values = parsed.values();
+    assert_eq!(values.next(), Some(Err(Error::Varint)));
+    assert_eq!(values.next(), None);
+}

@@ -197,7 +197,9 @@ fn a_root_that_names_an_index_tree_is_refused_by_a_walk_of_rows() {
     }
     assert!(index_root > 0);
     let mut rows = image.rows(index_root);
-    assert_eq!(rows.next(), Some(Err(Error::PageKind(0))));
+    // The refusal names the page type that was found where a table tree
+    // has none: ten is a leaf of an index tree.
+    assert_eq!(rows.next(), Some(Err(Error::PageKind(10))));
     assert_eq!(rows.next(), None);
 }
 
@@ -214,4 +216,85 @@ fn a_hundred_rows_of_a_table_with_indexes_are_all_there() {
     let image = Image::open(INDEXED).unwrap();
     let root = root_of(&image, b"k");
     assert_eq!(image.rows(root).count(), 100);
+}
+
+#[test]
+fn a_chain_that_ends_before_the_payload_does_is_refused() {
+    // Three thousand bytes, four hundred and sixty of them on the page —
+    // which is what the threshold rule leaves there — and one overflow
+    // page that says the chain ends after it.
+    let page = crate::tests::leaf_with_overflow(512, 3000, 460, 3);
+    let bytes = crate::tests::Builder::new(512)
+        .page(&page)
+        .page(&[0, 0, 0, 0])
+        .finish();
+    let image = Image::open(&bytes).unwrap();
+    let row = image.rows(2).next().unwrap().unwrap();
+    let mut into = vec![0u8; row.payload.total];
+    assert_eq!(
+        image.read_payload(&row.payload, &mut into),
+        Err(Error::Overflow(3))
+    );
+}
+
+#[test]
+fn a_chain_that_turns_back_on_itself_is_refused_rather_than_followed() {
+    let page = crate::tests::leaf_with_overflow(512, 3000, 460, 3);
+    // Page 3 points at itself, so the walk would never end.
+    let mut overflow = vec![0u8; 512];
+    overflow[..4].copy_from_slice(&3u32.to_be_bytes());
+    let bytes = crate::tests::Builder::new(512)
+        .page(&page)
+        .page(&overflow)
+        .finish();
+    let image = Image::open(&bytes).unwrap();
+    let row = image.rows(2).next().unwrap().unwrap();
+    let mut into = vec![0u8; row.payload.total];
+    assert_eq!(
+        image.read_payload(&row.payload, &mut into),
+        Err(Error::Overflow(3))
+    );
+}
+
+#[test]
+fn a_chain_that_leaves_the_file_is_refused_by_the_page_it_names() {
+    let page = crate::tests::leaf_with_overflow(512, 3000, 460, 9);
+    let bytes = crate::tests::Builder::new(512).page(&page).finish();
+    let image = Image::open(&bytes).unwrap();
+    let row = image.rows(2).next().unwrap().unwrap();
+    let mut into = vec![0u8; row.payload.total];
+    assert_eq!(
+        image.read_payload(&row.payload, &mut into),
+        Err(Error::Page(9))
+    );
+}
+
+#[test]
+fn a_tree_deeper_than_the_walk_is_refused_at_the_depth_it_stops_at() {
+    // Thirty-three interior pages, each pointing at the next: one more
+    // than the walk keeps frames for.
+    let mut builder = crate::tests::Builder::new(512);
+    for page in 0..33u32 {
+        builder = builder.page(&crate::tests::interior_to(512, page + 3));
+    }
+    let bytes = builder.finish();
+    let image = Image::open(&bytes).unwrap();
+    let mut rows = image.rows(2);
+    assert_eq!(rows.next(), Some(Err(Error::Depth)));
+    assert_eq!(rows.next(), None);
+}
+
+#[test]
+fn a_payload_that_says_it_continues_at_page_zero_is_refused() {
+    let page = crate::tests::leaf_with_overflow(512, 600, 92, 0);
+    let bytes = crate::tests::Builder::new(512).page(&page).finish();
+    let image = Image::open(&bytes).unwrap();
+    let mut rows = image.rows(2);
+    assert_eq!(rows.next(), Some(Err(Error::Overflow(0))));
+}
+
+#[test]
+fn a_file_that_is_not_a_database_is_refused_by_opening_it() {
+    assert_eq!(Image::open(&[]), Err(Error::Truncated));
+    assert_eq!(Image::open(&[0u8; 200]), Err(Error::Magic));
 }

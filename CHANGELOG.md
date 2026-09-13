@@ -7,6 +7,22 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` is held to complete coverage and meets it: every line, every
+  region and every branch, under both instrumentations, which the policy
+  table now states as `COMPLETE` rather than as the repository's floor of
+  91 and 86 percent. What it took is the rule document 15, section 15.7,
+  sets: a refusal no input can reach is a defect, so the unreachable ones
+  were removed — the reads inside a hundred-byte header that cannot come
+  back empty, the overflow arithmetic that cannot overflow, the cell slice
+  that cannot fail after the check before it — and the reachable ones are
+  reached, most of them by a database laid out by hand: a chain that ends
+  early, a chain that turns back on itself, a chain that leaves the file, a
+  payload that says it continues at page zero, a tree deeper than the walk
+  keeps frames for, and a cell of every shape cut off by the end of its
+  page. `Page::row` and `Page::child` answer the two questions a walk asks,
+  so that asking a leaf for a child is a refusal a test can make rather
+  than a branch no input reaches.
+
 - The configuration matrix of document 15, section 15.6, as a test: the
   same three rows and the same index written by the shell under eleven
   configurations — four page sizes, three text encodings, reserved space,

@@ -48,6 +48,17 @@ impl Kind {
         matches!(self, Kind::InteriorIndex | Kind::InteriorTable)
     }
 
+    /// The byte a page of this kind begins with.
+    #[must_use]
+    pub const fn byte(self) -> u8 {
+        match self {
+            Kind::InteriorIndex => 2,
+            Kind::InteriorTable => 5,
+            Kind::LeafIndex => 10,
+            Kind::LeafTable => 13,
+        }
+    }
+
     /// Whether the page belongs to a table tree, which is what gives its
     /// cells a rowid.
     #[must_use]
@@ -142,11 +153,13 @@ impl<'a> Page<'a> {
     /// [`Error::Overrun`] for a page shorter than its own header.
     pub fn parse(bytes: &'a [u8], number: u32, usable: u32) -> Result<Self, Error> {
         let start = if number == 1 { HEADER_LEN } else { 0 };
-        let usable = size(u64::from(usable))?;
+        let usable = size(u64::from(usable));
         if bytes.len() < usable {
             return Err(Error::Overrun);
         }
-        let kind = Kind::from_byte(u8_at(bytes, start).ok_or(Error::Overrun)?)?;
+        // A page is at least 480 bytes, so the byte the type is in is
+        // there whether the header lies before it or not.
+        let kind = Kind::from_byte(u8_at(bytes, start).unwrap_or(0))?;
         let page = Page {
             bytes,
             start,
@@ -155,12 +168,11 @@ impl<'a> Page<'a> {
         };
         // The cell pointer array has to fit between the header and the
         // usable end, or the page is not readable at all.
-        let pointers = page.cells().checked_mul(2).ok_or(Error::Overrun)?;
+        let pointers = page.cells().saturating_mul(2);
         let end = page
             .start
-            .checked_add(kind.header_len())
-            .and_then(|after| after.checked_add(pointers))
-            .ok_or(Error::Overrun)?;
+            .saturating_add(kind.header_len())
+            .saturating_add(pointers);
         if end > usable {
             return Err(Error::Overrun);
         }
@@ -210,10 +222,12 @@ impl<'a> Page<'a> {
         }
         let at = self
             .start
-            .checked_add(self.kind.header_len())
-            .and_then(|base| base.checked_add(index.checked_mul(2)?))
-            .ok_or(Error::Overrun)?;
-        let offset = usize::from(u16_at(self.bytes, at).ok_or(Error::Overrun)?);
+            .saturating_add(self.kind.header_len())
+            .saturating_add(index.saturating_mul(2));
+        // The pointer array was checked to lie inside the page, so the
+        // two bytes are there; a pointer that leaves the page is what the
+        // test below it refuses.
+        let offset = usize::from(u16_at(self.bytes, at).unwrap_or(u16::MAX));
         if offset >= self.usable {
             return Err(Error::Overrun);
         }
@@ -229,11 +243,15 @@ impl<'a> Page<'a> {
     /// it.
     pub fn cell(&self, index: usize) -> Result<Cell<'a>, Error> {
         let offset = self.cell_offset(index)?;
-        let cell = self.bytes.get(offset..self.usable).ok_or(Error::Overrun)?;
+        // The offset lies inside the usable part of the page, which is
+        // what `cell_offset` has just checked.
+        let cell = self.bytes.get(offset..self.usable).unwrap_or_default();
         match self.kind {
             Kind::InteriorTable => {
                 let child = child_page(u32_at(cell, 0).ok_or(Error::Overrun)?)?;
-                let (key, _) = varint(cell.get(4..).ok_or(Error::Overrun)?)?;
+                // The child pointer was read out of these bytes, so the
+                // key after it is inside them.
+                let (key, _) = varint(cell.get(4..).unwrap_or_default())?;
                 Ok(Cell::TableInterior {
                     child,
                     rowid: crate::bytes::signed(key),
@@ -241,30 +259,62 @@ impl<'a> Page<'a> {
             }
             Kind::LeafTable => {
                 let (total, read) = varint(cell)?;
-                let rest = cell.get(read..).ok_or(Error::Overrun)?;
+                // A varint was read out of these bytes, so what follows
+                // it is inside them.
+                let rest = cell.get(read..).unwrap_or_default();
                 let (key, key_len) = varint(rest)?;
-                let after = rest.get(key_len..).ok_or(Error::Overrun)?;
+                let after = rest.get(key_len..).unwrap_or_default();
                 Ok(Cell::TableLeaf {
                     rowid: crate::bytes::signed(key),
-                    payload: self.payload(after, size(total)?)?,
+                    payload: self.payload(after, size(total))?,
                 })
             }
             Kind::LeafIndex => {
                 let (total, read) = varint(cell)?;
-                let after = cell.get(read..).ok_or(Error::Overrun)?;
+                let after = cell.get(read..).unwrap_or_default();
                 Ok(Cell::IndexLeaf {
-                    payload: self.payload(after, size(total)?)?,
+                    payload: self.payload(after, size(total))?,
                 })
             }
             Kind::InteriorIndex => {
                 let child = child_page(u32_at(cell, 0).ok_or(Error::Overrun)?)?;
-                let rest = cell.get(4..).ok_or(Error::Overrun)?;
+                let rest = cell.get(4..).unwrap_or_default();
                 let (total, read) = varint(rest)?;
-                let after = rest.get(read..).ok_or(Error::Overrun)?;
+                let after = rest.get(read..).unwrap_or_default();
                 Ok(Cell::IndexInterior {
                     child,
-                    payload: self.payload(after, size(total)?)?,
+                    payload: self.payload(after, size(total))?,
                 })
+            }
+        }
+    }
+
+    /// The row of cell `index`: its key and its record.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::PageKind`] where this is not a table leaf, and the errors
+    /// of [`Page::cell`].
+    pub fn row(&self, index: usize) -> Result<(i64, Payload<'a>), Error> {
+        match self.cell(index)? {
+            Cell::TableLeaf { rowid, payload } => Ok((rowid, payload)),
+            Cell::TableInterior { .. } | Cell::IndexLeaf { .. } | Cell::IndexInterior { .. } => {
+                Err(Error::PageKind(self.kind.byte()))
+            }
+        }
+    }
+
+    /// The page cell `index` points at, for an interior page.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::PageKind`] where this is a leaf, and the errors of
+    /// [`Page::cell`].
+    pub fn child(&self, index: usize) -> Result<u32, Error> {
+        match self.cell(index)? {
+            Cell::TableInterior { child, .. } | Cell::IndexInterior { child, .. } => Ok(child),
+            Cell::TableLeaf { .. } | Cell::IndexLeaf { .. } => {
+                Err(Error::PageKind(self.kind.byte()))
             }
         }
     }
@@ -311,7 +361,7 @@ const fn child_page(number: u32) -> Result<u32, Error> {
 /// the payload, X the largest payload that stays whole, and M the smallest
 /// that is ever left on a page. The remainder rule exists so that the last
 /// overflow page is as full as it can be.
-fn local_len(total: usize, usable: usize, kind: Kind) -> usize {
+pub(crate) fn local_len(total: usize, usable: usize, kind: Kind) -> usize {
     let x = if kind.is_table() {
         usable.saturating_sub(35)
     } else {

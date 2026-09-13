@@ -127,8 +127,11 @@ impl Header {
         if head.get(..16) != Some(MAGIC.as_slice()) {
             return Err(Error::Magic);
         }
-        let page_size = page_size(u16_at(head, 16).ok_or(Error::Truncated)?)?;
-        let reserved = u8_at(head, 20).ok_or(Error::Truncated)?;
+        // Every field below lies inside the hundred bytes above, so the
+        // readers cannot come back empty; a file too short to hold them was
+        // refused already.
+        let page_size = page_size(u16_at(head, 16).unwrap_or(0))?;
+        let reserved = u8_at(head, 20).unwrap_or(0);
         if page_size.saturating_sub(u32::from(reserved)) < MIN_USABLE {
             return Err(Error::Reserved(reserved));
         }
@@ -137,26 +140,26 @@ impl Header {
         if (u8_at(head, 21), u8_at(head, 22), u8_at(head, 23)) != (Some(64), Some(32), Some(32)) {
             return Err(Error::Fractions);
         }
-        let word = |offset: usize| u32_at(head, offset).ok_or(Error::Truncated);
+        let word = |offset: usize| u32_at(head, offset).unwrap_or(0);
         Ok(Header {
             page_size,
-            write_version: u8_at(head, 18).ok_or(Error::Truncated)?,
-            read_version: u8_at(head, 19).ok_or(Error::Truncated)?,
+            write_version: u8_at(head, 18).unwrap_or(0),
+            read_version: u8_at(head, 19).unwrap_or(0),
             reserved,
-            change_counter: word(24)?,
-            pages: word(28)?,
-            freelist: word(32)?,
-            freelist_pages: word(36)?,
-            schema_cookie: word(40)?,
-            schema_format: word(44)?,
-            cache_size: word(48)?,
-            largest_root: word(52)?,
-            encoding: Encoding::from_code(word(56)?)?,
-            user_version: word(60)?,
-            incremental_vacuum: word(64)?,
-            application_id: word(68)?,
-            version_valid_for: word(92)?,
-            library_version: word(96)?,
+            change_counter: word(24),
+            pages: word(28),
+            freelist: word(32),
+            freelist_pages: word(36),
+            schema_cookie: word(40),
+            schema_format: word(44),
+            cache_size: word(48),
+            largest_root: word(52),
+            encoding: Encoding::from_code(word(56))?,
+            user_version: word(60),
+            incremental_vacuum: word(64),
+            application_id: word(68),
+            version_valid_for: word(92),
+            library_version: word(96),
         })
     }
 }

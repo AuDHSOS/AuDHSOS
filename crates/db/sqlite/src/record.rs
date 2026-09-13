@@ -51,8 +51,7 @@ impl Serial {
     ///
     /// # Errors
     ///
-    /// [`Error::SerialType`] for 10 and 11, which the format reserves, and
-    /// [`Error::Overrun`] for a length no `usize` holds.
+    /// [`Error::SerialType`] for 10 and 11, which the format reserves.
     pub fn from_code(code: u64) -> Result<Self, Error> {
         match code {
             0 => Ok(Serial::Null),
@@ -66,8 +65,8 @@ impl Serial {
             8 => Ok(Serial::Zero),
             9 => Ok(Serial::One),
             10 | 11 => Err(Error::SerialType(code)),
-            other if other % 2 == 0 => Ok(Serial::Blob(size(other.saturating_sub(12) / 2)?)),
-            other => Ok(Serial::Text(size(other.saturating_sub(13) / 2)?)),
+            other if other % 2 == 0 => Ok(Serial::Blob(size(other.saturating_sub(12) / 2))),
+            other => Ok(Serial::Text(size(other.saturating_sub(13) / 2))),
         }
     }
 
@@ -112,11 +111,11 @@ impl Serial {
 fn integer(bytes: &[u8]) -> i64 {
     let negative = bytes.first().is_some_and(|byte| byte & 0x80 != 0);
     let mut wide = [if negative { 0xff } else { 0x00 }; 8];
+    // The value is right-aligned in eight bytes, so a shorter one keeps
+    // the sign byte it was padded with.
     let start = 8usize.saturating_sub(bytes.len());
-    for (at, byte) in bytes.iter().enumerate() {
-        if let Some(slot) = wide.get_mut(start.saturating_add(at)) {
-            *slot = *byte;
-        }
+    for (slot, byte) in wide.iter_mut().skip(start).zip(bytes) {
+        *slot = *byte;
     }
     signed(u64::from_be_bytes(wide))
 }
@@ -124,10 +123,8 @@ fn integer(bytes: &[u8]) -> i64 {
 /// The bits of a double, which the format stores big-endian.
 fn double(bytes: &[u8]) -> u64 {
     let mut wide = [0u8; 8];
-    for (at, byte) in bytes.iter().take(8).enumerate() {
-        if let Some(slot) = wide.get_mut(at) {
-            *slot = *byte;
-        }
+    for (slot, byte) in wide.iter_mut().zip(bytes) {
+        *slot = *byte;
     }
     u64::from_be_bytes(wide)
 }
@@ -151,12 +148,13 @@ impl<'a> Record<'a> {
     /// than the payload.
     pub fn parse(payload: &'a [u8]) -> Result<Self, Error> {
         let (declared, read) = varint(payload)?;
-        let header_len = size(declared)?;
+        let header_len = size(declared);
         if header_len < read {
             return Err(Error::Overrun);
         }
         let header = payload.get(read..header_len).ok_or(Error::Overrun)?;
-        let body = payload.get(header_len..).ok_or(Error::Overrun)?;
+        // The header lies inside the payload, so what follows it does too.
+        let body = payload.get(header_len..).unwrap_or_default();
         Ok(Record { header, body })
     }
 

@@ -1083,6 +1083,27 @@ pub(crate) const COVERAGE: Thresholds = Thresholds {
     branches: 86.0,
 };
 
+/// The thresholds for a crate of [`COMPLETE`].
+pub(crate) const COMPLETE_COVERAGE: Thresholds = Thresholds {
+    lines: 100.0,
+    branches: 100.0,
+};
+
+/// Crates that are held to all of it: every line and every branch, with
+/// nothing exempted. Document 15, section 15.7, asks it of the SQLite
+/// port, and the way it is met is that a refusal no input can reach is
+/// removed rather than excused.
+pub(crate) const COMPLETE: &[&str] = &["db-sqlite"];
+
+/// The thresholds a crate is held to.
+pub(crate) fn thresholds(name: &str) -> Thresholds {
+    if COMPLETE.contains(&name) {
+        COMPLETE_COVERAGE
+    } else {
+        COVERAGE
+    }
+}
+
 /// A fuzz target.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FuzzTarget {

@@ -54,8 +54,10 @@ pub(crate) const fn signed(value: u64) -> i64 {
     i64::from_le_bytes(value.to_le_bytes())
 }
 
-/// A `usize` from a `u64` of the file, or [`Error::Overrun`] where the
-/// number does not fit this machine.
-pub(crate) fn size(value: u64) -> Result<usize, Error> {
-    usize::try_from(value).map_err(|_| Error::Overrun)
+/// A `usize` from a `u64` of the file. A number wider than this machine
+/// holds saturates, and every reader that uses one asks the bytes for it
+/// afterwards, so a length no file can hold is refused where it is used
+/// rather than where it is read.
+pub(crate) fn size(value: u64) -> usize {
+    usize::try_from(value).unwrap_or(usize::MAX)
 }
