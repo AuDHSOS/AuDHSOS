@@ -598,8 +598,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Object.prototype methods (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/prototype --summary` | 248 | 494 | 284 (57.49%) | 202 (40.89%) | 8 (1.62%) |
 | Property accessors (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors --summary` | 21 | 42 | 32 (76.19%) | 10 (23.81%) | 0 (0.00%) |
 | String.prototype methods (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,708 (79.66%) | 382 (17.82%) | 54 (2.52%) |
-| Functions, calls and `this` (focused) | focused | `45916c9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/this test/language/statements/function test/language/expressions/call --summary` | 549 | 965 | 799 (82.80%) | 15 (1.55%) | 151 (15.65%) |
-| Functions, calls and `this` on the register engine (focused) | focused | `45916c9` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/this test/language/statements/function test/language/expressions/call --summary` | 549 | 965 | 75 (7.77%) | 742 (76.89%) | 148 (15.34%) |
+| Functions and `this` (focused) | focused | `a1acfb1` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/this test/language/statements/function --summary` | 457 | 794 | 688 (86.65%) | 4 (0.50%) | 102 (12.85%) |
+| Functions and `this` on the register engine (focused) | focused | `a1acfb1` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/this test/language/statements/function --summary` | 457 | 794 | 75 (9.45%) | 617 (77.71%) | 102 (12.85%) |
 | Loop statements (focused) | focused | `24d6a88` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for test/language/statements/while test/language/statements/do-while --summary` | 459 | 900 | 713 (79.22%) | 11 (1.22%) | 176 (19.56%) |
 | Loop statements on the register engine (focused) | focused | `24d6a88` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for test/language/statements/while test/language/statements/do-while --summary` | 459 | 900 | 107 (11.89%) | 619 (68.78%) | 174 (19.33%) |
 | Property reads over the Prototype Chain (focused) | focused | `a240620` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/built-ins/Object/prototype test/built-ins/Array/prototype --summary` | 3,080 | 6,119 | 5,060 (82.69%) | 1,021 (16.69%) | 38 (0.62%) |
@@ -608,8 +608,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Property reads, writes and `Function.prototype` on the register engine (focused) | focused | `30b9dc3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/language/expressions/assignment test/built-ins/Function/prototype --summary` | 815 | 1,494 | 60 (4.02%) | 1,100 (73.63%) | 334 (22.36%) |
 | `instanceof`, `new` and `throw` (focused) | focused | `cae1518` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/instanceof test/language/expressions/new test/language/statements/throw --summary` | 116 | 231 | 187 (80.95%) | 0 (0.00%) | 44 (19.05%) |
 | `instanceof`, `new` and `throw` on the register engine (focused) | focused | `cae1518` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/instanceof test/language/expressions/new test/language/statements/throw --summary` | 116 | 231 | 0 (0.00%) | 189 (81.82%) | 42 (18.18%) |
-| Complete pinned suite, including staging and Intl | full | `cae1518` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `cae1518` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 2,770 (2.69%) | 64,429 (62.60%) | 35,726 (34.71%) |
+| Complete pinned suite, including staging and Intl | full | `a1acfb1` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `a1acfb1` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 2,770 (2.69%) | 64,429 (62.60%) | 35,726 (34.71%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -627,8 +627,8 @@ global name is lowered where it is returned and inside the body of a loop, which
 `harness/compareArray.js` needs. `this` is the receiver of the call, a method
 call reaches a function of the Script and not only an intrinsic, and a property
 of a value the lowering could not name is read and written, `new` constructs from
-the `prototype` 10.2.5 gives a function, and `instanceof` walks the chain of the
-value. `harness/sta.js` is lowered in full; it stops at the boundary, because
+the `prototype` 10.2.5 gives a function, `instanceof` walks the chain of the
+value, and 10.2.1.2 binds `this` for a call that has no receiver. `harness/sta.js` is lowered in full; it stops at the boundary, because
 the Script completes with an Object and an Object of the engine has no identity
 the embedding can hold. That is the unified object model of M3 and M4, not a
 gap of the lowering.
@@ -663,8 +663,9 @@ same suite measured before it, variant for variant. The Array search run was mea
 `e873e530ad100efc4492e5a0a4ce68c824503cae`, and the property-read runs at tree
 `e946d0f5655a3f90d2abe1986bcff7cdc9765072`. The function, call and `this` runs at tree
 `94023436def77fc0433c7d67f6bc9b70c2455b5d`, the property runs at tree
-`c1f2a4fab7808f3b5c8b0824f8a8ed3eaf11dc59`, and the `instanceof` runs together with both full
-runs at tree `504da841ece9a2a58acc73ef0a5968b53daa252c`.
+`c1f2a4fab7808f3b5c8b0824f8a8ed3eaf11dc59`, the `instanceof` runs at tree
+`504da841ece9a2a58acc73ef0a5968b53daa252c`, and the `this` runs together with both full runs at tree
+`3d20693df017258270e78d197497481761dee88b`.
 
 ### Historical Test262 baseline
 
