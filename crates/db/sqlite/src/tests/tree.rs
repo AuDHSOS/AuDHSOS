@@ -1398,3 +1398,59 @@ fn a_key_the_table_does_not_hold_writes_over_no_row() {
     assert!(crate::tree::remove(&mut pages, 2, 200).unwrap());
     assert!(!update(&mut pages, 2, 200, &record).unwrap());
 }
+
+#[test]
+fn the_journal_mode_changes_what_lies_beside_the_file_and_not_what_is_in_it() {
+    use crate::change::Writer;
+    use crate::journal::Mode;
+    // The journal-mode dimension of document 16, section 16.11, over
+    // the write path: the same two statements under every mode a
+    // rollback journal has. The nonce comes from SQLite's random
+    // source, so the one `journalled.db-journal` was written with is
+    // read back out of it.
+    let theirs = crate::tests::JOURNALLED;
+    let run = |mode, nonce| {
+        let mut writer = Writer::journalling(512, 0, Encoding::Utf8, mode, nonce, 512).unwrap();
+        writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+        writer.run(sql_of_rows().as_bytes()).unwrap();
+        writer.run(b"DELETE FROM t WHERE rowid%4!=0").unwrap();
+        writer
+    };
+    let nonce = nonce_of(theirs, run(Mode::Persist, 0).journal().unwrap());
+    for mode in [Mode::Delete, Mode::Memory, Mode::Off] {
+        let writer = run(mode, nonce);
+        same("emptied.db", &writer.written(), crate::tests::EMPTIED, 512);
+        assert_eq!(writer.journal(), None, "{mode:?} left a journal");
+    }
+    let writer = run(Mode::Truncate, nonce);
+    same("emptied.db", &writer.written(), crate::tests::EMPTIED, 512);
+    assert_eq!(writer.journal(), Some(&[][..]));
+    let writer = run(Mode::Persist, nonce);
+    same("emptied.db", &writer.written(), crate::tests::EMPTIED, 512);
+    same(
+        "journalled.db-journal",
+        writer.journal().unwrap(),
+        theirs,
+        512,
+    );
+}
+
+#[test]
+fn a_statement_run_in_logging_mode_writes_the_log_the_shell_wrote() {
+    use crate::change::Writer;
+    // The last point of the journal-mode dimension: the file stays as
+    // `PRAGMA journal_mode=wal` left it and the three statements are
+    // three transactions in the log. The two salts come from SQLite's
+    // random source, so the ones the fixture was written with are read
+    // back out of its header.
+    let theirs = crate::tests::LOGGING_WAL;
+    let word = |at: usize| u32::from_be_bytes(theirs[at..at + 4].try_into().unwrap());
+    let mut writer = Writer::logging(512, 0, Encoding::Utf8, (word(16), word(20))).unwrap();
+    same("logging.db", &writer.written(), crate::tests::LOGGING, 512);
+    writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+    writer.run(sql_of_rows().as_bytes()).unwrap();
+    writer.run(b"DELETE FROM t WHERE rowid%3=0").unwrap();
+    same("logging.db-wal", writer.log().unwrap(), theirs, 512);
+    // The file is the one the pragma left, whatever the log holds.
+    same("logging.db", &writer.written(), crate::tests::LOGGING, 512);
+}

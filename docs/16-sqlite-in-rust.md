@@ -89,7 +89,7 @@ Each rule is checkable, and each makes a later thing possible.
 | `tree` | The pages of a database being written, a row put in the tree its table begins at or taken out of it again, the balance any key order needs, and the free list the pages go on. | D-166 to D-169, Q7 |
 | `format` | `format(F,...)` and `printf(F,...)`: the flags, the field width, the precision, and the twenty-three conversions of `sqlite3_str_vappendf`. `unistr(X)` reads the escapes `%#q` writes, and `quote(X)` of text is `%Q` of it. | D-161, Q8 |
 | `db` | A statement answered from a file by walking the sides of its `FROM` once, held to the rowids the `WHERE` leaves each. | D-146, D-149, D-150, D-153, D-158, Q5 |
-| `change` | A statement that changes a database run from its text: the table a `CREATE TABLE` names, the rows an `INSERT` puts in it, the rows a `DELETE` takes out, and the rows an `UPDATE` writes over. | D-172, D-173, D-174, Q8 |
+| `change` | A statement that changes a database run from its text: the table a `CREATE TABLE` names, the rows an `INSERT` puts in it, the rows a `DELETE` takes out, the rows an `UPDATE` writes over, and what the journal mode leaves beside the file. | D-172, D-173, D-174, D-175, Q8 |
 
 ### What a statement may hold
 
@@ -263,6 +263,15 @@ reserved tail — with the same four hundred rows put in by a key that
 jumps about. Each is built here from the schema and the rows and is the
 file the shell wrote, byte for byte.
 
+The journal-mode dimension needs no fixture of its own, because the mode
+changes what lies beside the file and not what is in it: `change::Writer`
+runs the same three statements under `delete`, `truncate`, `persist`,
+`memory` and `off` and writes `emptied.db` under every one of them, and
+what each mode leaves beside it is nothing, an empty file, or
+`journalled.db-journal` byte for byte. The sixth mode writes frames
+rather than pages, so the file stays as `PRAGMA journal_mode=wal` left it
+and the log is `logging.db-wal` byte for byte.
+
 The last two dimensions have no fixture: a schema format below four
 needs a database the shell will not write, and temporary storage is not
 a file.
@@ -291,8 +300,8 @@ CI has no SQLite.
 | # | Layer | What it holds | Status |
 |---|-------|---------------|--------|
 | L1 | The format | Header, b-tree pages, cells, overflow chains, records. | built |
-| L2 | The pager | Pages in and out of a file, the journal in four modes, the WAL, locking, the free list. | missing |
-| L3 | The b-tree writer | Insert, delete, balance, the pointer maps auto-vacuum needs. | missing |
+| L2 | The pager | Pages in and out of a file, the journal in five modes, the WAL, locking, the free list. | built but for locking and the checkpoint |
+| L3 | The b-tree writer | Insert, delete, balance, the pointer maps auto-vacuum needs. | built but for the pointer maps and the index trees |
 | L4 | The tokenizer and parser | SQL text to a tree. | built but for the window clauses |
 | L5 | The code generator and virtual machine | The tree to opcodes, and the register machine that runs them. | missing |
 | L6 | The semantics | Affinity, comparison, collation, the built-in functions, `NULL`. | built for the read half |

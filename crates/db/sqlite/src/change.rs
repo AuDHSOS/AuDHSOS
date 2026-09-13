@@ -17,10 +17,17 @@ use alloc::vec::Vec;
 use crate::ast::{Arena, Change, Definition, Span, TableBody};
 use crate::db::{Database, Error};
 use crate::header::{Encoding, Header, LIBRARY_VERSION};
+use crate::journal::Mode;
 use crate::page::Kind;
 use crate::schema::Table;
 use crate::tree::{Pages, insert, largest};
 use crate::value::{Affinity, Collation, Value};
+use crate::wal::Log;
+
+/// The sector a commit writes the journal header into, which is 512 for
+/// every device that says a write of one sector cannot damage another,
+/// and so for every build with `SQLITE_POWERSAFE_OVERWRITE`.
+const SECTOR: u32 = 512;
 
 /// The columns of `sqlite_schema`, which every row of it is written
 /// with: `type`, `name`, `tbl_name`, `rootpage` and `sql`.
@@ -38,6 +45,22 @@ pub struct Writer {
     pages: Pages,
     /// The header beside them, which every commit writes again.
     header: Header,
+    /// The mode a commit writes the rollback journal under.
+    mode: Mode,
+    /// The nonce every checksum of the journal begins at, which comes
+    /// from SQLite's random source.
+    nonce: u32,
+    /// How many bytes the header of the journal takes, which is what
+    /// the device says a write cannot damage beyond.
+    sector: u32,
+    /// What the commit of the last statement left beside the file.
+    journal: Option<Vec<u8>>,
+    /// The log the commits write frames into, where the file is in
+    /// write-ahead logging mode.
+    log: Option<Log>,
+    /// The file as write-ahead logging began, which is what a database
+    /// no checkpoint has run over holds.
+    origin: Option<Vec<u8>>,
 }
 
 impl Writer {
@@ -51,6 +74,12 @@ impl Writer {
         let pages = Pages::new(page_size, reserved)?;
         Ok(Writer {
             pages,
+            mode: Mode::Delete,
+            nonce: 0,
+            sector: SECTOR,
+            journal: None,
+            log: None,
+            origin: None,
             header: Header {
                 page_size,
                 write_version: 1,
@@ -74,10 +103,83 @@ impl Writer {
         })
     }
 
-    /// The file the statements so far have made.
+    /// The same, under the journal mode given, with the nonce every
+    /// checksum of the journal begins at and the sector its header
+    /// takes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the page size or the reserved tail breaks.
+    pub fn journalling(
+        page_size: u32,
+        reserved: u8,
+        encoding: Encoding,
+        mode: Mode,
+        nonce: u32,
+        sector: u32,
+    ) -> Result<Self, Error> {
+        let mut writer = Self::new(page_size, reserved, encoding)?;
+        writer.mode = mode;
+        writer.nonce = nonce;
+        writer.sector = sector;
+        Ok(writer)
+    }
+
+    /// The same, in write-ahead logging mode: the commits write frames
+    /// into a log rather than pages into the file, and the file stays
+    /// as `PRAGMA journal_mode=wal` left it until a checkpoint runs.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the page size or the reserved tail breaks.
+    pub fn logging(
+        page_size: u32,
+        reserved: u8,
+        encoding: Encoding,
+        salt: (u32, u32),
+    ) -> Result<Self, Error> {
+        let mut writer = Self::new(page_size, reserved, encoding)?;
+        // The pragma is itself a change, so the file it leaves counts
+        // one and names both versions two.
+        writer.header.write_version = 2;
+        writer.header.read_version = 2;
+        writer.header.change_counter = 1;
+        writer.header.version_valid_for = 1;
+        writer.origin = Some(writer.pages.written(&writer.header));
+        writer.log = Some(Log::new(page_size, salt, 0, false));
+        Ok(writer)
+    }
+
+    /// The file the statements so far have made. In write-ahead logging
+    /// mode that is the file the pragma left, because no checkpoint has
+    /// written a frame back into it.
     #[must_use]
     pub fn written(&self) -> Vec<u8> {
+        match &self.origin {
+            Some(bytes) => bytes.clone(),
+            None => self.pages.written(&self.header),
+        }
+    }
+
+    /// The file the pages hold, which is what a statement reads its
+    /// rows out of, whatever a log beside the file holds.
+    fn image(&self) -> Vec<u8> {
         self.pages.written(&self.header)
+    }
+
+    /// What the commit of the last statement left beside the file: the
+    /// rollback journal the mode keeps, and nothing where the mode
+    /// keeps none.
+    #[must_use]
+    pub fn journal(&self) -> Option<&[u8]> {
+        self.journal.as_deref()
+    }
+
+    /// The log the commits wrote their frames into, where the file is
+    /// in write-ahead logging mode.
+    #[must_use]
+    pub fn log(&self) -> Option<&[u8]> {
+        self.log.as_ref().map(Log::bytes)
     }
 
     /// Runs one statement, which is one transaction.
@@ -86,6 +188,9 @@ impl Writer {
     ///
     /// [`Error`] names what it could not read, answer or write.
     pub fn run(&mut self, sql: &[u8]) -> Result<(), Error> {
+        // The header as the transaction begins, which is the one the
+        // record of page one in the journal holds.
+        let was = self.header;
         self.pages.begin();
         if let Ok((arena, definition)) = crate::parse::definition(sql) {
             self.define(&arena, definition, sql)?;
@@ -100,8 +205,24 @@ impl Writer {
         // A statement that wrote no page is one the commit has nothing
         // to write for, so the change counter stands where it stood.
         if self.pages.changed() {
-            self.header.change_counter = self.header.change_counter.saturating_add(1);
-            self.header.version_valid_for = self.header.change_counter;
+            self.header.pages = self.pages.count();
+            (self.header.freelist, self.header.freelist_pages) = self.pages.freelist();
+            // `pager_write_changecounter`: a frame of page one holds
+            // the counter the file holds and one, and no checkpoint
+            // writes the file, so every commit writes the same counter
+            // there. A commit that writes the file itself carries the
+            // counter on.
+            if let Some(log) = &mut self.log {
+                let mut now = self.header;
+                now.change_counter = now.change_counter.saturating_add(1);
+                now.version_valid_for = now.change_counter;
+                log.commit(&self.pages.frames(&now), self.pages.count());
+            } else {
+                self.header.change_counter = self.header.change_counter.saturating_add(1);
+                self.header.version_valid_for = self.header.change_counter;
+                let written = self.pages.journal(&was, self.nonce, self.sector);
+                self.journal = crate::journal::committed(&written, self.mode);
+            }
         }
         Ok(())
     }
@@ -157,7 +278,7 @@ impl Writer {
             .map(|span: &Span| crate::schema::dequote(span.text(sql)))
             .collect();
         let (root, alias, affinities, rows) = {
-            let bytes = self.written();
+            let bytes = self.image();
             let database = Database::open(&bytes)?;
             let (table, root) = database.table(&name).ok_or(Error::Unsupported)?;
             if table.without_rowid {
@@ -312,7 +433,7 @@ impl Writer {
     ) -> Result<(), Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
         let (root, keys) = {
-            let bytes = self.written();
+            let bytes = self.image();
             let database = Database::open(&bytes)?;
             let (table, root) = database.table(&name).ok_or(Error::NoTable)?;
             let rows = database.rows_of(&name)?;
@@ -360,7 +481,7 @@ impl Writer {
         let name = crate::schema::dequote(statement.name.text(sql));
         let sets = arena.sets(statement.sets);
         let (root, alias, affinities, written) = {
-            let bytes = self.written();
+            let bytes = self.image();
             let database = Database::open(&bytes)?;
             let (table, root) = database.table(&name).ok_or(Error::NoTable)?;
             let places: Vec<Option<usize>> = sets

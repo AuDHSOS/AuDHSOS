@@ -108,6 +108,13 @@ impl Pages {
         u32::try_from(self.held.len()).unwrap_or(0)
     }
 
+    /// The first page of the free list and how many pages lie on it,
+    /// which is what the header of the file says.
+    #[must_use]
+    pub const fn freelist(&self) -> (u32, u32) {
+        (self.freelist, self.freelist_count)
+    }
+
     /// Bytes of every page the b-tree may use.
     #[must_use]
     pub const fn usable(&self) -> usize {
@@ -495,9 +502,14 @@ impl Pages {
     /// pages the database has, because the commit writes that count
     /// into page one along with the change counter. `now` is the header
     /// the commit writes, which this crate keeps beside the pages
-    /// rather than on page one.
+    /// rather than on page one; the page count and the free list of it
+    /// are the ones the pages hold, whatever the caller's header says.
     #[must_use]
     pub fn frames(&self, now: &Header) -> Vec<(u32, Vec<u8>)> {
+        let mut now = *now;
+        now.pages = self.count();
+        now.freelist = self.freelist;
+        now.freelist_pages = self.freelist_count;
         let mut numbers: Vec<u32> = (1..=self.count())
             .filter(|number| {
                 let at = size(u64::from(*number)).saturating_sub(1);

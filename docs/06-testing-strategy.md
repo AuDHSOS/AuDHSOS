@@ -4155,6 +4155,25 @@ D-174, document 16 step Q8. `UPDATE` run from its text.
   key written as text that is not a number, a `WITH` before the
   `UPDATE`, a `SET` without an `=`, and text after the statement.
 
+### 6.6.115 The journal mode a statement commits under (`db-sqlite`)
+
+D-175, document 16 section 16.11. The journal-mode dimension of the
+matrix over the write path.
+
+- `change::Writer` runs the same three statements under `delete`,
+  `truncate`, `persist`, `memory` and `off`, and writes `emptied.db`
+  under every one of them, so the mode changes what lies beside the file
+  and not what is in it.
+- What each mode leaves: nothing for `delete`, `memory` and `off`, an
+  empty file for `truncate`, and `journalled.db-journal` byte for byte
+  for `persist`.
+- Under `wal` the file stays as `PRAGMA journal_mode=wal` left it, the
+  three statements are three transactions of the log, and the log is
+  `logging.db-wal` byte for byte.
+- The counter a frame of page one carries is the counter the file
+  carries and one, because no checkpoint writes the file, which is what
+  the second and third transactions of the log show.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
