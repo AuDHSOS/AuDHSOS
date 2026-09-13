@@ -218,13 +218,13 @@ N|t	R|'A'	R|'a'	R|'a'	R|'b'
 N|t	R|'A'	R|'b'
 !	near "LIMIT": syntax error
 N|1	R|1
-N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|1|'one'|4|'B4'	R|1|'one'|NULL|'Bn'	R|2|'two'|1|'B1'	R|2|'two'|1|'B1b'	R|2|'two'|4|'B4'	R|2|'two'|NULL|'Bn'	R|3|NULL|1|'B1'	R|3|NULL|1|'B1b'	R|3|NULL|4|'B4'	R|3|NULL|NULL|'Bn'
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|1|'one'|4|'B4'	R|1|'one'|NULL|'Bn'	R|1|'one'|-9223372036854775808|'Bmin'	R|2|'two'|1|'B1'	R|2|'two'|1|'B1b'	R|2|'two'|4|'B4'	R|2|'two'|NULL|'Bn'	R|2|'two'|-9223372036854775808|'Bmin'	R|3|NULL|1|'B1'	R|3|NULL|1|'B1b'	R|3|NULL|4|'B4'	R|3|NULL|NULL|'Bn'	R|3|NULL|-9223372036854775808|'Bmin'
 N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'
 N|x|y|z	R|1|'one'|'B1'	R|1|'one'|'B1b'
 N|x|y|z	R|1|'one'|'B1'	R|1|'one'|'B1b'
 N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|2|'two'|NULL|NULL	R|3|NULL|NULL|NULL
 N|x|y|z	R|1|'one'|'B1'	R|1|'one'|'B1b'	R|2|'two'|NULL	R|3|NULL|NULL
-N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|1|'one'|4|'B4'	R|1|'one'|NULL|'Bn'	R|2|'two'|1|'B1'	R|2|'two'|1|'B1b'	R|2|'two'|4|'B4'	R|2|'two'|NULL|'Bn'	R|3|NULL|1|'B1'	R|3|NULL|1|'B1b'	R|3|NULL|4|'B4'	R|3|NULL|NULL|'Bn'
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|1|'one'|4|'B4'	R|1|'one'|NULL|'Bn'	R|1|'one'|-9223372036854775808|'Bmin'	R|2|'two'|1|'B1'	R|2|'two'|1|'B1b'	R|2|'two'|4|'B4'	R|2|'two'|NULL|'Bn'	R|2|'two'|-9223372036854775808|'Bmin'	R|3|NULL|1|'B1'	R|3|NULL|1|'B1b'	R|3|NULL|4|'B4'	R|3|NULL|NULL|'Bn'	R|3|NULL|-9223372036854775808|'Bmin'
 N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'
 N|x|z	R|1|'B1'	R|1|'B1b'
 N|x|z	R|1|'B1'	R|1|'B1b'
@@ -245,13 +245,28 @@ N|x|y|x|z	R|1|'one'|NULL|NULL	R|2|'two'|NULL|NULL	R|3|NULL|NULL|NULL
 N|x|y|x|z|y|w
 N|x|count(*)	R|1|2	R|2|1	R|3|1
 N|count(*)|max(b.z)	R|2|'B1b'
-N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|NULL|NULL|4|'B4'	R|NULL|NULL|NULL|'Bn'
-N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|2|'two'|NULL|NULL	R|3|NULL|NULL|NULL	R|NULL|NULL|4|'B4'	R|NULL|NULL|NULL|'Bn'
-N|x|y|x|z	R|1|'one'|NULL|'Bn'	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|1|'one'|4|'B4'	R|2|'two'|NULL|'Bn'	R|2|'two'|1|'B1'	R|2|'two'|1|'B1b'	R|2|'two'|4|'B4'	R|3|NULL|NULL|'Bn'	R|3|NULL|1|'B1'	R|3|NULL|1|'B1b'	R|3|NULL|4|'B4'
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|NULL|NULL|4|'B4'	R|NULL|NULL|NULL|'Bn'	R|NULL|NULL|-9223372036854775808|'Bmin'
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|2|'two'|NULL|NULL	R|3|NULL|NULL|NULL	R|NULL|NULL|4|'B4'	R|NULL|NULL|NULL|'Bn'	R|NULL|NULL|-9223372036854775808|'Bmin'
+N|x|y|x|z	R|1|'one'|NULL|'Bn'	R|1|'one'|-9223372036854775808|'Bmin'	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|1|'one'|4|'B4'	R|2|'two'|NULL|'Bn'	R|2|'two'|-9223372036854775808|'Bmin'	R|2|'two'|1|'B1'	R|2|'two'|1|'B1b'	R|2|'two'|4|'B4'	R|3|NULL|NULL|'Bn'	R|3|NULL|-9223372036854775808|'Bmin'	R|3|NULL|1|'B1'	R|3|NULL|1|'B1b'	R|3|NULL|4|'B4'
 !	SELECTs to the left and right of UNION do not have the same number of result columns
 N|x	R|1	R|2	R|3
-N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|1|'one'|4|'B4'	R|1|'one'|NULL|'Bn'	R|2|'two'|1|'B1'	R|2|'two'|1|'B1b'	R|2|'two'|4|'B4'	R|2|'two'|NULL|'Bn'	R|3|NULL|1|'B1'	R|3|NULL|1|'B1b'	R|3|NULL|4|'B4'	R|3|NULL|NULL|'Bn'
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|1|'one'|4|'B4'	R|1|'one'|NULL|'Bn'	R|1|'one'|-9223372036854775808|'Bmin'	R|2|'two'|1|'B1'	R|2|'two'|1|'B1b'	R|2|'two'|4|'B4'	R|2|'two'|NULL|'Bn'	R|2|'two'|-9223372036854775808|'Bmin'	R|3|NULL|1|'B1'	R|3|NULL|1|'B1b'	R|3|NULL|4|'B4'	R|3|NULL|NULL|'Bn'	R|3|NULL|-9223372036854775808|'Bmin'
 !	no such table: nosuch
 !	a NATURAL join may not have an ON or USING clause
 !	cannot join using column z - column not present in both tables
 !	no tables specified
+N|x|y|z	R|1|'one'|'B1'	R|1|'one'|'B1b'	R|4|NULL|'B4'	R|NULL|NULL|'Bn'	R|-9223372036854775808|NULL|'Bmin'
+N|x|y|z	R|1|'one'|'B1'	R|1|'one'|'B1b'	R|2|'two'|NULL	R|3|NULL|NULL	R|4|NULL|'B4'	R|NULL|NULL|'Bn'	R|-9223372036854775808|NULL|'Bmin'
+N|x|x|x	R|1|1|1	R|1|1|1	R|NULL|4|4	R|NULL|NULL|NULL	R|NULL|-9223372036854775808|-9223372036854775808
+N|x|y|x|z	R|NULL|NULL|1|'B1'	R|NULL|NULL|1|'B1b'	R|NULL|NULL|4|'B4'	R|NULL|NULL|NULL|'Bn'	R|NULL|NULL|-9223372036854775808|'Bmin'
+N|x|y|x|z	R|1|'one'|NULL|NULL	R|2|'two'|NULL|NULL	R|3|NULL|NULL|NULL	R|NULL|NULL|1|'B1'	R|NULL|NULL|1|'B1b'	R|NULL|NULL|4|'B4'	R|NULL|NULL|NULL|'Bn'	R|NULL|NULL|-9223372036854775808|'Bmin'
+N|x|y|x|z|y|w
+N|x|y|x|z|y|w	R|NULL|NULL|NULL|NULL|'ONE'|10	R|NULL|NULL|NULL|NULL|'two'|20
+N|x|y|x|z|y|w	R|1|'one'|1|'B1'|NULL|NULL	R|1|'one'|1|'B1b'|NULL|NULL	R|NULL|NULL|4|'B4'|NULL|NULL	R|NULL|NULL|NULL|'Bn'|NULL|NULL	R|NULL|NULL|-9223372036854775808|'Bmin'|NULL|NULL
+N|x|y|z	R|1|'one'|'B1'	R|1|'one'|'B1b'	R|4|NULL|'B4'	R|NULL|NULL|'Bn'	R|-9223372036854775808|NULL|'Bmin'
+N|count(*)|count(a.x)	R|5|2
+N|x|y|x|z	R|NULL|NULL|NULL|'Bn'	R|NULL|NULL|-9223372036854775808|'Bmin'	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|NULL|NULL|4|'B4'
+N|x|y|x|z	R|NULL|NULL|4|'B4'	R|NULL|NULL|NULL|'Bn'	R|NULL|NULL|-9223372036854775808|'Bmin'
+N|x|y|x|z	R|NULL|NULL|4|'B4'
+N|abs(b.x)	R|1	R|1	R|4	R|NULL	!integer overflow
+N|abs(b.x)	R|1	R|1

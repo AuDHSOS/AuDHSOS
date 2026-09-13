@@ -388,11 +388,6 @@ impl<'a> Database<'a> {
             }
             let stored = self.find(name.text(sql)).ok_or(Error::NoTable)?;
             readable(stored)?;
-            if matches!(source.join.kind, JoinKind::Right | JoinKind::Full) {
-                // A join that keeps the rows of the table read last is
-                // a later step.
-                return Err(Error::Unsupported);
-            }
             let written: Vec<Vec<u8>> = arena
                 .names(source.using)
                 .iter()
@@ -447,11 +442,26 @@ impl<'a> Database<'a> {
             // A statement with no `FROM` reads one row of nothing.
             return each(&cursor);
         }
-        self.nest(sides, 0, &mut cursor, arena, sql, each)
+        let mut kept: Vec<Vec<i64>> = alloc::vec![Vec::new(); sides.len()];
+        self.nest(sides, 0, &mut cursor, arena, sql, each, &mut kept)?;
+        // Then the rows a `RIGHT` or a `FULL` join keeps that the nest
+        // matched nothing to, with the levels before them empty. They
+        // come after every row the nest answered, which is the order
+        // `sqlite3WhereRightJoinLoop` walks them in.
+        for (at, side) in sides.iter().enumerate() {
+            if matches!(side.kind, JoinKind::Right | JoinKind::Full) {
+                self.spare(sides, at, side, &kept, &mut cursor, arena, sql, each)?;
+            }
+        }
+        Ok(())
     }
 
     /// One level of the nest: every row of `sides[at]` against what the
     /// levels above it hold.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the tables, where the walk stands, what it holds, the statement, and what it has matched"
+    )]
     fn nest<'b>(
         &self,
         sides: &'b [Side<'b>],
@@ -460,6 +470,7 @@ impl<'a> Database<'a> {
         arena: &Arena,
         sql: &[u8],
         each: &mut dyn FnMut(&Cursor<'b>) -> Result<(), Error>,
+        kept: &mut [Vec<i64>],
     ) -> Result<(), Error> {
         let Some(side) = sides.get(at) else {
             return each(cursor);
@@ -480,19 +491,79 @@ impl<'a> Database<'a> {
             let attached = attached(arena, side, cursor, sql)?;
             if attached {
                 any = true;
-                self.nest(sides, deeper, cursor, arena, sql, each)?;
+                mark(kept, at, row.rowid);
+                self.nest(sides, deeper, cursor, arena, sql, each, kept)?;
             }
             cursor.held.pop();
         }
-        if !any && side.kind == JoinKind::Left {
+        if !any && matches!(side.kind, JoinKind::Left | JoinKind::Full) {
             // A `LEFT JOIN` answers the row on the left once with
             // nothing on the right where nothing on the right matched.
             cursor
                 .held
                 .push(Held::empty(&side.stored.table, side.alias, &side.using));
-            self.nest(sides, deeper, cursor, arena, sql, each)?;
+            self.nest(sides, deeper, cursor, arena, sql, each, kept)?;
             cursor.held.pop();
         }
+        Ok(())
+    }
+
+    /// The rows of `sides[at]` the nest matched nothing to, each with the
+    /// levels before it empty and the levels after it walked as usual.
+    ///
+    /// Finding whether a row was matched is a walk of what was: O(n·m)
+    /// for `n` rows against `m` matches.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the tables, which of them keeps its rows, what the nest matched, and the statement"
+    )]
+    fn spare<'b>(
+        &self,
+        sides: &'b [Side<'b>],
+        at: usize,
+        side: &'b Side<'b>,
+        kept: &[Vec<i64>],
+        cursor: &mut Cursor<'b>,
+        arena: &Arena,
+        sql: &[u8],
+        each: &mut dyn FnMut(&Cursor<'b>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let matched = kept.get(at).map_or(&[][..], Vec::as_slice);
+        cursor.held.clear();
+        for before in sides.iter().take(at) {
+            cursor.held.push(Held::empty(
+                &before.stored.table,
+                before.alias,
+                &before.using,
+            ));
+        }
+        let mut ignored: Vec<Vec<i64>> = alloc::vec![Vec::new(); sides.len()];
+        let mut payload = Vec::new();
+        for row in self.image.rows(side.stored.root) {
+            let row = row?;
+            if matched.contains(&row.rowid) {
+                continue;
+            }
+            read_payload(&self.image, &row.payload, &mut payload)?;
+            cursor.held.push(Held {
+                table: &side.stored.table,
+                alias: side.alias,
+                using: &side.using,
+                rowid: Some(row.rowid),
+                values: values_of(&payload, &side.stored.table, row.rowid, self.encoding)?,
+            });
+            self.nest(
+                sides,
+                at.saturating_add(1),
+                cursor,
+                arena,
+                sql,
+                each,
+                &mut ignored,
+            )?;
+            cursor.held.pop();
+        }
+        cursor.held.clear();
         Ok(())
     }
 
@@ -650,6 +721,13 @@ fn equal(cursor: &Cursor<'_>, name: &[u8]) -> bool {
             compare(&left, &right, collation) == core::cmp::Ordering::Equal
         },
     )
+}
+
+/// Records that the row `rowid` of the table at `at` was matched.
+fn mark(kept: &mut [Vec<i64>], at: usize, rowid: i64) {
+    for slot in kept.iter_mut().skip(at).take(1) {
+        slot.push(rowid);
+    }
 }
 
 /// Whether the rows of a table are ones this engine reads.
@@ -983,10 +1061,10 @@ fn project(
     for column in arena.results(select.columns) {
         match *column {
             ResultColumn::Star => {
-                for held in &cursor.held {
+                for (at, held) in cursor.held.iter().enumerate() {
                     held.each(|name, value| {
                         if !held.hides(name) {
-                            out.push(value.clone());
+                            out.push(cursor.coalesced(at, name, value));
                         }
                     });
                 }
@@ -1525,6 +1603,26 @@ struct Cursor<'a> {
 }
 
 impl Cursor<'_> {
+    /// What the side at `at` answers for `column`, filled from the
+    /// sides a `USING` or a `NATURAL` matched to it where its own value
+    /// is `NULL`.
+    ///
+    /// This is the `coalesce` `sqlite3ProcessJoin` writes around such a
+    /// column, and it shows in a `RIGHT JOIN`, where the side written
+    /// first is the one that holds nothing.
+    fn coalesced(&self, at: usize, column: &[u8], value: &Value) -> Value {
+        if *value != Value::Null {
+            return value.clone();
+        }
+        self.held
+            .iter()
+            .skip(at.saturating_add(1))
+            .filter(|held| held.hides(column))
+            .filter_map(|held| held.column(column).map(|(value, ..)| value))
+            .find(|filled| *filled != Value::Null)
+            .unwrap_or(Value::Null)
+    }
+
     /// A cursor that holds no table, which is a statement with no
     /// `FROM` before it reads its one row of nothing.
     const fn new(collation: Collation, encoding: Encoding) -> Self {
@@ -1562,8 +1660,8 @@ impl eval::Row for Cursor<'_> {
         if schema.is_some_and(|named| !is_main(named)) {
             return None;
         }
-        let mut found = None;
-        for held in &self.held {
+        let mut found: Option<(usize, Value, Affinity, Collation)> = None;
+        for (at, held) in self.held.iter().enumerate() {
             match table {
                 Some(named) if !held.named(named) => continue,
                 // A bare name does not reach the side a `USING` or a
@@ -1571,7 +1669,7 @@ impl eval::Row for Cursor<'_> {
                 None if held.hides(column) => continue,
                 _ => {}
             }
-            let Some(answer) = held.column(column) else {
+            let Some((value, affinity, collation)) = held.column(column) else {
                 continue;
             };
             if found.is_some() {
@@ -1579,8 +1677,15 @@ impl eval::Row for Cursor<'_> {
                 // refusal and not a choice.
                 return None;
             }
-            found = Some(answer);
+            found = Some((at, value, affinity, collation));
         }
-        found
+        let (at, value, affinity, collation) = found?;
+        // A name written with its table is that table's value; only a
+        // bare one is filled from the side a `USING` matched to it.
+        let value = match table {
+            Some(_) => value,
+            None => self.coalesced(at, column, &value),
+        };
+        Some((value, affinity, collation))
     }
 }

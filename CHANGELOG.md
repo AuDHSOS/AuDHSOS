@@ -7,14 +7,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
-- Joins in `db-sqlite`: a comma, `JOIN`, `INNER`, `CROSS`, `LEFT`, `ON`,
-  `USING` and `NATURAL`, answered as the loops nested. An `ON` is read at
-  the level it was written on, so a `LEFT JOIN` keeps the row on the left
-  where nothing on the right matched; a `USING` compares under the
-  collation of the side written first; a bare name does not reach the
+- `RIGHT JOIN` and `FULL JOIN` in `db-sqlite`, and document 16 rewritten
+  into the planning form of document 15: terms, goal, what is built, what
+  is missing, four numbered decisions, one section per step with Status,
+  Depends on, Size, Needs, Does and Done when, and a table of risks.
+- Joins in `db-sqlite`: a comma, `JOIN`, `INNER`, `CROSS`, `LEFT`,
+  `RIGHT`, `FULL`, `ON`, `USING` and `NATURAL`, answered as the loops
+  nested. An `ON` is read at the level it was written on, so a `LEFT
+  JOIN` keeps the row on the left where nothing on the right matched;
+  a `RIGHT` or a `FULL` join adds a pass after the nest for the rows it
+  matched nothing to; a `USING` compares under the collation of the side
+  written first and answers the first side holding something, which is
+  the `coalesce` SQLite writes around it; a bare name does not reach the
   side a `USING` matched; and a name two tables answer is refused rather
-  than chosen between. A join that keeps the rows of the table read last
-  — `RIGHT` and `FULL` — still refuses by name.
+  than chosen between.
 - Statements put together in `db-sqlite`: `UNION`, `UNION ALL`,
   `INTERSECT`, `EXCEPT`, `VALUES`, and a table written with `main` in
   front of it. The set operators are the merge SQLite compiles rather
@@ -185,7 +191,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   tokens partition the bytes, and none of them is empty. D-141, catalog
   6.6.76.
 
-- The nine rules document 16, section 16.3, now states, which the port is
+- The nine rules document 16, section 16.4, now states, which the port is
   written to rather than judged by afterwards: sans-I/O, one direction of
   dependency, reading without copying, refusals as data, total functions,
   bounded work, determinism, a recorded oracle rather than a trusted one,
@@ -194,7 +200,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 - `db-sqlite` is held to complete coverage and meets it: every line, every
   region and every branch, under both instrumentations, which the policy
   table now states as `COMPLETE` rather than as the repository's floor of
-  91 and 86 percent. What it took is the rule document 16, section 16.7,
+  91 and 86 percent. What it took is the rule document 16, decision D4,
   sets: a refusal no input can reach is a defect, so the unreachable ones
   were removed — the reads inside a hundred-byte header that cannot come
   back empty, the overflow arithmetic that cannot overflow, the cell slice
@@ -207,7 +213,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   so that asking a leaf for a child is a refusal a test can make rather
   than a branch no input reaches.
 
-- The configuration matrix of document 16, section 16.6, as a test: the
+- The configuration matrix of document 16, section 16.11, as a test: the
   same three rows and the same index written by the shell under eleven
   configurations — four page sizes, three text encodings, reserved space,
   a file that has been in write-ahead logging, and both vacuum settings —

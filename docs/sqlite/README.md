@@ -52,7 +52,7 @@ copy — and there is nothing further to state.
   `keyword.rs` is that list; the source of the words is
   `tool/mkkeywordhash.c` of the checkout under `research/`, because the
   page names them without saying which token each becomes.
-- `testing.html` is the standard document 16, section 16.7, holds this
+- `testing.html` is the standard document 16, decision D4, holds this
   port to: branch coverage and MC/DC over the whole of it, with the
   reasoning for why that is the bar.
 

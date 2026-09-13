@@ -82,10 +82,10 @@ rm -f "$out/small.db" "$out/page512.db" "$out/utf16.db" "$out/overflow.db" \
 "$sqlite" "$out/wide16.db" "PRAGMA encoding='UTF-16le'; CREATE TABLE s(t TEXT); INSERT INTO s VALUES (char(57344)), (char(65536)), ('z'), (char(65533)), (char(55296)), (char(65536)||'a'); CREATE TABLE n(t TEXT COLLATE NOCASE); INSERT INTO n VALUES ('A'),('b'),('a');"
 "$sqlite" "$out/keys.db" "CREATE TABLE r(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO r VALUES (5,'five'),(2,'two'),(9,'nine'); CREATE TABLE w(a TEXT, b INT, PRIMARY KEY(a)) WITHOUT ROWID; INSERT INTO w VALUES ('x',1),('y',2); CREATE TABLE d(k INTEGER PRIMARY KEY DESC, v); INSERT INTO d VALUES (1,'a');"
 "$sqlite" "$out/generated.db" "CREATE TABLE g(a, b AS (a+1), c AS (a*2) STORED); INSERT INTO g(a) VALUES (1),(2); CREATE TABLE h(a, c AS (a*2) STORED); INSERT INTO h(a) VALUES (3),(4);"
-"$sqlite" "$out/joins.db" "CREATE TABLE a(x INTEGER, y TEXT); INSERT INTO a VALUES (1,'one'),(2,'two'),(3,NULL); CREATE TABLE b(x INTEGER, z TEXT); INSERT INTO b VALUES (1,'B1'),(1,'B1b'),(4,'B4'),(NULL,'Bn'); CREATE TABLE c(y TEXT COLLATE NOCASE, w INTEGER); INSERT INTO c VALUES ('ONE',10),('two',20);"
+"$sqlite" "$out/joins.db" "CREATE TABLE a(x INTEGER, y TEXT); INSERT INTO a VALUES (1,'one'),(2,'two'),(3,NULL); CREATE TABLE b(x INTEGER, z TEXT); INSERT INTO b VALUES (1,'B1'),(1,'B1b'),(4,'B4'),(NULL,'Bn'),(-9223372036854775808,'Bmin'); CREATE TABLE c(y TEXT COLLATE NOCASE, w INTEGER); INSERT INTO c VALUES ('ONE',10),('two',20);"
 "$sqlite" "$out/indexed.db" "CREATE TABLE k(a INTEGER, b TEXT); CREATE INDEX ka ON k(a); CREATE UNIQUE INDEX kb ON k(b); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<100) INSERT INTO k SELECT i, 'v' || i FROM c;"
 
-# The matrix of document 16, section 16.6: the same rows written under
+# The matrix of document 16, section 16.11: the same rows written under
 # every configuration the shell can write them under.
 fixture m-utf8-512.db        "" "PRAGMA page_size=512;"
 fixture m-utf8-1024.db       "" "PRAGMA page_size=1024;"

@@ -69,12 +69,13 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
             sql.extend_from_slice(&quoted);
             sql.extend_from_slice(b" LIMIT 64");
             answers(&database, &sql);
-            // A join, which is the loops nested.
+            // A join, which is the loops nested, and the pass over the
+            // rows nothing matched that a `FULL` join adds to them.
             let mut sql = b"SELECT * FROM ".to_vec();
             sql.extend_from_slice(&quoted);
-            sql.extend_from_slice(b" AS p JOIN ");
+            sql.extend_from_slice(b" AS p FULL JOIN ");
             sql.extend_from_slice(&quoted);
-            sql.extend_from_slice(b" AS q ON p.rowid=q.rowid LIMIT 16");
+            sql.extend_from_slice(b" AS q ON p.rowid=q.rowid+1 LIMIT 16");
             answers(&database, &sql);
         }
     }

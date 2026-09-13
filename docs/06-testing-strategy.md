@@ -124,13 +124,13 @@ within each target and skipping targets whose corpus directory is absent.
   `xtask` and `docpdf`, which are reported only. CI fails below the
   thresholds. Uncovered lines must be justified in review. A crate named
   in `COMPLETE` is held to all of it instead — 100 percent of lines and of
-  branches — which is what document 16, section 16.7, asks of the SQLite
+  branches — which is what document 16, decision D4, asks of the SQLite
   port and what `db-sqlite` meets.
 - Condition coverage: `cargo xtask coverage --condition` builds the same
   tests with `-Z coverage-options=branch,condition`, which counts every
   operand of a compound decision and not only the decision. The same
   thresholds apply to that column. It is not a step of `check`: it is the
-  measurement document 16, section 16.7, holds the SQLite port to, and the
+  measurement document 16, decision D4, holds the SQLite port to, and the
   reason it is not MC/DC is stated there.
 - QEMU coverage is not measured. Each adapter crate keeps a table that maps
   every public function to at least one QEMU test. `cargo xtask
@@ -3012,7 +3012,7 @@ it.
   rather than filled; a root that names an index tree is refused by a walk
   of rows, and so is a root the file does not have.
 
-- The configuration matrix of document 16, section 16.6: the same three
+- The configuration matrix of document 16, section 16.11: the same three
   rows and the same index, written by the shell under eleven
   configurations — page sizes 512, 1024, 4096 and 65536, the three text
   encodings, 32 reserved bytes per page, a file that has been in
@@ -3339,7 +3339,7 @@ tree: the first statement this port answers end to end.
   statement per line, and `fixtures/query.golden` is the columns SQLite
   named and the rows it answered, each value quoted, written by
   `tools/sqlite-oracle.c`. The comparison is the name of every column
-  and the value of every field, over two hundred and fifty-seven statements
+  and the value of every field, over two hundred and seventy-two statements
   against fourteen files — every page size of the matrix, reserved space, a file that has
   been through write-ahead logging, both kinds of auto-vacuum, a tree
   with an interior page, a row on overflow pages, a key that is the
@@ -3352,10 +3352,10 @@ tree: the first statement this port answers end to end.
   NOCASE` whole, because a collation written around a column stops it
   being one.
 - What the engine refuses by name is counted rather than asserted: a
-  join that keeps the rows of the table read last, a statement inside a
-  `FROM`, a `WITH`, a table whose rows live in the key's own tree, a
-  column that is computed and not stored, and a `GROUP BY` that counts to
-  a `*`. The count is held down so that it can only fall.
+  statement inside a `FROM`, a `WITH`, a table whose rows live in the
+  key's own tree, a column that is computed and not stored, and a
+  `GROUP BY` that counts to a `*`. The count is held down so that it can
+  only fall.
 - Text in UTF-16 is answered as well as text in UTF-8, both ways round,
   and the three places the stored encoding shows through are tested
   under both: `hex`, `octet_length` and a cast to a blob. So is the one
@@ -3463,12 +3463,20 @@ through the same recorded oracle.
 
 D-150. `fixtures/joins.db` holds three tables — two sharing a column
 named `x`, a third sharing one named `y` and collating it without case —
-and thirty-six statements over them.
+and fifty-one statements over them.
 
 - Every way of writing one: a comma, `JOIN`, `INNER JOIN`, `CROSS JOIN`,
-  `LEFT JOIN`, `ON`, `USING` and `NATURAL`, each against the same rows,
-  with `NULL`s on both sides so that a key that matches nothing is
-  tested as well as one that matches twice.
+  `LEFT JOIN`, `RIGHT JOIN`, `FULL JOIN`, `ON`, `USING` and `NATURAL`,
+  each against the same rows, with `NULL`s on both sides so that a key
+  that matches nothing is tested as well as one that matches twice.
+- A `RIGHT` or a `FULL` join answers the rows it matched nothing to
+  after every row the nest answered, which is the order SQLite walks
+  them in; the cases hold that order, and hold what a third table joined
+  after one of them answers.
+- A `USING` column of an outer join answers the first side holding
+  something rather than the side written first, which is the `coalesce`
+  `sqlite3ProcessJoin` writes around it: `SELECT a.x, b.x, x FROM a
+  RIGHT JOIN b USING(x)` answers `NULL`, 4, 4 for one row.
 - What a `*` answers, which is not the columns of the tables put
   together: a `USING` or a `NATURAL` answers the column it matched once,
   and `b.*` answers all of `b`'s. Two tables of one name make every
@@ -3480,12 +3488,11 @@ and thirty-six statements over them.
 - A bare name does not reach the side a `USING` matched, and a name two
   tables answer is refused rather than chosen between, `rowid` included.
 - The refusals: a `NATURAL` with an `ON` or a `USING` written on it as
-  well, a `USING` naming a column the left or the right does not hold,
-  and a join that keeps the rows of the table read last, which is a
-  later step.
-- `sqlite_image` joins every fuzzed table to itself on its key, so that
-  the nest is walked over a file that lies as well as over one that does
-  not.
+  well, and a `USING` naming a column the left or the right does not
+  hold.
+- `sqlite_image` joins every fuzzed table to itself with a `FULL JOIN`
+  on a key that matches every row but one, so that the nest and the pass
+  over what it matched nothing to are both walked over a file that lies.
 
 ## 6.7 CI pipeline
 

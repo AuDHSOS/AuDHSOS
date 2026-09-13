@@ -86,7 +86,8 @@ pub(super) const WIDE16: &[u8] = include_bytes!("fixtures/wide16.db");
 /// that shares one named `y` and collates it without case.
 ///
 /// `CREATE TABLE a(x INTEGER, y TEXT); CREATE TABLE b(x INTEGER, z
-/// TEXT); CREATE TABLE c(y TEXT COLLATE NOCASE, w INTEGER);`
+/// TEXT); CREATE TABLE c(y TEXT COLLATE NOCASE, w INTEGER);` `b` holds
+/// the smallest integer, which `abs` has no positive for.
 pub(super) const JOINS: &[u8] = include_bytes!("fixtures/joins.db");
 
 /// A varint, written the way section 1.6 describes, so that the reader is

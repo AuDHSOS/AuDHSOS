@@ -1,154 +1,224 @@
 # 16. SQLite in Rust
 
-## 16.1 What is being built
+## 16.0 How to read this document
 
-A database engine in this repository's Rust that is SQLite: the same file
-format, the same SQL, the same answers. It reads a file the C library
-wrote, and the C library reads what it writes. It is written under the
-rules every other crate here follows — no dependency outside the
-workspace, `forbid(unsafe_code)` in the logic, host tests under a coverage
-gate — and it is checked against the C library rather than against a
-reading of the documentation.
+Every step below has the same six parts, in the same order: Status,
+Depends on, Size, Needs, Does, Done when. A step that leaves something
+nameable behind carries Produces between Does and Done when. Nothing is
+implied. Every term is defined in 16.1 and has exactly one name, used
+everywhere.
 
-Why this system wants one: a file system is what document 2 gives
-userland, and the next thing a program asks for after a file is a table.
-D-53 put the file system logic in a crate so that the server and the image
-writer share one implementation of the format; a database is the same
-argument one layer up. The port is also the largest test this project's
-tooling has been given, and the tooling is what makes it possible: the
-`sqlite3` shell of `sh tools/sqlite.sh` is a reference implementation that
-answers questions, and `norec` already asks it some.
+## 16.1 Terms
 
-## 16.2 What "the same" means
+| Term | Meaning |
+|------|---------|
+| the engine | `crates/db/sqlite`, the crate this document is about. |
+| the C library | SQLite 3.53.4, checked out under `research/sqlite` by `sh tools/sqlite.sh`. |
+| the shell | `research/sqlite/sqlite3`, built by the same script. |
+| the oracle | `tools/sqlite-oracle.c`, a program linked against the amalgamation that answers what no SQL statement can ask. |
+| corpus | A file of cases, one per line or one per NUL, committed under `crates/db/sqlite/src/tests/fixtures`. |
+| golden | What the C library answered for a corpus, committed beside it. |
+| recorded oracle | A corpus and its golden together. The comparison runs where SQLite is not installed. |
+| fixture | A database file the shell wrote, committed under the same directory. |
+| the matrix | The seven run-time dimensions of 16.11. |
+| differential execution | The same statement put to both engines and the rows compared. |
+| storage class | One of `NULL`, `INTEGER`, `REAL`, `TEXT`, `BLOB`, which is what a value is. |
+| affinity | What a column converts a value to before storing or comparing it. |
+| collation | What orders two pieces of text: `BINARY`, `NOCASE`, `RTRIM`. |
+| core | One `SELECT` between the compound operators, with its own `WHERE`, `GROUP BY` and `DISTINCT`. |
+| compound | Two or more cores put together with `UNION`, `UNION ALL`, `INTERSECT` or `EXCEPT`. |
+| side | One table of a `FROM` clause, with the join that attaches it. |
+| refuse by name | Answer an error variant that names the shape, rather than answer rows that are near. |
 
-Three claims, each of them testable, and no claim beyond them.
+## 16.2 Goal
 
-- **The format.** A database this engine writes is one the C library opens
-  and reads without complaint, and the other way round, byte for byte
-  where the format fixes the bytes. `docs/sqlite/fileformat2.html` is the
-  document, and every structure cites the section it comes from.
-- **The SQL.** For a statement both engines accept, the rows come back the
-  same, in the same order where the statement orders them, with the same
-  types. Where SQLite's behaviour is unspecified, this engine matches what
-  the C library does and says so in a comment.
-- **The refusals.** A statement the C library refuses is refused here too.
-  The message need not be the same string; the error code is.
+Six things are true at the end of the track that are not true now.
 
-What is not claimed: the same query plans, the same file sizes for the
-same inserts, the same performance, or the loadable extensions.
+1. The engine reads a database the C library wrote and answers the same
+   rows for the same statements.
+2. The C library reads a database the engine wrote.
+3. SQLite's own test suite under `research/sqlite/test` runs against the
+   engine.
+4. Every fuzz target of `fuzz/` replays its corpus without a panic.
+5. The engine stands at 100 percent of lines, branches and conditions,
+   with no line exempted.
+6. Every level of the suite runs across the matrix of 16.11.
 
-## 16.3 The architecture, and its layers
+## 16.3 What "the same" means
 
-Nine rules the port is written to. They are not style; each one is what
-makes some later thing possible, and each is checkable.
+| Claim | What is tested |
+|-------|----------------|
+| The format | A database the engine writes, the C library opens and reads, and the other way round, byte for byte where the format fixes the bytes. `docs/sqlite/fileformat2.html` is the document, and every structure cites its section. |
+| The SQL | For a statement both engines accept, the rows come back the same, in the same order where the statement orders them, with the same storage classes. Where SQLite's behaviour is unspecified, the engine matches the C library and the comment says so. |
+| The refusals | A statement the C library refuses, the engine refuses. The message need not be the same string. |
 
-1. **Sans-I/O.** No layer opens a file, reads a clock, takes a lock or
-   starts a thread. A layer is a function of bytes and a state machine over
-   them; the I/O is at the edge, in whatever embeds the engine. This is
-   what `audhsos-tls` and `audhsos-ssh` already are, and it is why they can
-   be tested exhaustively on a host with no machine around them.
-2. **One direction.** Format, pager, b-tree, parser, planner, virtual
-   machine, interface: each layer knows only the ones below it. The check
-   `cargo xtask check-layering` holds the graph to the table, so a cycle
-   fails the build rather than the review.
-3. **Read without copying.** A value is a slice of the page it was stored
-   in, for as long as the page is there. The read path allocates nothing,
-   which is what lets the same code run in a kernel with no allocator and
-   in a shell with one.
-4. **Refusals are data.** Every error names the rule of the format or of
-   the language that was broken, as a variant and not a string. A caller
-   can act on it, a test can assert it, and a message can be written from
-   it in whatever language the caller prints in.
-5. **Total functions.** No panic, no unwrap, no index, no arithmetic that
-   can overflow unseen: the workspace lints forbid them, so a file that
-   lies produces a refusal and never a crash.
-6. **Bounded work.** Every walk of a structure a file describes carries its
-   own bound — the depth of a tree, the length of a chain, the size of a
-   payload — because the file chooses those numbers and the engine must
-   not be what they choose.
-7. **Determinism.** No global state, no ambient randomness, no clock. The
-   same database and the same statements answer the same rows, which is
-   what makes a differential test against the C library a test rather than
-   a hope.
-8. **The oracle is recorded, not trusted.** Where the C library is the
-   truth — the tokenizer's answers, the bytes of a file — what it answered
-   is committed beside the test, so the comparison runs where SQLite is not
-   installed. What generated it is written down; what it generated is
-   checked in.
-9. **Testing is part of the design.** Each layer is built with the test
-   that can hold it: fixtures for the format, a recorded oracle for the
-   tokenizer, differential execution for the semantics, property tests for
-   the algebra, fuzz targets for every parser, the configuration matrix of
-   16.6 for the run-time shapes, and complete coverage over all of it.
+Not claimed: the same query plans, the same file sizes for the same
+inserts, the same speed, the loadable extensions.
 
-Bottom to top, each its own crate or module, each testable without the one
-above it:
+## 16.4 The rules the port is written to
 
-1. **The format** (`db-sqlite`, reading): the header, b-tree pages, cells,
-   overflow chains, the record format. Done.
-2. **The pager**: pages in and out of a file, the rollback journal and its
-   four modes, the write-ahead log, locking, and the free list.
-3. **The b-tree writer**: insert, delete, balance, and the pointer maps
-   auto-vacuum needs.
-4. **The tokenizer and the parser**: SQL text to a syntax tree, in the
-   grammar `docs/sqlite/lang_expr.html` and its neighbours describe.
-5. **The code generator and the virtual machine**: the tree to opcodes, and
-   the register machine that runs them.
-6. **The semantics**: type affinity, the comparison and collation rules,
-   the built-in functions, `NULL` everywhere.
-7. **The interface**: prepare, step, bind, column, and the shell that drives
-   them, so that a person can type at it.
+Each rule is checkable, and each makes a later thing possible.
 
-## 16.4 The order of work
+| # | Rule | What it makes possible |
+|---|------|------------------------|
+| R1 | No layer opens a file, reads a clock, takes a lock or starts a thread. | The engine is a function of bytes, testable on a host with no machine around it, as `audhsos-tls` and `audhsos-ssh` are. |
+| R2 | Each layer of 16.10 knows only the layers below it. | `sh tools/xtask.sh check-layering` holds the graph to the table, so a cycle fails the build. |
+| R3 | A value is a slice of the page it was stored in, for as long as the page is there. | The read path allocates nothing, so the same code runs in a kernel with no allocator. |
+| R4 | Every error is a variant naming the rule of the format or of the language that was broken. | A caller acts on it, a test asserts it, and a message is written from it in any language. |
+| R5 | No panic, no unwrap, no index, no arithmetic that can overflow unseen. | A file that lies produces a refusal. The workspace lints hold it. |
+| R6 | Every walk of a structure a file describes carries its own bound. | The file chooses the depth of a tree, the length of a chain and the size of a payload; the engine chooses what it will walk. |
+| R7 | No global state, no ambient randomness, no clock. | The same database and the same statements answer the same rows, which is what makes differential execution a test. |
+| R8 | What the C library answered is committed beside the test. | The comparison runs in CI, where SQLite is not installed. |
+| R9 | Each layer is built together with the test that holds it. | Fixtures for the format, a recorded oracle for the tokenizer, differential execution for the semantics, a fuzz target per parser, the matrix for the run-time shapes. |
 
-Each step ends green: the checks pass, the coverage gate holds, and what
-the step claims is tested.
+## 16.5 What is already built
 
-| Step | What it delivers |
-|------|------------------|
-| Q1 | The format, read-only: header, pages, cells, overflow, records. **Done.** |
-| Q2 | Reading a schema into types: the `CREATE` text parsed rather than handed on, then columns, affinities, collations and the rowid rules. |
-| Q3 | The pager reading: page cache, the journal a reader must ignore, the WAL a reader must follow. |
-| Q4 | The tokenizer, the expression parser and the statement parser for the read half of SQL. **Done**, but for the window clauses. |
-| Q5 | The value semantics — storage classes, affinity, collation, and the decimal spelling of a double — and a tree walker that answers those statements from a file. **Done** for one table at a time, grouping and aggregates included. |
-| Q6 | The virtual machine, and the code generator that replaces the walker. |
-| Q7 | Writing: the b-tree writer, transactions, the rollback journal in all four modes, then the WAL. |
-| Q8 | The rest of the language: `CREATE`, `ALTER`, `DROP`, triggers, views, the built-in functions. |
-| Q9 | The configuration matrix and the test suites of 16.5 run whole. |
-| Q10 | Coverage to the standard of 16.6. |
+### The crate
 
-## 16.5 How it is tested
+| Module | What it holds | Decided in |
+|--------|---------------|------------|
+| `header`, `page`, `record`, `image`, `bytes` | The hundred-byte header, the four b-tree page types, the four cell shapes, overflow chains, the record format. | Q1 |
+| `token`, `keyword` | SQL text to tokens, the same character classes as `src/tokenize.c`. | Q4 |
+| `ast`, `parse` | Tokens to a tree: expressions, `SELECT`, `CREATE TABLE`, `CREATE INDEX`. | Q4 |
+| `schema` | The `CREATE` text of `sqlite_schema` to columns, affinities, collations and the rowid rules. | D-145, Q2 |
+| `fp`, `number` | A double as decimal text and back: `sqlite3FpDecode`, `sqlite3AtoF`, `sqlite3Atoi64`. | D-142, Q5 |
+| `value`, `utf8` | Storage classes, affinity, collation, comparison, the three text encodings. | D-143, D-147, Q5 |
+| `eval`, `func`, `agg` | An expression over a row; thirty-four scalar functions; seven aggregates. | D-143, D-144, D-148, Q5 |
+| `db` | A statement answered from a file by walking the tables once. | D-146, D-149, D-150, Q5 |
 
-Four sources of truth, in the order they were built:
+### What a statement may hold
 
-- **Fixtures the C library wrote.** A database written by the shell is the
-  format as it is. They are small, they are committed, and the statement
-  that produced each is in the test that reads it.
-- **Differential execution.** The same statement to both engines, the rows
-  compared. `norec` already drives the shell one case at a time; the same
-  harness, given a second engine, is a differential tester, and the
-  generator it has is the one that writes the cases.
-- **SQLite's own tests.** The suite under `research/sqlite/test` is TCL
-  driving a `testfixture` that links the library. Running it against this
-  engine needs a fixture that speaks the same commands; that is an adapter
-  crate (rule R4 territory: it is where the C ABI would live), and the
-  order in 16.4 puts it after the engine can answer statements at all.
-  Until then the `.test` files are read as specifications — each names the
-  behaviour it checks — and the ones that are pure SQL are run through the
-  differential harness.
-- **A program that links the C library.** `tools/sqlite-oracle.c` is
-  built against the amalgamation by `sh tools/sqlite-fixtures.sh`, asked
-  what SQLite answers, and its answers are committed. It is how a question
-  the shell cannot be asked in SQL — what text a particular double is
-  printed as — still has SQLite as its answer.
-- **Fuzzing.** The project's own engine (`crates/support/fuzz`) over every
-  parser this port has: the file format reader, the tokenizer, the
-  parser, and the record decoder, each with a corpus under `fuzz/`.
+| Clause | State |
+|--------|-------|
+| `SELECT` over one table, over none, or over several joined | answered |
+| `WHERE`, `ORDER BY`, `LIMIT`, `OFFSET`, `DISTINCT` | answered |
+| `GROUP BY`, `HAVING`, and `count`, `sum`, `total`, `avg`, `min`, `max`, `group_concat`, each with `DISTINCT` | answered |
+| `UNION`, `UNION ALL`, `INTERSECT`, `EXCEPT`, `VALUES` | answered |
+| A comma, `JOIN`, `INNER`, `CROSS`, `LEFT`, `RIGHT`, `FULL`, `ON`, `USING`, `NATURAL` | answered |
+| A table written with `main` in front of it | answered |
+| A statement inside a `FROM`, a `WITH`, a window clause | refused by name |
+| A table whose rows live in the key's own tree | refused by name |
+| A column that is computed and not stored | refused by name |
 
-## 16.6 The configuration matrix
+### What the tests hold it to
 
-A test that ran under one configuration tested one configuration. What
-varies, and what every level of the suite runs across:
+| Layer | Cases | Source |
+|-------|-------|--------|
+| Tokens | 959, of which 800 come out of SQLite's own suite | recorded oracle |
+| Expressions, parsed | 541 | recorded oracle |
+| Statements, parsed | 792, of which 36 are refused and counted | recorded oracle |
+| Schemas | 169 | recorded oracle, `schema.corpus` |
+| Doubles as text | 8404, at three precisions | recorded oracle, `fp.corpus` |
+| Text as numbers | 215 | recorded oracle, `num.corpus` |
+| Expressions, answered | 17051 | recorded oracle, `eval.corpus` |
+| Statements, answered | 272 over 14 fixtures | recorded oracle, `query.corpus` |
+| The format under every configuration | 11 fixtures, the same three rows and the same index | the matrix, 16.11 |
+| The readers against arbitrary bytes | 4 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval` |
+
+The crate is `COMPLETE` in `crates/tools/xtask/src/policy.rs`: 100 percent
+of lines and 100 percent of branches, in both instrumentations.
+
+## 16.6 What is missing
+
+| # | What is missing | Which step |
+|---|-----------------|------------|
+| 1 | The pager: a page cache, the rollback journal a reader must ignore, the write-ahead log a reader must follow. | Q3 |
+| 2 | Index trees, read. A table whose rows live in the key's own tree needs them. | Q3 |
+| 3 | The virtual machine and the code generator that replaces the tree walker. | Q6 |
+| 4 | Writing: the b-tree writer, transactions, the journal in four modes, the WAL. | Q7 |
+| 5 | The rest of the language: `INSERT`, `UPDATE`, `DELETE`, `CREATE`, `ALTER`, `DROP`, triggers, views, subqueries, `WITH`. | Q8 |
+| 6 | The window clauses, which the parser refuses. | Q8 |
+| 7 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
+| 8 | The matrix run across every level of the suite rather than the format alone. | Q9 |
+| 9 | MC/DC, which the pinned toolchain does not emit. See D4 (16.9). | Q10 |
+
+## 16.7 Decision D1: the engine is a port of the routines
+
+**The decision: each piece is ported from the C routine that implements
+it, named in the comment, rather than written from the documentation.**
+
+Reason 1: the documentation is silent where the answers are. It does not
+say which side of a comparison takes affinity first, which is what makes
+`'abc' + 1` answer 1; `src/vdbe.c` says.
+Reason 2: the documentation is wrong about spelling. `docs/sqlite/datatype3.html`
+gives no rule that produces `0.33333333333333331` for `1.0/3`;
+`sqlite3FpDecode` produces it.
+Reason 3: a named routine is checkable. A reader compares the Rust with
+the C beside it, and a corpus case holds the two together.
+
+**The option not taken: implement the documentation and test against the
+C library.** It costs one diagnosis per divergence, and every divergence
+found so far — float rendering, `substr` over a blob, `replace` with an
+empty pattern, `likelihood` refusing a non-literal — was a rule the
+documentation does not state.
+
+Recorded in D-141 through D-150.
+
+## 16.8 Decision D2: rows before plans
+
+**The decision: a statement is answered by walking each table's tree
+once, with no index, no plan and no compilation, until the rows are
+right.**
+
+Reason 1: a wrong row is a bug and a slow scan is a number. Only the
+first blocks the next step.
+Reason 2: the walker is what the virtual machine of Q6 is tested
+against. Two implementations that answer the same rows is a stronger
+test than one.
+Reason 3: the shapes the walker cannot answer refuse by name, so the
+engine's answer is either right or absent.
+
+What it costs: O(n) for a scan, O(n log n) where an `ORDER BY` sorts,
+O(n·g) to find which of `g` groups a row belongs to, and the product of
+the rows for a join of several tables.
+
+**The option not taken: generate opcodes from the start.** It puts the
+code generator, the register machine and the semantics in one step, and
+a wrong row could be any of the three.
+
+Recorded in D-146.
+
+## 16.9 Decision D3: the oracle is recorded, not trusted
+
+**The decision: every answer the C library gives is committed as a golden
+file, together with the corpus that produced it and the program that
+asked.**
+
+Reason 1: CI has no SQLite, and a test that needs one is a test that does
+not run.
+Reason 2: a golden file is a diff. A change in the engine that changes an
+answer shows as a failed comparison against a fixed string.
+Reason 3: `sh tools/sqlite-fixtures.sh` regenerates every corpus and
+every golden from the shell and the oracle, so the recording is
+reproducible rather than remembered.
+
+**The option not taken: link the C library into the tests.** It costs a C
+toolchain in CI and an `unsafe` boundary in a crate that has none.
+
+## 16.10 Decision D4: what coverage means here
+
+**The decision: the engine is held to 100 percent of lines and 100
+percent of branches in both instrumentations, unreachable defensive code
+is deleted rather than exempted, and MC/DC is named as not measured.**
+
+Reason 1: `docs/sqlite/testing.html` is the standard SQLite holds itself
+to, and a port that claims the file format should claim the testing too.
+Reason 2: a refusal no input reaches is either dead code or a missing
+test. Both are defects, and an exemption hides which one it is.
+Reason 3: the pinned toolchain takes `-Z coverage-options=block`,
+`branch` and `condition`, and `llvm-cov` reports no MC/DC pairs for what
+it emits. Condition coverage is measured by `sh tools/xtask.sh coverage
+--condition`; the independence half of MC/DC is not.
+
+**The option not taken: claim MC/DC from condition coverage.** Condition
+coverage counts each operand both ways. It does not show that each
+operand alone decides the outcome, which is the half that finds a
+condition masked by another.
+
+The gap closes when the pin emits the records. Until then this document
+states it.
+
+## 16.11 The configuration matrix
 
 | Dimension | Values |
 |-----------|--------|
@@ -160,100 +230,324 @@ varies, and what every level of the suite runs across:
 | Schema format | 1 to 4 |
 | Temporary storage | file, memory |
 
-The matrix is a table in the test support, not a `for` loop in each test:
-a test names the dimensions it is sensitive to, and the harness runs it
-for every value of them.
+The matrix is a table in the test support and not a `for` loop in each
+test: a test names the dimensions it is sensitive to, and the harness
+runs it for every value of them.
 
-## 16.7 Coverage
+## 16.12 The fixtures
 
-The standard is the one SQLite holds itself to and documents in
-`docs/sqlite/testing.html`: every branch taken both ways, and modified
-condition/decision coverage over every compound condition. Two things
-follow for this port.
+`sh tools/sqlite-fixtures.sh` writes every fixture and every corpus the
+tests read, using the shell and the oracle. They are committed, because
+CI has no SQLite.
 
-- The `coverage` step measures lines and branches. `sh tools/xtask.sh
-  coverage --condition` measures more: it builds with
-  `-Z coverage-options=branch,condition`, so that every operand of a
-  compound decision is counted and not only the decision, and the same
-  thresholds apply to that column. What the pinned toolchain does not
-  emit is LLVM's MC/DC records — `-Z coverage-options` takes `block`,
-  `branch` and `condition`, and `llvm-cov` reports no MC/DC pairs for
-  what it produces — so the independence half of MC/DC is not measured
-  today. Condition coverage is what is measured; the gap is named here
-  rather than claimed away, and it closes when the pin emits the
-  records.
-- Unreachable defensive code is a defect and not a line to exempt. Where a
-  refusal cannot be reached by any input, either the refusal is dead and
-  goes, or the input that reaches it exists and is missing from the tests.
-  `db-sqlite` is held to all of it — `COMPLETE` in the policy table, 100
-  percent of lines and 100 percent of branches, in both instrumentations —
-  and it meets it: the refusals that no file could reach were removed
-  rather than excused, and the ones that a file can reach are reached by a
-  test, most of them by a database laid out by hand for that purpose.
+| Fixture | What it holds |
+|---------|---------------|
+| `m-*.db`, eleven of them | The same three rows and the same index under every configuration of 16.11 the shell can write. |
+| `small.db` | One row of each storage class. |
+| `page512.db` | Four hundred rows over 512-byte pages, which makes an interior page. |
+| `utf16.db`, `wide16.db` | Text in UTF-16, including the widths where the order of UTF-16 and the order of characters part. |
+| `overflow.db` | A payload that continues on overflow pages. |
+| `indexed.db` | One table with two indexes. |
+| `keys.db` | The three shapes a key takes: a rowid alias, a key written backwards, a table with no rowid. |
+| `generated.db` | Computed columns, stored and not stored. |
+| `joins.db` | Three tables: two sharing a column named `x`, one sharing `y` and collating it without case. |
 
-## 16.8 The fixtures
+## 16.13 The layers
 
-`sh tools/sqlite-fixtures.sh` writes every fixture the tests read, with the
-shell of `sh tools/sqlite.sh`. They are committed, because CI has no
-SQLite; the script is what makes them reproducible rather than
-remembered. Eleven of them are the matrix of 16.6 holding the same three
-rows and the same index, and the rest are the cases one test each reads:
-a table of every storage class, four hundred rows over 512-byte pages, text
-in UTF-16, a payload that overflows, a table with two indexes, the three
-shapes a key takes, a table with generated columns, and text that needs
-every width UTF-16 has, and three to join. The corpus files beside them are recorded oracles
-rather than databases: tokens, expressions, statements, schemas, the
-statements of `query.corpus` with the rows the C library answered them
-with, and the doubles of `fp.corpus` with the text it prints each of them
-as.
+| # | Layer | What it holds | Status |
+|---|-------|---------------|--------|
+| L1 | The format | Header, b-tree pages, cells, overflow chains, records. | built |
+| L2 | The pager | Pages in and out of a file, the journal in four modes, the WAL, locking, the free list. | missing |
+| L3 | The b-tree writer | Insert, delete, balance, the pointer maps auto-vacuum needs. | missing |
+| L4 | The tokenizer and parser | SQL text to a tree. | built but for the window clauses |
+| L5 | The code generator and virtual machine | The tree to opcodes, and the register machine that runs them. | missing |
+| L6 | The semantics | Affinity, comparison, collation, the built-in functions, `NULL`. | built for the read half |
+| L7 | The interface | Prepare, step, bind, column, and a shell to type at. | missing |
 
-## 16.9 Where it stands
+## 16.14 The order of the steps
 
-Q1, Q2, Q4 but for the window clauses, and Q5 for one table at a time are
-in `crates/db/sqlite`, and the crate is
-held to complete coverage: every line, every region and every branch, in
-both instrumentations.
+| Step | Name | Status | Depends on | Size |
+|------|------|--------|------------|------|
+| Q1 | The format, read | built | nothing | L |
+| Q2 | The schema as types | built | Q1 | M |
+| Q3 | The pager and the index trees | open | Q1 | L |
+| Q4 | The tokenizer and the parser | built but for the window clauses | nothing | L |
+| Q5 | Values, and a statement answered by walking | built | Q2, Q4 | L |
+| Q6 | The virtual machine | open | Q5 | L |
+| Q7 | Writing | open | Q3, Q6 | L |
+| Q8 | The rest of the language | open | Q6 | L |
+| Q9 | The suites run whole | open | Q7, Q8 | M |
+| Q10 | Coverage to the standard of D4 | open | Q9 | M |
 
-A database is opened, its schema walked, its
-tables read in rowid order, its overflow chains followed, and its records
-decoded, over any page size and any of the three encodings, without
-allocating. The matrix of 16.6 is a test, the reader is fuzzed by
-`sqlite_image`, and the first bug that target found — a child pointer of
-zero, which is a page no file has — is in the regression corpus. A statement is read
-into a tree that agrees with SQLite's parser over seven hundred and ninety
--two recorded cases — everything it refuses is refused, and all but
-thirty-six of what it accepts is read — an expression over five hundred
-and forty-one more, and SQL text is tokenized exactly as
-`src/tokenize.c` tokenizes it — the same character
-classes, the same rules, the same answers, checked against nine hundred
-and fifty-nine recorded cases of which eight hundred come out of SQLite's
-own test suite. A double is spelled in decimal digit for digit as the C
-library spells it, over eight thousand four hundred recorded doubles at
-three precisions, and text is read back into a number — which text is one,
-which prefix of it counts, and which digits are dropped — as
-`sqlite3AtoF` and `sqlite3Atoi64` read it. An expression over constants
-answers what SQLite answers, in the same storage class, over seventeen
-thousand recorded cases: every operator between every pair of sixteen
-operands, every cast over nineteen type names, the edges of what an
-integer and a double hold, thirty-four of the scalar functions, and every
-pattern of `LIKE` and `GLOB` against every subject. What refuses by name
-is a column, a statement inside an expression, and the functions that
-read a clock, a random source or the connection — with `printf` and the
-mathematical ones, which want a library this repository does not have
-yet.
+Q4 depends on nothing and was built beside Q1 and Q2.
 
-A statement is answered from a file: one table, none, or several joined,
-with `WHERE`, `ORDER BY`, `LIMIT`, `DISTINCT`, a `GROUP BY` and a
-`HAVING`, and the seven aggregates — `count`, `sum`, `total`, `avg`,
-`min`, `max` and `group_concat`, each of them with `DISTINCT`. Several
-such statements are put together with `UNION`, `UNION ALL`, `INTERSECT`
-and `EXCEPT`, a `VALUES` answers its own rows, and a name with `main` in
-front of it is the table it names. A join is written as a comma, `JOIN`,
-`INNER`, `CROSS`, `LEFT`, `ON`, `USING` or `NATURAL`, and answered as the
-loops nested — right rows and no plan. The answer is checked against two
-hundred and fifty-seven statements the C library answered over those
-fixtures, the name of every column and the value of every field, under
-all three encodings. What refuses by name is a join that keeps the rows
-of the table read last, a statement inside a `FROM`, a `WITH`, a table
-whose rows live in the key's own tree, and a column that is computed and
-not stored. What the crate cannot do is everything else in 16.3.
+## 16.15 Q1. The format, read
+
+Status: built.
+Depends on: nothing.
+Size: L.
+
+### Needs
+
+- `docs/sqlite/fileformat2.html`, sections 1.3, 1.6 and 2.1.
+- Fixtures the shell wrote, one per shape.
+
+### Does
+
+1. Parse the hundred-byte header: page size, encoding, reserved bytes,
+   write version, the largest root page.
+2. Parse a b-tree page of each of the four types, its cell pointer array
+   and its cells.
+3. Follow an overflow chain, bounded by the pages the file has.
+4. Decode a record: the header of serial types and the body they
+   describe.
+5. Walk a table tree in rowid order, one frame per level, at most 32
+   levels, without allocating.
+
+### Produces
+
+`header`, `page`, `record`, `image`, `bytes` in `crates/db/sqlite/src`.
+
+### Done when
+
+The eleven matrix fixtures read back the same three rows and the same
+index; `sqlite_image` replays its corpus without a panic; the crate meets
+D4.
+
+## 16.16 Q2. The schema as types
+
+Status: built.
+Depends on: Q1.
+Size: M.
+
+### Needs
+
+- Q1, to read `sqlite_schema`.
+- The `CREATE TABLE` grammar of Q4.
+
+### Does
+
+1. Read the `sql` column of every `table` row of `sqlite_schema`.
+2. Parse it as a `CREATE TABLE`.
+3. Give each column its declared type, its affinity by
+   `sqlite3AffinityType`, and its collation.
+4. Decide the rowid rules: which column is the rowid's alias, whether the
+   table has no rowid, whether it is `STRICT`.
+
+### Produces
+
+`schema` in `crates/db/sqlite/src`, and `Table`.
+
+### Done when
+
+169 recorded schemas agree with what the C library made of the same
+text, columns, affinities, collations and keys.
+
+## 16.17 Q3. The pager and the index trees
+
+Status: open.
+Depends on: Q1.
+Size: L.
+
+### Needs
+
+- Q1, for the page layout.
+- `docs/sqlite/fileformat2.html` section 4, for the write-ahead log.
+- The matrix of 16.11, for the journal modes.
+
+### Does
+
+1. Read a page through a cache rather than out of a byte slice.
+2. Ignore a rollback journal, which a reader must.
+3. Follow a write-ahead log, which a reader must, including its index.
+4. Walk an index tree, which unlocks a table whose rows live in the key's
+   own tree.
+
+### Done when
+
+A file in each of the six journal modes reads back the same rows; a
+`WITHOUT ROWID` table answers `SELECT`; the crate meets D4.
+
+## 16.18 Q4. The tokenizer and the parser
+
+Status: built but for the window clauses.
+Depends on: nothing.
+Size: L.
+
+### Needs
+
+- `src/tokenize.c`, for the character classes.
+- `src/parse.y`, for the grammar.
+
+### Does
+
+1. Tokenize SQL text with the same classes and the same rules as
+   `src/tokenize.c`.
+2. Parse an expression, with the precedence of `parse.y`.
+3. Parse a `SELECT`, a `CREATE TABLE` and a `CREATE INDEX` into an arena
+   the walk of which is bounded.
+
+### Produces
+
+`token`, `keyword`, `ast`, `parse` in `crates/db/sqlite/src`.
+
+### Done when
+
+959 recorded token cases agree; 792 recorded statements are accepted or
+refused as the C library does, but for the 36 the parser counts;
+`sqlite_tokens` and `sqlite_expr` replay their corpora without a panic.
+
+## 16.19 Q5. Values, and a statement answered by walking
+
+Status: built.
+Depends on: Q2, Q4.
+Size: L.
+
+### Needs
+
+- Q2, for the columns and their affinities.
+- Q4, for the tree.
+- `src/vdbe.c`, `src/func.c`, `src/select.c`, for what each operator,
+  function and clause does.
+
+### Does
+
+1. Answer an expression over constants, each operator taken from the
+   opcode it compiles into.
+2. Answer an expression over a row, with affinity and collation applied
+   as the comparison opcodes apply them.
+3. Walk one table's tree and answer `SELECT` over it, with `WHERE`,
+   `ORDER BY`, `LIMIT` and `DISTINCT`.
+4. Group the rows and accumulate the seven aggregates.
+5. Put several cores together with the four compound operators.
+6. Nest the loops for a join, one level per side.
+
+### Produces
+
+`fp`, `number`, `value`, `utf8`, `eval`, `func`, `agg`, `db` in
+`crates/db/sqlite/src`.
+
+### Done when
+
+8404 doubles, 215 numbers, 17051 expressions and 272 statements agree
+with the C library; `sqlite_eval` and `sqlite_image` replay their corpora
+without a panic; the crate meets D4.
+
+## 16.20 Q6. The virtual machine
+
+Status: open.
+Depends on: Q5.
+Size: L.
+
+### Needs
+
+- Q5, for the semantics each opcode carries.
+- `src/vdbe.c`, for the opcodes.
+- `src/select.c`, for what a statement compiles into.
+
+### Does
+
+1. Define the register machine and its opcodes.
+2. Generate opcodes from the tree Q4 builds.
+3. Answer every statement Q5 answers, by running the opcodes.
+
+### Done when
+
+The 272 recorded statements answer the same rows through the machine as
+through the walker; the crate meets D4.
+
+## 16.21 Q7. Writing
+
+Status: open.
+Depends on: Q3, Q6.
+Size: L.
+
+### Needs
+
+- Q3, for the pager and the journal.
+- Q6, for the opcodes that write.
+
+### Does
+
+1. Insert, delete and balance in a b-tree.
+2. Keep the free list and the pointer maps.
+3. Run a transaction through the rollback journal in each of its four
+   modes, then through the WAL.
+
+### Done when
+
+The C library opens a database this engine wrote and reads the rows back;
+the matrix of 16.11 runs across the write path.
+
+## 16.22 Q8. The rest of the language
+
+Status: open.
+Depends on: Q6.
+Size: L.
+
+### Does
+
+1. `INSERT`, `UPDATE`, `DELETE`, `REPLACE`.
+2. `CREATE`, `ALTER`, `DROP` for tables, indexes, views and triggers.
+3. Subqueries, `WITH`, and the window clauses the parser refuses.
+4. The functions that need a clock, a random source or `printf`.
+
+### Done when
+
+Every statement of the recorded corpora is accepted or refused as the C
+library accepts or refuses it, with no count of what is waiting.
+
+## 16.23 Q9. The suites run whole
+
+Status: open.
+Depends on: Q7, Q8.
+Size: M.
+
+### Needs
+
+- An adapter that speaks the commands `testfixture` drives, which is
+  where a C ABI would live.
+- The matrix of 16.11 in the test support.
+
+### Does
+
+1. Run SQLite's TCL suite under `research/sqlite/test` against the
+   engine.
+2. Run every level of this repository's own suite across the matrix
+   rather than the format alone.
+3. Drive differential execution from `norec`'s generator with the engine
+   as the second implementation.
+
+### Done when
+
+The TCL suite reports no failure that is not a documented omission.
+
+## 16.24 Q10. Coverage to the standard of D4
+
+Status: open.
+Depends on: Q9.
+Size: M.
+
+### Does
+
+1. Hold every crate of the port to 100 percent of lines and branches in
+   both instrumentations.
+2. Measure MC/DC when the pinned toolchain emits the records, and raise
+   the gate to it.
+
+### Done when
+
+`sh tools/xtask.sh coverage --condition` reports 100 percent for every
+crate of the port, and D4's named gap is closed or restated.
+
+## 16.25 Risks
+
+| # | Risk | Effect | What reduces it |
+|---|------|--------|-----------------|
+| 1 | The C library changes under the port. | A golden file records an answer the current library no longer gives. | `sh tools/sqlite.sh` pins tag `version-3.53.4`. A change of tag regenerates every golden and shows as a diff. |
+| 2 | The walker of Q5 and the machine of Q6 disagree. | Two answers, and no way to say which is SQLite's. | The recorded corpora are the third party. Both are compared against the golden, not against each other. |
+| 3 | A refusal is added to reach a green check rather than because SQLite refuses. | The engine answers less and the count of refusals hides it. | The count in `tests/db.rs` is asserted and may only fall. |
+| 4 | Coverage is met by deleting a test's reach rather than by reaching. | A branch counted covered by one input that no file produces. | D4 forbids exemptions. A branch no input reaches is deleted, which shows in the diff as deleted code. |
+| 5 | The matrix is a `for` loop copied into each test. | A dimension added in one test and forgotten in ten. | 16.11 puts the matrix in the test support and has the test name its dimensions. |
+| 6 | The fuzz corpora grow until the regression replay is slow. | The check takes longer than three minutes and is skipped. | `sh tools/xtask.sh fuzz --merge` keeps one input per feature. Hash-named files are not committed; named regression entries are. |
+| 7 | MC/DC never becomes measurable on the pinned toolchain. | Goal 5 of 16.2 cannot be met as written. | D4 states the gap rather than claiming it away. Condition coverage is measured and gated today. |

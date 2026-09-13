@@ -1087,7 +1087,22 @@ static const char *aQuery[] = {
   "joins.db|SELECT * FROM nosuch, a",
   "joins.db|SELECT * FROM a NATURAL JOIN b USING(x)",
   "joins.db|SELECT * FROM a JOIN b USING(z)",
-  "small.db|SELECT *"
+  "small.db|SELECT *",
+  "joins.db|SELECT * FROM a RIGHT JOIN b USING(x)",
+  "joins.db|SELECT * FROM a FULL JOIN b USING(x)",
+  "joins.db|SELECT a.x, b.x, x FROM a RIGHT JOIN b USING(x)",
+  "joins.db|SELECT * FROM a RIGHT JOIN b ON 0",
+  "joins.db|SELECT * FROM a FULL JOIN b ON 0",
+  "joins.db|SELECT * FROM a RIGHT JOIN b ON a.x=b.x JOIN c ON b.z=c.y",
+  "joins.db|SELECT * FROM a JOIN b ON a.x=b.x RIGHT JOIN c ON a.y=c.y",
+  "joins.db|SELECT * FROM a RIGHT JOIN b ON a.x=b.x LEFT JOIN c ON a.y=c.y",
+  "joins.db|SELECT * FROM a NATURAL RIGHT JOIN b",
+  "joins.db|SELECT count(*), count(a.x) FROM a RIGHT JOIN b ON a.x=b.x",
+  "joins.db|SELECT * FROM a RIGHT JOIN b ON a.x=b.x ORDER BY 3, 4",
+  "joins.db|SELECT * FROM a FULL JOIN b ON a.x=b.x WHERE a.x IS NULL",
+  "joins.db|SELECT * FROM a RIGHT JOIN b ON a.x=b.x WHERE b.x=4",
+  "joins.db|SELECT abs(b.x) FROM a RIGHT JOIN b ON a.x=b.x",
+  "joins.db|SELECT abs(b.x) FROM a JOIN b ON a.x=b.x"
 };
 
 /* The cases, one per line. */
