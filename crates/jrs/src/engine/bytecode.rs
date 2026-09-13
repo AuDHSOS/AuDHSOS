@@ -310,6 +310,8 @@ pub enum Instruction {
         /// Feedback vector slot for inline caching.
         slot: u16,
     },
+    /// `acc = acc instanceof reg` (13.10.2).
+    TestInstanceOf(Reg),
     /// Constructs with a callable: `acc = new func_reg(args)` (7.3.15).
     ///
     /// `target` holds the object 10.1.13 creates, where the collector sees it
@@ -672,7 +674,8 @@ impl BytecodeFunction {
             | Instruction::TestLessThan(register)
             | Instruction::TestLessThanOrEqual(register)
             | Instruction::TestGreaterThan(register)
-            | Instruction::TestGreaterThanOrEqual(register) => Some(register),
+            | Instruction::TestGreaterThanOrEqual(register)
+            | Instruction::TestInstanceOf(register) => Some(register),
             Instruction::Mov { src, dst } => {
                 self.verify_register(pc, src)?;
                 Some(dst)

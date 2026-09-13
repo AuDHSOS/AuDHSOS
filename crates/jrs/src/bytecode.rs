@@ -1819,6 +1819,14 @@ impl RegisterLowerer {
         if !captures.is_empty() {
             child.code.outer_context_slot_counts = self.context_slot_counts()?;
         }
+        // 10.2.5 gives an ordinary function a `[[Construct]]` and a `prototype`,
+        // and withholds both from a method and an arrow. The body is told
+        // before it is lowered, because a constructor may construct itself.
+        let child_constructible = function.constructible && !function.arrow;
+        child.constructible.clone_from(&self.constructible);
+        if child_constructible {
+            child.constructible.insert(code_id);
+        }
         let return_type = Self::lower_function_body(&mut child, &function.body)?;
         let capture_effects = captures
             .iter()
@@ -1852,9 +1860,6 @@ impl RegisterLowerer {
         child.code.parameter_count = u16::try_from(function.parameters.len()).ok()?;
         child.code.binding_count = child.max_binding_count;
         child.code.self_register = self_register;
-        // 10.2.5 gives an ordinary function a `[[Construct]]` and a `prototype`,
-        // and withholds both from a method and an arrow.
-        let child_constructible = function.constructible && !function.arrow;
         child.code.constructible = child_constructible;
         let nested_functions = core::mem::take(&mut child.code.functions);
         self.code.functions.push(child.code);
@@ -1904,6 +1909,12 @@ impl RegisterLowerer {
                 code_id,
                 alloc::vec![RegisterType::Primitive; function.parameters.len()],
             );
+            // A declaration names itself in its own body, so a constructor that
+            // constructs itself has to know it is one before the body is
+            // lowered (10.2.5).
+            if function.constructible && !function.arrow {
+                self.constructible.insert(code_id);
+            }
         }
         self.lower_function(function)
     }
@@ -2223,7 +2234,14 @@ impl RegisterLowerer {
     /// the collector sees it while the constructor runs.
     fn lower_construct(&mut self, callee: &Expr, arguments: &[Expr]) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        let RegisterType::Function(code_id) = self.lower(callee)? else {
+        let callee_type = self.lower(callee)?;
+        // In a Realm a function declaration is a binding of the Global
+        // Environment Record, so its name reads as a type the lowering cannot
+        // give. 7.3.15 resolves the constructor at run time either way.
+        if callee_type == RegisterType::Unknown {
+            return self.lower_dynamic_construct(arguments);
+        }
+        let RegisterType::Function(code_id) = callee_type else {
             return None;
         };
         if !self.constructible.contains(&code_id) {
@@ -2353,11 +2371,23 @@ impl RegisterLowerer {
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let base_type = self.lower(base)?;
-        if !base_type.is_object() && base_type != RegisterType::String {
+        if !base_type.is_object()
+            && base_type != RegisterType::String
+            && base_type != RegisterType::Unknown
+        {
             return None;
         }
         let receiver = self.allocate_register()?;
         self.code.emit(Instruction::Star(receiver));
+        // A base the lowering could not name carries no layout, so the callee
+        // is read at run time and 7.3.14 dispatches on whatever it is.
+        if matches!(base_type, RegisterType::Unknown | RegisterType::Function(_)) {
+            self.code.emit(Instruction::Ldar(receiver));
+            self.lower_unknown_member(key)?;
+            let result = self.lower_dynamic_method_call(receiver, arguments)?;
+            self.release_register(receiver)?;
+            return Some(result);
+        }
         let intrinsic = if base_type == RegisterType::String {
             // 22.1.3: the method is resolved on %String.prototype%.
             let name = Self::static_property_name(key)
@@ -2437,6 +2467,106 @@ impl RegisterLowerer {
         self.release_register(function)?;
         self.release_register(receiver)?;
         self.intrinsic_call_result(intrinsic, base_type, &argument_types)
+    }
+
+    /// Lowers `new` whose constructor only the run time knows.
+    ///
+    /// The constructor is in the accumulator. 7.3.15 refuses a value without a
+    /// `[[Construct]]` there, which the instruction does. Every argument must
+    /// be a primitive: the lowering cannot say which function answers, and it
+    /// compiled every candidate under the assumption that its parameters are.
+    fn lower_dynamic_construct(&mut self, arguments: &[Expr]) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let function = self.allocate_register()?;
+        self.code.emit(Instruction::Star(function));
+        let target = self.allocate_register()?;
+        let mut argument_registers = Vec::new();
+        for argument in arguments {
+            if !self.lower(argument)?.is_primitive() {
+                return None;
+            }
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            argument_registers.push(register);
+        }
+        let dummy = if argument_registers.is_empty() {
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::LdaUndefined);
+            self.code.emit(Instruction::Star(register));
+            Some(register)
+        } else {
+            None
+        };
+        let arg_start = argument_registers.first().copied().or(dummy)?;
+        let arg_count = u16::try_from(arguments.len()).ok()?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::Construct {
+            func: function,
+            target,
+            arg_start,
+            arg_count,
+            slot,
+        });
+        if let Some(dummy) = dummy {
+            self.release_register(dummy)?;
+        }
+        for register in argument_registers.into_iter().rev() {
+            self.release_register(register)?;
+        }
+        self.release_register(target)?;
+        self.release_register(function)?;
+        Some(RegisterType::Unknown)
+    }
+
+    /// Lowers a method call whose callee only the run time knows.
+    ///
+    /// The callee is in the accumulator and `receiver` holds the base, which
+    /// 13.3.6.1 passes as the `this` value. Every argument must be a primitive:
+    /// the lowering cannot say which function answers, and it compiled every
+    /// candidate under the assumption that its parameters are primitives.
+    fn lower_dynamic_method_call(
+        &mut self,
+        receiver: crate::engine::bytecode::Reg,
+        arguments: &[Expr],
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let function = self.allocate_register()?;
+        self.code.emit(Instruction::Star(function));
+        let mut argument_registers = Vec::new();
+        for argument in arguments {
+            if !self.lower(argument)?.is_primitive() {
+                return None;
+            }
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            argument_registers.push(register);
+        }
+        let dummy = if argument_registers.is_empty() {
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::LdaUndefined);
+            self.code.emit(Instruction::Star(register));
+            Some(register)
+        } else {
+            None
+        };
+        let arg_start = argument_registers.first().copied().or(dummy)?;
+        let arg_count = u16::try_from(arguments.len()).ok()?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::CallMethod {
+            receiver,
+            func: function,
+            arg_start,
+            arg_count,
+            slot,
+        });
+        if let Some(dummy) = dummy {
+            self.release_register(dummy)?;
+        }
+        for register in argument_registers.into_iter().rev() {
+            self.release_register(register)?;
+        }
+        self.release_register(function)?;
+        Some(RegisterType::Unknown)
     }
 
     /// Lowers a method call whose callee is a function of this unit.
@@ -3246,12 +3376,20 @@ impl RegisterLowerer {
         Some(Some(value_type))
     }
 
-    /// Whether a Prototype this Realm has not finished building would own this
-    /// name, on whichever kind of object the base turns out to be.
+    /// Whether writing this name could do something other than create an own
+    /// property, on whichever kind of object the base turns out to be.
+    ///
+    /// 10.1.9.1 creates an own property only when the Prototype Chain holds no
+    /// setter and nothing that refuses the write. Every name a Prototype of
+    /// this Realm would own is a writable data property, so shadowing one is
+    /// what a Script may do — except these three: B.2.2.1 makes `__proto__` an
+    /// accessor, and 10.2.9 and 10.2.10 make a function's `length` and `name`
+    /// properties that are not writable. A Prototype holding one of them is not
+    /// built yet, so a write of that name is refused rather than guessed.
     fn names_an_unbuilt_prototype(name: &[u16]) -> bool {
-        crate::engine::realm::function_prototype_owns(name)
-            || crate::engine::realm::array_prototype_owns(name)
-            || crate::engine::realm::string_prototype_owns(name)
+        ["__proto__", "length", "name"]
+            .into_iter()
+            .any(|refused| refused.encode_utf16().eq(name.iter().copied()))
     }
 
     fn prepare_member_assignment(&mut self, target: &Expr) -> Option<RegisterMemberAssignment> {
@@ -3525,9 +3663,11 @@ impl RegisterLowerer {
             }
             Stmt::Throw(value) => {
                 let value_type = self.lower(value)?;
-                // A value that leaves the script has to be representable at the
-                // legacy boundary, which only carries primitives.
-                if !value_type.is_primitive() {
+                // An Object may be thrown. One that leaves the Script has no
+                // identity the embedding can hold, which the boundary reports
+                // as a gap; one a handler of this Script catches never reaches
+                // it.
+                if !value_type.is_returnable() {
                     return None;
                 }
                 if let Some(thrown) = self.thrown.last_mut() {
@@ -4821,6 +4961,12 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(right_register));
         self.code.emit(Instruction::Ldar(left_register));
         let (instruction, result_type) = match operator {
+            // 13.10.2 reaches 7.3.22 for every object of this Realm, because
+            // none of them carries an `@@hasInstance` yet.
+            Binary::InstanceOf => (
+                Instruction::TestInstanceOf(right_register),
+                RegisterType::Boolean,
+            ),
             Binary::Add | Binary::Sub | Binary::Mul | Binary::Pow | Binary::Div | Binary::Rem
                 if left_type.is_numeric_primitive() && right_type.is_numeric_primitive() =>
             {
@@ -6756,10 +6902,10 @@ fn lower_register_script(
             },
         }
     }
-    // A completion of a type the lowering does not know may still be an Object,
-    // which has no identity outside the engine. That is refused at the boundary
-    // as an unsupported feature, not compiled away here.
-    if !completion_type.is_primitive() && completion_type != RegisterType::Unknown {
+    // An Object completion has no identity outside the engine. The boundary
+    // refuses it there, by the name of what is missing, so the lowering does
+    // not repeat the rule and report the Script as one it cannot take.
+    if !completion_type.is_returnable() {
         return None;
     }
     lowerer

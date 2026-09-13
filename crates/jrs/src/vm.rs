@@ -202,6 +202,14 @@ pub struct Runtime {
     register_code: Vec<RegisterCodeUnit>,
 }
 
+/// What the boundary reports for a value of the engine that the embedding has
+/// no way to hold.
+///
+/// Unlike every other unsupported feature, this one does not leave the Realm in
+/// an unknown state: the Script reached a defined end and only its value cannot
+/// cross, so the Realm stays usable.
+pub(crate) const UNCROSSABLE_OBJECT: &str = "an Object of the engine crossing to the embedding";
+
 /// Converts a register-backend value into the legacy value the embedding sees.
 ///
 /// Objects, Symbols and `BigInt`s of the new engine have no legacy identity, so
@@ -526,11 +534,17 @@ impl Execution<'_> {
         if let Some(value) = register_primitive(value, &agent.heap) {
             return Error::Thrown { value };
         }
+        // A thrown Object of the engine has no identity the embedding can
+        // hold, so one that is not a native error is a gap rather than a value.
         let Some(object) = value.as_object() else {
-            return Error::InvalidBytecode;
+            return Error::Unsupported {
+                feature: UNCROSSABLE_OBJECT,
+            };
         };
         let Some(kind) = agent.realm.native_error_kind(&agent.heap, object) else {
-            return Error::InvalidBytecode;
+            return Error::Unsupported {
+                feature: UNCROSSABLE_OBJECT,
+            };
         };
         let message = agent
             .heap
@@ -655,7 +669,7 @@ impl Execution<'_> {
         self.fuel = vm.fuel;
         let result = match result {
             Ok(value) => register_primitive(value, &agent.heap).ok_or(Error::Unsupported {
-                feature: "an Object of the engine crossing to the embedding",
+                feature: UNCROSSABLE_OBJECT,
             }),
             Err(crate::engine::interpreter::VMError::Thrown(value, native)) => {
                 Err(self.register_exception(value, native, &agent))

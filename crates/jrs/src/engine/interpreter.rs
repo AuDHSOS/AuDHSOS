@@ -414,6 +414,58 @@ impl RegisterVM {
         }
     }
 
+    /// `OrdinaryHasInstance` of 7.3.22, which 13.10.2 reaches because no
+    /// `@@hasInstance` exists on any object of this Realm yet.
+    ///
+    /// Walks the Prototype Chain of the value looking for the constructor's
+    /// `prototype`. A right operand that is not an Object is a `TypeError`, one
+    /// that is not callable answers false, and a constructor whose `prototype`
+    /// is not an Object is a `TypeError`.
+    fn ordinary_has_instance(
+        constructor: Value,
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<bool, VMError> {
+        let Some(function) = constructor.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "right-hand side of instanceof is not an object",
+            ));
+        };
+        if !Self::is_callable(constructor, heap) {
+            return Ok(false);
+        }
+        let Some(mut current) = value.as_object() else {
+            return Ok(false);
+        };
+        let name = PropertyKey::String(heap.strings.intern("prototype")?);
+        let prototype = heap
+            .lookup_named(function, name)?
+            .map_or(VALUE_UNDEFINED, |property| property.value);
+        let Some(prototype) = prototype.as_object() else {
+            return Err(type_error(
+                heap,
+                realm,
+                "prototype of the right-hand side of instanceof is not an object",
+            ));
+        };
+        loop {
+            let next = heap
+                .get_object(current)
+                .ok_or(VMError::TypeError)?
+                .prototype;
+            let Some(next) = next.as_object() else {
+                return Ok(false);
+            };
+            if next == prototype {
+                return Ok(true);
+            }
+            current = next;
+        }
+    }
+
     /// `OrdinaryCreateFromConstructor` of 10.1.13: the object `new` starts
     /// from, whose Prototype is the constructor's `prototype` when that is an
     /// Object and `%Object.prototype%` otherwise.
@@ -2841,6 +2893,16 @@ impl RegisterVM {
                 Instruction::TestStrictEqual(reg) => {
                     let rhs = self.read_reg(reg)?;
                     self.acc = Value::from_bool(Self::strictly_equals(self.acc, rhs, heap)?);
+                }
+                Instruction::TestInstanceOf(reg) => {
+                    let constructor = self.read_reg(reg)?;
+                    let value = self.acc;
+                    self.acc = Value::from_bool(Self::ordinary_has_instance(
+                        constructor,
+                        value,
+                        heap,
+                        realm,
+                    )?);
                 }
                 Instruction::TestLessThan(reg) => {
                     let rhs = self.read_reg(reg)?;

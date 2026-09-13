@@ -358,6 +358,74 @@ fn this_is_the_receiver_of_the_call() -> Result<(), Error> {
 }
 
 #[test]
+fn instanceof_walks_the_prototype_chain_of_the_value() -> Result<(), Error> {
+    // 13.10.2 reaches 7.3.22 because no object of this Realm carries an
+    // `@@hasInstance`, and 7.3.22 looks for the constructor's `prototype` on
+    // the chain of the value.
+    for source in [
+        "function F(){}var f=new F();f instanceof F",
+        "function F(){}function G(){}var f=new F();f instanceof G",
+        "function F(){}1 instanceof F",
+        "function F(){}'a' instanceof F",
+        "function F(){}var f=new F();typeof (f instanceof F)",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_value_the_embedding_cannot_hold_leaves_the_realm_usable() -> Result<(), Error> {
+    // The Script reaches a defined end and only its value cannot cross, so this
+    // is the one unsupported feature that does not poison the Realm.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    for source in ["({x:1})", "[1,2]", "throw {}"] {
+        assert!(
+            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+            "{source}"
+        );
+        assert_eq!(realm.evaluate("2*3")?, Value::Number(6.0), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_constructor_and_a_method_of_a_global_are_reached_at_run_time() -> Result<(), Error> {
+    // In a Realm a function declaration binds a name of the Global Environment
+    // Record, so neither the constructor of `new` nor the callee of a method
+    // call has a type the lowering can give; 7.3.15 and 7.3.14 resolve both.
+    for scripts in [
+        &[
+            "function T(m){this.message=m}",
+            "var t=new T('x');t.message",
+        ][..],
+        &[
+            "function T(m){this.message=m}",
+            "T.prototype.describe=function(){return 'E: '+this.message};0",
+            "var t=new T('x');t.describe()",
+        ][..],
+        // A constructor that constructs itself, which sta.js of Test262 opens
+        // with.
+        &[
+            "function T(m){if(!(this instanceof T))return new T(m);this.message=m||''}",
+            "var t=new T('x');t.message",
+        ][..],
+        // Calling that constructor without `new` still needs the `this` of a
+        // call without a receiver, which is a gap.
+        // A thrown Object a handler of the same Script catches never reaches
+        // the boundary.
+        &[
+            "function T(m){this.message=m}",
+            "var r='';try{throw new T('x')}catch(e){r=e.message}r",
+        ][..],
+    ] {
+        differential_scripts(scripts)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn new_constructs_from_the_prototype_of_the_constructor() -> Result<(), Error> {
     // 10.2.5 gives an ordinary function a `prototype`, 10.1.13 creates the
     // object from it, and 10.2.2 answers that object unless the constructor
@@ -411,7 +479,7 @@ fn a_property_of_a_function_object_is_read_and_written() -> Result<(), Error> {
     ));
     for source in [
         "var f=function(){};f.name=1;1",
-        "let o={g:function(){this.call=1;return 2}};o.g()",
+        "var f=function(){};f.__proto__=1;1",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
@@ -1278,11 +1346,14 @@ fn numeric_array_indices_do_not_enter_the_property_name_pool() -> Result<(), Err
 
 #[test]
 fn non_indices_and_object_results_remain_on_the_full_property_path() -> Result<(), Error> {
+    // The Array is built; only its crossing to the embedding is refused.
     let source = "[1,2]";
-    assert!(
-        !compile(source, Limits::default())?.uses_register_backend(),
-        "{source}"
-    );
+    let program = compile(source, Limits::default())?;
+    assert!(program.uses_register_backend(), "{source}");
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
     Ok(())
 }
 
@@ -1423,12 +1494,23 @@ fn feedback_vectors_persist_per_code_identity_and_obey_the_agent_quota() -> Resu
 #[test]
 fn object_completion_values_stay_on_the_legacy_backend_until_handles_are_public()
 -> Result<(), Error> {
-    for source in ["({x:1})", "let o={x:1};o", "true?({x:1}):({x:2})"] {
+    // The Script is lowered; the Object it completes with is refused where the
+    // missing part is, at the boundary, by the name of what it needs.
+    for source in ["({x:1})", "let o={x:1};o"] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
         assert!(
-            !compile(source, Limits::default())?.uses_register_backend(),
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
             "{source}"
         );
     }
+    // Two Object literals of one conditional are two layouts the lowering
+    // cannot merge, which refuses the Script before the completion matters.
+    assert!(!compile("true?({x:1}):({x:2})", Limits::default())?.uses_register_backend());
     assert!(compile("let o={x:1};42", Limits::default())?.uses_register_backend());
     Ok(())
 }
@@ -1773,7 +1855,6 @@ fn returned_closures_outlive_register_frames_and_keep_distinct_contexts() -> Res
 fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> Result<(), Error> {
     for source in [
         "function f(){return arguments.length}f()",
-        "function f(){return {x:1}}f()",
         "async function f(){return 1}f()",
         "function f(a,a){return a}f(1,2)",
         "function f(a={}){return a}f()",
@@ -2778,9 +2859,6 @@ fn register_lowering_rejects_exception_shapes_it_cannot_type() -> Result<(), Err
     for source in [
         // A destructuring catch parameter is not lowered.
         "try{throw [1]}catch([e]){e}",
-        // The thrown value must be representable at the legacy boundary.
-        "throw {}",
-        "throw [1]",
         // The Block must not change a tracked binding type.
         "let x=1;try{x='a'}catch(e){e}x",
         // A Finally Block cannot run before a control transfer leaves it.
