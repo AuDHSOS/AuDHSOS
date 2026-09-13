@@ -382,3 +382,199 @@ fn the_entry_of_a_table_page_is_refused_by_the_type_of_the_page() {
     assert_eq!(page.kind(), crate::Kind::LeafTable);
     assert_eq!(page.entry(0), Err(crate::Error::PageKind(13)));
 }
+
+/// Every page of every tree a fixture names, root first.
+fn tree_pages(image: &crate::image::Image<'_>, root: u32, out: &mut Vec<u32>) {
+    let Ok(page) = image.page(root) else {
+        return;
+    };
+    out.push(root);
+    if !page.kind().is_interior() {
+        return;
+    }
+    for at in 0..page.cells() {
+        if let Ok(child) = page.child(at) {
+            tree_pages(image, child, out);
+        }
+    }
+    if let Some(right) = page.right_most() {
+        tree_pages(image, right, out);
+    }
+}
+
+/// The roots a fixture names: the schema's own tree and every tree it
+/// holds a row for.
+fn roots(image: &crate::image::Image<'_>) -> Vec<u32> {
+    let mut out = alloc::vec![1];
+    let mut payload = Vec::new();
+    for row in image.schema() {
+        let Ok(row) = row else { continue };
+        payload.resize(row.payload.total, 0);
+        if image.read_payload(&row.payload, &mut payload).is_err() {
+            continue;
+        }
+        let Ok(record) = crate::record::Record::parse(&payload) else {
+            continue;
+        };
+        if let Ok(Some(crate::record::Value::Int(root))) = record.value(3)
+            && let Ok(root) = u32::try_from(root)
+        {
+            out.push(root);
+        }
+    }
+    out
+}
+
+#[test]
+fn every_cell_of_every_fixture_is_written_back_as_the_bytes_it_lies_in() {
+    use crate::image::Image;
+    let mut counted = 0;
+    let mut rebuilt = 0;
+    for (name, bytes) in crate::tests::WRITTEN {
+        let image = Image::open(bytes).unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        let usable = usize::try_from(image.header().usable()).unwrap();
+        let page_size = usize::try_from(image.header().page_size).unwrap();
+        let mut pages = Vec::new();
+        for root in roots(&image) {
+            tree_pages(&image, root, &mut pages);
+        }
+        for number in pages {
+            let whole = image.page_bytes(number).unwrap();
+            let page = image.page(number).unwrap();
+            let mut cells = Vec::new();
+            for at in 0..page.cells() {
+                let cell = page.cell(at).unwrap();
+                let written = crate::page::write_cell(&cell);
+                let offset = page.cell_offset(at).unwrap();
+                assert_eq!(
+                    whole.get(offset..offset + written.len()),
+                    Some(written.as_slice()),
+                    "{name} page {number} cell {at}"
+                );
+                cells.push(written);
+                counted += 1;
+            }
+            // A page that was filled in one pass holds its cells from the
+            // end downward in the order the pointer array names them, and
+            // has no freeblock and no fragmented byte. Such a page is the
+            // one `build` writes, byte for byte.
+            let start = usize::from(number == 1) * crate::header::HEADER_LEN;
+            let freeblock = u16::from_be_bytes([whole[start + 1], whole[start + 2]]);
+            let fragmented = whole[start + 7];
+            let descending = (0..page.cells()).all(|at| {
+                at == 0 || page.cell_offset(at).unwrap() < page.cell_offset(at - 1).unwrap()
+            });
+            if freeblock != 0 || fragmented != 0 || !descending {
+                continue;
+            }
+            let built = crate::page::build(
+                page.kind(),
+                number,
+                page_size,
+                usable,
+                &cells,
+                page.right_most(),
+            )
+            .unwrap();
+            // The header, the pointer array and the content area are the
+            // page; what lies between the array and the content is
+            // unallocated, and SQLite leaves whatever was there before in
+            // it, so only the three are compared. Page 1 carries the
+            // database header, which `build` leaves as it found it, and
+            // the reserved tail is not the b-tree's either.
+            let array = start + page.kind().header_len() + page.cells() * 2;
+            assert_eq!(
+                built.get(start..array),
+                whole.get(start..array),
+                "{name} page {number}, the header and the pointers"
+            );
+            let content = page.content_start();
+            assert_eq!(
+                built.get(content..usable),
+                whole.get(content..usable),
+                "{name} page {number}, the content"
+            );
+            rebuilt += 1;
+        }
+    }
+    assert!(counted > 1600, "only {counted} cells were written back");
+    assert!(rebuilt > 50, "only {rebuilt} pages were built back");
+}
+
+#[test]
+fn a_page_that_cannot_hold_what_it_is_given_is_not_built() {
+    use crate::page::build;
+    let none: [Vec<u8>; 0] = [];
+    // A usable size past the page itself, which no header names.
+    assert_eq!(build(Kind::LeafTable, 2, 512, 1024, &none, None), None);
+    // A page shorter than the database header page 1 carries first.
+    assert_eq!(build(Kind::LeafTable, 1, 64, 64, &none, None), None);
+    // Cells whose bytes alone are more than the page holds.
+    let over = alloc::vec![alloc::vec![0u8; 8]; 65];
+    assert_eq!(build(Kind::LeafTable, 2, 512, 512, &over, None), None);
+    // Cells that fit with no room left for the pointers naming them.
+    let tight = alloc::vec![alloc::vec![0u8; 8]; 60];
+    assert_eq!(build(Kind::LeafTable, 2, 512, 512, &tight, None), None);
+}
+
+#[test]
+fn a_page_built_from_cells_is_read_back_as_those_cells() {
+    use crate::page::{Payload, build, write_cell};
+    // A payload of six hundred bytes leaves ninety-two of them on a page
+    // of five hundred and twelve, which is the rule of section 1.6.
+    let local = crate::page::local_len(600, 512, Kind::LeafTable);
+    assert_eq!(local, 92);
+    let body = alloc::vec![0x41u8; local];
+    let cells = [
+        write_cell(&Cell::TableLeaf {
+            rowid: 1,
+            payload: Payload {
+                local: b"\x03\x11one",
+                total: 5,
+                overflow: None,
+            },
+        }),
+        write_cell(&Cell::TableLeaf {
+            rowid: 9_223_372_036_854_775_807,
+            payload: Payload {
+                local: &body,
+                total: 600,
+                overflow: Some(7),
+            },
+        }),
+    ];
+    let built = build(Kind::LeafTable, 2, 512, 512, &cells, None).unwrap();
+    let page = Page::parse(&built, 2, 512).unwrap();
+    assert_eq!(page.kind(), Kind::LeafTable);
+    assert_eq!(page.cells(), 2);
+    assert_eq!(page.right_most(), None);
+    // The first cell lies highest, which is where the content area
+    // begins, and the second one below it.
+    assert_eq!(page.content_start(), 512 - cells[0].len() - cells[1].len());
+    assert!(page.cell_offset(0).unwrap() > page.cell_offset(1).unwrap());
+    let Ok(Cell::TableLeaf { rowid, payload }) = page.cell(1) else {
+        panic!("a cell of another shape");
+    };
+    assert_eq!(rowid, 9_223_372_036_854_775_807);
+    assert_eq!(payload.overflow, Some(7));
+    assert_eq!(payload.total, 600);
+}
+
+#[test]
+fn an_interior_page_built_from_cells_keeps_its_right_most_pointer() {
+    use crate::page::{build, write_cell};
+    let cells = [write_cell(&Cell::TableInterior {
+        child: 4,
+        rowid: -1,
+    })];
+    let built = build(Kind::InteriorTable, 2, 512, 512, &cells, Some(9)).unwrap();
+    let page = Page::parse(&built, 2, 512).unwrap();
+    assert_eq!(page.right_most(), Some(9));
+    assert_eq!(
+        page.cell(0),
+        Ok(Cell::TableInterior {
+            child: 4,
+            rowid: -1
+        })
+    );
+}

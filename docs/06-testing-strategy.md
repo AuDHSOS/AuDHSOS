@@ -3882,6 +3882,32 @@ section 2.1.
   ninth byte carries all eight of its bits, is the one the record layer
   never writes.
 
+### 6.6.103 A cell and a page as bytes (`db-sqlite`)
+
+D-163, document 16 step Q7. `page::write_cell` and `page::build`, held
+to the pages the C library wrote.
+
+- Every tree of eight fixtures is walked, root first and children after
+  it, and every cell of every page is written back and compared against
+  the bytes it lies in: 1663 cells, of all four shapes, with and without
+  an overflow page.
+- 56 of those pages are built whole and compared. A page qualifies where
+  it carries no freeblock, no fragmented byte, and holds its cells from
+  the end downward in the order the pointer array names them, which is
+  the shape `rebuildPage` writes. The header, the pointer array and the
+  content area are compared; the unallocated space between the array and
+  the content is not, because the format says nothing about it and
+  SQLite leaves in it whatever the page held before.
+- What no fixture reaches is a unit test: a usable size past the page
+  itself, a page shorter than the database header page 1 carries, cells
+  whose bytes are more than the page holds, and cells that fit with no
+  room left for the pointers naming them. Each is refused rather than
+  written wrong.
+- `sqlite_image` holds the statement arbitrary bytes allow: a page built
+  from the cells of another page reads back as those cells. The bytes
+  need not match, because a file may write a length as a varint longer
+  than the value needs and this engine writes the shortest one.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

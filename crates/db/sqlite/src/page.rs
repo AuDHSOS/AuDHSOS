@@ -7,8 +7,14 @@
 //! `docs/sqlite/fileformat2.html`, section 1.6, *B-tree Pages*. Page 1
 //! carries the database header first, so its b-tree header begins a
 //! hundred bytes in; every other page begins with it.
+//!
+//! A page is written as well as read: [`build`] lays the cells out the
+//! way `rebuildPage` in `src/btree.c` lays them out, which is the shape
+//! a page filled in key order has.
 
-use crate::bytes::{size, u8_at, u16_at, u32_at, varint};
+use alloc::vec::Vec;
+
+use crate::bytes::{put_varint, size, u8_at, u16_at, u32_at, varint};
 use crate::error::Error;
 use crate::header::HEADER_LEN;
 
@@ -359,6 +365,131 @@ impl<'a> Page<'a> {
             total,
             overflow: Some(page),
         })
+    }
+}
+
+/// One cell as the bytes a page holds it in: the child pointer of an
+/// interior page, the length of the payload, the key of a table tree,
+/// and what of the payload is on the page, with the first overflow page
+/// after it where the payload runs on.
+#[must_use]
+pub fn write_cell(cell: &Cell<'_>) -> Vec<u8> {
+    let mut out = Vec::new();
+    match cell {
+        Cell::TableInterior { child, rowid } => {
+            out.extend_from_slice(&child.to_be_bytes());
+            put_varint(&mut out, rowid.cast_unsigned());
+        }
+        Cell::TableLeaf { rowid, payload } => {
+            put_varint(&mut out, whole(payload.total));
+            put_varint(&mut out, rowid.cast_unsigned());
+            put_payload(&mut out, payload);
+        }
+        Cell::IndexLeaf { payload } => {
+            put_varint(&mut out, whole(payload.total));
+            put_payload(&mut out, payload);
+        }
+        Cell::IndexInterior { child, payload } => {
+            out.extend_from_slice(&child.to_be_bytes());
+            put_varint(&mut out, whole(payload.total));
+            put_payload(&mut out, payload);
+        }
+    }
+    out
+}
+
+/// What of a payload the cell holds, and the page the rest is on.
+fn put_payload(out: &mut Vec<u8>, payload: &Payload<'_>) {
+    out.extend_from_slice(payload.local);
+    if let Some(page) = payload.overflow {
+        out.extend_from_slice(&page.to_be_bytes());
+    }
+}
+
+/// A length as the number a varint is written from.
+fn whole(total: usize) -> u64 {
+    u64::try_from(total).unwrap_or(u64::MAX)
+}
+
+/// A page holding `cells`, in the order they are given.
+///
+/// This is `rebuildPage`: the pointer array names the cells in that
+/// order, and the content of each is taken from the end of the usable
+/// part downward, so the first cell lies highest. The page carries no
+/// freeblock and no fragmented byte, which is what a page built in one
+/// pass has. `number` is the page's own number, because page 1 carries
+/// the database header before its b-tree header, and those hundred bytes
+/// are left as they are.
+///
+/// Answers nothing where the cells and their pointers do not fit.
+#[must_use]
+pub fn build(
+    kind: Kind,
+    number: u32,
+    page_size: usize,
+    usable: usize,
+    cells: &[Vec<u8>],
+    right_most: Option<u32>,
+) -> Option<Vec<u8>> {
+    let start = if number == 1 { HEADER_LEN } else { 0 };
+    if usable > page_size || start.saturating_add(kind.header_len()) > usable {
+        return None;
+    }
+    let mut out = alloc::vec![0u8; page_size];
+    let mut content = usable;
+    let mut pointers = Vec::with_capacity(cells.len());
+    for cell in cells {
+        content = content.checked_sub(cell.len())?;
+        for (slot, byte) in out.iter_mut().skip(content).zip(cell) {
+            *slot = *byte;
+        }
+        pointers.push(content);
+    }
+    let array = start.saturating_add(kind.header_len());
+    if array.saturating_add(cells.len().saturating_mul(2)) > content {
+        return None;
+    }
+    for (slot, byte) in out.iter_mut().skip(start).zip([kind.byte()]) {
+        *slot = byte;
+    }
+    // The first freeblock and the fragmented bytes are nought, which the
+    // page already is.
+    put16(
+        &mut out,
+        start.saturating_add(3),
+        u16::try_from(cells.len()).ok()?,
+    );
+    // A content area that begins at 65536 is written as nought, which is
+    // the whole of the largest page there is.
+    put16(
+        &mut out,
+        start.saturating_add(5),
+        u16::try_from(content).unwrap_or(0),
+    );
+    if let Some(page) = right_most {
+        for (slot, byte) in out
+            .iter_mut()
+            .skip(start.saturating_add(8))
+            .zip(page.to_be_bytes())
+        {
+            *slot = byte;
+        }
+    }
+    for (at, offset) in pointers.iter().enumerate() {
+        put16(
+            &mut out,
+            array.saturating_add(at.saturating_mul(2)),
+            u16::try_from(*offset).unwrap_or(0),
+        );
+    }
+    Some(out)
+}
+
+/// Two bytes at `at`, big-endian. A page shorter than that is one the
+/// caller has already refused.
+fn put16(out: &mut [u8], at: usize, value: u16) {
+    for (slot, byte) in out.iter_mut().skip(at).zip(value.to_be_bytes()) {
+        *slot = byte;
     }
 }
 

@@ -158,21 +158,6 @@ fn a_header_whose_last_serial_type_does_not_end_is_refused_once() {
     assert_eq!(values.next(), None);
 }
 
-/// The fixtures whose every row is written back and compared, and what
-/// each was written to hold.
-const WRITTEN: [(&str, &[u8]); 8] = [
-    // Every serial type, every affinity, a header either side of the
-    // size varint counting itself, a key's own tree and a rowid alias.
-    ("records.db", include_bytes!("fixtures/records.db")),
-    ("small.db", include_bytes!("fixtures/small.db")),
-    ("page512.db", include_bytes!("fixtures/page512.db")),
-    ("indexed.db", include_bytes!("fixtures/indexed.db")),
-    ("joins.db", include_bytes!("fixtures/joins.db")),
-    ("keys.db", include_bytes!("fixtures/keys.db")),
-    ("overflow.db", include_bytes!("fixtures/overflow.db")),
-    ("utf16.db", include_bytes!("fixtures/utf16.db")),
-];
-
 /// The values of one record, as an expression holds them.
 fn owned(record: &Record<'_>) -> Vec<crate::value::Value> {
     record
@@ -191,7 +176,7 @@ fn owned(record: &Record<'_>) -> Vec<crate::value::Value> {
 fn every_row_of_every_fixture_is_written_back_as_the_bytes_it_was_read_from() {
     use crate::image::Image;
     let mut rows = 0;
-    for (name, bytes) in WRITTEN {
+    for (name, bytes) in crate::tests::WRITTEN {
         let image = Image::open(bytes).unwrap_or_else(|error| panic!("{name}: {error:?}"));
         let format = image.header().schema_format;
         for table in tables(&image) {

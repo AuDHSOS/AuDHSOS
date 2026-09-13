@@ -17,7 +17,7 @@
 
 use db_sqlite::db::Database;
 use db_sqlite::value::Value as Owned;
-use db_sqlite::{Cell, Image, Kind, Record, Value};
+use db_sqlite::{Cell, Header, Image, Kind, Page, Record, Value};
 
 /// What is asked of every table the file names, before its name.
 const SHAPES: [&[u8]; 2] = [
@@ -174,12 +174,15 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
         let Ok(page) = image.page(number) else {
             continue;
         };
+        let mut cells = Vec::new();
         for index in 0..page.cells() {
             let Ok(cell) = page.cell(index) else {
                 continue;
             };
             check(&image, page.kind(), &cell);
+            cells.push(db_sqlite::page::write_cell(&cell));
         }
+        built_back(&page, number, &header, &cells);
         assert_eq!(
             page.right_most().is_some(),
             page.kind().is_interior(),
@@ -262,6 +265,46 @@ fn walk(image: &Image<'_>, root: u32, roots: &mut Vec<u32>) {
                 roots.push(page);
             }
         }
+    }
+}
+
+/// The cells of a page, written back into a page of their own, which
+/// reads as the same cells. The bytes need not be the bytes the file
+/// holds: a file may write a length as a varint longer than the value
+/// needs, and this engine writes the shortest one.
+fn built_back(page: &Page<'_>, number: u32, header: &Header, cells: &[Vec<u8>]) {
+    if cells.len() != page.cells() {
+        return;
+    }
+    let page_size = usize::try_from(header.page_size).unwrap_or(0);
+    let usable = usize::try_from(header.usable()).unwrap_or(0);
+    let Some(built) = db_sqlite::page::build(
+        page.kind(),
+        number,
+        page_size,
+        usable,
+        cells,
+        page.right_most(),
+    ) else {
+        return;
+    };
+    let again = Page::parse(&built, number, header.usable())
+        .expect("a page this engine built is one it reads");
+    assert_eq!(again.cells(), page.cells(), "a page of another width");
+    assert_eq!(again.kind(), page.kind(), "a page of another kind");
+    assert_eq!(
+        again.right_most(),
+        page.right_most(),
+        "a right-most pointer that moved"
+    );
+    for index in 0..page.cells() {
+        let Ok(was) = page.cell(index) else {
+            continue;
+        };
+        let now = again
+            .cell(index)
+            .expect("a cell this engine wrote is one it reads");
+        assert_eq!(was, now, "a cell that moved");
     }
 }
 

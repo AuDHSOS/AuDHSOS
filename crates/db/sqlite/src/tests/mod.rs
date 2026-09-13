@@ -265,3 +265,18 @@ pub(super) fn index_leaf_past_the_page(page_size: usize) -> Vec<u8> {
     page[8..10].copy_from_slice(&u16::try_from(page_size).unwrap_or(0).to_be_bytes());
     page
 }
+
+/// The fixtures a test reads whole: every one the shell wrote that holds
+/// a table, and what each was written to hold.
+pub(crate) const WRITTEN: [(&str, &[u8]); 8] = [
+    // Every serial type, every affinity, a header either side of the
+    // size varint counting itself, a key's own tree and a rowid alias.
+    ("records.db", include_bytes!("fixtures/records.db")),
+    ("small.db", include_bytes!("fixtures/small.db")),
+    ("page512.db", include_bytes!("fixtures/page512.db")),
+    ("indexed.db", include_bytes!("fixtures/indexed.db")),
+    ("joins.db", include_bytes!("fixtures/joins.db")),
+    ("keys.db", include_bytes!("fixtures/keys.db")),
+    ("overflow.db", include_bytes!("fixtures/overflow.db")),
+    ("utf16.db", include_bytes!("fixtures/utf16.db")),
+];

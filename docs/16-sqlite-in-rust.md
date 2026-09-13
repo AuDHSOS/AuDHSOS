@@ -77,7 +77,7 @@ Each rule is checkable, and each makes a later thing possible.
 
 | Module | What it holds | Decided in |
 |--------|---------------|------------|
-| `header`, `page`, `record`, `image`, `bytes` | The hundred-byte header, the four b-tree page types, the four cell shapes, overflow chains, the record format read and written, the walk of a table tree and of an index tree. | Q1, D-162 |
+| `header`, `page`, `record`, `image`, `bytes` | The hundred-byte header, the four b-tree page types read and written, the four cell shapes, overflow chains, the record format read and written, the walk of a table tree and of an index tree. | Q1, D-162, D-163 |
 | `wal` | The write-ahead log a reader must follow: the header, the frames, the checksum of section 4.2, and the newest committed frame of each page. | D-155, Q3 |
 | `journal` | The rollback journal a reader must play back: the headers, the records, the checksum of `pager_cksum`, and the content each page began with. | D-156, Q3 |
 | `token`, `keyword` | SQL text to tokens, the same character classes as `src/tokenize.c`. | Q4 |
@@ -123,6 +123,7 @@ Each rule is checkable, and each makes a later thing possible.
 | A database caught mid-transaction | 19 cases over `rollback.db`, and the journals two modes leave behind | the fixture and journals built by hand |
 | The format under every configuration | 11 fixtures, the same three rows and the same index | the matrix, 16.11 |
 | A row written back as the bytes it was read from | 978 rows over 8 files | the fixtures the shell wrote |
+| A cell written back, and a page built from its cells | 1663 cells, 56 pages | the fixtures the shell wrote |
 | The readers against arbitrary bytes | 7 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval`, `sqlite_wal`, `sqlite_journal`, `sqlite_format` |
 
 The crate is `COMPLETE` in `crates/tools/xtask/src/policy.rs`: 100 percent
@@ -497,8 +498,9 @@ through the walker; the crate meets D4.
 
 ## 16.21 Q7. Writing
 
-Status: the record is written; the b-tree writer is not.
-Depends on: Q3, Q5. Recorded in D-162.
+Status: a row is written as a record and a page as its cells; the tree
+that puts a cell on a page is not.
+Depends on: Q3, Q5. Recorded in D-162 and D-163.
 Size: L.
 
 ### Needs
@@ -510,9 +512,11 @@ Size: L.
 
 1. Write a row as a record: the affinity of each column, a serial type
    per value, the header of types and the body of values. Built.
-2. Insert, delete and balance in a b-tree.
-3. Keep the free list and the pointer maps.
-4. Run a transaction through the rollback journal in each of its four
+2. Write a cell as the bytes a page holds it in, and a page as the
+   cells it holds. Built.
+3. Insert, delete and balance in a b-tree.
+4. Keep the free list and the pointer maps.
+5. Run a transaction through the rollback journal in each of its four
    modes, then through the WAL.
 
 ### Done when
