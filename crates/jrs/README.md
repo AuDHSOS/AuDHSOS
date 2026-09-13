@@ -598,12 +598,14 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Object.prototype methods (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/prototype --summary` | 248 | 494 | 284 (57.49%) | 202 (40.89%) | 8 (1.62%) |
 | Property accessors (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors --summary` | 21 | 42 | 32 (76.19%) | 10 (23.81%) | 0 (0.00%) |
 | String.prototype methods (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,708 (79.66%) | 382 (17.82%) | 54 (2.52%) |
-| Function declarations (focused) | focused | `61be13c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/function --summary` | 451 | 783 | 677 (86.46%) | 4 (0.51%) | 102 (13.03%) |
-| Function declarations on the register engine (focused) | focused | `61be13c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/function --summary` | 451 | 783 | 73 (9.32%) | 608 (77.65%) | 102 (13.03%) |
+| Function declarations and calls (focused) | focused | `ab6c28a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/function test/language/expressions/call --summary` | 543 | 954 | 788 (82.60%) | 15 (1.57%) | 151 (15.83%) |
+| Function declarations and calls on the register engine (focused) | focused | `ab6c28a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/function test/language/expressions/call --summary` | 543 | 954 | 73 (7.65%) | 733 (76.83%) | 148 (15.51%) |
+| Loop statements (focused) | focused | `24d6a88` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for test/language/statements/while test/language/statements/do-while --summary` | 459 | 900 | 713 (79.22%) | 11 (1.22%) | 176 (19.56%) |
+| Loop statements on the register engine (focused) | focused | `24d6a88` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for test/language/statements/while test/language/statements/do-while --summary` | 459 | 900 | 107 (11.89%) | 619 (68.78%) | 174 (19.33%) |
 | Property reads over the Prototype Chain (focused) | focused | `a240620` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/built-ins/Object/prototype test/built-ins/Array/prototype --summary` | 3,080 | 6,119 | 5,060 (82.69%) | 1,021 (16.69%) | 38 (0.62%) |
 | Property reads over the Prototype Chain on the register engine (focused) | focused | `a240620` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/built-ins/Object/prototype test/built-ins/Array/prototype --summary` | 3,080 | 6,119 | 2 (0.03%) | 6,099 (99.67%) | 18 (0.29%) |
-| Complete pinned suite, including staging and Intl | full | `61be13c` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `a240620` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 2,770 (2.69%) | 64,429 (62.60%) | 35,726 (34.71%) |
+| Complete pinned suite, including staging and Intl | full | `24d6a88` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `24d6a88` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 2,770 (2.69%) | 64,429 (62.60%) | 35,726 (34.71%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -615,10 +617,11 @@ That refusal is why its failed count is high; it is the honest starting number
 of the migration, not a defect of the suite. The gap between each pair of rows
 is what the milestone group in
 [docs/jrs-architecture.md](../../docs/jrs-architecture.md) has to close. No
-Test262 file reaches the engine yet. Code identity now belongs to the Realm, so
-a function declared in one Script is callable from the next; what a harness file
-still needs is a call with `this` and `new`, and a lowering that takes a call of
-a global name wherever the stack path runs one.
+Test262 file reaches the engine yet. Code identity belongs to the Realm, so a
+function declared in one Script is callable from the next, and a call of a
+global name is lowered where it is returned and inside the body of a loop, which
+`harness/compareArray.js` needs. What the remaining harness files need is a call
+with `this` and `new`.
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
@@ -632,14 +635,13 @@ family is almost entirely refusals. The full run is unchanged against the run
 before it, so no pass depended on the wrong answer.
 
 The focused families are what the register backend gained in this migration
-step: the five statements, the methods of %Object.prototype% it now answers
+step. The function, call and loop rows are pairs measuring the two paths against
+each other rather than a family the engine has taken over; the rest are families
+it answers itself: the five statements, the methods of %Object.prototype% it now answers
 itself, the property accessors, which reach a String's own "length" and indices
 on the new engine, the methods of %String.prototype%, and the four search
-methods, `join`, `push`, `pop`, `reverse` and `slice` of %Array.prototype%. The
-function-declaration family is the exception: its two rows measure the step in
-which code identity moved to the Realm, so they are a pair to be read against
-each other rather than a family the engine has taken over. What the engine
-passes there are the files that need no harness. Each produces
+methods, `join`, `push`, `pop`, `reverse` and `slice` of %Array.prototype%. What the engine
+passes in the paired families are the files that need no harness. Each produces
 the counts the legacy stack backend produces for the same family, which is what
 a backend migration has to show: the full-suite counts are unchanged against the
 same suite measured before it, variant for variant. The Array search run was measured at tree
@@ -648,9 +650,9 @@ same suite measured before it, variant for variant. The Array search run was mea
 `2f35debf666654ca39a9ef91cdf75097a7125288`, the reverse run at tree
 `19054962f1f93e409f7b0d5dad173b74d5eb1d88`, the iteration run at tree
 `769107adb8c6f8b0f87d7dfe0f348df4531d0ce0`, the slice run at tree
-`e873e530ad100efc4492e5a0a4ce68c824503cae`, and the function-declaration runs
-and the full run of the stack backend at tree `d44a3270a4c88824b6b9bb1d63a4d6ea7e9d9ff1`. The property-read runs and
-the full run of the register engine were measured at tree `e946d0f5655a3f90d2abe1986bcff7cdc9765072`.
+`e873e530ad100efc4492e5a0a4ce68c824503cae`, and the property-read runs at tree
+`e946d0f5655a3f90d2abe1986bcff7cdc9765072`. The function, call and loop runs
+and both full runs were measured at tree `24a00c502d96c127a9f3c885ed1a49a047c28db7`.
 
 ### Historical Test262 baseline
 

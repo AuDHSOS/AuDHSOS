@@ -519,7 +519,7 @@ und deshalb erreicht ihn keine Test262-Datei. Die Reihenfolge folgt daraus:
 | G3 | GlobalDeclarationInstantiation (16.1.7) für `var`, `function`, `let`, `const` samt Redeklarationsfehlern. | Bindungen überleben mehrere `Realm::evaluate`-Aufrufe; Fehlerfälle von 16.1.7 sind geprüft. |
 | G4 | Backend-Auswahl pro Realm statt pro Script. | Ein Realm läuft vollständig auf einem Pfad; ein Programm kann nicht mehr davon abhängen, welcher Pfad es kompiliert hat. |
 | G5a | Code-Identität gehört dem Realm: der Realm hält den Code jedes Scripts, das er ausgeführt hat, und ein Funktionsobjekt nennt seine Unit. Erledigt. | `function f(){}` in einem Script, `f()` im nächsten desselben Realms antwortet wie im Stack-Backend. |
-| G5b | Das Lowering nimmt einen Aufruf eines globalen Namens nur, wenn sein Ergebnis statisch typisierbar wird: `return f(x)+0` wird übersetzt, `return f(x)` und jeder Aufruf im Rumpf einer Schleife nicht. | Ein Aufruf eines globalen Namens wird an jeder Stelle übersetzt, an der der Stack-Pfad ihn ausführt. |
+| G5b | Das Lowering nimmt einen Aufruf eines globalen Namens auch dort, wo sein Ergebnis statisch nicht typisierbar ist: als Rückgabewert und im Rumpf einer Schleife, deren Kopf dafür von den Typen der Zuweisungen des Rumpfes ausgeht. Erledigt. | Ein Aufruf eines globalen Namens wird an jeder Stelle übersetzt, an der der Stack-Pfad ihn ausführt. |
 | G5 | Aufrufe mit `this` und `new`. | Der Test262-Harness lädt im Engine-Core; ab hier sind Test262-Zahlen für diesen Pfad überhaupt messbar. |
 
 G0 steht vorn, weil G2 und G3 ohne ihn nicht fertig werden können. Das Lowering
