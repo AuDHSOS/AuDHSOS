@@ -48,7 +48,7 @@ it was finished in document 12.
 | The MCFG table and the ECAM window | **missing** |
 | PCI enumeration, BARs, capabilities | **missing** |
 | Volatile MMIO from a `forbid(unsafe_code)` crate | **missing** |
-| `driver-virtio-net`, `server-net`, the socket protocol | **missing** |
+| `driver-virtio-net`, `server-net`, the socket protocol | Phase 14 |
 
 The kernel counts ticks — `KernelState::ticks` — and `system_info`
 reports the tick frequency, so the clock is arithmetic over a number the
@@ -361,6 +361,23 @@ pub trait Registers {
 configuration, notification, ISR status, device configuration — so the
 crate never computes an address and the adapter never interprets a field.
 
+The frame buffers reach it the same way, through a second trait:
+
+```rust
+pub trait Frames {
+    fn count(&self) -> u16;
+    fn len(&self) -> u32;
+    fn address(&self, index: u16) -> Option<u64>;
+    fn bytes(&self, index: u16) -> Option<&[u8]>;
+    fn bytes_mut(&mut self, index: u16) -> Option<&mut [u8]>;
+}
+```
+
+The rings of a queue are `virtio-queue`'s `QueueMemory` and the buffers are
+this, so the four pieces of the region — the rings of each queue and the
+buffers of each side — are four values over disjoint halves of one slice
+and the driver holds all four at once.
+
 Modules:
 
 - `common.rs`: the common configuration structure of section 4.1.4.3 —
@@ -381,16 +398,26 @@ Modules:
   and the failure path into `Failed` for each step that can refuse.
 - `rx.rs`: receive. Every buffer of the receive area is in the available
   ring from the start; a used element yields the frame behind its
-  twelve-byte header, the caller copies what it wants out of it, and the
+  twelve-byte header, copied into a buffer the caller hands in, and the
   buffer goes back into the available ring in the same call, so the device
-  is never left with fewer buffers than the driver believes.
+  is never left with fewer buffers than the driver believes. The copy is
+  what makes the two independent: a slice of the buffer itself would be
+  memory the device may write into from the moment the buffer is available
+  again. Which buffer a used element names is read out of a table of the
+  driver, one entry per descriptor of the queue, because the queue hands
+  out whichever descriptor was free and not the one the buffer went out on
+  last time.
 - `tx.rs`: transmit. A frame is written into a free transmit buffer behind
   a zeroed header, added as one output chain, and the device notified
   through the notify structure at the queue's own offset. Completions are
   drained before the next send, and a send with no free buffer is a
   refusal the caller retries, not a wait.
 - `net.rs`: the device configuration of section 5.1.4, which for the
-  negotiated feature set is the six bytes of the MAC address.
+  negotiated feature set is the six bytes of the MAC address, read between
+  two reads of the configuration generation as virtio 2.5.1 requires; and
+  the twelve-byte header of section 5.1.9, whose every field this driver
+  writes as zero, `num_buffers` included, which 5.1.9.2.1 requires of a
+  transmitted packet.
 
 What is not in the crate: link status changes, statistics, offloads,
 multiqueue, and the control queue. Each is a named refusal in
@@ -427,10 +454,11 @@ deadline and give it to the timer thread.
 
 Giving it to the timer thread is the one place where two threads of this
 server touch the same memory, and it is worth naming rather than
-discovering: the deadline is one aligned word in a memory object the
-serving thread owns and the timer thread maps, written by one thread and
-read by the other, with a notification signalled after the write so that a
-timer already asleep on a later deadline wakes and re-reads. No lock,
+discovering: the deadline is one aligned word of the program itself,
+written by one thread and read by the other, with a notification signalled
+after the write so that a timer already asleep on a later deadline wakes
+and re-reads. It is a `static` and not a memory object because the two are
+threads of one process and therefore of one address space. No lock,
 because there is one writer and one reader and the value is a single word;
 no shared stack state, because that word is all there is. The console
 driver needed none of this because it has no deadline to keep, and the
@@ -452,22 +480,36 @@ than through one IPC call per byte (D-31's shape, D-116).
 
 | Message | Answer |
 |---------|--------|
-| `Interface` | the MAC address, the addresses, the routes, whether DHCP has a lease |
-| `UdpBind { local }` | a socket handle, its ring memory object, and a notification |
-| `UdpSendTo { socket, remote }` | the payload is already in the ring |
+| `Interface` | the MAC address, the addresses, the router of the link, whether the address configuration client has a lease |
+| `UdpBind { port }` | a socket number and the memory object of its two rings |
+| `UdpSendTo { socket, remote, len }` | how many bytes of the outbound ring went out |
 | `UdpClose { socket }` | - |
-| `TcpConnect { socket, remote }` | pending; the notification says when it is established or refused |
-| `TcpListen { local, backlog }` | a listener handle |
-| `TcpAccept { listener }` | a socket handle and its ring, or pending |
-| `TcpSend`, `TcpRecv` | how many bytes moved through the ring |
+| `TcpConnect { remote }` | a socket number and its rings; the connection is still being opened |
+| `TcpListen { port }` | a listener number |
+| `TcpAccept { socket }` | the same number, now a connection, and its rings; or `WouldBlock` |
+| `TcpSend { socket, len }`, `TcpRecv { socket }` | how many bytes moved through the ring |
 | `TcpShutdown { socket, direction }`, `TcpClose { socket }` | - |
-| `Resolve { name }` | the addresses of both families, or a failure |
+| `TcpState { socket }` | where the connection stands |
+| `Resolve { name }` | the addresses of both families, `WouldBlock` while the resolution runs, or a failure |
 
-One ring per socket, each in its own memory object, each with a header of
-write and read sequence numbers and a capacity, exactly as the input
-protocol's ring has. A client that is not reading fills its ring and the
-stack stops advancing its window, which is the back pressure TCP already
-has; nothing in the server grows without bound.
+Two rings per socket in one memory object of two pages: the one the server
+writes and the client reads, and the one the client writes and the server
+reads. Each has a header of write and read sequence numbers, a capacity
+and a count of the bytes that did not fit, exactly as the input protocol's
+ring has. A client that is not reading fills its ring, the server stops
+taking bytes out of the connection, and the window stops advancing, which
+is the back pressure TCP already has; nothing in the server grows without
+bound.
+
+A datagram stands in the inbound ring behind a fixed record of
+twenty-four bytes: how many bytes the payload is, and the port and address
+it came from. A reader takes the record and then waits until the ring
+holds the payload it names.
+
+Nothing after the reply is a message, and nothing is signalled either: a
+call that cannot be answered yet is answered `WouldBlock` and the client
+asks again after a wait on the clock of Phase 12 (D-142). A socket
+therefore carries no notification.
 
 ## 13.12 The reference machine grows a network
 
@@ -547,10 +589,10 @@ starts on the development machine with a certificate the test builder of
 | N4 | `kernel-acpi::mcfg`, the ECAM words of `system_info`, the device memory region | 13 | S |
 | N5 | the crate `pci` | 13 | M |
 | N6 | the volatile accessor in `user-sys-x86_64`, the network device on the reference machine, and a program that enumerates | 13 | S |
-| N7 | `driver-virtio-net` | 14 | L |
-| N8 | the DMA region, and `server-net` around the stack | 14 | L |
-| N9 | the socket protocol in `user-proto`, and a client that uses it | 14 | M |
-| N10 | the end-to-end tests of 13.13 | 14 | M |
+| N7 | `driver-virtio-net` | 14 | L, implemented |
+| N8 | the DMA region, and `server-net` around the stack | 14 | L, implemented |
+| N9 | the socket protocol in `user-proto`, and a client that uses it | 14 | M, implemented |
+| N10 | the end-to-end tests of 13.13 | 14 | M, implemented |
 | N11 | the TLS transport: step T8 of document 11 | 15 | M |
 
 N1 to N3 are worth having whether or not the network follows: a clock, a

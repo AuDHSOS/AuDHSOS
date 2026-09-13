@@ -14,3 +14,5 @@ mod label;
 mod memory;
 mod name;
 mod parent;
+mod ring;
+mod socket;

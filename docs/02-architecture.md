@@ -58,7 +58,9 @@ Three properties define the design:
 | Program loading | validates the eight fields of the boot image header; maps the root task | tar reader, ELF loader, process creation |
 | Naming | - | name server |
 | Faults | converts a fault into a message to the fault handler endpoint | fault handler decides: repair, resume, kill |
-| File systems, networking, time of day | - | servers in later phases |
+| File systems | hands out the virtio block devices as register windows, message interrupts and notifications | the file system server (document 15) |
+| Networking | hands out the virtio network device the same way | the network driver and the network server in one process, and the clients of the socket protocol (document 13) |
+| Time of day | reports the moment the firmware named and the microseconds since the kernel started | whoever needs a date |
 
 ## 2.3 Kernel object model
 

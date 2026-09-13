@@ -316,6 +316,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "driver-virtio-net"
+version = "0.1.0"
+dependencies = [
+ "test-support",
+ "virtio-queue",
+]
+
+[[package]]
 name = "fs-fat"
 version = "0.1.0"
 dependencies = [
@@ -669,6 +677,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "server-net"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-time",
+ "crypto-rng",
+ "net-dhcp",
+ "net-dns",
+ "net-eth",
+ "net-ip",
+ "net-stack",
+ "net-tcp",
+ "net-udp",
+ "net-wire",
+ "user-proto",
+]
+
+[[package]]
 name = "test-support"
 version = "0.1.0"
 
@@ -679,6 +705,25 @@ dependencies = [
  "audhsos-abi",
  "audhsos-elf",
  "test-support",
+]
+
+[[package]]
+name = "user-net-programs"
+version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+ "audhsos-time",
+ "crypto-rng",
+ "driver-virtio-net",
+ "net-http",
+ "net-stack",
+ "net-wire",
+ "server-net",
+ "user-programs",
+ "user-proto",
+ "user-rt",
+ "user-sys-x86_64",
+ "virtio-queue",
 ]
 
 [[package]]
@@ -715,6 +760,7 @@ dependencies = [
  "audhsos-abi",
  "driver-i8042",
  "gfx",
+ "net-wire",
  "user-rt",
 ]
 

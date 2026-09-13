@@ -52,7 +52,7 @@ use pci::enumerate::walk as enumerate;
 use pci::error::PciError;
 use pci::header::{COMMAND_BUS_MASTER, COMMAND_MEMORY, read_command, write_command};
 use pci::msix;
-use pci::virtio::{self, BLOCK_DEVICE, VIRTIO_VENDOR};
+use pci::virtio::{self, BLOCK_DEVICE, NETWORK_DEVICE, VIRTIO_VENDOR};
 use user_loader::tar::{Archive, Kind};
 use user_loader::volume;
 use user_loader::{Plan, STACK_PAGES};
@@ -90,6 +90,8 @@ enum Grant {
     /// The registers of the virtio block device, its message interrupt,
     /// and the notification that interrupt is bound to.
     Block,
+    /// The same three for the virtio network device.
+    Net,
 }
 
 /// One line of the start table: what to start, how, and with what.
@@ -123,6 +125,10 @@ struct Program {
     /// Whether it may listen, which is a badged capability to the input
     /// server, for the same reason.
     listens: bool,
+    /// Whether it may use a socket, which is a badged capability to the
+    /// network server, for the same reason: the server keeps a socket
+    /// table per client.
+    talks: bool,
     /// Whether it reports to this program when it is done. The machine
     /// ends when every program that reports has reported.
     reports: bool,
@@ -133,7 +139,7 @@ struct Program {
 /// The quotas are what the programs measured out at need with room over
 /// them; a program that asks for more than its line says is refused by the
 /// kernel and not by this table.
-const PROGRAMS: [Program; 14] = [
+const PROGRAMS: [Program; 16] = [
     Program {
         name: b"server-memory",
         priority: priority::SERVER,
@@ -145,6 +151,7 @@ const PROGRAMS: [Program; 14] = [
         memory: false,
         draws: false,
         listens: false,
+        talks: false,
         reports: false,
     },
     Program {
@@ -158,6 +165,7 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: false,
         listens: false,
+        talks: false,
         reports: false,
     },
     Program {
@@ -171,6 +179,7 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: false,
         listens: false,
+        talks: false,
         reports: false,
     },
     // The file system server drives the block device: the register
@@ -190,6 +199,7 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: false,
         listens: false,
+        talks: false,
         reports: false,
     },
     // The display server maps the framebuffer, which is four mebibytes on
@@ -206,6 +216,7 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: false,
         listens: false,
+        talks: false,
         reports: false,
     },
     // The input server owns the PS/2 controller and both of its lines. It
@@ -222,6 +233,7 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: false,
         listens: false,
+        talks: false,
         reports: false,
     },
     Program {
@@ -235,6 +247,7 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: false,
         listens: false,
+        talks: false,
         reports: true,
     },
     Program {
@@ -248,6 +261,7 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: false,
         listens: true,
+        talks: false,
         reports: true,
     },
     Program {
@@ -261,6 +275,7 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: true,
         listens: false,
+        talks: false,
         reports: true,
     },
     Program {
@@ -274,6 +289,7 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: false,
         listens: true,
+        talks: false,
         reports: true,
     },
     // The canvas draws and listens at once, and its surface is the size of
@@ -290,6 +306,7 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: true,
         listens: true,
+        talks: false,
         reports: true,
     },
     // The bus walk maps one mebibyte of the configuration window at a time,
@@ -306,6 +323,43 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: false,
         listens: false,
+        talks: false,
+        reports: true,
+    },
+    // The network server drives the network device: the register window,
+    // the message interrupt, and the notification that interrupt is bound
+    // to. It maps the window, the region the device reads and writes, the
+    // memory its stack writes into, and one page pair per socket, so its
+    // quota of frames is a driver's. A machine without the device starts it
+    // all the same, and it answers that there is no interface.
+    Program {
+        name: b"server-net",
+        priority: priority::DRIVER,
+        handles: 64,
+        frames: 128,
+        objects: 64,
+        grant: Grant::Net,
+        names: true,
+        memory: true,
+        draws: false,
+        listens: false,
+        talks: false,
+        reports: false,
+    },
+    // The program that uses the network server. It starts after the bus
+    // walk so that the lines of the two do not interleave.
+    Program {
+        name: b"app-net",
+        priority: priority::APPLICATION,
+        handles: 32,
+        frames: 32,
+        objects: 32,
+        grant: Grant::None,
+        names: true,
+        memory: true,
+        draws: false,
+        listens: false,
+        talks: true,
         reports: true,
     },
     // The program that uses the file system server. It starts after the
@@ -321,6 +375,7 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: false,
         listens: false,
+        talks: false,
         reports: true,
     },
     // It faults and its thread stops there, so it never reports and the
@@ -336,6 +391,7 @@ const PROGRAMS: [Program; 14] = [
         memory: true,
         draws: false,
         listens: false,
+        talks: false,
         reports: false,
     },
 ];
@@ -402,11 +458,14 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         console: None,
         display: None,
         input: None,
+        net: None,
         console_for_self: None,
         files_for_self: None,
         bin: None,
         ecam: None,
         blocks: None,
+        network: None,
+        walked: false,
         next_badge: 1,
     };
 
@@ -442,6 +501,8 @@ struct World {
     display: Option<EndpointHandle>,
     /// The endpoint of the input server.
     input: Option<EndpointHandle>,
+    /// The endpoint of the network server.
+    net: Option<EndpointHandle>,
     /// The same, badged for the root task's own lines.
     console_for_self: Option<EndpointHandle>,
     /// The endpoint of the file system server, badged for the root task's
@@ -458,7 +519,14 @@ struct World {
     /// Every virtio block device the enumeration found and prepared, in
     /// the order the bus has them: the disk the firmware read first, and
     /// the disk the system writes after it (3.1.1).
-    blocks: Option<ArrayVec<Block, MAX_BLOCK_DEVICES>>,
+    blocks: Option<ArrayVec<Device, MAX_BLOCK_DEVICES>>,
+    /// The virtio network device the enumeration found and prepared, where
+    /// the machine carries one.
+    network: Option<Device>,
+    /// Whether the bus was walked for that device. A machine that carries
+    /// none is a machine this stays `true` and `network` stays `None` on,
+    /// so the walk happens once either way.
+    walked: bool,
     /// What the next child reports its faults under.
     next_badge: u64,
 }
@@ -879,6 +947,15 @@ fn install_all(
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
         push(&mut given, &mut count, Role::InputServer, handle)?;
     }
+    // A program that uses a socket is known to the network server the same
+    // way: the server keeps a socket table per client.
+    if program.talks
+        && let Some(net) = world.net
+    {
+        let marked = gate.endpoint_badge(net, badge)?;
+        let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
+        push(&mut given, &mut count, Role::NetServer, handle)?;
+    }
     // Everyone but the console driver gets the console as its log. The
     // driver is the console: a line it sent itself would be a call on the
     // endpoint it is the only receiver of, and it would wait for itself.
@@ -1005,6 +1082,9 @@ fn grant(
                 tell(given, count, Role::BlockVectorBit, block.bit)?;
             }
         }
+        // A machine that carries no virtio network device grants nothing
+        // here, for the reason the block device grants nothing above.
+        Grant::Net => grant_net(gate, world, child, given, count)?,
         Grant::Input => {
             let (ports, keyboard, mouse) = ps2(gate, world)?;
             let handle = gate.process_install_handle(child, ports.handle(), ObjectRights::PORTS)?;
@@ -1016,6 +1096,40 @@ fn grant(
                 gate.process_install_handle(child, mouse.handle(), ObjectRights::MANAGE)?;
             push(given, count, Role::AuxInterrupt, handle)?;
         }
+    }
+    Ok(())
+}
+
+/// Grants the nine roles of the virtio network device, where the machine
+/// carries one.
+fn grant_net(
+    gate: &mut Gate,
+    world: &mut World,
+    child: ProcessHandle,
+    given: &mut [(Role, Payload); MAX_GIVEN],
+    count: &mut usize,
+) -> Result<(), Error> {
+    if let Some(device) = network_device(gate, world) {
+        let handle =
+            gate.process_install_handle(child, device.registers.handle(), ObjectRights::DEVICE)?;
+        push(given, count, Role::NetRegisters, handle)?;
+        tell(given, count, Role::NetCommon, device.places[0].word())?;
+        tell(given, count, Role::NetNotify, device.places[1].word())?;
+        tell(given, count, Role::NetIsr, device.places[2].word())?;
+        tell(given, count, Role::NetConfig, device.places[3].word())?;
+        tell(
+            given,
+            count,
+            Role::NetNotifyMultiplier,
+            u64::from(device.multiplier),
+        )?;
+        let handle =
+            gate.process_install_handle(child, device.interrupt.handle(), ObjectRights::MANAGE)?;
+        push(given, count, Role::NetInterrupt, handle)?;
+        let handle =
+            gate.process_install_handle(child, device.notification.handle(), ObjectRights::NOTIFY)?;
+        push(given, count, Role::NetNotification, handle)?;
+        tell(given, count, Role::NetVectorBit, device.bit)?;
     }
     Ok(())
 }
@@ -1196,9 +1310,10 @@ impl From<Refused> for Error {
     }
 }
 
-/// The virtio block device of the machine, as the root task found it and
-/// made it ready to be driven.
-struct Block {
+/// One virtio device of the machine, as the root task found it and made it
+/// ready to be driven.
+#[derive(Clone, Copy)]
+struct Device {
     /// Device memory over the base address register the four structures
     /// lie in, aligned outward to whole frames.
     registers: MemoryHandle,
@@ -1234,14 +1349,14 @@ const STRUCTURES: [virtio::Kind; 4] = [
     virtio::Kind::Device,
 ];
 
-/// The bit of the notification the message interrupt of a block device
-/// sets. Each device is given a notification of its own, so the bit is
-/// the first of it.
-const BLOCK_VECTOR_BIT: u64 = 0;
+/// The bit of the notification the message interrupt of a device sets.
+/// Each device is given a notification of its own, so the bit is the first
+/// of it.
+const DEVICE_VECTOR_BIT: u64 = 0;
 
-/// The entry of the MSI-X table the vector is written into. The driver
+/// The entry of the MSI-X table the vector is written into. Each driver
 /// uses one vector, so it is the first.
-const BLOCK_MSIX_ENTRY: u32 = 0;
+const DEVICE_MSIX_ENTRY: u32 = 0;
 
 /// The configuration window of the PCI bus, made on the first ask and
 /// kept: the root task enumerates through it and `app-lspci` is given a
@@ -1261,9 +1376,9 @@ fn window(gate: &mut Gate, world: &mut World) -> Option<(MemoryHandle, BusRange)
 fn block_devices<'a>(
     gate: &mut Gate,
     world: &'a mut World,
-) -> &'a ArrayVec<Block, MAX_BLOCK_DEVICES> {
+) -> &'a ArrayVec<Device, MAX_BLOCK_DEVICES> {
     if world.blocks.is_none() {
-        match find_blocks(gate, world) {
+        match find_devices(gate, world, BLOCK_DEVICE) {
             Ok(found) => {
                 // What the handover left behind, read back off each
                 // device: the risk this reduces is a message table that
@@ -1299,7 +1414,45 @@ fn block_devices<'a>(
 }
 
 /// What `block_devices` answers for a machine whose enumeration refused.
-const EMPTY_BLOCKS: ArrayVec<Block, MAX_BLOCK_DEVICES> = ArrayVec::new();
+const EMPTY_BLOCKS: ArrayVec<Device, MAX_BLOCK_DEVICES> = ArrayVec::new();
+
+/// The virtio network device, found and prepared on the first ask and
+/// kept. A machine carries at most one (3.1.1), so what is kept is one
+/// device and not a list.
+fn network_device(gate: &mut Gate, world: &mut World) -> Option<Device> {
+    if !world.walked {
+        world.walked = true;
+        match find_devices(gate, world, NETWORK_DEVICE) {
+            Ok(found) => {
+                let device = found.iter().next().copied();
+                if let Some(ready) = device.as_ref() {
+                    let line: Line<160> = Line::of(format_args!(
+                        "[init] net msix bar{}+{:#x} of {} vectors holds {:#x}/{:#x} masked={}\n",
+                        ready.table.table.bar,
+                        ready.table.table.offset,
+                        ready.table.vectors,
+                        ready.back.address,
+                        ready.back.data,
+                        ready.back.masked
+                    ));
+                    say(gate, world, line.as_bytes());
+                }
+                world.network = device;
+            }
+            Err(refused) => {
+                let (first, frames) = refused.about.unwrap_or((0, 0));
+                let line: Line<160> = Line::of(format_args!(
+                    "[init] no network device: {} at {} ({first:#x}+{frames:#x})\n",
+                    refused.error.message(),
+                    refused.step
+                ));
+                say(gate, world, line.as_bytes());
+                world.network = None;
+            }
+        }
+    }
+    world.network
+}
 
 /// Every virtio block device of the machine, prepared for a driver.
 ///
@@ -1311,10 +1464,11 @@ const EMPTY_BLOCKS: ArrayVec<Block, MAX_BLOCK_DEVICES> = ArrayVec::new();
 /// system writes (3.1.1). The driver tells them apart by what is on them
 /// and not by that order: a disk that carries a partition table is one
 /// somebody else wrote.
-fn find_blocks(
+fn find_devices(
     gate: &mut Gate,
     world: &mut World,
-) -> Result<ArrayVec<Block, MAX_BLOCK_DEVICES>, Refused> {
+    kind: u16,
+) -> Result<ArrayVec<Device, MAX_BLOCK_DEVICES>, Refused> {
     let system = world.system.ok_or(Error::AccessDenied).step("system")?;
     let own = world.own;
     let mut found = ArrayVec::new();
@@ -1325,7 +1479,16 @@ fn find_blocks(
         let offset = u64::from(bus.saturating_sub(buses.first_bus)).saturating_mul(BYTES_PER_BUS);
         let mut mapping =
             Mapping::window(gate, own, memory, BUS, offset, BYTES_PER_BUS).step("bus")?;
-        let outcome = on_one_bus(gate, system, own, &mut mapping, buses, bus, &mut found);
+        let outcome = on_one_bus(
+            gate,
+            system,
+            own,
+            &mut mapping,
+            buses,
+            bus,
+            kind,
+            &mut found,
+        );
         mapping.unmap(gate, own).step("bus back")?;
         outcome?;
     }
@@ -1333,6 +1496,10 @@ fn find_blocks(
 }
 
 /// Prepares every device of this bus and appends it to `found`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one bus walk needs the window it reads through, the bus it is on, and the three capabilities a device is prepared with"
+)]
 fn on_one_bus(
     gate: &mut Gate,
     system: SystemControlHandle,
@@ -1340,7 +1507,8 @@ fn on_one_bus(
     mapping: &mut Mapping,
     buses: BusRange,
     bus: u8,
-    found: &mut ArrayVec<Block, MAX_BLOCK_DEVICES>,
+    kind: u16,
+    found: &mut ArrayVec<Device, MAX_BLOCK_DEVICES>,
 ) -> Result<(), Refused> {
     let window = Window::new(buses.segment, bus, bus)
         .map_err(pci_error)
@@ -1354,7 +1522,7 @@ fn on_one_bus(
     let mut count = 0usize;
     enumerate(&space, window, |function| {
         if function.header.vendor == VIRTIO_VENDOR
-            && function.header.device == BLOCK_DEVICE
+            && function.header.device == kind
             && let Some(slot) = addresses.get_mut(count)
         {
             *slot = Some(function.address);
@@ -1385,7 +1553,7 @@ fn prepare(
     own: ProcessHandle,
     space: &mut MappedSpace<'_>,
     address: Address,
-) -> Result<Block, Refused> {
+) -> Result<Device, Refused> {
     let header = pci::header::read(space, address)
         .map_err(pci_error)
         .step("header")?
@@ -1438,7 +1606,7 @@ fn prepare(
 
     let vector = gate.interrupt_create_msi(system).step("vector")?;
     let notification = gate.notification_create().step("notification")?;
-    gate.interrupt_bind(vector.interrupt, notification, BLOCK_VECTOR_BIT)
+    gate.interrupt_bind(vector.interrupt, notification, DEVICE_VECTOR_BIT)
         .step("bind")?;
     let back = write_vector(gate, system, own, &bars, &table, &vector)?;
 
@@ -1452,13 +1620,13 @@ fn prepare(
     let table = msix::read(space, address, msix_capability.offset)
         .map_err(pci_error)
         .step("msix back")?;
-    Ok(Block {
+    Ok(Device {
         registers,
         places,
         multiplier,
         interrupt: vector.interrupt,
         notification,
-        bit: BLOCK_VECTOR_BIT,
+        bit: DEVICE_VECTOR_BIT,
         table,
         back,
     })
@@ -1607,7 +1775,7 @@ fn write_entry_into(
         u64::from(window_offset(register))
             .wrapping_add(u64::from(table.table.offset))
             .wrapping_add(
-                u64::from(BLOCK_MSIX_ENTRY)
+                u64::from(DEVICE_MSIX_ENTRY)
                     .wrapping_mul(u64::try_from(msix::ENTRY_LEN).unwrap_or(0)),
             ),
     )
@@ -1813,6 +1981,7 @@ fn remember(
         }
         b"server-display" => world.display = Some(endpoint),
         b"server-input" => world.input = Some(endpoint),
+        b"server-net" => world.net = Some(endpoint),
         _ => {}
     }
     Ok(())

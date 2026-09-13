@@ -72,7 +72,7 @@ From Phase 13 on the runner adds two more lines:
 
 ```
 -netdev user,id=n0,hostfwd=tcp:127.0.0.1:<free port>-:7 \
--device virtio-net-pci,netdev=n0,disable-legacy=on,mq=off
+-device virtio-net-pci,netdev=n0,disable-legacy=on,mq=off,mac=52:54:00:12:34:56
 ```
 
 The device arrives one phase before anything drives it, because what
@@ -88,7 +88,9 @@ a listener in the guest. The runner picks the host port free and records it in t
 device, which is the only kind `virtio-queue` and `driver-virtio-net`
 implement, so its PCI device id is `0x1041` and not the transitional
 `0x1000`; `mq=off` is the default and is written down because the driver
-depends on it. Dropping the two lines is the run Phases 13 and 14 are also
+depends on it; `mac=` is written down rather than left to QEMU's default
+because the address the driver reports is checked against the address the
+run asked for. Dropping the two lines is the run Phases 13 and 14 are also
 accepted on, as `-vga none` is the second run Phase 9 is accepted on.
 Before Phase 13 the machine has no network device at all: a device that
 neither a driver nor a bus walk looks at is one more thing for an

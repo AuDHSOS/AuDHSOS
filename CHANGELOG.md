@@ -7,6 +7,67 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Phase 14: the network on the machine. A program of the image leases an
+  address, resolves a name, takes a connection on the port the reference
+  machine forwards, and makes an HTTP request over it that it parses.
+
+- `driver-virtio-net`: the virtio network device as logic, over a register
+  trait with a scripted double and a frame trait with a memory double.
+  `VIRTIO_F_VERSION_1` and `VIRTIO_NET_F_MAC` are taken and all
+  thirty-three other bits of virtio 5.1.3 are named and refused, mergeable
+  receive buffers among them, which is what makes one buffer hold one
+  whole frame and one used element one frame. The initialization is steps
+  2 to 8 of virtio 3.1.1 over the state machine of `virtio-queue`, with a
+  vector per queue read back as 4.1.5.1.3 asks. The receive path posts
+  every buffer before the first frame arrives, copies the frame out from
+  behind its twelve-byte header, and puts the buffer back in the call that
+  took it; the transmit path drains the completions before it writes, and
+  refuses rather than waits when every buffer is with the device.
+
+- `server-net`: the network server as logic, around `net-stack`. It keeps
+  one socket table per client, found by the badge of the endpoint the
+  message came through, and two rings per socket in one memory object. A
+  round moves what a connection holds into the inbound ring as far as the
+  ring has room and what the client wrote into the connection as far as
+  its window allows, which is the back pressure TCP already has. It is
+  tested against a second server on the same link and against a station
+  that answers a discover, a request and one name.
+
+- The socket protocol in `user-proto`, with the byte ring both directions
+  of a socket travel through, and `app-net`, the program of the image that
+  uses it. `server-net` and `app-net` join the start table of the root
+  task, which prepares the network device the way it prepares the block
+  devices: the register window, the message interrupt, and the
+  notification it is bound to.
+
+- D-142: every call of the socket protocol is answered at once, and what
+  is not ready yet is answered `WouldBlock`. A server of this system holds
+  one reply capability at a time, so a reply held back until a connection
+  opens stalls every other client behind the one that is waiting.
+
+- D-143: a listener of the socket protocol becomes the connection a peer
+  opened and keeps its number, `net-tcp` opening one connection in
+  `LISTEN` and turning that same connection into an open one.
+
+- D-144: the two programs of the network are a package of their own,
+  `user-net-programs`, and every other program stays in `user-programs`. A
+  binary of this workspace names every dependency of its package, so a
+  package is the unit that decides what a program carries; the stack under
+  these two is megabytes of an image every other program is read off the
+  volume one message at a time. The end-to-end run is what noticed.
+
+- The fuzz target `virtio_net_rx`: a used element and a receive buffer of
+  arbitrary bytes, which the driver yields a frame from or refuses, and
+  which never costs more than the one buffer it refused.
+
+- The end-to-end run opens the forwarded port, sends a line and reads it
+  back, answers the request the program makes over the same connection,
+  and checks that the driver reported the hardware address the command
+  line gave the device, that the lease is the address the built-in server
+  hands out first, that the gateway reached the client, and that the name
+  was resolved. The run without the two network lines checks that the
+  server reports no interface and that the program is told there is none.
+
 - D-141: the client of step S8 is built off the phases, and what is left
   of that step is the integration alone. D-123 put the whole of S8 behind
   Phase 14 because the step was written as the client over a socket; two
@@ -615,6 +676,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   stopped (D-133).
 
 ### Changed
+
+- D-145: every thread of a program gets sixty-four pages of stack, not
+  thirty-two. `Server` of `server-net` is twenty-nine kibibytes, `main`
+  holds one and `Server::new` holds two more while it builds one, which
+  reached the last mapped page of the old stack: the network server
+  faulted between the line that reports the device and its first poll.
 
 - `Interrupt::line` is an `Option<u8>`: a message interrupt has no line at
   any controller the kernel could mask. `interrupt_ack` on such an object

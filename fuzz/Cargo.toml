@@ -37,6 +37,7 @@ members = [
     "tcp_segment",
     "tls_handshake",
     "tls_record",
+    "virtio_net_rx",
     "x509",
 ]
 
@@ -60,6 +61,8 @@ audhsos-elf = { path = "../crates/elf" }
 audhsos-time = { path = "../crates/time" }
 crypto-rng = { path = "../crates/crypto/rng", features = ["test-doubles"] }
 driver-i8042 = { path = "../crates/drivers/i8042" }
+driver-virtio-net = { path = "../crates/drivers/virtio-net" }
+virtio-queue = { path = "../crates/virtio/queue" }
 audhsos-ssh = { path = "../crates/net/ssh" }
 audhsos-tls = { path = "../crates/net/tls" }
 audhsos-x509 = { path = "../crates/net/x509" }

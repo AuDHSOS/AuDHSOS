@@ -147,6 +147,16 @@ roles! {
     BlockInterrupt = 26, handle => "The message interrupt of that device. The driver acknowledges an interrupt through it.",
     BlockNotification = 27, handle => "The notification the message interrupt is bound to.",
     BlockVectorBit = 28, value => "The bit of that notification the message interrupt sets. It closes the description `BlockRegisters` opened.",
+    NetRegisters = 29, handle => "A device memory object over the base address register that carries the four structures of the virtio network device. It opens the description of that device: the eight roles below belong to it. Only the network server receives them.",
+    NetCommon = 30, value => "Where the common configuration structure lies in that window: its offset in the high half of the word, its length in the low half. It comes with `NetRegisters`.",
+    NetNotify = 31, value => "The same two numbers for the notification structure.",
+    NetIsr = 32, value => "The same two numbers for the interrupt status structure.",
+    NetConfig = 33, value => "The same two numbers for the device configuration structure.",
+    NetNotifyMultiplier = 34, value => "The multiplier a queue index is scaled by inside the notification structure (virtio 4.1.4.4).",
+    NetInterrupt = 35, handle => "The message interrupt of that device. The driver acknowledges an interrupt through it.",
+    NetNotification = 36, handle => "The notification the message interrupt is bound to.",
+    NetVectorBit = 37, value => "The bit of that notification the message interrupt sets. It closes the description `NetRegisters` opened.",
+    NetServer = 38, handle => "The endpoint of the network server, badged with what that server is to know this process by. A program that uses a socket receives one, as a program that draws receives `DisplayServer`.",
 }
 
 /// Why a startup message could not be read.

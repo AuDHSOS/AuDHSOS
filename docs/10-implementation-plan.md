@@ -3154,14 +3154,16 @@ reports the rest of the bus and no virtio device.
 
 ## 10.14 Phase 14: The network on the machine
 
-The design is sections 13.8 to 13.12.
+Status: implemented. The design is sections 13.8 to 13.12.
 
 ### 10.14.1 Crate `driver-virtio-net` (`crates/drivers/virtio-net`)
 
 Layer-2 logic crate, `no_std`, `#![forbid(unsafe_code)]`, no allocation,
-depending on `pci` and `virtio-queue` and on nothing of the network
-track. Modules `common.rs`, `features.rs`, `init.rs`, `rx.rs`, `tx.rs`,
-`net.rs` as 13.9 specifies, over
+depending on `virtio-queue` and on nothing else — it parses no capability,
+so it needs `pci` no more than `driver-virtio-blk` does (D-139). Modules
+`common.rs`, `features.rs`, `init.rs`, `rx.rs`, `tx.rs`, `net.rs` as 13.9
+specifies, with `queues.rs` for the two queues and `frames.rs` for the
+buffers, over
 
 ```rust
 pub trait Registers {
@@ -3170,90 +3172,115 @@ pub trait Registers {
 }
 ```
 
-with `ScriptedRegisters` behind `test-doubles`: a device that answers a
-scripted sequence and records every write.
+with `RamDevice` behind `test-doubles`: four structures of bytes that
+answer reads, record every access, and can be scripted to clear
+`FEATURES_OK`, to refuse every vector, or to change the configuration
+generation under every read. `RamFrames` is the frame area beside it,
+which a test delivers a frame into.
 
 Feature negotiation accepts `VIRTIO_F_VERSION_1` (bit 32) and
-`VIRTIO_NET_F_MAC` (bit 5) and refuses every other offered bit by name,
-in a table that pairs the bit number with the name, so that a refusal
-reads as a decision and a log line names it. `VIRTIO_NET_F_MRG_RXBUF` is
-among them, which is what makes one receive buffer hold one whole frame,
-and `VIRTIO_NET_F_CTRL_VQ` is among them, which is what makes the device
-two queues.
+`VIRTIO_NET_F_MAC` (bit 5) and refuses every other bit of virtio 5.1.3 by
+name, in a table that pairs the bit with the name, so that a refusal reads
+as a decision and a log line names it. `VIRTIO_NET_F_MRG_RXBUF` is among
+them, which is what makes one receive buffer hold one whole frame, and
+`VIRTIO_NET_F_CTRL_VQ` is among them, which is what makes the device two
+queues. Above 63 there is no bit at all: the driver reads two windows of
+thirty-two.
 
-MAC address from the device configuration of virtio section 5.1.4, as
-`[u8; 6]`.
+`Net<SLOTS>` keeps four tables of `SLOTS` entries: which buffer each
+descriptor of each queue was handed out for, and which buffer of each side
+is with the device. That is what lets the receive path name the buffer a
+used element came in, the queue handing out whichever descriptor was free.
+
+MAC address from the device configuration of virtio 5.1.4, as `[u8; 6]`,
+read between two reads of the configuration generation as 2.5.1 requires.
 
 Fuzz target `virtio_net_rx`: a used element and a buffer of arbitrary
-bytes; the driver must yield a frame or refuse and must never read
-outside the buffer.
+bytes; the driver yields a frame or refuses, never reads outside the
+buffer, and never loses more than the one buffer it refused.
 
 ### 10.14.2 The DMA region
 
-`server-init` creates one `Ram` memory object for the network driver,
-maps it into the driver's process and installs the handle with
-`READ | WRITE | MAP | INFO`. The driver calls `memory_info` once, and its
-`QueueMemory` implementation is the offset arithmetic between the mapping
-and the physical start — nothing else.
+`server-net` asks the memory server for one `Ram` memory object, maps it,
+and calls `memory_info` once; a memory object is one contiguous physical
+range (D-115), so an offset into the mapping is the same offset into
+physical memory and that one addition is the whole of the address
+arithmetic. `user_net_programs::net_dma` is that arithmetic.
 
-Layout, in this order and each with a named constant: the descriptor
-table, available ring and used ring of the receive queue; the same three
-for the transmit queue; `RX_BUFFERS` receive buffers of 2048 bytes;
-`TX_BUFFERS` transmit buffers of 2048 bytes. The region's length follows
-from the constants and is asserted at compile time against the page size.
+Layout, in this order and each with a named constant: the three rings of
+the receive queue, the three rings of the transmit queue, eight receive
+buffers of 2048 bytes, eight transmit buffers of 2048 bytes. The region is
+cut into those four pieces once, each piece borrowing a disjoint half of
+the mapping, so the driver holds the two queues and the two areas at once.
+`REGION_BYTES` follows from the constants.
 
 ### 10.14.3 `server-net` (`crates/user/servers/net`)
 
 Layer-u2 logic crate, host-tested, no system call in it; the process
-around it is a binary of `user-programs`.
+around it is the binary `server-net` of `user-net-programs`.
 
-Startup message: the endpoint of the name server, the ECAM device memory
-object, the DMA memory object, the MSI-X `Interrupt` and the notification
-it is bound to. It enumerates with `pci`, finds the virtio-net function,
-maps its structures, brings the device up with `driver-virtio-net`,
-configures the MSI-X table entry from the address and data the
-`Interrupt` was created with, seeds a `ChaChaRng` from one `random_bytes`,
-builds the `Stack` from the MAC address, starts DHCP, and registers as
-`net`.
+The startup message carries the nine roles of the network device: the
+register window, where each of its four structures lies in that window,
+the notification multiplier, the message interrupt, the notification it is
+bound to, and the bit that interrupt sets. The root task read the
+capabilities with `pci` and wrote the message interrupt into the device's
+MSI-X table, as it does for the block devices, so the server enumerates
+nothing: it maps the window, brings the device up with
+`driver-virtio-net`, seeds a `ChaChaRng` from one `random_bytes`, builds
+the `Stack` from the MAC address, starts DHCP, and registers as `net`.
 
-The three threads and the loop are 13.10, step for step: a serving thread
-on the endpoint, an interrupt thread that forwards the MSI-X notification
-to it under a badge, and a timer thread that sends a tick under a third
-badge when the deadline the serving thread wrote passes. `state.rs` holds
-the logic and is tested on the host with the network double of
-`net-stack`, a scripted device, and a clock a test advances; the threads
-themselves are the binary's, as the console driver's are.
+The crate holds the socket table of every client, the two rings of every
+socket, and the loop around `net-stack`; it takes frames in and hands
+frames out, and the device is the binary's. It is tested on the host
+against a second server on the same link and against a station that
+answers a discover, a request and one name, with a clock the test
+advances.
 
-The unsafe budget of `user-programs` grows for the two extra thread entry
-points and their IPC buffers, the same two sites per thread D-106 counted
-for the display server's watcher thread, plus the mapping of the deadline
-word.
+The three threads are 13.10, step for step: a serving thread on the
+endpoint, an interrupt thread that forwards the MSI-X notification to it
+under a badge, and a timer thread that sends a tick under a third badge
+when the deadline the serving thread wrote passes. The deadline is one
+`static` word of the program, the two being threads of one process.
+
+`user-net-programs` is a package of its own (D-144), and its unsafe budget
+covers the mappings of the two windows, the memory the stack writes into,
+the four socket pages, the two thread entry points and the gate each
+adopts, and the socket page of `app-net`.
 
 ### 10.14.4 Socket protocol (`user-proto`)
 
-The messages of the table in 13.11, each a type with `encode` and
-`decode` and no system call, in `socket.rs` beside `display.rs` and
-`input.rs`. One ring per socket in its own memory object, with the header
-`{ write_seq: u64, read_seq: u64, capacity: u32, flags: u32 }` and the
-payload behind it; a client that stops reading fills its ring and the
-stack stops advancing the window, which is the back pressure TCP already
-has. `Socket` on the client side wraps the ring and the notification.
+The messages of the table in 13.11, each a type with `encode` and `decode`
+and no system call, in `socket.rs` beside `display.rs` and `input.rs`, and
+one reply variant per request so that the label of a reply is the label of
+what it answers. Two rings per socket in one memory object of two pages,
+in `ring.rs`: the one the server writes and the one the client writes,
+each a byte ring with a header of `{ write_seq: u64, read_seq: u64,
+dropped: u32, capacity: u32 }`. A client that stops reading fills its
+ring, the server stops taking bytes out of the connection, and the window
+stops advancing, which is the back pressure TCP already has. A datagram
+stands behind a fixed record of twenty-four bytes naming its length and
+where it came from. Nothing is signalled: a call that cannot be answered
+yet is answered `WouldBlock` (D-142).
 
 ### 10.14.5 `xtask` and the reference machine
 
 The two network lines are already on the machine: Phase 13 put them there
 so that its bus walk had a device to find, with the host port chosen free
 by the runner and reported in the test log, and `--no-network` to drop
-them. `policy::CRATES` entries
-`driver-virtio-net` (Logic, deps `pci`, `virtio-queue`) and `server-net`
-(Logic, `X86_64None` in its binary form, deps `audhsos-abi`,
-`audhsos-collections`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`,
-`net-stack`, `pci`, `user-proto`).
+them. Phase 14 adds `mac=` to the device line, so that the address the
+driver reports is checked against the address the run asked for.
+`policy::CRATES` gains `driver-virtio-net` (Logic, deps `virtio-queue`,
+`test-support`) and `server-net` (Logic, deps `audhsos-abi`,
+`audhsos-time`, `crypto-rng`, `net-dns`, `net-ip`, `net-stack`, `net-tcp`,
+`net-wire`, `user-proto`).
 
-The client of the end-to-end tests is `app-net`, a program of the
-archive: it looks up `net`, waits for a lease, reports it, resolves a
-name, opens a TCP connection to the forwarded port, echoes a payload,
-performs an HTTP `GET`, reports each result as a line, and exits.
+The client of the end-to-end tests is `app-net`, the second program of
+`user-net-programs` and a program of the volume:
+it takes the endpoint the root task gave it, waits for a lease, reports
+it, resolves a name, listens on the forwarded port, echoes what the runner
+sends, makes an HTTP `GET` over the same connection, reports each result
+as a line, and exits. The runner is the other end of that one connection:
+it sends a line, reads it back, reads the request, and answers it.
 
 Acceptance: `check` green; catalog 6.6.62 to 6.6.64; the seven e2e
 assertions of 13.13 pass, and the run without the two network lines ends

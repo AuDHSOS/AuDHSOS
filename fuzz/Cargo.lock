@@ -196,6 +196,13 @@ name = "driver-i8042"
 version = "0.1.0"
 
 [[package]]
+name = "driver-virtio-net"
+version = "0.1.0"
+dependencies = [
+ "virtio-queue",
+]
+
+[[package]]
 name = "elf"
 version = "0.1.0"
 dependencies = [
@@ -516,6 +523,22 @@ version = "0.1.0"
 dependencies = [
  "audhsos-utf16",
  "fuzz-support",
+]
+
+[[package]]
+name = "virtio-queue"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+]
+
+[[package]]
+name = "virtio_net_rx"
+version = "0.1.0"
+dependencies = [
+ "driver-virtio-net",
+ "fuzz-support",
+ "virtio-queue",
 ]
 
 [[package]]
