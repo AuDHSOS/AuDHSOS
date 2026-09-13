@@ -1531,6 +1531,23 @@ pub(crate) fn jrs(root: &Path, options: &[String]) -> Result<(), Error> {
         .run()
 }
 
+/// The memory benchmark of the development machine.
+///
+/// It is built with optimizations and never from the `dev` profile: a
+/// benchmark of unoptimized code measures the bounds checks, not the
+/// machine.
+///
+/// # Errors
+///
+/// The errors of the build and of the run.
+pub(crate) fn membench(root: &Path, options: &[String]) -> Result<(), Error> {
+    Cmd::cargo()
+        .cwd(root)
+        .args(["run", "--release", "-p", "membench", "--"])
+        .args(options.iter().map(String::as_str))
+        .run()
+}
+
 /// Focused checks for the JavaScript runtime, still using the pinned tools.
 pub(crate) fn jrs_check(root: &Path, options: &[String]) -> Result<(), Error> {
     let fix_format = match options {

@@ -280,9 +280,29 @@ fn regions_that_merge_below_the_limit_are_accepted() {
         })
         .collect();
     assert_eq!(
-        convert(&touching),
-        Err(ConversionError::TooManyRegions),
-        "the limit applies before merging, so that the array never overflows"
+        convert(&touching).map(|regions| regions.len()),
+        Ok(1),
+        "a map that merges below the limit is accepted, however long it is"
+    );
+}
+
+#[test]
+fn a_fragmented_map_longer_than_the_array_merges_into_its_regions() {
+    // What the firmware of the reference machine hands out: far more
+    // descriptors than the array holds, in runs that touch.
+    let fragmented: Vec<MemoryDescriptor> = (0..MAX_BOOT_REGIONS * 2)
+        .map(|index| {
+            let kind = if index % 40 < 20 {
+                MemoryType::Conventional
+            } else {
+                MemoryType::Reserved
+            };
+            descriptor(kind, u64::try_from(index).unwrap() * PAGE_SIZE, 1)
+        })
+        .collect();
+    assert_eq!(
+        convert(&fragmented).map(|regions| regions.len()),
+        Ok((MAX_BOOT_REGIONS * 2).div_ceil(20))
     );
 }
 

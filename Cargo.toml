@@ -84,6 +84,7 @@ members = [
     "crates/tools/svg",
     "crates/tools/pdf",
     "crates/tools/docpdf",
+    "crates/tools/membench",
     "crates/tools/xtask",
     "crates/tools/jrs",
 ]
