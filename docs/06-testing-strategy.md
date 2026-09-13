@@ -2658,6 +2658,11 @@ example (D-134) over it.
 - A packet of the largest mandatory payload fits in a buffer of the
   mandatory size, and two packets in one buffer are read one after the
   other.
+- The fuzz target `ssh_packet` reads arbitrary bytes as a packet, with the
+  cipher in use and without it: a packet that is read lies inside what
+  arrived, its payload is shorter than the packet that carried it, and the
+  sequence number counts a packet that was read and nothing else. It frames
+  the same bytes as a payload and reads them back.
 - Every refusal renders a sentence of its own.
 
 ### 6.6.69 The greeting and the negotiation (`audhsos-ssh`)
@@ -2704,6 +2709,16 @@ documents state and against this crate's own writer.
   are the chosen ones — the right method under the wrong host key is
   still wrong — and a message that announces no guess is nothing to
   ignore whatever its first names are.
+
+#### The fuzz target
+
+`ssh_handshake` reads arbitrary bytes as the identification string, as a
+`SSH_MSG_KEXINIT` with its ten name-lists, as the reply of either key
+exchange method, and as a host key blob — the four places where a byte
+from the network chooses a length. What it holds: nothing is read as
+longer than what arrived, a name-list holds no name of no length, what
+the negotiation chooses is a name both sides offered, and no input is
+admitted as a host key by a rule that names another.
 
 ### 6.6.70 The key exchange and the cipher (`audhsos-ssh`)
 

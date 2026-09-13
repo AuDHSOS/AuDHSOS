@@ -7,6 +7,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Two fuzz targets for the Secure Shell client, which 14.12 named and
+  which now exist. `ssh_packet` reads arbitrary bytes as a binary packet
+  with the cipher in use and without it — a packet that is read lies
+  inside what arrived, its payload is shorter than the packet that carried
+  it, and the sequence number counts a packet that was read and nothing
+  else — and frames the same bytes as a payload and reads them back.
+  `ssh_handshake` reads them as the identification string, as a
+  `SSH_MSG_KEXINIT` with its ten name-lists, as the reply of either key
+  exchange method, and as a host key blob, which are the places where a
+  byte from the network chooses a length; what it holds is that nothing is
+  read as longer than what arrived, that what the negotiation chooses is a
+  name both sides offered, and that no input is admitted as a host key by
+  a rule that names another.
+
 - Track S, the client of step S8: `audhsos-ssh` gains `client`, one state
   machine over every layer below it with no I/O. It is given bytes that
   arrived and a buffer to write into, and it answers with what it wants

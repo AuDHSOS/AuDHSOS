@@ -1142,6 +1142,10 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "pem" },
     FuzzTarget { name: "rsa" },
     FuzzTarget { name: "scancode" },
+    FuzzTarget {
+        name: "ssh_handshake",
+    },
+    FuzzTarget { name: "ssh_packet" },
     FuzzTarget { name: "tar" },
     FuzzTarget {
         name: "dns_message",

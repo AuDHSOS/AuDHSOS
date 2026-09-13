@@ -681,7 +681,8 @@ of track C was, and so did the client. What is left of S8 needs the
 network on the machine.
 
 Tests: catalog 6.6.66, 6.6.68, 6.6.69, 6.6.70 and 6.6.75 to 6.6.79 are
-written, for the arithmetic of S2, the whole of S1 to S7, and the client; the rest are written
+written, for the arithmetic of S2, the whole of S1 to S7, and the client,
+with the fuzz targets `ssh_packet` and `ssh_handshake` beside them; the rest are written
 with the step that owns each. There is no RFC 8448 for this protocol — no document publishes a
 complete handshake with the keys that made it — so the check from outside
 is the interop test of S8 and not a replay, which is the one way this

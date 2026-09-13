@@ -433,9 +433,11 @@ status. A handshake against a server that this project did not
 write is the only evidence that the exchange hash, the key derivation
 and the packet layer are what the documents mean.
 
-**Fuzz targets** (D-23, D-54): `ssh_packet` for the binary packet reader,
-and `ssh_handshake` for the `KEXINIT` name-lists and the key exchange
-messages — the two places where a byte from the network chooses a length.
+**Fuzz targets** (D-23, D-54), both built: `ssh_packet` for the binary
+packet reader, with the cipher in use and without it, and `ssh_handshake`
+for the identification string, the `KEXINIT` name-lists, the key exchange
+messages and the host key blob — the places where a byte from the network
+chooses a length.
 
 **The catalog.** The edge-case catalog is the definition of done (D-23);
 this track's entries begin at 6.6.66 and are written with the steps that
