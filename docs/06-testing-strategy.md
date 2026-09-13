@@ -3112,6 +3112,44 @@ the grammar says, and that what SQLite refuses this parser refuses too.
   the arena holds, and nothing taller than the bound. Thirty-three million
   executions found nothing after the height bound went in.
 
+### 6.6.78 The statement parser (`db-sqlite`)
+
+D-141, document 15 step Q4, finished. `SELECT`, `VALUES` and `WITH`, with
+everything the grammar hangs off them, and the subqueries that let an
+expression hold a statement.
+
+- Every clause, written out as a bracketed form and compared: `DISTINCT`
+  and `ALL`; a result column with `AS`, with a name and no `AS`, and as
+  `*` or `t.*`; `FROM` with a comma, with each of the five joins, with
+  `NATURAL`, with `ON` and with `USING`; a schema-qualified table, an
+  alias, `INDEXED BY` and `NOT INDEXED`; a statement or a table-valued
+  function as a table; `WHERE`, `GROUP BY`, `HAVING`; `ORDER BY` with
+  `ASC`, `DESC`, `NULLS FIRST` and `NULLS LAST`; `LIMIT`, `LIMIT OFFSET`,
+  and the older `LIMIT skip, count`, which counts the other way round; the
+  four compound operators and the clauses that belong to the whole of a
+  compound rather than to its last half; `WITH`, `WITH RECURSIVE`, column
+  names, `MATERIALIZED` and `NOT MATERIALIZED`; and the four shapes of
+  subquery — a value, `EXISTS`, `IN (SELECT ...)` and `IN table`.
+- The recorded oracle: `fixtures/stmt.corpus` holds seven hundred and
+  ninety-two statements, seven hundred of them taken out of SQLite's own
+  test suite, and `fixtures/stmt.golden` records whether SQLite's parser
+  accepted each. Everything it refuses, this parser refuses. What it
+  accepts and this parser does not is counted rather than listed — thirty
+  -six today, the window clauses and the statements that carry a clause of
+  a later step — and the test fails if that number rises.
+- Refusals: one case for every place a clause reads something, with
+  something that is not it there. A `WITH` without `AS`, a `USING` whose
+  names are not names, a join whose word is not a join, a `NULLS` that
+  says neither `FIRST` nor `LAST`, a `LIMIT` whose second half is not an
+  expression, and thirty more.
+- The bounds hold over statements as well: three hundred nested
+  subqueries are refused by the parser's own depth, and a `VALUES` row one
+  taller than the greatest height there may be is refused where the row is
+  built, which is the height bound reached from a different direction.
+- `sqlite_expr` now walks statements too, so the fuzzer holds that a
+  statement is a tree: every child a node the arena has, every subquery a
+  statement the arena has, and nothing deeper than the parser walks.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

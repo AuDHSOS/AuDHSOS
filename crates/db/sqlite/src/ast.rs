@@ -281,6 +281,254 @@ pub enum Node {
     },
     /// `(a, b, c)`, which is a row and not a parenthesis.
     Row(Range),
+    /// `(SELECT ...)`, a statement used as a value.
+    Subquery(SelectId),
+    /// `EXISTS (SELECT ...)`.
+    Exists(SelectId),
+    /// `x IN (SELECT ...)`.
+    InSelect {
+        /// The value tested.
+        value: ExprId,
+        /// The statement it is looked for in.
+        select: SelectId,
+        /// Whether `NOT` precedes it.
+        negated: bool,
+    },
+    /// `x IN table`, which is `IN (SELECT * FROM table)` written short.
+    InTable {
+        /// The value tested.
+        value: ExprId,
+        /// The schema, where one was named.
+        schema: Option<Span>,
+        /// The table.
+        table: Span,
+        /// Whether `NOT` precedes it.
+        negated: bool,
+    },
+}
+
+/// One statement in the arena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SelectId(u32);
+
+/// Whether a statement keeps every row or only the rows that differ.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Distinct {
+    /// Neither word was written.
+    #[default]
+    Unspecified,
+    /// `ALL`, which is what neither word means.
+    All,
+    /// `DISTINCT`.
+    Distinct,
+}
+
+/// One thing a statement answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ResultColumn {
+    /// `*`.
+    Star,
+    /// `t.*`.
+    TableStar(Span),
+    /// An expression, with the name it is answered under.
+    Expr {
+        /// What is computed.
+        expr: ExprId,
+        /// The name after `AS`, or the one written without it.
+        alias: Option<Span>,
+    },
+}
+
+/// How one table of a `FROM` clause attaches to the ones before it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Join {
+    /// Whether the word `NATURAL` was written.
+    pub natural: bool,
+    /// Which join it is.
+    pub kind: JoinKind,
+    /// Whether it was written as a comma rather than as `JOIN`.
+    pub comma: bool,
+}
+
+/// The kinds of join the grammar spells.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum JoinKind {
+    /// The first table, which joins nothing.
+    #[default]
+    None,
+    /// `JOIN`, `INNER JOIN`, and a comma.
+    Inner,
+    /// `CROSS JOIN`.
+    Cross,
+    /// `LEFT JOIN` and `LEFT OUTER JOIN`.
+    Left,
+    /// `RIGHT JOIN` and `RIGHT OUTER JOIN`.
+    Right,
+    /// `FULL JOIN` and `FULL OUTER JOIN`.
+    Full,
+}
+
+/// What a `FROM` clause draws rows from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SourceKind {
+    /// A table, with as much of `schema.table` as was written.
+    Table {
+        /// The schema, where one was named.
+        schema: Option<Span>,
+        /// The table.
+        name: Span,
+        /// What the statement says about the index to use.
+        indexed: Indexed,
+    },
+    /// A table-valued function: `name(args)`.
+    Function {
+        /// The schema, where one was named.
+        schema: Option<Span>,
+        /// The function.
+        name: Span,
+        /// Its arguments.
+        args: Range,
+    },
+    /// A statement in brackets.
+    Select(SelectId),
+}
+
+/// What a table of a `FROM` clause says about indexes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Indexed {
+    /// Nothing was said.
+    #[default]
+    Unspecified,
+    /// `INDEXED BY name`.
+    By(Span),
+    /// `NOT INDEXED`.
+    Not,
+}
+
+/// One table of a `FROM` clause.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Source {
+    /// Where the rows come from.
+    pub kind: SourceKind,
+    /// The name it is known by in the statement.
+    pub alias: Option<Span>,
+    /// How it attaches to what came before it.
+    pub join: Join,
+    /// The `ON` condition, where one was written.
+    pub on: Option<ExprId>,
+    /// The names of a `USING` clause, where one was written.
+    pub using: Range,
+}
+
+/// Which way a sort runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Order {
+    /// Neither word was written.
+    #[default]
+    Unspecified,
+    /// `ASC`.
+    Ascending,
+    /// `DESC`.
+    Descending,
+}
+
+/// Where the nulls of a sort go.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Nulls {
+    /// Nothing was said.
+    #[default]
+    Unspecified,
+    /// `NULLS FIRST`.
+    First,
+    /// `NULLS LAST`.
+    Last,
+}
+
+/// One term of an `ORDER BY`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct OrderTerm {
+    /// What is sorted by.
+    pub expr: ExprId,
+    /// Which way.
+    pub order: Order,
+    /// Where the nulls go.
+    pub nulls: Nulls,
+}
+
+/// A `LIMIT`, with the `OFFSET` that may follow it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Limit {
+    /// How many rows.
+    pub count: ExprId,
+    /// How many to skip first.
+    pub offset: Option<ExprId>,
+}
+
+/// How two statements are put together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Compound {
+    /// `UNION`.
+    Union,
+    /// `UNION ALL`.
+    UnionAll,
+    /// `EXCEPT`.
+    Except,
+    /// `INTERSECT`.
+    Intersect,
+}
+
+/// What a `WITH` clause says about keeping a result.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Materialized {
+    /// Nothing was said.
+    #[default]
+    Unspecified,
+    /// `MATERIALIZED`.
+    Yes,
+    /// `NOT MATERIALIZED`.
+    No,
+}
+
+/// One table of a `WITH` clause.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Cte {
+    /// Its name.
+    pub name: Span,
+    /// The names of its columns, where they were written.
+    pub columns: Range,
+    /// What it answers.
+    pub select: SelectId,
+    /// What was said about keeping it.
+    pub materialized: Materialized,
+}
+
+/// One `SELECT`, or one `VALUES`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Select {
+    /// The tables of a `WITH` clause.
+    pub ctes: Range,
+    /// Whether `RECURSIVE` was written.
+    pub recursive: bool,
+    /// What was said about duplicate rows.
+    pub distinct: Distinct,
+    /// What the statement answers.
+    pub columns: Range,
+    /// Where the rows come from.
+    pub from: Range,
+    /// The `WHERE` clause.
+    pub filter: Option<ExprId>,
+    /// The `GROUP BY` terms.
+    pub group: Range,
+    /// The `HAVING` clause.
+    pub having: Option<ExprId>,
+    /// The rows of a `VALUES`, each of them a row node.
+    pub values: Range,
+    /// What this statement is put together with, and how.
+    pub compound: Option<(Compound, SelectId)>,
+    /// The `ORDER BY` terms.
+    pub order: Range,
+    /// The `LIMIT`.
+    pub limit: Option<Limit>,
 }
 
 /// A tree, and the nodes it is made of.
@@ -292,6 +540,19 @@ pub struct Arena {
     heights: Vec<u32>,
     /// The children of the nodes that have a run of them.
     children: Vec<ExprId>,
+    /// Every statement.
+    selects: Vec<Select>,
+    /// The result columns of the statements, in runs.
+    results: Vec<ResultColumn>,
+    /// The tables of the `FROM` clauses, in runs.
+    sources: Vec<Source>,
+    /// The terms of the `ORDER BY` clauses, in runs.
+    orders: Vec<OrderTerm>,
+    /// The names of the `USING` clauses and of the `WITH` columns, in
+    /// runs.
+    names: Vec<Span>,
+    /// The tables of the `WITH` clauses, in runs.
+    ctes: Vec<Cte>,
 }
 
 impl Arena {
@@ -302,6 +563,12 @@ impl Arena {
             nodes: Vec::new(),
             heights: Vec::new(),
             children: Vec::new(),
+            selects: Vec::new(),
+            results: Vec::new(),
+            sources: Vec::new(),
+            orders: Vec::new(),
+            names: Vec::new(),
+            ctes: Vec::new(),
         }
     }
 
@@ -344,7 +611,13 @@ impl Arena {
         let mut tallest = 0;
         let mut under = |id: ExprId| tallest = tallest.max(self.height(id));
         match node {
-            Node::Literal(_) | Node::Column { .. } | Node::Variable(_) => {}
+            // A leaf has no children, and a statement is a tree of its
+            // own, walked and bounded on its own.
+            Node::Literal(_)
+            | Node::Column { .. }
+            | Node::Variable(_)
+            | Node::Subquery(_)
+            | Node::Exists(_) => {}
             Node::Unary { operand, .. } => under(operand),
             Node::Binary { left, right, .. } => {
                 under(left);
@@ -375,7 +648,6 @@ impl Arena {
                     under(escape);
                 }
             }
-            Node::Cast { value, .. } | Node::Collate { value, .. } => under(value),
             Node::Call { args, .. } => {
                 for arg in self.children(args) {
                     under(*arg);
@@ -398,6 +670,10 @@ impl Arena {
                     under(*item);
                 }
             }
+            Node::Cast { value, .. }
+            | Node::Collate { value, .. }
+            | Node::InSelect { value, .. }
+            | Node::InTable { value, .. } => under(value),
         }
         tallest.saturating_add(1)
     }
@@ -426,5 +702,122 @@ impl Arena {
         let start = usize::try_from(range.start).unwrap_or(usize::MAX);
         let end = start.saturating_add(range.len());
         self.children.get(start..end).unwrap_or_default()
+    }
+}
+
+/// A run of one of the arena's side tables. Which table a run belongs to
+/// is decided by what asks for it: the result columns of a statement are
+/// read with [`Arena::results`], its tables with [`Arena::sources`], and so
+/// on. One kind of run rather than six keeps the arena's shape plain.
+impl Arena {
+    /// Adds a statement and answers where it went.
+    pub fn push_select(&mut self, select: Select) -> SelectId {
+        let at = u32::try_from(self.selects.len()).unwrap_or(u32::MAX);
+        self.selects.push(select);
+        SelectId(at)
+    }
+
+    /// The statement at `id`.
+    #[must_use]
+    pub fn select(&self, id: SelectId) -> Option<Select> {
+        self.selects
+            .get(usize::try_from(id.0).unwrap_or(usize::MAX))
+            .copied()
+    }
+
+    /// How many statements the arena holds.
+    #[must_use]
+    pub const fn selects(&self) -> usize {
+        self.selects.len()
+    }
+
+    /// Adds a run of result columns.
+    pub fn push_results(&mut self, columns: &[ResultColumn]) -> Range {
+        let start = u32::try_from(self.results.len()).unwrap_or(u32::MAX);
+        self.results.extend_from_slice(columns);
+        Range {
+            start,
+            len: u32::try_from(columns.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// The result columns of a run.
+    #[must_use]
+    pub fn results(&self, range: Range) -> &[ResultColumn] {
+        let start = usize::try_from(range.start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(range.len());
+        self.results.get(start..end).unwrap_or_default()
+    }
+
+    /// Adds a run of tables.
+    pub fn push_sources(&mut self, sources: &[Source]) -> Range {
+        let start = u32::try_from(self.sources.len()).unwrap_or(u32::MAX);
+        self.sources.extend_from_slice(sources);
+        Range {
+            start,
+            len: u32::try_from(sources.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// The tables of a run.
+    #[must_use]
+    pub fn sources(&self, range: Range) -> &[Source] {
+        let start = usize::try_from(range.start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(range.len());
+        self.sources.get(start..end).unwrap_or_default()
+    }
+
+    /// Adds a run of sort terms.
+    pub fn push_orders(&mut self, orders: &[OrderTerm]) -> Range {
+        let start = u32::try_from(self.orders.len()).unwrap_or(u32::MAX);
+        self.orders.extend_from_slice(orders);
+        Range {
+            start,
+            len: u32::try_from(orders.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// The sort terms of a run.
+    #[must_use]
+    pub fn orders(&self, range: Range) -> &[OrderTerm] {
+        let start = usize::try_from(range.start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(range.len());
+        self.orders.get(start..end).unwrap_or_default()
+    }
+
+    /// Adds a run of names.
+    pub fn push_names(&mut self, names: &[Span]) -> Range {
+        let start = u32::try_from(self.names.len()).unwrap_or(u32::MAX);
+        self.names.extend_from_slice(names);
+        Range {
+            start,
+            len: u32::try_from(names.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// The names of a run.
+    #[must_use]
+    pub fn names(&self, range: Range) -> &[Span] {
+        let start = usize::try_from(range.start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(range.len());
+        self.names.get(start..end).unwrap_or_default()
+    }
+
+    /// Adds a run of `WITH` tables.
+    pub fn push_ctes(&mut self, ctes: &[Cte]) -> Range {
+        let start = u32::try_from(self.ctes.len()).unwrap_or(u32::MAX);
+        self.ctes.extend_from_slice(ctes);
+        Range {
+            start,
+            len: u32::try_from(ctes.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// The `WITH` tables of a run.
+    #[must_use]
+    pub fn ctes(&self, range: Range) -> &[Cte] {
+        let start = usize::try_from(range.start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(range.len());
+        self.ctes.get(start..end).unwrap_or_default()
     }
 }

@@ -219,7 +219,227 @@ fn write(arena: &Arena, id: ExprId, sql: &[u8], out: &mut String) {
             }
             out.push(')');
         }
+        Node::Subquery(select) => {
+            out.push_str("(sub ");
+            write_select(arena, select, sql, out);
+            out.push(')');
+        }
+        Node::Exists(select) => {
+            out.push_str("(exists ");
+            write_select(arena, select, sql, out);
+            out.push(')');
+        }
+        Node::InSelect {
+            value,
+            select,
+            negated,
+        } => {
+            out.push_str(if negated { "(notinsel " } else { "(insel " });
+            write(arena, value, sql, out);
+            out.push(' ');
+            write_select(arena, select, sql, out);
+            out.push(')');
+        }
+        Node::InTable {
+            value,
+            schema,
+            table,
+            negated,
+        } => {
+            out.push_str(if negated { "(notintab " } else { "(intab " });
+            write(arena, value, sql, out);
+            for part in schema.into_iter().chain(core::iter::once(table)) {
+                out.push(' ');
+                out.push_str(&text(part));
+            }
+            out.push(')');
+        }
     }
+}
+
+/// One statement, written out the same way.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one clause per clause of the grammar, and the point is that none is missing"
+)]
+fn write_select(arena: &Arena, id: crate::ast::SelectId, sql: &[u8], out: &mut String) {
+    use crate::ast::{
+        Compound, Distinct, Indexed, JoinKind, Materialized, Nulls, Order, ResultColumn, SourceKind,
+    };
+
+    let Some(select) = arena.select(id) else {
+        out.push('?');
+        return;
+    };
+    let text = |span: crate::ast::Span| String::from_utf8_lossy(span.text(sql)).into_owned();
+    out.push_str("(select");
+    if select.recursive {
+        out.push_str(" recursive");
+    }
+    for cte in arena.ctes(select.ctes) {
+        out.push_str(" (with ");
+        out.push_str(&text(cte.name));
+        for column in arena.names(cte.columns) {
+            out.push(' ');
+            out.push_str(&text(*column));
+        }
+        match cte.materialized {
+            Materialized::Yes => out.push_str(" materialized"),
+            Materialized::No => out.push_str(" notmaterialized"),
+            Materialized::Unspecified => {}
+        }
+        out.push(' ');
+        write_select(arena, cte.select, sql, out);
+        out.push(')');
+    }
+    match select.distinct {
+        Distinct::Distinct => out.push_str(" distinct"),
+        Distinct::All => out.push_str(" all"),
+        Distinct::Unspecified => {}
+    }
+    for column in arena.results(select.columns) {
+        out.push(' ');
+        match *column {
+            ResultColumn::Star => out.push('*'),
+            ResultColumn::TableStar(table) => {
+                out.push_str(&text(table));
+                out.push_str(".*");
+            }
+            ResultColumn::Expr { expr, alias } => {
+                write(arena, expr, sql, out);
+                if let Some(alias) = alias {
+                    out.push_str(" as ");
+                    out.push_str(&text(alias));
+                }
+            }
+        }
+    }
+    for row in arena.children(select.values) {
+        out.push_str(" values ");
+        write(arena, *row, sql, out);
+    }
+    for source in arena.sources(select.from) {
+        out.push_str(" (from");
+        match source.join.kind {
+            JoinKind::None => {}
+            JoinKind::Inner if source.join.comma => out.push_str(" comma"),
+            JoinKind::Inner => out.push_str(" inner"),
+            JoinKind::Cross => out.push_str(" cross"),
+            JoinKind::Left => out.push_str(" left"),
+            JoinKind::Right => out.push_str(" right"),
+            JoinKind::Full => out.push_str(" full"),
+        }
+        if source.join.natural {
+            out.push_str(" natural");
+        }
+        match source.kind {
+            SourceKind::Table {
+                schema,
+                name,
+                indexed,
+            } => {
+                for part in schema.into_iter().chain(core::iter::once(name)) {
+                    out.push(' ');
+                    out.push_str(&text(part));
+                }
+                match indexed {
+                    Indexed::By(index) => {
+                        out.push_str(" indexedby ");
+                        out.push_str(&text(index));
+                    }
+                    Indexed::Not => out.push_str(" notindexed"),
+                    Indexed::Unspecified => {}
+                }
+            }
+            SourceKind::Function { schema, name, args } => {
+                out.push_str(" (call");
+                for part in schema.into_iter().chain(core::iter::once(name)) {
+                    out.push(' ');
+                    out.push_str(&text(part));
+                }
+                for arg in arena.children(args) {
+                    out.push(' ');
+                    write(arena, *arg, sql, out);
+                }
+                out.push(')');
+            }
+            SourceKind::Select(inner) => {
+                out.push(' ');
+                write_select(arena, inner, sql, out);
+            }
+        }
+        if let Some(alias) = source.alias {
+            out.push_str(" as ");
+            out.push_str(&text(alias));
+        }
+        if let Some(on) = source.on {
+            out.push_str(" on ");
+            write(arena, on, sql, out);
+        }
+        for name in arena.names(source.using) {
+            out.push_str(" using ");
+            out.push_str(&text(*name));
+        }
+        out.push(')');
+    }
+    if let Some(filter) = select.filter {
+        out.push_str(" (where ");
+        write(arena, filter, sql, out);
+        out.push(')');
+    }
+    for term in arena.children(select.group) {
+        out.push_str(" (group ");
+        write(arena, *term, sql, out);
+        out.push(')');
+    }
+    if let Some(having) = select.having {
+        out.push_str(" (having ");
+        write(arena, having, sql, out);
+        out.push(')');
+    }
+    if let Some((operator, next)) = select.compound {
+        out.push_str(match operator {
+            Compound::Union => " union ",
+            Compound::UnionAll => " unionall ",
+            Compound::Except => " except ",
+            Compound::Intersect => " intersect ",
+        });
+        write_select(arena, next, sql, out);
+    }
+    for term in arena.orders(select.order) {
+        out.push_str(" (order ");
+        write(arena, term.expr, sql, out);
+        match term.order {
+            Order::Ascending => out.push_str(" asc"),
+            Order::Descending => out.push_str(" desc"),
+            Order::Unspecified => {}
+        }
+        match term.nulls {
+            Nulls::First => out.push_str(" nullsfirst"),
+            Nulls::Last => out.push_str(" nullslast"),
+            Nulls::Unspecified => {}
+        }
+        out.push(')');
+    }
+    if let Some(limit) = select.limit {
+        out.push_str(" (limit ");
+        write(arena, limit.count, sql, out);
+        if let Some(offset) = limit.offset {
+            out.push_str(" offset ");
+            write(arena, offset, sql, out);
+        }
+        out.push(')');
+    }
+    out.push(')');
+}
+
+/// The statement of `sql`, written out, or the refusal it ended in.
+fn parsed(sql: &str) -> Result<String, Error> {
+    let bytes = sql.as_bytes();
+    let (arena, root) = crate::parse::statement(bytes)?;
+    let mut out = String::new();
+    write_select(&arena, root, bytes, &mut out);
+    Ok(out)
 }
 
 /// The tree of `sql`, written out, or the refusal it ended in.
@@ -336,7 +556,7 @@ fn a_statement_that_is_not_an_expression_says_where_it_stopped() {
         ("CASE WHEN 1 END", 12, Expected::Then),
         ("CASE WHEN 1 THEN 2", 18, Expected::End),
         ("1 BETWEEN 2", 11, Expected::And),
-        ("1 IN", 4, Expected::OpenParen),
+        ("1 IN", 4, Expected::Name),
         ("1 COLLATE", 9, Expected::Name),
         ("1 NOT 2", 6, Expected::Expression),
     ];
@@ -365,18 +585,10 @@ fn what_sqlite_refuses_this_parser_refuses_too() {
     let answers: Vec<&str> = golden.lines().collect();
     assert_eq!(cases.len(), answers.len());
 
-    // What the parser cannot read yet: each of them needs the `SELECT`
-    // of step Q4's second half, or the window functions after it.
+    // What the parser cannot read yet: the two window clauses.
     // `RAISE(...)` is not among them — it reads as a call, which is what
     // it looks like, and only the resolver will care that it is not one.
-    let not_yet: [&str; 6] = [
-        "EXISTS (SELECT 1)",
-        "(SELECT 1)",
-        "1 IN (SELECT 1)",
-        "1 IN t",
-        "count(*) OVER ()",
-        "count(*) FILTER (WHERE 1)",
-    ];
+    let not_yet: [&str; 2] = ["count(*) OVER ()", "count(*) FILTER (WHERE 1)"];
 
     let mut waiting = 0;
     for (case, answer) in cases.iter().zip(&answers) {
@@ -557,4 +769,314 @@ fn the_height_of_a_leaf_is_one_and_of_a_node_one_more_than_its_tallest_child() {
     assert_eq!(arena.height(root), 3);
     let (arena, root) = expression(b"CASE 1+1 WHEN 1 THEN 1 ELSE 1 END").unwrap();
     assert_eq!(arena.height(root), 3);
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one case per clause of the grammar, and the point is that none is missing"
+)]
+fn every_clause_of_a_statement_reads_as_the_clause_it_is() {
+    let cases = [
+        ("SELECT 1", "(select 1)"),
+        ("SELECT 1;", "(select 1)"),
+        ("SELECT *", "(select *)"),
+        ("SELECT t.* FROM t", "(select t.* (from t))"),
+        ("SELECT DISTINCT a", "(select distinct (col a))"),
+        ("SELECT ALL a", "(select all (col a))"),
+        ("SELECT a AS b", "(select (col a) as b)"),
+        ("SELECT a b", "(select (col a) as b)"),
+        ("SELECT a, b", "(select (col a) (col b))"),
+        (
+            "SELECT a FROM t WHERE a=1",
+            "(select (col a) (from t) (where (eq (col a) 1)))",
+        ),
+        (
+            "SELECT a FROM t GROUP BY a",
+            "(select (col a) (from t) (group (col a)))",
+        ),
+        (
+            "SELECT a FROM t GROUP BY a HAVING b",
+            "(select (col a) (from t) (group (col a)) (having (col b)))",
+        ),
+        ("SELECT a ORDER BY a", "(select (col a) (order (col a)))"),
+        (
+            "SELECT a ORDER BY a DESC",
+            "(select (col a) (order (col a) desc))",
+        ),
+        (
+            "SELECT a ORDER BY a ASC NULLS FIRST",
+            "(select (col a) (order (col a) asc nullsfirst))",
+        ),
+        (
+            "SELECT a ORDER BY a NULLS LAST",
+            "(select (col a) (order (col a) nullslast))",
+        ),
+        ("SELECT a LIMIT 1", "(select (col a) (limit 1))"),
+        (
+            "SELECT a LIMIT 1 OFFSET 2",
+            "(select (col a) (limit 1 offset 2))",
+        ),
+        // `LIMIT a, b` counts b rows after skipping a.
+        ("SELECT a LIMIT 1, 2", "(select (col a) (limit 2 offset 1))"),
+        (
+            "SELECT 1 FROM t1, t2",
+            "(select 1 (from t1) (from comma t2))",
+        ),
+        (
+            "SELECT 1 FROM t1 JOIN t2",
+            "(select 1 (from t1) (from inner t2))",
+        ),
+        (
+            "SELECT 1 FROM t1 LEFT JOIN t2 ON 1",
+            "(select 1 (from t1) (from left t2 on 1))",
+        ),
+        (
+            "SELECT 1 FROM t1 NATURAL LEFT OUTER JOIN t2",
+            "(select 1 (from t1) (from left natural t2))",
+        ),
+        (
+            "SELECT 1 FROM t1 CROSS JOIN t2",
+            "(select 1 (from t1) (from cross t2))",
+        ),
+        (
+            "SELECT 1 FROM t1 JOIN t2 USING (a, b)",
+            "(select 1 (from t1) (from inner t2 using a using b))",
+        ),
+        ("SELECT 1 FROM main.t AS x", "(select 1 (from main t as x))"),
+        (
+            "SELECT 1 FROM t INDEXED BY i",
+            "(select 1 (from t indexedby i))",
+        ),
+        (
+            "SELECT 1 FROM t NOT INDEXED",
+            "(select 1 (from t notindexed))",
+        ),
+        (
+            "SELECT 1 FROM (SELECT 2) AS x",
+            "(select 1 (from (select 2) as x))",
+        ),
+        ("SELECT 1 FROM f(1,2)", "(select 1 (from (call f 1 2)))"),
+        ("VALUES (1)", "(select values (row 1))"),
+        (
+            "VALUES (1,2),(3)",
+            "(select values (row 1 2) values (row 3))",
+        ),
+        ("SELECT 1 UNION SELECT 2", "(select 1 union (select 2))"),
+        (
+            "SELECT 1 UNION ALL SELECT 2",
+            "(select 1 unionall (select 2))",
+        ),
+        ("SELECT 1 EXCEPT SELECT 2", "(select 1 except (select 2))"),
+        (
+            "SELECT 1 INTERSECT SELECT 2",
+            "(select 1 intersect (select 2))",
+        ),
+        (
+            "SELECT 1 UNION SELECT 2 UNION SELECT 3",
+            "(select 1 union (select 2 union (select 3)))",
+        ),
+        (
+            "SELECT 1 UNION SELECT 2 ORDER BY 1 LIMIT 2",
+            "(select 1 union (select 2) (order 1) (limit 2))",
+        ),
+        (
+            "WITH c AS (SELECT 1) SELECT 2",
+            "(select (with c (select 1)) 2)",
+        ),
+        (
+            "WITH RECURSIVE c(i,j) AS (SELECT 1) SELECT 2",
+            "(select recursive (with c i j (select 1)) 2)",
+        ),
+        (
+            "WITH c AS MATERIALIZED (SELECT 1) SELECT 2",
+            "(select (with c materialized (select 1)) 2)",
+        ),
+        (
+            "WITH c AS NOT MATERIALIZED (SELECT 1) SELECT 2",
+            "(select (with c notmaterialized (select 1)) 2)",
+        ),
+        (
+            "WITH a AS (SELECT 1), b AS (SELECT 2) SELECT 3",
+            "(select (with a (select 1)) (with b (select 2)) 3)",
+        ),
+        ("SELECT (SELECT 1)", "(select (sub (select 1)))"),
+        ("SELECT EXISTS (SELECT 1)", "(select (exists (select 1)))"),
+        (
+            "SELECT NOT EXISTS (SELECT 1)",
+            "(select (not (exists (select 1))))",
+        ),
+        (
+            "SELECT 1 WHERE 1 IN (SELECT 2)",
+            "(select 1 (where (insel 1 (select 2))))",
+        ),
+        (
+            "SELECT 1 WHERE 1 NOT IN (SELECT 2)",
+            "(select 1 (where (notinsel 1 (select 2))))",
+        ),
+        ("SELECT 1 WHERE 1 IN t", "(select 1 (where (intab 1 t)))"),
+        (
+            "SELECT 1 WHERE 1 IN main.t",
+            "(select 1 (where (intab 1 main t)))",
+        ),
+        (
+            "SELECT 1 WHERE 1 NOT IN t",
+            "(select 1 (where (notintab 1 t)))",
+        ),
+    ];
+    for (sql, expected) in cases {
+        assert_eq!(parsed(sql).as_deref(), Ok(expected), "{sql}");
+    }
+}
+
+#[test]
+fn what_sqlite_refuses_as_a_statement_this_parser_refuses_too() {
+    let corpus: &[u8] = include_bytes!("fixtures/stmt.corpus");
+    let golden: &str = include_str!("fixtures/stmt.golden");
+    let mut cases: Vec<&[u8]> = corpus.split(|byte| *byte == 0).collect();
+    cases.pop();
+    let answers: Vec<&str> = golden.lines().collect();
+    assert_eq!(cases.len(), answers.len());
+
+    let mut waiting = 0;
+    for (case, answer) in cases.iter().zip(&answers) {
+        let sql = String::from_utf8_lossy(case).into_owned();
+        let read = parsed(&sql);
+        // What is not a `SELECT` at all is refused here, and is not a
+        // difference: the rest of the language is a later step.
+        let ours = sql.trim_start().to_ascii_uppercase();
+        let is_select =
+            ours.starts_with("SELECT") || ours.starts_with("WITH") || ours.starts_with("VALUES");
+        match *answer {
+            "accept" if is_select => {
+                if read.is_err() {
+                    waiting += 1;
+                }
+            }
+            "accept" => {}
+            _ => assert!(read.is_err(), "`{sql}` is not SQL and was read as {read:?}"),
+        }
+    }
+    // What the parser cannot read yet is counted rather than listed: the
+    // window clauses, and the statements that carry a clause of a later
+    // step. The number falls as the steps land, and a rise fails the test.
+    // Thirty-six today: the window clauses, and statements carrying a
+    // clause of a later step. The number falls as the steps land, and a
+    // rise fails the test.
+    assert!(
+        waiting <= 36,
+        "{waiting} statements of the corpus were refused"
+    );
+}
+
+#[test]
+fn a_refusal_inside_a_clause_is_the_refusal_of_the_statement() {
+    let cases = [
+        // The `WITH` clause, one refusal per place it reads something.
+        "WITH 1 AS (SELECT 1) SELECT 1",
+        "WITH c(1) AS (SELECT 1) SELECT 1",
+        "WITH c(a AS (SELECT 1) SELECT 1",
+        "WITH c SELECT 1",
+        "WITH c AS NOT (SELECT 1) SELECT 1",
+        "WITH c AS SELECT 1",
+        "WITH c AS (SELECT) SELECT 1",
+        "WITH c AS (SELECT 1 SELECT 1",
+        "WITH c AS (SELECT 1), SELECT 1",
+        // The result columns and their names.
+        "SELECT 1 AS 2",
+        "SELECT 1+",
+        // `VALUES`.
+        "VALUES 1",
+        "VALUES (1+)",
+        "VALUES (1",
+        "VALUES (1),",
+        // `FROM`, and everything a table may carry.
+        "SELECT 1 FROM 2",
+        "SELECT 1 FROM main.+",
+        "SELECT 1 FROM f(1+)",
+        "SELECT 1 FROM f(1",
+        "SELECT 1 FROM (SELECT 1",
+        "SELECT 1 FROM t AS 2",
+        "SELECT 1 FROM t INDEXED 2",
+        "SELECT 1 FROM t INDEXED BY 2",
+        "SELECT 1 FROM (SELECT 1) NOT INDEXED",
+        "SELECT 1 FROM t1 JOIN t2 ON 1+",
+        "SELECT 1 FROM t1 JOIN t2 USING 1",
+        "SELECT 1 FROM t1 JOIN t2 USING (1)",
+        "SELECT 1 FROM t1 JOIN t2 USING (a",
+        "SELECT 1 FROM t LEFT",
+        "SELECT 1 FROM t LEFT SELECT",
+        // The clauses after it.
+        "SELECT 1 WHERE 1+",
+        "SELECT 1 GROUP a",
+        "SELECT 1 GROUP BY 1+",
+        "SELECT 1 GROUP BY a HAVING 1+",
+        "SELECT 1 ORDER 1",
+        "SELECT 1 ORDER BY 1+",
+        "SELECT 1 ORDER BY a NULLS 2",
+        "SELECT 1 LIMIT 1+",
+        "SELECT 1 LIMIT 1 OFFSET 1+",
+        "SELECT 1 LIMIT 1, 1+",
+        // The statements inside expressions.
+        "SELECT (SELECT 1",
+        "SELECT EXISTS 1",
+        "SELECT EXISTS (SELECT 1",
+        "SELECT 1 WHERE 1 IN (SELECT 1",
+        "SELECT 1 WHERE 1 IN main.+",
+        "SELECT 1 WHERE 1 IN (SELECT)",
+        // And a compound that never gets its second half.
+        "SELECT 1 UNION",
+        "SELECT 1 UNION ALL",
+        "SELECT 1 EXCEPT",
+        "SELECT 1 INTERSECT",
+    ];
+    for sql in cases {
+        assert!(parsed(sql).is_err(), "`{sql}` is not a statement");
+    }
+}
+
+#[test]
+fn the_clauses_that_may_repeat_are_read_to_their_end() {
+    let cases = [
+        (
+            "SELECT 1 GROUP BY a, b",
+            "(select 1 (group (col a)) (group (col b)))",
+        ),
+        ("SELECT 1 FROM f()", "(select 1 (from (call f)))"),
+        // A word that is not `INDEXED` after `NOT` is where the table
+        // ends, and the statement with it.
+        ("SELECT 1 FROM t", "(select 1 (from t))"),
+    ];
+    for (sql, expected) in cases {
+        assert_eq!(parsed(sql).as_deref(), Ok(expected), "{sql}");
+    }
+    assert!(parsed("SELECT 1 FROM t NOT x").is_err());
+}
+
+#[test]
+fn a_row_of_values_that_is_too_tall_is_refused_where_it_is_built() {
+    // An expression of exactly the greatest height there may be, so that
+    // it is the row over it that is one too tall.
+    let tall = "VALUES (1".to_owned() + &"+1".repeat(199) + ")";
+    let error = parsed(&tall).expect_err("a row one taller than the bound");
+    assert_eq!(error.expected, Expected::Depth);
+    // One shorter, and the row fits.
+    let fits = "VALUES (1".to_owned() + &"+1".repeat(198) + ")";
+    assert!(parsed(&fits).is_ok());
+}
+
+#[test]
+fn the_arena_says_how_many_statements_it_holds() {
+    let (arena, _) = crate::parse::statement(b"SELECT (SELECT 1) UNION SELECT 2").unwrap();
+    // The subquery, and the two halves of the compound.
+    assert_eq!(arena.selects(), 3);
+    let (arena, _) = crate::parse::statement(b"SELECT 1").unwrap();
+    assert_eq!(arena.selects(), 1);
+}
+
+#[test]
+fn statements_that_nest_deeper_than_the_walk_are_refused() {
+    let deep = "SELECT ".to_owned() + &"(SELECT ".repeat(300) + "1" + &")".repeat(300);
+    let error = parsed(&deep).expect_err("three hundred nested statements");
+    assert_eq!(error.expected, Expected::Depth);
 }

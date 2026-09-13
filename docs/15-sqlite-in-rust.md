@@ -109,7 +109,7 @@ the step claims is tested.
 | Q1 | The format, read-only: header, pages, cells, overflow, records. **Done.** |
 | Q2 | Reading a schema into types: columns, affinities, indexes, and the `sqlite_schema` text parsed rather than handed on. |
 | Q3 | The pager reading: page cache, the journal a reader must ignore, the WAL a reader must follow. |
-| Q4 | The tokenizer (**done**), the expression parser (**done**) and the rest of the read half of SQL: `SELECT`, `WHERE`, `ORDER BY`, `LIMIT`. |
+| Q4 | The tokenizer, the expression parser and the statement parser for the read half of SQL. **Done**, but for the window clauses. |
 | Q5 | A tree walker that answers those statements from a file, with affinity and collation. Differential tests against the C shell begin here. |
 | Q6 | The virtual machine, and the code generator that replaces the walker. |
 | Q7 | Writing: the b-tree writer, transactions, the rollback journal in all four modes, then the WAL. |
@@ -207,10 +207,12 @@ tables read in rowid order, its overflow chains followed, and its records
 decoded, over any page size and any of the three encodings, without
 allocating. The matrix of 15.6 is a test, the reader is fuzzed by
 `sqlite_image`, and the first bug that target found — a child pointer of
-zero, which is a page no file has — is in the regression corpus. An expression is
-read into a tree that agrees with SQLite's parser on every one of five
-hundred and forty-one recorded cases, bar six that wait for `SELECT`, and
-SQL text is tokenized exactly as `src/tokenize.c` tokenizes it — the same character
+zero, which is a page no file has — is in the regression corpus. A statement is read
+into a tree that agrees with SQLite's parser over seven hundred and ninety
+-two recorded cases — everything it refuses is refused, and all but
+thirty-six of what it accepts is read — an expression over five hundred
+and forty-one more, and SQL text is tokenized exactly as
+`src/tokenize.c` tokenizes it — the same character
 classes, the same rules, the same answers, checked against nine hundred
 and fifty-nine recorded cases of which eight hundred come out of SQLite's
 own test suite. What the crate cannot do is everything else in 15.3.

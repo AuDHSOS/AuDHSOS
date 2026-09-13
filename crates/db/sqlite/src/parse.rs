@@ -15,7 +15,11 @@
 
 use alloc::vec::Vec;
 
-use crate::ast::{Arena, BinaryOp, CurrentTime, ExprId, LikeOp, Literal, Node, Span, UnaryOp};
+use crate::ast::{
+    Arena, BinaryOp, Compound, Cte, CurrentTime, Distinct, ExprId, Indexed, Join, JoinKind, LikeOp,
+    Limit, Literal, Materialized, Node, Nulls, Order, OrderTerm, Range, ResultColumn, Select,
+    SelectId, Source, SourceKind, Span, UnaryOp,
+};
 use crate::keyword::Keyword;
 use crate::token::{Kind, Lexer, Token};
 
@@ -51,6 +55,16 @@ pub enum Expected {
     End,
     /// `AND`, in a `BETWEEN`.
     And,
+    /// `FROM`, after a comma in a `USING`.
+    From,
+    /// `BY`, after `GROUP` or `ORDER`.
+    By,
+    /// `AS`, in a `WITH` clause.
+    WithAs,
+    /// `SELECT`, `VALUES` or `WITH`.
+    Select,
+    /// `JOIN`, after the words that describe one.
+    Join,
     /// The end of the statement.
     Eof,
     /// Nothing: the statement nests deeper than the parser walks.
@@ -76,8 +90,10 @@ pub struct Parser<'a> {
     sql: &'a [u8],
     /// What is left of it.
     lexer: Lexer<'a>,
-    /// The next two tokens, once they have been looked at.
-    ahead: [Option<Token>; 2],
+    /// The next three tokens, once they have been looked at. Three is
+    /// what `t.*` needs, which is the longest thing the grammar decides
+    /// by looking rather than by reading.
+    ahead: [Option<Token>; 3],
     /// The tree so far.
     arena: Arena,
     /// How deep the walk stands.
@@ -91,11 +107,11 @@ impl<'a> Parser<'a> {
         let mut parser = Parser {
             sql,
             lexer: Lexer::new(sql),
-            ahead: [None, None],
+            ahead: [None, None, None],
             arena: Arena::new(),
             depth: 0,
         };
-        parser.ahead = [parser.read(), parser.read()];
+        parser.ahead = [parser.read(), parser.read(), parser.read()];
         parser
     }
 
@@ -109,6 +125,501 @@ impl<'a> Parser<'a> {
     #[must_use]
     pub fn into_arena(self) -> Arena {
         self.arena
+    }
+
+    /// Reads one statement, and nothing after it but a semicolon.
+    ///
+    /// # Errors
+    ///
+    /// Where the tokens are not a statement, or where something follows
+    /// it.
+    pub fn only_statement(&mut self) -> Result<SelectId, Error> {
+        let select = self.select()?;
+        self.eat(Kind::Semi);
+        match self.peek() {
+            None => Ok(select),
+            Some(token) => Err(self.error(Some(token), Expected::Eof)),
+        }
+    }
+
+    /// A statement: a `WITH` clause, one or more cores put together, and
+    /// the `ORDER BY` and `LIMIT` that belong to the whole of it.
+    ///
+    /// The clauses of the whole are kept on the first core, which is what
+    /// the statement is named by; the cores after it hang off its
+    /// `compound`.
+    ///
+    /// # Errors
+    ///
+    /// Where the tokens are not a statement.
+    pub fn select(&mut self) -> Result<SelectId, Error> {
+        self.deeper()?;
+        let (ctes, recursive) = if self.eat_keyword(Keyword::With) {
+            self.with_clause()?
+        } else {
+            (Range::default(), false)
+        };
+        let mut first = self.select_core()?;
+        first.ctes = ctes;
+        first.recursive = recursive;
+        let mut cores = alloc::vec![first];
+        let mut operators = Vec::new();
+        while let Some(operator) = self.compound_operator() {
+            operators.push(operator);
+            cores.push(self.select_core()?);
+        }
+        let order = self.order_by()?;
+        let limit = self.limit()?;
+        // The chain is built from the back, so that each core can name
+        // the one after it. There is always a first core, which is the
+        // statement, and the clauses of the whole belong to it.
+        let mut last = cores.pop().unwrap_or_default();
+        let mut at = cores.len();
+        if at == 0 {
+            last.order = order;
+            last.limit = limit;
+        }
+        let mut chain = self.arena.push_select(last);
+        while let Some(mut core) = cores.pop() {
+            at = at.saturating_sub(1);
+            core.compound = operators.get(at).copied().map(|operator| (operator, chain));
+            if at == 0 {
+                core.order = order;
+                core.limit = limit;
+            }
+            chain = self.arena.push_select(core);
+        }
+        self.depth = self.depth.saturating_sub(1);
+        Ok(chain)
+    }
+
+    /// `WITH [RECURSIVE] name [(columns)] AS [NOT] [MATERIALIZED] (select), ...`
+    fn with_clause(&mut self) -> Result<(Range, bool), Error> {
+        let recursive = self.eat_keyword(Keyword::Recursive);
+        let mut ctes = Vec::new();
+        loop {
+            let name = self.name()?;
+            let columns = if self.eat(Kind::Lp) {
+                let mut names = Vec::new();
+                loop {
+                    names.push(self.name()?);
+                    if !self.eat(Kind::Comma) {
+                        break;
+                    }
+                }
+                self.expect(Kind::Rp, Expected::CloseParen)?;
+                self.arena.push_names(&names)
+            } else {
+                Range::default()
+            };
+            self.expect_keyword(Keyword::As, Expected::WithAs)?;
+            let materialized = if self.eat_keyword(Keyword::Not) {
+                self.expect_keyword(Keyword::Materialized, Expected::WithAs)?;
+                Materialized::No
+            } else if self.eat_keyword(Keyword::Materialized) {
+                Materialized::Yes
+            } else {
+                Materialized::Unspecified
+            };
+            self.expect(Kind::Lp, Expected::OpenParen)?;
+            let select = self.select()?;
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            ctes.push(Cte {
+                name,
+                columns,
+                select,
+                materialized,
+            });
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+        Ok((self.arena.push_ctes(&ctes), recursive))
+    }
+
+    /// One `SELECT`, or one `VALUES`.
+    fn select_core(&mut self) -> Result<Select, Error> {
+        if self.eat_keyword(Keyword::Values) {
+            return self.values();
+        }
+        self.expect_keyword(Keyword::Select, Expected::Select)?;
+        let distinct = if self.eat_keyword(Keyword::Distinct) {
+            Distinct::Distinct
+        } else if self.eat_keyword(Keyword::All) {
+            Distinct::All
+        } else {
+            Distinct::Unspecified
+        };
+        let columns = self.result_columns()?;
+        let from = if self.eat_keyword(Keyword::From) {
+            self.tables()?
+        } else {
+            Range::default()
+        };
+        let filter = if self.eat_keyword(Keyword::Where) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        let group = if self.eat_keyword(Keyword::Group) {
+            self.expect_keyword(Keyword::By, Expected::By)?;
+            let mut terms = Vec::new();
+            loop {
+                terms.push(self.expression()?);
+                if !self.eat(Kind::Comma) {
+                    break;
+                }
+            }
+            self.arena.push_children(&terms)
+        } else {
+            Range::default()
+        };
+        let having = if self.eat_keyword(Keyword::Having) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        Ok(Select {
+            distinct,
+            columns,
+            from,
+            filter,
+            group,
+            having,
+            ..Select::default()
+        })
+    }
+
+    /// `VALUES (a, b), (c, d)`, where each row is a row node.
+    fn values(&mut self) -> Result<Select, Error> {
+        let mut rows = Vec::new();
+        loop {
+            self.expect(Kind::Lp, Expected::OpenParen)?;
+            let mut items = Vec::new();
+            loop {
+                items.push(self.expression()?);
+                if !self.eat(Kind::Comma) {
+                    break;
+                }
+            }
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            let children = self.arena.push_children(&items);
+            rows.push(self.node(Node::Row(children))?);
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+        let values = self.arena.push_children(&rows);
+        Ok(Select {
+            values,
+            ..Select::default()
+        })
+    }
+
+    /// What the statement answers: `*`, `t.*`, or an expression with the
+    /// name it is answered under.
+    fn result_columns(&mut self) -> Result<Range, Error> {
+        let mut columns = Vec::new();
+        loop {
+            columns.push(self.result_column()?);
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+        Ok(self.arena.push_results(&columns))
+    }
+
+    /// One result column.
+    fn result_column(&mut self) -> Result<ResultColumn, Error> {
+        if self.eat(Kind::Star) {
+            return Ok(ResultColumn::Star);
+        }
+        // `t.*` is a result column and not an expression, so it is read
+        // here and nowhere else.
+        if let (Some(first), Some(second), Some(third)) =
+            (self.peek(), self.ahead(1), self.ahead(2))
+            && matches!(first.kind, Kind::Id | Kind::String)
+            && second.kind == Kind::Dot
+            && third.kind == Kind::Star
+        {
+            self.bump();
+            self.bump();
+            self.bump();
+            return Ok(ResultColumn::TableStar(Span::of(first)));
+        }
+        let expr = self.expression()?;
+        let alias = if self.eat_keyword(Keyword::As) {
+            Some(self.name()?)
+        } else {
+            self.optional_name()
+        };
+        Ok(ResultColumn::Expr { expr, alias })
+    }
+
+    /// The tables of a `FROM` clause, with the joins between them.
+    fn tables(&mut self) -> Result<Range, Error> {
+        let mut sources = Vec::new();
+        sources.push(self.source(Join::default())?);
+        while let Some(join) = self.join_operator()? {
+            sources.push(self.source(join)?);
+        }
+        Ok(self.arena.push_sources(&sources))
+    }
+
+    /// The operator between two tables, where there is one.
+    fn join_operator(&mut self) -> Result<Option<Join>, Error> {
+        if self.eat(Kind::Comma) {
+            return Ok(Some(Join {
+                natural: false,
+                kind: JoinKind::Inner,
+                comma: true,
+            }));
+        }
+        if self.eat_keyword(Keyword::Join) {
+            return Ok(Some(Join {
+                natural: false,
+                kind: JoinKind::Inner,
+                comma: false,
+            }));
+        }
+        let Some(token) = self.peek() else {
+            return Ok(None);
+        };
+        let Kind::Keyword(first) = token.kind else {
+            return Ok(None);
+        };
+        if !is_join_word(first) {
+            return Ok(None);
+        }
+        // `NATURAL LEFT OUTER JOIN` and the shorter ways of writing it:
+        // up to three words, and then `JOIN`.
+        let mut join = Join::default();
+        let mut words = 0u32;
+        while words < 3 {
+            let Some(token) = self.peek() else { break };
+            let Kind::Keyword(word) = token.kind else {
+                break;
+            };
+            if word == Keyword::Join {
+                break;
+            }
+            if !is_join_word(word) {
+                break;
+            }
+            self.bump();
+            words = words.saturating_add(1);
+            match word {
+                Keyword::Natural => join.natural = true,
+                Keyword::Left => join.kind = JoinKind::Left,
+                Keyword::Right => join.kind = JoinKind::Right,
+                Keyword::Full => join.kind = JoinKind::Full,
+                Keyword::Cross => join.kind = JoinKind::Cross,
+                Keyword::Inner => join.kind = JoinKind::Inner,
+                _ => {}
+            }
+        }
+        self.expect_keyword(Keyword::Join, Expected::Join)?;
+        if join.kind == JoinKind::None {
+            join.kind = JoinKind::Inner;
+        }
+        Ok(Some(join))
+    }
+
+    /// One table of a `FROM` clause, with its name, its alias, and the
+    /// condition that joins it.
+    fn source(&mut self, join: Join) -> Result<Source, Error> {
+        let kind = if self.at(Kind::Lp) {
+            self.bump();
+            let select = self.select()?;
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            SourceKind::Select(select)
+        } else {
+            let first = self.name()?;
+            let (schema, name) = if self.eat(Kind::Dot) {
+                (Some(first), self.name()?)
+            } else {
+                (None, first)
+            };
+            if self.at(Kind::Lp) {
+                self.bump();
+                let mut args = Vec::new();
+                if !self.at(Kind::Rp) {
+                    loop {
+                        args.push(self.expression()?);
+                        if !self.eat(Kind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                self.expect(Kind::Rp, Expected::CloseParen)?;
+                let args = self.arena.push_children(&args);
+                SourceKind::Function { schema, name, args }
+            } else {
+                SourceKind::Table {
+                    schema,
+                    name,
+                    indexed: Indexed::Unspecified,
+                }
+            }
+        };
+        let alias = if self.eat_keyword(Keyword::As) {
+            Some(self.name()?)
+        } else {
+            self.optional_name()
+        };
+        let kind = self.indexed_by(kind)?;
+        let mut on = None;
+        let mut using = Range::default();
+        if self.eat_keyword(Keyword::On) {
+            on = Some(self.expression()?);
+        } else if self.eat_keyword(Keyword::Using) {
+            self.expect(Kind::Lp, Expected::OpenParen)?;
+            let mut names = Vec::new();
+            loop {
+                names.push(self.name()?);
+                if !self.eat(Kind::Comma) {
+                    break;
+                }
+            }
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            using = self.arena.push_names(&names);
+        }
+        Ok(Source {
+            kind,
+            alias,
+            join,
+            on,
+            using,
+        })
+    }
+
+    /// `INDEXED BY name` and `NOT INDEXED`, which only a table may carry.
+    fn indexed_by(&mut self, kind: SourceKind) -> Result<SourceKind, Error> {
+        let indexed = if self.eat_keyword(Keyword::Indexed) {
+            self.expect_keyword(Keyword::By, Expected::By)?;
+            Indexed::By(self.name()?)
+        } else if self.at_keyword(Keyword::Not) && self.ahead(1).is_some_and(is_indexed) {
+            self.bump();
+            self.bump();
+            Indexed::Not
+        } else {
+            return Ok(kind);
+        };
+        match kind {
+            SourceKind::Table { schema, name, .. } => Ok(SourceKind::Table {
+                schema,
+                name,
+                indexed,
+            }),
+            // `INDEXED BY` after anything but a table is not a statement.
+            SourceKind::Function { .. } | SourceKind::Select(_) => {
+                Err(self.error(self.peek(), Expected::Eof))
+            }
+        }
+    }
+
+    /// `ORDER BY term, term`, where a term may say which way it sorts and
+    /// where its nulls go.
+    fn order_by(&mut self) -> Result<Range, Error> {
+        if !self.eat_keyword(Keyword::Order) {
+            return Ok(Range::default());
+        }
+        self.expect_keyword(Keyword::By, Expected::By)?;
+        let mut terms = Vec::new();
+        loop {
+            let expr = self.expression()?;
+            let order = if self.eat_keyword(Keyword::Asc) {
+                Order::Ascending
+            } else if self.eat_keyword(Keyword::Desc) {
+                Order::Descending
+            } else {
+                Order::Unspecified
+            };
+            let nulls = if self.eat_keyword(Keyword::Nulls) {
+                if self.eat_keyword(Keyword::First) {
+                    Nulls::First
+                } else {
+                    self.expect_keyword(Keyword::Last, Expected::By)?;
+                    Nulls::Last
+                }
+            } else {
+                Nulls::Unspecified
+            };
+            terms.push(OrderTerm { expr, order, nulls });
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+        Ok(self.arena.push_orders(&terms))
+    }
+
+    /// `LIMIT count`, `LIMIT count OFFSET skip`, and the older
+    /// `LIMIT skip, count`.
+    fn limit(&mut self) -> Result<Option<Limit>, Error> {
+        if !self.eat_keyword(Keyword::Limit) {
+            return Ok(None);
+        }
+        let first = self.expression()?;
+        if self.eat_keyword(Keyword::Offset) {
+            return Ok(Some(Limit {
+                count: first,
+                offset: Some(self.expression()?),
+            }));
+        }
+        if self.eat(Kind::Comma) {
+            // `LIMIT a, b` counts `b` rows after skipping `a`, which is
+            // the other way round from `OFFSET`.
+            let count = self.expression()?;
+            return Ok(Some(Limit {
+                count,
+                offset: Some(first),
+            }));
+        }
+        Ok(Some(Limit {
+            count: first,
+            offset: None,
+        }))
+    }
+
+    /// `UNION`, `UNION ALL`, `EXCEPT` and `INTERSECT`.
+    fn compound_operator(&mut self) -> Option<Compound> {
+        if self.eat_keyword(Keyword::Union) {
+            if self.eat_keyword(Keyword::All) {
+                return Some(Compound::UnionAll);
+            }
+            return Some(Compound::Union);
+        }
+        if self.eat_keyword(Keyword::Except) {
+            return Some(Compound::Except);
+        }
+        if self.eat_keyword(Keyword::Intersect) {
+            return Some(Compound::Intersect);
+        }
+        None
+    }
+
+    /// The next token as a name, where it could be one. A name that is
+    /// not there is not a refusal: an alias may be left out.
+    fn optional_name(&mut self) -> Option<Span> {
+        if !self.at_name() {
+            return None;
+        }
+        self.bump().map(Span::of)
+    }
+
+    /// Whether the next token could be a name.
+    fn at_name(&self) -> bool {
+        match self.peek().map(|token| token.kind) {
+            Some(Kind::Id | Kind::String) => true,
+            Some(Kind::Keyword(keyword)) => keyword.can_be_name(),
+            _ => false,
+        }
+    }
+
+    /// The token `ahead` places on, once the two that are read have been
+    /// looked at.
+    fn ahead(&self, at: usize) -> Option<Token> {
+        self.ahead.get(at).copied().flatten()
     }
 
     /// Reads one expression, and nothing after it.
@@ -289,9 +800,33 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `x IN (a, b)`, and the empty list the grammar allows.
+    /// `x IN (a, b)`, the empty list the grammar allows, `x IN (SELECT
+    /// ...)`, and `x IN table`, which is the statement written short.
     fn in_list(&mut self, value: ExprId, negated: bool) -> Result<ExprId, Error> {
-        self.expect(Kind::Lp, Expected::OpenParen)?;
+        if !self.at(Kind::Lp) {
+            let first = self.name()?;
+            let (schema, table) = if self.eat(Kind::Dot) {
+                (Some(first), self.name()?)
+            } else {
+                (None, first)
+            };
+            return self.node(Node::InTable {
+                value,
+                schema,
+                table,
+                negated,
+            });
+        }
+        self.bump();
+        if self.at_select() {
+            let select = self.select()?;
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            return self.node(Node::InSelect {
+                value,
+                select,
+                negated,
+            });
+        }
         let mut items = Vec::new();
         if !self.at(Kind::Rp) {
             loop {
@@ -308,6 +843,13 @@ impl<'a> Parser<'a> {
             list,
             negated,
         })
+    }
+
+    /// Whether a statement begins here.
+    fn at_select(&self) -> bool {
+        self.at_keyword(Keyword::Select)
+            || self.at_keyword(Keyword::Values)
+            || self.at_keyword(Keyword::With)
     }
 
     /// `x LIKE pattern ESCAPE escape`, and the three that work like it.
@@ -355,6 +897,13 @@ impl<'a> Parser<'a> {
                 self.unary(UnaryOp::Identity, operand)
             }
             Kind::Keyword(Keyword::Cast) => self.cast(),
+            Kind::Keyword(Keyword::Exists) => {
+                self.bump();
+                self.expect(Kind::Lp, Expected::OpenParen)?;
+                let select = self.select()?;
+                self.expect(Kind::Rp, Expected::CloseParen)?;
+                self.node(Node::Exists(select))
+            }
             Kind::Keyword(Keyword::Case) => self.case(),
             Kind::Lp => self.parenthesized(),
             Kind::Integer | Kind::QNumber => {
@@ -506,6 +1055,11 @@ impl<'a> Parser<'a> {
     /// `(x)`, which is the expression, and `(x, y)`, which is a row.
     fn parenthesized(&mut self) -> Result<ExprId, Error> {
         self.bump();
+        if self.at_select() {
+            let select = self.select()?;
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            return self.node(Node::Subquery(select));
+        }
         let first = self.expression()?;
         if !self.at(Kind::Comma) {
             self.expect(Kind::Rp, Expected::CloseParen)?;
@@ -648,7 +1202,11 @@ impl<'a> Parser<'a> {
     /// Takes the next token.
     fn bump(&mut self) -> Option<Token> {
         let token = self.peek();
-        self.ahead = [self.ahead.get(1).copied().flatten(), self.read()];
+        self.ahead = [
+            self.ahead.get(1).copied().flatten(),
+            self.ahead.get(2).copied().flatten(),
+            self.read(),
+        ];
         token
     }
 
@@ -720,6 +1278,25 @@ enum Infix {
     Is,
 }
 
+/// Whether a word is one of the seven that describe a join.
+const fn is_join_word(keyword: Keyword) -> bool {
+    matches!(
+        keyword,
+        Keyword::Cross
+            | Keyword::Full
+            | Keyword::Inner
+            | Keyword::Left
+            | Keyword::Natural
+            | Keyword::Outer
+            | Keyword::Right
+    )
+}
+
+/// Whether a token is the word `INDEXED`.
+fn is_indexed(token: Token) -> bool {
+    token.kind == Kind::Keyword(Keyword::Indexed)
+}
+
 /// A token that is nowhere and nothing, for the two places a peek that has
 /// already been made cannot fail.
 const EMPTY: Token = Token {
@@ -735,6 +1312,17 @@ const fn join(left: Span, right: Span) -> Span {
         start: left.start,
         len: end.saturating_sub(left.start),
     }
+}
+
+/// Reads one statement out of `sql` and answers the tree it built.
+///
+/// # Errors
+///
+/// Where the statement is not one `SELECT` or `VALUES`.
+pub fn statement(sql: &[u8]) -> Result<(Arena, SelectId), Error> {
+    let mut parser = Parser::new(sql);
+    let root = parser.only_statement()?;
+    Ok((parser.into_arena(), root))
 }
 
 /// Reads one expression out of `sql` and answers the tree it built.

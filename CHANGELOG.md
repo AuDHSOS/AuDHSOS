@@ -7,6 +7,28 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The statement parser of `db-sqlite`, which finishes step Q4 of document
+  15: `SELECT`, `VALUES` and `WITH`, with the clauses the grammar hangs
+  off them — result columns and their names, `FROM` with all five joins
+  and `NATURAL`, `ON` and `USING`, a statement or a table-valued function
+  as a table, `INDEXED BY`, `WHERE`, `GROUP BY`, `HAVING`, `ORDER BY` with
+  its two directions and both places for nulls, `LIMIT` in its three
+  spellings, the four compound operators, and `WITH RECURSIVE` with
+  `MATERIALIZED`. An expression may now hold a statement: a subquery,
+  `EXISTS`, `IN (SELECT ...)`, and `IN table`, which is that statement
+  written short.
+
+  A third recorded oracle holds it: seven hundred and ninety-two
+  statements, seven hundred of them out of SQLite's own test suite, with
+  whether SQLite's parser accepted each. Everything it refuses, this
+  refuses. What it accepts and this does not is counted — thirty-six, the
+  window clauses and the statements of later steps — and the test fails if
+  that number rises rather than falls.
+
+  The crate stays at complete coverage, and `sqlite_expr` now walks
+  statements as well: twenty-nine million executions found nothing.
+  D-141, catalog 6.6.78.
+
 - The expression parser of `db-sqlite`: recursive descent with the
   precedence table of `src/parse.y` as a climb, over an arena where a node
   is an index rather than a pointer — one allocation that grows, four

@@ -9,10 +9,16 @@
 //! holds it: a statement of ten thousand brackets is refused rather than
 //! followed.
 
-use db_sqlite::ast::{Arena, ExprId, Node};
-use db_sqlite::parse::{Expected, expression};
+use db_sqlite::ast::{Arena, ExprId, Node, SelectId};
+use db_sqlite::parse::{expression, statement};
 
 fuzz_support::fuzz_target!(|bytes: &[u8]| {
+    // The same bytes as a statement: a `SELECT` is where the tree of
+    // statements and the tree of expressions meet, and a subquery is how
+    // deep that can go.
+    if let Ok((arena, root)) = statement(bytes) {
+        walk_select(&arena, root, 0);
+    }
     match expression(bytes) {
         Err(error) => {
             assert!(error.at <= bytes.len(), "a refusal past the end of the input");
@@ -29,6 +35,54 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
         }
     }
 });
+
+/// Reads every statement reachable from `id`, and every expression of
+/// each, so that a statement is a tree as well.
+fn walk_select(arena: &Arena, id: SelectId, depth: u32) {
+    assert!(depth < 512, "a statement nested deeper than the parser walks");
+    let select = arena.select(id).expect("a statement the arena does not hold");
+    let deeper = depth.saturating_add(1);
+    for cte in arena.ctes(select.ctes) {
+        walk_select(arena, cte.select, deeper);
+    }
+    for column in arena.results(select.columns) {
+        if let db_sqlite::ast::ResultColumn::Expr { expr, .. } = *column {
+            walk(arena, expr, 0);
+        }
+    }
+    for source in arena.sources(select.from) {
+        match source.kind {
+            db_sqlite::ast::SourceKind::Select(inner) => walk_select(arena, inner, deeper),
+            db_sqlite::ast::SourceKind::Function { args, .. } => {
+                for arg in arena.children(args) {
+                    walk(arena, *arg, 0);
+                }
+            }
+            db_sqlite::ast::SourceKind::Table { .. } => {}
+        }
+        if let Some(on) = source.on {
+            walk(arena, on, 0);
+        }
+    }
+    for expr in select
+        .filter
+        .into_iter()
+        .chain(select.having)
+        .chain(select.limit.map(|limit| limit.count))
+        .chain(select.limit.and_then(|limit| limit.offset))
+    {
+        walk(arena, expr, 0);
+    }
+    for expr in arena.children(select.group).iter().chain(arena.children(select.values)) {
+        walk(arena, *expr, 0);
+    }
+    for term in arena.orders(select.order) {
+        walk(arena, term.expr, 0);
+    }
+    if let Some((_, next)) = select.compound {
+        walk_select(arena, next, deeper);
+    }
+}
 
 /// Reads every node reachable from `id`, and holds that the tree is one:
 /// a child is always a node the arena has.
@@ -93,6 +147,9 @@ fn walk(arena: &Arena, id: ExprId, depth: u32) {
                 child(*item);
             }
         }
+        // A statement is walked by `walk_select`, which the statement
+        // above this expression reached it through.
+        Node::Subquery(_) | Node::Exists(_) => {}
+        Node::InSelect { value, .. } | Node::InTable { value, .. } => child(value),
     }
-    let _ = Expected::Depth;
 }
