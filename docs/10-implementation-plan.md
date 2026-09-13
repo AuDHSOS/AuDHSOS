@@ -2605,7 +2605,7 @@ first thread over the same endpoint under a badge of its own; the first
 thread owns the decoders, the subscribers, and the rings. Nothing is held
 by both, so nothing needs a lock.
 
-**The client of the end-to-end tests is a program of the archive**,
+**The client of the end-to-end tests is a program of the image**,
 `app-input` beside `app-paint`, and not a binary of `user-test-programs`:
 those carry the kernel's own QEMU tests and reach no userland server.
 
@@ -3125,7 +3125,7 @@ adapter contains no layout knowledge of its own.
 
 ### 10.13.5 The program that enumerates
 
-`app-lspci`, a program of the archive: the root task asks `system_info` for
+`app-lspci`, a program of the image: the root task asks `system_info` for
 the ECAM window, makes it a `Device` memory object, and grants it with the
 segment and the bus range. The program maps one bus of it at a time, at one
 address, and takes that mapping back before the next — a window of every bus

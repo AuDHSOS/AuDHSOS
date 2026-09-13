@@ -19,17 +19,19 @@ A client, and not a server. That is the first statement of this document
 because it is the one that decides its size.
 
 A server is specified by section 6 of RFC 4254, and it presumes four
-things this system does not have: a process server that can start a
-program on request, a file system that a user's keys and a session's
-files live in, user accounts, and a pseudo-terminal. None of the four is
-a small piece of work, and none of them is about Secure Shell. A client
-presumes a TCP connection and a program that wants one, and both are
-Phase 14.
+things: a process server that can start a program on request, a file
+system that a user's keys and a session's files live in, user accounts,
+and a pseudo-terminal. One of the four is built: `server-fs` answers
+file requests over the two volumes of document 15. Each of the other
+three is a piece of work of its own, and none of them is about Secure
+Shell. A client presumes a TCP connection and a program that wants one,
+and both are Phase 14.
 
 What a client is for here: reaching a shell or a command on another
-machine from a program of the boot archive, over a connection this system
-opened and encrypted itself. It is the second thing this system can do
-with a network that a person would recognise, after fetching a page.
+machine from a program the root task starts, over a connection this
+system opened and encrypted itself. It is the second thing this system
+can do with a network that a person would recognise, after fetching a
+page.
 
 ## 14.2 Scope
 
@@ -88,10 +90,12 @@ written for a verifier and branched on the bits it was given, the decision
 carries the masked multiplication that signing now runs on. ECDSA signing
 stays behind `test-signing`.
 
-The wire types and the binary packet are built, which is step S1. What is
-missing is everything above them: the negotiation, the exchange hash, the
-key derivation, the authentication exchange, and the channel layer. Two
-things are also missing that are not code, and 14.13 lists them.
+Steps S1 to S3 are built: the wire types, the binary packet, the
+identification string, the negotiation, both key exchange methods, the
+exchange hash, the six keys, and the cipher. What is missing is the host
+key of S4, the authentication exchange of S5, the channel layer of S6,
+the re-exchange of S7, and the integration of S8. Two things are also
+missing that are not code, and 14.13 lists them.
 
 ## 14.4 The documents
 
@@ -351,23 +355,28 @@ question and not a protocol one. There is no X11 forwarding.
 
 ## 14.10 Trusting a host key
 
-This is the part with no infrastructure, and it is stated as a problem
-rather than as a design because it is open (14.13).
+Which rule the client is given is open (14.13). The interface is decided:
+the client takes the rule at construction and judges no key on its own,
+so one place states which hosts this system will talk to.
 
-TLS solved it with a certificate chain and the trust anchors the image
-carries. SSH has no chain: a host key is trusted because it was seen
-before and written down, which is a file, and this system has no writable
-storage — there is no file system server, and `virtio-blk` is not
-scheduled. Trust on first use needs somewhere to put the first use.
+SSH has no certificate chain, so a client trusts a host key because it
+read that key from a source it trusts. This system holds two such
+sources.
 
-The two ends of the range are these. A fingerprint compiled into the
-image is honest, checkable, and reaches only hosts that were known when
-the image was built. Accepting any key on first sight is what an
-interactive client does and is exactly the attack the protocol exists to
-prevent, with nobody at a console to answer the question. Whatever is
-chosen, the client's interface is the same: it is given the rule at
-construction and never decides on its own, so that the decision lives
-where it can be read.
+- A fingerprint in the image: costs nothing at run time, and reaches the
+  hosts that were known when the image was built. It is compiled into the
+  client, or it is a file of the boot volume, which this system reads and
+  does not write (document 15, decision D4).
+- A file on the scratch disk: `server-fs` creates, reads, writes and
+  removes files, and a file written in one boot is found in the next with
+  the same bytes (document 15, step S8, test 3), which is what trust on
+  first use needs of a volume. Two conditions come with it: a run carries
+  that disk only when it asks (D-136), and `server-fs` has to be in the
+  boot set before a client can open a path, so a client that finds no file
+  system server needs a rule that wants no file.
+
+A client that accepts any key on first sight admits the attack the
+protocol exists to prevent, and this system has no console to ask.
 
 ## 14.11 Buffers, and the rule against allocating
 
@@ -410,10 +419,10 @@ it decides the shape of the outside check.
 **The outside check is a live OpenSSH.** The development machine runs
 one; the reference machine of D-118 reaches the development machine, and
 the acceptance of Phase 15 is written that way (catalog 6.6.65). The
-acceptance for this track is the same shape: a program of the boot
-archive opens a connection to an `sshd` the test starts, authenticates
-with a key the test generated, runs a command, and reads its output and
-its exit status. A handshake against a server that this project did not
+acceptance for this track is the same shape: a program of the image opens
+a connection to an `sshd` the test starts, authenticates with a key the
+test generated, runs a command, and reads its output and its exit
+status. A handshake against a server that this project did not
 write is the only evidence that the exchange hash, the key derivation
 and the packet layer are what the documents mean.
 
@@ -432,8 +441,8 @@ listed against until that step is reached.
 
 | What is open | Where it is felt | Shape of the answer |
 |--------------|------------------|---------------------|
-| How a host key is trusted | step S4, and 14.10 | a rule the client is given at construction; the question is what the image can carry |
-| Where the client's private key comes from | step S5 | the boot archive of D-27, or generated per boot, in which case the far side must already know the public half |
+| How a host key is trusted | step S4, and 14.10 | a rule the client is given at construction; the question is which of the two places of 14.10 it reads, the image or the volume |
+| Where the client's private key comes from | step S5 | a file of the boot volume the image writer puts there, a file on the scratch disk, or generated per boot, in which case the far side must already know the public half |
 
 Four questions that stood here are answered. Whether `ed25519::sign`
 becomes product surface is settled by D-135: it does, together with
@@ -464,7 +473,7 @@ definition of done every phase and every track step uses.
 | S5 | `auth` | M | `publickey` with the signature of RFC 4252, section 7, the failure and success paths, and `ext-info-c` with `server-sig-algs` |
 | S6 | `channel` | L | the channel messages, the window, the session channel, `exec` and `shell`, extended data, `exit-status`, and the close sequence |
 | S7 | re-exchange | S-M | a re-exchange from either side, the byte and time thresholds, and the disconnect messages with the reason codes of RFC 4250 |
-| S8 | integration | M | the client over a socket of `server-net`, a program in the boot archive, and the interop acceptance of 14.12; needs Phase 14 |
+| S8 | integration | M | the client over a socket of `server-net`, a program of the image, and the interop acceptance of 14.12; needs Phase 14 |
 
 S1 to S7 need nothing from another track and are built between phases, as
 the whole of document 11 was. S8 is integration and needs the network on
@@ -477,6 +486,6 @@ the machine.
 | No published trace to replay | the client is checked only against itself and agrees with nobody | the interop acceptance of 14.12 is not optional and is what the track is judged on; it is an end-to-end run and belongs to `test --e2e`, which `check` runs. `tools/tls-probe` is not the model for it: that one is a separate workspace and no part of the checks (11.12) |
 | The `mpint` of the shared secret | a handshake that succeeds about half the time and fails otherwise, with no error that names the cause | a test for both cases — a shared secret whose top bit is set and one whose is clear — written before the exchange hash is |
 | A cipher whose specification is a draft | the text the crate cites is revised or expires under it | the copy is a numbered revision and cannot change (D-134); a later revision is a later file, and the RFC it becomes goes to `docs/rfc/` with the citations moved to it |
-| Trusting a host key with no storage | a client that reaches the wrong machine and cannot tell | the rule is a parameter, not a default; a client constructed without one does not connect |
+| Trusting a host key by no rule | a client that reaches the wrong machine and cannot tell | the rule is a parameter, not a default; a client constructed without one does not connect |
 | Fixed buffers meet a peer that wants more | a connection refused for a size rather than for a reason | the receive sizes are the ones RFC 4253, section 6.1, makes mandatory, so a peer that needs more than 35000 bytes is outside what it may require |
 | Departing from three REQUIRED algorithms | a peer this client cannot talk to | the departure is measured, not assumed: OpenSSH negotiates every algorithm of 14.5, and the interop test is what says so on the day it stops being true |

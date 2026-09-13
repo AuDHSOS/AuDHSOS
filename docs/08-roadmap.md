@@ -23,7 +23,7 @@ XL) and describe effort, not calendar time.
 | 12 | Time, randomness, and message interrupts | L | a userland thread reads a clock, waits until a deadline, draws entropy, and receives an MSI-X vector |
 | 13 | PCI and the bus | M | a userland program enumerates the PCI bus and reports the virtio-net device and its registers |
 | 14 | The network on the machine | XL | the system leases an address, resolves a name, and completes an HTTP request over a real device |
-| 15 | TLS over the network | M | an HTTPS request from a program of the archive, with the certificate path validated |
+| 15 | TLS over the network | M | an HTTPS request from a program of the image, with the certificate path validated |
 
 Every phase has the same definition of done: all catalog items for the
 components in the phase have tests, `sh tools/xtask-check.sh` is green, the
@@ -36,13 +36,15 @@ cryptography and TLS crates of section 8.21, specified in
 [document 11](11-cryptography-and-tls.md), the tracks of sections 8.22
 to 8.25, specified in [document 12](12-parallel-work.md), and the Secure
 Shell client of section 8.26, specified in
-[document 14](14-secure-shell-as-a-client.md). Section 8.27 states how
+[document 14](14-secure-shell-as-a-client.md). The disk and the file
+system server are off the phases as well, built and specified in
+[document 15](15-the-disk-on-the-machine.md). Section 8.27 states how
 many of them may be active at once and which phase work may be pulled
 forward. Of the tracks of documents 11 and 12 everything but the two
 integration steps is finished, and those two are Phases 14 and 15; what
 the four phases from 12 on need beyond them is specified in
-[document 13](13-the-network-on-the-machine.md). Track S is decided and
-not started (D-123).
+[document 13](13-the-network-on-the-machine.md). Track S is begun: steps
+S1 to S3 are built and S4 to S8 are not (D-123).
 
 ## 8.2 Phase 0: Project foundation
 
@@ -307,6 +309,8 @@ matter of what happened rather than of which started last.
 
 ## 8.14 Phase 12: Time, randomness, and message interrupts
 
+Status: implemented.
+
 Three capabilities the kernel does not have and that everything above it
 wants — time, randomness, and message interrupts. None of them is about
 networking; all three are what
@@ -358,6 +362,8 @@ a vector without a gate arrives as a general protection fault.
 
 ## 8.15 Phase 13: PCI and the bus
 
+Status: implemented.
+
 Deliverables: `kernel-acpi` gains `mcfg.rs`, which reads the `MCFG` table
 the way `madt.rs` reads the MADT — signature, length and checksum first,
 then the allocation structures with their base address, segment group and
@@ -383,7 +389,7 @@ the bus works is finding the device the next phase will drive.
 
 Tests: catalog 6.6.61, and the fuzz targets `pci_config` and `mcfg`.
 
-Acceptance: a program of the archive enumerates the bus and reports the
+Acceptance: a program of the image enumerates the bus and reports the
 virtio-net device with its vendor and device id, the base address
 registers it decoded, the four virtio capabilities it found, and the size
 of its MSI-X table; on a machine started without the two network lines it
@@ -461,7 +467,7 @@ role and gains a counterpart that runs on the target.
 
 Tests: catalog 6.6.65, with 6.6.71 already in.
 
-Acceptance: an HTTPS `GET` from a program of the archive against a server
+Acceptance: an HTTPS `GET` from a program of the image against a server
 the test starts on the development machine, with a chain the test
 certificate builder of `audhsos-x509` wrote, returns a response the
 client parses; a chain with an expired certificate, one with a name that
@@ -470,16 +476,13 @@ each refused with the alert the standard names.
 
 ## 8.18 Later work, not scheduled
 
-a file system server on top of the FAT32, partition table and block
-device logic of 8.24, which Phase 13 brings within reach because the bus
-it needs is the one PCI gives it: what is left is the DMA region, the
-process around the driver, and the protocol its clients speak; certificate revocation checking; virtio-gpu;
-virtio-input or `usb-tablet` for absolute pointer coordinates; a
-compositor with several windows; the `aarch64` port under HVF without a
-loader; SMP with per-CPU run queues; hardware port permission bitmaps;
-kernel-object memory donation; an interface definition language for
-protocols; recursive capability revocation; a tickless timer; long file
-names in the disk image writer.
+certificate revocation checking; virtio-gpu; virtio-input or
+`usb-tablet` for absolute pointer coordinates; a compositor with several
+windows; the `aarch64` port under HVF without a loader; SMP with per-CPU
+run queues; hardware port permission bitmaps; kernel-object memory
+donation; an interface definition language for protocols; recursive
+capability revocation; a tickless timer; long file names in the disk
+image writer.
 
 ## 8.19 Risks
 
@@ -664,7 +667,7 @@ build. What it refuses, and why each name is refused, is section 14.5.
 | S5 | `auth` | M | `publickey` with the signature of RFC 4252, section 7, and `ext-info-c` with `server-sig-algs` |
 | S6 | `channel` | L | channels, the window, the session channel, `exec` and `shell`, extended data, and `exit-status` |
 | S7 | re-exchange | S-M | a re-exchange from either side, its two thresholds, and the disconnect reason codes of RFC 4250 |
-| S8 | integration | M | the client over a socket of `server-net`, a program in the boot archive, and a handshake against a live OpenSSH; needs Phase 14 |
+| S8 | integration | M | the client over a socket of `server-net`, a program of the image, and a handshake against a live OpenSSH; needs Phase 14 |
 
 S1 to S7 depend on no phase and are built between them, as the whole of
 track C was. S8 needs the network on the machine.

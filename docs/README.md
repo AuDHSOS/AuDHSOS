@@ -6,15 +6,17 @@ They describe the target design, the rules the code must follow, and the
 order in which the system is built.
 
 Status: every entry of the decision register is decided; no open
-decisions remain. Phases 0 to 9 of the roadmap are implemented, Phases 0
-to 8 released as 0.1.0, and Phase 10 is under way. Every side track of
-documents 11 and 12 is finished: the TLS track of document 11 through
-T7 and R1 to R6, and of document 12 the network stack D1 to D9, the shared
-foundations, the whole of track F, and the tooling. What was left of both
-documents is their two integration steps, and those are no longer
-unscheduled: they are Phases 14 and 15, and document 13 specifies them
-together with the two phases of kernel and bus work that has to come
-first.
+decisions remain. Phases 0 to 13 of the roadmap are implemented, Phases 0
+to 8 released as 0.1.0, and Phase 14 is next. The disk and the file
+system server of [document 15](15-the-disk-on-the-machine.md) are built
+beside the phases: `server-fs` answers file requests over the boot volume
+and over a scratch disk, and every program outside the boot set is read
+off the volume. Every side track of documents 11 and 12 is finished: the
+TLS track of document 11 through T7 and R1 to R6, and of document 12 the
+network stack D1 to D9, the shared foundations, the whole of track F, and
+the tooling. What is left of both documents is their two integration
+steps, which are Phases 14 and 15; document 13 specifies them together
+with the two phases of kernel and bus work that came first.
 
 One track is begun and not finished: Secure Shell as a client, which
 D-123 admits and [document 14](14-secure-shell-as-a-client.md)
@@ -22,9 +24,10 @@ specifies, as track S of the roadmap. Steps S1 to S3 exist: the wire
 types and the binary packet of `audhsos-ssh`, the greeting and the
 negotiation, both key exchange methods with the exchange hash and the six
 keys, and the cipher over the packet layer, whose documents are in
-[openssh/](openssh) (D-134). Three questions
-inside that track are open and each is a precondition of one of its steps
-rather than of the track; section 14.13 names them.
+[openssh/](openssh) (D-134). Two questions inside that track are open —
+how a host key is trusted and where the client's private key comes from —
+and each is a precondition of one of its steps rather than of the track;
+section 14.13 names them.
 
 ## Reading order
 
@@ -44,7 +47,7 @@ rather than of the track; section 14.13 names them.
 | 12 | [Work parallel to the kernel phases](12-parallel-work.md) | The admission test for parallel work; the network stack, the shared foundations, the device logic, the tooling; what may be pulled forward |
 | 13 | [The network on the machine](13-the-network-on-the-machine.md) | What has to exist before a network driver can be written: a clock and a deadline, entropy, MSI-X, PCI, DMA; then the driver, the server, and the socket protocol |
 | 14 | [Secure Shell as a client](14-secure-shell-as-a-client.md) | The SSH-2 client: the algorithm set and what is refused, the crate, the three layers of the protocol, trusting a host key, testing against an implementation from outside |
-| 15 | [The disk on the machine](15-the-disk-on-the-machine.md) | What has to exist before a file system server can be written: the handover of a PCI device, the two adapters, the server, the file protocol, and the move of the programs onto the volume |
+| 15 | [The disk on the machine](15-the-disk-on-the-machine.md) | The file system server and what had to exist before it: the handover of a PCI device, the two adapters, the server, the file protocol, and the move of the programs onto the volume |
 
 Beside the documents lie the standards they cite, verbatim and with
 their checksums, one directory per body that publishes them:

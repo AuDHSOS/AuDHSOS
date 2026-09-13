@@ -12,7 +12,7 @@ everywhere.
 | Term | Meaning |
 |------|---------|
 | root task | `server-init`, the first user process. It holds `Role::SystemControl` and starts every other process. |
-| file system server | `server-fs`, the process this document is about. It does not exist yet. |
+| file system server | `server-fs`, the process this document is about. Every step below is built. |
 | driver process | Any user process that drives a hardware device. The file system server is one. |
 | register window | A `Device` memory object over the base address register of the virtio block device. The driver process reads and writes device registers through it. |
 | DMA region | A `Ram` memory object that the device reads and writes. It holds the virtqueue rings and the request slots. |

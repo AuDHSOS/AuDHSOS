@@ -75,6 +75,7 @@ AuDHSOS/
 │   │   │   ├── memory/        server-memory
 │   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor
 │   │   │   ├── input/         server-input: subscribers, the two decoders, event rings
+│   │   │   ├── fs/            server-fs: open files per client, the file protocol over a FAT32 volume (document 15)
 │   │   │   └── net/           server-net: the device, the stack, the sockets (document 13, Phase 14)
 │   │   ├── programs/          user-programs: every program of the system as one
 │   │   │   │                  binary each of one crate, because a program is a
@@ -83,9 +84,10 @@ AuDHSOS/
 │   │   │   │                  thing (D-97)
 │   │   │   └── src/bin/       server-init (the root task), server-memory,
 │   │   │                      server-name, server-console, server-display,
-│   │   │                      server-input, app-hello, app-checks,
-│   │   │                      app-paint, app-input, app-canvas,
-│   │   │                      app-faulter
+│   │   │                      server-input, server-fs, app-hello,
+│   │   │                      app-checks, app-paint, app-input,
+│   │   │                      app-canvas, app-faulter, app-lspci,
+│   │   │                      app-files
 │   │   └── apps/              the logic of the applications, as servers/ is
 │   │                          for the servers: host-tested, no system call
 │   │       └── canvas/        app-canvas: the drawing state of the graphical
@@ -176,8 +178,9 @@ AuDHSOS/
 | `server-console` | u2 | all | no | yes | `audhsos-collections`, `driver-uart16550` |
 | `server-display` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `gfx`, `user-proto` |
 | `server-input` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `driver-i8042`, `user-proto`; feature `test-doubles` |
+| `server-fs` | u2 | all | no | yes | `audhsos-abi`, `audhsos-time`, `fs-fat`, `fs-gpt`, `user-proto`; `test-support` as a dev-dependency |
 | `server-net` (Phase 14) | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `net-stack`, `pci`, `user-proto` |
-| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | the three server logic crates, `audhsos-abi`, `driver-uart16550`, `pci`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
+| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | every server logic crate, `app-canvas`, `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `driver-i8042`, `driver-uart16550`, `driver-virtio-blk`, `fs-fat`, `gfx`, `pci`, `virtio-queue`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
 | `crypto-ct` | c0 | all | no | yes | - |
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
 | `crypto-hash` | c1 | all | no | yes | `crypto-ct` |
@@ -278,10 +281,11 @@ remains separate. The independent fuzz target is `json_codec`.
     joins them lives in a userland process.
 11. `audhsos-symbols`, `virtio-queue`, `fs-fat`, `fs-gpt`, and `pci` are
     logic crates at layer 1. They depend on layer-0 crates only — `pci` on
-    nothing at all — and are used by the xtask and, when the phases reach
-    them, by driver and server processes. `fs-gpt` is the one exception to
-    the layer-0 rule: it depends on `fs-fat`, which is layer 1, because the
-    block device trait it reads through is defined there (D-138).
+    nothing at all — and are used by the xtask, by `server-fs` for the two
+    file system crates, and by driver and server processes as the phases
+    reach them. `fs-gpt` is the one exception to the layer-0 rule: it
+    depends on `fs-fat`, which is layer 1, because the block device trait
+    it reads through is defined there (D-138).
 12. `driver-virtio-blk` is a logic crate at layer 2, and
     `driver-virtio-net` will be another, because a driver of a virtio
     device stands above the queue logic it drives the device through.
@@ -409,8 +413,8 @@ still has none.
 | Object types, their rights masks, and `TryFrom<u32>` conversions | one declarative table in `audhsos-abi` |
 | Error mapping | one `From` implementation per crate pair, tested by a table |
 | Test doubles | one implementation in `kernel-hal-api` behind `test-doubles` |
-| FAT32 structures in the image writer and in a later file system server | `fs-fat` over a block device trait; the image writer of the xtask is its first user and a file system server will be the second |
-| Partition table structures and the CRC-32 they are checked with, in the image writer and in a later file system server | `fs-gpt` over the same trait; the xtask keeps the image's own choices and no structure of the format (D-138) |
+| FAT32 structures in the image writer and in the file system server | `fs-fat` over a block device trait; the image writer of the xtask is its first user and `server-fs` its second (document 15) |
+| Partition table structures and the CRC-32 they are checked with, in the image writer and in the file system server | `fs-gpt` over the same trait; the xtask keeps the image's own choices and no structure of the format (D-138) |
 | Calendar arithmetic in certificate validity, file timestamps, and network timers | `audhsos-time`; every interface takes time as a parameter, no crate reads a clock |
 | Fixed-capacity containers in kernel queues, the network stack, and userland | `audhsos-collections`; one model-tested implementation per container |
 | Base64 and PEM in the trust-anchor tool and in generated test data | `audhsos-encoding` |
