@@ -2983,6 +2983,41 @@ own tests hold it to RFC 8032.
   not the peer's ends the exchange, and a blob that is no key ends it
   before the rule is asked.
 
+### 6.6.76 The authentication exchange (`audhsos-ssh`)
+
+Step S5 of 8.26. RFC 4252 publishes no vector, so a request is read back
+field by field and its signature is checked the way a server checks it,
+with `crypto-ec`.
+
+- The service request names the service and an `SSH_MSG_SERVICE_ACCEPT`
+  answers with the name it accepted; another message number is no accept,
+  and a payload that ends early is refused.
+- The query carries the user name, the service, `publickey`, the boolean
+  false, the algorithm name and the key blob, in that order and with
+  nothing after them.
+- The request that authenticates is the query with the boolean true and a
+  signature blob after it. What a server verifies — the session
+  identifier as a string, then the fields of the request as they stand —
+  verifies under the key the request carries.
+- One bit of the session identifier changes the signature, which is what
+  makes a signature captured from one connection worthless on another.
+- The lengths are what the two requests need: a scratch buffer of
+  `signed_len` writes the request, one byte shorter writes none, and the
+  request is `request_len` bytes. A buffer too small for the query, for
+  the signed request, or for the service request writes nothing.
+- A failure carries the methods that may continue and the partial-success
+  flag; a success is the message alone; a banner carries its text and its
+  language tag, which may be empty.
+- Leave to sign is the algorithm and the key blob of the query, sent
+  back: another key's blob, another algorithm, and any other message are
+  not it.
+- A message of another layer is no answer of this one, and an answer that
+  ends early is refused.
+- An `SSH_MSG_EXT_INFO` gives up `server-sig-algs` and skips every other
+  extension whatever its value holds; a message without the extension
+  says nothing about algorithms; a count larger than the message, another
+  message number, and a list that is no name-list are each refused.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

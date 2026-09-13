@@ -40,6 +40,18 @@ pub const KEXINIT: u8 = 20;
 /// `SSH_MSG_NEWKEYS`.
 pub const NEWKEYS: u8 = 21;
 
+/// `SSH_MSG_USERAUTH_REQUEST`.
+pub const USERAUTH_REQUEST: u8 = 50;
+
+/// `SSH_MSG_USERAUTH_FAILURE`.
+pub const USERAUTH_FAILURE: u8 = 51;
+
+/// `SSH_MSG_USERAUTH_SUCCESS`.
+pub const USERAUTH_SUCCESS: u8 = 52;
+
+/// `SSH_MSG_USERAUTH_BANNER`.
+pub const USERAUTH_BANNER: u8 = 53;
+
 /// The reason codes of a `SSH_MSG_DISCONNECT` (RFC 4250, section 4.2.2),
 /// again only the ones the layers that are built name.
 pub mod disconnect {

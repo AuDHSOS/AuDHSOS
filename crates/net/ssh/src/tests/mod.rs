@@ -4,6 +4,7 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
+mod auth;
 mod cipher;
 mod error;
 mod exchange;

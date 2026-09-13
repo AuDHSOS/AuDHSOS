@@ -3,9 +3,9 @@
 The SSH-2 client of [document 14](../../../docs/14-secure-shell-as-a-client.md),
 sans-I/O: it is given bytes that arrived and a buffer to write into, and
 it never reads a socket, allocates, or asks what time it is. What exists
-today is steps S1 to S4 of track S: the two layers everything else is
-written in, the negotiation, both key exchange methods, the cipher, and
-the host key.
+today is steps S1 to S5 of track S: the two layers everything else is
+written in, the negotiation, both key exchange methods, the cipher, the
+host key, and the authentication exchange.
 
 ## `wire`
 
@@ -130,7 +130,30 @@ judges no key of its own (document 14, section 14.10).
 names, a SHA-256 the image carries; the second is a file, which a caller
 reads through the file system server and this crate does not.
 
+## `auth`
+
+RFC 4252: the service request, the `publickey` method with an Ed25519
+key, and what a server answers with. [`auth::write_query`] asks whether a
+key would be accepted, [`auth::write_publickey`] signs, and
+[`auth::Response`] is the failure with its method list, the success, the
+banner, and the `SSH_MSG_USERAUTH_PK_OK` that is leave to sign.
+
+The signature of section 7 is over the session identifier and then the
+fields of the request, so a signature captured from one connection is
+worthless on another. The signed data is written once into a scratch
+buffer the caller owns and the request is that data without the session
+identifier, so no field is encoded twice; [`auth::signed_len`] and
+[`auth::request_len`] are how long the two are.
+
+Where the private key comes from is the caller's — [`auth::ClientKey`]
+takes the secret and clears it when it is dropped — and section 14.13 of
+the document holds that question open.
+
+[`auth::ExtInfo`] reads the `SSH_MSG_EXT_INFO` of RFC 8308, section 2.3,
+keeps `server-sig-algs`, and skips every other extension whatever its
+value holds, which section 2.5 requires.
+
 ## What is not here
 
-Everything above the key exchange: the authentication (S5), the channels
-(S6), and the re-exchange (S7).
+Everything above the authentication: the channels (S6) and the
+re-exchange (S7).

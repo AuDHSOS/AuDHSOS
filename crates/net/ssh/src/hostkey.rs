@@ -82,10 +82,7 @@ impl HostKey {
     /// [`SshError::OutOfBounds`] when `out` holds fewer than
     /// [`BLOB_LEN`] bytes.
     pub fn write(&self, out: &mut [u8]) -> Result<usize, SshError> {
-        let mut writer = Writer::new(out);
-        writer.write_string(HOST_KEY_ED25519.as_bytes())?;
-        writer.write_string(&self.key)?;
-        Ok(writer.position())
+        write_blob(&self.key, out)
     }
 
     /// The SHA-256 of the blob.
@@ -128,6 +125,21 @@ impl HostKey {
         }
         ed25519::verify(&self.key, hash, &value).map_err(|_| SshError::Signature)
     }
+}
+
+/// Writes the key blob of RFC 8709, section 4, for any `ssh-ed25519`
+/// public key — a server's or this client's own, which [`crate::auth`]
+/// sends under the same encoding.
+///
+/// # Errors
+///
+/// [`SshError::OutOfBounds`] when `out` holds fewer than [`BLOB_LEN`]
+/// bytes.
+pub fn write_blob(key: &[u8; PUBLIC_LEN], out: &mut [u8]) -> Result<usize, SshError> {
+    let mut writer = Writer::new(out);
+    writer.write_string(HOST_KEY_ED25519.as_bytes())?;
+    writer.write_string(key)?;
+    Ok(writer.position())
 }
 
 /// Which host keys this client will talk to.

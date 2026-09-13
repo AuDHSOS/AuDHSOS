@@ -90,12 +90,12 @@ written for a verifier and branched on the bits it was given, the decision
 carries the masked multiplication that signing now runs on. ECDSA signing
 stays behind `test-signing`.
 
-Steps S1 to S4 are built: the wire types, the binary packet, the
+Steps S1 to S5 are built: the wire types, the binary packet, the
 identification string, the negotiation, both key exchange methods, the
-exchange hash, the six keys, the cipher, and the host key with the
-signature over the exchange hash. What is missing is the authentication
-exchange of S5, the channel layer of S6, the re-exchange of S7, and the
-integration of S8. Two things are also
+exchange hash, the six keys, the cipher, the host key with the signature
+over the exchange hash, and the authentication exchange. What is missing
+is the channel layer of S6, the re-exchange of S7, and the integration of
+S8. Two things are also
 missing that are not code, and 14.13 lists them.
 
 ## 14.4 The documents
@@ -446,7 +446,7 @@ listed against until that step is reached.
 | What is open | Where it is felt | Shape of the answer |
 |--------------|------------------|---------------------|
 | Which host key rule a client is given | step S8, and 14.10 | the rule is a parameter of the crate and `hostkey::Fingerprint` is one; the question is which of the two places of 14.10 the program that constructs a client reads, the image or the volume |
-| Where the client's private key comes from | step S5 | a file of the boot volume the image writer puts there, a file on the scratch disk, or generated per boot, in which case the far side must already know the public half |
+| Where the client's private key comes from | step S8 | `auth::ClientKey` takes the secret as a parameter and this crate opens no file; what the program that constructs a client reads is the question — a file of the boot volume the image writer puts there, a file on the scratch disk, or a key generated per boot, in which case the far side must already know the public half |
 
 Four questions that stood here are answered. Whether `ed25519::sign`
 becomes product surface is settled by D-135: it does, together with
@@ -474,7 +474,7 @@ definition of done every phase and every track step uses.
 | S2 | `kex` | L | implemented: the identification string, the message numbers, `SSH_MSG_KEXINIT` and the negotiation rule (catalog 6.6.69); both key exchange methods over `crypto-dh` (D-122) and `crypto-ec::x25519`, the exchange hash, the six keys of section 7.2, `SSH_MSG_NEWKEYS`, and the aborts (catalog 6.6.70) |
 | S3 | the cipher | M | implemented: `chacha20-poly1305@openssh.com` over the packet layer, against the worked example of appendix A of the draft D-134 keeps (catalog 6.6.70) |
 | S4 | host keys | S-M | implemented: the `ssh-ed25519` blobs of RFC 8709, sections 4 and 6, the signature over `H` verified, the fingerprint of a blob, and the trust rule as a parameter (catalog 6.6.75) |
-| S5 | `auth` | M | `publickey` with the signature of RFC 4252, section 7, the failure and success paths, and `ext-info-c` with `server-sig-algs` |
+| S5 | `auth` | M | implemented: the service request, `publickey` with the signature of RFC 4252, section 7, the failure, success, banner and `SSH_MSG_USERAUTH_PK_OK` answers, and the `SSH_MSG_EXT_INFO` that carries `server-sig-algs` (catalog 6.6.76) |
 | S6 | `channel` | L | the channel messages, the window, the session channel, `exec` and `shell`, extended data, `exit-status`, and the close sequence |
 | S7 | re-exchange | S-M | a re-exchange from either side, the byte and time thresholds, and the disconnect messages with the reason codes of RFC 4250 |
 | S8 | integration | M | the client over a socket of `server-net`, a program of the image, and the interop acceptance of 14.12; needs Phase 14 |

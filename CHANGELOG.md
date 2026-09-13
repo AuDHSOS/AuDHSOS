@@ -7,6 +7,26 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Track S, step S5, the authentication exchange: `audhsos-ssh` gains
+  `auth`, which writes the service request of RFC 4252, section 5, the
+  `publickey` query with the boolean false, and the request that
+  authenticates with the signature of section 7 over the session
+  identifier and the fields that follow it — which is what makes a
+  signature captured from one connection worthless on another. The signed
+  data is written once into a buffer the caller owns and the request is
+  that data without the session identifier, so no field is encoded twice;
+  `signed_len` and `request_len` say how long the two are, and the crate
+  still allocates nothing. `ClientKey` takes the private key as a
+  parameter and clears it when it is dropped: where that key comes from
+  is the program's, and 14.13 holds the question open against step S8.
+  `Response` is the four answers a server sends — the failure with its
+  method list and its partial-success flag, the success, the banner, and
+  the `SSH_MSG_USERAUTH_PK_OK` that is leave to sign — and `ExtInfo`
+  reads the `SSH_MSG_EXT_INFO` of RFC 8308, section 2.3, keeps
+  `server-sig-algs`, and skips every other extension whatever bytes its
+  value holds, which section 2.5 requires of every reader. Catalog
+  6.6.76.
+
 - Track S, step S4, the host key: `audhsos-ssh` gains `hostkey`, which
   reads the `ssh-ed25519` blobs of RFC 8709, sections 4 and 6, checks the
   signature over the exchange hash, and computes the SHA-256 fingerprint
