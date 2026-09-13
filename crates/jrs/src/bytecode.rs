@@ -4221,6 +4221,8 @@ impl RegisterLowerer {
                 };
                 (instruction, RegisterType::Boolean)
             }
+            // 7.1.1 converts an Object operand at run time, so the feedback
+            // dispatch takes every operand the typed forms above do not.
             Binary::Add
             | Binary::Sub
             | Binary::Mul
@@ -4230,11 +4232,7 @@ impl RegisterLowerer {
             | Binary::Lt
             | Binary::Le
             | Binary::Gt
-            | Binary::Ge
-                if left_type.is_primitive() && right_type.is_primitive() =>
-            {
-                self.feedback_binary(operator, right_register)?
-            }
+            | Binary::Ge => self.feedback_binary(operator, left_register, right_register)?,
             Binary::BitAnd
             | Binary::BitOr
             | Binary::BitXor
@@ -4304,6 +4302,7 @@ impl RegisterLowerer {
     fn feedback_binary(
         &mut self,
         operator: Binary,
+        lhs: crate::engine::bytecode::Reg,
         rhs: crate::engine::bytecode::Reg,
     ) -> Option<(crate::engine::bytecode::Instruction, RegisterType)> {
         use crate::engine::bytecode::{BinaryOp, FeedbackKind, Instruction};
@@ -4321,7 +4320,7 @@ impl RegisterLowerer {
             _ => return None,
         };
         let slot = self.feedback_slot(FeedbackKind::BinaryOp)?;
-        Some((Instruction::Binary { op, rhs, slot }, result_type))
+        Some((Instruction::Binary { op, lhs, rhs, slot }, result_type))
     }
 
     fn lower_assignment(
@@ -4388,7 +4387,8 @@ impl RegisterLowerer {
                 && right_type.is_numeric_primitive())
                 && !concatenates;
             if generic {
-                let (instruction, generic_type) = self.feedback_binary(operator, right_register)?;
+                let (instruction, generic_type) =
+                    self.feedback_binary(operator, left_register, right_register)?;
                 self.code.emit(instruction);
                 self.release_register(right_register)?;
                 self.release_register(left_register)?;
@@ -4405,6 +4405,7 @@ impl RegisterLowerer {
                         self.feedback_slot(crate::engine::bytecode::FeedbackKind::BinaryOp)?;
                     Instruction::Binary {
                         op: crate::engine::bytecode::BinaryOp::Pow,
+                        lhs: left_register,
                         rhs: right_register,
                         slot,
                     }
@@ -4671,7 +4672,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypeTrim
         | crate::engine::realm::Intrinsic::StringPrototypeTrimEnd
         | crate::engine::realm::Intrinsic::StringPrototypeTrimStart
-        | crate::engine::realm::Intrinsic::ArrayPrototypeJoin => RegisterType::String,
+        | crate::engine::realm::Intrinsic::ArrayPrototypeJoin
+        | crate::engine::realm::Intrinsic::ArrayPrototypeToString => RegisterType::String,
 
         // 23.1.3.38 answers an Array Iterator and 23.1.5.2.1 a result object,
         // neither of which has a tracked layout. 23.1.3.1 answers an element,

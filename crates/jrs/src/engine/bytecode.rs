@@ -231,10 +231,16 @@ pub enum Instruction {
     Div(Reg),
     /// `acc = acc % reg`
     Mod(Reg),
-    /// Primitive arithmetic/string operation with runtime type feedback.
+    /// Arithmetic, concatenation or comparison with runtime type feedback.
+    ///
+    /// Both operands are registers rather than the accumulator and a register,
+    /// because 7.1.1 may call a user method to convert one of them and the
+    /// converted value is written back where the collector can see it.
     Binary {
         /// Operation to execute.
         op: BinaryOp,
+        /// Left-hand operand register.
+        lhs: Reg,
         /// Right-hand operand register.
         rhs: Reg,
         /// `BinaryOp` feedback slot.
@@ -634,8 +640,9 @@ impl BytecodeFunction {
                 self.verify_context_access(pc, depth, slot)?;
                 None
             }
-            Instruction::Binary { rhs, slot, .. } => {
+            Instruction::Binary { lhs, rhs, slot, .. } => {
                 self.verify_feedback(pc, slot, FeedbackKind::BinaryOp)?;
+                self.verify_register(pc, lhs)?;
                 Some(rhs)
             }
             Instruction::GetNamed { obj, name, slot }

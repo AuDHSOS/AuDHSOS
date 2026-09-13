@@ -60,6 +60,9 @@ pub enum VMError {
     Thrown(Value, Option<(super::realm::NativeErrorKind, &'static str)>),
     /// Property lookup failed or target is not an object.
     TypeError,
+    /// An algorithm reached a step this engine does not implement. It is a gap
+    /// in the migration, never an answer a program gave.
+    Unsupported(&'static str),
     /// Instruction execution fell off bytecode bounds without Return.
     UnexpectedEnd,
     /// Generational heap invariant or reference failure.
@@ -99,6 +102,29 @@ struct Call {
     return_pc: usize,
     /// Bytecode unit active in the caller.
     caller_code_id: Option<u32>,
+    /// Set when an operation opened this call and waits for its answer.
+    resume: Option<Resume>,
+}
+
+/// The hint 7.1.1 passes to `@@toPrimitive` for an operation that names none.
+const DEFAULT_HINT: [u16; 7] = [0x64, 0x65, 0x66, 0x61, 0x75, 0x6C, 0x74];
+
+/// What a conversion of 7.1.1 reached.
+enum Conversion {
+    /// The primitive value the operation asked for.
+    Done(Value),
+    /// A method has to run first; this is the bytecode unit it starts in.
+    Suspended(u32),
+}
+
+/// The two bytecode units an instruction works with: the root unit that owns
+/// the function table and the constants, and the unit the frame is executing.
+#[derive(Clone, Copy)]
+struct CodeUnits<'a> {
+    /// The root unit, which owns the nested functions.
+    root: &'a BytecodeFunction,
+    /// The unit of the active frame.
+    active: &'a BytecodeFunction,
 }
 
 /// Light frame boundary recorded on the contiguous call stack.
@@ -114,6 +140,32 @@ pub struct FrameHeader {
     pub caller_binding_count: usize,
     /// Lexical heap context to restore with the caller.
     pub caller_context: Option<ContextRef>,
+    /// Set when this call was opened by an operation rather than by a call
+    /// instruction, and says what the operation does with the answer.
+    pub resume: Option<Resume>,
+}
+
+/// What an operation that called user code does when the call returns.
+///
+/// Only a register of the caller frame is held, never a value: the collector
+/// sees registers, and it does not see the fields of a frame header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Resume {
+    /// Register of the caller frame the answer is written to.
+    pub register: Reg,
+    /// The method of 7.1.1 whose answer this is.
+    pub step: PrimitiveStep,
+}
+
+/// Which method of 7.1.1 a conversion has already asked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrimitiveStep {
+    /// `@@toPrimitive` of 7.1.1 step 2, whose answer must be primitive.
+    Exotic,
+    /// `valueOf` of 7.1.1.1, after which `toString` follows.
+    ValueOf,
+    /// `toString` of 7.1.1.1, the last method the list holds.
+    ToString,
 }
 
 /// Contiguous register-based virtual machine executor.
@@ -616,14 +668,34 @@ impl RegisterVM {
     /// resource error when a frame, a binding or fuel is exhausted.
     fn enter_call(
         &mut self,
-        code: &BytecodeFunction,
-        active_code: &BytecodeFunction,
+        units: CodeUnits<'_>,
         active_feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
         realm: &Realm,
         call: Call,
     ) -> Result<Option<u32>, VMError> {
         let function = self.read_reg(call.func)?;
+        self.enter_call_value(function, units, active_feedback, heap, realm, call)
+    }
+
+    /// Enters a call whose callee is already a value rather than a register.
+    ///
+    /// An operation that converts an operand looks its method up itself, so it
+    /// has no register to name it in.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] for a callee that is not callable, and the
+    /// frame, binding and fuel limits of the caller.
+    fn enter_call_value(
+        &mut self,
+        function: Value,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+        call: Call,
+    ) -> Result<Option<u32>, VMError> {
         // 13.3.6.1: a callee that is not callable is a TypeError, not a
         // failure of execution.
         let Some(function_ref) = function.as_object() else {
@@ -639,17 +711,21 @@ impl RegisterVM {
             ObjectKind::NativeFunction { id, .. } => {
                 let intrinsic = Intrinsic::from_id(id).ok_or(VMError::TypeError)?;
                 // A native identifier and a bytecode index are separate
-                // namespaces; the call site profile keeps them apart.
-                active_feedback
-                    .record_call(call.slot, NATIVE_CALL_TARGET | id)
-                    .ok_or(VMError::InvalidFeedbackVector)?;
+                // namespaces; the call site profile keeps them apart. A call an
+                // operation opened has no call site and records nothing.
+                if call.resume.is_none() {
+                    active_feedback
+                        .record_call(call.slot, NATIVE_CALL_TARGET | id)
+                        .ok_or(VMError::InvalidFeedbackVector)?;
+                }
                 let value = self.call_intrinsic(intrinsic, call, heap, realm)?;
                 self.acc = value;
                 return Ok(None);
             }
             _ => return Err(type_error(heap, realm, "value is not callable")),
         };
-        let callee = code
+        let callee = units
+            .root
             .functions
             .get(code_id as usize)
             .ok_or(VMError::InvalidBytecode(
@@ -676,16 +752,19 @@ impl RegisterVM {
             .fuel
             .checked_sub(callee.entry_fuel_cost)
             .ok_or(VMError::OutOfFuel)?;
-        let next_frame = self.open_frame(active_code, callee, call, function_ref)?;
-        active_feedback
-            .record_call(call.slot, code_id)
-            .ok_or(VMError::InvalidFeedbackVector)?;
+        let next_frame = self.open_frame(units.active, callee, call, function_ref)?;
+        if call.resume.is_none() {
+            active_feedback
+                .record_call(call.slot, code_id)
+                .ok_or(VMError::InvalidFeedbackVector)?;
+        }
         self.frames.push(FrameHeader {
             caller_fp: self.fp,
             return_pc: call.return_pc,
             caller_code_id: call.caller_code_id,
             caller_binding_count: self.active_binding_count,
             caller_context: self.current_context,
+            resume: call.resume,
         });
         self.fp = next_frame;
         self.active_binding_count = callee_bindings;
@@ -840,7 +919,8 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypePop
             | Intrinsic::ArrayPrototypePush
             | Intrinsic::ArrayPrototypeReverse
-            | Intrinsic::ArrayPrototypeSlice => {
+            | Intrinsic::ArrayPrototypeSlice
+            | Intrinsic::ArrayPrototypeToString => {
                 self.call_array_intrinsic(intrinsic, call, heap, realm)
             }
         }
@@ -921,6 +1001,39 @@ impl RegisterVM {
                 }
                 Ok(Value::from_smi(-1))
             }
+            // 23.1.3.37: the `join` of the receiver, or 20.1.3.6 when it is
+            // not callable.
+            Intrinsic::ArrayPrototypeToString => {
+                let key = PropertyKey::String(heap.strings.intern("join")?);
+                let join = heap
+                    .lookup_named(object, key)?
+                    .map(|property| property.value);
+                let native = join.and_then(Value::as_object).and_then(|reference| {
+                    match heap.get_object(reference)?.kind {
+                        ObjectKind::NativeFunction { id, .. } => Intrinsic::from_id(id),
+                        _ => None,
+                    }
+                });
+                match native {
+                    Some(Intrinsic::ArrayPrototypeJoin) => self.call_array_intrinsic(
+                        Intrinsic::ArrayPrototypeJoin,
+                        Call {
+                            arg_count: 0,
+                            ..call
+                        },
+                        heap,
+                        realm,
+                    ),
+                    _ if join.is_some_and(|join| Self::is_callable(join, heap)) => {
+                        // Calling it needs a frame, which an intrinsic has no
+                        // way to open yet.
+                        Err(VMError::Unsupported(
+                            "a user join in Array.prototype.toString",
+                        ))
+                    }
+                    _ => self.object_to_string(call.receiver, heap, realm),
+                }
+            }
             // 23.1.3.18: undefined and null contribute the empty String, and
             // the separator defaults to a comma.
             Intrinsic::ArrayPrototypeJoin => {
@@ -936,6 +1049,11 @@ impl RegisterVM {
                         units.extend_from_slice(&separator);
                     }
                     let element = Self::element_at(heap, object, index)?.unwrap_or(VALUE_UNDEFINED);
+                    if element.is_object() {
+                        // ToString of an Object calls a method of it, which an
+                        // intrinsic has no way to do yet.
+                        return Err(VMError::Unsupported("an Object element in a join"));
+                    }
                     if !element.is_undefined() && !element.is_null() {
                         units.extend(property_name_units(element, heap)?);
                     }
@@ -1036,6 +1154,191 @@ impl RegisterVM {
                 Ok(Value::from_smi(-1))
             }
         }
+    }
+
+    /// `ToPrimitive` of 7.1.1 for the Object `call.receiver`, starting at the
+    /// method `call.resume` names.
+    ///
+    /// Answers the primitive when the conversion finishes without running
+    /// bytecode. Answers the bytecode unit of a method that has to run first;
+    /// its answer arrives through [`Resume`], and the operation runs again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` when no method of the
+    /// object answers a primitive.
+    fn convert_to_primitive(
+        &mut self,
+        mut call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Conversion, VMError> {
+        let object = call.receiver.as_object().ok_or(VMError::TypeError)?;
+        let resume = call.resume.ok_or(VMError::TypeError)?;
+        let kind = heap
+            .get_object(object)
+            .ok_or(VMError::TypeError)?
+            .kind
+            .clone();
+        if let Some(feature) = Self::unimplemented_conversion(&kind) {
+            return Err(VMError::Unsupported(feature));
+        }
+        let mut step = resume.step;
+        loop {
+            let key = match step {
+                PrimitiveStep::Exotic => super::realm::WellKnownSymbol::ToPrimitive.key(),
+                PrimitiveStep::ValueOf => PropertyKey::String(heap.strings.intern("valueOf")?),
+                PrimitiveStep::ToString => PropertyKey::String(heap.strings.intern("toString")?),
+            };
+            let method = heap
+                .lookup_named(object, key)?
+                .map(|property| property.value)
+                .filter(|method| Self::is_callable(*method, heap));
+            if let Some(method) = method {
+                // 7.1.1 step 2 passes the hint; 7.1.1.1 passes nothing. The
+                // hint goes in the register the answer comes back to, which is
+                // where the collector can see it.
+                call.arg_count = u16::from(step == PrimitiveStep::Exotic);
+                if step == PrimitiveStep::Exotic {
+                    let hint = self.allocate_string(heap, &DEFAULT_HINT)?;
+                    self.write_reg(resume.register, hint)?;
+                }
+                call.resume = Some(Resume { step, ..resume });
+                if let Some(code_id) =
+                    self.enter_call_value(method, units, active_feedback, heap, realm, call)?
+                {
+                    return Ok(Conversion::Suspended(code_id));
+                }
+                // An intrinsic answered without a frame of its own.
+                if let Some(value) = Self::primitive_answer(self.acc, step, heap, realm)? {
+                    return Ok(Conversion::Done(value));
+                }
+            }
+            step = match step {
+                PrimitiveStep::Exotic => PrimitiveStep::ValueOf,
+                PrimitiveStep::ValueOf => PrimitiveStep::ToString,
+                PrimitiveStep::ToString => {
+                    return Err(type_error(heap, realm, "an object has no primitive value"));
+                }
+            };
+        }
+    }
+
+    /// Continues the conversion of 7.1.1 with the answer a method gave.
+    ///
+    /// Answers the bytecode unit of the next method when one has to run, and
+    /// nothing when the operation can start again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` when no method of the
+    /// object answers a primitive.
+    fn finish_conversion(
+        &mut self,
+        call: Call,
+        units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let resume = call.resume.ok_or(VMError::TypeError)?;
+        if let Some(value) = Self::primitive_answer(self.acc, resume.step, heap, realm)? {
+            self.write_reg(resume.register, value)?;
+            return Ok(None);
+        }
+        // The method answered an Object, so 7.1.1.1 asks the next one. The
+        // operand is still in its register, where the collector kept it.
+        let next = match resume.step {
+            PrimitiveStep::Exotic => PrimitiveStep::ValueOf,
+            PrimitiveStep::ValueOf => PrimitiveStep::ToString,
+            PrimitiveStep::ToString => {
+                return Err(type_error(heap, realm, "an object has no primitive value"));
+            }
+        };
+        let object = self
+            .read_reg(resume.register)?
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        let call = Call {
+            receiver: Value::from_object(object),
+            resume: Some(Resume {
+                step: next,
+                ..resume
+            }),
+            ..call
+        };
+        match self.convert_to_primitive(call, units, active_feedback, heap, realm)? {
+            Conversion::Done(value) => {
+                self.write_reg(resume.register, value)?;
+                Ok(None)
+            }
+            Conversion::Suspended(code_id) => Ok(Some(code_id)),
+        }
+    }
+
+    /// The method of 7.1.1.1 this Realm still owes an object of this kind.
+    ///
+    /// A prototype that should own `toString` but does not lets the lookup walk
+    /// to %Object.prototype% and answer `[object …]`, which is a wrong answer
+    /// rather than a missing feature. Naming the gap keeps it a gap.
+    const fn unimplemented_conversion(kind: &ObjectKind) -> Option<&'static str> {
+        match kind {
+            // 20.2.3.5 answers the source text of the function.
+            ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. } => {
+                Some("Function.prototype.toString")
+            }
+            // 20.5.3.4 answers "name: message".
+            ObjectKind::Error => Some("Error.prototype.toString"),
+            // 22.1.3.28, 21.1.3.7 and 20.3.3.3 answer the wrapped primitive.
+            ObjectKind::StringWrapper(_) => Some("String.prototype.toString"),
+            ObjectKind::NumberWrapper(_) => Some("Number.prototype.toString"),
+            ObjectKind::BooleanWrapper(_) => Some("Boolean.prototype.toString"),
+            // 20.1.3.6 is the right answer for these, and 23.1.3.37 is
+            // implemented.
+            ObjectKind::Ordinary | ObjectKind::Array { .. } | ObjectKind::ArrayIterator { .. } => {
+                None
+            }
+        }
+    }
+
+    /// Whether a value is one of the callables this engine knows (7.2.3).
+    fn is_callable(value: Value, heap: &GenerationalHeap) -> bool {
+        value.as_object().is_some_and(|reference| {
+            heap.get_object(reference).is_some_and(|object| {
+                matches!(
+                    object.kind,
+                    ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. }
+                )
+            })
+        })
+    }
+
+    /// The answer one method of 7.1.1 gave, or none when the conversion goes
+    /// on with the next method.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VMError::Thrown`] with a `TypeError` when `@@toPrimitive`
+    /// answered an Object, which 7.1.1 does not continue past.
+    fn primitive_answer(
+        value: Value,
+        step: PrimitiveStep,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<Value>, VMError> {
+        if !value.is_object() {
+            return Ok(Some(value));
+        }
+        if step == PrimitiveStep::Exotic {
+            return Err(type_error(
+                heap,
+                realm,
+                "Symbol.toPrimitive answered an object",
+            ));
+        }
+        Ok(None)
     }
 
     /// The error a refused binding operation of 9.1.1 raises.
@@ -1669,6 +1972,7 @@ impl RegisterVM {
                 arg_count: 0,
                 slot: 0,
                 return_pc: 0,
+                resume: None,
                 caller_code_id: None,
             },
             heap,
@@ -1960,6 +2264,10 @@ impl RegisterVM {
             if heap.nursery_is_full() {
                 self.collect_young(active_code, heap)?;
             }
+            let units = CodeUnits {
+                root: code,
+                active: active_code,
+            };
             let active_feedback = feedback_unit_mut(feedback, current_code_id)
                 .ok_or(VMError::InvalidFeedbackVector)?;
 
@@ -2134,9 +2442,50 @@ impl RegisterVM {
                         return Err(VMError::TypeError);
                     }
                 }
-                Instruction::Binary { op, rhs, slot } => {
-                    let rhs = self.read_reg(rhs)?;
-                    let observed = self.primitive_binary(op, rhs, heap)?;
+                Instruction::Binary { op, lhs, rhs, slot } => {
+                    // 7.1.1 converts an Object operand first, which may run a
+                    // method of the object. The instruction then starts again
+                    // with the converted operand in its register.
+                    let left = self.read_reg(lhs)?;
+                    let right = self.read_reg(rhs)?;
+                    let pending = left
+                        .as_object()
+                        .map(|object| (object, lhs))
+                        .or_else(|| right.as_object().map(|object| (object, rhs)));
+                    if let Some((object, register)) = pending {
+                        let call = Call {
+                            receiver: Value::from_object(object),
+                            func: register,
+                            arg_start: register,
+                            arg_count: 0,
+                            slot: 0,
+                            resume: Some(Resume {
+                                register,
+                                step: PrimitiveStep::Exotic,
+                            }),
+                            return_pc: pc.saturating_sub(1),
+                            caller_code_id: current_code_id,
+                        };
+                        match self.convert_to_primitive(
+                            call,
+                            units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            Conversion::Done(value) => {
+                                self.write_reg(register, value)?;
+                                pc = pc.saturating_sub(1);
+                            }
+                            Conversion::Suspended(code_id) => {
+                                current_code_id = Some(code_id);
+                                pc = 0;
+                            }
+                        }
+                        return Ok(None);
+                    }
+                    self.acc = left;
+                    let observed = self.primitive_binary(op, right, heap)?;
                     active_feedback
                         .record_binary(slot, observed)
                         .ok_or(VMError::InvalidFeedbackVector)?;
@@ -2583,8 +2932,7 @@ impl RegisterVM {
                     slot,
                 } => {
                     if let Some(code_id) = self.enter_call(
-                        code,
-                        active_code,
+                        units,
                         active_feedback,
                         heap,
                         realm,
@@ -2595,6 +2943,7 @@ impl RegisterVM {
                             arg_count,
                             slot,
                             return_pc: pc,
+                            resume: None,
                             caller_code_id: current_code_id,
                         },
                     )? {
@@ -2611,8 +2960,7 @@ impl RegisterVM {
                 } => {
                     let receiver = self.read_reg(receiver)?;
                     if let Some(code_id) = self.enter_call(
-                        code,
-                        active_code,
+                        units,
                         active_feedback,
                         heap,
                         realm,
@@ -2623,6 +2971,7 @@ impl RegisterVM {
                             arg_count,
                             slot,
                             return_pc: pc,
+                            resume: None,
                             caller_code_id: current_code_id,
                         },
                     )? {
@@ -2644,6 +2993,41 @@ impl RegisterVM {
                         current_code_id = frame.caller_code_id;
                         self.active_binding_count = frame.caller_binding_count;
                         self.current_context = frame.caller_context;
+                        if let Some(resume) = frame.resume {
+                            // An operation of the caller is waiting for this
+                            // answer, and runs again once it has one.
+                            let caller = code_unit(code, current_code_id).ok_or(
+                                VMError::InvalidBytecode(VerificationError::FunctionOutOfBounds {
+                                    pc,
+                                    index: current_code_id.unwrap_or(u32::MAX),
+                                }),
+                            )?;
+                            let feedback = feedback_unit_mut(feedback, current_code_id)
+                                .ok_or(VMError::InvalidFeedbackVector)?;
+                            let call = Call {
+                                receiver: VALUE_UNDEFINED,
+                                func: resume.register,
+                                arg_start: resume.register,
+                                arg_count: 0,
+                                slot: 0,
+                                resume: Some(resume),
+                                return_pc: pc,
+                                caller_code_id: current_code_id,
+                            };
+                            if let Some(code_id) = self.finish_conversion(
+                                call,
+                                CodeUnits {
+                                    root: code,
+                                    active: caller,
+                                },
+                                feedback,
+                                heap,
+                                realm,
+                            )? {
+                                current_code_id = Some(code_id);
+                                pc = 0;
+                            }
+                        }
                     } else {
                         self.fp = 0;
                         self.active_binding_count = 0;
@@ -3495,6 +3879,7 @@ mod tests {
         binary.emit(Instruction::Ldar(Reg(0)));
         binary.emit(Instruction::Binary {
             op: BinaryOp::Add,
+            lhs: Reg(0),
             rhs: Reg(1),
             slot: binary_slot,
         });
@@ -3899,6 +4284,7 @@ mod tests {
             arg_count: 0,
             slot: 0,
             return_pc: 0,
+            resume: None,
             caller_code_id: None,
         };
         assert_eq!(

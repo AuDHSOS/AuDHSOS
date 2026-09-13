@@ -26,6 +26,39 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
 }
 
 #[test]
+fn an_operation_converts_an_object_operand_by_calling_its_methods() -> Result<(), Error> {
+    for source in [
+        // 7.1.1.1 asks valueOf first and toString after it.
+        "let o={valueOf(){return 2}};let n=1;n+o",
+        "let o={valueOf(){return 2}};let n=1;o+n",
+        "let o={toString(){return 'x'}};let s='a';s+o",
+        "let o={valueOf(){return 3}};let n=2;o*n",
+        "let o={valueOf(){return 2}};let n=1;n<o",
+        "({valueOf(){return 1}})+2",
+        "({valueOf(){return 2}})**3",
+        // An ordinary object reaches %Object.prototype%.toString.
+        "let o={};let n=1;n+o",
+        // A valueOf that answers an Object is not the answer, so toString is
+        // asked next; when neither answers a primitive it is a TypeError.
+        "let o={valueOf(){return {}},toString(){return 'T'}};1+o",
+        "let o={valueOf(){return {}}};1+o",
+        // Both operands are converted, in the order the operation reads them.
+        "let a={valueOf(){return 1}};let b={valueOf(){return 2}};a+b",
+        // A conversion that itself converts, and one that throws.
+        "let i={valueOf(){return 5}};let o={valueOf(){return 1+i}};2+o",
+        "let o={valueOf(){throw 7}};try{1+o}catch(e){e}",
+        "let o={x:40,y:2},key=true?'x':'y';o[key]+2",
+        // 23.1.3.37 answers the join of the receiver.
+        "let a=[1];a.toString()",
+        "[!{}]+'x'",
+        "[1,2]+'x'",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn a_completion_of_an_unknown_type_lowers_and_answers_the_same() -> Result<(), Error> {
     // A completion whose type the lowering does not know is carried to the
     // boundary, which refuses only what it cannot represent.
@@ -1070,7 +1103,6 @@ fn register_string_concatenation_preserves_string_unit_limit() -> Result<(), Err
 fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<(), Error> {
     for source in [
         "Number(1)",
-        "({valueOf(){return 1}})+2",
         "+({valueOf(){return 1}})",
         "-function(){}",
         "({}) & 1",
@@ -1080,7 +1112,6 @@ fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<
         "let x=1;x>>={};0",
         "let o={};false&&(o.x=1);0",
         "let x=1;false&&(function(){return x});x",
-        "({valueOf(){return 2}})**3",
         "let x={};x**=2;0",
     ] {
         assert!(
@@ -2849,13 +2880,11 @@ fn register_lowering_rejects_reads_the_prototype_chain_cannot_answer() -> Result
         // 20.1.3 names %Object.prototype% owns whose intrinsic does not exist yet.
         "let o={};o.valueOf",
         // 23.1.3 names %Array.prototype% owns, none of which exists yet.
-        "let a=[1];a.toString()",
         "let a=[1];a.concat",
         "let a=[1];a.indexOf",
         "let a=[1];a['push']",
         "let a=[1];a.constructor",
         "let o={};o['toString']",
-        "let o={x:40,y:2},key=true?'x':'y';o[key]+2",
         "function f(key){let o={[key]:42};return o[key]}f('answer')",
         // An intrinsic is only lowered at a call site.
         "let o={a:1};o.hasOwnProperty",

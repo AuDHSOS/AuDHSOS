@@ -251,6 +251,8 @@ pub enum Intrinsic {
     ArrayPrototypeReverse,
     /// `Array.prototype.slice` (23.1.3.28).
     ArrayPrototypeSlice,
+    /// `Array.prototype.toString` (23.1.3.37).
+    ArrayPrototypeToString,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -268,7 +270,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -302,6 +304,7 @@ impl Intrinsic {
         Self::ArrayPrototypePush,
         Self::ArrayPrototypeReverse,
         Self::ArrayPrototypeSlice,
+        Self::ArrayPrototypeToString,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -339,7 +342,8 @@ impl Intrinsic {
             | Self::ArrayPrototypePop
             | Self::ArrayPrototypePush
             | Self::ArrayPrototypeReverse
-            | Self::ArrayPrototypeSlice => IntrinsicHolder::ArrayPrototype,
+            | Self::ArrayPrototypeSlice
+            | Self::ArrayPrototypeToString => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
         }
     }
@@ -381,6 +385,7 @@ impl Intrinsic {
             Self::ArrayPrototypePush => 30,
             Self::ArrayPrototypeReverse => 31,
             Self::ArrayPrototypeSlice => 32,
+            Self::ArrayPrototypeToString => 33,
         }
     }
 
@@ -420,6 +425,7 @@ impl Intrinsic {
             Self::ArrayPrototypePush => 30,
             Self::ArrayPrototypeReverse => 31,
             Self::ArrayPrototypeSlice => 32,
+            Self::ArrayPrototypeToString => 33,
         }
     }
 
@@ -460,6 +466,7 @@ impl Intrinsic {
             30 => Some(Self::ArrayPrototypePush),
             31 => Some(Self::ArrayPrototypeReverse),
             32 => Some(Self::ArrayPrototypeSlice),
+            33 => Some(Self::ArrayPrototypeToString),
             _ => None,
         }
     }
@@ -471,7 +478,7 @@ impl Intrinsic {
             Self::ObjectPrototypeHasOwnProperty => "hasOwnProperty",
             Self::ObjectPrototypeIsPrototypeOf => "isPrototypeOf",
             Self::ObjectPrototypePropertyIsEnumerable => "propertyIsEnumerable",
-            Self::ObjectPrototypeToString => "toString",
+            Self::ObjectPrototypeToString | Self::ArrayPrototypeToString => "toString",
             Self::StringPrototypeCharAt => "charAt",
             Self::StringPrototypeCharCodeAt => "charCodeAt",
             Self::StringPrototypeIndexOf | Self::ArrayPrototypeIndexOf => "indexOf",
@@ -516,7 +523,8 @@ impl Intrinsic {
             | Self::ArrayIteratorPrototypeNext
             | Self::ArrayPrototypePop
             | Self::ArrayPrototypePush
-            | Self::ArrayPrototypeReverse => false,
+            | Self::ArrayPrototypeReverse
+            | Self::ArrayPrototypeToString => false,
             // 20.1.3.2 and 20.1.3.4 apply ToPropertyKey to the first argument.
             Self::ObjectPrototypeHasOwnProperty | Self::ObjectPrototypePropertyIsEnumerable => {
                 index == 0
@@ -542,7 +550,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeValues
             | Self::ArrayIteratorPrototypeNext
             | Self::ArrayPrototypePop
-            | Self::ArrayPrototypeReverse => 0,
+            | Self::ArrayPrototypeReverse
+            | Self::ArrayPrototypeToString => 0,
             Self::ObjectPrototypeHasOwnProperty
             | Self::ObjectPrototypeIsPrototypeOf
             | Self::ObjectPrototypePropertyIsEnumerable

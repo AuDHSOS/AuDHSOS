@@ -617,6 +617,9 @@ impl Execution<'_> {
                 | crate::engine::interpreter::VMError::UnexpectedEnd
                 | crate::engine::interpreter::VMError::Heap(_),
             ) => Err(Error::InvalidBytecode),
+            Err(crate::engine::interpreter::VMError::Unsupported(feature)) => {
+                Err(Error::Unsupported { feature })
+            }
             Err(crate::engine::interpreter::VMError::OutOfFuel) => Err(Error::Limit {
                 resource: "execution fuel",
             }),
