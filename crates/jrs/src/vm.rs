@@ -534,6 +534,18 @@ impl Execution<'_> {
             .and_then(|name| agent.heap.lookup_named(object, name).ok().flatten())
             .and_then(|property| agent.heap.strings.to_utf16(property.value))
             .map_or(Value::Undefined, |units| Value::String(units.into()));
+        // A ReferenceError names the binding it could not resolve, which this
+        // API carries as the name rather than as a thrown object.
+        if kind == crate::engine::realm::NativeErrorKind::ReferenceError
+            && let Value::String(units) = &message
+        {
+            let text = alloc::string::String::from_utf16_lossy(units);
+            if let Some(name) = text.strip_suffix(crate::engine::interpreter::UNRESOLVABLE_SUFFIX) {
+                return Error::Reference {
+                    name: alloc::string::String::from(name),
+                };
+            }
+        }
         let builtin = match kind {
             crate::engine::realm::NativeErrorKind::EvalError => Builtin::EvalError,
             crate::engine::realm::NativeErrorKind::RangeError => Builtin::RangeError,

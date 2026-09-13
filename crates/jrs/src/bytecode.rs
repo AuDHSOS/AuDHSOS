@@ -1208,13 +1208,16 @@ impl RegisterLowerer {
                             self.code.emit(Instruction::LdaConstant(index));
                             RegisterType::Number
                         }
-                        // 9.1.1.4.6 would resolve every other name on the
-                        // Realm's Global Environment Record. The engine Realm
-                        // does not yet carry the globals of clause 19, so a
-                        // read of one would answer differently there than on
-                        // the stack path. G3 fills that Realm; until then the
-                        // name is not lowered.
-                        _ => return None,
+                        // 9.1.1.4.6 resolves every other name on the Realm's
+                        // Global Environment Record. A name of clause 19 this
+                        // Realm has not built is reported there as a gap, so
+                        // no read of one can answer wrongly.
+                        _ => {
+                            let units: Vec<u16> = name.encode_utf16().collect();
+                            let index = self.string_constant(&units)?;
+                            self.code.emit(Instruction::LdaGlobal(index));
+                            RegisterType::Unknown
+                        }
                     }
                 }
             }
@@ -1224,7 +1227,15 @@ impl RegisterLowerer {
                 self.lower(right)?
             }
             ExprKind::Unary(operator, inner) => {
-                let inner_type = self.lower(inner)?;
+                // 13.5.3 reads the operand of `typeof` without GetValue, so an
+                // unresolvable name answers undefined instead of throwing.
+                let inner_type = match (operator, self.global_name(inner)) {
+                    (Unary::Typeof, Some(index)) => {
+                        self.code.emit(Instruction::LdaGlobalForTypeOf(index));
+                        RegisterType::Unknown
+                    }
+                    _ => self.lower(inner)?,
+                };
                 match operator {
                     Unary::Plus | Unary::Minus | Unary::BitNot if inner_type.is_primitive() => {
                         if inner_type != RegisterType::Number {
@@ -4321,6 +4332,21 @@ impl RegisterLowerer {
         };
         let slot = self.feedback_slot(FeedbackKind::BinaryOp)?;
         Some((Instruction::Binary { op, lhs, rhs, slot }, result_type))
+    }
+
+    /// The string constant of an identifier this Script resolves on the Global
+    /// Environment Record, if `expression` is one.
+    fn global_name(&mut self, expression: &Expr) -> Option<u16> {
+        let ExprKind::Name(name) = &expression.kind else {
+            return None;
+        };
+        if self.bindings.contains_key(name)
+            || matches!(name.as_str(), "undefined" | "NaN" | "Infinity")
+        {
+            return None;
+        }
+        let units: Vec<u16> = name.encode_utf16().collect();
+        self.string_constant(&units)
     }
 
     fn lower_assignment(

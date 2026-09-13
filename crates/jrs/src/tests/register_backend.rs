@@ -22,6 +22,15 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
 
     // The refusal is not a language error, so it leaves the realm usable.
     assert_eq!(realm.evaluate("2*3")?, Value::Number(6.0));
+
+    // A name clause 19 gives every Realm but this one has not built is a gap,
+    // never an answer. It shows only once the Script has run, which is fatal
+    // like every other unsupported feature.
+    assert!(matches!(
+        realm.evaluate("typeof Array"),
+        Err(Error::Unsupported { .. })
+    ));
+    assert!(realm.evaluate("1").is_err());
     Ok(())
 }
 
@@ -93,15 +102,21 @@ fn a_realm_on_the_engine_backend_evaluates_and_refuses_without_poisoning() -> Re
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
 
     // A Script the lowering does not take is refused before anything runs, so
-    // the realm stays usable. A name resolved on the Global Environment Record
-    // is one of those until that Record carries the globals of clause 19.
-    for source in ["notDefined", "typeof absent", "let x=1"] {
-        assert!(
-            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
-            "{source}"
-        );
-    }
+    // the realm stays usable.
+    assert!(matches!(
+        realm.evaluate("let x=1"),
+        Err(Error::Unsupported { .. })
+    ));
     assert_eq!(realm.evaluate("1+1")?, Value::Number(2.0));
+
+    // 9.1.1.2.7 throws for a name nothing binds, and 13.5.3 answers undefined
+    // for the same name under `typeof`.
+    assert!(matches!(
+        realm.evaluate("notDefined"),
+        Err(Error::Reference { .. })
+    ));
+    assert_eq!(realm.evaluate("typeof absent")?, Value::string("undefined"));
+
     // A completion the boundary cannot carry is refused before it runs too,
     // because the lowering knows the type is an Array.
     assert!(matches!(

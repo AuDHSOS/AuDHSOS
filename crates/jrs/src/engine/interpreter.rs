@@ -106,6 +106,13 @@ struct Call {
     resume: Option<Resume>,
 }
 
+/// What the engine writes after the name of an unresolvable binding.
+///
+/// The embedding takes the name back off the message, so that a
+/// `ReferenceError` of this engine reaches it in the same shape as one of the
+/// stack backend rather than as a thrown object it cannot classify.
+pub const UNRESOLVABLE_SUFFIX: &str = " is not initialized or defined";
+
 /// The hint 7.1.1 passes to `@@toPrimitive` for an operation that names none.
 const DEFAULT_HINT: [u16; 7] = [0x64, 0x65, 0x66, 0x61, 0x75, 0x6C, 0x74];
 
@@ -1353,9 +1360,10 @@ impl RegisterVM {
         let kind = match outcome {
             // 9.1.1.1.6 and 9.1.1.2.7 both name the binding that is missing.
             BindingOutcome::Uninitialized | BindingOutcome::Unresolvable => {
-                message.push_str(" is not initialized or defined");
+                message.push_str(UNRESOLVABLE_SUFFIX);
                 NativeErrorKind::ReferenceError
             }
+            BindingOutcome::Missing(feature) => return VMError::Unsupported(feature),
             BindingOutcome::Immutable => {
                 message.push_str(" is not writable");
                 NativeErrorKind::TypeError

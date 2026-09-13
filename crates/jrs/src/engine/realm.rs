@@ -41,6 +41,84 @@ pub fn holder_intrinsic(holder: IntrinsicHolder, name: &[u16]) -> Option<Intrins
     })
 }
 
+/// The property names clause 19 gives the global object of every Realm.
+///
+/// This Realm carries only the few of them the engine has built. A name of
+/// this list that it does not carry is a gap in the migration, not a name the
+/// program failed to define, and 9.1.1.2.7 must not report it as one.
+pub const GLOBAL_PROPERTIES: [&str; 62] = [
+    "AggregateError",
+    "Array",
+    "ArrayBuffer",
+    "AsyncDisposableStack",
+    "Atomics",
+    "BigInt",
+    "BigInt64Array",
+    "BigUint64Array",
+    "Boolean",
+    "DataView",
+    "Date",
+    "DisposableStack",
+    "Error",
+    "EvalError",
+    "FinalizationRegistry",
+    "Float16Array",
+    "Float32Array",
+    "Float64Array",
+    "Function",
+    "Infinity",
+    "Int16Array",
+    "Int32Array",
+    "Int8Array",
+    "Iterator",
+    "JSON",
+    "Map",
+    "Math",
+    "NaN",
+    "Number",
+    "Object",
+    "Promise",
+    "Proxy",
+    "RangeError",
+    "ReferenceError",
+    "Reflect",
+    "RegExp",
+    "Set",
+    "SharedArrayBuffer",
+    "String",
+    "SuppressedError",
+    "Symbol",
+    "SyntaxError",
+    "TypeError",
+    "URIError",
+    "Uint16Array",
+    "Uint32Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "WeakMap",
+    "WeakRef",
+    "WeakSet",
+    "decodeURI",
+    "decodeURIComponent",
+    "encodeURI",
+    "encodeURIComponent",
+    "eval",
+    "globalThis",
+    "isFinite",
+    "isNaN",
+    "parseFloat",
+    "parseInt",
+    "undefined",
+];
+
+/// Whether clause 19 gives the global object a property of this name.
+#[must_use]
+pub fn global_properties_own(name: &[u16]) -> bool {
+    GLOBAL_PROPERTIES
+        .into_iter()
+        .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
+
 /// Whether an implemented intrinsic of `%Object.prototype%` has this name.
 #[must_use]
 pub fn object_prototype_intrinsic(name: &[u16]) -> Option<Intrinsic> {
@@ -821,6 +899,9 @@ pub enum BindingOutcome {
     Immutable,
     /// 9.1.1.2.5: strict evaluation reached a name nothing binds.
     Unresolvable,
+    /// Clause 19 gives the global object this name and this Realm has not
+    /// built it yet, so its absence is a gap and not an answer.
+    Missing(&'static str),
 }
 
 /// Global Environment Record of 9.1.1.4.
@@ -1220,11 +1301,22 @@ impl GlobalEnvironment {
             }
             return Ok(Ok(property.value));
         }
-        Ok(heap
-            .lookup_named(self.global_object(heap)?, name)?
-            .map_or(Err(BindingOutcome::Unresolvable), |property| {
-                Ok(property.value)
-            }))
+        if let Some(property) = heap.lookup_named(self.global_object(heap)?, name)? {
+            return Ok(Ok(property.value));
+        }
+        // Clause 19 names a property this Realm has not built, so reporting it
+        // as undefined would be a wrong answer rather than a missing feature.
+        let units = name
+            .as_string()
+            .and_then(|name| heap.strings.to_utf16(Value::from_string(name)));
+        if let Some(units) = units
+            && let Some(missing) = GLOBAL_PROPERTIES
+                .into_iter()
+                .find(|owned| owned.encode_utf16().eq(units.iter().copied()))
+        {
+            return Ok(Err(BindingOutcome::Missing(missing)));
+        }
+        Ok(Err(BindingOutcome::Unresolvable))
     }
 }
 
