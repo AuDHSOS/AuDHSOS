@@ -239,7 +239,7 @@ fn float_floor(n: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::decimal_string;
+    use super::{decimal_string, format_with_radix};
 
     #[test]
     fn decimal_string_matches_ecmascript_number_keys() {
@@ -256,5 +256,39 @@ mod tests {
         ] {
             assert_eq!(decimal_string(number), expected);
         }
+    }
+
+    #[test]
+    fn a_radix_reaches_every_representation_of_number_to_string() {
+        for (number, radix, expected) in [
+            (f64::NAN, 2, "NaN"),
+            (0.0, 2, "0"),
+            (-0.0, 2, "0"),
+            (f64::INFINITY, 2, "Infinity"),
+            (f64::NEG_INFINITY, 2, "-Infinity"),
+            // Radix ten is the decimal form itself.
+            (1.5, 10, "1.5"),
+            // An integer below 2^53 is converted with integer arithmetic, and
+            // one above it with the double the value already is.
+            (255.0, 16, "ff"),
+            (-10.0, 2, "-1010"),
+            (12_345_678_901_234_567_890.0, 16, "ab54a98ceb1f0800"),
+            (1e21, 36, "5v1j4f4ds7c4ks"),
+            // A fraction adds digits until it is exhausted, and an integer
+            // part of zero still leads with one digit.
+            (0.5, 2, "0.1"),
+            (10.25, 4, "22.1"),
+            (255.5, 16, "ff.8"),
+        ] {
+            assert_eq!(
+                format_with_radix(number, radix),
+                expected,
+                "{number} {radix}"
+            );
+        }
+        // A fraction that never terminates stops after fifty digits.
+        let repeating = format_with_radix(0.1, 3);
+        assert_eq!(repeating.len(), 52, "{repeating}");
+        assert!(repeating.starts_with("0.0022002200"), "{repeating}");
     }
 }
