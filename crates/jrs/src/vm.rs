@@ -484,6 +484,7 @@ impl Execution<'_> {
             .heap
             .strings
             .lookup_interned_units(&Value::string("message").units())
+            .map(crate::engine::value::PropertyKey::String)
             .and_then(|name| agent.heap.lookup_named(object, name).ok().flatten())
             .and_then(|property| agent.heap.strings.to_utf16(property.value))
             .map_or(Value::Undefined, |units| Value::String(units.into()));

@@ -130,6 +130,35 @@ pub struct SymbolRef(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BigIntRef(pub u32);
 
+/// A property key: a String or a Symbol (6.1.7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PropertyKey {
+    /// A String key, which every ordinary property name is.
+    String(StringRef),
+    /// A Symbol key, which no `for`-`in` enumeration and no JSON reaches.
+    Symbol(SymbolRef),
+}
+
+impl PropertyKey {
+    /// The String this key is, if it is one.
+    #[must_use]
+    pub const fn as_string(self) -> Option<StringRef> {
+        match self {
+            Self::String(name) => Some(name),
+            Self::Symbol(_) => None,
+        }
+    }
+
+    /// The value this key is as an ECMAScript value.
+    #[must_use]
+    pub const fn to_value(self) -> Value {
+        match self {
+            Self::String(name) => Value::from_string(name),
+            Self::Symbol(symbol) => Value::from_symbol(symbol),
+        }
+    }
+}
+
 /// 64-bit NaN-boxed value.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Value(pub u64);

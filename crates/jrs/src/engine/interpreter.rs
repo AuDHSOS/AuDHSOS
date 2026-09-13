@@ -24,7 +24,10 @@ use super::{
     realm::{Intrinsic, Realm},
     shape::{PropertyFlags, ShapeId},
     string::StringError,
-    value::{ObjectRef, VALUE_FALSE, VALUE_NAN, VALUE_NULL, VALUE_TRUE, VALUE_UNDEFINED, Value},
+    value::{
+        ObjectRef, PropertyKey, VALUE_FALSE, VALUE_NAN, VALUE_NULL, VALUE_TRUE, VALUE_UNDEFINED,
+        Value,
+    },
 };
 use alloc::vec::Vec;
 
@@ -805,33 +808,7 @@ impl RegisterVM {
                 let own = heap.own_named_flags(object, key)?;
                 Ok(Value::from_bool(own.is_some_and(|flags| flags.enumerable)))
             }
-            // 20.1.3.6: undefined and null answer before ToObject, and the
-            // builtin tag comes from the receiver's internal slots. No object
-            // of this engine carries @@toStringTag, so step 15 keeps that tag.
-            Intrinsic::ObjectPrototypeToString => {
-                let tag = if call.receiver.is_undefined() {
-                    "Undefined"
-                } else if call.receiver.is_null() {
-                    "Null"
-                } else {
-                    let object = Self::coerce_object(call.receiver, heap, realm)?;
-                    match heap.get_object(object).ok_or(VMError::TypeError)?.kind {
-                        ObjectKind::Array { .. } => "Array",
-                        ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. } => {
-                            "Function"
-                        }
-                        ObjectKind::Error => "Error",
-                        ObjectKind::BooleanWrapper(_) => "Boolean",
-                        ObjectKind::NumberWrapper(_) => "Number",
-                        ObjectKind::StringWrapper(_) => "String",
-                        ObjectKind::Ordinary => "Object",
-                    }
-                };
-                let mut units: Vec<u16> = "[object ".encode_utf16().collect();
-                units.extend(tag.encode_utf16());
-                units.push(0x5D);
-                self.allocate_string(heap, &units)
-            }
+            Intrinsic::ObjectPrototypeToString => self.object_to_string(call.receiver, heap, realm),
             Intrinsic::StringPrototypeCharAt
             | Intrinsic::StringPrototypeCharCodeAt
             | Intrinsic::StringPrototypeIndexOf
@@ -853,6 +830,52 @@ impl RegisterVM {
                 self.call_string_intrinsic(intrinsic, call, heap, realm)
             }
         }
+    }
+
+    /// `Object.prototype.toString` of 20.1.3.6.
+    ///
+    /// # Errors
+    ///
+    /// Returns a heap error when the tag cannot be materialized.
+    fn object_to_string(
+        &self,
+        receiver: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let tag = if receiver.is_undefined() {
+            "Undefined"
+        } else if receiver.is_null() {
+            "Null"
+        } else {
+            let object = Self::coerce_object(receiver, heap, realm)?;
+            match heap.get_object(object).ok_or(VMError::TypeError)?.kind {
+                ObjectKind::Array { .. } => "Array",
+                ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. } => "Function",
+                ObjectKind::Error => "Error",
+                ObjectKind::BooleanWrapper(_) => "Boolean",
+                ObjectKind::NumberWrapper(_) => "Number",
+                ObjectKind::StringWrapper(_) => "String",
+                ObjectKind::Ordinary => "Object",
+            }
+        };
+        let mut units: Vec<u16> = "[object ".encode_utf16().collect();
+        match receiver
+            .as_object()
+            .map(|object| {
+                heap.lookup_named(object, super::realm::WellKnownSymbol::ToStringTag.key())
+            })
+            .transpose()?
+            .flatten()
+            .map(|property| property.value)
+            .filter(|value| value.is_string())
+            .and_then(|value| heap.strings.to_utf16(value))
+        {
+            Some(own) => units.extend(own),
+            None => units.extend(tag.encode_utf16()),
+        }
+        units.push(0x5D);
+        self.allocate_string(heap, &units)
     }
 
     /// Runs one `%String.prototype%` method.
@@ -1148,7 +1171,7 @@ impl RegisterVM {
     fn string_member(
         &self,
         value: Value,
-        name: super::value::StringRef,
+        name: PropertyKey,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
@@ -1156,10 +1179,10 @@ impl RegisterVM {
             .strings
             .length_of(value)
             .ok_or(VMError::Heap(HeapError::InvalidReference))?;
-        let units = heap
-            .strings
-            .to_utf16(Value::from_string(name))
-            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let units = name
+            .as_string()
+            .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+            .unwrap_or_default();
         if units == LENGTH_NAME {
             let length = i32::try_from(length).map_err(|_| VMError::StringLimit)?;
             return Ok(Value::from_smi(length));
@@ -1240,7 +1263,12 @@ impl RegisterVM {
                 let own = heap.own_keys(object)?;
                 let length = u32::try_from(own.len()).map_err(|_| VMError::PropertyLimit)?;
                 let keys = self.allocate_array(code, heap, realm, length)?;
-                for (index, (name, _)) in own.into_iter().enumerate() {
+                // 14.7.5.9 enumerates String keys only.
+                for (index, name) in own
+                    .into_iter()
+                    .filter_map(|(name, _)| name.as_string())
+                    .enumerate()
+                {
                     let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
                     heap.set_array_element(keys, index, Value::from_string(name))?;
                 }
@@ -1268,7 +1296,7 @@ impl RegisterVM {
                     .and_then(|elements| heap.get_elements(elements))
                     .and_then(|elements| elements.get(index))
                     .ok_or(VMError::TypeError)?;
-                let name = key.as_heap_string().ok_or(VMError::TypeError)?;
+                let name = PropertyKey::String(key.as_heap_string().ok_or(VMError::TypeError)?);
                 let visited = self
                     .read_reg(visited_slot)?
                     .as_object()
@@ -1727,7 +1755,7 @@ impl RegisterVM {
                         .string_constants
                         .get(name as usize)
                         .ok_or(VMError::InvalidRegister)?;
-                    let name = heap.strings.intern_units(name)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(name)?);
                     let target = self.read_reg(obj)?;
                     // 10.4.3: a String answers "length" and its indices from the
                     // exotic object ToObject would produce, without producing it.
@@ -1785,7 +1813,7 @@ impl RegisterVM {
                         .string_constants
                         .get(name as usize)
                         .ok_or(VMError::InvalidRegister)?;
-                    let name = heap.strings.intern_units(name)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(name)?);
                     let target = self.read_reg(obj)?;
                     let oref = target.as_object().ok_or(VMError::TypeError)?;
                     let current_shape = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
@@ -1876,7 +1904,11 @@ impl RegisterVM {
                             );
                             return Ok(None);
                         }
-                        let Some(name) = heap.strings.lookup_interned_units(&name) else {
+                        let Some(name) = heap
+                            .strings
+                            .lookup_interned_units(&name)
+                            .map(PropertyKey::String)
+                        else {
                             self.acc = VALUE_UNDEFINED;
                             return Ok(None);
                         };
@@ -1940,14 +1972,14 @@ impl RegisterVM {
                         let name_units = property_name_units(key_val, heap)?;
                         let name =
                             if let Some(name) = heap.strings.lookup_interned_units(&name_units) {
-                                name
+                                PropertyKey::String(name)
                             } else {
                                 if heap.own_property_count(oref).unwrap_or(usize::MAX)
                                     >= self.property_limit
                                 {
                                     return Err(VMError::PropertyLimit);
                                 }
-                                heap.strings.intern_units(&name_units)?
+                                PropertyKey::String(heap.strings.intern_units(&name_units)?)
                             };
                         let current_shape =
                             heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
@@ -2249,15 +2281,15 @@ fn array_index(value: Value, heap: &GenerationalHeap) -> Result<Option<u32>, VME
 ///
 /// An Object key needs `ToPrimitive`, which needs callable `valueOf` and
 /// `toString` intrinsics; until those exist such a key is refused.
-fn property_key(
-    value: Value,
-    heap: &mut GenerationalHeap,
-) -> Result<super::value::StringRef, VMError> {
+fn property_key(value: Value, heap: &mut GenerationalHeap) -> Result<PropertyKey, VMError> {
+    if let Some(symbol) = value.as_symbol() {
+        return Ok(PropertyKey::Symbol(symbol));
+    }
     if let Some(name) = value.as_heap_string() {
-        return Ok(name);
+        return Ok(PropertyKey::String(name));
     }
     let units = property_name_units(value, heap)?;
-    Ok(heap.strings.intern_units(&units)?)
+    Ok(PropertyKey::String(heap.strings.intern_units(&units)?))
 }
 
 /// Creates a `TypeError` of the Realm and raises it as an exception.
@@ -3088,7 +3120,7 @@ mod tests {
                 panic!("expected a thrown TypeError, got {error:?}");
             };
             let thrown = value.as_object().unwrap();
-            let name = heap.strings.intern("name").unwrap();
+            let name = PropertyKey::String(heap.strings.intern("name").unwrap());
             let found = heap.lookup_named(thrown, name).unwrap().unwrap();
             assert_eq!(
                 heap.strings.to_rust_string(found.value).unwrap(),
@@ -3109,9 +3141,7 @@ mod tests {
         ] {
             let key = property_key(value, &mut heap).unwrap();
             assert_eq!(
-                heap.strings
-                    .to_rust_string(Value::from_string(key))
-                    .unwrap(),
+                heap.strings.to_rust_string(key.to_value()).unwrap(),
                 expected
             );
         }

@@ -20,7 +20,7 @@ use super::{
     object::{JSObject, ObjectKind},
     shape::{PropertyFlags, ShapeId, ShapeTable},
     string::{StringArena, StringError},
-    value::{ObjectRef, StringRef, VALUE_NULL, VALUE_UNDEFINED, Value},
+    value::{ObjectRef, PropertyKey, StringRef, VALUE_NULL, VALUE_UNDEFINED, Value},
 };
 use alloc::{collections::BTreeMap, collections::BTreeSet, vec::Vec};
 
@@ -646,7 +646,10 @@ impl GenerationalHeap {
     ///
     /// Returns [`HeapError::InvalidReference`] for a stale reference, or a
     /// string error when an index key cannot be interned.
-    pub fn own_keys(&mut self, reference: ObjectRef) -> Result<Vec<(StringRef, bool)>, HeapError> {
+    pub fn own_keys(
+        &mut self,
+        reference: ObjectRef,
+    ) -> Result<Vec<(PropertyKey, bool)>, HeapError> {
         let object = self
             .get_object(reference)
             .ok_or(HeapError::InvalidReference)?;
@@ -664,23 +667,32 @@ impl GenerationalHeap {
             None => Vec::new(),
         };
         let mut named = Vec::new();
+        let mut symbols = Vec::new();
         for (name, flags, _) in self.shapes.own_properties(shape_id) {
-            match self.array_index_of(name)? {
-                Some(index) => indices.push(index),
-                None => named.push((name, flags.enumerable)),
+            match name.as_string().map(|name| self.array_index_of(name)) {
+                Some(index) => match index? {
+                    Some(index) => indices.push(index),
+                    None => named.push((name, flags.enumerable)),
+                },
+                // 10.1.11.1 lists every Symbol key after every String key.
+                None => symbols.push((name, flags.enumerable)),
             }
         }
         indices.sort_unstable();
         indices.dedup();
         let mut keys = Vec::with_capacity(indices.len().saturating_add(named.len()));
         for index in indices {
-            keys.push((self.intern_index(index)?, true));
+            keys.push((PropertyKey::String(self.intern_index(index)?), true));
         }
         keys.extend(named);
+        keys.extend(symbols);
         if array_length.is_some() {
             // 23.1.4: an Array's "length" is an own non-enumerable property, so
             // it shadows an inherited one without being visited.
-            keys.push((self.strings.intern_units(&LENGTH_UNITS)?, false));
+            keys.push((
+                PropertyKey::String(self.strings.intern_units(&LENGTH_UNITS)?),
+                false,
+            ));
         }
         Ok(keys)
     }
@@ -693,7 +705,7 @@ impl GenerationalHeap {
     pub fn own_named_flags(
         &self,
         reference: ObjectRef,
-        name: StringRef,
+        name: PropertyKey,
     ) -> Result<Option<PropertyFlags>, HeapError> {
         let object = self
             .get_object(reference)
@@ -701,7 +713,11 @@ impl GenerationalHeap {
         if let Some(location) = self.shapes.lookup(object.shape_id, name) {
             return Ok(Some(location.flags));
         }
-        if let Some(index) = self.array_index_of(name)?
+        if let Some(index) = name
+            .as_string()
+            .map(|name| self.array_index_of(name))
+            .transpose()?
+            .flatten()
             && let Some(elements) = object.elements
             && self
                 .get_elements(elements)
@@ -711,10 +727,10 @@ impl GenerationalHeap {
         {
             return Ok(Some(PropertyFlags::ordinary_data()));
         }
-        let units = self
-            .strings
-            .to_utf16(Value::from_string(name))
-            .ok_or(HeapError::InvalidReference)?;
+        let units = name
+            .as_string()
+            .and_then(|name| self.strings.to_utf16(Value::from_string(name)))
+            .unwrap_or_default();
         if matches!(object.kind, ObjectKind::Array { .. }) && units == LENGTH_UNITS {
             return Ok(Some(PropertyFlags {
                 writable: true,
@@ -768,7 +784,7 @@ impl GenerationalHeap {
     pub fn lookup_named(
         &self,
         receiver: ObjectRef,
-        name: StringRef,
+        name: PropertyKey,
     ) -> Result<Option<NamedProperty>, HeapError> {
         let receiver_shape = self
             .get_object(receiver)
@@ -884,7 +900,7 @@ impl GenerationalHeap {
     pub fn define_own_named(
         &mut self,
         reference: ObjectRef,
-        name: StringRef,
+        name: PropertyKey,
         value: Value,
         flags: PropertyFlags,
     ) -> Result<u32, HeapError> {

@@ -9,7 +9,7 @@
 //! Property lookups start as Monomorphic (1 check, direct slot load),
 //! expand to Polymorphic (2-4 shapes), or degrade to Megamorphic.
 
-use super::{bytecode::FeedbackKind, shape::ShapeId, value::StringRef};
+use super::{bytecode::FeedbackKind, shape::ShapeId, value::PropertyKey};
 use alloc::vec::Vec;
 
 /// Maximum number of shapes handled inline in a polymorphic cache before degrading.
@@ -19,7 +19,7 @@ pub const POLYMORPHIC_LIMIT: usize = 4;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NamedAccessCase {
     /// Interned property name guarded by this case.
-    pub name: StringRef,
+    pub name: PropertyKey,
     /// Shape observed on the receiver object.
     pub receiver_shape: ShapeId,
     /// Number of `[[Prototype]]` edges from receiver to the property holder.
@@ -51,7 +51,7 @@ impl NamedAccessIC {
     #[must_use]
     pub fn try_get(
         &self,
-        name: StringRef,
+        name: PropertyKey,
         actual_shape: ShapeId,
         prototype_epoch: Option<u64>,
     ) -> Option<NamedAccessCase> {
@@ -109,7 +109,7 @@ impl NamedAccessIC {
 
 fn case_matches(
     case: NamedAccessCase,
-    name: StringRef,
+    name: PropertyKey,
     actual_shape: ShapeId,
     prototype_epoch: Option<u64>,
 ) -> bool {
@@ -373,7 +373,7 @@ mod tests {
     fn named_ic_monomorphic_to_polymorphic_transition() {
         let mut ic = NamedAccessIC::default();
         assert_eq!(ic, NamedAccessIC::Uninitialized);
-        let name = StringRef::from_parts(1, 0);
+        let name = PropertyKey::String(crate::engine::value::StringRef::from_parts(1, 0));
         assert_eq!(ic.try_get(name, ShapeId(1), Some(0)), None);
 
         // First execution -> Monomorphic
@@ -392,7 +392,11 @@ mod tests {
         assert_eq!(ic.try_get(name, ShapeId(1), None), Some(first));
         assert_eq!(ic.try_get(name, ShapeId(2), Some(0)), None);
         assert_eq!(
-            ic.try_get(StringRef::from_parts(2, 0), ShapeId(1), Some(0)),
+            ic.try_get(
+                PropertyKey::String(crate::engine::value::StringRef::from_parts(2, 0)),
+                ShapeId(1),
+                Some(0)
+            ),
             None
         );
 

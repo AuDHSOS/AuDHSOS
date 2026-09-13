@@ -13,7 +13,7 @@
 //! Property lookup is an offset calculation, not a hash/tree probe.
 //! Objects with identical property insertion sequences share the same Shape.
 
-use super::value::StringRef;
+use super::value::PropertyKey;
 use alloc::{collections::BTreeMap, vec::Vec};
 
 /// Unique identifier of a Shape in the `ShapeTable`.
@@ -65,7 +65,7 @@ pub struct Shape {
     /// Parent shape from which this shape transitioned.
     pub parent: Option<ShapeId>,
     /// Property name introduced in this transition.
-    pub property_name: Option<StringRef>,
+    pub property_name: Option<PropertyKey>,
     /// Property attributes.
     pub flags: PropertyFlags,
     /// Slot index assigned to this property.
@@ -73,7 +73,7 @@ pub struct Shape {
     /// Total number of own properties described by this shape.
     pub property_count: u32,
     /// Outgoing transitions: property name -> next shape.
-    pub transitions: BTreeMap<StringRef, ShapeId>,
+    pub transitions: BTreeMap<PropertyKey, ShapeId>,
     /// Validity cell counter for prototype invalidation.
     pub validity_epoch: u64,
 }
@@ -123,7 +123,7 @@ impl ShapeTable {
     pub fn transition(
         &mut self,
         current: ShapeId,
-        name: StringRef,
+        name: PropertyKey,
         flags: PropertyFlags,
     ) -> (ShapeId, u32) {
         if let Some(shape) = self.shapes.get(current.0 as usize)
@@ -162,7 +162,7 @@ impl ShapeTable {
 
     /// Searches for `name` along the shape transition chain.
     #[must_use]
-    pub fn lookup(&self, shape_id: ShapeId, name: StringRef) -> Option<PropertyLocation> {
+    pub fn lookup(&self, shape_id: ShapeId, name: PropertyKey) -> Option<PropertyLocation> {
         let mut curr = shape_id;
         loop {
             let shape = self.shapes.get(curr.0 as usize)?;
@@ -181,7 +181,7 @@ impl ShapeTable {
     /// The transition chain records the newest property first, so the walk is
     /// reversed to give the order 10.1.11.1 requires for String keys.
     #[must_use]
-    pub fn own_properties(&self, shape_id: ShapeId) -> Vec<(StringRef, PropertyFlags, u32)> {
+    pub fn own_properties(&self, shape_id: ShapeId) -> Vec<(PropertyKey, PropertyFlags, u32)> {
         let mut properties = Vec::new();
         let mut current = shape_id;
         while let Some(shape) = self.shapes.get(current.0 as usize) {
@@ -229,8 +229,8 @@ mod tests {
         let mut table = ShapeTable::new();
         let root = table.root_shape();
 
-        let prop_x = StringRef::from_parts(1, 0);
-        let prop_y = StringRef::from_parts(2, 0);
+        let prop_x = PropertyKey::String(crate::engine::value::StringRef::from_parts(1, 0));
+        let prop_y = PropertyKey::String(crate::engine::value::StringRef::from_parts(2, 0));
 
         let (shape1, offset1) = table.transition(root, prop_x, PropertyFlags::ordinary_data());
         assert_eq!(offset1, 0);
@@ -255,7 +255,10 @@ mod tests {
         let loc_y = table.lookup(shape2, prop_y).unwrap();
         assert_eq!(loc_y.slot_offset, 1);
 
-        let loc_z = table.lookup(shape2, StringRef::from_parts(3, 0));
+        let loc_z = table.lookup(
+            shape2,
+            PropertyKey::String(crate::engine::value::StringRef::from_parts(3, 0)),
+        );
         assert!(loc_z.is_none());
     }
 

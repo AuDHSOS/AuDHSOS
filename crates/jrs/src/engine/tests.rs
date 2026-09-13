@@ -14,7 +14,7 @@ use super::{
     interpreter::RegisterVM,
     realm::Realm,
     shape::PropertyFlags,
-    value::{VALUE_NULL, Value},
+    value::{PropertyKey, VALUE_NULL, Value},
 };
 
 #[test]
@@ -22,8 +22,8 @@ fn end_to_end_shape_transitions_and_shared_shapes() {
     let mut heap = GenerationalHeap::new();
     let root = heap.shapes.root_shape();
 
-    let prop_a = heap.strings.intern("a").unwrap();
-    let prop_b = heap.strings.intern("b").unwrap();
+    let prop_a = PropertyKey::String(heap.strings.intern("a").unwrap());
+    let prop_b = PropertyKey::String(heap.strings.intern("b").unwrap());
 
     // Object 1: { a: 1, b: 2 }
     let obj1 = heap.allocate_object(root, VALUE_NULL).unwrap();
@@ -171,7 +171,7 @@ fn inherited_named_access_uses_depth_cache_and_invalidates_on_mutation() {
     let mut heap = GenerationalHeap::new();
     let realm = Realm::new(&mut heap).unwrap();
     let root_shape = heap.shapes.root_shape();
-    let name = heap.strings.intern("answer").unwrap();
+    let name = PropertyKey::String(heap.strings.intern("answer").unwrap());
     let (prototype_shape, slot) =
         heap.shapes
             .transition(root_shape, name, PropertyFlags::ordinary_data());
@@ -260,8 +260,8 @@ fn inherited_cache_checks_the_holder_shape_for_equal_receiver_shapes() {
     let mut heap = GenerationalHeap::new();
     let realm = Realm::new(&mut heap).unwrap();
     let root_shape = heap.shapes.root_shape();
-    let wanted = heap.strings.intern("wanted").unwrap();
-    let other = heap.strings.intern("other").unwrap();
+    let wanted = PropertyKey::String(heap.strings.intern("wanted").unwrap());
+    let other = PropertyKey::String(heap.strings.intern("other").unwrap());
     let (wanted_shape, wanted_slot) =
         heap.shapes
             .transition(root_shape, wanted, PropertyFlags::ordinary_data());

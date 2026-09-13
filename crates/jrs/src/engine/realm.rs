@@ -13,6 +13,7 @@ use super::{
     heap::{GenerationalHeap, HeapError, Root},
     shape::PropertyFlags,
     value::{ObjectRef, VALUE_NULL, Value},
+    value::{PropertyKey, SymbolRef},
 };
 
 /// Native error type of ECMA-262 20.5.5.
@@ -44,6 +45,131 @@ pub fn holder_intrinsic(holder: IntrinsicHolder, name: &[u16]) -> Option<Intrins
 #[must_use]
 pub fn object_prototype_intrinsic(name: &[u16]) -> Option<Intrinsic> {
     holder_intrinsic(IntrinsicHolder::ObjectPrototype, name)
+}
+
+/// A well-known Symbol of table 1 in 6.1.5.1.
+///
+/// Every Symbol the engine has is one of these: a user Symbol needs the
+/// `Symbol` constructor, which does not exist yet, so the set is closed and
+/// each one is its own `SymbolRef`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WellKnownSymbol {
+    /// `@@asyncIterator`.
+    AsyncIterator,
+    /// `@@hasInstance`.
+    HasInstance,
+    /// `@@isConcatSpreadable`.
+    IsConcatSpreadable,
+    /// `@@iterator`.
+    Iterator,
+    /// `@@match`.
+    Match,
+    /// `@@matchAll`.
+    MatchAll,
+    /// `@@replace`.
+    Replace,
+    /// `@@search`.
+    Search,
+    /// `@@species`.
+    Species,
+    /// `@@split`.
+    Split,
+    /// `@@toPrimitive`.
+    ToPrimitive,
+    /// `@@toStringTag`.
+    ToStringTag,
+    /// `@@unscopables`.
+    Unscopables,
+}
+
+impl WellKnownSymbol {
+    /// Every well-known Symbol, in the order of table 1.
+    pub const ALL: [Self; 13] = [
+        Self::AsyncIterator,
+        Self::HasInstance,
+        Self::IsConcatSpreadable,
+        Self::Iterator,
+        Self::Match,
+        Self::MatchAll,
+        Self::Replace,
+        Self::Search,
+        Self::Species,
+        Self::Split,
+        Self::ToPrimitive,
+        Self::ToStringTag,
+        Self::Unscopables,
+    ];
+
+    /// The `[[Description]]` of this Symbol.
+    #[must_use]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::AsyncIterator => "Symbol.asyncIterator",
+            Self::HasInstance => "Symbol.hasInstance",
+            Self::IsConcatSpreadable => "Symbol.isConcatSpreadable",
+            Self::Iterator => "Symbol.iterator",
+            Self::Match => "Symbol.match",
+            Self::MatchAll => "Symbol.matchAll",
+            Self::Replace => "Symbol.replace",
+            Self::Search => "Symbol.search",
+            Self::Species => "Symbol.species",
+            Self::Split => "Symbol.split",
+            Self::ToPrimitive => "Symbol.toPrimitive",
+            Self::ToStringTag => "Symbol.toStringTag",
+            Self::Unscopables => "Symbol.unscopables",
+        }
+    }
+
+    /// The reference that identifies this Symbol.
+    #[must_use]
+    pub const fn reference(self) -> SymbolRef {
+        SymbolRef(self.index())
+    }
+
+    /// The key this Symbol is when it names a property.
+    #[must_use]
+    pub const fn key(self) -> PropertyKey {
+        PropertyKey::Symbol(self.reference())
+    }
+
+    /// The well-known Symbol one reference denotes.
+    #[must_use]
+    pub const fn from_reference(reference: SymbolRef) -> Option<Self> {
+        match reference.0 {
+            0 => Some(Self::AsyncIterator),
+            1 => Some(Self::HasInstance),
+            2 => Some(Self::IsConcatSpreadable),
+            3 => Some(Self::Iterator),
+            4 => Some(Self::Match),
+            5 => Some(Self::MatchAll),
+            6 => Some(Self::Replace),
+            7 => Some(Self::Search),
+            8 => Some(Self::Species),
+            9 => Some(Self::Split),
+            10 => Some(Self::ToPrimitive),
+            11 => Some(Self::ToStringTag),
+            12 => Some(Self::Unscopables),
+            _ => None,
+        }
+    }
+
+    const fn index(self) -> u32 {
+        match self {
+            Self::AsyncIterator => 0,
+            Self::HasInstance => 1,
+            Self::IsConcatSpreadable => 2,
+            Self::Iterator => 3,
+            Self::Match => 4,
+            Self::MatchAll => 5,
+            Self::Replace => 6,
+            Self::Search => 7,
+            Self::Species => 8,
+            Self::Split => 9,
+            Self::ToPrimitive => 10,
+            Self::ToStringTag => 11,
+            Self::Unscopables => 12,
+        }
+    }
 }
 
 /// A native function of the standard library.
@@ -610,7 +736,7 @@ impl Realm {
             }
             .as_object()
             .ok_or(HeapError::InvalidReference)?;
-            let key = heap.strings.intern(intrinsic.name())?;
+            let key = PropertyKey::String(heap.strings.intern(intrinsic.name())?);
             heap.define_own_named(holder, key, Value::from_object(function), builtin_data())?;
         }
 
@@ -803,14 +929,14 @@ impl Realm {
     }
 }
 
-fn intern(heap: &mut GenerationalHeap, name: &str) -> Result<super::value::StringRef, HeapError> {
-    Ok(heap.strings.intern(name)?)
+fn intern(heap: &mut GenerationalHeap, name: &str) -> Result<PropertyKey, HeapError> {
+    Ok(PropertyKey::String(heap.strings.intern(name)?))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{NativeErrorKind, Realm, builtin_data};
-    use crate::engine::{agent::Agent, heap::GenerationalHeap, value::Value};
+    use super::{NativeErrorKind, Realm, WellKnownSymbol, builtin_data};
+    use crate::engine::{agent::Agent, heap::GenerationalHeap, value::PropertyKey, value::Value};
 
     fn text(heap: &GenerationalHeap, value: Value) -> alloc::string::String {
         heap.strings.to_rust_string(value).unwrap()
@@ -861,8 +987,8 @@ mod tests {
     fn error_prototypes_carry_the_specified_name_and_empty_message() {
         let mut heap = GenerationalHeap::new();
         let realm = Realm::new(&mut heap).unwrap();
-        let name_key = heap.strings.intern("name").unwrap();
-        let message_key = heap.strings.intern("message").unwrap();
+        let name_key = PropertyKey::String(heap.strings.intern("name").unwrap());
+        let message_key = PropertyKey::String(heap.strings.intern("message").unwrap());
 
         let mut expected = alloc::vec![(realm.error_prototype(&heap).unwrap(), "Error")];
         for kind in NativeErrorKind::ALL {
@@ -894,13 +1020,13 @@ mod tests {
             .create_native_error(&mut heap, NativeErrorKind::TypeError, "not a function")
             .unwrap();
 
-        let name_key = heap.strings.intern("name").unwrap();
+        let name_key = PropertyKey::String(heap.strings.intern("name").unwrap());
         let inherited = heap.lookup_named(error, name_key).unwrap().unwrap();
         assert_eq!(inherited.holder_depth, 1);
         assert_eq!(text(&heap, inherited.value), "TypeError");
 
         // 20.5.6.1.1 step 3: "message" is an own non-enumerable property.
-        let message_key = heap.strings.intern("message").unwrap();
+        let message_key = PropertyKey::String(heap.strings.intern("message").unwrap());
         let own = heap.lookup_named(error, message_key).unwrap().unwrap();
         assert_eq!(own.holder_depth, 0);
         assert_eq!(text(&heap, own.value), "not a function");
@@ -937,5 +1063,50 @@ mod tests {
         let object = agent.realm.ordinary_object(&mut agent.heap).unwrap();
         assert!(object.is_young());
         assert_eq!(agent.heap.get_object(object).unwrap().prototype, after);
+    }
+
+    #[test]
+    fn a_symbol_key_is_distinct_from_every_string_key() {
+        let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
+        let object = realm.ordinary_object(&mut heap).unwrap();
+
+        // 6.1.5.1: each well-known Symbol is its own key, and none of them is
+        // the String of its description.
+        let tag = WellKnownSymbol::ToStringTag.key();
+        let described = PropertyKey::String(
+            heap.strings
+                .intern(WellKnownSymbol::ToStringTag.description())
+                .unwrap(),
+        );
+        assert_ne!(tag, described);
+        heap.define_own_named(object, tag, Value::from_smi(1), builtin_data())
+            .unwrap();
+        assert!(heap.own_named_flags(object, tag).unwrap().is_some());
+        assert!(heap.own_named_flags(object, described).unwrap().is_none());
+
+        // 10.1.11.1 lists every Symbol key after every String key, and a
+        // `for`-`in` enumeration reaches none of them.
+        let name = PropertyKey::String(heap.strings.intern("a").unwrap());
+        heap.define_own_named(object, name, Value::from_smi(2), builtin_data())
+            .unwrap();
+        let keys = heap.own_keys(object).unwrap();
+        assert_eq!(
+            keys.iter()
+                .map(|(key, _)| *key)
+                .collect::<alloc::vec::Vec<_>>(),
+            alloc::vec![name, tag]
+        );
+    }
+
+    #[test]
+    fn every_well_known_symbol_round_trips_through_its_reference() {
+        for symbol in WellKnownSymbol::ALL {
+            assert_eq!(
+                WellKnownSymbol::from_reference(symbol.reference()),
+                Some(symbol)
+            );
+            assert!(symbol.description().starts_with("Symbol."));
+        }
     }
 }
