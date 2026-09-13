@@ -12,7 +12,7 @@
 use super::{
     heap::{GenerationalHeap, HeapError, Root},
     shape::PropertyFlags,
-    value::{ObjectRef, VALUE_NULL, Value},
+    value::{ObjectRef, VALUE_NULL, VALUE_UNDEFINED, VALUE_UNINITIALIZED, Value},
     value::{PropertyKey, SymbolRef},
 };
 
@@ -802,6 +802,18 @@ pub struct Realm {
     global: GlobalEnvironment,
 }
 
+/// What a binding operation of 9.1.1 refuses, for the caller to raise with its
+/// own Realm.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BindingOutcome {
+    /// 9.1.1.1.5: the binding exists but has no value yet.
+    Uninitialized,
+    /// 9.1.1.1.5: the binding is a `const`, or the property is not writable.
+    Immutable,
+    /// 9.1.1.2.5: strict evaluation reached a name nothing binds.
+    Unresolvable,
+}
+
 /// Global Environment Record of 9.1.1.4.
 ///
 /// The `[[DeclarativeRecord]]` is an object of the heap rather than a map beside
@@ -1011,11 +1023,175 @@ impl GlobalEnvironment {
             .is_some())
     }
 
-    /// `GetBindingValue` of 9.1.1.4.6, which reaches 9.1.1.2.7 for a name the
-    /// declarative record does not bind.
+    /// `HasLexicalDeclaration` of 9.1.1.4.12.
     ///
-    /// Answers `None` where 9.1.1.2.7 throws a `ReferenceError`, so that the
-    /// caller raises it with the `Realm` the running execution belongs to.
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] for a stale root.
+    pub fn has_lexical_declaration(
+        &self,
+        heap: &GenerationalHeap,
+        name: PropertyKey,
+    ) -> Result<bool, HeapError> {
+        Ok(heap
+            .own_named_flags(self.declarative_object(heap)?, name)?
+            .is_some())
+    }
+
+    /// `HasRestrictedGlobalProperty` of 9.1.1.4.13: an own property of the
+    /// global object that cannot be configured away.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] for a stale root.
+    pub fn has_restricted_global_property(
+        &self,
+        heap: &GenerationalHeap,
+        name: PropertyKey,
+    ) -> Result<bool, HeapError> {
+        Ok(heap
+            .own_named_flags(self.global_object(heap)?, name)?
+            .is_some_and(|flags| !flags.configurable))
+    }
+
+    /// `CreateGlobalVarBinding` of 9.1.1.4.16 with `deletable` false, which is
+    /// what a Script declaration asks for.
+    ///
+    /// 9.1.1.4.14 `CanDeclareGlobalVar` answers true for every name here: it
+    /// asks whether the global object already has the property or is
+    /// extensible, and this engine has no `[[PreventExtensions]]`, so every
+    /// object is extensible.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] when the property cannot be defined.
+    pub fn create_global_var_binding(
+        &self,
+        heap: &mut GenerationalHeap,
+        name: PropertyKey,
+    ) -> Result<(), HeapError> {
+        let global = self.global_object(heap)?;
+        if heap.own_named_flags(global, name)?.is_some() {
+            return Ok(());
+        }
+        // 9.1.1.2.2 defines it writable and enumerable, configurable only when
+        // the binding is deletable.
+        heap.define_own_named(
+            global,
+            name,
+            VALUE_UNDEFINED,
+            PropertyFlags {
+                writable: true,
+                enumerable: true,
+                configurable: false,
+                is_accessor: false,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// `CreateMutableBinding` of 9.1.1.4.2 and `CreateImmutableBinding` of
+    /// 9.1.1.4.3, which both put an uninitialized binding in the declarative
+    /// record.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] when the binding cannot be defined.
+    pub fn create_lexical_binding(
+        &self,
+        heap: &mut GenerationalHeap,
+        name: PropertyKey,
+        mutable: bool,
+    ) -> Result<(), HeapError> {
+        let declarative = self.declarative_object(heap)?;
+        heap.define_own_named(
+            declarative,
+            name,
+            VALUE_UNINITIALIZED,
+            PropertyFlags {
+                writable: mutable,
+                enumerable: true,
+                configurable: false,
+                is_accessor: false,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// `InitializeBinding` of 9.1.1.4.4 for a name the declarative record
+    /// holds uninitialized.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] when the binding cannot be written.
+    pub fn initialize_lexical_binding(
+        &self,
+        heap: &mut GenerationalHeap,
+        name: PropertyKey,
+        value: Value,
+    ) -> Result<(), HeapError> {
+        let declarative = self.declarative_object(heap)?;
+        let flags = heap
+            .own_named_flags(declarative, name)?
+            .ok_or(HeapError::InvalidReference)?;
+        heap.define_own_named(declarative, name, value, flags)?;
+        Ok(())
+    }
+
+    /// `SetMutableBinding` of 9.1.1.4.5, which reaches 9.1.1.1.5 for a name the
+    /// declarative record binds and 9.1.1.2.5 for every other.
+    ///
+    /// Answers `Err(BindingOutcome)` where the specification throws, so that
+    /// the caller raises the error with the `Realm` the running execution
+    /// belongs to.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] for a stale root or a malformed Prototype Chain.
+    pub fn set_mutable_binding(
+        &self,
+        heap: &mut GenerationalHeap,
+        name: PropertyKey,
+        value: Value,
+        strict: bool,
+    ) -> Result<Result<(), BindingOutcome>, HeapError> {
+        let declarative = self.declarative_object(heap)?;
+        if let Some(flags) = heap.own_named_flags(declarative, name)? {
+            // 9.1.1.1.5: an uninitialized binding is a ReferenceError, and one
+            // that is not writable is a TypeError under strict evaluation.
+            let current = heap
+                .lookup_named(declarative, name)?
+                .map_or(VALUE_UNDEFINED, |property| property.value);
+            if current == VALUE_UNINITIALIZED {
+                return Ok(Err(BindingOutcome::Uninitialized));
+            }
+            if !flags.writable {
+                return Ok(Err(BindingOutcome::Immutable));
+            }
+            heap.define_own_named(declarative, name, value, flags)?;
+            return Ok(Ok(()));
+        }
+        // 9.1.1.2.5: a name the binding object does not have is a
+        // ReferenceError under strict evaluation and a new property otherwise.
+        let global = self.global_object(heap)?;
+        let existing = heap.own_named_flags(global, name)?;
+        if existing.is_none() && strict {
+            return Ok(Err(BindingOutcome::Unresolvable));
+        }
+        let flags = existing.unwrap_or(PropertyFlags::ordinary_data());
+        if !flags.writable {
+            return Ok(Err(BindingOutcome::Immutable));
+        }
+        heap.define_own_named(global, name, value, flags)?;
+        Ok(Ok(()))
+    }
+
+    /// `GetBindingValue` of 9.1.1.4.6, which reaches 9.1.1.1.6 for a name the
+    /// declarative record binds and 9.1.1.2.7 for every other.
+    ///
+    /// Answers `Err(BindingOutcome)` where the specification throws, so that
+    /// the caller raises the error with the `Realm` the running execution
+    /// belongs to.
     ///
     /// # Errors
     ///
@@ -1024,16 +1200,22 @@ impl GlobalEnvironment {
         &self,
         heap: &GenerationalHeap,
         name: PropertyKey,
-    ) -> Result<Option<Value>, HeapError> {
+    ) -> Result<Result<Value, BindingOutcome>, HeapError> {
         let declarative = self.declarative_object(heap)?;
         if let Some(property) = heap.lookup_named(declarative, name)?
             && property.holder_depth == 0
         {
-            return Ok(Some(property.value));
+            // 9.1.1.1.6: a binding that has no value yet is a ReferenceError.
+            if property.value == VALUE_UNINITIALIZED {
+                return Ok(Err(BindingOutcome::Uninitialized));
+            }
+            return Ok(Ok(property.value));
         }
         Ok(heap
             .lookup_named(self.global_object(heap)?, name)?
-            .map(|property| property.value))
+            .map_or(Err(BindingOutcome::Unresolvable), |property| {
+                Ok(property.value)
+            }))
     }
 }
 

@@ -12,9 +12,9 @@ use super::{
     feedback::{FeedbackVector, NamedAccessIC},
     heap::GenerationalHeap,
     interpreter::RegisterVM,
-    realm::{Realm, builtin_data},
+    realm::{BindingOutcome, Realm, builtin_data},
     shape::PropertyFlags,
-    value::{PropertyKey, VALUE_NULL, Value},
+    value::{PropertyKey, VALUE_NULL, VALUE_UNDEFINED, Value},
 };
 
 #[test]
@@ -33,7 +33,7 @@ fn the_global_object_carries_global_this_with_the_attributes_of_nineteen_one_one
     );
     assert_eq!(
         environment.get_binding_value(&heap, name).unwrap(),
-        Some(Value::from_object(global))
+        Ok(Value::from_object(global))
     );
     assert!(flags.writable);
     assert!(!flags.enumerable);
@@ -67,14 +67,162 @@ fn the_global_environment_asks_the_declarative_record_before_the_binding_object(
 
     assert_eq!(
         environment.get_binding_value(&heap, shared).unwrap(),
-        Some(Value::from_smi(3))
+        Ok(Value::from_smi(3))
     );
     assert_eq!(
         environment.get_binding_value(&heap, only_global).unwrap(),
-        Some(Value::from_smi(2))
+        Ok(Value::from_smi(2))
     );
     // 9.1.1.2.7 throws a ReferenceError here, which the caller raises.
-    assert_eq!(environment.get_binding_value(&heap, unbound).unwrap(), None);
+    assert_eq!(
+        environment.get_binding_value(&heap, unbound).unwrap(),
+        Err(BindingOutcome::Unresolvable)
+    );
+}
+
+#[test]
+fn a_global_var_binding_is_writable_enumerable_and_not_configurable() {
+    let mut heap = GenerationalHeap::new();
+    let realm = Realm::new(&mut heap).unwrap();
+    let name = PropertyKey::String(heap.strings.intern("counter").unwrap());
+    let environment = realm.global_environment();
+
+    // 9.1.1.4.14 answers true here, so 9.1.1.4.16 defines the property of
+    // 9.1.1.2.2 with deletable false.
+    environment
+        .create_global_var_binding(&mut heap, name)
+        .unwrap();
+    let global = environment.global_object(&heap).unwrap();
+    let flags = heap.own_named_flags(global, name).unwrap().unwrap();
+    assert!(flags.writable);
+    assert!(flags.enumerable);
+    assert!(!flags.configurable);
+    assert_eq!(
+        environment.get_binding_value(&heap, name).unwrap(),
+        Ok(VALUE_UNDEFINED)
+    );
+
+    // 9.1.1.4.13: it is a restricted global property from now on, which
+    // 16.1.7 refuses to shadow with a lexical declaration.
+    assert!(
+        environment
+            .has_restricted_global_property(&heap, name)
+            .unwrap()
+    );
+    assert!(!environment.has_lexical_declaration(&heap, name).unwrap());
+
+    // 9.1.1.4.16 leaves an existing binding alone, so a second Script that
+    // declares the same var keeps its value.
+    environment
+        .set_mutable_binding(&mut heap, name, Value::from_smi(1), false)
+        .unwrap()
+        .unwrap();
+    environment
+        .create_global_var_binding(&mut heap, name)
+        .unwrap();
+    assert_eq!(
+        environment.get_binding_value(&heap, name).unwrap(),
+        Ok(Value::from_smi(1))
+    );
+}
+
+#[test]
+fn a_lexical_binding_starts_in_its_temporal_dead_zone() {
+    let mut heap = GenerationalHeap::new();
+    let realm = Realm::new(&mut heap).unwrap();
+    let mutable = PropertyKey::String(heap.strings.intern("changing").unwrap());
+    let immutable = PropertyKey::String(heap.strings.intern("fixed").unwrap());
+    let environment = realm.global_environment();
+
+    environment
+        .create_lexical_binding(&mut heap, mutable, true)
+        .unwrap();
+    environment
+        .create_lexical_binding(&mut heap, immutable, false)
+        .unwrap();
+
+    // 9.1.1.4.12 sees them, and 9.1.1.1.6 refuses to read either yet.
+    assert!(environment.has_lexical_declaration(&heap, mutable).unwrap());
+    assert_eq!(
+        environment.get_binding_value(&heap, mutable).unwrap(),
+        Err(BindingOutcome::Uninitialized)
+    );
+    assert_eq!(
+        environment
+            .set_mutable_binding(&mut heap, mutable, Value::from_smi(1), false)
+            .unwrap(),
+        Err(BindingOutcome::Uninitialized)
+    );
+
+    // 9.1.1.4.4 gives each one its value; the mutable one then takes another.
+    environment
+        .initialize_lexical_binding(&mut heap, mutable, Value::from_smi(1))
+        .unwrap();
+    environment
+        .initialize_lexical_binding(&mut heap, immutable, Value::from_smi(2))
+        .unwrap();
+    assert_eq!(
+        environment.get_binding_value(&heap, mutable).unwrap(),
+        Ok(Value::from_smi(1))
+    );
+    environment
+        .set_mutable_binding(&mut heap, mutable, Value::from_smi(3), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        environment.get_binding_value(&heap, mutable).unwrap(),
+        Ok(Value::from_smi(3))
+    );
+
+    // 9.1.1.1.5: a const never takes another value.
+    assert_eq!(
+        environment
+            .set_mutable_binding(&mut heap, immutable, Value::from_smi(4), false)
+            .unwrap(),
+        Err(BindingOutcome::Immutable)
+    );
+    assert_eq!(
+        environment.get_binding_value(&heap, immutable).unwrap(),
+        Ok(Value::from_smi(2))
+    );
+}
+
+#[test]
+fn a_write_to_an_unbound_name_depends_on_strictness() {
+    let mut heap = GenerationalHeap::new();
+    let realm = Realm::new(&mut heap).unwrap();
+    let name = PropertyKey::String(heap.strings.intern("created").unwrap());
+    let environment = realm.global_environment();
+
+    // 9.1.1.2.5 throws under strict evaluation for a name the binding object
+    // does not have.
+    assert_eq!(
+        environment
+            .set_mutable_binding(&mut heap, name, Value::from_smi(1), true)
+            .unwrap(),
+        Err(BindingOutcome::Unresolvable)
+    );
+    assert_eq!(
+        environment.get_binding_value(&heap, name).unwrap(),
+        Err(BindingOutcome::Unresolvable)
+    );
+
+    // Otherwise it creates the property on the global object.
+    environment
+        .set_mutable_binding(&mut heap, name, Value::from_smi(1), false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        environment.get_binding_value(&heap, name).unwrap(),
+        Ok(Value::from_smi(1))
+    );
+    let global = environment.global_object(&heap).unwrap();
+    assert!(
+        heap.own_named_flags(global, name)
+            .unwrap()
+            .unwrap()
+            .configurable
+    );
 }
 
 #[test]

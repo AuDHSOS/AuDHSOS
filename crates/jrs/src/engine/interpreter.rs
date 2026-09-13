@@ -1038,6 +1038,29 @@ impl RegisterVM {
         }
     }
 
+    /// The error a refused binding operation of 9.1.1 raises.
+    fn binding_error(
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+        outcome: super::realm::BindingOutcome,
+        name: &[u16],
+    ) -> VMError {
+        use super::realm::{BindingOutcome, NativeErrorKind};
+        let mut message = alloc::string::String::from_utf16_lossy(name);
+        let kind = match outcome {
+            // 9.1.1.1.6 and 9.1.1.2.7 both name the binding that is missing.
+            BindingOutcome::Uninitialized | BindingOutcome::Unresolvable => {
+                message.push_str(" is not initialized or defined");
+                NativeErrorKind::ReferenceError
+            }
+            BindingOutcome::Immutable => {
+                message.push_str(" is not writable");
+                NativeErrorKind::TypeError
+            }
+        };
+        raise_message(heap, realm, kind, &message)
+    }
+
     /// The Elements store of an Array receiver.
     ///
     /// The methods of 23.1.3 that move elements reach the engine only through
@@ -1965,11 +1988,16 @@ impl RegisterVM {
                         .ok_or(VMError::InvalidRegister)?;
                     let name = PropertyKey::String(heap.strings.intern_units(units)?);
                     // 13.5.3 answers undefined for an unresolvable Reference
-                    // rather than reaching GetValue.
-                    self.acc = realm
-                        .global_environment()
-                        .get_binding_value(heap, name)?
-                        .unwrap_or(VALUE_UNDEFINED);
+                    // rather than reaching GetValue. Every other refusal of
+                    // 9.1.1.4.6 still throws, a binding in its temporal dead
+                    // zone included.
+                    self.acc = match realm.global_environment().get_binding_value(heap, name)? {
+                        Ok(value) => value,
+                        Err(super::realm::BindingOutcome::Unresolvable) => VALUE_UNDEFINED,
+                        Err(outcome) => {
+                            return Err(Self::binding_error(heap, realm, outcome, units));
+                        }
+                    };
                 }
                 Instruction::LdaGlobal(index) => {
                     let units = active_code
@@ -1979,18 +2007,10 @@ impl RegisterVM {
                     let name = PropertyKey::String(heap.strings.intern_units(units)?);
                     // 9.1.1.4.6 reaches 9.1.1.2.7, which throws for a name the
                     // binding object does not have.
-                    let Some(value) = realm.global_environment().get_binding_value(heap, name)?
-                    else {
-                        let mut message = alloc::string::String::from_utf16_lossy(units);
-                        message.push_str(" is not initialized or defined");
-                        return Err(raise_message(
-                            heap,
-                            realm,
-                            super::realm::NativeErrorKind::ReferenceError,
-                            &message,
-                        ));
-                    };
-                    self.acc = value;
+                    self.acc = realm
+                        .global_environment()
+                        .get_binding_value(heap, name)?
+                        .map_err(|outcome| Self::binding_error(heap, realm, outcome, units))?;
                 }
                 Instruction::LdaUndefined | Instruction::ToUndefined => {
                     self.acc = VALUE_UNDEFINED;

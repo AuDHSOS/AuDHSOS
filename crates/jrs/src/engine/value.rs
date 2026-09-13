@@ -193,6 +193,11 @@ pub const VALUE_FALSE: Value = Value(TAG_SPECIAL | 2);
 /// Bit pattern for `true`.
 pub const VALUE_TRUE: Value = Value(TAG_SPECIAL | 3);
 
+/// The marker of a binding that exists but has no value yet, which 9.1.1.1.6
+/// answers with a `ReferenceError`. It is never an ECMAScript language value
+/// and never leaves an Environment Record.
+pub const VALUE_UNINITIALIZED: Value = Value(TAG_SPECIAL | 4);
+
 /// Canonical quiet NaN used for floating-point NaN results.
 pub const CANONICAL_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
 /// Canonical quiet NaN value.
