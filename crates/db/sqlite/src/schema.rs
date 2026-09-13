@@ -20,8 +20,8 @@
 use alloc::vec::Vec;
 
 use crate::ast::{
-    Arena, ColumnConstraint, CreateTable, ExprId, Literal, Node, Order, Span, TableBody,
-    TableConstraint,
+    Arena, ColumnConstraint, CreateIndex, CreateTable, ExprId, Literal, Node, Order, Span,
+    TableBody, TableConstraint,
 };
 use crate::value::{Affinity, Collation};
 
@@ -59,6 +59,11 @@ pub enum Error {
     NoSuchColumn,
     /// A primary key whose term is an expression rather than a name.
     KeyExpression,
+    /// An index term that is not a column of the table it is over.
+    IndexColumn,
+    /// An index with a `WHERE` clause, which holds fewer rows than the
+    /// table has.
+    PartialIndex,
 }
 
 /// Whether a column is computed, and whether what it computes is kept.
@@ -115,6 +120,94 @@ pub struct Table {
     pub autoincrement: bool,
 }
 
+/// One column of an index, and how it is held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Keyed {
+    /// Where the column stands in the table.
+    pub column: usize,
+    /// Which way the entries run in it.
+    pub order: Order,
+    /// How its text is compared, which is the table's unless the index
+    /// writes another.
+    pub collation: Collation,
+}
+
+/// An index, as a `CREATE INDEX` describes it.
+///
+/// An index this crate cannot use is not one it holds: an index over an
+/// expression and a partial index both answer fewer entries than their
+/// columns say, so `index` refuses them and the statement scans.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Index {
+    /// The name, with its quotes taken off.
+    pub name: Vec<u8>,
+    /// The table it is over, with its quotes taken off.
+    pub table: Vec<u8>,
+    /// The columns it holds its entries in the order of.
+    pub columns: Vec<Keyed>,
+    /// Whether two rows may share one key.
+    pub unique: bool,
+}
+
+/// The index a `CREATE INDEX` describes, read against the table it is
+/// over.
+///
+/// # Errors
+///
+/// [`Error::IndexColumn`] for a term that is not a column of the table,
+/// and [`Error::PartialIndex`] for a `WHERE` clause, which makes the
+/// index hold fewer rows than the table has.
+pub fn index(
+    arena: &Arena,
+    definition: &CreateIndex,
+    sql: &[u8],
+    table: &Table,
+) -> Result<Index, Error> {
+    if definition.filter.is_some() {
+        return Err(Error::PartialIndex);
+    }
+    let mut columns = Vec::new();
+    for term in arena.orders(definition.columns) {
+        // A term may be written with a collation of its own, which is
+        // the one its entries are held in.
+        let (named, written) = collated(arena, term.expr, sql);
+        let name = dequote(named.ok_or(Error::IndexColumn)?.text(sql));
+        let at = table
+            .columns
+            .iter()
+            .position(|column| column.name.eq_ignore_ascii_case(&name))
+            .ok_or(Error::IndexColumn)?;
+        let collation = table
+            .columns
+            .get(at)
+            .map_or(Collation::Binary, |column| column.collation);
+        columns.push(Keyed {
+            column: at,
+            order: term.order,
+            collation: written.unwrap_or(collation),
+        });
+    }
+    Ok(Index {
+        name: dequote(definition.name.text(sql)),
+        table: dequote(definition.table.text(sql)),
+        columns,
+        unique: definition.unique,
+    })
+}
+
+/// The column an index term names and the collation written on it, where
+/// the term is a column and nothing else.
+fn collated(arena: &Arena, id: ExprId, sql: &[u8]) -> (Option<Span>, Option<Collation>) {
+    match arena.node(id) {
+        Some(Node::Collate { value, name }) => (
+            collated(arena, value, sql).0,
+            Collation::of_name(name.text(sql)),
+        ),
+        Some(Node::Column { column, .. }) => (Some(column), None),
+        _ => (None, None),
+    }
+}
+
 /// The six names a type may be that the schema stores as a code rather
 /// than as text, with the affinity of each.
 const STANDARD: [(&[u8], Affinity); 6] = [
@@ -137,7 +230,7 @@ fn standard(name: &[u8]) -> Option<usize> {
 }
 
 /// A name with its quotes taken off, which is `sqlite3Dequote`.
-fn dequote(text: &[u8]) -> Vec<u8> {
+pub(crate) fn dequote(text: &[u8]) -> Vec<u8> {
     let quote = match text.first().copied() {
         Some(b'\'') => b'\'',
         Some(b'"') => b'"',

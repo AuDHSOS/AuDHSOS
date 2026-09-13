@@ -7,6 +7,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The secondary indexes, used, in `db-sqlite`: a `WHERE` that holds an
+  indexed column equal to a value is now answered out of the index's
+  tree, O(log n) to find the first entry and O(log n) for each row it
+  names, where a scan is O(n). Over `fixtures/indexed.db`, five thousand
+  answers of `WHERE a=77` fell from 143 ms to 13 ms and of
+  `WHERE b='v77'` from 183 ms to 15 ms. An index is taken only where its
+  order is the order the term asks about: one held backwards, one
+  written with another collation, one over an expression, a partial one,
+  and one over a table that keeps its rows in the key's own tree are all
+  passed over, and the statement scans. `schema::index` reads a
+  `CREATE INDEX` against the table it is over.
+
 - A `WHERE` that names a side's rowid in `db-sqlite` now holds the walk
   to a range of rowids, which it descends to rather than scanning past:
   O(log n + k) where a scan is O(n). Over `fixtures/page512.db`, two

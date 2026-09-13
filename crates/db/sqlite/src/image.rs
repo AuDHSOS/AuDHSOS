@@ -185,6 +185,58 @@ impl<'a> Image<'a> {
         Entries::new(*self, root)
     }
 
+    /// The same, beginning at the first entry `before` does not answer
+    /// for.
+    ///
+    /// `before` answers whether an entry sorts before the key being
+    /// looked for, which is the one thing the walk needs to know and the
+    /// only thing it cannot decide for itself: an entry is a record, and
+    /// what a record's values compare as is what the schema says, not
+    /// what the tree does. The descent is a binary search of each page
+    /// down one path: O(log n) for `n` entries, where a walk from the
+    /// first entry is O(n).
+    ///
+    /// # Errors
+    ///
+    /// Whatever `before` refuses, and the errors of [`Image::page`] and
+    /// [`Page::entry`]. A caller that cannot compare an entry refuses
+    /// here and walks from the first entry instead, which answers the
+    /// same entries and only costs more.
+    pub fn entries_from(
+        &self,
+        root: u32,
+        before: &mut dyn FnMut(&Payload<'a>) -> Result<bool, Error>,
+    ) -> Result<Entries<'a>, Error> {
+        let mut walk = Entries::new(*self, root);
+        let mut number = root;
+        for depth in 1..=MAX_DEPTH {
+            let page = self.page(number)?;
+            let cells = page.cells();
+            let at = search(&page, cells, before)?;
+            walk.depth = depth;
+            for frame in walk.stack.iter_mut().skip(depth.saturating_sub(1)).take(1) {
+                frame.number = number;
+                // A leaf stands on the cell itself; an interior page
+                // stands past the child it descends into, so that the
+                // entry after that child is answered on the way back.
+                frame.next = if page.kind().is_interior() {
+                    at.saturating_mul(2).saturating_add(1)
+                } else {
+                    at
+                };
+            }
+            if !page.kind().is_interior() {
+                return Ok(walk);
+            }
+            number = if at == cells {
+                page.right_most().ok_or(Error::Overrun)?
+            } else {
+                page.child(at)?
+            };
+        }
+        Err(Error::Depth)
+    }
+
     /// How many bytes the file is, which is the most any one payload of
     /// it can be.
     #[must_use]
@@ -253,6 +305,30 @@ fn copy<'b>(room: &'b mut [u8], from: &[u8]) -> (&'b mut [u8], usize) {
         *slot = *byte;
     }
     (rest, len)
+}
+
+/// The first entry of `page` that does not sort before the key, which
+/// is where a descent goes next.
+///
+/// The entries of a page are in key order, so the walk of the page is a
+/// binary search: O(log c) for `c` cells, and `c` calls of `before` at
+/// most.
+fn search<'a>(
+    page: &Page<'a>,
+    cells: usize,
+    before: &mut dyn FnMut(&Payload<'a>) -> Result<bool, Error>,
+) -> Result<usize, Error> {
+    let mut low = 0usize;
+    let mut high = cells;
+    while low < high {
+        let middle = low.saturating_add(high.saturating_sub(low) / 2);
+        if before(&page.entry(middle)?)? {
+            low = middle.saturating_add(1);
+        } else {
+            high = middle;
+        }
+    }
+    Ok(low)
 }
 
 /// The first cell of `page` that may hold `key`.

@@ -412,3 +412,51 @@ N|a	R|1
 N|a	R|1
 N|a	R|2
 N|a
+N|b	R|'v77'
+N|a	R|77
+N|a
+N|a	R|77
+N|a	R|77
+N|a
+N|a
+N|a
+N|count(*)	R|50
+N|a	R|1
+N|a	R|1	R|2
+N|p|q|r	R|1|'A'|10	R|1|'b'|20
+N|p|q|r	R|2|'A'|30	R|2|'c'|NULL
+N|p|q|r	R|1|'A'|10	R|2|'A'|30
+N|p|q|r	R|1|'A'|10	R|2|'A'|30
+N|p|q|r	R|3|NULL|50
+N|p|q|r	R|1|'A'|10
+N|p|q|r	R|3|NULL|50
+N|p|q|r	R|1|'b'|20
+N|a|b	R|-1|1
+N|a|b	R|-1|1
+N|a|b	R|3|3
+N|a	R|2
+N|a|b	R|'x'|1
+N|a|b	R|'y'|2
+N|a|r	R|2|NULL	R|2|30
+N|p|q|r|p|q|r	R|1|'A'|10|3|NULL|50	R|1|'b'|20|3|NULL|50
+N|p|q|r|a|b	R|1|'A'|10|1|'v1'	R|2|'A'|30|2|'v2'
+N|p|q|r	R|1|'A'|10	R|1|'b'|20
+N|p|q|r	R|1|'A'|10	R|1|'b'|20
+N|p|q|r	R|1|'A'|10	R|1|'b'|20
+N|p|q|r	R|1|'A'|10	R|1|'b'|20
+N|p|q|r	R|1|'A'|10	R|1|'b'|20
+N|p|q|r	R|1|'A'|10
+N|p|q|r
+N|p|q|r
+N|n	R|399
+N|n	R|1
+N|n	R|200
+N|n
+N|n
+N|count(*)	R|2
+N|rowid	R|3
+N|rowid	R|2
+N|rowid	R|5
+N|rowid	R|4
+N|rowid	R|1
+N|typeof(v)	R|'null'	R|'integer'	R|'real'	R|'text'	R|'blob'

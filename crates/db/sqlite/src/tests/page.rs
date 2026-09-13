@@ -62,7 +62,8 @@ fn the_root_of_a_tall_tree_is_an_interior_page_that_points_at_its_children() {
 #[test]
 fn an_index_page_holds_records_and_no_rowid_of_its_own() {
     let image = Image::open(INDEXED).unwrap();
-    // The schema names the two indexes; their roots are index pages.
+    // The schema names eleven indexes; every one of their roots is an
+    // index page, whatever the index is over.
     let mut roots = Vec::new();
     for row in image.schema() {
         let row = row.unwrap();
@@ -73,7 +74,7 @@ fn an_index_page_holds_records_and_no_rowid_of_its_own() {
             roots.push(u32::try_from(root).unwrap());
         }
     }
-    assert_eq!(roots.len(), 2);
+    assert_eq!(roots.len(), 11);
     for root in roots {
         let page = image.page(root).unwrap();
         assert_eq!(page.kind(), Kind::LeafIndex);

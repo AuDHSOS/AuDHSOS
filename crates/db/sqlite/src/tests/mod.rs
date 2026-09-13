@@ -18,6 +18,7 @@ mod eval;
 mod fp;
 mod header;
 mod image;
+mod index;
 mod journal;
 mod matrix;
 mod number;

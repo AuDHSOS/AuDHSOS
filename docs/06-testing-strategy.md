@@ -3714,6 +3714,44 @@ corpus holds it to the same rows and the timing is what changed.
 - `sqlite_image` puts four such ranges over every fuzzed file and reads
   the count, the smallest rowid and the largest.
 
+### 6.6.98 The index a `WHERE` reaches (`db-sqlite`)
+
+D-159. An index answers where a row is, so the corpus holds a statement
+read out of one to the rows a scan answers and the timing is what
+changed.
+
+- `fixtures/indexed.db` holds the indexes that must be used and the ones
+  that must not: two over one column, one over two, one held backwards,
+  one over an expression, one with a `WHERE`, one written with a
+  collation the column does not have, one over a table that keeps its
+  rows in the key's own tree, one whose entries run onto an overflow
+  page, and one over a column holding each of the five storage classes.
+- What the key is: the bound with the column's affinity applied, so
+  `a='77'` over an `INTEGER` column reaches the entry `77`. A key of
+  `NULL` reaches no entry, which is what `NULL = NULL` answering nothing
+  means.
+- What the collation is: the index's own, which is the column's unless
+  the index writes another. `q='a'` over a column declared
+  `COLLATE NOCASE` answers the rows `q='A'` answers.
+- A file is not obliged to hold an index the shell would write. An entry
+  the descent cannot read gives the index up and the table is scanned,
+  which answers the same rows; an entry the walk cannot read refuses,
+  because answering the rows found before it would be answering fewer
+  rows than the table holds. Both are reached by damaging one byte of
+  one cell: the cell the descent reads, and the cell after the ones the
+  key reaches.
+- The other damaged shapes: an entry whose record header claims more
+  than the entry holds, an entry whose last value is not a rowid, a row
+  an entry names whose record is broken, an index schema row whose root
+  page is not a number, one that calls itself an index and holds a
+  table, and one over a table the file does not have.
+- `Image::entries_from` descends a tree of four hundred entries with
+  interior pages, and is refused at the depth the walk keeps frames for
+  where the tree never reaches a leaf.
+- `sqlite_image` puts a `=` against the first two columns of every table
+  of every fuzzed file, with an integer, a text and a blob, so the index
+  a file describes is walked with keys of every class.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

@@ -29,6 +29,29 @@ const MAX_ROWS: usize = 4096;
 /// no machine holds, and refusing to allocate it is the point.
 const MAX_PAYLOAD: usize = 1 << 20;
 
+/// The names of the first columns of the table `name`, each with its
+/// quotes doubled, because a column's name is text the file decides.
+fn columns_of(database: &Database<'_>, name: &[u8]) -> Vec<Vec<u8>> {
+    let Some(table) = database.tables().find(|table| table.name == name) else {
+        return Vec::new();
+    };
+    table
+        .columns
+        .iter()
+        .take(2)
+        .map(|column| {
+            let mut out = Vec::new();
+            for byte in &column.name {
+                if *byte == b'"' {
+                    out.push(b'"');
+                }
+                out.push(*byte);
+            }
+            out
+        })
+        .collect()
+}
+
 fuzz_support::fuzz_target!(|bytes: &[u8]| {
     // The schema of a file is text the file decides, and a statement
     // over it is a walk the file decides the shape of. Neither may
@@ -113,6 +136,22 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
                 sql.extend_from_slice(b" WHERE ");
                 sql.extend_from_slice(held);
                 answers(&database, &sql);
+            }
+            // A `WHERE` that names a column an index may be over, which
+            // holds the walk to the entries of that index. The rows it
+            // answers have to be the rows the same statement answers
+            // without one, and a file decides both the index and what
+            // its entries hold.
+            for column in columns_of(&database, name) {
+                for value in [b"0".as_slice(), b"''".as_slice(), b"x'00'".as_slice()] {
+                    let mut sql = b"SELECT count(*) FROM ".to_vec();
+                    sql.extend_from_slice(&quoted);
+                    sql.extend_from_slice(b" WHERE \"");
+                    sql.extend_from_slice(&column);
+                    sql.extend_from_slice(b"\"=");
+                    sql.extend_from_slice(value);
+                    answers(&database, &sql);
+                }
             }
         }
     }

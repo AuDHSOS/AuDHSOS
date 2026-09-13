@@ -169,8 +169,8 @@ fn the_tables_of_a_file_are_the_ones_its_schema_names() {
         .tables()
         .map(|table| String::from_utf8_lossy(&table.name).into_owned())
         .collect();
-    // The two indexes of the fixture are not tables, and are skipped.
-    assert_eq!(names, ["k"]);
+    // The indexes of the fixture are not tables, and are skipped.
+    assert_eq!(names, ["k", "m", "e", "o", "u", "f"]);
     let database = Database::open(super::KEYS).expect("a database");
     let names: Vec<String> = database
         .tables()
@@ -291,6 +291,30 @@ fn a_schema_row_that_is_not_a_table_is_passed_over() {
             Ok("d"),
             Err(5),
             Ok("CREATE TABLE d(x)"),
+        ]),
+        // Three index rows the reader must walk past as well: one whose
+        // root page is not a number, one that calls itself an index and
+        // holds a table, and one over a table the file does not have.
+        record([
+            Ok("index"),
+            Ok("j"),
+            Ok("d"),
+            Ok("two"),
+            Ok("CREATE INDEX j ON d(x)"),
+        ]),
+        record([
+            Ok("index"),
+            Ok("l"),
+            Ok("d"),
+            Err(7),
+            Ok("CREATE TABLE l(x)"),
+        ]),
+        record([
+            Ok("index"),
+            Ok("n"),
+            Ok("nosuch"),
+            Err(8),
+            Ok("CREATE INDEX n ON nosuch(x)"),
         ]),
     ]);
     let database = Database::open(&file).expect("a database");

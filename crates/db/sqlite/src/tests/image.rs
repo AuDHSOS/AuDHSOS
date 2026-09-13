@@ -31,7 +31,7 @@ fn a_file_is_as_many_pages_as_it_is_long() {
     let image = Image::open(SMALL).unwrap();
     assert_eq!(image.pages(), 2);
     assert_eq!(image.header().page_size, 4096);
-    assert_eq!(Image::open(PAGE512).unwrap().pages(), 26);
+    assert_eq!(Image::open(PAGE512).unwrap().pages(), 39);
 }
 
 #[test]
@@ -435,4 +435,19 @@ fn a_walk_between_two_rowids_refuses_the_tree_of_the_wrong_kind() {
             crate::page::Kind::InteriorIndex.byte()
         )))
     );
+}
+
+#[test]
+fn a_descent_into_an_index_tree_deeper_than_the_walk_is_refused() {
+    // The descent reads one page per level, so a tree that never reaches
+    // a leaf is refused at the depth the walk keeps frames for rather
+    // than followed for ever.
+    let mut builder = crate::tests::Builder::new(512);
+    for page in 0..33u32 {
+        builder = builder.page(&crate::tests::index_interior_to(512, page + 3));
+    }
+    let bytes = builder.finish();
+    let image = Image::open(&bytes).unwrap();
+    let outcome = image.entries_from(2, &mut |_| Ok(true));
+    assert_eq!(outcome.err(), Some(Error::Depth));
 }

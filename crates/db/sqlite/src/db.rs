@@ -39,7 +39,7 @@ use crate::header::Encoding;
 use crate::image::Image;
 use crate::parse;
 use crate::record;
-use crate::schema::{self, Generated, Table};
+use crate::schema::{self, Generated, Table, dequote};
 use crate::value::{Affinity, Collation, Value, apply_comparison, compare, compare_affinity};
 use crate::{error, number};
 
@@ -132,6 +132,17 @@ struct Stored {
     /// column's own place where a column is computed and not stored or
     /// the table keeps its rows in the key's own tree.
     places: Vec<usize>,
+    /// The indexes over it that this crate can walk.
+    indexes: Vec<Kept>,
+}
+
+/// One index of a table, and where its tree is.
+#[derive(Clone, Debug)]
+struct Kept {
+    /// The index as its statement describes it.
+    index: schema::Index,
+    /// The page its tree begins at.
+    root: u32,
 }
 
 /// One column a statement answers, and what a comparison against it
@@ -173,6 +184,35 @@ impl Shape {
     /// Whether the side has a column of this name.
     fn has(&self, name: &[u8]) -> bool {
         self.place(name).is_some()
+    }
+
+    /// What a name reaches on this side: one of its columns, or its
+    /// rowid where it keeps one.
+    ///
+    /// A column of the side's own is what a name reaches first, so a
+    /// table with a column called `rowid` answers that column and not
+    /// the key. The one name that reaches the key while naming a column
+    /// is the column the key is another name for.
+    fn reaches(&self, name: &[u8]) -> Option<Reached> {
+        if let Some(place) = self.place(name) {
+            let key = self
+                .key
+                .as_deref()
+                .is_some_and(|key| key.eq_ignore_ascii_case(name));
+            return Some(if key {
+                Reached::Key
+            } else {
+                Reached::Column(place)
+            });
+        }
+        // The three names the rowid answers to, which a statement inside
+        // a `FROM` and a table that keeps its rows in the key's own tree
+        // both refuse.
+        let rowid = self.keyed
+            && (name.eq_ignore_ascii_case(b"rowid")
+                || name.eq_ignore_ascii_case(b"oid")
+                || name.eq_ignore_ascii_case(b"_rowid_"));
+        rowid.then_some(Reached::Key)
     }
 }
 
@@ -242,12 +282,39 @@ struct Side<'a> {
     /// The columns a `USING` or a `NATURAL` matches it by, which are
     /// also the columns it does not answer a bare name with.
     using: Vec<Vec<u8>>,
-    /// The rowids the walk is held to, where the `WHERE` names them: the
-    /// smallest it descends to and the largest it ends past.
-    range: (Option<i64>, Option<i64>),
+    /// How the walk reads it.
+    plan: Plan,
+}
+
+/// How a side's rows are read.
+#[derive(Clone, Debug)]
+enum Plan {
+    /// The tree of the side, from the rowid the walk descends to up to
+    /// the one it ends past. Both nothing is a scan of the whole tree.
+    Rows(Option<i64>, Option<i64>),
+    /// The rows an index names, which a `WHERE` holds to one key.
+    Keyed {
+        /// The page the index's tree begins at.
+        root: u32,
+        /// The values the key begins with.
+        key: Vec<Value>,
+        /// What each of them compares under.
+        collations: Vec<Collation>,
+        /// Where the rowid stands in an entry, which is after every
+        /// column the index holds.
+        rowid_at: usize,
+    },
 }
 
 impl Side<'_> {
+    /// The rowids the walk of the side's own tree is held to.
+    const fn range(&self) -> (Option<i64>, Option<i64>) {
+        match self.plan {
+            Plan::Rows(first, last) => (first, last),
+            Plan::Keyed { .. } => (None, None),
+        }
+    }
+
     /// Whether `named` is what the statement calls this side.
     fn named(&self, named: &[u8]) -> bool {
         !self.name.is_empty() && self.name.eq_ignore_ascii_case(named)
@@ -383,13 +450,70 @@ impl<'a> Database<'a> {
                 sql,
                 arena,
                 places,
+                indexes: Vec::new(),
             });
         }
-        Ok(Database {
+        let mut database = Database {
             image,
             tables,
             encoding,
-        })
+        };
+        database.read_indexes()?;
+        Ok(database)
+    }
+
+    /// Reads the indexes of the schema, once every table is read.
+    ///
+    /// An index names its table, and a schema may name the index before
+    /// the table where it was written that way, so the tables are read
+    /// first and the indexes against them. An index this crate cannot
+    /// walk is passed over rather than refused: the statement over it
+    /// scans, which is slower and just as right.
+    fn read_indexes(&mut self) -> Result<(), Error> {
+        let mut payload = Vec::new();
+        for row in self.image.schema() {
+            let row = row?;
+            read_payload(&self.image, &row.payload, &mut payload)?;
+            let record = record::Record::parse(&payload)?;
+            let text = |at: usize| -> Result<Vec<u8>, Error> {
+                Ok(match record.value(at)? {
+                    Some(record::Value::Text(bytes)) => decode(bytes, self.encoding),
+                    _ => Vec::new(),
+                })
+            };
+            if text(0)? != b"index" {
+                continue;
+            }
+            let Some(record::Value::Int(root)) = record.value(3)? else {
+                continue;
+            };
+            let sql = text(4)?;
+            if sql.is_empty() {
+                // An index a `UNIQUE` or a `PRIMARY KEY` made carries no
+                // statement, and its columns are the constraint's.
+                continue;
+            }
+            let (arena, definition) = parse::definition(&sql)?;
+            let crate::ast::Definition::Index(written) = definition else {
+                continue;
+            };
+            let over = dequote(written.table.text(&sql));
+            let Some(stored) = self
+                .tables
+                .iter_mut()
+                .find(|stored| stored.table.name.eq_ignore_ascii_case(&over))
+            else {
+                continue;
+            };
+            let Ok(index) = schema::index(&arena, &written, &sql, &stored.table) else {
+                continue;
+            };
+            stored.indexes.push(Kept {
+                index,
+                root: u32::try_from(root).unwrap_or(0),
+            });
+        }
+        Ok(())
     }
 
     /// The tables of the schema, in the order the file holds them.
@@ -531,7 +655,7 @@ impl<'a> Database<'a> {
             return listed(arena, &select, sql, &cursor);
         }
         let mut sides = self.sides(arena, &select, sql, scope)?;
-        held_to(arena, select.filter, sql, &mut sides);
+        planned(arena, select.filter, sql, &mut sides);
         let shape = shape(arena, &select, sql, &sides)?;
         let collations = self.collations(&shape);
         let names: Vec<Vec<u8>> = shape
@@ -667,7 +791,7 @@ impl<'a> Database<'a> {
                 kind: source.join.kind,
                 on: source.on,
                 using,
-                range: (None, None),
+                plan: Plan::Rows(None, None),
             });
         }
         Ok(out)
@@ -735,7 +859,7 @@ impl<'a> Database<'a> {
                     kind: JoinKind::Inner,
                     on: None,
                     using: Vec::new(),
-                    range: (None, None),
+                    plan: Plan::Rows(None, None),
                 };
                 let column = one(&side.shape)?;
                 let mut rows = Vec::new();
@@ -837,17 +961,52 @@ impl<'a> Database<'a> {
     /// The rows of one side of a `FROM`, each with the rowid where the
     /// side is a table that keeps one.
     fn feed<'f>(&self, side: &'f Side<'f>) -> Feed<'a, 'f> {
-        match &side.source {
-            Source::Table(stored) => Feed::Tree(Box::new(Tree {
+        let stored = match &side.source {
+            Source::Rows(rows) => return Feed::Rows(rows.iter()),
+            Source::Table(stored) => stored,
+        };
+        if let Plan::Keyed {
+            root,
+            key,
+            collations,
+            rowid_at,
+        } = &side.plan
+            // An entry this walk cannot read whole is one it cannot
+            // compare, so the descent gives up and the table is scanned:
+            // the same rows, and only the cost is not the same.
+            && let Ok(walk) = {
+                let mut scratch = Vec::new();
+                self.image.entries_from(*root, &mut |entry| {
+                    let order =
+                        order_of_entry(&self.image, entry, key, collations, self.encoding, &mut scratch)
+                            .map_err(|_| crate::error::Error::Overrun)?;
+                    Ok(order == core::cmp::Ordering::Less)
+                })
+            }
+        {
+            return Feed::Keyed(Box::new(Sought {
                 image: self.image,
                 stored,
-                walk: self.walk(stored, side.range),
+                walk,
+                key,
+                collations,
+                rowid_at: *rowid_at,
                 encoding: self.encoding,
                 collation: self.collation(),
                 payload: Vec::new(),
-            })),
-            Source::Rows(rows) => Feed::Rows(rows.iter()),
+            }));
         }
+        // A plan that names an index and could not be walked falls back
+        // to the whole tree, which answers the same rows.
+        let range = side.range();
+        Feed::Tree(Box::new(Tree {
+            image: self.image,
+            stored,
+            walk: self.walk(stored, range),
+            encoding: self.encoding,
+            collation: self.collation(),
+            payload: Vec::new(),
+        }))
     }
 
     /// The rows of a table, whichever kind of tree holds them, each with
@@ -1046,70 +1205,117 @@ fn listed(
     })
 }
 
-/// Holds each side's walk to the rowids the `WHERE` leaves it.
+/// Plans how each side of a `FROM` is read, out of the terms the
+/// `WHERE` holds.
 ///
 /// Only the terms a top-level `AND` spine holds are read, because a term
 /// under an `OR` or a `NOT` does not have to be true of every row the
-/// statement answers. A row the range leaves out is a row that same term
-/// would refuse, so the answer is what a scan of the whole tree answers
-/// and the cost is O(log n + k) for the `k` rows the range holds.
-fn held_to(arena: &Arena, filter: Option<ExprId>, sql: &[u8], sides: &mut [Side<'_>]) {
+/// statement answers. Only the `WHERE` is read and never an `ON`,
+/// because an `ON` decides which rows of an outer join match and not
+/// which rows the statement answers. A row a plan leaves out is a row
+/// one of those terms refuses, so every plan answers what a scan
+/// answers.
+fn planned(arena: &Arena, filter: Option<ExprId>, sql: &[u8], sides: &mut [Side<'_>]) {
     let Some(filter) = filter else {
         return;
     };
-    let mut terms = alloc::vec![filter];
-    while let Some(id) = terms.pop() {
+    let terms = terms_of(arena, filter, sql, sides);
+    // A rowid range is what a table's own tree is walked by, and it
+    // answers a row where an index answers only where the row is, so it
+    // is taken first and never given up for an index.
+    let mut ranges = alloc::vec![(None, None); sides.len()];
+    for term in &terms {
+        let (Reached::Key, Value::Int(bound)) = (term.reached, &term.value) else {
+            continue;
+        };
+        for range in ranges.iter_mut().skip(term.at).take(1) {
+            narrow(&mut range.0, &mut range.1, term.op, *bound);
+        }
+    }
+    let mut plans: Vec<Plan> = Vec::new();
+    for ((at, side), range) in sides.iter().enumerate().zip(&ranges) {
+        // An index over a table that keeps its rows in the key's own
+        // tree ends its entries with that key and not with a rowid, and
+        // a side already held to a rowid range is read by that range.
+        let keyed = match &side.source {
+            Source::Table(stored) if !stored.table.without_rowid && *range == (None, None) => {
+                plan_of(&terms, at, stored)
+            }
+            Source::Table(_) | Source::Rows(_) => None,
+        };
+        plans.push(keyed.unwrap_or(Plan::Rows(range.0, range.1)));
+    }
+    for (side, plan) in sides.iter_mut().zip(plans) {
+        side.plan = plan;
+    }
+}
+
+/// What one side's column is compared against, out of one term.
+struct Bound {
+    /// Which side.
+    at: usize,
+    /// Which of its columns, or its rowid.
+    reached: Reached,
+    /// Which way the comparison runs, with the column on the left.
+    op: BinaryOp,
+    /// What the column is compared against.
+    value: Value,
+}
+
+/// What a name in a `WHERE` reaches.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reached {
+    /// The rowid of the side.
+    Key,
+    /// The column of the side at this place.
+    Column(usize),
+}
+
+/// Every term a top-level `AND` spine holds that compares a column of
+/// one side against a value no row is needed to read.
+fn terms_of(arena: &Arena, filter: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Vec<Bound> {
+    let mut out = Vec::new();
+    let mut spine = alloc::vec![filter];
+    while let Some(id) = spine.pop() {
         let Some(Node::Binary { op, left, right }) = arena.node(id) else {
             continue;
         };
         if op == BinaryOp::And {
-            terms.push(left);
-            terms.push(right);
+            spine.push(left);
+            spine.push(right);
+            continue;
+        }
+        if !matches!(
+            op,
+            BinaryOp::Eq | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+        ) {
             continue;
         }
         // `a < 5` and `5 > a` say the same thing about `a`, so the
         // operator turns over with the operands.
-        let Some((at, op, bound)) = pinned(arena, op, left, right, sql, sides)
-            .or_else(|| pinned(arena, flipped(op), right, left, sql, sides))
-        else {
-            continue;
-        };
-        for side in sides.iter_mut().skip(at).take(1) {
-            narrow(&mut side.range, op, bound);
+        for (op, column, value) in [(op, left, right), (flipped(op), right, left)] {
+            let Some((at, reached)) = reached(arena, column, sql, sides) else {
+                continue;
+            };
+            // A term that names a column is a term about the row, and
+            // the row is what is being planned for, so only a value the
+            // walk needs no row to read is one it can be held to.
+            let Ok(value) = evaluate_row(arena, value, sql, &eval::NoRow) else {
+                continue;
+            };
+            out.push(Bound {
+                at,
+                reached,
+                op,
+                value,
+            });
         }
     }
+    out
 }
 
-/// What a term says about one side's rowid: which side, which way, and
-/// the number it is held to.
-fn pinned(
-    arena: &Arena,
-    op: BinaryOp,
-    column: ExprId,
-    value: ExprId,
-    sql: &[u8],
-    sides: &[Side<'_>],
-) -> Option<(usize, BinaryOp, i64)> {
-    if !matches!(
-        op,
-        BinaryOp::Eq | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
-    ) {
-        return None;
-    }
-    let at = keyed(arena, column, sql, sides)?;
-    // A term that names a column is a term about the row, and the row is
-    // what the walk is being planned for, so only a value the walk needs
-    // no row to read is one it can be held to.
-    let Ok(Value::Int(bound)) = evaluate_row(arena, value, sql, &eval::NoRow) else {
-        // A value that is not a whole number holds the walk to nothing:
-        // a scan answers it, more slowly and just as rightly.
-        return None;
-    };
-    Some((at, op, bound))
-}
-
-/// Which side's rowid an expression names, where it names one.
-fn keyed(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<usize> {
+/// Which side an expression names a column of, and which column.
+fn reached(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<(usize, Reached)> {
     let Node::Column {
         schema,
         table,
@@ -1128,29 +1334,52 @@ fn keyed(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<us
         if named.is_some_and(|named| !side.named(named)) {
             continue;
         }
-        // The three names the rowid answers to reach a table that keeps
-        // one; a column of the side that is another name for the rowid
-        // reaches it as well.
-        let keyed = side.shape.keyed
-            && (column.eq_ignore_ascii_case(b"rowid")
-                || column.eq_ignore_ascii_case(b"oid")
-                || column.eq_ignore_ascii_case(b"_rowid_")
-                || side
-                    .shape
-                    .key
-                    .as_ref()
-                    .is_some_and(|key| key.eq_ignore_ascii_case(column)));
-        if !keyed && !side.shape.has(column) {
+        let Some(reached) = side.shape.reaches(column) else {
             continue;
-        }
+        };
         if found.is_some() {
             // A name two sides answer is ambiguous, and the statement
             // refuses it later; nothing is planned for it here.
             return None;
         }
-        found = keyed.then_some(at);
+        found = Some((at, reached));
     }
     found
+}
+
+/// The index the terms reach on one side, where they reach one.
+fn plan_of(terms: &[Bound], at: usize, stored: &Stored) -> Option<Plan> {
+    for kept in &stored.indexes {
+        let first = kept.index.columns.first()?;
+        let column = stored.table.columns.get(first.column)?;
+        // An index held in another order, or under another collation
+        // than the column compares under, answers its entries in an
+        // order the terms do not ask about.
+        if first.order == crate::ast::Order::Descending || first.collation != column.collation {
+            continue;
+        }
+        let Some(term) = terms.iter().find(|term| {
+            term.at == at
+                && term.op == BinaryOp::Eq
+                && term.reached == Reached::Column(first.column)
+                // An index holds no entry a `=` against `NULL` reaches,
+                // which is what `NULL = NULL` answering nothing means.
+                && term.value != Value::Null
+        }) else {
+            continue;
+        };
+        // An entry holds what the table's affinity left of the value, so
+        // the key is what that affinity leaves of the bound.
+        let mut value = term.value.clone();
+        crate::value::apply(&mut value, column.affinity);
+        return Some(Plan::Keyed {
+            root: kept.root,
+            key: alloc::vec![value],
+            collations: alloc::vec![first.collation],
+            rowid_at: kept.index.columns.len(),
+        });
+    }
+    None
 }
 
 /// The operator that says the same thing with its operands the other way
@@ -1167,20 +1396,20 @@ const fn flipped(op: BinaryOp) -> BinaryOp {
 
 /// Narrows a range by one term, which never widens it: two terms about
 /// one rowid both hold.
-fn narrow(range: &mut (Option<i64>, Option<i64>), op: BinaryOp, bound: i64) {
+fn narrow(range: &mut Option<i64>, past: &mut Option<i64>, op: BinaryOp, bound: i64) {
     let (first, last) = match op {
         BinaryOp::Eq => (Some(bound), Some(bound)),
         BinaryOp::Ge => (Some(bound), None),
         BinaryOp::Gt => (bound.checked_add(1), None),
         BinaryOp::Le => (None, Some(bound)),
-        // Every operator but the five is refused before this is reached.
+        // Every operator but the five is left out of the terms.
         _ => (None, bound.checked_sub(1)),
     };
     if let Some(first) = first {
-        range.0 = Some(range.0.map_or(first, |held| held.max(first)));
+        *range = Some(range.map_or(first, |held| held.max(first)));
     }
     if let Some(last) = last {
-        range.1 = Some(range.1.map_or(last, |held| held.min(last)));
+        *past = Some(past.map_or(last, |held| held.min(last)));
     }
 }
 
@@ -1287,6 +1516,13 @@ fn equal(cursor: &Cursor<'_>, name: &[u8]) -> bool {
     )
 }
 
+/// One row a feed answers: the rowid where the side keeps one, and the
+/// values of the row.
+type Read = Result<Fed, Error>;
+
+/// The rowid a row keeps, where its side keeps one, and its values.
+type Fed = (Option<i64>, Vec<Value>);
+
 /// The rows of one side of a `FROM`.
 enum Feed<'i, 'f> {
     /// A table of the schema, read out of its tree, which carries a
@@ -1294,6 +1530,85 @@ enum Feed<'i, 'f> {
     Tree(Box<Tree<'i, 'f>>),
     /// The rows a statement answered, already read.
     Rows(core::slice::Iter<'f, Vec<Value>>),
+    /// The rows an index names, read out of the index's tree and then
+    /// out of the table's.
+    Keyed(Box<Sought<'i, 'f>>),
+}
+
+/// An index of a table while its tree is being walked.
+struct Sought<'i, 'f> {
+    /// The file the trees are in.
+    image: Image<'i>,
+    /// The table the index is over.
+    stored: &'f Stored,
+    /// Where the walk of the index stands.
+    walk: crate::image::Entries<'i>,
+    /// The values every entry the walk takes begins with.
+    key: &'f [Value],
+    /// What each of them compares under.
+    collations: &'f [Collation],
+    /// Where the rowid stands in an entry.
+    rowid_at: usize,
+    /// What encoding the file keeps its text in.
+    encoding: Encoding,
+    /// What a comparison uses where nothing writes a collation.
+    collation: Collation,
+    /// The buffer one record is read into.
+    payload: Vec<u8>,
+}
+
+impl<'i> Sought<'i, '_> {
+    /// The next row the index names, or nothing once its entries no
+    /// longer begin with the key.
+    fn read(&mut self) -> Option<Read> {
+        let entry = self.walk.next()?;
+        match self.take(entry) {
+            Ok(Some(row)) => Some(Ok(row)),
+            // Every entry after this one sorts after it, so the entries
+            // that begin with the key are read out.
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        }
+    }
+
+    /// One entry as the row it names, or nothing where the entry no
+    /// longer begins with the key.
+    fn take(
+        &mut self,
+        entry: Result<crate::page::Payload<'i>, crate::error::Error>,
+    ) -> Result<Option<Fed>, Error> {
+        let entry = entry?;
+        let order = order_of_entry(
+            &self.image,
+            &entry,
+            self.key,
+            self.collations,
+            self.encoding,
+            &mut self.payload,
+        )?;
+        if order != core::cmp::Ordering::Equal {
+            return Ok(None);
+        }
+        let rowid = rowid_of(&self.image, &entry, self.rowid_at, &mut self.payload)?;
+        // The row the entry names, which the table's tree is descended
+        // to: O(log n) for each entry the index answers.
+        let row = self
+            .image
+            .rows_between(self.stored.root, Some(rowid), Some(rowid))
+            .next()
+            // An entry naming a row the table does not hold is a file
+            // whose index and table disagree.
+            .ok_or(Error::Image(crate::error::Error::Page(self.stored.root)))??;
+        read_payload(&self.image, &row.payload, &mut self.payload)?;
+        let values = values_of(
+            &self.payload,
+            self.stored,
+            Some(row.rowid),
+            self.encoding,
+            self.collation,
+        )?;
+        Ok(Some((Some(row.rowid), values)))
+    }
 }
 
 /// A table of the schema while its tree is being walked.
@@ -1332,7 +1647,7 @@ impl<'i> Tree<'i, '_> {
 }
 
 impl Iterator for Feed<'_, '_> {
-    type Item = Result<(Option<i64>, Vec<Value>), Error>;
+    type Item = Read;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
@@ -1341,8 +1656,79 @@ impl Iterator for Feed<'_, '_> {
                 Some(tree.read(step))
             }
             Feed::Rows(rows) => rows.next().map(|values| Ok((None, values.clone()))),
+            Feed::Keyed(sought) => sought.read(),
         }
     }
+}
+
+/// What an index entry's first values compare as against a key.
+///
+/// An entry holds each value as the table's affinity left it, so the key
+/// the planner builds has that affinity applied to it and nothing is
+/// converted here.
+fn order_of_entry(
+    image: &Image<'_>,
+    entry: &crate::page::Payload<'_>,
+    key: &[Value],
+    collations: &[Collation],
+    encoding: Encoding,
+    scratch: &mut Vec<u8>,
+) -> Result<core::cmp::Ordering, Error> {
+    // An entry that runs onto an overflow page is read whole before it
+    // is compared, because the key may be the part that runs on.
+    let held;
+    let record = if entry.is_whole() {
+        record::Record::parse(entry.local)?
+    } else {
+        read_payload(image, entry, scratch)?;
+        held = scratch;
+        record::Record::parse(held)?
+    };
+    for (at, wanted) in key.iter().enumerate() {
+        let held = held_value(&record, at, encoding)?;
+        let collation = collations.get(at).copied().unwrap_or(Collation::Binary);
+        let order = compare(&held, wanted, collation);
+        if order != core::cmp::Ordering::Equal {
+            return Ok(order);
+        }
+    }
+    Ok(core::cmp::Ordering::Equal)
+}
+
+/// The rowid an entry ends with, which is the value after every column
+/// the index holds.
+fn rowid_of(
+    image: &Image<'_>,
+    entry: &crate::page::Payload<'_>,
+    at: usize,
+    scratch: &mut Vec<u8>,
+) -> Result<i64, Error> {
+    let held;
+    let record = if entry.is_whole() {
+        record::Record::parse(entry.local)?
+    } else {
+        read_payload(image, entry, scratch)?;
+        held = scratch;
+        record::Record::parse(held)?
+    };
+    match record.value(at)? {
+        Some(record::Value::Int(rowid)) => Ok(rowid),
+        // An index over a table that keeps its rows in the key's own
+        // tree ends with that key and not with a rowid, and nothing
+        // plans for one.
+        _ => Err(Error::Image(crate::error::Error::Overrun)),
+    }
+}
+
+/// One value of a record, as the engine holds values.
+fn held_value(record: &record::Record<'_>, at: usize, encoding: Encoding) -> Result<Value, Error> {
+    Ok(match record.value(at)? {
+        None | Some(record::Value::Null) => Value::Null,
+        Some(record::Value::Int(number)) => Value::Int(number),
+        Some(record::Value::Real(number)) => Value::Real(number),
+        Some(record::Value::Text(bytes)) => Value::Text(decode(bytes, encoding)),
+        Some(record::Value::Blob(bytes)) => Value::Blob(bytes.to_vec()),
+    })
 }
 
 /// A walk of a table's rows: down a table tree by rowid, or down the
