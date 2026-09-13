@@ -12,6 +12,7 @@
 
 mod bytes;
 mod error;
+mod eval;
 mod fp;
 mod header;
 mod image;
@@ -21,6 +22,7 @@ mod page;
 mod parse;
 mod record;
 mod token;
+mod value;
 
 /// One table, three rows, every storage class, page size 4096, UTF-8.
 ///

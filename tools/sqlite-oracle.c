@@ -19,6 +19,9 @@
 **   num         a piece of text as "x" and its bytes in hex, answered as
 **               what sqlite3AtoF and sqlite3Atoi64 make of it: the code
 **               each returns, the double, and the integer.
+**   expr-corpus writes the cases for the reader of expressions.
+**   expr        one SQL expression, answered as its type and its value
+**               quoted, or as the message SQLite refused it with.
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -249,10 +252,162 @@ static void num_corpus(void) {
   }
 }
 
+/* The database every expression is put to. It holds no tables: what is
+** asked is what an expression alone answers. */
+static sqlite3 *g_db = 0;
+
+/* What SQLite answers for one expression. */
+static int expr_case(const char *line) {
+  char *sql = sqlite3_mprintf("SELECT typeof(%s), quote(%s);", line, line);
+  sqlite3_stmt *stmt = 0;
+  int rc;
+  if (sql == 0) return 1;
+  rc = sqlite3_prepare_v2(g_db, sql, -1, &stmt, 0);
+  if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
+  if (rc == SQLITE_ROW) {
+    printf("%s\t%s\n", sqlite3_column_text(stmt, 0),
+           sqlite3_column_text(stmt, 1));
+  } else {
+    const char *message = sqlite3_errmsg(g_db);
+    printf("!\t%s\n", message);
+  }
+  sqlite3_finalize(stmt);
+  sqlite3_free(sql);
+  return 0;
+}
+
+/* The operands every binary operator is put between. */
+static const char *aOperand[] = {
+  "NULL", "0", "1", "-3", "2.5", "1e308", "9223372036854775807", "''",
+  "'abc'", "'2'", "'2.5'", "' 3 '", "'abc9'", "x'32'", "x''",
+  "0x7FFFFFFFFFFFFFFF"
+};
+
+/* The operators between them. */
+static const char *aBinary[] = {
+  "+", "-", "*", "/", "%", "||", "&", "|", "<<", ">>", "=", "==", "!=",
+  "<>", "<", "<=", ">", ">=", "IS", "IS NOT", "AND", "OR"
+};
+
+/* The values the one-operand cases are put to. */
+static const char *aSingle[] = {
+  "NULL", "0", "1", "-1", "2", "-3", "0.0", "2.5", "-2.5", "1e308",
+  "1e-308", "9223372036854775807", "9223372036854775808",
+  "-9223372036854775808", "0x10", "0x8000000000000000", "1_000", ".5",
+  "1.", "1e3", "''", "'a'", "'A'", "'abc'", "'a''b'", "'1'", "'1.0'",
+  "' 1 '", "'10'", "'9'", "'0'", "'abc '", "'0x10'", "' '", "x''",
+  "x'41'", "x'4142'", "x'00'", "'1.5'", "'1e400'", "1e400", "-1e400",
+  "'9223372036854775808'", "'-9223372036854775809'", "' 12 '", "'-0'",
+  "'.5'", "'1e'", "'+3'"
+};
+
+/* The type names a cast is written with. */
+static const char *aType[] = {
+  "INTEGER", "INT", "TEXT", "BLOB", "REAL", "NUMERIC", "VARCHAR(10)",
+  "FLOAT", "DOUBLE", "CHARACTER(20)", "", "POINT", "BLOBTEXT",
+  "TEXTBLOB", "REALBLOB", "BLOBREAL", "CHARREAL", "REALCHAR", "DECIMAL"
+};
+
+/* The cases no cross product writes. */
+static const char *aOther[] = {
+  "CASE WHEN 1 THEN 'a' ELSE 'b' END",
+  "CASE WHEN 0 THEN 'a' ELSE 'b' END",
+  "CASE WHEN NULL THEN 'a' ELSE 'b' END",
+  "CASE WHEN 0 THEN 'a' END",
+  "CASE 1 WHEN 1 THEN 'a' WHEN 2 THEN 'b' ELSE 'c' END",
+  "CASE 2 WHEN 1 THEN 'a' WHEN 2 THEN 'b' ELSE 'c' END",
+  "CASE 3 WHEN 1 THEN 'a' WHEN 2 THEN 'b' ELSE 'c' END",
+  "CASE 3 WHEN 1 THEN 'a' WHEN 2 THEN 'b' END",
+  "CASE NULL WHEN NULL THEN 'a' ELSE 'b' END",
+  "CASE '1' WHEN 1 THEN 'a' ELSE 'b' END",
+  "CASE WHEN 'x' THEN 'a' ELSE 'b' END",
+  "2 BETWEEN 1 AND 3", "2 BETWEEN 3 AND 1", "2 NOT BETWEEN 1 AND 3",
+  "NULL BETWEEN 1 AND 3", "2 BETWEEN NULL AND 3", "2 BETWEEN 1 AND NULL",
+  "0 BETWEEN NULL AND 3", "4 BETWEEN 1 AND NULL",
+  "'b' BETWEEN 'a' AND 'c'", "2 BETWEEN '1' AND '3'",
+  "1 IN (1,2,3)", "4 IN (1,2,3)", "NULL IN (1,2,3)", "1 IN (NULL,2)",
+  "2 IN (NULL,2)", "1 NOT IN (1,2)", "4 NOT IN (1,2)",
+  "NULL NOT IN (1,2)", "'1' IN (1,2)", "1 IN ('1','2')",
+  "1 IN (1.0,2)", "'a' IN ('A')", "'a' COLLATE NOCASE IN ('A')",
+  "'a' = 'A' COLLATE NOCASE", "'a' COLLATE NOCASE = 'A'",
+  "'a ' = 'a'", "'a ' = 'a' COLLATE RTRIM", "'a' COLLATE BINARY = 'A'",
+  "'B' COLLATE NOCASE < 'a'", "'B' < 'a'",
+  "CAST('1' AS INTEGER) = '1'", "CAST(1 AS TEXT) = 1",
+  "1 = '1'", "1 = 1.0", "'1' = '1.0'", "1.0 = '1'",
+  "9223372036854775807 + 1", "-9223372036854775808 - 1",
+  "9223372036854775807 * 2", "-9223372036854775808 / -1",
+  "9223372036854775807 % -1", "5 % 0", "5 / 0", "5.0 / 0", "5 % 0.0",
+  "5.5 % 2", "-5 % 3", "5 % -3", "-5.5 % 2",
+  "1 << 64", "-1 >> 64", "1 >> -1", "1 << -1", "-1 << 1", "-8 >> 2",
+  "1 << 63", "1 << 62", "-1 >> 1", "~0", "~-1", "~'abc'", "~2.9",
+  "NOT 0", "NOT 1", "NOT NULL", "NOT 'abc'", "NOT ''", "NOT 0.0",
+  "NULL ISNULL", "1 ISNULL", "NULL NOTNULL", "1 NOTNULL",
+  "1 IS NULL", "1 IS NOT NULL", "NULL IS NULL", "NULL IS NOT NULL",
+  "-(-9223372036854775808)", "-(9223372036854775807)", "- -1", "+ -1",
+  "+'abc'", "-'abc'", "-'2abc'", "-x'32'", "- (1+1)",
+  "0.1 + 0.2", "1.0 / 3", "1 / 3", "1 / 3.0", "2 * 0.5",
+  "'5' + 5", "'5abc' + 5", "'abc' + 5", "'' + 5", "' 5 ' + 5",
+  "'5' || 5", "5 || 5", "x'41' || 'b'", "NULL || 'a'",
+  "1 AND NULL", "0 AND NULL", "1 OR NULL", "0 OR NULL",
+  "NULL AND NULL", "NULL OR NULL", "'a' AND 1", "'1' AND 1",
+  "1 < 2 < 3", "3 > 2 > 1", "1 = 1 = 1",
+  "1 IN ()", "1 NOT IN ()", "NULL IN ()", "NULL NOT IN ()",
+  "'9223372036854775808' + 0", "'9223372036854775808' * 1",
+  "'-9223372036854775809' + 0", "'9223372036854775807' + 0",
+  "1e400 - 1e400", "1e400 * 0", "1e400 / 1e400", "1e400 + 1e400",
+  "-1e400 + 1e400", "'1e400' + 0", "1e400 > 1", "1e400 = 1e400",
+  "CAST('abc' AS INTEGER) = 'abc'", "CAST(1 AS REAL) = '1.5'",
+  "CAST('1.5' AS NUMERIC) = '1.5'", "CAST(1 AS TEXT) < 2",
+  "CAST('x' AS TEXT) = 1", "CAST(1 AS BLOB) = '1'",
+  "CAST(1.5 AS INTEGER)", "CAST(-1.5 AS INTEGER)", "CAST(1e400 AS INTEGER)",
+  "CAST(-1e400 AS INTEGER)", "CAST(1e400 AS NUMERIC)",
+  "CAST('12' AS INTEGER) < CAST('9' AS INTEGER)",
+  "'ABC' COLLATE NOCASE = 'abc'", "'abc' COLLATE RTRIM = 'abc   '",
+  "'abc' COLLATE NOCASE COLLATE BINARY = 'ABC'",
+  "'a' < 'b' COLLATE NOCASE", "x'41' = x'41'", "x'41' < x'42'",
+  "x'41' < x'4100'", "'' < 'a'", "'a' < 'ab'",
+  "-9223372036854775809", "-99999999999999999999", "-(1e400)",
+  "5.5 % -1", "-5.5 % -1", "'5.5' % -1", "5.5 % 1", "2.5 % -2",
+  "1 << -64", "1 >> -100", "-1 << -64", "1 << -63",
+  "4 BETWEEN 1 AND 3", "2 BETWEEN 1 AND 1", "0 BETWEEN 1 AND 3",
+  "'99999999999999999999abc' + 0", "'12abc' * 2", "' 12 ' + 0",
+  "'9223372036854775808abc' + 0", "'0x10' + 0", "'1.5abc' + 0"
+};
+
+/* The cases, as SQL text, one per line. */
+static void expr_corpus(void) {
+  int i, j, k;
+  int nOperand = (int)(sizeof(aOperand) / sizeof(aOperand[0]));
+  int nBinary = (int)(sizeof(aBinary) / sizeof(aBinary[0]));
+  int nSingle = (int)(sizeof(aSingle) / sizeof(aSingle[0]));
+  int nType = (int)(sizeof(aType) / sizeof(aType[0]));
+  for (i = 0; i < nSingle; i++) {
+    printf("%s\n", aSingle[i]);
+    printf("-(%s)\n", aSingle[i]);
+    printf("+(%s)\n", aSingle[i]);
+    printf("~(%s)\n", aSingle[i]);
+    printf("NOT (%s)\n", aSingle[i]);
+    printf("(%s) ISNULL\n", aSingle[i]);
+    for (k = 0; k < nType; k++) {
+      printf("CAST((%s) AS %s)\n", aSingle[i], aType[k]);
+    }
+  }
+  for (i = 0; i < nOperand; i++) {
+    for (j = 0; j < nOperand; j++) {
+      for (k = 0; k < nBinary; k++) {
+        printf("(%s) %s (%s)\n", aOperand[i], aBinary[k], aOperand[j]);
+      }
+    }
+  }
+  for (i = 0; i < (int)(sizeof(aOther) / sizeof(aOther[0])); i++) {
+    printf("%s\n", aOther[i]);
+  }
+}
+
 int main(int argc, char **argv) {
   char line[4096];
   if (argc != 2) {
-    fprintf(stderr, "usage: sqlite-oracle fp-corpus|fp|num-corpus|num\n");
+    fprintf(stderr, "usage: sqlite-oracle <mode>; see the head of this file\n");
     return 2;
   }
   if (strcmp(argv[1], "fp-corpus") == 0) {
@@ -261,6 +416,27 @@ int main(int argc, char **argv) {
   }
   if (strcmp(argv[1], "num-corpus") == 0) {
     num_corpus();
+    return 0;
+  }
+  if (strcmp(argv[1], "expr-corpus") == 0) {
+    expr_corpus();
+    return 0;
+  }
+  if (strcmp(argv[1], "expr") == 0) {
+    int rc = sqlite3_open(":memory:", &g_db);
+    if (rc != SQLITE_OK) {
+      fprintf(stderr, "sqlite-oracle: cannot open a database\n");
+      return 1;
+    }
+    while (fgets(line, sizeof(line), stdin) != 0) {
+      size_t len = strlen(line);
+      while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+        line[--len] = 0;
+      }
+      if (len == 0) continue;
+      if (expr_case(line) != 0) return 1;
+    }
+    sqlite3_close(g_db);
     return 0;
   }
   if (strcmp(argv[1], "fp") != 0 && strcmp(argv[1], "num") != 0) {

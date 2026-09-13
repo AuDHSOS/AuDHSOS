@@ -206,7 +206,7 @@ text the C library prints each of them as.
 
 ## 15.9 Where it stands
 
-Q1, Q4 but for the window clauses, and the numbers of Q5 are in
+Q1, Q4 but for the window clauses, and the value semantics of Q5 are in
 `crates/db/sqlite`, and the crate is
 held to complete coverage: every line, every region and every branch, in
 both instrumentations.
@@ -228,4 +228,8 @@ own test suite. A double is spelled in decimal digit for digit as the C
 library spells it, over eight thousand four hundred recorded doubles at
 three precisions, and text is read back into a number — which text is one,
 which prefix of it counts, and which digits are dropped — as
-`sqlite3AtoF` and `sqlite3Atoi64` read it. What the crate cannot do is everything else in 15.3.
+`sqlite3AtoF` and `sqlite3Atoi64` read it. An expression over constants
+answers what SQLite answers, in the same storage class, over seven
+thousand recorded cases: every operator between every pair of sixteen
+operands, every cast over nineteen type names, and the edges of what an
+integer and a double hold. What the crate cannot do is everything else in 15.3.

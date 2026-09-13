@@ -3198,6 +3198,40 @@ answers and whether `'10' < '9'` compares as text or as numbers, so
 - The round trip: every integer a reader would pick is written and read
   back as itself, the two ends of the range included.
 
+### 6.6.81 What an expression answers (`db-sqlite`)
+
+D-143, document 15 step Q5. Storage classes, affinity, collation and every
+operator, checked against the engine rather than against a reading of
+`docs/sqlite/datatype3.html`, because the order of the conversions is the
+semantics and the prose does not give it.
+
+- The recorded oracle: `fixtures/eval.corpus` holds seven thousand
+  expressions, one per line — every binary operator between every pair of
+  sixteen operands, so that `1 + '2'` and `'2' + 1` are both asked; every
+  one-operand form and every cast over forty-eight values and nineteen
+  type names; and the shapes no cross product writes, among them the
+  overflows at both ends of an integer, division by zero in both classes,
+  shifts past the width of a word and in the wrong direction, `BETWEEN`
+  and `IN` with nothing on either side, and the three collations against
+  each other. `fixtures/eval.golden` is what SQLite answered for each —
+  `typeof` and `quote`, or the message it refused it with — written by
+  `tools/sqlite-oracle.c`. The test compares the class and the value, so
+  an answer that is right by accident in one class and wrong in another
+  fails it.
+- The conversions a column does, which no expression reaches, are unit
+  tests beside it: what `applyAffinity` makes of each class under each of
+  the six affinities, where a double becomes an integer and where it may
+  not, and the two ends of what either holds.
+- Refusals: a column, a function, the pattern operators, a variable, a
+  row, and the four shapes of statement inside an expression each refuse
+  by name rather than guessing, and a tree handed in from outside deeper
+  than the walk goes is refused rather than followed.
+- `sqlite_eval` is the fuzz target: no expression may panic, every value
+  equals itself under every collation, and every number written down
+  reads back as itself. The first thing it found is in the regression
+  corpus — a zero is written without its sign, so a negative zero is the
+  one double that does not come back as the bits it went out as.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

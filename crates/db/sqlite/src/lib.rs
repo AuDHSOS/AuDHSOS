@@ -10,6 +10,7 @@ extern crate alloc;
 pub mod ast;
 mod bytes;
 pub mod error;
+pub mod eval;
 pub mod fp;
 pub mod header;
 pub mod image;
@@ -19,6 +20,7 @@ pub mod page;
 pub mod parse;
 pub mod record;
 pub mod token;
+pub mod value;
 
 #[cfg(test)]
 mod tests;

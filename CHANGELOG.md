@@ -15,6 +15,20 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   rendering where the shorter one reads back as the same double. The
   inverse — digits and a power back to the double nearest them — comes
   with it, and reading a number out of text will use it.
+- What an expression answers in `db-sqlite`, the rest of the value
+  semantics of step Q5: the five storage classes, the six affinities and
+  the conversions each asks for, the three built-in collations, and every
+  operator — arithmetic that counts in integers until one overflows,
+  comparison by class with the affinity of the column side applied first,
+  three-valued `AND`, `OR` and `NOT`, concatenation, the bitwise
+  operators and their shifts, `IS`, `BETWEEN`, `IN`, `CASE`, `CAST` and
+  `COLLATE`. Seven thousand recorded expressions answer the same class
+  and the same value as the C library. What is not written yet — columns,
+  functions, the pattern operators and the statements an expression may
+  hold — refuses by name.
+- `sqlite_eval`, a fuzz target over the evaluator: no expression panics,
+  every value equals itself under every collation, and every number
+  written down reads back as itself.
 - Numbers out of text in `db-sqlite`: `sqlite3AtoF` and `sqlite3Atoi64`
   ported, so that which text is a number, which prefix of it counts and
   which digits are dropped are what SQLite decides rather than what the

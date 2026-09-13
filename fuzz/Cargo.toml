@@ -39,6 +39,7 @@ members = [
     "sqlite_image",
     "sqlite_tokens",
     "sqlite_expr",
+    "sqlite_eval",
 ]
 
 [workspace.package]

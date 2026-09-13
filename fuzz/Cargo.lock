@@ -426,6 +426,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlite_eval"
+version = "0.1.0"
+dependencies = [
+ "db-sqlite",
+ "fuzz-support",
+]
+
+[[package]]
 name = "sqlite_expr"
 version = "0.1.0"
 dependencies = [
