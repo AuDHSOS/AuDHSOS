@@ -2474,3 +2474,44 @@ fn an_engine_error_reaches_the_embedding_as_the_same_error_type() -> Result<(), 
     assert_eq!(name, Value::string("TypeError"));
     Ok(())
 }
+
+#[test]
+fn register_string_members_answer_length_and_indices() -> Result<(), Error> {
+    for source in [
+        "'abc'.length",
+        "''.length",
+        "'abc'[0]",
+        "'abc'[2]",
+        "'abc'[3]",
+        "'abc'[-1]",
+        "let s='hello';s.length",
+        "let s='hello';let i=1;s[i]",
+        "let s='hello';s['length']",
+        "let s='hello';s[0]+s[1]",
+        "let s='ab';let n=0;for(let i=0;i<s.length;i++){n++}n",
+        "'abc'.missing",
+        "let s='abc';s['missing']",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn register_lowering_rejects_string_methods_that_do_not_exist_yet() -> Result<(), Error> {
+    for source in [
+        // 22.1.3 names %String.prototype% owns.
+        "'abc'.charAt",
+        "'abc'.indexOf",
+        "'abc'.toString",
+        "'abc'['slice']",
+        // A String key can name one of them.
+        "let s='abc';let k='length';s[k]",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    Ok(())
+}

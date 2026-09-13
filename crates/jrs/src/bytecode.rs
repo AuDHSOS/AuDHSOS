@@ -2062,6 +2062,9 @@ impl RegisterLowerer {
     fn lower_member(&mut self, base: &Expr, key: &Expr) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         let base_type = self.lower(base)?;
+        if base_type == RegisterType::String {
+            return self.lower_string_member(key);
+        }
         if !base_type.is_object() {
             return None;
         }
@@ -2072,6 +2075,52 @@ impl RegisterLowerer {
         let result = self.lower_property_from_register(object, base_type, key, keyed, true)?;
         self.release_register(object)?;
         Some(result)
+    }
+
+    /// Lowers a property read whose base is a String.
+    ///
+    /// 10.4.3 gives the String exotic object `ToObject` produces an own
+    /// `"length"` and an own property per code unit; every other name is
+    /// resolved on %String.prototype%, whose methods do not exist yet.
+    fn lower_string_member(&mut self, key: &Expr) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let object = self.allocate_register()?;
+        self.code.emit(Instruction::Star(object));
+        let static_name = Self::static_property_name(key)
+            .map(<[u16]>::to_vec)
+            .or_else(|| self.static_key_units(key));
+        let result_type = match static_name.as_deref() {
+            Some(name) if Self::is_length(name) => RegisterType::Number,
+            Some(name) if crate::engine::realm::string_prototype_owns(name) => return None,
+            // A run-time key can name a method of %String.prototype%.
+            None if self.key_reaches_prototype(key) => return None,
+            // A name that is neither "length" nor an index is undefined, and an
+            // index is a one-unit String or undefined past the end.
+            Some(_) | None => RegisterType::Primitive,
+        };
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        if let Some(name) = static_name.as_deref() {
+            let name = self.string_constant(name)?;
+            self.code.emit(Instruction::GetNamed {
+                obj: object,
+                name,
+                slot,
+            });
+        } else {
+            if !self.lower(key)?.is_primitive() {
+                return None;
+            }
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            self.code.emit(Instruction::GetByValue {
+                obj: object,
+                key: register,
+                slot,
+            });
+            self.release_register(register)?;
+        }
+        self.release_register(object)?;
+        Some(result_type)
     }
 
     fn lower_property_from_register(

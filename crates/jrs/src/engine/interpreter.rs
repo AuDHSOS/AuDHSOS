@@ -831,6 +831,43 @@ impl RegisterVM {
         }
     }
 
+    /// The value a String answers for one property name.
+    ///
+    /// 10.4.3 describes the String exotic object `ToObject` produces: its own
+    /// properties are `"length"` and the index of every code unit. Anything
+    /// else is resolved on `%String.prototype%`, which carries no method yet,
+    /// so it is undefined.
+    fn string_member(
+        &self,
+        value: Value,
+        name: super::value::StringRef,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        let length = heap
+            .strings
+            .length_of(value)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let units = heap
+            .strings
+            .to_utf16(Value::from_string(name))
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        if units == LENGTH_NAME {
+            let length = i32::try_from(length).map_err(|_| VMError::StringLimit)?;
+            return Ok(Value::from_smi(length));
+        }
+        let Some(index) = string_index(&units) else {
+            return Ok(VALUE_UNDEFINED);
+        };
+        let Some(unit) = usize::try_from(index)
+            .ok()
+            .filter(|index| *index < length)
+            .and_then(|index| heap.strings.char_code_at(value, index))
+        else {
+            return Ok(VALUE_UNDEFINED);
+        };
+        self.allocate_string(heap, &[unit])
+    }
+
     /// `ToObject` of 7.1.18: an Object is itself, a primitive is boxed, and
     /// undefined and null throw a `TypeError`.
     fn coerce_object(
@@ -1375,7 +1412,19 @@ impl RegisterVM {
                         .ok_or(VMError::InvalidRegister)?;
                     let name = heap.strings.intern_units(name)?;
                     let target = self.read_reg(obj)?;
-                    let oref = target.as_object().ok_or(VMError::TypeError)?;
+                    // 10.4.3: a String answers "length" and its indices from the
+                    // exotic object ToObject would produce, without producing it.
+                    if target.is_string() {
+                        self.acc = self.string_member(target, name, heap)?;
+                        return Ok(None);
+                    }
+                    let Some(oref) = target.as_object() else {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "property access on a value that is not an object",
+                        ));
+                    };
                     let shape_id = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
                     let prototype_epoch = heap.shapes.prototype_epoch();
 
@@ -1479,7 +1528,19 @@ impl RegisterVM {
                 }
                 Instruction::GetByValue { obj, key, slot } => {
                     let target = self.read_reg(obj)?;
-                    let oref = target.as_object().ok_or(VMError::TypeError)?;
+                    if target.is_string() {
+                        let key = self.read_reg(key)?;
+                        let name = property_key(key, heap)?;
+                        self.acc = self.string_member(target, name, heap)?;
+                        return Ok(None);
+                    }
+                    let Some(oref) = target.as_object() else {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "property access on a value that is not an object",
+                        ));
+                    };
                     let js_obj = heap.get_object(oref).ok_or(VMError::TypeError)?;
                     let key_val = self.read_reg(key)?;
 
@@ -1888,6 +1949,29 @@ fn type_error(heap: &mut GenerationalHeap, realm: &Realm, message: &str) -> VMEr
         Ok(error) => VMError::Thrown(Value::from_object(error)),
         Err(error) => VMError::Heap(error),
     }
+}
+
+/// UTF-16 code units of the property name `"length"`.
+const LENGTH_NAME: [u16; 6] = [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68];
+
+/// The canonical index a property name denotes, if it denotes one.
+fn string_index(units: &[u16]) -> Option<u32> {
+    let digit = |unit: u16| {
+        (0x30..=0x39)
+            .contains(&unit)
+            .then(|| unit.wrapping_sub(0x30))
+    };
+    let (first, rest) = units.split_first()?;
+    if digit(*first).is_none() || (*first == 0x30 && !rest.is_empty()) || units.len() > 10 {
+        return None;
+    }
+    let mut value: u32 = 0;
+    for unit in units {
+        value = value
+            .checked_mul(10)?
+            .checked_add(u32::from(digit(*unit)?))?;
+    }
+    Some(value)
 }
 
 fn property_name_units(value: Value, heap: &GenerationalHeap) -> Result<Vec<u16>, VMError> {

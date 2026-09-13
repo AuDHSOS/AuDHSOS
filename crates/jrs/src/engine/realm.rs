@@ -190,6 +190,73 @@ pub const ARRAY_PROTOTYPE_PROPERTIES: [&str; 39] = [
     "with",
 ];
 
+/// The property names `%String.prototype%` owns: 22.1.3, and the legacy string
+/// HTML methods and `substr` of B.2.2 and B.2.3.
+///
+/// It serves the purpose [`OBJECT_PROTOTYPE_PROPERTIES`] serves: a String read
+/// of one of these names is answered by the Prototype Chain.
+pub const STRING_PROTOTYPE_PROPERTIES: [&str; 49] = [
+    "at",
+    "charAt",
+    "charCodeAt",
+    "codePointAt",
+    "concat",
+    "constructor",
+    "endsWith",
+    "includes",
+    "indexOf",
+    "isWellFormed",
+    "lastIndexOf",
+    "localeCompare",
+    "match",
+    "matchAll",
+    "normalize",
+    "padEnd",
+    "padStart",
+    "repeat",
+    "replace",
+    "replaceAll",
+    "search",
+    "slice",
+    "split",
+    "startsWith",
+    "substring",
+    "toLocaleLowerCase",
+    "toLocaleUpperCase",
+    "toLowerCase",
+    "toString",
+    "toUpperCase",
+    "toWellFormed",
+    "trim",
+    "trimEnd",
+    "trimStart",
+    "valueOf",
+    "substr",
+    "anchor",
+    "big",
+    "blink",
+    "bold",
+    "fixed",
+    "fontcolor",
+    "fontsize",
+    "italics",
+    "link",
+    "small",
+    "strike",
+    "sub",
+    "sup",
+];
+
+/// Whether `%String.prototype%` or `%Object.prototype%` owns a property of this
+/// name, which a String resolves on its Prototype Chain.
+#[must_use]
+pub fn string_prototype_owns(name: &[u16]) -> bool {
+    object_prototype_owns(name)
+        || STRING_PROTOTYPE_PROPERTIES
+            .into_iter()
+            .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
+
 /// Whether `%Array.prototype%` or `%Object.prototype%` owns a property of this
 /// name, which an Array resolves on its Prototype Chain.
 #[must_use]
