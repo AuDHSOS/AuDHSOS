@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- Joins in `db-sqlite`: a comma, `JOIN`, `INNER`, `CROSS`, `LEFT`, `ON`,
+  `USING` and `NATURAL`, answered as the loops nested. An `ON` is read at
+  the level it was written on, so a `LEFT JOIN` keeps the row on the left
+  where nothing on the right matched; a `USING` compares under the
+  collation of the side written first; a bare name does not reach the
+  side a `USING` matched; and a name two tables answer is refused rather
+  than chosen between. A join that keeps the rows of the table read last
+  — `RIGHT` and `FULL` — still refuses by name.
 - Statements put together in `db-sqlite`: `UNION`, `UNION ALL`,
   `INTERSECT`, `EXCEPT`, `VALUES`, and a table written with `main` in
   front of it. The set operators are the merge SQLite compiles rather

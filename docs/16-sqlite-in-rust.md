@@ -201,7 +201,7 @@ rows and the same index, and the rest are the cases one test each reads:
 a table of every storage class, four hundred rows over 512-byte pages, text
 in UTF-16, a payload that overflows, a table with two indexes, the three
 shapes a key takes, a table with generated columns, and text that needs
-every width UTF-16 has. The corpus files beside them are recorded oracles
+every width UTF-16 has, and three to join. The corpus files beside them are recorded oracles
 rather than databases: tokens, expressions, statements, schemas, the
 statements of `query.corpus` with the rows the C library answered them
 with, and the doubles of `fp.corpus` with the text it prints each of them
@@ -242,15 +242,18 @@ read a clock, a random source or the connection — with `printf` and the
 mathematical ones, which want a library this repository does not have
 yet.
 
-A statement is answered from a file: one table or none, with `WHERE`,
-`ORDER BY`, `LIMIT`, `DISTINCT`, a `GROUP BY` and a `HAVING`, and the
-seven aggregates — `count`, `sum`, `total`, `avg`, `min`, `max` and
-`group_concat`, each of them with `DISTINCT`. Several such statements are
-put together with `UNION`, `UNION ALL`, `INTERSECT` and `EXCEPT`, a
-`VALUES` answers its own rows, and a name with `main` in front of it is
-the table it names. The answer is checked against two hundred and twenty
-statements the C library answered over those fixtures, the name of every
-column and the value of every field, under all three encodings. What
-refuses by name is a join, a statement inside a `FROM`, a `WITH`, a table
+A statement is answered from a file: one table, none, or several joined,
+with `WHERE`, `ORDER BY`, `LIMIT`, `DISTINCT`, a `GROUP BY` and a
+`HAVING`, and the seven aggregates — `count`, `sum`, `total`, `avg`,
+`min`, `max` and `group_concat`, each of them with `DISTINCT`. Several
+such statements are put together with `UNION`, `UNION ALL`, `INTERSECT`
+and `EXCEPT`, a `VALUES` answers its own rows, and a name with `main` in
+front of it is the table it names. A join is written as a comma, `JOIN`,
+`INNER`, `CROSS`, `LEFT`, `ON`, `USING` or `NATURAL`, and answered as the
+loops nested — right rows and no plan. The answer is checked against two
+hundred and fifty-seven statements the C library answered over those
+fixtures, the name of every column and the value of every field, under
+all three encodings. What refuses by name is a join that keeps the rows
+of the table read last, a statement inside a `FROM`, a `WITH`, a table
 whose rows live in the key's own tree, and a column that is computed and
 not stored. What the crate cannot do is everything else in 16.3.

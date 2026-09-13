@@ -3339,8 +3339,8 @@ tree: the first statement this port answers end to end.
   statement per line, and `fixtures/query.golden` is the columns SQLite
   named and the rows it answered, each value quoted, written by
   `tools/sqlite-oracle.c`. The comparison is the name of every column
-  and the value of every field, over two hundred and twenty statements
-  against thirteen files — every page size of the matrix, reserved space, a file that has
+  and the value of every field, over two hundred and fifty-seven statements
+  against fourteen files — every page size of the matrix, reserved space, a file that has
   been through write-ahead logging, both kinds of auto-vacuum, a tree
   with an interior page, a row on overflow pages, a key that is the
   rowid, a key written backwards, and computed columns.
@@ -3352,10 +3352,10 @@ tree: the first statement this port answers end to end.
   NOCASE` whole, because a collation written around a column stops it
   being one.
 - What the engine refuses by name is counted rather than asserted: a
-  join, a statement inside a `FROM`, a `WITH`, a table whose rows live in
-  the key's own tree, a column that is computed and not stored, and a
-  `GROUP BY` that counts to a `*`. The count is held down so that it can
-  only fall.
+  join that keeps the rows of the table read last, a statement inside a
+  `FROM`, a `WITH`, a table whose rows live in the key's own tree, a
+  column that is computed and not stored, and a `GROUP BY` that counts to
+  a `*`. The count is held down so that it can only fall.
 - Text in UTF-16 is answered as well as text in UTF-8, both ways round,
   and the three places the stored encoding shows through are tested
   under both: `hex`, `octet_length` and a cast to a blob. So is the one
@@ -3458,6 +3458,34 @@ through the same recorded oracle.
 - A table may be written with `main` in front of it and is the same
   table; any other schema names no table, which the column `main.t.a`
   tests as well as the table `main.t`.
+
+### 6.6.89 Joins (`db-sqlite`)
+
+D-150. `fixtures/joins.db` holds three tables — two sharing a column
+named `x`, a third sharing one named `y` and collating it without case —
+and thirty-six statements over them.
+
+- Every way of writing one: a comma, `JOIN`, `INNER JOIN`, `CROSS JOIN`,
+  `LEFT JOIN`, `ON`, `USING` and `NATURAL`, each against the same rows,
+  with `NULL`s on both sides so that a key that matches nothing is
+  tested as well as one that matches twice.
+- What a `*` answers, which is not the columns of the tables put
+  together: a `USING` or a `NATURAL` answers the column it matched once,
+  and `b.*` answers all of `b`'s. Two tables of one name make every
+  column of them a name two tables answer, which SQLite refuses and so
+  does this.
+- A `USING` compares under the collation of the side written first, so
+  `a JOIN c USING(y)` and `c JOIN a USING(y)` answer different rows over
+  the same tables — both are cases.
+- A bare name does not reach the side a `USING` matched, and a name two
+  tables answer is refused rather than chosen between, `rowid` included.
+- The refusals: a `NATURAL` with an `ON` or a `USING` written on it as
+  well, a `USING` naming a column the left or the right does not hold,
+  and a join that keeps the rows of the table read last, which is a
+  later step.
+- `sqlite_image` joins every fuzzed table to itself on its key, so that
+  the nest is walked over a file that lies as well as over one that does
+  not.
 
 ## 6.7 CI pipeline
 

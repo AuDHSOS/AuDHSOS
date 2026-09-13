@@ -44,6 +44,7 @@ fn fixture(name: &str) -> Option<&'static [u8]> {
         "keys.db" => super::KEYS,
         "generated.db" => super::GENERATED,
         "wide16.db" => super::WIDE16,
+        "joins.db" => super::JOINS,
         _ => return super::matrix::fixture(name),
     })
 }
@@ -81,10 +82,11 @@ fn answer(bytes: &[u8], sql: &str) -> Option<String> {
 
 #[test]
 fn every_statement_answers_what_the_c_library_answers() {
-    // What is left is the shapes this engine refuses by name: a join, a
-    // statement inside a `FROM`, a `WITH`, a table whose rows live in
-    // the key's own tree, a column that is computed and not stored, and
-    // a `GROUP BY` that counts to a `*`.
+    // What is left is the shapes this engine refuses by name: a join
+    // that keeps the rows of the table read last, a statement inside a
+    // `FROM`, a `WITH`, a table whose rows live in the key's own tree, a
+    // column that is computed and not stored, and a `GROUP BY` that
+    // counts to a `*`.
     let mut refused = 0;
     let cases = corpus();
     let answers = golden();
@@ -105,7 +107,7 @@ fn every_statement_answers_what_the_c_library_answers() {
         };
         assert_eq!(mine, theirs, "{sql} over {name}");
     }
-    assert_eq!(refused, 6, "what this engine does not answer yet");
+    assert_eq!(refused, 8, "what this engine does not answer yet");
 }
 
 #[test]

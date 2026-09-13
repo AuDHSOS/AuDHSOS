@@ -218,3 +218,40 @@ wide16.db|SELECT t FROM n UNION ALL SELECT 'a' ORDER BY 1
 wide16.db|SELECT DISTINCT t FROM n
 small.db|VALUES(1) LIMIT 1
 small.db|SELECT * FROM (SELECT 1)
+joins.db|SELECT * FROM a, b
+joins.db|SELECT * FROM a JOIN b ON a.x=b.x
+joins.db|SELECT * FROM a JOIN b USING(x)
+joins.db|SELECT * FROM a NATURAL JOIN b
+joins.db|SELECT * FROM a LEFT JOIN b ON a.x=b.x
+joins.db|SELECT * FROM a LEFT JOIN b USING(x)
+joins.db|SELECT * FROM a CROSS JOIN b
+joins.db|SELECT * FROM a INNER JOIN b ON a.x=b.x
+joins.db|SELECT a.x, b.z FROM a, b WHERE a.x=b.x
+joins.db|SELECT b.* FROM a JOIN b USING(x)
+joins.db|SELECT a.*, b.z FROM a JOIN b USING(x)
+joins.db|SELECT x FROM a JOIN b USING(x)
+joins.db|SELECT x FROM a, b
+joins.db|SELECT rowid FROM a, b
+joins.db|SELECT a.rowid, b.rowid FROM a, b LIMIT 3
+joins.db|SELECT * FROM a AS p, a AS q WHERE p.x<q.x
+joins.db|SELECT * FROM a, a
+joins.db|SELECT * FROM a JOIN b USING(y)
+joins.db|SELECT * FROM a NATURAL JOIN b ON a.x=b.x
+joins.db|SELECT * FROM a NATURAL JOIN c
+joins.db|SELECT * FROM a JOIN c USING(y)
+joins.db|SELECT * FROM c JOIN a USING(y)
+joins.db|SELECT * FROM a LEFT JOIN b ON a.x=b.x WHERE b.x IS NULL
+joins.db|SELECT * FROM a LEFT JOIN b ON 0
+joins.db|SELECT * FROM a JOIN b ON a.x=b.x JOIN c ON a.y=c.y
+joins.db|SELECT a.x, count(*) FROM a LEFT JOIN b ON a.x=b.x GROUP BY a.x ORDER BY a.x
+joins.db|SELECT count(*), max(b.z) FROM a JOIN b USING(x)
+joins.db|SELECT * FROM a RIGHT JOIN b ON a.x=b.x
+joins.db|SELECT * FROM a FULL JOIN b ON a.x=b.x
+joins.db|SELECT * FROM a, b ORDER BY 1, 2, 3, 4
+joins.db|SELECT * FROM a LEFT JOIN b USING(x) UNION SELECT 9,'z',9,'z'
+joins.db|SELECT DISTINCT a.x FROM a, b ORDER BY 1
+joins.db|SELECT * FROM a JOIN b
+joins.db|SELECT * FROM nosuch, a
+joins.db|SELECT * FROM a NATURAL JOIN b USING(x)
+joins.db|SELECT * FROM a JOIN b USING(z)
+small.db|SELECT *

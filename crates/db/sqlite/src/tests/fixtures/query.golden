@@ -218,3 +218,40 @@ N|t	R|'A'	R|'a'	R|'a'	R|'b'
 N|t	R|'A'	R|'b'
 !	near "LIMIT": syntax error
 N|1	R|1
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|1|'one'|4|'B4'	R|1|'one'|NULL|'Bn'	R|2|'two'|1|'B1'	R|2|'two'|1|'B1b'	R|2|'two'|4|'B4'	R|2|'two'|NULL|'Bn'	R|3|NULL|1|'B1'	R|3|NULL|1|'B1b'	R|3|NULL|4|'B4'	R|3|NULL|NULL|'Bn'
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'
+N|x|y|z	R|1|'one'|'B1'	R|1|'one'|'B1b'
+N|x|y|z	R|1|'one'|'B1'	R|1|'one'|'B1b'
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|2|'two'|NULL|NULL	R|3|NULL|NULL|NULL
+N|x|y|z	R|1|'one'|'B1'	R|1|'one'|'B1b'	R|2|'two'|NULL	R|3|NULL|NULL
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|1|'one'|4|'B4'	R|1|'one'|NULL|'Bn'	R|2|'two'|1|'B1'	R|2|'two'|1|'B1b'	R|2|'two'|4|'B4'	R|2|'two'|NULL|'Bn'	R|3|NULL|1|'B1'	R|3|NULL|1|'B1b'	R|3|NULL|4|'B4'	R|3|NULL|NULL|'Bn'
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'
+N|x|z	R|1|'B1'	R|1|'B1b'
+N|x|z	R|1|'B1'	R|1|'B1b'
+N|x|y|z	R|1|'one'|'B1'	R|1|'one'|'B1b'
+N|x	R|1	R|1
+!	ambiguous column name: x
+!	ambiguous column name: rowid
+N|rowid|rowid	R|1|1	R|1|2	R|1|3
+N|x|y|x|y	R|1|'one'|2|'two'	R|1|'one'|3|NULL	R|2|'two'|3|NULL
+!	ambiguous column name: main.a.x
+!	cannot join using column y - column not present in both tables
+!	a NATURAL join may not have an ON or USING clause
+N|x|y|w	R|2|'two'|20
+N|x|y|w	R|2|'two'|20
+N|y|w|x	R|'ONE'|10|1	R|'two'|20|2
+N|x|y|x|z	R|2|'two'|NULL|NULL	R|3|NULL|NULL|NULL
+N|x|y|x|z	R|1|'one'|NULL|NULL	R|2|'two'|NULL|NULL	R|3|NULL|NULL|NULL
+N|x|y|x|z|y|w
+N|x|count(*)	R|1|2	R|2|1	R|3|1
+N|count(*)|max(b.z)	R|2|'B1b'
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|NULL|NULL|4|'B4'	R|NULL|NULL|NULL|'Bn'
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|2|'two'|NULL|NULL	R|3|NULL|NULL|NULL	R|NULL|NULL|4|'B4'	R|NULL|NULL|NULL|'Bn'
+N|x|y|x|z	R|1|'one'|NULL|'Bn'	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|1|'one'|4|'B4'	R|2|'two'|NULL|'Bn'	R|2|'two'|1|'B1'	R|2|'two'|1|'B1b'	R|2|'two'|4|'B4'	R|3|NULL|NULL|'Bn'	R|3|NULL|1|'B1'	R|3|NULL|1|'B1b'	R|3|NULL|4|'B4'
+!	SELECTs to the left and right of UNION do not have the same number of result columns
+N|x	R|1	R|2	R|3
+N|x|y|x|z	R|1|'one'|1|'B1'	R|1|'one'|1|'B1b'	R|1|'one'|4|'B4'	R|1|'one'|NULL|'Bn'	R|2|'two'|1|'B1'	R|2|'two'|1|'B1b'	R|2|'two'|4|'B4'	R|2|'two'|NULL|'Bn'	R|3|NULL|1|'B1'	R|3|NULL|1|'B1b'	R|3|NULL|4|'B4'	R|3|NULL|NULL|'Bn'
+!	no such table: nosuch
+!	a NATURAL join may not have an ON or USING clause
+!	cannot join using column z - column not present in both tables
+!	no tables specified

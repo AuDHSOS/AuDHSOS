@@ -82,6 +82,13 @@ pub(super) const GENERATED: &[u8] = include_bytes!("fixtures/generated.db");
 /// `char(65536)||'a'`.
 pub(super) const WIDE16: &[u8] = include_bytes!("fixtures/wide16.db");
 
+/// Three tables to join: two that share a column named `x`, and a third
+/// that shares one named `y` and collates it without case.
+///
+/// `CREATE TABLE a(x INTEGER, y TEXT); CREATE TABLE b(x INTEGER, z
+/// TEXT); CREATE TABLE c(y TEXT COLLATE NOCASE, w INTEGER);`
+pub(super) const JOINS: &[u8] = include_bytes!("fixtures/joins.db");
+
 /// A varint, written the way section 1.6 describes, so that the reader is
 /// tested against something other than itself.
 pub(super) fn varint(value: u64) -> ([u8; 9], usize) {

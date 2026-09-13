@@ -69,6 +69,13 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
             sql.extend_from_slice(&quoted);
             sql.extend_from_slice(b" LIMIT 64");
             answers(&database, &sql);
+            // A join, which is the loops nested.
+            let mut sql = b"SELECT * FROM ".to_vec();
+            sql.extend_from_slice(&quoted);
+            sql.extend_from_slice(b" AS p JOIN ");
+            sql.extend_from_slice(&quoted);
+            sql.extend_from_slice(b" AS q ON p.rowid=q.rowid LIMIT 16");
+            answers(&database, &sql);
         }
     }
 
