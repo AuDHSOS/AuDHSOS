@@ -488,6 +488,8 @@ Der nächste Architektur-Arbeitsschritt sollte keine neue große Sprachfunktion 
 
 Der Pilot ist fertig, wenn der gemeinsame Vertrag funktioniert und die bestehenden Tests ohne verdeckte Ausnahmen weiterlaufen. Er ist nicht gleichbedeutend mit dem Abschluss des gesamten Goals.
 
+Schritt 1 ist erledigt: [jrs-inventory.md](jrs-inventory.md) hält den Ausgangsstand fest. Der Befund dieses Inventars ist, dass der vorhandene registerbasierte Pfad unter `crates/jrs/src/engine/` eine zweite Sprachsemantik mit eigenem Objektmodell, eigenem Heap und eigenen Intrinsics ist und keine Test262-Datei ausführt. Er gehört nach M8 und darf vor M1 bis M5 nicht weiter wachsen.
+
 ## 19. Review- und Änderungsregeln
 
 Für jedes Feature oder jede Optimierung beantwortet der Review:
