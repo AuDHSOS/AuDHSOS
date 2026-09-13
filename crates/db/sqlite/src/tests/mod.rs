@@ -101,6 +101,29 @@ pub(crate) struct Configuration {
     pub(crate) beside: Option<&'static [u8]>,
 }
 
+/// The schema-format dimension of document 16, section 16.11. No pragma
+/// the shell takes asks for a format below four, so the oracle asks for
+/// it through `SQLITE_DBCONFIG_LEGACY_FILE_FORMAT`.
+///
+/// Format 1 stores the whole numbers 0 and 1 as a byte each and ignores
+/// the `DESC` of an index.
+pub(super) const FORMAT1: &[u8] = include_bytes!("fixtures/format1.db");
+
+/// Format 3, which `ALTER TABLE ADD COLUMN` raises the file to: the rows
+/// were written before the fourth and fifth columns, so each is short by
+/// two, and the two answer what they fall back to, which is seven for
+/// one and nothing for the other. Format 2 has no fixture, because this
+/// library writes 3 wherever the file format document allows 2.
+pub(super) const FORMAT3: &[u8] = include_bytes!("fixtures/format3.db");
+
+/// Format 4, which the shell writes by default: the same rows and the
+/// same added columns, with 0 and 1 stored as serial types 8 and 9.
+pub(super) const FORMAT4: &[u8] = include_bytes!("fixtures/format4.db");
+
+/// Columns that fall back, with a row that names one of the three, so
+/// the other two hold what they fall back to rather than nothing.
+pub(super) const DEFAULTS: &[u8] = include_bytes!("fixtures/defaults.db");
+
 /// The matrix of document 16, section 16.11, over the write path as a
 /// covering array: thirty configurations in which every value of every
 /// dimension appears and every pair of values from two dimensions

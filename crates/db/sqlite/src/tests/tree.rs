@@ -1753,3 +1753,57 @@ fn the_covering_array_of_the_matrix_writes_the_files_the_shell_wrote() {
         }
     }
 }
+
+#[test]
+fn a_column_the_statement_names_no_value_for_holds_what_it_falls_back_to() {
+    use crate::change::Writer;
+    // `defaults.db`: a statement that names one of three columns leaves
+    // the other two holding what they fall back to, which is what
+    // `sqlite3ExprCodeGetColumnOfTable` writes for a column the
+    // statement passed over.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(a, b DEFAULT 7, c TEXT DEFAULT 'z')")
+        .unwrap();
+    writer.run(b"INSERT INTO t(a) VALUES(1)").unwrap();
+    same(
+        "defaults.db",
+        &writer.written(),
+        crate::tests::DEFAULTS,
+        4096,
+    );
+    // A table the database does not hold has no column to fall back.
+    let bytes = writer.written();
+    let database = crate::db::Database::open(&bytes).unwrap();
+    assert!(database.defaults(b"nosuch").unwrap().is_empty());
+    assert_eq!(database.defaults(b"t").unwrap().len(), 3);
+}
+
+#[test]
+fn the_schema_format_a_file_names_is_the_one_its_rows_were_written_under() {
+    // The schema format dimension of document 16, section 16.11. The
+    // formats differ in what they store rather than in what they
+    // answer, so the bytes are what the test reads: format 4 stores the
+    // whole numbers 0 and 1 with no payload at all, under serial types
+    // 8 and 9, and format 1 stores a byte for each.
+    let format = |bytes: &[u8]| crate::bytes::u32_at(bytes, 44).unwrap_or(0);
+    assert_eq!(format(crate::tests::FORMAT1), 1);
+    assert_eq!(format(crate::tests::FORMAT3), 3);
+    assert_eq!(format(crate::tests::FORMAT4), 4);
+    let first_row = |bytes: &[u8]| {
+        let page = crate::page::Page::parse(bytes.get(4096..8192).unwrap(), 2, 4096).unwrap();
+        page.row(0).unwrap().1.total
+    };
+    assert_eq!(first_row(crate::tests::FORMAT1), 7);
+    assert_eq!(first_row(crate::tests::FORMAT4), 5);
+    // What the two answer for those rows is the same, which is what the
+    // twelve cases of `query.corpus` over the three files hold.
+    let rows = |bytes: &'static [u8]| {
+        crate::db::Database::open(bytes)
+            .unwrap()
+            .query(b"SELECT a, b, c FROM t")
+            .unwrap()
+            .rows
+    };
+    assert_eq!(rows(crate::tests::FORMAT1), rows(crate::tests::FORMAT4));
+}

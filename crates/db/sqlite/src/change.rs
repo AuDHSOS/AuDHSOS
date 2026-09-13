@@ -293,6 +293,14 @@ impl Writer {
                 return Err(Error::Unsupported);
             }
             let places = places(table, &named)?;
+            // A column the statement names no value for holds what it
+            // falls back to, which is nothing where it has no
+            // `DEFAULT`.
+            let falls_back: Vec<Value> = database
+                .defaults(&name)?
+                .iter()
+                .map(|value| stored(value, self.header.encoding))
+                .collect();
             let answer = database.rows(arena, statement.select, sql)?;
             let affinities: Vec<Affinity> =
                 table.columns.iter().map(|column| column.affinity).collect();
@@ -301,7 +309,7 @@ impl Writer {
                 if row.len() != places.len() {
                     return Err(Error::Unsupported);
                 }
-                let mut values = alloc::vec![Value::Null; table.columns.len()];
+                let mut values = falls_back.clone();
                 let mut key = Value::Null;
                 for (at, value) in places.iter().zip(row) {
                     match at {

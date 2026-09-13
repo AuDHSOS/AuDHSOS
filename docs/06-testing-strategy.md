@@ -4219,6 +4219,26 @@ answers, put to it together.
   hundred and fifty-six pairs and fails where a row no longer covers
   one.
 
+### 6.6.118 The schema format a file was written under (`db-sqlite`)
+
+D-179, document 16 section 16.11. The schema-format dimension of the
+matrix.
+
+- `format1.db` is written by the oracle through
+  `SQLITE_DBCONFIG_LEGACY_FILE_FORMAT`, because no pragma the shell
+  takes asks for a format below four. `format3.db` is the same file with
+  two columns added after its rows, and `format4.db` is what the shell
+  writes by default.
+- What the formats differ in is what they store: format 4 stores the
+  whole numbers 0 and 1 under serial types 8 and 9 with no payload, so
+  its first row is five bytes where format 1 writes seven.
+- What they answer is the same, which fourteen cases of `query.corpus`
+  over the three files hold to the C library.
+- A column the rows are short of answers what it falls back to, and
+  nothing where it has none. `defaults.db` holds the same rule over the
+  write path: a statement naming one of three columns writes the file
+  the shell wrote, byte for byte.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

@@ -1,3 +1,17 @@
+N|a|b|c	R|0|1|'x'	R|2|3|'y'
+N|typeof(a)|typeof(b)	R|'integer'|'integer'	R|'integer'|'integer'
+N|c	R|'y'	R|'x'
+N|a|b|c	R|0|1|'x'
+N|a|b|c|d	R|0|1|'x'|7	R|2|3|'y'|7
+N|d	R|7
+N|count(*)|sum(d)	R|2|14
+N|d|e|typeof(e)	R|7|NULL|'null'	R|7|NULL|'null'
+N|a|b|c|d	R|0|1|'x'|7	R|2|3|'y'|7
+N|typeof(a)|typeof(b)	R|'integer'|'integer'	R|'integer'|'integer'
+N|d	R|7
+N|d|e|typeof(e)	R|7|NULL|'null'	R|7|NULL|'null'
+N|a|b|c	R|1|7|'z'
+N|typeof(b)|typeof(c)	R|'integer'|'text'
 N|a|b|c|d	R|1|'one'|1.5|X'0102'	R|2|'two'|-2.5|NULL	R|-3|''|0.0|X'FF'
 N|a	R|1	R|2	R|-3
 N|a|b	R|2|'two'

@@ -23,6 +23,11 @@
 **   expr        one SQL expression, answered as its type and its value
 **               quoted, or as the message SQLite refused it with.
 **   schema-corpus  writes the cases for the reader of schemas.
+**   legacy      a path and the statements to run there, written under
+**               the schema format the file format document calls 1,
+**               which `SQLITE_DBCONFIG_LEGACY_FILE_FORMAT` asks for and
+**               no pragma the shell takes does. Answers the format the
+**               file ends with, which ALTER TABLE ADD COLUMN raises.
 **   query-corpus   writes the cases for the engine that answers a query.
 **   query       a fixture and a statement, separated by a bar, answered
 **               as the rows the statement makes of that file. The
@@ -988,6 +993,25 @@ static void schema_corpus(void) {
 
 /* The statements put to the fixture databases. */
 static const char *aQuery[] = {
+  /* The schema format dimension of document 16, section 16.11: format 1
+  ** stores the whole numbers 0 and 1 as a byte each where format 4
+  ** stores them as serial types 8 and 9, format 1 ignores the DESC of
+  ** an index where format 4 keeps it, and a column added after rows
+  ** were written answers what it falls back to. */
+  "format1.db|SELECT a, b, c FROM t",
+  "format1.db|SELECT typeof(a), typeof(b) FROM t",
+  "format1.db|SELECT c FROM t ORDER BY c DESC",
+  "format1.db|SELECT * FROM t WHERE c='x'",
+  "format3.db|SELECT a, b, c, d FROM t",
+  "format3.db|SELECT d FROM t WHERE a=0",
+  "format3.db|SELECT count(*), sum(d) FROM t",
+  "format3.db|SELECT d, e, typeof(e) FROM t",
+  "format4.db|SELECT a, b, c, d FROM t",
+  "format4.db|SELECT typeof(a), typeof(b) FROM t",
+  "format4.db|SELECT d FROM t WHERE a=0",
+  "format4.db|SELECT d, e, typeof(e) FROM t",
+  "defaults.db|SELECT a, b, c FROM t",
+  "defaults.db|SELECT typeof(b), typeof(c) FROM t",
   "small.db|SELECT * FROM t",
   "small.db|SELECT a FROM t",
   "small.db|SELECT a, b FROM t WHERE a>1",
@@ -1785,6 +1809,47 @@ static void query_corpus(void) {
   }
 }
 
+/* A database written under the schema format the file format document
+** calls 1: `SQLITE_DBCONFIG_LEGACY_FILE_FORMAT` is what asks for it,
+** and no pragma the shell takes does, which is why this is here and not
+** in `sqlite-fixtures.sh`. Every statement after the first argument is
+** run in order, so ALTER TABLE ADD COLUMN raises the format to 2 or 3
+** from here. Answers the format the file ends with. */
+static int legacy_case(int argc, char **argv) {
+  sqlite3 *db = 0;
+  int rc, i;
+  unsigned char aHdr[48];
+  FILE *f;
+  remove(argv[2]);
+  rc = sqlite3_open(argv[2], &db);
+  if (rc == SQLITE_OK) {
+    rc = sqlite3_db_config(db, SQLITE_DBCONFIG_LEGACY_FILE_FORMAT, 1, 0);
+  }
+  for (i = 3; rc == SQLITE_OK && i < argc; i++) {
+    char *zErr = 0;
+    rc = sqlite3_exec(db, argv[i], 0, 0, &zErr);
+    if (rc != SQLITE_OK) {
+      fprintf(stderr, "legacy: %s\n", zErr ? zErr : sqlite3_errmsg(db));
+      sqlite3_free(zErr);
+    }
+  }
+  if (rc != SQLITE_OK) {
+    sqlite3_close(db);
+    return 1;
+  }
+  sqlite3_close(db);
+  f = fopen(argv[2], "rb");
+  if (f == 0 || fread(aHdr, 1, sizeof(aHdr), f) != sizeof(aHdr)) {
+    fprintf(stderr, "legacy: cannot read %s\n", argv[2]);
+    if (f) fclose(f);
+    return 1;
+  }
+  fclose(f);
+  printf("schema format %u\n",
+         (aHdr[44] << 24) | (aHdr[45] << 16) | (aHdr[46] << 8) | aHdr[47]);
+  return 0;
+}
+
 /* The rows one statement makes of one file. */
 static int query_case(const char *line, const char *zDir) {
   const char *bar = strchr(line, '|');
@@ -1960,6 +2025,13 @@ int main(int argc, char **argv) {
   if (strcmp(argv[1], "expr-corpus") == 0) {
     expr_corpus();
     return 0;
+  }
+  if (strcmp(argv[1], "legacy") == 0) {
+    if (argc < 4) {
+      fprintf(stderr, "legacy: usage: legacy <path> <sql>...\n");
+      return 2;
+    }
+    return legacy_case(argc, argv);
   }
   if (strcmp(argv[1], "query-corpus") == 0) {
     query_corpus();

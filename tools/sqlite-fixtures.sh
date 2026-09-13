@@ -497,6 +497,31 @@ if [ -f "$amalgamation" ]; then
     "${CC:-cc}" -O1 -DSQLITE_PRIVATE= -DSQLITE_ENABLE_MATH_FUNCTIONS \
         -I "$(dirname "$amalgamation")" -o "$oracle" \
         tools/sqlite-oracle.c "$amalgamation" -lm -lpthread -ldl
+    # The schema format dimension of document 16, section 16.11. No
+    # pragma the shell takes asks for a format below four —
+    # `legacy_file_format` is answered and ignored — so the oracle asks
+    # for it through `SQLITE_DBCONFIG_LEGACY_FILE_FORMAT`. ALTER TABLE
+    # ADD COLUMN raises the format to three, and this library writes
+    # three where the file format document allows two, so format two has
+    # no fixture.
+    rows="INSERT INTO t VALUES(0,1,'x'),(2,3,'y')"
+    printf 'format1.db\t%s\n' \
+        "$("$oracle" legacy "$out/format1.db" \
+            "CREATE TABLE t(a,b,c)" "$rows" "CREATE INDEX tc ON t(c DESC)")"
+    printf 'format3.db\t%s\n' \
+        "$("$oracle" legacy "$out/format3.db" \
+            "CREATE TABLE t(a,b,c)" "$rows" "ALTER TABLE t ADD COLUMN d DEFAULT 7" \
+            "ALTER TABLE t ADD COLUMN e")"
+    rm -f "$out/format4.db" "$out/defaults.db"
+    "$sqlite" "$out/format4.db" \
+        "CREATE TABLE t(a,b,c); $rows; ALTER TABLE t ADD COLUMN d DEFAULT 7; ALTER TABLE t ADD COLUMN e;"
+    printf 'format4.db\tschema format %s\n' \
+        "$("$sqlite" "$out/format4.db" "PRAGMA schema_version" >/dev/null; \
+            od -An -tu1 -j47 -N1 "$out/format4.db" | tr -d ' ')"
+    "$sqlite" "$out/defaults.db" \
+        "CREATE TABLE t(a, b DEFAULT 7, c TEXT DEFAULT 'z'); INSERT INTO t(a) VALUES(1);"
+    printf 'defaults.db\t%s bytes\n' "$(wc -c <"$out/defaults.db" | tr -d ' ')"
+
     for mode in fp num schema; do
         "$oracle" "$mode-corpus" >"$out/$mode.corpus"
         "$oracle" "$mode" <"$out/$mode.corpus" >"$out/$mode.golden"

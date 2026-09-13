@@ -322,10 +322,19 @@ The last two dimensions have no fixture: a schema format below four
 needs a database the shell will not write, and temporary storage is not
 a file.
 
-Nothing of the five is left over the write path. The two dimensions
-with no fixture at all stay as they are: a schema format below four
-needs a database the shell will not write, and temporary storage is not
-a file.
+Nothing of the five is left over the write path.
+
+The schema-format dimension is read rather than written: no pragma the
+shell takes asks for a format below four, because `legacy_file_format`
+is answered and ignored, so the oracle asks for it through
+`SQLITE_DBCONFIG_LEGACY_FILE_FORMAT` and writes `format1.db`. Format 3
+is what `ALTER TABLE ADD COLUMN` raises a file to, which `format3.db`
+holds; format 2 has no fixture, because the pinned library writes 3
+wherever the file format document allows 2. Fourteen cases of
+`query.corpus` hold the three files to the C library, and the write path
+answers the same dimension through `defaults.db`.
+
+Temporary storage has no fixture, because it is not a file.
 
 ## 16.12 The fixtures
 
@@ -338,6 +347,8 @@ CI has no SQLite.
 | `m-*.db`, eleven of them | The same three rows and the same index under every configuration of 16.11 the shell can write. |
 | `v-*.db`, six of them | The auto-vacuum dimension over the write path: the pointer maps, the free pages `incremental` keeps, and the pages `full` moves down at the commit. |
 | `x-NN.db`, thirty of them | The covering array of 16.11 over the write path, each with the journal or the log the mode leaves beside it. |
+| `format1.db`, `format3.db`, `format4.db` | The schema-format dimension: the whole numbers 0 and 1 stored with and without a payload, the `DESC` of an index kept and ignored, and the columns `ALTER TABLE ADD COLUMN` left the rows short of. |
+| `defaults.db` | A statement that names one of three columns, so the other two hold what they fall back to. |
 | `w-*.db`, nine of them | The same four hundred rows, put in by a key that jumps about, under every page size, every encoding and every reserved tail. |
 | `small.db` | One row of each storage class. |
 | `page512.db` | Four hundred rows over 512-byte pages, which makes an interior page, in a table tree and in a key's own tree. |

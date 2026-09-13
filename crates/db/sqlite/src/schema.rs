@@ -94,6 +94,9 @@ pub struct Column {
     pub not_null: bool,
     /// What it falls back to, as it was written.
     pub default: Option<Vec<u8>>,
+    /// The same, as the tree of the `CREATE` holds it, which is what a
+    /// row that was written before the column was added answers.
+    pub falls_back: Option<ExprId>,
     /// Where it stands in the primary key, counting from one, or zero
     /// where it is not in it.
     pub key: u16,
@@ -347,6 +350,7 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
             collation: Collation::Binary,
             not_null: false,
             default: None,
+            falls_back: None,
             key: 0,
             generated: Generated::Never,
             computed: None,
@@ -359,8 +363,9 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
                     column.collation =
                         Collation::of_name(&dequote(name.text(sql))).ok_or(Error::NoCollation)?;
                 }
-                ColumnConstraint::Default { text, .. } => {
+                ColumnConstraint::Default { value, text } => {
                     column.default = Some(text.text(sql).to_vec());
+                    column.falls_back = Some(value);
                 }
                 ColumnConstraint::PrimaryKey {
                     order,

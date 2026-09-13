@@ -531,6 +531,34 @@ impl<'a> Database<'a> {
             .map(|stored| (&stored.table, stored.root))
     }
 
+    /// What each column of the table of `name` falls back to, which is
+    /// what a row that names no value for a column holds and what a row
+    /// written before the column was added answers.
+    ///
+    /// One column with no `DEFAULT` falls back to nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the expression could not answer.
+    pub fn defaults(&self, name: &[u8]) -> Result<Vec<Value>, Error> {
+        let Some(stored) = self
+            .tables
+            .iter()
+            .find(|stored| stored.table.name.eq_ignore_ascii_case(name))
+        else {
+            return Ok(Vec::new());
+        };
+        stored
+            .table
+            .columns
+            .iter()
+            .map(|column| match column.falls_back {
+                Some(expr) => Ok(crate::eval::evaluate(&stored.arena, expr, &stored.sql)?),
+                None => Ok(Value::Null),
+            })
+            .collect()
+    }
+
     /// Every row of the table of `name`, each with its key and the
     /// values of its columns, which is what a statement that takes rows
     /// out walks to find the rows it takes.
@@ -2622,6 +2650,16 @@ fn values_of(
             out.push(None);
             continue;
         };
+        // A row written before the column was added holds no value for
+        // it, which is what schema format 2 allows and format 3 gives a
+        // fallback for: the column answers what it falls back to.
+        if record.value(place)?.is_none()
+            && let Some(expr) = column.falls_back
+        {
+            let value = crate::eval::evaluate(&stored.arena, expr, &stored.sql)?;
+            out.push(Some(value));
+            continue;
+        }
         let mut value = match record.value(place)? {
             None | Some(record::Value::Null) => Value::Null,
             Some(record::Value::Int(number)) => Value::Int(number),

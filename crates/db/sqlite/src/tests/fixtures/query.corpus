@@ -1,3 +1,17 @@
+format1.db|SELECT a, b, c FROM t
+format1.db|SELECT typeof(a), typeof(b) FROM t
+format1.db|SELECT c FROM t ORDER BY c DESC
+format1.db|SELECT * FROM t WHERE c='x'
+format3.db|SELECT a, b, c, d FROM t
+format3.db|SELECT d FROM t WHERE a=0
+format3.db|SELECT count(*), sum(d) FROM t
+format3.db|SELECT d, e, typeof(e) FROM t
+format4.db|SELECT a, b, c, d FROM t
+format4.db|SELECT typeof(a), typeof(b) FROM t
+format4.db|SELECT d FROM t WHERE a=0
+format4.db|SELECT d, e, typeof(e) FROM t
+defaults.db|SELECT a, b, c FROM t
+defaults.db|SELECT typeof(b), typeof(c) FROM t
 small.db|SELECT * FROM t
 small.db|SELECT a FROM t
 small.db|SELECT a, b FROM t WHERE a>1

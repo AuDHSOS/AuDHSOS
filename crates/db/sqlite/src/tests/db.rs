@@ -45,6 +45,10 @@ fn fixture(name: &str) -> Option<&'static [u8]> {
         "generated.db" => super::GENERATED,
         "wide16.db" => super::WIDE16,
         "joins.db" => super::JOINS,
+        "format1.db" => super::FORMAT1,
+        "format3.db" => super::FORMAT3,
+        "format4.db" => super::FORMAT4,
+        "defaults.db" => super::DEFAULTS,
         _ => return super::matrix::fixture(name),
     })
 }

@@ -72,7 +72,11 @@ payload that overflows costs one page read per link of its chain.
 write the file SQLite writes. Under them a table tree is written from
 nothing, a row lands anywhere in it, a row written over keeps its cell
 where the new payload is the length the old one was, a row taken out
-gives its pages back to the free list, and a commit writes the rollback
-journal under any of its five modes or the frames of a write-ahead log. What is missing of
-writing is `CREATE INDEX`, `DROP`, `ALTER`, the pointer maps, the
-checkpoint, and the index b-trees beyond reading their pages.
+gives its pages back to the free list, a column a statement names no
+value for holds what it falls back to, and a commit writes the rollback
+journal under any of its five modes or the frames of a write-ahead log.
+A file that vacuums itself keeps pointer maps, and the commit of one
+that vacuums itself whole moves the pages at the end of the file into
+the free pages below them and cuts the file back. What is missing of
+writing is `CREATE INDEX`, `DROP`, `ALTER`, the checkpoint, and the
+index b-trees beyond reading their pages.
