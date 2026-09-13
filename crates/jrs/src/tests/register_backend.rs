@@ -228,12 +228,12 @@ fn a_global_function_outlives_the_script_that_declared_it() -> Result<(), Error>
         // Recursion across two units.
         &[
             "function down(n){return n===0?0:up(n-1)+1}",
-            "function up(n){return down(n)+0}down(6)",
+            "function up(n){return down(n)}down(6)",
         ][..],
         // A conversion of an operand calls a method of another unit.
         &[
-            "function two(){return 2+0}",
-            "var o={valueOf(){return two()+0}};1+o",
+            "function two(){return 2}",
+            "var o={valueOf(){return two()}};1+o",
         ][..],
         // Enough allocation in a frame of another unit for the Nursery to fill.
         &[
@@ -277,6 +277,22 @@ fn differential_scripts(scripts: &[&str]) -> Result<(), Error> {
 }
 
 #[test]
+fn a_call_the_lowering_could_not_type_is_returnable() -> Result<(), Error> {
+    // `Return` carries the accumulator whatever it holds, so a call whose
+    // result the lowering could not name leaves a function like any other
+    // value. The call site receives it as the same unknown a call it could not
+    // name already produces.
+    for source in [
+        "function id(x){return x}id(41)+1",
+        "function id(x){return x}id('a')+'b'",
+        "function f(key){let o={[key]:42};return o[key]}f('answer')",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn a_read_that_reaches_an_unbuilt_prototype_is_a_gap() -> Result<(), Error> {
     // 10.1.8.1 answers undefined for a name no object of the Prototype Chain
     // has. That is the answer only when the chain is complete: a name of
@@ -310,6 +326,8 @@ fn a_read_that_reaches_an_unbuilt_prototype_is_a_gap() -> Result<(), Error> {
         "let o={a:1};let k='a';o[k]",
         "let a=[1,2];let k='length';a[k]",
         "let a=[1,2];let k=1;a[k]",
+        // A computed read of an own name is answered, and returnable.
+        "function f(key){let o={[key]:42};return o[key]}f('answer')",
     ] {
         differential(source)?;
     }
@@ -3090,7 +3108,6 @@ fn register_lowering_rejects_reads_the_prototype_chain_cannot_answer() -> Result
         "let a=[1];a['push']",
         "let a=[1];a.constructor",
         "let o={};o['toString']",
-        "function f(key){let o={[key]:42};return o[key]}f('answer')",
         // An intrinsic is only lowered at a call site.
         "let o={a:1};o.hasOwnProperty",
         // A parameter has no tracked object layout.

@@ -570,8 +570,13 @@ impl RegisterType {
         matches!(self, Self::Array(_) | Self::Function(_) | Self::Object(_))
     }
 
+    /// Whether a value of this type may leave a function.
+    ///
+    /// `Return` carries the accumulator whatever it holds, so a type the
+    /// lowering could not name is returnable too: the call site receives it as
+    /// `Unknown`, which is what a call it could not name already produces.
     const fn is_returnable(self) -> bool {
-        self.is_primitive() || self.is_object()
+        self.is_primitive() || self.is_object() || matches!(self, Self::Unknown)
     }
 
     const fn is_numeric_primitive(self) -> bool {
