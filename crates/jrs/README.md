@@ -594,10 +594,11 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Array join (focused) | focused | `7d4fe9ec875244e04043c08414f9878469504051` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/join --summary` | 23 | 46 | 40 (86.96%) | 6 (13.04%) | 0 (0.00%) |
 | Array push and pop (focused) | focused | `ab8aae8eb7e1b2368dabe5a49d79f3a9e402a395` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/push test/built-ins/Array/prototype/pop --summary` | 47 | 94 | 94 (100.00%) | 0 (0.00%) | 0 (0.00%) |
 | Array reverse (focused) | focused | `4b859f4feca764020ca4bd385f168e4e213dd767` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/reverse --summary` | 18 | 36 | 32 (88.89%) | 4 (11.11%) | 0 (0.00%) |
+| Array slice (focused) | focused | `42d23a2033eb26f2dc996747e92adb157c6ef1d1` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array/prototype/slice --summary` | 71 | 142 | 126 (88.73%) | 12 (8.45%) | 4 (2.82%) |
 | Object.prototype methods (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/prototype --summary` | 248 | 494 | 284 (57.49%) | 202 (40.89%) | 8 (1.62%) |
 | Property accessors (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors --summary` | 21 | 42 | 32 (76.19%) | 10 (23.81%) | 0 (0.00%) |
 | String.prototype methods (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,708 (79.66%) | 382 (17.82%) | 54 (2.52%) |
-| Complete pinned suite, including staging and Intl | full | `401c4c1d875c9e5a2107510217b2ea4994ce4088` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite, including staging and Intl | full | `68d0b12052d8867fee62c7644dabd9b54a369638` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
@@ -608,15 +609,16 @@ The focused families are what the register backend gained in this migration
 step: the five statements, the methods of %Object.prototype% it now answers
 itself, the property accessors, which reach a String's own "length" and indices
 on the new engine, the methods of %String.prototype%, and the four search
-methods, `join`, `push`, `pop` and `reverse` of %Array.prototype%. Each produces
+methods, `join`, `push`, `pop`, `reverse` and `slice` of %Array.prototype%. Each produces
 the counts the legacy stack backend produces for the same family, which is what
 a backend migration has to show: the full-suite counts are unchanged against the
 same suite measured before it, variant for variant. The Array search run was measured at tree
 `da4011ac65a23328693080a67da8efbe902c02f3`, the join run at tree
 `75bc66931663a104b8f4c973fae1a7878aa53ca2`, the push and pop run at tree
 `2f35debf666654ca39a9ef91cdf75097a7125288`, the reverse run at tree
-`19054962f1f93e409f7b0d5dad173b74d5eb1d88`, and the iteration run and the full
-run at tree `769107adb8c6f8b0f87d7dfe0f348df4531d0ce0`.
+`19054962f1f93e409f7b0d5dad173b74d5eb1d88`, the iteration run at tree
+`769107adb8c6f8b0f87d7dfe0f348df4531d0ce0`, the slice run at tree
+`e873e530ad100efc4492e5a0a4ce68c824503cae`, and the full run at tree `811c1777915249765b44dd8d72999789063451ba`.
 
 ### Historical Test262 baseline
 
