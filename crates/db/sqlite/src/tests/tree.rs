@@ -571,3 +571,38 @@ fn a_balance_that_would_free_a_page_is_refused() {
     let row = write(&[Value::Blob(alloc::vec![7u8; 90])], &[Affinity::None], 4);
     assert_eq!(insert(&mut pages, parent, 215, &row), Err(Error::Balance));
 }
+
+#[test]
+fn the_write_path_under_every_configuration_is_the_file_the_shell_wrote() {
+    // The matrix of document 16, section 16.11, over writing: the same
+    // four hundred rows under every page size, every encoding and every
+    // reserved tail, each held to the file the shell wrote under it.
+    for (name, page_size, reserved, encoding, fixture) in crate::tests::CONFIGURED {
+        let mut pages = Pages::new(page_size, reserved).unwrap();
+        assert_eq!(pages.add(Kind::LeafTable).unwrap(), 2);
+        let sql = "CREATE TABLE t(n INTEGER, s TEXT)";
+        insert(&mut pages, 1, 1, &schema_row("t", 2, sql, encoding)).unwrap();
+        for number in 1..=400_i64 {
+            let rowid = (number * 137) % 401;
+            let text = alloc::format!("row {number}");
+            let row = write(
+                &[
+                    Value::Int(number),
+                    Value::Text(crate::value::stored(text.as_bytes(), encoding)),
+                ],
+                &[Affinity::Integer, Affinity::Text],
+                4,
+            );
+            insert(&mut pages, 2, rowid, &row).unwrap();
+        }
+        let mut head = header(page_size, encoding, 2);
+        head.reserved = reserved;
+        let written = pages.written(&head);
+        same(
+            name,
+            &written,
+            fixture,
+            crate::bytes::size(u64::from(page_size)),
+        );
+    }
+}

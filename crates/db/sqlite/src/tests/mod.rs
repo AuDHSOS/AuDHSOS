@@ -51,6 +51,76 @@ pub(super) const SHUFFLED: &[u8] = include_bytes!("fixtures/shuffled.db");
 /// interior pages of that level against each other.
 pub(super) const DEEP: &[u8] = include_bytes!("fixtures/deep.db");
 
+/// The matrix of document 16, section 16.11, over the write path: the
+/// same four hundred rows under every page size, every encoding and
+/// every reserved tail the shell writes, each with the page size, the
+/// reserved tail and the encoding the file was written under.
+pub(crate) const CONFIGURED: [(&str, u32, u8, crate::header::Encoding, &[u8]); 9] = [
+    (
+        "w-utf8-512.db",
+        512,
+        0,
+        crate::header::Encoding::Utf8,
+        include_bytes!("fixtures/w-utf8-512.db"),
+    ),
+    (
+        "w-utf8-1024.db",
+        1024,
+        0,
+        crate::header::Encoding::Utf8,
+        include_bytes!("fixtures/w-utf8-1024.db"),
+    ),
+    (
+        "w-utf8-4096.db",
+        4096,
+        0,
+        crate::header::Encoding::Utf8,
+        include_bytes!("fixtures/w-utf8-4096.db"),
+    ),
+    (
+        "w-utf8-8192.db",
+        8192,
+        0,
+        crate::header::Encoding::Utf8,
+        include_bytes!("fixtures/w-utf8-8192.db"),
+    ),
+    (
+        "w-utf8-65536.db",
+        65_536,
+        0,
+        crate::header::Encoding::Utf8,
+        include_bytes!("fixtures/w-utf8-65536.db"),
+    ),
+    (
+        "w-utf16le-512.db",
+        512,
+        0,
+        crate::header::Encoding::Utf16Le,
+        include_bytes!("fixtures/w-utf16le-512.db"),
+    ),
+    (
+        "w-utf16be-512.db",
+        512,
+        0,
+        crate::header::Encoding::Utf16Be,
+        include_bytes!("fixtures/w-utf16be-512.db"),
+    ),
+    (
+        "w-reserved4.db",
+        1024,
+        4,
+        crate::header::Encoding::Utf8,
+        include_bytes!("fixtures/w-reserved4.db"),
+    ),
+    (
+        "w-reserved32.db",
+        512,
+        32,
+        crate::header::Encoding::Utf8,
+        include_bytes!("fixtures/w-reserved32.db"),
+    ),
+];
+
 /// Four hundred rows over 512-byte pages, which is small enough that the
 /// tree has an interior page and the walk has to descend.
 ///

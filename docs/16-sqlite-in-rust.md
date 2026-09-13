@@ -255,6 +255,12 @@ because those three answer the bytes as they are stored. `query.corpus`
 records what the C library answers for all of them, so the answers are
 held to SQLite and to each other.
 
+Nine more fixtures, `w-*.db`, hold one point each of the three
+dimensions writing changes — the page size, the encoding and the
+reserved tail — with the same four hundred rows put in by a key that
+jumps about. Each is built here from the schema and the rows and is the
+file the shell wrote, byte for byte.
+
 The last two dimensions have no fixture: a schema format below four
 needs a database the shell will not write, and temporary storage is not
 a file.
@@ -268,6 +274,7 @@ CI has no SQLite.
 | Fixture | What it holds |
 |---------|---------------|
 | `m-*.db`, eleven of them | The same three rows and the same index under every configuration of 16.11 the shell can write. |
+| `w-*.db`, nine of them | The same four hundred rows, put in by a key that jumps about, under every page size, every encoding and every reserved tail. |
 | `small.db` | One row of each storage class. |
 | `page512.db` | Four hundred rows over 512-byte pages, which makes an interior page, in a table tree and in a key's own tree. |
 | `utf16.db`, `wide16.db` | Text in UTF-16, including the widths where the order of UTF-16 and the order of characters part. |
@@ -540,7 +547,8 @@ Size: L.
 ### Done when
 
 The C library opens a database this engine wrote and reads the rows back;
-the matrix of 16.11 runs across the write path.
+the matrix of 16.11 runs across the write path, which the `w-*` fixtures
+do for the page size, the encoding and the reserved tail.
 
 ## 16.22 Q8. The rest of the language
 

@@ -137,6 +137,33 @@ rm -f "$out/deep.db"
 "$sqlite" "$out/deep.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<4000) INSERT INTO t(rowid,n,s) SELECT (i*1373)%4201, i, 'row ' || i FROM c;"
 printf '%s\t%s bytes\n' deep.db "$(wc -c <"$out/deep.db" | tr -d ' ')"
 
+# The matrix of document 16, section 16.11, over the write path: the
+# same four hundred rows put in by a key that jumps about, under every
+# page size, every encoding and every reserved tail the shell writes.
+written() {
+    name="$1"
+    control="$2"
+    pragmas="$3"
+    rm -f "$out/$name"
+    rows="CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<400) INSERT INTO t(rowid,n,s) SELECT (i*137)%401, i, 'row ' || i FROM c;"
+    if [ -n "$control" ]; then
+        "$sqlite" "$out/$name" "$control" "$pragmas $rows" >/dev/null
+    else
+        "$sqlite" "$out/$name" "$pragmas $rows" >/dev/null
+    fi
+    printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
+}
+
+written w-utf8-512.db       "" "PRAGMA page_size=512;"
+written w-utf8-1024.db      "" "PRAGMA page_size=1024;"
+written w-utf8-4096.db      "" "PRAGMA page_size=4096;"
+written w-utf8-8192.db      "" "PRAGMA page_size=8192;"
+written w-utf8-65536.db     "" "PRAGMA page_size=65536;"
+written w-utf16le-512.db    "" "PRAGMA page_size=512; PRAGMA encoding='UTF-16le';"
+written w-utf16be-512.db    "" "PRAGMA page_size=512; PRAGMA encoding='UTF-16be';"
+written w-reserved4.db      ".filectrl reserve_bytes 4" "PRAGMA page_size=1024;"
+written w-reserved32.db     ".filectrl reserve_bytes 32" "PRAGMA page_size=512;"
+
 # Every serial type and every affinity, so that a record written by this
 # repository can be held to the bytes the C library writes. `wide` has a
 # header of exactly 127 code bytes and `wider` one of 130, which are the

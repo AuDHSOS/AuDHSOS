@@ -4012,6 +4012,26 @@ runs up to the root, held to the files the shell wrote.
   use, a page smaller than the cells it is to hold, and a page whose
   free list says a block longer than the page.
 
+### 6.6.108 The write path under every configuration (`db-sqlite`)
+
+Document 16, section 16.11, over writing. Nine fixtures hold the same
+four hundred rows, put in by a key that jumps about, under every page
+size the format allows, every encoding, and the reserved tails the shell
+writes.
+
+- `w-utf8-512.db`, `w-utf8-1024.db`, `w-utf8-4096.db`,
+  `w-utf8-8192.db` and `w-utf8-65536.db` are the five page sizes, which
+  changes how many rows a leaf holds and, at 65536, how the header
+  writes the size.
+- `w-utf16le-512.db` and `w-utf16be-512.db` are the two UTF-16
+  encodings, which changes the bytes of every row and of the schema.
+- `w-reserved4.db` and `w-reserved32.db` leave four and thirty-two bytes
+  at the end of every page, which changes what a payload holds locally
+  and where a cell may lie.
+- Each is built here from the schema and the rows and is the fixture
+  byte for byte, so the configuration changes the file and not what the
+  engine writes into it.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`
