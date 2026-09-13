@@ -2437,3 +2437,40 @@ fn register_lowering_rejects_reads_the_prototype_chain_cannot_answer() -> Result
     }
     Ok(())
 }
+
+#[test]
+fn an_engine_error_reaches_the_embedding_as_the_same_error_type() -> Result<(), Error> {
+    use crate::engine::bytecode::{BytecodeFunction, FeedbackKind, Instruction, Reg};
+
+    // A Program whose register bytecode calls a value that is not callable.
+    // 13.3.6.1 makes that a TypeError, and the embedding has to see one.
+    let mut code = BytecodeFunction::new(2, 0);
+    let callee = Reg(0);
+    let argument = Reg(1);
+    let slot = code.allocate_feedback_slot(FeedbackKind::Call);
+    code.emit(Instruction::LdaSmi(1));
+    code.emit(Instruction::Star(callee));
+    code.emit(Instruction::LdaUndefined);
+    code.emit(Instruction::Star(argument));
+    code.emit(Instruction::Call {
+        func: callee,
+        arg_start: argument,
+        arg_count: 0,
+        slot,
+    });
+    code.emit(Instruction::Return);
+
+    let mut script = compile_script("1", Limits::default())?;
+    script.program.register_code = Some(alloc::rc::Rc::new(code));
+    let mut host = SilentHost;
+    let mut realm = Realm::new(Limits::default(), &mut host)?;
+    let error = realm
+        .evaluate_compiled(&script)
+        .expect_err("a Smi is not callable");
+    let Error::Thrown { value } = error else {
+        panic!("expected a thrown TypeError, got {error:?}");
+    };
+    let name = realm.get(&value, &Value::string("name"))?;
+    assert_eq!(name, Value::string("TypeError"));
+    Ok(())
+}

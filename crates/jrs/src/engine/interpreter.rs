@@ -617,10 +617,14 @@ impl RegisterVM {
         call: Call,
     ) -> Result<Option<u32>, VMError> {
         let function = self.read_reg(call.func)?;
-        let function_ref = function.as_object().ok_or(VMError::TypeError)?;
+        // 13.3.6.1: a callee that is not callable is a TypeError, not a
+        // failure of execution.
+        let Some(function_ref) = function.as_object() else {
+            return Err(type_error(heap, realm, "value is not callable"));
+        };
         let kind = heap
             .get_object(function_ref)
-            .ok_or(VMError::TypeError)?
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
             .kind
             .clone();
         let (code_id, context) = match kind {
@@ -636,7 +640,7 @@ impl RegisterVM {
                 self.acc = value;
                 return Ok(None);
             }
-            _ => return Err(VMError::TypeError),
+            _ => return Err(type_error(heap, realm, "value is not callable")),
         };
         let callee = code
             .functions
@@ -1200,7 +1204,14 @@ impl RegisterVM {
                     let rhs = self.read_reg(reg)?;
                     if let (Some(a), Some(b)) = (self.acc.as_smi(), rhs.as_smi()) {
                         if let Some(res) = a.checked_mul(b) {
-                            self.acc = Value::from_smi(res);
+                            // 6.1.6.1.4: the sign of a product is the sign of
+                            // the operands, so a zero product of operands with
+                            // different signs is -0, which no Smi can hold.
+                            self.acc = if res == 0 && (a < 0) != (b < 0) {
+                                Value::from_f64(-0.0)
+                            } else {
+                                Value::from_smi(res)
+                            };
                         } else {
                             self.acc = Value::from_f64(f64::from(a) * f64::from(b));
                         }
@@ -2610,6 +2621,83 @@ mod tests {
         assert_eq!(
             property_key(Value::from_object(object), &mut heap),
             Err(VMError::TypeError)
+        );
+    }
+
+    #[test]
+    fn calling_a_value_that_is_not_callable_throws_a_type_error() {
+        // 13.3.6.1: the callee is checked before the frame is entered.
+        let mut code = BytecodeFunction::new(2, 0);
+        let callee = Reg(0);
+        let argument = Reg(1);
+        let slot = code.allocate_feedback_slot(FeedbackKind::Call);
+        code.emit(Instruction::LdaSmi(1));
+        code.emit(Instruction::Star(callee));
+        code.emit(Instruction::LdaUndefined);
+        code.emit(Instruction::Star(argument));
+        code.emit(Instruction::Call {
+            func: callee,
+            arg_start: argument,
+            arg_count: 0,
+            slot,
+        });
+        code.emit(Instruction::Return);
+
+        let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
+        let mut feedback = FeedbackVector::for_code(&code);
+        let mut vm = RegisterVM::new(1000);
+        let error = vm
+            .run(&code, &mut feedback, &mut heap, &realm)
+            .expect_err("a Smi is not callable");
+        let VMError::Thrown(value) = error else {
+            panic!("expected a thrown TypeError, got {error:?}");
+        };
+        let thrown = value.as_object().unwrap();
+        assert_eq!(
+            realm.native_error_kind(&heap, thrown),
+            Some(super::super::realm::NativeErrorKind::TypeError)
+        );
+    }
+
+    #[test]
+    fn a_thrown_type_error_reaches_a_handler_of_the_throwing_function() {
+        // The unwinder treats an error the VM raises like any other value.
+        let mut code = BytecodeFunction::new(3, 0);
+        let callee = Reg(0);
+        let argument = Reg(1);
+        let caught = Reg(2);
+        let slot = code.allocate_feedback_slot(FeedbackKind::Call);
+        code.emit(Instruction::LdaSmi(1));
+        code.emit(Instruction::Star(callee));
+        code.emit(Instruction::LdaUndefined);
+        code.emit(Instruction::Star(argument));
+        let start = code.instructions.len();
+        code.emit(Instruction::Call {
+            func: callee,
+            arg_start: argument,
+            arg_count: 0,
+            slot,
+        });
+        let end = code.instructions.len();
+        let handler = code.instructions.len();
+        code.emit(Instruction::LdaTrue);
+        code.emit(Instruction::Return);
+        code.handlers
+            .push(super::super::bytecode::ExceptionHandler {
+                start_pc: u32::try_from(start).unwrap(),
+                end_pc: u32::try_from(end).unwrap(),
+                handler_pc: u32::try_from(handler).unwrap(),
+                exception: caught,
+            });
+
+        let mut heap = GenerationalHeap::new();
+        let realm = Realm::new(&mut heap).unwrap();
+        let mut feedback = FeedbackVector::for_code(&code);
+        let mut vm = RegisterVM::new(1000);
+        assert_eq!(
+            vm.run(&code, &mut feedback, &mut heap, &realm),
+            Ok(VALUE_TRUE)
         );
     }
 }

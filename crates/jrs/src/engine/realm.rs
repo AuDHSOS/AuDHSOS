@@ -431,6 +431,22 @@ impl Realm {
         Self::rooted(heap, root)
     }
 
+    /// The native error type an object is an instance of, by its prototype.
+    ///
+    /// The embedding boundary needs this: an error that leaves the engine has
+    /// to reach the host as an error of the same type.
+    #[must_use]
+    pub fn native_error_kind(
+        &self,
+        heap: &GenerationalHeap,
+        object: ObjectRef,
+    ) -> Option<NativeErrorKind> {
+        let prototype = heap.get_object(object)?.prototype;
+        NativeErrorKind::ALL
+            .into_iter()
+            .find(|kind| self.native_error_prototype(heap, *kind).ok() == Some(prototype))
+    }
+
     /// Allocates an ordinary object with %Object.prototype% (10.1.12).
     ///
     /// # Errors

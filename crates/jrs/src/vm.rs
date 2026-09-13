@@ -447,6 +447,48 @@ impl Execution<'_> {
         crate::engine::agent::Agent::new().map_err(|_| Error::InvalidBytecode)
     }
 
+    /// Converts a value the register backend threw into the error the
+    /// embedding sees.
+    ///
+    /// A primitive crosses as itself. An error of the engine's Realm is built
+    /// again as the error of the same type here, so that a host observes the
+    /// constructor name and the message the engine gave it. Nothing else has a
+    /// representation on this side of the migration.
+    fn register_exception(
+        &mut self,
+        value: crate::engine::value::Value,
+        agent: &crate::engine::agent::Agent,
+    ) -> Error {
+        if let Some(value) = register_primitive(value, &agent.heap) {
+            return Error::Thrown { value };
+        }
+        let Some(object) = value.as_object() else {
+            return Error::InvalidBytecode;
+        };
+        let Some(kind) = agent.realm.native_error_kind(&agent.heap, object) else {
+            return Error::InvalidBytecode;
+        };
+        let message = agent
+            .heap
+            .strings
+            .lookup_interned_units(&Value::string("message").units())
+            .and_then(|name| agent.heap.lookup_named(object, name).ok().flatten())
+            .and_then(|property| agent.heap.strings.to_utf16(property.value))
+            .map_or(Value::Undefined, |units| Value::String(units.into()));
+        let builtin = match kind {
+            crate::engine::realm::NativeErrorKind::EvalError => Builtin::EvalError,
+            crate::engine::realm::NativeErrorKind::RangeError => Builtin::RangeError,
+            crate::engine::realm::NativeErrorKind::ReferenceError => Builtin::ReferenceError,
+            crate::engine::realm::NativeErrorKind::SyntaxError => Builtin::SyntaxError,
+            crate::engine::realm::NativeErrorKind::TypeError => Builtin::TypeError,
+            crate::engine::realm::NativeErrorKind::UriError => Builtin::URIError,
+        };
+        match self.new_error(builtin, &[message]) {
+            Ok(value) => Error::Thrown { value },
+            Err(error) => error,
+        }
+    }
+
     fn execute_register_program(
         &mut self,
         code: &Rc<crate::engine::bytecode::BytecodeFunction>,
@@ -504,8 +546,7 @@ impl Execution<'_> {
         let result = match result {
             Ok(value) => register_primitive(value, &agent.heap).ok_or(Error::InvalidBytecode),
             Err(crate::engine::interpreter::VMError::Thrown(value)) => {
-                Err(register_primitive(value, &agent.heap)
-                    .map_or(Error::InvalidBytecode, |value| Error::Thrown { value }))
+                Err(self.register_exception(value, &agent))
             }
             Err(
                 crate::engine::interpreter::VMError::InvalidBytecode(_)
