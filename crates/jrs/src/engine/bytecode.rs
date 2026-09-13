@@ -167,6 +167,13 @@ pub enum Instruction {
     LdaConstant(u16),
     /// `acc = strings[index]`, materialized in the current Agent's string arena.
     LdaString(u16),
+    /// `acc = GetBindingValue(strings[index])` on the Realm's Global
+    /// Environment Record (9.1.1.4.6), which throws a `ReferenceError` for a
+    /// name it does not bind.
+    LdaGlobal(u16),
+    /// The same read for the operand of `typeof`, which 13.5.3 answers with
+    /// undefined for an unresolvable Reference instead of throwing.
+    LdaGlobalForTypeOf(u16),
     /// `acc = undefined`
     LdaUndefined,
     /// `acc = null`
@@ -670,7 +677,9 @@ impl BytecodeFunction {
                 }
                 None
             }
-            Instruction::LdaString(index) => {
+            Instruction::LdaString(index)
+            | Instruction::LdaGlobal(index)
+            | Instruction::LdaGlobalForTypeOf(index) => {
                 if usize::from(index) >= self.string_constants.len() {
                     return Err(VerificationError::StringConstantOutOfBounds { pc, index });
                 }

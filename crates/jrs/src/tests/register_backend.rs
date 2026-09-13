@@ -26,6 +26,60 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
 }
 
 #[test]
+fn a_completion_of_an_unknown_type_lowers_and_answers_the_same() -> Result<(), Error> {
+    // A completion whose type the lowering does not know is carried to the
+    // boundary, which refuses only what it cannot represent.
+    for source in [
+        "let o={x:42},key='x';o[key]",
+        "let k='x';let {[k]:x}={x:42};x",
+        "let a=[2,3,5];let i='1';a[i]",
+        "let a=[2,3,5];let i='length';a[i]",
+        "function f(){return 1}try{f()}catch(e){e}",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn an_object_completion_of_the_engine_is_refused_at_the_boundary() -> Result<(), Error> {
+    // An Object of the engine has no identity in this API. A completion that
+    // is one is reported as the gap it is, never approximated.
+    let program = compile("let x=1;if(true)x=function(){};x", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn a_realm_on_the_engine_backend_evaluates_and_refuses_without_poisoning() -> Result<(), Error> {
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+
+    // A Script the lowering does not take is refused before anything runs, so
+    // the realm stays usable. A name resolved on the Global Environment Record
+    // is one of those until that Record carries the globals of clause 19.
+    for source in ["notDefined", "typeof absent", "let x=1"] {
+        assert!(
+            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+            "{source}"
+        );
+    }
+    assert_eq!(realm.evaluate("1+1")?, Value::Number(2.0));
+    // A completion the boundary cannot carry is refused before it runs too,
+    // because the lowering knows the type is an Array.
+    assert!(matches!(
+        realm.evaluate("[1,2]"),
+        Err(Error::Unsupported { .. })
+    ));
+    assert_eq!(realm.evaluate("2*3")?, Value::Number(6.0));
+    Ok(())
+}
+
+#[test]
 fn a_realm_on_the_stack_backend_takes_the_same_scripts() -> Result<(), Error> {
     let mut host = SilentHost;
     let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Stack)?;
@@ -1015,7 +1069,6 @@ fn register_string_concatenation_preserves_string_unit_limit() -> Result<(), Err
 #[test]
 fn register_backend_is_selected_statically_without_runtime_fallback() -> Result<(), Error> {
     for source in [
-        "typeof absent",
         "Number(1)",
         "({valueOf(){return 1}})+2",
         "+({valueOf(){return 1}})",
@@ -2025,7 +2078,6 @@ fn conditional_statements_match_legacy_execution() -> Result<(), Error> {
 fn register_branch_lowering_rejects_incompatible_control_flow() -> Result<(), Error> {
     for source in [
         "let x=1;if(true)x={};else x=2;x",
-        "let x=1;if(true)x=function(){};x",
         "function f(){function g(){return x}var x=1;x='a';return g()}f()",
         "function f(){var x=1;function g(){x++;return x}return g()}f()",
     ] {
@@ -2188,7 +2240,6 @@ fn register_for_lowering_rejects_unstable_or_observable_lexical_cases() -> Resul
         "let i=1;for(let i=0;i<2;i++){}i",
         "let x=1;for(let {x}={x:2};x<3;x++){}x",
         "for(const i=0;i<2;i++){}",
-        "for(let i=0;i<2;i++){let x=i;}i",
         "for(let i=0;i<2;i++){(()=>i)}",
         "for(let {i}={i:0};i<2;i++){(()=>i)}",
         "let x=1;while(true){x=true;break}x",
@@ -2325,8 +2376,6 @@ fn register_try_catch_rethrows_when_the_handler_throws() -> Result<(), Error> {
 #[test]
 fn register_lowering_rejects_exception_shapes_it_cannot_type() -> Result<(), Error> {
     for source in [
-        // A callee's thrown type is unknown, so reading the parameter bails.
-        "function f(){return 1}try{f()}catch(e){e}",
         // A destructuring catch parameter is not lowered.
         "try{throw [1]}catch([e]){e}",
         // The thrown value must be representable at the legacy boundary.
@@ -2806,16 +2855,10 @@ fn register_lowering_rejects_reads_the_prototype_chain_cannot_answer() -> Result
         "let a=[1];a['push']",
         "let a=[1];a.constructor",
         "let o={};o['toString']",
-        // A key known only at run time can name one of them.
-        "let o={x:42},key='x';o[key]",
         "let o={x:40,y:2},key=true?'x':'y';o[key]+2",
-        "let k='x';let {[k]:x}={x:42};x",
         "function f(key){let o={[key]:42};return o[key]}f('answer')",
         // An intrinsic is only lowered at a call site.
         "let o={a:1};o.hasOwnProperty",
-        // A String key can name a property of the chain.
-        "let a=[2,3,5];let i='1';a[i]",
-        "let a=[2,3,5];let i='length';a[i]",
         // A parameter has no tracked object layout.
         "function f(o){return o.hasOwnProperty('a')}f({a:1})",
     ] {

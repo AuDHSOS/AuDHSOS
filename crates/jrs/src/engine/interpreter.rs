@@ -1958,6 +1958,40 @@ impl RegisterVM {
                         .ok_or(VMError::InvalidRegister)?;
                     self.acc = self.allocate_string(heap, units)?;
                 }
+                Instruction::LdaGlobalForTypeOf(index) => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    // 13.5.3 answers undefined for an unresolvable Reference
+                    // rather than reaching GetValue.
+                    self.acc = realm
+                        .global_environment()
+                        .get_binding_value(heap, name)?
+                        .unwrap_or(VALUE_UNDEFINED);
+                }
+                Instruction::LdaGlobal(index) => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    // 9.1.1.4.6 reaches 9.1.1.2.7, which throws for a name the
+                    // binding object does not have.
+                    let Some(value) = realm.global_environment().get_binding_value(heap, name)?
+                    else {
+                        let mut message = alloc::string::String::from_utf16_lossy(units);
+                        message.push_str(" is not initialized or defined");
+                        return Err(raise_message(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::ReferenceError,
+                            &message,
+                        ));
+                    };
+                    self.acc = value;
+                }
                 Instruction::LdaUndefined | Instruction::ToUndefined => {
                     self.acc = VALUE_UNDEFINED;
                 }
@@ -2835,6 +2869,22 @@ fn raise(
 ) -> VMError {
     match realm.create_native_error(heap, kind, message) {
         Ok(error) => VMError::Thrown(Value::from_object(error), Some((kind, message))),
+        Err(error) => VMError::Heap(error),
+    }
+}
+
+/// Raises a native error whose message is built at run time.
+///
+/// The error object carries the message, so the embedding reads it from there
+/// instead of from a fixed diagnostic beside it.
+fn raise_message(
+    heap: &mut GenerationalHeap,
+    realm: &Realm,
+    kind: super::realm::NativeErrorKind,
+    message: &str,
+) -> VMError {
+    match realm.create_native_error(heap, kind, message) {
+        Ok(error) => VMError::Thrown(Value::from_object(error), None),
         Err(error) => VMError::Heap(error),
     }
 }

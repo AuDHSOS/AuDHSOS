@@ -103,7 +103,10 @@ impl<'host> Realm<'host> {
     /// runs on the engine.
     ///
     /// Nothing has executed at this point, so the realm stays usable: the
-    /// refusal reports a gap in the migration, not a failure of the realm.
+    /// refusal reports a gap in the migration, not a failure of the realm. A
+    /// gap that only shows once the Script has run, such as a completion value
+    /// the boundary cannot carry, is fatal like every other unsupported
+    /// feature.
     ///
     /// # Errors
     /// [`Error::Unsupported`] for a Script only the stack backend can run.

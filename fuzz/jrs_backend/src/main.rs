@@ -24,8 +24,17 @@ fn same_value(left: &Value, right: &Value) -> bool {
 /// How two outcomes are compared. A resource limit is not comparable: the two
 /// backends charge fuel differently by design, and the register backend checks
 /// it at loop back edges rather than at every instruction.
+/// Whether an outcome says anything about the language.
+///
+/// A budget that ran out and a feature one path does not implement are both
+/// properties of this implementation, not answers a program gave. Coverage is
+/// what Test262 measures; this target measures whether the two paths that do
+/// answer answer the same.
 fn comparable(outcome: &Result<Value, Error>) -> bool {
-    !matches!(outcome, Err(Error::Limit { .. }))
+    !matches!(
+        outcome,
+        Err(Error::Limit { .. } | Error::Unsupported { .. })
+    )
 }
 
 fn describe(outcome: &Result<Value, Error>) -> Option<Value> {

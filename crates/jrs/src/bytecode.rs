@@ -1208,6 +1208,12 @@ impl RegisterLowerer {
                             self.code.emit(Instruction::LdaConstant(index));
                             RegisterType::Number
                         }
+                        // 9.1.1.4.6 would resolve every other name on the
+                        // Realm's Global Environment Record. The engine Realm
+                        // does not yet carry the globals of clause 19, so a
+                        // read of one would answer differently there than on
+                        // the stack path. G3 fills that Realm; until then the
+                        // name is not lowered.
                         _ => return None,
                     }
                 }
@@ -5893,7 +5899,10 @@ fn lower_register_script(
             },
         }
     }
-    if !completion_type.is_primitive() {
+    // A completion of a type the lowering does not know may still be an Object,
+    // which has no identity outside the engine. That is refused at the boundary
+    // as an unsupported feature, not compiled away here.
+    if !completion_type.is_primitive() && completion_type != RegisterType::Unknown {
         return None;
     }
     lowerer

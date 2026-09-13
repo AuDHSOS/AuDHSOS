@@ -500,14 +500,22 @@ impl Execution<'_> {
     ) -> Error {
         // An error the engine raised is the error the specification names, in
         // the form the legacy backend reports for the same operation.
+        // TypeError and RangeError have a typed counterpart in this API. Every
+        // other kind crosses as the error object itself, built again below, so
+        // that its constructor and message survive.
         if let Some((kind, message)) = native {
-            return match kind {
-                crate::engine::realm::NativeErrorKind::TypeError => Error::Type { message },
-                crate::engine::realm::NativeErrorKind::RangeError => Error::Range { message },
-                _ => Error::Thrown {
-                    value: Value::string(message),
-                },
-            };
+            match kind {
+                crate::engine::realm::NativeErrorKind::TypeError => {
+                    return Error::Type { message };
+                }
+                crate::engine::realm::NativeErrorKind::RangeError => {
+                    return Error::Range { message };
+                }
+                crate::engine::realm::NativeErrorKind::EvalError
+                | crate::engine::realm::NativeErrorKind::ReferenceError
+                | crate::engine::realm::NativeErrorKind::SyntaxError
+                | crate::engine::realm::NativeErrorKind::UriError => {}
+            }
         }
         if let Some(value) = register_primitive(value, &agent.heap) {
             return Error::Thrown { value };
@@ -595,7 +603,9 @@ impl Execution<'_> {
         let result = vm.run(code, &mut feedback.vector, &mut agent.heap, &agent.realm);
         self.fuel = vm.fuel;
         let result = match result {
-            Ok(value) => register_primitive(value, &agent.heap).ok_or(Error::InvalidBytecode),
+            Ok(value) => register_primitive(value, &agent.heap).ok_or(Error::Unsupported {
+                feature: "an Object of the engine crossing to the embedding",
+            }),
             Err(crate::engine::interpreter::VMError::Thrown(value, native)) => {
                 Err(self.register_exception(value, native, &agent))
             }

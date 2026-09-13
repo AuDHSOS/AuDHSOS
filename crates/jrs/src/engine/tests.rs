@@ -78,6 +78,62 @@ fn the_global_environment_asks_the_declarative_record_before_the_binding_object(
 }
 
 #[test]
+fn a_global_read_answers_the_binding_and_throws_for_an_unbound_name() {
+    let mut heap = GenerationalHeap::new();
+    let realm = Realm::new(&mut heap).unwrap();
+    let bound = PropertyKey::String(heap.strings.intern("bound").unwrap());
+    let global = realm.global_environment().global_object(&heap).unwrap();
+    heap.define_own_named(global, bound, Value::from_smi(7), builtin_data())
+        .unwrap();
+
+    // 9.1.1.4.6 answers the binding the global object carries.
+    let mut code = BytecodeFunction::new(1, 0);
+    let name = code.add_string_constant("bound".encode_utf16().collect());
+    code.emit(Instruction::LdaGlobal(name));
+    code.emit(Instruction::Return);
+    let mut feedback = FeedbackVector::for_code(&code);
+    let mut vm = RegisterVM::new(10_000);
+    assert_eq!(
+        vm.run(&code, &mut feedback, &mut heap, &realm)
+            .unwrap()
+            .as_smi(),
+        Some(7)
+    );
+
+    // 9.1.1.2.7 throws a ReferenceError for a name the binding object lacks.
+    let mut code = BytecodeFunction::new(1, 0);
+    let name = code.add_string_constant("absent".encode_utf16().collect());
+    code.emit(Instruction::LdaGlobal(name));
+    code.emit(Instruction::Return);
+    let mut feedback = FeedbackVector::for_code(&code);
+    let mut vm = RegisterVM::new(10_000);
+    let error = vm
+        .run(&code, &mut feedback, &mut heap, &realm)
+        .expect_err("an unbound name is a ReferenceError");
+    let thrown = match error {
+        crate::engine::interpreter::VMError::Thrown(value, _) => value,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        realm.native_error_kind(&heap, thrown.as_object().unwrap()),
+        Some(crate::engine::realm::NativeErrorKind::ReferenceError)
+    );
+
+    // 13.5.3 answers undefined for the same name under `typeof`.
+    let mut code = BytecodeFunction::new(1, 0);
+    let name = code.add_string_constant("absent".encode_utf16().collect());
+    code.emit(Instruction::LdaGlobalForTypeOf(name));
+    code.emit(Instruction::Return);
+    let mut feedback = FeedbackVector::for_code(&code);
+    let mut vm = RegisterVM::new(10_000);
+    assert!(
+        vm.run(&code, &mut feedback, &mut heap, &realm)
+            .unwrap()
+            .is_undefined()
+    );
+}
+
+#[test]
 fn end_to_end_shape_transitions_and_shared_shapes() {
     let mut heap = GenerationalHeap::new();
     let root = heap.shapes.root_shape();
