@@ -974,6 +974,7 @@ pub(crate) const CRATES: &[Crate] = &[
             "audhsos-abi",
             "audhsos-symbols",
             "audhsos-time",
+            "db-sqlite",
             "driver-i8042",
             "fs-fat",
             "fs-gpt",

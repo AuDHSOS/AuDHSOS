@@ -4239,6 +4239,20 @@ matrix.
   write path: a statement naming one of three columns writes the file
   the shell wrote, byte for byte.
 
+### 6.6.119 SQLite's own test files (`db-sqlite`)
+
+D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
+
+- The part of `research/sqlite/test` that needs no TCL interpreter: a
+  `do_execsql_test` whose statements and whose answer carry no
+  substitution, which is 10 428 of the 13 602 cases in 570 files.
+- 408 pass, 14 answer differently and 10 006 name something the engine
+  refuses. Document 16, section 16.23 lists the fourteen.
+- The checkout is not part of this repository, so this is never a step
+  of `cargo xtask check`; `sh tools/sqlite.sh` brings it and
+  `--file <name>` runs one file. `--show` prints each case that did not
+  pass with what each side answered.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

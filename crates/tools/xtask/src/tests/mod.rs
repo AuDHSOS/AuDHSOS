@@ -21,6 +21,7 @@ mod process;
 mod qemu;
 mod qmp;
 mod spdx;
+mod suite;
 mod symbolize;
 mod test_ext;
 mod toolchain;

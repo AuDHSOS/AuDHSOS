@@ -16,7 +16,7 @@ use crate::qemu::{self, Machine, Run};
 use crate::qmp::{Button, Qmp};
 use crate::session::Session;
 use crate::symbolize;
-use crate::{artifacts, coverage, deps, fs, layering, linker, mcdc, spdx, unsafe_budget};
+use crate::{artifacts, coverage, deps, fs, layering, linker, mcdc, spdx, suite, unsafe_budget};
 
 /// `rustfmt --check`, `clippy -D warnings` per target group, SPDX headers.
 pub(crate) fn lint(root: &Path) -> Result<(), Error> {
@@ -1874,6 +1874,59 @@ pub(crate) fn regex_check(root: &Path, options: &[String]) -> Result<(), Error> 
             "x86_64-unknown-none",
         ])
         .run()
+}
+
+/// SQLite's own test files, run against `db-sqlite`.
+pub(crate) fn sqlite_suite(root: &Path, options: &[String]) -> Result<(), Error> {
+    let mut only = None;
+    let mut rest = options.iter();
+    while let Some(option) = rest.next() {
+        match option.as_str() {
+            "--file" => {
+                only = Some(
+                    rest.next()
+                        .ok_or_else(|| Error::Usage("--file wants a name".to_owned()))?
+                        .clone(),
+                );
+            }
+            "--show" => suite::show(),
+            other => {
+                return Err(Error::Usage(format!(
+                    "unknown option `{other}` for sqlite-suite"
+                )));
+            }
+        }
+    }
+    let scores = suite::run(root, only.as_deref())?;
+    let mut total = suite::Score::default();
+    note!(
+        "{:<28} {:>6} {:>6} {:>7}",
+        "file",
+        "passed",
+        "failed",
+        "refused"
+    );
+    for (name, score) in &scores {
+        if score.passed != 0 || score.failed != 0 {
+            note!(
+                "{:<28} {:>6} {:>6} {:>7}",
+                name,
+                score.passed,
+                score.failed,
+                score.refused
+            );
+        }
+        total.and(*score);
+    }
+    note!(
+        "{} files, {} cases: {} passed, {} failed, {} refused",
+        scores.len(),
+        total.ran(),
+        total.passed,
+        total.failed,
+        total.refused
+    );
+    Ok(())
 }
 
 /// The premise condition coverage stands as MC/DC on.

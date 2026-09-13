@@ -653,24 +653,55 @@ library accepts or refuses it, with no count of what is waiting.
 
 ## 16.23 Q9. The suites run whole
 
-Status: open.
+Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
+test files that needs no TCL interpreter. Of 10 428 cases in 570 files,
+408 pass, 14 answer differently, and 10 006 name something the engine
+refuses. The matrix runs over the write path as the covering array of
+16.11.
 Depends on: Q7, Q8.
 Size: M.
 
 ### Needs
 
 - An adapter that speaks the commands `testfixture` drives, which is
-  where a C ABI would live.
-- The matrix of 16.11 in the test support.
+  where a C ABI would live. Built for the part written out in the file:
+  a `do_execsql_test` whose statements and whose answer carry no
+  substitution.
+- The matrix of 16.11 in the test support. Built.
 
 ### Does
 
 1. Run SQLite's TCL suite under `research/sqlite/test` against the
-   engine.
+   engine. Built for 10 428 of its cases; the rest need the
+   interpreter, because a substitution says what they run only once it
+   has run.
 2. Run every level of this repository's own suite across the matrix
-   rather than the format alone.
+   rather than the format alone. Built for the write path.
 3. Drive differential execution from `norec`'s generator with the engine
    as the second implementation.
+
+### How a case is counted
+
+A file keeps one database and its cases run against it in the order they
+are written, because each builds on the ones before it. A case the
+engine refuses stops the file, and the cases after it are refused with
+it, because the database is then short of what they read. A case that
+runs is counted passed where the list it answers is the list the file
+writes, element for element.
+
+### The fourteen that answer differently
+
+| Case | What it shows |
+|------|---------------|
+| `collate8-3.1`, `-3.2`, `-3.4` | A `COLLATE` on one operand does not carry through `||`, `max` or `CASE`. |
+| `resolver01-4.1` | `ORDER BY m COLLATE binary` names the column where SQLite names the result column of that name. |
+| `gencol1-100` | `INSERT INTO t SELECT * FROM u` carries the computed column of `u` into `t`. |
+| `affinity2-300` | One comparison of text against a blob. |
+| `conflict3-1.2`, `-1.4` | No `UNIQUE` is kept, so a row SQLite refuses goes in. |
+| `autoindex4-1.0` | `ORDER BY +b` over equal keys, which names no order. |
+| `func-1.6` | The file writes `NULL` for nothing, which `db nullvalue` set. |
+| `fpconv1-1.1`, `-1.2`, `-1.3` | The file writes two answers for one statement, so it changes a setting between them. |
+| `icu-2.9` | `upper` over the ICU extension, which this build has not got. |
 
 ### Done when
 

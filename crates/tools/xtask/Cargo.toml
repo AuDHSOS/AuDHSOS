@@ -12,6 +12,7 @@ rust-version.workspace = true
 
 [dependencies]
 app-canvas.workspace = true
+db-sqlite.workspace = true
 audhsos-abi.workspace = true
 audhsos-symbols.workspace = true
 audhsos-time.workspace = true

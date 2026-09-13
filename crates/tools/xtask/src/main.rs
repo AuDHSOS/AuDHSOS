@@ -24,6 +24,7 @@ mod qemu;
 mod qmp;
 mod session;
 mod spdx;
+mod suite;
 mod symbolize;
 mod test_ext;
 mod toolchain;
@@ -59,6 +60,9 @@ subcommands:
   coverage [--condition]
                    host coverage with thresholds; --condition counts every
                    operand of a compound decision as well
+  sqlite-suite [--file <name>]
+                   run SQLite's own test files against `db-sqlite` from
+                   the checkout `sh tools/sqlite.sh` brings
   mcdc             hold every decision of the completely covered crates to
                    the short-circuit operators, which is what makes
                    condition coverage masking MC/DC
@@ -142,6 +146,7 @@ fn run() -> Result<(), Error> {
         "jrs-check" => commands::jrs_check(&root, options),
         "regex-check" => commands::regex_check(&root, options),
         "coverage" => commands::coverage(&root, options),
+        "sqlite-suite" => commands::sqlite_suite(&root, options),
         "mcdc" => none(subcommand, options).and_then(|()| commands::mcdc(&root)),
         "miri" => none(subcommand, options).and_then(|()| commands::miri(&root)),
         "doc" => none(subcommand, options).and_then(|()| commands::doc(&root)),
