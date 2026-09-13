@@ -145,7 +145,7 @@ of lines and 100 percent of branches, in both instrumentations.
 | 6 | The functions whose answers are not exact: `sqrt`, `exp`, `ln`, `log`, `pow` and the trigonometric set. See D-160. | Q8 |
 | 7 | An adapter that speaks the commands SQLite's TCL suite drives. | Q9 |
 | 8 | The matrix run across every level of the suite rather than the format alone. | Q9 |
-| 9 | MC/DC, which the pinned toolchain does not emit. See D4 (16.9). | Q10 |
+| 9 | MC/DC, which the pinned toolchain refuses the option for. Condition coverage is gated at 100 percent instead. See D4 (16.9). | Q10 |
 
 ## 16.7 Decision D1: the engine is a port of the routines
 
@@ -221,9 +221,10 @@ to, and a port that claims the file format should claim the testing too.
 Reason 2: a refusal no input reaches is either dead code or a missing
 test. Both are defects, and an exemption hides which one it is.
 Reason 3: the pinned toolchain takes `-Z coverage-options=block`,
-`branch` and `condition`, and `llvm-cov` reports no MC/DC pairs for what
-it emits. Condition coverage is measured by `sh tools/xtask.sh coverage
---condition`; the independence half of MC/DC is not.
+`branch` and `condition`, refuses `mcdc`, and `llvm-cov` reports no
+MC/DC pairs for what it emits. Condition coverage is what `cargo xtask
+check` gates on, which is `sh tools/xtask.sh coverage --condition`; the
+independence half of MC/DC is not measured.
 
 **The option not taken: claim MC/DC from condition coverage.** Condition
 coverage counts each operand both ways. It does not show that each
@@ -511,8 +512,8 @@ through the walker; the crate meets D4.
 
 Status: a table is filled in any key order, emptied again, and filled
 from the pages the delete freed; the file and the rollback journal
-beside it are the ones the shell wrote, byte for byte. The pointer maps,
-playing a journal back, and the WAL are not built.
+beside it are the ones the shell wrote, byte for byte. The pointer maps and
+the WAL are not built.
 Depends on: Q3, Q5. Recorded in D-162 to D-170.
 Size: L.
 
@@ -544,8 +545,8 @@ Size: L.
 9. Keep the pointer maps of a file that vacuums itself.
 10. Write the rollback journal of a transaction and leave of it what
     the journal mode says. Built.
-11. Play a journal back over the file it belongs to, and run a
-    transaction through the WAL.
+11. Play a journal back over the file it belongs to. Built.
+12. Run a transaction through the WAL.
 
 ### Done when
 
@@ -598,14 +599,17 @@ The TCL suite reports no failure that is not a documented omission.
 
 ## 16.24 Q10. Coverage to the standard of D4
 
-Status: open.
+Status: `db-sqlite` is at 100 percent of lines and 100 percent of
+conditions, and `cargo xtask check` runs the condition instrumentation,
+so a decision whose second operand no test settles fails the check. What
+is left is MC/DC, which the pinned toolchain does not emit.
 Depends on: Q9.
 Size: M.
 
 ### Does
 
 1. Hold every crate of the port to 100 percent of lines and branches in
-   both instrumentations.
+   both instrumentations. Built.
 2. Measure MC/DC when the pinned toolchain emits the records, and raise
    the gate to it.
 

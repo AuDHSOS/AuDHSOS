@@ -446,6 +446,7 @@ static const char *aOther[] = {
   "length(x'000102')", "octet_length(x'000102')",
   "concat_ws('-',1,2)", "concat_ws('-',1,2,3)", "concat_ws('',1,2)",
   "unhex('41 ',' ')", "unhex(' 41',' ')", "unhex('4 1 4 2',' ')",
+  "unhex(' ' || char(0) || '41',' ')", "unhex(char(0) || '41')",
   "likelihood(1,0.5)", "likelihood('a',1.0)", "likelihood(1,0.0)",
   "likelihood(1,1.5)", "likelihood(1,-0.5)",
   "NULL LIKE 'a'", "'a' LIKE NULL", "NULL LIKE NULL", "NULL GLOB 'a'",

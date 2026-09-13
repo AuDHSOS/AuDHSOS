@@ -328,8 +328,12 @@ if [ -f "$amalgamation" ]; then
         "CREATE TABLE t(a INTEGER, b TEXT); INSERT INTO t VALUES (1,'one'),(2,'two'),(3,'three');" \
         >/dev/null
     cp "$out/rollback.db" "$(dirname "$oracle")/old.db"
+    # The same database before the transaction, which is what playing
+    # the journal back over the pair has to give.
+    cp "$out/rollback.db" "$out/rolled.db"
     "$sqlite" "$out/rollback.db" \
         "UPDATE t SET b='changed'; INSERT INTO t VALUES (4,'four');" >/dev/null
+    printf '%s\t%s bytes\n' rolled.db "$(wc -c <"$out/rolled.db" | tr -d ' ')"
     printf 'rollback.db-journal\t%s\n' \
         "$("$oracle" journal "$(dirname "$oracle")/old.db" "$out/rollback.db" \
             "$out/rollback.db-journal")"

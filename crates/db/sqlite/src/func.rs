@@ -937,7 +937,7 @@ fn unhex(subject: &Value, allowed: Option<&Value>) -> Value {
             let (character, next) = utf8::read(&bytes, at);
             if !characters(&pass)
                 .iter()
-                .any(|(from, to)| utf8::read(&pass, *from).0 == character && to > from)
+                .any(|(from, _)| utf8::read(&pass, *from).0 == character)
             {
                 return Value::Null;
             }

@@ -244,6 +244,10 @@ pub(super) const ROLLBACK: &[u8] = include_bytes!("fixtures/rollback.db");
 /// The rollback journal of [`ROLLBACK`].
 pub(super) const JOURNAL: &[u8] = include_bytes!("fixtures/rollback.db-journal");
 
+/// [`ROLLBACK`] as the transaction that wrote [`JOURNAL`] found it,
+/// which is what playing that journal back over the pair gives.
+pub(super) const ROLLED: &[u8] = include_bytes!("fixtures/rolled.db");
+
 /// A database committed under a journal mode of `persist`, which leaves
 /// the journal file behind with its header zeroed.
 pub(super) const PERSIST: &[u8] = include_bytes!("fixtures/m-persist.db");

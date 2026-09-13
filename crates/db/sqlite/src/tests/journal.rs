@@ -361,3 +361,35 @@ fn the_journal_a_committed_transaction_leaves_changes_nothing() {
         );
     }
 }
+
+#[test]
+fn a_journal_played_back_gives_the_database_the_transaction_found() {
+    // `rollback.db` is a database caught between the sync of its
+    // journal and the sync of its own pages. Playing the journal back
+    // over it gives `rolled.db`, which is the file the transaction
+    // began with, byte for byte.
+    let journal = Journal::open(super::JOURNAL);
+    let rolled = journal.rolled_back(super::ROLLBACK);
+    assert_eq!(rolled.len(), super::ROLLED.len());
+    assert_eq!(rolled, super::ROLLED);
+    // A journal that is not hot restores nothing, so the database is
+    // the one the caller handed in.
+    let cold = Journal::open(&[]);
+    assert_eq!(cold.rolled_back(super::ROLLBACK), super::ROLLBACK);
+}
+
+#[test]
+fn a_playback_shortens_a_database_the_transaction_had_grown() {
+    // The journal says the database had two pages, so a file that grew
+    // to three is cut back to the two the transaction found.
+    let journal = Journal::open(super::JOURNAL);
+    let page = usize::try_from(journal.page_size()).unwrap();
+    let mut grown = super::ROLLBACK.to_vec();
+    grown.resize(page * 3, 7);
+    assert_eq!(journal.rolled_back(&grown), super::ROLLED);
+    // And one cut short is filled back out to them.
+    let short = super::ROLLBACK.get(..page).unwrap().to_vec();
+    let back = journal.rolled_back(&short);
+    assert_eq!(back.len(), super::ROLLED.len());
+    assert_eq!(back.get(..page), super::ROLLED.get(..page));
+}

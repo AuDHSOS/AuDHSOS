@@ -126,12 +126,13 @@ within each target and skipping targets whose corpus directory is absent.
   in `COMPLETE` is held to all of it instead — 100 percent of lines and of
   branches — which is what document 16, decision D4, asks of the SQLite
   port and what `db-sqlite` meets.
-- Condition coverage: `cargo xtask coverage --condition` builds the same
+- Condition coverage: the coverage step of `cargo xtask check` builds the
   tests with `-Z coverage-options=branch,condition`, which counts every
-  operand of a compound decision and not only the decision. The same
-  thresholds apply to that column. It is not a step of `check`: it is the
-  measurement document 16, decision D4, holds the SQLite port to, and the
-  reason it is not MC/DC is stated there.
+  operand of a compound decision and not only the decision, so a decision
+  whose second operand no test settles fails the check. The same
+  thresholds apply to that column. It is the measurement document 16,
+  decision D4, holds the SQLite port to, and the reason it is not MC/DC
+  is stated there. `cargo xtask coverage` alone counts decisions only.
 - QEMU coverage is not measured. Each adapter crate keeps a table that maps
   every public function to at least one QEMU test. `cargo xtask
   check-layering` verifies that every function and every test named in the

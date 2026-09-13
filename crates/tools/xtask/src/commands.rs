@@ -2181,7 +2181,9 @@ pub(crate) fn check(root: &Path, channel: &str, options: &[String]) -> Result<()
         ("check-deps", check_deps),
         ("unsafe-budget", unsafe_budget),
         ("test --host", |root| test(root, &["--host".to_owned()])),
-        ("coverage", |root| coverage(root, &[])),
+        ("coverage", |root| {
+            coverage(root, &["--condition".to_owned()])
+        }),
         ("miri", miri),
         ("doc", doc),
         ("test --qemu", |root| test(root, &["--qemu".to_owned()])),

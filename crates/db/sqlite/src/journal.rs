@@ -215,6 +215,36 @@ impl<'a> Journal<'a> {
         self.bytes.get(*start..end)
     }
 
+    /// The database as the transaction that wrote this journal found
+    /// it, which is `pager_playback`: every page the journal holds put
+    /// back where it lay, and the file shortened to the pages the
+    /// database then had.
+    ///
+    /// One playback is O(p) in the bytes of the `p` pages the database
+    /// had, and answers `database` unchanged where the journal is not
+    /// hot.
+    #[must_use]
+    pub fn rolled_back(&self, database: &[u8]) -> Vec<u8> {
+        if !self.hot() {
+            return database.to_vec();
+        }
+        let page_size = size(u64::from(self.page_size));
+        let len = size(u64::from(self.pages)).saturating_mul(page_size);
+        let mut out = database.get(..len).unwrap_or(database).to_vec();
+        out.resize(len, 0);
+        for (number, start) in &self.restored {
+            let at = size(u64::from(*number))
+                .saturating_sub(1)
+                .saturating_mul(page_size);
+            let end = start.saturating_add(page_size);
+            let page = self.bytes.get(*start..end).unwrap_or_default();
+            for (slot, byte) in out.iter_mut().skip(at).zip(page) {
+                *slot = *byte;
+            }
+        }
+        out
+    }
+
     /// Reads every header of the journal and the records under it.
     fn play(&mut self) {
         let mut at = 0usize;

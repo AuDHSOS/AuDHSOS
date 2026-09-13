@@ -7226,6 +7226,8 @@ text	'12'
 blob	X'41'
 blob	X'41'
 null	NULL
+blob	X''
+blob	X''
 integer	1
 text	'a'
 integer	1

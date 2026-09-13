@@ -249,7 +249,7 @@ pub(crate) fn dequote(text: &[u8]) -> Vec<u8> {
             continue;
         }
         out.push(*byte);
-        doubled = *byte == quote && quote != b']';
+        doubled = *byte == quote;
     }
     out
 }
