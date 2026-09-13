@@ -493,6 +493,505 @@ fn put16(out: &mut [u8], at: usize, value: u16) {
     }
 }
 
+/// A page changed where it lies.
+///
+/// This is the part of `MemPage` in `src/btree.c` that one page decides
+/// for itself: `insertCell`, `dropCell`, `allocateSpace`, `freeSpace`,
+/// `pageFindSlot` and `defragmentPage`. Which page a cell belongs on is
+/// the balance of a tree and not of a page, and is not here.
+///
+/// The free space of a page is counted rather than carried, which is
+/// `btreeComputeFreeSpace` on every call: O(f) for `f` freeblocks, where
+/// SQLite keeps a number it has to keep right.
+pub struct Writer<'a> {
+    /// The page, reserved tail and all.
+    bytes: &'a mut [u8],
+    /// Where the b-tree header begins.
+    start: usize,
+    /// Bytes of the page the b-tree may use.
+    usable: usize,
+    /// What the page holds.
+    kind: Kind,
+}
+
+impl<'a> Writer<'a> {
+    /// Opens a page for changing.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Page::parse`] refuses the page with.
+    pub fn open(bytes: &'a mut [u8], number: u32, usable: u32) -> Result<Self, Error> {
+        let kind = Page::parse(bytes, number, usable)?.kind();
+        Ok(Writer {
+            start: if number == 1 { HEADER_LEN } else { 0 },
+            usable: size(u64::from(usable)),
+            kind,
+            bytes,
+        })
+    }
+
+    /// The page as a reader sees it.
+    #[must_use]
+    pub const fn page(&self) -> Page<'_> {
+        Page {
+            bytes: self.bytes,
+            start: self.start,
+            usable: self.usable,
+            kind: self.kind,
+        }
+    }
+
+    /// Two bytes of the page, big-endian.
+    fn get16(&self, at: usize) -> usize {
+        usize::from(u16_at(self.bytes, at).unwrap_or(0))
+    }
+
+    /// Writes two bytes of the page, big-endian.
+    fn put16(&mut self, at: usize, value: usize) {
+        let bytes = u16::try_from(value).unwrap_or(0).to_be_bytes();
+        for (slot, byte) in self.bytes.iter_mut().skip(at).zip(bytes) {
+            *slot = byte;
+        }
+    }
+
+    /// One byte of the page.
+    fn get8(&self, at: usize) -> usize {
+        usize::from(u8_at(self.bytes, at).unwrap_or(0))
+    }
+
+    /// Writes one byte of the page.
+    fn put8(&mut self, at: usize, value: usize) {
+        for slot in self.bytes.iter_mut().skip(at).take(1) {
+            *slot = u8::try_from(value).unwrap_or(0);
+        }
+    }
+
+    /// Copies `bytes` to `at`.
+    fn put(&mut self, at: usize, bytes: &[u8]) {
+        for (slot, byte) in self.bytes.iter_mut().skip(at).zip(bytes) {
+            *slot = *byte;
+        }
+    }
+
+    /// How many cells the page holds.
+    fn cells(&self) -> usize {
+        self.get16(self.start.saturating_add(3))
+    }
+
+    /// Where the cell pointer array begins.
+    const fn array(&self) -> usize {
+        self.start.saturating_add(self.kind.header_len())
+    }
+
+    /// Where the cell content area begins, with nought read as the whole
+    /// of the largest page there is.
+    fn content(&self) -> usize {
+        match self.get16(self.start.saturating_add(5)) {
+            0 => 65536,
+            top => top,
+        }
+    }
+
+    /// How many bytes of the page no cell holds, which is
+    /// `btreeComputeFreeSpace`: the gap between the pointer array and the
+    /// content, every freeblock, and the bytes too few to be one.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::FreeBlock`] where the list leaves the page or does not
+    /// count up.
+    pub fn free(&self) -> Result<usize, Error> {
+        let first = self.array().saturating_add(self.cells().saturating_mul(2));
+        let top = self.content();
+        if top < first || top > self.usable {
+            return Err(Error::FreeBlock);
+        }
+        let mut free = top.saturating_sub(first);
+        free = free.saturating_add(self.get8(self.start.saturating_add(7)));
+        let mut at = self.get16(self.start.saturating_add(1));
+        let mut last = 0;
+        while at > 0 {
+            if at <= last || at > self.usable.saturating_sub(4) {
+                return Err(Error::FreeBlock);
+            }
+            let size = self.get16(at.saturating_add(2));
+            if at.saturating_add(size) > self.usable {
+                return Err(Error::FreeBlock);
+            }
+            free = free.saturating_add(size);
+            last = at;
+            at = self.get16(at);
+        }
+        if free > self.usable {
+            return Err(Error::FreeBlock);
+        }
+        Ok(free)
+    }
+
+    /// Puts `size` bytes beginning at `at` back on the free list, which
+    /// is `freeSpace`. Freeblocks that touch are made one, and a block at
+    /// the content area moves the content area rather than joining the
+    /// list.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::FreeBlock`] where the list or the block leaves the page.
+    pub(crate) fn release(&mut self, at: usize, size: usize) -> Result<(), Error> {
+        let header = self.start;
+        let mut start = at;
+        let mut size = size;
+        let mut end = start.saturating_add(size);
+        let mut pointer = header.saturating_add(1);
+        let mut block = 0;
+        let mut fragments = 0;
+        if self.get16(pointer) != 0 {
+            loop {
+                block = self.get16(pointer);
+                if block >= start {
+                    break;
+                }
+                if block <= pointer {
+                    if block == 0 {
+                        break;
+                    }
+                    return Err(Error::FreeBlock);
+                }
+                pointer = block;
+            }
+            if block > self.usable.saturating_sub(4) {
+                return Err(Error::FreeBlock);
+            }
+            // A freeblock the released bytes reach is taken into them.
+            if block != 0 && end.saturating_add(3) >= block {
+                fragments = block.saturating_sub(end);
+                if end > block {
+                    return Err(Error::FreeBlock);
+                }
+                end = block.saturating_add(self.get16(block.saturating_add(2)));
+                if end > self.usable {
+                    return Err(Error::FreeBlock);
+                }
+                size = end.saturating_sub(start);
+                block = self.get16(block);
+            }
+            // And the freeblock before them takes them, where it reaches.
+            if pointer > header.saturating_add(1) {
+                let above = pointer.saturating_add(self.get16(pointer.saturating_add(2)));
+                if above.saturating_add(3) >= start {
+                    if above > start {
+                        return Err(Error::FreeBlock);
+                    }
+                    fragments = fragments.saturating_add(start.saturating_sub(above));
+                    size = end.saturating_sub(pointer);
+                    start = pointer;
+                }
+            }
+            let held = self.get8(header.saturating_add(7));
+            if fragments > held {
+                return Err(Error::FreeBlock);
+            }
+            self.put8(header.saturating_add(7), held.saturating_sub(fragments));
+        }
+        let top = self.content();
+        if start <= top {
+            // The bytes are at the front of the content area, so the area
+            // begins further down rather than the list growing.
+            if start < top || pointer != header.saturating_add(1) {
+                return Err(Error::FreeBlock);
+            }
+            self.put16(header.saturating_add(1), block);
+            self.put16(header.saturating_add(5), end);
+        } else {
+            self.put16(pointer, start);
+            self.put16(start, block);
+            self.put16(start.saturating_add(2), size);
+        }
+        Ok(())
+    }
+
+    /// The freeblock `want` bytes fit in, taken off the list, which is
+    /// `pageFindSlot`. A block between one and three bytes too large is
+    /// taken whole and the extra counted as fragments, unless that would
+    /// leave more fragments than a page may hold.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::FreeBlock`] where the list leaves the page.
+    pub(crate) fn slot(&mut self, want: usize) -> Result<Option<usize>, Error> {
+        let header = self.start;
+        let most = self.usable.saturating_sub(want);
+        let mut pointer = header.saturating_add(1);
+        let mut at = self.get16(pointer);
+        // The caller asks only where the list holds something, so the
+        // first block is past the header and every next one is past the
+        // block that named it.
+        while at <= most {
+            let size = self.get16(at.saturating_add(2));
+            if let Some(extra) = size.checked_sub(want) {
+                if extra < 4 {
+                    if self.get8(header.saturating_add(7)) > 57 {
+                        return Ok(None);
+                    }
+                    let next = self.get16(at);
+                    self.put16(pointer, next);
+                    let held = self.get8(header.saturating_add(7));
+                    self.put8(header.saturating_add(7), held.saturating_add(extra));
+                    return Ok(Some(at));
+                }
+                if at.saturating_add(extra) > most {
+                    return Err(Error::FreeBlock);
+                }
+                self.put16(at.saturating_add(2), extra);
+                return Ok(Some(at.saturating_add(extra)));
+            }
+            pointer = at;
+            at = self.get16(at);
+            if at <= pointer {
+                if at != 0 {
+                    return Err(Error::FreeBlock);
+                }
+                return Ok(None);
+            }
+        }
+        if at > most.saturating_add(want).saturating_sub(4) {
+            return Err(Error::FreeBlock);
+        }
+        Ok(None)
+    }
+
+    /// Moves every cell to the end of the page, so that the free space is
+    /// in one piece. This is `defragmentPage`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::FreeBlock`] where the page does not count up, and
+    /// whatever reading a cell refuses.
+    pub(crate) fn defragment(&mut self, most_fragments: usize) -> Result<(), Error> {
+        let header = self.start;
+        let cells = self.cells();
+        let first = self.array().saturating_add(cells.saturating_mul(2));
+        let free = self.free()?;
+        let top = if self.get8(header.saturating_add(7)) <= most_fragments {
+            self.closed()?
+        } else {
+            None
+        };
+        let top = match top {
+            Some(top) => top,
+            None => self.rewritten()?,
+        };
+        if self
+            .get8(header.saturating_add(7))
+            .saturating_add(top)
+            .saturating_sub(first)
+            != free
+        {
+            return Err(Error::FreeBlock);
+        }
+        self.put16(header.saturating_add(5), top);
+        self.put16(header.saturating_add(1), 0);
+        for at in first..top {
+            self.put8(at, 0);
+        }
+        Ok(())
+    }
+
+    /// The one or two freeblocks of a page closed up by moving the
+    /// content over them, which is the fast path of `defragmentPage`.
+    /// Answers nothing where the page has more than two of them.
+    fn closed(&mut self) -> Result<Option<usize>, Error> {
+        let header = self.start;
+        let free = self.get16(header.saturating_add(1));
+        if free == 0 {
+            return Ok(None);
+        }
+        // Every block of the list lies inside the page and ends inside
+        // it, which `free` has just counted, so what is left to refuse is
+        // a block the content area is above and a block another one
+        // reaches into.
+        let next = self.get16(free);
+        if next != 0 && self.get16(next) != 0 {
+            return Ok(None);
+        }
+        let mut size = self.get16(free.saturating_add(2));
+        let top = self.content();
+        if top >= free {
+            return Err(Error::FreeBlock);
+        }
+        let mut second = 0;
+        if next != 0 {
+            if free.saturating_add(size) > next {
+                return Err(Error::FreeBlock);
+            }
+            second = self.get16(next.saturating_add(2));
+            self.slide(
+                free.saturating_add(size),
+                free.saturating_add(size).saturating_add(second),
+                next.saturating_sub(free.saturating_add(size)),
+            );
+            size = size.saturating_add(second);
+        }
+        let broken = top.saturating_add(size);
+        self.slide(top, broken, free.saturating_sub(top));
+        let array = self.array();
+        for at in 0..self.cells() {
+            let pointer = array.saturating_add(at.saturating_mul(2));
+            let offset = self.get16(pointer);
+            if offset < free {
+                self.put16(pointer, offset.saturating_add(size));
+            } else if offset < next {
+                self.put16(pointer, offset.saturating_add(second));
+            }
+        }
+        Ok(Some(broken))
+    }
+
+    /// Every cell copied to the end of the page in the order the pointer
+    /// array names them, which is the slow path of `defragmentPage`.
+    fn rewritten(&mut self) -> Result<usize, Error> {
+        let array = self.array();
+        let cells = self.cells();
+        let lowest = self.content();
+        let mut top = self.usable;
+        let mut held = Vec::with_capacity(cells);
+        for at in 0..cells {
+            let cell = self.page().cell(at)?;
+            held.push(write_cell(&cell));
+        }
+        for (at, cell) in held.iter().enumerate() {
+            top = top.checked_sub(cell.len()).ok_or(Error::FreeBlock)?;
+            if top < lowest {
+                return Err(Error::FreeBlock);
+            }
+            self.put(top, cell);
+            self.put16(array.saturating_add(at.saturating_mul(2)), top);
+        }
+        self.put8(self.start.saturating_add(7), 0);
+        Ok(top)
+    }
+
+    /// Moves `len` bytes from `from` to `to`, which may overlap.
+    fn slide(&mut self, from: usize, to: usize, len: usize) {
+        if to > from {
+            for step in (0..len).rev() {
+                let byte = self.get8(from.saturating_add(step));
+                self.put8(to.saturating_add(step), byte);
+            }
+        } else {
+            for step in 0..len {
+                let byte = self.get8(from.saturating_add(step));
+                self.put8(to.saturating_add(step), byte);
+            }
+        }
+    }
+
+    /// Where `want` bytes of cell content go, which is `allocateSpace`:
+    /// off the free list where a block holds them, out of the gap
+    /// otherwise, and after moving every cell to the end where the gap is
+    /// too small.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::FreeBlock`] where the page does not count up.
+    pub(crate) fn allocate(&mut self, want: usize) -> Result<usize, Error> {
+        let header = self.start;
+        let gap = self.array().saturating_add(self.cells().saturating_mul(2));
+        let mut top = self.content();
+        if gap > top || top > self.usable {
+            return Err(Error::FreeBlock);
+        }
+        if (self.get8(header.saturating_add(1)) != 0 || self.get8(header.saturating_add(2)) != 0)
+            && gap.saturating_add(2) <= top
+            && let Some(at) = self.slot(want)?
+        {
+            if at <= gap {
+                return Err(Error::FreeBlock);
+            }
+            return Ok(at);
+        }
+        if gap.saturating_add(2).saturating_add(want) > top {
+            let free = self.free()?;
+            let most = free.saturating_sub(want.saturating_add(2)).min(4);
+            self.defragment(most)?;
+            top = self.content();
+            if gap.saturating_add(2).saturating_add(want) > top {
+                return Err(Error::FreeBlock);
+            }
+        }
+        top = top.saturating_sub(want);
+        self.put16(header.saturating_add(5), top);
+        Ok(top)
+    }
+
+    /// Puts `cell` on the page as its cell number `at`.
+    ///
+    /// Answers `false` where the page has no room for it, which is the
+    /// overflow cell of `insertCell` and is what a balance of the tree
+    /// answers instead.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::FreeBlock`] where the page does not count up.
+    pub fn insert(&mut self, at: usize, cell: &[u8]) -> Result<bool, Error> {
+        let cells = self.cells();
+        if at > cells {
+            return Err(Error::Overrun);
+        }
+        if cell.len().saturating_add(2) > self.free()? {
+            return Ok(false);
+        }
+        let offset = self.allocate(cell.len())?;
+        self.put(offset, cell);
+        let array = self.array();
+        let pointer = array.saturating_add(at.saturating_mul(2));
+        self.slide(
+            pointer,
+            pointer.saturating_add(2),
+            cells.saturating_sub(at).saturating_mul(2),
+        );
+        self.put16(pointer, offset);
+        self.put16(self.start.saturating_add(3), cells.saturating_add(1));
+        Ok(true)
+    }
+
+    /// Takes cell number `at` off the page, which is `dropCell`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Overrun`] for a cell the page does not have, and
+    /// [`Error::FreeBlock`] where the page does not count up.
+    pub fn remove(&mut self, at: usize) -> Result<(), Error> {
+        let cells = self.cells();
+        if at >= cells {
+            return Err(Error::Overrun);
+        }
+        let offset = self.page().cell_offset(at)?;
+        // A cell the reader answers is one whose every byte it found
+        // inside the page, and what is written back is never longer,
+        // because a length the file wrote as a wide varint is written
+        // back as the shortest one that holds it.
+        let size = write_cell(&self.page().cell(at)?).len();
+        self.release(offset, size)?;
+        let header = self.start;
+        if cells == 1 {
+            self.put16(header.saturating_add(1), 0);
+            self.put16(header.saturating_add(3), 0);
+            self.put16(header.saturating_add(5), self.usable);
+            self.put8(header.saturating_add(7), 0);
+            return Ok(());
+        }
+        let array = self.array();
+        let pointer = array.saturating_add(at.saturating_mul(2));
+        self.slide(
+            pointer.saturating_add(2),
+            pointer,
+            cells.saturating_sub(at).saturating_sub(1).saturating_mul(2),
+        );
+        self.put16(header.saturating_add(3), cells.saturating_sub(1));
+        Ok(())
+    }
+}
+
 /// A child pointer, which is a page number and therefore never zero.
 const fn child_page(number: u32) -> Result<u32, Error> {
     if number == 0 {

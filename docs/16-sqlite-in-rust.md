@@ -124,6 +124,7 @@ Each rule is checkable, and each makes a later thing possible.
 | The format under every configuration | 11 fixtures, the same three rows and the same index | the matrix, 16.11 |
 | A row written back as the bytes it was read from | 978 rows over 8 files | the fixtures the shell wrote |
 | A cell written back, and a page built from its cells | 1663 cells, 56 pages | the fixtures the shell wrote |
+| A cell taken off a page and put back | 1333 cells | the fixtures the shell wrote |
 | The readers against arbitrary bytes | 7 fuzz targets | `fuzz/sqlite_image`, `sqlite_tokens`, `sqlite_expr`, `sqlite_eval`, `sqlite_wal`, `sqlite_journal`, `sqlite_format` |
 
 The crate is `COMPLETE` in `crates/tools/xtask/src/policy.rs`: 100 percent
@@ -498,9 +499,9 @@ through the walker; the crate meets D4.
 
 ## 16.21 Q7. Writing
 
-Status: a row is written as a record and a page as its cells; the tree
-that puts a cell on a page is not.
-Depends on: Q3, Q5. Recorded in D-162 and D-163.
+Status: a row is written as a record, a page as its cells, and a cell
+onto a page; the tree that decides which page is not.
+Depends on: Q3, Q5. Recorded in D-162, D-163 and D-164.
 Size: L.
 
 ### Needs
@@ -514,9 +515,13 @@ Size: L.
    per value, the header of types and the body of values. Built.
 2. Write a cell as the bytes a page holds it in, and a page as the
    cells it holds. Built.
-3. Insert, delete and balance in a b-tree.
-4. Keep the free list and the pointer maps.
-5. Run a transaction through the rollback journal in each of its four
+3. Put a cell on a page and take one off: the free list, the space a
+   cell is given, and the page moved together where the space is in
+   pieces. Built.
+4. Balance a b-tree: split a page that will not hold a cell, and join
+   pages a delete has emptied.
+5. Keep the free list of the file and the pointer maps.
+6. Run a transaction through the rollback journal in each of its four
    modes, then through the WAL.
 
 ### Done when

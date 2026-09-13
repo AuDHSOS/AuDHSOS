@@ -578,3 +578,419 @@ fn an_interior_page_built_from_cells_keeps_its_right_most_pointer() {
         })
     );
 }
+
+#[test]
+fn a_cell_taken_off_a_page_and_put_back_leaves_the_page_as_it_was() {
+    use crate::image::Image;
+    use crate::page::{Writer, write_cell};
+    let mut counted = 0;
+    for (name, bytes) in crate::tests::WRITTEN {
+        let image = Image::open(bytes).unwrap();
+        let usable = image.header().usable();
+        let mut pages = Vec::new();
+        for root in roots(&image) {
+            tree_pages(&image, root, &mut pages);
+        }
+        for number in pages {
+            let whole = image.page_bytes(number).unwrap();
+            let page = image.page(number).unwrap();
+            let start = usize::from(number == 1) * crate::header::HEADER_LEN;
+            // A page that already holds a freeblock gives the cell back
+            // to a list that is not empty, and what comes back is a slot
+            // of another size at another place. Such a page is the
+            // balance's to rewrite, not this test's.
+            if whole[start + 1] != 0 || whole[start + 2] != 0 || whole[start + 7] != 0 {
+                continue;
+            }
+            for at in 0..page.cells() {
+                let cell = write_cell(&page.cell(at).unwrap());
+                let mut copy = whole.to_vec();
+                let mut writer = Writer::open(&mut copy, number, usable).unwrap();
+                let free = writer.free().unwrap();
+                writer.remove(at).unwrap();
+                assert_eq!(
+                    writer.free().unwrap(),
+                    free + cell.len() + 2,
+                    "{name} page {number} cell {at}, what the cell left"
+                );
+                assert!(writer.insert(at, &cell).unwrap());
+                assert_eq!(writer.free().unwrap(), free);
+                assert_eq!(copy, whole, "{name} page {number} cell {at}");
+                counted += 1;
+            }
+        }
+    }
+    assert!(
+        counted > 1300,
+        "only {counted} cells were taken off and put back"
+    );
+}
+
+/// One cell of `len` bytes of payload, with `rowid` as its key.
+fn leaf_cell(rowid: i64, len: usize) -> Vec<u8> {
+    let body = alloc::vec![u8::try_from(rowid & 0x7f).unwrap(); len];
+    crate::page::write_cell(&Cell::TableLeaf {
+        rowid,
+        payload: crate::page::Payload {
+            local: &body,
+            total: len,
+            overflow: None,
+        },
+    })
+}
+
+#[test]
+fn a_page_holds_what_is_put_on_it_and_gives_back_what_is_taken_off() {
+    use crate::page::{Writer, build};
+    // A run of inserts and removes over a page of five hundred and
+    // twelve bytes, sized so that the page fills, fragments, and is
+    // moved together again. The page is read back after every step.
+    let mut bytes = build(Kind::LeafTable, 2, 512, 512, &[], None).unwrap();
+    let mut held: Vec<Vec<u8>> = Vec::new();
+    let mut seed: u32 = 0x9e37_79b9;
+    let mut inserted = 0;
+    let mut removed = 0;
+    let mut refused = 0;
+    for step in 0..400_u32 {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let pick = usize::try_from(seed >> 16).unwrap();
+        let mut writer = Writer::open(&mut bytes, 2, 512).unwrap();
+        if held.is_empty() || pick % 3 != 0 {
+            let len = 4 + pick % 40;
+            let cell = leaf_cell(i64::from(step), len);
+            let at = pick % (held.len() + 1);
+            if writer.insert(at, &cell).unwrap() {
+                held.insert(at, cell);
+                inserted += 1;
+            } else {
+                refused += 1;
+            }
+        } else {
+            let at = pick % held.len();
+            writer.remove(at).unwrap();
+            held.remove(at);
+            removed += 1;
+        }
+        let page = Page::parse(&bytes, 2, 512).unwrap();
+        assert_eq!(page.cells(), held.len(), "step {step}");
+        for (at, cell) in held.iter().enumerate() {
+            let offset = page.cell_offset(at).unwrap();
+            assert_eq!(
+                bytes.get(offset..offset + cell.len()),
+                Some(cell.as_slice()),
+                "step {step}, cell {at}"
+            );
+        }
+    }
+    // The run reaches every shape: a page that fills, a page that empties
+    // again, and cells that go back on it.
+    assert!(inserted > 100, "only {inserted} cells went on");
+    assert!(removed > 50, "only {removed} cells came off");
+    assert!(refused > 0, "the page never filled");
+}
+
+#[test]
+fn a_page_whose_free_space_is_in_pieces_is_moved_together_to_take_a_cell() {
+    use crate::page::{Writer, build};
+    // Eight cells of forty bytes, then every other one taken off: the
+    // page holds a hundred and sixty free bytes in four pieces, none of
+    // which is forty-eight, so a cell of that size moves the page
+    // together rather than fitting in a piece of it.
+    let mut bytes = build(Kind::LeafTable, 2, 256, 256, &[], None).unwrap();
+    let mut writer = Writer::open(&mut bytes, 2, 256).unwrap();
+    for at in 0..5 {
+        assert!(
+            writer
+                .insert(at, &leaf_cell(i64::try_from(at).unwrap() + 1, 36))
+                .unwrap()
+        );
+    }
+    for at in [3, 1] {
+        writer.remove(at).unwrap();
+    }
+    let scattered = writer.free().unwrap();
+    let big = leaf_cell(9, 70);
+    assert!(big.len() + 2 <= scattered);
+    assert!(writer.insert(1, &big).unwrap());
+    // What is left is one piece: the cells lie at the end of the page
+    // and nothing is on the free list.
+    let page = Page::parse(&bytes, 2, 256).unwrap();
+    assert_eq!(page.cells(), 4);
+    assert_eq!(u16::from_be_bytes([bytes[1], bytes[2]]), 0);
+    assert_eq!(bytes[7], 0);
+    let offset = page.cell_offset(1).unwrap();
+    assert_eq!(bytes.get(offset..offset + big.len()), Some(big.as_slice()));
+}
+
+#[test]
+fn a_page_moved_together_keeps_every_cell_where_three_pieces_are_free() {
+    use crate::page::{Writer, build};
+    // Three freeblocks is one more than the fast path of
+    // `defragmentPage` takes, so every cell is copied to the end
+    // instead. The cells have to read back in the order they went on.
+    let mut bytes = build(Kind::LeafTable, 2, 256, 256, &[], None).unwrap();
+    let mut writer = Writer::open(&mut bytes, 2, 256).unwrap();
+    for at in 0..7 {
+        assert!(
+            writer
+                .insert(at, &leaf_cell(i64::try_from(at).unwrap() + 1, 24))
+                .unwrap()
+        );
+    }
+    for at in [5, 3, 1] {
+        writer.remove(at).unwrap();
+    }
+    let big = leaf_cell(9, 60);
+    assert!(writer.insert(0, &big).unwrap());
+    let page = Page::parse(&bytes, 2, 256).unwrap();
+    assert_eq!(page.cells(), 5);
+    let keys: Vec<i64> = (0..page.cells())
+        .map(|at| match page.cell(at).unwrap() {
+            Cell::TableLeaf { rowid, .. } => rowid,
+            _ => panic!("a cell of another shape"),
+        })
+        .collect();
+    assert_eq!(keys, [9, 1, 3, 5, 7]);
+}
+
+#[test]
+fn a_cell_index_no_page_has_is_refused() {
+    use crate::page::{Writer, build};
+    let mut bytes = build(Kind::LeafTable, 2, 256, 256, &[], None).unwrap();
+    let mut writer = Writer::open(&mut bytes, 2, 256).unwrap();
+    assert_eq!(writer.remove(0), Err(Error::Overrun));
+    assert_eq!(writer.insert(1, &leaf_cell(1, 8)), Err(Error::Overrun));
+    assert!(writer.insert(0, &leaf_cell(1, 8)).unwrap());
+    assert_eq!(writer.remove(1), Err(Error::Overrun));
+    // A cell of more than the page holds is answered, not written.
+    assert_eq!(writer.insert(0, &leaf_cell(2, 250)), Ok(false));
+}
+
+#[test]
+fn a_page_whose_free_space_does_not_count_up_is_refused_rather_than_written() {
+    use crate::page::{Writer, build};
+    // A page of five cells with two of them taken off again, so that it
+    // holds a free list of two blocks, and then every byte that says
+    // where the free space is set to each of a few values. What each one
+    // breaks is a rule of section 1.6, and every one of them has to be a
+    // refusal rather than a write past the page.
+    let mut good = build(Kind::LeafTable, 2, 256, 256, &[], None).unwrap();
+    {
+        let mut writer = Writer::open(&mut good, 2, 256).unwrap();
+        for at in 0..5 {
+            let cell = leaf_cell(i64::try_from(at).unwrap() + 1, 30);
+            assert!(writer.insert(at, &cell).unwrap());
+        }
+        writer.remove(3).unwrap();
+        writer.remove(1).unwrap();
+    }
+    let first = usize::from(u16::from_be_bytes([good[1], good[2]]));
+    let second = usize::from(u16::from_be_bytes([good[first], good[first + 1]]));
+    assert!(first > 0 && second > first, "the page holds two freeblocks");
+    let mut edits = alloc::vec![1, 2, 5, 6, 7];
+    for block in [first, second] {
+        edits.extend([block, block + 1, block + 2, block + 3]);
+    }
+    // The cell pointers, and the length and the key of each cell, which
+    // is what says how far a cell reaches.
+    {
+        let page = Page::parse(&good, 2, 256).unwrap();
+        for at in 0..page.cells() {
+            edits.push(8 + at * 2);
+            edits.push(9 + at * 2);
+            let offset = page.cell_offset(at).unwrap();
+            edits.extend([offset, offset + 1, offset + 2]);
+        }
+    }
+    let small = leaf_cell(9, 8);
+    let big = leaf_cell(9, 60);
+    let mut refused = 0;
+    let mut written = 0;
+    for at in edits {
+        for value in [0_u8, 1, 2, 4, 0x7f, 0x80, 0xfe, 0xff] {
+            for step in 0..5 {
+                let mut copy = good.clone();
+                copy[at] = value;
+                let Ok(mut writer) = Writer::open(&mut copy, 2, 256) else {
+                    continue;
+                };
+                let answer = match step {
+                    0 => writer.free().map(|_| true),
+                    1 => writer.insert(0, &small),
+                    2 => writer.insert(3, &big),
+                    3 => writer.remove(0).map(|()| true),
+                    _ => writer.remove(2).map(|()| true),
+                };
+                match answer {
+                    Ok(_) => written += 1,
+                    Err(error) => {
+                        assert!(
+                            matches!(error, Error::FreeBlock | Error::Overrun | Error::Varint),
+                            "a broken page refused with {error:?}"
+                        );
+                        refused += 1;
+                    }
+                }
+                // Whatever the page said, it is still a page: its cells
+                // are read back or refused, and none of them is read
+                // from outside it.
+                let Ok(page) = Page::parse(&copy, 2, 256) else {
+                    continue;
+                };
+                for index in 0..page.cells() {
+                    let _ = page.cell(index);
+                }
+            }
+        }
+    }
+    assert!(
+        refused > 20,
+        "only {refused} of the broken pages were refused"
+    );
+    assert!(
+        written > 20,
+        "only {written} of the broken pages were written"
+    );
+}
+
+/// The steps of a write, each asked of its own copy of a page.
+fn steps(good: &[u8], at: usize, value: u8, refused: &mut u32) {
+    use crate::page::Writer;
+    for step in 0..13 {
+        let mut copy = good.to_vec();
+        copy[at] = value;
+        let Ok(mut writer) = Writer::open(&mut copy, 2, 256) else {
+            return;
+        };
+        let answer = match step {
+            0 => writer.free().map(|_| ()),
+            1 => writer.slot(4).map(|_| ()),
+            2 => writer.slot(20).map(|_| ()),
+            3 => writer.slot(34).map(|_| ()),
+            4 => writer.slot(36).map(|_| ()),
+            5 => writer.release(200, 20),
+            6 => writer.release(60, 20),
+            7 => writer.release(20, 4),
+            8 => writer.defragment(4),
+            9 => writer.defragment(0),
+            10 => writer.allocate(20).map(|_| ()),
+            11 => writer.allocate(200).map(|_| ()),
+            _ => writer.remove(0),
+        };
+        if let Err(error) = answer {
+            assert!(
+                matches!(error, Error::FreeBlock | Error::Overrun | Error::Varint),
+                "a broken page refused with {error:?}"
+            );
+            *refused += 1;
+        }
+        // Whatever the step said, the page is still one: every cell of
+        // it is read back or refused, and none from outside it.
+        if let Ok(page) = Page::parse(&copy, 2, 256) {
+            for index in 0..page.cells() {
+                let _ = page.cell(index);
+            }
+        }
+    }
+}
+
+#[test]
+fn every_step_of_a_write_refuses_a_page_that_does_not_count_up() {
+    use crate::page::{Writer, build};
+    // The steps are asked one by one rather than through `insert`,
+    // because `insert` counts the free space first and a page that does
+    // not count up never reaches the steps after it. One page holds a
+    // free list of two blocks and one holds none, because what a step
+    // does with an empty list is its own path.
+    let mut pieces = build(Kind::LeafTable, 2, 256, 256, &[], None).unwrap();
+    {
+        let mut writer = Writer::open(&mut pieces, 2, 256).unwrap();
+        for at in 0..5 {
+            let cell = leaf_cell(i64::try_from(at).unwrap() + 1, 30);
+            assert!(writer.insert(at, &cell).unwrap());
+        }
+        writer.remove(3).unwrap();
+        writer.remove(1).unwrap();
+    }
+    let mut whole = build(Kind::LeafTable, 2, 256, 256, &[], None).unwrap();
+    {
+        let mut writer = Writer::open(&mut whole, 2, 256).unwrap();
+        for at in 0..4 {
+            let cell = leaf_cell(i64::try_from(at).unwrap() + 1, 30);
+            assert!(writer.insert(at, &cell).unwrap());
+        }
+    }
+    let mut refused = 0;
+    for good in [&pieces, &whole] {
+        for at in 0..good.len() {
+            for value in [
+                0_u8, 1, 2, 3, 4, 8, 0x3f, 0x40, 0x7f, 0x80, 0xc0, 0xfe, 0xff,
+            ] {
+                steps(good, at, value, &mut refused);
+            }
+        }
+    }
+    assert!(refused > 50, "only {refused} steps refused a broken page");
+}
+
+#[test]
+fn what_a_page_refuses_where_its_own_numbers_do_not_allow_the_step() {
+    use crate::page::{Writer, build};
+    // A page of five cells with the second and the fourth taken off, so
+    // that it holds two freeblocks of a size this test knows.
+    let mut bytes = build(Kind::LeafTable, 2, 256, 256, &[], None).unwrap();
+    {
+        let mut writer = Writer::open(&mut bytes, 2, 256).unwrap();
+        for at in 0..5 {
+            let cell = leaf_cell(i64::try_from(at).unwrap() + 1, 30);
+            assert!(writer.insert(at, &cell).unwrap());
+        }
+        writer.remove(3).unwrap();
+        writer.remove(1).unwrap();
+    }
+    let first = usize::from(u16::from_be_bytes([bytes[1], bytes[2]]));
+    let size = usize::from(u16::from_be_bytes([bytes[first + 2], bytes[first + 3]]));
+    assert_eq!(size, 32);
+
+    // Bytes that end two short of a freeblock take those two into the
+    // block, and a page that says it holds no fragmented byte cannot
+    // give two back.
+    let mut copy = bytes.clone();
+    let mut writer = Writer::open(&mut copy, 2, 256).unwrap();
+    assert_eq!(writer.release(first - 6, 4), Err(Error::FreeBlock));
+
+    // A block between one and three bytes wider than what is asked for
+    // is taken whole and the rest counted as fragments, which a page
+    // already holding fifty-eight of them has no room for.
+    let mut copy = bytes.clone();
+    copy[7] = 58;
+    let mut writer = Writer::open(&mut copy, 2, 256).unwrap();
+    assert_eq!(writer.slot(size - 2), Ok(None));
+    // With room for them the block goes, and the two bytes are counted.
+    let mut copy = bytes.clone();
+    copy[7] = 57;
+    let mut writer = Writer::open(&mut copy, 2, 256).unwrap();
+    assert_eq!(writer.slot(size - 2), Ok(Some(first)));
+    assert_eq!(copy[7], 59);
+
+    // A free list that begins inside the cell pointer array names space
+    // the cells themselves are in.
+    let mut copy = bytes.clone();
+    copy[1] = 0;
+    copy[2] = 10;
+    copy[10] = 0;
+    copy[11] = 0;
+    copy[12] = 0;
+    copy[13] = 20;
+    let mut writer = Writer::open(&mut copy, 2, 256).unwrap();
+    assert_eq!(writer.allocate(20), Err(Error::FreeBlock));
+
+    // A cell whose length says it reaches past the page is refused by
+    // the reader, so the page never gives it back.
+    let page = Page::parse(&bytes, 2, 256).unwrap();
+    let offset = page.cell_offset(0).unwrap();
+    let mut copy = bytes.clone();
+    copy[offset] = 100;
+    let mut writer = Writer::open(&mut copy, 2, 256).unwrap();
+    assert_eq!(writer.remove(0), Err(Error::Overrun));
+}

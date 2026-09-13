@@ -183,6 +183,7 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
             cells.push(db_sqlite::page::write_cell(&cell));
         }
         built_back(&page, number, &header, &cells);
+        changed(&image, &page, number, &header);
         assert_eq!(
             page.right_most().is_some(),
             page.kind().is_interior(),
@@ -305,6 +306,34 @@ fn built_back(page: &Page<'_>, number: u32, header: &Header, cells: &[Vec<u8>]) 
             .cell(index)
             .expect("a cell this engine wrote is one it reads");
         assert_eq!(was, now, "a cell that moved");
+    }
+}
+
+/// A page changed where it lies: a cell taken off it and a cell put on
+/// it, of a page a file decided the shape of. Neither may panic, and
+/// what either leaves behind is still a page a reader reads or refuses.
+fn changed(image: &Image<'_>, page: &Page<'_>, number: u32, header: &Header) {
+    let cell: &[u8] = match page.kind() {
+        Kind::LeafTable => b"\x02\x01\x00\x00",
+        Kind::LeafIndex => b"\x02\x00\x00",
+        Kind::InteriorTable => b"\x00\x00\x00\x02\x01",
+        Kind::InteriorIndex => b"\x00\x00\x00\x02\x02\x00\x00",
+    };
+    let Ok(bytes) = image.page_bytes(number) else {
+        return;
+    };
+    let mut copy = bytes.to_vec();
+    let Ok(mut writer) = db_sqlite::page::Writer::open(&mut copy, number, header.usable()) else {
+        return;
+    };
+    let _ = writer.free();
+    let _ = writer.remove(0);
+    let _ = writer.insert(0, cell);
+    let _ = writer.remove(page.cells().saturating_sub(1));
+    if let Ok(again) = Page::parse(&copy, number, header.usable()) {
+        for at in 0..again.cells() {
+            let _ = again.cell(at);
+        }
     }
 }
 

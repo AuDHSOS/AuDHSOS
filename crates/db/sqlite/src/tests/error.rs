@@ -21,6 +21,7 @@ fn every_refusal_says_which_rule_of_the_format_was_broken() {
         (Error::SerialType(10), "serial type 10"),
         (Error::Depth, "deeper than this crate walks"),
         (Error::Overflow(5), "overflow chain at page 5"),
+        (Error::FreeBlock, "free space of a page"),
     ];
     for (error, expected) in cases {
         let said = format!("{error}");

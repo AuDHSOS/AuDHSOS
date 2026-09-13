@@ -3908,6 +3908,33 @@ to the pages the C library wrote.
   need not match, because a file may write a length as a varint longer
   than the value needs and this engine writes the shortest one.
 
+### 6.6.104 A cell put on a page and taken off (`db-sqlite`)
+
+D-164, document 16 step Q7. `Writer` is the part of `MemPage` one page
+decides for itself, and what holds it is the pages the C library wrote.
+
+- Every cell of every page of eight fixtures that carries no freeblock
+  and no fragmented byte is taken off its page and put back: 1333 cells,
+  and the page has to be the bytes it was. A page that already holds a
+  freeblock is left out, because the cell comes back into a list that is
+  not empty and what comes back is a slot of another size at another
+  place; such a page is the balance's to rewrite.
+- A run of four hundred inserts and removes over one page, sized so that
+  the page fills, fragments, and is moved together again. The page is
+  read back after every step and every cell compared against what went
+  on.
+- Two tests reach the two ways a page is moved together: one freeblock,
+  which is closed by sliding the content over it, and three, which is
+  one more than that path takes, so every cell is copied to the end
+  instead. The second holds the order of the cells, which is what a
+  copy in the wrong order would lose.
+- A page with one byte of it changed, over every byte of the page and
+  thirteen values, put to each of thirteen steps of a write on its own
+  copy: every one of them refuses rather than writing outside the page,
+  and the page still reads back afterwards.
+- `sqlite_image` does the same against arbitrary bytes: a cell taken off
+  a page a file decided the shape of, and a cell put on it.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

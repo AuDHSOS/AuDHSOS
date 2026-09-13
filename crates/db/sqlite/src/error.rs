@@ -38,6 +38,9 @@ pub enum Error {
     /// An overflow chain that reaches a page it has already read, or that
     /// ends before the payload is whole.
     Overflow(u32),
+    /// A list of freeblocks that leaves the page, turns back on itself,
+    /// or says a size the page does not hold.
+    FreeBlock,
 }
 
 impl fmt::Display for Error {
@@ -53,6 +56,7 @@ impl fmt::Display for Error {
             Error::Encoding(code) => {
                 write!(f, "text encoding {code} is not UTF-8, UTF-16le or UTF-16be")
             }
+            Error::FreeBlock => f.write_str("the free space of a page does not add up to the page"),
             Error::Page(number) => write!(f, "page {number} is not in the file"),
             Error::PageKind(byte) => write!(f, "{byte} is not a b-tree page type"),
             Error::Overrun => f.write_str("a cell or a record reaches past its page"),
