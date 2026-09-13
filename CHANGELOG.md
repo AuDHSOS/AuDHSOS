@@ -675,6 +675,40 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   line, which from outside is indistinguishable from a machine that has
   stopped (D-133).
 
+### Fixed
+
+- The network server no longer loses a pool buffer when the stack refuses
+  the call it travelled into: the port is asked about first, through the
+  new `Stack::is_bound` and `Stack::listens_on`, and a destination this
+  host has no address for is refused before a window pair leaves the pool.
+  A `UdpBind` or `TcpListen` on a port that is held answers `AddressInUse`.
+
+- `push` leaves the outbound ring alone while a connection is not open, so
+  what a client writes between `TcpConnect` and the handshake goes when the
+  connection opens instead of being dropped; `TcpShutdown` moves what the
+  ring holds into the connection before the `FIN`.
+
+- A datagram is whole or it is not delivered: `UdpSendTo` refuses a `len`
+  above one datagram of the link rather than sending part of it and leaving
+  the rest to prefix the next one, and a datagram that arrives goes into
+  the ring at its whole length.
+
+- The rings of a socket slot stay with the client they were first given to
+  until the server learns that client is gone, and both rings are emptied
+  before they are handed out. A closed client could otherwise read and
+  write the socket of whoever took the slot next.
+
+- A second `Resolve` with another name while one runs answers `Busy`
+  instead of the running name's addresses.
+
+- The socket number of a slot handed out more than sixty-five thousand
+  times names that slot again: the count the slot holds is kept inside the
+  sixteen bits the number carries.
+
+- The network driver puts every receive buffer back when a used element
+  refuses, so eight refusals no longer leave the receive queue empty and
+  the server deaf.
+
 ### Changed
 
 - D-145: every thread of a program gets sixty-four pages of stack, not

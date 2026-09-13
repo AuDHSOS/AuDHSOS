@@ -406,6 +406,18 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     if violations.is_empty() {
         violations.extend(block_lines(&session.output()));
     }
+    // The network, before anything else this run drives: the program of
+    // the image takes the connection the forwarded port opens, sends back
+    // what it was sent, and then makes an HTTP request over the same
+    // connection, which this answers. It waits for the connection with a
+    // deadline of its own, so the runner opens it as soon as the program
+    // says it is listening.
+    if violations.is_empty() {
+        violations.extend(exchange_over_the_network(forwarded, &mut session));
+    }
+    if violations.is_empty() {
+        violations.extend(network_lines(&session.output()));
+    }
     // The picture, while the machine still runs: `app-hello` is waiting to
     // be typed at, so nothing has ended yet. What is on the screen is
     // checked against what `app-paint` says it drew and against the font
@@ -446,15 +458,6 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     // against.
     if violations.is_empty() {
         violations.extend(inject_canvas(&socket, &mut session, root));
-    }
-    // The network: the program of the image takes the connection the
-    // forwarded port opens, sends back what it was sent, and then makes an
-    // HTTP request over the same connection, which this answers.
-    if violations.is_empty() {
-        violations.extend(exchange_over_the_network(forwarded, &mut session));
-    }
-    if violations.is_empty() {
-        violations.extend(network_lines(&session.output()));
     }
     // Two clients wrote at once and no line of either may be torn: every
     // line the second one wrote has to stand whole and once, which the

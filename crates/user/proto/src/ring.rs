@@ -109,12 +109,18 @@ impl Ring {
         }
     }
 
-    /// Writes the header of a private, zero-filled ring before its page is
-    /// shared.
+    /// Empties the ring before its page is shared.
+    ///
+    /// The bytes go as well as the header: a page is handed to one client
+    /// after another, and what the one before it wrote stands in the page
+    /// the next one maps.
     pub fn initialize(&self) {
         self.write_seq.store(0, Ordering::Relaxed);
         self.read_seq.store(0, Ordering::Relaxed);
         self.dropped.store(0, Ordering::Relaxed);
+        for byte in &self.data {
+            byte.store(0, Ordering::Relaxed);
+        }
         self.capacity.store(RING_CAPACITY, Ordering::Release);
     }
 

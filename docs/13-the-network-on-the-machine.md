@@ -481,16 +481,16 @@ than through one IPC call per byte (D-31's shape, D-116).
 | Message | Answer |
 |---------|--------|
 | `Interface` | the MAC address, the addresses, the router of the link, whether the address configuration client has a lease |
-| `UdpBind { port }` | a socket number and the memory object of its two rings |
-| `UdpSendTo { socket, remote, len }` | how many bytes of the outbound ring went out |
+| `UdpBind { port }` | a socket number and the memory object of its two rings, or `AddressInUse` for a port a socket holds |
+| `UdpSendTo { socket, remote, len }` | how many bytes of the outbound ring went out, or `BufferTooSmall` for a `len` above 1472, which is one datagram of the link |
 | `UdpClose { socket }` | - |
 | `TcpConnect { remote }` | a socket number and its rings; the connection is still being opened |
-| `TcpListen { port }` | a listener number |
+| `TcpListen { port }` | a listener number, or `AddressInUse` for a port a listener holds |
 | `TcpAccept { socket }` | the same number, now a connection, and its rings; or `WouldBlock` |
 | `TcpSend { socket, len }`, `TcpRecv { socket }` | how many bytes moved through the ring |
 | `TcpShutdown { socket, direction }`, `TcpClose { socket }` | - |
 | `TcpState { socket }` | where the connection stands |
-| `Resolve { name }` | the addresses of both families, `WouldBlock` while the resolution runs, or a failure |
+| `Resolve { name }` | the addresses of both families, `WouldBlock` while the resolution runs, `Busy` for any other name while one runs, or a failure |
 
 Two rings per socket in one memory object of two pages: the one the server
 writes and the client reads, and the one the client writes and the server
@@ -504,7 +504,17 @@ bound.
 A datagram stands in the inbound ring behind a fixed record of
 twenty-four bytes: how many bytes the payload is, and the port and address
 it came from. A reader takes the record and then waits until the ring
-holds the payload it names.
+holds the payload it names. A datagram is whole or it is not delivered:
+the record and the payload go into the ring together or neither goes, and
+the socket holds the datagram until the ring has room for both.
+
+The rings of a slot are one memory object, which the client maps and the
+server cannot unmap. A slot therefore stays with the client it was first
+given to, even after that client closes the socket, and is offered to
+another client only once the server has learned the first one is gone; a
+client that finds no slot is refused. The server empties both rings before
+it hands them out, so no byte of one socket stands in the page of the
+next.
 
 Nothing after the reply is a message, and nothing is signalled either: a
 call that cannot be answered yet is answered `WouldBlock` and the client

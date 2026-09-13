@@ -346,12 +346,16 @@ impl RamFrames {
     /// Acts as the device: writes `frame` into buffer `index` behind a
     /// header of `header` bytes, and answers what a used element would
     /// report as written.
+    ///
+    /// A device writes into the buffer it was given and no further, so
+    /// what is longer than one buffer ends at that buffer's last byte.
     pub fn deliver(&mut self, index: u16, header: &[u8], frame: &[u8]) -> u32 {
         let Some(at) = self.at(index) else {
             return 0;
         };
+        let room = usize::try_from(self.stride).unwrap_or(0);
         let mut written = 0usize;
-        for (step, byte) in header.iter().chain(frame.iter()).enumerate() {
+        for (step, byte) in header.iter().chain(frame.iter()).take(room).enumerate() {
             if let Some(slot) = self.bytes.get_mut(at.saturating_add(step)) {
                 *slot = *byte;
                 written = written.saturating_add(1);

@@ -221,8 +221,17 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
 
     // Every receive buffer goes into the available ring before the first
     // frame arrives, and the device is told they are there.
-    let _filled = net.fill(&mut receive_queue, &mut dma.receive, &dma.taken);
+    let filled = net
+        .fill(&mut receive_queue, &mut dma.receive, &dma.taken)
+        .unwrap_or(0);
     net.notify(&mut registers, Side::Receive);
+    if filled == 0 {
+        say(
+            &mut gate,
+            voice,
+            &Report::of(format_args!("[net] no receive buffer went in\n")),
+        );
+    }
 
     let mut driver = Driver {
         net,
@@ -272,11 +281,28 @@ impl Driver<'_> {
                 self.net.notify(&mut self.registers, Side::Receive);
                 frame
             }
-            // A refusal of the queue says the driver and the device no
-            // longer agree; the frame is lost and the next round carries
-            // on, which is what a driver with no allocator can do.
-            Err(_refused) => None,
+            // A refusal says the driver and the device no longer agree on
+            // what is in the queue, and a refusal that came before the
+            // buffer went back is a buffer the device no longer has. Every
+            // buffer this driver holds goes back in, so that eight
+            // refusals do not leave the receive queue empty and the server
+            // deaf.
+            Err(_refused) => {
+                self.refill();
+                None
+            }
         }
+    }
+
+    /// Puts every receive buffer the device does not hold back into the
+    /// available ring.
+    fn refill(&mut self) {
+        let _filled = self.net.fill(
+            &mut self.receive_queue,
+            &mut self.dma.receive,
+            &self.dma.taken,
+        );
+        self.net.notify(&mut self.registers, Side::Receive);
     }
 
     /// Sends one frame, and answers whether the device took it.

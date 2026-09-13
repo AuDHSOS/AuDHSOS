@@ -9,9 +9,13 @@
 //! answer [`Error::WouldBlock`], and the client asks again (D-142).
 //!
 //! Invariants: a socket slot and the rings of that slot are handed out
-//! together and taken back together; no byte is moved out of a connection
-//! that the inbound ring has no room for, which is what makes the window
-//! stop advancing.
+//! together and taken back together, and the rings are emptied before they
+//! go; no byte is moved out of a connection that the inbound ring has no
+//! room for, which is what makes the window stop advancing; and no buffer
+//! leaves the pool for a call of the stack that can refuse it, because a
+//! buffer travels into that call and a refusal does not bring it back —
+//! the port is asked about first, and a pool that still holds a buffer is
+//! a stack that still has a table slot, the two having the same count.
 
 use audhsos_abi::Error;
 use audhsos_abi::Handle as RawHandle;
@@ -23,8 +27,8 @@ use net_tcp::State as TcpState;
 use net_wire::{IpAddr, Port};
 use user_proto::ring::SocketPage;
 use user_proto::socket::{
-    Addresses, DATAGRAM_HEADER_LEN, Direction, Endpoint, Interface, Opened, Reply, Request, State,
-    datagram_header,
+    Addresses, DATAGRAM_HEADER_LEN, Direction, Endpoint, Interface, Name, Opened, Reply, Request,
+    State, datagram_header,
 };
 
 use crate::memory::{CONNECTIONS, Pool, SOCKETS};
@@ -43,6 +47,11 @@ pub struct Rings<'a> {
 /// How many bytes one round moves between a ring and a connection.
 const CHUNK: usize = 1024;
 
+/// The longest datagram this server sends in one call: one IPv4 datagram
+/// over a link of 1500 bytes, less the twenty bytes of the header and the
+/// eight of UDP, which is what leaves no fragment.
+const DATAGRAM: usize = 1472;
+
 /// The network server.
 #[derive(Debug)]
 pub struct Server<'a> {
@@ -54,9 +63,9 @@ pub struct Server<'a> {
     rings: [Rings<'a>; MAX_SOCKETS],
     /// Which slot is whose.
     sockets: Sockets,
-    /// The client whose name is being resolved, and the socket it is
-    /// being resolved through.
-    resolving: Option<(u64, Handle)>,
+    /// The client whose name is being resolved, the socket it is being
+    /// resolved through, and the name itself.
+    resolving: Option<(u64, Handle, Name)>,
 }
 
 impl<'a> Server<'a> {
@@ -149,9 +158,7 @@ impl<'a> Server<'a> {
     ) -> Reply {
         match request {
             Request::Interface => Reply::Interface(Ok(self.interface())),
-            Request::Resolve { name } => {
-                Reply::Resolved(self.resolve(badge, name.as_bytes(), now, rng))
-            }
+            Request::Resolve { name } => Reply::Resolved(self.resolve(badge, name, now, rng)),
             Request::UdpBind { port } => Reply::Bound(self.bind(badge, *port, rng)),
             Request::UdpSendTo {
                 socket,
@@ -184,7 +191,9 @@ impl<'a> Server<'a> {
                 self.give_up(index);
             }
         }
-        if let Some((whose, socket)) = self.resolving
+        // The client is gone, so the rings it was given may go to another.
+        self.sockets.release(badge);
+        if let Some((whose, socket, _name)) = self.resolving
             && whose == badge
         {
             self.forget_resolution(socket);
@@ -210,17 +219,21 @@ impl<'a> Server<'a> {
     fn resolve<R: Rng + ?Sized>(
         &mut self,
         badge: u64,
-        name: &[u8],
+        name: &Name,
         now: Instant,
         rng: &mut R,
     ) -> Result<Addresses, Error> {
-        if let Some((whose, socket)) = self.resolving {
-            if whose != badge {
+        if let Some((whose, socket, running)) = self.resolving {
+            // One resolution runs at a time, and the answer that is coming
+            // is the answer to the name it began with; a client asking for
+            // another name is told the server is busy, as another client
+            // is.
+            if whose != badge || running != *name {
                 return Err(Error::Busy);
             }
             return self.resolution(socket);
         }
-        let text = core::str::from_utf8(name).map_err(|_| Error::InvalidArgument)?;
+        let text = core::str::from_utf8(name.as_bytes()).map_err(|_| Error::InvalidArgument)?;
         let asked = DnsName::from_ascii(text).map_err(|_| Error::InvalidArgument)?;
         let buffer = self.pool.take_datagram().ok_or(Error::OutOfMemory)?;
         // The port is drawn from the dynamic range as RFC 6056 asks, which
@@ -231,7 +244,7 @@ impl<'a> Server<'a> {
         };
         match self.stack.resolve(&asked, socket, now) {
             Ok(()) => {
-                self.resolving = Some((badge, socket));
+                self.resolving = Some((badge, socket, *name));
                 Err(Error::WouldBlock)
             }
             Err(error) => {
@@ -279,6 +292,9 @@ impl<'a> Server<'a> {
         port: u16,
         rng: &mut R,
     ) -> Result<Opened, Error> {
+        if port != 0 && self.stack.is_bound(Port::new(port)) {
+            return Err(Error::AddressInUse);
+        }
         let buffer = self.pool.take_datagram().ok_or(Error::OutOfMemory)?;
         let opened = if port == 0 {
             self.stack.bind_ephemeral(None, rng, buffer)
@@ -299,6 +315,9 @@ impl<'a> Server<'a> {
         remote: Endpoint,
         rng: &mut R,
     ) -> Result<Opened, Error> {
+        if self.stack.source_for(remote.address).is_none() {
+            return Err(Error::Unavailable);
+        }
         let (send, receive) = self.pool.take_window().ok_or(Error::OutOfMemory)?;
         let handle = match self
             .stack
@@ -321,6 +340,9 @@ impl<'a> Server<'a> {
         rng: &mut R,
     ) -> Result<u32, Error> {
         let local = self.stack.addresses().next().ok_or(Error::Unavailable)?;
+        if self.stack.listens_on(Port::new(port)) {
+            return Err(Error::AddressInUse);
+        }
         let (send, receive) = self.pool.take_window().ok_or(Error::OutOfMemory)?;
         let handle = match self
             .stack
@@ -396,8 +418,14 @@ impl<'a> Server<'a> {
     ) -> Result<u32, Error> {
         let entry = self.datagram(badge, number)?;
         let index = self.sockets.slot(badge, number).ok_or(Error::NotFound)?;
-        let mut payload = [0u8; CHUNK];
-        let wanted = usize::try_from(len).unwrap_or(0).min(CHUNK);
+        let wanted = usize::try_from(len).unwrap_or(0);
+        // A longer datagram is refused before anything leaves the ring:
+        // what this took and left behind would be the head of the next
+        // one.
+        if wanted > DATAGRAM {
+            return Err(Error::BufferTooSmall);
+        }
+        let mut payload = [0u8; DATAGRAM];
         let taken = self
             .page(index)?
             .outbound
@@ -415,6 +443,12 @@ impl<'a> Server<'a> {
         if direction == Direction::Read {
             return Ok(());
         }
+        // What the client left in the ring goes into the connection first:
+        // the `FIN` follows everything the send buffer holds, and a
+        // connection that is closing takes nothing more.
+        let index = self.sockets.slot(badge, number).ok_or(Error::NotFound)?;
+        let page = self.page(index)?;
+        let _sent = self.push(page, entry.handle);
         let connection = self.stack.connection(entry.handle).map_err(refusal)?;
         connection.close().map_err(|_| Error::InvalidState)
     }
@@ -561,6 +595,12 @@ impl<'a> Server<'a> {
         let Ok(connection) = self.stack.connection(handle) else {
             return 0;
         };
+        // A connection that is not open yet takes nothing, and the bytes
+        // stay in the ring until it is: the room below is the send buffer
+        // and says nothing about the state.
+        if !connection.state().can_send() {
+            return 0;
+        }
         let room = connection.writable().min(CHUNK);
         if room == 0 {
             return 0;
@@ -606,7 +646,6 @@ impl<'a> Server<'a> {
     /// datagram socket: what overflows is what `net-udp` counts as
     /// dropped, and nothing here grows.
     fn take_datagrams(&mut self, page: &SocketPage, handle: Handle) {
-        let mut payload = [0u8; CHUNK];
         loop {
             let Ok(socket) = self.stack.socket(handle) else {
                 return;
@@ -614,19 +653,18 @@ impl<'a> Server<'a> {
             let Some(received) = socket.peek() else {
                 return;
             };
-            let len = received.payload.len().min(CHUNK);
+            let len = received.payload.len();
             let from = Endpoint::new(received.source, received.port.get());
-            let header = datagram_header(from, u16::try_from(len).unwrap_or(0));
-            payload
-                .get_mut(..len)
-                .unwrap_or(&mut [])
-                .copy_from_slice(received.payload.get(..len).unwrap_or(&[]));
+            let header = datagram_header(from, u16::try_from(len).unwrap_or(u16::MAX));
             let needed = u32::try_from(DATAGRAM_HEADER_LEN.saturating_add(len)).unwrap_or(u32::MAX);
             if needed > page.inbound.free() {
                 return;
             }
+            // The whole datagram goes in, straight out of the socket:
+            // a record that said one length and carried another would be
+            // read as the head of the next one.
             let _header = page.inbound.write(&header);
-            let _payload = page.inbound.write(payload.get(..len).unwrap_or(&[]));
+            let _payload = page.inbound.write(received.payload);
             let _taken = socket.discard();
         }
     }

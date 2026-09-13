@@ -11,7 +11,10 @@
 //! the slot (D-116).
 //!
 //! Invariants: a slot is either free or belongs to exactly one client; a
-//! number of the wrong client is refused as if the slot were free.
+//! number of the wrong client is refused as if the slot were free; and a
+//! slot that has been handed out stays with the client that had it until
+//! that client is gone, because the rings of a slot are memory the client
+//! maps and no call of this server takes a mapping back.
 
 use net_stack::Handle;
 
@@ -54,6 +57,8 @@ pub struct Sockets {
     slots: [Option<Entry>; MAX_SOCKETS],
     /// How often each slot has been handed out.
     generations: [u32; MAX_SOCKETS],
+    /// Which client last held each slot, kept after the slot is closed.
+    owners: [Option<u64>; MAX_SOCKETS],
 }
 
 /// How far up the generation sits in a socket number.
@@ -70,14 +75,18 @@ impl Sockets {
         Sockets {
             slots: [None; MAX_SOCKETS],
             generations: [0; MAX_SOCKETS],
+            owners: [None; MAX_SOCKETS],
         }
     }
 
     /// Opens a socket for `badge` and answers its number and the slot it
     /// took, or `None` when every slot is taken.
     pub fn open(&mut self, badge: u64, kind: Kind, handle: Handle) -> Option<(u32, usize)> {
-        let index = self.slots.iter().position(Option::is_none)?;
+        let index = self.free_for(badge)?;
         let generation = self.generations.get(index).copied().unwrap_or(0);
+        if let Some(owner) = self.owners.get_mut(index) {
+            *owner = Some(badge);
+        }
         *self.slots.get_mut(index)? = Some(Entry {
             badge,
             kind,
@@ -86,6 +95,37 @@ impl Sockets {
             peer_closed: false,
         });
         Some((number_of(index, generation), index))
+    }
+
+    /// The first free slot `badge` may have: one nobody has held, or one
+    /// it held itself.
+    ///
+    /// The rings of a slot are one memory object, and a client that was
+    /// given it maps it for as long as it runs — the server cannot take
+    /// that mapping back. A slot therefore stays with the client that
+    /// first had it until [`release`](Sockets::release) says that client
+    /// is gone, and a client that finds none is refused rather than
+    /// handed the rings another client can still read.
+    fn free_for(&self, badge: u64) -> Option<usize> {
+        self.slots.iter().enumerate().position(|(index, slot)| {
+            slot.is_none()
+                && self
+                    .owners
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .is_none_or(|owner| owner == badge)
+        })
+    }
+
+    /// Lets go of every slot a client that is gone last held, so that
+    /// another client may have them.
+    pub fn release(&mut self, badge: u64) {
+        for (index, owner) in self.owners.iter_mut().enumerate() {
+            if *owner == Some(badge) && self.slots.get(index).is_none_or(Option::is_none) {
+                *owner = None;
+            }
+        }
     }
 
     /// The slot `number` names, for the client `badge` names.
@@ -126,7 +166,10 @@ impl Sockets {
     pub fn close(&mut self, index: usize) -> Option<Entry> {
         let entry = self.slots.get_mut(index)?.take()?;
         if let Some(generation) = self.generations.get_mut(index) {
-            *generation = generation.wrapping_add(1);
+            // The count stays inside the sixteen bits a number carries, so
+            // that the count a slot holds and the count a number holds are
+            // the same value after the sixty-five thousandth use.
+            *generation = generation.wrapping_add(1) & SLOT_MASK;
         }
         Some(entry)
     }

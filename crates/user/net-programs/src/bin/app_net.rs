@@ -285,15 +285,28 @@ fn echo_and_fetch(
         &Report::of(format_args!("[net-app] accepted socket {socket}\n")),
     );
 
+    // One line goes back, and a line that arrives in pieces is read and
+    // written piece by piece: what the peer sent in one write of its own
+    // is not what one read of a stream answers.
     let mut taken = [0u8; CHUNK];
-    let len = read(gate, server, socket, page, &mut taken, until, idle)?;
-    let line = taken.get(..len).unwrap_or(&[]);
+    let mut echoed = 0usize;
+    loop {
+        let len = read(gate, server, socket, page, &mut taken, until, idle)?;
+        let line = taken.get(..len).unwrap_or(&[]);
+        if line.is_empty() {
+            break;
+        }
+        write(gate, server, socket, page, line, until, idle)?;
+        echoed = echoed.saturating_add(len);
+        if line.last() == Some(&b'\n') {
+            break;
+        }
+    }
     say(
         gate,
         voice,
-        &Report::of(format_args!("[net-app] echo {len} bytes\n")),
+        &Report::of(format_args!("[net-app] echo {echoed} bytes\n")),
     );
-    write(gate, server, socket, page, line, until, idle)?;
 
     fetch(gate, server, socket, page, voice, until, idle)?;
     let _shut = call(

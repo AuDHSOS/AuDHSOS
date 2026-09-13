@@ -89,3 +89,54 @@ fn the_slots_of_one_client_are_the_ones_it_opened() {
 fn a_table_that_was_never_used_is_empty() {
     assert!(Sockets::new().is_empty());
 }
+
+#[test]
+fn a_slot_that_has_been_used_sixty_five_thousand_times_still_answers() {
+    let mut sockets = Sockets::new();
+    // The count a number carries is sixteen bits wide; the count the slot
+    // holds has to stay inside them or the two stop agreeing.
+    for _round in 0..=0x1_0000u32 {
+        let (number, index) = sockets
+            .open(7, Kind::Connection, handle(0))
+            .expect("a slot was free");
+        assert_eq!(sockets.slot(7, number), Some(index), "the number was lost");
+        let _closed = sockets.close(index).expect("the slot was open");
+    }
+}
+
+#[test]
+fn a_slot_one_client_let_go_of_is_not_handed_to_another() {
+    let mut sockets = Sockets::new();
+    let mut held = [0usize; MAX_SOCKETS];
+    for slot in &mut held {
+        let (_number, index) = sockets
+            .open(7, Kind::Connection, handle(0))
+            .expect("a slot was free");
+        *slot = index;
+    }
+    for index in held {
+        let _closed = sockets.close(index).expect("the slot was open");
+    }
+    assert!(
+        sockets.open(8, Kind::Connection, handle(0)).is_none(),
+        "the rings of one client were handed to another"
+    );
+    assert!(
+        sockets.open(7, Kind::Connection, handle(0)).is_some(),
+        "the client that held the slot was refused its own"
+    );
+}
+
+#[test]
+fn a_slot_is_another_clients_once_the_one_that_held_it_is_gone() {
+    let mut sockets = Sockets::new();
+    let (_number, index) = sockets
+        .open(7, Kind::Connection, handle(0))
+        .expect("a slot was free");
+    let _closed = sockets.close(index).expect("the slot was open");
+    sockets.release(7);
+    let (_taken, again) = sockets
+        .open(8, Kind::Connection, handle(0))
+        .expect("the slot was let go of");
+    assert_eq!(again, index);
+}
