@@ -599,13 +599,17 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Property accessors (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/property-accessors --summary` | 21 | 42 | 32 (76.19%) | 10 (23.81%) | 0 (0.00%) |
 | String.prototype methods (focused) | focused | `e5402166a49fcab99d5075ef2c076e3a49572d46` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/String/prototype --summary` | 1,073 | 2,144 | 1,708 (79.66%) | 382 (17.82%) | 54 (2.52%) |
 | Complete pinned suite, including staging and Intl | full | `49211ba` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `8e2e79f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 2,769 (2.69%) | 64,429 (62.60%) | 35,727 (34.71%) |
 
-Every number in this table is the stack backend's. `Realm::evaluate` compiles
-with `realm = true`, and in that mode the register lowering refuses every
-declaration, `var`, function and lexical block, so no Test262 file reaches the
-register engine under `crates/jrs/src/engine/`. Test262 becomes a measurement of
-that engine only after step G5 of the milestone group in
-[docs/jrs-architecture.md](../../docs/jrs-architecture.md).
+The last two rows measure the two execution paths against the same suite. Every
+row above them is the stack backend, which `Realm::evaluate` uses by default.
+The `--engine` row is the register engine under `crates/jrs/src/engine/`, which
+`jrs --engine` selects for the whole realm: a Script its lowering does not take
+is refused as `Unsupported` rather than run on the stack path, because the two
+paths hold separate object models. That refusal is why its unsupported count is
+high; it is the honest starting number of the migration, not a defect of the
+suite. The gap between the two rows is what the milestone group in
+[docs/jrs-architecture.md](../../docs/jrs-architecture.md) has to close.
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
