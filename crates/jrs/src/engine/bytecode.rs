@@ -310,6 +310,23 @@ pub enum Instruction {
         /// Feedback vector slot for inline caching.
         slot: u16,
     },
+    /// Constructs with a callable: `acc = new func_reg(args)` (7.3.15).
+    ///
+    /// `target` holds the object 10.1.13 creates, where the collector sees it
+    /// while the constructor runs and where the return takes it when the
+    /// constructor answers no object of its own.
+    Construct {
+        /// Register holding the constructor.
+        func: Reg,
+        /// Register the created object is kept in.
+        target: Reg,
+        /// First argument register.
+        arg_start: Reg,
+        /// Number of arguments passed.
+        arg_count: u16,
+        /// Feedback vector slot for call target caching.
+        slot: u16,
+    },
     /// Store named property: `obj_reg[name] = acc` (uses feedback slot).
     SetNamed {
         /// Object register.
@@ -433,6 +450,9 @@ pub struct BytecodeFunction {
     pub self_register: Option<Reg>,
     /// Register initialized with the `this` value of the call (9.4.5).
     pub this_register: Option<Reg>,
+    /// Whether this function has a `[[Construct]]` method, which 10.2.5 gives an
+    /// ordinary function and withholds from a method and an arrow.
+    pub constructible: bool,
     /// Own heap-context slot count, when this frame creates a lexical context.
     pub own_context_slot_count: Option<u16>,
     /// Slot counts expected in each captured outer lexical context.
@@ -461,6 +481,7 @@ impl BytecodeFunction {
             binding_count: parameter_count,
             self_register: None,
             this_register: None,
+            constructible: false,
             own_context_slot_count: None,
             outer_context_slot_counts: Vec::new(),
             feedback_slots: Vec::new(),
@@ -696,6 +717,17 @@ impl BytecodeFunction {
                 slot,
             } => {
                 self.verify_register(pc, receiver)?;
+                self.verify_call(pc, func, arg_start, arg_count, slot)?;
+                None
+            }
+            Instruction::Construct {
+                func,
+                target,
+                arg_start,
+                arg_count,
+                slot,
+            } => {
+                self.verify_register(pc, target)?;
                 self.verify_call(pc, func, arg_start, arg_count, slot)?;
                 None
             }

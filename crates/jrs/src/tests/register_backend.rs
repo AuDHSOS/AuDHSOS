@@ -358,6 +358,32 @@ fn this_is_the_receiver_of_the_call() -> Result<(), Error> {
 }
 
 #[test]
+fn new_constructs_from_the_prototype_of_the_constructor() -> Result<(), Error> {
+    // 10.2.5 gives an ordinary function a `prototype`, 10.1.13 creates the
+    // object from it, and 10.2.2 answers that object unless the constructor
+    // answers one of its own.
+    for source in [
+        "function F(){};typeof F.prototype",
+        "function F(){};F.prototype===F.prototype",
+        "function F(){this.x=1}var f=new F();f.x",
+        "function F(a){this.x=a}var f=new F(41);f.x+1",
+        "function F(){this.x='a'}var f=new F();f.x+'b'",
+        "function F(){}var f=new F();typeof f",
+        "function F(){}var f=new F();typeof f.nope",
+        // A primitive completion is discarded for the created object.
+        "function F(){return 7}var f=new F();typeof f",
+        // Two constructions of the same constructor are distinct objects.
+        "function F(){this.x=1}var a=new F();var b=new F();b.x=2;a.x+b.x",
+    ] {
+        differential(source)?;
+    }
+
+    // An arrow has no [[Construct]] (10.2.5), so the lowering does not take it.
+    assert!(!compile("var g=()=>1;var f=new g();1", Limits::default())?.uses_register_backend());
+    Ok(())
+}
+
+#[test]
 fn a_property_of_a_function_object_is_read_and_written() -> Result<(), Error> {
     // A function object is an ordinary object with a Prototype, so it carries
     // own properties like any other. The lowering tracks no layout for it, so
@@ -385,7 +411,6 @@ fn a_property_of_a_function_object_is_read_and_written() -> Result<(), Error> {
     ));
     for source in [
         "var f=function(){};f.name=1;1",
-        "var f=function(){};f.prototype=1;1",
         "let o={g:function(){this.call=1;return 2}};o.g()",
     ] {
         assert!(

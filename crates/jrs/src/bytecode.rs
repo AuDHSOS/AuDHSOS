@@ -677,6 +677,8 @@ struct RegisterLowerer {
     max_binding_count: u16,
     bindings: BTreeMap<String, RegisterBinding>,
     loops: Vec<RegisterLoop>,
+    /// Every code id 10.2.5 made a constructor.
+    constructible: BTreeSet<u32>,
     /// Which types a loop head starts from. Widened only for the second
     /// attempt of [`Self::lower_loop`].
     loop_head_types: RegisterLoopHead,
@@ -778,6 +780,7 @@ struct RegisterSnapshot {
     function_parameters: BTreeMap<u32, Vec<RegisterType>>,
     function_capture_effects: BTreeMap<u32, BTreeMap<String, RegisterType>>,
     function_layout_effects: BTreeMap<u32, BTreeMap<u32, RegisterObjectLayout>>,
+    constructible: BTreeSet<u32>,
     binding_type_hints: BTreeMap<String, RegisterType>,
     return_type: Option<RegisterType>,
 }
@@ -803,6 +806,7 @@ impl RegisterLowerer {
             bindings: BTreeMap::new(),
             loops: Vec::new(),
             completions: Vec::new(),
+            constructible: BTreeSet::new(),
             loop_head_types: RegisterLoopHead::Declared,
             thrown: Vec::new(),
             next_object_id: 0,
@@ -1230,6 +1234,7 @@ impl RegisterLowerer {
             function_parameters: self.function_parameters.clone(),
             function_capture_effects: self.function_capture_effects.clone(),
             function_layout_effects: self.function_layout_effects.clone(),
+            constructible: self.constructible.clone(),
             binding_type_hints: self.binding_type_hints.clone(),
             return_type: self.return_type,
         }
@@ -1255,6 +1260,7 @@ impl RegisterLowerer {
         self.function_parameters = snapshot.function_parameters;
         self.function_capture_effects = snapshot.function_capture_effects;
         self.function_layout_effects = snapshot.function_layout_effects;
+        self.constructible = snapshot.constructible;
         self.binding_type_hints = snapshot.binding_type_hints;
         self.return_type = snapshot.return_type;
     }
@@ -1416,6 +1422,7 @@ impl RegisterLowerer {
             ExprKind::Function(function) => self.lower_function(function)?,
             ExprKind::Call(callee, arguments) => self.lower_call(callee, arguments)?,
             ExprKind::Member(base, key) => self.lower_member(base, key)?,
+            ExprKind::Construct(callee, arguments) => self.lower_construct(callee, arguments)?,
             ExprKind::SetMember(target, operator, value, _) => {
                 self.lower_member_assignment(target, *operator, value)?
             }
@@ -1845,6 +1852,10 @@ impl RegisterLowerer {
         child.code.parameter_count = u16::try_from(function.parameters.len()).ok()?;
         child.code.binding_count = child.max_binding_count;
         child.code.self_register = self_register;
+        // 10.2.5 gives an ordinary function a `[[Construct]]` and a `prototype`,
+        // and withholds both from a method and an arrow.
+        let child_constructible = function.constructible && !function.arrow;
+        child.code.constructible = child_constructible;
         let nested_functions = core::mem::take(&mut child.code.functions);
         self.code.functions.push(child.code);
         self.code.functions.extend(nested_functions);
@@ -1854,6 +1865,11 @@ impl RegisterLowerer {
             .extend(child.function_capture_effects);
         self.function_layout_effects
             .extend(child.function_layout_effects);
+        if child_constructible {
+            self.constructible.insert(code_id);
+        }
+        self.constructible
+            .extend(child.constructible.iter().copied());
         self.function_returns.insert(code_id, return_type);
         self.function_parameters.insert(
             code_id,
@@ -2198,6 +2214,91 @@ impl RegisterLowerer {
             self.object_layouts.extend(effects);
         }
         self.function_returns.get(&code_id).copied()
+    }
+
+    /// Lowers `new` (13.3.5.1), whose callee must be a function of this unit
+    /// that 10.2.5 made a constructor.
+    ///
+    /// The object 10.1.13 creates is kept in a register of this frame, where
+    /// the collector sees it while the constructor runs.
+    fn lower_construct(&mut self, callee: &Expr, arguments: &[Expr]) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let RegisterType::Function(code_id) = self.lower(callee)? else {
+            return None;
+        };
+        if !self.constructible.contains(&code_id) {
+            return None;
+        }
+        if self
+            .function_capture_effects
+            .get(&code_id)
+            .is_some_and(|effects| {
+                effects.keys().any(|name| {
+                    self.bindings
+                        .get(name)
+                        .is_some_and(|binding| binding.value_type.is_none())
+                })
+            })
+        {
+            return None;
+        }
+        let function = self.allocate_register()?;
+        self.code.emit(Instruction::Star(function));
+        let target = self.allocate_register()?;
+        let parameter_types = self.function_parameters.get(&code_id)?.clone();
+        let mut argument_registers = Vec::new();
+        for (index, argument) in arguments.iter().enumerate() {
+            let argument_type = self.lower(argument)?;
+            if !argument_type.is_primitive()
+                || parameter_types
+                    .get(index)
+                    .is_some_and(|parameter| !parameter.accepts(argument_type))
+            {
+                return None;
+            }
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::Star(register));
+            argument_registers.push(register);
+        }
+        let dummy = if argument_registers.is_empty() {
+            let register = self.allocate_register()?;
+            self.code.emit(Instruction::LdaUndefined);
+            self.code.emit(Instruction::Star(register));
+            Some(register)
+        } else {
+            None
+        };
+        let arg_start = argument_registers.first().copied().or(dummy)?;
+        let arg_count = u16::try_from(arguments.len()).ok()?;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::Call)?;
+        self.code.emit(Instruction::Construct {
+            func: function,
+            target,
+            arg_start,
+            arg_count,
+            slot,
+        });
+        if let Some(dummy) = dummy {
+            self.release_register(dummy)?;
+        }
+        for register in argument_registers.into_iter().rev() {
+            self.release_register(register)?;
+        }
+        self.release_register(target)?;
+        self.release_register(function)?;
+        if let Some(effects) = self.function_capture_effects.get(&code_id).cloned() {
+            for (name, effect) in effects {
+                if let Some(binding) = self.bindings.get_mut(&name) {
+                    binding.value_type = Some(binding.value_type?.merge(effect));
+                }
+            }
+        }
+        if let Some(effects) = self.function_layout_effects.get(&code_id).cloned() {
+            self.object_layouts.extend(effects);
+        }
+        // The result is the created object or whatever the constructor answered
+        // instead; the lowering can name neither.
+        Some(RegisterType::Unknown)
     }
 
     /// Lowers a call whose callee is a property of an object, evaluating the
@@ -5861,7 +5962,7 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
                 || register_expression_writes_names(yes, names)?
                 || register_expression_writes_names(no, names)?
         }
-        ExprKind::Call(callee, arguments) => {
+        ExprKind::Call(callee, arguments) | ExprKind::Construct(callee, arguments) => {
             if register_expression_writes_names(callee, names)? {
                 return Some(true);
             }
@@ -5905,7 +6006,6 @@ fn register_expression_writes_names(expression: &Expr, names: &BTreeSet<String>)
         ExprKind::Regex(_, _)
         | ExprKind::Template(_, _)
         | ExprKind::Await(_)
-        | ExprKind::Construct(_, _)
         | ExprKind::Class(_)
         | ExprKind::Super
         | ExprKind::NewTarget
@@ -6111,7 +6211,7 @@ fn register_expression_references(
             register_expression_references(yes, names, nested_free_names)?;
             register_expression_references(no, names, nested_free_names)?;
         }
-        ExprKind::Call(callee, arguments) => {
+        ExprKind::Call(callee, arguments) | ExprKind::Construct(callee, arguments) => {
             register_expression_references(callee, names, nested_free_names)?;
             for argument in arguments {
                 register_expression_references(argument, names, nested_free_names)?;
@@ -6145,7 +6245,6 @@ fn register_expression_references(
         ExprKind::Regex(_, _)
         | ExprKind::Template(_, _)
         | ExprKind::Await(_)
-        | ExprKind::Construct(_, _)
         | ExprKind::Class(_)
         | ExprKind::Super
         | ExprKind::NewTarget

@@ -48,6 +48,18 @@ impl PropertyFlags {
             is_accessor: false,
         }
     }
+
+    /// The attributes 10.2.5 gives a constructor's `prototype` and that
+    /// prototype's `constructor`: writable and configurable, never enumerated.
+    #[must_use]
+    pub const fn constructor_data() -> Self {
+        Self {
+            writable: true,
+            enumerable: false,
+            configurable: true,
+            is_accessor: false,
+        }
+    }
 }
 
 /// Descriptor for a single property inside a Shape.

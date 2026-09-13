@@ -110,6 +110,8 @@ struct Call {
     caller_code_id: Option<u32>,
     /// Set when an operation opened this call and waits for its answer.
     resume: Option<Resume>,
+    /// Set when 7.3.15 opened this call; see [`FrameHeader::construct`].
+    construct: Option<Reg>,
 }
 
 /// What the engine writes after the name of an unresolvable binding.
@@ -174,6 +176,10 @@ pub struct FrameHeader {
     pub caller_code_id: Option<u32>,
     /// Code unit the caller belongs to, which a call of another Script leaves.
     pub caller_unit: u32,
+    /// Set when 7.3.15 opened this call. Names the caller register holding the
+    /// object 10.1.13 created, which the return answers when the constructor
+    /// answers no object of its own (10.2.2 step 13).
+    pub construct: Option<Reg>,
     /// Active binding count to restore with the caller.
     pub caller_binding_count: usize,
     /// Lexical heap context to restore with the caller.
@@ -406,6 +412,71 @@ impl RegisterVM {
                 Err(error) => return Err(error.into()),
             }
         }
+    }
+
+    /// `OrdinaryCreateFromConstructor` of 10.1.13: the object `new` starts
+    /// from, whose Prototype is the constructor's `prototype` when that is an
+    /// Object and `%Object.prototype%` otherwise.
+    ///
+    /// 7.3.15 step 1 refuses a callee without `[[Construct]]`. A function of this
+    /// engine has one exactly when 10.2.5 gave it a `prototype`, so a callee
+    /// without that property is not a constructor.
+    fn ordinary_create_from_constructor(
+        &mut self,
+        code: &BytecodeFunction,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+        callee: Value,
+    ) -> Result<ObjectRef, VMError> {
+        let Some(function) = callee.as_object() else {
+            return Err(type_error(heap, realm, "value is not a constructor"));
+        };
+        if !matches!(
+            heap.get_object(function).ok_or(VMError::TypeError)?.kind,
+            ObjectKind::Function { .. }
+        ) {
+            return Err(type_error(heap, realm, "value is not a constructor"));
+        }
+        let name = PropertyKey::String(heap.strings.intern("prototype")?);
+        let Some(property) = heap.lookup_named(function, name)? else {
+            return Err(type_error(heap, realm, "value is not a constructor"));
+        };
+        let shape = heap.shapes.root_shape();
+        let object = self.allocate_object(code, heap, realm, shape)?;
+        if property.value.as_object().is_some() {
+            heap.set_object_prototype(object, property.value)?;
+        }
+        Ok(object)
+    }
+
+    /// `MakeConstructor` of 10.2.5: gives a function an own `prototype` whose
+    /// own `constructor` is the function, both writable and not enumerable.
+    ///
+    /// The object is allocated first and installed after, so a collection
+    /// between the two cannot leave the function holding a forwarded address.
+    fn make_constructor(
+        &mut self,
+        code: &BytecodeFunction,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+        function: ObjectRef,
+    ) -> Result<(), VMError> {
+        let prototype = self.allocate_object(code, heap, realm, heap.shapes.root_shape())?;
+        let constructor = PropertyKey::String(heap.strings.intern("constructor")?);
+        heap.define_own_named(
+            prototype,
+            constructor,
+            Value::from_object(function),
+            PropertyFlags::constructor_data(),
+        )?;
+        let name = PropertyKey::String(heap.strings.intern("prototype")?);
+        heap.define_own_named(
+            function,
+            name,
+            Value::from_object(prototype),
+            PropertyFlags::constructor_data(),
+        )?;
+        Ok(())
     }
 
     fn allocate_context(
@@ -814,6 +885,7 @@ impl RegisterVM {
             caller_binding_count: self.active_binding_count,
             caller_context: self.current_context,
             resume: call.resume,
+            construct: call.construct,
         });
         self.unit = unit;
         self.fp = next_frame;
@@ -2078,6 +2150,7 @@ impl RegisterVM {
                 slot: 0,
                 return_pc: 0,
                 resume: None,
+                construct: None,
                 caller_code_id: None,
             },
             heap,
@@ -2699,6 +2772,7 @@ impl RegisterVM {
                             }),
                             return_pc: pc.saturating_sub(1),
                             caller_code_id: current_code_id,
+                            construct: None,
                         };
                         match self.convert_to_primitive(
                             call,
@@ -3162,6 +3236,7 @@ impl RegisterVM {
                                 },
                             ))?;
                     let captures_context = !target.outer_context_slot_counts.is_empty();
+                    let constructible = target.constructible;
                     let function = self.allocate_function(
                         active_code,
                         heap,
@@ -3169,7 +3244,47 @@ impl RegisterVM {
                         code_id,
                         captures_context,
                     )?;
+                    // 10.2.5 gives an ordinary function its `prototype`; a
+                    // method and an arrow have none and no `[[Construct]]`.
+                    if constructible {
+                        self.acc = Value::from_object(function);
+                        self.make_constructor(active_code, heap, realm, function)?;
+                    }
                     self.acc = Value::from_object(function);
+                }
+                Instruction::Construct {
+                    func,
+                    target,
+                    arg_start,
+                    arg_count,
+                    slot,
+                } => {
+                    // 7.3.15 refuses a callee without `[[Construct]]`, which here
+                    // is a callee without the `prototype` 10.2.5 installs.
+                    let callee = self.read_reg(func)?;
+                    let object =
+                        self.ordinary_create_from_constructor(active_code, heap, realm, callee)?;
+                    self.write_reg(target, Value::from_object(object))?;
+                    if let Some(code_id) = self.enter_call(
+                        units,
+                        active_feedback,
+                        heap,
+                        realm,
+                        Call {
+                            receiver: Value::from_object(object),
+                            func,
+                            arg_start,
+                            arg_count,
+                            slot,
+                            return_pc: pc,
+                            resume: None,
+                            caller_code_id: current_code_id,
+                            construct: Some(target),
+                        },
+                    )? {
+                        current_code_id = Some(code_id);
+                        pc = 0;
+                    }
                 }
                 Instruction::Call {
                     func,
@@ -3190,6 +3305,7 @@ impl RegisterVM {
                             slot,
                             return_pc: pc,
                             resume: None,
+                            construct: None,
                             caller_code_id: current_code_id,
                         },
                     )? {
@@ -3218,6 +3334,7 @@ impl RegisterVM {
                             slot,
                             return_pc: pc,
                             resume: None,
+                            construct: None,
                             caller_code_id: current_code_id,
                         },
                     )? {
@@ -3240,6 +3357,13 @@ impl RegisterVM {
                         self.unit = frame.caller_unit;
                         self.active_binding_count = frame.caller_binding_count;
                         self.current_context = frame.caller_context;
+                        // 10.2.2 step 13: a constructor that answers no Object
+                        // answers the one its call started from.
+                        if let Some(target) = frame.construct
+                            && self.acc.as_object().is_none()
+                        {
+                            self.acc = self.read_reg(target)?;
+                        }
                         if let Some(resume) = frame.resume {
                             // An operation of the caller is waiting for this
                             // answer, and runs again once it has one. It belongs
@@ -3268,6 +3392,7 @@ impl RegisterVM {
                                 arg_count: 0,
                                 slot: 0,
                                 resume: Some(resume),
+                                construct: None,
                                 return_pc: pc,
                                 caller_code_id: current_code_id,
                             };
@@ -4543,6 +4668,7 @@ mod tests {
             return_pc: 0,
             resume: None,
             caller_code_id: None,
+            construct: None,
         };
         assert_eq!(
             RegisterVM::call_iterator_intrinsic(
