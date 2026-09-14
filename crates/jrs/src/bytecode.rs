@@ -741,6 +741,19 @@ type RegisterArrayLayout<'a> = (
     Option<RegisterType>,
 );
 
+/// The binding a `for`-`in` head writes each iteration.
+#[derive(Clone, Copy)]
+enum ForInHead<'a> {
+    /// A lexical head: 14.7.5.5 makes one binding per iteration.
+    PerIteration { name: &'a str, mutable: bool },
+    /// A `var` head: the one binding the declaration made, in its register.
+    Var {
+        name: &'a str,
+        register: crate::engine::bytecode::Reg,
+        declared_type: RegisterType,
+    },
+}
+
 /// What a `for`-`in` or `for`-`of` head leaves for its body.
 #[derive(Clone, Copy)]
 struct IterationHead {
@@ -4649,6 +4662,46 @@ impl RegisterLowerer {
     /// one function-scoped binding whose inferred type the loop would have to
     /// widen. A per-iteration binding captured by a closure needs a fresh
     /// context per step, which this lowering does not create.
+    /// The binding a `for`-`in` head writes.
+    ///
+    /// 14.7.5.5 gives a lexical head a binding of its own in every iteration.
+    /// A `var` head has none: it writes the one function-scoped binding the
+    /// declaration already made, which the frame keeps in a register.
+    fn for_in_head_binding<'a>(
+        &self,
+        binding: Option<&'a (BindingPattern, Option<bool>)>,
+        target: Option<&parser::AssignmentTarget>,
+        body: &Stmt,
+    ) -> Option<ForInHead<'a>> {
+        let (pattern, None) = binding? else {
+            return self
+                .iteration_binding(binding, target, body)
+                .map(|(name, mutable)| ForInHead::PerIteration { name, mutable });
+        };
+        if target.is_some() {
+            return None;
+        }
+        let name = pattern.identifier()?;
+        let mut direct = BTreeSet::new();
+        let mut nested = BTreeSet::new();
+        register_statement_references(body, &mut direct, &mut nested)?;
+        if nested.contains(name) {
+            return None;
+        }
+        let declared = *self.bindings.get(name)?;
+        if !declared.mutable || declared.stable_function_identity {
+            return None;
+        }
+        let RegisterBindingStorage::Register(register) = declared.storage else {
+            return None;
+        };
+        Some(ForInHead::Var {
+            name,
+            register,
+            declared_type: declared.value_type?,
+        })
+    }
+
     fn iteration_binding<'a>(
         &self,
         binding: Option<&'a (BindingPattern, Option<bool>)>,
@@ -4688,13 +4741,12 @@ impl RegisterLowerer {
         body: &Stmt,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
-        let (name, mutable) = self.iteration_binding(binding, target, body)?;
-        // ToObject on a primitive is not lowered, and neither is the empty
-        // enumeration of null or undefined.
-        let object_type = self.lower(object)?;
-        if !object_type.is_object() {
-            return None;
-        }
+        let head_binding = self.for_in_head_binding(binding, target, body)?;
+        // 14.7.5.6 decides at run time what the head is: undefined and null
+        // enumerate nothing, an Object enumerates its chain, and a primitive
+        // needs the ToObject this engine cannot build. The instruction names
+        // that where it happens, so any head is lowered.
+        self.lower(object)?;
 
         let [state, keys, index, visited] = self.allocate_register_window()?;
         self.code.emit(Instruction::Star(state));
@@ -4709,18 +4761,29 @@ impl RegisterLowerer {
         let result_register = self.allocate_register()?;
         self.code.emit(Instruction::Star(result_register));
 
-        let key_register = self.allocate_register()?;
-        self.active_binding_count = self.active_binding_count.checked_add(1)?;
-        self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
-        self.bindings.insert(
-            String::from(name),
-            RegisterBinding {
-                storage: RegisterBindingStorage::Register(key_register),
-                value_type: Some(RegisterType::String),
-                mutable,
-                stable_function_identity: false,
-            },
-        );
+        let key_register = match head_binding {
+            ForInHead::PerIteration { name, mutable } => {
+                let key_register = self.allocate_register()?;
+                self.active_binding_count = self.active_binding_count.checked_add(1)?;
+                self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+                self.bindings.insert(
+                    String::from(name),
+                    RegisterBinding {
+                        storage: RegisterBindingStorage::Register(key_register),
+                        value_type: Some(RegisterType::String),
+                        mutable,
+                        stable_function_identity: false,
+                    },
+                );
+                key_register
+            }
+            // The declaration already made the binding; the loop only writes
+            // it, and inside the body it holds the key.
+            ForInHead::Var { name, register, .. } => {
+                self.bindings.get_mut(name)?.value_type = Some(RegisterType::String);
+                register
+            }
+        };
 
         let mut bindings_at_head = self.bindings.clone();
         infer_register_var_types_to_fixed_point(
@@ -4747,9 +4810,23 @@ impl RegisterLowerer {
             &bindings_at_head,
         )?;
         self.bindings = bindings_at_head;
-        self.bindings.remove(name)?;
-        self.active_binding_count = self.active_binding_count.checked_sub(1)?;
-        self.release_register(key_register)?;
+        match head_binding {
+            ForInHead::PerIteration { name, .. } => {
+                self.bindings.remove(name)?;
+                self.active_binding_count = self.active_binding_count.checked_sub(1)?;
+                self.release_register(key_register)?;
+            }
+            // An enumeration that ran left a key in the binding; one that
+            // enumerated nothing left what the declaration put there.
+            ForInHead::Var {
+                name,
+                declared_type,
+                ..
+            } => {
+                self.bindings.get_mut(name)?.value_type =
+                    Some(declared_type.merge(RegisterType::String));
+            }
+        }
         self.release_register(result_register)?;
         self.release_register(visited)?;
         self.release_register(index)?;
@@ -5744,8 +5821,15 @@ fn register_statement_var_names(
             }
         }
         Stmt::ForIn { binding, body, .. } | Stmt::ForOf { binding, body, .. } => {
-            if binding.as_ref().is_some_and(|(_, kind)| kind.is_none()) {
-                return None;
+            // 8.2.7: a `var` head is a var name of the body. The head writes it
+            // once per iteration, so an enumeration that produces nothing
+            // leaves it as the declaration did: it is not an initialized name.
+            if let Some((pattern, None)) = binding
+                && !initialized_only
+            {
+                let mut bound = Vec::new();
+                pattern.names(&mut bound);
+                names.extend(bound);
             }
             register_statement_var_names(body, names, initialized_only)?;
         }
@@ -6077,19 +6161,28 @@ fn register_scoped_statement_writes_names(
             writes
         }
         Stmt::ForIn {
+            binding,
             target,
             object,
             body,
-            ..
         }
         | Stmt::ForOf {
+            binding,
             target,
             object,
             body,
-            ..
         } => {
             if target.is_some() {
                 return None;
+            }
+            // A `var` head writes its binding once per iteration; a lexical
+            // head makes one of its own and writes nothing outside the loop.
+            if let Some((pattern, None)) = binding {
+                let mut bound = Vec::new();
+                pattern.names(&mut bound);
+                if bound.iter().any(|name| names.contains(name)) {
+                    return Some(true);
+                }
             }
             register_expression_writes_names(object, names)?
                 || register_statement_writes_names(body, names)?

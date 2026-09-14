@@ -3325,17 +3325,48 @@ fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<()
 }
 
 #[test]
-fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error> {
+fn a_for_in_head_reaches_the_binding_the_declaration_made() -> Result<(), Error> {
+    // 8.2.7 makes a `var` head a var name of the body, and 14.7.5.5 gives it no
+    // binding of its own: the loop writes the one the declaration made.
+    differential("let o={a:1,b:2};let s='';for(var k in o){s+=k}s")?;
+    differential("let f=function(o){var s='';for(var k in o){s+=k}return s};f({a:1,b:2})")?;
+    differential("var k=1;let o={a:1};let s='';for(var k in o){s+=k}s+k")?;
+    // An enumeration that produced nothing leaves the declaration's value.
+    differential("let s='';for(var k in {}){s+=k}typeof k")?;
+    differential("let a=[1,2];let s='';for(var i in a){s+=i}s")?;
+    // A head the lowering could not name is enumerated at run time.
+    differential("let f=function(o){var s='';for(var k in o){s+=k}return s};f([1,2])")?;
+    // A closure holds the binding the head writes, so the body is not lowered.
     for source in [
-        // A `var` head shares one function-scoped binding.
-        "for(var k in {a:1}){}",
+        "var k=9;let g=function(){return k};let o={a:1};for(var k in o){}g()",
+        "var k=9;let g=function(){return k};let o={a:1};for(var k in o){}k",
+    ] {
+        assert!(
+            !compile(source, Limits::default())?.uses_register_backend(),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn register_lowering_rejects_for_in_heads_it_cannot_model() -> Result<(), Error> {
+    // 14.7.5.6 decides the head at run time: null and undefined enumerate
+    // nothing, and a primitive needs a ToObject this engine has no wrapper
+    // Object for, which the instruction names where it happens.
+    differential("let s='';for(const k in null){s+=k}s")?;
+    differential("let s='';for(const k in undefined){s+=k}s")?;
+    let program = compile("for(const k in 'ab'){}", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    for source in [
         // An assignment head writes an existing reference.
         "let k;for(k in {a:1}){}",
         // A destructuring head is not lowered.
         "for(const [k] in {a:1}){}",
-        // ToObject on a primitive is not lowered.
-        "for(const k in 'ab'){}",
-        "for(const k in null){}",
         // A captured per-iteration binding needs a context of its own.
         "for(const k in {a:1}){(()=>k)}",
         // A for-of over a value that is not an Array resolves @@iterator to a

@@ -2271,8 +2271,17 @@ impl RegisterVM {
         let index_slot = Reg(state.0.checked_add(2).ok_or(VMError::InvalidRegister)?);
         let visited_slot = Reg(state.0.checked_add(3).ok_or(VMError::InvalidRegister)?);
         loop {
-            let Some(object) = self.read_reg(object_slot)?.as_object() else {
-                return Ok(VALUE_UNDEFINED);
+            let enumerated = self.read_reg(object_slot)?;
+            let Some(object) = enumerated.as_object() else {
+                // 14.7.5.6 step 2: undefined and null enumerate nothing. Every
+                // other primitive needs the ToObject of 7.1.18, which this
+                // engine has no wrapper Object for.
+                if enumerated.is_undefined() || enumerated.is_null() {
+                    return Ok(VALUE_UNDEFINED);
+                }
+                return Err(VMError::Unsupported(
+                    "ToObject of a primitive in a for-in head",
+                ));
             };
             let Some(keys) = self.read_reg(keys_slot)?.as_object() else {
                 // 14.7.5.9 enumerates String keys only, so the Symbol keys of
