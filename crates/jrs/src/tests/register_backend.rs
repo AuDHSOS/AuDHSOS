@@ -448,6 +448,44 @@ fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Erro
 }
 
 #[test]
+fn a_delete_takes_the_property_off_the_object() -> Result<(), Error> {
+    // 13.5.1.2 sends the base through ToObject and the name through
+    // [[Delete]], which 10.1.10.1 refuses for a property that is not
+    // configurable and answers true for one that is not there at all.
+    for source in [
+        "let o={a:1,b:2};let f=function(p){return delete p.a};f(o);''+o.a+o.b",
+        "let f=function(p){return delete p.a};f({a:1})",
+        "let f=function(p){return delete p.zz};f({a:1})",
+        "let f=function(p){return delete p['a']};f({a:1})",
+        "let f=function(p,k){return delete p[k]};f({a:1},'a')",
+        "let a=[1,2,3];let f=function(p){return delete p[1]};''+f(a)+a[1]+a.length",
+        "let f=function(p){return delete p.length};f([1,2,3])",
+        "let f=function(){return delete 5};f()",
+        "let f=function(){let v=1;return delete v};f()",
+    ] {
+        differential(source)?;
+    }
+    // 10.4.4 gives the arguments object ordinary properties, so an index of it
+    // is deletable like any other.
+    differential("let f=function(){return ''+(delete arguments[0])+arguments[0]};f(7)")?;
+    Ok(())
+}
+
+#[test]
+fn a_delete_of_a_global_name_names_the_gap() -> Result<(), Error> {
+    // 13.5.1.2 sends an unresolvable Reference to true and a resolvable one to
+    // the Environment Record it belongs to. A free name belongs to the global
+    // object, which this lowering does not reach.
+    let program = compile("delete zz", Limits::default())?;
+    assert!(!program.uses_register_backend());
+    // A `var` of a Script is a property of the global object that 16.1.7 makes
+    // non-configurable, and every binding of a declaration is one too.
+    differential("var q=1;delete q")?;
+    differential("let f=function(){var v=1;return delete v};f()")?;
+    Ok(())
+}
+
+#[test]
 fn an_array_answers_an_index_and_length_under_a_static_name() -> Result<(), Error> {
     // 10.4.2 keeps the indices of an Array in an element store and its length
     // in a field of its own. A name that asks for one of them reaches them

@@ -334,6 +334,27 @@ pub enum Instruction {
         /// Feedback vector slot for call target caching.
         slot: u16,
     },
+    /// Deletes a named property: `acc = delete obj_reg.name` (13.5.1.2).
+    ///
+    /// `strict` is the strictness of the Reference, which decides whether a
+    /// `[[Delete]]` that answered false throws instead.
+    DeleteNamed {
+        /// Object register.
+        obj: Reg,
+        /// Property-name index in the heap-independent UTF-16 constant pool.
+        name: u16,
+        /// Strictness of the Reference the operand made.
+        strict: bool,
+    },
+    /// Deletes a computed property: `acc = delete obj_reg[key_reg]` (13.5.1.2).
+    DeleteByValue {
+        /// Object register.
+        obj: Reg,
+        /// Key register.
+        key: Reg,
+        /// Strictness of the Reference the operand made.
+        strict: bool,
+    },
     /// Store named property: `obj_reg[name] = acc` (uses feedback slot).
     SetNamed {
         /// Object register.
@@ -714,6 +735,14 @@ impl BytecodeFunction {
             | Instruction::SetByValue { obj, key, slot, .. } => {
                 self.verify_register(pc, obj)?;
                 self.verify_feedback(pc, slot, FeedbackKind::NamedAccess)?;
+                Some(key)
+            }
+            Instruction::DeleteNamed { obj, name, .. } => {
+                self.verify_string_constant(pc, name)?;
+                Some(obj)
+            }
+            Instruction::DeleteByValue { obj, key, .. } => {
+                self.verify_register(pc, obj)?;
                 Some(key)
             }
             Instruction::GetArrayLength { obj } => Some(obj),

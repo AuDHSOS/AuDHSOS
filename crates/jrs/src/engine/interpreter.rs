@@ -3446,6 +3446,28 @@ impl RegisterVM {
                         }
                     }
                 }
+                Instruction::DeleteNamed {
+                    obj,
+                    name: name_index,
+                    strict,
+                } => {
+                    let units = active_code
+                        .string_constants
+                        .get(name_index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let index = array_index_units(units);
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    let target = self.read_reg(obj)?;
+                    self.acc = delete_reference(target, name, index, strict, heap, realm)?;
+                }
+                Instruction::DeleteByValue { obj, key, strict } => {
+                    let target = self.read_reg(obj)?;
+                    let key = self.read_reg(key)?;
+                    let index = array_index(key, heap)?;
+                    let units = property_name_units(key, heap)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(&units)?);
+                    self.acc = delete_reference(target, name, index, strict, heap, realm)?;
+                }
                 Instruction::GetArrayLength { obj } => {
                     let target = self.read_reg(obj)?;
                     let object = target.as_object().ok_or(VMError::TypeError)?;
@@ -3740,10 +3762,6 @@ fn exact_smi(number: f64) -> Option<i32> {
         .then_some(integer)
 }
 
-/// The Array index a property name denotes, if it is one (10.4.2.1).
-///
-/// Only the canonical decimal of an index is one: a name with a leading zero,
-/// a sign or a fraction names an ordinary property.
 /// What a property access on a base that is no Object answers.
 ///
 /// 7.3.2 sends the base through `ToObject`, which 7.1.18 refuses for undefined
@@ -3757,6 +3775,89 @@ fn property_base_error(base: Value, heap: &mut GenerationalHeap, realm: &Realm) 
     VMError::Unsupported("ToObject of a primitive for a property access")
 }
 
+/// The Reference half of 13.5.1.2: the base goes through `ToObject`, the name
+/// through `[[Delete]]`, and a strict Reference that was refused throws.
+fn delete_reference(
+    base: Value,
+    name: PropertyKey,
+    index: Option<u32>,
+    strict: bool,
+    heap: &mut GenerationalHeap,
+    realm: &Realm,
+) -> Result<Value, VMError> {
+    let Some(object) = base.as_object() else {
+        return Err(property_base_error(base, heap, realm));
+    };
+    if delete_property(object, name, index, heap)? {
+        return Ok(VALUE_TRUE);
+    }
+    if strict {
+        return Err(type_error(
+            heap,
+            realm,
+            "delete of a property that is not configurable",
+        ));
+    }
+    Ok(VALUE_FALSE)
+}
+
+/// `[[Delete]]` of an ordinary object (10.1.10.1) and of the element store an
+/// Array exotic object keeps its indices in (10.4.2).
+///
+/// A property that is not there was deleted, and one that is not configurable
+/// was not. The Shape is a transition tree, so removing a name builds the
+/// chain again without it: O(n) in the own properties of the object.
+fn delete_property(
+    object: ObjectRef,
+    name: PropertyKey,
+    index: Option<u32>,
+    heap: &mut GenerationalHeap,
+) -> Result<bool, VMError> {
+    let entry = heap.get_object(object).ok_or(VMError::TypeError)?;
+    let elements = entry.elements;
+    let shape = entry.shape_id;
+    if let (Some(index), Some(elements)) = (index, elements) {
+        return Ok(heap.delete_element(elements, index)?);
+    }
+    // 10.4.2.1 gives an Array its own `length`, which no Shape carries and
+    // which is never configurable.
+    if heap.array_length(object).is_some()
+        && heap
+            .strings
+            .lookup_interned_units(&LENGTH_NAME)
+            .is_some_and(|length| PropertyKey::String(length) == name)
+    {
+        return Ok(false);
+    }
+    let Some(location) = heap.shapes.lookup(shape, name) else {
+        return Ok(true);
+    };
+    if !location.flags.configurable {
+        return Ok(false);
+    }
+    let kept = heap.shapes.own_properties(shape);
+    let mut moved = Vec::with_capacity(kept.len());
+    let mut next = heap.shapes.root_shape();
+    for (key, flags, old) in kept.into_iter().filter(|(key, _, _)| *key != name) {
+        let value = heap
+            .get_object(object)
+            .and_then(|entry| entry.get_slot(old))
+            .ok_or(VMError::TypeError)?;
+        let (shape, slot) = heap.shapes.transition(next, key, flags);
+        next = shape;
+        moved.push((slot, value));
+    }
+    heap.set_object_shape(object, next)?;
+    for (slot, value) in moved {
+        heap.set_object_slot(object, slot, value)?;
+    }
+    Ok(true)
+}
+
+/// The Array index a property name denotes, if it is one (10.4.2.1).
+///
+/// Only the canonical decimal of an index is one: a name with a leading zero,
+/// a sign or a fraction names an ordinary property.
 fn array_index_units(units: &[u16]) -> Option<u32> {
     let (first, rest) = units.split_first()?;
     if *first == 0x30 {

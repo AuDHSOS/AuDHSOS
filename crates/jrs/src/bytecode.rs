@@ -1416,6 +1416,7 @@ impl RegisterLowerer {
                 self.lower(left)?;
                 self.lower(right)?
             }
+            ExprKind::Unary(Unary::Delete, inner) => self.lower_delete(inner, expression.strict)?,
             ExprKind::Unary(operator, inner) => {
                 // 13.5.3 reads the operand of `typeof` without GetValue, so an
                 // unresolvable name answers undefined instead of throwing.
@@ -2943,6 +2944,61 @@ impl RegisterLowerer {
         let result = self.lower_property_from_register(object, base_type, key, keyed, true)?;
         self.release_register(object)?;
         Some(result)
+    }
+
+    /// Lowers `delete` (13.5.1.2).
+    ///
+    /// A Reference to a property goes through `[[Delete]]` where it happens.
+    /// An operand that makes no Reference is evaluated for its effect and
+    /// answers true, and a name a declaration bound answers false, because
+    /// 9.1.1.1 makes no binding of one configurable. A free name is a
+    /// property of the global object, which this lowering does not reach.
+    fn lower_delete(&mut self, inner: &Expr, strict: bool) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        if let Some((base, key)) = inner.member() {
+            self.reading_member_base = true;
+            let base_type = self.lower(base)?;
+            // The object loses the layout this lowering tracked: what a
+            // `[[Delete]]` took off it is known where it runs, not here.
+            self.escape(&[base_type]);
+            let object = self.allocate_register()?;
+            self.code.emit(Instruction::Star(object));
+            let static_name = Self::static_property_name(key)
+                .map(<[u16]>::to_vec)
+                .or_else(|| self.static_key_units(key));
+            if let Some(name) = static_name.as_deref() {
+                let name = self.string_constant(name)?;
+                self.code.emit(Instruction::DeleteNamed {
+                    obj: object,
+                    name,
+                    strict,
+                });
+            } else {
+                if !self.lower(key)?.converts_to_primitive() {
+                    return None;
+                }
+                let key = self.allocate_register()?;
+                self.code.emit(Instruction::Star(key));
+                self.code.emit(Instruction::DeleteByValue {
+                    obj: object,
+                    key,
+                    strict,
+                });
+                self.release_register(key)?;
+            }
+            self.release_register(object)?;
+            return Some(RegisterType::Boolean);
+        }
+        if let Some(name) = inner.reference_name() {
+            if !self.bindings.contains_key(name) {
+                return None;
+            }
+            self.code.emit(Instruction::LdaFalse);
+            return Some(RegisterType::Boolean);
+        }
+        self.lower(inner)?;
+        self.code.emit(Instruction::LdaTrue);
+        Some(RegisterType::Boolean)
     }
 
     /// Lowers a property read whose base the lowering could not name.
@@ -5672,10 +5728,10 @@ fn register_expression_type(
                 Unary::Plus | Unary::Minus | Unary::BitNot if inner.is_primitive() => {
                     RegisterType::Number
                 }
-                Unary::Not => RegisterType::Boolean,
+                Unary::Not | Unary::Delete => RegisterType::Boolean,
                 Unary::Void => RegisterType::Undefined,
                 Unary::Typeof => RegisterType::String,
-                Unary::Plus | Unary::Minus | Unary::BitNot | Unary::Delete => {
+                Unary::Plus | Unary::Minus | Unary::BitNot => {
                     return None;
                 }
             }
