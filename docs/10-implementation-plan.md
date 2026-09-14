@@ -1340,7 +1340,10 @@ from the draft of this section named where they are.
   and the unit is on; a second tick arrives after the end-of-interrupt; the
   tick counter grows while the kernel does nothing; a masked timer delivers
   nothing and unmasking starts it again; a vector raised from software
-  reaches the handler of that vector, for `0x30`, `0x40`, and `0xFF`; a
+  reaches the handler of that vector, for `0x30`, `0x40`, and `0xFF`,
+  which the test reads while interrupts are still off because the
+  handler stores every vector it is reached by and a timer tick
+  delivered as they go back on would stand where the raised one does; a
   routed line carries the vector and the wiring the table names, comes up
   masked, follows `mask` and `unmask`, and refuses a second routing. The
   last one reads the redirection entry back out of the I/O APIC rather

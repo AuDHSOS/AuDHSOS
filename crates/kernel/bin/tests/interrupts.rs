@@ -193,12 +193,16 @@ fn raise<const VECTOR: u8>() -> u32 {
     FROM_SOFTWARE.store(true, Ordering::SeqCst);
     testing::raise_interrupt::<VECTOR>();
     FROM_SOFTWARE.store(false, Ordering::SeqCst);
+    // The vector is read while interrupts are still off, because the
+    // handler stores every vector it is reached by and a timer tick
+    // delivered as they go back on would stand where this one does.
+    let raised = LAST_VECTOR.load(Ordering::SeqCst);
     // SAFETY: the descriptor table is loaded and every vector the hardware
     // can raise has a handler.
     unsafe {
         instructions::enable_interrupts();
     }
-    LAST_VECTOR.load(Ordering::SeqCst)
+    raised
 }
 
 /// The tables of the machine name a local APIC and at least one I/O APIC,
