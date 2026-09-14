@@ -612,8 +612,12 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `delete` on the register engine (focused) | focused | `0989fc9` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/delete --summary` | 69 | 103 | 31 (30.10%) | 10 (9.71%) | 62 (60.19%) |
 | Assignment and property accessors (focused) | focused | `7047dcf` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment test/language/expressions/property-accessors --summary` | 506 | 892 | 570 (63.90%) | 28 (3.14%) | 294 (32.96%) |
 | Assignment and property accessors on the register engine (focused) | focused | `7047dcf` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/assignment test/language/expressions/property-accessors --summary` | 506 | 892 | 86 (9.64%) | 65 (7.29%) | 741 (83.07%) |
-| Complete pinned suite, including staging and Intl | full | `7047dcf` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `7047dcf` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 4,954 (4.81%) | 19,276 (18.73%) | 78,695 (76.46%) |
+| `if` and object literals (focused) | focused | `6438218` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/if test/language/expressions/object --summary` | 1,239 | 2,377 | 793 (33.36%) | 58 (2.44%) | 1,526 (64.20%) |
+| `if` and object literals on the register engine (focused) | focused | `6438218` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/if test/language/expressions/object --summary` | 1,239 | 2,377 | 200 (8.41%) | 115 (4.84%) | 2,062 (86.75%) |
+| `new` and function declarations (focused) | focused | `1ed956e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/new test/language/statements/function --summary` | 510 | 901 | 751 (83.35%) | 4 (0.44%) | 146 (16.20%) |
+| `new` and function declarations on the register engine (focused) | focused | `1ed956e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/new test/language/statements/function --summary` | 510 | 901 | 202 (22.42%) | 26 (2.89%) | 673 (74.69%) |
+| Complete pinned suite, including staging and Intl | full | `1ed956e` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `1ed956e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 4,958 (4.82%) | 19,234 (18.69%) | 78,733 (76.50%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -652,11 +656,16 @@ is one a Prototype this Realm has not built owns — `__proto__` on every object
 `length` and `name` on an Array or a function. A computed key of a literal
 defines instead of assigning (13.2.5.5), reaches no Prototype, and asks that
 nothing.
-`harness/propertyHelper.js` now lowers `isWritable` and stops in
-`verifyCallableProperty`, at an Object a branch makes: 14.6.2 joins the two
-states of an `if`, and a layout one side carries and the other does not is a
-difference the join does not take yet. That one gap holds 946 variants which
-count as a failed harness today.
+The join of an `if` takes the Objects its branches made (14.6.2): one only a
+branch made keeps what its layout says, one the branches shaped differently
+gives that up, and so does every value whose layout the join could not keep.
+Two references the constructor path lost to a collection are fixed with it,
+both of them the same mistake — a reference read before an allocation that may
+scavenge (10.2.5 and 10.1.13).
+With that, `harness/propertyHelper.js` lowers completely. What stops it now is
+no gap of the lowering but the `%Array%` intrinsic this Realm has not built for
+the engine, which `Array.isArray` asks for in its first lines. That one gap
+holds 946 variants which count as a failed harness today.
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
@@ -691,9 +700,10 @@ same suite measured before it, variant for variant. The Array search run was mea
 `c1f2a4fab7808f3b5c8b0824f8a8ed3eaf11dc59`, the `instanceof` runs at tree
 `504da841ece9a2a58acc73ef0a5968b53daa252c`, and the `this` runs at tree
 `3d20693df017258270e78d197497481761dee88b`, and the `delete` runs at tree
-`db32abdb924343cb345a45286c3df0a2b8f3eb9d`. The assignment runs and both full
-runs were measured at tree `e2e3473e55f557f7f7a887963d18a60c857fb433`, which is
-the tree of `7047dcf`.
+`db32abdb924343cb345a45286c3df0a2b8f3eb9d`, and the assignment runs at tree
+`e2e3473e55f557f7f7a887963d18a60c857fb433`. The `new` runs and both full runs
+were measured at tree `d98662e20789888cb180d99642144c95e6596f04`, which is the
+tree of `1ed956e`.
 
 ### Historical Test262 baseline
 
