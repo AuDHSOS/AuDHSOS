@@ -608,8 +608,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Property reads, writes and `Function.prototype` on the register engine (focused) | focused | `30b9dc3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/language/expressions/assignment test/built-ins/Function/prototype --summary` | 815 | 1,494 | 60 (4.02%) | 1,100 (73.63%) | 334 (22.36%) |
 | `instanceof`, `new` and `throw` (focused) | focused | `cae1518` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/instanceof test/language/expressions/new test/language/statements/throw --summary` | 116 | 231 | 187 (80.95%) | 0 (0.00%) | 44 (19.05%) |
 | `instanceof`, `new` and `throw` on the register engine (focused) | focused | `cae1518` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/instanceof test/language/expressions/new test/language/statements/throw --summary` | 116 | 231 | 0 (0.00%) | 189 (81.82%) | 42 (18.18%) |
-| Complete pinned suite, including staging and Intl | full | `4fd3513` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `4fd3513` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 4,873 (4.73%) | 19,251 (18.70%) | 78,801 (76.56%) |
+| Complete pinned suite, including staging and Intl | full | `cfd2cc5` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `cfd2cc5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 4,875 (4.74%) | 19,251 (18.70%) | 78,799 (76.56%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -629,10 +629,12 @@ value the lowering could not name is read and written, `new` constructs from
 the `prototype` 10.2.5 gives a function, `instanceof` walks the chain of the
 value, and 10.2.1.2 binds `this` for a call that has no receiver. A parameter is
 any value (10.2.11), so `harness/assert.js`, `harness/sta.js` and
-`harness/compareArray.js` all run on the engine and the suite reaches it. A
-conversion that would have to call a `valueOf` of the Script names that as a gap
-instead of answering, which is most of what the engine now reports as
-unsupported.
+`harness/compareArray.js` all run on the engine and the suite reaches it, and a
+`for`-`in` takes any head and the binding its declaration made. A conversion
+that would have to call a `valueOf` of the Script names that as a gap instead of
+answering, which is most of what the engine now reports as unsupported.
+`harness/propertyHelper.js` stops at `arguments`, which 10.4.4 has yet to
+reach.
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
