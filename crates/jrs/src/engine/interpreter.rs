@@ -817,7 +817,12 @@ impl RegisterVM {
         if left.is_object() && right.is_object() {
             return Ok(left.strictly_equals(right));
         }
-        if left.is_object() || right.is_object() || left.is_bigint() || right.is_bigint() {
+        // 7.2.14 sends the Object operand through ToPrimitive, which can call
+        // a `valueOf` of the Script; this comparison has no frame to run one in.
+        if left.is_object() || right.is_object() {
+            return Err(NUMERIC_CONVERSION_GAP);
+        }
+        if left.is_bigint() || right.is_bigint() {
             return Err(VMError::TypeError);
         }
         if left.is_boolean() {
@@ -2714,7 +2719,13 @@ impl RegisterVM {
                     self.acc = VALUE_FALSE;
                 }
                 Instruction::Negate => {
-                    let number = numeric_value(self.acc).ok_or(VMError::TypeError)?;
+                    // 6.1.6.1.1 negates a Number. Anything else reached this
+                    // instruction without the conversion 7.1.4 asks for.
+                    let number = numeric_value(self.acc).ok_or(if self.acc.is_object() {
+                        NUMERIC_CONVERSION_GAP
+                    } else {
+                        VMError::TypeError
+                    })?;
                     self.acc = Value::from_f64(-number);
                 }
                 Instruction::LogicalNot => {
@@ -3535,6 +3546,10 @@ fn numeric_value(value: Value) -> Option<f64> {
         .or_else(|| value.is_undefined().then_some(f64::NAN))
 }
 
+/// An Object reached a conversion that cannot open a frame for `ToPrimitive`.
+const NUMERIC_CONVERSION_GAP: VMError =
+    VMError::Unsupported("ToPrimitive of an Object outside a call");
+
 fn primitive_number(value: Value, heap: &GenerationalHeap) -> Result<f64, VMError> {
     if let Some(number) = value.as_f64() {
         return Ok(number);
@@ -3554,6 +3569,11 @@ fn primitive_number(value: Value, heap: &GenerationalHeap) -> Result<f64, VMErro
             .to_rust_string(value)
             .ok_or(VMError::Heap(HeapError::InvalidReference))?;
         return Ok(crate::value::string_number(&text));
+    }
+    // 7.1.4 sends an Object through ToPrimitive, which can call a `valueOf`
+    // of the Script. These conversions have no frame to run one in.
+    if value.is_object() {
+        return Err(NUMERIC_CONVERSION_GAP);
     }
     Err(VMError::TypeError)
 }
@@ -4032,7 +4052,7 @@ mod tests {
     }
 
     #[test]
-    fn primitive_to_number_rejects_symbols_bigints_and_objects() {
+    fn primitive_to_number_takes_neither_a_symbol_nor_a_bigint_nor_an_object() {
         let mut code = BytecodeFunction::new(1, 1);
         code.emit(Instruction::Ldar(Reg(0)));
         code.emit(Instruction::ToNumber);
@@ -4043,22 +4063,30 @@ mod tests {
             .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
             .unwrap();
 
-        for value in [
-            Value::from_symbol(super::super::value::SymbolRef(0)),
-            Value::from_bigint(super::super::value::BigIntRef(0)),
-            Value::from_object(object),
+        for (value, expected) in [
+            (
+                Value::from_symbol(super::super::value::SymbolRef(0)),
+                VMError::TypeError,
+            ),
+            (
+                Value::from_bigint(super::super::value::BigIntRef(0)),
+                VMError::TypeError,
+            ),
+            // 7.1.4 sends an Object through ToPrimitive; this conversion has
+            // no frame to run a `valueOf` of the Script in.
+            (Value::from_object(object), NUMERIC_CONVERSION_GAP),
         ] {
             let mut feedback = FeedbackVector::for_code(&code);
             let mut vm = RegisterVM::new(100);
             assert_eq!(
                 vm.run_with_arguments(&code, &[value], &mut feedback, &mut heap, &realm),
-                Err(VMError::TypeError)
+                Err(expected)
             );
         }
     }
 
     #[test]
-    fn primitive_loose_equality_rejects_objects_and_bigints() {
+    fn primitive_loose_equality_takes_neither_an_object_nor_a_bigint() {
         let mut code = BytecodeFunction::new(2, 2);
         code.emit(Instruction::Ldar(Reg(0)));
         code.emit(Instruction::TestEqual(Reg(1)));
@@ -4069,9 +4097,12 @@ mod tests {
             .allocate_object(heap.shapes.root_shape(), VALUE_NULL)
             .unwrap();
 
-        for value in [
-            Value::from_bigint(super::super::value::BigIntRef(0)),
-            Value::from_object(object),
+        for (value, expected) in [
+            (
+                Value::from_bigint(super::super::value::BigIntRef(0)),
+                VMError::TypeError,
+            ),
+            (Value::from_object(object), NUMERIC_CONVERSION_GAP),
         ] {
             let mut feedback = FeedbackVector::for_code(&code);
             let mut vm = RegisterVM::new(100);
@@ -4083,7 +4114,7 @@ mod tests {
                     &mut heap,
                     &realm
                 ),
-                Err(VMError::TypeError)
+                Err(expected)
             );
         }
 

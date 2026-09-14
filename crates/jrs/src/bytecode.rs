@@ -592,7 +592,27 @@ impl RegisterType {
     fn accepts(self, actual: Self) -> bool {
         match self {
             Self::Primitive => actual.is_primitive(),
+            Self::Unknown => true,
             _ => self == actual,
+        }
+    }
+
+    /// Whether a conversion that wants a primitive may be given this value.
+    ///
+    /// A type the lowering could not name may be an Object, which 7.1.4 and
+    /// 7.2.14 send through `ToPrimitive`. The conversion names that as a gap
+    /// where it happens, so the lowering does not refuse the whole Script for
+    /// a value that is a primitive in every run that reaches it.
+    const fn converts_to_primitive(self) -> bool {
+        self.is_primitive() || matches!(self, Self::Unknown)
+    }
+
+    /// The identifier of the layout this lowering tracks for the value, if it
+    /// tracks one.
+    const fn object_id(self) -> Option<u32> {
+        match self {
+            Self::Array(id) | Self::Object(id) => Some(id),
+            _ => None,
         }
     }
 
@@ -1372,7 +1392,9 @@ impl RegisterLowerer {
                     _ => self.lower(inner)?,
                 };
                 match operator {
-                    Unary::Plus | Unary::Minus | Unary::BitNot if inner_type.is_primitive() => {
+                    Unary::Plus | Unary::Minus | Unary::BitNot
+                        if inner_type.converts_to_primitive() =>
+                    {
                         if inner_type != RegisterType::Number {
                             self.code.emit(Instruction::ToNumber);
                         }
@@ -1664,7 +1686,7 @@ impl RegisterLowerer {
             }
             let key = if property.computed {
                 let static_name = Self::static_property_key_units(&property.key);
-                if !self.lower(&property.key)?.is_primitive() {
+                if !self.lower(&property.key)?.converts_to_primitive() {
                     return None;
                 }
                 let register = self.allocate_register()?;
@@ -1679,7 +1701,7 @@ impl RegisterLowerer {
                 }
             };
             let value_type = self.lower(&property.value)?;
-            if !value_type.is_primitive() && !value_type.is_object() {
+            if matches!(value_type, RegisterType::NativeFunction(_)) {
                 return None;
             }
             let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
@@ -1775,7 +1797,7 @@ impl RegisterLowerer {
             let key = self.allocate_register()?;
             self.code.emit(Instruction::Star(key));
             let value_type = self.lower(item)?;
-            if !value_type.is_primitive() && !value_type.is_object() {
+            if matches!(value_type, RegisterType::NativeFunction(_)) {
                 return None;
             }
             let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
@@ -1879,7 +1901,7 @@ impl RegisterLowerer {
         self.function_returns.insert(code_id, return_type);
         self.function_parameters.insert(
             code_id,
-            alloc::vec![RegisterType::Primitive; function.parameters.len()],
+            alloc::vec![RegisterType::Unknown; function.parameters.len()],
         );
         self.function_capture_effects
             .insert(code_id, capture_effects);
@@ -1908,7 +1930,7 @@ impl RegisterLowerer {
                 .insert(code_id, RegisterType::Primitive);
             self.function_parameters.insert(
                 code_id,
-                alloc::vec![RegisterType::Primitive; function.parameters.len()],
+                alloc::vec![RegisterType::Unknown; function.parameters.len()],
             );
             // A declaration names itself in its own body, so a constructor that
             // constructs itself has to know it is one before the body is
@@ -1986,7 +2008,9 @@ impl RegisterLowerer {
         for parameter in &function.parameters {
             let name = parameter.pattern.identifier()?;
             child.declare(name, true)?;
-            child.bindings.get_mut(name)?.value_type = Some(RegisterType::Primitive);
+            // 10.2.11 binds the argument itself, whatever it is, so a
+            // parameter has the type of a value the lowering cannot name.
+            child.bindings.get_mut(name)?.value_type = Some(RegisterType::Unknown);
         }
         let self_register = if let Some(name) = &function.name {
             if function
@@ -2007,7 +2031,7 @@ impl RegisterLowerer {
                 .insert(code_id, RegisterType::Primitive);
             child.function_parameters.insert(
                 code_id,
-                alloc::vec![RegisterType::Primitive; function.parameters.len()],
+                alloc::vec![RegisterType::Unknown; function.parameters.len()],
             );
             Some(register)
         } else {
@@ -2147,6 +2171,83 @@ impl RegisterLowerer {
         Some(child.return_type.unwrap_or(RegisterType::Undefined))
     }
 
+    /// Gives up the layouts of the values a call hands to user code.
+    ///
+    /// 10.2.11 binds the argument itself, so the callee reaches the Object and
+    /// may change what it holds. From here the value keeps only the type of a
+    /// value the lowering cannot name, and every access to it goes to 10.1.8.1
+    /// at run time.
+    fn escape(&mut self, escaped: &[RegisterType]) {
+        let mut pending: Vec<RegisterType> = escaped.to_vec();
+        while let Some(value_type) = pending.pop() {
+            // A function leaves with everything its closure can reach: the
+            // callee may call it, and the call writes the captured bindings.
+            // Following one twice adds nothing, because the first pass left
+            // every binding it captures with a type this lowering cannot name.
+            if let RegisterType::Function(code_id) = value_type {
+                let captured: Vec<String> = self
+                    .function_capture_effects
+                    .get(&code_id)
+                    .map(|effects| effects.keys().cloned().collect())
+                    .unwrap_or_default();
+                pending.extend(
+                    captured
+                        .iter()
+                        .filter_map(|name| self.bindings.get(name)?.value_type),
+                );
+                continue;
+            }
+            let Some(id) = value_type.object_id() else {
+                continue;
+            };
+            // Everything the Object holds is reachable through it, so it
+            // leaves with it.
+            let Some(layout) = self.object_layouts.remove(&id) else {
+                continue;
+            };
+            match &layout {
+                RegisterObjectLayout::Ordinary {
+                    properties,
+                    dynamic,
+                    ..
+                } => pending.extend(properties.values().copied().chain(*dynamic)),
+                RegisterObjectLayout::Array {
+                    elements, dynamic, ..
+                } => pending.extend(elements.values().copied().chain(*dynamic)),
+            }
+            for binding in self.bindings.values_mut() {
+                if binding.value_type == Some(value_type) {
+                    binding.value_type = Some(RegisterType::Unknown);
+                }
+            }
+            for hint in self.binding_type_hints.values_mut() {
+                if *hint == value_type {
+                    *hint = RegisterType::Unknown;
+                }
+            }
+            for layout in self.object_layouts.values_mut() {
+                let (held, dynamic) = match layout {
+                    RegisterObjectLayout::Ordinary {
+                        properties,
+                        dynamic,
+                        ..
+                    } => (properties.values_mut().collect::<Vec<_>>(), dynamic),
+                    RegisterObjectLayout::Array {
+                        elements, dynamic, ..
+                    } => (elements.values_mut().collect::<Vec<_>>(), dynamic),
+                };
+                for entry in held {
+                    if *entry == value_type {
+                        *entry = RegisterType::Unknown;
+                    }
+                }
+                if *dynamic == Some(value_type) {
+                    *dynamic = Some(RegisterType::Unknown);
+                }
+            }
+        }
+    }
+
     fn lower_call(&mut self, callee: &Expr, arguments: &[Expr]) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
         if let ExprKind::Member(base, key) = &callee.kind {
@@ -2178,18 +2279,19 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(function));
         let parameter_types = self.function_parameters.get(&code_id)?.clone();
         let mut argument_registers = Vec::new();
+        let mut argument_types = Vec::new();
         for (index, argument) in arguments.iter().enumerate() {
             let argument_type = self.lower(argument)?;
-            if !argument_type.is_primitive()
-                || parameter_types
-                    .get(index)
-                    .is_some_and(|parameter| !parameter.accepts(argument_type))
+            if parameter_types
+                .get(index)
+                .is_some_and(|parameter| !parameter.accepts(argument_type))
             {
                 return None;
             }
             let register = self.allocate_register()?;
             self.code.emit(Instruction::Star(register));
             argument_registers.push(register);
+            argument_types.push(argument_type);
         }
         let dummy = if argument_registers.is_empty() {
             let register = self.allocate_register()?;
@@ -2225,6 +2327,7 @@ impl RegisterLowerer {
         if let Some(effects) = self.function_layout_effects.get(&code_id).cloned() {
             self.object_layouts.extend(effects);
         }
+        self.escape(&argument_types);
         self.function_returns.get(&code_id).copied()
     }
 
@@ -2266,18 +2369,19 @@ impl RegisterLowerer {
         let target = self.allocate_register()?;
         let parameter_types = self.function_parameters.get(&code_id)?.clone();
         let mut argument_registers = Vec::new();
+        let mut argument_types = Vec::new();
         for (index, argument) in arguments.iter().enumerate() {
             let argument_type = self.lower(argument)?;
-            if !argument_type.is_primitive()
-                || parameter_types
-                    .get(index)
-                    .is_some_and(|parameter| !parameter.accepts(argument_type))
+            if parameter_types
+                .get(index)
+                .is_some_and(|parameter| !parameter.accepts(argument_type))
             {
                 return None;
             }
             let register = self.allocate_register()?;
             self.code.emit(Instruction::Star(register));
             argument_registers.push(register);
+            argument_types.push(argument_type);
         }
         let dummy = if argument_registers.is_empty() {
             let register = self.allocate_register()?;
@@ -2315,6 +2419,7 @@ impl RegisterLowerer {
         if let Some(effects) = self.function_layout_effects.get(&code_id).cloned() {
             self.object_layouts.extend(effects);
         }
+        self.escape(&argument_types);
         // The result is the created object or whatever the constructor answered
         // instead; the lowering can name neither.
         Some(RegisterType::Unknown)
@@ -2331,11 +2436,13 @@ impl RegisterLowerer {
         let function = self.allocate_register()?;
         self.code.emit(Instruction::Star(function));
         let mut argument_registers = Vec::new();
+        let mut argument_types = Vec::new();
         for argument in arguments {
-            self.lower(argument)?;
+            let argument_type = self.lower(argument)?;
             let register = self.allocate_register()?;
             self.code.emit(Instruction::Star(register));
             argument_registers.push(register);
+            argument_types.push(argument_type);
         }
         let dummy = if argument_registers.is_empty() {
             let register = self.allocate_register()?;
@@ -2361,6 +2468,7 @@ impl RegisterLowerer {
             self.release_register(register)?;
         }
         self.release_register(function)?;
+        self.escape(&argument_types);
         Some(RegisterType::Unknown)
     }
 
@@ -2418,6 +2526,7 @@ impl RegisterLowerer {
                 RegisterType::Function(code_id) => {
                     let result = self.lower_method_call_bytecode(receiver, code_id, arguments)?;
                     self.release_register(receiver)?;
+                    self.escape(&[base_type]);
                     return Some(result);
                 }
                 _ => return None,
@@ -2431,7 +2540,7 @@ impl RegisterLowerer {
         let mut argument_types = Vec::new();
         for (index, argument) in arguments.iter().enumerate() {
             let argument_type = self.lower(argument)?;
-            if !argument_type.is_primitive()
+            if !argument_type.converts_to_primitive()
                 && intrinsic.coerces_argument(u16::try_from(index).ok()?)
             {
                 return None;
@@ -2467,7 +2576,9 @@ impl RegisterLowerer {
         }
         self.release_register(function)?;
         self.release_register(receiver)?;
-        self.intrinsic_call_result(intrinsic, base_type, &argument_types)
+        let result = self.intrinsic_call_result(intrinsic, base_type, &argument_types);
+        self.escape(&argument_types);
+        result
     }
 
     /// Lowers `new` whose constructor only the run time knows.
@@ -2482,13 +2593,13 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(function));
         let target = self.allocate_register()?;
         let mut argument_registers = Vec::new();
+        let mut argument_types = Vec::new();
         for argument in arguments {
-            if !self.lower(argument)?.is_primitive() {
-                return None;
-            }
+            let argument_type = self.lower(argument)?;
             let register = self.allocate_register()?;
             self.code.emit(Instruction::Star(register));
             argument_registers.push(register);
+            argument_types.push(argument_type);
         }
         let dummy = if argument_registers.is_empty() {
             let register = self.allocate_register()?;
@@ -2516,6 +2627,7 @@ impl RegisterLowerer {
         }
         self.release_register(target)?;
         self.release_register(function)?;
+        self.escape(&argument_types);
         Some(RegisterType::Unknown)
     }
 
@@ -2534,13 +2646,13 @@ impl RegisterLowerer {
         let function = self.allocate_register()?;
         self.code.emit(Instruction::Star(function));
         let mut argument_registers = Vec::new();
+        let mut argument_types = Vec::new();
         for argument in arguments {
-            if !self.lower(argument)?.is_primitive() {
-                return None;
-            }
+            let argument_type = self.lower(argument)?;
             let register = self.allocate_register()?;
             self.code.emit(Instruction::Star(register));
             argument_registers.push(register);
+            argument_types.push(argument_type);
         }
         let dummy = if argument_registers.is_empty() {
             let register = self.allocate_register()?;
@@ -2567,6 +2679,7 @@ impl RegisterLowerer {
             self.release_register(register)?;
         }
         self.release_register(function)?;
+        self.escape(&argument_types);
         Some(RegisterType::Unknown)
     }
 
@@ -2598,18 +2711,19 @@ impl RegisterLowerer {
         self.code.emit(Instruction::Star(function));
         let parameter_types = self.function_parameters.get(&code_id)?.clone();
         let mut argument_registers = Vec::new();
+        let mut argument_types = Vec::new();
         for (index, argument) in arguments.iter().enumerate() {
             let argument_type = self.lower(argument)?;
-            if !argument_type.is_primitive()
-                || parameter_types
-                    .get(index)
-                    .is_some_and(|parameter| !parameter.accepts(argument_type))
+            if parameter_types
+                .get(index)
+                .is_some_and(|parameter| !parameter.accepts(argument_type))
             {
                 return None;
             }
             let register = self.allocate_register()?;
             self.code.emit(Instruction::Star(register));
             argument_registers.push(register);
+            argument_types.push(argument_type);
         }
         let dummy = if argument_registers.is_empty() {
             let register = self.allocate_register()?;
@@ -2646,6 +2760,7 @@ impl RegisterLowerer {
         if let Some(effects) = self.function_layout_effects.get(&code_id).cloned() {
             self.object_layouts.extend(effects);
         }
+        self.escape(&argument_types);
         self.function_returns.get(&code_id).copied()
     }
 
@@ -2795,7 +2910,7 @@ impl RegisterLowerer {
                 slot,
             });
         } else {
-            if !self.lower(key)?.is_primitive() {
+            if !self.lower(key)?.converts_to_primitive() {
                 return None;
             }
             let key = self.allocate_register()?;
@@ -2841,7 +2956,7 @@ impl RegisterLowerer {
                 slot,
             });
         } else {
-            if !self.lower(key)?.is_primitive() {
+            if !self.lower(key)?.converts_to_primitive() {
                 return None;
             }
             let register = self.allocate_register()?;
@@ -2958,12 +3073,12 @@ impl RegisterLowerer {
                 })
         };
         if keyed {
-            if !self.lower(key)?.is_primitive() {
+            if !self.lower(key)?.converts_to_primitive() {
                 return None;
             }
         } else if let Some(index) = static_index {
             self.emit_array_index(index)?;
-        } else if !self.lower(key)?.is_primitive() {
+        } else if !self.lower(key)?.converts_to_primitive() {
             return None;
         }
         let key = self.allocate_register()?;
@@ -3264,7 +3379,7 @@ impl RegisterLowerer {
         };
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
         if keyed {
-            if !self.lower(key)?.is_primitive() {
+            if !self.lower(key)?.converts_to_primitive() {
                 return None;
             }
             let key = self.allocate_register()?;
@@ -3346,7 +3461,7 @@ impl RegisterLowerer {
         let key_register = if keyed.is_some() {
             None
         } else {
-            if !self.lower(key)?.is_primitive() {
+            if !self.lower(key)?.converts_to_primitive() {
                 return None;
             }
             let register = self.allocate_register()?;
@@ -3354,7 +3469,7 @@ impl RegisterLowerer {
             Some(register)
         };
         let value_type = self.lower(value)?;
-        if !value_type.is_primitive() && !value_type.is_object() {
+        if matches!(value_type, RegisterType::NativeFunction(_)) {
             return None;
         }
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
@@ -3424,7 +3539,7 @@ impl RegisterLowerer {
                 name,
             }
         } else {
-            if !self.lower(key)?.is_primitive() {
+            if !self.lower(key)?.converts_to_primitive() {
                 return None;
             }
             let key = self.allocate_register()?;
@@ -3444,7 +3559,7 @@ impl RegisterLowerer {
         value_type: RegisterType,
     ) -> Option<()> {
         use crate::engine::bytecode::Instruction;
-        if !value_type.is_primitive() && !value_type.is_object() {
+        if matches!(value_type, RegisterType::NativeFunction(_)) {
             return None;
         }
         let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
@@ -5009,7 +5124,7 @@ impl RegisterLowerer {
             | Binary::Shl
             | Binary::Shr
             | Binary::Ushr => {
-                if !left_type.is_primitive() || !right_type.is_primitive() {
+                if !left_type.converts_to_primitive() || !right_type.converts_to_primitive() {
                     return None;
                 }
                 let instruction = match operator {
@@ -5138,7 +5253,14 @@ impl RegisterLowerer {
                 name: constant,
                 strict,
             });
-            return Some(value_type);
+            // Every later call can read the name from the Global Environment
+            // Record, so the value is no longer only this Script's.
+            self.escape(&[value_type]);
+            return Some(if value_type.object_id().is_some() {
+                RegisterType::Unknown
+            } else {
+                value_type
+            });
         };
         if !binding.mutable || binding.value_type.is_none() || binding.stable_function_identity {
             return None;
@@ -5160,11 +5282,11 @@ impl RegisterLowerer {
                 {
                     RegisterType::Number
                 }
-                Binary::Add | Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem
-                    if left_type.is_primitive() && right_type.is_primitive() =>
-                {
-                    RegisterType::Primitive
-                }
+                // The generic dispatch below carries these; 7.1.1 converts an
+                // Object operand there, so the type is the one a run-time
+                // dispatch answers with.
+                Binary::Add => RegisterType::Primitive,
+                Binary::Sub | Binary::Mul | Binary::Div | Binary::Rem => RegisterType::Number,
                 Binary::Pow
                 | Binary::BitAnd
                 | Binary::BitOr
@@ -5172,7 +5294,7 @@ impl RegisterLowerer {
                 | Binary::Shl
                 | Binary::Shr
                 | Binary::Ushr => {
-                    if !left_type.is_primitive() || !right_type.is_primitive() {
+                    if !left_type.converts_to_primitive() || !right_type.converts_to_primitive() {
                         return None;
                     }
                     RegisterType::Number
@@ -5338,7 +5460,10 @@ impl RegisterLowerer {
 }
 
 const fn equality_operands_supported(left: RegisterType, right: RegisterType) -> bool {
-    left.is_primitive() && right.is_primitive() || left.is_object() && right.is_object()
+    matches!(left, RegisterType::Unknown)
+        || matches!(right, RegisterType::Unknown)
+        || left.is_primitive() && right.is_primitive()
+        || left.is_object() && right.is_object()
 }
 
 fn smi_literal(number: f64) -> Option<i32> {

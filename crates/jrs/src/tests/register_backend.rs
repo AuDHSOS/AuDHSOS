@@ -177,11 +177,18 @@ fn a_callee_the_lowering_cannot_type_is_dispatched_at_run_time() -> Result<(), E
 fn a_catch_parameter_widens_when_the_range_can_throw_an_error_object() -> Result<(), Error> {
     // Only `throw` carries a value the lowering saw. Every other instruction
     // that throws raises an error object of the Realm, whose type it does not
-    // know, so a Block that can raise one is not lowered with a primitive
-    // parameter.
+    // know, so the parameter is a value the lowering cannot name and `|`
+    // reaches the conversion that names the gap (7.1.6 over 7.1.4).
+    let program = compile("try{f}catch(e){e|5}", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    // A member of a value that is not an object is not lowered at all, so
+    // these never reach the conversion.
     for source in [
         "try{null.x}catch(e){e|5}",
-        "try{f}catch(e){e|5}",
         "let o={};try{o.x.y}catch(e){e|5}",
     ] {
         assert!(
@@ -389,6 +396,58 @@ fn a_value_the_embedding_cannot_hold_leaves_the_realm_usable() -> Result<(), Err
         );
         assert_eq!(realm.evaluate("2*3")?, Value::Number(6.0), "{source}");
     }
+    Ok(())
+}
+
+#[test]
+fn a_parameter_is_any_value() -> Result<(), Error> {
+    // 10.2.11 binds the argument itself, so a parameter is not a primitive and
+    // an argument is not restricted to one.
+    differential_scripts(&["function f(o){return o.a}var o={a:42};f(o)"])?;
+    differential_scripts(&["function f(o){o.b=2}var o={a:1};f(o);o.a+o.b"])?;
+    differential_scripts(&["function f(o){return typeof o}f({})"])?;
+    differential_scripts(&["function f(o){return o.hasOwnProperty('a')}f({a:1})"])?;
+    Ok(())
+}
+
+#[test]
+fn an_object_that_reached_a_call_keeps_no_layout() -> Result<(), Error> {
+    // The callee can change what the Object holds, so a read after the call
+    // asks the Object, not the layout the lowering had before it.
+    differential("let f=function(o){o.a=2};let o={a:1};f(o);o.a")?;
+    differential("let f=function(o){o.b=2};let o={a:1};f(o);o.b")?;
+    differential("let f=function(o){o.a.b=2};let o={a:{b:1}};f(o);o.a.b")?;
+    differential("let f=function(o){return o.a};let o={a:1};let r=f(o);o.a=2;r+o.a")?;
+    // A function carries its closure with it, so what it captures leaves too.
+    differential("let o={a:1};let f=function(){o.a=5};let g=function(h){h()};g(f);o.a")?;
+    differential("let o={a:1};let f=function(){o.b=5};let g=function(h){h()};g(f);o.b")?;
+    Ok(())
+}
+
+#[test]
+fn a_conversion_that_cannot_run_valueof_names_the_gap() -> Result<(), Error> {
+    // 7.1.4 sends an Object through ToPrimitive. A conversion that cannot open
+    // a frame for a `valueOf` of the Script names that instead of answering.
+    for source in [
+        "function f(p){return p&1}f({})",
+        "function f(p){return +p}f({})",
+        "function f(p){return p==1}f({})",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+    // The same code answers for every argument that is a primitive.
+    differential_scripts(&["function f(p){return p&1}f(3)"])?;
+    differential_scripts(&["function f(p){return +p}f('42')"])?;
+    differential_scripts(&["function f(p){return p==1}f('1')"])?;
     Ok(())
 }
 
@@ -3358,8 +3417,6 @@ fn register_lowering_rejects_reads_the_prototype_chain_cannot_answer() -> Result
         "let o={};o['toString']",
         // An intrinsic is only lowered at a call site.
         "let o={a:1};o.hasOwnProperty",
-        // A parameter has no tracked object layout.
-        "function f(o){return o.hasOwnProperty('a')}f({a:1})",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
