@@ -687,6 +687,10 @@ enum RegisterPreparedAssignment {
     Member(RegisterMemberAssignment),
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag names one independent property of the lowering"
+)]
 struct RegisterLowerer {
     code: crate::engine::bytecode::BytecodeFunction,
     function_table_base: u32,
@@ -714,6 +718,12 @@ struct RegisterLowerer {
     function_layout_effects: BTreeMap<u32, BTreeMap<u32, RegisterObjectLayout>>,
     binding_type_hints: BTreeMap<String, RegisterType>,
     allow_return: bool,
+    /// The binding 10.4.4 made for `arguments`, when this body reads it.
+    arguments_binding: Option<RegisterBinding>,
+    /// Set while the base of a property read is lowered, which is the one
+    /// place `arguments` may be read: the mapping of 10.4.4.7 is not built,
+    /// so a body that could observe it is not lowered.
+    reading_member_base: bool,
     return_type: Option<RegisterType>,
     /// Whether a name no binding covers is resolved on the Global Environment
     /// Record. A function of a Realm Script resolves its free names there too,
@@ -851,6 +861,8 @@ impl RegisterLowerer {
             function_layout_effects: BTreeMap::new(),
             binding_type_hints: BTreeMap::new(),
             allow_return: false,
+            arguments_binding: None,
+            reading_member_base: false,
             return_type: None,
             realm: false,
             script_globals: false,
@@ -1304,6 +1316,9 @@ impl RegisterLowerer {
     )]
     fn lower(&mut self, expression: &Expr) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        // The flag covers this expression alone, so a base that is itself a
+        // call or an assignment does not pass it on to what it contains.
+        let member_base = core::mem::take(&mut self.reading_member_base);
         let result = match &expression.kind {
             ExprKind::Literal(value) => match value {
                 Value::Number(number) => {
@@ -1374,8 +1389,15 @@ impl RegisterLowerer {
                         }
                         // 10.4.4 binds `arguments` in every ordinary function,
                         // so inside one it is never the Realm's global of that
-                        // name. The object does not exist yet.
-                        "arguments" if self.allow_return => return None,
+                        // name. The object is only read as the base of a
+                        // property access: 10.4.4.7 maps its indices onto the
+                        // parameters, and a body that could observe the
+                        // mapping is not lowered.
+                        "arguments" if self.allow_return => {
+                            let binding = self.arguments_binding.filter(|_| member_base)?;
+                            self.load_binding(binding);
+                            RegisterType::Unknown
+                        }
                         // 9.1.1.4.6 resolves every other name on the Realm's
                         // Global Environment Record. A name of clause 19 this
                         // Realm has not built is reported there as a gap, so
@@ -2050,6 +2072,24 @@ impl RegisterLowerer {
         } else {
             None
         };
+        // 10.4.4 binds `arguments` in every ordinary function. The mapping of
+        // 10.4.4.7 is only unobservable while no parameter is assigned, and a
+        // strict function needs the accessor 10.4.4.6 poisons `callee` with,
+        // which this engine has no accessors for.
+        if !function.arrow
+            && !function.strict
+            && register_body_reads_arguments(&function.body)?
+            && !register_body_writes_parameters(&function.body, function)?
+        {
+            child.declare(ARGUMENTS, false)?;
+            let RegisterBindingStorage::Register(register) = child.bindings.get(ARGUMENTS)?.storage
+            else {
+                return None;
+            };
+            child.bindings.get_mut(ARGUMENTS)?.value_type = Some(RegisterType::Unknown);
+            child.arguments_binding = child.bindings.remove(ARGUMENTS);
+            child.code.arguments_register = Some(register);
+        }
         if register_body_reads_this(&function.body) {
             // An arrow function has no Function Environment Record of its own
             // (10.2.1.1), so its `this` is the one of the enclosing function
@@ -2138,6 +2178,9 @@ impl RegisterLowerer {
 
     fn lower_function_body(child: &mut Self, body: &[Stmt]) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        if let Some(register) = child.code.arguments_register {
+            child.code.emit(Instruction::CreateArguments(register));
+        }
         for statement in body {
             if let Stmt::Function(name, function) = statement {
                 let value_type = child.lower_function_declaration(name, function)?;
@@ -2880,6 +2923,7 @@ impl RegisterLowerer {
 
     fn lower_member(&mut self, base: &Expr, key: &Expr) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        self.reading_member_base = true;
         let base_type = self.lower(base)?;
         if base_type == RegisterType::String {
             return self.lower_string_member(key);
@@ -5038,12 +5082,12 @@ impl RegisterLowerer {
         self.completions.push(completion);
         let yes_flow = self.lower_statement(yes)?;
         self.completions.pop()?;
-        let bindings_after_yes = self.bindings.clone();
-        let properties_after_yes = self.object_layouts.clone();
+        let mut bindings_after_yes = self.bindings.clone();
+        let mut properties_after_yes = self.object_layouts.clone();
         let jump = (yes_flow != RegisterFlow::Abrupt).then(|| self.code.emit(Instruction::Jump(0)));
         let no_start = self.code.instructions.len();
         self.bindings = bindings_before;
-        self.object_layouts = properties_before;
+        self.object_layouts = properties_before.clone();
         self.code.emit(Instruction::LdaUndefined);
         self.code.emit(Instruction::Star(completion));
         self.completions.push(completion);
@@ -5052,6 +5096,24 @@ impl RegisterLowerer {
         })?;
         self.completions.pop()?;
         self.release_register(completion)?;
+        // An Object one branch handed to user code is no longer this
+        // lowering's after the join, whichever branch ran, so the branch that
+        // kept its layout gives it up too.
+        let escaped: Vec<RegisterType> = properties_before
+            .keys()
+            .filter(|id| {
+                !properties_after_yes.contains_key(id) || !self.object_layouts.contains_key(id)
+            })
+            .flat_map(|id| [RegisterType::Object(*id), RegisterType::Array(*id)])
+            .collect();
+        if !escaped.is_empty() {
+            self.escape(&escaped);
+            let bindings = core::mem::replace(&mut self.bindings, bindings_after_yes);
+            let layouts = core::mem::replace(&mut self.object_layouts, properties_after_yes);
+            self.escape(&escaped);
+            bindings_after_yes = core::mem::replace(&mut self.bindings, bindings);
+            properties_after_yes = core::mem::replace(&mut self.object_layouts, layouts);
+        }
         let bindings_after_no = self.bindings.clone();
         let end = self.code.instructions.len();
         self.patch_jump(branch, no_start)?;
@@ -6197,6 +6259,46 @@ fn register_scoped_statement_writes_names(
 /// A nested ordinary function has a record of its own, so the walk stops there.
 /// An arrow function has none and takes the one of this body, so the walk
 /// follows it.
+/// The name 10.4.4 binds in every ordinary function.
+const ARGUMENTS: &str = "arguments";
+
+/// Whether a body reads `arguments` and no function inside it does.
+///
+/// An arrow has no `arguments` of its own (10.2.1.1), so one that names it
+/// would read the object of this frame from a context this step does not
+/// build.
+fn register_body_reads_arguments(body: &[Stmt]) -> Option<bool> {
+    let mut names = BTreeSet::new();
+    let mut nested = BTreeSet::new();
+    for statement in body {
+        register_statement_references(statement, &mut names, &mut nested)?;
+    }
+    if nested.contains(ARGUMENTS) {
+        return None;
+    }
+    Some(names.contains(ARGUMENTS))
+}
+
+/// Whether a body assigns one of the parameters, which 10.4.4.7 would show in
+/// the arguments object.
+fn register_body_writes_parameters(body: &[Stmt], function: &Function) -> Option<bool> {
+    let mut parameters = BTreeSet::new();
+    for parameter in &function.parameters {
+        let mut bound = Vec::new();
+        parameter.names(&mut bound);
+        parameters.extend(bound);
+    }
+    if parameters.is_empty() {
+        return Some(false);
+    }
+    for statement in body {
+        if register_statement_writes_names(statement, &parameters)? {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
 fn register_body_reads_this(body: &[Stmt]) -> bool {
     body.iter().any(register_statement_reads_this)
 }

@@ -312,6 +312,11 @@ pub enum Instruction {
     },
     /// `acc = acc instanceof reg` (13.10.2).
     TestInstanceOf(Reg),
+    /// Builds the arguments object of this call in `reg` (10.4.4).
+    ///
+    /// The frame keeps the caller registers the call passed, so the object
+    /// holds every argument, not only the declared parameters.
+    CreateArguments(Reg),
     /// Constructs with a callable: `acc = new func_reg(args)` (7.3.15).
     ///
     /// `target` holds the object 10.1.13 creates, where the collector sees it
@@ -452,6 +457,9 @@ pub struct BytecodeFunction {
     pub self_register: Option<Reg>,
     /// Register initialized with the `this` value of the call (9.4.5).
     pub this_register: Option<Reg>,
+    /// Register the arguments object of the call is built in (10.4.4), when
+    /// the body reads it.
+    pub arguments_register: Option<Reg>,
     /// Whether this function has a `[[Construct]]` method, which 10.2.5 gives an
     /// ordinary function and withholds from a method and an arrow.
     pub constructible: bool,
@@ -486,6 +494,7 @@ impl BytecodeFunction {
             binding_count: parameter_count,
             self_register: None,
             this_register: None,
+            arguments_register: None,
             constructible: false,
             strict: false,
             own_context_slot_count: None,
@@ -679,7 +688,8 @@ impl BytecodeFunction {
             | Instruction::TestLessThanOrEqual(register)
             | Instruction::TestGreaterThan(register)
             | Instruction::TestGreaterThanOrEqual(register)
-            | Instruction::TestInstanceOf(register) => Some(register),
+            | Instruction::TestInstanceOf(register)
+            | Instruction::CreateArguments(register) => Some(register),
             Instruction::Mov { src, dst } => {
                 self.verify_register(pc, src)?;
                 Some(dst)

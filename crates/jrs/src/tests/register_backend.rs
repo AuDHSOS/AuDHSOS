@@ -308,12 +308,20 @@ fn a_call_the_lowering_could_not_type_is_returnable() -> Result<(), Error> {
 fn arguments_inside_a_function_is_never_a_global() -> Result<(), Error> {
     // 10.4.4 binds `arguments` in every ordinary function. Resolving it on the
     // Global Environment Record answered a ReferenceError where the stack
-    // backend answers the arguments object, so inside a function it is refused
-    // until the object exists.
+    // backend answers the arguments object.
+    differential_scripts(&["function f(){return arguments.length}f()"])?;
+    differential_scripts(&["function f(a){return arguments.length}f(1,2,3)"])?;
+    differential_scripts(&["function f(a){return arguments[1]}f(1,2)"])?;
+    // The object is only read as the base of a property access, because the
+    // mapping of 10.4.4.7 is not built.
     for source in [
         "function f(){return typeof arguments}f()",
-        "function f(){return arguments.length}f()",
         "function f(){arguments=1;return 2}f()",
+        "function f(a){arguments[0]=2;return a}f(1)",
+        "function f(a){a=2;return arguments[0]}f(1)",
+        "function g(x){return x}function f(a){return g(arguments)}f(1)",
+        "function f(a){return arguments}f(1)",
+        "function f(a){return (()=>arguments.length)()}f(1)",
     ] {
         assert!(
             !compile(source, Limits::default())?.uses_register_backend(),
@@ -396,6 +404,81 @@ fn a_value_the_embedding_cannot_hold_leaves_the_realm_usable() -> Result<(), Err
         );
         assert_eq!(realm.evaluate("2*3")?, Value::Number(6.0), "{source}");
     }
+    Ok(())
+}
+
+#[test]
+fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Error> {
+    // 7.3.2 sends the base of a property access through ToObject, which 7.1.18
+    // refuses for undefined and null alone. Every other primitive gets a
+    // wrapper Object this engine has not built, so the access names that
+    // instead of the TypeError only the first two deserve.
+    for source in [
+        "[x=>h=>x,3,3,22,5][-3,3,2][-2]+1",
+        "let f=function(o){return o.x};f(3)",
+        "let f=function(o){return o[0]};f(true)",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+    // 10.4.3 answers a String without producing the Object, and undefined and
+    // null keep the TypeError.
+    differential("let f=function(o){return o.length};f('ab')")?;
+    differential("let f=function(o){return o[0]};f('ab')")?;
+    for source in [
+        "let f=function(o){return o.x};f(null)",
+        "let f=function(o){return o.x};f(undefined)",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let expected = Runtime::new(Limits::default()).run(&program.legacy_only(), &mut SilentHost);
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost);
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn an_array_answers_an_index_and_length_under_a_static_name() -> Result<(), Error> {
+    // 10.4.2 keeps the indices of an Array in an element store and its length
+    // in a field of its own. A name that asks for one of them reaches them
+    // whichever instruction asks, so a base the lowering could not name
+    // answers what an Array holds and not what its Shape carries.
+    differential("let f=function(o){return o[0]};f([7,8])")?;
+    differential("let f=function(o){return o.length};f([7,8])")?;
+    differential("let f=function(o){return o['length']};f([1,2,3])")?;
+    differential("let f=function(o){return o[5]};f([7,8])")?;
+    differential("let f=function(o){return o['00']};f([7,8])")?;
+    differential("let f=function(o){o[0]=9};let a=[7];f(a);a[0]")?;
+    differential("let f=function(o){o[3]=9;return o.length};f([7])")?;
+    differential("let f=function(o){o.x=1;return o.x};f([7])")?;
+    // An ordinary object keeps both under its Shape.
+    differential("let f=function(o){return o.length};f({length:4})")?;
+    differential("let f=function(o){return o[0]};f({0:4})")?;
+    Ok(())
+}
+
+#[test]
+fn an_object_that_escaped_in_one_branch_escaped_after_the_join() -> Result<(), Error> {
+    // 14.6.2 joins the two Blocks. An Object one of them handed to user code
+    // is no longer this lowering's after the join, whichever Block ran.
+    differential(
+        "let p=function(a,v){a[0]=v};let f=function(d){let a=[1];if(d){p(a,9)}return a[0]};\
+         f(true)+','+f(false)",
+    )?;
+    differential(
+        "let p=function(a,v){a.b=v};let f=function(d){let a={x:1};if(d){p(a,9)}else{}return a.b};\
+         typeof f(false)",
+    )?;
     Ok(())
 }
 
@@ -1937,7 +2020,6 @@ fn returned_closures_outlive_register_frames_and_keep_distinct_contexts() -> Res
 )]
 fn register_function_calls_preserve_limits_and_reject_unlowered_semantics() -> Result<(), Error> {
     for source in [
-        "function f(){return arguments.length}f()",
         "async function f(){return 1}f()",
         "function f(a,a){return a}f(1,2)",
         "function f(a={}){return a}f()",

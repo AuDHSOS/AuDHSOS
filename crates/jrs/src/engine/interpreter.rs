@@ -187,6 +187,23 @@ pub struct FrameHeader {
     /// Set when this call was opened by an operation rather than by a call
     /// instruction, and says what the operation does with the answer.
     pub resume: Option<Resume>,
+    /// Where the arguments of this call sit in the caller frame, which 10.4.4
+    /// needs after the frame has been entered. Only registers are held, never
+    /// values: the collector sees registers, not the fields of a header.
+    pub arguments: Option<FrameArguments>,
+}
+
+/// The registers of the caller frame that 10.4.4 reads to build an arguments
+/// object: the arguments themselves and the callable the call named.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameArguments {
+    /// First argument register of the caller frame.
+    pub start: Reg,
+    /// Number of arguments the call passed.
+    pub count: u16,
+    /// Caller register holding the Function object, which 10.4.4 makes
+    /// `callee`.
+    pub callee: Reg,
 }
 
 /// What an operation that called user code does when the call returns.
@@ -972,6 +989,11 @@ impl RegisterVM {
             caller_context: self.current_context,
             resume: call.resume,
             construct: call.construct,
+            arguments: Some(FrameArguments {
+                start: call.arg_start,
+                count: call.arg_count,
+                callee: call.func,
+            }),
         });
         self.unit = unit;
         self.fp = next_frame;
@@ -2259,6 +2281,83 @@ impl RegisterVM {
     /// is not enumerable, so that it shadows the same key on a prototype, and
     /// the attributes are read again at this point, so that a property deleted
     /// during the enumeration is not visited.
+    /// Builds the arguments object of the running call (10.4.4).
+    ///
+    /// The frame keeps the caller registers the call passed, so the object
+    /// holds every argument and not only the declared parameters. It is
+    /// written to `target` before its properties are, because every
+    /// allocation after that is a Safe Point and the register is what the
+    /// collector sees.
+    ///
+    /// The mapping of 10.4.4.7 is not built. The lowering only takes a body
+    /// where the mapping cannot be observed: one that assigns no parameter and
+    /// uses `arguments` for nothing but reading a property of it.
+    fn create_arguments(
+        &mut self,
+        code: &BytecodeFunction,
+        target: Reg,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(), VMError> {
+        let frame = *self.frames.last().ok_or(VMError::InvalidRegister)?;
+        let arguments = frame.arguments.ok_or(VMError::Unsupported(
+            "the arguments object of a call the engine did not open",
+        ))?;
+        let count = usize::from(arguments.count);
+        if count.saturating_add(2) > self.property_limit {
+            return Err(VMError::PropertyLimit);
+        }
+        let root_shape = heap.shapes.root_shape();
+        let object = self.allocate_object(code, heap, realm, root_shape)?;
+        self.write_reg(target, Value::from_object(object))?;
+        let outer = |vm: &Self, register: Reg| -> Result<Value, VMError> {
+            let slot = frame
+                .caller_fp
+                .checked_add(register.0 as usize)
+                .ok_or(VMError::InvalidRegister)?;
+            vm.stack.get(slot).copied().ok_or(VMError::InvalidRegister)
+        };
+        for index in 0..arguments.count {
+            let argument = outer(self, Reg(arguments.start.0.saturating_add(index)))?;
+            let name = alloc::format!("{index}");
+            let key = PropertyKey::String(
+                heap.strings
+                    .intern_units(&name.encode_utf16().collect::<alloc::vec::Vec<u16>>())?,
+            );
+            self.define_own(target, key, PropertyFlags::ordinary_data(), argument, heap)?;
+        }
+        let length = Value::from_f64(f64::from(arguments.count));
+        let key = PropertyKey::String(heap.strings.intern_units(&LENGTH_NAME)?);
+        self.define_own(target, key, PropertyFlags::constructor_data(), length, heap)?;
+        let callee = outer(self, arguments.callee)?;
+        let key = PropertyKey::String(heap.strings.intern_units(&CALLEE_NAME)?);
+        self.define_own(target, key, PropertyFlags::constructor_data(), callee, heap)?;
+        Ok(())
+    }
+
+    /// Adds one own property to an object this frame holds in `holder`.
+    ///
+    /// The object is read from the register again, because interning the name
+    /// is a Safe Point that can forward it.
+    fn define_own(
+        &self,
+        holder: Reg,
+        name: PropertyKey,
+        flags: PropertyFlags,
+        value: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let object = self
+            .read_reg(holder)?
+            .as_object()
+            .ok_or(VMError::TypeError)?;
+        let shape = heap.get_object(object).ok_or(VMError::TypeError)?.shape_id;
+        let (next, slot) = heap.shapes.transition(shape, name, flags);
+        heap.set_object_shape(object, next)?;
+        heap.set_object_slot(object, slot, value)?;
+        Ok(())
+    }
+
     fn for_in_next(
         &mut self,
         code: &BytecodeFunction,
@@ -3034,12 +3133,31 @@ impl RegisterVM {
                         return Ok(None);
                     }
                     let Some(oref) = target.as_object() else {
-                        return Err(type_error(
-                            heap,
-                            realm,
-                            "property access on a value that is not an object",
-                        ));
+                        return Err(property_base_error(target, heap, realm));
                     };
+                    // 10.4.2: an Array keeps its indices in an element store
+                    // and its length in a field of its own, so a name that
+                    // asks for one of them is answered there whichever
+                    // instruction asks.
+                    let units = active_code
+                        .string_constants
+                        .get(name_index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let elements = heap.get_object(oref).ok_or(VMError::TypeError)?.elements;
+                    if let Some(eref) = elements
+                        && let Some(index) = array_index_units(units)
+                    {
+                        let element = heap.get_elements(eref).ok_or(VMError::TypeError)?;
+                        self.acc = element.get(index).unwrap_or(VALUE_UNDEFINED);
+                        return Ok(None);
+                    }
+                    if units.as_slice() == LENGTH_NAME
+                        && let Some(length) = heap.array_length(oref)
+                    {
+                        self.acc = i32::try_from(length)
+                            .map_or_else(|_| Value::from_f64(f64::from(length)), Value::from_smi);
+                        return Ok(None);
+                    }
                     let shape_id = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
                     let prototype_epoch = heap.shapes.prototype_epoch();
 
@@ -3082,14 +3200,36 @@ impl RegisterVM {
                         self.acc = Self::absent_property(target, units, heap)?;
                     }
                 }
-                Instruction::SetNamed { obj, name, slot } => {
-                    let name = active_code
+                Instruction::SetNamed {
+                    obj,
+                    name: name_index,
+                    slot,
+                } => {
+                    let units = active_code
                         .string_constants
-                        .get(name as usize)
+                        .get(name_index as usize)
                         .ok_or(VMError::InvalidRegister)?;
-                    let name = PropertyKey::String(heap.strings.intern_units(name)?);
                     let target = self.read_reg(obj)?;
                     let oref = target.as_object().ok_or(VMError::TypeError)?;
+                    // 10.4.2: an Array keeps its indices in an element store,
+                    // so a name that is one is written there and not as a
+                    // property of its own.
+                    let elements = heap.get_object(oref).ok_or(VMError::TypeError)?.elements;
+                    if let Some(eref) = elements
+                        && let Some(index) = array_index_units(units)
+                    {
+                        let stored = heap.get_elements(eref).ok_or(VMError::TypeError)?;
+                        if stored.get(index).is_none()
+                            && heap.own_property_count(oref).unwrap_or(usize::MAX)
+                                >= self.property_limit
+                        {
+                            return Err(VMError::PropertyLimit);
+                        }
+                        let value = self.acc;
+                        heap.set_array_element(oref, index, value)?;
+                        return Ok(None);
+                    }
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
                     let current_shape = heap.get_object(oref).ok_or(VMError::TypeError)?.shape_id;
                     let prototype_epoch = heap.shapes.prototype_epoch();
 
@@ -3154,11 +3294,7 @@ impl RegisterVM {
                         return Ok(None);
                     }
                     let Some(oref) = target.as_object() else {
-                        return Err(type_error(
-                            heap,
-                            realm,
-                            "property access on a value that is not an object",
-                        ));
+                        return Err(property_base_error(target, heap, realm));
                     };
                     let js_obj = heap.get_object(oref).ok_or(VMError::TypeError)?;
                     let key_val = self.read_reg(key)?;
@@ -3321,6 +3457,9 @@ impl RegisterVM {
                     let root_shape = heap.shapes.root_shape();
                     let oref = self.allocate_object(active_code, heap, realm, root_shape)?;
                     self.acc = Value::from_object(oref);
+                }
+                Instruction::CreateArguments(target) => {
+                    self.create_arguments(active_code, target, heap, realm)?;
                 }
                 Instruction::CreateArray(length) => {
                     if self.property_limit == 0 {
@@ -3601,6 +3740,38 @@ fn exact_smi(number: f64) -> Option<i32> {
         .then_some(integer)
 }
 
+/// The Array index a property name denotes, if it is one (10.4.2.1).
+///
+/// Only the canonical decimal of an index is one: a name with a leading zero,
+/// a sign or a fraction names an ordinary property.
+/// What a property access on a base that is no Object answers.
+///
+/// 7.3.2 sends the base through `ToObject`, which 7.1.18 refuses for undefined
+/// and null alone. Every other primitive gets a wrapper Object this engine has
+/// not built, so the access names that instead of throwing the `TypeError` only
+/// the first two deserve.
+fn property_base_error(base: Value, heap: &mut GenerationalHeap, realm: &Realm) -> VMError {
+    if base.is_undefined() || base.is_null() {
+        return type_error(heap, realm, "property access on null or undefined");
+    }
+    VMError::Unsupported("ToObject of a primitive for a property access")
+}
+
+fn array_index_units(units: &[u16]) -> Option<u32> {
+    let (first, rest) = units.split_first()?;
+    if *first == 0x30 {
+        return rest.is_empty().then_some(0);
+    }
+    let mut index: u32 = 0;
+    for unit in units {
+        let digit = u32::from(*unit)
+            .checked_sub(0x30)
+            .filter(|digit| *digit < 10)?;
+        index = index.checked_mul(10)?.checked_add(digit)?;
+    }
+    Some(index)
+}
+
 fn array_index(value: Value, heap: &GenerationalHeap) -> Result<Option<u32>, VMError> {
     if let Some(index) = value.as_smi() {
         return Ok(u32::try_from(index).ok());
@@ -3834,6 +4005,9 @@ fn integer_argument(value: Value, heap: &GenerationalHeap) -> Result<i64, VMErro
 
 /// UTF-16 code units of the property name `"length"`.
 const LENGTH_NAME: [u16; 6] = [0x6C, 0x65, 0x6E, 0x67, 0x74, 0x68];
+
+/// `callee`, which 10.4.4 gives the arguments object.
+const CALLEE_NAME: [u16; 6] = [0x63, 0x61, 0x6C, 0x6C, 0x65, 0x65];
 
 /// The canonical index a property name denotes, if it denotes one.
 fn string_index(units: &[u16]) -> Option<u32> {
