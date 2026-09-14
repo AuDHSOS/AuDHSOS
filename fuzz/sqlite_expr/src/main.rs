@@ -109,6 +109,21 @@ fn walk_definition(arena: &Arena, definition: Definition) {
         // A view holds the statement it names, and every expression of
         // that statement with it.
         Definition::View(view) => walk_select(arena, view.select, 0),
+        // A column added to a table holds the expressions its
+        // constraints are written with, as a column of a `CREATE TABLE`
+        // does.
+        Definition::AddColumn(added) => {
+            for constraint in arena.column_constraints(added.column.constraints) {
+                match *constraint {
+                    ColumnConstraint::Check(expr)
+                    | ColumnConstraint::Default { value: expr, .. }
+                    | ColumnConstraint::Generated { value: expr, .. } => {
+                        walk(arena, expr, 0);
+                    }
+                    _ => {}
+                }
+            }
+        }
         // A `DROP` names a table, an index or a view and holds no
         // expression.
         Definition::Drop(_) => {}

@@ -29,6 +29,27 @@ use crate::wal::Log;
 /// and so for every build with `SQLITE_POWERSAFE_OVERWRITE`.
 const SECTOR: u32 = 512;
 
+/// What `sqlite3AlterFinishAddColumn` refuses to add: a column that is
+/// `PRIMARY KEY` or `UNIQUE`, because the index over it would hold the
+/// rows the table already has, and one that may not be nothing and
+/// falls back to nothing, because the rows it already has hold nothing
+/// for it.
+fn refused_column(arena: &Arena, asked: &crate::ast::AddColumn) -> Result<(), Error> {
+    let mut fallback = false;
+    for constraint in arena.column_constraints(asked.column.constraints) {
+        match constraint {
+            crate::ast::ColumnConstraint::PrimaryKey { .. }
+            | crate::ast::ColumnConstraint::Unique(_) => return Err(Error::Unsupported),
+            crate::ast::ColumnConstraint::Default { .. } => fallback = true,
+            crate::ast::ColumnConstraint::NotNull(_) if !fallback => {
+                return Err(Error::Unsupported);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Whether a column of a `sqlite_schema` row is the text `wanted`.
 const fn is_text(value: Option<crate::record::Value<'_>>, wanted: &[u8]) -> bool {
     matches!(value, Some(crate::record::Value::Text(bytes)) if bytes.eq_ignore_ascii_case(wanted))
@@ -169,6 +190,81 @@ impl Writer {
             Some(bytes) => bytes.clone(),
             None => self.pages.written(&self.header),
         }
+    }
+
+    /// `ALTER TABLE ... ADD COLUMN`: the statement of the table gains
+    /// the column, and the rows it already holds gain nothing.
+    ///
+    /// `sqlite3AlterFinishAddColumn` writes the column into the text
+    /// between the last thing the columns hold and the bracket that
+    /// closes them, so a row written before the column answers what the
+    /// column falls back to and not a value of its own, which is the
+    /// schema format of D-178.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] where the database holds no such table, and
+    /// [`Error::Unsupported`] for a column SQLite refuses to add: one
+    /// that is `PRIMARY KEY` or `UNIQUE`, and one that may not be
+    /// nothing and falls back to nothing.
+    fn add_column(
+        &mut self,
+        arena: &Arena,
+        asked: &crate::ast::AddColumn,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        let name = crate::schema::dequote(asked.table.text(sql));
+        let written = asked.written.text(sql).to_vec();
+        refused_column(arena, asked)?;
+        let rowid = self.row_of(&name)?;
+        let image = self.image();
+        let database = Database::open(&image)?;
+        let root = database.table(&name).ok_or(Error::NoTable)?.1;
+        let (statement, add_at) = database.written_as(&name).ok_or(Error::NoTable)?;
+        // The column goes where `addColOffset` names: in front of the
+        // comma the constraints begin after, and in front of the
+        // bracket that closes the columns where the table has none.
+        let at = add_at.ok_or(Error::Unsupported)?;
+        let mut text = statement.get(..at).unwrap_or_default().to_vec();
+        text.extend_from_slice(b", ");
+        text.extend_from_slice(&written);
+        text.extend_from_slice(statement.get(at..).unwrap_or_default());
+        // The row keeps its place, its type, its name and its root, and
+        // gains the statement the column is written into.
+        let value = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
+        let row = crate::record::write(
+            &[
+                value(b"table"),
+                value(&name),
+                value(&name),
+                Value::Int(i64::from(root)),
+                value(&text),
+            ],
+            &SCHEMA,
+            4,
+        );
+        drop(database);
+        crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
+        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        Ok(())
+    }
+
+    /// Which row of `sqlite_schema` names the table, which is the row a
+    /// statement that changes the table writes again.
+    fn row_of(&self, name: &[u8]) -> Result<i64, Error> {
+        let bytes = self.image();
+        let image = crate::image::Image::open(&bytes)?;
+        let mut payload = Vec::new();
+        for row in image.schema() {
+            let row = row?;
+            payload.resize(row.payload.total, 0);
+            image.read_payload(&row.payload, &mut payload)?;
+            let record = crate::record::Record::parse(&payload)?;
+            if is_text(record.value(0)?, b"table") && is_text(record.value(1)?, name) {
+                return Ok(row.rowid);
+            }
+        }
+        Err(Error::NoTable)
     }
 
     /// `DROP TABLE` and `DROP INDEX`: the rows of `sqlite_schema` that
@@ -511,6 +607,7 @@ impl Writer {
     fn define(&mut self, arena: &Arena, definition: Definition, sql: &[u8]) -> Result<(), Error> {
         let (kind, name, over) = match definition {
             Definition::Drop(asked) => return self.drop_object(&asked, sql),
+            Definition::AddColumn(asked) => return self.add_column(arena, &asked, sql),
             Definition::Table(table) => {
                 if !matches!(table.body, TableBody::Columns { .. }) {
                     return Err(Error::Unsupported);

@@ -103,6 +103,8 @@ pub enum Expected {
     On,
     /// `BEGIN`, `COMMIT`, `END` or `ROLLBACK`.
     Transaction,
+    /// `ADD`, after the table of an `ALTER TABLE`.
+    Add,
 }
 
 /// Where the parser stopped, and what it wanted there.
@@ -867,10 +869,14 @@ impl<'a> Parser<'a> {
         Ok(definition)
     }
 
-    /// `CREATE TABLE`, `CREATE INDEX`, `DROP TABLE` or `DROP INDEX`.
+    /// A statement that makes something, takes it away, or changes what
+    /// it is made of.
     fn definition(&mut self) -> Result<Definition, Error> {
         if self.eat_keyword(Keyword::Drop) {
             return Ok(Definition::Drop(self.drop_statement()?));
+        }
+        if self.eat_keyword(Keyword::Alter) {
+            return Ok(Definition::AddColumn(self.alter_table()?));
         }
         self.expect_keyword(Keyword::Create, Expected::Create)?;
         let temporary = self.at_temporary();
@@ -924,6 +930,32 @@ impl<'a> Parser<'a> {
         };
         self.eat_keyword(Keyword::Transaction);
         Ok(read)
+    }
+
+    /// What follows `ALTER TABLE`: the table, the word `ADD`, and the
+    /// column it gains.
+    ///
+    /// The text of the column is what the schema statement gains, so it
+    /// is kept as it was written, from the first byte of the column to
+    /// the last byte of its last token. `sqlite3AlterFinishAddColumn`
+    /// takes the trailing semicolon and the space before it off there,
+    /// which a span that ends on a token never holds.
+    fn alter_table(&mut self) -> Result<crate::ast::AddColumn, Error> {
+        self.expect_keyword(Keyword::Table, Expected::Table)?;
+        let (schema, table) = self.qualified_name()?;
+        self.expect_keyword(Keyword::Add, Expected::Add)?;
+        self.eat_keyword(Keyword::Column);
+        let start = self.peek().map_or(self.end, |token| token.start);
+        let column = self.column_def()?;
+        Ok(crate::ast::AddColumn {
+            schema,
+            table,
+            written: Span {
+                start,
+                len: self.end.saturating_sub(start),
+            },
+            column,
+        })
     }
 
     /// What follows `CREATE VIEW`: the name, the names it answers its
@@ -1077,10 +1109,14 @@ impl<'a> Parser<'a> {
                 name,
                 body: TableBody::Select(select),
                 options: TableOptions::default(),
+                add_at: None,
             });
         }
         self.expect(Kind::Lp, Expected::OpenParen)?;
-        let (columns, constraints) = self.column_list()?;
+        let (columns, constraints, add_at) = self.column_list()?;
+        // A table with no constraint after its columns takes a column
+        // added later in front of the bracket that closes them.
+        let add_at = add_at.or_else(|| self.peek().map(|token| token.start));
         self.expect(Kind::Rp, Expected::CloseParen)?;
         let options = self.table_options()?;
         Ok(CreateTable {
@@ -1093,19 +1129,28 @@ impl<'a> Parser<'a> {
                 constraints,
             },
             options,
+            add_at,
         })
     }
 
     /// The columns of a table, and the constraints that follow them.
-    fn column_list(&mut self) -> Result<(Range, Range), Error> {
+    ///
+    /// `add_at` is where a column added later is written, which is the
+    /// comma the constraints begin after and nothing where the table
+    /// has none; `sqlite3EndTable` takes the same token for
+    /// `addColOffset`.
+    fn column_list(&mut self) -> Result<(Range, Range, Option<usize>), Error> {
         let mut columns = Vec::new();
         let mut constraints = Vec::new();
+        let mut add_at = None;
         loop {
             columns.push(self.column_def()?);
+            let comma = self.peek().map(|token| token.start);
             if !self.eat(Kind::Comma) {
                 break;
             }
             if self.at_table_constraint() {
+                add_at = comma;
                 // `tconscomma ::= COMMA. | .` — the comma between two
                 // constraints may be left out, and one with nothing
                 // after it is left where it stands so that the bracket
@@ -1127,7 +1172,11 @@ impl<'a> Parser<'a> {
             }
         }
         let columns = self.arena.push_columns(&columns);
-        Ok((columns, self.arena.push_table_constraints(&constraints)))
+        Ok((
+            columns,
+            self.arena.push_table_constraints(&constraints),
+            add_at,
+        ))
     }
 
     /// Whether what stands here belongs to the table rather than to a

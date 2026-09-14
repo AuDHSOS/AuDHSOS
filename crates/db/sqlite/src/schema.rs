@@ -121,6 +121,9 @@ pub struct Table {
     pub rowid_alias: Option<usize>,
     /// Whether the rowid counts up rather than filling gaps.
     pub autoincrement: bool,
+    /// Where in the statement a column added later is written, which is
+    /// `addColOffset`.
+    pub add_at: Option<usize>,
 }
 
 /// One column of an index, and how it is held.
@@ -314,6 +317,7 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
         columns: Vec::new(),
         without_rowid: definition.options.without_rowid,
         strict: definition.options.strict,
+        add_at: definition.add_at,
         rowid_alias: None,
         autoincrement: false,
     };

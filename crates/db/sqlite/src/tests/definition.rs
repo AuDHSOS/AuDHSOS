@@ -72,6 +72,10 @@ fn every_syntax_error_the_c_library_finds_is_found_here() {
             // A `DROP` makes nothing, so the oracle names no kind for
             // it; this parser reads it as the definition that takes one
             // away.
+            _ if sql.to_ascii_uppercase().starts_with("ALTER") => assert!(
+                matches!(mine, Some(Definition::AddColumn(_))),
+                "{sql} adds a column and was not read as one"
+            ),
             _ if sql.to_ascii_uppercase().starts_with("DROP") => assert!(
                 matches!(mine, Some(Definition::Drop(_))),
                 "{sql} takes a table or an index away and was not read as one"
@@ -96,8 +100,11 @@ fn table_of(sql: &str) -> (crate::ast::Arena, crate::ast::CreateTable) {
     let (arena, definition) = definition(sql.as_bytes()).expect("a table");
     match definition {
         Definition::Table(table) => (arena, table),
-        Definition::Index(_) | Definition::View(_) | Definition::Drop(_) => {
-            panic!("an index, a view or a drop where a table was written")
+        Definition::Index(_)
+        | Definition::View(_)
+        | Definition::AddColumn(_)
+        | Definition::Drop(_) => {
+            panic!("something other than a table was written")
         }
     }
 }

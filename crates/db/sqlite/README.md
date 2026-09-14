@@ -84,5 +84,8 @@ A `DROP` takes a table or an index away and puts every page of its tree
 on the free list. A `BEGIN` opens a transaction that spans statements,
 a `COMMIT` writes it as one unit of work and a `ROLLBACK` leaves the
 file the transaction began with. A view is a named statement, whose
-rows are the ones that statement answers where the view is named. What
-is missing of writing is `ALTER` and the checkpoint.
+rows are the ones that statement answers where the view is named. An
+`ALTER TABLE ... ADD COLUMN` writes the column into the statement of the
+table, and the rows it already holds answer what the column falls back
+to. What is missing of writing is `ALTER TABLE ... RENAME` and the
+checkpoint.

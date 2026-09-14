@@ -646,11 +646,11 @@ do for the page size, the encoding and the reserved tail.
 ## 16.22 Q8. The rest of the language
 
 Status: `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW`, the three
-`DROP`s, `PRAGMA`, `BEGIN`, `COMMIT`, `ROLLBACK`, `INSERT`, `DELETE`
-and `UPDATE` are run from their text and write the files the shell
-wrote; the rest is open.
+`DROP`s, `ALTER TABLE ... ADD COLUMN`, `PRAGMA`, `BEGIN`, `COMMIT`,
+`ROLLBACK`, `INSERT`, `DELETE` and `UPDATE` are run from their text and
+write the files the shell wrote; the rest is open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
-D-191, D-193 and D-195.
+D-191, D-193, D-195 and D-196.
 Size: L.
 
 ### Does
@@ -664,7 +664,8 @@ Size: L.
    `CREATE TABLE` is built for a table of columns, `CREATE INDEX` for
    an index over columns, which D-186 records, `CREATE VIEW` and
    `DROP VIEW`, which D-195 records, and `DROP TABLE` and `DROP INDEX`,
-   which D-191 records.
+   which D-191 records. `ALTER TABLE ... ADD COLUMN` is built, which
+   D-196 records; `RENAME` is open.
 3. Subqueries, `WITH`, and the window clauses the parser refuses.
 4. The functions that need a clock or a random source.
 
@@ -677,7 +678,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 789 pass, 9 answer differently, and 14 566 name something the
+files, 797 pass, 9 answer differently, and 14 558 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.

@@ -587,6 +587,14 @@ impl<'a> Database<'a> {
         })
     }
 
+    /// The statement the table of `name` was written with, and where a
+    /// column added later goes in it.
+    #[must_use]
+    pub fn written_as(&self, name: &[u8]) -> Option<(&[u8], Option<usize>)> {
+        self.find(name)
+            .map(|stored| (stored.sql.as_slice(), stored.table.add_at))
+    }
+
     /// The view of `name`, where the schema holds one.
     #[must_use]
     pub fn view(&self, name: &[u8]) -> Option<&[u8]> {

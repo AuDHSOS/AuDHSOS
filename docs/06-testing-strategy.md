@@ -4287,7 +4287,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - The block of an `else` is read past and a case whose name repeats is
   dropped, because the interpreter runs one arm of a conditional, which
   D-192 and D-189 record.
-- 789 pass, 9 answer differently and 14 566 are refused or stopped.
+- 797 pass, 9 answer differently and 14 558 are refused or stopped.
   Document 16, section 16.23 groups the nine. Earlier runs answered
   14, then 27, then 17 differently; twelve were defects, which D-181,
   D-184 and D-189 record and twenty-eight cases of `query.corpus` now
@@ -4424,6 +4424,24 @@ D-195, document 16 step Q8.
 - A view row whose statement the reader cannot read, and one that calls
   itself a view and holds a table, are walked past, which the crafted
   schema of `a_schema_row_that_is_not_a_table_is_passed_over` holds.
+
+### 6.6.126 A column added to a table (`db-sqlite`)
+
+D-196, document 16 step Q8.
+
+- Three fixtures, `alter-*.db`: a column with a fallback, one with
+  neither type nor fallback, and one added to a table that carries a
+  constraint after its columns, which the column is written in front
+  of. Each is the file the shell wrote, byte for byte.
+- A row written before the column answers what the column falls back
+  to; a row written after it holds a value of its own.
+- The refusals: a table the database does not hold, a column that is
+  `PRIMARY KEY` or `UNIQUE`, and one that may not be nothing and falls
+  back to nothing. One that may not be nothing and falls back to
+  something is allowed.
+- The row the statement writes again is found by name and by kind, so
+  the walk passes over a table of another name and over a row that is
+  not a table.
 
 ## 6.7 CI pipeline
 

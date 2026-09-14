@@ -599,6 +599,28 @@ pub(super) const VIEW_NAMED: &[u8] = include_bytes!("fixtures/view-named.db");
 /// What a `DROP VIEW` leaves, which is the file without its row.
 pub(super) const VIEW_GONE: &[u8] = include_bytes!("fixtures/view-gone.db");
 
+/// What `ALTER TABLE ... ADD COLUMN` writes: the statement of the table
+/// gains the column, and the row it already holds gains nothing, so the
+/// column answers what it falls back to. `alter-typed` has a constraint
+/// after its columns, which the column is written in front of.
+pub(super) const ADDED_COLUMN: &[(&str, &str, &[u8])] = &[
+    (
+        "alter-added.db",
+        "ALTER TABLE t ADD COLUMN c DEFAULT 7",
+        include_bytes!("fixtures/alter-added.db"),
+    ),
+    (
+        "alter-plain.db",
+        "ALTER TABLE t ADD c",
+        include_bytes!("fixtures/alter-plain.db"),
+    ),
+    (
+        "alter-typed.db",
+        "ALTER TABLE t ADD COLUMN d REAL DEFAULT 1.5",
+        include_bytes!("fixtures/alter-typed.db"),
+    ),
+];
+
 /// The auto-vacuum dimension of document 16, section 16.11, over the
 /// write path: the same four hundred rows under both settings, chains
 /// that cross the second pointer-map page, the free pages a file that

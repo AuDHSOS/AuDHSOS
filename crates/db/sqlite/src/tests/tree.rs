@@ -2287,6 +2287,105 @@ fn what_a_view_refuses() {
 }
 
 #[test]
+fn a_column_added_to_a_table_is_the_statement_the_shell_wrote() {
+    use crate::change::Writer;
+    for (name, statement, fixture) in crate::tests::ADDED_COLUMN {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        if *name == "alter-typed.db" {
+            writer
+                .run(b"CREATE TABLE t(n INTEGER, s TEXT, PRIMARY KEY(n))")
+                .unwrap();
+        } else {
+            writer.run(b"CREATE TABLE t(a,b)").unwrap();
+        }
+        writer.run(b"INSERT INTO t VALUES(1,'x')").unwrap();
+        writer.run(statement.as_bytes()).unwrap();
+        same(name, &writer.written(), fixture, 512);
+    }
+}
+
+#[test]
+fn a_row_written_before_a_column_was_added_answers_what_it_falls_back_to() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,'x')").unwrap();
+    writer.run(b"ALTER TABLE t ADD COLUMN c DEFAULT 7").unwrap();
+    // The row holds two values and the table has three columns, so the
+    // third answers what it falls back to.
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT a,b,c FROM t").unwrap().rows,
+        [alloc::vec![
+            Value::Int(1),
+            Value::Text(b"x".to_vec()),
+            Value::Int(7)
+        ]]
+    );
+    // A row written after it holds a value of its own for the column.
+    writer.run(b"INSERT INTO t VALUES(2,'y',9)").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT c FROM t ORDER BY a").unwrap().rows,
+        [[Value::Int(7)], [Value::Int(9)]]
+    );
+}
+
+#[test]
+fn what_adding_a_column_refuses() {
+    use crate::change::Writer;
+    use crate::db::Error;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    // A table the database does not hold.
+    assert_eq!(
+        writer.run(b"ALTER TABLE nosuch ADD COLUMN c"),
+        Err(Error::NoTable)
+    );
+    // `sqlite3AlterFinishAddColumn` refuses a column that would need an
+    // index over the rows the table already holds, and one that may not
+    // be nothing where the rows hold nothing for it.
+    assert_eq!(
+        writer.run(b"ALTER TABLE t ADD COLUMN c UNIQUE"),
+        Err(Error::Unsupported)
+    );
+    assert_eq!(
+        writer.run(b"ALTER TABLE t ADD COLUMN c PRIMARY KEY"),
+        Err(Error::Unsupported)
+    );
+    assert_eq!(
+        writer.run(b"ALTER TABLE t ADD COLUMN c NOT NULL"),
+        Err(Error::Unsupported)
+    );
+    // One that may not be nothing and falls back to something is
+    // allowed, because every row then holds one.
+    writer
+        .run(b"ALTER TABLE t ADD COLUMN d DEFAULT 3 NOT NULL")
+        .unwrap();
+    // The row the statement writes again is found by name and by kind,
+    // so the walk passes over a table of another name and over a row
+    // that is not a table at all.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"CREATE INDEX ta ON t(a)").unwrap();
+    writer.run(b"CREATE TABLE u(b)").unwrap();
+    // The text of the column is kept as it was written, with the
+    // trailing semicolon and the space before it taken off.
+    writer
+        .run(b"ALTER TABLE u ADD COLUMN c DEFAULT 7 ;  ")
+        .unwrap();
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    assert_eq!(
+        database.written_as(b"u").map(|(sql, _)| sql),
+        Some(b"CREATE TABLE u(b, c DEFAULT 7)".as_slice())
+    );
+}
+
+#[test]
 fn what_a_drop_refuses() {
     use crate::change::Writer;
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();

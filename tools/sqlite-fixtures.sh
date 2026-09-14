@@ -348,7 +348,10 @@ for case in "index-empty.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a);" \
     "tx-kept.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x');" \
     "view-one.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x'),(2,'y'),(3,'z'); CREATE VIEW v AS SELECT a FROM t WHERE a>1;" \
     "view-named.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x'),(2,'y'); CREATE VIEW v(one,two) AS SELECT b,a FROM t ORDER BY a DESC;" \
-    "view-gone.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x'); CREATE VIEW v AS SELECT a FROM t; DROP VIEW v;"; do
+    "view-gone.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x'); CREATE VIEW v AS SELECT a FROM t; DROP VIEW v;" \
+    "alter-added.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x'); ALTER TABLE t ADD COLUMN c DEFAULT 7;" \
+    "alter-plain.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x'); ALTER TABLE t ADD c;" \
+    "alter-typed.db:CREATE TABLE t(n INTEGER, s TEXT, PRIMARY KEY(n)); INSERT INTO t VALUES(1,'x'); ALTER TABLE t ADD COLUMN d REAL DEFAULT 1.5;"; do
     name="${case%%:*}"
     sql="${case#*:}"
     rm -f "$out/$name"

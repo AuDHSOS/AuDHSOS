@@ -485,6 +485,24 @@ pub struct CreateTable {
     pub body: TableBody,
     /// What follows the columns.
     pub options: TableOptions,
+    /// Where in the statement a column added later is written, which is
+    /// `addColOffset`: the comma the constraints begin after, else the
+    /// bracket that closes the columns.
+    pub add_at: Option<usize>,
+}
+
+/// `ALTER TABLE [schema.]name ADD [COLUMN] <column>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AddColumn {
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The table.
+    pub table: Span,
+    /// The column, as the statement wrote it, which is what the schema
+    /// text gains.
+    pub written: Span,
+    /// The column, read.
+    pub column: ColumnDef,
 }
 
 /// `CREATE VIEW [IF NOT EXISTS] name [(columns)] AS select`.
@@ -608,6 +626,8 @@ pub enum Definition {
     Index(CreateIndex),
     /// `CREATE VIEW`.
     View(CreateView),
+    /// `ALTER TABLE ... ADD COLUMN`.
+    AddColumn(AddColumn),
     /// `DROP TABLE`, `DROP INDEX` and `DROP VIEW`.
     Drop(Drop),
 }
