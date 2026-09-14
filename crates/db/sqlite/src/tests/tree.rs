@@ -2493,18 +2493,23 @@ fn what_a_pragma_refuses() {
     // The page count is what the file holds, not what a statement sets.
     assert!(writer.run(b"PRAGMA page_count=7").is_err());
     // The three that say how the first table is written stand before
-    // it.
+    // it, and one written after it changes nothing.
     writer.run(b"PRAGMA auto_vacuum=full").unwrap();
     writer.run(b"CREATE TABLE t(a)").unwrap();
-    assert!(writer.run(b"PRAGMA page_size=512").is_err());
+    assert!(writer.run(b"PRAGMA page_size=512").unwrap().is_empty());
+    assert_eq!(
+        writer.run(b"PRAGMA page_size").unwrap(),
+        [[Value::Int(4096)]]
+    );
     let written = writer.written();
     let database = crate::db::Database::open(&written).unwrap();
     // A file being read is not being configured.
     assert!(database.query(b"PRAGMA page_size=1024").is_err());
     assert!(database.query(b"PRAGMA nosuch").is_err());
-    // The pragma the connection holds has no answer out of a file.
+    // The pragma the connection holds has no answer out of a file, and
+    // a pragma that answers nothing at all has none either.
     assert!(database.query(b"PRAGMA count_changes").is_err());
-    assert!(database.query(b"PRAGMA cache_size").is_err());
+    assert!(database.query(b"PRAGMA cache_spill").is_err());
     // The journal mode belongs to the connection, so it is set after a
     // table is there as well; a file in write-ahead logging leaves that
     // mode through a checkpoint, which this crate does not write.
@@ -3078,8 +3083,13 @@ fn a_with_term_that_reads_itself_is_answered_row_by_row() {
               SELECT x+10 FROM c WHERE x<5) SELECT group_concat(x) FROM c",
             b"1,2,11,12",
         ),
-        // A term of a `WITH` written `RECURSIVE` that reads nothing of
-        // its own is answered once, like any other.
+        // `RECURSIVE` says nothing: a term reads itself where it names
+        // itself, and is answered once where it does not.
+        (
+            b"WITH c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<4) \
+              SELECT group_concat(x) FROM c",
+            b"1,2,3,4",
+        ),
         (
             b"WITH RECURSIVE c(x) AS (SELECT a FROM t WHERE a<2) SELECT group_concat(x) FROM c",
             b"1,1",
@@ -3206,5 +3216,94 @@ fn the_schema_tree_grows_past_one_page_as_the_shell_grows_it() {
         &writer.written(),
         crate::tests::SCHEMA_DEEP,
         512,
+    );
+}
+
+#[test]
+fn the_pragmas_a_connection_keeps_answer_what_it_was_told() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    let text = |bytes: &[u8]| Value::Text(bytes.to_vec());
+    // What a connection told nothing answers, which is the shell's own
+    // answer for a database with nothing set.
+    for (sql, want) in [
+        (b"PRAGMA mmap_size".as_slice(), Value::Int(0)),
+        (b"PRAGMA locking_mode", text(b"normal")),
+        (b"PRAGMA secure_delete", Value::Int(0)),
+        (b"PRAGMA max_page_count", Value::Int(4_294_967_294)),
+        (b"PRAGMA journal_size_limit", Value::Int(-1)),
+        (b"PRAGMA wal_autocheckpoint", Value::Int(1000)),
+        (b"PRAGMA query_only", Value::Int(0)),
+        (b"PRAGMA automatic_index", Value::Int(1)),
+        (b"PRAGMA synchronous", Value::Int(2)),
+        (b"PRAGMA cache_size", Value::Int(-2000)),
+        (b"PRAGMA data_version", Value::Int(1)),
+    ] {
+        assert_eq!(writer.run(sql).unwrap(), [[want]], "{sql:?}");
+    }
+    // Setting one answers the value it was set to where that pragma
+    // answers a row, and nothing where it does not.
+    for (sql, want) in [
+        // This crate maps no file, so `mmap_size` stands at nought
+        // whatever a statement sets it to, and `data_version` is raised
+        // by a write from another connection and by nothing else.
+        (b"PRAGMA mmap_size=8000000".as_slice(), Value::Int(0)),
+        (b"PRAGMA data_version=1234", Value::Int(1)),
+        (b"PRAGMA locking_mode=EXCLUSIVE", text(b"exclusive")),
+        (b"PRAGMA secure_delete=fast", Value::Int(2)),
+        (b"PRAGMA secure_delete=on", Value::Int(1)),
+        (b"PRAGMA max_page_count=50", Value::Int(50)),
+        (b"PRAGMA busy_timeout=500", Value::Int(500)),
+    ] {
+        assert_eq!(writer.run(sql).unwrap(), [[want]], "{sql:?}");
+    }
+    for sql in [
+        b"PRAGMA query_only=1".as_slice(),
+        b"PRAGMA cache_size=-4000",
+        b"PRAGMA cache_size=2000",
+        b"PRAGMA synchronous=normal",
+        b"PRAGMA synchronous=full",
+        b"PRAGMA synchronous=extra",
+        b"PRAGMA synchronous=OFF",
+        b"PRAGMA temp_store=default",
+        b"PRAGMA temp_store=file",
+        b"PRAGMA temp_store=memory",
+        b"PRAGMA temp_store=1",
+        b"PRAGMA synchronous=3",
+        b"PRAGMA foreign_keys=ON",
+    ] {
+        assert!(writer.run(sql).unwrap().is_empty(), "{sql:?}");
+    }
+    assert_eq!(writer.run(b"PRAGMA temp_store").unwrap(), [[Value::Int(1)]]);
+    // What was set is what the connection answers after.
+    assert_eq!(
+        writer.run(b"PRAGMA cache_size").unwrap(),
+        [[Value::Int(2000)]]
+    );
+    assert_eq!(
+        writer.run(b"PRAGMA synchronous").unwrap(),
+        [[Value::Int(3)]]
+    );
+    // A value the pragma does not name is refused.
+    assert!(writer.run(b"PRAGMA locking_mode=sometimes").is_err());
+    assert!(writer.run(b"PRAGMA mmap_size=lots").is_err());
+    assert!(writer.run(b"PRAGMA mmap_size=''").is_err());
+    assert!(writer.run(b"PRAGMA query_only=maybe").is_err());
+    assert!(writer.run(b"PRAGMA synchronous=sometimes").is_err());
+    assert!(writer.run(b"PRAGMA temp_store=disk").is_err());
+    assert!(writer.run(b"PRAGMA secure_delete=sometimes").is_err());
+    // A pragma the file does not hold and the connection answers
+    // nothing for is accepted and changes nothing.
+    assert!(writer.run(b"PRAGMA cache_spill=0").unwrap().is_empty());
+    // A database read answers what a connection told nothing answers.
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"PRAGMA mmap_size").unwrap().rows,
+        [[Value::Int(0)]]
+    );
+    assert_eq!(
+        database.query(b"PRAGMA locking_mode").unwrap().rows,
+        [[text(b"normal")]]
     );
 }

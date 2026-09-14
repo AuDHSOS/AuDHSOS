@@ -4293,7 +4293,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - A statement reaches the connection that reads or the one that writes
   by its first word, and a `WITH` clause stands in front of a statement
   that writes as well, so the words after it say which.
-- 893 pass, 9 answer differently and 14 462 are refused or stopped.
+- 914 pass, 9 answer differently and 14 441 are refused or stopped.
   Document 16, section 16.23 groups the nine. Earlier runs answered
   14, then 27, then 17, then 13 differently; sixteen were defects,
   which D-181, D-184, D-189 and D-197 record and twenty-eight cases of
@@ -4512,6 +4512,24 @@ D-200, document 16 step Q8.
   byte for byte, the bytes of the blank record included.
 - Twenty schema rows written into page one leave page one an interior
   page whose tree holds all twenty.
+
+### 6.6.131 The pragmas a connection keeps (`db-sqlite`)
+
+D-202, document 16 step Q8.
+
+- What a connection told nothing answers for each of them, which is
+  the shell's own answer for a database with nothing set.
+- Setting one answers the value it was set to where that pragma
+  answers a row, and nothing where it does not; what was set is what
+  the connection answers after.
+- `mmap_size` stands at nought and `data_version` at one, whatever a
+  statement sets them to.
+- The four shapes a value is written in: a whole number with the minus
+  sign a cache size carries, a truth value, `normal` or `exclusive`,
+  and the words `off`, `normal`, `full` and `extra`.
+- The refusals: a value the pragma does not name, in each shape.
+- A database being read answers what a connection told nothing
+  answers.
 
 ## 6.7 CI pipeline
 

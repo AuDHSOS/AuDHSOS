@@ -874,9 +874,10 @@ pub struct Cte {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Select {
     /// The tables of a `WITH` clause.
+    ///
+    /// `RECURSIVE` is not kept: a term that reads its own name reads
+    /// itself whether the word was written or not.
     pub ctes: Range,
-    /// Whether `RECURSIVE` was written.
-    pub recursive: bool,
     /// What was said about duplicate rows.
     pub distinct: Distinct,
     /// What the statement answers.

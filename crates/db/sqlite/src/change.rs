@@ -79,6 +79,9 @@ pub struct Writer {
     /// Where `random` and `randomblob` take their bytes from, which
     /// comes from SQLite's random source as well.
     random: crate::random::Source,
+    /// What the connection was told for each pragma of
+    /// [`crate::pragma::HELD`], where it was told one.
+    kept: Vec<Option<i64>>,
     /// How many bytes the header of the journal takes, which is what
     /// the device says a write cannot damage beyond.
     sector: u32,
@@ -113,6 +116,7 @@ impl Writer {
             mode: Mode::Delete,
             nonce: 0,
             random: crate::random::Source::default(),
+            kept: alloc::vec![None; crate::pragma::HELD.len()],
             sector: SECTOR,
             journal: None,
             log: None,
@@ -536,16 +540,15 @@ impl Writer {
     ///
     /// The page size, the encoding and the auto-vacuum setting are what
     /// the first table is written under, so a statement that sets one
-    /// after a table is there is refused rather than answered, which is
-    /// what SQLite does for the first two and by `VACUUM` for the
-    /// third. A pragma the file does not hold is accepted and changes
-    /// nothing.
+    /// after a table is there changes nothing, which is what
+    /// `sqlite3Pragma` does for the first two and what leaves the third
+    /// to `VACUUM`. A pragma the file does not hold is answered out of
+    /// what the connection was told.
     ///
     /// # Errors
     ///
-    /// [`Error::Unsupported`] for a pragma this crate does not write,
-    /// for a value it does not name, and for one written after the
-    /// first table.
+    /// [`Error::Unsupported`] for a pragma this crate does not write
+    /// and for a value it does not name.
     fn pragma(&mut self, asked: &crate::ast::Pragma, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
         let name = crate::schema::dequote(asked.name.text(sql));
         let setting = crate::pragma::of_name(&name).ok_or(Error::Unsupported)?;
@@ -558,12 +561,18 @@ impl Writer {
                     self.counting
                 ))]]);
             }
+            if let crate::pragma::Setting::Held(at) = setting {
+                return Ok(alloc::vec![alloc::vec![self.held(at)]]);
+            }
             let read = setting.read(&self.now()).ok_or(Error::Unsupported)?;
             return Ok(alloc::vec![alloc::vec![read]]);
         };
         let text = value.text(sql);
         if setting == crate::pragma::Setting::Ignored {
             return Ok(Vec::new());
+        }
+        if let crate::pragma::Setting::Held(at) = setting {
+            return self.keep(at, text);
         }
         // The page size, the encoding and the vacuuming are what the
         // first table was written under, so a statement that sets one
@@ -575,7 +584,7 @@ impl Writer {
             return Ok(Vec::new());
         }
         if self.header.schema_cookie != 0 && setting != crate::pragma::Setting::JournalMode {
-            return Err(Error::Unsupported);
+            return Ok(Vec::new());
         }
         match setting {
             crate::pragma::Setting::PageSize => {
@@ -614,6 +623,34 @@ impl Writer {
             _ => return Err(Error::Unsupported),
         }
         Ok(Vec::new())
+    }
+
+    /// What the connection answers for the pragma at `at` of
+    /// [`crate::pragma::HELD`], which is what it was told or what a
+    /// connection told nothing answers.
+    fn held(&self, at: usize) -> Value {
+        let fallback = crate::pragma::HELD
+            .get(at)
+            .map_or(0, |keeps| keeps.fallback);
+        let value = self.kept.get(at).copied().flatten().unwrap_or(fallback);
+        crate::pragma::kept(at, value)
+    }
+
+    /// The pragma at `at` of [`crate::pragma::HELD`] set to what `text`
+    /// names, which answers the value it was set to where that pragma
+    /// answers one.
+    fn keep(&mut self, at: usize, text: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
+        let value = crate::pragma::keeping(at, text).ok_or(Error::Unsupported)?;
+        let keeps = crate::pragma::HELD.get(at);
+        if !keeps.is_some_and(|keeps| keeps.fixed) {
+            for slot in self.kept.iter_mut().skip(at).take(1) {
+                *slot = Some(value);
+            }
+        }
+        if !keeps.is_some_and(|keeps| keeps.answers) {
+            return Ok(Vec::new());
+        }
+        Ok(alloc::vec![alloc::vec![self.held(at)]])
     }
 
     /// `CREATE TABLE`: a page for the tree of the table and a row of

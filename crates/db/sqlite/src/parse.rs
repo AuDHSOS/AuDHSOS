@@ -194,14 +194,13 @@ impl<'a> Parser<'a> {
     /// Where the tokens are not a statement.
     pub fn select(&mut self) -> Result<SelectId, Error> {
         self.deeper()?;
-        let (ctes, recursive) = if self.eat_keyword(Keyword::With) {
+        let ctes = if self.eat_keyword(Keyword::With) {
             self.with_clause()?
         } else {
-            (Range::default(), false)
+            Range::default()
         };
         let mut first = self.select_core()?;
         first.ctes = ctes;
-        first.recursive = recursive;
         let mut cores = alloc::vec![first];
         let mut operators = Vec::new();
         while let Some(operator) = self.compound_operator() {
@@ -242,8 +241,11 @@ impl<'a> Parser<'a> {
     }
 
     /// `WITH [RECURSIVE] name [(columns)] AS [NOT] [MATERIALIZED] (select), ...`
-    fn with_clause(&mut self) -> Result<(Range, bool), Error> {
-        let recursive = self.eat_keyword(Keyword::Recursive);
+    ///
+    /// `RECURSIVE` is read and not kept, because a term that reads its
+    /// own name reads itself whether the word was written or not.
+    fn with_clause(&mut self) -> Result<Range, Error> {
+        let _ = self.eat_keyword(Keyword::Recursive);
         let mut ctes = Vec::new();
         loop {
             let name = self.name()?;
@@ -282,7 +284,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        Ok((self.arena.push_ctes(&ctes), recursive))
+        Ok(self.arena.push_ctes(&ctes))
     }
 
     /// One `SELECT`, or one `VALUES`.
@@ -711,17 +713,16 @@ impl<'a> Parser<'a> {
     /// that stands before it where one does: the tables that clause
     /// names belong to the statement the rows come from.
     fn change(&mut self) -> Result<Change, Error> {
-        let (ctes, recursive) = if self.eat_keyword(Keyword::With) {
+        let ctes = if self.eat_keyword(Keyword::With) {
             self.with_clause()?
         } else {
-            (Range::default(), false)
+            Range::default()
         };
         if self.at_keyword(Keyword::Update) {
             let statement = self.update()?;
             if !ctes.is_empty() {
                 return Err(self.error(None, Expected::Select));
             }
-            let _ = recursive;
             return Ok(Change::Update(statement));
         }
         if self.at_keyword(Keyword::Delete) {
@@ -731,7 +732,6 @@ impl<'a> Parser<'a> {
                 // may read, which this crate does not answer yet.
                 return Err(self.error(None, Expected::Select));
             }
-            let _ = recursive;
             return Ok(Change::Delete(statement));
         }
         let mut statement = self.insert()?;
@@ -742,7 +742,6 @@ impl<'a> Parser<'a> {
                 .select(id)
                 .ok_or(self.error(None, Expected::Select))?;
             select.ctes = ctes;
-            select.recursive = recursive;
             statement.select = self.arena.push_select(select);
         }
         Ok(Change::Insert(statement))

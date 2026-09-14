@@ -861,9 +861,16 @@ impl<'a> Database<'a> {
         if asked.value.is_some() {
             return Err(Error::Unsupported);
         }
-        let value = setting
-            .read(self.image.header())
-            .ok_or(Error::Unsupported)?;
+        // A pragma the connection keeps a value for is answered out of
+        // what a connection told nothing answers, because a database
+        // read here was told nothing.
+        let value = match setting {
+            crate::pragma::Setting::Held(at) => crate::pragma::HELD
+                .get(at)
+                .map(|keeps| crate::pragma::kept(at, keeps.fallback)),
+            other => other.read(self.image.header()),
+        }
+        .ok_or(Error::Unsupported)?;
         let rows = alloc::vec![alloc::vec![value]];
         Ok(Answer {
             names: alloc::vec![name],
@@ -1219,12 +1226,10 @@ impl<'a> Database<'a> {
                 outer: scope.outer,
                 views: scope.views,
             };
-            let answered = if select.recursive {
-                self.recursive(arena, cte, &name, sql, mine)?
-            } else {
-                None
-            };
-            let mut answered = match answered {
+            // `RECURSIVE` says nothing: a term that reads its own name
+            // reads itself whether the word was written or not, which
+            // is what `sqlite3WithPush` decides by the name alone.
+            let mut answered = match self.recursive(arena, cte, &name, sql, mine)? {
                 Some(answered) => answered,
                 None => self.statement(arena, cte.select, sql, mine)?,
             };

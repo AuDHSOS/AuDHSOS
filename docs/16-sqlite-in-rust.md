@@ -681,7 +681,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 893 pass, 9 answer differently, and 14 462 name something the
+files, 914 pass, 9 answer differently, and 14 441 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.

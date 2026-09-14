@@ -41,10 +41,280 @@ pub enum Setting {
     /// Whether a statement that changes rows answers how many it
     /// changed, which the connection holds and the file does not.
     CountChanges,
-    /// A pragma the file does not hold, which is answered and changes
-    /// nothing: the cache size, how a write is synced, where a
-    /// temporary table lives, and the two that ask for an older format.
+    /// A pragma the connection keeps a value for, which the file does
+    /// not hold, at this place of [`HELD`].
+    Held(usize),
+    /// A pragma the file does not hold and the connection answers
+    /// nothing for, which is accepted and changes nothing.
     Ignored,
+}
+
+/// What a pragma the connection keeps a value for is written as.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Written {
+    /// A whole number.
+    Number,
+    /// A truth value, which is `sqlite3GetBoolean`.
+    Truth,
+    /// `normal` or `exclusive`, which the pragma answers back as the
+    /// word it was written as.
+    Locking,
+    /// `off`, `on` or `fast`, which the pragma answers back as nought,
+    /// one or two.
+    Secure,
+    /// `off`, `normal`, `full` or `extra`, which the pragma answers
+    /// back as nought to three.
+    Syncing,
+    /// `file` or `memory`, which the pragma answers back as one or two.
+    Storing,
+}
+
+/// One pragma the connection keeps a value for: its name, what a
+/// connection that was told nothing answers, how it is written, and
+/// whether setting it answers the value it was set to.
+pub struct Keeps {
+    /// The name.
+    pub name: &'static [u8],
+    /// What a connection that was told nothing answers.
+    pub fallback: i64,
+    /// How the value is written.
+    pub written: Written,
+    /// Whether setting it answers a row.
+    pub answers: bool,
+    /// Whether the value stands whatever a statement sets it to, which
+    /// `data_version` does because only a write by another connection
+    /// raises it and `mmap_size` does because this crate maps no file.
+    pub fixed: bool,
+}
+
+/// The pragmas the connection keeps a value for, which are the ones
+/// `sqlite3Pragma` answers out of the connection and no byte of the
+/// file holds.
+pub static HELD: &[Keeps] = &[
+    Keeps {
+        name: b"mmap_size",
+        fallback: 0,
+        written: Written::Number,
+        answers: true,
+        fixed: true,
+    },
+    Keeps {
+        name: b"locking_mode",
+        fallback: 0,
+        written: Written::Locking,
+        answers: true,
+        fixed: false,
+    },
+    Keeps {
+        name: b"secure_delete",
+        fallback: 0,
+        written: Written::Secure,
+        answers: true,
+        fixed: false,
+    },
+    Keeps {
+        name: b"max_page_count",
+        fallback: 4_294_967_294,
+        written: Written::Number,
+        answers: true,
+        fixed: false,
+    },
+    Keeps {
+        name: b"journal_size_limit",
+        fallback: -1,
+        written: Written::Number,
+        answers: true,
+        fixed: false,
+    },
+    Keeps {
+        name: b"wal_autocheckpoint",
+        fallback: 1000,
+        written: Written::Number,
+        answers: true,
+        fixed: false,
+    },
+    Keeps {
+        name: b"threads",
+        fallback: 0,
+        written: Written::Number,
+        answers: true,
+        fixed: false,
+    },
+    Keeps {
+        name: b"analysis_limit",
+        fallback: 0,
+        written: Written::Number,
+        answers: true,
+        fixed: false,
+    },
+    Keeps {
+        name: b"busy_timeout",
+        fallback: 0,
+        written: Written::Number,
+        answers: true,
+        fixed: false,
+    },
+    Keeps {
+        name: b"query_only",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"read_uncommitted",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"automatic_index",
+        fallback: 1,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"defer_foreign_keys",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"foreign_keys",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"recursive_triggers",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"reverse_unordered_selects",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"trusted_schema",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"synchronous",
+        fallback: 2,
+        written: Written::Syncing,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"temp_store",
+        fallback: 0,
+        written: Written::Storing,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"cache_size",
+        fallback: -2000,
+        written: Written::Number,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"default_cache_size",
+        fallback: -2000,
+        written: Written::Number,
+        answers: false,
+        fixed: false,
+    },
+    Keeps {
+        name: b"data_version",
+        fallback: 1,
+        written: Written::Number,
+        answers: true,
+        fixed: true,
+    },
+];
+
+/// What a pragma the connection keeps answers for `value`.
+#[must_use]
+pub fn kept(at: usize, value: i64) -> Value {
+    match HELD.get(at).map(|keeps| keeps.written) {
+        Some(Written::Locking) => Value::Text(
+            if value == 0 {
+                b"normal".as_slice()
+            } else {
+                b"exclusive".as_slice()
+            }
+            .to_vec(),
+        ),
+        _ => Value::Int(value),
+    }
+}
+
+/// The value a pragma the connection keeps is set to, or nothing where
+/// what is written is not one of its values.
+#[must_use]
+pub fn keeping(at: usize, text: &[u8]) -> Option<i64> {
+    let written: Vec<u8> = crate::schema::dequote(text).to_ascii_lowercase();
+    match HELD.get(at).map(|keeps| keeps.written) {
+        Some(Written::Truth) => truth(&written).map(i64::from),
+        Some(Written::Locking) => match written.as_slice() {
+            b"normal" => Some(0),
+            b"exclusive" => Some(1),
+            _ => None,
+        },
+        Some(Written::Secure) => match written.as_slice() {
+            b"fast" => Some(2),
+            _ => truth(&written).map(i64::from),
+        },
+        Some(Written::Syncing) => match written.as_slice() {
+            b"off" => Some(0),
+            b"normal" => Some(1),
+            b"full" => Some(2),
+            b"extra" => Some(3),
+            _ => signed_number(&written),
+        },
+        Some(Written::Storing) => match written.as_slice() {
+            b"default" => Some(0),
+            b"file" => Some(1),
+            b"memory" => Some(2),
+            _ => signed_number(&written),
+        },
+        // A whole number, and a place [`HELD`] does not have.
+        _ => signed_number(&written),
+    }
+}
+
+/// The whole number a pragma is set to, with the minus sign a cache
+/// size and a size limit may carry.
+fn signed_number(text: &[u8]) -> Option<i64> {
+    let (negative, digits) = match text.strip_prefix(b"-") {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let mut out: i64 = 0;
+    for byte in digits {
+        let digit = byte.checked_sub(b'0').filter(|digit| *digit < 10)?;
+        out = out
+            .checked_mul(10)
+            .and_then(|shifted| shifted.checked_add(i64::from(digit)))?;
+    }
+    if digits.is_empty() {
+        return None;
+    }
+    Some(if negative { out.wrapping_neg() } else { out })
 }
 
 /// What the pragma of `name` says, or nothing where this crate does not
@@ -65,22 +335,22 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"application_id" => Setting::ApplicationId,
         b"schema_format" => Setting::SchemaFormat,
         b"count_changes" => Setting::CountChanges,
-        b"cache_size"
-        | b"synchronous"
-        | b"temp_store"
-        | b"legacy_file_format"
+        b"legacy_file_format"
         | b"legacy_alter_table"
         | b"short_column_names"
         | b"full_column_names"
         | b"empty_result_callbacks"
         | b"cache_spill"
-        | b"defer_foreign_keys"
-        | b"foreign_keys"
-        | b"recursive_triggers"
         | b"ignore_check_constraints"
-        | b"trusted_schema"
-        | b"query_only" => Setting::Ignored,
-        _ => return None,
+        | b"case_sensitive_like"
+        | b"shrink_memory"
+        | b"optimize" => Setting::Ignored,
+        _ => {
+            let at = HELD
+                .iter()
+                .position(|keeps| keeps.name == name.as_slice())?;
+            Setting::Held(at)
+        }
     })
 }
 
@@ -124,9 +394,9 @@ impl Setting {
             Setting::UserVersion => number(header.user_version),
             Setting::ApplicationId => number(header.application_id),
             Setting::SchemaFormat => number(header.schema_format),
-            // A pragma the file does not hold, and the one the
+            // A pragma the file does not hold, and the ones the
             // connection holds, have no answer out of a header.
-            Setting::CountChanges | Setting::Ignored => return None,
+            Setting::CountChanges | Setting::Held(_) | Setting::Ignored => return None,
         })
     }
 }

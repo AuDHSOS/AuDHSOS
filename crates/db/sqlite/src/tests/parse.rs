@@ -273,9 +273,6 @@ fn write_select(arena: &Arena, id: crate::ast::SelectId, sql: &[u8], out: &mut S
     };
     let text = |span: crate::ast::Span| String::from_utf8_lossy(span.text(sql)).into_owned();
     out.push_str("(select");
-    if select.recursive {
-        out.push_str(" recursive");
-    }
     for cte in arena.ctes(select.ctes) {
         out.push_str(" (with ");
         out.push_str(&text(cte.name));
@@ -884,9 +881,10 @@ fn every_clause_of_a_statement_reads_as_the_clause_it_is() {
             "WITH c AS (SELECT 1) SELECT 2",
             "(select (with c (select 1)) 2)",
         ),
+        // `RECURSIVE` is read and not kept, so the two read the same.
         (
             "WITH RECURSIVE c(i,j) AS (SELECT 1) SELECT 2",
-            "(select recursive (with c i j (select 1)) 2)",
+            "(select (with c i j (select 1)) 2)",
         ),
         (
             "WITH c AS MATERIALIZED (SELECT 1) SELECT 2",
