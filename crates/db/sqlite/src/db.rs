@@ -987,6 +987,11 @@ impl<'a> Database<'a> {
     ///
     /// [`Error`] names what it could not answer and why.
     pub fn query(&self, sql: &[u8]) -> Result<Answer, Error> {
+        // A text of comments alone holds no statement and answers no
+        // row, which is what `sqlite3_exec` runs for one.
+        if parse::blank(sql) {
+            return Ok(Answer::default());
+        }
         if let Ok(asked) = parse::pragma(sql) {
             return self.pragma(&asked, sql);
         }

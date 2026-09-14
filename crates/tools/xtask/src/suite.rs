@@ -596,12 +596,46 @@ fn reads(sql: &str) -> bool {
         })
 }
 
+/// `sql` with the comments taken out, so that the first word of a
+/// statement is the word that says what the statement does.
+///
+/// A comment inside a string stays, because a string is not a comment.
+/// Reading the text costs O(n) in its bytes.
+fn uncommented(sql: &str) -> String {
+    let mut out = String::new();
+    let mut quote: Option<char> = None;
+    let mut rest = sql;
+    while let Some(character) = rest.chars().next() {
+        if let Some(mark) = quote {
+            quote = (character != mark).then_some(mark);
+        } else if matches!(character, '\'' | '"' | '`') {
+            quote = Some(character);
+        } else if rest.starts_with("--") {
+            let end = rest.find('\n').unwrap_or(rest.len());
+            out.push(' ');
+            rest = rest.get(end..).unwrap_or_default();
+            continue;
+        } else if rest.starts_with("/*") {
+            let end = rest
+                .get(2..)
+                .and_then(|rest| rest.find("*/"))
+                .map_or(rest.len(), |at| at.saturating_add(4));
+            out.push(' ');
+            rest = rest.get(end..).unwrap_or_default();
+            continue;
+        }
+        out.push(character);
+        rest = rest.get(character.len_utf8()..).unwrap_or_default();
+    }
+    out
+}
+
 /// The words of a statement that stand outside a string.
 fn words(sql: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut held = String::new();
     let mut quote: Option<char> = None;
-    for character in sql.chars() {
+    for character in uncommented(sql).chars() {
         match quote {
             Some(mark) if character == mark => quote = None,
             Some(_) => {}

@@ -450,6 +450,11 @@ impl Writer {
     ///
     /// [`Error`] names what it could not read, answer or write.
     pub fn run(&mut self, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
+        // A text of comments alone holds no statement, so it writes no
+        // byte and raises no counter of the header.
+        if crate::parse::blank(sql) {
+            return Ok(Vec::new());
+        }
         // The header as the transaction begins, which is the one the
         // record of page one in the journal holds.
         if let Ok(asked) = crate::parse::transaction(sql) {

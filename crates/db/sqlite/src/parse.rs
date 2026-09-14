@@ -2474,6 +2474,19 @@ const fn join(left: Span, right: Span) -> Span {
     }
 }
 
+/// Whether `sql` holds no statement, which a text of comments,
+/// whitespace and semicolons alone does.
+///
+/// `sqlite3_prepare_v2` answers no statement for such a text, so
+/// `sqlite3_exec` runs nothing and answers no row. Reading the text
+/// costs O(n) in its bytes.
+#[must_use]
+pub fn blank(sql: &[u8]) -> bool {
+    let mut parser = Parser::new(sql);
+    while parser.eat(Kind::Semi) {}
+    parser.peek().is_none()
+}
+
 /// Reads one statement out of `sql` and answers the tree it built.
 ///
 /// # Errors

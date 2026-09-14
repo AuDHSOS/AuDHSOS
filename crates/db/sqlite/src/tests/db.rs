@@ -419,3 +419,27 @@ fn a_payload_longer_than_the_file_is_refused_before_room_is_made_for_it() {
         Error::Image(error::Error::Overrun)
     );
 }
+
+#[test]
+fn a_text_of_comments_alone_holds_no_statement() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    // `sqlite3_prepare_v2` answers no statement for a text of comments,
+    // whitespace and semicolons, so the connection that reads answers
+    // no row and the one that writes leaves the file as it found it.
+    assert!(crate::parse::blank(b"-- nothing"));
+    assert!(crate::parse::blank(b"/* nothing */ ;; "));
+    assert!(!crate::parse::blank(b"-- nothing\nSELECT 1"));
+
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    let before = writer.written();
+    assert_eq!(writer.run(b"/* nothing */").unwrap(), Vec::<Vec<_>>::new());
+    assert_eq!(writer.written(), before);
+
+    let database = Database::open(&before).unwrap();
+    assert_eq!(
+        database.query(b"-- nothing").unwrap(),
+        crate::db::Answer::default()
+    );
+}

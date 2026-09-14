@@ -4291,9 +4291,10 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
   what `testfixture` is built with and what the answers the files write
   were recorded under.
 - A statement reaches the connection that reads or the one that writes
-  by its first word, and a `WITH` clause stands in front of a statement
-  that writes as well, so the words after it say which.
-- 968 pass, 7 answer differently and 14 389 are refused or stopped.
+  by its first word, read with the comments taken out, and a `WITH`
+  clause stands in front of a statement that writes as well, so the
+  words after it say which.
+- 973 pass, 7 answer differently and 14 384 are refused or stopped.
   Document 16, section 16.23 groups the seven. Earlier runs answered
   14, then 27, then 17, then 13, then 16 differently; twenty-five were
   defects, which D-181, D-184, D-189, D-197 and D-205 record and
@@ -4598,6 +4599,17 @@ D-205, document 16 step Q8.
 - A row of `sqlite_schema` that names an index of a table's own
   carries one only where the table and the constraint the name points
   at are both there.
+
+### 6.6.135 A text that holds no statement (`db-sqlite`)
+
+D-206, document 16 step Q8.
+
+- `crate::parse::blank` answers true for a line comment and for a
+  block comment with semicolons after it, and false for a statement
+  written under a comment.
+- The connection that reads answers no name and no row for one; the
+  connection that writes answers no row and leaves every byte of the
+  file as it found it.
 
 ## 6.7 CI pipeline
 
