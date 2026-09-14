@@ -2976,6 +2976,34 @@ answers three of twenty thousand cases two ways, each a `LEFT JOIN` whose
 unmatched row the `WHERE` clause drops and the sum keeps. The same cases
 agree on 3.53.4.
 
+### 6.6.74a The fuzzing campaign over `db-sqlite`
+
+D-185. `sh tools/xtask.sh fuzz --target <name> --time <seconds>` runs one
+target for as long as it is given, which is what the regression replay of
+`cargo xtask check` does not: the replay reads the inputs a test cites
+and says nothing about inputs no one has written down.
+
+| Target | Executions in five minutes | Coverage | Crashes |
+|--------|---------------------------|----------|---------|
+| `sqlite_tokens` | 122 735 253 | 164 | 0 |
+| `sqlite_expr` | 56 881 762 | 905 | 1, then 0 |
+| `sqlite_eval` | 41 615 287 | 1 440 | 0 |
+| `sqlite_wal` | 18 309 135 | 161 | 0 |
+| `sqlite_format` | 16 814 787 | 367 | 0 |
+| `sqlite_journal` | 5 646 169 | 586 | 0 |
+| `sqlite_image` | 2 712 610 | 857 | 0 |
+
+The one crash was the target's own invariant: `sqlite_expr` held that a
+column's place in a primary key is at most the count of columns, and
+`CREATE TABLE t(a INT,b,PRIMARY KEY(a, a, b))` gives `b` the place 3 in
+a table of two columns, which is what `PRAGMA table_info` answers for
+that statement as well. The case is
+`fuzz/corpus/sqlite_expr/a_key_naming_one_column_twice`.
+
+The differential fuzzer of 6.6.74 is the other half: 3 000 generated
+cases put to this engine and to the pinned shell agreed on 2 998, were
+refused by the shell on 2, and found nothing.
+
 ### 6.6.75 The SQLite file format, read (`db-sqlite`)
 
 D-141, document 16 step Q1. Five databases written by the `sqlite3` shell

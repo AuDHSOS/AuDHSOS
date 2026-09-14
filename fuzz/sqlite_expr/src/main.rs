@@ -39,9 +39,17 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
                 assert!(!table.without_rowid, "a rowid on a table with none");
             }
             for (at, column) in table.columns.iter().enumerate() {
+                // A key place counts the terms the key was written
+                // with, so a column named twice there leaves a place
+                // past the count of columns, which is what `PRAGMA
+                // table_info` answers. What holds is that no two
+                // columns share a place.
                 assert!(
-                    usize::from(column.key) <= table.columns.len(),
-                    "a key place past the columns"
+                    column.key == 0
+                        || !table.columns[..at]
+                            .iter()
+                            .any(|before| before.key == column.key),
+                    "two columns at one key place"
                 );
                 assert!(
                     !table.columns[..at]
