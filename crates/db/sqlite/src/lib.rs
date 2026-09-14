@@ -8,6 +8,7 @@
 extern crate alloc;
 
 pub mod agg;
+pub mod analyze;
 pub mod ast;
 mod bytes;
 pub mod change;

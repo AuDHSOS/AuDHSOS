@@ -3900,3 +3900,44 @@ fn the_indexes_a_table_carries_of_its_own_are_the_ones_the_shell_names() {
         [[Value::Int(1), Value::Text(b"y".to_vec())]]
     );
 }
+
+#[test]
+fn what_analyze_counts_is_the_file_the_shell_wrote() {
+    use crate::change::Writer;
+    for (name, statements, fixture) in crate::tests::COUNTED {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        for sql in *statements {
+            writer
+                .run(sql.as_bytes())
+                .unwrap_or_else(|error| panic!("{name}: {sql} is refused with {error:?}"));
+        }
+        same(name, &writer.written(), fixture, 512);
+    }
+}
+
+#[test]
+fn what_analyze_refuses_and_what_it_passes_over() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    // A name no table and no index carries is a refusal, and so is a
+    // word written after the name.
+    assert_eq!(
+        writer.run(b"ANALYZE nosuch").err(),
+        Some(crate::db::Error::NoTable)
+    );
+    assert!(crate::parse::analyze(b"ANALYZE t junk").is_err());
+    // `ANALYZE` makes `sqlite_stat1` whatever it counts, so a database
+    // whose one table holds no row carries the table and no row.
+    writer.run(b"ANALYZE main.t").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT count(*) FROM sqlite_stat1")
+            .unwrap()
+            .rows,
+        [[Value::Int(0)]]
+    );
+}

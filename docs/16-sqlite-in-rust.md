@@ -633,12 +633,13 @@ do for the page size, the encoding and the reserved tail.
 
 ## 16.22 Q8. The rest of the language
 
-Status: `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW`, the three
-`DROP`s, `ALTER TABLE ... ADD COLUMN`, `PRAGMA`, `BEGIN`, `COMMIT`,
-`ROLLBACK`, `INSERT`, `DELETE` and `UPDATE` are run from their text and
-write the files the shell wrote; the rest is open.
+Status: `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW`, `CREATE
+TRIGGER`, the four `DROP`s, `ALTER TABLE ... ADD COLUMN`, `PRAGMA`,
+`ANALYZE`, `BEGIN`, `COMMIT`, `ROLLBACK`, `INSERT`, `DELETE` and
+`UPDATE` are run from their text and write the files the shell wrote;
+the rest is open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
-D-191, D-193, D-195, D-196, D-205 and D-206.
+D-191, D-193, D-195, D-196 and D-205 to D-207.
 Size: L.
 
 ### Does
@@ -663,6 +664,8 @@ Size: L.
    window clauses are open.
 4. The functions that need a clock or a random source. `random` and
    `randomblob` are built, which D-199 records; the clock is open.
+5. `ANALYZE`, which counts the tables and their indexes into
+   `sqlite_stat1`. Built, which D-207 records.
 
 ### Done when
 
@@ -673,7 +676,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 973 pass, 7 answer differently, and 14 384 name something the
+files, 2145 pass, 7 answer differently, and 13 212 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.
@@ -768,3 +771,4 @@ the port.
 | 5 | The matrix is a `for` loop copied into each test. | A dimension added in one test and forgotten in ten. | 16.11 puts the matrix in the test support and has the test name its dimensions. |
 | 6 | The fuzz corpora grow until the regression replay is slow. | The check takes longer than three minutes and is skipped. | `sh tools/xtask.sh fuzz --merge` keeps one input per feature. Hash-named files are not committed; named regression entries are. |
 | 7 | MC/DC never becomes measurable on the pinned toolchain. | Goal 5 of 16.2 cannot be met by reading a report. | D4 derives MC/DC from condition coverage and checks both of its premises with `cargo xtask mcdc`, so the goal is met by argument and by check rather than by a report the pin does not emit. |
+| 8 | A join is answered by reading every row of every side against every row of the sides before it, because the plan of Q5 reads only a `WHERE` term whose other side is a constant. | `joinD.test`, a thousand cases over four tables of a hundred rows, takes longer than the rest of the suite together. | A `ON` term that compares a column of the side against a column of a side already read is the key of an index over that column, which Q6 builds the plan from. |

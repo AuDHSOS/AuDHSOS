@@ -376,6 +376,25 @@ for case in \
     printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
 done
 
+# What `ANALYZE` counts into `sqlite_stat1`.
+for case in \
+    "stat-one.db:CREATE TABLE t(a,b,c); CREATE INDEX i1 ON t(a); CREATE INDEX i2 ON t(a,b); INSERT INTO t VALUES(1,1,1),(1,2,2),(2,2,3),(2,2,4); ANALYZE;" \
+    "stat-none.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,1),(2,2),(3,3); ANALYZE;" \
+    "stat-empty.db:CREATE TABLE t(a); CREATE INDEX i ON t(a); ANALYZE;" \
+    "stat-key.db:CREATE TABLE t(a PRIMARY KEY,b); INSERT INTO t VALUES(1,1),(2,1),(3,1); ANALYZE;" \
+    "stat-many.db:CREATE TABLE u(x); CREATE TABLE t(a); INSERT INTO u VALUES(1); INSERT INTO t VALUES(1); ANALYZE;" \
+    "stat-again.db:CREATE TABLE t(a); INSERT INTO t VALUES(1); ANALYZE; INSERT INTO t VALUES(2); ANALYZE;" \
+    "stat-table.db:CREATE TABLE u(x); CREATE TABLE t(a); INSERT INTO u VALUES(1); INSERT INTO t VALUES(1); ANALYZE t;" \
+    "stat-index.db:CREATE TABLE t(a,b); CREATE INDEX i1 ON t(a); CREATE INDEX i2 ON t(b); INSERT INTO t VALUES(1,1); ANALYZE i1;" \
+    "stat-text.db:CREATE TABLE t(a TEXT COLLATE NOCASE); CREATE INDEX i ON t(a); INSERT INTO t VALUES('x'),('X'),('y'); ANALYZE;" \
+    "stat-kept.db:CREATE TABLE u(x); CREATE TABLE t(a); INSERT INTO u VALUES(1); INSERT INTO t VALUES(1); ANALYZE; INSERT INTO t VALUES(2); ANALYZE t;"; do
+    name="${case%%:*}"
+    sql="${case#*:}"
+    rm -f "$out/$name"
+    "$sqlite" "$out/$name" "PRAGMA page_size=512; $sql"
+    printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
+done
+
 # A trigger: the row of `sqlite_schema` that names it, and the rows its
 # body writes when a statement on the table it is on runs.
 for case in \

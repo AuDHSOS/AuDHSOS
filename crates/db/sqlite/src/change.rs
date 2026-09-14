@@ -55,6 +55,52 @@ const fn is_text(value: Option<crate::record::Value<'_>>, wanted: &[u8]) -> bool
     matches!(value, Some(crate::record::Value::Text(bytes)) if bytes.eq_ignore_ascii_case(wanted))
 }
 
+/// The table `ANALYZE` writes its counts into.
+const STAT: &[u8] = b"sqlite_stat1";
+
+/// What one `ANALYZE` counts.
+struct Analyzed {
+    /// The tables, in the order the rows are written for them.
+    tables: Vec<Vec<u8>>,
+    /// The one index the run is held to, where it names one.
+    only: Option<Vec<u8>>,
+}
+
+/// The tables one `ANALYZE` counts, and the index it holds to where it
+/// names one.
+///
+/// Reading the schema costs O(n) in its rows.
+fn analyzed(database: &Database<'_>, named: Option<&[u8]>) -> Result<Analyzed, Error> {
+    let Some(named) = named else {
+        // `sqliteHashFirst` walks the tables of the schema with the one
+        // made last first.
+        let mut tables: Vec<Vec<u8>> = database.tables().map(|table| table.name.clone()).collect();
+        tables.reverse();
+        return Ok(Analyzed { tables, only: None });
+    };
+    if database.table(named).is_some() {
+        return Ok(Analyzed {
+            tables: alloc::vec![named.to_vec()],
+            only: None,
+        });
+    }
+    let over = database
+        .index(named)
+        .map(|(index, _)| index.table.clone())
+        .ok_or(Error::NoTable)?;
+    Ok(Analyzed {
+        tables: alloc::vec![over],
+        only: Some(named.to_vec()),
+    })
+}
+
+/// Whether `name` names a table of the system, which is every name the
+/// word `sqlite_` begins.
+fn of_the_system(name: &[u8]) -> bool {
+    name.get(..7)
+        .is_some_and(|head| head.eq_ignore_ascii_case(b"sqlite_"))
+}
+
 /// The columns of `sqlite_schema`, which every row of it is written
 /// with: `type`, `name`, `tbl_name`, `rootpage` and `sql`.
 const SCHEMA: [Affinity; 5] = [
@@ -503,11 +549,111 @@ impl Writer {
         Ok(Vec::new())
     }
 
+    /// `ANALYZE`: the rows of `sqlite_stat1`, written over the rows a
+    /// run before this one left.
+    ///
+    /// `ANALYZE` alone counts every table of the schema, and a name
+    /// counts the table it names or the table of the index it names.
+    /// Counting costs what [`crate::analyze::stats_of`] costs per
+    /// table.
+    fn analyze(&mut self, asked: &crate::ast::Analyze, sql: &[u8]) -> Result<(), Error> {
+        let named = asked
+            .name
+            .map(|span| crate::schema::dequote(span.text(sql)));
+        let (Analyzed { tables, only }, held) = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?;
+            (
+                analyzed(&database, named.as_deref())?,
+                database.table(STAT).is_some(),
+            )
+        };
+        // `openStatTable` makes the table where the database holds
+        // none, and takes out the rows a run before this one wrote:
+        // every row for a whole database, the rows of the table for
+        // one table.
+        if held {
+            let scope = named.as_ref().and_then(|_| tables.first().cloned());
+            self.unstat(scope.as_deref())?;
+        } else {
+            self.ran(b"CREATE TABLE sqlite_stat1(tbl,idx,stat)")?;
+        }
+        let (root, stats) = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?;
+            let (_, root) = database.table(STAT).ok_or(Error::NoTable)?;
+            let mut stats = Vec::new();
+            for table in &tables {
+                // `analyzeOneTable` counts no table of the system,
+                // `sqlite_stat1` itself among them.
+                if of_the_system(table) {
+                    continue;
+                }
+                stats.extend(crate::analyze::stats_of(&database, table, only.as_deref())?);
+            }
+            (root, stats)
+        };
+        for stat in &stats {
+            self.stat_row(root, stat)?;
+        }
+        Ok(())
+    }
+
+    /// The rows of `sqlite_stat1` a run before this one wrote, taken
+    /// out: every row where `scope` names no table, and the rows of
+    /// that table otherwise.
+    ///
+    /// Taking `n` rows out costs O(n log n).
+    fn unstat(&mut self, scope: Option<&[u8]>) -> Result<(), Error> {
+        let wanted = scope.map(|name| crate::value::stored(name, self.header.encoding));
+        let (root, held) = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?;
+            let (_, root) = database.table(STAT).ok_or(Error::NoTable)?;
+            let held: Vec<i64> = database
+                .rows_of(STAT)?
+                .iter()
+                .filter(|(_, values)| {
+                    wanted.as_ref().is_none_or(|name| {
+                        matches!(values.first(), Some(Value::Text(text))
+                            if text.eq_ignore_ascii_case(name))
+                    })
+                })
+                .map(|(rowid, _)| *rowid)
+                .collect();
+            (root, held)
+        };
+        for rowid in held {
+            crate::tree::remove(&mut self.pages, root, rowid)?;
+        }
+        Ok(())
+    }
+
+    /// One row of `sqlite_stat1`, written into the tree at `root`.
+    ///
+    /// Writing one row costs O(log n) in the rows of the table.
+    fn stat_row(&mut self, root: u32, stat: &crate::analyze::Stat) -> Result<(), Error> {
+        let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
+        let values = [
+            text(&stat.table),
+            stat.index.as_deref().map_or(Value::Null, text),
+            text(&stat.stat),
+        ];
+        let record = crate::record::write(&values, &[Affinity::None; 3], 4);
+        let rowid = largest(&self.pages, root)?.unwrap_or(0).saturating_add(1);
+        insert(&mut self.pages, root, rowid, &record)?;
+        Ok(())
+    }
+
     /// One statement that makes something or changes rows, and how
     /// many rows it changed.
     fn ran(&mut self, sql: &[u8]) -> Result<i64, Error> {
         if let Ok((arena, definition)) = crate::parse::definition(sql) {
             self.define(&arena, definition, sql)?;
+            return Ok(0);
+        }
+        if let Ok(asked) = crate::parse::analyze(sql) {
+            self.analyze(&asked, sql)?;
             return Ok(0);
         }
         let (arena, change) = crate::parse::change(sql)?;
@@ -1900,7 +2046,7 @@ fn kept_indexes(database: &Database<'_>, name: &[u8]) -> Vec<Kept> {
 
 /// The entry an index holds for one row: the columns it is over, and
 /// the key of the row last, which is what makes its order total.
-fn entry_of(index: &crate::schema::Index, values: &[Value], rowid: i64) -> Vec<Value> {
+pub(crate) fn entry_of(index: &crate::schema::Index, values: &[Value], rowid: i64) -> Vec<Value> {
     let mut key: Vec<Value> = index
         .columns
         .iter()
@@ -1911,7 +2057,7 @@ fn entry_of(index: &crate::schema::Index, values: &[Value], rowid: i64) -> Vec<V
 }
 
 /// The collation each column of an index is held in.
-fn collations_of(index: &crate::schema::Index) -> Vec<Collation> {
+pub(crate) fn collations_of(index: &crate::schema::Index) -> Vec<Collation> {
     index
         .columns
         .iter()
@@ -1922,7 +2068,11 @@ fn collations_of(index: &crate::schema::Index) -> Vec<Collation> {
 /// Where one index entry stands against another: column by column
 /// under the collation each is held in, and the key of the row last,
 /// which is what makes the order of an index total.
-fn order_of_keys(one: &[Value], other: &[Value], collations: &[Collation]) -> core::cmp::Ordering {
+pub(crate) fn order_of_keys(
+    one: &[Value],
+    other: &[Value],
+    collations: &[Collation],
+) -> core::cmp::Ordering {
     one.iter()
         .zip(other)
         .enumerate()

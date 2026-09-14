@@ -693,6 +693,112 @@ pub(crate) const OWN_KEYS: &[(&str, &[&str], &[u8])] = &[
     ),
 ];
 
+/// What `ANALYZE` counts into `sqlite_stat1`. Each case is the
+/// statements the fixture was written with, in order.
+pub(crate) const COUNTED: &[(&str, &[&str], &[u8])] = &[
+    (
+        "stat-one.db",
+        &[
+            "CREATE TABLE t(a,b,c)",
+            "CREATE INDEX i1 ON t(a)",
+            "CREATE INDEX i2 ON t(a,b)",
+            "INSERT INTO t VALUES(1,1,1),(1,2,2),(2,2,3),(2,2,4)",
+            "ANALYZE",
+        ],
+        include_bytes!("fixtures/stat-one.db"),
+    ),
+    (
+        "stat-none.db",
+        &[
+            "CREATE TABLE t(a,b)",
+            "INSERT INTO t VALUES(1,1),(2,2),(3,3)",
+            "ANALYZE",
+        ],
+        include_bytes!("fixtures/stat-none.db"),
+    ),
+    (
+        "stat-empty.db",
+        &["CREATE TABLE t(a)", "CREATE INDEX i ON t(a)", "ANALYZE"],
+        include_bytes!("fixtures/stat-empty.db"),
+    ),
+    (
+        "stat-key.db",
+        &[
+            "CREATE TABLE t(a PRIMARY KEY,b)",
+            "INSERT INTO t VALUES(1,1),(2,1),(3,1)",
+            "ANALYZE",
+        ],
+        include_bytes!("fixtures/stat-key.db"),
+    ),
+    (
+        "stat-many.db",
+        &[
+            "CREATE TABLE u(x)",
+            "CREATE TABLE t(a)",
+            "INSERT INTO u VALUES(1)",
+            "INSERT INTO t VALUES(1)",
+            "ANALYZE",
+        ],
+        include_bytes!("fixtures/stat-many.db"),
+    ),
+    (
+        "stat-again.db",
+        &[
+            "CREATE TABLE t(a)",
+            "INSERT INTO t VALUES(1)",
+            "ANALYZE",
+            "INSERT INTO t VALUES(2)",
+            "ANALYZE",
+        ],
+        include_bytes!("fixtures/stat-again.db"),
+    ),
+    (
+        "stat-table.db",
+        &[
+            "CREATE TABLE u(x)",
+            "CREATE TABLE t(a)",
+            "INSERT INTO u VALUES(1)",
+            "INSERT INTO t VALUES(1)",
+            "ANALYZE t",
+        ],
+        include_bytes!("fixtures/stat-table.db"),
+    ),
+    (
+        "stat-index.db",
+        &[
+            "CREATE TABLE t(a,b)",
+            "CREATE INDEX i1 ON t(a)",
+            "CREATE INDEX i2 ON t(b)",
+            "INSERT INTO t VALUES(1,1)",
+            "ANALYZE i1",
+        ],
+        include_bytes!("fixtures/stat-index.db"),
+    ),
+    (
+        "stat-text.db",
+        &[
+            "CREATE TABLE t(a TEXT COLLATE NOCASE)",
+            "CREATE INDEX i ON t(a)",
+            "INSERT INTO t VALUES('x'),('X'),('y')",
+            "ANALYZE",
+        ],
+        include_bytes!("fixtures/stat-text.db"),
+    ),
+    (
+        "stat-kept.db",
+        &[
+            "CREATE TABLE u(x)",
+            "CREATE TABLE t(a)",
+            "INSERT INTO u VALUES(1)",
+            "INSERT INTO t VALUES(1)",
+            "ANALYZE",
+            "INSERT INTO t VALUES(2)",
+            "ANALYZE t",
+        ],
+        include_bytes!("fixtures/stat-kept.db"),
+    ),
+];
+
 /// A trigger: the row of `sqlite_schema` that names it, and the rows
 /// its body writes when a statement on the table it is on runs. Each
 /// case is the statements the fixture was written with, in order.

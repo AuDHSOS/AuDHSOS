@@ -602,6 +602,17 @@ pub struct Update {
     pub filter: Option<ExprId>,
 }
 
+/// `ANALYZE [[schema.]name]`, which writes `sqlite_stat1` out of what
+/// the tables and their indexes hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Analyze {
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The table or the index it names, where it names one; every
+    /// table of the schema otherwise.
+    pub name: Option<Span>,
+}
+
 /// `PRAGMA [schema.]name [= value | (value)]`, which says how a
 /// connection is configured or answers how it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

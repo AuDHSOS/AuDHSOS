@@ -92,6 +92,8 @@ pub enum Expected {
     Update,
     /// The word `PRAGMA`.
     Pragma,
+    /// The word `ANALYZE`.
+    Analyze,
     /// `SET`, after the table of an `UPDATE`.
     Set,
     /// `=`, after a column of a `SET`.
@@ -2538,6 +2540,29 @@ pub fn transaction(sql: &[u8]) -> Result<crate::ast::Transaction, Error> {
         return Err(parser.error(Some(token), Expected::Eof));
     }
     Ok(read)
+}
+
+/// Reads one `ANALYZE` out of `sql`.
+///
+/// # Errors
+///
+/// Where the statement is not an `ANALYZE`, or where more is written
+/// after it than a semicolon.
+pub fn analyze(sql: &[u8]) -> Result<crate::ast::Analyze, Error> {
+    let mut parser = Parser::new(sql);
+    parser.expect_keyword(Keyword::Analyze, Expected::Analyze)?;
+    let named = parser.peek().is_some_and(|token| token.kind != Kind::Semi);
+    let (schema, name) = if named {
+        let (schema, name) = parser.qualified_name()?;
+        (schema, Some(name))
+    } else {
+        (None, None)
+    };
+    parser.eat(Kind::Semi);
+    if let Some(token) = parser.peek() {
+        return Err(parser.error(Some(token), Expected::Eof));
+    }
+    Ok(crate::ast::Analyze { schema, name })
 }
 
 /// Reads one statement that changes a database out of `sql`.

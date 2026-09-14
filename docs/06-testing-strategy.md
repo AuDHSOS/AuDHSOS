@@ -4294,7 +4294,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
   by its first word, read with the comments taken out, and a `WITH`
   clause stands in front of a statement that writes as well, so the
   words after it say which.
-- 973 pass, 7 answer differently and 14 384 are refused or stopped.
+- 2145 pass, 7 answer differently and 13 212 are refused or stopped.
   Document 16, section 16.23 groups the seven. Earlier runs answered
   14, then 27, then 17, then 13, then 16 differently; twenty-five were
   defects, which D-181, D-184, D-189, D-197 and D-205 record and
@@ -4610,6 +4610,24 @@ D-206, document 16 step Q8.
 - The connection that reads answers no name and no row for one; the
   connection that writes answers no row and leaves every byte of the
   file as it found it.
+
+### 6.6.136 What `ANALYZE` counts (`db-sqlite`)
+
+D-207, document 16 step Q8.
+
+- Ten fixtures, `stat-*.db`: two indexes over one table, a table with
+  no index, a table with no row, an index a `PRIMARY KEY` carries, two
+  tables, a second run over a table a first one counted, a run over
+  one table, a run over one index, a collation, and a run over one
+  table that keeps the rows of the other. Each is the file the shell
+  wrote, byte for byte.
+- The row of an index holds the number of rows and one count per
+  prefix of its columns; the indexes are written with the one made
+  last first, and the tables with the one made last first.
+- A run takes out the rows a run before it wrote: every row for a
+  whole database, the rows of the table for one table.
+- `ANALYZE` makes `sqlite_stat1` where the database holds none, and
+  counts no table whose name the word `sqlite_` begins.
 
 ## 6.7 CI pipeline
 
