@@ -1,15 +1,3 @@
-### The sixteen that answer differently
-
-| File | Cases | What it shows |
-|------|-------|---------------|
-| `fpconv1.test` | 3 | The file writes two answers for one statement, so it changes a setting between them. |
-| `enc3.test` | 3 | The encoding of a file opened again. |
-| `tkt3997.test` | 2 | A collation the file registers through the interpreter. |
-| `conflict3.test` | 1 | No `UNIQUE` is kept, so a row SQLite refuses goes in. |
-| `gencol1.test` | 1 | `INSERT INTO t SELECT * FROM u` where both hold a computed column. |
-| `autoindex4.test` | 1 | `ORDER BY +b` over equal keys, which names no order. |
-| five more | 5 | One case each, not yet read. |
-
 # 16. SQLite in Rust
 
 ## 16.0 How to read this document
@@ -664,8 +652,9 @@ Size: L.
    `CREATE TABLE` is built for a table of columns and for one made
    from a statement, which D-203 records, `CREATE INDEX` for
    an index over columns, which D-186 records, `CREATE VIEW` and
-   `DROP VIEW`, which D-195 records, and `DROP TABLE` and `DROP INDEX`,
-   which D-191 records. `ALTER TABLE ... ADD COLUMN` is built, which
+   `DROP VIEW`, which D-195 records, `DROP TABLE` and `DROP INDEX`,
+   which D-191 records, and `CREATE TRIGGER` and `DROP TRIGGER`, which
+   D-204 records. `ALTER TABLE ... ADD COLUMN` is built, which
    D-196 records; `RENAME` is open.
 3. Subqueries, `WITH`, and the window clauses the parser refuses. A
    `WITH` term that reads itself is built, which D-198 records; the
@@ -682,7 +671,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 921 pass, 9 answer differently, and 14 434 name something the
+files, 964 pass, 16 answer differently, and 14 384 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.
@@ -726,12 +715,12 @@ list it answers is the list the file writes, element for element.
 statement and what the engine answered, which is what says which missing
 feature stops the most files.
 
-### The nine that answer differently
+### The sixteen that answer differently
 
 | File | Cases | What it shows |
 |------|-------|---------------|
 | `fpconv1.test` | 3 | `sqlite3_db_config db FP_DIGITS 15`, which the interpreter sets between two cases; the pinned shell answers what this engine answers for the third. |
-| `conflict3.test`, `tkt2832.test` | 2 | No `UNIQUE` is kept, so a row SQLite refuses goes in and `OR REPLACE` replaces nothing. |
+| `conflict3.test`, `tkt2832.test`, `insert3.test` | 9 | No `UNIQUE` is kept, so a row SQLite refuses goes in and `OR REPLACE` replaces nothing. |
 | `collate1.test` | 1 | A collation the file registers through the interpreter, which this harness cannot run. |
 | `gencol1.test` | 1 | `INSERT INTO t1 SELECT * FROM t0` where both hold a computed column: the values are placed over every column and the computed one is written again. |
 | `autoindex4.test` | 1 | The order of rows an `ORDER BY` leaves equal, which SQLite settles by the automatic index it builds. |

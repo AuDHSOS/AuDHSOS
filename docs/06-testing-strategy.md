@@ -4293,10 +4293,11 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - A statement reaches the connection that reads or the one that writes
   by its first word, and a `WITH` clause stands in front of a statement
   that writes as well, so the words after it say which.
-- 921 pass, 9 answer differently and 14 434 are refused or stopped.
-  Document 16, section 16.23 groups the nine. Earlier runs answered
-  14, then 27, then 17, then 13 differently; sixteen were defects,
-  which D-181, D-184, D-189 and D-197 record and twenty-eight cases of
+- 964 pass, 16 answer differently and 14 384 are refused or stopped.
+  Document 16, section 16.23 groups the sixteen, of which nine read a
+  `UNIQUE` this crate does not keep. Earlier runs answered 14, then 27,
+  then 17, then 13 differently; sixteen were defects, which D-181,
+  D-184, D-189 and D-197 record and twenty-eight cases of
   `query.corpus` now hold to the C library.
 - `--why` counts what each refusal was for by the first two words of
   the statement, which is what says which missing feature stops the
@@ -4543,6 +4544,29 @@ D-203, document 16 step Q8.
   layout of one column per line and a column place of two digits;
   `as-none.db` holds no row; `as-vacuum.db` is a file that vacuums
   itself.
+
+### 6.6.133 A trigger (`db-sqlite`)
+
+D-204, document 16 step Q8.
+
+- Six fixtures, `trig-*.db`: one trigger, three that say which runs
+  first, an `UPDATE OF`, a `DELETE`, a `WHEN`, and one taken away
+  again. Each is the file the shell wrote, byte for byte, the row of
+  `sqlite_schema` included.
+- The row the body reads: `new` for an `INSERT`, `old` for a
+  `DELETE`, both for an `UPDATE`, the key under the three names the
+  rowid answers to, and no column for a name that is neither.
+- `RAISE(ABORT)` refuses the statement and leaves the file as the
+  statement found it; `RAISE(IGNORE)` passes the row over, in a
+  `BEFORE INSERT`, a `BEFORE UPDATE` and a `BEFORE DELETE`.
+- A trigger reaches itself once, and reaches as deep as
+  `TRIGGER_DEPTH` where `PRAGMA recursive_triggers` is on.
+- The refusals: a table the database does not hold, `INSTEAD OF`, a
+  name the database already holds unless the statement allows it, and
+  a name it does not hold unless the statement allows it.
+- A trigger and an index may share a name, and a `DROP` takes away
+  the one of its own kind; a `DROP TABLE` takes the triggers on the
+  table with it.
 
 ## 6.7 CI pipeline
 

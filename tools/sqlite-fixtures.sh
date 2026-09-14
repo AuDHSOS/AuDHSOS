@@ -359,6 +359,22 @@ for case in "index-empty.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a);" \
     printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
 done
 
+# A trigger: the row of `sqlite_schema` that names it, and the rows its
+# body writes when a statement on the table it is on runs.
+for case in \
+    "trig-one.db:CREATE TABLE t(a,b); CREATE TABLE log(m); CREATE TRIGGER x1 AFTER INSERT ON t BEGIN INSERT INTO log VALUES('x1:'||new.a); END; INSERT INTO t VALUES(1,10),(2,20);" \
+    "trig-order.db:CREATE TABLE t(a); CREATE TABLE log(m); CREATE TRIGGER x1 AFTER INSERT ON t BEGIN INSERT INTO log VALUES('x1'); END; CREATE TRIGGER x2 AFTER INSERT ON t BEGIN INSERT INTO log VALUES('x2'); END; CREATE TRIGGER b1 BEFORE INSERT ON t BEGIN INSERT INTO log VALUES('b1'); END; INSERT INTO t VALUES(1);" \
+    "trig-update.db:CREATE TABLE t(a,b); CREATE TABLE log(m); INSERT INTO t VALUES(1,10),(2,20); CREATE TRIGGER u1 AFTER UPDATE OF b ON t BEGIN INSERT INTO log VALUES(old.b||'->'||new.b); END; UPDATE t SET a=99 WHERE a=1; UPDATE t SET b=b+1;" \
+    "trig-delete.db:CREATE TABLE t(a); CREATE TABLE log(m); INSERT INTO t VALUES(1),(2),(3); CREATE TRIGGER d1 AFTER DELETE ON t BEGIN INSERT INTO log VALUES(old.a); END; DELETE FROM t WHERE a<3;" \
+    "trig-when.db:CREATE TABLE t(a); CREATE TABLE log(m); CREATE TRIGGER w1 AFTER INSERT ON t WHEN new.a>1 BEGIN INSERT INTO log VALUES(new.a); END; INSERT INTO t VALUES(1),(2),(3);" \
+    "trig-gone.db:CREATE TABLE t(a); CREATE TABLE log(m); CREATE TRIGGER x1 AFTER INSERT ON t BEGIN INSERT INTO log VALUES(1); END; DROP TRIGGER x1; INSERT INTO t VALUES(1);"; do
+    name="${case%%:*}"
+    sql="${case#*:}"
+    rm -f "$out/$name"
+    "$sqlite" "$out/$name" "PRAGMA page_size=512; $sql"
+    printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
+done
+
 # A table whose columns are the ones a statement answers, which is
 # `sqlite3ColumnsFromExprList` naming them and `createTableStmt` writing
 # the statement out.

@@ -36,6 +36,9 @@ pub enum Error {
     /// `random` or `randomblob` where the caller gave the connection no
     /// source of bytes to answer them from.
     NoRandom,
+    /// A `RAISE` the statement reached, which says what the statement
+    /// that reached it does.
+    Raised(crate::ast::Raise),
     /// A shape of expression this engine does not answer yet.
     Unsupported,
     /// The tree names a node the arena does not hold.
@@ -366,6 +369,9 @@ fn answer(
             table,
             negated,
         } => used(row, Used::InTable(value, schema, table, negated)),
+        // `RAISE` answers no value: it says what the statement that
+        // reached it does.
+        Node::Raise { action, .. } => Err(Error::Raised(action)),
         Node::Variable(_) | Node::Row(_) => Err(Error::Unsupported),
     }
 }

@@ -395,10 +395,28 @@ pub struct Database<'a> {
     tables: Vec<Stored>,
     /// Its views.
     views: Vec<View>,
+    /// Its triggers.
+    triggers: Vec<Trigger>,
     /// What encoding its text is in.
     encoding: Encoding,
     /// Where `random` and `randomblob` take their bytes from.
     random: crate::random::Source,
+}
+
+/// One trigger of the schema: what it is on, and the statement that
+/// made it.
+#[derive(Clone, Debug)]
+pub(crate) struct Trigger {
+    /// The name, with its quotes taken off.
+    pub(crate) name: Vec<u8>,
+    /// The table it is on, with its quotes taken off.
+    pub(crate) table: Vec<u8>,
+    /// The `CREATE TRIGGER` text, which the tree points into.
+    pub(crate) sql: Vec<u8>,
+    /// The tree that text was parsed into.
+    pub(crate) arena: Arena,
+    /// What the statement said.
+    pub(crate) written: crate::ast::CreateTrigger,
 }
 
 /// One view of the schema: a name, the statement it answers, and the
@@ -515,11 +533,13 @@ impl<'a> Database<'a> {
             image,
             tables,
             views: Vec::new(),
+            triggers: Vec::new(),
             encoding,
             random: crate::random::Source::default(),
         };
         database.read_indexes()?;
         database.read_views()?;
+        database.read_triggers()?;
         Ok(database)
     }
 
@@ -579,6 +599,73 @@ impl<'a> Database<'a> {
         }
         self.views = views;
         Ok(())
+    }
+
+    /// Reads every trigger of the schema, keeping the statement that
+    /// made each one.
+    ///
+    /// A trigger this crate cannot read is passed over, so a database
+    /// that holds one is read for everything else it holds.
+    fn read_triggers(&mut self) -> Result<(), Error> {
+        let mut triggers = Vec::new();
+        let mut payload = Vec::new();
+        for row in self.image.schema() {
+            let row = row?;
+            read_payload(&self.image, &row.payload, &mut payload)?;
+            let record = record::Record::parse(&payload)?;
+            let text = |at: usize| -> Result<Vec<u8>, Error> {
+                Ok(match record.value(at)? {
+                    Some(record::Value::Text(bytes)) => crate::value::decoded(bytes, self.encoding),
+                    _ => Vec::new(),
+                })
+            };
+            if text(0)? != b"trigger" {
+                continue;
+            }
+            let sql = text(4)?;
+            let Ok((arena, definition)) = parse::definition(&sql) else {
+                continue;
+            };
+            let crate::ast::Definition::Trigger(written) = definition else {
+                continue;
+            };
+            triggers.push(Trigger {
+                name: schema::dequote(written.name.text(&sql)),
+                table: schema::dequote(written.table.text(&sql)),
+                sql,
+                arena,
+                written,
+            });
+        }
+        self.triggers = triggers;
+        Ok(())
+    }
+
+    /// The triggers of `table` that run on `event` at `time`, in the
+    /// order they run: `sqlite3FinishTrigger` puts each in front of the
+    /// ones before it, so the one made last runs first.
+    pub(crate) fn triggers_on(
+        &self,
+        table: &[u8],
+        event: crate::ast::TriggerEvent,
+        time: crate::ast::TriggerTime,
+    ) -> Vec<&Trigger> {
+        self.triggers
+            .iter()
+            .rev()
+            .filter(|trigger| {
+                trigger.table.eq_ignore_ascii_case(table)
+                    && trigger.written.event == event
+                    && trigger.written.time == time
+            })
+            .collect()
+    }
+
+    /// The trigger of `name` this database holds.
+    pub(crate) fn trigger(&self, name: &[u8]) -> Option<&Trigger> {
+        self.triggers
+            .iter()
+            .find(|trigger| trigger.name.eq_ignore_ascii_case(name))
     }
 
     /// The rows a view answers, with the shape they carry and the name
@@ -807,8 +894,25 @@ impl<'a> Database<'a> {
     /// # Errors
     ///
     /// [`Error`] names what it could not answer and why.
-    pub fn rows(&self, arena: &Arena, id: SelectId, sql: &[u8]) -> Result<Answer, Error> {
-        Ok(self.answered(arena, id, sql)?.0)
+    /// The rows a statement answers against a row that stands outside
+    /// it, which is the row a trigger's body reads as `new` and `old`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what it could not answer and why.
+    pub fn rows_under(
+        &self,
+        arena: &Arena,
+        id: SelectId,
+        sql: &[u8],
+        outer: Option<&dyn eval::Row>,
+    ) -> Result<Answer, Error> {
+        let scope = Scope {
+            terms: &[],
+            outer,
+            views: 0,
+        };
+        Ok(self.statement(arena, id, sql, scope)?.answer)
     }
 
     /// The rows a statement answers, with the affinity each of its

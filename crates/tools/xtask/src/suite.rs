@@ -637,7 +637,10 @@ pub(crate) fn statements(sql: &str) -> Vec<&str> {
             Some(_) => {}
             None => match character {
                 '\'' | '"' | '`' => quote = Some(character),
-                ';' => {
+                // A `CREATE TRIGGER` carries semicolons inside its
+                // body, so the one that ends it is the one after the
+                // word `END`, which is what `sqlite3_complete` reads.
+                ';' if ends(sql.get(start..at).unwrap_or_default()) => {
                     if let Some(piece) = sql.get(start..at) {
                         out.push(piece);
                     }
@@ -651,6 +654,30 @@ pub(crate) fn statements(sql: &str) -> Vec<&str> {
         out.push(piece);
     }
     out
+}
+
+/// Whether a semicolon after this much text ends the statement, which
+/// it does for everything but a `CREATE TRIGGER` whose `END` has not
+/// been read yet.
+fn ends(text: &str) -> bool {
+    let words = words(text);
+    let mut names = words.iter().map(String::as_str);
+    let Some(first) = names.next() else {
+        return true;
+    };
+    if !first.eq_ignore_ascii_case("create") {
+        return true;
+    }
+    if !words
+        .iter()
+        .take(6)
+        .any(|word| word.eq_ignore_ascii_case("trigger"))
+    {
+        return true;
+    }
+    words
+        .last()
+        .is_some_and(|word| word.eq_ignore_ascii_case("end"))
 }
 
 /// One value as an element of a TCL list: nothing is the empty element,

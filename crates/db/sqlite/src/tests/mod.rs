@@ -621,6 +621,78 @@ pub(super) const ADDED_COLUMN: &[(&str, &str, &[u8])] = &[
     ),
 ];
 
+/// A trigger: the row of `sqlite_schema` that names it, and the rows
+/// its body writes when a statement on the table it is on runs. Each
+/// case is the statements the fixture was written with, in order.
+pub(crate) const TRIGGERED: &[(&str, &[&str], &[u8])] = &[
+    (
+        "trig-one.db",
+        &[
+            "CREATE TABLE t(a,b)",
+            "CREATE TABLE log(m)",
+            "CREATE TRIGGER x1 AFTER INSERT ON t BEGIN INSERT INTO log VALUES('x1:'||new.a); END",
+            "INSERT INTO t VALUES(1,10),(2,20)",
+        ],
+        include_bytes!("fixtures/trig-one.db"),
+    ),
+    (
+        "trig-order.db",
+        &[
+            "CREATE TABLE t(a)",
+            "CREATE TABLE log(m)",
+            "CREATE TRIGGER x1 AFTER INSERT ON t BEGIN INSERT INTO log VALUES('x1'); END",
+            "CREATE TRIGGER x2 AFTER INSERT ON t BEGIN INSERT INTO log VALUES('x2'); END",
+            "CREATE TRIGGER b1 BEFORE INSERT ON t BEGIN INSERT INTO log VALUES('b1'); END",
+            "INSERT INTO t VALUES(1)",
+        ],
+        include_bytes!("fixtures/trig-order.db"),
+    ),
+    (
+        "trig-update.db",
+        &[
+            "CREATE TABLE t(a,b)",
+            "CREATE TABLE log(m)",
+            "INSERT INTO t VALUES(1,10),(2,20)",
+            "CREATE TRIGGER u1 AFTER UPDATE OF b ON t BEGIN INSERT INTO log VALUES(old.b||'->'||new.b); END",
+            "UPDATE t SET a=99 WHERE a=1",
+            "UPDATE t SET b=b+1",
+        ],
+        include_bytes!("fixtures/trig-update.db"),
+    ),
+    (
+        "trig-delete.db",
+        &[
+            "CREATE TABLE t(a)",
+            "CREATE TABLE log(m)",
+            "INSERT INTO t VALUES(1),(2),(3)",
+            "CREATE TRIGGER d1 AFTER DELETE ON t BEGIN INSERT INTO log VALUES(old.a); END",
+            "DELETE FROM t WHERE a<3",
+        ],
+        include_bytes!("fixtures/trig-delete.db"),
+    ),
+    (
+        "trig-when.db",
+        &[
+            "CREATE TABLE t(a)",
+            "CREATE TABLE log(m)",
+            "CREATE TRIGGER w1 AFTER INSERT ON t WHEN new.a>1 BEGIN INSERT INTO log VALUES(new.a); END",
+            "INSERT INTO t VALUES(1),(2),(3)",
+        ],
+        include_bytes!("fixtures/trig-when.db"),
+    ),
+    (
+        "trig-gone.db",
+        &[
+            "CREATE TABLE t(a)",
+            "CREATE TABLE log(m)",
+            "CREATE TRIGGER x1 AFTER INSERT ON t BEGIN INSERT INTO log VALUES(1); END",
+            "DROP TRIGGER x1",
+            "INSERT INTO t VALUES(1)",
+        ],
+        include_bytes!("fixtures/trig-gone.db"),
+    ),
+];
+
 /// A table whose columns are the ones a statement answers: the names
 /// `sqlite3ColumnsFromExprList` gives them, the types
 /// `sqlite3SubqueryColumnTypes` gives them, and the statement

@@ -27,6 +27,20 @@ fn write(arena: &Arena, id: ExprId, sql: &[u8], out: &mut String) {
     };
     let text = |span: crate::ast::Span| String::from_utf8_lossy(span.text(sql)).into_owned();
     match node {
+        Node::Raise { action, message } => {
+            out.push_str("(raise ");
+            out.push_str(match action {
+                crate::ast::Raise::Ignore => "ignore",
+                crate::ast::Raise::Rollback => "rollback",
+                crate::ast::Raise::Abort => "abort",
+                crate::ast::Raise::Fail => "fail",
+            });
+            if let Some(id) = message {
+                out.push(' ');
+                write(arena, id, sql, out);
+            }
+            out.push(')');
+        }
         Node::Literal(Literal::Null) => out.push_str("null"),
         Node::Literal(Literal::CurrentTime(which)) => {
             out.push_str(match which {
@@ -1077,4 +1091,16 @@ fn statements_that_nest_deeper_than_the_walk_are_refused() {
     let deep = "SELECT ".to_owned() + &"(SELECT ".repeat(300) + "1" + &")".repeat(300);
     let error = parsed(&deep).expect_err("three hundred nested statements");
     assert_eq!(error.expected, Expected::Depth);
+}
+
+#[test]
+fn raise_is_one_of_four_words_and_the_three_that_are_not_ignore_carry_a_message() {
+    for (sql, written) in [
+        ("RAISE(IGNORE)", "(raise ignore)"),
+        ("RAISE(ROLLBACK, 'x')", "(raise rollback 'x')"),
+        ("RAISE(ABORT, 'x')", "(raise abort 'x')"),
+        ("RAISE(FAIL, 'x'||'y')", "(raise fail (cat 'x' 'y'))"),
+    ] {
+        assert_eq!(tree(sql).as_deref(), Ok(written), "{sql}");
+    }
 }

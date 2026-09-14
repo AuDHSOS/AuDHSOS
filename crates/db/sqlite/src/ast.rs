@@ -281,6 +281,14 @@ pub enum Node {
     },
     /// `(a, b, c)`, which is a row and not a parenthesis.
     Row(Range),
+    /// `RAISE(IGNORE)` and `RAISE(action, message)`, which only a
+    /// trigger's body may write.
+    Raise {
+        /// What it does to the statement that reached it.
+        action: Raise,
+        /// The message, which `RAISE(IGNORE)` writes none.
+        message: Option<ExprId>,
+    },
     /// `(SELECT ...)`, a statement used as a value.
     Subquery(SelectId),
     /// `EXISTS (SELECT ...)`.
@@ -628,7 +636,9 @@ pub enum Definition {
     View(CreateView),
     /// `ALTER TABLE ... ADD COLUMN`.
     AddColumn(AddColumn),
-    /// `DROP TABLE`, `DROP INDEX` and `DROP VIEW`.
+    /// `CREATE TRIGGER`.
+    Trigger(CreateTrigger),
+    /// `DROP TABLE`, `DROP INDEX`, `DROP VIEW` and `DROP TRIGGER`.
     Drop(Drop),
 }
 
@@ -641,6 +651,88 @@ pub enum Dropped {
     Index,
     /// `DROP VIEW`.
     View,
+    /// `DROP TRIGGER`.
+    Trigger,
+}
+
+/// When a trigger runs against the row it is on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TriggerTime {
+    /// `BEFORE`, which is also what a trigger with no time written
+    /// runs at.
+    #[default]
+    Before,
+    /// `AFTER`.
+    After,
+    /// `INSTEAD OF`, which only a view carries.
+    InsteadOf,
+}
+
+/// What a trigger runs on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TriggerEvent {
+    /// `DELETE`.
+    #[default]
+    Delete,
+    /// `INSERT`.
+    Insert,
+    /// `UPDATE`, with the columns an `UPDATE OF` named.
+    Update,
+}
+
+/// `CREATE TRIGGER name time event ON table [WHEN ...] BEGIN ... END`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CreateTrigger {
+    /// Whether `TEMP` or `TEMPORARY` was written.
+    pub temporary: bool,
+    /// Whether `IF NOT EXISTS` was written.
+    pub if_not_exists: bool,
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The name.
+    pub name: Span,
+    /// When it runs.
+    pub time: TriggerTime,
+    /// What it runs on.
+    pub event: TriggerEvent,
+    /// The columns an `UPDATE OF` named, or an empty run.
+    pub columns: Range,
+    /// The table it is on.
+    pub table: Span,
+    /// The `WHEN`, where one was written.
+    pub condition: Option<ExprId>,
+    /// The statements between `BEGIN` and `END`.
+    pub body: Range,
+    /// The text from the name to the `END`, which is what
+    /// `sqlite3FinishTrigger` writes after the words `CREATE TRIGGER`.
+    pub written: Span,
+}
+
+/// What a `RAISE` does to the statement that reached it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Raise {
+    /// `IGNORE`: the row the trigger stands on is passed over.
+    Ignore,
+    /// `ROLLBACK`: the transaction is undone.
+    Rollback,
+    /// `ABORT`: the statement is undone.
+    Abort,
+    /// `FAIL`: the statement stops where it stands.
+    Fail,
+}
+
+/// One statement of a trigger's body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TriggerStep {
+    /// `INSERT`.
+    Insert(Insert),
+    /// `UPDATE`.
+    Update(Update),
+    /// `DELETE`.
+    Delete(Delete),
+    /// `SELECT`, which answers no row to anything and runs for what it
+    /// reads.
+    Select(SelectId),
 }
 
 /// `BEGIN`, `COMMIT` and `ROLLBACK`, which are what a connection
@@ -925,6 +1017,8 @@ pub struct Arena {
     names: Vec<Span>,
     /// The tables of the `WITH` clauses, in runs.
     ctes: Vec<Cte>,
+    /// The statements of the trigger bodies, in runs.
+    steps: Vec<TriggerStep>,
     /// The columns of the tables, in runs.
     columns: Vec<ColumnDef>,
     /// What follows each column, in runs.
@@ -938,6 +1032,7 @@ impl Arena {
     #[must_use]
     pub const fn new() -> Self {
         Arena {
+            steps: Vec::new(),
             nodes: Vec::new(),
             heights: Vec::new(),
             children: Vec::new(),
@@ -1001,6 +1096,11 @@ impl Arena {
     /// on its own, so nothing here descends into one.
     pub fn under(&self, node: Node, mut under: impl FnMut(ExprId)) {
         match node {
+            Node::Raise { message, .. } => {
+                if let Some(id) = message {
+                    under(id);
+                }
+            }
             // A leaf names none.
             Node::Literal(_)
             | Node::Column { .. }
@@ -1272,6 +1372,25 @@ impl Arena {
             start,
             len: u32::try_from(ctes.len()).unwrap_or(u32::MAX),
         }
+    }
+
+    /// Keeps the statements of one trigger body and answers where they
+    /// are.
+    pub fn push_steps(&mut self, steps: &[TriggerStep]) -> Range {
+        let start = u32::try_from(self.steps.len()).unwrap_or(u32::MAX);
+        self.steps.extend_from_slice(steps);
+        Range {
+            start,
+            len: u32::try_from(steps.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// The statements of a trigger body.
+    #[must_use]
+    pub fn steps(&self, range: Range) -> &[TriggerStep] {
+        let start = usize::try_from(range.start).unwrap_or(usize::MAX);
+        let end = start.saturating_add(range.len());
+        self.steps.get(start..end).unwrap_or_default()
     }
 
     /// The `WITH` tables of a run.

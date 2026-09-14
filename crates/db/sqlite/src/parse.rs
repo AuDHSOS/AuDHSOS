@@ -53,6 +53,17 @@ pub enum Expected {
     As,
     /// `THEN`, in a `CASE`.
     Then,
+    /// `BEGIN`, before the body of a trigger.
+    Body,
+    /// A statement of a trigger's body, which is an `INSERT`, an
+    /// `UPDATE`, a `DELETE` or a `SELECT`.
+    Step,
+    /// `;`, after a statement of a trigger's body.
+    Semi,
+    /// `ROW`, after `FOR EACH`.
+    Row,
+    /// `OF`, after `INSTEAD`.
+    Of,
     /// `END`, in a `CASE`.
     End,
     /// `AND`, in a `BETWEEN`.
@@ -888,6 +899,9 @@ impl<'a> Parser<'a> {
         if self.eat_keyword(Keyword::View) {
             return Ok(Definition::View(self.create_view(temporary)?));
         }
+        if self.eat_keyword(Keyword::Trigger) {
+            return Ok(Definition::Trigger(self.create_trigger(temporary)?));
+        }
         let unique = self.eat_keyword(Keyword::Unique);
         self.expect_keyword(Keyword::Index, Expected::Table)?;
         Ok(Definition::Index(self.create_index(unique)?))
@@ -987,13 +1001,144 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// What follows `DROP`: the word `TABLE`, `INDEX` or `VIEW`, an
-    /// optional `IF EXISTS`, and the name.
+    /// `CREATE TRIGGER name [BEFORE|AFTER|INSTEAD OF] event ON table
+    /// [FOR EACH ROW] [WHEN expr] BEGIN step; ... END`.
+    fn create_trigger(&mut self, temporary: bool) -> Result<crate::ast::CreateTrigger, Error> {
+        use crate::ast::{TriggerEvent, TriggerTime};
+        let if_not_exists = self.if_not_exists()?;
+        let start = self.peek().map_or(self.end, |token| token.start);
+        let (schema, name) = self.qualified_name()?;
+        let time = if self.eat_keyword(Keyword::Before) {
+            TriggerTime::Before
+        } else if self.eat_keyword(Keyword::After) {
+            TriggerTime::After
+        } else if self.eat_keyword(Keyword::Instead) {
+            self.expect_keyword(Keyword::Of, Expected::Of)?;
+            TriggerTime::InsteadOf
+        } else {
+            // A trigger with no time written runs before the row,
+            // which is `trigger_time` reducing to `TK_BEFORE`.
+            TriggerTime::Before
+        };
+        let mut columns = crate::ast::Range::default();
+        let event = if self.eat_keyword(Keyword::Delete) {
+            TriggerEvent::Delete
+        } else if self.eat_keyword(Keyword::Insert) {
+            TriggerEvent::Insert
+        } else {
+            self.expect_keyword(Keyword::Update, Expected::Update)?;
+            if self.eat_keyword(Keyword::Of) {
+                columns = self.name_list()?;
+            }
+            TriggerEvent::Update
+        };
+        self.expect_keyword(Keyword::On, Expected::On)?;
+        let table = self.name()?;
+        if self.eat_keyword(Keyword::For) {
+            self.expect_keyword(Keyword::Each, Expected::Row)?;
+            self.expect_keyword(Keyword::Row, Expected::Row)?;
+        }
+        let condition = if self.eat_keyword(Keyword::When) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        self.expect_keyword(Keyword::Begin, Expected::Body)?;
+        let mut steps = Vec::new();
+        loop {
+            steps.push(self.trigger_step()?);
+            self.expect(Kind::Semi, Expected::Semi)?;
+            if self.eat_keyword(Keyword::End) {
+                break;
+            }
+        }
+        let body = self.arena.push_steps(&steps);
+        let written = Span {
+            start,
+            len: self.end.saturating_sub(start),
+        };
+        Ok(crate::ast::CreateTrigger {
+            temporary,
+            if_not_exists,
+            schema,
+            name,
+            time,
+            event,
+            columns,
+            table,
+            condition,
+            body,
+            written,
+        })
+    }
+
+    /// `RAISE(IGNORE)` and `RAISE(action, message)`.
+    fn raise(&mut self) -> Result<ExprId, Error> {
+        use crate::ast::Raise;
+        self.bump();
+        self.expect(Kind::Lp, Expected::OpenParen)?;
+        let action = if self.eat_keyword(Keyword::Ignore) {
+            Raise::Ignore
+        } else if self.eat_keyword(Keyword::Rollback) {
+            Raise::Rollback
+        } else if self.eat_keyword(Keyword::Abort) {
+            Raise::Abort
+        } else {
+            self.expect_keyword(Keyword::Fail, Expected::Action)?;
+            Raise::Fail
+        };
+        let message = if action == Raise::Ignore {
+            None
+        } else {
+            self.expect(Kind::Comma, Expected::Expression)?;
+            Some(self.expression()?)
+        };
+        self.expect(Kind::Rp, Expected::CloseParen)?;
+        self.node(Node::Raise { action, message })
+    }
+
+    /// One statement of a trigger's body.
+    fn trigger_step(&mut self) -> Result<crate::ast::TriggerStep, Error> {
+        use crate::ast::TriggerStep;
+        if self.at_keyword(Keyword::Update) {
+            return Ok(TriggerStep::Update(self.update()?));
+        }
+        if self.at_keyword(Keyword::Delete) {
+            return Ok(TriggerStep::Delete(self.delete()?));
+        }
+        if self.at_keyword(Keyword::Insert) || self.at_keyword(Keyword::Replace) {
+            return Ok(TriggerStep::Insert(self.insert()?));
+        }
+        if self.at_keyword(Keyword::Select)
+            || self.at_keyword(Keyword::Values)
+            || self.at_keyword(Keyword::With)
+        {
+            return Ok(TriggerStep::Select(self.select()?));
+        }
+        Err(self.error(self.peek(), Expected::Step))
+    }
+
+    /// A list of names in brackets.
+    fn name_list(&mut self) -> Result<crate::ast::Range, Error> {
+        let mut names = Vec::new();
+        loop {
+            names.push(self.name()?);
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+        Ok(self.arena.push_names(&names))
+    }
+
+    /// What follows `DROP`: the word `TABLE`, `INDEX`, `VIEW` or
+    /// `TRIGGER`, an optional `IF EXISTS`, and the name.
     fn drop_statement(&mut self) -> Result<crate::ast::Drop, Error> {
         let kind = if self.eat_keyword(Keyword::Table) {
             crate::ast::Dropped::Table
         } else if self.eat_keyword(Keyword::View) {
             crate::ast::Dropped::View
+        } else if self.eat_keyword(Keyword::Trigger) {
+            crate::ast::Dropped::Trigger
         } else {
             self.expect_keyword(Keyword::Index, Expected::Table)?;
             crate::ast::Dropped::Index
@@ -1910,6 +2055,7 @@ impl<'a> Parser<'a> {
                 self.node(Node::Exists(select))
             }
             Kind::Keyword(Keyword::Case) => self.case(),
+            Kind::Keyword(Keyword::Raise) => self.raise(),
             Kind::Lp => self.parenthesized(),
             Kind::Integer | Kind::QNumber => {
                 self.bump();

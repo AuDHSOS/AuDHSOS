@@ -9,7 +9,7 @@
 //! holds it: a statement of ten thousand brackets is refused rather than
 //! followed.
 
-use db_sqlite::ast::{Arena, ColumnConstraint, Definition, ExprId, Node, SelectId, TableBody};
+use db_sqlite::ast::{Arena, ColumnConstraint, Definition, ExprId, Node, SelectId, TableBody, TriggerStep};
 use db_sqlite::parse::{definition, expression, statement};
 
 fuzz_support::fuzz_target!(|bytes: &[u8]| {
@@ -124,8 +124,34 @@ fn walk_definition(arena: &Arena, definition: Definition) {
                 }
             }
         }
-        // A `DROP` names a table, an index or a view and holds no
-        // expression.
+        // A trigger holds the `WHEN` it runs under and every statement
+        // of its body.
+        Definition::Trigger(trigger) => {
+            if let Some(expr) = trigger.condition {
+                walk(arena, expr, 0);
+            }
+            for step in arena.steps(trigger.body) {
+                match *step {
+                    TriggerStep::Select(select) => walk_select(arena, select, 0),
+                    TriggerStep::Insert(insert) => walk_select(arena, insert.select, 0),
+                    TriggerStep::Update(update) => {
+                        for set in arena.sets(update.sets) {
+                            walk(arena, set.value, 0);
+                        }
+                        if let Some(expr) = update.filter {
+                            walk(arena, expr, 0);
+                        }
+                    }
+                    TriggerStep::Delete(delete) => {
+                        if let Some(expr) = delete.filter {
+                            walk(arena, expr, 0);
+                        }
+                    }
+                }
+            }
+        }
+        // A `DROP` names a table, an index, a view or a trigger and
+        // holds no expression.
         Definition::Drop(_) => {}
     }
 }
@@ -245,5 +271,12 @@ fn walk(arena: &Arena, id: ExprId, depth: u32) {
         // above this expression reached it through.
         Node::Subquery(_) | Node::Exists(_) => {}
         Node::InSelect { value, .. } | Node::InTable { value, .. } => child(value),
+        // `RAISE(IGNORE)` holds no message and the other three hold
+        // one.
+        Node::Raise { message, .. } => {
+            if let Some(expr) = message {
+                child(expr);
+            }
+        }
     }
 }

@@ -14,7 +14,7 @@
 
 use alloc::vec::Vec;
 
-use crate::ast::{Arena, Change, Definition, Span, TableBody};
+use crate::ast::{Arena, Change, Definition, Span, TableBody, TriggerEvent, TriggerTime};
 use crate::db::{Database, Error};
 use crate::header::{Encoding, Header, LIBRARY_VERSION};
 use crate::journal::Mode;
@@ -82,6 +82,10 @@ pub struct Writer {
     /// What the connection was told for each pragma of
     /// [`crate::pragma::HELD`], where it was told one.
     kept: Vec<Option<i64>>,
+    /// The triggers running now, innermost last, which is what stops a
+    /// trigger that reaches itself where `PRAGMA recursive_triggers`
+    /// is off.
+    running: Vec<Vec<u8>>,
     /// How many bytes the header of the journal takes, which is what
     /// the device says a write cannot damage beyond.
     sector: u32,
@@ -117,6 +121,7 @@ impl Writer {
             nonce: 0,
             random: crate::random::Source::default(),
             kept: alloc::vec![None; crate::pragma::HELD.len()],
+            running: Vec::new(),
             sector: SECTOR,
             journal: None,
             log: None,
@@ -344,19 +349,22 @@ impl Writer {
             // A view names no tree, so what says the database holds one
             // is the row and not a root.
             crate::ast::Dropped::View => held = database.view(name).is_some(),
+            // A trigger names no tree either, so the row is what says
+            // the database holds one.
+            crate::ast::Dropped::Trigger => held = database.trigger(name).is_some(),
         }
         if !held {
             return Ok((Vec::new(), roots));
         }
-        // The rows to take out are found by name: a table's are its own
-        // and every index over it, which `sqlite_schema` names in the
-        // column `tbl_name`; an index's is the one row of its own name.
+        // The rows to take out are found by name and by kind: a table's
+        // and a view's are every row whose `tbl_name` names it and
+        // which is not a trigger, which is what `sqlite3CodeDropTable`
+        // writes, and the triggers on it go first, because
+        // `sqlite3DropTriggerPtr` runs before that. An index's and a
+        // trigger's is the one row of its own name and its own kind.
         let image = crate::image::Image::open(&bytes)?;
-        let at = if kind == crate::ast::Dropped::Table {
-            2
-        } else {
-            1
-        };
+        let over = matches!(kind, crate::ast::Dropped::Table | crate::ast::Dropped::View);
+        let mut triggers = Vec::new();
         let mut rowids = Vec::new();
         let mut payload = Vec::new();
         for row in image.schema() {
@@ -364,11 +372,24 @@ impl Writer {
             payload.resize(row.payload.total, 0);
             image.read_payload(&row.payload, &mut payload)?;
             let record = crate::record::Record::parse(&payload)?;
-            if is_text(record.value(at)?, name) {
+            let trigger = is_text(record.value(0)?, b"trigger");
+            let named = if over {
+                is_text(record.value(2)?, name)
+            } else {
+                is_text(record.value(1)?, name)
+                    && trigger == matches!(kind, crate::ast::Dropped::Trigger)
+            };
+            if !named {
+                continue;
+            }
+            if over && trigger {
+                triggers.push(row.rowid);
+            } else {
                 rowids.push(row.rowid);
             }
         }
-        Ok((rowids, roots))
+        triggers.extend(rowids);
+        Ok((triggers, roots))
     }
 
     /// `PRAGMA journal_mode=wal` from a statement, which names no salt:
@@ -441,20 +462,24 @@ impl Writer {
         // statements before it wrote, so the pages keep what they held
         // when the `BEGIN` ran and not when this statement began.
         let was = self.began.unwrap_or(self.header);
-        let mut changed = 0_i64;
         if self.began.is_none() {
             self.pages.begin();
         }
-        if let Ok((arena, definition)) = crate::parse::definition(sql) {
-            self.define(&arena, definition, sql)?;
-        } else {
-            let (arena, change) = crate::parse::change(sql)?;
-            changed = match change {
-                Change::Insert(statement) => self.insert(&arena, &statement, sql)?,
-                Change::Delete(statement) => self.delete(&arena, &statement, sql)?,
-                Change::Update(statement) => self.update(&arena, &statement, sql)?,
-            };
-        }
+        let ran = self.ran(sql);
+        // A statement that refuses what it was given leaves the file
+        // as it found it, which is what `OE_Abort` does: the pages go
+        // back to where the transaction of the statement began. A
+        // statement inside a transaction is left alone, because the
+        // transaction is the unit of work there.
+        let changed = match ran {
+            Ok(rows) => rows,
+            Err(error) => {
+                if self.began.is_none() {
+                    self.pages.rollback();
+                }
+                return Err(error);
+            }
+        };
         // A statement inside a transaction is written by the `COMMIT`
         // and not by itself, which is what makes the transaction one
         // unit of work.
@@ -467,6 +492,21 @@ impl Writer {
             return Ok(alloc::vec![alloc::vec![Value::Int(changed)]]);
         }
         Ok(Vec::new())
+    }
+
+    /// One statement that makes something or changes rows, and how
+    /// many rows it changed.
+    fn ran(&mut self, sql: &[u8]) -> Result<i64, Error> {
+        if let Ok((arena, definition)) = crate::parse::definition(sql) {
+            self.define(&arena, definition, sql)?;
+            return Ok(0);
+        }
+        let (arena, change) = crate::parse::change(sql)?;
+        match change {
+            Change::Insert(statement) => self.insert(&arena, &statement, sql, None),
+            Change::Delete(statement) => self.delete(&arena, &statement, sql, None),
+            Change::Update(statement) => self.update(&arena, &statement, sql, None),
+        }
     }
 
     /// `BEGIN`, `COMMIT` and `ROLLBACK`.
@@ -713,6 +753,181 @@ impl Writer {
         Ok(())
     }
 
+    /// `CREATE TRIGGER`: one row of `sqlite_schema` that names the
+    /// table it is on and holds the statement that made it.
+    ///
+    /// `sqlite3FinishTrigger` writes the words `CREATE TRIGGER` and
+    /// then the text from the name to the `END`, so the words
+    /// `TEMPORARY` and `IF NOT EXISTS` are not in what the file holds.
+    /// A trigger holds no row of its own, so its root page is nought.
+    ///
+    /// Writing one row costs O(log n) in the rows of the schema.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] for a trigger written `INSTEAD OF`,
+    /// which only a view carries and this crate writes no row of, and
+    /// for one on a table the database does not hold; [`Error::Nested`]
+    /// for a name the database already holds.
+    fn create_trigger(
+        &mut self,
+        trigger: &crate::ast::CreateTrigger,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        if trigger.time == crate::ast::TriggerTime::InsteadOf {
+            return Err(Error::Unsupported);
+        }
+        let name = crate::schema::dequote(trigger.name.text(sql));
+        let over = crate::schema::dequote(trigger.table.text(sql));
+        {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?;
+            if database.table(&over).is_none() {
+                return Err(Error::NoTable);
+            }
+            if database.trigger(&name).is_some() {
+                if trigger.if_not_exists {
+                    return Ok(());
+                }
+                return Err(Error::Nested);
+            }
+        }
+        let mut written = b"CREATE TRIGGER ".to_vec();
+        written.extend_from_slice(trigger.written.text(sql));
+        let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
+        let row = crate::record::write(
+            &[
+                text(b"trigger"),
+                text(&name),
+                text(&over),
+                Value::Int(0),
+                text(&written),
+            ],
+            &SCHEMA,
+            4,
+        );
+        let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
+            .unwrap_or(0)
+            .saturating_add(1);
+        insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
+        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        self.header.schema_format = 4;
+        Ok(())
+    }
+
+    /// The triggers of `over` that run on `event` at `time`, in the
+    /// order they run.
+    ///
+    /// The statement that changes rows reads them once and runs them
+    /// per row, so one read of the schema costs a statement and not a
+    /// row.
+    fn triggers_for(
+        &self,
+        over: &[u8],
+        event: crate::ast::TriggerEvent,
+        time: crate::ast::TriggerTime,
+    ) -> Result<Vec<crate::db::Trigger>, Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        Ok(database
+            .triggers_on(over, event, time)
+            .into_iter()
+            .cloned()
+            .collect())
+    }
+
+    /// Runs every trigger of `triggers` over one row, which is
+    /// `sqlite3CodeRowTrigger`.
+    ///
+    /// Answers whether the statement keeps the row: `RAISE(IGNORE)`
+    /// passes it over and every other `RAISE` refuses the statement.
+    /// `written` is the columns an `UPDATE` writes, which an
+    /// `UPDATE OF` is held to.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Eval`] for a `RAISE` other than `IGNORE` and for a
+    /// `WHEN` that could not be answered, [`Error::Unsupported`] where
+    /// the triggers reach deeper than `TRIGGER_DEPTH`, and whatever a
+    /// statement of a body refuses.
+    fn fire(
+        &mut self,
+        triggers: &[crate::db::Trigger],
+        written: &[Vec<u8>],
+        row: &Fired<'_>,
+    ) -> Result<bool, Error> {
+        for trigger in triggers {
+            if !writes_one(&trigger.arena, &trigger.written, &trigger.sql, written) {
+                continue;
+            }
+            if self.repeats(&trigger.name) {
+                continue;
+            }
+            if self.running.len() >= TRIGGER_DEPTH {
+                return Err(Error::Unsupported);
+            }
+            if let Some(condition) = trigger.written.condition
+                && !crate::eval::evaluate_row(&trigger.arena, condition, &trigger.sql, row)?
+                    .truth(false)
+            {
+                continue;
+            }
+            self.running.push(trigger.name.clone());
+            let ran = self.body(trigger, row);
+            self.running.pop();
+            match ran {
+                Err(Error::Eval(crate::eval::Error::Raised(crate::ast::Raise::Ignore))) => {
+                    return Ok(false);
+                }
+                other => other?,
+            }
+        }
+        Ok(true)
+    }
+
+    /// Whether a trigger of this name is running already and may not
+    /// run again, which `PRAGMA recursive_triggers` turns off.
+    fn repeats(&self, name: &[u8]) -> bool {
+        let recursive = crate::pragma::HELD
+            .iter()
+            .position(|keeps| keeps.name == b"recursive_triggers")
+            .and_then(|at| self.kept.get(at).copied().flatten())
+            .unwrap_or(0);
+        recursive == 0
+            && self
+                .running
+                .iter()
+                .any(|held| held.eq_ignore_ascii_case(name))
+    }
+
+    /// Runs the statements of one trigger's body.
+    fn body(&mut self, trigger: &crate::db::Trigger, row: &Fired<'_>) -> Result<(), Error> {
+        let arena = &trigger.arena;
+        let sql = &trigger.sql;
+        for step in arena.steps(trigger.written.body) {
+            match *step {
+                crate::ast::TriggerStep::Insert(statement) => {
+                    self.insert(arena, &statement, sql, Some(row))?;
+                }
+                crate::ast::TriggerStep::Update(statement) => {
+                    self.update(arena, &statement, sql, Some(row))?;
+                }
+                crate::ast::TriggerStep::Delete(statement) => {
+                    self.delete(arena, &statement, sql, Some(row))?;
+                }
+                // A statement that answers rows runs for what it reads
+                // and answers nothing, which is what a `SELECT` of a
+                // body is for: it carries the `RAISE`.
+                crate::ast::TriggerStep::Select(select) => {
+                    let bytes = self.image();
+                    let database = Database::open(&bytes)?.seeded(self.random.word());
+                    database.rows_under(arena, select, sql, Some(row))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// One row written into `sqlite_schema`, over the record of five
     /// noughts `sqlite3StartTable` writes first.
     fn schema_row(&mut self, row: &[u8]) -> Result<(), Error> {
@@ -743,6 +958,7 @@ impl Writer {
         let (kind, name, over) = match definition {
             Definition::Drop(asked) => return self.drop_object(&asked, sql),
             Definition::AddColumn(asked) => return self.add_column(arena, &asked, sql),
+            Definition::Trigger(trigger) => return self.create_trigger(&trigger, sql),
             Definition::Table(table) => {
                 if let TableBody::Select(select) = table.body {
                     return self.create_as(arena, &table, select, sql);
@@ -857,6 +1073,7 @@ impl Writer {
         arena: &Arena,
         statement: &crate::ast::Insert,
         sql: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
         let named: Vec<Vec<u8>> = arena
@@ -864,7 +1081,7 @@ impl Writer {
             .iter()
             .map(|span: &Span| crate::schema::dequote(span.text(sql)))
             .collect();
-        let (root, alias, affinities, rows, kept) = {
+        let (root, alias, affinities, rows, kept, table) = {
             let bytes = self.image();
             // Every statement draws from where the connection stands,
             // so two statements of one connection answer `randomblob`
@@ -884,7 +1101,7 @@ impl Writer {
                 .iter()
                 .map(|value| stored(value, self.header.encoding))
                 .collect();
-            let answer = database.rows(arena, statement.select, sql)?;
+            let answer = database.rows_under(arena, statement.select, sql, outer)?;
             let affinities: Vec<Affinity> =
                 table.columns.iter().map(|column| column.affinity).collect();
             let mut rows = Vec::new();
@@ -906,11 +1123,27 @@ impl Writer {
                 }
                 rows.push((key, values));
             }
-            (root, table.rowid_alias, affinities, rows, kept)
+            (
+                root,
+                table.rowid_alias,
+                affinities,
+                rows,
+                kept,
+                table.clone(),
+            )
         };
+        let before = self.triggers_for(&name, TriggerEvent::Insert, TriggerTime::Before)?;
+        let after = self.triggers_for(&name, TriggerEvent::Insert, TriggerTime::After)?;
+        let fires = !before.is_empty() || !after.is_empty();
         let mut next = largest(&self.pages, root)?.unwrap_or(0);
         let mut written = 0_i64;
         for (key, mut values) in rows {
+            // A trigger's body may write the table this statement
+            // writes, so the largest key is read again per row where
+            // one runs.
+            if fires {
+                next = next.max(largest(&self.pages, root)?.unwrap_or(0));
+            }
             let given = match key {
                 Value::Int(given) => Some(given),
                 Value::Null => alias.and_then(|at| match values.get(at) {
@@ -932,10 +1165,22 @@ impl Writer {
             for slot in values.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
                 *slot = Value::Null;
             }
+            let row = Fired {
+                table: &table,
+                old: None,
+                new: Some((&named, rowid)),
+                encoding: self.header.encoding,
+            };
+            if fires && !self.fire(&before, &[], &row)? {
+                continue;
+            }
             let record = crate::record::write(&values, &affinities, 4);
             insert(&mut self.pages, root, rowid, &record)?;
             self.index_row(&kept, &named, rowid)?;
             written = written.saturating_add(1);
+            if fires {
+                self.fire(&after, &[], &row)?;
+            }
         }
         Ok(written)
     }
@@ -956,6 +1201,9 @@ struct Held<'a> {
     encoding: Encoding,
     /// Where `random` and `randomblob` take their bytes from.
     random: &'a crate::random::Source,
+    /// The row a trigger's body reads as `new` and `old`, where this
+    /// row is one of a statement a trigger runs.
+    outer: Option<&'a dyn crate::eval::Row>,
 }
 
 impl crate::eval::Row for Held<'_> {
@@ -963,7 +1211,27 @@ impl crate::eval::Row for Held<'_> {
         Some(self.random)
     }
 
+    fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
     fn column(
+        &self,
+        schema: Option<&[u8]>,
+        table: Option<&[u8]>,
+        column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)> {
+        self.mine(schema, table, column).or_else(|| {
+            self.outer
+                .and_then(|outer| outer.column(schema, table, column))
+        })
+    }
+}
+
+impl Held<'_> {
+    /// The column of this row, which is the table the statement
+    /// changes and not the row a trigger stands on.
+    fn mine(
         &self,
         schema: Option<&[u8]>,
         table: Option<&[u8]>,
@@ -992,9 +1260,104 @@ impl crate::eval::Row for Held<'_> {
             None => None,
         }
     }
+}
 
+/// Whether a trigger runs for a statement that writes these columns,
+/// which is what `UPDATE OF` holds it to: a trigger that names columns
+/// runs where the statement writes one of them.
+fn writes_one(
+    arena: &Arena,
+    trigger: &crate::ast::CreateTrigger,
+    sql: &[u8],
+    written: &[Vec<u8>],
+) -> bool {
+    let named = arena.names(trigger.columns);
+    named.is_empty()
+        || named.iter().any(|span| {
+            let name = crate::schema::dequote(span.text(sql));
+            written.iter().any(|held| held.eq_ignore_ascii_case(&name))
+        })
+}
+
+/// How deep a trigger may reach.
+///
+/// SQLite runs a trigger's body as a program of its own machine, so
+/// `SQLITE_MAX_TRIGGER_DEPTH` bounds it at a thousand. This crate runs
+/// the body where the statement runs, so the count is the frames the
+/// stack holds and is bounded the way a view that names itself is.
+const TRIGGER_DEPTH: usize = 32;
+
+/// What an `UPDATE` writes.
+struct Updating {
+    /// The tree of the table.
+    root: u32,
+    /// The column the key is another name for, where the table has one.
+    alias: Option<usize>,
+    /// What each column of the table converts a value under.
+    affinities: Vec<Affinity>,
+    /// One per row the `WHERE` keeps: its key, the key it is written
+    /// under, the values it held and the values it is written with.
+    written: Vec<(i64, i64, Vec<Value>, Vec<Value>)>,
+    /// The indexes over the table.
+    kept: Vec<Kept>,
+    /// The table itself.
+    table: Table,
+}
+
+/// The row a trigger's body reads as `new` and `old`.
+///
+/// `sqlite3CodeRowTrigger` puts the row the statement changes in two
+/// cursors the body reaches by those names: a `DELETE` has `old` alone,
+/// an `INSERT` has `new` alone, and an `UPDATE` has both.
+struct Fired<'a> {
+    /// The table the trigger is on.
+    table: &'a Table,
+    /// The row as it was, with its key.
+    old: Option<(&'a [Value], i64)>,
+    /// The row as it is, with its key.
+    new: Option<(&'a [Value], i64)>,
+    /// What encoding the file keeps its text in.
+    encoding: Encoding,
+}
+
+impl crate::eval::Row for Fired<'_> {
     fn encoding(&self) -> Encoding {
         self.encoding
+    }
+
+    fn column(
+        &self,
+        schema: Option<&[u8]>,
+        table: Option<&[u8]>,
+        column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)> {
+        // A name with a schema in front of it names no row a trigger
+        // stands on, because `new` and `old` are cursors and not
+        // tables.
+        let table = table.filter(|_| schema.is_none())?;
+        let (values, rowid) = if table.eq_ignore_ascii_case(b"new") {
+            self.new
+        } else if table.eq_ignore_ascii_case(b"old") {
+            self.old
+        } else {
+            None
+        }?;
+        let at = self
+            .table
+            .columns
+            .iter()
+            .position(|held| held.name.eq_ignore_ascii_case(column));
+        match at {
+            Some(at) => {
+                let held = self.table.columns.get(at)?;
+                let value = values.get(at)?.clone();
+                Some((value, held.affinity, held.collation))
+            }
+            None if is_rowid(column) => {
+                Some((Value::Int(rowid), Affinity::Integer, Collation::Binary))
+            }
+            None => None,
+        }
     }
 }
 
@@ -1044,9 +1407,10 @@ impl Writer {
         arena: &Arena,
         statement: &crate::ast::Delete,
         sql: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
-        let (root, keys, kept) = {
+        let (root, keys, kept, table) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
             let (table, root) = database.table(&name).ok_or(Error::NoTable)?;
@@ -1060,6 +1424,7 @@ impl Writer {
                     rowid: *rowid,
                     encoding: self.header.encoding,
                     random: &self.random,
+                    outer,
                 };
                 let keep = match statement.filter {
                     None => true,
@@ -1071,14 +1436,30 @@ impl Writer {
                     keys.push((*rowid, values.clone()));
                 }
             }
-            (root, keys, kept)
+            (root, keys, kept, table.clone())
         };
+        let before = self.triggers_for(&name, TriggerEvent::Delete, TriggerTime::Before)?;
+        let after = self.triggers_for(&name, TriggerEvent::Delete, TriggerTime::After)?;
+        let fires = !before.is_empty() || !after.is_empty();
         // `sqlite3GenerateRowDelete` writes the entries out before the
         // row, because the entries are found through the row.
-        let taken = i64::try_from(keys.len()).unwrap_or(i64::MAX);
+        let mut taken = 0_i64;
         for (key, values) in keys {
+            let row = Fired {
+                table: &table,
+                old: Some((&values, key)),
+                new: None,
+                encoding: self.header.encoding,
+            };
+            if fires && !self.fire(&before, &[], &row)? {
+                continue;
+            }
             self.unindex_row(&kept, &values, key)?;
             crate::tree::remove(&mut self.pages, root, key)?;
+            taken = taken.saturating_add(1);
+            if fires {
+                self.fire(&after, &[], &row)?;
+            }
         }
         Ok(taken)
     }
@@ -1092,77 +1473,113 @@ impl Writer {
     /// them first, because a tree changes under a walk of it. A row
     /// whose key the statement writes comes out and goes in again under
     /// the key it was given; every other row is written where it lies.
+    /// What an `UPDATE` writes: the rows its `WHERE` keeps, each with
+    /// the key and the values it becomes.
+    ///
+    /// Reading `n` rows costs O(n) and answering the `SET` of one costs
+    /// what its expressions cost.
+    fn updating(
+        &self,
+        arena: &Arena,
+        statement: &crate::ast::Update,
+        sql: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
+        name: &[u8],
+    ) -> Result<Updating, Error> {
+        let sets = arena.sets(statement.sets);
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        let (table, root) = database.table(name).ok_or(Error::NoTable)?;
+        let kept = kept_indexes(&database, name);
+        let places: Vec<Option<usize>> = sets
+            .iter()
+            .map(|set| {
+                let column = crate::schema::dequote(set.column.text(sql));
+                match table
+                    .columns
+                    .iter()
+                    .position(|held| held.name.eq_ignore_ascii_case(&column))
+                {
+                    Some(at) => Ok(Some(at)),
+                    // `rowid` names the column the key is another name
+                    // for, where the table has one.
+                    None if is_rowid(&column) => Ok(table.rowid_alias),
+                    None => Err(Error::Unsupported),
+                }
+            })
+            .collect::<Result<_, Error>>()?;
+        let affinities: Vec<Affinity> =
+            table.columns.iter().map(|column| column.affinity).collect();
+        let mut written = Vec::new();
+        for (rowid, values) in database.rows_of(name)? {
+            let held = Held {
+                table,
+                values: &values,
+                rowid,
+                encoding: self.header.encoding,
+                random: &self.random,
+                outer,
+            };
+            let keep = match statement.filter {
+                None => true,
+                Some(filter) => crate::eval::evaluate_row(arena, filter, sql, &held)?.truth(false),
+            };
+            if !keep {
+                continue;
+            }
+            let mut next = values.clone();
+            let mut key = rowid;
+            for (at, set) in places.iter().zip(sets) {
+                let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
+                match at {
+                    Some(at) => {
+                        for slot in next.iter_mut().skip(*at).take(1) {
+                            *slot = stored(&value, self.header.encoding);
+                        }
+                    }
+                    None => match value {
+                        Value::Int(given) => key = given,
+                        _ => return Err(Error::Unsupported),
+                    },
+                }
+            }
+            written.push((rowid, key, values, next));
+        }
+        Ok(Updating {
+            root,
+            alias: table.rowid_alias,
+            affinities,
+            written,
+            kept,
+            table: table.clone(),
+        })
+    }
+
     fn update(
         &mut self,
         arena: &Arena,
         statement: &crate::ast::Update,
         sql: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
         let sets = arena.sets(statement.sets);
-        let (root, alias, affinities, written, kept) = {
-            let bytes = self.image();
-            let database = Database::open(&bytes)?;
-            let (table, root) = database.table(&name).ok_or(Error::NoTable)?;
-            let kept = kept_indexes(&database, &name);
-            let places: Vec<Option<usize>> = sets
-                .iter()
-                .map(|set| {
-                    let column = crate::schema::dequote(set.column.text(sql));
-                    match table
-                        .columns
-                        .iter()
-                        .position(|held| held.name.eq_ignore_ascii_case(&column))
-                    {
-                        Some(at) => Ok(Some(at)),
-                        // `rowid` names the column the key is another name
-                        // for, where the table has one.
-                        None if is_rowid(&column) => Ok(table.rowid_alias),
-                        None => Err(Error::Unsupported),
-                    }
-                })
-                .collect::<Result<_, Error>>()?;
-            let affinities: Vec<Affinity> =
-                table.columns.iter().map(|column| column.affinity).collect();
-            let mut written = Vec::new();
-            for (rowid, values) in database.rows_of(&name)? {
-                let held = Held {
-                    table,
-                    values: &values,
-                    rowid,
-                    encoding: self.header.encoding,
-                    random: &self.random,
-                };
-                let keep = match statement.filter {
-                    None => true,
-                    Some(filter) => {
-                        crate::eval::evaluate_row(arena, filter, sql, &held)?.truth(false)
-                    }
-                };
-                if !keep {
-                    continue;
-                }
-                let mut next = values.clone();
-                let mut key = rowid;
-                for (at, set) in places.iter().zip(sets) {
-                    let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
-                    match at {
-                        Some(at) => {
-                            for slot in next.iter_mut().skip(*at).take(1) {
-                                *slot = stored(&value, self.header.encoding);
-                            }
-                        }
-                        None => match value {
-                            Value::Int(given) => key = given,
-                            _ => return Err(Error::Unsupported),
-                        },
-                    }
-                }
-                written.push((rowid, key, values, next));
-            }
-            (root, table.rowid_alias, affinities, written, kept)
-        };
-        let changed = i64::try_from(written.len()).unwrap_or(i64::MAX);
+        let Updating {
+            root,
+            alias,
+            affinities,
+            written,
+            kept,
+            table,
+        } = self.updating(arena, statement, sql, outer, &name)?;
+        let columns: Vec<Vec<u8>> = sets
+            .iter()
+            .map(|set| crate::schema::dequote(set.column.text(sql)))
+            .collect();
+        let before = self.triggers_for(&name, TriggerEvent::Update, TriggerTime::Before)?;
+        let after = self.triggers_for(&name, TriggerEvent::Update, TriggerTime::After)?;
+        let fires = !before.is_empty() || !after.is_empty();
+        let mut changed = 0_i64;
         for (rowid, mut key, held, mut values) in written {
             // The column the key is another name for says the key, so a
             // statement that writes that column writes the key, and the
@@ -1184,6 +1601,15 @@ impl Writer {
             for slot in named.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
                 *slot = Value::Int(key);
             }
+            let row = Fired {
+                table: &table,
+                old: Some((&held, rowid)),
+                new: Some((&named, key)),
+                encoding: self.header.encoding,
+            };
+            if fires && !self.fire(&before, &columns, &row)? {
+                continue;
+            }
             let record = crate::record::write(&values, &affinities, 4);
             self.unindex_row(&kept, &held, rowid)?;
             if key == rowid {
@@ -1193,6 +1619,10 @@ impl Writer {
                 insert(&mut self.pages, root, key, &record)?;
             }
             self.index_row(&kept, &named, key)?;
+            changed = changed.saturating_add(1);
+            if fires {
+                self.fire(&after, &columns, &row)?;
+            }
         }
         Ok(changed)
     }

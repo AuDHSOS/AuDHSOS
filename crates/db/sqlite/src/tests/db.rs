@@ -344,6 +344,48 @@ fn a_schema_row_that_is_not_a_table_is_passed_over() {
 }
 
 #[test]
+fn a_schema_row_that_is_not_a_trigger_is_passed_over() {
+    // Two trigger rows the reader must walk past: one whose statement
+    // it cannot read, and one that calls itself a trigger and holds a
+    // table.
+    let file = schema_file(&[
+        record([
+            Ok("table"),
+            Ok("d"),
+            Ok("d"),
+            Err(2),
+            Ok("CREATE TABLE d(x)"),
+        ]),
+        record([
+            Ok("trigger"),
+            Ok("s"),
+            Ok("d"),
+            Err(0),
+            Ok("CREATE TRIGGER s AFTER"),
+        ]),
+        record([
+            Ok("trigger"),
+            Ok("u"),
+            Ok("d"),
+            Err(0),
+            Ok("CREATE TABLE u(x)"),
+        ]),
+        record([
+            Ok("trigger"),
+            Ok("w"),
+            Ok("d"),
+            Err(0),
+            Ok("CREATE TRIGGER w AFTER INSERT ON d BEGIN SELECT 1; END"),
+        ]),
+    ]);
+    let database = Database::open(&file).expect("a database");
+    // The trigger the reader could read is the only one it holds.
+    assert!(database.trigger(b"w").is_some());
+    assert!(database.trigger(b"s").is_none());
+    assert!(database.trigger(b"u").is_none());
+}
+
+#[test]
 fn a_payload_longer_than_the_file_is_refused_before_room_is_made_for_it() {
     use crate::db::Error;
     use crate::error;

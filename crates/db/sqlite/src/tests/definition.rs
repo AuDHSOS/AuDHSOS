@@ -80,9 +80,12 @@ fn every_syntax_error_the_c_library_finds_is_found_here() {
                 matches!(mine, Some(Definition::Drop(_))),
                 "{sql} takes a table or an index away and was not read as one"
             ),
-            // A view, a trigger, and anything that is not a definition
-            // at all: this parser reads three kinds and refuses the
-            // rest.
+            "trigger" => assert!(
+                matches!(mine, Some(Definition::Trigger(_))),
+                "{sql} makes a trigger and was not read as one"
+            ),
+            // Anything that is not a definition at all: this parser
+            // reads five kinds and refuses the rest.
             _ => assert!(
                 mine.is_none(),
                 "{sql} is not a definition and was read as one"
@@ -103,6 +106,7 @@ fn table_of(sql: &str) -> (crate::ast::Arena, crate::ast::CreateTable) {
         Definition::Index(_)
         | Definition::View(_)
         | Definition::AddColumn(_)
+        | Definition::Trigger(_)
         | Definition::Drop(_) => {
             panic!("something other than a table was written")
         }
@@ -386,4 +390,157 @@ fn one_definition_is_all_a_row_of_the_schema_holds() {
     assert!(parsed("CREATE TABLE t(x);").is_some());
     assert!(parsed("CREATE TABLE t(x); CREATE TABLE u(y)").is_none());
     assert!(parsed("CREATE INDEX i ON base(a); SELECT 1").is_none());
+}
+
+/// The trigger a statement makes.
+fn trigger_of(sql: &str) -> (crate::ast::Arena, crate::ast::CreateTrigger) {
+    let (arena, definition) = definition(sql.as_bytes()).expect("a trigger");
+    match definition {
+        Definition::Trigger(trigger) => (arena, trigger),
+        Definition::Table(_)
+        | Definition::Index(_)
+        | Definition::View(_)
+        | Definition::AddColumn(_)
+        | Definition::Drop(_) => panic!("something other than a trigger was written"),
+    }
+}
+
+#[test]
+fn a_trigger_carries_when_it_runs_what_it_runs_on_and_what_it_runs() {
+    use crate::ast::{TriggerEvent, TriggerStep, TriggerTime};
+    let sql = "CREATE TRIGGER a AFTER INSERT ON t BEGIN INSERT INTO log VALUES(new.a); END";
+    let (arena, trigger) = trigger_of(sql);
+    assert!(!trigger.temporary);
+    assert!(!trigger.if_not_exists);
+    assert_eq!(trigger.schema, None);
+    assert_eq!(trigger.name.text(sql.as_bytes()), b"a");
+    assert_eq!(trigger.time, TriggerTime::After);
+    assert_eq!(trigger.event, TriggerEvent::Insert);
+    assert_eq!(trigger.table.text(sql.as_bytes()), b"t");
+    assert_eq!(trigger.condition, None);
+    assert!(matches!(
+        arena.steps(trigger.body),
+        [TriggerStep::Insert(_)]
+    ));
+
+    // A trigger with no time written runs before the row, `FOR EACH
+    // ROW` is read and says nothing, and a `WHEN` is kept.
+    let sql = "CREATE TRIGGER b BEFORE DELETE ON t FOR EACH ROW WHEN old.a>1 \
+               BEGIN DELETE FROM log WHERE a=old.a; UPDATE log SET a=1; END";
+    let (arena, trigger) = trigger_of(sql);
+    assert_eq!(trigger.time, TriggerTime::Before);
+    assert_eq!(trigger.event, TriggerEvent::Delete);
+    assert!(trigger.condition.is_some());
+    assert!(matches!(
+        arena.steps(trigger.body),
+        [TriggerStep::Delete(_), TriggerStep::Update(_)]
+    ));
+    let sql = "CREATE TRIGGER c UPDATE ON t BEGIN SELECT 1; END";
+    let (arena, trigger) = trigger_of(sql);
+    assert_eq!(trigger.time, TriggerTime::Before);
+    assert_eq!(trigger.event, TriggerEvent::Update);
+    assert!(matches!(
+        arena.steps(trigger.body),
+        [TriggerStep::Select(_)]
+    ));
+
+    // `INSTEAD OF`, the columns an `UPDATE OF` names, and
+    // `IF NOT EXISTS`.
+    let sql = "CREATE TRIGGER IF NOT EXISTS d INSTEAD OF UPDATE OF a,b ON v BEGIN SELECT 1; END";
+    let (arena, trigger) = trigger_of(sql);
+    assert!(trigger.if_not_exists);
+    assert_eq!(trigger.time, TriggerTime::InsteadOf);
+    assert_eq!(trigger.event, TriggerEvent::Update);
+    assert_eq!(arena.names(trigger.columns).len(), 2);
+    assert_eq!(trigger.table.text(sql.as_bytes()), b"v");
+
+    // The four shapes a statement of a body is written in.
+    let sql = "CREATE TRIGGER e AFTER INSERT ON t BEGIN \
+               REPLACE INTO log VALUES(1); VALUES(2); \
+               WITH c(i) AS (SELECT 1) SELECT i FROM c; DELETE FROM log; END";
+    let (arena, trigger) = trigger_of(sql);
+    assert!(matches!(
+        arena.steps(trigger.body),
+        [
+            TriggerStep::Insert(_),
+            TriggerStep::Select(_),
+            TriggerStep::Select(_),
+            TriggerStep::Delete(_),
+        ]
+    ));
+
+    // A `DROP TRIGGER` takes one away, and `IF EXISTS` allows a name
+    // the database does not hold.
+    for (sql, if_exists) in [
+        ("DROP TRIGGER a", false),
+        ("DROP TRIGGER IF EXISTS a", true),
+    ] {
+        let (_, definition) = definition(sql.as_bytes()).expect("a drop");
+        let Definition::Drop(asked) = definition else {
+            panic!("something other than a drop was written");
+        };
+        assert_eq!(asked.kind, crate::ast::Dropped::Trigger);
+        assert_eq!(asked.if_exists, if_exists);
+    }
+}
+
+#[test]
+fn what_a_trigger_refuses() {
+    use crate::parse::Expected;
+    for (sql, expected) in [
+        (
+            "CREATE TRIGGER a INSTEAD UPDATE ON t BEGIN SELECT 1; END",
+            Expected::Of,
+        ),
+        (
+            "CREATE TRIGGER a AFTER INSERT ON t BEGIN CREATE TABLE u(a); END",
+            Expected::Step,
+        ),
+        (
+            "CREATE TRIGGER a AFTER TRUNCATE ON t BEGIN SELECT 1; END",
+            Expected::Update,
+        ),
+        (
+            "CREATE TRIGGER a AFTER INSERT t BEGIN SELECT 1; END",
+            Expected::On,
+        ),
+        (
+            "CREATE TRIGGER a AFTER INSERT ON t FOR ROW BEGIN SELECT 1; END",
+            Expected::Row,
+        ),
+        (
+            "CREATE TRIGGER a AFTER INSERT ON t SELECT 1; END",
+            Expected::Body,
+        ),
+        (
+            "CREATE TRIGGER a AFTER INSERT ON t BEGIN DROP TABLE t; END",
+            Expected::Step,
+        ),
+        (
+            "CREATE TRIGGER a AFTER INSERT ON t BEGIN SELECT 1 END",
+            Expected::Semi,
+        ),
+    ] {
+        let read = definition(sql.as_bytes());
+        assert_eq!(
+            read.err().map(|error| error.expected),
+            Some(expected),
+            "{sql}"
+        );
+    }
+    // `RAISE` is an expression, and one of its four words is what
+    // stands in the brackets.
+    for (sql, expected) in [
+        ("RAISE(NOTHING, 'x')", Expected::Action),
+        ("RAISE(ABORT 'x')", Expected::Expression),
+        ("RAISE ABORT", Expected::OpenParen),
+        ("RAISE(ABORT, 'x'", Expected::CloseParen),
+    ] {
+        let read = crate::parse::expression(sql.as_bytes());
+        assert_eq!(
+            read.err().map(|error| error.expected),
+            Some(expected),
+            "{sql}"
+        );
+    }
 }

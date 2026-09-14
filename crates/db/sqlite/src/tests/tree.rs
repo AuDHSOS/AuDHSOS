@@ -3347,3 +3347,269 @@ fn setup_for(name: &str) -> &'static [&'static [u8]] {
         _ => &[b"CREATE TABLE t(a)"],
     }
 }
+
+#[test]
+fn a_trigger_writes_the_rows_the_shell_wrote() {
+    use crate::change::Writer;
+    for (name, statements, fixture) in crate::tests::TRIGGERED {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        for sql in *statements {
+            writer
+                .run(sql.as_bytes())
+                .unwrap_or_else(|error| panic!("{name}: {sql} is refused with {error:?}"));
+        }
+        same(name, &writer.written(), fixture, 512);
+    }
+}
+
+#[test]
+fn what_a_trigger_raises_and_where_it_stops() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    // `RAISE(ABORT)` refuses the statement and leaves the file as the
+    // statement found it.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"CREATE TRIGGER r1 BEFORE INSERT ON t BEGIN SELECT RAISE(ABORT,'nope') WHERE new.a<0; END",
+        b"INSERT INTO t VALUES(1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert_eq!(
+        writer.run(b"INSERT INTO t VALUES(-1)").err(),
+        Some(crate::db::Error::Eval(crate::eval::Error::Raised(
+            crate::ast::Raise::Abort
+        )))
+    );
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT group_concat(a) FROM t")
+            .unwrap()
+            .rows,
+        [[Value::Text(b"1".to_vec())]]
+    );
+
+    // `RAISE(IGNORE)` passes the row over, and a trigger that reaches
+    // itself runs once, which is what `PRAGMA recursive_triggers` off
+    // says.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"CREATE TRIGGER i1 BEFORE INSERT ON t BEGIN SELECT RAISE(IGNORE) WHERE new.a<0; END",
+        b"CREATE TRIGGER c1 AFTER INSERT ON t BEGIN INSERT INTO t VALUES(new.a+1); END",
+        b"INSERT INTO t VALUES(-1)",
+        b"INSERT INTO t VALUES(1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT group_concat(a) FROM t")
+            .unwrap()
+            .rows,
+        [[Value::Text(b"1,2".to_vec())]]
+    );
+}
+
+#[test]
+fn what_a_trigger_refuses() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    // A table the database does not hold.
+    assert!(
+        writer
+            .run(b"CREATE TRIGGER x1 AFTER INSERT ON nosuch BEGIN SELECT 1; END")
+            .is_err()
+    );
+    // `INSTEAD OF` stands on a view, which this crate writes no row of.
+    assert!(
+        writer
+            .run(b"CREATE TRIGGER x1 INSTEAD OF INSERT ON t BEGIN SELECT 1; END")
+            .is_err()
+    );
+    writer
+        .run(b"CREATE TRIGGER x1 AFTER INSERT ON t BEGIN SELECT 1; END")
+        .unwrap();
+    // A name the database already holds, unless the statement allows
+    // it.
+    assert!(
+        writer
+            .run(b"CREATE TRIGGER x1 AFTER INSERT ON t BEGIN SELECT 1; END")
+            .is_err()
+    );
+    writer
+        .run(b"CREATE TRIGGER IF NOT EXISTS x1 AFTER INSERT ON t BEGIN SELECT 1; END")
+        .unwrap();
+    // A name the database does not hold, unless the statement allows
+    // it.
+    assert!(writer.run(b"DROP TRIGGER nosuch").is_err());
+    writer.run(b"DROP TRIGGER IF EXISTS nosuch").unwrap();
+    writer.run(b"DROP TRIGGER x1").unwrap();
+}
+
+#[test]
+fn what_a_trigger_reaches_and_how_deep_it_runs() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    // A body that writes rows again, a `WHEN` that names the row the
+    // trigger does not carry, and a `WHEN` that names a table.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"CREATE TABLE log(m)",
+        b"INSERT INTO log VALUES(0)",
+        b"CREATE TRIGGER u1 AFTER INSERT ON t WHEN hex(new.a)<>''           BEGIN UPDATE log SET m=hex(new.a); DELETE FROM log WHERE m='no'; END",
+        b"INSERT INTO t VALUES(255)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT m FROM log").unwrap().rows,
+        [[Value::Text(b"323535".to_vec())]]
+    );
+    // An `INSERT` carries no row as it was, so `old` names no column
+    // there, and a name that is neither `new` nor `old` names none
+    // either.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer
+        .run(b"CREATE TRIGGER o1 AFTER INSERT ON t WHEN old.a>1 BEGIN SELECT 1; END")
+        .unwrap();
+    assert!(writer.run(b"INSERT INTO t VALUES(2)").is_err());
+    for when in [b"t.a>1".as_slice(), b"new.nosuch>1"] {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        writer.run(b"CREATE TABLE t(a)").unwrap();
+        let mut sql = b"CREATE TRIGGER n1 AFTER INSERT ON t WHEN ".to_vec();
+        sql.extend_from_slice(when);
+        sql.extend_from_slice(b" BEGIN SELECT 1; END");
+        writer.run(&sql).unwrap();
+        assert!(writer.run(b"INSERT INTO t VALUES(2)").is_err());
+    }
+    // The key answers to the three names the rowid answers to.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"CREATE TABLE log(m)",
+        b"CREATE TRIGGER k1 AFTER INSERT ON t WHEN new.rowid>0 \
+          BEGIN INSERT INTO log VALUES(new.a); END",
+        b"INSERT INTO t VALUES(7)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT m FROM log").unwrap().rows,
+        [[Value::Int(7)]]
+    );
+
+    // `PRAGMA recursive_triggers` lets a trigger reach itself, and the
+    // count it may reach is what stops one that does not.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"PRAGMA recursive_triggers=1".as_slice(),
+        b"CREATE TABLE t(a)",
+        b"CREATE TRIGGER c1 AFTER INSERT ON t BEGIN INSERT INTO t VALUES(new.a+1); END",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert!(writer.run(b"INSERT INTO t VALUES(1)").is_err());
+    // A trigger on another table does not run.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"CREATE TABLE u(a)",
+        b"CREATE TABLE log(m)",
+        b"CREATE TRIGGER x1 AFTER INSERT ON u BEGIN INSERT INTO log VALUES(1); END",
+        b"INSERT INTO t VALUES(1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert!(
+        database
+            .query(b"SELECT m FROM log")
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_trigger_that_passes_a_row_over_keeps_it_where_it_is() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"INSERT INTO t VALUES(1),(2),(3)",
+        b"CREATE TRIGGER d1 BEFORE DELETE ON t BEGIN SELECT RAISE(IGNORE) WHERE old.a=11; END",
+        b"CREATE TRIGGER u1 BEFORE UPDATE ON t BEGIN SELECT RAISE(IGNORE) WHERE old.a=3; END",
+        b"UPDATE t SET a=a+10",
+        b"DELETE FROM t",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    // The row the `UPDATE` passed over is written no differently, and
+    // the row the `DELETE` passed over stays where it was.
+    assert_eq!(
+        database
+            .query(b"SELECT group_concat(a) FROM t")
+            .unwrap()
+            .rows,
+        [[Value::Text(b"11".to_vec())]]
+    );
+    // A trigger and an index may share a name, and a `DROP` takes away
+    // the one of its own kind.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"CREATE TABLE log(m)",
+        b"CREATE INDEX i1 ON t(a)",
+        b"CREATE TRIGGER i1 AFTER INSERT ON t BEGIN INSERT INTO log VALUES(new.a); END",
+        b"DROP INDEX i1",
+        b"INSERT INTO t VALUES(5)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert!(database.index(b"i1").is_none());
+    assert_eq!(
+        database.query(b"SELECT m FROM log").unwrap().rows,
+        [[Value::Int(5)]]
+    );
+
+    // A table taken away takes the triggers on it with it.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"CREATE TABLE log(m)",
+        b"CREATE TRIGGER x1 AFTER INSERT ON t BEGIN INSERT INTO log VALUES(1); END",
+        b"DROP TABLE t",
+        b"CREATE TABLE t(a)",
+        b"INSERT INTO t VALUES(1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert!(
+        database
+            .query(b"SELECT m FROM log")
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+}
