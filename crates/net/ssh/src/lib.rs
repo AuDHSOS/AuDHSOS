@@ -26,7 +26,7 @@ pub use cipher::ChaChaPoly;
 pub use client::{Buffers, Config, Connection, Event};
 pub use error::SshError;
 pub use exchange::{Ephemeral, HashInput, Method, Reply, exchange_hash};
-pub use hostkey::{Fingerprint, HostKey, Trust, accept};
+pub use hostkey::{Fingerprint, Fingerprints, HostKey, Trust, accept};
 pub use ident::Greeting;
 pub use kex::{Choice, KexInit, Proposal, negotiate};
 pub use keys::{Key, derive};

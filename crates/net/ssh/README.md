@@ -126,10 +126,15 @@ that order, so a key from a host this client will not reach costs no
 signature check.
 
 SSH has no certificate chain, so the rule is a parameter and this crate
-judges no key of its own (document 14, section 14.10).
-[`hostkey::Fingerprint`] is the first of the two sources that section
-names, a SHA-256 the image carries; the second is a file, which a caller
-reads through the file system server and this crate does not.
+judges no key of its own (document 14, section 14.10). Two rules are
+here: [`hostkey::Fingerprint`], which admits one key by the SHA-256 of
+its blob, and [`hostkey::Fingerprints`], which admits any key of a slice
+of such digests and compares every one of them, because a loop that
+stopped at the first match would say which entry matched by how long it
+took. The slice is the caller's, so a program that read a file of
+fingerprints keeps them where it read them; an empty one admits no key.
+Where the digests come from — the image or a file of a volume — is the
+caller's and D-146 settles it for the program of the image.
 
 ## `auth`
 
@@ -205,12 +210,19 @@ the key exchange, `publickey` authentication, one `session` channel with
 read, the command started, data on either stream, the exit status, the
 end.
 
+A global request the peer makes of the connection (RFC 4254, section 4)
+is answered here and not acted on: this client offers no forwarding, no
+agent and no host key proof, so the answer is `SSH_MSG_REQUEST_FAILURE`
+where a reply was asked for and nothing where it was not. OpenSSH sends
+`hostkeys-00@openssh.com` as such a request.
+
 Its buffers are the caller's and their minimum is the packet size RFC
 4253, section 6.1, makes mandatory, which is what one connection costs.
 
 ## What is not here
 
-The socket under the client and the program around it, which are the rest
-of step S8 and need the network on the machine, and the handshake against
-an OpenSSH that measures this client against an implementation this
-project did not write.
+The socket under the client and the program around it. Both are outside
+this crate by design (D-49): `server-net` answers the socket protocol and
+`app-ssh` of `user-net-programs` is the program, and the handshake
+between that program and a live OpenSSH is what measures this client
+against an implementation this project did not write.

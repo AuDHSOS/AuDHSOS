@@ -13,7 +13,7 @@
 //! that signature is the only evidence that the peer holds the private
 //! half of the key it sent.
 
-use crypto_ct::ct_eq;
+use crypto_ct::{Choice, ct_eq};
 use crypto_ec::ed25519::{self, PUBLIC_LEN, SIGNATURE_LEN};
 use crypto_hash::Sha256;
 
@@ -177,6 +177,52 @@ impl Fingerprint {
 impl Trust for Fingerprint {
     fn accepts(&self, key: &HostKey) -> bool {
         ct_eq(&self.digest, &key.fingerprint()).is_true()
+    }
+}
+
+/// A set of fingerprints, which admits a key whose blob hashes to any one
+/// of them.
+///
+/// The slice is the caller's, so a program that read a file of
+/// fingerprints keeps them where it read them and this crate allocates
+/// nothing. An empty set admits no key, which is what a client with no
+/// rule is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Fingerprints<'a> {
+    /// The SHA-256 digests this client will talk to.
+    digests: &'a [[u8; FINGERPRINT_LEN]],
+}
+
+impl<'a> Fingerprints<'a> {
+    /// The rule that admits the keys whose blobs hash to `digests`.
+    #[must_use]
+    pub const fn new(digests: &'a [[u8; FINGERPRINT_LEN]]) -> Fingerprints<'a> {
+        Fingerprints { digests }
+    }
+
+    /// How many fingerprints the rule holds.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.digests.len()
+    }
+
+    /// Whether the rule holds none, and so admits no key.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.digests.is_empty()
+    }
+}
+
+impl Trust for Fingerprints<'_> {
+    /// Every fingerprint is compared, because a loop that stops at the
+    /// first match tells a caller which entry matched by how long it took.
+    fn accepts(&self, key: &HostKey) -> bool {
+        let digest = key.fingerprint();
+        let mut found = Choice::NO;
+        for held in self.digests {
+            found = found | ct_eq(held, &digest);
+        }
+        found.is_true()
     }
 }
 

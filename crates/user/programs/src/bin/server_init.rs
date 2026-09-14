@@ -139,7 +139,7 @@ struct Program {
 /// The quotas are what the programs measured out at need with room over
 /// them; a program that asks for more than its line says is refused by the
 /// kernel and not by this table.
-const PROGRAMS: [Program; 16] = [
+const PROGRAMS: [Program; 17] = [
     Program {
         name: b"server-memory",
         priority: priority::SERVER,
@@ -350,6 +350,22 @@ const PROGRAMS: [Program; 16] = [
     // walk so that the lines of the two do not interleave.
     Program {
         name: b"app-net",
+        priority: priority::APPLICATION,
+        handles: 32,
+        frames: 32,
+        objects: 32,
+        grant: Grant::None,
+        names: true,
+        memory: true,
+        draws: false,
+        listens: false,
+        talks: true,
+        reports: true,
+    },
+    // The Secure Shell client. It talks through the network server and
+    // reads what it is given off the volume, so it starts after both.
+    Program {
+        name: b"app-ssh",
         priority: priority::APPLICATION,
         handles: 32,
         frames: 32,

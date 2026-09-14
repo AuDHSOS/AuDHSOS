@@ -17,6 +17,17 @@ This is an adapter crate on the allowlist of the safety policy: a program
 that maps memory and then writes into it has to turn an address into a
 slice, and that step is `unsafe` wherever it is written.
 
+The library beside the programs holds what they share. [`socket::Stream`]
+is one end of a TCP connection over the protocol of `server-net`: it maps
+the rings, moves bytes through them, asks again after a wait for every
+call the server answers `WouldBlock` (D-142), and says whether what came
+back was bytes, nothing yet, or the end. A program that talks over a
+connection writes what it is saying; `app-net` and `app-ssh` of
+`user-net-programs` are its two callers, and neither reaches a ring or an
+`unsafe` block of its own. [`socket::Listener`] is the other end of the
+same protocol, and it is consumed by its own `accept`, because a listener
+becomes the connection it took and keeps its number (D-143).
+
 `server-init` is the root task and is linked at `ROOT_TASK_BASE`, with
 every section on a page of its own: the kernel reads it as an ELF and maps
 each segment with the permissions its header names, and two segments in one

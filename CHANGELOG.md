@@ -7,6 +7,34 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `user-programs`: `socket::Stream`, one end of a TCP connection over the
+  protocol of `server-net`, with `socket::Listener` for the other end and
+  `socket::Idle` for the wait every `WouldBlock` costs (D-142). It maps
+  the rings, moves bytes through them, and answers one ask with bytes,
+  `Waiting`, or `Ended`, so the ambiguity between "nothing yet" and "the
+  peer is done" is a variant and not a zero. `app-net` and `app-ssh` are
+  its callers; between them they lose about two hundred lines of near
+  duplicate, both of their `unsafe` blocks, and every mention of a ring.
+  A listener is consumed by its own `accept`, because under D-143 it
+  becomes the connection it took.
+
+- Track S, step S8 integrated: the Secure Shell client of the image
+  reaches a live OpenSSH. `app-ssh` reads the port, the account, the
+  command, the fingerprints it trusts and its own secret off the scratch
+  volume, opens one connection through the socket protocol of
+  `server-net`, gets through the key exchange, the host key, `publickey`
+  and one `session` channel, runs a command, reads both of its streams,
+  and takes its exit status. `sh tools/xtask.sh test --e2e` runs that
+  handshake last and `test --ssh` runs it alone: it generates an Ed25519
+  host key and client key into `keys/ssh/` where there are none, starts
+  an `sshd` on a free port of the loopback with every algorithm of 14.5
+  named, and writes the trust file, the seed and the port onto a scratch
+  disk of its own (D-146). No key of this repository is tracked.
+
+- `audhsos-ssh`: `hostkey::Fingerprints`, a trust rule over a slice of
+  SHA-256 digests that compares every one of them, so a program can be
+  given the several hosts a file names.
+
 - Phase 14: the network on the machine. A program of the image leases an
   address, resolves a name, takes a connection on the port the reference
   machine forwards, and makes an HTTP request over it that it parses.
@@ -659,6 +687,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   Catalog 6.6.59 and 6.6.60.
 
 ### Fixed
+
+- `audhsos-ssh`: a global request the peer makes of the connection
+  (RFC 4254, section 4) no longer ends the connection. This client offers
+  nothing a peer can ask of it, so the answer is
+  `SSH_MSG_REQUEST_FAILURE` where a reply was asked for and nothing where
+  it was not. OpenSSH sends `hostkeys-00@openssh.com` as such a request
+  as soon as it has authenticated a client, which is what the handshake
+  against a live server found.
 
 - A switch out of a thread that holds one of the kernel's cells leaves that
   cell borrowed by a thread that is no longer running, and nothing gets it

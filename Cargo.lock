@@ -712,6 +712,8 @@ name = "user-net-programs"
 version = "0.1.0"
 dependencies = [
  "audhsos-abi",
+ "audhsos-encoding",
+ "audhsos-ssh",
  "audhsos-time",
  "crypto-rng",
  "driver-virtio-net",
@@ -804,8 +806,10 @@ version = "0.1.0"
 dependencies = [
  "app-canvas",
  "audhsos-abi",
+ "audhsos-encoding",
  "audhsos-symbols",
  "audhsos-time",
+ "crypto-hash",
  "driver-i8042",
  "fs-fat",
  "fs-gpt",

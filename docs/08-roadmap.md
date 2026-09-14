@@ -46,9 +46,9 @@ forward. Of the tracks of documents 11 and 12 everything but the
 integration of track C is finished, and that is Phase 15; track D's own
 integration is Phase 14 and is done. What the four phases from 12 on need
 beyond them is specified in
-[document 13](13-the-network-on-the-machine.md). Track S is begun: steps
-S1 to S7 and the client of S8 are built, and what is left of S8 is the
-program of the image and the handshake against a live OpenSSH (D-123).
+[document 13](13-the-network-on-the-machine.md). Track S is finished:
+steps S1 to S8 are built, and the client of the image reaches a live
+OpenSSH through the socket of `server-net` (D-123, D-146).
 
 ## 8.2 Phase 0: Project foundation
 
@@ -668,19 +668,19 @@ Tests: catalog 6.6.53 and 6.6.58.
 ## 8.26 Track S: Secure Shell as a client
 
 Status: decided in D-123, specified in
-[document 14](14-secure-shell-as-a-client.md), begun. Steps S1 to S7 are
-built, which is every layer of the protocol: the wire types and the
-binary packet, the greeting and the negotiation, both key exchange
-methods over `crypto-dh` (D-122) and `crypto-ec::x25519` with the
-exchange hash and the six keys, the cipher over the packet layer, the
-host key with the signature over the exchange hash, the authentication
-exchange with `publickey`, the session channel with its window, and the
-re-exchange with its thresholds. The client of S8 is built with them
-under D-141 and is driven end to end against a server written in the
-tests. What is left
-of S8 needs Phase 14: the socket of `server-net`, the program of the
-image, and the handshake against an OpenSSH, which is also where the two
-open questions of 14.13 belong.
+[document 14](14-secure-shell-as-a-client.md), implemented. Steps S1 to
+S7 are every layer of the protocol: the wire types and the binary packet,
+the greeting and the negotiation, both key exchange methods over
+`crypto-dh` (D-122) and `crypto-ec::x25519` with the exchange hash and
+the six keys, the cipher over the packet layer, the host key with the
+signature over the exchange hash, the authentication exchange with
+`publickey`, the session channel with its window, and the re-exchange
+with its thresholds. The client of S8 is built with them under D-141 and
+is driven end to end against a server written in the tests. Its
+integration needed Phase 14 and has it: `app-ssh` is a program of the
+image, it reaches an `sshd` through the socket of `server-net`, and that
+handshake is a step of `test --e2e`. The two questions 14.13 held open
+are answered by D-146.
 
 The track is a client for SSH-2 and not a server, for the reason D-123
 gives. It offers `curve25519-sha256` and `diffie-hellman-group14-sha256`
@@ -698,20 +698,20 @@ build. What it refuses, and why each name is refused, is section 14.5.
 | S5 | `auth` | M | implemented: the service request, `publickey` with the signature of RFC 4252, section 7, the four answers a server sends, and `server-sig-algs` out of an `SSH_MSG_EXT_INFO` (catalog 6.6.76) |
 | S6 | `channel` | L | implemented: channels, the window in both directions, the session channel, `exec`, `shell` and `env`, extended data, and the exit status (catalog 6.6.77) |
 | S7 | re-exchange | S-M | implemented: a re-exchange from either side, its three thresholds, what may be sent while one runs, and the disconnect with the reason codes of RFC 4250 (catalog 6.6.78) |
-| S8 | the client, and its integration | M | implemented (D-141): the state machine over every layer below it, against a server written in the tests (catalog 6.6.79). Waiting on Phase 14: the socket of `server-net`, the program of the image, and the handshake against a live OpenSSH |
+| S8 | the client, and its integration | M | implemented: the state machine over every layer below it, against a server written in the tests (catalog 6.6.79) and against a live OpenSSH from the program `app-ssh` of the image, on the key material of D-146 (catalog 6.6.80) |
 
 S1 to S7 depended on no phase and were built between them, as the whole
 of track C was, and so did the client, which D-141 admits under the
-admission test of 8.27. What is left of S8 needs the network on the
-machine.
+admission test of 8.27. The integration needed the network on the
+machine, which is Phase 14.
 
-Tests: catalog 6.6.66, 6.6.68, 6.6.69, 6.6.70 and 6.6.75 to 6.6.79 are
-written, for the arithmetic of S2, the whole of S1 to S7, and the client,
-with the fuzz targets `ssh_packet` and `ssh_handshake` beside them; the rest are written
-with the step that owns each. There is no RFC 8448 for this protocol — no document publishes a
-complete handshake with the keys that made it — so the check from outside
-is the interop test of S8 and not a replay, which is the one way this
-track differs in kind from track C.
+Tests: catalog 6.6.66, 6.6.68, 6.6.69, 6.6.70 and 6.6.75 to 6.6.80 are
+written, for the arithmetic of S2, the whole of S1 to S7, the client, and
+the key material of the interop run, with the fuzz targets `ssh_packet`
+and `ssh_handshake` beside them. There is no RFC 8448 for this
+protocol — no document publishes a complete handshake with the keys that
+made it — so the check from outside is the interop run of S8 and not a
+replay, which is the one way this track differs in kind from track C.
 
 ## 8.27 Capacity for parallel work
 
@@ -721,10 +721,9 @@ track differs in kind from track C.
 - Order: track E, then the cryptography track to T7, then track D, with
   step D6 not started beside an XL phase; track F when a driver becomes
   foreseeable; G2 before Phase 3.
-- Track S (8.26) is the one side track that is not finished. The first
-  rule covers it, and where it falls in the order above is not settled:
-  the order is the history of the tracks that are done, and no phase
-  requires track S of anything.
+- Track S (8.26) is finished. Where it fell in the order above was never
+  settled, because the order is the history of the tracks that are done
+  and no phase required track S of anything.
 - Phase work whose logic passes the admission test may be pulled
   forward without changing its phase, its catalog items, or its
   acceptance criteria: `gfx` (Phase 9), `driver-i8042` (Phase 10), the

@@ -6,8 +6,8 @@ They describe the target design, the rules the code must follow, and the
 order in which the system is built.
 
 Status: every entry of the decision register is decided; no open
-decisions remain. Phases 0 to 13 of the roadmap are implemented, Phases 0
-to 8 released as 0.1.0, and Phase 14 is next. The disk and the file
+decisions remain. Phases 0 to 14 of the roadmap are implemented, Phases 0
+to 8 released as 0.1.0, and Phase 15 is next. The disk and the file
 system server of [document 15](15-the-disk-on-the-machine.md) are built
 beside the phases: `server-fs` answers file requests over the boot volume
 and over a scratch disk, and every program outside the boot set is read
@@ -18,21 +18,20 @@ the tooling. What is left of both documents is their two integration
 steps, which are Phases 14 and 15; document 13 specifies them together
 with the two phases of kernel and bus work that came first.
 
-One track is begun and not finished: Secure Shell as a client, which
-D-123 admits and [document 14](14-secure-shell-as-a-client.md)
-specifies, as track S of the roadmap. Steps S1 to S7 exist, which is
-every layer of the protocol: the wire types and the binary packet of
-`audhsos-ssh`, the greeting and the negotiation, both key exchange
-methods with the exchange hash and the six keys, the cipher over the
-packet layer, whose documents are in [openssh/](openssh) (D-134), the
-host key with the signature over the exchange hash, the authentication
-exchange with `publickey`, the session channel with its window, and the
-re-exchange with its thresholds. The client that drives them is built
-too, and is host-tested against a server written in the tests. What is
-left of step S8 waits on Phase 14: the socket, the program of the image,
-and the handshake against an OpenSSH. The two questions the track holds
-open — which host key rule a client is given and where its private key
-comes from — belong to that program, and section 14.13 names them.
+Secure Shell as a client is finished as well, which D-123 admits and
+[document 14](14-secure-shell-as-a-client.md) specifies, as track S of
+the roadmap. Steps S1 to S7 are every layer of the protocol: the wire
+types and the binary packet of `audhsos-ssh`, the greeting and the
+negotiation, both key exchange methods with the exchange hash and the six
+keys, the cipher over the packet layer, whose documents are in
+[openssh/](openssh) (D-134), the host key with the signature over the
+exchange hash, the authentication exchange with `publickey`, the session
+channel with its window, and the re-exchange with its thresholds. The
+client that drives them is host-tested against a server written in the
+tests, and `app-ssh` of the image reaches a live OpenSSH through the
+socket of `server-net` and runs a command there, which is the acceptance
+of the track. What it is given — the host keys it trusts and its own
+secret — is D-146.
 
 ## Reading order
 

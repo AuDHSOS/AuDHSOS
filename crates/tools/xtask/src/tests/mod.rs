@@ -20,6 +20,7 @@ mod process;
 mod qemu;
 mod qmp;
 mod spdx;
+mod ssh;
 mod symbolize;
 mod test_ext;
 mod toolchain;

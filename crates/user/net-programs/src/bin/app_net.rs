@@ -6,10 +6,10 @@
 //! what it was sent, and then makes an HTTP request over that same
 //! connection and parses the answer.
 //!
-//! Every call of the socket protocol is answered at once (D-142), so what
-//! is not ready yet comes back as `WouldBlock` and this program asks again
-//! after a wait on the clock. That is what the loops below are; nothing
-//! here spins.
+//! The connection is `user_programs::socket::Stream`, which is what asks
+//! again after a wait on the clock for every call the server answers
+//! `WouldBlock` (D-142); nothing here spins and nothing here reaches a
+//! ring.
 //!
 //! The connection carries two exchanges because the machine it runs on has
 //! one port forwarded into it: the runner connects to that port, sends a
@@ -18,11 +18,12 @@
 
 #![no_std]
 #![no_main]
-#![allow(unsafe_code)]
-#![deny(unsafe_op_in_unsafe_fn)]
+#![forbid(unsafe_code)]
 
-// The package holds two programs and each uses a different part of what it
-// depends on; these are the crates this one does not.
+// The package holds three programs and each uses a different part of what
+// it depends on; these are the crates this one does not.
+use audhsos_encoding as _;
+use audhsos_ssh as _;
 use audhsos_time as _;
 use crypto_rng as _;
 use driver_virtio_net as _;
@@ -32,16 +33,12 @@ use user_net_programs as _;
 use virtio_queue as _;
 
 use audhsos_abi::Error;
-use audhsos_abi::layout::PAGE_SIZE;
 use net_http::{Decoder, Event, Method, Request as HttpRequest};
 use net_wire::Writer as WireWriter;
 use user_programs::client::{lookup, write_line};
-use user_programs::mapping::Mapping;
-use user_proto::ring::{SOCKET_PAGE_LEN, SocketPage};
-use user_proto::socket::{Direction, Name, Reply, Request, State};
-use user_rt::{
-    EndpointHandle, Line, MemoryHandle, NotificationHandle, ProcessHandle, Startup, Typed as _,
-};
+use user_programs::socket::{Idle, Listener, Stream};
+use user_proto::socket::{Name, Reply, Request};
+use user_rt::{EndpointHandle, Line, ProcessHandle, Startup};
 use user_sys_x86_64::{self as sys, Gate};
 
 sys::program!(main);
@@ -98,7 +95,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         gate.thread_exit()
     };
 
-    let Ok(idle) = gate.notification_create() else {
+    let Ok(idle) = Idle::new(&mut gate).map(|idle| idle.with_step(STEP)) else {
         say(
             &mut gate,
             voice,
@@ -106,7 +103,6 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         );
         gate.thread_exit()
     };
-    let idle = Idle(idle);
 
     if let Err(error) = report_interface(&mut gate, server, voice, idle) {
         say(
@@ -250,39 +246,22 @@ fn echo_and_fetch(
     voice: Option<EndpointHandle>,
     idle: Idle,
 ) -> Result<(), Error> {
-    let Reply::Listening(outcome) = call(gate, server, &Request::TcpListen { port: PORT })? else {
-        return Err(Error::InvalidArgument);
-    };
-    let listener = outcome?;
+    let listener = Listener::bind(gate, server, PORT)?;
     say(
         gate,
         voice,
-        &Report::of(format_args!("[net-app] listening on {PORT}\n")),
+        &Report::of(format_args!("[net-app] listening on {}\n", listener.port())),
     );
 
     let until = gate.clock_now()?.saturating_add(DEADLINE);
-    let (socket, object) = loop {
-        let reply = call(gate, server, &Request::TcpAccept { socket: listener })?;
-        let Reply::Accepted(outcome) = reply else {
-            return Err(Error::InvalidArgument);
-        };
-        match outcome {
-            Ok(opened) => break (opened.socket, MemoryHandle::from_handle(opened.rings)),
-            Err(Error::WouldBlock) => idle.wait(gate, until)?,
-            Err(error) => return Err(error),
-        }
-    };
-    let bytes = u64::try_from(SOCKET_PAGE_LEN)
-        .unwrap_or(0)
-        .next_multiple_of(PAGE_SIZE);
-    let mapping = Mapping::new(gate, process, object, RINGS, bytes)?;
-    // SAFETY: the mapping stands until this program ends, it is memory of
-    // this process alone, and every access to it is atomic on both sides.
-    let page = unsafe { mapping.socket_page() }.ok_or(Error::Unaligned)?;
+    let stream = listener.accept(gate, process, RINGS, idle, until)?;
     say(
         gate,
         voice,
-        &Report::of(format_args!("[net-app] accepted socket {socket}\n")),
+        &Report::of(format_args!(
+            "[net-app] accepted socket {}\n",
+            stream.socket()
+        )),
     );
 
     // One line goes back, and a line that arrives in pieces is read and
@@ -291,12 +270,12 @@ fn echo_and_fetch(
     let mut taken = [0u8; CHUNK];
     let mut echoed = 0usize;
     loop {
-        let len = read(gate, server, socket, page, &mut taken, until, idle)?;
+        let len = stream.read(gate, &mut taken, idle, until)?;
         let line = taken.get(..len).unwrap_or(&[]);
         if line.is_empty() {
             break;
         }
-        write(gate, server, socket, page, line, until, idle)?;
+        stream.write_all(gate, line, idle, until)?;
         echoed = echoed.saturating_add(len);
         if line.last() == Some(&b'\n') {
             break;
@@ -308,16 +287,9 @@ fn echo_and_fetch(
         &Report::of(format_args!("[net-app] echo {echoed} bytes\n")),
     );
 
-    fetch(gate, server, socket, page, voice, until, idle)?;
-    let _shut = call(
-        gate,
-        server,
-        &Request::TcpShutdown {
-            socket,
-            direction: Direction::Write,
-        },
-    )?;
-    let _closed = call(gate, server, &Request::TcpClose { socket })?;
+    fetch(gate, &stream, voice, until, idle)?;
+    let _shut = stream.shutdown_write(gate);
+    let _closed = stream.close(gate);
     say(gate, voice, &Report::of(format_args!("[net-app] closed\n")));
     Ok(())
 }
@@ -325,9 +297,7 @@ fn echo_and_fetch(
 /// Writes a request over the connection and reads the answer.
 fn fetch(
     gate: &mut Gate,
-    server: EndpointHandle,
-    socket: u32,
-    page: &SocketPage,
+    stream: &Stream,
     voice: Option<EndpointHandle>,
     until: u64,
     idle: Idle,
@@ -338,15 +308,7 @@ fn fetch(
         .write(&mut writer)
         .map_err(|_| Error::InvalidArgument)?;
     let len = writer.position();
-    write(
-        gate,
-        server,
-        socket,
-        page,
-        request.get(..len).unwrap_or(&[]),
-        until,
-        idle,
-    )?;
+    stream.write_all(gate, request.get(..len).unwrap_or(&[]), idle, until)?;
 
     let mut head = [0u8; 1024];
     let mut decoder = Decoder::<8>::new(&mut head, Method::Get);
@@ -354,7 +316,7 @@ fn fetch(
     let mut status = 0u16;
     let mut taken = [0u8; CHUNK];
     loop {
-        let len = read(gate, server, socket, page, &mut taken, until, idle)?;
+        let len = stream.read(gate, &mut taken, idle, until)?;
         let mut rest = taken.get(..len).unwrap_or(&[]);
         if rest.is_empty() {
             // A body whose end is the end of the connection is complete
@@ -403,98 +365,11 @@ fn said(gate: &mut Gate, voice: Option<EndpointHandle>, status: u16, body: usize
     );
 }
 
-/// Puts `bytes` into the outbound ring and tells the server they are
-/// there, until every one of them has gone.
-fn write(
-    gate: &mut Gate,
-    server: EndpointHandle,
-    socket: u32,
-    page: &SocketPage,
-    bytes: &[u8],
-    until: u64,
-    idle: Idle,
-) -> Result<(), Error> {
-    let mut rest = bytes;
-    while !rest.is_empty() {
-        let taken = page.outbound.write(rest);
-        rest = rest.get(taken..).unwrap_or(&[]);
-        let len = u32::try_from(taken).unwrap_or(0);
-        let Reply::Sent(outcome) = call(gate, server, &Request::TcpSend { socket, len })? else {
-            return Err(Error::InvalidArgument);
-        };
-        let _moved = outcome?;
-        if taken == 0 {
-            idle.wait(gate, until)?;
-        }
-    }
-    Ok(())
-}
-
-/// Takes what the connection holds into `into`, waiting until there is
-/// something or the connection is over.
-fn read(
-    gate: &mut Gate,
-    server: EndpointHandle,
-    socket: u32,
-    page: &SocketPage,
-    into: &mut [u8],
-    until: u64,
-    idle: Idle,
-) -> Result<usize, Error> {
-    loop {
-        let Reply::Received(outcome) = call(gate, server, &Request::TcpRecv { socket })? else {
-            return Err(Error::InvalidArgument);
-        };
-        let _held = outcome?;
-        let taken = page.inbound.read(into);
-        if taken > 0 {
-            return Ok(taken);
-        }
-        let Reply::State(state) = call(gate, server, &Request::TcpState { socket })? else {
-            return Err(Error::InvalidArgument);
-        };
-        match state? {
-            State::Established | State::Connecting => idle.wait(gate, until)?,
-            State::PeerClosed => {
-                // The server answers each call out of what the stack held
-                // when the call came, so bytes the peer sent before its
-                // `FIN` can arrive between the two calls above. One more
-                // ask takes them, and after a `FIN` nothing follows.
-                let Reply::Received(outcome) = call(gate, server, &Request::TcpRecv { socket })?
-                else {
-                    return Err(Error::InvalidArgument);
-                };
-                let _held = outcome?;
-                return Ok(page.inbound.read(into));
-            }
-            State::Closed | State::Refused => return Err(Error::Unavailable),
-        }
-    }
-}
-
 /// Sends one request and reads the reply out of the buffer.
 fn call(gate: &mut Gate, server: EndpointHandle, request: &Request) -> Result<Reply, Error> {
     request.encode(&mut gate.writer())?;
     gate.ipc_call(server)?;
     Ok(Reply::decode(gate.reader())?)
-}
-
-/// The notification every wait of this program sleeps on. One is made for
-/// the whole program, because one made for each wait uses up the object
-/// quota of the process.
-#[derive(Clone, Copy)]
-struct Idle(NotificationHandle);
-
-impl Idle {
-    /// Sleeps one step, and refuses once `until` has passed.
-    fn wait(self, gate: &mut Gate, until: u64) -> Result<(), Error> {
-        let now = gate.clock_now()?;
-        if now >= until {
-            return Err(Error::Cancelled);
-        }
-        let _bits = gate.notification_wait_until(self.0, now.saturating_add(STEP))?;
-        Ok(())
-    }
 }
 
 /// Writes one line, if there is anywhere to write it.

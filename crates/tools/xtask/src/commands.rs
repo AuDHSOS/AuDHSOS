@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::Error;
-use crate::image::{archive, boot_image, disk};
+use crate::image::{archive, boot_image, disk, fat32};
 use crate::out::{self, note, note_raw};
 use crate::policy::{FUZZ_TARGETS, FuzzTarget, MIRI_TARGETS, Target, crates_for};
 use crate::ppm;
@@ -15,6 +15,7 @@ use crate::process::{Cmd, run_parallel, test_jobs};
 use crate::qemu::{self, Machine, Run};
 use crate::qmp::{Button, Qmp};
 use crate::session::Session;
+use crate::ssh;
 use crate::symbolize;
 use crate::{artifacts, coverage, deps, fs, layering, linker, spdx, unsafe_budget};
 
@@ -101,17 +102,19 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut host = false;
     let mut qemu = false;
     let mut e2e = false;
+    let mut ssh = false;
     let mut profile = Vec::new();
     for option in options {
         match option.as_str() {
             "--host" => host = true,
             "--qemu" => qemu = true,
             "--e2e" => e2e = true,
+            "--ssh" => ssh = true,
             "--release" => profile.push("--release".to_owned()),
             other => return Err(Error::Usage(format!("unknown option `{other}` for test"))),
         }
     }
-    if !(host || qemu || e2e) {
+    if !(host || qemu || e2e || ssh) {
         host = true;
     }
     if host {
@@ -138,6 +141,17 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
     }
     if e2e {
         test_e2e(root, &profile)?;
+    }
+    // The Secure Shell run alone, which `--e2e` runs last anyway. It is
+    // its own option because it is the one run that needs a server on the
+    // development machine, and a person who is changing the client repeats
+    // it without the four runs before it.
+    if ssh {
+        build(root, &profile)?;
+        image(root, &profile)?;
+        let machine = Machine::locate()?;
+        let path = root.join("target").join("audhsos.img");
+        test_the_secure_shell_client(&machine, &path, root)?;
     }
     Ok(())
 }
@@ -503,7 +517,91 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     Error::from_violations(violations)?;
     test_the_same_disk_again(&machine, &path, root)?;
     test_without_a_framebuffer(&machine, &path)?;
-    test_without_a_network(&machine, &path)
+    test_without_a_network(&machine, &path)?;
+    test_the_secure_shell_client(&machine, &path, root)
+}
+
+/// The acceptance of track S: the client of the image reaches a command on
+/// an OpenSSH server and reads what it wrote.
+///
+/// This is the one check from outside that the exchange hash, the key
+/// derivation and the packet layer are what the documents mean
+/// (14.12). It is a run of its own, with a scratch disk of its own, so
+/// that the end-to-end run above keeps the blank disk its persistence
+/// test needs.
+fn test_the_secure_shell_client(machine: &Machine, path: &Path, root: &Path) -> Result<(), Error> {
+    let material = ssh::material(root)?;
+    let account = ssh::account()?;
+    let server = ssh::Server::start(root, &material)?;
+    note!(
+        "sshd: port {}, {} fingerprint(s) trusted",
+        server.port(),
+        material.fingerprints.len()
+    );
+    let files = ssh::scratch_files(server.port(), &account, &material);
+    let scratch = written_scratch_image(root, "ssh", &files)?;
+    let mut session = Session::start(
+        machine,
+        path,
+        &qemu::Options {
+            scratch: Some(scratch),
+            ..qemu::Options::plain()
+        },
+    )?;
+
+    let mut violations = Vec::new();
+    for (needle, complaint) in ssh_lines() {
+        if !session.wait_for(&needle, E2E_TIMEOUT) {
+            violations.push(complaint.to_owned());
+            break;
+        }
+    }
+    let output = session.finish();
+    report("secure shell", &violations);
+    if !violations.is_empty() {
+        eprintln!("--- serial output of the Secure Shell run ---");
+        eprintln!("{output}");
+        eprintln!("--- what the server said ---");
+        eprintln!("{}", server.log());
+        eprintln!("--- end ---");
+    }
+    Error::from_violations(violations)
+}
+
+/// What the client of the image has to reach, in this order.
+///
+/// The command writes on both streams and exits with a status that is not
+/// zero, so a client that reads only the first stream and one that
+/// reports no status both fail here. The three needles that quote the
+/// command are built from the constants the command itself is built from,
+/// so the check cannot drift away from what the guest is told to run.
+fn ssh_lines() -> [(String, &'static str); 6] {
+    [
+        (
+            "[init] started app-ssh".to_owned(),
+            "the Secure Shell client did not start",
+        ),
+        (
+            "[ssh-app] connected to 10.0.2.2:".to_owned(),
+            "the client reached no server: it read no configuration off the volume, or the connection was refused",
+        ),
+        (
+            "[ssh-app] command started".to_owned(),
+            "the client did not get through the key exchange, the host key, the authentication and the channel",
+        ),
+        (
+            format!("[ssh-app] stdout: {}", ssh::guest::SAID),
+            "the client did not read what the command wrote",
+        ),
+        (
+            format!("[ssh-app] stderr: {}", ssh::guest::COMPLAINED),
+            "the client did not read the extended data of the command",
+        ),
+        (
+            format!("[ssh-app] exit status {}", ssh::guest::STATUS),
+            "the client did not take the exit status of the command",
+        ),
+    ]
 }
 
 /// What the second boot has to reach before anything is typed at it, in
@@ -1864,6 +1962,40 @@ fn blank_scratch_image(root: &Path, name: &str) -> Result<PathBuf, Error> {
     let path = scratch_path(root, name);
     let _ = std::fs::remove_file(&path);
     scratch_image(root, name)
+}
+
+/// The scratch disk of the run `name`, carrying `files` from the first
+/// boot on.
+///
+/// A disk nothing wrote is formatted by `server-fs` on its first boot,
+/// which is what [`blank_scratch_image`] leaves it. This one carries a
+/// volume the host wrote, so the server mounts it and finds the files
+/// there — which is how the key material of the interop run reaches the
+/// guest (D-146). There is no partition table on it: the scratch disk is
+/// the system's own and a table would make it a disk somebody else
+/// partitioned (document 15, 15.10).
+fn written_scratch_image(
+    root: &Path,
+    name: &str,
+    files: &[(String, Vec<u8>)],
+) -> Result<PathBuf, Error> {
+    let path = scratch_path(root, name);
+    let _ = std::fs::remove_file(&path);
+    let borrowed: Vec<(&str, Vec<u8>)> = files
+        .iter()
+        .map(|(path, bytes)| (path.as_str(), bytes.clone()))
+        .collect();
+    let size = usize::try_from(SCRATCH_SIZE).unwrap_or(0);
+    let mut image = vec![0u8; size];
+    let geometry = fat32::write(&mut image, &borrowed)?;
+    note!(
+        "scratch disk {}: {} files, {} clusters",
+        path.display(),
+        files.len(),
+        geometry.clusters
+    );
+    fs::write_bytes(&path, &image)?;
+    Ok(path)
 }
 
 /// The scratch disk of the run `name`, blank when it was not there and as

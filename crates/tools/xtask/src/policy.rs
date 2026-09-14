@@ -867,9 +867,11 @@ pub(crate) const CRATES: &[Crate] = &[
         // this from 33 (Phase 13). The mappings of the disk track raised it
         // from 34 to 40, named one by one in D2 of
         // `docs/15-the-disk-on-the-machine.md`. Phase 14 added the socket
-        // page of `Mapping`, which is one site more.
+        // page of `Mapping`, which is one site more, and `socket::Stream`
+        // one more again — the reference into the rings that the two
+        // programs of the network used to take each for itself.
         kind: Kind::Adapter {
-            unsafe_budget: 42,
+            unsafe_budget: 43,
             asm_budget: 0,
         },
         deps: &[
@@ -905,16 +907,21 @@ pub(crate) const CRATES: &[Crate] = &[
     Crate {
         name: "user-net-programs",
         path: "crates/user/net-programs",
-        // The register window, the region the device reads and writes, the
-        // memory the stack writes into and the four socket pages of
-        // `server-net`, the entry points of its two threads and the gate
-        // each adopts, and the socket page of `app-net`.
+        // Eight sites, all of `server-net`: the register window, the
+        // region the device reads and writes, the memory the stack writes
+        // into, the socket pages it hands out, and the entry point of each
+        // of its two threads with the gate that thread adopts. The two
+        // programs that use a connection have none left —
+        // `user_programs::socket::Stream` holds the mapping and the
+        // reference into the rings.
         kind: Kind::Adapter {
-            unsafe_budget: 14,
+            unsafe_budget: 8,
             asm_budget: 0,
         },
         deps: &[
             "audhsos-abi",
+            "audhsos-encoding",
+            "audhsos-ssh",
             "audhsos-time",
             "crypto-rng",
             "driver-virtio-net",
@@ -1029,8 +1036,10 @@ pub(crate) const CRATES: &[Crate] = &[
         deps: &[
             "app-canvas",
             "audhsos-abi",
+            "audhsos-encoding",
             "audhsos-symbols",
             "audhsos-time",
+            "crypto-hash",
             "driver-i8042",
             "fs-fat",
             "fs-gpt",

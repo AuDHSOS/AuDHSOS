@@ -28,8 +28,16 @@ path = "src/bin/app_net.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "app-ssh"
+path = "src/bin/app_ssh.rs"
+test = false
+bench = false
+
 [dependencies]
 audhsos-abi.workspace = true
+audhsos-encoding.workspace = true
+audhsos-ssh.workspace = true
 audhsos-time.workspace = true
 crypto-rng.workspace = true
 driver-virtio-net.workspace = true

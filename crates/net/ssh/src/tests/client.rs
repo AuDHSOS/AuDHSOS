@@ -104,6 +104,9 @@ struct Server {
     channel: Option<u32>,
     /// What the client sent on the channel.
     received: Vec<u8>,
+    /// Whether the client answered a global request that asked for a
+    /// reply.
+    answered: bool,
     /// What this server was told to do and what it still owes.
     doing: Doing,
 }
@@ -115,6 +118,10 @@ struct Doing {
     rekeys: bool,
     /// Refuse the client's key.
     refuses: bool,
+    /// Send a global request once authentication is through, the way
+    /// OpenSSH sends `hostkeys-00@openssh.com`, and whether it asks for a
+    /// reply.
+    global_request: Option<bool>,
     /// The output is owed, because a re-exchange is running.
     deferred: bool,
 }
@@ -136,6 +143,7 @@ impl Server {
             session_id: None,
             channel: None,
             received: Vec::new(),
+            answered: false,
             doing: Doing::default(),
         }
     }
@@ -310,6 +318,7 @@ impl Server {
                 let data = reader.read_string().expect("the data");
                 self.received.extend_from_slice(data);
             }
+            msg::REQUEST_FAILURE => self.answered = true,
             msg::CHANNEL_CLOSE | msg::DISCONNECT | msg::CHANNEL_EOF => {}
             other => panic!("the client sent message {other}"),
         }
@@ -364,6 +373,13 @@ impl Server {
             return;
         }
         self.send(&[msg::USERAUTH_SUCCESS]);
+        if let Some(wants_reply) = self.doing.global_request {
+            let mut out = vec![msg::GLOBAL_REQUEST];
+            out.extend_from_slice(&ssh_string(b"hostkeys-00@openssh.com"));
+            out.push(u8::from(wants_reply));
+            out.extend_from_slice(&ssh_string(b"a key blob this client does not read"));
+            self.send(&out);
+        }
     }
 
     /// The channel open, confirmed.
@@ -481,6 +497,9 @@ struct Run {
     closed: bool,
     /// What the server read off the channel.
     received: Vec<u8>,
+    /// Whether the client answered a global request that asked for a
+    /// reply.
+    answered: bool,
 }
 
 /// Drives a client against a fresh server.
@@ -510,6 +529,7 @@ fn drive(config: &Config<'_, Fingerprint>, server: Server, input: &[u8]) -> Resu
         status: None,
         closed: false,
         received: Vec::new(),
+        answered: false,
     };
 
     let mut wire = Vec::new();
@@ -569,6 +589,7 @@ fn drive(config: &Config<'_, Fingerprint>, server: Server, input: &[u8]) -> Resu
                 }
                 result.closed = true;
                 result.received = server.received.clone();
+                result.answered = server.answered;
                 return Ok(result);
             }
         }
@@ -731,4 +752,35 @@ fn the_writer_and_the_reader_of_this_test_agree_with_the_crate() {
     let len = writer.position();
 
     assert_eq!(out.get(..len), Some(ssh_string(b"session").as_slice()));
+}
+
+#[test]
+fn a_global_request_that_wants_no_reply_is_ignored_and_the_command_runs() {
+    let key = ClientKey::new(CLIENT_SECRET);
+    let trust = rule();
+    let mut server = Server::new();
+    server.doing.global_request = Some(false);
+
+    let result = drive(&config(&key, &trust), server, &[]).expect("the handshake completes");
+
+    assert_eq!(result.output, OUTPUT);
+    assert_eq!(result.status, Some(0));
+    assert!(!result.answered, "nothing was asked and nothing was sent");
+}
+
+#[test]
+fn a_global_request_that_wants_a_reply_is_refused_and_the_command_runs() {
+    let key = ClientKey::new(CLIENT_SECRET);
+    let trust = rule();
+    let mut server = Server::new();
+    server.doing.global_request = Some(true);
+
+    let result = drive(&config(&key, &trust), server, &[]).expect("the handshake completes");
+
+    assert_eq!(result.output, OUTPUT);
+    assert_eq!(result.status, Some(0));
+    assert!(
+        result.answered,
+        "the client answered SSH_MSG_REQUEST_FAILURE"
+    );
 }

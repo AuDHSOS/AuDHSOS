@@ -12,7 +12,9 @@ use crypto_ec::ed25519;
 use crypto_hash::Sha256;
 
 use crate::error::SshError;
-use crate::hostkey::{BLOB_LEN, Fingerprint, HostKey, SIGNATURE_BLOB_LEN, Trust, accept};
+use crate::hostkey::{
+    BLOB_LEN, Fingerprint, Fingerprints, HostKey, SIGNATURE_BLOB_LEN, Trust, accept,
+};
 use crate::kex::HOST_KEY_ED25519;
 use crate::tests::ssh_string;
 
@@ -230,5 +232,48 @@ fn a_blob_that_is_no_key_ends_it_before_the_rule_is_asked() {
     assert_eq!(
         accept(&key_blob("ssh-dss", &[0x01; 32]), &HASH, &signature, &rule),
         Err(SshError::HostKey)
+    );
+}
+
+/// The fingerprint of the host key `secret` stands for.
+fn digest_for(secret: &[u8; 32]) -> [u8; 32] {
+    Sha256::digest(&server_blob(secret))
+}
+
+#[test]
+fn a_set_of_fingerprints_admits_every_host_it_names() {
+    let held = [digest_for(&OTHER_SECRET), digest_for(&SERVER_SECRET)];
+    let rule = Fingerprints::new(&held);
+    let blob = server_blob(&SERVER_SECRET);
+    let signature = signature_blob(&SERVER_SECRET, &HASH);
+
+    assert_eq!(rule.len(), 2);
+    assert!(!rule.is_empty());
+    assert!(accept(&blob, &HASH, &signature, &rule).is_ok());
+}
+
+#[test]
+fn a_set_of_fingerprints_refuses_a_host_it_does_not_name() {
+    let held = [digest_for(&OTHER_SECRET)];
+    let rule = Fingerprints::new(&held);
+    let blob = server_blob(&SERVER_SECRET);
+    let signature = signature_blob(&SERVER_SECRET, &HASH);
+
+    assert_eq!(
+        accept(&blob, &HASH, &signature, &rule),
+        Err(SshError::HostKeyRejected)
+    );
+}
+
+#[test]
+fn an_empty_set_of_fingerprints_admits_no_host() {
+    let rule = Fingerprints::new(&[]);
+    let blob = server_blob(&SERVER_SECRET);
+    let signature = signature_blob(&SERVER_SECRET, &HASH);
+
+    assert!(rule.is_empty());
+    assert_eq!(
+        accept(&blob, &HASH, &signature, &rule),
+        Err(SshError::HostKeyRejected)
     );
 }

@@ -7,8 +7,11 @@ The cipher this system's Secure Shell client encrypts with,
 written down in a file of the OpenSSH source rather than by a standards
 body; OpenSSH has since replaced that file with a pointer to an IETF
 draft, and both documents are kept. The other is `PROTOCOL.key`, the
-container a private key is written into, which the client has to read
-before it can authenticate with a key of its own.
+container a private key is written into. The xtask reads it: the
+unencrypted Ed25519 form that `ssh-keygen -N ""` writes, out of which it
+takes the thirty-two octets of the seed that the client of the image
+signs with (D-146). The guest gets no parser for a format that is on no
+wire.
 
 Every file is verbatim and carries its checksum, so that a constant can
 be checked against its source without a network and so that the source

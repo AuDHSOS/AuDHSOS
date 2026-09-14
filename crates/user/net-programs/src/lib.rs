@@ -6,10 +6,12 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![doc = include_str!("../README.md")]
 
-// The library holds what the two programs share; each uses a different
+// The library holds what the three programs share; each uses a different
 // part of the crates below, and the binaries are what reach them. Naming
 // them here is what the unused-dependency check asks for.
 use audhsos_abi as _;
+use audhsos_encoding as _;
+use audhsos_ssh as _;
 use audhsos_time as _;
 use crypto_rng as _;
 use net_http as _;

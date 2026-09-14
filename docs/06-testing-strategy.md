@@ -3114,8 +3114,8 @@ complete SSH handshake with the keys that made it, so what the client is
 driven against is a server written in the tests over the same layers: the
 greeting, both messages of the key exchange, the signature over the
 exchange hash, the six keys, the authentication and one session channel.
-The handshake against an OpenSSH is the acceptance of the step and needs
-the network on the machine.
+The handshake against an OpenSSH is the acceptance of the step and is
+6.6.80.
 
 - The client reaches a command: it greets, negotiates, verifies the host
   key, authenticates with `publickey`, opens the session channel, runs
@@ -3131,6 +3131,47 @@ the network on the machine.
   byte short of either is refused before anything is written, and a user
   name longer than the buffer the signature is taken over is refused with
   it.
+- A global request the server makes of the connection is answered and not
+  read: one that wants no reply is ignored, one that wants a reply is
+  answered `SSH_MSG_REQUEST_FAILURE`, and the command runs either way.
+  OpenSSH sends `hostkeys-00@openssh.com` as such a request.
+
+### 6.6.80 The handshake against an OpenSSH (`app-ssh`, `xtask`, QEMU)
+
+The acceptance of track S, and the one check that the client agrees with
+an implementation this project did not write (14.12). Two parts: the key
+material on the host, and the run.
+
+The key material, host-tested in `xtask`:
+
+- The fingerprint of a public key line is the one `ssh-keygen -lf`
+  prints, which is a known answer taken from OpenSSH and not from this
+  side. The comment and the line terminator are not part of it.
+- A public key line naming another algorithm, carrying no blob, or
+  carrying one that is not Base64 is refused.
+- The seed read out of a private key of `docs/openssh/PROTOCOL.key` is
+  the first thirty-two octets of the private half.
+- A key under a passphrase, a file holding more than one key, a key of
+  another algorithm, a private half of another length, another envelope
+  and another label are each refused. No key is embedded in a test: the
+  fixtures are built from the document, because no key of this repository
+  is tracked (D-146).
+
+The run, which `sh tools/xtask.sh test --e2e` performs last and
+`sh tools/xtask.sh test --ssh` performs alone:
+
+- `sshd` starts on a free port of the loopback with every algorithm of
+  14.5 named, so the run cannot pass on a set the two sides happened to
+  prefer.
+- The scratch disk of the run carries the trust file, the client's seed
+  and the port, written by the host onto a FAT32 volume the file system
+  server mounts rather than formats.
+- The client of the image connects to the gateway, gets through the key
+  exchange, the host key, `publickey` and the session channel, and says
+  the command started.
+- It reads what the command wrote on standard output and on standard
+  error, and takes an exit status that is not zero, so a client that
+  reads one stream and one that reports no status both fail.
 
 ## 6.7 CI pipeline
 

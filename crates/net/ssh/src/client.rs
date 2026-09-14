@@ -15,8 +15,14 @@
 //! RFC 4254 with `exec` or `shell`; and the re-exchange of section 9
 //! whenever either side asks for one.
 //!
-//! The socket under it and the program around it are the rest of step S8
-//! and wait on Phase 14.
+//! A global request the peer makes of the connection (RFC 4254, section
+//! 4) is answered here and not acted on: this client offers nothing a peer
+//! can ask of it, so the answer is `SSH_MSG_REQUEST_FAILURE` where a reply
+//! was asked for and nothing where it was not.
+//!
+//! The socket under it and the program around it are outside this crate by
+//! design: `server-net` answers the socket protocol and `app-ssh` of
+//! `user-net-programs` is the program.
 
 use crypto_ct::wipe;
 use crypto_rng::Rng;
@@ -33,6 +39,7 @@ use crate::keys::{self, Key};
 use crate::msg::{self, Disconnect};
 use crate::packet::{Decoded, Decoder, Encoder, MAX_PACKET};
 use crate::rekey::{Answer, Rekey};
+use crate::wire::Reader;
 
 /// The smallest buffer that can hold any packet this client must receive
 /// (RFC 4253, section 6.1).
@@ -546,7 +553,16 @@ impl<'a, R: Rng, T: Trust> Connection<'a, R, T> {
                 self.machine.state = State::Closed;
                 return Ok(Some(Event::Closed));
             }
-            msg::IGNORE | msg::DEBUG | msg::UNIMPLEMENTED | msg::EXT_INFO => return Ok(None),
+            // The last two are replies to a request this client never
+            // made: it sends no global request, so nothing waits on one
+            // and nothing acts on the answer.
+            msg::IGNORE
+            | msg::DEBUG
+            | msg::UNIMPLEMENTED
+            | msg::EXT_INFO
+            | msg::REQUEST_SUCCESS
+            | msg::REQUEST_FAILURE => return Ok(None),
+            msg::GLOBAL_REQUEST => return self.take_global_request(payload).map(|()| None),
             _ => {}
         }
         if number == msg::KEXINIT && self.machine.state == State::Session {
@@ -773,6 +789,30 @@ impl<'a, R: Rng, T: Trust> Connection<'a, R, T> {
             }
             _ => Ok(None),
         }
+    }
+
+    /// A request the peer makes of the connection and not of a channel
+    /// (RFC 4254, section 4).
+    ///
+    /// This client offers nothing a peer can ask of the connection — no
+    /// forwarding, no agent, no host key proof — so every name is one it
+    /// does not recognise, and section 4 answers that with
+    /// `SSH_MSG_REQUEST_FAILURE` where a reply was asked for and with
+    /// nothing where it was not. OpenSSH sends `hostkeys-00@openssh.com`
+    /// as such a request as soon as it has authenticated a client, which
+    /// is what made this necessary.
+    fn take_global_request(&mut self, payload: Span) -> Result<(), SshError> {
+        let wants_reply = {
+            let mut reader = Reader::new(at(self.incoming, payload));
+            let _number = reader.read_byte()?;
+            let _name = reader.read_string()?;
+            reader.read_boolean()?
+        };
+        if !wants_reply {
+            return Ok(());
+        }
+        let out = [msg::REQUEST_FAILURE];
+        self.emit(&out, out.len())
     }
 
     /// What arrives while the command runs.

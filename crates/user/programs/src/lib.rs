@@ -33,10 +33,12 @@ pub mod dma;
 pub mod mapping;
 pub mod registers;
 pub mod serve;
+pub mod socket;
 
 pub use client::{allocate, lookup, register, release, write_line};
 pub use mapping::{Mapping, SCRATCH};
 pub use serve::{Serving, receive, reply};
+pub use socket::{Idle, Listener, Received, Stream};
 
 /// Where the programs of the archive are linked. It must equal
 /// `PROGRAM_BASE` of `program.ld`, which the xtask checks.

@@ -81,18 +81,21 @@ AuDHSOS/
 │   │   │   │                  binary each of one crate, because a program is a
 │   │   │   │                  loop around a logic crate and seven crates of a
 │   │   │   │                  loop each are seven manifests saying the same
-│   │   │   │                  thing (D-97)
+│   │   │   │                  thing (D-97). The library beside them holds what
+│   │   │   │                  every program shares: the clients of the servers,
+│   │   │   │                  the mapping, the serving loop, and socket::Stream,
+│   │   │   │                  which is one end of a TCP connection
 │   │   │   └── src/bin/       server-init (the root task), server-memory,
 │   │   │                      server-name, server-console, server-display,
 │   │   │                      server-input, server-fs, app-hello,
 │   │   │                      app-checks, app-paint, app-input,
 │   │   │                      app-canvas, app-faulter, app-lspci,
 │   │   │                      app-files
-│   │   ├── net-programs/      user-net-programs: server-net and app-net, and what
-│   │   │                      only they need — the region the device reads and
-│   │   │                      writes, and its registers. A package of its own so
-│   │   │                      that no other program carries the network stack
-│   │   │                      (D-144)
+│   │   ├── net-programs/      user-net-programs: server-net, app-net and app-ssh,
+│   │   │                      and what only they need — the region the device
+│   │   │                      reads and writes, and its registers. A package of
+│   │   │                      its own so that no other program carries the
+│   │   │                      network stack (D-144)
 │   │   └── apps/              the logic of the applications, as servers/ is
 │   │                          for the servers: host-tested, no system call
 │   │       └── canvas/        app-canvas: the drawing state of the graphical
@@ -186,7 +189,7 @@ AuDHSOS/
 | `server-fs` | u2 | all | no | yes | `audhsos-abi`, `audhsos-time`, `fs-fat`, `fs-gpt`, `user-proto`; `test-support` as a dev-dependency |
 | `server-net` | u2 | all | no | yes | `audhsos-abi`, `audhsos-time`, `crypto-rng`, `net-dns`, `net-stack`, `net-tcp`, `net-wire`, `user-proto`; `net-dhcp`, `net-eth`, `net-ip`, `net-udp` and `crypto-rng` with `test-doubles` as dev-dependencies, for the station the tests answer with. The device is the binary's: this crate takes frames in and hands frames out |
 | `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | every server logic crate but `server-net`, `app-canvas`, `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `driver-i8042`, `driver-uart16550`, `driver-virtio-blk`, `fs-fat`, `gfx`, `pci`, `virtio-queue`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
-| `user-net-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | `audhsos-abi`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `net-http`, `net-stack`, `net-wire`, `server-net`, `user-programs`, `user-proto`, `user-rt`, `user-sys-x86_64`, `virtio-queue` |
+| `user-net-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | `audhsos-abi`, `audhsos-encoding`, `audhsos-ssh`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `net-http`, `net-stack`, `net-wire`, `server-net`, `user-programs`, `user-proto`, `user-rt`, `user-sys-x86_64`, `virtio-queue` |
 | `crypto-ct` | c0 | all | no | yes | - |
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
 | `crypto-hash` | c1 | all | no | yes | `crypto-ct` |
@@ -211,7 +214,7 @@ AuDHSOS/
 | `net-stack` | n5 | all | no | yes | every `net-` crate, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
 | `fuzz-support` | dev | host | allowlisted | yes, and Miri over `counters` and `sancov`, which hold its `unsafe` | - |
-| `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `audhsos-symbols`, `audhsos-time`, `fs-fat`, `fs-gpt`, `user-loader` |
+| `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `audhsos-encoding` and `crypto-hash` (the key material of the Secure Shell interop run, D-146), `audhsos-symbols`, `audhsos-time`, `fs-fat`, `fs-gpt`, `user-loader` |
 | `doc-markdown` | host | host | no | yes | - |
 | `doc-html` | host | host | no | yes | `doc-markdown` |
 | `doc-pdf` | host | host | no | yes | `audhsos-deflate` |
