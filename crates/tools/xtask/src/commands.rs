@@ -3,6 +3,7 @@
 
 //! The subcommands.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -1868,6 +1869,62 @@ fn merge_corpus(root: &Path, name: &str, from: &str) -> Result<(), Error> {
         .run()
 }
 
+/// Folds the corpus of `name` back to a minimal cover of what it reaches.
+///
+/// Fuzzing writes a file for every input that reaches something the run had
+/// not reached as cheaply, and a run that reads a part of the corpus calls
+/// some of them new that another part already covers. A merge into an empty
+/// directory answers which files a minimal cover needs; the rest are deleted,
+/// except the ones a person named, which are the regression inputs this
+/// project tracks and never the hexadecimal names a find gets.
+fn compact_corpus(root: &Path, name: &str) -> Result<(), Error> {
+    let corpus = corpus_of(root, name);
+    let cover = corpus.with_extension("cover");
+    let _ = std::fs::remove_dir_all(&cover);
+    std::fs::create_dir_all(&cover)
+        .map_err(|source| Error::io(format!("creating {}", cover.display()), source))?;
+    note!("compacting the corpus of `{name}`");
+    Cmd::cargo()
+        .cwd(&root.join("fuzz"))
+        .args([
+            "run",
+            "--release",
+            "--bin",
+            name,
+            "--",
+            "-merge=1",
+            &cover.display().to_string(),
+            &corpus.display().to_string(),
+        ])
+        .env("RUSTFLAGS", FUZZING_FLAGS)
+        .run()?;
+    let kept: BTreeSet<String> = fs::walk_files(&cover)?
+        .iter()
+        .map(|file| fs::file_name(file).to_owned())
+        .collect();
+    let mut removed = 0usize;
+    for file in fs::walk_files(&corpus)? {
+        let found = fs::file_name(&file);
+        if is_found_name(found) && !kept.contains(found) {
+            std::fs::remove_file(&file)
+                .map_err(|source| Error::io(format!("deleting {}", file.display()), source))?;
+            removed = removed.saturating_add(1);
+        }
+    }
+    let _ = std::fs::remove_dir_all(&cover);
+    note!(
+        "`{name}`: {removed} redundant inputs removed, {} kept",
+        kept.len()
+    );
+    Ok(())
+}
+
+/// Whether `name` is the hexadecimal name a find gets rather than the name a
+/// person gave a regression input.
+fn is_found_name(name: &str) -> bool {
+    matches!(name.len(), 32 | 40) && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 /// Shrinks one crashing input of a target, for at most `seconds`.
 fn minimize_crash(root: &Path, name: &str, file: &str, seconds: u64) -> Result<(), Error> {
     note!("shrinking {file} against `{name}` for {seconds} seconds");
@@ -1887,22 +1944,53 @@ fn minimize_crash(root: &Path, name: &str, file: &str, seconds: u64) -> Result<(
         .run()
 }
 
-/// Runs the fuzzer of one target for `seconds` seconds.
+/// Runs the fuzzer of one target for `seconds` seconds, on every core.
+///
+/// One fuzzer is one process, which is how libFuzzer fuzzes too: it spawns
+/// more of itself for `-jobs`, and this spawns them from here. The workers
+/// share the corpus directory, where an input is named by a hash of its
+/// bytes, so one worker's find is a seed of every worker's next run and two
+/// that find the same input write one file. Each gets a seed of its own, or
+/// they would all walk the same mutations, and a part of the seed corpus of
+/// its own, because loading one file means running it and a worker that read
+/// the whole corpus would spend the run on that instead of on fuzzing.
 fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
-    note!("fuzzing `{name}` for {seconds} seconds");
-    Cmd::cargo()
-        .cwd(&root.join("fuzz"))
-        .args([
-            "run",
-            "--release",
-            "--bin",
-            name,
-            "--",
-            &corpus_of(root, name).display().to_string(),
-            &format!("-max_total_time={seconds}"),
-        ])
-        .env("RUSTFLAGS", FUZZING_FLAGS)
-        .run()
+    let jobs = test_jobs()?;
+    note!("fuzzing `{name}` for {seconds} seconds on {jobs} workers");
+    let fuzz = root.join("fuzz");
+    let executables = artifacts::build(
+        Cmd::cargo()
+            .cwd(&fuzz)
+            .args(["build", "--release", "--bin", name])
+            .env("RUSTFLAGS", FUZZING_FLAGS),
+    )?;
+    let executable = executables
+        .iter()
+        .find(|exe| exe.name == name && !exe.test)
+        .ok_or_else(|| Error::Parse(format!("Cargo reported no executable for `{name}`")))?;
+    let corpus = corpus_of(root, name).display().to_string();
+    // The seed must differ between the workers and between two runs of the
+    // whole command, and it must not be zero, which the engine reads as none.
+    let mut seed = u64::from(std::process::id()).wrapping_mul(0x9E37_79B9) | 1;
+    let mut shard = 0u64;
+    let shards = u64::try_from(jobs).unwrap_or(1);
+    let mut commands = Vec::with_capacity(jobs);
+    for _ in 0..jobs {
+        commands.push(
+            executable
+                .command()
+                .cwd(&fuzz)
+                .arg(&corpus)
+                .arg(format!("-max_total_time={seconds}"))
+                .arg(format!("-seed={seed}"))
+                .arg(format!("-shard={shard}"))
+                .arg(format!("-shards={shards}")),
+        );
+        seed = seed.wrapping_add(1) | 1;
+        shard = shard.wrapping_add(1);
+    }
+    run_parallel(&commands, jobs)?;
+    compact_corpus(root, name)
 }
 
 /// Builds selected regression binaries once, then replays their corpora

@@ -77,6 +77,9 @@ pub struct Pool {
     weights: Vec<u64>,
     /// How many features the pool covers.
     covered: usize,
+    /// The files of the inputs that stopped reaching anything, which the
+    /// run takes to delete them.
+    retired: Vec<PathBuf>,
 }
 
 impl Default for Pool {
@@ -94,6 +97,7 @@ impl Pool {
             slots: vec![Owned::default(); FEATURE_SLOTS].into_boxed_slice(),
             weights: Vec::new(),
             covered: 0,
+            retired: Vec::new(),
         }
     }
 
@@ -226,15 +230,29 @@ impl Pool {
 
     /// Takes one feature away from the input in `index`, dropping it if
     /// that was its last.
+    ///
+    /// An input that owns no feature reaches nothing another input of this
+    /// pool does not reach as cheaply, so the file it came from is redundant
+    /// and is offered to the run to delete. Every feature it had is owned by
+    /// an input this pool holds, and every one of those is a file of the same
+    /// corpus, so nothing the corpus reaches is lost with it.
     fn release(&mut self, index: usize) {
         let Some(input) = self.inputs.get_mut(index) else {
             return;
         };
         input.features = input.features.saturating_sub(1);
-        if input.features == 0 {
-            input.bytes = Vec::new();
-            input.live = false;
+        if input.features != 0 {
+            return;
         }
+        input.bytes = Vec::new();
+        input.live = false;
+        let file = input.file.take();
+        self.retired.extend(file);
+    }
+
+    /// Takes the files of the inputs that stopped reaching anything.
+    pub fn take_retired(&mut self) -> Vec<PathBuf> {
+        core::mem::take(&mut self.retired)
     }
 
     /// Rebuilds the running sum the draw reads.

@@ -19,7 +19,7 @@
 //! the length limit only ever grows, so an input already in the corpus is
 //! never too long for the run that reads it.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::panic::AssertUnwindSafe;
@@ -175,8 +175,14 @@ impl<'a> Runner<'a> {
     /// what they reached.
     fn load(&mut self, options: &Options) -> Result<(), ExitCode> {
         let mut longest = 0usize;
+        let mut index = 0u64;
         for path in &options.paths {
             for file in files_under(path) {
+                let mine = index.checked_rem(options.shards) == Some(options.shard);
+                index = index.wrapping_add(1);
+                if !mine {
+                    continue;
+                }
                 let Ok(bytes) = std::fs::read(&file) else {
                     continue;
                 };
@@ -189,6 +195,7 @@ impl<'a> Runner<'a> {
                 let features = core::mem::take(&mut self.features);
                 let verdict = self.pool.offer(&bytes, &features, options.reduce_inputs);
                 self.features = features;
+                self.delete_retired();
                 if verdict != Verdict::Nothing {
                     let index = self.pool.next_index().saturating_sub(1);
                     self.pool.set_file(index, file);
@@ -207,6 +214,12 @@ impl<'a> Runner<'a> {
     }
 
     /// The fuzzing loop.
+    ///
+    /// `-max_total_time` is the whole run, not what is left of it after the
+    /// corpus is loaded: [`now`] counts from the start of the process, which
+    /// is where libFuzzer starts the clock of that flag too. Loading a corpus
+    /// runs every file in it, so a large one can take the greater part of a
+    /// short budget; the run says how much of it that was.
     fn fuzz(&mut self, options: &Options) -> ExitCode {
         watchdog();
         self.read_dictionary(options);
@@ -221,7 +234,15 @@ impl<'a> Runner<'a> {
         }
         let deadline = options
             .max_total_time
-            .map(|seconds| now().saturating_add(seconds.saturating_mul(1000)));
+            .map(|seconds| seconds.saturating_mul(1000));
+        if let Some(deadline) = deadline {
+            let loaded = now();
+            eprintln!(
+                "INFO: loading the corpus took {}s of the {}s this run has",
+                loaded / 1000,
+                deadline / 1000
+            );
+        }
         let mut limit = SMALLEST_LIMIT.min(options.max_len);
         let mut last_find = 0u64;
         let mut printed = 0u64;
@@ -299,6 +320,25 @@ impl<'a> Runner<'a> {
 
     /// Runs `input` and keeps it if it reached something. Answers `None`
     /// when it reached nothing, and the outcome when it did or panicked.
+    /// Deletes the corpus files of the inputs the pool has stopped keeping.
+    ///
+    /// A corpus grows by one file for every input that reaches something in
+    /// fewer bytes than the one that reached it first, and the one it
+    /// replaced stays on disk unless something removes it. This removes it
+    /// where it stops being kept, so the directory holds what the pool holds
+    /// and no run has to be merged to shrink it again.
+    fn delete_retired(&mut self) {
+        for file in self.pool.take_retired() {
+            if file
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(is_found_name)
+            {
+                let _ = std::fs::remove_file(file);
+            }
+        }
+    }
+
     fn offer_input(&mut self, input: &[u8], options: &Options) -> Option<Outcome> {
         if self.execute(input) == Outcome::Panicked {
             self.save_artifact(input);
@@ -307,6 +347,7 @@ impl<'a> Runner<'a> {
         let features = core::mem::take(&mut self.features);
         let verdict = self.pool.offer(input, &features, options.reduce_inputs);
         self.features = features;
+        self.delete_retired();
         if verdict == Verdict::Nothing {
             return None;
         }
@@ -553,6 +594,13 @@ pub fn name_of(bytes: &[u8]) -> String {
         high = high.rotate_left(7) ^ low;
     }
     format!("{low:016x}{high:016x}")
+}
+
+/// Whether `name` is the hexadecimal name [`name_of`] gives a find, and not
+/// a name a person gave a regression input that the corpus tracks.
+#[must_use]
+pub fn is_found_name(name: &str) -> bool {
+    name.len() == 32 && name.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Whether the input that began at `began` had outrun `limit` by `now`,
