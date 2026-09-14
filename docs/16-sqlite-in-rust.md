@@ -648,7 +648,8 @@ do for the page size, the encoding and the reserved tail.
 Status: `CREATE TABLE`, `CREATE INDEX`, `PRAGMA`, `INSERT`, `DELETE`
 and `UPDATE` are run from their text and write the files the shell
 wrote; the rest is open.
-Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186 and D-187.
+Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187 and
+D-189.
 Size: L.
 
 ### Does
@@ -672,8 +673,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
-test files that needs no TCL interpreter. Of 15 550 cases in 1 165
-files, 642 pass, 17 answer differently, and 14 891 name something the
+test files that needs no TCL interpreter. Of 15 382 cases in 1 169
+files, 654 pass, 9 answer differently, and 14 719 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.
@@ -689,7 +690,7 @@ Size: M.
 ### Does
 
 1. Run SQLite's TCL suite under `research/sqlite/test` against the
-   engine. Built for 15 550 of its cases; the rest need the
+   engine. Built for 15 382 of its cases; the rest need the
    interpreter, because a substitution says what they run only once it
    has run.
 2. Run every level of this repository's own suite across the matrix
@@ -712,21 +713,16 @@ list it answers is the list the file writes, element for element.
 statement and what the engine answered, which is what says which missing
 feature stops the most files.
 
-### The sixty-seven that answer differently
+### The nine that answer differently
 
 | File | Cases | What it shows |
 |------|-------|---------------|
-| `rowid.test` | 17 | A table with a column named `rowid`, which overrides the key of that name. |
-| `collate1.test` | 7 | A collation the file registers through the interpreter, which this harness cannot run. |
-| `collate8.test` | 2 | A column's own collation in an `ORDER BY`, and an explicit `COLLATE` that should beat a column's. |
-| `enc3.test`, `incrblob.test`, `check.test` | 9 | Three features: the encoding of a file opened again, a blob written a piece at a time, and `CHECK`. |
-| `conflict3.test` | 2 | No `UNIQUE` is kept, so a row SQLite refuses goes in. |
-| `gencol1.test` | 1 | `INSERT INTO t SELECT * FROM u` where both hold a computed column. |
-| `fpconv1.test` | 3 | The file writes two answers for one statement, so it changes a setting between them. |
-| `icu.test` | 2 | The ICU extension, which this build has not got. |
-| twelve more | 12 | One case each, not yet read. |
-
-### Done when
+| `fpconv1.test` | 3 | `sqlite3_db_config db FP_DIGITS 15`, which the interpreter sets between two cases; the pinned shell answers what this engine answers for the third. |
+| `conflict3.test`, `tkt2832.test` | 2 | No `UNIQUE` is kept, so a row SQLite refuses goes in and `OR REPLACE` replaces nothing. |
+| `collate1.test` | 1 | A collation the file registers through the interpreter, which this harness cannot run. |
+| `gencol1.test` | 1 | `INSERT INTO t1 SELECT * FROM t0` where both hold a computed column: the values are placed over every column and the computed one is written again. |
+| `autoindex4.test` | 1 | The order of rows an `ORDER BY` leaves equal, which SQLite settles by the automatic index it builds. |
+| `tkt-c48d99d690.test` | 1 | `PRAGMA count_changes`, under which every statement answers how many rows it changed. |
 
 ### Done when
 

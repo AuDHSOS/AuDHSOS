@@ -1936,9 +1936,16 @@ fn what_a_pragma_answers_out_of_a_file() {
             .run(alloc::format!("PRAGMA encoding={written}").as_bytes())
             .unwrap();
         writer.run(b"PRAGMA auto_vacuum=none").unwrap();
-        // A pragma that sets nothing is read out of the file and not
-        // out of the connection, so it answers no row here.
-        assert!(writer.run(b"PRAGMA page_size").unwrap().is_empty());
+        // A pragma that sets nothing is read out of the connection,
+        // which holds the encoding a file with no table does not.
+        assert_eq!(
+            writer.run(b"PRAGMA page_size").unwrap(),
+            [[Value::Int(512)]]
+        );
+        assert_eq!(
+            writer.run(b"PRAGMA encoding").unwrap(),
+            [[Value::Text(read.to_vec())]]
+        );
         writer.run(b"CREATE TABLE t(a)").unwrap();
         let written = writer.written();
         let database = crate::db::Database::open(&written).unwrap();

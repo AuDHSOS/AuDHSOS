@@ -163,6 +163,18 @@ impl Writer {
         self.pages.written(&self.header)
     }
 
+    /// The header as the pages stand, which is what a pragma answers:
+    /// the count of pages and the free list are the pages' own and not
+    /// the header's until a commit writes them.
+    fn now(&self) -> Header {
+        let mut now = self.header;
+        let (first, count) = self.pages.freelist();
+        now.pages = self.pages.count();
+        now.freelist = first;
+        now.freelist_pages = count;
+        now
+    }
+
     /// What the commit of the last statement left beside the file: the
     /// rollback journal the mode keeps, and nothing where the mode
     /// keeps none.
@@ -256,8 +268,11 @@ impl Writer {
         let name = crate::schema::dequote(asked.name.text(sql));
         let setting = crate::pragma::of_name(&name).ok_or(Error::Unsupported)?;
         let Some(value) = asked.value else {
-            // Reading one is what `db::Database` answers.
-            return Ok(Vec::new());
+            // A connection answers a pragma out of what it holds and
+            // not out of the file, because a file with no table holds
+            // no encoding: `sqlite3Pragma` reads the schema in memory.
+            let read = setting.read(&self.now()).ok_or(Error::Unsupported)?;
+            return Ok(alloc::vec![alloc::vec![read]]);
         };
         let text = value.text(sql);
         if setting == crate::pragma::Setting::Ignored {

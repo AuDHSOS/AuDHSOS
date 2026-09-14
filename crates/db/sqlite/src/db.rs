@@ -413,7 +413,7 @@ impl<'a> Database<'a> {
             let record = record::Record::parse(&payload)?;
             let text = |at: usize| -> Result<Vec<u8>, Error> {
                 Ok(match record.value(at)? {
-                    Some(record::Value::Text(bytes)) => decode(bytes, encoding),
+                    Some(record::Value::Text(bytes)) => crate::value::decoded(bytes, encoding),
                     _ => Vec::new(),
                 })
             };
@@ -477,7 +477,7 @@ impl<'a> Database<'a> {
             let record = record::Record::parse(&payload)?;
             let text = |at: usize| -> Result<Vec<u8>, Error> {
                 Ok(match record.value(at)? {
-                    Some(record::Value::Text(bytes)) => decode(bytes, self.encoding),
+                    Some(record::Value::Text(bytes)) => crate::value::decoded(bytes, self.encoding),
                     _ => Vec::new(),
                 })
             };
@@ -1634,11 +1634,15 @@ fn equal(cursor: &Cursor<'_>, name: &[u8]) -> bool {
         .held
         .last()
         .and_then(|held| held.column(name, cursor.collation));
+    // The leftmost side that holds the name is the one the column
+    // belongs to, because a `USING` drops the copy the right side
+    // carries and leaves the left side's: `t1 LEFT JOIN t2 USING(a)`
+    // answers `t1.a` for `a`, whatever `t2` held.
     let theirs = cursor
         .held
+        .get(..cursor.held.len().saturating_sub(1))
+        .unwrap_or_default()
         .iter()
-        .rev()
-        .skip(1)
         .find_map(|held| held.column(name, cursor.collation));
     mine.zip(theirs).is_some_and(
         |((mut right, right_affinity, _), (mut left, left_affinity, collation))| {
@@ -1864,7 +1868,7 @@ fn held_value(record: &record::Record<'_>, at: usize, encoding: Encoding) -> Res
         None | Some(record::Value::Null) => Value::Null,
         Some(record::Value::Int(number)) => Value::Int(number),
         Some(record::Value::Real(number)) => Value::Real(number),
-        Some(record::Value::Text(bytes)) => Value::Text(decode(bytes, encoding)),
+        Some(record::Value::Text(bytes)) => Value::Text(crate::value::decoded(bytes, encoding)),
         Some(record::Value::Blob(bytes)) => Value::Blob(bytes.to_vec()),
     })
 }
@@ -2763,7 +2767,7 @@ fn values_of(
             None | Some(record::Value::Null) => Value::Null,
             Some(record::Value::Int(number)) => Value::Int(number),
             Some(record::Value::Real(number)) => Value::Real(number),
-            Some(record::Value::Text(bytes)) => Value::Text(decode(bytes, encoding)),
+            Some(record::Value::Text(bytes)) => Value::Text(crate::value::decoded(bytes, encoding)),
             Some(record::Value::Blob(bytes)) => Value::Blob(bytes.to_vec()),
         };
         // A real that is a whole number is stored as an integer, and
@@ -2883,15 +2887,6 @@ const fn binary_of(encoding: Encoding) -> Collation {
         Encoding::Utf8 => Collation::Binary,
         Encoding::Utf16Le => Collation::Binary16Le,
         Encoding::Utf16Be => Collation::Binary16Be,
-    }
-}
-
-/// Text as the engine holds it, which is UTF-8 whatever the file keeps.
-fn decode(bytes: &[u8], encoding: Encoding) -> Vec<u8> {
-    match encoding {
-        Encoding::Utf8 => bytes.to_vec(),
-        Encoding::Utf16Le => crate::utf8::from_utf16(bytes, false),
-        Encoding::Utf16Be => crate::utf8::from_utf16(bytes, true),
     }
 }
 

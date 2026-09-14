@@ -67,6 +67,9 @@ pub(crate) enum Step {
         /// The answer the file writes.
         want: Vec<String>,
     },
+    /// What the file prints a `NULL` as from here on, which `db null`
+    /// and `db nullvalue` set and which every answer after it carries.
+    Null(String),
     /// Something the file runs that this harness cannot: a body that
     /// runs more than statements, or statements a substitution stands
     /// in. It leaves the database short of what the cases after it
@@ -176,9 +179,18 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
     while let Some((command, after)) = next_command(rest) {
         rest = after;
         match command {
-            // `execsql` outside a case is the file setting itself up,
-            // and the cases after it read what it wrote.
-            "execsql" => {
+            // `execsql` and `db eval` outside a case are the file
+            // setting itself up, and the cases after them read what
+            // they wrote.
+            // `db null` and `db nullvalue` say what a `NULL` prints
+            // as, which the answers a file writes are written under.
+            "db nullvalue" | "db null" => {
+                if let Some((text, after)) = word(rest) {
+                    rest = after;
+                    out.push(Step::Null(text.to_owned()));
+                }
+            }
+            "execsql" | "db eval" => {
                 if let Some((sql, after)) = braced(rest) {
                     rest = after;
                     out.push(Step::Setup(sql.to_owned()));
@@ -239,6 +251,14 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
             }
         }
     }
+    // A file that writes one case in each arm of a conditional names it
+    // once per arm, and the interpreter runs one arm, so the first case
+    // of a name is kept and the rest are dropped.
+    let mut seen = std::collections::BTreeSet::new();
+    out.retain(|step| match step {
+        Step::Case { name, .. } => seen.insert(name.clone()),
+        Step::Setup(_) | Step::Null(_) | Step::Opaque => true,
+    });
     out
 }
 
@@ -264,7 +284,15 @@ fn push(out: &mut Vec<Step>, name: &str, sql: &str, want: &str) {
 
 /// The next of the four commands this reads, and what follows its name.
 fn next_command(text: &str) -> Option<(&'static str, &str)> {
-    const COMMANDS: [&str; 4] = ["do_execsql_test", "do_catchsql_test", "do_test", "execsql"];
+    const COMMANDS: [&str; 7] = [
+        "do_execsql_test",
+        "do_catchsql_test",
+        "do_test",
+        "execsql",
+        "db eval",
+        "db nullvalue",
+        "db null",
+    ];
     let mut best: Option<(&'static str, usize)> = None;
     for command in COMMANDS {
         let mut from = 0;
@@ -357,14 +385,19 @@ fn score(file: &str, cases: &[Step]) -> Score {
     };
     let show = SHOW.load(std::sync::atomic::Ordering::Relaxed);
     let mut stopped = false;
+    let mut null = String::new();
     for step in cases {
         let (name, sql, want) = match step {
             Step::Opaque => {
                 stopped = true;
                 continue;
             }
+            Step::Null(text) => {
+                null.clone_from(text);
+                continue;
+            }
             Step::Setup(sql) => {
-                if !stopped && answer(&mut writer, sql).is_none() {
+                if !stopped && answer(&mut writer, sql, &null).is_none() {
                     stopped = true;
                 }
                 continue;
@@ -379,7 +412,7 @@ fn score(file: &str, cases: &[Step]) -> Score {
             score.refused = score.refused.saturating_add(1);
             continue;
         }
-        match answer(&mut writer, sql) {
+        match answer(&mut writer, sql, &null) {
             None => {
                 score.refused = score.refused.saturating_add(1);
                 stopped = true;
@@ -404,7 +437,7 @@ fn score(file: &str, cases: &[Step]) -> Score {
 /// What the engine answers for one case, written as `execsql` writes an
 /// answer: every value of every row of every statement, in order, as
 /// one list.
-fn answer(writer: &mut Writer, sql: &str) -> Option<Vec<String>> {
+fn answer(writer: &mut Writer, sql: &str, null: &str) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for statement in statements(sql) {
         let text = statement.trim();
@@ -423,7 +456,7 @@ fn answer(writer: &mut Writer, sql: &str) -> Option<Vec<String>> {
             };
             for row in &answered.rows {
                 for value in row {
-                    out.push(listed(value));
+                    out.push(listed(value, null));
                 }
             }
         } else {
@@ -436,7 +469,7 @@ fn answer(writer: &mut Writer, sql: &str) -> Option<Vec<String>> {
             };
             for row in &rows {
                 for value in row {
-                    out.push(listed(value));
+                    out.push(listed(value, null));
                 }
             }
         }
@@ -497,14 +530,14 @@ fn first_words(sql: &str) -> String {
 
 /// Whether the statement answers rows rather than changing them.
 ///
-/// A `PRAGMA` that sets something changes the file; one that sets
-/// nothing answers what the file holds.
+/// A `PRAGMA` goes to the connection either way, because a connection
+/// answers one out of what it holds and a file with no table holds no
+/// encoding.
 fn reads(sql: &str) -> bool {
     let word = sql.split_whitespace().next().unwrap_or("");
     word.eq_ignore_ascii_case("select")
         || word.eq_ignore_ascii_case("values")
         || word.eq_ignore_ascii_case("with")
-        || (word.eq_ignore_ascii_case("pragma") && !sql.contains('='))
 }
 
 /// The statements of one case, split on the semicolons that stand
@@ -537,9 +570,9 @@ pub(crate) fn statements(sql: &str) -> Vec<&str> {
 
 /// One value as an element of a TCL list: nothing is the empty element,
 /// and a real keeps the digits SQLite prints it with.
-fn listed(value: &Value) -> String {
+fn listed(value: &Value, null: &str) -> String {
     match value {
-        Value::Null => String::new(),
+        Value::Null => null.to_owned(),
         Value::Int(number) => number.to_string(),
         Value::Real(number) => {
             String::from_utf8_lossy(&db_sqlite::fp::text(*number, db_sqlite::fp::DIGITS))

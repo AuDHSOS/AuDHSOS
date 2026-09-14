@@ -4273,17 +4273,22 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 
 - The part of `research/sqlite/test` that needs no TCL interpreter: a
   `do_execsql_test`, a `do_test` whose body is one `execsql`, and the
-  `execsql` a file sets itself up with, each carrying no substitution.
-  That is 15 550 cases in 881 files.
+  `execsql` or `db eval` a file sets itself up with, each carrying no
+  substitution. That is 15 382 cases in 1 169 files. `db null` and
+  `db nullvalue` say what a `NULL` prints as, which the answer a file
+  writes is written under.
 - A step this harness cannot run — a body that runs more than
   statements, or statements a substitution stands in — stops the file
   the way a refusal does, because the database is then short of what
   the cases after it read.
-- 552 pass, 16 answer differently and 14 982 are refused or stopped.
-  Document 16, section 16.23 groups the sixteen. Earlier runs answered
-  14 and then 27 differently; eight were defects, which D-181 and D-184
-  record and twenty-eight cases of `query.corpus` now hold to the C
-  library.
+- A case whose name repeats is one arm of a conditional the interpreter
+  runs one arm of, so the first case of a name is kept and the rest are
+  dropped, which D-189 records.
+- 654 pass, 9 answer differently and 14 719 are refused or stopped.
+  Document 16, section 16.23 groups the nine. Earlier runs answered
+  14, then 27, then 17 differently; twelve were defects, which D-181,
+  D-184 and D-189 record and twenty-eight cases of `query.corpus` now
+  hold to the C library.
 - `--why` counts what each refusal was for by the first two words of
   the statement, which is what says which missing feature stops the
   most files. It named a `PRAGMA` for sixty of them, and D-182 answers

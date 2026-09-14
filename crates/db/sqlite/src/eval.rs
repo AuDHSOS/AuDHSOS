@@ -986,10 +986,12 @@ fn in_list(left: &Answer, list: &[Answer], negated: bool, default: Collation) ->
     let mut unknown = false;
     for member in list {
         // The affinity is the left side's alone, which is what
-        // `comparisonAffinity` answers where the right side is a list.
+        // `comparisonAffinity` answers where the right side is a list:
+        // the member carries none, so the two together are the left
+        // side's.
         let against = Answer {
             value: member.value.clone(),
-            affinity: left.affinity,
+            affinity: Affinity::None,
             collation: member.collation,
             written: member.written,
         };

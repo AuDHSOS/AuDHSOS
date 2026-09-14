@@ -448,12 +448,30 @@ pub fn cast(value: &mut Value, affinity: Affinity, encoding: Encoding) {
             });
         }
         Affinity::Text => {
+            // A blob is the bytes as the database holds them, so a blob
+            // made text is read under the encoding, which is the mirror
+            // of the text made blob above.
+            let blob = matches!(value, Value::Blob(_));
             let bytes = take_bytes(value);
-            *value = Value::Text(bytes);
+            *value = Value::Text(if blob {
+                decoded(&bytes, encoding)
+            } else {
+                bytes
+            });
         }
         Affinity::Numeric => numerify(value),
         Affinity::Integer => *value = Value::Int(value.to_integer()),
         Affinity::Real => *value = Value::Real(value.to_real()),
+    }
+}
+
+/// Text as the engine holds it, which is UTF-8 whatever the file keeps.
+#[must_use]
+pub fn decoded(bytes: &[u8], encoding: Encoding) -> Vec<u8> {
+    match encoding {
+        Encoding::Utf8 => bytes.to_vec(),
+        Encoding::Utf16Le => crate::utf8::from_utf16(bytes, false),
+        Encoding::Utf16Be => crate::utf8::from_utf16(bytes, true),
     }
 }
 
