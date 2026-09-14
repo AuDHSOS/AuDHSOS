@@ -60,6 +60,9 @@ pub enum X509Error {
     NoTrustAnchor,
     /// The chain is longer than this crate follows.
     ChainTooLong,
+    /// The anchor table is not a header this crate wrote and that many
+    /// records.
+    BadAnchorTable,
 }
 
 impl From<DerError> for X509Error {
@@ -101,6 +104,7 @@ impl fmt::Display for X509Error {
             }
             X509Error::NoTrustAnchor => f.write_str("the chain reaches no trust anchor"),
             X509Error::ChainTooLong => f.write_str("the chain is too long"),
+            X509Error::BadAnchorTable => f.write_str("the anchor table is malformed"),
         }
     }
 }

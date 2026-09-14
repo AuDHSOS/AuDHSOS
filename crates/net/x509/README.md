@@ -19,15 +19,26 @@ understand rejects the certificate, which is what critical means.
 
 What is absent is absent deliberately: no revocation checking, no name
 constraints, no policy processing. Document 11, section 11.9, says why,
-and section 11.14 lists what the track is still waiting on — including
-the conversion of a certificate time to an instant, without which a
-validity window cannot be compared against a clock.
+and section 11.14 lists what the track waited on and what filled each
+row.
+
+## Anchors
+
+`anchors` is the table an image carries: the tool that writes the image
+calls `write`, the program that reads the file calls `Anchors::parse` and
+`Anchors::read_into`, and one certificate becomes one `TrustAnchor`
+through `TrustAnchor::from_certificate`. The format is a magic, a
+version, a count, and that many length-prefixed certificates (D-147), and
+it refuses a record of no bytes and a byte behind the last record, so a
+file that was cut short and one that was appended to are seen rather than
+read.
 
 ## Test certificates
 
 The feature `test-certificates` adds a builder that writes certificates
 and signs them with the deterministic signing of `crypto-ec`. Every chain
 these tests use is built by it: expired ones, wrong names, broken
-signatures, missing constraints. Nothing is vendored, so there is no
-certificate in this repository whose private key someone else has ever
-held.
+signatures, missing constraints. No test certificate is vendored. The
+five certificates the repository does carry are the public roots of
+`anchors/`, which hold no key material at all beyond the public keys
+their authorities publish.

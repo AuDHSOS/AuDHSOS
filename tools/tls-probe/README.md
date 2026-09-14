@@ -80,9 +80,9 @@ Section 11.15 of document 11 names three chains this client could not
 walk, and they are the end of steps R1 to R6:
 
 ```sh
-cargo run -- www.ietf.org      / --anchor anchors/isrg-root-x1.der
-cargo run -- www.rust-lang.org / --anchor anchors/isrg-root-x1.der
-cargo run -- www.bbc.co.uk     / --anchor anchors/globalsign-root-r46.der
+cargo run -- www.ietf.org      / --anchor ../../anchors/isrg-root-x1.der
+cargo run -- www.rust-lang.org / --anchor ../../anchors/isrg-root-x1.der
+cargo run -- www.bbc.co.uk     / --anchor ../../anchors/globalsign-root-r46.der
 ```
 
 All three complete. What each one exercises is not the same thing:

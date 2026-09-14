@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The image carries trust anchors (D-147). `cargo xtask image` reads every
+  certificate of the directory `anchors/` — DER or PEM — and writes them
+  as one table onto the boot volume as `AUDHSOS/ANCHORS.BIN`;
+  `audhsos-x509::anchors` is the writer and the reader of that table, as
+  `user_loader::tar` is of the archive. The program `app-tls` reads the
+  table and reports what it found, and the end-to-end run checks that it
+  reports as many anchors as the image was given. Five public roots are
+  tracked in `anchors/`, moved there from `tools/tls-probe/`, so a
+  checkout reaches a real host without fetching anything first. What is
+  left for Phase 15 is the handshake, not the anchors under it.
+
 - `user-programs`: `socket::Stream`, one end of a TCP connection over the
   protocol of `server-net`, with `socket::Listener` for the other end and
   `socket::Idle` for the wait every `WouldBlock` costs (D-142). It maps

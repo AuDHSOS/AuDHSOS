@@ -3333,10 +3333,16 @@ specifies and which has waited for a transport.
   and sends and expects `close_notify`. The `now` of `ClientConfig` comes
   from `clock_wall` (10.14A); a machine that answers `Unavailable` there
   does not validate a chain against a guess, it refuses to connect.
-- The trust anchors the image carries are the ones the test certificate
-  builder of `audhsos-x509` wrote, placed in the archive as one file.
-- `app-tls` performs an HTTPS `GET` against a server the test starts on
-  the development machine and reports the status line.
+- The trust anchors the image carries are built and in (D-147): the
+  xtask writes the files of `anchors/` as one table onto the boot volume,
+  `audhsos-x509::anchors` reads it, and `app-tls` is the program that
+  holds them. The acceptance run below adds one anchor of its own, the
+  certificate the test builder writes for the server it starts, by
+  putting that file in the same directory before the image is written.
+- `app-tls` gains the handshake: it performs an HTTPS `GET` against a
+  server the test starts on the development machine and reports the
+  status line. What the program already does is read the anchors and
+  report them.
 
 Acceptance: `check` green; catalog 6.6.65; the `GET` succeeds, and an
 expired chain, a name that does not match, and an unknown anchor are each

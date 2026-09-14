@@ -42,7 +42,7 @@ use crate::error::ProbeError;
 /// `google.de` reaches today. It was `GTS Root R4` until Google moved
 /// that chain from a P-384 root to this RSA one; `anchors/` still holds
 /// R4, and the README says which host each anchor is for.
-const DEFAULT_ANCHOR: &[u8] = include_bytes!("../anchors/gts-root-r1.der");
+const DEFAULT_ANCHOR: &[u8] = include_bytes!("../../../anchors/gts-root-r1.der");
 
 /// The host a run reaches when the caller names no other.
 const DEFAULT_HOST: &str = "google.de";

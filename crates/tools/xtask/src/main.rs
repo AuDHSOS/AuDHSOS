@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod anchors;
 mod artifacts;
 mod commands;
 mod coverage;

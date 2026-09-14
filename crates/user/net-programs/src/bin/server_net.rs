@@ -33,6 +33,7 @@
 // it depends on; these are the crates this one does not.
 use audhsos_encoding as _;
 use audhsos_ssh as _;
+use audhsos_x509 as _;
 use net_http as _;
 
 use core::sync::atomic::{AtomicU64, Ordering};

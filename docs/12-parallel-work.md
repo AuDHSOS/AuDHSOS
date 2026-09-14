@@ -151,11 +151,12 @@ Every function writes into a buffer the caller owns and returns the
 number of bytes written; nothing allocates. The trust-anchor conversion
 of D-42 uses this crate instead of an ad-hoc decoder in the xtask
 (D-47), and the certificate builder of document 11 uses it to emit test
-data in a form a human can read. The xtask is a consumer since the
-Secure Shell interop run, which reads its key material through
-`pem::decode` and `base64`; `audhsos-x509` is not one yet, and the
-trust-anchor conversion is unwritten, so there is still nothing ad hoc
-for either to replace.
+data in a form a human can read. Both consumers are the xtask: the
+Secure Shell interop run reads its key material through `pem::decode`
+and `base64`, and the trust-anchor conversion of D-147 reads a root in
+either form and hands the DER to `audhsos-x509::anchors`. Neither
+contains a decoder of its own, which is the point of writing this crate
+first.
 
 Tests: catalog 6.6.40. Fuzz target `pem`.
 

@@ -480,13 +480,19 @@ answers the microseconds since the epoch with the source the firmware
 named. Certificate validation had a `now` parameter and no value to put
 in it; now it has one.
 
+The anchors this phase validates against arrived ahead of it too
+(D-147): the xtask writes the files of `anchors/` as one table onto the
+boot volume, `audhsos-x509::anchors` reads it, and `app-tls` is the
+program of the image that holds them and reports what it read.
+
 Deliverables: the transport glue that joins `audhsos-tls` to a TCP
 connection of `server-net` — the record layer's bytes in and out of the
 socket's ring, the handshake driven to completion against a deadline of
 the clock of Phase 12, and the close notify in both directions; the
 certificate path validated against the trust anchors the image carries,
 against the date `clock_wall` answers; `tools/tls-probe` keeps its host
-role and gains a counterpart that runs on the target.
+role, and `app-tls` gains the handshake that makes it the counterpart on
+the target.
 
 Tests: catalog 6.6.65, with 6.6.71 already in.
 

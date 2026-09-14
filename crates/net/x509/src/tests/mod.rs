@@ -8,6 +8,7 @@
 //! the deterministic signing of `crypto-ec`. Nothing is vendored: the
 //! private key of every test certificate is a constant in this directory.
 
+mod anchors;
 mod certificate;
 mod name;
 mod parts;

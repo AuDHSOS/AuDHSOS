@@ -25,6 +25,7 @@
 use audhsos_encoding as _;
 use audhsos_ssh as _;
 use audhsos_time as _;
+use audhsos_x509 as _;
 use crypto_rng as _;
 use driver_virtio_net as _;
 use net_stack as _;

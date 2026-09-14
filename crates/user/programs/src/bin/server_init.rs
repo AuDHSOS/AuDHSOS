@@ -139,7 +139,7 @@ struct Program {
 /// The quotas are what the programs measured out at need with room over
 /// them; a program that asks for more than its line says is refused by the
 /// kernel and not by this table.
-const PROGRAMS: [Program; 17] = [
+const PROGRAMS: [Program; 18] = [
     Program {
         name: b"server-memory",
         priority: priority::SERVER,
@@ -376,6 +376,23 @@ const PROGRAMS: [Program; 17] = [
         draws: false,
         listens: false,
         talks: true,
+        reports: true,
+    },
+    // The program that holds the trust anchors. It reads one file off the
+    // boot volume and talks to nothing else, so it starts after the file
+    // system server and needs nothing of the network.
+    Program {
+        name: b"app-tls",
+        priority: priority::APPLICATION,
+        handles: 32,
+        frames: 32,
+        objects: 32,
+        grant: Grant::None,
+        names: true,
+        memory: true,
+        draws: false,
+        listens: false,
+        talks: false,
         reports: true,
     },
     // The program that uses the file system server. It starts after the

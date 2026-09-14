@@ -1083,6 +1083,15 @@ done until every applicable item has a test. Items are added, never removed.
   verifies against an empty trust store, neither on its own nor as its own
   issuer. The corpus holds the certificate of RFC 8448 and three the
   builder writes.
+- The anchor table of D-147: a table of no anchors is a header and nothing
+  else; every certificate written comes back byte for byte, and its anchor
+  is the subject and the key `TrustAnchor::from_certificate` reads. A
+  magic this crate did not write, a version it does not know, a header cut
+  short, a length that reaches past the end, a record of no bytes, and a
+  byte behind the last record are six refusals with `BadAnchorTable`. An
+  array shorter than the table is `BufferTooSmall` before a certificate is
+  read, and a record that is no certificate is refused where it is read
+  and not where the table is parsed.
 
 ### 6.6.37 TLS record layer and key schedule (`audhsos-tls`)
 
@@ -2377,6 +2386,12 @@ what the kernel dispatches on, so the check is what the kernel saw.
 
 ### 6.6.65 TLS on the target (QEMU)
 
+- The anchors of the image reach a program of the image: `app-tls` reads
+  `AUDHSOS/ANCHORS.BIN` off the boot volume, reports as many anchors as
+  the directory `anchors/` held when the image was written, and one line
+  per anchor with the length of its subject and of its key. This is the
+  part of the item the anchors are, built under D-147; the three below it
+  are the handshake and are Phase 15.
 - An HTTPS `GET` against a server the test starts on the development
   machine, with a chain the test certificate builder wrote, returns a
   status line the client parses.
