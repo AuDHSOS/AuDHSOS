@@ -4287,11 +4287,11 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - The block of an `else` is read past and a case whose name repeats is
   dropped, because the interpreter runs one arm of a conditional, which
   D-192 and D-189 record.
-- 797 pass, 9 answer differently and 14 558 are refused or stopped.
+- 867 pass, 9 answer differently and 14 488 are refused or stopped.
   Document 16, section 16.23 groups the nine. Earlier runs answered
-  14, then 27, then 17 differently; twelve were defects, which D-181,
-  D-184 and D-189 record and twenty-eight cases of `query.corpus` now
-  hold to the C library.
+  14, then 27, then 17, then 13 differently; sixteen were defects,
+  which D-181, D-184, D-189 and D-197 record and twenty-eight cases of
+  `query.corpus` now hold to the C library.
 - `--why` counts what each refusal was for by the first two words of
   the statement, which is what says which missing feature stops the
   most files. It named a `PRAGMA` for sixty of them, and D-182 answers
@@ -4442,6 +4442,26 @@ D-196, document 16 step Q8.
 - The row the statement writes again is found by name and by kind, so
   the walk passes over a table of another name and over a row that is
   not a table.
+
+### 6.6.127 The names a statement writes in quotes (`db-sqlite`)
+
+D-197, document 16 step Q9.
+
+- One column reached under all four quotes and bare: `a`, `"a"`,
+  `[a]`, `` `a` ``, and `"t"."a"` over `FROM "t"`.
+- A quote doubled inside a name is one quote of the name, so the
+  column `"""cb"""` is called `"cb"`: the star, the qualified star
+  and the name itself each answer its value, and the answer names it
+  with the two quotes it holds.
+- `true` and `false` written bare and with no table in front of them
+  are one and nought, under any case, and they add, compare and count
+  as integers.
+- A column of either name answers instead, and the same name in quotes
+  is a column and never a number: `SELECT "false" FROM u` over a table
+  with no such column is refused.
+- The rows a second `RIGHT JOIN` answers: `t2` holds nothing, so the
+  first join answers the two `t3` rows, each matches the one `t4` row,
+  and the second join adds no row of its own.
 
 ## 6.7 CI pipeline
 

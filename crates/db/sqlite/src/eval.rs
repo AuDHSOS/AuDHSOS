@@ -301,10 +301,25 @@ fn answer(
             table,
             column,
         } => {
-            let text = |span: crate::ast::Span| span.text(sql);
-            let (value, affinity, collation) = row
-                .column(schema.map(text), table.map(text), column.text(sql))
-                .ok_or(Error::NoColumn)?;
+            // A name is matched with its quotes off, which is
+            // `sqlite3Dequote` before `lookupName`.
+            let text = |span: crate::ast::Span| crate::schema::dequote(span.text(sql));
+            let named = column.text(sql);
+            let found = row.column(
+                schema.map(text).as_deref(),
+                table.map(text).as_deref(),
+                &crate::schema::dequote(named),
+            );
+            let Some((value, affinity, collation)) = found else {
+                // `sqlite3ExprIdToTrueFalse`: a name no table answers
+                // to, written without quotes and without a table in
+                // front of it, is the number one where it is `true` and
+                // nought where it is `false`.
+                let truth = truth_of(named)
+                    .filter(|_| table.is_none())
+                    .ok_or(Error::NoColumn)?;
+                return Ok(Answer::plain(Value::Int(i64::from(truth))));
+            };
             Ok(Answer {
                 value,
                 affinity,
@@ -1006,6 +1021,18 @@ fn in_list(left: &Answer, list: &[Answer], negated: bool, default: Collation) ->
     } else {
         Value::Int(i64::from(negated))
     }
+}
+
+/// Whether a name written without quotes is one of the two SQLite
+/// reads as a number rather than as a column.
+const fn truth_of(text: &[u8]) -> Option<bool> {
+    if text.eq_ignore_ascii_case(b"true") {
+        return Some(true);
+    }
+    if text.eq_ignore_ascii_case(b"false") {
+        return Some(false);
+    }
+    None
 }
 
 /// `CASE`, in both of its shapes.

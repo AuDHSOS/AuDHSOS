@@ -1010,16 +1010,18 @@ impl<'a> Database<'a> {
     ) -> Result<Vec<Side<'s>>, Error> {
         let mut out: Vec<Side<'s>> = Vec::new();
         for source in arena.sources(select.from) {
-            let alias = source.alias.map(|span| span.text(sql).to_vec());
+            // A name is matched with its quotes off, which is
+            // `sqlite3Dequote` over every identifier the parser keeps.
+            let alias = source.alias.map(|span| dequote(span.text(sql)));
             let (shape, from, name) = match source.kind {
                 SourceKind::Table { schema, name, .. } => {
-                    if schema.is_some_and(|span| !is_main(span.text(sql))) {
+                    if schema.is_some_and(|span| !is_main(&dequote(span.text(sql)))) {
                         // Only the one schema a file holds is readable,
                         // and a name in front of it that is not it names
                         // no table rather than another database.
                         return Err(Error::NoTable);
                     }
-                    let written = name.text(sql);
+                    let written = &dequote(name.text(sql));
                     // A `WITH` term is reached by its bare name; a name
                     // with a schema in front of it is a table.
                     let found = match schema {
@@ -1062,7 +1064,7 @@ impl<'a> Database<'a> {
             let written: Vec<Vec<u8>> = arena
                 .names(source.using)
                 .iter()
-                .map(|span| span.text(sql).to_vec())
+                .map(|span| dequote(span.text(sql)))
                 .collect();
             let using = if source.join.natural {
                 if source.on.is_some() || !written.is_empty() {
@@ -1149,10 +1151,10 @@ impl<'a> Database<'a> {
                 )
             }
             Used::InTable(value, schema, table, negated) => {
-                if schema.is_some_and(|span| !is_main(span.text(sql))) {
+                if schema.is_some_and(|span| !is_main(&dequote(span.text(sql)))) {
                     return Err(Error::NoTable);
                 }
-                let stored = self.find(table.text(sql)).ok_or(Error::NoTable)?;
+                let stored = self.find(&dequote(table.text(sql))).ok_or(Error::NoTable)?;
                 let side = Side {
                     shape: shape_of(&stored.table),
                     source: Source::Table(stored),
@@ -1198,13 +1200,13 @@ impl<'a> Database<'a> {
                     return Err(Error::Names);
                 }
                 for (column, span) in answered.shape.columns.iter_mut().zip(written) {
-                    column.name = span.text(sql).to_vec();
+                    column.name = dequote(span.text(sql));
                 }
                 for (name, span) in answered.answer.names.iter_mut().zip(written) {
-                    *name = span.text(sql).to_vec();
+                    *name = dequote(span.text(sql));
                 }
             }
-            out.push((cte.name.text(sql).to_vec(), answered));
+            out.push((dequote(cte.name.text(sql)), answered));
         }
         Ok(out)
     }
@@ -1233,7 +1235,6 @@ impl<'a> Database<'a> {
         // matched nothing to, with the levels before them empty. They
         // come after every row the nest answered, which is the order
         // `sqlite3WhereRightJoinLoop` walks them in.
-        let mut ignored: Vec<Vec<i64>> = alloc::vec![Vec::new(); sides.len()];
         for (at, side) in sides.iter().enumerate() {
             if !matches!(side.kind, JoinKind::Right | JoinKind::Full) {
                 continue;
@@ -1244,7 +1245,11 @@ impl<'a> Database<'a> {
                     .held
                     .push(Held::empty(&before.shape, &before.name, &before.using));
             }
-            let matched = kept.get(at).map_or(&[][..], Vec::as_slice);
+            // The walk marks what it matches into the same list, so a
+            // row a `RIGHT` join at an earlier level already answered
+            // counts as matched here, which is the row set
+            // `sqlite3WhereRightJoinLoop` keeps for the whole statement.
+            let matched = kept.get(at).map_or(&[][..], Vec::as_slice).to_vec();
             self.nest(
                 sides,
                 at,
@@ -1252,8 +1257,8 @@ impl<'a> Database<'a> {
                 arena,
                 sql,
                 each,
-                &mut ignored,
-                Some(matched),
+                &mut kept,
+                Some(&matched),
             )?;
             cursor.held.clear();
         }
@@ -1626,14 +1631,14 @@ fn reached(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<
     else {
         return None;
     };
-    if schema.is_some_and(|span| !is_main(span.text(sql))) {
+    if schema.is_some_and(|span| !is_main(&dequote(span.text(sql)))) {
         return None;
     }
-    let named = table.map(|span| span.text(sql));
-    let column = column.text(sql);
+    let named = table.map(|span| dequote(span.text(sql)));
+    let column = &dequote(column.text(sql));
     let mut found = None;
     for (at, side) in sides.iter().enumerate() {
-        if named.is_some_and(|named| !side.named(named)) {
+        if named.as_deref().is_some_and(|named| !side.named(named)) {
             continue;
         }
         let Some(reached) = side.shape.reaches(column) else {
@@ -2211,11 +2216,11 @@ fn answered(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> V
                 }
             }
             ResultColumn::TableStar(span) => {
-                let called = span.text(sql);
+                let called = dequote(span.text(sql));
                 for (at, side) in sides
                     .iter()
                     .enumerate()
-                    .filter(|(_, side)| side.named(called))
+                    .filter(|(_, side)| side.named(&called))
                 {
                     for place in 0..side.shape.columns.len() {
                         out.push(Term::Held(at, place));
@@ -2255,8 +2260,9 @@ fn grouping(
         // only where it has none is it the name something is answered
         // under.
         let aliased = column_named(arena, *term)
-            .filter(|name| !holds(sides, name.text(sql)))
-            .and_then(|name| aliased(results, sql, name.text(sql)));
+            .map(|name| dequote(name.text(sql)))
+            .filter(|name| !holds(sides, name))
+            .and_then(|name| aliased(results, sql, &name));
         out.push(Term::Expr(aliased.unwrap_or(*term)));
     }
     Ok(out)
@@ -2299,7 +2305,7 @@ fn aliased(results: &[ResultColumn], sql: &[u8], name: &[u8]) -> Option<ExprId> 
             expr,
             alias: Some(alias),
             ..
-        } if alias.text(sql).eq_ignore_ascii_case(name) => Some(expr),
+        } if dequote(alias.text(sql)).eq_ignore_ascii_case(name) => Some(expr),
         _ => None,
     })
 }
@@ -2424,8 +2430,8 @@ fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Resu
                 }
             }
             ResultColumn::TableStar(span) => {
-                let called = span.text(sql);
-                let mut named = sides.iter().filter(|side| side.named(called));
+                let called = dequote(span.text(sql));
+                let mut named = sides.iter().filter(|side| side.named(&called));
                 let side = named.next().ok_or(Error::NoTable)?;
                 if named.next().is_some() {
                     return Err(Error::Ambiguous);
@@ -2434,12 +2440,12 @@ fn shape(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Resu
             }
             ResultColumn::Expr { expr, alias, text } => {
                 let name = match alias {
-                    Some(span) => span.text(sql).to_vec(),
+                    Some(span) => dequote(span.text(sql)),
                     // With no name written, a column answers under its
                     // own name and everything else under the text it
                     // was written as.
                     None => match column_named(arena, expr) {
-                        Some(name) => answered_name(name.text(sql), sides),
+                        Some(name) => answered_name(&dequote(name.text(sql)), sides),
                         None => text.text(sql).to_vec(),
                     },
                 };
@@ -2479,8 +2485,8 @@ fn project(
                 }
             }
             ResultColumn::TableStar(span) => {
-                let named = span.text(sql);
-                for held in cursor.held.iter().filter(|held| held.named(named)) {
+                let named = dequote(span.text(sql));
+                for held in cursor.held.iter().filter(|held| held.named(&named)) {
                     held.each(|_, value| out.push(value.clone()));
                 }
             }

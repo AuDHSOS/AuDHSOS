@@ -2386,6 +2386,83 @@ fn what_adding_a_column_refuses() {
 }
 
 #[test]
+fn true_and_false_are_numbers_where_no_column_answers_to_them() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(1,TRUE),(2,false),(3,NULL)")
+        .unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT b FROM t ORDER BY a").unwrap().rows,
+        [[Value::Int(1)], [Value::Int(0)], [Value::Null]]
+    );
+    // They are numbers, so they count and compare as numbers.
+    assert_eq!(
+        database
+            .query(b"SELECT true, false, TRUE+1, typeof(true)")
+            .unwrap()
+            .rows,
+        [alloc::vec![
+            Value::Int(1),
+            Value::Int(0),
+            Value::Int(2),
+            Value::Text(b"integer".to_vec())
+        ]]
+    );
+    // A column of that name answers instead, which is what makes this
+    // the fallback and not the rule.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE u(true)").unwrap();
+    writer.run(b"INSERT INTO u VALUES(9)").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT true FROM u").unwrap().rows,
+        [[Value::Int(9)]]
+    );
+    // A name in quotes is a column and never a number, under any of the
+    // four quotes, and a name with a table in front of it is a column
+    // as well.
+    for sql in [
+        b"SELECT \"true\" FROM u".as_slice(),
+        b"SELECT [true] FROM u",
+        b"SELECT `true` FROM u",
+        b"SELECT u.true FROM u",
+        b"SELECT \"u\".\"true\" FROM u",
+    ] {
+        assert_eq!(database.query(sql).unwrap().rows, [[Value::Int(9)]]);
+    }
+    // A name no table answers to, in quotes, is refused rather than
+    // read as a number.
+    assert!(database.query(b"SELECT \"false\" FROM u").is_err());
+    assert!(database.query(b"SELECT t.true FROM u").is_err());
+}
+
+#[test]
+fn a_column_is_named_with_its_quotes_off() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    for sql in [
+        b"SELECT a FROM t".as_slice(),
+        b"SELECT \"a\" FROM t",
+        b"SELECT [a] FROM t",
+        b"SELECT `a` FROM t",
+        b"SELECT \"t\".\"a\" FROM \"t\"",
+    ] {
+        assert_eq!(database.query(sql).unwrap().rows, [[Value::Int(1)]]);
+    }
+}
+
+#[test]
 fn what_a_drop_refuses() {
     use crate::change::Writer;
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
@@ -2884,4 +2961,70 @@ fn what_a_statement_over_an_indexed_table_refuses() {
     assert!(writer.run(b"CREATE INDEX ta ON t(a) WHERE a>0").is_err());
     assert!(writer.run(b"CREATE INDEX ta ON t(abs(a))").is_err());
     assert!(writer.run(b"CREATE INDEX ta ON nosuch(a)").is_err());
+}
+
+#[test]
+fn a_table_is_named_with_its_quotes_off() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE \"t a\" (\"\"\"cb\"\"\")")
+        .unwrap();
+    writer
+        .run(b"INSERT INTO \"t a\" (\"\"\"cb\"\"\") VALUES (1)")
+        .unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    // A quote doubled inside a name is one quote of the name, so the
+    // column here is called `"cb"` with its quotes in it.
+    for sql in [
+        b"SELECT * FROM \"t a\"".as_slice(),
+        b"SELECT \"t a\".* FROM \"t a\"",
+        b"SELECT \"\"\"cb\"\"\" FROM \"t a\"",
+        b"SELECT \"t a\".\"\"\"cb\"\"\" FROM \"t a\"",
+    ] {
+        assert_eq!(database.query(sql).unwrap().rows, [[Value::Int(1)]]);
+    }
+    assert_eq!(
+        database.query(b"SELECT * FROM \"t a\"").unwrap().names,
+        [b"\"cb\"".to_vec()]
+    );
+}
+
+#[test]
+fn a_row_a_right_join_answered_is_matched_for_the_join_after_it() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(x)".as_slice(),
+        b"CREATE TABLE t2(y)",
+        b"CREATE TABLE t3(z)",
+        b"CREATE TABLE t4(w)",
+        b"INSERT INTO t1 VALUES(10)",
+        b"INSERT INTO t3 VALUES(20),(30)",
+        b"INSERT INTO t4 VALUES(50)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    // `t2` holds nothing, so the two `t3` rows are answered by the
+    // first `RIGHT JOIN`; each matches the one `t4` row, so the second
+    // `RIGHT JOIN` adds no row of its own.
+    let answer = database
+        .query(
+            b"SELECT * FROM t1 INNER JOIN t2 ON true \
+              RIGHT JOIN t3 ON t2.y IS NOT NULL \
+              RIGHT JOIN t4 ON true ORDER BY t3.z",
+        )
+        .unwrap();
+    assert_eq!(
+        answer.rows,
+        [
+            alloc::vec![Value::Null, Value::Null, Value::Int(20), Value::Int(50)],
+            alloc::vec![Value::Null, Value::Null, Value::Int(30), Value::Int(50)],
+        ]
+    );
 }
