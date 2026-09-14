@@ -527,7 +527,7 @@ und deshalb erreicht ihn keine Test262-Datei. Die Reihenfolge folgt daraus:
 | G5g | `OrdinaryCallBindThis` (10.2.1.2): ein Aufruf ohne Receiver bindet `this` an das globale Objekt, wenn die Funktion nicht strict ist, und lässt es undefined, wenn sie es ist. Erledigt. | `function f(){return typeof this}f()` antwortet wie im Stack-Backend. |
 | G5f | `instanceof` (13.10.2, `OrdinaryHasInstance` 7.3.22); Konstruktor und Methode eines Realms werden zur Laufzeit aufgelöst, weil eine Funktionsdeklaration dort ein Name des Global Environment Record ist; das Werfen und das Completion eines Objects gehören an die Grenze, nicht ins Lowering. Erledigt. | `harness/sta.js` wird vollständig übersetzt. |
 | G5h | Das Completion eines Scripts, das für seine Wirkung läuft, muss die Grenze nicht überqueren: `Realm::run_compiled` verwirft es, und der Test262-Runner nimmt es, weil ein Verdikt am Geworfenen hängt und nie am Wert. Erledigt. | `harness/sta.js` läuft im Engine-Core vollständig durch. |
-| G5i | Ein Parameter ist ein beliebiger Wert. Heute bindet das Lowering jeden Parameter als `Primitive`, also lehnt es jeden Zugriff auf eine Property eines Parameters ab und jeden Aufruf, der ein Object übergibt. `harness/assert.js` scheitert daran. | `function f(o){return o.name}` wird übersetzt und antwortet wie im Stack-Backend. |
+| G5i | Ein Parameter ist ein beliebiger Wert (10.2.11). Ein Object, das an einen Aufruf geht, verliert sein Layout, denn der Aufgerufene erreicht es; eine Funktion nimmt ihre Closure mit. Eine Konvertierung, die ToPrimitive bräuchte, nennt die Lücke an ihrer Stelle statt zu antworten. Erledigt. | `harness/assert.js` läuft im Engine-Core; die Test262-Zahlen des Pfades sind messbar. |
 | G5 | Ein Object des Engine-Cores kann die Grenze zum Embedding überqueren, wo ein Aufrufer den Wert wirklich liest. Das ist das gemeinsame Objektmodell aus M3 und M4, keine Lücke des Lowerings. | `Realm::evaluate` gibt ein Object zurück, statt es als Lücke zu melden. |
 
 G0 steht vorn, weil G2 und G3 ohne ihn nicht fertig werden können. Das Lowering
@@ -548,9 +548,8 @@ Erweiterung des Lowerings deckt deshalb Stellen auf, die vorher unerreichbar
 waren; der Differential-Fuzzer und der variantengenaue Test262-Vergleich sind
 die Werkzeuge, die sie finden.
 
-Vor G5i misst kein Test262-Lauf den Engine-Core, weil der Harness bis dahin
-nicht lädt. Zahlen, die vorher entstehen, werden als Zahlen des Stack-Backends
-ausgewiesen.
+Seit G5i lädt der Harness im Engine-Core, also messen die `--engine`-Läufe ihn
+wirklich. Zahlen davor sind Zahlen des Stack-Backends.
 
 Aus G5a folgt eine Grenze, die mit `eval` fällig wird: der Realm hält jede Unit,
 die er ausgeführt hat, weil ein Funktionsobjekt einer früheren Unit aufrufbar
