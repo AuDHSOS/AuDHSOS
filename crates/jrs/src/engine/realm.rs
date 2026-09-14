@@ -343,6 +343,10 @@ pub enum Intrinsic {
     ObjectGetOwnPropertyDescriptor,
     /// `Object.getOwnPropertyNames` (20.1.2.10).
     ObjectGetOwnPropertyNames,
+    /// The `Function` constructor `%Function%` (20.2.1.1).
+    FunctionConstructor,
+    /// `Function.prototype.call` (20.2.3.3).
+    FunctionPrototypeCall,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -363,11 +367,14 @@ pub enum IntrinsicHolder {
     ArrayConstructor,
     /// `%Object%`, which carries the functions 20.1.2 gives the constructor.
     ObjectConstructor,
+    /// `%Function.prototype%`, which carries the methods 20.2.3 gives every
+    /// function.
+    FunctionPrototype,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 42] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -408,6 +415,8 @@ impl Intrinsic {
         Self::ObjectDefineProperty,
         Self::ObjectGetOwnPropertyDescriptor,
         Self::ObjectGetOwnPropertyNames,
+        Self::FunctionConstructor,
+        Self::FunctionPrototypeCall,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -448,7 +457,10 @@ impl Intrinsic {
             | Self::ArrayPrototypeSlice
             | Self::ArrayPrototypeToString => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
-            Self::ArrayConstructor | Self::ObjectConstructor => IntrinsicHolder::Global,
+            Self::ArrayConstructor | Self::ObjectConstructor | Self::FunctionConstructor => {
+                IntrinsicHolder::Global
+            }
+            Self::FunctionPrototypeCall => IntrinsicHolder::FunctionPrototype,
             Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
             Self::ObjectDefineProperty
             | Self::ObjectGetOwnPropertyDescriptor
@@ -500,6 +512,8 @@ impl Intrinsic {
             Self::ObjectDefineProperty => 37,
             Self::ObjectGetOwnPropertyDescriptor => 38,
             Self::ObjectGetOwnPropertyNames => 39,
+            Self::FunctionConstructor => 40,
+            Self::FunctionPrototypeCall => 41,
         }
     }
 
@@ -546,6 +560,8 @@ impl Intrinsic {
             Self::ObjectDefineProperty => 37,
             Self::ObjectGetOwnPropertyDescriptor => 38,
             Self::ObjectGetOwnPropertyNames => 39,
+            Self::FunctionConstructor => 40,
+            Self::FunctionPrototypeCall => 41,
         }
     }
 
@@ -593,6 +609,8 @@ impl Intrinsic {
             37 => Some(Self::ObjectDefineProperty),
             38 => Some(Self::ObjectGetOwnPropertyDescriptor),
             39 => Some(Self::ObjectGetOwnPropertyNames),
+            40 => Some(Self::FunctionConstructor),
+            41 => Some(Self::FunctionPrototypeCall),
             _ => None,
         }
     }
@@ -607,6 +625,8 @@ impl Intrinsic {
             Self::ObjectPrototypeToString | Self::ArrayPrototypeToString => "toString",
             Self::ArrayConstructor => "Array",
             Self::ObjectConstructor => "Object",
+            Self::FunctionConstructor => "Function",
+            Self::FunctionPrototypeCall => "call",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -660,6 +680,8 @@ impl Intrinsic {
             | Self::ArrayConstructor
             | Self::ArrayIsArray
             | Self::ObjectConstructor
+            | Self::FunctionConstructor
+            | Self::FunctionPrototypeCall
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4 and 20.1.2.8 apply ToPropertyKey to the second argument.
             Self::ObjectDefineProperty | Self::ObjectGetOwnPropertyDescriptor => index == 1,
@@ -715,6 +737,8 @@ impl Intrinsic {
             | Self::ArrayConstructor
             | Self::ArrayIsArray
             | Self::ObjectConstructor
+            | Self::FunctionConstructor
+            | Self::FunctionPrototypeCall
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty => 3,
             Self::ObjectGetOwnPropertyDescriptor
@@ -1169,6 +1193,12 @@ impl Realm {
             Intrinsic::ObjectConstructor,
             object_prototype,
         )?;
+        Self::pair_constructor_with_prototype(
+            heap,
+            &intrinsics,
+            Intrinsic::FunctionConstructor,
+            function_prototype,
+        )?;
 
         // 9.1.1.4: the Global Environment Record binds the global object and
         // the declarations of every Script of this Realm. 19.1.1: `globalThis`
@@ -1566,6 +1596,9 @@ impl Realm {
                     Self::rooted(heap, holders.array_iterator_prototype)?
                 }
                 IntrinsicHolder::Global => Self::rooted(heap, holders.global_object)?,
+                IntrinsicHolder::FunctionPrototype => {
+                    Self::rooted(heap, holders.function_prototype)?
+                }
                 IntrinsicHolder::ObjectConstructor => Self::rooted(
                     heap,
                     *intrinsics

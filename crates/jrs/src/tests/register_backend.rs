@@ -447,6 +447,46 @@ fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Erro
 }
 
 #[test]
+fn a_call_reaches_the_function_it_was_found_on() -> Result<(), Error> {
+    // 20.2.3.3 calls the function it was reached through, with the first
+    // argument as the `this` value and the rest shifted down by one, and
+    // 10.2.1.2 still binds `this` for a callee that is not strict.
+    for source in [
+        "function f(a){return this.v+a}var o={v:1};f.call(o,2)",
+        "function f(){return typeof this}f.call()",
+        "function f(a,b){return a+b}f.call(null,3,4)",
+        "function f(){return 7}f.call(null)",
+        // Forwarding again drops one more argument, which is why a chain ends.
+        "function f(a){return this.v+a}var o={v:1};f.call.call(f,o,2)",
+        "var a=[3,1,2];Array.prototype.join.call(a,'-')",
+        "typeof Function",
+        "typeof Function.prototype.call",
+        "Function.name",
+        "Function.length",
+    ] {
+        differential(source)?;
+    }
+    // 17 counts the arguments of the heading of 20.2.3.3 without its rest
+    // parameter, so `call` has a length of one. The stack backend answers
+    // zero, which is why this is not compared against it.
+    let program = compile("function f(){}f.call.length", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert_eq!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost)?,
+        Value::Number(1.0)
+    );
+    // 20.2.1.1 compiles a body at run time, which this engine names as a gap
+    // rather than answering a function that would not be the one asked for.
+    let program = compile("Function('return 1')", Limits::default())?;
+    assert!(program.uses_register_backend());
+    assert!(matches!(
+        Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn a_lexical_declaration_of_a_script_binds_on_the_realm() -> Result<(), Error> {
     // 16.1.7 puts a `let` or a `const` of a Script on the
     // [[DeclarativeRecord]] of the Global Environment Record, not on the

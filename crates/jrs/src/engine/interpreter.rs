@@ -918,11 +918,8 @@ impl RegisterVM {
         realm: &Realm,
         call: Call,
     ) -> Result<Option<u32>, VMError> {
-        // 13.3.6.1: a callee that is not callable is a TypeError, not a
-        // failure of execution.
-        let Some(function_ref) = function.as_object() else {
-            return Err(type_error(heap, realm, "value is not callable"));
-        };
+        let mut call = call;
+        let function_ref = self.resolve_callee(function, &mut call, heap, realm)?;
         let kind = heap
             .get_object(function_ref)
             .ok_or(VMError::Heap(HeapError::InvalidReference))?
@@ -980,7 +977,6 @@ impl RegisterVM {
             .fuel
             .checked_sub(callee.entry_fuel_cost)
             .ok_or(VMError::OutOfFuel)?;
-        let mut call = call;
         if callee.this_register.is_some() {
             call.receiver = Self::bind_this(call.receiver, callee.strict, heap, realm)?;
         }
@@ -1163,22 +1159,18 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeToString => {
                 self.call_array_intrinsic(intrinsic, call, heap, realm)
             }
-            // 23.1.2.3 answers IsArray, which 7.2.2 answers for an Array
-            // exotic object and, for a Proxy, for what it wraps.
             Intrinsic::ArrayIsArray => {
-                let value = argument(self, 0)?;
-                let array = value
-                    .as_object()
-                    .and_then(|object| heap.get_object(object))
-                    .is_some_and(|object| matches!(object.kind, ObjectKind::Array { .. }));
-                Ok(Value::from_bool(array))
+                Ok(Value::from_bool(Self::is_array(argument(self, 0)?, heap)))
             }
             // 23.1.1.1, for the `%Array%` that is its own NewTarget: one
             // argument that is a Number is the length, and every other list of
             // them is the elements.
             Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
-            Intrinsic::ObjectConstructor => Self::construct_object(argument(self, 0)?, heap, realm),
-            Intrinsic::ObjectDefineProperty
+            Intrinsic::FunctionConstructor | Intrinsic::FunctionPrototypeCall => {
+                Self::call_function_intrinsic(intrinsic)
+            }
+            Intrinsic::ObjectConstructor
+            | Intrinsic::ObjectDefineProperty
             | Intrinsic::ObjectGetOwnPropertyDescriptor
             | Intrinsic::ObjectGetOwnPropertyNames => {
                 let target = argument(self, 0)?;
@@ -1187,6 +1179,61 @@ impl RegisterVM {
                 Self::call_object_intrinsic(intrinsic, target, key, attributes, heap, realm)
             }
         }
+    }
+
+    /// The object a call finally reaches, and the call that reaches it.
+    ///
+    /// 20.2.3.3 calls the function it was reached through, with the first
+    /// argument as the `this` value and the rest shifted down by one. The
+    /// arguments lie in neighbouring registers, so the shift is where the
+    /// list starts and how long it is, and forwarding again drops one more
+    /// argument, which is why a chain of them ends.
+    fn resolve_callee(
+        &self,
+        function: Value,
+        call: &mut Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<ObjectRef, VMError> {
+        let mut function = function;
+        loop {
+            // 13.3.6.1: a callee that is not callable is a TypeError, not a
+            // failure of execution.
+            let Some(function_ref) = function.as_object() else {
+                return Err(type_error(heap, realm, "value is not callable"));
+            };
+            let forwards = matches!(
+                heap.get_object(function_ref)
+                    .ok_or(VMError::Heap(HeapError::InvalidReference))?
+                    .kind,
+                ObjectKind::NativeFunction { id, .. }
+                    if id == Intrinsic::FunctionPrototypeCall.id()
+            );
+            if !forwards {
+                return Ok(function_ref);
+            }
+            function = call.receiver;
+            call.receiver = if call.arg_count == 0 {
+                VALUE_UNDEFINED
+            } else {
+                self.read_reg(call.arg_start)?
+            };
+            call.arg_start = Reg(call
+                .arg_start
+                .0
+                .checked_add(1)
+                .ok_or(VMError::InvalidRegister)?);
+            call.arg_count = call.arg_count.saturating_sub(1);
+        }
+    }
+
+    /// `IsArray` of 7.2.2, which answers for an Array exotic object and, for a
+    /// Proxy, for what it wraps.
+    fn is_array(value: Value, heap: &GenerationalHeap) -> bool {
+        value
+            .as_object()
+            .and_then(|object| heap.get_object(object))
+            .is_some_and(|object| matches!(object.kind, ObjectKind::Array { .. }))
     }
 
     /// The intrinsic of a callee that constructs without 10.1.13.
@@ -1223,6 +1270,9 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         match intrinsic {
+            // 20.1.1.1: undefined and null make an ordinary object, and every
+            // other value goes through ToObject.
+            Intrinsic::ObjectConstructor => Self::construct_object(target, heap, realm),
             // 20.1.2.10: the String keys of the object, in the order 10.1.11
             // gives them. The names are interned, and interning moves no
             // object, so the Array below may be allocated after them.
@@ -1350,6 +1400,21 @@ impl RegisterVM {
                 is_accessor: false,
             },
         ))
+    }
+
+    /// The functions of 20.2 that reach `call_intrinsic`.
+    ///
+    /// 20.2.1.1 compiles its arguments into a function body, which needs the
+    /// parser at run time. 20.2.3.3 never reaches here at all, because
+    /// [`Self::enter_call_value`] answers it by entering the call it forwards
+    /// to rather than by answering a value.
+    const fn call_function_intrinsic(intrinsic: Intrinsic) -> Result<Value, VMError> {
+        match intrinsic {
+            Intrinsic::FunctionConstructor => Err(VMError::Unsupported(
+                "the Function constructor, which compiles a body at run time",
+            )),
+            _ => Err(VMError::TypeError),
+        }
     }
 
     /// `Object ( value )` of 20.1.1.1.

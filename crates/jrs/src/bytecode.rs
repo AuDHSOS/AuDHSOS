@@ -5979,6 +5979,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectDefineProperty
         | crate::engine::realm::Intrinsic::ObjectGetOwnPropertyDescriptor
         | crate::engine::realm::Intrinsic::ObjectGetOwnPropertyNames
+        | crate::engine::realm::Intrinsic::FunctionConstructor
+        | crate::engine::realm::Intrinsic::FunctionPrototypeCall
         | crate::engine::realm::Intrinsic::ArrayPrototypeValues
         | crate::engine::realm::Intrinsic::ArrayIteratorPrototypeNext
         | crate::engine::realm::Intrinsic::ArrayPrototypeAt
