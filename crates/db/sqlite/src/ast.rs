@@ -588,6 +588,21 @@ pub enum Definition {
     Table(CreateTable),
     /// `CREATE INDEX`.
     Index(CreateIndex),
+    /// `DROP TABLE` and `DROP INDEX`.
+    Drop(Drop),
+}
+
+/// `DROP TABLE [IF EXISTS] [schema.]name`, and the same for an index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Drop {
+    /// Whether the statement names a table rather than an index.
+    pub table: bool,
+    /// Whether `IF EXISTS` was written.
+    pub if_exists: bool,
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The name.
+    pub name: Span,
 }
 
 /// One statement in the arena.

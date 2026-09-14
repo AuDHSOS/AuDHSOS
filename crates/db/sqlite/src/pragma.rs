@@ -38,6 +38,9 @@ pub enum Setting {
     ApplicationId,
     /// The schema format the file was written under.
     SchemaFormat,
+    /// Whether a statement that changes rows answers how many it
+    /// changed, which the connection holds and the file does not.
+    CountChanges,
     /// A pragma the file does not hold, which is answered and changes
     /// nothing: the cache size, how a write is synced, where a
     /// temporary table lives, and the two that ask for an older format.
@@ -61,12 +64,12 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"user_version" => Setting::UserVersion,
         b"application_id" => Setting::ApplicationId,
         b"schema_format" => Setting::SchemaFormat,
+        b"count_changes" => Setting::CountChanges,
         b"cache_size"
         | b"synchronous"
         | b"temp_store"
         | b"legacy_file_format"
         | b"legacy_alter_table"
-        | b"count_changes"
         | b"short_column_names"
         | b"full_column_names"
         | b"empty_result_callbacks"
@@ -121,7 +124,9 @@ impl Setting {
             Setting::UserVersion => number(header.user_version),
             Setting::ApplicationId => number(header.application_id),
             Setting::SchemaFormat => number(header.schema_format),
-            Setting::Ignored => return None,
+            // A pragma the file does not hold, and the one the
+            // connection holds, have no answer out of a header.
+            Setting::CountChanges | Setting::Ignored => return None,
         })
     }
 }
@@ -169,6 +174,19 @@ pub fn mode_of(text: &[u8]) -> Option<crate::journal::Mode> {
         b"memory" => Some(crate::journal::Mode::Memory),
         b"off" => Some(crate::journal::Mode::Off),
         _ => None,
+    }
+}
+
+/// What a pragma set to a truth value is set to, which is
+/// `sqlite3GetBoolean`: a number is true where it is not nought, and
+/// four words say so in letters.
+#[must_use]
+pub fn truth(text: &[u8]) -> Option<bool> {
+    let text: Vec<u8> = crate::schema::dequote(text).to_ascii_lowercase();
+    match text.as_slice() {
+        b"on" | b"yes" | b"true" => Some(true),
+        b"off" | b"no" | b"false" => Some(false),
+        _ => whole_number(&text).map(|number| number != 0),
     }
 }
 

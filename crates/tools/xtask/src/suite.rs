@@ -194,7 +194,19 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
                         .is_some_and(|name| HELD.contains(&name.trim_matches(['{', '}'])))
                 {
                     rest = past(after, 1);
+                    // The arm that runs is the `else` of a condition
+                    // that did not hold, so its block is read and the
+                    // word before it is not.
+                    if let Some(over) = rest.trim_start().strip_prefix("else") {
+                        rest = over;
+                    }
                 }
+            }
+            // The interpreter runs one arm of a conditional, so the
+            // block of an `else` is read past and the arm written
+            // before it is the one that runs.
+            "else" => {
+                rest = past(rest, 1);
             }
             // `db null` and `db nullvalue` say what a `NULL` prints
             // as, which the answers a file writes are written under.
@@ -298,7 +310,7 @@ fn push(out: &mut Vec<Step>, name: &str, sql: &str, want: &str) {
 
 /// The next of the four commands this reads, and what follows its name.
 fn next_command(text: &str) -> Option<(&'static str, &str)> {
-    const COMMANDS: [&str; 8] = [
+    const COMMANDS: [&str; 9] = [
         "do_execsql_test",
         "do_catchsql_test",
         "do_test",
@@ -307,6 +319,7 @@ fn next_command(text: &str) -> Option<(&'static str, &str)> {
         "db nullvalue",
         "db null",
         "ifcapable",
+        "else",
     ];
     let mut best: Option<(&'static str, usize)> = None;
     for command in COMMANDS {

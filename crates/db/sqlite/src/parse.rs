@@ -865,8 +865,11 @@ impl<'a> Parser<'a> {
         Ok(definition)
     }
 
-    /// `CREATE TABLE` or `CREATE INDEX`.
+    /// `CREATE TABLE`, `CREATE INDEX`, `DROP TABLE` or `DROP INDEX`.
     fn definition(&mut self) -> Result<Definition, Error> {
+        if self.eat_keyword(Keyword::Drop) {
+            return Ok(Definition::Drop(self.drop_statement()?));
+        }
         self.expect_keyword(Keyword::Create, Expected::Create)?;
         let temporary = self.at_temporary();
         if temporary {
@@ -892,6 +895,34 @@ impl<'a> Parser<'a> {
                 self.ahead(1).map(|token| token.kind),
                 Some(Kind::Keyword(Keyword::Table))
             )
+    }
+
+    /// What follows `DROP`: the word `TABLE` or `INDEX`, an optional
+    /// `IF EXISTS`, and the name.
+    fn drop_statement(&mut self) -> Result<crate::ast::Drop, Error> {
+        let table = if self.eat_keyword(Keyword::Table) {
+            true
+        } else {
+            self.expect_keyword(Keyword::Index, Expected::Table)?;
+            false
+        };
+        let if_exists = self.if_exists()?;
+        let (schema, name) = self.qualified_name()?;
+        Ok(crate::ast::Drop {
+            table,
+            if_exists,
+            schema,
+            name,
+        })
+    }
+
+    /// `IF EXISTS`.
+    fn if_exists(&mut self) -> Result<bool, Error> {
+        if !self.eat_keyword(Keyword::If) {
+            return Ok(false);
+        }
+        self.expect_keyword(Keyword::Exists, Expected::Name)?;
+        Ok(true)
     }
 
     /// `IF NOT EXISTS`.

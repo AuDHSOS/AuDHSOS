@@ -29,6 +29,11 @@ use crate::wal::Log;
 /// and so for every build with `SQLITE_POWERSAFE_OVERWRITE`.
 const SECTOR: u32 = 512;
 
+/// Whether a column of a `sqlite_schema` row is the text `wanted`.
+const fn is_text(value: Option<crate::record::Value<'_>>, wanted: &[u8]) -> bool {
+    matches!(value, Some(crate::record::Value::Text(bytes)) if bytes.eq_ignore_ascii_case(wanted))
+}
+
 /// The columns of `sqlite_schema`, which every row of it is written
 /// with: `type`, `name`, `tbl_name`, `rootpage` and `sql`.
 const SCHEMA: [Affinity; 5] = [
@@ -61,6 +66,9 @@ pub struct Writer {
     /// The file as write-ahead logging began, which is what a database
     /// no checkpoint has run over holds.
     origin: Option<Vec<u8>>,
+    /// Whether a statement that changes rows answers how many it
+    /// changed, which `PRAGMA count_changes` sets.
+    counting: bool,
 }
 
 impl Writer {
@@ -80,6 +88,7 @@ impl Writer {
             journal: None,
             log: None,
             origin: None,
+            counting: false,
             header: Header {
                 page_size,
                 write_version: 1,
@@ -157,6 +166,77 @@ impl Writer {
         }
     }
 
+    /// `DROP TABLE` and `DROP INDEX`: the rows of `sqlite_schema` that
+    /// name it go, and every page of every tree they named goes on the
+    /// free list.
+    ///
+    /// `sqlite3CodeDropTable` writes the rows out first and destroys
+    /// the trees after, largest root first, which is what `destroyTable`
+    /// does so that a file that vacuums itself moves each root once.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] where the database holds no such table or
+    /// index and the statement did not write `IF EXISTS`, and whatever
+    /// reading or freeing a page refuses.
+    fn drop_object(&mut self, asked: &crate::ast::Drop, sql: &[u8]) -> Result<(), Error> {
+        let name = crate::schema::dequote(asked.name.text(sql));
+        let (rowids, mut roots) = self.named(&name, asked.table)?;
+        if rowids.is_empty() {
+            return if asked.if_exists {
+                Ok(())
+            } else {
+                Err(Error::NoTable)
+            };
+        }
+        for rowid in rowids {
+            crate::tree::remove(&mut self.pages, crate::image::SCHEMA_ROOT, rowid)?;
+        }
+        roots.sort_unstable();
+        for root in roots.into_iter().rev() {
+            crate::tree::destroy(&mut self.pages, root)?;
+        }
+        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        Ok(())
+    }
+
+    /// The rows of `sqlite_schema` a `DROP` takes out and the roots it
+    /// destroys: a table takes its indexes with it, an index takes only
+    /// itself.
+    fn named(&self, name: &[u8], table: bool) -> Result<(Vec<i64>, Vec<u32>), Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        let mut roots: Vec<u32> = Vec::new();
+        if table {
+            if let Some((_, root)) = database.table(name) {
+                roots.push(root);
+            }
+            roots.extend(database.indexes(name).iter().map(|(_, root)| *root));
+        } else if let Some((_, root)) = database.index(name) {
+            roots.push(root);
+        }
+        if roots.is_empty() {
+            return Ok((Vec::new(), roots));
+        }
+        // The rows to take out are found by name: a table's are its own
+        // and every index over it, which `sqlite_schema` names in the
+        // column `tbl_name`; an index's is the one row of its own name.
+        let image = crate::image::Image::open(&bytes)?;
+        let at = if table { 2 } else { 1 };
+        let mut rowids = Vec::new();
+        let mut payload = Vec::new();
+        for row in image.schema() {
+            let row = row?;
+            payload.resize(row.payload.total, 0);
+            image.read_payload(&row.payload, &mut payload)?;
+            let record = crate::record::Record::parse(&payload)?;
+            if is_text(record.value(at)?, name) {
+                rowids.push(row.rowid);
+            }
+        }
+        Ok((rowids, roots))
+    }
+
     /// `PRAGMA journal_mode=wal` from a statement, which names no salt:
     /// the two the log carries come from SQLite's random source there
     /// and are nought here, because a salt tells one generation of a
@@ -221,16 +301,17 @@ impl Writer {
             return self.pragma(&asked, sql);
         }
         let was = self.header;
+        let mut changed = 0_i64;
         self.pages.begin();
         if let Ok((arena, definition)) = crate::parse::definition(sql) {
             self.define(&arena, definition, sql)?;
         } else {
             let (arena, change) = crate::parse::change(sql)?;
-            match change {
+            changed = match change {
                 Change::Insert(statement) => self.insert(&arena, &statement, sql)?,
                 Change::Delete(statement) => self.delete(&arena, &statement, sql)?,
                 Change::Update(statement) => self.update(&arena, &statement, sql)?,
-            }
+            };
         }
         // A statement that wrote no page is one the commit has nothing
         // to write for, so the change counter stands where it stood.
@@ -260,6 +341,11 @@ impl Writer {
                 self.journal = crate::journal::committed(&written, self.mode);
             }
         }
+        // `PRAGMA count_changes`: a statement that changes rows answers
+        // how many it changed, which is one row of one column.
+        if self.counting {
+            return Ok(alloc::vec![alloc::vec![Value::Int(changed)]]);
+        }
         Ok(Vec::new())
     }
 
@@ -284,6 +370,11 @@ impl Writer {
             // A connection answers a pragma out of what it holds and
             // not out of the file, because a file with no table holds
             // no encoding: `sqlite3Pragma` reads the schema in memory.
+            if setting == crate::pragma::Setting::CountChanges {
+                return Ok(alloc::vec![alloc::vec![Value::Int(i64::from(
+                    self.counting
+                ))]]);
+            }
             let read = setting.read(&self.now()).ok_or(Error::Unsupported)?;
             return Ok(alloc::vec![alloc::vec![read]]);
         };
@@ -296,6 +387,10 @@ impl Writer {
         // after a table is there is refused. The journal mode belongs
         // to the connection and is set whenever `sqlite3PragmaJournalMode`
         // is asked.
+        if setting == crate::pragma::Setting::CountChanges {
+            self.counting = crate::pragma::truth(text).ok_or(Error::Unsupported)?;
+            return Ok(Vec::new());
+        }
         if self.header.schema_cookie != 0 && setting != crate::pragma::Setting::JournalMode {
             return Err(Error::Unsupported);
         }
@@ -342,6 +437,7 @@ impl Writer {
     /// `sqlite_schema` that names it.
     fn define(&mut self, arena: &Arena, definition: Definition, sql: &[u8]) -> Result<(), Error> {
         let (kind, name, over) = match definition {
+            Definition::Drop(asked) => return self.drop_object(&asked, sql),
             Definition::Table(table) => {
                 if !matches!(table.body, TableBody::Columns { .. }) {
                     return Err(Error::Unsupported);
@@ -436,7 +532,7 @@ impl Writer {
         arena: &Arena,
         statement: &crate::ast::Insert,
         sql: &[u8],
-    ) -> Result<(), Error> {
+    ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
         let named: Vec<Vec<u8>> = arena
             .names(statement.columns)
@@ -485,6 +581,7 @@ impl Writer {
             (root, table.rowid_alias, affinities, rows, kept)
         };
         let mut next = largest(&self.pages, root)?.unwrap_or(0);
+        let mut written = 0_i64;
         for (key, mut values) in rows {
             let given = match key {
                 Value::Int(given) => Some(given),
@@ -510,8 +607,9 @@ impl Writer {
             let record = crate::record::write(&values, &affinities, 4);
             insert(&mut self.pages, root, rowid, &record)?;
             self.index_row(&kept, &named, rowid)?;
+            written = written.saturating_add(1);
         }
-        Ok(())
+        Ok(written)
     }
 }
 
@@ -612,7 +710,7 @@ impl Writer {
         arena: &Arena,
         statement: &crate::ast::Delete,
         sql: &[u8],
-    ) -> Result<(), Error> {
+    ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
         let (root, keys, kept) = {
             let bytes = self.image();
@@ -642,11 +740,12 @@ impl Writer {
         };
         // `sqlite3GenerateRowDelete` writes the entries out before the
         // row, because the entries are found through the row.
+        let taken = i64::try_from(keys.len()).unwrap_or(i64::MAX);
         for (key, values) in keys {
             self.unindex_row(&kept, &values, key)?;
             crate::tree::remove(&mut self.pages, root, key)?;
         }
-        Ok(())
+        Ok(taken)
     }
 }
 
@@ -663,7 +762,7 @@ impl Writer {
         arena: &Arena,
         statement: &crate::ast::Update,
         sql: &[u8],
-    ) -> Result<(), Error> {
+    ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
         let sets = arena.sets(statement.sets);
         let (root, alias, affinities, written, kept) = {
@@ -727,6 +826,7 @@ impl Writer {
             }
             (root, table.rowid_alias, affinities, written, kept)
         };
+        let changed = i64::try_from(written.len()).unwrap_or(i64::MAX);
         for (rowid, mut key, held, mut values) in written {
             // The column the key is another name for says the key, so a
             // statement that writes that column writes the key, and the
@@ -758,7 +858,7 @@ impl Writer {
             }
             self.index_row(&kept, &named, key)?;
         }
-        Ok(())
+        Ok(changed)
     }
 }
 

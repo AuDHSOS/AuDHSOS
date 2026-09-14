@@ -541,6 +541,39 @@ pub(super) const ALIAS: &[u8] = include_bytes!("fixtures/index-alias.db");
 /// up into a page the entry it replaces will not fit on.
 pub(super) const TALL_INDEX: &[u8] = include_bytes!("fixtures/index-tall.db");
 
+/// What a `DROP` leaves: one table of two rows taken out beside another
+/// that stays, four hundred rows whose tree has a page above its
+/// leaves, two rows that run onto chains, a table an index is over, the
+/// index alone, and the table whose root is the last of the file.
+pub(super) const DROPPED: &[(&str, &str, &[u8])] = &[
+    ("drop-one.db", "one", include_bytes!("fixtures/drop-one.db")),
+    (
+        "drop-deep.db",
+        "deep",
+        include_bytes!("fixtures/drop-deep.db"),
+    ),
+    (
+        "drop-wide.db",
+        "wide",
+        include_bytes!("fixtures/drop-wide.db"),
+    ),
+    (
+        "drop-indexed.db",
+        "indexed",
+        include_bytes!("fixtures/drop-indexed.db"),
+    ),
+    (
+        "drop-index.db",
+        "index",
+        include_bytes!("fixtures/drop-index.db"),
+    ),
+    (
+        "drop-last.db",
+        "last",
+        include_bytes!("fixtures/drop-last.db"),
+    ),
+];
+
 /// The auto-vacuum dimension of document 16, section 16.11, over the
 /// write path: the same four hundred rows under both settings, chains
 /// that cross the second pointer-map page, the free pages a file that

@@ -4274,7 +4274,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - The part of `research/sqlite/test` that needs no TCL interpreter: a
   `do_execsql_test`, a `do_test` whose body is one `execsql`, and the
   `execsql` or `db eval` a file sets itself up with, each carrying no
-  substitution. That is 15 379 cases in 1 169 files. `db null` and
+  substitution. That is 15 364 cases in 1 169 files. `db null` and
   `db nullvalue` say what a `NULL` prints as, which the answer a file
   writes is written under. `ifcapable !X` holds a block for a build
   without `X`, which is read past where this engine has `X`.
@@ -4282,11 +4282,11 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
   statements, or statements a substitution stands in — stops the file
   the way a refusal does, because the database is then short of what
   the cases after it read.
-- A case whose name repeats is one arm of a conditional the interpreter
-  runs one arm of, so the first case of a name is kept and the rest are
-  dropped, which D-189 records.
-- 678 pass, 10 answer differently and 14 691 are refused or stopped.
-  Document 16, section 16.23 groups the ten. Earlier runs answered
+- The block of an `else` is read past and a case whose name repeats is
+  dropped, because the interpreter runs one arm of a conditional, which
+  D-192 and D-189 record.
+- 721 pass, 9 answer differently and 14 634 are refused or stopped.
+  Document 16, section 16.23 groups the nine. Earlier runs answered
   14, then 27, then 17 differently; twelve were defects, which D-181,
   D-184 and D-189 record and twenty-eight cases of `query.corpus` now
   hold to the C library.
@@ -4370,6 +4370,24 @@ D-187 and D-188, document 16 step Q8.
   divider.
 - The refusals: a tree deeper than the walk goes, on the descent to the
   entry and on the walk to the entry before it.
+
+### 6.6.123 What a `DROP` takes away (`db-sqlite`)
+
+D-191, document 16 step Q8.
+
+- Six fixtures, `drop-*.db`: a table of two rows taken out beside one
+  that stays, four hundred rows whose tree has a page above its leaves,
+  two rows that run onto chains, a table an index is over, the index
+  alone, and the table whose root is the last page of the file. Each is
+  the file the shell wrote, byte for byte.
+- The refusals: a name the database does not hold, and a table asked
+  for as an index. `IF EXISTS` is what makes a name that is not there
+  no refusal.
+- A tree that names itself is one the walk that frees a tree stops in.
+- `PRAGMA count_changes`: a connection that counts answers one row per
+  statement that changes rows, which is how many it changed, and
+  nought for a statement that changed none; a value that is not a truth
+  is refused.
 
 ## 6.7 CI pipeline
 

@@ -335,7 +335,13 @@ for case in "index-empty.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a);" \
     "index-moved.db:$rows60 CREATE INDEX ts ON t(s); UPDATE t SET s='moved ' || n WHERE n%7=0;" \
     "index-rekeyed.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a); INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c'); UPDATE t SET rowid=9 WHERE a=2;" \
     "index-alias.db:CREATE TABLE t(a INTEGER PRIMARY KEY, b); INSERT INTO t VALUES(7,'x'),(3,'y'),(9,'z'); CREATE INDEX ta ON t(a); DELETE FROM t WHERE b='y';" \
-    "index-tall.db:$rows900 CREATE INDEX ts ON t(s); DELETE FROM t WHERE n%3=0;"; do
+    "index-tall.db:$rows900 CREATE INDEX ts ON t(s); DELETE FROM t WHERE n%3=0;" \
+    "drop-one.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x'),(2,'y'); CREATE TABLE u(c); INSERT INTO u VALUES(9); DROP TABLE t;" \
+    "drop-deep.db:$rows400 CREATE TABLE u(c); INSERT INTO u VALUES(9); DROP TABLE t;" \
+    "drop-wide.db:CREATE TABLE t(a); INSERT INTO t VALUES(replace(hex(zeroblob(900)),'0','a')),(replace(hex(zeroblob(900)),'0','b')); CREATE TABLE u(c); DROP TABLE t;" \
+    "drop-indexed.db:$rows60 CREATE INDEX ts ON t(s); CREATE TABLE u(c); INSERT INTO u VALUES(9); DROP TABLE t;" \
+    "drop-index.db:$rows60 CREATE INDEX ts ON t(s); DROP INDEX ts;" \
+    "drop-last.db:CREATE TABLE t(a); INSERT INTO t VALUES(1); CREATE TABLE u(c); INSERT INTO u VALUES(9); DROP TABLE u;"; do
     name="${case%%:*}"
     sql="${case#*:}"
     rm -f "$out/$name"

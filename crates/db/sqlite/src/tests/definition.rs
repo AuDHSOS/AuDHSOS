@@ -65,8 +65,16 @@ fn every_syntax_error_the_c_library_finds_is_found_here() {
                 matches!(mine, Some(Definition::Index(_))),
                 "{sql} makes an index and was not read as one"
             ),
+            // A `DROP` makes nothing, so the oracle names no kind for
+            // it; this parser reads it as the definition that takes one
+            // away.
+            _ if sql.to_ascii_uppercase().starts_with("DROP") => assert!(
+                matches!(mine, Some(Definition::Drop(_))),
+                "{sql} takes a table or an index away and was not read as one"
+            ),
             // A view, a trigger, and anything that is not a definition
-            // at all: this parser reads two kinds and refuses the rest.
+            // at all: this parser reads three kinds and refuses the
+            // rest.
             _ => assert!(
                 mine.is_none(),
                 "{sql} is not a definition and was read as one"
@@ -84,7 +92,9 @@ fn table_of(sql: &str) -> (crate::ast::Arena, crate::ast::CreateTable) {
     let (arena, definition) = definition(sql.as_bytes()).expect("a table");
     match definition {
         Definition::Table(table) => (arena, table),
-        Definition::Index(_) => panic!("an index where a table was written"),
+        Definition::Index(_) | Definition::Drop(_) => {
+            panic!("an index or a drop where a table was written")
+        }
     }
 }
 

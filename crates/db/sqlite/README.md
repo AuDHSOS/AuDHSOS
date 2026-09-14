@@ -80,4 +80,6 @@ that vacuums itself whole moves the pages at the end of the file into
 the free pages below them and cuts the file back. An index gains an entry as each
 row is written and loses one as each row is taken out, so a `DELETE` and
 an `UPDATE` over an indexed table write the index beside the table. What
-is missing of writing is `DROP`, `ALTER` and the checkpoint.
+A `DROP` takes a table or an index away and puts every page of its tree
+on the free list. What is missing of writing is `ALTER` and the
+checkpoint.

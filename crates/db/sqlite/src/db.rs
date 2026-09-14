@@ -531,6 +531,18 @@ impl<'a> Database<'a> {
             .map(|stored| (&stored.table, stored.root))
     }
 
+    /// The index of `name`, with the page its tree begins on.
+    #[must_use]
+    pub fn index(&self, name: &[u8]) -> Option<(&schema::Index, u32)> {
+        self.tables.iter().find_map(|stored| {
+            stored
+                .indexes
+                .iter()
+                .find(|kept| kept.index.name.eq_ignore_ascii_case(name))
+                .map(|kept| (&kept.index, kept.root))
+        })
+    }
+
     /// The indexes over the table of `name` this crate holds, each with
     /// the page its tree begins at and the columns it is over.
     ///

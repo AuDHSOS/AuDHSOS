@@ -365,6 +365,12 @@ fn a_tree_that_is_not_a_table_and_a_tree_deeper_than_the_walk_are_refused() {
         crate::tree::remove_entry(&mut pages, root, &[Value::Int(1)], &[]),
         Err(Error::Depth)
     );
+    // The walk that frees a tree stops the same way, which a page that
+    // names itself is what shows.
+    let mut pages = Pages::new(512, 0).unwrap();
+    let root = pages.add(Kind::InteriorTable, 0).unwrap();
+    point(&mut pages, root, root);
+    assert_eq!(crate::tree::destroy(&mut pages, root), Err(Error::Depth));
 }
 
 #[test]
@@ -1970,6 +1976,131 @@ fn what_a_pragma_answers_out_of_a_file() {
 }
 
 #[test]
+fn what_a_drop_leaves_is_the_file_the_shell_wrote() {
+    use crate::change::Writer;
+    use core::fmt::Write as _;
+    let wide: alloc::string::String = core::iter::repeat_n('a', 1800).collect();
+    let other: alloc::string::String = core::iter::repeat_n('b', 1800).collect();
+    for (name, shape, fixture) in crate::tests::DROPPED {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        match *shape {
+            "deep" | "indexed" | "index" => {
+                writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+                if *shape == "deep" {
+                    writer.run(sql_of_rows().as_bytes()).unwrap();
+                } else {
+                    let mut sql = alloc::string::String::from("INSERT INTO t(rowid,n,s) VALUES ");
+                    for number in 1..=60_i64 {
+                        if number > 1 {
+                            sql.push(',');
+                        }
+                        let _ = write!(sql, "({number},{number},'row {number}')");
+                    }
+                    writer.run(sql.as_bytes()).unwrap();
+                    writer.run(b"CREATE INDEX ts ON t(s)").unwrap();
+                }
+            }
+            "wide" => {
+                writer.run(b"CREATE TABLE t(a)").unwrap();
+                writer
+                    .run(alloc::format!("INSERT INTO t VALUES('{wide}'),('{other}')").as_bytes())
+                    .unwrap();
+            }
+            "last" => {
+                writer.run(b"CREATE TABLE t(a)").unwrap();
+                writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+            }
+            _ => {
+                writer.run(b"CREATE TABLE t(a,b)").unwrap();
+                writer.run(b"INSERT INTO t VALUES(1,'x'),(2,'y')").unwrap();
+            }
+        }
+        if *shape != "index" {
+            writer.run(b"CREATE TABLE u(c)").unwrap();
+            if *shape != "wide" {
+                writer.run(b"INSERT INTO u VALUES(9)").unwrap();
+            }
+        }
+        let statement: &[u8] = match *shape {
+            "index" => b"DROP INDEX ts",
+            "last" => b"DROP TABLE u",
+            _ => b"DROP TABLE t",
+        };
+        writer.run(statement).unwrap();
+        same(name, &writer.written(), fixture, 512);
+    }
+}
+
+#[test]
+fn a_statement_answers_how_many_rows_it_changed_where_the_pragma_says_so() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    // The pragma is off to begin with, so a statement answers no row.
+    assert_eq!(
+        writer.run(b"PRAGMA count_changes").unwrap(),
+        [[Value::Int(0)]]
+    );
+    assert!(
+        writer
+            .run(b"INSERT INTO t VALUES(1,'x'),(2,'y'),(3,'z')")
+            .unwrap()
+            .is_empty()
+    );
+    writer.run(b"PRAGMA count_changes=ON").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA count_changes").unwrap(),
+        [[Value::Int(1)]]
+    );
+    assert_eq!(
+        writer.run(b"INSERT INTO t VALUES(4,'w')").unwrap(),
+        [[Value::Int(1)]]
+    );
+    assert_eq!(
+        writer.run(b"UPDATE t SET b='q' WHERE a<3").unwrap(),
+        [[Value::Int(2)]]
+    );
+    assert_eq!(
+        writer.run(b"DELETE FROM t WHERE a>2").unwrap(),
+        [[Value::Int(2)]]
+    );
+    // A statement that changes no row answers nought, and one that
+    // makes a table answers nothing of its own.
+    assert_eq!(
+        writer.run(b"DELETE FROM t WHERE a>99").unwrap(),
+        [[Value::Int(0)]]
+    );
+    assert_eq!(writer.run(b"CREATE TABLE u(c)").unwrap(), [[Value::Int(0)]]);
+    // A number says it as well, which is what `sqlite3GetBoolean`
+    // takes for one.
+    writer.run(b"PRAGMA count_changes=0").unwrap();
+    assert!(writer.run(b"DELETE FROM t WHERE a=99").unwrap().is_empty());
+    writer.run(b"PRAGMA count_changes=1").unwrap();
+    assert_eq!(
+        writer.run(b"DELETE FROM t WHERE a=2").unwrap(),
+        [[Value::Int(1)]]
+    );
+    writer.run(b"PRAGMA count_changes=off").unwrap();
+    assert!(writer.run(b"DELETE FROM t WHERE a=1").unwrap().is_empty());
+    // A value that is not a truth is refused.
+    assert!(writer.run(b"PRAGMA count_changes=maybe").is_err());
+}
+
+#[test]
+fn what_a_drop_refuses() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    // A name the database does not hold, unless the statement allows it.
+    assert!(writer.run(b"DROP TABLE nosuch").is_err());
+    assert!(writer.run(b"DROP INDEX nosuch").is_err());
+    writer.run(b"DROP TABLE IF EXISTS nosuch").unwrap();
+    writer.run(b"DROP INDEX IF EXISTS nosuch").unwrap();
+    // A table is not an index and an index is not a table.
+    assert!(writer.run(b"DROP INDEX t").is_err());
+}
+
+#[test]
 fn what_a_pragma_refuses() {
     use crate::change::Writer;
     use crate::parse::pragma;
@@ -1994,6 +2125,8 @@ fn what_a_pragma_refuses() {
     // A file being read is not being configured.
     assert!(database.query(b"PRAGMA page_size=1024").is_err());
     assert!(database.query(b"PRAGMA nosuch").is_err());
+    // The pragma the connection holds has no answer out of a file.
+    assert!(database.query(b"PRAGMA count_changes").is_err());
     assert!(database.query(b"PRAGMA cache_size").is_err());
     // The journal mode belongs to the connection, so it is set after a
     // table is there as well; a file in write-ahead logging leaves that

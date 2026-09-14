@@ -1416,6 +1416,65 @@ fn clear(pages: &mut Pages, first: Option<u32>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Every page of the tree at `root` put on the free list, which is
+/// `sqlite3BtreeDropTable` for a file that does not vacuum itself.
+///
+/// `clearDatabasePage` frees what lies under a page before the page
+/// itself: the child of a cell, then the chain the cell runs onto, then
+/// the page under the right pointer, and the page last. The root goes
+/// after all of them.
+///
+/// Freeing a tree of `n` pages is O(n), and the walk is O(d) deep for a
+/// tree of depth `d`.
+///
+/// # Errors
+///
+/// [`Error::Depth`] for a tree deeper than this crate walks, which is
+/// what a page that names itself answers, and whatever reading or
+/// freeing a page of it refuses.
+pub fn destroy(pages: &mut Pages, root: u32) -> Result<(), Error> {
+    clear_page(pages, root, false, 0)?;
+    pages.release(root)
+}
+
+/// One page of a tree cleared, and freed where `free` says so.
+fn clear_page(pages: &mut Pages, number: u32, free: bool, depth: usize) -> Result<(), Error> {
+    if depth >= MAX_DEPTH {
+        return Err(Error::Depth);
+    }
+    let (children, chains, right) = {
+        let page = pages.page(number)?;
+        let interior = page.kind().is_interior();
+        let mut children = Vec::new();
+        let mut chains = Vec::new();
+        for at in 0..page.cells() {
+            if interior {
+                children.push(page.child(at)?);
+            }
+            chains.push(match page.cell(at)? {
+                Cell::TableLeaf { payload, .. }
+                | Cell::IndexLeaf { payload }
+                | Cell::IndexInterior { payload, .. } => payload.overflow,
+                Cell::TableInterior { .. } => None,
+            });
+        }
+        (children, chains, page.right_most())
+    };
+    for (at, chain) in chains.iter().enumerate() {
+        if let Some(child) = children.get(at) {
+            clear_page(pages, *child, true, depth.saturating_add(1))?;
+        }
+        clear(pages, *chain)?;
+    }
+    if let Some(right) = right {
+        clear_page(pages, right, true, depth.saturating_add(1))?;
+    }
+    if free {
+        pages.release(number)?;
+    }
+    Ok(())
+}
+
 /// A cell a page holds that does not lie on it, which is `apOvfl` and
 /// `aiOvfl`: where among the cells of the page the cell belongs, and its
 /// bytes. Every one of them is next to the one before, because a page
