@@ -78,7 +78,6 @@ journal under any of its five modes or the frames of a write-ahead log.
 A file that vacuums itself keeps pointer maps, and the commit of one
 that vacuums itself whole moves the pages at the end of the file into
 the free pages below them and cuts the file back. An index gains an entry as each
-row is written, and a statement that takes rows out of an indexed table
-is refused rather than leaving the index answering rows the table no
-longer holds. What is missing of writing is `DROP`, `ALTER`, the
-checkpoint, and taking an entry out of an index.
+row is written and loses one as each row is taken out, so a `DELETE` and
+an `UPDATE` over an indexed table write the index beside the table. What
+is missing of writing is `DROP`, `ALTER` and the checkpoint.

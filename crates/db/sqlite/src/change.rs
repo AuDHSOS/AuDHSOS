@@ -411,11 +411,7 @@ impl Writer {
             if table.without_rowid {
                 return Err(Error::Unsupported);
             }
-            let kept: Vec<(crate::schema::Index, Vec<Collation>, u32)> = database
-                .indexes(&name)
-                .iter()
-                .map(|(index, root)| ((*index).clone(), collations_of(index), *root))
-                .collect();
+            let kept = kept_indexes(&database, &name);
             let places = places(table, &named)?;
             // A column the statement names no value for holds what it
             // falls back to, which is nothing where it has no
@@ -461,6 +457,12 @@ impl Writer {
             };
             let rowid = given.unwrap_or_else(|| next.saturating_add(1));
             next = next.max(rowid);
+            // The column the rowid is another name for answers the
+            // key, which is what an index over that column holds.
+            let mut named = values.clone();
+            for slot in named.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
+                *slot = Value::Int(rowid);
+            }
             // The column the rowid is another name for is stored as
             // nothing, because the key carries it.
             for slot in values.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
@@ -468,17 +470,7 @@ impl Writer {
             }
             let record = crate::record::write(&values, &affinities, 4);
             insert(&mut self.pages, root, rowid, &record)?;
-            // Every index over the table holds an entry for the row,
-            // which is what `sqlite3GenerateConstraintChecks` writes
-            // beside it.
-            for (index, collations, root) in &kept {
-                let key = entry_of(index, &values, rowid);
-                let plain = alloc::vec![Affinity::None; key.len()];
-                let entry = crate::record::write(&key, &plain, 4);
-                let pages = &mut self.pages;
-                let root = *root;
-                crate::tree::insert_entry(pages, root, &entry, &key, collations, false)?;
-            }
+            self.index_row(&kept, &named, rowid)?;
         }
         Ok(())
     }
@@ -583,18 +575,11 @@ impl Writer {
         sql: &[u8],
     ) -> Result<(), Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
-        let (root, keys) = {
+        let (root, keys, kept) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
-            // An index this crate does not write rows out of would
-            // answer rows the table no longer holds, so a statement
-            // that takes rows out of an indexed table is refused rather
-            // than answered wrongly. Keeping the entries is what the
-            // next step of document 16, section 16.22 builds.
-            if !database.indexes(&name).is_empty() {
-                return Err(Error::Unsupported);
-            }
             let (table, root) = database.table(&name).ok_or(Error::NoTable)?;
+            let kept = kept_indexes(&database, &name);
             let rows = database.rows_of(&name)?;
             let mut keys = Vec::new();
             for (rowid, values) in &rows {
@@ -611,12 +596,15 @@ impl Writer {
                     }
                 };
                 if keep {
-                    keys.push(*rowid);
+                    keys.push((*rowid, values.clone()));
                 }
             }
-            (root, keys)
+            (root, keys, kept)
         };
-        for key in keys {
+        // `sqlite3GenerateRowDelete` writes the entries out before the
+        // row, because the entries are found through the row.
+        for (key, values) in keys {
+            self.unindex_row(&kept, &values, key)?;
             crate::tree::remove(&mut self.pages, root, key)?;
         }
         Ok(())
@@ -639,18 +627,11 @@ impl Writer {
     ) -> Result<(), Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
         let sets = arena.sets(statement.sets);
-        let (root, alias, affinities, written) = {
+        let (root, alias, affinities, written, kept) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
-            // An index this crate does not write rows out of would
-            // answer rows the table no longer holds, so a statement
-            // that takes rows out of an indexed table is refused rather
-            // than answered wrongly. Keeping the entries is what the
-            // next step of document 16, section 16.22 builds.
-            if !database.indexes(&name).is_empty() {
-                return Err(Error::Unsupported);
-            }
             let (table, root) = database.table(&name).ok_or(Error::NoTable)?;
+            let kept = kept_indexes(&database, &name);
             let places: Vec<Option<usize>> = sets
                 .iter()
                 .map(|set| {
@@ -703,11 +684,11 @@ impl Writer {
                         },
                     }
                 }
-                written.push((rowid, key, next));
+                written.push((rowid, key, values, next));
             }
-            (root, table.rowid_alias, affinities, written)
+            (root, table.rowid_alias, affinities, written, kept)
         };
-        for (rowid, mut key, mut values) in written {
+        for (rowid, mut key, held, mut values) in written {
             // The column the key is another name for says the key, so a
             // statement that writes that column writes the key, and the
             // row holds no value for that column.
@@ -722,16 +703,66 @@ impl Writer {
                     *slot = Value::Null;
                 }
             }
+            // The column the key is another name for answers the key,
+            // which is what an index over that column holds.
+            let mut named = values.clone();
+            for slot in named.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
+                *slot = Value::Int(key);
+            }
             let record = crate::record::write(&values, &affinities, 4);
+            self.unindex_row(&kept, &held, rowid)?;
             if key == rowid {
                 crate::tree::update(&mut self.pages, root, rowid, &record)?;
             } else {
                 crate::tree::remove(&mut self.pages, root, rowid)?;
                 insert(&mut self.pages, root, key, &record)?;
             }
+            self.index_row(&kept, &named, key)?;
         }
         Ok(())
     }
+}
+
+impl Writer {
+    /// The entry every index over the table holds for one row, written,
+    /// which is what `sqlite3GenerateConstraintChecks` writes beside
+    /// the row.
+    fn index_row(&mut self, kept: &[Kept], values: &[Value], rowid: i64) -> Result<(), Error> {
+        for (index, collations, root) in kept {
+            let key = entry_of(index, values, rowid);
+            let plain = alloc::vec![Affinity::None; key.len()];
+            let entry = crate::record::write(&key, &plain, 4);
+            let pages = &mut self.pages;
+            let root = *root;
+            crate::tree::insert_entry(pages, root, &entry, &key, collations, false)?;
+        }
+        Ok(())
+    }
+
+    /// The entry every index over the table holds for one row, taken
+    /// out, which is `sqlite3GenerateRowIndexDelete`.
+    fn unindex_row(&mut self, kept: &[Kept], values: &[Value], rowid: i64) -> Result<(), Error> {
+        for (index, collations, root) in kept {
+            let key = entry_of(index, values, rowid);
+            crate::tree::remove_entry(&mut self.pages, *root, &key, collations)?;
+        }
+        Ok(())
+    }
+}
+
+/// One index over a table as a statement that writes rows reads it: the
+/// index, the collation of each of its columns, and the page its tree
+/// begins on.
+type Kept = (crate::schema::Index, Vec<Collation>, u32);
+
+/// Every index over the table `name`, read once so that the statement
+/// keeps them while it writes the rows the database answered.
+fn kept_indexes(database: &Database<'_>, name: &[u8]) -> Vec<Kept> {
+    database
+        .indexes(name)
+        .iter()
+        .map(|(index, root)| ((*index).clone(), collations_of(index), *root))
+        .collect()
 }
 
 /// The entry an index holds for one row: the columns it is over, and

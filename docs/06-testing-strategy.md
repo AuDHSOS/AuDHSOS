@@ -4330,10 +4330,36 @@ D-186, document 16 step Q8.
   right one is begun; an `INSERT` into an index that is already there
   evens the two out. The two write different files, which is what
   `index-deep.db` and `index-added.db` hold apart.
-- The refusals: a `DELETE` and an `UPDATE` over a table that has an
-  index, an index over an expression, a partial index, an index over a
-  table the database does not hold, and an index tree deeper than the
-  walk goes.
+- The refusals: an index over an expression, a partial index, an index
+  over a table the database does not hold, and an index tree deeper than
+  the walk goes.
+
+### 6.6.122 The entries a statement takes out of an index (`db-sqlite`)
+
+D-187 and D-188, document 16 step Q8.
+
+- Seven fixtures: `index-gone.db` takes a third of the entries off the
+  leaves of a tree of two; `index-hollow.db` takes half out of a tree
+  whose root holds entries as well, so an entry moves up from the leaf
+  under the one that went; `index-emptied.db` takes every row of a
+  table; `index-moved.db` and `index-rekeyed.db` are what an `UPDATE`
+  writes again, one over a term and one over the key; `index-alias.db`
+  is an index over the column the rowid is another name for, whose
+  entries hold the key twice; `index-tall.db` is nine hundred rows whose
+  text runs from four bytes to fifty-seven, so its index is three levels
+  deep. Each is the file the shell wrote, byte for byte.
+- `every_entry_taken_out_of_an_index_leaves_the_ones_beside_it` puts
+  five hundred entries in a tree under eleven shapes of length, page
+  size and removal order and takes every one of them out again, reading
+  the rest back every sixteenth removal. This is what found the overflow
+  pointer of D-188.
+- `an_entry_moved_up_into_a_page_with_no_room_for_it_is_balanced_with_it`
+  builds a root nearly full of short dividers over thirteen leaves and
+  takes the first divider out, so the entry that moves up is one the
+  root has no room for and the balance of the leaf reads it as a
+  divider.
+- The refusals: a tree deeper than the walk goes, on the descent to the
+  entry and on the walk to the entry before it.
 
 ## 6.7 CI pipeline
 

@@ -648,7 +648,7 @@ do for the page size, the encoding and the reserved tail.
 Status: `CREATE TABLE`, `CREATE INDEX`, `PRAGMA`, `INSERT`, `DELETE`
 and `UPDATE` are run from their text and write the files the shell
 wrote; the rest is open.
-Depends on: Q6. Recorded in D-172 to D-174, D-182 and D-186.
+Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186 and D-187.
 Size: L.
 
 ### Does
@@ -656,9 +656,8 @@ Size: L.
 1. `INSERT`, `UPDATE`, `DELETE`, `REPLACE`. `INSERT` is built, over
    `VALUES` and over a `SELECT`, and so are `DELETE` and `UPDATE`;
    `REPLACE` and the other conflict words are read and not answered. A
-   `DELETE` and an `UPDATE` over a table that has an index are refused,
-   because this crate writes an entry into an index and does not write
-   one out of it.
+   `DELETE` and an `UPDATE` over a table an index is over write the
+   entries of that index as well, which D-187 records.
 2. `CREATE`, `ALTER`, `DROP` for tables, indexes, views and triggers.
    `CREATE TABLE` is built for a table of columns, and `CREATE INDEX`
    for an index over columns, which D-186 records.
@@ -674,7 +673,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 550 cases in 1 165
-files, 552 pass, 16 answer differently, and 14 982 name something the
+files, 642 pass, 17 answer differently, and 14 891 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.

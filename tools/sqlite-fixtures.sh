@@ -314,6 +314,10 @@ done
 # above the leaves. The entries are sorted before any is written, so the
 # pages fill left to right and the left one is filled before the right
 # one is begun, which is what `BTREE_BULKLOAD` asks for.
+# Nine hundred rows whose text runs from four bytes to fifty-seven,
+# so the index is three levels deep and the entries of one page
+# differ in length by more than one of them takes.
+rows900="CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<900) INSERT INTO t(rowid,n,s) SELECT (i*541)%1501, i, 'row ' || i || substr('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, i%53) FROM c;"
 rows60="CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<60) INSERT INTO t(rowid,n,s) SELECT i, i, 'row ' || i FROM c;"
 for case in "index-empty.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a);" \
     "index-few.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(3,'c'),(1,'a'),(2,'b'); CREATE INDEX ta ON t(a);" \
@@ -324,7 +328,14 @@ for case in "index-empty.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a);" \
     "index-wide.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(replace(hex(zeroblob(400)),'0','a'),1),('b',2); CREATE INDEX ta ON t(a);" \
     "index-kept.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a); INSERT INTO t VALUES(3,'c'),(1,'a'),(2,'b'),(2,'d');" \
     "index-classes.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a); INSERT INTO t VALUES(NULL,1),(2.5,2),(x'0102',3),('t',4),(7,5),(NULL,6),(2.5,7);" \
-    "index-added.db:$rows400 CREATE INDEX ts ON t(s); INSERT INTO t(rowid,n,s) VALUES(500,500,'row 1 and a half'),(501,501,'row 999');"; do
+    "index-added.db:$rows400 CREATE INDEX ts ON t(s); INSERT INTO t(rowid,n,s) VALUES(500,500,'row 1 and a half'),(501,501,'row 999');" \
+    "index-gone.db:$rows60 CREATE INDEX ts ON t(s); DELETE FROM t WHERE n%3=0;" \
+    "index-hollow.db:$rows400 CREATE INDEX ts ON t(s); DELETE FROM t WHERE n%2=0;" \
+    "index-emptied.db:$rows60 CREATE INDEX ts ON t(s); DELETE FROM t WHERE n>0;" \
+    "index-moved.db:$rows60 CREATE INDEX ts ON t(s); UPDATE t SET s='moved ' || n WHERE n%7=0;" \
+    "index-rekeyed.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a); INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c'); UPDATE t SET rowid=9 WHERE a=2;" \
+    "index-alias.db:CREATE TABLE t(a INTEGER PRIMARY KEY, b); INSERT INTO t VALUES(7,'x'),(3,'y'),(9,'z'); CREATE INDEX ta ON t(a); DELETE FROM t WHERE b='y';" \
+    "index-tall.db:$rows900 CREATE INDEX ts ON t(s); DELETE FROM t WHERE n%3=0;"; do
     name="${case%%:*}"
     sql="${case#*:}"
     rm -f "$out/$name"

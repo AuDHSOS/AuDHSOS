@@ -334,6 +334,37 @@ fn a_tree_that_is_not_a_table_and_a_tree_deeper_than_the_walk_are_refused() {
         crate::tree::insert_entry(&mut pages, 2, &record, &[Value::Int(1)], &[], false),
         Err(Error::Depth)
     );
+    // The descent that looks for one entry stops the same way.
+    assert_eq!(
+        crate::tree::remove_entry(&mut pages, 2, &[Value::Int(1)], &[]),
+        Err(Error::Depth)
+    );
+    // The walk to the entry before one on an interior page stops the
+    // same way: the root holds the entry and the pages under it never
+    // reach a leaf.
+    let mut pages = Pages::new(512, 0).unwrap();
+    let root = pages.add(Kind::InteriorIndex, 0).unwrap();
+    let mut above = 0;
+    for _ in 0..34 {
+        let number = pages.add(Kind::InteriorIndex, 0).unwrap();
+        if above != 0 {
+            point(&mut pages, above, number);
+        }
+        above = number;
+    }
+    let cell = write_cell(&Cell::IndexInterior {
+        child: 3,
+        payload: Payload {
+            local: &record,
+            total: record.len(),
+            overflow: None,
+        },
+    });
+    assert!(pages.writer(root).unwrap().insert(0, &cell).unwrap());
+    assert_eq!(
+        crate::tree::remove_entry(&mut pages, root, &[Value::Int(1)], &[]),
+        Err(Error::Depth)
+    );
 }
 
 #[test]
@@ -2066,17 +2097,307 @@ fn the_entries_an_index_gains_as_rows_are_put_in_are_the_ones_the_shell_wrote() 
     );
 }
 
+/// A writer over a table of `rows` rows with an index over its text,
+/// which is what the tests of a statement over an indexed table begin
+/// from.
+fn indexed(rows: i64) -> crate::change::Writer {
+    use core::fmt::Write as _;
+    let mut writer = crate::change::Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+    if rows == 400 {
+        writer.run(sql_of_rows().as_bytes()).unwrap();
+    } else {
+        let mut sql = alloc::string::String::from("INSERT INTO t(rowid,n,s) VALUES ");
+        for number in 1..=rows {
+            if number > 1 {
+                sql.push(',');
+            }
+            let _ = write!(sql, "({number},{number},'row {number}')");
+        }
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    writer.run(b"CREATE INDEX ts ON t(s)").unwrap();
+    writer
+}
+
+#[test]
+fn the_entries_a_delete_takes_out_of_an_index_are_the_ones_the_shell_wrote() {
+    // An entry on a leaf is dropped and the leaf is balanced, which is
+    // the shorter branch of `sqlite3BtreeDelete`.
+    let mut writer = indexed(60);
+    writer.run(b"DELETE FROM t WHERE n%3=0").unwrap();
+    same("index-gone.db", &writer.written(), crate::tests::GONE, 512);
+    // An entry on the page above the leaves is replaced by the entry
+    // before it, which lies at the end of the right-most leaf under the
+    // page the entry names.
+    let mut writer = indexed(400);
+    writer.run(b"DELETE FROM t WHERE n%2=0").unwrap();
+    same(
+        "index-hollow.db",
+        &writer.written(),
+        crate::tests::HOLLOW,
+        512,
+    );
+    // A table emptied leaves its index one root page holding no entry.
+    let mut writer = indexed(60);
+    writer.run(b"DELETE FROM t WHERE n>0").unwrap();
+    same(
+        "index-emptied.db",
+        &writer.written(),
+        crate::tests::SWEPT,
+        512,
+    );
+}
+
+#[test]
+fn an_entry_moved_up_into_a_page_with_no_room_for_it_is_balanced_with_it() {
+    use crate::page::{Cell, Payload, write_cell};
+    use crate::tree::{find_entry, remove_entry};
+    use core::fmt::Write as _;
+    // A root nearly full of short dividers, over thirteen leaves of one
+    // entry each, the first of which is as long as an entry lies on a
+    // page. Taking the first divider out moves that entry up, and the
+    // root has no room for it, so the balance of the leaf reads it as
+    // one of its dividers.
+    let mut pages = Pages::new(512, 0).unwrap();
+    let root = pages.add(Kind::InteriorIndex, 0).unwrap();
+    let mut keys: alloc::vec::Vec<alloc::vec::Vec<Value>> = alloc::vec::Vec::new();
+    let mut leaves: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
+    for number in 0..13_i64 {
+        let leaf = pages.add(Kind::LeafIndex, 0).unwrap();
+        leaves.push(leaf);
+        let mut text = alloc::string::String::new();
+        let _ = write!(text, "k{number:02}a");
+        if number == 0 {
+            text.extend(core::iter::repeat_n('b', 94));
+        }
+        let key = alloc::vec![Value::Text(text.into_bytes()), Value::Int(number)];
+        let record = write(&key, &[Affinity::None, Affinity::None], 4);
+        let cell = write_cell(&Cell::IndexLeaf {
+            payload: Payload {
+                local: &record,
+                total: record.len(),
+                overflow: None,
+            },
+        });
+        assert!(pages.writer(leaf).unwrap().insert(0, &cell).unwrap());
+        keys.push(key);
+    }
+    let mut dividers: alloc::vec::Vec<alloc::vec::Vec<Value>> = alloc::vec::Vec::new();
+    for number in 0..12_i64 {
+        let mut text = alloc::string::String::new();
+        let _ = write!(text, "k{number:02}z");
+        text.extend(core::iter::repeat_n('d', 25));
+        let key = alloc::vec![Value::Text(text.into_bytes()), Value::Int(number)];
+        let record = write(&key, &[Affinity::None, Affinity::None], 4);
+        let at = usize::try_from(number).unwrap();
+        let cell = write_cell(&Cell::IndexInterior {
+            child: leaves[at],
+            payload: Payload {
+                local: &record,
+                total: record.len(),
+                overflow: None,
+            },
+        });
+        assert!(pages.writer(root).unwrap().insert(at, &cell).unwrap());
+        dividers.push(key);
+    }
+    point(&mut pages, root, leaves[12]);
+    // The root holds less room than the entry that moves up needs.
+    assert!(pages.page(root).unwrap().free().unwrap() < 40);
+    let gone = dividers[0].clone();
+    assert!(remove_entry(&mut pages, root, &gone, &[]).unwrap());
+    assert!(!remove_entry(&mut pages, root, &gone, &[]).unwrap());
+    // The entry that moved up is still in the tree, as a divider.
+    for kept in keys.iter().chain(dividers.iter().skip(1)) {
+        assert!(
+            matches!(find_entry(&pages, root, kept, &[]), Ok(Some(_))),
+            "the tree lost an entry"
+        );
+    }
+}
+
+#[test]
+fn every_entry_taken_out_of_an_index_leaves_the_ones_beside_it() {
+    for (page_size, shape, stride) in SWEEPS {
+        sweep(*page_size, *shape, *stride);
+    }
+}
+
+/// How long the text of entry `number` is, which is what makes the
+/// pages of a tree hold few entries or many.
+fn length_of(shape: u8, number: u64) -> usize {
+    let step = usize::try_from(number).unwrap_or(0);
+    match shape {
+        0 => step % 97,
+        1 => {
+            if step % 5 == 0 {
+                400
+            } else {
+                2
+            }
+        }
+        2 => step.saturating_mul(37) % 200,
+        3 => {
+            if step % 11 == 0 {
+                300
+            } else {
+                step % 3
+            }
+        }
+        _ => step.saturating_mul(53) % 7 + usize::from(step % 13 == 0) * 300,
+    }
+}
+
+/// The page size, the shape of the entries, and how far apart the
+/// entries are taken out, over the sweeps that between them reach every
+/// balance a removal writes.
+/// How many entries a sweep puts in.
+const COUNT: i64 = 500;
+
+const SWEEPS: &[(u32, u8, usize)] = &[
+    (512, 0, 37),
+    (512, 1, 37),
+    (512, 2, 11),
+    (1024, 1, 11),
+    (512, 1, 3),
+    (512, 3, 7),
+    (512, 3, 29),
+    (512, 4, 13),
+    (512, 1, 1),
+    (512, 1, 2),
+    (512, 4, 1),
+];
+
+/// Puts `COUNT` entries in an index tree and takes every one of them out
+/// again, with the tree read back after each.
+fn sweep(page_size: u32, shape: u8, stride: usize) {
+    use crate::tree::{insert_entry, remove_entry};
+    use core::fmt::Write as _;
+    let mut pages = Pages::new(page_size, 0).unwrap();
+    assert_eq!(pages.add(Kind::LeafIndex, 0).unwrap(), 2);
+    let mut keys: alloc::vec::Vec<alloc::vec::Vec<Value>> = alloc::vec::Vec::new();
+    for number in 1..=COUNT {
+        let mut text = alloc::string::String::new();
+        let _ = write!(text, "row {number}");
+        let length = length_of(shape, number.unsigned_abs());
+        text.extend(core::iter::repeat_n('a', length));
+        let key = alloc::vec![Value::Text(text.into_bytes()), Value::Int(number)];
+        let record = write(&key, &[Affinity::None, Affinity::None], 4);
+        insert_entry(&mut pages, 2, &record, &key, &[], false).unwrap();
+        keys.push(key);
+    }
+    // The entries come out in an order that is neither the one they
+    // went in nor the one they lie in, so the balance joins pages at
+    // every place of the tree.
+    let mut left = keys;
+    let mut step = 0_usize;
+    while !left.is_empty() {
+        step = step.saturating_add(stride) % left.len();
+        let key = left.remove(step);
+        assert!(remove_entry(&mut pages, 2, &key, &[]).unwrap());
+        // An entry the tree no longer holds is one the descent reaches
+        // a leaf without finding.
+        assert!(!remove_entry(&mut pages, 2, &key, &[]).unwrap());
+        // Every entry left is read back every sixteenth removal, which
+        // holds the cost of the sweep to O(n²/16) descents.
+        if left.len().is_multiple_of(16) {
+            for kept in &left {
+                assert!(
+                    matches!(crate::tree::find_entry(&pages, 2, kept, &[]), Ok(Some(_))),
+                    "the tree lost an entry"
+                );
+            }
+        }
+    }
+    assert_eq!(pages.page(2).unwrap().cells(), 0);
+}
+
+#[test]
+fn a_delete_over_an_index_three_levels_deep_is_the_file_the_shell_wrote() {
+    use crate::change::Writer;
+    use core::fmt::Write as _;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+    let mut sql = alloc::string::String::from("INSERT INTO t(rowid,n,s) VALUES ");
+    for number in 1..=900_i64 {
+        if number > 1 {
+            sql.push(',');
+        }
+        let pad: alloc::string::String =
+            core::iter::repeat_n('a', usize::try_from(number % 53).unwrap_or(0)).collect();
+        let _ = write!(
+            sql,
+            "({},{number},'row {number}{pad}')",
+            (number * 541) % 1501
+        );
+    }
+    writer.run(sql.as_bytes()).unwrap();
+    writer.run(b"CREATE INDEX ts ON t(s)").unwrap();
+    writer.run(b"DELETE FROM t WHERE n%3=0").unwrap();
+    same(
+        "index-tall.db",
+        &writer.written(),
+        crate::tests::TALL_INDEX,
+        512,
+    );
+}
+
+#[test]
+fn the_entries_an_update_writes_again_are_the_ones_the_shell_wrote() {
+    use crate::change::Writer;
+    // The entry of a row comes out under the term the row held and goes
+    // in under the term the statement gives it.
+    let mut writer = indexed(60);
+    writer
+        .run(b"UPDATE t SET s='moved ' || n WHERE n%7=0")
+        .unwrap();
+    same(
+        "index-moved.db",
+        &writer.written(),
+        crate::tests::SHIFTED,
+        512,
+    );
+    // A statement that writes the key writes the entry again as well,
+    // because the key is the last column of every entry.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer.run(b"CREATE INDEX ta ON t(a)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c')")
+        .unwrap();
+    writer.run(b"UPDATE t SET rowid=9 WHERE a=2").unwrap();
+    same(
+        "index-rekeyed.db",
+        &writer.written(),
+        crate::tests::REKEYED,
+        512,
+    );
+}
+
+#[test]
+fn an_index_over_the_column_the_key_names_holds_the_key_twice() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(a INTEGER PRIMARY KEY, b)")
+        .unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(7,'x'),(3,'y'),(9,'z')")
+        .unwrap();
+    writer.run(b"CREATE INDEX ta ON t(a)").unwrap();
+    writer.run(b"DELETE FROM t WHERE b='y'").unwrap();
+    same(
+        "index-alias.db",
+        &writer.written(),
+        crate::tests::ALIAS,
+        512,
+    );
+}
+
 #[test]
 fn what_a_statement_over_an_indexed_table_refuses() {
     use crate::change::Writer;
-    // An index this crate does not write rows out of would answer rows
-    // the table no longer holds.
-    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
-    writer.run(b"CREATE TABLE t(a,b)").unwrap();
-    writer.run(b"CREATE INDEX ta ON t(a)").unwrap();
-    writer.run(b"INSERT INTO t VALUES(1,'a')").unwrap();
-    assert!(writer.run(b"DELETE FROM t WHERE a=1").is_err());
-    assert!(writer.run(b"UPDATE t SET b='z' WHERE a=1").is_err());
     // An index over another table leaves the statements of this one
     // alone.
     let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();

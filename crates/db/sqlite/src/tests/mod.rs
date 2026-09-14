@@ -509,6 +509,38 @@ pub(super) const CLASSES: &[u8] = include_bytes!("fixtures/index-classes.db");
 /// lands in a leaf that is not the last.
 pub(super) const ADDED: &[u8] = include_bytes!("fixtures/index-added.db");
 
+/// The entries a `DELETE` takes out of an index over sixty rows, which
+/// is a tree of two leaves under a root, so the balance joins pages.
+pub(super) const GONE: &[u8] = include_bytes!("fixtures/index-gone.db");
+
+/// The same over four hundred rows, whose index has a page above its
+/// leaves, so half the entries come off leaves and the rest replace
+/// entries of the page above, which is the branch of
+/// `sqlite3BtreeDelete` that moves the entry before the lost one up.
+pub(super) const HOLLOW: &[u8] = include_bytes!("fixtures/index-hollow.db");
+
+/// Every row of an indexed table taken out, which leaves the index one
+/// empty root page.
+pub(super) const SWEPT: &[u8] = include_bytes!("fixtures/index-emptied.db");
+
+/// The entries an `UPDATE` writes again, which come out under the term
+/// the row held and go in under the term it is given.
+pub(super) const SHIFTED: &[u8] = include_bytes!("fixtures/index-moved.db");
+
+/// An `UPDATE` that writes the key of a row, so the entry comes out
+/// under the old key and goes in under the new one.
+pub(super) const REKEYED: &[u8] = include_bytes!("fixtures/index-rekeyed.db");
+
+/// An index over the column the key is another name for, whose entries
+/// hold the key twice, and a `DELETE` that finds one of them.
+pub(super) const ALIAS: &[u8] = include_bytes!("fixtures/index-alias.db");
+
+/// Nine hundred rows whose text runs from four bytes to fifty-seven,
+/// which makes an index three levels deep whose entries differ in
+/// length by more than one of them takes, so a `DELETE` moves an entry
+/// up into a page the entry it replaces will not fit on.
+pub(super) const TALL_INDEX: &[u8] = include_bytes!("fixtures/index-tall.db");
+
 /// The auto-vacuum dimension of document 16, section 16.11, over the
 /// write path: the same four hundred rows under both settings, chains
 /// that cross the second pointer-map page, the free pages a file that

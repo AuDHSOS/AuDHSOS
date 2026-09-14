@@ -955,6 +955,11 @@ fn spilled_as<'a>(
         pages.put(number, 4, taken);
         rest = rest.get(taken.len()..).unwrap_or_default();
         if rest.is_empty() {
+            // `fillInCell` writes nought over the pointer of every page
+            // it takes, and the page the chain ends on keeps it. A page
+            // the free list gave back holds what it held before, so the
+            // pointer is written and not left.
+            pages.put(number, 0, &0_u32.to_be_bytes());
             break;
         }
         let next = pages.add_plain(pages.after_maps(number))?;
@@ -1001,7 +1006,7 @@ pub fn insert_entry(
     if pages.put_cell(leaf, at, &cell)? {
         return Ok(());
     }
-    balance(pages, &path, alloc::vec![(at, cell)], bulk)
+    balance(pages, &path, alloc::vec![(at, cell)], None, bulk).map(|_| ())
 }
 
 /// Where an entry of `key` belongs in the index tree at `root`: one
@@ -1106,6 +1111,147 @@ fn read_chain(pages: &Pages, payload: &Payload<'_>, into: &mut Vec<u8>) -> Resul
     Ok(())
 }
 
+/// Takes the entry of `key` out of the index tree that begins at
+/// `root`, and answers whether the tree held one.
+///
+/// This is `sqlite3BtreeDelete` over an index cursor: an entry on a
+/// leaf is dropped and the leaf is balanced; an entry on an interior
+/// page is replaced by the entry before it, which lies at the end of
+/// the right-most leaf under the page the entry names, and both the
+/// leaf and the interior page are balanced.
+///
+/// The descent is O(log n) pages and the balance O(log n) more.
+///
+/// # Errors
+///
+/// [`Error::Depth`] for a tree deeper than this crate walks, and
+/// whatever reading, balancing or freeing a page of it refuses.
+pub fn remove_entry(
+    pages: &mut Pages,
+    root: u32,
+    key: &[Value],
+    collations: &[Collation],
+) -> Result<bool, Error> {
+    let Some(path) = find_entry(pages, root, key, collations)? else {
+        return Ok(false);
+    };
+    let (holder, at) = *path.last().ok_or(Error::Depth)?;
+    let interior = pages.page(holder)?.kind().is_interior();
+    let under = if interior {
+        let child = pages.page(holder)?.child(at)?;
+        last_under(pages, child)?
+    } else {
+        Vec::new()
+    };
+    let overflow = pages.page(holder)?.entry(at)?.overflow;
+    pages.open(holder);
+    clear(pages, overflow)?;
+    pages.writer(holder)?.remove(at)?;
+    if !interior {
+        balance(pages, &path, Vec::new(), None, false)?;
+        return Ok(true);
+    }
+    replace_entry(pages, &path, &under)
+}
+
+/// The entry an interior page lost given the entry before it, and both
+/// pages balanced.
+///
+/// `path` ends on the interior page and `under` runs from the page the
+/// lost entry named down to the leaf that holds the entry before it.
+fn replace_entry(
+    pages: &mut Pages,
+    path: &[(u32, usize)],
+    under: &[(u32, usize)],
+) -> Result<bool, Error> {
+    let (holder, at) = *path.last().ok_or(Error::Depth)?;
+    let (below, _) = *under.first().ok_or(Error::Depth)?;
+    let (leaf, last) = *under.last().ok_or(Error::Depth)?;
+    // The entry moves up as a divider, which names the page the lost
+    // entry named in its first four bytes.
+    let mut divider = below.to_be_bytes().to_vec();
+    divider.extend_from_slice(&write_cell(&pages.page(leaf)?.cell(last)?));
+    pages.open(leaf);
+    let mut spill: Vec<Spill> = Vec::new();
+    if !pages.put_cell(holder, at, &divider)? {
+        spill.push((at, divider));
+    }
+    pages.writer(leaf)?.remove(last)?;
+    let mut down = path.to_vec();
+    down.extend_from_slice(under);
+    let held = (!spill.is_empty()).then(|| (holder, spill.clone()));
+    let left = balance(pages, &down, Vec::new(), held, false)?;
+    // The balance of the leaf stops where it has no more to do, so the
+    // interior page is balanced on its own where the balance stopped
+    // below it.
+    if left > path.len() {
+        balance(pages, path, spill, None, false)?;
+    }
+    Ok(true)
+}
+
+/// Where the entry of `key` lies in the index tree at `root`: one page
+/// and one place per level, the page that holds the entry last.
+/// Answers nothing where the tree holds no entry of `key`.
+///
+/// The descent is O(log n) pages, and one page costs O(k) comparisons
+/// over its `k` cells.
+pub(crate) fn find_entry(
+    pages: &Pages,
+    root: u32,
+    key: &[Value],
+    collations: &[Collation],
+) -> Result<Option<Vec<(u32, usize)>>, Error> {
+    let mut path = Vec::new();
+    let mut number = root;
+    for _ in 0..MAX_DEPTH {
+        let cells = pages.page(number)?.cells();
+        let mut at = cells;
+        let mut same = false;
+        for index in 0..cells {
+            let order = order_of_entry(pages, number, index, key, collations)?;
+            if order.is_ge() {
+                at = index;
+                same = order == core::cmp::Ordering::Equal;
+                break;
+            }
+        }
+        path.push((number, at));
+        if same {
+            return Ok(Some(path));
+        }
+        let page = pages.page(number)?;
+        if !page.kind().is_interior() {
+            return Ok(None);
+        }
+        number = if at == cells {
+            page.right_most().ok_or(Error::Overrun)?
+        } else {
+            page.child(at)?
+        };
+    }
+    Err(Error::Depth)
+}
+
+/// The path from `child` down to the leaf that holds the last entry
+/// under it, which is the entry before the one the divider above
+/// `child` holds. The leaf stands at its last cell.
+fn last_under(pages: &Pages, child: u32) -> Result<Vec<(u32, usize)>, Error> {
+    let mut path = Vec::new();
+    let mut number = child;
+    for _ in 0..MAX_DEPTH {
+        let page = pages.page(number)?;
+        let cells = page.cells();
+        if !page.kind().is_interior() {
+            path.push((number, cells.saturating_sub(1)));
+            return Ok(path);
+        }
+        path.push((number, cells));
+        number = page.right_most().ok_or(Error::Overrun)?;
+    }
+    Err(Error::Depth)
+}
+
 /// Puts one row in the table tree that begins at `root`.
 ///
 /// A leaf that will not hold the cell is balanced, and so is every page
@@ -1131,7 +1277,7 @@ pub fn insert(pages: &mut Pages, root: u32, rowid: i64, record: &[u8]) -> Result
     if pages.put_cell(leaf, at, &cell)? {
         return Ok(());
     }
-    balance(pages, &path, alloc::vec![(at, cell)], false)
+    balance(pages, &path, alloc::vec![(at, cell)], None, false).map(|_| ())
 }
 
 /// Puts a row that the tree already holds there again, and answers
@@ -1211,7 +1357,7 @@ pub fn update(pages: &mut Pages, root: u32, rowid: i64, record: &[u8]) -> Result
     if pages.put_cell(leaf, at, &cell)? {
         return Ok(true);
     }
-    balance(pages, &path, alloc::vec![(at, cell)], false)?;
+    balance(pages, &path, alloc::vec![(at, cell)], None, false)?;
     Ok(true)
 }
 
@@ -1244,7 +1390,7 @@ pub fn remove(pages: &mut Pages, root: u32, rowid: i64) -> Result<bool, Error> {
     pages.open(leaf);
     clear(pages, overflow)?;
     pages.writer(leaf)?.remove(at)?;
-    balance(pages, &path, Vec::new(), false)?;
+    balance(pages, &path, Vec::new(), None, false)?;
     Ok(true)
 }
 
@@ -1287,8 +1433,9 @@ fn balance(
     pages: &mut Pages,
     path: &[(u32, usize)],
     mut spill: Vec<Spill>,
+    mut above: Option<(u32, Vec<Spill>)>,
     bulk: bool,
-) -> Result<(), Error> {
+) -> Result<usize, Error> {
     let mut stack = path.to_vec();
     // A page more than two thirds empty is balanced as well, so that a
     // delete joins pages rather than leaving a tree of empty ones.
@@ -1298,17 +1445,17 @@ fn balance(
     loop {
         let (page, at) = *stack.last().ok_or(Error::Depth)?;
         if spill.is_empty() && pages.page(page)?.free()? <= least {
-            return Ok(());
+            return Ok(stack.len());
         }
         let over = stack
             .len()
             .checked_sub(2)
             .and_then(|level| stack.get(level));
-        let Some(&(parent, above)) = over else {
+        let Some(&(parent, at_above)) = over else {
             if spill.is_empty() {
                 // A root has no sibling to even out against, however
                 // empty it is.
-                return Ok(());
+                return Ok(stack.len());
             }
             // A tree of one page: the root keeps its place in the file,
             // so the cells of the root move to a child and the root
@@ -1327,10 +1474,25 @@ fn balance(
         let first = spill.first().map(|(at, _)| *at);
         if pages.page(page)?.kind() == Kind::LeafTable && first == Some(pages.page(page)?.cells()) {
             let (_, bytes) = spill.first().ok_or(Error::Balance)?;
-            return quick(pages, parent, page, bytes);
+            return quick(pages, parent, page, bytes).map(|()| stack.len());
         }
         pages.open(parent);
-        spill = balance_nonroot(pages, parent, above, &spill, stack.len() == 2, bulk)?;
+        // The cell the parent has no room for is one of the dividers
+        // this balance reads, so the balance that reaches the parent
+        // takes it and no later one does.
+        let mine = above
+            .take_if(|(number, _)| *number == parent)
+            .map(|(_, cells)| cells)
+            .unwrap_or_default();
+        spill = balance_nonroot(
+            pages,
+            parent,
+            at_above,
+            &spill,
+            &mine,
+            stack.len() == 2,
+            bulk,
+        )?;
         stack.pop();
     }
 }
@@ -1512,8 +1674,33 @@ struct Siblings {
 ///
 /// [`Error::Overrun`] for a parent with no right-most pointer, and
 /// whatever reading or writing the parent refuses.
-fn siblings(pages: &mut Pages, parent: u32, at: usize) -> Result<Siblings, Error> {
-    let held_by_parent = pages.page(parent)?.cells();
+/// The divider at `index` of a parent that holds at most one cell it
+/// has no room for: its bytes, the page under it, and where it lies
+/// among the cells of the page, which is nothing for the cell the
+/// parent has no room for.
+///
+/// The dividers are read from the last to the first, so a divider after
+/// the one the parent has no room for lies one place earlier on the
+/// page than its index says.
+fn divider_at(
+    pages: &Pages,
+    parent: u32,
+    index: usize,
+    above: &[Spill],
+) -> Result<(Vec<u8>, u32, Option<usize>), Error> {
+    let over = above.first().map(|(place, _)| *place);
+    if over == Some(index) {
+        let (_, bytes) = above.first().ok_or(Error::Balance)?;
+        let child = crate::bytes::u32_at(bytes, 0).ok_or(Error::Overrun)?;
+        return Ok((bytes.clone(), child, None));
+    }
+    let on = index.saturating_sub(usize::from(over.is_some_and(|place| index > place)));
+    let page = pages.page(parent)?;
+    Ok((write_cell(&page.cell(on)?), page.child(on)?, Some(on)))
+}
+
+fn siblings(pages: &mut Pages, parent: u32, at: usize, above: &[Spill]) -> Result<Siblings, Error> {
+    let held_by_parent = pages.page(parent)?.cells().saturating_add(above.len());
     let (mut i, next) = if held_by_parent < 2 {
         (held_by_parent, 0)
     } else if at == 0 {
@@ -1527,7 +1714,7 @@ fn siblings(pages: &mut Pages, parent: u32, at: usize) -> Result<Siblings, Error
     let mut number = if right_at == held_by_parent {
         pages.page(parent)?.right_most().ok_or(Error::Overrun)?
     } else {
-        pages.page(parent)?.child(right_at)?
+        divider_at(pages, parent, right_at, above)?.1
     };
     // The siblings are read right to left, because the divider that
     // names one of them lies to its left.
@@ -1540,12 +1727,14 @@ fn siblings(pages: &mut Pages, parent: u32, at: usize) -> Result<Siblings, Error
         }
         i = i.saturating_sub(1);
         let index = i.saturating_add(next);
-        {
-            let page = pages.page(parent)?;
-            dividers.push(write_cell(&page.cell(index)?));
-            number = page.child(index)?;
+        let (bytes, child, on) = divider_at(pages, parent, index, above)?;
+        dividers.push(bytes);
+        number = child;
+        // A divider the parent has no room for lies on no page, so the
+        // balance reads it and drops nothing.
+        if let Some(on) = on {
+            pages.writer(parent)?.remove(on)?;
         }
-        pages.writer(parent)?.remove(index)?;
     }
     old.reverse();
     dividers.reverse();
@@ -1939,12 +2128,13 @@ fn balance_nonroot(
     parent: u32,
     at: usize,
     spill: &[Spill],
+    above: &[Spill],
     topmost: bool,
     bulk: bool,
 ) -> Result<Vec<Spill>, Error> {
     let usable = pages.usable();
-    let held_by_parent = pages.page(parent)?.cells();
-    let taken = siblings(pages, parent, at)?;
+    let held_by_parent = pages.page(parent)?.cells().saturating_add(above.len());
+    let taken = siblings(pages, parent, at, above)?;
     let old_count = taken.old.len();
     let kind = pages
         .page(*taken.old.first().ok_or(Error::Balance)?)?
