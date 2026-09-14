@@ -487,6 +487,24 @@ pub struct CreateTable {
     pub options: TableOptions,
 }
 
+/// `CREATE VIEW [IF NOT EXISTS] name [(columns)] AS select`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CreateView {
+    /// Whether `TEMP` or `TEMPORARY` was written.
+    pub temporary: bool,
+    /// Whether `IF NOT EXISTS` was written.
+    pub if_not_exists: bool,
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The name.
+    pub name: Span,
+    /// The names the view answers its columns under, where they were
+    /// written.
+    pub columns: Range,
+    /// The statement it answers.
+    pub select: SelectId,
+}
+
 /// `CREATE INDEX`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CreateIndex {
@@ -588,8 +606,21 @@ pub enum Definition {
     Table(CreateTable),
     /// `CREATE INDEX`.
     Index(CreateIndex),
-    /// `DROP TABLE` and `DROP INDEX`.
+    /// `CREATE VIEW`.
+    View(CreateView),
+    /// `DROP TABLE`, `DROP INDEX` and `DROP VIEW`.
     Drop(Drop),
+}
+
+/// What a `DROP` takes away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Dropped {
+    /// `DROP TABLE`.
+    Table,
+    /// `DROP INDEX`.
+    Index,
+    /// `DROP VIEW`.
+    View,
 }
 
 /// `BEGIN`, `COMMIT` and `ROLLBACK`, which are what a connection
@@ -610,8 +641,8 @@ pub enum Transaction {
 /// `DROP TABLE [IF EXISTS] [schema.]name`, and the same for an index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Drop {
-    /// Whether the statement names a table rather than an index.
-    pub table: bool,
+    /// What it takes away.
+    pub kind: Dropped,
     /// Whether `IF EXISTS` was written.
     pub if_exists: bool,
     /// The schema, where one was named.

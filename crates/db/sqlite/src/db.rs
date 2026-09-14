@@ -241,6 +241,24 @@ struct Scope<'a> {
     /// The row the enclosing statement stands on, which a correlated
     /// statement reads its columns from.
     outer: Option<&'a dyn eval::Row>,
+    /// How many views the statement is being answered inside, which
+    /// stops a view that names itself.
+    views: u32,
+}
+
+/// How many views deep a statement is answered, which is what
+/// `SQLITE_MAX_VIEW_DEPTH` bounds a view that names itself by.
+const VIEW_DEPTH: u32 = 32;
+
+/// What a view puts in the place of a table: the columns it answers,
+/// the rows its statement answered, and the name it is known by.
+struct Viewed {
+    /// The columns it answers.
+    shape: Shape,
+    /// The rows its statement answered.
+    rows: Vec<Vec<Value>>,
+    /// The name the view is known by.
+    name: Vec<u8>,
 }
 
 /// What a statement written inside an expression is answered by.
@@ -362,8 +380,27 @@ pub struct Database<'a> {
     image: Image<'a>,
     /// Its tables.
     tables: Vec<Stored>,
+    /// Its views.
+    views: Vec<View>,
     /// What encoding its text is in.
     encoding: Encoding,
+}
+
+/// One view of the schema: a name, the statement it answers, and the
+/// names it answers its columns under where the definition wrote them.
+#[derive(Clone, Debug)]
+struct View {
+    /// The name, with its quotes taken off.
+    name: Vec<u8>,
+    /// The `CREATE VIEW` text, which the tree points into.
+    sql: Vec<u8>,
+    /// The tree that text was parsed into.
+    arena: Arena,
+    /// The statement it answers.
+    select: crate::ast::SelectId,
+    /// The names the definition wrote for its columns, where it wrote
+    /// them.
+    columns: Vec<Vec<u8>>,
 }
 
 /// What a statement answered.
@@ -462,10 +499,101 @@ impl<'a> Database<'a> {
         let mut database = Database {
             image,
             tables,
+            views: Vec::new(),
             encoding,
         };
         database.read_indexes()?;
+        database.read_views()?;
         Ok(database)
+    }
+
+    /// Reads the views of the schema.
+    ///
+    /// A view names a statement rather than a tree, so it carries no
+    /// root page; one whose statement this crate cannot read is passed
+    /// over, and a statement that names it then answers no table.
+    fn read_views(&mut self) -> Result<(), Error> {
+        let mut views = Vec::new();
+        let mut payload = Vec::new();
+        for row in self.image.schema() {
+            let row = row?;
+            read_payload(&self.image, &row.payload, &mut payload)?;
+            let record = record::Record::parse(&payload)?;
+            let text = |at: usize| -> Result<Vec<u8>, Error> {
+                Ok(match record.value(at)? {
+                    Some(record::Value::Text(bytes)) => crate::value::decoded(bytes, self.encoding),
+                    _ => Vec::new(),
+                })
+            };
+            if text(0)? != b"view" {
+                continue;
+            }
+            let sql = text(4)?;
+            let Ok((arena, definition)) = parse::definition(&sql) else {
+                continue;
+            };
+            let crate::ast::Definition::View(written) = definition else {
+                continue;
+            };
+            let columns = arena
+                .names(written.columns)
+                .iter()
+                .map(|span| schema::dequote(span.text(&sql)))
+                .collect();
+            views.push(View {
+                name: schema::dequote(written.name.text(&sql)),
+                select: written.select,
+                sql,
+                arena,
+                columns,
+            });
+        }
+        self.views = views;
+        Ok(())
+    }
+
+    /// The rows a view answers, with the shape they carry and the name
+    /// the view is known by.
+    ///
+    /// The statement of a view is answered where the view is named, so
+    /// a view over a table reads what the table holds now. A view that
+    /// names itself, directly or through another, is stopped by the
+    /// count of views the statement is already inside.
+    fn viewed(&self, name: &[u8], scope: Scope<'_>) -> Result<Viewed, Error> {
+        let view = self
+            .views
+            .iter()
+            .find(|view| view.name.eq_ignore_ascii_case(name))
+            .ok_or(Error::NoTable)?;
+        if scope.views >= VIEW_DEPTH {
+            return Err(Error::Unsupported);
+        }
+        let inner = Scope {
+            terms: &[],
+            outer: None,
+            views: scope.views.saturating_add(1),
+        };
+        let mut answered = self.statement(&view.arena, view.select, &view.sql, inner)?;
+        // `CREATE VIEW v(a,b) AS ...` answers its columns under the
+        // names the definition wrote, and under the statement's own
+        // where it wrote none.
+        for (column, written) in answered.shape.columns.iter_mut().zip(&view.columns) {
+            column.name.clone_from(written);
+        }
+        Ok(Viewed {
+            shape: answered.shape,
+            rows: answered.answer.rows,
+            name: view.name.clone(),
+        })
+    }
+
+    /// The view of `name`, where the schema holds one.
+    #[must_use]
+    pub fn view(&self, name: &[u8]) -> Option<&[u8]> {
+        self.views
+            .iter()
+            .find(|view| view.name.eq_ignore_ascii_case(name))
+            .map(|view| view.sql.as_slice())
     }
 
     /// Reads the indexes of the schema, once every table is read.
@@ -646,6 +774,7 @@ impl<'a> Database<'a> {
         let scope = Scope {
             terms: &[],
             outer: None,
+            views: 0,
         };
         Ok(self.statement(arena, id, sql, scope)?.answer)
     }
@@ -676,6 +805,7 @@ impl<'a> Database<'a> {
         let scope = Scope {
             terms: &[],
             outer: None,
+            views: 0,
         };
         Ok(self.statement(&arena, root, sql, scope)?.answer)
     }
@@ -725,6 +855,7 @@ impl<'a> Database<'a> {
         let scope = Scope {
             terms: &held,
             outer: scope.outer,
+            views: scope.views,
         };
         if first.compound.is_none() {
             return self.core(arena, id, sql, true, scope);
@@ -896,13 +1027,18 @@ impl<'a> Database<'a> {
                             Source::Rows(answered.answer.rows.clone()),
                             term.clone(),
                         )
-                    } else {
-                        let stored = self.find(written).ok_or(Error::NoTable)?;
+                    } else if let Some(stored) = self.find(written) {
                         (
                             shape_of(&stored.table),
                             Source::Table(stored),
                             stored.table.name.clone(),
                         )
+                    } else {
+                        // A view names a statement, so the rows are the
+                        // ones that statement answers, which is what
+                        // `sqlite3SelectExpand` puts in its place.
+                        let viewed = self.viewed(written, scope)?;
+                        (viewed.shape, Source::Rows(viewed.rows), viewed.name)
                     }
                 }
                 SourceKind::Select(id) => {
@@ -971,6 +1107,7 @@ impl<'a> Database<'a> {
         let inner = Scope {
             terms: scope.terms,
             outer: Some(row),
+            views: scope.views,
         };
         match used {
             Used::Value(select) => {
@@ -1044,6 +1181,7 @@ impl<'a> Database<'a> {
             let mine = Scope {
                 terms: &out,
                 outer: scope.outer,
+                views: scope.views,
             };
             let mut answered = self.statement(arena, cte.select, sql, mine)?;
             let written = arena.names(cte.columns);

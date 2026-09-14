@@ -106,7 +106,11 @@ fn walk_definition(arena: &Arena, definition: Definition) {
                 walk(arena, filter, 0);
             }
         }
-        // A `DROP` names a table or an index and holds no expression.
+        // A view holds the statement it names, and every expression of
+        // that statement with it.
+        Definition::View(view) => walk_select(arena, view.select, 0),
+        // A `DROP` names a table, an index or a view and holds no
+        // expression.
         Definition::Drop(_) => {}
     }
 }

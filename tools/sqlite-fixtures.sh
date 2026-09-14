@@ -345,7 +345,10 @@ for case in "index-empty.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a);" \
     "tx-one.db:CREATE TABLE t(a,b); BEGIN; INSERT INTO t VALUES(1,'x'); INSERT INTO t VALUES(2,'y'); COMMIT;" \
     "tx-grown.db:$rows60 BEGIN; DELETE FROM t WHERE n%3=0; INSERT INTO t(rowid,n,s) VALUES(500,500,'row 500'); COMMIT;" \
     "tx-back.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x'); BEGIN; INSERT INTO t VALUES(2,'y'); DELETE FROM t WHERE a=1; ROLLBACK;" \
-    "tx-kept.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x');"; do
+    "tx-kept.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x');" \
+    "view-one.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x'),(2,'y'),(3,'z'); CREATE VIEW v AS SELECT a FROM t WHERE a>1;" \
+    "view-named.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x'),(2,'y'); CREATE VIEW v(one,two) AS SELECT b,a FROM t ORDER BY a DESC;" \
+    "view-gone.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x'); CREATE VIEW v AS SELECT a FROM t; DROP VIEW v;"; do
     name="${case%%:*}"
     sql="${case#*:}"
     rm -f "$out/$name"

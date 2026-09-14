@@ -880,6 +880,9 @@ impl<'a> Parser<'a> {
         if self.eat_keyword(Keyword::Table) {
             return Ok(Definition::Table(self.create_table(temporary)?));
         }
+        if self.eat_keyword(Keyword::View) {
+            return Ok(Definition::View(self.create_view(temporary)?));
+        }
         let unique = self.eat_keyword(Keyword::Unique);
         self.expect_keyword(Keyword::Index, Expected::Table)?;
         Ok(Definition::Index(self.create_index(unique)?))
@@ -895,7 +898,7 @@ impl<'a> Parser<'a> {
         temporary
             && matches!(
                 self.ahead(1).map(|token| token.kind),
-                Some(Kind::Keyword(Keyword::Table))
+                Some(Kind::Keyword(Keyword::Table | Keyword::View))
             )
     }
 
@@ -923,19 +926,51 @@ impl<'a> Parser<'a> {
         Ok(read)
     }
 
-    /// What follows `DROP`: the word `TABLE` or `INDEX`, an optional
-    /// `IF EXISTS`, and the name.
+    /// What follows `CREATE VIEW`: the name, the names it answers its
+    /// columns under where they were written, and the statement.
+    fn create_view(&mut self, temporary: bool) -> Result<crate::ast::CreateView, Error> {
+        let if_not_exists = self.if_not_exists()?;
+        let (schema, name) = self.qualified_name()?;
+        let columns = if self.eat(Kind::Lp) {
+            let mut names = Vec::new();
+            loop {
+                names.push(self.name()?);
+                if !self.eat(Kind::Comma) {
+                    break;
+                }
+            }
+            self.expect(Kind::Rp, Expected::CloseParen)?;
+            self.arena.push_names(&names)
+        } else {
+            crate::ast::Range::default()
+        };
+        self.expect_keyword(Keyword::As, Expected::As)?;
+        let select = self.select()?;
+        Ok(crate::ast::CreateView {
+            temporary,
+            if_not_exists,
+            schema,
+            name,
+            columns,
+            select,
+        })
+    }
+
+    /// What follows `DROP`: the word `TABLE`, `INDEX` or `VIEW`, an
+    /// optional `IF EXISTS`, and the name.
     fn drop_statement(&mut self) -> Result<crate::ast::Drop, Error> {
-        let table = if self.eat_keyword(Keyword::Table) {
-            true
+        let kind = if self.eat_keyword(Keyword::Table) {
+            crate::ast::Dropped::Table
+        } else if self.eat_keyword(Keyword::View) {
+            crate::ast::Dropped::View
         } else {
             self.expect_keyword(Keyword::Index, Expected::Table)?;
-            false
+            crate::ast::Dropped::Index
         };
         let if_exists = self.if_exists()?;
         let (schema, name) = self.qualified_name()?;
         Ok(crate::ast::Drop {
-            table,
+            kind,
             if_exists,
             schema,
             name,

@@ -186,7 +186,7 @@ impl Writer {
     /// reading or freeing a page refuses.
     fn drop_object(&mut self, asked: &crate::ast::Drop, sql: &[u8]) -> Result<(), Error> {
         let name = crate::schema::dequote(asked.name.text(sql));
-        let (rowids, mut roots) = self.named(&name, asked.table)?;
+        let (rowids, mut roots) = self.named(&name, asked.kind)?;
         if rowids.is_empty() {
             return if asked.if_exists {
                 Ok(())
@@ -208,26 +208,41 @@ impl Writer {
     /// The rows of `sqlite_schema` a `DROP` takes out and the roots it
     /// destroys: a table takes its indexes with it, an index takes only
     /// itself.
-    fn named(&self, name: &[u8], table: bool) -> Result<(Vec<i64>, Vec<u32>), Error> {
+    fn named(&self, name: &[u8], kind: crate::ast::Dropped) -> Result<(Vec<i64>, Vec<u32>), Error> {
         let bytes = self.image();
         let database = Database::open(&bytes)?;
         let mut roots: Vec<u32> = Vec::new();
-        if table {
-            if let Some((_, root)) = database.table(name) {
-                roots.push(root);
+        let mut held = false;
+        match kind {
+            crate::ast::Dropped::Table => {
+                if let Some((_, root)) = database.table(name) {
+                    roots.push(root);
+                    held = true;
+                }
+                roots.extend(database.indexes(name).iter().map(|(_, root)| *root));
             }
-            roots.extend(database.indexes(name).iter().map(|(_, root)| *root));
-        } else if let Some((_, root)) = database.index(name) {
-            roots.push(root);
+            crate::ast::Dropped::Index => {
+                if let Some((_, root)) = database.index(name) {
+                    roots.push(root);
+                    held = true;
+                }
+            }
+            // A view names no tree, so what says the database holds one
+            // is the row and not a root.
+            crate::ast::Dropped::View => held = database.view(name).is_some(),
         }
-        if roots.is_empty() {
+        if !held {
             return Ok((Vec::new(), roots));
         }
         // The rows to take out are found by name: a table's are its own
         // and every index over it, which `sqlite_schema` names in the
         // column `tbl_name`; an index's is the one row of its own name.
         let image = crate::image::Image::open(&bytes)?;
-        let at = if table { 2 } else { 1 };
+        let at = if kind == crate::ast::Dropped::Table {
+            2
+        } else {
+            1
+        };
         let mut rowids = Vec::new();
         let mut payload = Vec::new();
         for row in image.schema() {
@@ -501,28 +516,43 @@ impl Writer {
                     return Err(Error::Unsupported);
                 }
                 let name = crate::schema::dequote(table.name.text(sql));
-                (Kind::LeafTable, name.clone(), name)
+                (Some(Kind::LeafTable), name.clone(), name)
             }
             Definition::Index(index) => (
-                Kind::LeafIndex,
+                Some(Kind::LeafIndex),
                 crate::schema::dequote(index.name.text(sql)),
                 crate::schema::dequote(index.table.text(sql)),
             ),
+            // A view holds no row of its own: it names a statement, and
+            // the rows are the ones that statement answers.
+            Definition::View(view) => {
+                let name = crate::schema::dequote(view.name.text(sql));
+                (None, name.clone(), name)
+            }
         };
-        let root = self.pages.add(kind, 0)?;
-        // `sqlite3BtreeCreateTable`: the root of a tree is named by no
-        // page, and page one holds the largest root the file has.
-        self.pages.point(root, crate::tree::Point::Root, 0)?;
-        if self.header.largest_root != 0 {
-            self.header.largest_root = root;
-        }
+        let root = match kind {
+            Some(kind) => {
+                let root = self.pages.add(kind, 0)?;
+                // `sqlite3BtreeCreateTable`: the root of a tree is
+                // named by no page, and page one holds the largest root
+                // the file has.
+                self.pages.point(root, crate::tree::Point::Root, 0)?;
+                if self.header.largest_root != 0 {
+                    self.header.largest_root = root;
+                }
+                root
+            }
+            // A view begins on no page, which `sqlite3EndTable` writes
+            // as nought.
+            None => 0,
+        };
         let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
         let row = crate::record::write(
             &[
-                text(if kind == Kind::LeafIndex {
-                    b"index"
-                } else {
-                    b"table"
+                text(match kind {
+                    Some(Kind::LeafIndex) => b"index".as_slice(),
+                    Some(_) => b"table",
+                    None => b"view",
                 }),
                 text(&name),
                 text(&over),

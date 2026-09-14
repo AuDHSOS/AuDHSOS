@@ -4287,7 +4287,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - The block of an `else` is read past and a case whose name repeats is
   dropped, because the interpreter runs one arm of a conditional, which
   D-192 and D-189 record.
-- 763 pass, 9 answer differently and 14 592 are refused or stopped.
+- 789 pass, 9 answer differently and 14 566 are refused or stopped.
   Document 16, section 16.23 groups the nine. Earlier runs answered
   14, then 27, then 17 differently; twelve were defects, which D-181,
   D-184 and D-189 record and twenty-eight cases of `query.corpus` now
@@ -4407,6 +4407,23 @@ D-193, document 16 step Q8.
   `ROLLBACK` outside one, and a `ROLLBACK TO`, which names a savepoint.
   `DEFERRED`, `IMMEDIATE`, `EXCLUSIVE` and the word `TRANSACTION` stand
   beside the three without changing what they do.
+
+### 6.6.125 A view, which is a named statement (`db-sqlite`)
+
+D-195, document 16 step Q8.
+
+- `view-one.db`: a view over a table, whose rows are the ones its
+  statement answers, read where the view is named; it stands in a join,
+  under an aggregate, and reads a row written after the view was made.
+- `view-named.db`: the names a definition writes for its columns are
+  the names the view answers them under.
+- `view-gone.db`: a `DROP VIEW` takes the row away and frees no page.
+- The refusals: a `DROP VIEW` over a table, a `DROP TABLE` over a view,
+  a name the schema does not hold, and a view that names itself, which
+  the reader stops in.
+- A view row whose statement the reader cannot read, and one that calls
+  itself a view and holds a table, are walked past, which the crafted
+  schema of `a_schema_row_that_is_not_a_table_is_passed_over` holds.
 
 ## 6.7 CI pipeline
 

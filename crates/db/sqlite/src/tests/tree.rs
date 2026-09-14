@@ -2182,6 +2182,111 @@ fn what_bounding_a_transaction_refuses() {
 }
 
 #[test]
+fn a_view_answers_the_statement_it_names() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(1,'x'),(2,'y'),(3,'z')")
+        .unwrap();
+    writer
+        .run(b"CREATE VIEW v AS SELECT a FROM t WHERE a>1")
+        .unwrap();
+    let written = writer.written();
+    same("view-one.db", &written, crate::tests::VIEW_ONE, 512);
+    // The rows are the ones the statement answers, read where the view
+    // is named.
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT a FROM v").unwrap().rows,
+        [[Value::Int(2)], [Value::Int(3)]]
+    );
+    // A view stands where a table stands: in a join, under a `WHERE`,
+    // and under an aggregate.
+    assert_eq!(
+        database.query(b"SELECT count(*) FROM v").unwrap().rows,
+        [[Value::Int(2)]]
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT v.a, t.b FROM v JOIN t ON t.a=v.a ORDER BY v.a")
+            .unwrap()
+            .rows,
+        [
+            alloc::vec![Value::Int(2), Value::Text(b"y".to_vec())],
+            alloc::vec![Value::Int(3), Value::Text(b"z".to_vec())]
+        ]
+    );
+    // A view reads what the table holds now, because its statement is
+    // answered where it is named.
+    writer.run(b"INSERT INTO t VALUES(4,'w')").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT count(*) FROM v").unwrap().rows,
+        [[Value::Int(3)]]
+    );
+}
+
+#[test]
+fn a_view_answers_its_columns_under_the_names_it_was_written_with() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,'x'),(2,'y')").unwrap();
+    writer
+        .run(b"CREATE VIEW v(one,two) AS SELECT b,a FROM t ORDER BY a DESC")
+        .unwrap();
+    let written = writer.written();
+    same("view-named.db", &written, crate::tests::VIEW_NAMED, 512);
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT one,two FROM v").unwrap().rows,
+        [
+            alloc::vec![Value::Text(b"y".to_vec()), Value::Int(2)],
+            alloc::vec![Value::Text(b"x".to_vec()), Value::Int(1)]
+        ]
+    );
+    // A `DROP VIEW` takes the row away and leaves no tree behind,
+    // because a view names none.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,'x')").unwrap();
+    writer.run(b"CREATE VIEW v AS SELECT a FROM t").unwrap();
+    writer.run(b"DROP VIEW v").unwrap();
+    let written = writer.written();
+    same("view-gone.db", &written, crate::tests::VIEW_GONE, 512);
+    let database = Database::open(&written).unwrap();
+    assert!(database.query(b"SELECT a FROM v").is_err());
+}
+
+#[test]
+fn what_a_view_refuses() {
+    use crate::change::Writer;
+    use crate::db::{Database, Error};
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"CREATE VIEW v AS SELECT a FROM t").unwrap();
+    // A view is not a table and a table is not a view.
+    assert!(writer.run(b"DROP VIEW t").is_err());
+    assert!(writer.run(b"DROP TABLE v").is_err());
+    assert!(writer.run(b"DROP VIEW nosuch").is_err());
+    writer.run(b"DROP VIEW IF EXISTS nosuch").unwrap();
+    // A view that names itself is one the reader stops in rather than
+    // following forever.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE VIEW v AS SELECT a FROM v").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT a FROM v").err(),
+        Some(Error::Unsupported)
+    );
+}
+
+#[test]
 fn what_a_drop_refuses() {
     use crate::change::Writer;
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();

@@ -588,6 +588,17 @@ pub(super) const GROWN: &[u8] = include_bytes!("fixtures/tx-grown.db");
 /// The file a `ROLLBACK` leaves, which is the file before the `BEGIN`.
 pub(super) const ROLLED_BACK: &[u8] = include_bytes!("fixtures/tx-back.db");
 
+/// A view is a named statement: `view-one` is one over a table,
+/// `view-named` writes the names its columns are answered under, and
+/// `view-gone` is what a `DROP VIEW` leaves.
+pub(super) const VIEW_ONE: &[u8] = include_bytes!("fixtures/view-one.db");
+
+/// The same with the column names the definition wrote.
+pub(super) const VIEW_NAMED: &[u8] = include_bytes!("fixtures/view-named.db");
+
+/// What a `DROP VIEW` leaves, which is the file without its row.
+pub(super) const VIEW_GONE: &[u8] = include_bytes!("fixtures/view-gone.db");
+
 /// The auto-vacuum dimension of document 16, section 16.11, over the
 /// write path: the same four hundred rows under both settings, chains
 /// that cross the second pointer-map page, the free pages a file that

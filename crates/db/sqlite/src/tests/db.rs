@@ -321,6 +321,24 @@ fn a_schema_row_that_is_not_a_table_is_passed_over() {
             Err(8),
             Ok("CREATE INDEX n ON nosuch(x)"),
         ]),
+        // Two view rows the reader must walk past as well: one whose
+        // statement it cannot read, and one that calls itself a view
+        // and holds a table.
+        record([Ok("view"), Ok("p"), Ok("p"), Err(0), Ok("CREATE VIEW p AS")]),
+        record([
+            Ok("view"),
+            Ok("q"),
+            Ok("q"),
+            Err(0),
+            Ok("CREATE TABLE q(x)"),
+        ]),
+        record([
+            Ok("view"),
+            Ok("r"),
+            Ok("r"),
+            Err(0),
+            Ok("CREATE VIEW r AS SELECT x FROM d"),
+        ]),
     ]);
     let database = Database::open(&file).expect("a database");
     let names: Vec<String> = database
@@ -328,6 +346,12 @@ fn a_schema_row_that_is_not_a_table_is_passed_over() {
         .map(|table| String::from_utf8_lossy(&table.name).into_owned())
         .collect();
     assert_eq!(names, ["d"]);
+    // The view the reader could read is the only one it holds, and a
+    // statement that names either of the others answers no table.
+    assert!(database.view(b"r").is_some());
+    assert!(database.view(b"p").is_none());
+    assert!(database.view(b"q").is_none());
+    assert!(database.query(b"SELECT x FROM p").is_err());
 }
 
 #[test]
