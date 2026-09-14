@@ -68,8 +68,8 @@ payload that overflows costs one page read per link of its chain.
 
 ## What is not here yet
 
-`PRAGMA`, `CREATE TABLE`, `INSERT`, `DELETE` and `UPDATE` run from their
-text and write the file SQLite writes. Under them a table tree is written from
+`PRAGMA`, `CREATE TABLE`, `CREATE INDEX`, `INSERT`, `DELETE` and
+`UPDATE` run from their text and write the file SQLite writes. Under them a table tree is written from
 nothing, a row lands anywhere in it, a row written over keeps its cell
 where the new payload is the length the old one was, a row taken out
 gives its pages back to the free list, a column a statement names no
@@ -77,6 +77,8 @@ value for holds what it falls back to, and a commit writes the rollback
 journal under any of its five modes or the frames of a write-ahead log.
 A file that vacuums itself keeps pointer maps, and the commit of one
 that vacuums itself whole moves the pages at the end of the file into
-the free pages below them and cuts the file back. What is missing of
-writing is `CREATE INDEX`, `DROP`, `ALTER`, the checkpoint, and the
-index b-trees beyond reading their pages.
+the free pages below them and cuts the file back. An index gains an entry as each
+row is written, and a statement that takes rows out of an indexed table
+is refused rather than leaving the index answering rows the table no
+longer holds. What is missing of writing is `DROP`, `ALTER`, the
+checkpoint, and taking an entry out of an index.

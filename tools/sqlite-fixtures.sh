@@ -308,6 +308,30 @@ CASE
     array_case "$name" "$encoding" "$page" "$reserved" "$journal" "$vacuum"
 done
 
+# The index trees a `CREATE INDEX` writes: over no row at all, over a
+# few, over terms with a collation and an order of their own, over
+# enough rows to fill a second leaf, and over enough to need a page
+# above the leaves. The entries are sorted before any is written, so the
+# pages fill left to right and the left one is filled before the right
+# one is begun, which is what `BTREE_BULKLOAD` asks for.
+rows60="CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<60) INSERT INTO t(rowid,n,s) SELECT i, i, 'row ' || i FROM c;"
+for case in "index-empty.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a);" \
+    "index-few.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(3,'c'),(1,'a'),(2,'b'); CREATE INDEX ta ON t(a);" \
+    "index-collated.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(3,'c'),(1,'a'),(2,'b'); CREATE INDEX tb ON t(b COLLATE nocase, a DESC);" \
+    "index-split.db:$rows60 CREATE INDEX ts ON t(s);" \
+    "index-deep.db:$rows400 CREATE INDEX ts ON t(s);" \
+    "index-repeated.db:CREATE TABLE t(a,b); INSERT INTO t VALUES('x',1),('x',2),('y',3); CREATE INDEX ta ON t(a);" \
+    "index-wide.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(replace(hex(zeroblob(400)),'0','a'),1),('b',2); CREATE INDEX ta ON t(a);" \
+    "index-kept.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a); INSERT INTO t VALUES(3,'c'),(1,'a'),(2,'b'),(2,'d');" \
+    "index-classes.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a); INSERT INTO t VALUES(NULL,1),(2.5,2),(x'0102',3),('t',4),(7,5),(NULL,6),(2.5,7);" \
+    "index-added.db:$rows400 CREATE INDEX ts ON t(s); INSERT INTO t(rowid,n,s) VALUES(500,500,'row 1 and a half'),(501,501,'row 999');"; do
+    name="${case%%:*}"
+    sql="${case#*:}"
+    rm -f "$out/$name"
+    "$sqlite" "$out/$name" "PRAGMA page_size=512; $sql"
+    printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
+done
+
 rm -f "$out/unchained.db"
 "$sqlite" "$out/unchained.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<40) INSERT INTO t(rowid,n,s) SELECT (i*17)%41, i, replace(hex(zeroblob(i*30)),'0','x') FROM c; DELETE FROM t WHERE rowid%3!=0;"
 printf '%s\t%s bytes\n' unchained.db "$(wc -c <"$out/unchained.db" | tr -d ' ')"

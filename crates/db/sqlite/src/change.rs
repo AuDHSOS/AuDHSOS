@@ -302,33 +302,43 @@ impl Writer {
     /// `CREATE TABLE`: a page for the tree of the table and a row of
     /// `sqlite_schema` that names it.
     fn define(&mut self, arena: &Arena, definition: Definition, sql: &[u8]) -> Result<(), Error> {
-        let Definition::Table(table) = definition else {
-            return Err(Error::Unsupported);
+        let (kind, name, over) = match definition {
+            Definition::Table(table) => {
+                if !matches!(table.body, TableBody::Columns { .. }) {
+                    return Err(Error::Unsupported);
+                }
+                let name = crate::schema::dequote(table.name.text(sql));
+                (Kind::LeafTable, name.clone(), name)
+            }
+            Definition::Index(index) => (
+                Kind::LeafIndex,
+                crate::schema::dequote(index.name.text(sql)),
+                crate::schema::dequote(index.table.text(sql)),
+            ),
         };
-        if !matches!(table.body, TableBody::Columns { .. }) {
-            return Err(Error::Unsupported);
-        }
-        let root = self.pages.add(Kind::LeafTable, 0)?;
+        let root = self.pages.add(kind, 0)?;
         // `sqlite3BtreeCreateTable`: the root of a tree is named by no
         // page, and page one holds the largest root the file has.
         self.pages.point(root, crate::tree::Point::Root, 0)?;
         if self.header.largest_root != 0 {
             self.header.largest_root = root;
         }
-        let name = crate::schema::dequote(table.name.text(sql));
         let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
         let row = crate::record::write(
             &[
-                text(b"table"),
+                text(if kind == Kind::LeafIndex {
+                    b"index"
+                } else {
+                    b"table"
+                }),
                 text(&name),
-                text(&name),
+                text(&over),
                 Value::Int(i64::from(root)),
                 text(statement_text(sql)),
             ],
             &SCHEMA,
             4,
         );
-        let _ = arena;
         let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?.unwrap_or(0);
         insert(
             &mut self.pages,
@@ -338,6 +348,45 @@ impl Writer {
         )?;
         self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
         self.header.schema_format = 4;
+        if let Definition::Index(index) = definition {
+            self.fill(arena, &index, sql, root, &over)?;
+        }
+        Ok(())
+    }
+
+    /// The entries a `CREATE INDEX` puts in the tree it just made: one
+    /// per row of the table, holding the columns the index is over and
+    /// the key of the row they belong to.
+    fn fill(
+        &mut self,
+        arena: &Arena,
+        index: &crate::ast::CreateIndex,
+        sql: &[u8],
+        root: u32,
+        over: &[u8],
+    ) -> Result<(), Error> {
+        let (entries, collations) = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?;
+            let (table, _) = database.table(over).ok_or(Error::Unsupported)?;
+            let read = crate::schema::index(arena, index, sql, table)?;
+            let collations = collations_of(&read);
+            let mut entries = Vec::new();
+            for (rowid, values) in database.rows_of(over)? {
+                entries.push(entry_of(&read, &values, rowid));
+            }
+            (entries, collations)
+        };
+        // `sqlite3VdbeSorterInit`: the entries are sorted before any is
+        // written, so the pages fill in the order the entries run and
+        // not in the order the rows do.
+        let mut entries = entries;
+        entries.sort_by(|one, other| order_of_keys(one, other, &collations));
+        let affinities = alloc::vec![Affinity::None; collations.len().saturating_add(1)];
+        for key in entries {
+            let record = crate::record::write(&key, &affinities, 4);
+            crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, true)?;
+        }
         Ok(())
     }
 
@@ -355,13 +404,18 @@ impl Writer {
             .iter()
             .map(|span: &Span| crate::schema::dequote(span.text(sql)))
             .collect();
-        let (root, alias, affinities, rows) = {
+        let (root, alias, affinities, rows, kept) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
             let (table, root) = database.table(&name).ok_or(Error::Unsupported)?;
             if table.without_rowid {
                 return Err(Error::Unsupported);
             }
+            let kept: Vec<(crate::schema::Index, Vec<Collation>, u32)> = database
+                .indexes(&name)
+                .iter()
+                .map(|(index, root)| ((*index).clone(), collations_of(index), *root))
+                .collect();
             let places = places(table, &named)?;
             // A column the statement names no value for holds what it
             // falls back to, which is nothing where it has no
@@ -393,7 +447,7 @@ impl Writer {
                 }
                 rows.push((key, values));
             }
-            (root, table.rowid_alias, affinities, rows)
+            (root, table.rowid_alias, affinities, rows, kept)
         };
         let mut next = largest(&self.pages, root)?.unwrap_or(0);
         for (key, mut values) in rows {
@@ -414,6 +468,17 @@ impl Writer {
             }
             let record = crate::record::write(&values, &affinities, 4);
             insert(&mut self.pages, root, rowid, &record)?;
+            // Every index over the table holds an entry for the row,
+            // which is what `sqlite3GenerateConstraintChecks` writes
+            // beside it.
+            for (index, collations, root) in &kept {
+                let key = entry_of(index, &values, rowid);
+                let plain = alloc::vec![Affinity::None; key.len()];
+                let entry = crate::record::write(&key, &plain, 4);
+                let pages = &mut self.pages;
+                let root = *root;
+                crate::tree::insert_entry(pages, root, &entry, &key, collations, false)?;
+            }
         }
         Ok(())
     }
@@ -521,6 +586,14 @@ impl Writer {
         let (root, keys) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
+            // An index this crate does not write rows out of would
+            // answer rows the table no longer holds, so a statement
+            // that takes rows out of an indexed table is refused rather
+            // than answered wrongly. Keeping the entries is what the
+            // next step of document 16, section 16.22 builds.
+            if !database.indexes(&name).is_empty() {
+                return Err(Error::Unsupported);
+            }
             let (table, root) = database.table(&name).ok_or(Error::NoTable)?;
             let rows = database.rows_of(&name)?;
             let mut keys = Vec::new();
@@ -569,6 +642,14 @@ impl Writer {
         let (root, alias, affinities, written) = {
             let bytes = self.image();
             let database = Database::open(&bytes)?;
+            // An index this crate does not write rows out of would
+            // answer rows the table no longer holds, so a statement
+            // that takes rows out of an indexed table is refused rather
+            // than answered wrongly. Keeping the entries is what the
+            // next step of document 16, section 16.22 builds.
+            if !database.indexes(&name).is_empty() {
+                return Err(Error::Unsupported);
+            }
             let (table, root) = database.table(&name).ok_or(Error::NoTable)?;
             let places: Vec<Option<usize>> = sets
                 .iter()
@@ -651,6 +732,44 @@ impl Writer {
         }
         Ok(())
     }
+}
+
+/// The entry an index holds for one row: the columns it is over, and
+/// the key of the row last, which is what makes its order total.
+fn entry_of(index: &crate::schema::Index, values: &[Value], rowid: i64) -> Vec<Value> {
+    let mut key: Vec<Value> = index
+        .columns
+        .iter()
+        .map(|column| values.get(column.column).cloned().unwrap_or(Value::Null))
+        .collect();
+    key.push(Value::Int(rowid));
+    key
+}
+
+/// The collation each column of an index is held in.
+fn collations_of(index: &crate::schema::Index) -> Vec<Collation> {
+    index
+        .columns
+        .iter()
+        .map(|column| column.collation)
+        .collect()
+}
+
+/// Where one index entry stands against another: column by column
+/// under the collation each is held in, and the key of the row last,
+/// which is what makes the order of an index total.
+fn order_of_keys(one: &[Value], other: &[Value], collations: &[Collation]) -> core::cmp::Ordering {
+    one.iter()
+        .zip(other)
+        .enumerate()
+        .map(|(at, (mine, theirs))| {
+            // The key of the row stands after the columns and is
+            // compared as bytes, which is what the default here is.
+            let collation = collations.get(at).copied().unwrap_or(Collation::Binary);
+            crate::value::compare(mine, theirs, collation)
+        })
+        .find(|order| *order != core::cmp::Ordering::Equal)
+        .unwrap_or(core::cmp::Ordering::Equal)
 }
 
 /// A value as the database stores it, which turns text into the

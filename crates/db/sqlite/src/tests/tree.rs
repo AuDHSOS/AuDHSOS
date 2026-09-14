@@ -320,6 +320,20 @@ fn a_tree_that_is_not_a_table_and_a_tree_deeper_than_the_walk_are_refused() {
     }
     assert_eq!(insert(&mut pages, 2, 1, &record), Err(Error::Depth));
     assert_eq!(crate::tree::largest(&pages, 2), Err(Error::Depth));
+    // The walk of an index tree stops the same way.
+    let mut pages = Pages::new(512, 0).unwrap();
+    let mut above = 0;
+    for _ in 0..34 {
+        let number = pages.add(Kind::InteriorIndex, 0).unwrap();
+        if above != 0 {
+            point(&mut pages, above, number);
+        }
+        above = number;
+    }
+    assert_eq!(
+        crate::tree::insert_entry(&mut pages, 2, &record, &[Value::Int(1)], &[], false),
+        Err(Error::Depth)
+    );
 }
 
 #[test]
@@ -378,10 +392,13 @@ fn what_the_two_halves_of_the_balance_refuse() {
     use crate::error::Error;
     use crate::page::{Cell, Payload, write_cell};
     use crate::tree::{deepen, quick};
-    // A tree of index pages has no key a divider names.
     let mut pages = Pages::new(512, 0).unwrap();
+    // A tree of index pages deepens the way a tree of rows does.
     let index = pages.add(Kind::LeafIndex, 0).unwrap();
-    assert_eq!(deepen(&mut pages, index), Err(Error::Balance));
+    let deeper = pages.add(Kind::LeafIndex, 0).unwrap();
+    let child = deepen(&mut pages, deeper).unwrap();
+    assert_eq!(pages.page(deeper).unwrap().kind(), Kind::InteriorIndex);
+    assert_eq!(pages.page(child).unwrap().kind(), Kind::LeafIndex);
     // The schema's own tree begins on the page the database header is
     // on, so it cannot become the page above a child.
     assert_eq!(deepen(&mut pages, 1), Err(Error::Balance));
@@ -1948,4 +1965,131 @@ fn what_a_pragma_refuses() {
     assert!(pragma(b"PRAGMA page_size(512").is_err());
     assert!(pragma(b"PRAGMA page_size extra").is_err());
     assert!(pragma(b"SELECT 1").is_err());
+}
+
+#[test]
+fn the_index_trees_a_statement_writes_are_the_ones_the_shell_wrote() {
+    use crate::change::Writer;
+    use core::fmt::Write as _;
+    // `CREATE INDEX` sorts its entries before it writes any, so the
+    // pages fill in the order the entries run and the left one is
+    // filled before the right one is begun, which is what
+    // `BTREE_BULKLOAD` asks for.
+    for (name, rows, index, fixture) in crate::tests::TREES {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        let create: &[u8] = match rows {
+            "shuffled" | "split" => b"CREATE TABLE t(n INTEGER, s TEXT)",
+            _ => b"CREATE TABLE t(a,b)",
+        };
+        writer.run(create).unwrap();
+        match rows {
+            "small" => {
+                writer
+                    .run(b"INSERT INTO t VALUES(3,'c'),(1,'a'),(2,'b')")
+                    .unwrap();
+            }
+            "shuffled" => {
+                writer.run(sql_of_rows().as_bytes()).unwrap();
+            }
+            "repeated" => {
+                writer
+                    .run(b"INSERT INTO t VALUES('x',1),('x',2),('y',3)")
+                    .unwrap();
+            }
+            "wide" => {
+                let wide: alloc::string::String = core::iter::repeat_n('a', 800).collect();
+                writer
+                    .run(alloc::format!("INSERT INTO t VALUES('{wide}',1),('b',2)").as_bytes())
+                    .unwrap();
+            }
+            "split" => {
+                let mut sql = alloc::string::String::from("INSERT INTO t(rowid,n,s) VALUES ");
+                for number in 1..=60_i64 {
+                    if number > 1 {
+                        sql.push(',');
+                    }
+                    let _ = write!(sql, "({number},{number},'row {number}')");
+                }
+                writer.run(sql.as_bytes()).unwrap();
+            }
+            _ => {}
+        }
+        writer.run(index.as_bytes()).unwrap();
+        same(name, &writer.written(), fixture, 512);
+    }
+}
+
+#[test]
+fn the_entries_an_index_gains_as_rows_are_put_in_are_the_ones_the_shell_wrote() {
+    use crate::change::Writer;
+    // An index made before the rows gains an entry per row as each is
+    // written, which is what `sqlite3GenerateConstraintChecks` writes
+    // beside the row.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer.run(b"CREATE INDEX ta ON t(a)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(3,'c'),(1,'a'),(2,'b'),(2,'d')")
+        .unwrap();
+    same("index-kept.db", &writer.written(), crate::tests::KEPT, 512);
+
+    // Over four hundred rows the index has a page above its leaves, so
+    // an entry that belongs in a leaf that is not the last is reached
+    // through a child pointer rather than through the right pointer.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+    writer.run(sql_of_rows().as_bytes()).unwrap();
+    writer.run(b"CREATE INDEX ts ON t(s)").unwrap();
+    writer
+        .run(b"INSERT INTO t(rowid,n,s) VALUES(500,500,'row 1 and a half'),(501,501,'row 999')")
+        .unwrap();
+    same(
+        "index-added.db",
+        &writer.written(),
+        crate::tests::ADDED,
+        512,
+    );
+
+    // Every storage class stands in an index key, and two rows sharing
+    // one are held apart by the key of the row.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer.run(b"CREATE INDEX ta ON t(a)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(NULL,1),(2.5,2),(x'0102',3),('t',4),(7,5),(NULL,6),(2.5,7)")
+        .unwrap();
+    same(
+        "index-classes.db",
+        &writer.written(),
+        crate::tests::CLASSES,
+        512,
+    );
+}
+
+#[test]
+fn what_a_statement_over_an_indexed_table_refuses() {
+    use crate::change::Writer;
+    // An index this crate does not write rows out of would answer rows
+    // the table no longer holds.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer.run(b"CREATE INDEX ta ON t(a)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,'a')").unwrap();
+    assert!(writer.run(b"DELETE FROM t WHERE a=1").is_err());
+    assert!(writer.run(b"UPDATE t SET b='z' WHERE a=1").is_err());
+    // An index over another table leaves the statements of this one
+    // alone.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer.run(b"CREATE TABLE u(c,d)").unwrap();
+    writer.run(b"CREATE INDEX uc ON u(c)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,'a')").unwrap();
+    assert!(writer.run(b"DELETE FROM t WHERE a=1").is_ok());
+    // An index this crate cannot walk is one it cannot write, so the
+    // statement that would make it is refused and no table carries one.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    assert!(writer.run(b"CREATE INDEX ta ON t(a) WHERE a>0").is_err());
+    assert!(writer.run(b"CREATE INDEX ta ON t(abs(a))").is_err());
+    assert!(writer.run(b"CREATE INDEX ta ON nosuch(a)").is_err());
 }

@@ -531,6 +531,27 @@ impl<'a> Database<'a> {
             .map(|stored| (&stored.table, stored.root))
     }
 
+    /// The indexes over the table of `name` this crate holds, each with
+    /// the page its tree begins at and the columns it is over.
+    ///
+    /// An index this crate cannot walk is not one it holds, so a table
+    /// may have more indexes on disk than this answers; `has_others`
+    /// says so.
+    #[must_use]
+    pub fn indexes(&self, name: &[u8]) -> Vec<(&schema::Index, u32)> {
+        self.tables
+            .iter()
+            .find(|stored| stored.table.name.eq_ignore_ascii_case(name))
+            .map(|stored| {
+                stored
+                    .indexes
+                    .iter()
+                    .map(|kept| (&kept.index, kept.root))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// What each column of the table of `name` falls back to, which is
     /// what a row that names no value for a column holds and what a row
     /// written before the column was added answers.

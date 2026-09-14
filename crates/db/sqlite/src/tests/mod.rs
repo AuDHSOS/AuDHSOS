@@ -441,6 +441,74 @@ pub(crate) const ARRAY: [Configuration; 30] = [
     },
 ];
 
+/// The index trees a `CREATE INDEX` writes, each with the statements
+/// that make it: over no row at all, over a few, over terms with a
+/// collation and an order of their own, over enough rows to fill a
+/// second leaf, and over enough to need a page above the leaves.
+///
+/// `rows` says which set of rows the table holds: none, the three of
+/// `small`, two that share a key and one that does not in `repeated`,
+/// one whose key runs onto a chain in `wide`, the sixty of `split`, or
+/// the four hundred of `shuffled.db`.
+pub(crate) const TREES: [(&str, &str, &str, &[u8]); 7] = [
+    (
+        "index-empty.db",
+        "none",
+        "CREATE INDEX ta ON t(a)",
+        include_bytes!("fixtures/index-empty.db"),
+    ),
+    (
+        "index-few.db",
+        "small",
+        "CREATE INDEX ta ON t(a)",
+        include_bytes!("fixtures/index-few.db"),
+    ),
+    (
+        "index-collated.db",
+        "small",
+        "CREATE INDEX tb ON t(b COLLATE nocase, a DESC)",
+        include_bytes!("fixtures/index-collated.db"),
+    ),
+    (
+        "index-split.db",
+        "split",
+        "CREATE INDEX ts ON t(s)",
+        include_bytes!("fixtures/index-split.db"),
+    ),
+    (
+        "index-deep.db",
+        "shuffled",
+        "CREATE INDEX ts ON t(s)",
+        include_bytes!("fixtures/index-deep.db"),
+    ),
+    (
+        "index-repeated.db",
+        "repeated",
+        "CREATE INDEX ta ON t(a)",
+        include_bytes!("fixtures/index-repeated.db"),
+    ),
+    (
+        "index-wide.db",
+        "wide",
+        "CREATE INDEX ta ON t(a)",
+        include_bytes!("fixtures/index-wide.db"),
+    ),
+];
+
+/// The entries an index gains as rows are put in after it: a table with
+/// no row when the index is made, and a table of four hundred whose
+/// index has a page above its leaves.
+pub(super) const KEPT: &[u8] = include_bytes!("fixtures/index-kept.db");
+
+/// An index over a column holding every storage class, with two rows
+/// that share a value in three of them, which is what makes the walk
+/// compare every kind and fall through to the key of the row.
+pub(super) const CLASSES: &[u8] = include_bytes!("fixtures/index-classes.db");
+
+/// The same over four hundred rows, where one of the two rows added
+/// lands in a leaf that is not the last.
+pub(super) const ADDED: &[u8] = include_bytes!("fixtures/index-added.db");
+
 /// The auto-vacuum dimension of document 16, section 16.11, over the
 /// write path: the same four hundred rows under both settings, chains
 /// that cross the second pointer-map page, the free pages a file that

@@ -4313,6 +4313,28 @@ D-182, document 16 step Q8.
   `--file <name>` runs one file. `--show` prints each case that did not
   pass with what each side answered.
 
+### 6.6.121 The index trees a statement writes (`db-sqlite`)
+
+D-186, document 16 step Q8.
+
+- Nine fixtures, `index-*.db`: an index over no row at all, over a few,
+  over terms with a collation and an order of their own, over a key that
+  runs onto a chain, over every storage class with two rows sharing a
+  value, over enough rows to fill a second leaf, and over enough to need
+  a page above the leaves. Each is the file the shell wrote, byte for
+  byte.
+- `index-kept.db` and `index-added.db` hold what an `INSERT` writes into
+  an index that is already there, one of them landing in a leaf that is
+  not the last, which is reached through a child pointer.
+- `CREATE INDEX` sorts its entries and fills the left page before the
+  right one is begun; an `INSERT` into an index that is already there
+  evens the two out. The two write different files, which is what
+  `index-deep.db` and `index-added.db` hold apart.
+- The refusals: a `DELETE` and an `UPDATE` over a table that has an
+  index, an index over an expression, a partial index, an index over a
+  table the database does not hold, and an index tree deeper than the
+  walk goes.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

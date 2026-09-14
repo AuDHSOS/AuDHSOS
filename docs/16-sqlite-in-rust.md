@@ -360,6 +360,7 @@ CI has no SQLite.
 | `m-*.db`, eleven of them | The same three rows and the same index under every configuration of 16.11 the shell can write. |
 | `v-*.db`, six of them | The auto-vacuum dimension over the write path: the pointer maps, the free pages `incremental` keeps, and the pages `full` moves down at the commit. |
 | `x-NN.db`, thirty of them | The covering array of 16.11 over the write path, each with the journal or the log the mode leaves beside it. |
+| `index-*.db`, nine of them | The index trees a `CREATE INDEX` writes and an `INSERT` keeps: over no row, over a few, with a collation and an order of their own, over a key that runs onto a chain, over every storage class, and over enough rows to need a page above the leaves. |
 | `format1.db`, `format3.db`, `format4.db` | The schema-format dimension: the whole numbers 0 and 1 stored with and without a payload, the `DESC` of an index kept and ignored, and the columns `ALTER TABLE ADD COLUMN` left the rows short of. |
 | `defaults.db` | A statement that names one of three columns, so the other two hold what they fall back to. |
 | `w-*.db`, nine of them | The same four hundred rows, put in by a key that jumps about, under every page size, every encoding and every reserved tail. |
@@ -378,7 +379,7 @@ CI has no SQLite.
 |---|-------|---------------|--------|
 | L1 | The format | Header, b-tree pages, cells, overflow chains, records. | built |
 | L2 | The pager | Pages in and out of a file, the journal in five modes, the WAL, locking, the free list. | built but for locking and the checkpoint |
-| L3 | The b-tree writer | Insert, delete, balance, the pointer maps auto-vacuum needs. | built but for the index trees |
+| L3 | The b-tree writer | Insert, delete, balance, the pointer maps auto-vacuum needs. | built |
 | L4 | The tokenizer and parser | SQL text to a tree. | built but for the window clauses |
 | L5 | The code generator and virtual machine | The tree to opcodes, and the register machine that runs them. | missing |
 | L6 | The semantics | Affinity, comparison, collation, the built-in functions, `NULL`. | built for the read half |
@@ -644,18 +645,23 @@ do for the page size, the encoding and the reserved tail.
 
 ## 16.22 Q8. The rest of the language
 
-Status: `CREATE TABLE`, `INSERT`, `DELETE` and `UPDATE` are run from
-their text and write the files the shell wrote; the rest is open.
-Depends on: Q6. Recorded in D-172, D-173 and D-174.
+Status: `CREATE TABLE`, `CREATE INDEX`, `PRAGMA`, `INSERT`, `DELETE`
+and `UPDATE` are run from their text and write the files the shell
+wrote; the rest is open.
+Depends on: Q6. Recorded in D-172 to D-174, D-182 and D-186.
 Size: L.
 
 ### Does
 
 1. `INSERT`, `UPDATE`, `DELETE`, `REPLACE`. `INSERT` is built, over
    `VALUES` and over a `SELECT`, and so are `DELETE` and `UPDATE`;
-   `REPLACE` and the other conflict words are read and not answered.
+   `REPLACE` and the other conflict words are read and not answered. A
+   `DELETE` and an `UPDATE` over a table that has an index are refused,
+   because this crate writes an entry into an index and does not write
+   one out of it.
 2. `CREATE`, `ALTER`, `DROP` for tables, indexes, views and triggers.
-   `CREATE TABLE` is built for a table of columns.
+   `CREATE TABLE` is built for a table of columns, and `CREATE INDEX`
+   for an index over columns, which D-186 records.
 3. Subqueries, `WITH`, and the window clauses the parser refuses.
 4. The functions that need a clock or a random source.
 

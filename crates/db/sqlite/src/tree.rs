@@ -22,6 +22,7 @@ use crate::error::Error;
 use crate::header::Header;
 use crate::image::MAX_DEPTH;
 use crate::page::{Cell, Kind, Page, Payload, Source, Writer, build, local_len, write_cell};
+use crate::value::{Collation, Value};
 
 /// Writes `value` where `at` names a slot of `list`, and writes nothing
 /// where the list is shorter, which no caller of this is.
@@ -912,7 +913,26 @@ pub(crate) fn map_page(usable: usize, number: u32) -> u32 {
 /// What of a payload stays on the page, with the rest written onto
 /// overflow pages.
 fn spilled<'a>(pages: &mut Pages, payload: &'a [u8]) -> Result<(&'a [u8], Option<u32>), Error> {
-    let local = local_len(payload.len(), pages.usable(), Kind::LeafTable);
+    spilled_as(pages, payload, Kind::LeafTable)
+}
+
+/// The same for an entry of an index, which keeps less of its payload
+/// on the page it lies on.
+fn spilled_entry<'a>(
+    pages: &mut Pages,
+    payload: &'a [u8],
+) -> Result<(&'a [u8], Option<u32>), Error> {
+    spilled_as(pages, payload, Kind::LeafIndex)
+}
+
+/// What of a payload stays on a page of `kind`, with the rest written
+/// onto overflow pages.
+fn spilled_as<'a>(
+    pages: &mut Pages,
+    payload: &'a [u8],
+    kind: Kind,
+) -> Result<(&'a [u8], Option<u32>), Error> {
+    let local = local_len(payload.len(), pages.usable(), kind);
     let held = payload.get(..local).unwrap_or_default();
     let mut rest = payload.get(local..).unwrap_or_default();
     if rest.is_empty() {
@@ -945,6 +965,147 @@ fn spilled<'a>(pages: &mut Pages, payload: &'a [u8]) -> Result<(&'a [u8], Option
     Ok((held, Some(first)))
 }
 
+/// Puts one entry in the index tree that begins at `root`.
+///
+/// `key` is what `record` holds, decoded, because an index tree is
+/// ordered by the values of its entries and not by a number: the walk
+/// compares `key` against the entry each cell holds, under `collations`
+/// column by column, and the key of the row the entry points at settles
+/// two entries that agree on every column before it.
+///
+/// # Errors
+///
+/// [`Error::Depth`] for a tree deeper than this crate walks, and
+/// whatever reading or writing a page of it refuses.
+/// `bulk` says the entries arrive in the order they run, which is what
+/// a `CREATE INDEX` does through its sorter: the balance then fills the
+/// left page and leaves the right one to the entries still to come.
+pub fn insert_entry(
+    pages: &mut Pages,
+    root: u32,
+    record: &[u8],
+    key: &[Value],
+    collations: &[Collation],
+    bulk: bool,
+) -> Result<(), Error> {
+    let path = place_entry(pages, root, key, collations)?;
+    let (leaf, at) = *path.last().ok_or(Error::Depth)?;
+    let (local, overflow) = spilled_entry(pages, record)?;
+    let cell = write_cell(&Cell::IndexLeaf {
+        payload: Payload {
+            local,
+            total: record.len(),
+            overflow,
+        },
+    });
+    if pages.put_cell(leaf, at, &cell)? {
+        return Ok(());
+    }
+    balance(pages, &path, alloc::vec![(at, cell)], bulk)
+}
+
+/// Where an entry of `key` belongs in the index tree at `root`: one
+/// page and one place per level, the leaf last.
+///
+/// The walk is O(log n) pages, and one page costs O(k log k) comparisons
+/// over its `k` cells where the search is a scan, which this is.
+fn place_entry(
+    pages: &Pages,
+    root: u32,
+    key: &[Value],
+    collations: &[Collation],
+) -> Result<Vec<(u32, usize)>, Error> {
+    let mut path = Vec::new();
+    let mut number = root;
+    for _ in 0..MAX_DEPTH {
+        let cells = pages.page(number)?.cells();
+        let mut at = cells;
+        for index in 0..cells {
+            if order_of_entry(pages, number, index, key, collations)?.is_ge() {
+                at = index;
+                break;
+            }
+        }
+        path.push((number, at));
+        let page = pages.page(number)?;
+        if !page.kind().is_interior() {
+            return Ok(path);
+        }
+        number = if at == cells {
+            page.right_most().ok_or(Error::Overrun)?
+        } else {
+            page.child(at)?
+        };
+    }
+    Err(Error::Depth)
+}
+
+/// Where the entry of cell `at` of page `number` stands against `key`.
+fn order_of_entry(
+    pages: &Pages,
+    number: u32,
+    at: usize,
+    key: &[Value],
+    collations: &[Collation],
+) -> Result<core::cmp::Ordering, Error> {
+    let page = pages.page(number)?;
+    let payload = page.entry(at)?;
+    // An entry that runs onto a chain is read whole before it is
+    // compared, because a column of the key may be the part that ran
+    // on.
+    let mut held = Vec::new();
+    let bytes = if payload.is_whole() {
+        payload.local
+    } else {
+        read_chain(pages, &payload, &mut held)?;
+        &held
+    };
+    let record = crate::record::Record::parse(bytes)?;
+    let mut orders = Vec::new();
+    for (at, wanted) in key.iter().enumerate() {
+        let mine = record.value(at)?.map_or(Value::Null, held_value);
+        let collation = collations.get(at).copied().unwrap_or(Collation::Binary);
+        orders.push(crate::value::compare(&mine, wanted, collation));
+    }
+    Ok(orders
+        .into_iter()
+        .find(|order| *order != core::cmp::Ordering::Equal)
+        .unwrap_or(core::cmp::Ordering::Equal))
+}
+
+/// One value of a record as a value a comparison takes, which is the
+/// bytes as they are stored: an index compares what it holds and not
+/// what an encoding makes of it.
+fn held_value(value: crate::record::Value<'_>) -> Value {
+    match value {
+        crate::record::Value::Null => Value::Null,
+        crate::record::Value::Int(number) => Value::Int(number),
+        crate::record::Value::Real(number) => Value::Real(number),
+        crate::record::Value::Text(bytes) => Value::Text(bytes.to_vec()),
+        crate::record::Value::Blob(bytes) => Value::Blob(bytes.to_vec()),
+    }
+}
+
+/// The whole of a payload that runs onto a chain, read into `into`.
+fn read_chain(pages: &Pages, payload: &Payload<'_>, into: &mut Vec<u8>) -> Result<(), Error> {
+    into.clear();
+    into.extend_from_slice(payload.local);
+    let span = pages.usable().saturating_sub(4);
+    let mut number = payload.overflow;
+    while let Some(page) = number {
+        let bytes = pages.bytes(page)?;
+        let rest = payload.total.saturating_sub(into.len());
+        into.extend_from_slice(
+            bytes
+                .get(4..span.min(rest).saturating_add(4))
+                .ok_or(Error::Overrun)?,
+        );
+        let next = crate::bytes::u32_at(bytes, 0).ok_or(Error::Overrun)?;
+        number = (next != 0).then_some(next);
+    }
+    Ok(())
+}
+
 /// Puts one row in the table tree that begins at `root`.
 ///
 /// A leaf that will not hold the cell is balanced, and so is every page
@@ -970,7 +1131,7 @@ pub fn insert(pages: &mut Pages, root: u32, rowid: i64, record: &[u8]) -> Result
     if pages.put_cell(leaf, at, &cell)? {
         return Ok(());
     }
-    balance(pages, &path, alloc::vec![(at, cell)])
+    balance(pages, &path, alloc::vec![(at, cell)], false)
 }
 
 /// Puts a row that the tree already holds there again, and answers
@@ -1050,7 +1211,7 @@ pub fn update(pages: &mut Pages, root: u32, rowid: i64, record: &[u8]) -> Result
     if pages.put_cell(leaf, at, &cell)? {
         return Ok(true);
     }
-    balance(pages, &path, alloc::vec![(at, cell)])?;
+    balance(pages, &path, alloc::vec![(at, cell)], false)?;
     Ok(true)
 }
 
@@ -1083,7 +1244,7 @@ pub fn remove(pages: &mut Pages, root: u32, rowid: i64) -> Result<bool, Error> {
     pages.open(leaf);
     clear(pages, overflow)?;
     pages.writer(leaf)?.remove(at)?;
-    balance(pages, &path, Vec::new())?;
+    balance(pages, &path, Vec::new(), false)?;
     Ok(true)
 }
 
@@ -1122,7 +1283,12 @@ type Spill = (usize, Vec<u8>);
 /// This is `balance`: the root of a tree of one page grows a child under
 /// it, a cell at the end of the right-most page grows a sibling beside
 /// it, and every other cell is the general balance.
-fn balance(pages: &mut Pages, path: &[(u32, usize)], mut spill: Vec<Spill>) -> Result<(), Error> {
+fn balance(
+    pages: &mut Pages,
+    path: &[(u32, usize)],
+    mut spill: Vec<Spill>,
+    bulk: bool,
+) -> Result<(), Error> {
     let mut stack = path.to_vec();
     // A page more than two thirds empty is balanced as well, so that a
     // delete joins pages rather than leaving a tree of empty ones.
@@ -1164,7 +1330,7 @@ fn balance(pages: &mut Pages, path: &[(u32, usize)], mut spill: Vec<Spill>) -> R
             return quick(pages, parent, page, bytes);
         }
         pages.open(parent);
-        spill = balance_nonroot(pages, parent, above, &spill, stack.len() == 2)?;
+        spill = balance_nonroot(pages, parent, above, &spill, stack.len() == 2, bulk)?;
         stack.pop();
     }
 }
@@ -1174,7 +1340,9 @@ fn balance(pages: &mut Pages, path: &[(u32, usize)], mut spill: Vec<Spill>) -> R
 /// becomes the interior page above it.
 pub(crate) fn deepen(pages: &mut Pages, root: u32) -> Result<u32, Error> {
     let kind = pages.page(root)?.kind();
-    if !kind.is_table() || root == crate::image::SCHEMA_ROOT {
+    // A root on page one begins a hundred bytes in, so its content does
+    // not fit a child that begins at nought.
+    if root == crate::image::SCHEMA_ROOT {
         return Err(Error::Balance);
     }
     let child = pages.add(kind, root)?;
@@ -1437,11 +1605,18 @@ fn gather(
         old_at.set(index, cells.len());
         if index < last && !leaf_data {
             let mut bytes = taken.dividers.get(index).cloned().unwrap_or_default();
-            // The right pointer of the page under the divider becomes
-            // the left pointer of the divider itself.
-            let child = page.right_most().ok_or(Error::Balance)?;
-            for (slot, byte) in bytes.iter_mut().zip(child.to_be_bytes()) {
-                *slot = byte;
+            match page.right_most() {
+                // The right pointer of the page under the divider
+                // becomes the left pointer of the divider itself.
+                Some(child) => {
+                    for (slot, byte) in bytes.iter_mut().zip(child.to_be_bytes()) {
+                        *slot = byte;
+                    }
+                }
+                // A leaf has no page under it, so the divider joins the
+                // cells of the leaves without the four bytes that named
+                // one, which is the `leafCorrection` of the C library.
+                None => bytes.drain(..4.min(bytes.len())).for_each(drop),
             }
             cells.push(Held { bytes, from: None });
         }
@@ -1466,6 +1641,7 @@ fn packing(
     old_count: usize,
     room: i64,
     leaf_data: bool,
+    bulk: bool,
 ) -> (usize, Row<usize>) {
     let mut k = old_count;
     let mut index = 0;
@@ -1518,9 +1694,14 @@ fn packing(
             let size_r = cost_of(cells, r).saturating_sub(2);
             let size_d = cost_of(cells, d).saturating_sub(2);
             let keeps = if index == k.saturating_sub(1) { 0 } else { 2 };
+            // A bulk load fills the left page and leaves the right one
+            // to the cells still to come, because they all run after
+            // what is there: `BTREE_BULKLOAD` is what a `CREATE INDEX`
+            // asks for.
             if right != 0
-                && right.saturating_add(size_d).saturating_add(2)
-                    > left.saturating_sub(size_r.saturating_add(keeps))
+                && (bulk
+                    || right.saturating_add(size_d).saturating_add(2)
+                        > left.saturating_sub(size_r.saturating_add(keeps)))
             {
                 break;
             }
@@ -1612,6 +1793,7 @@ fn dividers_for(
     new: &[u32],
     next: usize,
     leaf_data: bool,
+    leaves: bool,
 ) -> Result<Vec<Spill>, Error> {
     let mut built: Vec<Spill> = Vec::new();
     for index in 0..new.len().saturating_sub(1) {
@@ -1621,6 +1803,15 @@ fn dividers_for(
             let held = cells.get(j.saturating_sub(1)).ok_or(Error::Balance)?;
             let rowid = key_of(&held.bytes)?;
             write_cell(&Cell::TableInterior { child: page, rowid })
+        } else if leaves {
+            // The divider of a tree that holds a key on every page is
+            // the entry itself, which no leaf keeps a copy of. A cell
+            // that came off a leaf carries no pointer, so the parent's
+            // copy gains the four bytes `leafCorrection` counts.
+            let held = cells.get(j).ok_or(Error::Balance)?;
+            let mut bytes = page.to_be_bytes().to_vec();
+            bytes.extend_from_slice(&held.bytes);
+            bytes
         } else {
             let held = cells.get(j).ok_or(Error::Balance)?;
             let child = u32::from_be_bytes(
@@ -1749,6 +1940,7 @@ fn balance_nonroot(
     at: usize,
     spill: &[Spill],
     topmost: bool,
+    bulk: bool,
 ) -> Result<Vec<Spill>, Error> {
     let usable = pages.usable();
     let held_by_parent = pages.page(parent)?.cells();
@@ -1782,7 +1974,7 @@ fn balance_nonroot(
         sizes.set(index, used);
         counts.set(index, old_at.get(index));
     }
-    let (k, counts) = packing(&cells, sizes, counts, old_count, room, leaf_data);
+    let (k, counts) = packing(&cells, sizes, counts, old_count, room, leaf_data, bulk);
     let new = allocate(pages, &taken, &mut cells, &mut old_at, k, kind)?;
     let last = number_at(&new, k.saturating_sub(1));
     // The pointer the last of the pages hangs from, which is written
@@ -1810,7 +2002,7 @@ fn balance_nonroot(
         let child = pages.page(from)?.right_most().ok_or(Error::Balance)?;
         pages.writer(last)?.point(child)?;
     }
-    let built = dividers_for(pages, &cells, counts, &new, taken.next, leaf_data)?;
+    let built = dividers_for(pages, &cells, counts, &new, taken.next, leaf_data, leaf)?;
     // A parent that holds one cell it has no room for holds every cell
     // after that one the same way, which is `insertCell`, and which is
     // why the dividers of a balance lie next to each other.
