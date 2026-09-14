@@ -132,8 +132,28 @@ impl<'host> Realm<'host> {
                 message: "compiled Script limits differ from realm limits",
             });
         }
-        let result = self.execution.evaluate_script(&script.program);
+        let result = self.execution.evaluate_script(&script.program, false);
         self.outcome(result)
+    }
+    /// Executes a precompiled global Script for its effects and performs its
+    /// job checkpoint. The completion value is dropped, so a Script that ends
+    /// in an object the embedding cannot name still completes normally: a
+    /// value without identity outside the engine is not a failure of the
+    /// Script. Everything else, a thrown value included, reports as in
+    /// [`Self::evaluate_compiled`].
+    ///
+    /// # Errors
+    /// Limit mismatch, poisoned realm, declaration conflicts or execution errors.
+    pub fn run_compiled(&mut self, script: &crate::Script) -> Result<(), Error> {
+        self.available()?;
+        self.refuse_unlowered(&script.program)?;
+        if script.limits != self.execution.limits {
+            return Err(Error::Type {
+                message: "compiled Script limits differ from realm limits",
+            });
+        }
+        let result = self.execution.evaluate_script(&script.program, true);
+        self.outcome(result).map(|_| ())
     }
     /// Installs standalone Event/EventTarget and AbortController/AbortSignal
     /// interfaces (timeout additionally requires `install_timers`). This does not make the
@@ -470,7 +490,7 @@ impl<'host> Realm<'host> {
             }
         };
         self.refuse_unlowered(&program)?;
-        let result = self.execution.evaluate_script(&program);
+        let result = self.execution.evaluate_script(&program, false);
         if result
             .as_ref()
             .is_err_and(|e| !super::iterators::language_error(e))
@@ -720,10 +740,14 @@ impl Execution<'_> {
         }
         Ok(())
     }
-    fn evaluate_script(&mut self, program: &Program) -> Result<Value, Error> {
+    fn evaluate_script(
+        &mut self,
+        program: &Program,
+        discard_completion: bool,
+    ) -> Result<Value, Error> {
         self.instantiate_globals(program)?;
         let result = if self.uses_register(program) {
-            self.execute_program_body(program, 0)
+            self.execute_program_completion(program, 0, discard_completion)
         } else {
             self.start_script_frame(program)?;
             self.execute_program_body(program, 0)

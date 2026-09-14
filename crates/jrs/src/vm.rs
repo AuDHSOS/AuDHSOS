@@ -616,9 +616,16 @@ impl Execution<'_> {
         })
     }
 
+    /// Runs one lowered Script on the engine.
+    ///
+    /// `discard_completion` says the caller does not read the value, so a
+    /// completion that cannot cross to the embedding is not a failure: the
+    /// Script ran to a defined end, and only its value has no identity outside
+    /// the engine.
     fn execute_register_program(
         &mut self,
         code: &Rc<crate::engine::bytecode::BytecodeFunction>,
+        discard_completion: bool,
     ) -> Result<Value, Error> {
         let unit = self.register_unit(code)?;
         let mut vm = self.register_vm.take().unwrap_or_else(|| {
@@ -668,9 +675,13 @@ impl Execution<'_> {
         drop(vectors);
         self.fuel = vm.fuel;
         let result = match result {
-            Ok(value) => register_primitive(value, &agent.heap).ok_or(Error::Unsupported {
-                feature: UNCROSSABLE_OBJECT,
-            }),
+            Ok(value) => match register_primitive(value, &agent.heap) {
+                Some(value) => Ok(value),
+                None if discard_completion => Ok(Value::Undefined),
+                None => Err(Error::Unsupported {
+                    feature: UNCROSSABLE_OBJECT,
+                }),
+            },
             Err(crate::engine::interpreter::VMError::Thrown(value, native)) => {
                 Err(self.register_exception(value, native, &agent))
             }
@@ -719,12 +730,21 @@ impl Execution<'_> {
     }
 
     fn execute_program_body(&mut self, program: &Program, boundary: usize) -> Result<Value, Error> {
+        self.execute_program_completion(program, boundary, false)
+    }
+
+    fn execute_program_completion(
+        &mut self,
+        program: &Program,
+        boundary: usize,
+        discard_completion: bool,
+    ) -> Result<Value, Error> {
         match program
             .register_code
             .as_ref()
             .filter(|_| self.uses_register(program))
         {
-            Some(code) => self.execute_register_program(code),
+            Some(code) => self.execute_register_program(code, discard_completion),
             None => self.execute(program, boundary),
         }
     }

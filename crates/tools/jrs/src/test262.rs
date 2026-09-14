@@ -364,11 +364,13 @@ impl Runner {
             return Outcome::Fail(format!("host setup: {e}"));
         }
         for script in harness {
-            if let Err(e) = realm.evaluate_compiled(&script) {
+            if let Err(e) = realm.run_compiled(&script) {
                 return Outcome::Fail(format!("harness execution: {}", describe(&mut realm, &e)));
             }
         }
-        let result = realm.evaluate_compiled(&script);
+        // A test passes or fails by what it throws, never by its completion
+        // value, so the value never has to reach this runner.
+        let result = realm.run_compiled(&script);
         if let Some(feature) = &state.borrow().unsupported {
             return Outcome::Unsupported(feature.clone());
         }
@@ -376,7 +378,7 @@ impl Runner {
             return Outcome::Unsupported((*feature).into());
         }
         let outcome = match (&meta.negative, result) {
-            (None, Ok(_)) => Outcome::Pass,
+            (None, Ok(())) => Outcome::Pass,
             (None, Err(e)) => Outcome::Fail(format!("runtime: {}", describe(&mut realm, &e))),
             (Some((phase, expected)), Err(e)) if phase == "runtime" => {
                 if error_name(&mut realm, &e).as_deref() == Some(expected) {
@@ -388,7 +390,7 @@ impl Runner {
                     ))
                 }
             }
-            (Some(_), Ok(_)) => Outcome::Fail("negative test completed without throwing".into()),
+            (Some(_), Ok(())) => Outcome::Fail("negative test completed without throwing".into()),
             (_, Err(e)) => Outcome::Fail(format!("unexpected phase: {e}")),
         };
         if outcome != Outcome::Pass {

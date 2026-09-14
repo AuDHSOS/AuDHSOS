@@ -393,6 +393,24 @@ fn a_value_the_embedding_cannot_hold_leaves_the_realm_usable() -> Result<(), Err
 }
 
 #[test]
+fn a_script_run_for_effect_ends_on_a_value_that_cannot_cross() -> Result<(), Error> {
+    // `run_compiled` drops the completion value, so a Script whose value has no
+    // identity outside the engine still completes. A thrown value stays a
+    // failure.
+    let limits = Limits::default();
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(limits, &mut host, Backend::Engine)?;
+    for source in ["({x:1})", "[1,2]", "2*3"] {
+        realm.run_compiled(&compile_script(source, limits)?)?;
+    }
+    assert!(matches!(
+        realm.run_compiled(&compile_script("throw {}", limits)?),
+        Err(Error::Unsupported { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn a_constructor_and_a_method_of_a_global_are_reached_at_run_time() -> Result<(), Error> {
     // In a Realm a function declaration binds a name of the Global Environment
     // Record, so neither the constructor of `new` nor the callee of a method
