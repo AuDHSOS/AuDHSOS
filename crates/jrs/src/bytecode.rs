@@ -5847,6 +5847,7 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // reads it there instead. 23.1.1.1 answers an Array whose elements
         // this lowering did not make and cannot name.
         crate::engine::realm::Intrinsic::ArrayConstructor
+        | crate::engine::realm::Intrinsic::ObjectConstructor
         | crate::engine::realm::Intrinsic::ArrayPrototypeValues
         | crate::engine::realm::Intrinsic::ArrayIteratorPrototypeNext
         | crate::engine::realm::Intrinsic::ArrayPrototypeAt

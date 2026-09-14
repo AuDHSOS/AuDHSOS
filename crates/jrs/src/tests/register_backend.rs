@@ -448,6 +448,44 @@ fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Erro
 }
 
 #[test]
+fn the_object_constructor_answers_what_its_realm_built() -> Result<(), Error> {
+    // 17 gives `%Object.prototype%` its `constructor`, so a read of that name
+    // is no longer a gap but the constructor it belongs to.
+    differential("let o={a:1};let k='constructor';typeof o[k]")?;
+    // 20.1.1.1 makes an ordinary object of undefined and null and answers
+    // every Object unchanged, and 17 ties `%Object%` and `%Object.prototype%`
+    // to one another.
+    for source in [
+        "typeof Object",
+        "Object.name",
+        "Object.length",
+        "typeof Object()",
+        "typeof Object(undefined)",
+        "typeof Object(null)",
+        "let o={a:1};Object(o).a",
+        "typeof new Object()",
+        "let f=function(o){return Object(o)===o};f({})",
+    ] {
+        differential(source)?;
+    }
+    // 20.1.2 gives `%Object%` names this Realm has not built, and `ToObject`
+    // of a primitive needs a wrapper it has not built either.
+    for source in ["Object.keys", "Object.defineProperty", "typeof Object(1)"] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn the_array_constructor_answers_what_its_realm_built() -> Result<(), Error> {
     // 23.1.1.1 makes an Array of one length or of many elements, 23.1.2.3
     // answers IsArray, and 23.1.2.5 and 23.1.3.2 tie the constructor and its
@@ -832,7 +870,6 @@ fn a_read_that_reaches_an_unbuilt_prototype_is_a_gap() -> Result<(), Error> {
     // computed one reaches the engine and used to answer undefined.
     for source in [
         "let o={a:1};let k='valueOf';typeof o[k]",
-        "let o={a:1};let k='constructor';typeof o[k]",
         "let a=[1];let k='concat';typeof a[k]",
     ] {
         let program = compile(source, Limits::default())?;

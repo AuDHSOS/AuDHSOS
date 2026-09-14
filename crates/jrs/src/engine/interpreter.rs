@@ -1177,6 +1177,7 @@ impl RegisterVM {
             // argument that is a Number is the length, and every other list of
             // them is the elements.
             Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
+            Intrinsic::ObjectConstructor => Self::construct_object(argument(self, 0)?, heap, realm),
         }
     }
 
@@ -1191,7 +1192,36 @@ impl RegisterVM {
         let ObjectKind::NativeFunction { id, .. } = heap.get_object(object)?.kind else {
             return None;
         };
-        Intrinsic::from_id(id).filter(|intrinsic| *intrinsic == Intrinsic::ArrayConstructor)
+        Intrinsic::from_id(id).filter(|intrinsic| {
+            matches!(
+                intrinsic,
+                Intrinsic::ArrayConstructor | Intrinsic::ObjectConstructor
+            )
+        })
+    }
+
+    /// `Object ( value )` of 20.1.1.1.
+    ///
+    /// undefined and null make an ordinary object, and every other value goes
+    /// through `ToObject`, which answers an Object unchanged and needs for a
+    /// primitive a wrapper this engine has not built.
+    fn construct_object(
+        value: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        if value.is_undefined() || value.is_null() {
+            let shape = heap.shapes.root_shape();
+            let prototype = realm.object_prototype(heap)?;
+            let object = heap.allocate_object(shape, prototype)?;
+            return Ok(Value::from_object(object));
+        }
+        if value.as_object().is_some() {
+            return Ok(value);
+        }
+        Err(VMError::Unsupported(
+            "ToObject of a primitive for the Object constructor",
+        ))
     }
 
     /// `Array ( ...values )` of 23.1.1.1.
@@ -1651,6 +1681,14 @@ impl RegisterVM {
             Some(ObjectKind::NativeFunction { id, .. })
                 if id == Intrinsic::ArrayConstructor.id()
                     && super::realm::array_constructor_owns(name) =>
+            {
+                Err(GAP)
+            }
+            // 20.1.2 gives `%Object%` more than 17 gives a built-in function,
+            // and this Realm builds only some of them.
+            Some(ObjectKind::NativeFunction { id, .. })
+                if id == Intrinsic::ObjectConstructor.id()
+                    && super::realm::object_constructor_owns(name) =>
             {
                 Err(GAP)
             }

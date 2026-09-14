@@ -335,6 +335,8 @@ pub enum Intrinsic {
     ArrayConstructor,
     /// `Array.isArray` (23.1.2.3).
     ArrayIsArray,
+    /// The `Object` constructor `%Object%` (20.1.1.1).
+    ObjectConstructor,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -357,7 +359,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 37] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -394,6 +396,7 @@ impl Intrinsic {
         Self::ArrayPrototypeToString,
         Self::ArrayConstructor,
         Self::ArrayIsArray,
+        Self::ObjectConstructor,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -434,7 +437,7 @@ impl Intrinsic {
             | Self::ArrayPrototypeSlice
             | Self::ArrayPrototypeToString => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
-            Self::ArrayConstructor => IntrinsicHolder::Global,
+            Self::ArrayConstructor | Self::ObjectConstructor => IntrinsicHolder::Global,
             Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
         }
     }
@@ -479,6 +482,7 @@ impl Intrinsic {
             Self::ArrayPrototypeToString => 33,
             Self::ArrayConstructor => 34,
             Self::ArrayIsArray => 35,
+            Self::ObjectConstructor => 36,
         }
     }
 
@@ -521,6 +525,7 @@ impl Intrinsic {
             Self::ArrayPrototypeToString => 33,
             Self::ArrayConstructor => 34,
             Self::ArrayIsArray => 35,
+            Self::ObjectConstructor => 36,
         }
     }
 
@@ -564,6 +569,7 @@ impl Intrinsic {
             33 => Some(Self::ArrayPrototypeToString),
             34 => Some(Self::ArrayConstructor),
             35 => Some(Self::ArrayIsArray),
+            36 => Some(Self::ObjectConstructor),
             _ => None,
         }
     }
@@ -577,6 +583,7 @@ impl Intrinsic {
             Self::ObjectPrototypePropertyIsEnumerable => "propertyIsEnumerable",
             Self::ObjectPrototypeToString | Self::ArrayPrototypeToString => "toString",
             Self::ArrayConstructor => "Array",
+            Self::ObjectConstructor => "Object",
             Self::ArrayIsArray => "isArray",
             Self::StringPrototypeCharAt => "charAt",
             Self::StringPrototypeCharCodeAt => "charCodeAt",
@@ -625,7 +632,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeReverse
             | Self::ArrayPrototypeToString
             | Self::ArrayConstructor
-            | Self::ArrayIsArray => false,
+            | Self::ArrayIsArray
+            | Self::ObjectConstructor => false,
             // 20.1.3.2 and 20.1.3.4 apply ToPropertyKey to the first argument.
             Self::ObjectPrototypeHasOwnProperty | Self::ObjectPrototypePropertyIsEnumerable => {
                 index == 0
@@ -676,7 +684,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeJoin
             | Self::ArrayPrototypePush
             | Self::ArrayConstructor
-            | Self::ArrayIsArray => 1,
+            | Self::ArrayIsArray
+            | Self::ObjectConstructor => 1,
             Self::StringPrototypeSlice
             | Self::StringPrototypeSubstring
             | Self::ArrayPrototypeSlice => 2,
@@ -855,6 +864,48 @@ pub const FUNCTION_PROPERTIES: [&str; 8] = [
 /// does not have it.
 pub const ARRAY_CONSTRUCTOR_PROPERTIES: [&str; 5] =
     ["from", "fromAsync", "isArray", "of", "prototype"];
+
+/// The property names 20.1.2 gives `%Object%`, beside the ones 17 gives every
+/// built-in function.
+///
+/// This Realm builds `prototype` of them; a read of one of the others is a
+/// gap, because answering undefined would say the constructor does not have
+/// it.
+pub const OBJECT_CONSTRUCTOR_PROPERTIES: [&str; 24] = [
+    "assign",
+    "create",
+    "defineProperties",
+    "defineProperty",
+    "entries",
+    "freeze",
+    "fromEntries",
+    "getOwnPropertyDescriptor",
+    "getOwnPropertyDescriptors",
+    "getOwnPropertyNames",
+    "getOwnPropertySymbols",
+    "getPrototypeOf",
+    "groupBy",
+    "hasOwn",
+    "is",
+    "isExtensible",
+    "isFrozen",
+    "isSealed",
+    "keys",
+    "preventExtensions",
+    "prototype",
+    "seal",
+    "setPrototypeOf",
+    "values",
+];
+
+/// Whether `%Object%` owns a property of this name.
+#[must_use]
+pub fn object_constructor_owns(name: &[u16]) -> bool {
+    function_prototype_owns(name)
+        || OBJECT_CONSTRUCTOR_PROPERTIES
+            .into_iter()
+            .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
 
 /// Whether `%Array%` owns a property of this name.
 #[must_use]
@@ -1073,7 +1124,18 @@ impl Realm {
             },
         )?;
 
-        Self::pair_array_with_its_prototype(heap, &intrinsics, array_prototype)?;
+        Self::pair_constructor_with_prototype(
+            heap,
+            &intrinsics,
+            Intrinsic::ArrayConstructor,
+            array_prototype,
+        )?;
+        Self::pair_constructor_with_prototype(
+            heap,
+            &intrinsics,
+            Intrinsic::ObjectConstructor,
+            object_prototype,
+        )?;
 
         // 9.1.1.4: the Global Environment Record binds the global object and
         // the declarations of every Script of this Realm. 19.1.1: `globalThis`
@@ -1497,24 +1559,25 @@ impl Realm {
         Ok(intrinsics)
     }
 
-    /// Ties `%Array%` and `%Array.prototype%` to one another.
+    /// Ties one constructor and its prototype to one another.
     ///
-    /// 23.1.2.5 gives the constructor its prototype, which is the one property
-    /// of it 17 makes neither writable, enumerable nor configurable, and
-    /// 23.1.3.2 gives that prototype back the constructor it belongs to.
+    /// 17 gives a constructor its `prototype` as the one property of it that
+    /// is neither writable, enumerable nor configurable, and gives that
+    /// prototype back the `constructor` it belongs to.
     ///
     /// # Errors
     ///
     /// Returns [`HeapError::InvalidReference`] when a root was discarded.
-    fn pair_array_with_its_prototype(
+    fn pair_constructor_with_prototype(
         heap: &mut GenerationalHeap,
         intrinsics: &[Root],
-        array_prototype: Root,
+        which: Intrinsic,
+        prototype: Root,
     ) -> Result<(), HeapError> {
         let constructor = Self::rooted(
             heap,
             *intrinsics
-                .get(Intrinsic::ArrayConstructor.index())
+                .get(which.index())
                 .ok_or(HeapError::InvalidReference)?,
         )?;
         let constructor_object = constructor.as_object().ok_or(HeapError::InvalidReference)?;
@@ -1522,7 +1585,7 @@ impl Realm {
         heap.define_own_named(
             constructor_object,
             prototype_key,
-            Self::rooted(heap, array_prototype)?,
+            Self::rooted(heap, prototype)?,
             PropertyFlags {
                 writable: false,
                 enumerable: false,
@@ -1531,7 +1594,7 @@ impl Realm {
             },
         )?;
         let constructor_key = intern(heap, "constructor")?;
-        let prototype_object = Self::rooted(heap, array_prototype)?
+        let prototype_object = Self::rooted(heap, prototype)?
             .as_object()
             .ok_or(HeapError::InvalidReference)?;
         heap.define_own_named(
