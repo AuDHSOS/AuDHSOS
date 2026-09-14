@@ -620,8 +620,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Array%` and its methods on the register engine (focused) | focused | `877447f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 338 (5.52%) | 642 (10.50%) | 5,137 (83.98%) |
 | `%Object%` and its methods (focused) | focused | `399ba5a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 5,916 (86.98%) | 862 (12.67%) | 24 (0.35%) |
 | `%Object%` and its methods on the register engine (focused) | focused | `399ba5a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 286 (4.20%) | 1,838 (27.02%) | 4,678 (68.77%) |
-| Complete pinned suite, including staging and Intl | full | `399ba5a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `399ba5a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 5,599 (5.44%) | 19,434 (18.88%) | 77,892 (75.68%) |
+| Compound assignment (focused) | focused | `69b8a6d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/compound-assignment --summary` | 454 | 786 | 591 (75.19%) | 55 (7.00%) | 140 (17.81%) |
+| Compound assignment on the register engine (focused) | focused | `69b8a6d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/compound-assignment --summary` | 454 | 786 | 167 (21.25%) | 0 (0.00%) | 619 (78.75%) |
+| Complete pinned suite, including staging and Intl | full | `69b8a6d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `69b8a6d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 5,807 (5.64%) | 19,487 (18.93%) | 77,631 (75.42%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -688,6 +690,13 @@ in a descriptor is a gap, because this engine has no accessor property. The
 harness now asks for `%Function%`; that gap still holds 946 variants which
 count as a failed harness today.
 
+A compound assignment reaches a property and a name of the Global Environment
+Record (13.15.2): the Reference is evaluated once, read through, and written
+back with the operator of 13.15.3, which is the operator the expression form
+applies. `o.a += 2` and, inside a Realm, `x *= 2` were Scripts the lowering
+refused before. What is left of that family is no longer the lowering but the
+constructors it asks for, `%Boolean%` and `%String%` first.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -725,8 +734,9 @@ same suite measured before it, variant for variant. The Array search run was mea
 `e2e3473e55f557f7f7a887963d18a60c857fb433`. The `new` runs and both full runs
 were measured at tree `d98662e20789888cb180d99642144c95e6596f04`. The
 `%Array%` runs at tree `4dcc52a89757181705ea5687778e857ae9d07408`. The
-`%Object%` runs and both full runs were measured at tree
-`595f01d820090f035e3b992c1db9990181d2ae95`, which is the tree of `399ba5a`.
+`%Object%` runs at tree `595f01d820090f035e3b992c1db9990181d2ae95`. The
+compound-assignment runs and both full runs were measured at tree
+`8183751cf4043881206e2a64a11ef3f5f0ad0aae`, which is the tree of `69b8a6d`.
 
 ### Historical Test262 baseline
 
