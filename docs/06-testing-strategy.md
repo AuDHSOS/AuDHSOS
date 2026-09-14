@@ -4293,12 +4293,11 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - A statement reaches the connection that reads or the one that writes
   by its first word, and a `WITH` clause stands in front of a statement
   that writes as well, so the words after it say which.
-- 964 pass, 16 answer differently and 14 384 are refused or stopped.
-  Document 16, section 16.23 groups the sixteen, of which nine read a
-  `UNIQUE` this crate does not keep. Earlier runs answered 14, then 27,
-  then 17, then 13 differently; sixteen were defects, which D-181,
-  D-184, D-189 and D-197 record and twenty-eight cases of
-  `query.corpus` now hold to the C library.
+- 968 pass, 7 answer differently and 14 389 are refused or stopped.
+  Document 16, section 16.23 groups the seven. Earlier runs answered
+  14, then 27, then 17, then 13, then 16 differently; twenty-five were
+  defects, which D-181, D-184, D-189, D-197 and D-205 record and
+  twenty-eight cases of `query.corpus` now hold to the C library.
 - `--why` counts what each refusal was for by the first two words of
   the statement, which is what says which missing feature stops the
   most files. It named a `PRAGMA` for sixty of them, and D-182 answers
@@ -4567,6 +4566,38 @@ D-204, document 16 step Q8.
 - A trigger and an index may share a name, and a `DROP` takes away
   the one of its own kind; a `DROP TABLE` takes the triggers on the
   table with it.
+
+### 6.6.134 The index a key carries (`db-sqlite`)
+
+D-205, document 16 step Q8.
+
+- Eight fixtures, `key-*.db`: one constraint of each kind, a rowid
+  alias, two constraints over one table, a collation, a row taken out
+  again, a key written over, an entry and a row that both run onto
+  chains, and a file that vacuums itself. Each is the file the shell
+  wrote, byte for byte, the row of `sqlite_schema` the index carries
+  included.
+- The entry of every index is written before the row, which is what
+  says a row whose entry runs onto a chain takes the pages of the
+  entry first.
+- A row that shares a key: refused under `ABORT`, stopped under `FAIL`
+  with the rows before it kept, passed over under `IGNORE`, written
+  over under `REPLACE`, and the clause the index carries where the
+  statement names none.
+- A key one of whose columns is nothing constrains no row, and an
+  index that is not unique constrains none.
+- Thirteen statements name the indexes a table carries of its own,
+  which the pinned shell answers: the rowid's own `PRIMARY KEY` gains
+  none and a `UNIQUE` over that column gains one, a constraint over
+  the columns of one already there gains none whatever order it writes
+  them in, and the index there takes the clause of that constraint
+  where it carries none.
+- A `REPLACE` runs the `BEFORE DELETE` and `AFTER DELETE` triggers on
+  the row it writes over, and a `RAISE(IGNORE)` in the `BEFORE` one
+  passes the row over.
+- A row of `sqlite_schema` that names an index of a table's own
+  carries one only where the table and the constraint the name points
+  at are both there.
 
 ## 6.7 CI pipeline
 

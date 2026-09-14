@@ -359,6 +359,23 @@ for case in "index-empty.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a);" \
     printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
 done
 
+# The index a `PRIMARY KEY` and a `UNIQUE` each carry, which
+# `sqlite_autoindex_<table>_<n>` names and which holds no statement.
+for case in \
+    "key-one.db:CREATE TABLE t(a PRIMARY KEY, b UNIQUE, c); INSERT INTO t VALUES(1,2,3),(4,5,6);" \
+    "key-alias.db:CREATE TABLE u(a INTEGER PRIMARY KEY, b); INSERT INTO u VALUES(1,2);" \
+    "key-many.db:CREATE TABLE v(a, b, PRIMARY KEY(a,b), UNIQUE(b)); INSERT INTO v VALUES(1,2),(1,3);" \
+    "key-text.db:CREATE TABLE w(a TEXT COLLATE NOCASE UNIQUE, b); INSERT INTO w VALUES('x',1),('Y',2);" \
+    "key-gone.db:CREATE TABLE t(a PRIMARY KEY, b); INSERT INTO t VALUES(1,2),(3,4); DELETE FROM t WHERE a=1;" \
+    "key-again.db:CREATE TABLE t(a PRIMARY KEY, b); INSERT INTO t VALUES(1,2); UPDATE t SET a=9;" \
+    "key-wide.db:CREATE TABLE t(a, b UNIQUE); INSERT INTO t VALUES(1, hex(zeroblob(400))),(2, hex(zeroblob(401)));"; do
+    name="${case%%:*}"
+    sql="${case#*:}"
+    rm -f "$out/$name"
+    "$sqlite" "$out/$name" "PRAGMA page_size=512; $sql"
+    printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
+done
+
 # A trigger: the row of `sqlite_schema` that names it, and the rows its
 # body writes when a statement on the table it is on runs.
 for case in \
@@ -395,6 +412,10 @@ done
 rm -f "$out/as-wider.db"
 "$sqlite" "$out/as-wider.db" "PRAGMA page_size=512; CREATE TABLE t(a); INSERT INTO t VALUES(1); CREATE TABLE u AS SELECT a AS c1, a AS c2, a AS c3, a AS c4, a AS c5, a AS c6, a AS c7, a AS c8, a AS c9, a AS c10, a AS c_11, false FROM t;"
 printf '%s\t%s bytes\n' as-wider.db "$(wc -c <"$out/as-wider.db" | tr -d ' ')"
+
+rm -f "$out/key-vacuum.db"
+"$sqlite" "$out/key-vacuum.db" "PRAGMA page_size=512; PRAGMA auto_vacuum=full; CREATE TABLE t(a PRIMARY KEY, b); INSERT INTO t VALUES(1,2),(3,4);"
+printf '%s\t%s bytes\n' key-vacuum.db "$(wc -c <"$out/key-vacuum.db" | tr -d ' ')"
 
 rm -f "$out/as-vacuum.db"
 "$sqlite" "$out/as-vacuum.db" "PRAGMA page_size=512; PRAGMA auto_vacuum=full; CREATE TABLE t(a); INSERT INTO t VALUES(1),(2); CREATE TABLE u AS SELECT a FROM t;"

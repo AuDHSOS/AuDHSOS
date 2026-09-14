@@ -638,16 +638,18 @@ Status: `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW`, the three
 `ROLLBACK`, `INSERT`, `DELETE` and `UPDATE` are run from their text and
 write the files the shell wrote; the rest is open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
-D-191, D-193, D-195 and D-196.
+D-191, D-193, D-195, D-196 and D-205.
 Size: L.
 
 ### Does
 
 1. `INSERT`, `UPDATE`, `DELETE`, `REPLACE`. `INSERT` is built, over
-   `VALUES` and over a `SELECT`, and so are `DELETE` and `UPDATE`;
-   `REPLACE` and the other conflict words are read and not answered. A
+   `VALUES` and over a `SELECT`, and so are `DELETE` and `UPDATE`. A
    `DELETE` and an `UPDATE` over a table an index is over write the
-   entries of that index as well, which D-187 records.
+   entries of that index as well, which D-187 records. A `UNIQUE` and
+   a `PRIMARY KEY` give the table an index of its own and hold every
+   row the statement writes to it, under the conflict word the
+   statement names or the one the index carries, which D-205 records.
 2. `CREATE`, `ALTER`, `DROP` for tables, indexes, views and triggers.
    `CREATE TABLE` is built for a table of columns and for one made
    from a statement, which D-203 records, `CREATE INDEX` for
@@ -671,7 +673,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 964 pass, 16 answer differently, and 14 384 name something the
+files, 968 pass, 7 answer differently, and 14 389 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.
@@ -715,12 +717,11 @@ list it answers is the list the file writes, element for element.
 statement and what the engine answered, which is what says which missing
 feature stops the most files.
 
-### The sixteen that answer differently
+### The seven that answer differently
 
 | File | Cases | What it shows |
 |------|-------|---------------|
 | `fpconv1.test` | 3 | `sqlite3_db_config db FP_DIGITS 15`, which the interpreter sets between two cases; the pinned shell answers what this engine answers for the third. |
-| `conflict3.test`, `tkt2832.test`, `insert3.test` | 9 | No `UNIQUE` is kept, so a row SQLite refuses goes in and `OR REPLACE` replaces nothing. |
 | `collate1.test` | 1 | A collation the file registers through the interpreter, which this harness cannot run. |
 | `gencol1.test` | 1 | `INSERT INTO t1 SELECT * FROM t0` where both hold a computed column: the values are placed over every column and the computed one is written again. |
 | `autoindex4.test` | 1 | The order of rows an `ORDER BY` leaves equal, which SQLite settles by the automatic index it builds. |

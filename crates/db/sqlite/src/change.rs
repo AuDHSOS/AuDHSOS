@@ -14,7 +14,7 @@
 
 use alloc::vec::Vec;
 
-use crate::ast::{Arena, Change, Definition, Span, TableBody, TriggerEvent, TriggerTime};
+use crate::ast::{Arena, Change, Conflict, Definition, Span, TableBody, TriggerEvent, TriggerTime};
 use crate::db::{Database, Error};
 use crate::header::{Encoding, Header, LIBRARY_VERSION};
 use crate::journal::Mode;
@@ -474,7 +474,11 @@ impl Writer {
         let changed = match ran {
             Ok(rows) => rows,
             Err(error) => {
-                if self.began.is_none() {
+                // A statement that stopped where it stood keeps what it
+                // wrote, which is `OE_Fail`. `OE_Rollback` undoes the
+                // whole transaction, which this crate answers as
+                // `OE_Abort`.
+                if self.began.is_none() && error != Error::Stopped {
                     self.pages.rollback();
                 }
                 return Err(error);
@@ -739,7 +743,8 @@ impl Writer {
             &SCHEMA,
             4,
         );
-        self.schema_row(&row)?;
+        let at = self.schema_blank()?;
+        self.schema_written(at, &row)?;
         let mut rowid = 0_i64;
         for row in &answer.rows {
             let values: Vec<Value> = row
@@ -928,9 +933,9 @@ impl Writer {
         Ok(())
     }
 
-    /// One row written into `sqlite_schema`, over the record of five
-    /// noughts `sqlite3StartTable` writes first.
-    fn schema_row(&mut self, row: &[u8]) -> Result<(), Error> {
+    /// The record of five noughts `sqlite3StartTable` writes into
+    /// `sqlite_schema` first, and the key it is written under.
+    fn schema_blank(&mut self) -> Result<i64, Error> {
         let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
             .unwrap_or(0)
             .saturating_add(1);
@@ -946,6 +951,12 @@ impl Writer {
             4,
         );
         insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &blank)?;
+        Ok(rowid)
+    }
+
+    /// The row `sqlite3EndTable` writes over the blank record, which
+    /// raises the schema cookie.
+    fn schema_written(&mut self, rowid: i64, row: &[u8]) -> Result<(), Error> {
         crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, row)?;
         self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
         self.header.schema_format = 4;
@@ -1014,19 +1025,56 @@ impl Writer {
         // `sqlite3EndTable` writes over it, so the page keeps the bytes
         // of the blank record where the row no longer stands.
         // `sqlite3CreateIndex` writes its row once and has no blank.
-        if matches!(definition, Definition::Index(_)) {
+        if let Definition::Index(index) = definition {
             let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
                 .unwrap_or(0)
                 .saturating_add(1);
             insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
             self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
             self.header.schema_format = 4;
-        } else {
-            self.schema_row(&row)?;
+            return self.fill(arena, &index, sql, root, &over);
         }
-        if let Definition::Index(index) = definition {
-            self.fill(arena, &index, sql, root, &over)?;
+        let rowid = self.schema_blank()?;
+        // A `PRIMARY KEY` and a `UNIQUE` each carry an index of the
+        // table's own, which the grammar makes as it reads the
+        // constraint, so its row stands before the row of the table is
+        // written over the blank one.
+        if let Definition::Table(written) = definition {
+            let table = crate::schema::table(arena, &written, sql)?;
+            for at in 0..table.keys.len() {
+                self.own_index(&table, at)?;
+            }
         }
+        self.schema_written(rowid, &row)
+    }
+
+    /// One index of a table's own, written: a page for its tree and a
+    /// row of `sqlite_schema` that names it and holds no statement.
+    ///
+    /// Writing one row costs O(log n) in the rows of the schema.
+    fn own_index(&mut self, table: &crate::schema::Table, at: usize) -> Result<(), Error> {
+        let index = crate::schema::own_index(table, at).ok_or(Error::Unsupported)?;
+        let root = self.pages.add(Kind::LeafIndex, 0)?;
+        self.pages.point(root, crate::tree::Point::Root, 0)?;
+        if self.header.largest_root != 0 {
+            self.header.largest_root = root;
+        }
+        let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
+        let row = crate::record::write(
+            &[
+                text(b"index"),
+                text(&index.name),
+                text(&table.name),
+                Value::Int(i64::from(root)),
+                Value::Null,
+            ],
+            &SCHEMA,
+            4,
+        );
+        let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
+            .unwrap_or(0)
+            .saturating_add(1);
+        insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
         Ok(())
     }
 
@@ -1066,8 +1114,75 @@ impl Writer {
         Ok(())
     }
 
-    /// `INSERT`: the rows the statement answers, each put in the tree of
-    /// the table it names.
+    /// What an `INSERT` writes: the rows the statement answered, each
+    /// with the key it was given where it was given one.
+    ///
+    /// Answering the statement costs what the statement costs.
+    fn inserting(
+        &self,
+        arena: &Arena,
+        statement: &crate::ast::Insert,
+        sql: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
+        name: &[u8],
+    ) -> Result<Inserting, Error> {
+        let named: Vec<Vec<u8>> = arena
+            .names(statement.columns)
+            .iter()
+            .map(|span: &Span| crate::schema::dequote(span.text(sql)))
+            .collect();
+        let bytes = self.image();
+        // Every statement draws from where the connection stands, so
+        // two statements of one connection answer `randomblob`
+        // differently.
+        let database = Database::open(&bytes)?.seeded(self.random.word());
+        let (table, root) = database.table(name).ok_or(Error::Unsupported)?;
+        if table.without_rowid {
+            return Err(Error::Unsupported);
+        }
+        let kept = kept_indexes(&database, name);
+        let places = places(table, &named)?;
+        // A column the statement names no value for holds what it falls
+        // back to, which is nothing where it has no `DEFAULT`.
+        let falls_back: Vec<Value> = database
+            .defaults(name)?
+            .iter()
+            .map(|value| stored(value, self.header.encoding))
+            .collect();
+        let answer = database.rows_under(arena, statement.select, sql, outer)?;
+        let affinities: Vec<Affinity> =
+            table.columns.iter().map(|column| column.affinity).collect();
+        let mut rows = Vec::new();
+        for row in &answer.rows {
+            if row.len() != places.len() {
+                return Err(Error::Unsupported);
+            }
+            let mut values = falls_back.clone();
+            let mut key = Value::Null;
+            for (at, value) in places.iter().zip(row) {
+                match at {
+                    Some(at) => {
+                        for slot in values.iter_mut().skip(*at).take(1) {
+                            *slot = stored(value, self.header.encoding);
+                        }
+                    }
+                    None => key = value.clone(),
+                }
+            }
+            rows.push((key, values));
+        }
+        Ok(Inserting {
+            root,
+            alias: table.rowid_alias,
+            affinities,
+            rows,
+            kept,
+            table: table.clone(),
+        })
+    }
+
+    /// `INSERT`: the rows the statement answers, each put in the tree
+    /// of the table it names and in every index over that table.
     fn insert(
         &mut self,
         arena: &Arena,
@@ -1076,62 +1191,14 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
-        let named: Vec<Vec<u8>> = arena
-            .names(statement.columns)
-            .iter()
-            .map(|span: &Span| crate::schema::dequote(span.text(sql)))
-            .collect();
-        let (root, alias, affinities, rows, kept, table) = {
-            let bytes = self.image();
-            // Every statement draws from where the connection stands,
-            // so two statements of one connection answer `randomblob`
-            // differently.
-            let database = Database::open(&bytes)?.seeded(self.random.word());
-            let (table, root) = database.table(&name).ok_or(Error::Unsupported)?;
-            if table.without_rowid {
-                return Err(Error::Unsupported);
-            }
-            let kept = kept_indexes(&database, &name);
-            let places = places(table, &named)?;
-            // A column the statement names no value for holds what it
-            // falls back to, which is nothing where it has no
-            // `DEFAULT`.
-            let falls_back: Vec<Value> = database
-                .defaults(&name)?
-                .iter()
-                .map(|value| stored(value, self.header.encoding))
-                .collect();
-            let answer = database.rows_under(arena, statement.select, sql, outer)?;
-            let affinities: Vec<Affinity> =
-                table.columns.iter().map(|column| column.affinity).collect();
-            let mut rows = Vec::new();
-            for row in &answer.rows {
-                if row.len() != places.len() {
-                    return Err(Error::Unsupported);
-                }
-                let mut values = falls_back.clone();
-                let mut key = Value::Null;
-                for (at, value) in places.iter().zip(row) {
-                    match at {
-                        Some(at) => {
-                            for slot in values.iter_mut().skip(*at).take(1) {
-                                *slot = stored(value, self.header.encoding);
-                            }
-                        }
-                        None => key = value.clone(),
-                    }
-                }
-                rows.push((key, values));
-            }
-            (
-                root,
-                table.rowid_alias,
-                affinities,
-                rows,
-                kept,
-                table.clone(),
-            )
-        };
+        let Inserting {
+            root,
+            alias,
+            affinities,
+            rows,
+            kept,
+            table,
+        } = self.inserting(arena, statement, sql, outer, &name)?;
         let before = self.triggers_for(&name, TriggerEvent::Insert, TriggerTime::Before)?;
         let after = self.triggers_for(&name, TriggerEvent::Insert, TriggerTime::After)?;
         let fires = !before.is_empty() || !after.is_empty();
@@ -1165,18 +1232,50 @@ impl Writer {
             for slot in values.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
                 *slot = Value::Null;
             }
+            if fires {
+                // `sqlite3Insert` writes the key as nought less one
+                // where the statement named none, because the key is
+                // given after the `BEFORE` triggers have run.
+                let shown = given.unwrap_or(-1);
+                let mut early = named.clone();
+                for slot in early.iter_mut().skip(alias.unwrap_or(usize::MAX)).take(1) {
+                    *slot = Value::Int(shown);
+                }
+                let row = Fired {
+                    table: &table,
+                    old: None,
+                    new: Some((&early, shown)),
+                    encoding: self.header.encoding,
+                };
+                if !self.fire(&before, &[], &row)? {
+                    continue;
+                }
+            }
             let row = Fired {
                 table: &table,
                 old: None,
                 new: Some((&named, rowid)),
                 encoding: self.header.encoding,
             };
-            if fires && !self.fire(&before, &[], &row)? {
-                continue;
+            // `sqlite3GenerateConstraintChecks`: a row that shares a
+            // key with one the table holds is refused, passed over, or
+            // written over the one that is there.
+            if let Some((index, held)) = self.conflicting(&kept, &named, rowid, None)? {
+                match resolved(statement.conflict, &kept, index) {
+                    crate::ast::Conflict::Ignore => continue,
+                    crate::ast::Conflict::Fail => return Err(Error::Stopped),
+                    crate::ast::Conflict::Replace => {
+                        self.replaced(root, &kept, &table, &held)?;
+                    }
+                    _ => return Err(Error::Unique),
+                }
             }
             let record = crate::record::write(&values, &affinities, 4);
-            insert(&mut self.pages, root, rowid, &record)?;
+            // `sqlite3CompleteInsertion` writes the entry of every
+            // index before the row, so the pages an entry runs onto
+            // are taken before the pages the row runs onto.
             self.index_row(&kept, &named, rowid)?;
+            insert(&mut self.pages, root, rowid, &record)?;
             written = written.saturating_add(1);
             if fires {
                 self.fire(&after, &[], &row)?;
@@ -1262,6 +1361,23 @@ impl Held<'_> {
     }
 }
 
+/// What a statement does where a row shares a key with one the table
+/// holds: what the statement said where it said anything, what the
+/// constraint said otherwise, and `ABORT` where neither said anything,
+/// which is `sqlite3GenerateConstraintChecks` reading `OE_Default`.
+fn resolved(written: Conflict, kept: &[Kept], at: usize) -> Conflict {
+    if written != Conflict::Unspecified {
+        return written;
+    }
+    let own = kept
+        .get(at)
+        .map_or(Conflict::Unspecified, |(index, _, _)| index.conflict);
+    if own == Conflict::Unspecified {
+        return Conflict::Abort;
+    }
+    own
+}
+
 /// Whether a trigger runs for a statement that writes these columns,
 /// which is what `UPDATE OF` holds it to: a trigger that names columns
 /// runs where the statement writes one of them.
@@ -1286,6 +1402,23 @@ fn writes_one(
 /// the body where the statement runs, so the count is the frames the
 /// stack holds and is bounded the way a view that names itself is.
 const TRIGGER_DEPTH: usize = 32;
+
+/// What an `INSERT` writes.
+struct Inserting {
+    /// The tree of the table.
+    root: u32,
+    /// The column the key is another name for, where the table has one.
+    alias: Option<usize>,
+    /// What each column of the table converts a value under.
+    affinities: Vec<Affinity>,
+    /// One per row the statement answered: the key it was given, and
+    /// the values of every column.
+    rows: Vec<(Value, Vec<Value>)>,
+    /// The indexes over the table.
+    kept: Vec<Kept>,
+    /// The table itself.
+    table: Table,
+}
 
 /// What an `UPDATE` writes.
 struct Updating {
@@ -1555,6 +1688,8 @@ impl Writer {
         })
     }
 
+    /// `UPDATE`: the rows the statement changes, each written again in
+    /// the tree of the table and in every index over that table.
     fn update(
         &mut self,
         arena: &Arena,
@@ -1610,15 +1745,31 @@ impl Writer {
             if fires && !self.fire(&before, &columns, &row)? {
                 continue;
             }
+            if let Some((index, other)) = self.conflicting(&kept, &named, key, Some(rowid))? {
+                match resolved(statement.conflict, &kept, index) {
+                    crate::ast::Conflict::Ignore => continue,
+                    crate::ast::Conflict::Fail => return Err(Error::Stopped),
+                    crate::ast::Conflict::Replace => {
+                        self.replaced(root, &kept, &table, &other)?;
+                    }
+                    _ => return Err(Error::Unique),
+                }
+            }
             let record = crate::record::write(&values, &affinities, 4);
+            // `sqlite3Update` removes the entries of the row, removes
+            // the row itself where the key changes, and then writes
+            // the new entries before the new row.
             self.unindex_row(&kept, &held, rowid)?;
-            if key == rowid {
-                crate::tree::update(&mut self.pages, root, rowid, &record)?;
-            } else {
+            let moved = key != rowid;
+            if moved {
                 crate::tree::remove(&mut self.pages, root, rowid)?;
-                insert(&mut self.pages, root, key, &record)?;
             }
             self.index_row(&kept, &named, key)?;
+            if moved {
+                insert(&mut self.pages, root, key, &record)?;
+            } else {
+                crate::tree::update(&mut self.pages, root, rowid, &record)?;
+            }
             changed = changed.saturating_add(1);
             if fires {
                 self.fire(&after, &columns, &row)?;
@@ -1642,6 +1793,78 @@ impl Writer {
             crate::tree::insert_entry(pages, root, &entry, &key, collations, false)?;
         }
         Ok(())
+    }
+
+    /// The row a `REPLACE` writes over, taken out with its entries and
+    /// with the triggers a `DELETE` on it runs, which is
+    /// `sqlite3GenerateRowDelete` under `OE_Replace`.
+    fn replaced(
+        &mut self,
+        root: u32,
+        kept: &[Kept],
+        table: &Table,
+        found: &Value,
+    ) -> Result<(), Error> {
+        // The entry names the key of the row it belongs to, so the row
+        // the statement writes over is the one that key finds.
+        let (rowid, values) = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?;
+            database
+                .rows_of(&table.name)?
+                .into_iter()
+                .find(|(key, _)| Value::Int(*key) == *found)
+                .ok_or(Error::NoTable)?
+        };
+        let before = self.triggers_for(&table.name, TriggerEvent::Delete, TriggerTime::Before)?;
+        let after = self.triggers_for(&table.name, TriggerEvent::Delete, TriggerTime::After)?;
+        let row = Fired {
+            table,
+            old: Some((&values, rowid)),
+            new: None,
+            encoding: self.header.encoding,
+        };
+        if !self.fire(&before, &[], &row)? {
+            return Ok(());
+        }
+        self.unindex_row(kept, &values, rowid)?;
+        crate::tree::remove(&mut self.pages, root, rowid)?;
+        self.fire(&after, &[], &row)?;
+        Ok(())
+    }
+
+    /// The unique index a row would share a key with, and the key of
+    /// the row already there, which is
+    /// `sqlite3GenerateConstraintChecks`.
+    ///
+    /// A key one of whose columns is nothing constrains no row, which
+    /// is what makes a `UNIQUE` hold over the values and not over the
+    /// rows. Looking one key up costs O(log n).
+    fn conflicting(
+        &self,
+        kept: &[Kept],
+        values: &[Value],
+        rowid: i64,
+        held: Option<i64>,
+    ) -> Result<Option<(usize, Value)>, Error> {
+        for (at, (index, collations, root)) in kept.iter().enumerate() {
+            if !index.unique {
+                continue;
+            }
+            let entry = entry_of(index, values, rowid);
+            let key = entry.get(..index.columns.len()).unwrap_or_default();
+            if key.contains(&Value::Null) {
+                continue;
+            }
+            let Some(found) = crate::tree::entry_at(&self.pages, *root, key, collations)? else {
+                continue;
+            };
+            if held.map(Value::Int).as_ref() == Some(&found) {
+                continue;
+            }
+            return Ok(Some((at, found)));
+        }
+        Ok(None)
     }
 
     /// The entry every index over the table holds for one row, taken

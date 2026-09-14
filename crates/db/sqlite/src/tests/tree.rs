@@ -3613,3 +3613,290 @@ fn a_trigger_that_passes_a_row_over_keeps_it_where_it_is() {
             .is_empty()
     );
 }
+
+#[test]
+fn the_index_a_key_carries_is_the_file_the_shell_wrote() {
+    use crate::change::Writer;
+    for (name, statements, fixture) in crate::tests::OWN_KEYS {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        if *name == "key-vacuum.db" {
+            writer.vacuuming(false);
+        }
+        for sql in *statements {
+            writer
+                .run(sql.as_bytes())
+                .unwrap_or_else(|error| panic!("{name}: {sql} is refused with {error:?}"));
+        }
+        same(name, &writer.written(), fixture, 512);
+    }
+}
+
+#[test]
+fn a_root_on_page_one_takes_its_child_only_where_the_child_has_room() {
+    use crate::change::Writer;
+    // A root on page one begins a hundred bytes in, so a child whose
+    // content reaches below that is not copied into it: the tree stays
+    // a level taller instead. This is the four tables of
+    // `tkt-9f2eb3abac.test`, whose schema tree deepens under the blank
+    // record of the last one and collapses again as it is written over.
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        "CREATE TABLE t1(a,b,c,d,e, PRIMARY KEY(a,b,c,d,e))",
+        "CREATE TABLE \"a\" (\n      \"b\" integer NOT NULL,\n      \"c\" integer NOT NULL,\n      PRIMARY KEY (\"b\", \"c\")\n      )",
+        "CREATE TABLE \"d\" (\n      \"e\" integer NOT NULL,\n      \"g\" integer NOT NULL,\n      \"f\" integer NOT NULL,\n      \"h\" integer NOT NULL,\n      \"i\" character(10) NOT NULL,\n      \"j\" int,\n      PRIMARY KEY (\"e\", \"g\", \"f\", \"h\")\n      )",
+        "CREATE TABLE \"d_to_a\" (\n      \"f_e\" integer NOT NULL,\n      \"f_g\" integer NOT NULL,\n      \"f_f\" integer NOT NULL,\n      \"f_h\" integer NOT NULL,\n      \"t_b\" integer NOT NULL,\n      \"t_c\" integer NOT NULL,\n      \"r\" character NOT NULL,\n      \"s\" integer,\n      PRIMARY KEY (\"f_e\", \"f_g\", \"f_f\", \"f_h\", \"t_b\", \"t_c\")\n      )",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    assert_eq!(database.tables().count(), 4);
+}
+
+#[test]
+fn a_row_that_shares_a_key_is_refused_passed_over_or_written_over() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a PRIMARY KEY, b)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,'one')").unwrap();
+    // `ABORT` is what a statement that says nothing does.
+    assert_eq!(
+        writer.run(b"INSERT INTO t VALUES(1,'x')").err(),
+        Some(crate::db::Error::Unique)
+    );
+    writer
+        .run(b"INSERT OR IGNORE INTO t VALUES(1,'two')")
+        .unwrap();
+    let text = |writer: &Writer| {
+        let written = writer.written();
+        let database = Database::open(&written).unwrap();
+        database
+            .query(b"SELECT group_concat(a||':'||b) FROM t")
+            .unwrap()
+            .rows
+    };
+    assert_eq!(text(&writer), [[Value::Text(b"1:one".to_vec())]]);
+    writer
+        .run(b"INSERT OR REPLACE INTO t VALUES(1,'three')")
+        .unwrap();
+    assert_eq!(text(&writer), [[Value::Text(b"1:three".to_vec())]]);
+    // A key one of whose columns is nothing constrains no row.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a UNIQUE, b)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(NULL,1),(NULL,2)")
+        .unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT count(*) FROM t").unwrap().rows,
+        [[Value::Int(2)]]
+    );
+    // The constraint says what to do where the statement says nothing.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(a UNIQUE ON CONFLICT IGNORE, b)")
+        .unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,'one')").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,'two')").unwrap();
+    let shown = |writer: &Writer, sql: &[u8]| {
+        let written = writer.written();
+        let database = Database::open(&written).unwrap();
+        database.query(sql).unwrap().rows
+    };
+    assert_eq!(
+        shown(&writer, b"SELECT group_concat(b) FROM t"),
+        [[Value::Text(b"one".to_vec())]]
+    );
+
+    // `FAIL` stops the statement where it stands and keeps the rows it
+    // wrote before that.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE u(a UNIQUE, b)").unwrap();
+    writer.run(b"INSERT INTO u VALUES(1,'x'),(2,'y')").unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT OR FAIL INTO u VALUES(3,'z'),(1,'w'),(4,'v')")
+            .err(),
+        Some(crate::db::Error::Stopped)
+    );
+    assert_eq!(
+        shown(&writer, b"SELECT group_concat(a) FROM u"),
+        [[Value::Text(b"1,2,3".to_vec())]]
+    );
+    // An `UPDATE` reaches the same four, and a row that keeps its own
+    // key shares it with nothing.
+    writer.run(b"UPDATE OR IGNORE u SET a=1 WHERE a=2").unwrap();
+    writer.run(b"UPDATE u SET a=a").unwrap();
+    assert_eq!(
+        shown(&writer, b"SELECT group_concat(a) FROM u"),
+        [[Value::Text(b"1,2,3".to_vec())]]
+    );
+    assert_eq!(
+        writer.run(b"UPDATE u SET a=1 WHERE a=2").err(),
+        Some(crate::db::Error::Unique)
+    );
+    assert_eq!(
+        writer.run(b"UPDATE OR FAIL u SET a=1 WHERE a=2").err(),
+        Some(crate::db::Error::Stopped)
+    );
+    writer
+        .run(b"UPDATE OR REPLACE u SET a=1 WHERE a=2")
+        .unwrap();
+    assert_eq!(
+        shown(&writer, b"SELECT group_concat(a) FROM u"),
+        [[Value::Text(b"1,3".to_vec())]]
+    );
+}
+
+#[test]
+fn what_the_index_a_key_carries_reaches() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    // A file that vacuums itself points at the tree of the index as it
+    // points at every other.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.vacuuming(false);
+    writer.run(b"CREATE TABLE t(a PRIMARY KEY, b)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,2)").unwrap();
+    assert_eq!(
+        writer.run(b"INSERT INTO t VALUES(1,3)").err(),
+        Some(crate::db::Error::Unique)
+    );
+
+    // An index that is not unique constrains no row, and an entry that
+    // runs onto a chain is read whole before it is compared.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a, b UNIQUE)").unwrap();
+    writer.run(b"CREATE INDEX i ON t(a)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(1, hex(zeroblob(400)))")
+        .unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(1, hex(zeroblob(401)))")
+        .unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t VALUES(2, hex(zeroblob(400)))")
+            .err(),
+        Some(crate::db::Error::Unique)
+    );
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT count(*) FROM t").unwrap().rows,
+        [[Value::Int(2)]]
+    );
+
+    // A `BEFORE INSERT` trigger reads the key as nought less one where
+    // the statement named none, and a `REPLACE` passes the row over
+    // where the trigger on the row it writes over says so.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a INTEGER PRIMARY KEY, b UNIQUE)".as_slice(),
+        b"CREATE TABLE log(m)",
+        b"CREATE TRIGGER x1 BEFORE INSERT ON t BEGIN INSERT INTO log VALUES(new.a); END",
+        b"CREATE TRIGGER d1 BEFORE DELETE ON t BEGIN SELECT RAISE(IGNORE) WHERE old.b='keep'; END",
+        b"INSERT INTO t(b) VALUES('keep')",
+        b"INSERT OR REPLACE INTO t(b) VALUES('keep')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT group_concat(m) FROM log")
+            .unwrap()
+            .rows,
+        [[Value::Text(b"-1,-1".to_vec())]]
+    );
+}
+
+#[test]
+fn a_row_that_names_an_index_over_no_key_carries_no_index() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    // `sqlite_schema` is read as it stands, so a row that names an
+    // index of a table's own carries one only where the table and the
+    // constraint it is named for are both there.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a PRIMARY KEY, b)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,2)").unwrap();
+    let written = writer.written();
+    let at = written
+        .windows(20)
+        .position(|window| window == b"sqlite_autoindex_t_1")
+        .unwrap();
+    for (over, name) in [(b'z', b'1'), (b't', b'2')] {
+        let mut bytes = written.clone();
+        bytes[at + 19] = name;
+        bytes[at + 20] = over;
+        let database = Database::open(&bytes).unwrap();
+        assert_eq!(
+            database.query(b"SELECT b FROM t").unwrap().rows,
+            [[Value::Int(2)]]
+        );
+    }
+}
+
+#[test]
+fn the_indexes_a_table_carries_of_its_own_are_the_ones_the_shell_names() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    // `sqlite3CreateIndex` builds one index per constraint, counting
+    // from one in the order the constraints are written, over every
+    // `PRIMARY KEY` but the one the rowid is another name for, and over
+    // no constraint whose columns and collations one already there
+    // carries.
+    for (sql, names) in [
+        ("CREATE TABLE t(a INTEGER PRIMARY KEY UNIQUE, b UNIQUE)", 2),
+        ("CREATE TABLE t(a INTEGER, PRIMARY KEY(a))", 0),
+        ("CREATE TABLE t(a INTEGER, UNIQUE(a), PRIMARY KEY(a))", 1),
+        ("CREATE TABLE t(a, b UNIQUE, PRIMARY KEY(a))", 2),
+        ("CREATE TABLE t(a UNIQUE, b, PRIMARY KEY(b))", 2),
+        ("CREATE TABLE t(a PRIMARY KEY, b UNIQUE, UNIQUE(a,b))", 3),
+        ("CREATE TABLE t(a UNIQUE UNIQUE, b)", 1),
+        ("CREATE TABLE t(a INTEGER PRIMARY KEY, b, UNIQUE(a))", 1),
+        ("CREATE TABLE t(a, UNIQUE(a ASC), UNIQUE(a DESC))", 1),
+        ("CREATE TABLE t(a PRIMARY KEY, UNIQUE(a))", 1),
+        ("CREATE TABLE t(a, b, UNIQUE(a,b), UNIQUE(b,a))", 2),
+        ("CREATE TABLE t(a COLLATE NOCASE UNIQUE, UNIQUE(a))", 1),
+        (
+            "CREATE TABLE t(a UNIQUE ON CONFLICT REPLACE, b, UNIQUE(a))",
+            1,
+        ),
+    ] {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        writer.run(sql.as_bytes()).unwrap();
+        let written = writer.written();
+        let database = Database::open(&written).unwrap();
+        let held: Vec<Vec<u8>> = database
+            .indexes(b"t")
+            .iter()
+            .map(|(index, _)| index.name.clone())
+            .collect();
+        let wanted: Vec<Vec<u8>> = (1..=names)
+            .map(|at| alloc::format!("sqlite_autoindex_t_{at}").into_bytes())
+            .collect();
+        assert_eq!(held, wanted, "{sql}");
+    }
+
+    // The index already there takes the clause of a constraint over the
+    // same columns where it carries none.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a UNIQUE, b, UNIQUE(a) ON CONFLICT REPLACE)".as_slice(),
+        b"INSERT INTO t VALUES(1,'x')",
+        b"INSERT INTO t VALUES(1,'y')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT a, b FROM t").unwrap().rows,
+        [[Value::Int(1), Value::Text(b"y".to_vec())]]
+    );
+}

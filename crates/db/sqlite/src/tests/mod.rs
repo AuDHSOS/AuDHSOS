@@ -621,6 +621,78 @@ pub(super) const ADDED_COLUMN: &[(&str, &str, &[u8])] = &[
     ),
 ];
 
+/// The index a `PRIMARY KEY` and a `UNIQUE` each carry, which
+/// `sqlite_autoindex_<table>_<n>` names and which holds no statement.
+/// Each case is the statements the fixture was written with, in order.
+pub(crate) const OWN_KEYS: &[(&str, &[&str], &[u8])] = &[
+    (
+        "key-one.db",
+        &[
+            "CREATE TABLE t(a PRIMARY KEY, b UNIQUE, c)",
+            "INSERT INTO t VALUES(1,2,3),(4,5,6)",
+        ],
+        include_bytes!("fixtures/key-one.db"),
+    ),
+    (
+        "key-alias.db",
+        &[
+            "CREATE TABLE u(a INTEGER PRIMARY KEY, b)",
+            "INSERT INTO u VALUES(1,2)",
+        ],
+        include_bytes!("fixtures/key-alias.db"),
+    ),
+    (
+        "key-many.db",
+        &[
+            "CREATE TABLE v(a, b, PRIMARY KEY(a,b), UNIQUE(b))",
+            "INSERT INTO v VALUES(1,2),(1,3)",
+        ],
+        include_bytes!("fixtures/key-many.db"),
+    ),
+    (
+        "key-text.db",
+        &[
+            "CREATE TABLE w(a TEXT COLLATE NOCASE UNIQUE, b)",
+            "INSERT INTO w VALUES('x',1),('Y',2)",
+        ],
+        include_bytes!("fixtures/key-text.db"),
+    ),
+    (
+        "key-gone.db",
+        &[
+            "CREATE TABLE t(a PRIMARY KEY, b)",
+            "INSERT INTO t VALUES(1,2),(3,4)",
+            "DELETE FROM t WHERE a=1",
+        ],
+        include_bytes!("fixtures/key-gone.db"),
+    ),
+    (
+        "key-again.db",
+        &[
+            "CREATE TABLE t(a PRIMARY KEY, b)",
+            "INSERT INTO t VALUES(1,2)",
+            "UPDATE t SET a=9",
+        ],
+        include_bytes!("fixtures/key-again.db"),
+    ),
+    (
+        "key-wide.db",
+        &[
+            "CREATE TABLE t(a, b UNIQUE)",
+            "INSERT INTO t VALUES(1, hex(zeroblob(400))),(2, hex(zeroblob(401)))",
+        ],
+        include_bytes!("fixtures/key-wide.db"),
+    ),
+    (
+        "key-vacuum.db",
+        &[
+            "CREATE TABLE t(a PRIMARY KEY, b)",
+            "INSERT INTO t VALUES(1,2),(3,4)",
+        ],
+        include_bytes!("fixtures/key-vacuum.db"),
+    ),
+];
+
 /// A trigger: the row of `sqlite_schema` that names it, and the rows
 /// its body writes when a statement on the table it is on runs. Each
 /// case is the statements the fixture was written with, in order.

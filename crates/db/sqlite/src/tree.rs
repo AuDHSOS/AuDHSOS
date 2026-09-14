@@ -224,15 +224,27 @@ impl Pages {
         let mut named: Vec<(u32, Point)> = Vec::new();
         {
             let page = self.page(number)?;
-            if page.kind().is_interior() {
+            let interior = page.kind().is_interior();
+            let over = matches!(page.kind(), Kind::LeafIndex | Kind::InteriorIndex);
+            if interior {
                 for index in 0..page.cells() {
                     named.push((page.child(index)?, Point::Branch));
                 }
                 named.extend(page.right_most().map(|child| (child, Point::Branch)));
-            } else {
-                for index in 0..page.cells() {
-                    named.extend(page.row(index)?.1.overflow.map(|head| (head, Point::Head)));
-                }
+            }
+            // Every cell that carries a payload names the page its
+            // chain begins on, which `ptrmapPutOvflPtr` records: an
+            // index page carries one on every cell it has and a table
+            // page only on its leaves.
+            for index in 0..page.cells() {
+                let head = if over {
+                    page.entry(index)?.overflow
+                } else if interior {
+                    None
+                } else {
+                    page.row(index)?.1.overflow
+                };
+                named.extend(head.map(|head| (head, Point::Head)));
             }
         }
         for (child, kind) in named {
@@ -1212,6 +1224,42 @@ fn replace_entry(
         balance(pages, path, spill, None, false)?;
     }
     Ok(true)
+}
+
+/// The key of the row an entry of `key` belongs to, where the index
+/// tree at `root` holds one, which is the value after the columns.
+///
+/// `key` is the columns of the index and not the key of the row after
+/// them, so an entry whose columns are these answers whatever row it
+/// belongs to, which is what a `UNIQUE` is held to. The walk is
+/// O(log n) pages.
+///
+/// # Errors
+///
+/// [`Error`] names whatever reading a page refuses.
+pub(crate) fn entry_at(
+    pages: &Pages,
+    root: u32,
+    key: &[Value],
+    collations: &[Collation],
+) -> Result<Option<Value>, Error> {
+    let Some(path) = find_entry(pages, root, key, collations)? else {
+        return Ok(None);
+    };
+    let (number, at) = *path.last().ok_or(Error::Depth)?;
+    let page = pages.page(number)?;
+    let payload = page.entry(at)?;
+    let mut held = Vec::new();
+    let bytes = if payload.is_whole() {
+        payload.local
+    } else {
+        read_chain(pages, &payload, &mut held)?;
+        &held
+    };
+    let record = crate::record::Record::parse(bytes)?;
+    Ok(Some(
+        record.value(key.len())?.map_or(Value::Null, held_value),
+    ))
 }
 
 /// Where the entry of `key` lies in the index tree at `root`: one page
@@ -2311,11 +2359,13 @@ fn balance_nonroot(
     }
     // A root left with no cell at all takes the content of its only
     // child, which is the balance that makes a tree one level shorter.
-    // A root on page one begins a hundred bytes in and is the balance
-    // this crate does not write, so the root always has room for what
-    // its child holds.
+    // A root on page one begins a hundred bytes in, so it takes the
+    // child only where the child has that many bytes free; the tree
+    // stays a level taller where it has fewer.
     let first = number_at(&new, 0);
-    if topmost && pages.page(parent)?.cells() == 0 {
+    let header =
+        usize::from(parent == crate::image::SCHEMA_ROOT).saturating_mul(crate::header::HEADER_LEN);
+    if topmost && pages.page(parent)?.cells() == 0 && pages.page(first)?.free()? >= header {
         shallower(pages, parent, first)?;
     }
     // The pages the balance no longer needs go on the free list.

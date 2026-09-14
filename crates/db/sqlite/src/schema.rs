@@ -124,6 +124,105 @@ pub struct Table {
     /// Where in the statement a column added later is written, which is
     /// `addColOffset`.
     pub add_at: Option<usize>,
+    /// The `PRIMARY KEY` and `UNIQUE` constraints an index of the
+    /// table's own holds the entries of, in the order they were
+    /// written.
+    pub keys: Vec<Keys>,
+}
+
+/// One `PRIMARY KEY` or `UNIQUE` as the statement wrote it: the name
+/// and the order of each column, the conflict clause, and whether the
+/// constraint is the `PRIMARY KEY`.
+type Written = (Vec<(Vec<u8>, Order)>, crate::ast::Conflict, bool);
+
+/// One `PRIMARY KEY` or `UNIQUE` an index of the table's own holds the
+/// entries of, which is `sqlite_autoindex_<table>_<n>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Keys {
+    /// The columns, in the order the constraint wrote them.
+    pub columns: Vec<Keyed>,
+    /// What the statement says to do where two rows share a key.
+    pub conflict: crate::ast::Conflict,
+}
+
+/// The index `at` of the table's own, counting from nought, as a
+/// `CREATE INDEX` would have described it.
+#[must_use]
+pub fn own_index(table: &Table, at: usize) -> Option<Index> {
+    let keys = table.keys.get(at)?;
+    let mut name = b"sqlite_autoindex_".to_vec();
+    name.extend_from_slice(&table.name);
+    name.push(b'_');
+    name.extend_from_slice(digits(at.saturating_add(1)).as_slice());
+    Some(Index {
+        name,
+        table: table.name.clone(),
+        columns: keys.columns.clone(),
+        unique: true,
+        conflict: keys.conflict,
+    })
+}
+
+/// Every `PRIMARY KEY` and `UNIQUE` of a table as an index of the
+/// table's own, which is `sqlite3CreateIndex` over the constraints of
+/// a `CREATE TABLE`.
+///
+/// Comparing `n` constraints of `k` columns costs O(n^2 k).
+fn own_keys(table: &Table, written: &[Written]) -> Result<Vec<Keys>, Error> {
+    let mut keys: Vec<Keys> = Vec::new();
+    for (columns, conflict, primary) in written {
+        let mut keyed = Vec::new();
+        for (name, order) in columns {
+            let at = table
+                .columns
+                .iter()
+                .position(|column| column.name.eq_ignore_ascii_case(name))
+                .ok_or(Error::NoSuchColumn)?;
+            let collation = table
+                .columns
+                .get(at)
+                .map_or(Collation::Binary, |column| column.collation);
+            keyed.push(Keyed {
+                column: at,
+                order: *order,
+                collation,
+            });
+        }
+        // The `PRIMARY KEY` the rowid is another name for is the
+        // table's own tree, so it carries no index of its own.
+        let alias = *primary
+            && keyed.len() == 1
+            && keyed
+                .first()
+                .is_some_and(|keyed| table.rowid_alias == Some(keyed.column));
+        if alias {
+            continue;
+        }
+        // A constraint over the columns of one already there carries no
+        // second index, and the one there takes the clause of the
+        // constraint where it carries none. The order of a column is
+        // not compared, which is what `sqlite3CreateIndex` leaves out,
+        // and the collation is the column's, so the columns settle it.
+        let held = keys.iter_mut().find(|held| {
+            held.columns.len() == keyed.len()
+                && held
+                    .columns
+                    .iter()
+                    .zip(&keyed)
+                    .all(|(held, new)| held.column == new.column)
+        });
+        if let Some(held) = held {
+            if held.conflict == crate::ast::Conflict::Unspecified {
+                held.conflict = *conflict;
+            }
+            continue;
+        }
+        keys.push(Keys {
+            columns: keyed,
+            conflict: *conflict,
+        });
+    }
+    Ok(keys)
 }
 
 /// One column of an index, and how it is held.
@@ -153,6 +252,9 @@ pub struct Index {
     pub columns: Vec<Keyed>,
     /// Whether two rows may share one key.
     pub unique: bool,
+    /// What the constraint says to do where two rows share one key,
+    /// which only an index of the table's own carries.
+    pub conflict: crate::ast::Conflict,
 }
 
 /// The index a `CREATE INDEX` describes, read against the table it is
@@ -198,6 +300,7 @@ pub fn index(
         table: dequote(definition.table.text(sql)),
         columns,
         unique: definition.unique,
+        conflict: crate::ast::Conflict::Unspecified,
     })
 }
 
@@ -453,8 +556,14 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
         add_at: definition.add_at,
         rowid_alias: None,
         autoincrement: false,
+        keys: Vec::new(),
     };
     let mut key: Option<(Vec<usize>, Order, bool)> = None;
+    // Every `PRIMARY KEY` and `UNIQUE`, in the order they were written,
+    // because that is the order `sqlite_autoindex_<table>_<n>` counts
+    // in: a column's own constraints as the columns run, then the
+    // constraints of the table.
+    let mut written_keys: Vec<Written> = Vec::new();
     for written in arena.columns(columns) {
         let name = dequote(written.name.text(sql));
         if table
@@ -471,6 +580,7 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
             .map(|ty| type_text(ty.text(sql)))
             .filter(|text| !text.is_empty());
         let standard = declared.as_deref().and_then(standard);
+        let named = name.clone();
         let mut column = Column {
             name,
             affinity: match (standard, declared.as_deref()) {
@@ -507,8 +617,18 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
                 ColumnConstraint::PrimaryKey {
                     order,
                     autoincrement,
-                    ..
-                } => own_key = Some((order, autoincrement)),
+                    conflict,
+                } => {
+                    own_key = Some((order, autoincrement));
+                    written_keys.push((alloc::vec![(named.clone(), order)], conflict, true));
+                }
+                ColumnConstraint::Unique(conflict) => {
+                    written_keys.push((
+                        alloc::vec![(named.clone(), Order::Unspecified)],
+                        conflict,
+                        false,
+                    ));
+                }
                 ColumnConstraint::Generated { value, kind } => {
                     column.generated = generated_kind(kind, sql)?;
                     column.computed = Some(value);
@@ -526,17 +646,14 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
         }
     }
     for constraint in arena.table_constraints(constraints) {
-        let TableConstraint::PrimaryKey {
-            columns,
-            autoincrement,
-            ..
-        } = *constraint
+        let (TableConstraint::PrimaryKey {
+            columns, conflict, ..
+        }
+        | TableConstraint::Unique { columns, conflict }) = *constraint
         else {
             continue;
         };
-        if key.is_some() {
-            return Err(Error::ManyKeys);
-        }
+        let mut written = Vec::new();
         let mut named = Vec::new();
         let mut order = Order::Unspecified;
         for (at, term) in arena.orders(columns).iter().enumerate() {
@@ -546,7 +663,16 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
             // A term that is not a name is refused where the key's own
             // index would be built.
             let column = key_name(arena, term.expr).ok_or(Error::KeyExpression)?;
+            written.push((dequote(column.text(sql)), term.order));
             named.push(index_of(&table, column, sql).ok_or(Error::NoSuchColumn)?);
+        }
+        let primary = matches!(*constraint, TableConstraint::PrimaryKey { .. });
+        written_keys.push((written, conflict, primary));
+        let TableConstraint::PrimaryKey { autoincrement, .. } = *constraint else {
+            continue;
+        };
+        if key.is_some() {
+            return Err(Error::ManyKeys);
         }
         key = Some((named, order, autoincrement));
     }
@@ -587,6 +713,8 @@ pub fn table(arena: &Arena, definition: &CreateTable, sql: &[u8]) -> Result<Tabl
             return Err(Error::Autoincrement);
         }
     }
+
+    table.keys = own_keys(&table, &written_keys)?;
 
     if table.strict {
         for column in &mut table.columns {

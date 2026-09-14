@@ -93,6 +93,12 @@ pub enum Error {
     /// A `COMMIT` or a `ROLLBACK` on a connection with no transaction
     /// open.
     NoTransaction,
+    /// A row that shares a key with one the table already holds, where
+    /// the statement said to refuse it and undo what it wrote.
+    Unique,
+    /// The same, where the statement said to stop where it stands and
+    /// keep what it wrote, which is `OE_Fail`.
+    Stopped,
     /// A `WITH` term that reads itself and answered more rows than
     /// `RECURSION_ROWS` allows.
     Recursion,
@@ -748,7 +754,26 @@ impl<'a> Database<'a> {
             let sql = text(4)?;
             if sql.is_empty() {
                 // An index a `UNIQUE` or a `PRIMARY KEY` made carries no
-                // statement, and its columns are the constraint's.
+                // statement, and its columns are the constraint's: the
+                // name says which of them it is.
+                let name = text(1)?;
+                let over = text(2)?;
+                let Some(stored) = self
+                    .tables
+                    .iter_mut()
+                    .find(|stored| stored.table.name.eq_ignore_ascii_case(&over))
+                else {
+                    continue;
+                };
+                let index = (0..stored.table.keys.len())
+                    .filter_map(|at| schema::own_index(&stored.table, at))
+                    .find(|index| index.name.eq_ignore_ascii_case(&name));
+                if let Some(index) = index {
+                    stored.indexes.push(Kept {
+                        index,
+                        root: u32::try_from(root).unwrap_or(0),
+                    });
+                }
                 continue;
             }
             let (arena, definition) = parse::definition(&sql)?;
