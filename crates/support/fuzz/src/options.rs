@@ -103,8 +103,9 @@ pub struct Options {
     pub reduce_inputs: bool,
     /// Whether to print the totals at the end.
     pub print_final_stats: bool,
-    /// How many worker processes the run drives, or fewer than two to
-    /// mutate and run in this process.
+    /// How many worker processes the run was asked for, or fewer than two
+    /// to mutate and run in this process. What it gets is this and no more
+    /// than the machine has cores, which the fleet decides and says.
     pub workers: usize,
 }
 

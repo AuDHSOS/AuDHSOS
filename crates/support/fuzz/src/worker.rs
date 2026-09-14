@@ -160,7 +160,7 @@ impl<'a, 'b> Worker<'a, 'b> {
         for round in rounds {
             let seed = self.store(&round.seed);
             let cross = self.store(&round.cross);
-            if self.round(&seed, &cross, limit) {
+            if self.round(seed, &cross, limit) {
                 return true;
             }
         }
@@ -172,8 +172,8 @@ impl<'a, 'b> Worker<'a, 'b> {
     /// One round: change the input a few times, testing after each change,
     /// so that a change which pays is built on. Answers whether the run
     /// must end.
-    fn round(&mut self, seed: &[u8], cross: &[u8], limit: usize) -> bool {
-        let mut input = seed.to_vec();
+    fn round(&mut self, seed: Vec<u8>, cross: &[u8], limit: usize) -> bool {
+        let mut input = seed;
         self.runner.mutator.begin_round();
         for _ in 0..MUTATE_DEPTH {
             let changed = sancov::with_trace(|trace| {

@@ -23,7 +23,8 @@
 //! writing either; a worker is sent an input's bytes once and its place
 //! after that.
 
-use std::io::{BufReader, Write};
+use std::io::{BufReader, BufWriter, Write};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, ExitCode, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -115,17 +116,24 @@ impl Fleet {
     /// Whatever starting a process or taking its pipes reports.
     pub(crate) fn spawn(options: &Options) -> std::io::Result<Self> {
         let program = std::env::current_exe()?;
+        let wanted = fleet_size(options.workers);
+        if wanted < options.workers {
+            eprintln!(
+                "INFO: {} workers were asked for and this machine has {wanted} cores",
+                options.workers
+            );
+        }
         let (sender, inbox) = channel();
-        let mut hands = Vec::with_capacity(options.workers);
-        let mut children = Vec::with_capacity(options.workers);
-        for number in 0..options.workers {
+        let mut hands = Vec::with_capacity(wanted);
+        let mut children = Vec::with_capacity(wanted);
+        for number in 0..wanted {
             let mut child = worker_command(&program, options, number).spawn()?;
             let (stdin, stdout) = (child.stdin.take(), child.stdout.take());
             let (Some(stdin), Some(stdout)) = (stdin, stdout) else {
                 return Err(std::io::Error::other("a worker was started without pipes"));
             };
-            relay(number, stdout, sender.clone());
-            hands.push(Hand::new(Box::new(stdin)));
+            relay(number, stdout, sender.clone())?;
+            hands.push(Hand::new(Box::new(BufWriter::new(stdin))));
             children.push(child);
         }
         Ok(Self::new(hands, inbox, children))
@@ -245,11 +253,31 @@ fn worker_command(program: &Path, options: &Options, number: usize) -> Command {
 /// two runs of one command walk different mutations.
 const WORKER_STRIDE: u64 = 0x9E37_79B9_7F4A_7C15;
 
+/// How many workers a run that asked for `asked` of them gets.
+///
+/// More processes than cores only share them, and each holds a coverage
+/// table of its own, so asking for more costs memory and buys nothing.
+/// The cap is also what keeps `-workers=-1` — which every number flag of
+/// this engine reads as as many as there can be — from asking for a fleet
+/// no machine can start.
+pub(crate) fn fleet_size(asked: usize) -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    asked.min(cores)
+}
+
 /// Starts the thread that turns one worker's output into messages on the
 /// channel. It runs until the pipe ends, so a worker never blocks writing
 /// while the orchestrator is busy with the pool.
-fn relay(number: usize, stdout: ChildStdout, sender: Sender<(usize, Option<Up>)>) {
-    let _ = std::thread::Builder::new()
+///
+/// A thread that will not start ends the fleet, because a worker whose
+/// output nothing reads says neither what it reached nor that it is done,
+/// and the orchestrator would wait on it for the whole run.
+fn relay(
+    number: usize,
+    stdout: ChildStdout,
+    sender: Sender<(usize, Option<Up>)>,
+) -> std::io::Result<()> {
+    std::thread::Builder::new()
         .name(format!("fuzz-worker-{number}"))
         .spawn(move || {
             let mut input = BufReader::new(stdout);
@@ -259,7 +287,8 @@ fn relay(number: usize, stdout: ChildStdout, sender: Sender<(usize, Option<Up>)>
                 }
             }
             let _ = sender.send((number, None));
-        });
+        })?;
+    Ok(())
 }
 
 /// What a phase of the run ended with.

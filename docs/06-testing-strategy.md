@@ -1763,6 +1763,11 @@ done until every applicable item has a test. Items are added, never removed.
   at every cut, and a length no message has are each refused rather than
   allocated; a draw the worker holds already costs its place and not its
   bytes.
+- The flags of a fleet (D-140): `-workers` is read as it was written, so
+  `-1` is as many as there can be; the fleet is never larger than the
+  machine has cores, and one asked for every core and one asked for more
+  than there are get the same; `-fuzz_worker` selects the worker mode and
+  only where it is on.
 - A worker (D-140): it runs the corpus files it was dealt and reports what
   they reached, passing over a number no file has and a file that is gone;
   it keeps nothing a full coverage table already holds; it mutates the

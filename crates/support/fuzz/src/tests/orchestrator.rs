@@ -9,6 +9,7 @@
 //! which is the whole of what it sees of a process.
 
 use std::io::Write;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::mpsc::channel;
@@ -16,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::engine::Runner;
 use crate::options::Options;
-use crate::orchestrator::{Fleet, Hand};
+use crate::orchestrator::{Fleet, Hand, fleet_size};
 use crate::proto::{Down, NO_FILE, Up};
 
 use super::{GLOBALS, register_counters, scratch_path};
@@ -746,4 +747,12 @@ fn a_fleet_of_processes_is_started_from_this_program_and_ended_with_it() {
         code(ExitCode::FAILURE)
     );
     drop(guard);
+}
+
+#[test]
+fn a_fleet_is_never_larger_than_the_machine_it_runs_on() {
+    let cores = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    assert_eq!(fleet_size(1), 1);
+    assert_eq!(fleet_size(usize::MAX), cores);
+    assert_eq!(fleet_size(cores.saturating_add(1)), cores);
 }

@@ -469,9 +469,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   `jrs_backend` inputs with a budget of 120 seconds: loading went from
   113-129 seconds of that budget to 34, and the run from 48,056
   executions across four processes to 799,868, which is 394 executions a
-  second against 6,665. `-workers` is implemented rather than refused;
-  `-fuzz_worker` is this engine's own flag for a worker process. `-jobs`
-  and `-fork` stay refused (D-140).
+  second against 6,665. `-workers` is implemented rather than refused, and
+  the fleet it asks for is never larger than the machine has cores, which
+  the run says when it gives fewer than were asked for; `-fuzz_worker` is
+  this engine's own flag for a worker process. `-jobs` and `-fork` stay
+  refused (D-140).
 
 - `Interrupt::line` is an `Option<u8>`: a message interrupt has no line at
   any controller the kernel could mask. `interrupt_ack` on such an object
