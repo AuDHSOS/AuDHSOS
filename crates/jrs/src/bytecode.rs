@@ -5161,13 +5161,28 @@ impl RegisterLowerer {
         self.release_register(completion)?;
         // An Object one branch handed to user code is no longer this
         // lowering's after the join, whichever branch ran, so the branch that
-        // kept its layout gives it up too.
-        let escaped: Vec<RegisterType> = properties_before
+        // kept its layout gives it up too. One the two branches shaped
+        // differently has no single shape to name and gives it up as well.
+        let lost: Vec<u32> = properties_before
             .keys()
             .filter(|id| {
                 !properties_after_yes.contains_key(id) || !self.object_layouts.contains_key(id)
             })
-            .flat_map(|id| [RegisterType::Object(*id), RegisterType::Array(*id)])
+            .copied()
+            .collect();
+        let reshaped: Vec<u32> = properties_after_yes
+            .iter()
+            .filter(|(id, layout)| {
+                self.object_layouts
+                    .get(id)
+                    .is_some_and(|other| other != *layout)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        let escaped: Vec<RegisterType> = lost
+            .into_iter()
+            .chain(reshaped)
+            .flat_map(|id| [RegisterType::Object(id), RegisterType::Array(id)])
             .collect();
         if !escaped.is_empty() {
             self.escape(&escaped);
@@ -5189,10 +5204,11 @@ impl RegisterLowerer {
             }
             (RegisterFlow::Abrupt, _) => bindings_after_no,
             (_, RegisterFlow::Abrupt) => bindings_after_yes,
-            _ if properties_after_yes == self.object_layouts => {
+            _ => {
+                self.object_layouts =
+                    merge_register_layouts(&properties_after_yes, &self.object_layouts);
                 merge_register_bindings(&bindings_after_yes, &bindings_after_no)?
             }
-            _ => return None,
         };
         let value_type = match (yes_flow, no_flow) {
             (RegisterFlow::Value(yes), RegisterFlow::Value(no)) => yes.merge(no),
@@ -5831,6 +5847,26 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         crate::engine::realm::Intrinsic::StringPrototypeAt
         | crate::engine::realm::Intrinsic::StringPrototypeCodePointAt => RegisterType::Primitive,
     }
+}
+
+/// Joins the object layouts of the two branches of an `if` (14.6.2).
+///
+/// An Object only one branch made exists only where that branch ran, so what
+/// its layout says still holds after the join. One both branches describe the
+/// same way keeps its layout too. One they describe differently has no single
+/// shape to name and keeps none.
+fn merge_register_layouts(
+    yes: &BTreeMap<u32, RegisterObjectLayout>,
+    no: &BTreeMap<u32, RegisterObjectLayout>,
+) -> BTreeMap<u32, RegisterObjectLayout> {
+    yes.iter()
+        .chain(no.iter())
+        .filter(|(id, layout)| {
+            yes.get(id).is_none_or(|own| own == *layout)
+                && no.get(id).is_none_or(|own| own == *layout)
+        })
+        .map(|(id, layout)| (*id, layout.clone()))
+        .collect()
 }
 
 fn merge_register_bindings(

@@ -448,6 +448,28 @@ fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Erro
 }
 
 #[test]
+fn an_object_only_one_branch_made_survives_the_join() -> Result<(), Error> {
+    // 14.6.2 joins the two states of an `if`. An Object only one branch made
+    // exists only where that branch ran, so what its layout says still holds;
+    // one the two branches shaped differently has no single shape to name and
+    // is read through the instruction instead.
+    for source in [
+        "let f=function(d){let o={w:0};if(d){o={w:1}}return o.w};''+f(1)+f(0)",
+        "let f=function(d){let o={w:0};if(d){o.w=9}return o.w};''+f(1)+f(0)",
+        "let f=function(d){let o={w:0,x:0};if(d){o={w:1}}else{o={w:2,x:3}}return ''+o.w+o.x};''+f(1)+f(0)",
+        "let f=function(d){let o={w:0};if(d){o={a:[1,2]}}return typeof o};''+f(1)+f(0)",
+        "let f=function(d){let a=[1];if(d){a=[1,2,3]}return a.length};''+f(1)+f(0)",
+        // A binding one branch makes an Object and the other a Number keeps
+        // no single type, so the join names what the value is at run time.
+        "let x=1;if(true){x={}}else{x=2}typeof x",
+        "let x=1;if(false){x={}}else{x=2}typeof x",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn a_property_is_written_under_a_key_only_the_run_time_knows() -> Result<(), Error> {
     // 13.15.2 writes through PutValue, which 10.1.9.2 sends along the
     // Prototype Chain when the receiver has no own property of that name.
@@ -2793,7 +2815,6 @@ fn conditional_statements_match_legacy_execution() -> Result<(), Error> {
 #[test]
 fn register_branch_lowering_rejects_incompatible_control_flow() -> Result<(), Error> {
     for source in [
-        "let x=1;if(true)x={};else x=2;x",
         "function f(){function g(){return x}var x=1;x='a';return g()}f()",
         "function f(){var x=1;function g(){x++;return x}return g()}f()",
     ] {
