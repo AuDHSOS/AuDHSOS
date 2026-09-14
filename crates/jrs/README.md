@@ -625,8 +625,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods on the register engine (focused) | focused | `399ba5a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 286 (4.20%) | 1,838 (27.02%) | 4,678 (68.77%) |
 | Compound assignment (focused) | focused | `69b8a6d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/compound-assignment --summary` | 454 | 786 | 591 (75.19%) | 55 (7.00%) | 140 (17.81%) |
 | Compound assignment on the register engine (focused) | focused | `69b8a6d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/compound-assignment --summary` | 454 | 786 | 167 (21.25%) | 0 (0.00%) | 619 (78.75%) |
-| Complete pinned suite, including staging and Intl | full | `69b8a6d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `69b8a6d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 5,807 (5.64%) | 19,487 (18.93%) | 77,631 (75.42%) |
+| `let` and `const` statements (focused) | focused | `c14dd24` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/let test/language/statements/const --summary` | 281 | 558 | 479 (85.84%) | 0 (0.00%) | 79 (14.16%) |
+| `let` and `const` statements on the register engine (focused) | focused | `c14dd24` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/let test/language/statements/const --summary` | 281 | 558 | 105 (18.82%) | 28 (5.02%) | 425 (76.16%) |
+| Complete pinned suite, including staging and Intl | full | `c14dd24` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `c14dd24` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 5,851 (5.68%) | 21,596 (20.98%) | 75,478 (73.33%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -700,6 +702,19 @@ applies. `o.a += 2` and, inside a Realm, `x *= 2` were Scripts the lowering
 refused before. What is left of that family is no longer the lowering but the
 constructors it asks for, `%Boolean%` and `%String%` first.
 
+A `let` and a `const` of a Script bind on the `[[DeclarativeRecord]]` of the
+Global Environment Record (16.1.7), where they outlive the Script that made
+them and every later Script of the Realm reads them, with the `ReferenceError`
+of a temporal dead zone before the declaration and the `TypeError` of 9.1.1.4.5
+for an assignment to a `const`. The lowering refused every Script that held one
+before, which is most of what is written today, and that is where the engine's
+count of refusals falls by 2,153 while its failures rise by 2,109: a Script
+that is taken now runs until it reaches a gap its harness needs, which the
+runner counts as a failed harness. Neither a failure nor a refusal is a pass,
+and the two full runs of the stack backend on either side of this step are
+identical variant for variant, so nothing that answered before answers
+differently.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -738,8 +753,9 @@ same suite measured before it, variant for variant. The Array search run was mea
 were measured at tree `d98662e20789888cb180d99642144c95e6596f04`. The
 `%Array%` runs at tree `4dcc52a89757181705ea5687778e857ae9d07408`. The
 `%Object%` runs at tree `595f01d820090f035e3b992c1db9990181d2ae95`. The
-compound-assignment runs and both full runs were measured at tree
-`8183751cf4043881206e2a64a11ef3f5f0ad0aae`, which is the tree of `69b8a6d`.
+compound-assignment runs at tree `8183751cf4043881206e2a64a11ef3f5f0ad0aae`.
+The lexical-declaration runs and both full runs were measured at tree
+`ea89126ff888b6994a0b25a69baf8b0845fa25ff`, which is the tree of `c14dd24`.
 
 ### Historical Test262 baseline
 
