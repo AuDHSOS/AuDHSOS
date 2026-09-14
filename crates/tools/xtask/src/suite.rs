@@ -182,6 +182,20 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
             // `execsql` and `db eval` outside a case are the file
             // setting itself up, and the cases after them read what
             // they wrote.
+            // `ifcapable !X` holds a block for a build without `X`,
+            // which this engine has, so the block is read past. Every
+            // other condition is left to be read inline, because the
+            // cases of both arms carry one name and the first of a
+            // name is the one kept.
+            "ifcapable" => {
+                if let Some((asked, after)) = word(rest)
+                    && asked
+                        .strip_prefix('!')
+                        .is_some_and(|name| HELD.contains(&name.trim_matches(['{', '}'])))
+                {
+                    rest = past(after, 1);
+                }
+            }
             // `db null` and `db nullvalue` say what a `NULL` prints
             // as, which the answers a file writes are written under.
             "db nullvalue" | "db null" => {
@@ -284,7 +298,7 @@ fn push(out: &mut Vec<Step>, name: &str, sql: &str, want: &str) {
 
 /// The next of the four commands this reads, and what follows its name.
 fn next_command(text: &str) -> Option<(&'static str, &str)> {
-    const COMMANDS: [&str; 7] = [
+    const COMMANDS: [&str; 8] = [
         "do_execsql_test",
         "do_catchsql_test",
         "do_test",
@@ -292,6 +306,7 @@ fn next_command(text: &str) -> Option<(&'static str, &str)> {
         "db eval",
         "db nullvalue",
         "db null",
+        "ifcapable",
     ];
     let mut best: Option<(&'static str, usize)> = None;
     for command in COMMANDS {
@@ -446,8 +461,16 @@ fn answer(writer: &mut Writer, sql: &str, null: &str) -> Option<Vec<String>> {
         }
         if reads(text) {
             let bytes = writer.written();
-            let database = Database::open(&bytes).ok()?;
-            let answered = match database.query(text.as_bytes()) {
+            // A connection in write-ahead logging holds its newest
+            // pages in the log, so a reader follows the log beside the
+            // file.
+            let log = writer.log().map(db_sqlite::wal::Wal::open);
+            let opened = match &log {
+                Some(Ok(log)) => Database::open_with_log(&bytes, log),
+                Some(Err(_)) => return None,
+                None => Database::open(&bytes),
+            };
+            let answered = match opened.and_then(|database| database.query(text.as_bytes())) {
                 Ok(answered) => answered,
                 Err(error) => {
                     refused(&format!("{} {error:?}", first_words(text)));
@@ -530,6 +553,10 @@ fn first_words(sql: &str) -> String {
 
 /// Whether the statement answers rows rather than changing them.
 ///
+/// What this engine has of the capabilities an `ifcapable` names, so
+/// that a block written for a build without one is read past.
+const HELD: [&str; 2] = ["wal", "utf16"];
+
 /// A `PRAGMA` goes to the connection either way, because a connection
 /// answers one out of what it holds and a file with no table holds no
 /// encoding.

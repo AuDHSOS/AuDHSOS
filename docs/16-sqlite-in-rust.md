@@ -673,8 +673,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
-test files that needs no TCL interpreter. Of 15 382 cases in 1 169
-files, 654 pass, 9 answer differently, and 14 719 name something the
+test files that needs no TCL interpreter. Of 15 379 cases in 1 169
+files, 678 pass, 10 answer differently, and 14 691 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.
@@ -690,7 +690,7 @@ Size: M.
 ### Does
 
 1. Run SQLite's TCL suite under `research/sqlite/test` against the
-   engine. Built for 15 382 of its cases; the rest need the
+   engine. Built for 15 379 of its cases; the rest need the
    interpreter, because a substitution says what they run only once it
    has run.
 2. Run every level of this repository's own suite across the matrix
@@ -713,7 +713,7 @@ list it answers is the list the file writes, element for element.
 statement and what the engine answered, which is what says which missing
 feature stops the most files.
 
-### The nine that answer differently
+### The ten that answer differently
 
 | File | Cases | What it shows |
 |------|-------|---------------|
@@ -723,6 +723,7 @@ feature stops the most files.
 | `gencol1.test` | 1 | `INSERT INTO t1 SELECT * FROM t0` where both hold a computed column: the values are placed over every column and the computed one is written again. |
 | `autoindex4.test` | 1 | The order of rows an `ORDER BY` leaves equal, which SQLite settles by the automatic index it builds. |
 | `tkt-c48d99d690.test` | 1 | `PRAGMA count_changes`, under which every statement answers how many rows it changed. |
+| `e_wal.test` | 1 | A VFS without shared memory, under which `PRAGMA journal_mode=wal` leaves the mode as it was. |
 
 ### Done when
 

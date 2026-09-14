@@ -4274,9 +4274,10 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - The part of `research/sqlite/test` that needs no TCL interpreter: a
   `do_execsql_test`, a `do_test` whose body is one `execsql`, and the
   `execsql` or `db eval` a file sets itself up with, each carrying no
-  substitution. That is 15 382 cases in 1 169 files. `db null` and
+  substitution. That is 15 379 cases in 1 169 files. `db null` and
   `db nullvalue` say what a `NULL` prints as, which the answer a file
-  writes is written under.
+  writes is written under. `ifcapable !X` holds a block for a build
+  without `X`, which is read past where this engine has `X`.
 - A step this harness cannot run — a body that runs more than
   statements, or statements a substitution stands in — stops the file
   the way a refusal does, because the database is then short of what
@@ -4284,8 +4285,8 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - A case whose name repeats is one arm of a conditional the interpreter
   runs one arm of, so the first case of a name is kept and the rest are
   dropped, which D-189 records.
-- 654 pass, 9 answer differently and 14 719 are refused or stopped.
-  Document 16, section 16.23 groups the nine. Earlier runs answered
+- 678 pass, 10 answer differently and 14 691 are refused or stopped.
+  Document 16, section 16.23 groups the ten. Earlier runs answered
   14, then 27, then 17 differently; twelve were defects, which D-181,
   D-184 and D-189 record and twenty-eight cases of `query.corpus` now
   hold to the C library.
@@ -4296,7 +4297,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 
 ### 6.6.120 The pragmas that configure a file (`db-sqlite`)
 
-D-182, document 16 step Q8.
+D-182 and D-190, document 16 step Q8.
 
 - The six files of the auto-vacuum dimension are written a second time
   with `PRAGMA page_size`, `PRAGMA encoding` and `PRAGMA auto_vacuum`
@@ -4307,12 +4308,16 @@ D-182, document 16 step Q8.
   page count, the free list count, the schema version, the user
   version, the application id and the schema format.
 - `PRAGMA journal_mode=X` answers the mode it left the connection in,
-  which is the one setting that answers a row.
+  which is the one setting that answers a row. It is set after a table
+  is there as well, and `wal` turns write-ahead logging on with the
+  salts of D-190.
+- A pragma that sets nothing is answered out of the connection, which
+  holds the encoding a file with no table does not.
 - The refusals: a pragma this crate does not answer, a value it does
-  not name, `wal` where no statement carries the two salts, a setting
-  that says how the first table is written after a table is there, a
-  pragma that sets something put to a file being read, and a pragma the
-  file does not hold read back.
+  not name, a mode other than `wal` put to a connection that is
+  logging, a setting that says how the first table is written after a
+  table is there, a pragma that sets something put to a file being
+  read, and a pragma the file does not hold read back.
 - The checkout is not part of this repository, so this is never a step
   of `cargo xtask check`; `sh tools/sqlite.sh` brings it and
   `--file <name>` runs one file. `--show` prints each case that did not

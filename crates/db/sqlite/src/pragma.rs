@@ -172,6 +172,13 @@ pub fn mode_of(text: &[u8]) -> Option<crate::journal::Mode> {
     }
 }
 
+/// Whether a `PRAGMA journal_mode` names write-ahead logging, which is
+/// the sixth mode and the one that writes no rollback journal.
+#[must_use]
+pub fn is_log(text: &[u8]) -> bool {
+    crate::schema::dequote(text).eq_ignore_ascii_case(b"wal")
+}
+
 /// The whole number a pragma is set to, or nothing where what is
 /// written is not one.
 #[must_use]

@@ -1978,7 +1978,7 @@ fn what_a_pragma_refuses() {
     // name.
     assert!(writer.run(b"PRAGMA nosuch=1").is_err());
     assert!(writer.run(b"PRAGMA auto_vacuum=sometimes").is_err());
-    assert!(writer.run(b"PRAGMA journal_mode=wal").is_err());
+    assert!(writer.run(b"PRAGMA journal_mode=nosuch").is_err());
     assert!(writer.run(b"PRAGMA encoding='UTF-32'").is_err());
     assert!(writer.run(b"PRAGMA page_size=five").is_err());
     assert!(writer.run(b"PRAGMA page_size=99999999999").is_err());
@@ -1995,6 +1995,38 @@ fn what_a_pragma_refuses() {
     assert!(database.query(b"PRAGMA page_size=1024").is_err());
     assert!(database.query(b"PRAGMA nosuch").is_err());
     assert!(database.query(b"PRAGMA cache_size").is_err());
+    // The journal mode belongs to the connection, so it is set after a
+    // table is there as well; a file in write-ahead logging leaves that
+    // mode through a checkpoint, which this crate does not write.
+    let mut logging = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    logging.run(b"CREATE TABLE t(a)").unwrap();
+    for mode in [
+        b"delete".as_slice(),
+        b"truncate",
+        b"persist",
+        b"memory",
+        b"off",
+    ] {
+        let sql = alloc::format!(
+            "PRAGMA journal_mode={}",
+            alloc::string::String::from_utf8_lossy(mode)
+        );
+        assert_eq!(
+            logging.run(sql.as_bytes()).unwrap(),
+            [[Value::Text(mode.to_vec())]]
+        );
+    }
+    assert_eq!(
+        logging.run(b"PRAGMA journal_mode=wal").unwrap(),
+        [[Value::Text(b"wal".to_vec())]]
+    );
+    // The pragma answers the same for a connection already logging.
+    assert_eq!(
+        logging.run(b"PRAGMA journal_mode=wal").unwrap(),
+        [[Value::Text(b"wal".to_vec())]]
+    );
+    assert!(logging.run(b"PRAGMA journal_mode=delete").is_err());
+    assert!(logging.log().is_some());
     // What the reader of a pragma refuses.
     assert!(pragma(b"PRAGMA main.page_size").is_ok());
     assert!(pragma(b"PRAGMA page_size(512)").is_ok());

@@ -938,7 +938,15 @@ impl<'a> Parser<'a> {
         }
         let token = self.peek();
         let value = match token.map(|found| found.kind) {
-            Some(Kind::Integer | Kind::Float | Kind::Blob) => {
+            // `nmnum ::= plus_num | nm | ON | DELETE | DEFAULT`: three
+            // words that are not names anywhere else name a setting
+            // here, of which `DELETE` is a journal mode.
+            Some(
+                Kind::Integer
+                | Kind::Float
+                | Kind::Blob
+                | Kind::Keyword(Keyword::On | Keyword::Delete | Keyword::Default),
+            ) => {
                 self.bump();
                 Span::of(token.unwrap_or(EMPTY))
             }

@@ -157,6 +157,19 @@ impl Writer {
         }
     }
 
+    /// `PRAGMA journal_mode=wal` from a statement, which names no salt:
+    /// the two the log carries come from SQLite's random source there
+    /// and are nought here, because a salt tells one generation of a
+    /// log from another and nothing else reads it.
+    ///
+    /// A file already in that mode stays in it, which is what the
+    /// pragma answers for a connection that is already logging.
+    fn log_mode(&mut self) {
+        if self.log.is_none() {
+            self.logging((0, 0));
+        }
+    }
+
     /// The file the pages hold, which is what a statement reads its
     /// rows out of, whatever a log beside the file holds.
     fn image(&self) -> Vec<u8> {
@@ -278,7 +291,12 @@ impl Writer {
         if setting == crate::pragma::Setting::Ignored {
             return Ok(Vec::new());
         }
-        if self.header.schema_cookie != 0 {
+        // The page size, the encoding and the vacuuming are what the
+        // first table was written under, so a statement that sets one
+        // after a table is there is refused. The journal mode belongs
+        // to the connection and is set whenever `sqlite3PragmaJournalMode`
+        // is asked.
+        if self.header.schema_cookie != 0 && setting != crate::pragma::Setting::JournalMode {
             return Err(Error::Unsupported);
         }
         match setting {
@@ -298,11 +316,17 @@ impl Writer {
                 }
             }
             crate::pragma::Setting::JournalMode => {
-                // A write-ahead log carries two salts from SQLite's
-                // random source, which a statement does not name, so
-                // `Writer::logging` is what turns that mode on.
-                let mode = crate::pragma::mode_of(text).ok_or(Error::Unsupported)?;
-                self.mode = mode;
+                if crate::pragma::is_log(text) {
+                    self.log_mode();
+                } else {
+                    // A file in write-ahead logging leaves that mode
+                    // through a checkpoint, which this crate does not
+                    // write.
+                    if self.log.is_some() {
+                        return Err(Error::Unsupported);
+                    }
+                    self.mode = crate::pragma::mode_of(text).ok_or(Error::Unsupported)?;
+                }
                 // The mode the connection is left in is the one row
                 // this pragma answers, which no other setting does.
                 return Ok(alloc::vec![alloc::vec![Value::Text(
