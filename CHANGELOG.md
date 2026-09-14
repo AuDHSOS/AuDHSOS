@@ -699,6 +699,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- 10.15 states what the transport glue of Phase 15 has to do about the
+  ring: `RING_CAPACITY` is 4072 bytes and a TLS record is up to 16640, so
+  a record crosses in four passes at least, which is what
+  `socket::Stream` already carries because the ring holds a byte stream
+  and no record boundary.
+
 - The documents record that the cryptography track waits on nothing: 11.14
   strikes the entropy row, which Phase 12 filled with `random_bytes` over
   `RDSEED`, and the transport row, which Phase 14 filled with `server-net`

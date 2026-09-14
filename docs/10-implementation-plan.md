@@ -3333,6 +3333,14 @@ specifies and which has waited for a transport.
   and sends and expects `close_notify`. The `now` of `ClientConfig` comes
   from `clock_wall` (10.14A); a machine that answers `Unavailable` there
   does not validate a chain against a guess, it refuses to connect.
+- A record crosses the ring in several passes. `RING_CAPACITY` is 4072
+  bytes and `audhsos_tls::client::MIN_INCOMING` and `MIN_OUTGOING` are
+  16640, so one record takes four passes at least. The ring carries a
+  byte stream and no record boundary, which is what `Stream::write_all`
+  and `Stream::read` already do: the first writes what fits and waits on
+  a full ring, the second takes what is there. The record itself stands
+  in the program's own buffers, which the glue owns, so the two sizes
+  never have to meet.
 - The trust anchors the image carries are built and in (D-147): the
   xtask writes the files of `anchors/` as one table onto the boot volume,
   `audhsos-x509::anchors` reads it, and `app-tls` is the program that
