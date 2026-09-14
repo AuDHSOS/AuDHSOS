@@ -1950,14 +1950,12 @@ fn minimize_crash(root: &Path, name: &str, file: &str, seconds: u64) -> Result<(
 
 /// Runs the fuzzer of one target for `seconds` seconds, on every core.
 ///
-/// One fuzzer is one process, which is how libFuzzer fuzzes too: it spawns
-/// more of itself for `-jobs`, and this spawns them from here. The workers
-/// share the corpus directory, where an input is named by a hash of its
-/// bytes, so one worker's find is a seed of every worker's next run and two
-/// that find the same input write one file. Each gets a seed of its own, or
-/// they would all walk the same mutations. Each reads the whole corpus, so
-/// what one of them calls new is new against all of it, which is what keeps
-/// the corpus from growing by what another worker already covers.
+/// One process is started, and it starts one worker per core itself. That
+/// process is the orchestrator: it reads the corpus once, keeps the pool,
+/// and hands its workers seeds to change. Every worker reading the whole
+/// corpus was what this used to do, and on a corpus of some thousand inputs
+/// of a slow target it spent the greater part of the run computing the same
+/// answer on every core.
 fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
     let jobs = test_jobs()?;
     note!("fuzzing `{name}` for {seconds} seconds on {jobs} workers");
@@ -1973,22 +1971,17 @@ fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
         .find(|exe| exe.name == name && !exe.test)
         .ok_or_else(|| Error::Parse(format!("Cargo reported no executable for `{name}`")))?;
     let corpus = corpus_of(root, name).display().to_string();
-    // The seed must differ between the workers and between two runs of the
-    // whole command, and it must not be zero, which the engine reads as none.
-    let mut seed = u64::from(std::process::id()).wrapping_mul(0x9E37_79B9) | 1;
-    let mut commands = Vec::with_capacity(jobs);
-    for _ in 0..jobs {
-        commands.push(
-            executable
-                .command()
-                .cwd(&fuzz)
-                .arg(&corpus)
-                .arg(format!("-max_total_time={seconds}"))
-                .arg(format!("-seed={seed}")),
-        );
-        seed = seed.wrapping_add(1) | 1;
-    }
-    run_parallel(&commands, jobs)
+    // The seed must differ between two runs of the whole command, and it
+    // must not be zero, which the engine reads as none.
+    let seed = u64::from(std::process::id()).wrapping_mul(0x9E37_79B9) | 1;
+    executable
+        .command()
+        .cwd(&fuzz)
+        .arg(&corpus)
+        .arg(format!("-max_total_time={seconds}"))
+        .arg(format!("-workers={jobs}"))
+        .arg(format!("-seed={seed}"))
+        .run()
 }
 
 /// Builds selected regression binaries once, then replays their corpora

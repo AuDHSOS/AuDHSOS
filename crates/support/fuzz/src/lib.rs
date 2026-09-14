@@ -7,15 +7,19 @@
 
 pub mod corpus;
 pub mod counters;
+pub mod cover;
 pub mod dictionary;
 pub mod engine;
 pub mod entry;
 pub mod feature;
 pub mod mutate;
 pub mod options;
+mod orchestrator;
 pub mod pool;
+pub mod proto;
 pub mod rng;
 pub mod sancov;
+mod worker;
 
 pub use corpus::{CorpusError, Outcome, files_under, replay_args, replay_paths};
 
