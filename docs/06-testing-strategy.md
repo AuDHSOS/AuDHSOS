@@ -289,6 +289,10 @@ done until every applicable item has a test. Items are added, never removed.
   first `allocate` hands out generation 1, slots come from the high-water
   mark in index order while none has been released, and released slots
   keep the FIFO order (D-66).
+- The message of `Unavailable` names no one caller: the entropy source,
+  the wall clock, the file system server, the network server and a
+  refused connection all answer that code, so the text carries neither
+  `RDSEED` nor the retry bound nor entropy.
 
 ### 6.6.7 Scheduler and thread states (`kernel-sched`)
 

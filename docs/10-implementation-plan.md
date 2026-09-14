@@ -2922,9 +2922,11 @@ codes: `Unavailable = 27`, which `random_bytes` answers when the hardware
 would not deliver inside its retry bound, and `NoVector = 28`, which
 `interrupt_create_msi` answers when the vector space has nothing left.
 Neither can be folded into an existing code without saying that a
-different resource ran out. The generated wrapper names, argument counts
-and dispatcher arms follow from the syscall table, as they do for every
-other call.
+different resource ran out. `Unavailable` is the general code for
+something that cannot serve: later phases answer it for a server, a peer
+and a device as well, so its message names no one of them. The generated
+wrapper names, argument counts and dispatcher arms follow from the
+syscall table, as they do for every other call.
 
 ### 10.12.2 `kernel-sched`: a thread that waits until
 

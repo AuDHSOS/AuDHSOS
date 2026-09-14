@@ -699,6 +699,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `audhsos-abi`: `Error::Unavailable` carries a message that fits every
+  caller. It read "the hardware source would not deliver inside its retry
+  bound", which describes `random_bytes` alone, so a boot where the file
+  system server could not serve reported five programs failing on an
+  entropy message. The wall clock, the file system server, the network
+  server, a device and a refused connection answer the same code; the
+  message names none of them, and a test of 6.6.6 holds it there.
+
+- Document 13 dates its table of what is missing: the seven rows it marks
+  missing were built in Phases 12 to 14, and the opening paragraph says
+  so in the tense the state deserves.
+
 - `audhsos-ssh`: a global request the peer makes of the connection
   (RFC 4254, section 4) no longer ends the connection. This client offers
   nothing a peer can ask of it, so the answer is
