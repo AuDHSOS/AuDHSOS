@@ -1774,6 +1774,7 @@ pub(crate) fn fuzz(root: &Path, options: &[String]) -> Result<(), Error> {
         match option.as_str() {
             "--target" => selected = iter.next().cloned(),
             "--regression" => mode = Job::Regression,
+            "--compact" => mode = Job::Compact,
             "--merge" => {
                 let from = iter.next().cloned().ok_or_else(|| {
                     Error::Usage("--merge needs a directory to fold in".to_owned())
@@ -1818,6 +1819,7 @@ pub(crate) fn fuzz(root: &Path, options: &[String]) -> Result<(), Error> {
             Job::Fuzz => run_fuzzer(root, target.name, seconds)?,
             Job::Regression => {}
             Job::Merge(from) => merge_corpus(root, target.name, from)?,
+            Job::Compact => compact_corpus(root, target.name)?,
             Job::Minimize(file) => minimize_crash(root, target.name, file, seconds)?,
         }
     }
@@ -1833,6 +1835,8 @@ enum Job {
     /// Fold a directory into the stored corpus, keeping what adds
     /// coverage.
     Merge(String),
+    /// Fold the stored corpus back to a minimal cover of what it reaches.
+    Compact,
     /// Shrink one crashing input.
     Minimize(String),
 }
@@ -1951,9 +1955,9 @@ fn minimize_crash(root: &Path, name: &str, file: &str, seconds: u64) -> Result<(
 /// share the corpus directory, where an input is named by a hash of its
 /// bytes, so one worker's find is a seed of every worker's next run and two
 /// that find the same input write one file. Each gets a seed of its own, or
-/// they would all walk the same mutations, and a part of the seed corpus of
-/// its own, because loading one file means running it and a worker that read
-/// the whole corpus would spend the run on that instead of on fuzzing.
+/// they would all walk the same mutations. Each reads the whole corpus, so
+/// what one of them calls new is new against all of it, which is what keeps
+/// the corpus from growing by what another worker already covers.
 fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
     let jobs = test_jobs()?;
     note!("fuzzing `{name}` for {seconds} seconds on {jobs} workers");
@@ -1972,8 +1976,6 @@ fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
     // The seed must differ between the workers and between two runs of the
     // whole command, and it must not be zero, which the engine reads as none.
     let mut seed = u64::from(std::process::id()).wrapping_mul(0x9E37_79B9) | 1;
-    let mut shard = 0u64;
-    let shards = u64::try_from(jobs).unwrap_or(1);
     let mut commands = Vec::with_capacity(jobs);
     for _ in 0..jobs {
         commands.push(
@@ -1982,15 +1984,11 @@ fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
                 .cwd(&fuzz)
                 .arg(&corpus)
                 .arg(format!("-max_total_time={seconds}"))
-                .arg(format!("-seed={seed}"))
-                .arg(format!("-shard={shard}"))
-                .arg(format!("-shards={shards}")),
+                .arg(format!("-seed={seed}")),
         );
         seed = seed.wrapping_add(1) | 1;
-        shard = shard.wrapping_add(1);
     }
-    run_parallel(&commands, jobs)?;
-    compact_corpus(root, name)
+    run_parallel(&commands, jobs)
 }
 
 /// Builds selected regression binaries once, then replays their corpora

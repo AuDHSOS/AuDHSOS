@@ -175,14 +175,8 @@ impl<'a> Runner<'a> {
     /// what they reached.
     fn load(&mut self, options: &Options) -> Result<(), ExitCode> {
         let mut longest = 0usize;
-        let mut index = 0u64;
         for path in &options.paths {
             for file in files_under(path) {
-                let mine = index.checked_rem(options.shards) == Some(options.shard);
-                index = index.wrapping_add(1);
-                if !mine {
-                    continue;
-                }
                 let Ok(bytes) = std::fs::read(&file) else {
                     continue;
                 };

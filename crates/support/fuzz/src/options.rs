@@ -96,12 +96,6 @@ pub struct Options {
     pub reduce_inputs: bool,
     /// Whether to print the totals at the end.
     pub print_final_stats: bool,
-    /// Which part of the seed corpus this run loads.
-    pub shard: u64,
-    /// How many parts the seed corpus is read in. One run of many loads a
-    /// part of it and finds the rest through the corpus directory, which
-    /// every run of the same corpus writes to.
-    pub shards: u64,
 }
 
 impl Default for Options {
@@ -120,8 +114,6 @@ impl Default for Options {
             value_profile: false,
             reduce_inputs: true,
             print_final_stats: false,
-            shard: 0,
-            shards: 1,
         }
     }
 }
@@ -198,8 +190,6 @@ fn apply(options: &mut Options, name: &str, value: &str) -> Result<(), OptionErr
         "timeout" => options.timeout = number(name, value)?,
         "artifact_prefix" => options.artifact_prefix = PathBuf::from(value),
         "dict" => options.dictionary = Some(PathBuf::from(value)),
-        "shard" => options.shard = number(name, value)?,
-        "shards" => options.shards = number(name, value)?.max(1),
         "use_value_profile" => options.value_profile = flag(name, value)?,
         "reduce_inputs" => options.reduce_inputs = flag(name, value)?,
         "print_final_stats" => options.print_final_stats = flag(name, value)?,
