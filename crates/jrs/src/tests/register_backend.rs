@@ -448,6 +448,37 @@ fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Erro
 }
 
 #[test]
+fn a_compound_assignment_reaches_a_property() -> Result<(), Error> {
+    // 13.15.2 evaluates the Reference once, reads through it, evaluates the
+    // right side, applies the operator of 13.15.3 and writes back. The base
+    // and the key are evaluated before the right side and not again after it.
+    for source in [
+        "var o={a:1};o.a+=2;o.a",
+        "var o={a:'x'};o.a+='y';o.a",
+        "var o={a:8};o.a-=3;o.a",
+        "var o={a:8};o.a*=3;o.a",
+        "var o={a:9};o.a/=2;o.a",
+        "var o={a:7};o.a%=4;o.a",
+        "var o={a:6};o.a<<=2;o.a",
+        "var o={a:6};o.a>>=1;o.a",
+        "var o={a:6};o.a&=3;o.a",
+        "var o={a:6};o.a|=1;o.a",
+        "var o={a:6};o.a^=3;o.a",
+        "var a=[1,2];a[0]+=5;a[0]",
+        "var o={a:1};var k='a';o[k]+=2;o.a",
+        // The right side runs after the read, so it sees the old value and
+        // what it writes is overwritten by the sum.
+        "var o={a:1};o.a+=(o.a=10);o.a",
+        // The key is evaluated once, whatever evaluating it does.
+        "var n=0;var o={a:1};o[(n++,'a')]+=2;''+n+','+o.a",
+        "var a=[1,2,3];var i=0;a[i++]+=10;''+i+','+a[0]+','+a[1]",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn a_property_descriptor_crosses_between_the_object_and_the_engine() -> Result<(), Error> {
     // 20.1.2.10 answers the own String keys in the order 10.1.11 gives them,
     // 20.1.2.8 answers the descriptor 6.2.6.4 makes of an own property, and

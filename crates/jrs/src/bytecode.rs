@@ -3523,17 +3523,62 @@ impl RegisterLowerer {
         operator: Option<Binary>,
         value: &Expr,
     ) -> Option<RegisterType> {
-        if operator.is_some() {
-            return None;
-        }
+        use crate::engine::bytecode::Instruction;
         let (base, key) = target.member()?;
-        if let Some(value_type) = self.lower_unknown_member_assignment(base, key, value)? {
+        if operator.is_none()
+            && let Some(value_type) = self.lower_unknown_member_assignment(base, key, value)?
+        {
             return Some(value_type);
         }
         let prepared = self.prepare_member_assignment(target)?;
-        let value_type = self.lower(value)?;
+        let Some(operator) = operator else {
+            let value_type = self.lower(value)?;
+            self.finish_member_assignment(prepared, value_type)?;
+            return Some(value_type);
+        };
+        // 13.15.2 evaluates the Reference once and reads through it before the
+        // right side is evaluated: the base and the key are in registers
+        // already, so the read and the write below reach the same property
+        // whatever the right side does to the expressions that named it.
+        let left_type = self.read_prepared_member(&prepared)?;
+        let left_register = self.allocate_register()?;
+        self.code.emit(Instruction::Star(left_register));
+        let right_type = self.lower(value)?;
+        let value_type = self.emit_compound(operator, left_type, left_register, right_type)?;
         self.finish_member_assignment(prepared, value_type)?;
         Some(value_type)
+    }
+
+    /// Reads the property a prepared assignment names, through the registers
+    /// that already hold its base and its key.
+    ///
+    /// The instruction answers what 10.1.8.1 answers, walking the Prototype
+    /// Chain and naming the gap where the chain reaches a Prototype this Realm
+    /// has not built, so the read needs no type of its own to be right.
+    fn read_prepared_member(
+        &mut self,
+        prepared: &RegisterMemberAssignment,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        let slot = self.feedback_slot(crate::engine::bytecode::FeedbackKind::NamedAccess)?;
+        match &prepared.key {
+            RegisterMemberKey::Named { constant, .. } => {
+                self.code.emit(Instruction::GetNamed {
+                    obj: prepared.object,
+                    name: *constant,
+                    slot,
+                });
+            }
+            RegisterMemberKey::ArrayKeyed { register, .. }
+            | RegisterMemberKey::ObjectKeyed(register, _) => {
+                self.code.emit(Instruction::GetByValue {
+                    obj: prepared.object,
+                    key: *register,
+                    slot,
+                });
+            }
+        }
+        Some(RegisterType::Unknown)
     }
 
     /// Lowers a write to a property of a base this lowering could not name.
@@ -5457,10 +5502,6 @@ impl RegisterLowerer {
         self.string_constant(&units)
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one function keeps every form of assignment beside the others"
-    )]
     fn lower_assignment(
         &mut self,
         name: &str,
@@ -5472,14 +5513,25 @@ impl RegisterLowerer {
         let Some(binding) = self.bindings.get(name).copied() else {
             // 9.1.1.4.5 writes a name no binding of this Script covers on the
             // Global Environment Record. Outside a Realm there is no such
-            // Record to write to. A compound assignment would have to read the
-            // name first, which needs a register the lowering has not reserved.
-            if !self.realm || operator.is_some() {
+            // Record to write to.
+            if !self.realm {
                 return None;
             }
-            let value_type = self.lower(right)?;
             let units: Vec<u16> = name.encode_utf16().collect();
             let constant = self.string_constant(&units)?;
+            let value_type = if let Some(operator) = operator {
+                // 13.15.2 reads the Reference before it evaluates the right
+                // side, and 9.1.1.4.6 resolves this name on the Global
+                // Environment Record, where a later Script may have put
+                // anything, so the read has no type of its own.
+                self.code.emit(Instruction::LdaGlobal(constant));
+                let left_register = self.allocate_register()?;
+                self.code.emit(Instruction::Star(left_register));
+                let right_type = self.lower(right)?;
+                self.emit_compound(operator, RegisterType::Unknown, left_register, right_type)?
+            } else {
+                self.lower(right)?
+            };
             self.code.emit(Instruction::StaGlobal {
                 name: constant,
                 strict,
@@ -5502,6 +5554,31 @@ impl RegisterLowerer {
             let left_register = self.allocate_register()?;
             self.code.emit(Instruction::Star(left_register));
             let right_type = self.lower(right)?;
+            self.emit_compound(operator, left_type, left_register, right_type)?
+        } else {
+            self.lower(right)?
+        };
+        self.store_binding(binding);
+        self.bindings.get_mut(name)?.value_type = Some(result_type);
+        Some(result_type)
+    }
+
+    /// Applies the operator of a compound assignment (13.15.3) to the value in
+    /// `left_register` and the one in the accumulator, leaving the answer in
+    /// the accumulator.
+    ///
+    /// This is the operator of 13.15.2 step 1.e, which is the same operator
+    /// the expression form applies, so the two reach the same instruction and
+    /// the same feedback dispatch for the operands a typed one does not cover.
+    fn emit_compound(
+        &mut self,
+        operator: Binary,
+        left_type: RegisterType,
+        left_register: crate::engine::bytecode::Reg,
+        right_type: RegisterType,
+    ) -> Option<RegisterType> {
+        use crate::engine::bytecode::Instruction;
+        {
             let result_type = match operator {
                 Binary::Add
                     if left_type == RegisterType::String && right_type == RegisterType::String =>
@@ -5554,8 +5631,6 @@ impl RegisterLowerer {
                 self.code.emit(instruction);
                 self.release_register(right_register)?;
                 self.release_register(left_register)?;
-                self.store_binding(binding);
-                self.bindings.get_mut(name)?.value_type = Some(generic_type);
                 return Some(generic_type);
             }
             let instruction = match operator {
@@ -5585,13 +5660,8 @@ impl RegisterLowerer {
             self.code.emit(instruction);
             self.release_register(right_register)?;
             self.release_register(left_register)?;
-            result_type
-        } else {
-            self.lower(right)?
-        };
-        self.store_binding(binding);
-        self.bindings.get_mut(name)?.value_type = Some(result_type);
-        Some(result_type)
+            Some(result_type)
+        }
     }
 
     fn lower_update(&mut self, name: &str, add: bool, prefix: bool) -> Option<RegisterType> {
