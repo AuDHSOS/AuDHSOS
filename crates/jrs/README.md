@@ -610,8 +610,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `instanceof`, `new` and `throw` on the register engine (focused) | focused | `cae1518` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/instanceof test/language/expressions/new test/language/statements/throw --summary` | 116 | 231 | 0 (0.00%) | 189 (81.82%) | 42 (18.18%) |
 | `delete` (focused) | focused | `0989fc9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/delete --summary` | 69 | 103 | 91 (88.35%) | 10 (9.71%) | 2 (1.94%) |
 | `delete` on the register engine (focused) | focused | `0989fc9` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/delete --summary` | 69 | 103 | 31 (30.10%) | 10 (9.71%) | 62 (60.19%) |
-| Complete pinned suite, including staging and Intl | full | `0989fc9` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `0989fc9` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 4,951 (4.81%) | 19,275 (18.73%) | 78,699 (76.46%) |
+| Assignment and property accessors (focused) | focused | `7047dcf` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment test/language/expressions/property-accessors --summary` | 506 | 892 | 570 (63.90%) | 28 (3.14%) | 294 (32.96%) |
+| Assignment and property accessors on the register engine (focused) | focused | `7047dcf` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/assignment test/language/expressions/property-accessors --summary` | 506 | 892 | 86 (9.64%) | 65 (7.29%) | 741 (83.07%) |
+| Complete pinned suite, including staging and Intl | full | `7047dcf` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `7047dcf` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 4,954 (4.81%) | 19,276 (18.73%) | 78,695 (76.46%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -644,12 +646,17 @@ A `delete` takes a property off an object: 13.5.1.2 sends the base through
 not configurable, and an Array answers its indices and its `length` from where
 10.4.2 puts them. A `delete` of a free name stays a gap, because the name
 belongs to the global object.
-`harness/propertyHelper.js` now lowers `isConfigurable` and reaches
-`isWritable`, where it stops at `obj[name] = value`. A property is read under
-any key and written under a static name, but a key the lowering cannot type as
-a Number is refused for a write: such a key could name a setter on a Prototype
-this Realm has not built, and 10.1.9.2 would have to call it. That one gap
-holds 946 variants which count as a failed harness today.
+A property is written under a key only the run time knows: 13.15.2 writes
+through `PutValue`, and the store names the gap where it happens when the name
+is one a Prototype this Realm has not built owns — `__proto__` on every object,
+`length` and `name` on an Array or a function. A computed key of a literal
+defines instead of assigning (13.2.5.5), reaches no Prototype, and asks that
+nothing.
+`harness/propertyHelper.js` now lowers `isWritable` and stops in
+`verifyCallableProperty`, at an Object a branch makes: 14.6.2 joins the two
+states of an `if`, and a layout one side carries and the other does not is a
+difference the join does not take yet. That one gap holds 946 variants which
+count as a failed harness today.
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
@@ -683,9 +690,10 @@ same suite measured before it, variant for variant. The Array search run was mea
 `94023436def77fc0433c7d67f6bc9b70c2455b5d`, the property runs at tree
 `c1f2a4fab7808f3b5c8b0824f8a8ed3eaf11dc59`, the `instanceof` runs at tree
 `504da841ece9a2a58acc73ef0a5968b53daa252c`, and the `this` runs at tree
-`3d20693df017258270e78d197497481761dee88b`. The `delete` runs and both full
-runs were measured at tree `db32abdb924343cb345a45286c3df0a2b8f3eb9d`, which is
-the tree of `0989fc9`.
+`3d20693df017258270e78d197497481761dee88b`, and the `delete` runs at tree
+`db32abdb924343cb345a45286c3df0a2b8f3eb9d`. The assignment runs and both full
+runs were measured at tree `e2e3473e55f557f7f7a887963d18a60c857fb433`, which is
+the tree of `7047dcf`.
 
 ### Historical Test262 baseline
 
