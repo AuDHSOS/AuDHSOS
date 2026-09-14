@@ -3061,6 +3061,51 @@ impl RegisterVM {
                         ));
                     }
                 }
+                // 16.1.7 step 3: a lexical name this Realm already binds, or
+                // one an existing global property would shadow, is a
+                // SyntaxError before anything of the Script runs.
+                Instruction::VerifyGlobalLexical(index) => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    let environment = realm.global_environment();
+                    if environment.has_lexical_declaration(heap, name)?
+                        || environment.has_restricted_global_property(heap, name)?
+                    {
+                        return Err(raise_message(
+                            heap,
+                            realm,
+                            super::realm::NativeErrorKind::SyntaxError,
+                            "a declaration of this name already exists",
+                        ));
+                    }
+                }
+                Instruction::DeclareGlobalLexical {
+                    name: index,
+                    mutable,
+                } => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    realm
+                        .global_environment()
+                        .create_lexical_binding(heap, name, mutable)?;
+                }
+                Instruction::InitializeGlobalLexical(index) => {
+                    let units = active_code
+                        .string_constants
+                        .get(index as usize)
+                        .ok_or(VMError::InvalidRegister)?;
+                    let name = PropertyKey::String(heap.strings.intern_units(units)?);
+                    let value = self.acc;
+                    realm
+                        .global_environment()
+                        .initialize_lexical_binding(heap, name, value)?;
+                }
                 Instruction::DeclareGlobalVar(index) => {
                     let units = active_code
                         .string_constants

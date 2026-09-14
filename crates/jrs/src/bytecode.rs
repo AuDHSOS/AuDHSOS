@@ -1088,11 +1088,23 @@ impl RegisterLowerer {
     fn instantiate_global_declarations(&mut self, body: &[Stmt]) -> Option<()> {
         use crate::engine::bytecode::Instruction;
         let mut variables = Vec::new();
+        // 16.1.7 step 3 checks every lexically declared name of the Script
+        // before step 16 creates any of them, so a Script that clashes leaves
+        // the Realm as it found it.
+        let mut lexical: Vec<(String, bool)> = Vec::new();
         for statement in body {
-            // A lexical declaration at the top level is not lowered yet, and
-            // neither is a Script that holds one.
-            if matches!(statement, Stmt::Declare(_)) {
-                return None;
+            if let Stmt::Declare(bindings) = statement {
+                for (pattern, mutable, _) in bindings {
+                    let mut bound = Vec::new();
+                    pattern.names(&mut bound);
+                    for name in bound {
+                        if lexical.iter().any(|(taken, _)| *taken == name) {
+                            return None;
+                        }
+                        lexical.push((name, *mutable));
+                    }
+                }
+                continue;
             }
             var_names(statement, &mut variables);
         }
@@ -1118,6 +1130,13 @@ impl RegisterLowerer {
             .collect::<Option<_>>()?;
         // Every name is verified before any binding is created, so a Script
         // that conflicts leaves the Realm as it found it.
+        let lexical_names: Vec<u16> = lexical
+            .iter()
+            .map(|(name, _)| self.name_constant(name))
+            .collect::<Option<_>>()?;
+        for name in &lexical_names {
+            self.code.emit(Instruction::VerifyGlobalLexical(*name));
+        }
         for name in &variable_names {
             self.code.emit(Instruction::VerifyGlobalVar(*name));
         }
@@ -1132,6 +1151,40 @@ impl RegisterLowerer {
         for name in &variable_names {
             self.code.emit(Instruction::DeclareGlobalVar(*name));
         }
+        for (constant, (_, mutable)) in lexical_names.iter().zip(&lexical) {
+            self.code.emit(Instruction::DeclareGlobalLexical {
+                name: *constant,
+                mutable: *mutable,
+            });
+        }
+        Some(())
+    }
+
+    /// Gives a lexical binding of a Realm Script the value its declaration
+    /// names (9.1.1.4.4).
+    ///
+    /// 16.1.7 created the binding before the Script ran, so this only writes
+    /// it. A declaration without an initializer writes undefined, which is
+    /// what `let x;` binds.
+    fn initialize_global_lexical(
+        &mut self,
+        pattern: &parser::BindingPattern,
+        initializer: Option<&Expr>,
+    ) -> Option<()> {
+        use crate::engine::bytecode::Instruction;
+        let name = pattern.identifier()?;
+        let value_type = if let Some(initializer) = initializer {
+            self.lower(initializer)?
+        } else {
+            self.code.emit(Instruction::LdaUndefined);
+            RegisterType::Undefined
+        };
+        let constant = self.name_constant(name)?;
+        self.code
+            .emit(Instruction::InitializeGlobalLexical(constant));
+        // Every later Script of this Realm reads the name from the
+        // [[DeclarativeRecord]], so the value is no longer only this one's.
+        self.escape(&[value_type]);
         Some(())
     }
 
@@ -2137,14 +2190,14 @@ impl RegisterLowerer {
             }
         }
         child.prepare_var_bindings(&function.body)?;
-        child.infer_binding_type_hints(&function.body)?;
+        child.infer_binding_type_hints(&function.body);
         for name in captured_names {
             child.capture_binding(name)?;
         }
         Some((child, self_register))
     }
 
-    fn infer_binding_type_hints(&mut self, body: &[Stmt]) -> Option<()> {
+    fn infer_binding_type_hints(&mut self, body: &[Stmt]) {
         let mut bindings = self.bindings.clone();
         for statement in body {
             let Stmt::Declare(declarations) = statement else {
@@ -2162,12 +2215,17 @@ impl RegisterLowerer {
                 } else {
                     RegisterType::Undefined
                 };
-                bindings.get_mut(name)?.value_type = Some(value_type);
+                // A lexical declaration of a Realm Script binds on the
+                // [[DeclarativeRecord]] and not here, so there is no binding
+                // of this lowering to give a type to.
+                let Some(binding) = bindings.get_mut(name) else {
+                    continue;
+                };
+                binding.value_type = Some(value_type);
                 self.binding_type_hints
                     .insert(String::from(name), value_type);
             }
         }
-        Some(())
     }
 
     fn context_slot_counts(&self) -> Option<Vec<u16>> {
@@ -7208,15 +7266,24 @@ fn register_script_features(body: &[Stmt], realm: bool) -> Option<(bool, bool)> 
     }
     for statement in body {
         match statement {
-            Stmt::Declare(bindings) if !saw_expression && !realm => {
-                saw_declaration = true;
-                let mut names = BTreeSet::new();
-                for (pattern, _, _) in bindings {
-                    let mut bound = Vec::new();
-                    pattern.names(&mut bound);
-                    for name in bound {
-                        if !names.insert(name) {
-                            return None;
+            // 16.1.7 puts a lexical declaration of a Realm Script on the
+            // [[DeclarativeRecord]] of the Global Environment Record, which
+            // outlives the Script, so it is no binding of this lowering and
+            // needs none of the checks one of a Script without a Realm needs.
+            Stmt::Declare(bindings) => {
+                if !realm {
+                    if saw_expression {
+                        return None;
+                    }
+                    saw_declaration = true;
+                    let mut names = BTreeSet::new();
+                    for (pattern, _, _) in bindings {
+                        let mut bound = Vec::new();
+                        pattern.names(&mut bound);
+                        for name in bound {
+                            if !names.insert(name) {
+                                return None;
+                            }
                         }
                     }
                 }
@@ -7323,7 +7390,7 @@ fn prepare_register_bindings(
         }
     }
     lowerer.prepare_var_bindings(body)?;
-    lowerer.infer_binding_type_hints(body)?;
+    lowerer.infer_binding_type_hints(body);
     if saw_function {
         for statement in body {
             if let Stmt::Function(name, function) = statement {
@@ -7385,11 +7452,20 @@ fn lower_register_script(
                     .emit(crate::engine::bytecode::Instruction::Ldar(result_register));
             }
             Stmt::Declare(bindings) => {
-                for (pattern, _, initializer) in bindings {
-                    if let Some(initializer) = initializer {
-                        lowerer.initialize_pattern(pattern, initializer)?;
-                    } else {
-                        lowerer.initialize(pattern.identifier()?, None)?;
+                if realm {
+                    // 9.1.1.4.4 gives the binding 16.1.7 created its value
+                    // where the declaration stands, and a read of it before
+                    // that is the ReferenceError of its temporal dead zone.
+                    for (pattern, _, initializer) in bindings {
+                        lowerer.initialize_global_lexical(pattern, initializer.as_ref())?;
+                    }
+                } else {
+                    for (pattern, _, initializer) in bindings {
+                        if let Some(initializer) = initializer {
+                            lowerer.initialize_pattern(pattern, initializer)?;
+                        } else {
+                            lowerer.initialize(pattern.identifier()?, None)?;
+                        }
                     }
                 }
                 lowerer

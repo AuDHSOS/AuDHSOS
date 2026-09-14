@@ -195,6 +195,24 @@ pub enum Instruction {
     /// `CreateGlobalFunctionBinding(strings[index], acc, false)` of 9.1.1.4.17,
     /// which step 17 of 16.1.7 performs with the function object it made.
     DeclareGlobalFunction(u16),
+    /// Step 3 of 16.1.7 for one lexically declared name: a lexical
+    /// declaration of the same name in this Realm, or a restricted global
+    /// property, is a `SyntaxError`.
+    VerifyGlobalLexical(u16),
+    /// `CreateMutableBinding` or `CreateImmutableBinding` of 9.1.1.4.2 and
+    /// 9.1.1.4.3, which step 16 of 16.1.7 performs on the
+    /// `[[DeclarativeRecord]]`. The binding has no value until
+    /// [`Instruction::InitializeGlobalLexical`] gives it one, and a read of it
+    /// before that is the `ReferenceError` of its temporal dead zone.
+    DeclareGlobalLexical {
+        /// Name index in the heap-independent UTF-16 constant pool.
+        name: u16,
+        /// Whether a later assignment may write it, which `const` withholds.
+        mutable: bool,
+    },
+    /// `InitializeBinding(strings[index], acc)` of 9.1.1.4.4, which the
+    /// declaration performs where it stands.
+    InitializeGlobalLexical(u16),
     /// `acc = undefined`
     LdaUndefined,
     /// `acc = null`
@@ -794,7 +812,10 @@ impl BytecodeFunction {
             | Instruction::VerifyGlobalVar(index)
             | Instruction::DeclareGlobalVar(index)
             | Instruction::VerifyGlobalFunction(index)
-            | Instruction::DeclareGlobalFunction(index) => {
+            | Instruction::VerifyGlobalLexical(index)
+            | Instruction::InitializeGlobalLexical(index)
+            | Instruction::DeclareGlobalFunction(index)
+            | Instruction::DeclareGlobalLexical { name: index, .. } => {
                 if usize::from(index) >= self.string_constants.len() {
                     return Err(VerificationError::StringConstantOutOfBounds { pc, index });
                 }

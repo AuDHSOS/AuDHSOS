@@ -13,12 +13,11 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
 
     // The two paths hold separate object models, so a Script the lowering does
     // not take is refused instead of running on the stack path.
-    for source in ["let x=1", "{ let z = 3 }"] {
-        assert!(
-            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
-            "{source}"
-        );
-    }
+    let source = "{ let z = 3 }";
+    assert!(
+        matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+        "{source}"
+    );
 
     // The refusal is not a language error, so it leaves the realm usable.
     assert_eq!(realm.evaluate("2*3")?, Value::Number(6.0));
@@ -104,7 +103,7 @@ fn a_realm_on_the_engine_backend_evaluates_and_refuses_without_poisoning() -> Re
     // A Script the lowering does not take is refused before anything runs, so
     // the realm stays usable.
     assert!(matches!(
-        realm.evaluate("let x=1"),
+        realm.evaluate("{ let z = 3 }"),
         Err(Error::Unsupported { .. })
     ));
     assert_eq!(realm.evaluate("1+1")?, Value::Number(2.0));
@@ -444,6 +443,61 @@ fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Erro
             .run(&program, &mut SilentHost);
         assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{source}");
     }
+    Ok(())
+}
+
+#[test]
+fn a_lexical_declaration_of_a_script_binds_on_the_realm() -> Result<(), Error> {
+    // 16.1.7 puts a `let` or a `const` of a Script on the
+    // [[DeclarativeRecord]] of the Global Environment Record, not on the
+    // global object, and the binding outlives the Script that made it.
+    differential_scripts(&["let x = 1;", "x + 1"])?;
+    differential_scripts(&["const y = 2;", "y * 3"])?;
+    differential_scripts(&["let a = 1; let b = 2;", "a + b"])?;
+    differential_scripts(&["let u;", "typeof u"])?;
+    differential_scripts(&["let s = 'a';", "s + 'b'"])?;
+    // 16.1.7 refuses a name the Realm already binds. Both paths answer the
+    // same SyntaxError beside the value rather than throwing it, which the
+    // comparison above does not cover.
+    for scripts in [
+        ["let d = 1;", "let d = 2;"],
+        ["let e = 1;", "var e = 2;"],
+        ["var f = 1;", "let f = 2;"],
+    ] {
+        let outcome = |backend| -> Result<String, Error> {
+            let mut host = SilentHost;
+            let mut realm = Realm::with_backend(Limits::default(), &mut host, backend)?;
+            let mut last = Ok(Value::Undefined);
+            for source in scripts {
+                last = realm.evaluate(source);
+            }
+            Ok(format!("{last:?}"))
+        };
+        assert_eq!(
+            outcome(Backend::Engine)?,
+            outcome(Backend::Stack)?,
+            "{scripts:?}"
+        );
+    }
+    // A `var` still becomes a property of the global object, and the two
+    // kinds of binding live beside one another.
+    differential_scripts(&["var v = 1; let w = 2;", "v + w"])?;
+    // 9.1.1.4.5 refuses to write a binding `const` made immutable. Both paths
+    // answer a TypeError, and they answer it differently: the engine throws
+    // the Object the specification throws, which the boundary cannot carry to
+    // the embedding, and the stack backend reports the error beside the value
+    // instead. So this compares what each one does, not how it is carried.
+    let mut host = SilentHost;
+    let mut engine = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    engine.evaluate("const c = 1;")?;
+    assert!(matches!(
+        engine.evaluate("c = 2"),
+        Err(Error::Thrown { .. })
+    ));
+    let mut host = SilentHost;
+    let mut stack = Realm::with_backend(Limits::default(), &mut host, Backend::Stack)?;
+    stack.evaluate("const c = 1;")?;
+    assert!(matches!(stack.evaluate("c = 2"), Err(Error::Type { .. })));
     Ok(())
 }
 
