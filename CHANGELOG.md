@@ -710,6 +710,22 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `audhsos-ssh`: a global request that arrives while a key exchange runs
+  is answered after the new keys are in use. `SSH_MSG_REQUEST_FAILURE` is
+  82, which RFC 4253, section 9, keeps off the wire between
+  `SSH_MSG_KEXINIT` and `SSH_MSG_NEWKEYS`; the client sent it at once and
+  a peer that enforces the rule would have disconnected. `Rekey::may_send`
+  existed for this and was called nowhere.
+
+- `user-programs`: `socket::Stream::connect` and `socket::Listener::accept`
+  close what they made before they answer an error. A connect that was
+  refused or ran out of time left the window mapped and the socket open in
+  `server-net`, so the next connect at the same address was refused by the
+  kernel for a range the program believed it had given up; an accept that
+  failed took the only record of the listening socket with it and the port
+  stayed taken. `Stream::close` now takes the window back even where the
+  close request never reached the server.
+
 - `audhsos-abi`: `Error::Unavailable` carries a message that fits every
   caller. It read "the hardware source would not deliver inside its retry
   bound", which describes `random_bytes` alone, so a boot where the file

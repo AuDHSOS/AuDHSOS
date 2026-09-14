@@ -18,7 +18,10 @@
 //! A global request the peer makes of the connection (RFC 4254, section
 //! 4) is answered here and not acted on: this client offers nothing a peer
 //! can ask of it, so the answer is `SSH_MSG_REQUEST_FAILURE` where a reply
-//! was asked for and nothing where it was not.
+//! was asked for and nothing where it was not. An answer the client owes
+//! while a key exchange runs is sent once the new keys are in use, because
+//! RFC 4253, section 9, leaves only the transport layer on the wire until
+//! then.
 //!
 //! The socket under it and the program around it are outside this crate by
 //! design: `server-net` answers the socket protocol and `app-ssh` of
@@ -244,6 +247,11 @@ struct Machine {
     pending: Option<Pending>,
     /// Whether this side has sent `SSH_MSG_CHANNEL_EOF`.
     finished: bool,
+    /// How many `SSH_MSG_REQUEST_FAILURE` this side owes a peer that asked
+    /// for a reply while a key exchange ran, which RFC 4253, section 9,
+    /// keeps off the wire until the new keys are in use. A peer that asks
+    /// more than 255 times inside one exchange is answered 255 times.
+    owed_failures: u8,
 }
 
 /// One client connection.
@@ -319,6 +327,7 @@ impl<'a, R: Rng, T: Trust> Connection<'a, R, T> {
                 channel: Channel::new(CHANNEL, config.window, config.max_packet),
                 pending: None,
                 finished: false,
+                owed_failures: 0,
             },
             incoming,
             incoming_len: 0,
@@ -486,6 +495,7 @@ impl<'a, R: Rng, T: Trust> Connection<'a, R, T> {
             if self.machine.pending.is_some() {
                 return Ok(self.wants());
             }
+            self.answer_owed_requests()?;
             if self.machine.state == State::Session && self.machine.rekey.due(now) {
                 self.machine.rekey.ask()?;
                 self.send_kexinit()?;
@@ -811,8 +821,25 @@ impl<'a, R: Rng, T: Trust> Connection<'a, R, T> {
         if !wants_reply {
             return Ok(());
         }
-        let out = [msg::REQUEST_FAILURE];
-        self.emit(&out, out.len())
+        // `SSH_MSG_REQUEST_FAILURE` is 82, so section 9 keeps it off the
+        // wire while a key exchange runs; the answer is owed and
+        // `answer_owed_requests` sends it once the new keys are in use.
+        if self.machine.rekey.may_send(msg::REQUEST_FAILURE) {
+            let out = [msg::REQUEST_FAILURE];
+            return self.emit(&out, out.len());
+        }
+        self.machine.owed_failures = self.machine.owed_failures.saturating_add(1);
+        Ok(())
+    }
+
+    /// Sends the answers a key exchange held back.
+    fn answer_owed_requests(&mut self) -> Result<(), SshError> {
+        while self.machine.owed_failures > 0 && self.machine.rekey.may_send(msg::REQUEST_FAILURE) {
+            let out = [msg::REQUEST_FAILURE];
+            self.emit(&out, out.len())?;
+            self.machine.owed_failures = self.machine.owed_failures.saturating_sub(1);
+        }
+        Ok(())
     }
 
     /// What arrives while the command runs.

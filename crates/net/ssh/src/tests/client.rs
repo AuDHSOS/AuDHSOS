@@ -118,12 +118,27 @@ struct Doing {
     rekeys: bool,
     /// Refuse the client's key.
     refuses: bool,
-    /// Send a global request once authentication is through, the way
-    /// OpenSSH sends `hostkeys-00@openssh.com`, and whether it asks for a
-    /// reply.
-    global_request: Option<bool>,
+    /// When the server makes a global request of the connection.
+    global_request: Asking,
     /// The output is owed, because a re-exchange is running.
     deferred: bool,
+}
+
+/// When the server sends `SSH_MSG_GLOBAL_REQUEST`, and whether it asks for
+/// a reply.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Asking {
+    /// It sends none.
+    #[default]
+    Nothing,
+    /// Once authentication is through, the way OpenSSH sends
+    /// `hostkeys-00@openssh.com`, asking for no reply.
+    AfterAuth,
+    /// The same, asking for a reply.
+    AfterAuthWithReply,
+    /// While the re-exchange runs, asking for a reply, so that the answer
+    /// is one section 9 keeps off the wire.
+    InRekey,
 }
 
 impl Server {
@@ -373,13 +388,20 @@ impl Server {
             return;
         }
         self.send(&[msg::USERAUTH_SUCCESS]);
-        if let Some(wants_reply) = self.doing.global_request {
-            let mut out = vec![msg::GLOBAL_REQUEST];
-            out.extend_from_slice(&ssh_string(b"hostkeys-00@openssh.com"));
-            out.push(u8::from(wants_reply));
-            out.extend_from_slice(&ssh_string(b"a key blob this client does not read"));
-            self.send(&out);
+        match self.doing.global_request {
+            Asking::AfterAuth => self.request(false),
+            Asking::AfterAuthWithReply => self.request(true),
+            Asking::Nothing | Asking::InRekey => {}
         }
+    }
+
+    /// One `SSH_MSG_GLOBAL_REQUEST` of a name no client recognises.
+    fn request(&mut self, wants_reply: bool) {
+        let mut out = vec![msg::GLOBAL_REQUEST];
+        out.extend_from_slice(&ssh_string(b"hostkeys-00@openssh.com"));
+        out.push(u8::from(wants_reply));
+        out.extend_from_slice(&ssh_string(b"a key blob this client does not read"));
+        self.send(&out);
     }
 
     /// The channel open, confirmed.
@@ -427,6 +449,9 @@ impl Server {
             self.kexinit = payload.get(..len).unwrap_or_default().to_vec();
             let kexinit = self.kexinit.clone();
             self.send(&kexinit);
+            if self.doing.global_request == Asking::InRekey {
+                self.request(true);
+            }
             return;
         }
         self.send_output();
@@ -759,7 +784,7 @@ fn a_global_request_that_wants_no_reply_is_ignored_and_the_command_runs() {
     let key = ClientKey::new(CLIENT_SECRET);
     let trust = rule();
     let mut server = Server::new();
-    server.doing.global_request = Some(false);
+    server.doing.global_request = Asking::AfterAuth;
 
     let result = drive(&config(&key, &trust), server, &[]).expect("the handshake completes");
 
@@ -773,7 +798,7 @@ fn a_global_request_that_wants_a_reply_is_refused_and_the_command_runs() {
     let key = ClientKey::new(CLIENT_SECRET);
     let trust = rule();
     let mut server = Server::new();
-    server.doing.global_request = Some(true);
+    server.doing.global_request = Asking::AfterAuthWithReply;
 
     let result = drive(&config(&key, &trust), server, &[]).expect("the handshake completes");
 
@@ -783,4 +808,23 @@ fn a_global_request_that_wants_a_reply_is_refused_and_the_command_runs() {
         result.answered,
         "the client answered SSH_MSG_REQUEST_FAILURE"
     );
+}
+
+#[test]
+fn a_global_request_inside_a_re_exchange_is_answered_after_the_new_keys() {
+    // The server reads the packets the client sends in order and panics on
+    // one that does not belong where it stands, so a client that answered
+    // between its `SSH_MSG_KEXINIT` and `SSH_MSG_NEWKEYS` ends this test
+    // there (RFC 4253, section 9).
+    let key = ClientKey::new(CLIENT_SECRET);
+    let trust = rule();
+    let mut server = Server::new();
+    server.doing.rekeys = true;
+    server.doing.global_request = Asking::InRekey;
+
+    let result = drive(&config(&key, &trust), server, &[]).expect("the handshake completes");
+
+    assert_eq!(result.output, OUTPUT);
+    assert_eq!(result.status, Some(0));
+    assert!(result.answered, "the answer was owed and then sent");
 }

@@ -3154,6 +3154,12 @@ The handshake against an OpenSSH is the acceptance of the step and is
   read: one that wants no reply is ignored, one that wants a reply is
   answered `SSH_MSG_REQUEST_FAILURE`, and the command runs either way.
   OpenSSH sends `hostkeys-00@openssh.com` as such a request.
+- A global request that arrives while a re-exchange runs is answered
+  after the new keys are in use, not between `SSH_MSG_KEXINIT` and
+  `SSH_MSG_NEWKEYS` where RFC 4253, section 9, allows the transport layer
+  alone. The server of the test panics on a packet that does not belong
+  where it stands, so a client that answered too early ends the test
+  there.
 
 ### 6.6.80 The handshake against an OpenSSH (`app-ssh`, `xtask`, QEMU)
 
