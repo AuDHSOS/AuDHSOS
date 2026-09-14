@@ -106,6 +106,8 @@ fn walk_definition(arena: &Arena, definition: Definition) {
                 walk(arena, filter, 0);
             }
         }
+        // A `DROP` names a table or an index and holds no expression.
+        Definition::Drop(_) => {}
     }
 }
 
