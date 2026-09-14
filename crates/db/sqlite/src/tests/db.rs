@@ -106,18 +106,6 @@ fn every_statement_answers_what_the_c_library_answers() {
 }
 
 #[test]
-fn a_with_term_written_recursive_is_refused() {
-    use crate::db::Error;
-    let database = Database::open(super::SMALL).unwrap();
-    assert_eq!(
-        database
-            .query(b"WITH RECURSIVE x(i) AS (SELECT 1) SELECT * FROM x")
-            .unwrap_err(),
-        Error::Unsupported
-    );
-}
-
-#[test]
 fn a_file_that_is_not_a_database_is_refused_as_one() {
     use crate::db::Error;
     use crate::error;

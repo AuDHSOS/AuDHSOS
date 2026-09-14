@@ -3035,3 +3035,95 @@ fn a_row_a_right_join_answered_is_matched_for_the_join_after_it() {
         ]
     );
 }
+
+#[test]
+fn a_with_term_that_reads_itself_is_answered_row_by_row() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1),(2)").unwrap();
+    // A `WITH` clause in front of an `INSERT` names the term the rows
+    // come from.
+    writer
+        .run(
+            b"WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<4) \
+              INSERT INTO t SELECT x FROM c",
+        )
+        .unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    let text = |sql: &[u8]| match database.query(sql).unwrap().rows.first() {
+        Some(row) => row.first().cloned(),
+        None => None,
+    };
+    assert_eq!(
+        text(b"SELECT group_concat(a) FROM t"),
+        Some(Value::Text(b"1,2,1,2,3,4".to_vec()))
+    );
+    // The rows stand in the order the walk took them off the front, so
+    // the cores after the recursive one answer behind the ones before
+    // it.
+    for (sql, want) in [
+        (
+            b"WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<4) \
+              SELECT group_concat(x) FROM c"
+                .as_slice(),
+            b"1,2,3,4".as_slice(),
+        ),
+        // `UNION` answers a row once, so the two rows the walk starts
+        // from are one row.
+        (
+            b"WITH RECURSIVE c(x) AS (VALUES(1),(1) UNION SELECT x+1 FROM c WHERE x<4) \
+              SELECT group_concat(x) FROM c",
+            b"1,2,3,4",
+        ),
+        // Two cores stand in front of the recursive one.
+        (
+            b"WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT 2 UNION ALL \
+              SELECT x+10 FROM c WHERE x<5) SELECT group_concat(x) FROM c",
+            b"1,2,11,12",
+        ),
+        // A term of a `WITH` written `RECURSIVE` that reads nothing of
+        // its own is answered once, like any other.
+        (
+            b"WITH RECURSIVE c(x) AS (SELECT a FROM t WHERE a<2) SELECT group_concat(x) FROM c",
+            b"1,1",
+        ),
+    ] {
+        assert_eq!(text(sql), Some(Value::Text(want.to_vec())), "{sql:?}");
+    }
+}
+
+#[test]
+fn what_a_with_term_that_reads_itself_refuses() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    for sql in [
+        // The first core reads the term, so the walk starts from
+        // nothing.
+        b"WITH RECURSIVE c(x) AS (SELECT x FROM c) SELECT * FROM c".as_slice(),
+        // An operator that is neither `UNION` nor `UNION ALL`.
+        b"WITH RECURSIVE c(x) AS (VALUES(1) EXCEPT SELECT x FROM c) SELECT * FROM c",
+        b"WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x FROM c INTERSECT VALUES(1)) \
+          SELECT * FROM c",
+        // The recursive core answers a different number of columns
+        // from the cores in front of it.
+        b"WITH RECURSIVE c(x,y) AS (SELECT 1,2 UNION ALL SELECT x FROM c) SELECT * FROM c",
+        b"WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT 1,2 UNION ALL SELECT x FROM c) \
+          SELECT * FROM c",
+    ] {
+        assert!(database.query(sql).is_err(), "{sql:?}");
+    }
+    // A term that does not stop is stopped by the count this crate
+    // answers rows into memory up to.
+    assert_eq!(
+        database.query(
+            b"WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c) SELECT * FROM c LIMIT 3"
+        ),
+        Err(crate::db::Error::Recursion)
+    );
+}

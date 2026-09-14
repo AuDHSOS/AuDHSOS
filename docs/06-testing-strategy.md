@@ -4287,7 +4287,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - The block of an `else` is read past and a case whose name repeats is
   dropped, because the interpreter runs one arm of a conditional, which
   D-192 and D-189 record.
-- 868 pass, 9 answer differently and 14 487 are refused or stopped.
+- 873 pass, 9 answer differently and 14 482 are refused or stopped.
   Document 16, section 16.23 groups the nine. Earlier runs answered
   14, then 27, then 17, then 13 differently; sixteen were defects,
   which D-181, D-184, D-189 and D-197 record and twenty-eight cases of
@@ -4465,6 +4465,24 @@ D-197, document 16 step Q9.
 - The rows a second `RIGHT JOIN` answers: `t2` holds nothing, so the
   first join answers the two `t3` rows, each matches the one `t4` row,
   and the second join adds no row of its own.
+
+### 6.6.128 A `WITH` term that reads itself (`db-sqlite`)
+
+D-198, document 16 step Q8.
+
+- The rows the walk answers, in the order it took them off the front:
+  one core in front of the recursive one, two cores in front of it,
+  and a `UNION` in front of it, which answers a row once.
+- A `WITH` clause in front of an `INSERT` names the term the rows come
+  from.
+- A term of a `WITH` written `RECURSIVE` that reads nothing of its own
+  is answered once, like any other.
+- The refusals: a term whose first core reads it, a recursive core
+  under `EXCEPT` or `INTERSECT`, and a recursive core that answers a
+  different number of columns from the cores in front of it.
+- A term that does not stop is refused at `RECURSION_ROWS` rows, which
+  is where this crate answers rows into memory rather than handing one
+  row on as SQLite does.
 
 ## 6.7 CI pipeline
 

@@ -93,8 +93,12 @@ pub enum Error {
     /// A `COMMIT` or a `ROLLBACK` on a connection with no transaction
     /// open.
     NoTransaction,
+    /// A `WITH` term that reads itself and answered more rows than
+    /// `RECURSION_ROWS` allows.
+    Recursion,
     /// A shape of statement this engine does not answer yet: a `WITH`
-    /// written `RECURSIVE`, a table-valued function.
+    /// term that reads itself under an operator other than `UNION`, a
+    /// table-valued function.
     Unsupported,
 }
 
@@ -168,7 +172,7 @@ struct Column {
 /// A table of the schema, a statement written inside the `FROM` and a
 /// `WITH` term answer the same question here, so nothing below this
 /// asks which of the three it is reading.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct Shape {
     /// The columns, in the order the side answers them.
     columns: Vec<Column>,
@@ -224,7 +228,7 @@ impl Shape {
 
 /// What a statement answered, and what a comparison against each of its
 /// columns does.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct Answered {
     /// The names and the rows.
     answer: Answer,
@@ -249,6 +253,15 @@ struct Scope<'a> {
 /// How many views deep a statement is answered, which is what
 /// `SQLITE_MAX_VIEW_DEPTH` bounds a view that names itself by.
 const VIEW_DEPTH: u32 = 32;
+
+/// How many rows a `WITH` term that reads itself may answer.
+///
+/// SQLite hands one row on as it answers it, so a term that does not
+/// stop is stopped by the `LIMIT` of the statement that reads it. This
+/// crate answers the rows of a term into memory before the statement
+/// that reads them, which D2 records, so a term that does not stop is
+/// stopped by this count instead.
+const RECURSION_ROWS: usize = 100_000;
 
 /// What a view puts in the place of a table: the columns it answers,
 /// the rows its statement answered, and the name it is known by.
@@ -404,7 +417,7 @@ struct View {
 }
 
 /// What a statement answered.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Answer {
     /// The name of each column, as SQLite would name it.
     pub names: Vec<Vec<u8>>,
@@ -1184,31 +1197,122 @@ impl<'a> Database<'a> {
     ) -> Result<Vec<(Vec<u8>, Answered)>, Error> {
         let mut out = scope.terms.to_vec();
         for cte in arena.ctes(select.ctes) {
-            if select.recursive {
-                // A term that reads itself is a later step.
-                return Err(Error::Unsupported);
-            }
+            let name = dequote(cte.name.text(sql));
             let mine = Scope {
                 terms: &out,
                 outer: scope.outer,
                 views: scope.views,
             };
-            let mut answered = self.statement(arena, cte.select, sql, mine)?;
-            let written = arena.names(cte.columns);
-            if !written.is_empty() {
-                if written.len() != answered.answer.names.len() {
-                    return Err(Error::Names);
-                }
-                for (column, span) in answered.shape.columns.iter_mut().zip(written) {
-                    column.name = dequote(span.text(sql));
-                }
-                for (name, span) in answered.answer.names.iter_mut().zip(written) {
-                    *name = dequote(span.text(sql));
-                }
-            }
-            out.push((dequote(cte.name.text(sql)), answered));
+            let answered = if select.recursive {
+                self.recursive(arena, cte, &name, sql, mine)?
+            } else {
+                None
+            };
+            let mut answered = match answered {
+                Some(answered) => answered,
+                None => self.statement(arena, cte.select, sql, mine)?,
+            };
+            renamed(arena, cte.columns, sql, &mut answered)?;
+            out.push((name, answered));
         }
         Ok(out)
+    }
+
+    /// A `WITH` term that reads itself, which is
+    /// `generateWithRecursiveQuery`: the cores before the one that
+    /// reads the term answer the rows the walk starts from, and each
+    /// row the walk takes off the front is what the cores after it
+    /// read, so the rows those answer stand behind it. The walk ends
+    /// where the rows do.
+    ///
+    /// The term answers nothing where no core of it reads the name,
+    /// which is a `WITH` written `RECURSIVE` whose terms read nothing
+    /// of their own. A term of `n` rows costs what its recursive cores
+    /// cost, `n` times.
+    fn recursive(
+        &self,
+        arena: &Arena,
+        cte: &crate::ast::Cte,
+        name: &[u8],
+        sql: &[u8],
+        scope: Scope<'_>,
+    ) -> Result<Option<Answered>, Error> {
+        let links = chain(arena, cte.select);
+        let Some(first) = links
+            .iter()
+            .position(|link| reads(arena, &link.core, sql, name))
+        else {
+            return Ok(None);
+        };
+        // `sqlite3SelectNew` refuses a term whose first core reads it,
+        // because the walk would then start from nothing.
+        let Some(split) = before(&links, first) else {
+            return Err(Error::Unsupported);
+        };
+        // `multiSelect` refuses a recursive core under an operator that
+        // is neither `UNION` nor `UNION ALL`.
+        if links.iter().skip(first).any(|link| {
+            link.operator
+                .is_some_and(|operator| !matches!(operator, Compound::Union | Compound::UnionAll))
+        }) || !matches!(split, Compound::Union | Compound::UnionAll)
+        {
+            return Err(Error::Unsupported);
+        }
+        let mut answered = Answered::default();
+        for (at, link) in links.get(..first).unwrap_or_default().iter().enumerate() {
+            let mine = self.core(arena, link.id, sql, false, scope)?;
+            let Some(operator) = before(&links, at) else {
+                answered = mine;
+                continue;
+            };
+            if answered.answer.names.len() != mine.answer.names.len() {
+                return Err(Error::Compound);
+            }
+            let collations = self.collations(&answered.shape);
+            combine(operator, &mut answered.answer, mine.answer, &collations);
+        }
+        renamed(arena, cte.columns, sql, &mut answered)?;
+        let collations = self.collations(&answered.shape);
+        let width = answered.answer.names.len();
+        let mut rows: Vec<Vec<Value>> = Vec::new();
+        for row in core::mem::take(&mut answered.answer.rows) {
+            add(&mut rows, row, split == Compound::Union, &collations);
+        }
+        let mut at = 0usize;
+        while let Some(row) = rows.get(at).cloned() {
+            at = at.saturating_add(1);
+            let mut terms = scope.terms.to_vec();
+            terms.push((
+                name.to_vec(),
+                Answered {
+                    answer: Answer {
+                        names: answered.answer.names.clone(),
+                        rows: alloc::vec![row],
+                    },
+                    shape: answered.shape.clone(),
+                },
+            ));
+            let mine = Scope {
+                terms: &terms,
+                outer: scope.outer,
+                views: scope.views,
+            };
+            for (step, link) in links.iter().enumerate().skip(first) {
+                let answer = self.core(arena, link.id, sql, false, mine)?;
+                if answer.answer.names.len() != width {
+                    return Err(Error::Compound);
+                }
+                let once = before(&links, step) == Some(Compound::Union);
+                for new in answer.answer.rows {
+                    add(&mut rows, new, once, &collations);
+                }
+                if rows.len() > RECURSION_ROWS {
+                    return Err(Error::Recursion);
+                }
+            }
+        }
+        answered.answer.rows = rows;
+        Ok(Some(answered))
     }
 
     /// Walks the rows a statement reads, once, and hands each to `each`.
@@ -2664,6 +2768,87 @@ fn combine(operator: Compound, left: &mut Answer, right: Answer, collations: &[C
         left.rows.extend(theirs);
         arrange(&mut left.rows, collations);
     }
+}
+
+/// One core of a chain, with the operator that stands between it and
+/// the core after it.
+#[derive(Clone, Copy)]
+struct Link {
+    /// Where the core is.
+    id: SelectId,
+    /// The core.
+    core: Select,
+    /// The operator after it, where a core follows.
+    operator: Option<Compound>,
+}
+
+/// The cores of a statement, each with the operator after it.
+fn chain(arena: &Arena, id: SelectId) -> Vec<Link> {
+    let mut links = Vec::new();
+    let mut at = Some(id);
+    while let Some((id, core)) = at.and_then(|id| arena.select(id).map(|core| (id, core))) {
+        links.push(Link {
+            id,
+            core,
+            operator: core.compound.map(|(operator, _)| operator),
+        });
+        at = core.compound.map(|(_, next)| next);
+    }
+    links
+}
+
+/// The operator that stands in front of the core at `at`.
+fn before(links: &[Link], at: usize) -> Option<Compound> {
+    at.checked_sub(1)
+        .and_then(|at| links.get(at))
+        .and_then(|link| link.operator)
+}
+
+/// Whether a core reads a table of this name in its `FROM`.
+///
+/// A name inside a statement of the `FROM` is not read, which is what
+/// `sqlite3WithPush` refuses as a recursive reference in a subquery.
+fn reads(arena: &Arena, core: &Select, sql: &[u8], name: &[u8]) -> bool {
+    arena.sources(core.from).iter().any(|source| {
+        matches!(
+            source.kind,
+            SourceKind::Table { schema: None, name: written, .. }
+                if dequote(written.text(sql)).eq_ignore_ascii_case(name)
+        )
+    })
+}
+
+/// Puts the column names a `WITH` term writes over the ones its
+/// statement answers.
+fn renamed(
+    arena: &Arena,
+    columns: Range,
+    sql: &[u8],
+    answered: &mut Answered,
+) -> Result<(), Error> {
+    let written = arena.names(columns);
+    if written.is_empty() {
+        return Ok(());
+    }
+    if written.len() != answered.answer.names.len() {
+        return Err(Error::Names);
+    }
+    for (column, span) in answered.shape.columns.iter_mut().zip(written) {
+        column.name = dequote(span.text(sql));
+    }
+    for (name, span) in answered.answer.names.iter_mut().zip(written) {
+        *name = dequote(span.text(sql));
+    }
+    Ok(())
+}
+
+/// Puts one row behind the rows a recursive term has answered, unless
+/// `once` says a row those already hold stands for it.
+fn add(rows: &mut Vec<Vec<Value>>, row: Vec<Value>, once: bool, collations: &[Collation]) {
+    if once && rows.iter().any(|held| same(held, &row, collations)) {
+        return;
+    }
+    rows.push(row);
 }
 
 /// Sorts rows by every column and drops the ones another row already

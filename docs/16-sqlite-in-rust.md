@@ -120,7 +120,7 @@ Each rule is checkable, and each makes a later thing possible.
 | A `WHERE` that holds an indexed column equal to a value, which the walk reads out of the index | answered |
 | A statement inside a `FROM`, a `WITH` that is not `RECURSIVE` | answered |
 | `(SELECT ...)` as a value, `EXISTS`, `IN (SELECT ...)`, `IN table`, correlated or not | answered |
-| A `WITH` written `RECURSIVE`, a window clause, a table-valued function | refused by name |
+| A window clause, a table-valued function | refused by name |
 
 ### What the tests hold it to
 
@@ -666,7 +666,9 @@ Size: L.
    `DROP VIEW`, which D-195 records, and `DROP TABLE` and `DROP INDEX`,
    which D-191 records. `ALTER TABLE ... ADD COLUMN` is built, which
    D-196 records; `RENAME` is open.
-3. Subqueries, `WITH`, and the window clauses the parser refuses.
+3. Subqueries, `WITH`, and the window clauses the parser refuses. A
+   `WITH` term that reads itself is built, which D-198 records; the
+   window clauses are open.
 4. The functions that need a clock or a random source.
 
 ### Done when
@@ -678,7 +680,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 868 pass, 9 answer differently, and 14 487 name something the
+files, 873 pass, 9 answer differently, and 14 482 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.
