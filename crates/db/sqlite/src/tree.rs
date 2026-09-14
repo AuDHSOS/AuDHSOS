@@ -62,6 +62,9 @@ pub struct Pages {
     /// already held, in the order it opened them, which is the order the
     /// rollback journal holds their records in.
     journalled: Vec<u32>,
+    /// The first trunk page of the free list and how many pages lay on
+    /// it when the transaction began, which a rollback puts back.
+    list: (u32, u32),
     /// How many pages the free list holds, which the header holds at
     /// offset 36.
     freelist_count: u32,
@@ -148,6 +151,7 @@ impl Pages {
             freed: alloc::vec![false],
             origin: 1,
             journalled: Vec::new(),
+            list: (0, 0),
             freelist_count: 0,
             vacuum: false,
         })
@@ -515,6 +519,26 @@ impl Pages {
         self.freed.fill(false);
         self.journalled.clear();
         self.origin = self.count();
+        self.list = (self.freelist, self.freelist_count);
+    }
+
+    /// Every page the transaction opened put back as it was, the file
+    /// back to the length it had, and the free list back to the pages it
+    /// named, which is what playing the rollback journal back does.
+    ///
+    /// A rollback costs O(n) in the pages the transaction opened.
+    pub fn rollback(&mut self) {
+        for (slot, before) in self.held.iter_mut().zip(&self.before) {
+            if let Some(bytes) = before {
+                slot.clone_from(bytes);
+            }
+        }
+        self.held.truncate(size(u64::from(self.origin)));
+        (self.freelist, self.freelist_count) = self.list;
+        self.before.fill(None);
+        self.skipped.fill(None);
+        self.freed.fill(false);
+        self.journalled.clear();
     }
 
     /// Opens page `number` to write, which is `sqlite3PagerWrite`: what

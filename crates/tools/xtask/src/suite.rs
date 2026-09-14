@@ -216,12 +216,18 @@ pub(crate) fn cases(text: &str) -> Vec<Step> {
                     out.push(Step::Null(text.to_owned()));
                 }
             }
-            "execsql" | "db eval" => {
-                if let Some((sql, after)) = braced(rest) {
+            "execsql" | "db eval" => match braced(rest) {
+                Some((sql, after)) => {
                     rest = after;
                     out.push(Step::Setup(sql.to_owned()));
                 }
-            }
+                // Setup written as a quoted string carries a
+                // substitution the interpreter fills in, so the rows it
+                // writes are rows this harness cannot write. The file
+                // stops there rather than running its cases against a
+                // database that is short of them.
+                None => out.push(Step::Opaque),
+            },
             // A case that expects a refusal says so as a pair of a
             // code and a message, which this does not answer; the
             // block is read past so that the `execsql` inside it is

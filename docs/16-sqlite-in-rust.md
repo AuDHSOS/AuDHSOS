@@ -646,10 +646,11 @@ do for the page size, the encoding and the reserved tail.
 ## 16.22 Q8. The rest of the language
 
 Status: `CREATE TABLE`, `CREATE INDEX`, `DROP TABLE`, `DROP INDEX`,
-`PRAGMA`, `INSERT`, `DELETE` and `UPDATE` are run from their text and
-write the files the shell wrote; the rest is open.
-Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189
-and D-191.
+`PRAGMA`, `BEGIN`, `COMMIT`, `ROLLBACK`, `INSERT`, `DELETE` and
+`UPDATE` are run from their text and write the files the shell wrote;
+the rest is open.
+Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
+D-191 and D-193.
 Size: L.
 
 ### Does
@@ -674,8 +675,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
-test files that needs no TCL interpreter. Of 15 364 cases in 1 169
-files, 721 pass, 9 answer differently, and 14 634 name something the
+test files that needs no TCL interpreter. Of 15 364 cases in 1 171
+files, 763 pass, 9 answer differently, and 14 592 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.

@@ -101,6 +101,8 @@ pub enum Expected {
     Action,
     /// `ON`, in a `CREATE INDEX`.
     On,
+    /// `BEGIN`, `COMMIT`, `END` or `ROLLBACK`.
+    Transaction,
 }
 
 /// Where the parser stopped, and what it wanted there.
@@ -895,6 +897,30 @@ impl<'a> Parser<'a> {
                 self.ahead(1).map(|token| token.kind),
                 Some(Kind::Keyword(Keyword::Table))
             )
+    }
+
+    /// `BEGIN`, `COMMIT`, `END` or `ROLLBACK`, each with the words
+    /// SQLite lets stand beside it.
+    ///
+    /// `ROLLBACK TO` names a savepoint, which is a statement of its own
+    /// and not this one, so it is refused here rather than read as a
+    /// rollback of the whole transaction.
+    fn transaction(&mut self) -> Result<crate::ast::Transaction, Error> {
+        let read = if self.eat_keyword(Keyword::Begin) {
+            for word in [Keyword::Deferred, Keyword::Immediate, Keyword::Exclusive] {
+                if self.eat_keyword(word) {
+                    break;
+                }
+            }
+            crate::ast::Transaction::Begin
+        } else if self.eat_keyword(Keyword::Commit) || self.eat_keyword(Keyword::End) {
+            crate::ast::Transaction::Commit
+        } else {
+            self.expect_keyword(Keyword::Rollback, Expected::Transaction)?;
+            crate::ast::Transaction::Rollback
+        };
+        self.eat_keyword(Keyword::Transaction);
+        Ok(read)
     }
 
     /// What follows `DROP`: the word `TABLE` or `INDEX`, an optional
@@ -2250,6 +2276,21 @@ pub fn definition(sql: &[u8]) -> Result<(Arena, Definition), Error> {
 pub fn pragma(sql: &[u8]) -> Result<crate::ast::Pragma, Error> {
     let mut parser = Parser::new(sql);
     let read = parser.pragma()?;
+    parser.eat(Kind::Semi);
+    if let Some(token) = parser.peek() {
+        return Err(parser.error(Some(token), Expected::Eof));
+    }
+    Ok(read)
+}
+
+/// Reads one `BEGIN`, `COMMIT` or `ROLLBACK` out of `sql`.
+///
+/// # Errors
+///
+/// Where the statement bounds no transaction.
+pub fn transaction(sql: &[u8]) -> Result<crate::ast::Transaction, Error> {
+    let mut parser = Parser::new(sql);
+    let read = parser.transaction()?;
     parser.eat(Kind::Semi);
     if let Some(token) = parser.peek() {
         return Err(parser.error(Some(token), Expected::Eof));

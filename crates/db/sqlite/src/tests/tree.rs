@@ -2087,6 +2087,101 @@ fn a_statement_answers_how_many_rows_it_changed_where_the_pragma_says_so() {
 }
 
 #[test]
+fn a_transaction_writes_what_its_statements_write_and_counts_once() {
+    use crate::change::Writer;
+    use core::fmt::Write as _;
+    // The statements between a `BEGIN` and a `COMMIT` write the file
+    // the same statements write on their own; the change counter is
+    // what says the transaction was one unit of work.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer.run(b"BEGIN").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,'x')").unwrap();
+    writer.run(b"INSERT INTO t VALUES(2,'y')").unwrap();
+    writer.run(b"COMMIT").unwrap();
+    same("tx-one.db", &writer.written(), crate::tests::ONE_UNIT, 512);
+    // A transaction that frees pages and takes one of them back leaves
+    // the free list where the same statements leave it.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(n INTEGER, s TEXT)").unwrap();
+    let mut sql = alloc::string::String::from("INSERT INTO t(rowid,n,s) VALUES ");
+    for number in 1..=60_i64 {
+        if number > 1 {
+            sql.push(',');
+        }
+        let _ = write!(sql, "({number},{number},'row {number}')");
+    }
+    writer.run(sql.as_bytes()).unwrap();
+    writer.run(b"BEGIN").unwrap();
+    writer.run(b"DELETE FROM t WHERE n%3=0").unwrap();
+    writer
+        .run(b"INSERT INTO t(rowid,n,s) VALUES(500,500,'row 500')")
+        .unwrap();
+    writer.run(b"COMMIT").unwrap();
+    same("tx-grown.db", &writer.written(), crate::tests::GROWN, 512);
+}
+
+#[test]
+fn a_rollback_leaves_the_file_the_transaction_began_with() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,'x')").unwrap();
+    let before = writer.written();
+    writer.run(b"BEGIN").unwrap();
+    writer.run(b"INSERT INTO t VALUES(2,'y')").unwrap();
+    writer.run(b"DELETE FROM t WHERE a=1").unwrap();
+    writer.run(b"ROLLBACK").unwrap();
+    let after = writer.written();
+    assert_eq!(before, after, "the rollback left the file changed");
+    same("tx-back.db", &after, crate::tests::ROLLED_BACK, 512);
+    // The rows are the ones the transaction began with, and the
+    // connection writes on from there.
+    let database = crate::db::Database::open(&after).unwrap();
+    assert_eq!(
+        database.query(b"SELECT a FROM t").unwrap().rows,
+        [[Value::Int(1)]]
+    );
+    writer.run(b"INSERT INTO t VALUES(3,'z')").unwrap();
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT a FROM t").unwrap().rows,
+        [[Value::Int(1)], [Value::Int(3)]]
+    );
+}
+
+#[test]
+fn what_bounding_a_transaction_refuses() {
+    use crate::change::Writer;
+    use crate::db::Error;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    // A `COMMIT` and a `ROLLBACK` outside a transaction have none to
+    // bound.
+    assert_eq!(writer.run(b"COMMIT"), Err(Error::NoTransaction));
+    assert_eq!(writer.run(b"ROLLBACK"), Err(Error::NoTransaction));
+    writer.run(b"BEGIN").unwrap();
+    // A transaction does not open inside a transaction.
+    assert_eq!(writer.run(b"BEGIN"), Err(Error::Nested));
+    writer.run(b"END").unwrap();
+    // The words that stand beside each of the three.
+    for sql in [
+        b"BEGIN DEFERRED TRANSACTION".as_slice(),
+        b"COMMIT TRANSACTION",
+        b"BEGIN IMMEDIATE",
+        b"ROLLBACK TRANSACTION",
+        b"BEGIN EXCLUSIVE TRANSACTION",
+        b"END TRANSACTION",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    // A `ROLLBACK TO` names a savepoint, which is a statement of its
+    // own.
+    writer.run(b"BEGIN").unwrap();
+    assert!(writer.run(b"ROLLBACK TO one").is_err());
+}
+
+#[test]
 fn what_a_drop_refuses() {
     use crate::change::Writer;
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();

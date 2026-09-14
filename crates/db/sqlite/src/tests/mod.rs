@@ -574,6 +574,20 @@ pub(super) const DROPPED: &[(&str, &str, &[u8])] = &[
     ),
 ];
 
+/// A transaction is one unit of work: the statements between a `BEGIN`
+/// and a `COMMIT` write the file the same statements write on their
+/// own, but the change counter counts the transaction once. `tx-grown`
+/// frees pages and takes one back inside the transaction; `tx-back` is
+/// what a `ROLLBACK` leaves, which is `tx-kept` byte for byte.
+pub(super) const ONE_UNIT: &[u8] = include_bytes!("fixtures/tx-one.db");
+
+/// The same over sixty rows, where the transaction frees pages and
+/// takes one of them back.
+pub(super) const GROWN: &[u8] = include_bytes!("fixtures/tx-grown.db");
+
+/// The file a `ROLLBACK` leaves, which is the file before the `BEGIN`.
+pub(super) const ROLLED_BACK: &[u8] = include_bytes!("fixtures/tx-back.db");
+
 /// The auto-vacuum dimension of document 16, section 16.11, over the
 /// write path: the same four hundred rows under both settings, chains
 /// that cross the second pointer-map page, the free pages a file that

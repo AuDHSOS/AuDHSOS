@@ -592,6 +592,21 @@ pub enum Definition {
     Drop(Drop),
 }
 
+/// `BEGIN`, `COMMIT` and `ROLLBACK`, which are what a connection
+/// bounds a transaction with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Transaction {
+    /// `BEGIN [DEFERRED | IMMEDIATE | EXCLUSIVE] [TRANSACTION]`. The
+    /// three words say when the connection takes its locks, which one
+    /// writer of one file answers the same way.
+    Begin,
+    /// `COMMIT [TRANSACTION]`, and `END [TRANSACTION]`, which is the
+    /// same statement under another word.
+    Commit,
+    /// `ROLLBACK [TRANSACTION]`.
+    Rollback,
+}
+
 /// `DROP TABLE [IF EXISTS] [schema.]name`, and the same for an index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Drop {

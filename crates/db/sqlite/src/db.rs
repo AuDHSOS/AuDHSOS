@@ -87,6 +87,12 @@ pub enum Error {
     /// A statement used as a value, or looked in by an `IN`, that
     /// answers more than the one column either reads.
     Columns,
+    /// A `BEGIN` on a connection that already has a transaction open,
+    /// which `sqlite3BeginTransaction` refuses.
+    Nested,
+    /// A `COMMIT` or a `ROLLBACK` on a connection with no transaction
+    /// open.
+    NoTransaction,
     /// A shape of statement this engine does not answer yet: a `WITH`
     /// written `RECURSIVE`, a table-valued function.
     Unsupported,

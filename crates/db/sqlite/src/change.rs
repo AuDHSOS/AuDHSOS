@@ -69,6 +69,10 @@ pub struct Writer {
     /// Whether a statement that changes rows answers how many it
     /// changed, which `PRAGMA count_changes` sets.
     counting: bool,
+    /// The header as the open transaction began, where a `BEGIN` opened
+    /// one. A connection outside `BEGIN` holds none and commits every
+    /// statement of its own.
+    began: Option<Header>,
 }
 
 impl Writer {
@@ -89,6 +93,7 @@ impl Writer {
             log: None,
             origin: None,
             counting: false,
+            began: None,
             header: Header {
                 page_size,
                 write_version: 1,
@@ -297,12 +302,20 @@ impl Writer {
     pub fn run(&mut self, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
         // The header as the transaction begins, which is the one the
         // record of page one in the journal holds.
+        if let Ok(asked) = crate::parse::transaction(sql) {
+            return self.bound(asked);
+        }
         if let Ok(asked) = crate::parse::pragma(sql) {
             return self.pragma(&asked, sql);
         }
-        let was = self.header;
+        // A statement inside a transaction writes on what the
+        // statements before it wrote, so the pages keep what they held
+        // when the `BEGIN` ran and not when this statement began.
+        let was = self.began.unwrap_or(self.header);
         let mut changed = 0_i64;
-        self.pages.begin();
+        if self.began.is_none() {
+            self.pages.begin();
+        }
         if let Ok((arena, definition)) = crate::parse::definition(sql) {
             self.define(&arena, definition, sql)?;
         } else {
@@ -313,8 +326,58 @@ impl Writer {
                 Change::Update(statement) => self.update(&arena, &statement, sql)?,
             };
         }
-        // A statement that wrote no page is one the commit has nothing
-        // to write for, so the change counter stands where it stood.
+        // A statement inside a transaction is written by the `COMMIT`
+        // and not by itself, which is what makes the transaction one
+        // unit of work.
+        if self.began.is_none() {
+            self.commit(&was)?;
+        }
+        // `PRAGMA count_changes`: a statement that changes rows answers
+        // how many it changed, which is one row of one column.
+        if self.counting {
+            return Ok(alloc::vec![alloc::vec![Value::Int(changed)]]);
+        }
+        Ok(Vec::new())
+    }
+
+    /// `BEGIN`, `COMMIT` and `ROLLBACK`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Nested`] for a `BEGIN` inside a transaction, and
+    /// [`Error::NoTransaction`] for a `COMMIT` or a `ROLLBACK` outside
+    /// one.
+    fn bound(&mut self, asked: crate::ast::Transaction) -> Result<Vec<Vec<Value>>, Error> {
+        match asked {
+            crate::ast::Transaction::Begin => {
+                if self.began.is_some() {
+                    return Err(Error::Nested);
+                }
+                self.pages.begin();
+                self.began = Some(self.header);
+            }
+            crate::ast::Transaction::Commit => {
+                let was = self.began.take().ok_or(Error::NoTransaction)?;
+                self.commit(&was)?;
+            }
+            crate::ast::Transaction::Rollback => {
+                let was = self.began.take().ok_or(Error::NoTransaction)?;
+                // The pages go back to what they held and the header
+                // with them, so the transaction leaves no trace.
+                self.pages.rollback();
+                self.header = was;
+            }
+        }
+        Ok(Vec::new())
+    }
+
+    /// What the transaction wrote, written: the file is cut back where
+    /// it vacuums itself, the header counts the pages and the free list
+    /// it now has, and the commit leaves a journal or a frame.
+    fn commit(&mut self, was: &Header) -> Result<(), Error> {
+        // A transaction that wrote no page is one the commit has
+        // nothing to write for, so the change counter stands where it
+        // stood.
         if self.pages.changed() {
             // `autoVacuumCommit`: a file that vacuums itself whole moves
             // the pages at its end into the free pages below them and is
@@ -337,16 +400,11 @@ impl Writer {
             } else {
                 self.header.change_counter = self.header.change_counter.saturating_add(1);
                 self.header.version_valid_for = self.header.change_counter;
-                let written = self.pages.journal(&was, self.nonce, self.sector);
+                let written = self.pages.journal(was, self.nonce, self.sector);
                 self.journal = crate::journal::committed(&written, self.mode);
             }
         }
-        // `PRAGMA count_changes`: a statement that changes rows answers
-        // how many it changed, which is one row of one column.
-        if self.counting {
-            return Ok(alloc::vec![alloc::vec![Value::Int(changed)]]);
-        }
-        Ok(Vec::new())
+        Ok(())
     }
 
     /// `PRAGMA name = value`, which says how the file is written.

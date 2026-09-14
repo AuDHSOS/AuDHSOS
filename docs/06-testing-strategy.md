@@ -4274,7 +4274,9 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - The part of `research/sqlite/test` that needs no TCL interpreter: a
   `do_execsql_test`, a `do_test` whose body is one `execsql`, and the
   `execsql` or `db eval` a file sets itself up with, each carrying no
-  substitution. That is 15 364 cases in 1 169 files. `db null` and
+  substitution. That is 15 364 cases in 1 171 files. Setup written as a
+  quoted string carries one, so the file stops there, which D-194
+  records. `db null` and
   `db nullvalue` say what a `NULL` prints as, which the answer a file
   writes is written under. `ifcapable !X` holds a block for a build
   without `X`, which is read past where this engine has `X`.
@@ -4285,7 +4287,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - The block of an `else` is read past and a case whose name repeats is
   dropped, because the interpreter runs one arm of a conditional, which
   D-192 and D-189 record.
-- 721 pass, 9 answer differently and 14 634 are refused or stopped.
+- 763 pass, 9 answer differently and 14 592 are refused or stopped.
   Document 16, section 16.23 groups the nine. Earlier runs answered
   14, then 27, then 17 differently; twelve were defects, which D-181,
   D-184 and D-189 record and twenty-eight cases of `query.corpus` now
@@ -4388,6 +4390,23 @@ D-191, document 16 step Q8.
   statement that changes rows, which is how many it changed, and
   nought for a statement that changed none; a value that is not a truth
   is refused.
+
+### 6.6.124 A transaction that spans statements (`db-sqlite`)
+
+D-193, document 16 step Q8.
+
+- `tx-one.db`: the statements between a `BEGIN` and a `COMMIT` write
+  the file the same statements write on their own, and the change
+  counter counts the transaction once.
+- `tx-grown.db`: a transaction that frees pages and takes one of them
+  back leaves the free list where the same statements leave it.
+- `tx-back.db`: what a `ROLLBACK` leaves is `tx-kept.db` byte for byte,
+  the rows are the ones the transaction began with, and the connection
+  writes on from there.
+- The refusals: a `BEGIN` inside a transaction, a `COMMIT` or a
+  `ROLLBACK` outside one, and a `ROLLBACK TO`, which names a savepoint.
+  `DEFERRED`, `IMMEDIATE`, `EXCLUSIVE` and the word `TRANSACTION` stand
+  beside the three without changing what they do.
 
 ## 6.7 CI pipeline
 

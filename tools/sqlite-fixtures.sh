@@ -341,7 +341,11 @@ for case in "index-empty.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a);" \
     "drop-wide.db:CREATE TABLE t(a); INSERT INTO t VALUES(replace(hex(zeroblob(900)),'0','a')),(replace(hex(zeroblob(900)),'0','b')); CREATE TABLE u(c); DROP TABLE t;" \
     "drop-indexed.db:$rows60 CREATE INDEX ts ON t(s); CREATE TABLE u(c); INSERT INTO u VALUES(9); DROP TABLE t;" \
     "drop-index.db:$rows60 CREATE INDEX ts ON t(s); DROP INDEX ts;" \
-    "drop-last.db:CREATE TABLE t(a); INSERT INTO t VALUES(1); CREATE TABLE u(c); INSERT INTO u VALUES(9); DROP TABLE u;"; do
+    "drop-last.db:CREATE TABLE t(a); INSERT INTO t VALUES(1); CREATE TABLE u(c); INSERT INTO u VALUES(9); DROP TABLE u;" \
+    "tx-one.db:CREATE TABLE t(a,b); BEGIN; INSERT INTO t VALUES(1,'x'); INSERT INTO t VALUES(2,'y'); COMMIT;" \
+    "tx-grown.db:$rows60 BEGIN; DELETE FROM t WHERE n%3=0; INSERT INTO t(rowid,n,s) VALUES(500,500,'row 500'); COMMIT;" \
+    "tx-back.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x'); BEGIN; INSERT INTO t VALUES(2,'y'); DELETE FROM t WHERE a=1; ROLLBACK;" \
+    "tx-kept.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,'x');"; do
     name="${case%%:*}"
     sql="${case#*:}"
     rm -f "$out/$name"
