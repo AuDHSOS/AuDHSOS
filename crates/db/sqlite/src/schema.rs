@@ -260,6 +260,139 @@ pub(crate) fn dequote(text: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The column names a table made from a statement carries, which is
+/// `sqlite3ColumnsFromExprList`: a name another column already carries
+/// gains a number, and `true` or `false` is not a name a column may
+/// carry.
+pub(crate) fn columns_from(names: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let mut out: Vec<Vec<u8>> = Vec::with_capacity(names.len());
+    for (at, written) in names.iter().enumerate() {
+        let mut name =
+            if written.eq_ignore_ascii_case(b"true") || written.eq_ignore_ascii_case(b"false") {
+                let mut held = b"column".to_vec();
+                held.extend_from_slice(digits(at.saturating_add(1)).as_slice());
+                held
+            } else {
+                written.clone()
+            };
+        let mut count: usize = 0;
+        while out.iter().any(|held| held.eq_ignore_ascii_case(&name)) {
+            count = count.saturating_add(1);
+            name = numbered(&name, count);
+        }
+        out.push(name);
+    }
+    out
+}
+
+/// A name with the number it collided over put after it, and the number
+/// a collision before it left taken back off.
+fn numbered(name: &[u8], count: usize) -> Vec<u8> {
+    let mut at = name.len().saturating_sub(1);
+    while at > 0 && name.get(at).is_some_and(u8::is_ascii_digit) {
+        at = at.saturating_sub(1);
+    }
+    let base = if name.get(at) == Some(&b':') {
+        name.get(..at).unwrap_or_default()
+    } else {
+        name
+    };
+    let mut out = base.to_vec();
+    out.push(b':');
+    out.extend_from_slice(digits(count).as_slice());
+    out
+}
+
+/// A whole number as the digits it is written with.
+fn digits(number: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut left = number;
+    loop {
+        out.push(b'0'.saturating_add(u8::try_from(left % 10).unwrap_or(0)));
+        left /= 10;
+        if left == 0 {
+            break;
+        }
+    }
+    out.reverse();
+    out
+}
+
+/// The statement a table made from another statement is written as,
+/// which is `createTableStmt`: the name, then every column with the
+/// type its affinity is written as, over one line where the names are
+/// short and one line per column where they are not.
+pub(crate) fn created(name: &[u8], columns: &[Vec<u8>], affinities: &[Affinity]) -> Vec<u8> {
+    let mut length = ident_length(name);
+    for column in columns {
+        length = length
+            .saturating_add(ident_length(column))
+            .saturating_add(5);
+    }
+    let (first, between, end): (&[u8], &[u8], &[u8]) = if length < 50 {
+        (b"", b",", b")")
+    } else {
+        (b"\n  ", b",\n  ", b"\n)")
+    };
+    let mut out = b"CREATE TABLE ".to_vec();
+    ident_put(&mut out, name);
+    out.push(b'(');
+    for (at, column) in columns.iter().enumerate() {
+        out.extend_from_slice(if at == 0 { first } else { between });
+        ident_put(&mut out, column);
+        let affinity = affinities.get(at).copied().unwrap_or_default();
+        out.extend_from_slice(type_written(affinity));
+    }
+    out.extend_from_slice(end);
+    out
+}
+
+/// The type an affinity is written as, which is the table
+/// `createTableStmt` keeps.
+const fn type_written(affinity: Affinity) -> &'static [u8] {
+    match affinity {
+        Affinity::None | Affinity::Blob => b"",
+        Affinity::Text => b" TEXT",
+        Affinity::Numeric => b" NUM",
+        Affinity::Integer => b" INT",
+        Affinity::Real => b" REAL",
+    }
+}
+
+/// How many bytes a name takes written out, which is `identLength`.
+fn ident_length(name: &[u8]) -> usize {
+    name.iter()
+        .fold(name.len().saturating_add(2), |count, byte| {
+            count.saturating_add(usize::from(*byte == b'"'))
+        })
+}
+
+/// A name written out, in quotes where it needs them, which is
+/// `identPut`: a name that begins with a digit, that is a keyword, that
+/// carries a byte other than a letter, a digit or an underscore, or
+/// that is empty.
+fn ident_put(out: &mut Vec<u8>, name: &[u8]) {
+    let plain = name
+        .iter()
+        .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+    let quote = !plain
+        || name.is_empty()
+        || name.first().is_some_and(u8::is_ascii_digit)
+        || crate::keyword::lookup(name).is_some();
+    if quote {
+        out.push(b'"');
+    }
+    for byte in name {
+        out.push(*byte);
+        if *byte == b'"' {
+            out.push(b'"');
+        }
+    }
+    if quote {
+        out.push(b'"');
+    }
+}
+
 /// The type of a column, with the words the parser could not tell from
 /// one taken back off.
 ///

@@ -808,12 +808,35 @@ impl<'a> Database<'a> {
     ///
     /// [`Error`] names what it could not answer and why.
     pub fn rows(&self, arena: &Arena, id: SelectId, sql: &[u8]) -> Result<Answer, Error> {
+        Ok(self.answered(arena, id, sql)?.0)
+    }
+
+    /// The rows a statement answers, with the affinity each of its
+    /// columns compares under, which is what `CREATE TABLE ... AS`
+    /// writes the column types from.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what it could not answer and why.
+    pub(crate) fn answered(
+        &self,
+        arena: &Arena,
+        id: SelectId,
+        sql: &[u8],
+    ) -> Result<(Answer, Vec<Affinity>), Error> {
         let scope = Scope {
             terms: &[],
             outer: None,
             views: 0,
         };
-        Ok(self.statement(arena, id, sql, scope)?.answer)
+        let answered = self.statement(arena, id, sql, scope)?;
+        let affinities = answered
+            .shape
+            .columns
+            .iter()
+            .map(|column| column.affinity)
+            .collect();
+        Ok((answered.answer, affinities))
     }
 
     /// What a comparison uses where nothing writes a collation, which
@@ -2983,11 +3006,24 @@ fn answered_name(name: &[u8], sides: &[Side<'_>]) -> Vec<u8> {
         return column.name.clone();
     }
     // A key that is the rowid answers under its own name, whichever of
-    // the rowid's three names was written.
+    // the rowid's three names was written; every other name no side
+    // holds answers under the name that was written, which is what
+    // `sqlite3ColumnsFromExprList` does for a `TK_ID`.
+    if !rowid_named(name) {
+        return name.to_vec();
+    }
     sides
         .iter()
         .find_map(|side| side.shape.key.clone())
         .unwrap_or_else(|| b"rowid".to_vec())
+}
+
+/// Whether `name` is one of the three names the key of a table answers
+/// to.
+fn rowid_named(name: &[u8]) -> bool {
+    [b"rowid".as_slice(), b"oid", b"_rowid_"]
+        .iter()
+        .any(|word| name.eq_ignore_ascii_case(word))
 }
 
 /// The whole number an expression is, where it is one.

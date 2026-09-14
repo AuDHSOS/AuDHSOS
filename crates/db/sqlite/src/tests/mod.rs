@@ -621,6 +621,58 @@ pub(super) const ADDED_COLUMN: &[(&str, &str, &[u8])] = &[
     ),
 ];
 
+/// A table whose columns are the ones a statement answers: the names
+/// `sqlite3ColumnsFromExprList` gives them, the types
+/// `sqlite3SubqueryColumnTypes` gives them, and the statement
+/// `createTableStmt` writes out. `as-named` has two columns of one name
+/// and two the statement writes no name for, `as-wide` is the layout of
+/// one column per line, `as-typed` reaches every affinity and `as-none`
+/// holds no row.
+pub(crate) const MADE_FROM: &[(&str, &str, &[u8])] = &[
+    (
+        "as-plain.db",
+        "CREATE TABLE u AS SELECT a, b, c, a+1 AS d, 'k' AS e FROM t",
+        include_bytes!("fixtures/as-plain.db"),
+    ),
+    (
+        "as-named.db",
+        "CREATE TABLE u AS SELECT a, a, a+0, 1 FROM t",
+        include_bytes!("fixtures/as-named.db"),
+    ),
+    (
+        "as-wide.db",
+        "CREATE TABLE u2 AS SELECT * FROM longernamehere",
+        include_bytes!("fixtures/as-wide.db"),
+    ),
+    (
+        "as-typed.db",
+        "CREATE TABLE u AS SELECT * FROM t",
+        include_bytes!("fixtures/as-typed.db"),
+    ),
+    (
+        "as-none.db",
+        "CREATE TABLE u AS SELECT a FROM t WHERE 0",
+        include_bytes!("fixtures/as-none.db"),
+    ),
+    (
+        "as-quoted.db",
+        "CREATE TABLE u AS SELECT a AS \"q\"\"r\", a AS \"\", a AS \"1x\", \
+         a AS \"select\", true, a AS \"a:1\", a, a FROM t",
+        include_bytes!("fixtures/as-quoted.db"),
+    ),
+    (
+        "as-wider.db",
+        "CREATE TABLE u AS SELECT a AS c1, a AS c2, a AS c3, a AS c4, a AS c5, \
+         a AS c6, a AS c7, a AS c8, a AS c9, a AS c10, a AS c_11, false FROM t",
+        include_bytes!("fixtures/as-wider.db"),
+    ),
+    (
+        "as-vacuum.db",
+        "CREATE TABLE u AS SELECT a FROM t",
+        include_bytes!("fixtures/as-vacuum.db"),
+    ),
+];
+
 /// The schema tree grown past one page, which is `balance_deeper` over
 /// a root that begins a hundred bytes in.
 pub(super) const SCHEMA_DEEP: &[u8] = include_bytes!("fixtures/schema-deep.db");

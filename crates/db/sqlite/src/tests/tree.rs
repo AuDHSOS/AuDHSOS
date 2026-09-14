@@ -1006,9 +1006,11 @@ fn what_a_statement_that_changes_a_database_refuses() {
         refuse(&["CREATE INDEX i ON t(a)"]),
         Error::Unsupported
     ));
+    // A table made from a statement is written; the grammar writes no
+    // `WITHOUT ROWID` and no `STRICT` after one.
     assert!(matches!(
-        refuse(&["CREATE TABLE t AS SELECT 1"]),
-        Error::Unsupported
+        refuse(&["CREATE TABLE t AS SELECT 1 WITHOUT ROWID"]),
+        Error::Parse(_)
     ));
     // A table the database does not hold, a column the table does not
     // have, and a row of another width.
@@ -3306,4 +3308,42 @@ fn the_pragmas_a_connection_keeps_answer_what_it_was_told() {
         database.query(b"PRAGMA locking_mode").unwrap().rows,
         [[text(b"normal")]]
     );
+}
+
+#[test]
+fn a_table_made_from_a_statement_is_the_file_the_shell_wrote() {
+    use crate::change::Writer;
+    for (name, statement, fixture) in crate::tests::MADE_FROM {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        if *name == "as-vacuum.db" {
+            writer.vacuuming(false);
+        }
+        for sql in setup_for(name) {
+            writer.run(sql).unwrap();
+        }
+        writer.run(statement.as_bytes()).unwrap();
+        same(name, &writer.written(), fixture, 512);
+    }
+}
+
+/// What each fixture of [`crate::tests::MADE_FROM`] was set up with.
+fn setup_for(name: &str) -> &'static [&'static [u8]] {
+    match name {
+        "as-plain.db" => &[
+            b"CREATE TABLE t(a INTEGER, b TEXT, c REAL)",
+            b"INSERT INTO t VALUES(1,'x',2.5),(2,'y',3.5)",
+        ],
+        "as-named.db" => &[b"CREATE TABLE t(a,b)", b"INSERT INTO t VALUES(1,2)"],
+        "as-wide.db" => &[
+            b"CREATE TABLE longernamehere(aaaaaaaaaa,bbbbbbbbbb,cccccccccc,dddddddddd)",
+            b"INSERT INTO longernamehere VALUES(1,2,3,4)",
+        ],
+        "as-typed.db" => &[
+            b"CREATE TABLE t(a NUMERIC, b BLOB, c, d VARCHAR(5), e DOUBLE)",
+            b"INSERT INTO t VALUES(1,x'00','q','r',1.5)",
+        ],
+        "as-quoted.db" | "as-wider.db" => &[b"CREATE TABLE t(a)", b"INSERT INTO t VALUES(1)"],
+        "as-vacuum.db" => &[b"CREATE TABLE t(a)", b"INSERT INTO t VALUES(1),(2)"],
+        _ => &[b"CREATE TABLE t(a)"],
+    }
 }

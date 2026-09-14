@@ -359,6 +359,31 @@ for case in "index-empty.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a);" \
     printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
 done
 
+# A table whose columns are the ones a statement answers, which is
+# `sqlite3ColumnsFromExprList` naming them and `createTableStmt` writing
+# the statement out.
+for case in \
+    "as-plain.db:CREATE TABLE t(a INTEGER, b TEXT, c REAL); INSERT INTO t VALUES(1,'x',2.5),(2,'y',3.5); CREATE TABLE u AS SELECT a, b, c, a+1 AS d, 'k' AS e FROM t;" \
+    "as-named.db:CREATE TABLE t(a,b); INSERT INTO t VALUES(1,2); CREATE TABLE u AS SELECT a, a, a+0, 1 FROM t;" \
+    "as-wide.db:CREATE TABLE longernamehere(aaaaaaaaaa,bbbbbbbbbb,cccccccccc,dddddddddd); INSERT INTO longernamehere VALUES(1,2,3,4); CREATE TABLE u2 AS SELECT * FROM longernamehere;" \
+    "as-typed.db:CREATE TABLE t(a NUMERIC, b BLOB, c, d VARCHAR(5), e DOUBLE); INSERT INTO t VALUES(1,x'00','q','r',1.5); CREATE TABLE u AS SELECT * FROM t;" \
+    "as-none.db:CREATE TABLE t(a); CREATE TABLE u AS SELECT a FROM t WHERE 0;" \
+    "as-quoted.db:CREATE TABLE t(a); INSERT INTO t VALUES(1); CREATE TABLE u AS SELECT a AS \"q\"\"r\", a AS \"\", a AS \"1x\", a AS \"select\", true, a AS \"a:1\", a, a FROM t;"; do
+    name="${case%%:*}"
+    sql="${case#*:}"
+    rm -f "$out/$name"
+    "$sqlite" "$out/$name" "PRAGMA page_size=512; $sql"
+    printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
+done
+
+rm -f "$out/as-wider.db"
+"$sqlite" "$out/as-wider.db" "PRAGMA page_size=512; CREATE TABLE t(a); INSERT INTO t VALUES(1); CREATE TABLE u AS SELECT a AS c1, a AS c2, a AS c3, a AS c4, a AS c5, a AS c6, a AS c7, a AS c8, a AS c9, a AS c10, a AS c_11, false FROM t;"
+printf '%s\t%s bytes\n' as-wider.db "$(wc -c <"$out/as-wider.db" | tr -d ' ')"
+
+rm -f "$out/as-vacuum.db"
+"$sqlite" "$out/as-vacuum.db" "PRAGMA page_size=512; PRAGMA auto_vacuum=full; CREATE TABLE t(a); INSERT INTO t VALUES(1),(2); CREATE TABLE u AS SELECT a FROM t;"
+printf '%s\t%s bytes\n' as-vacuum.db "$(wc -c <"$out/as-vacuum.db" | tr -d ' ')"
+
 # The schema tree grown past one page, which is `balance_deeper` over a
 # root that begins a hundred bytes in.
 rm -f "$out/schema-deep.db"

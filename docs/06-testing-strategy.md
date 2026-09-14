@@ -4293,7 +4293,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - A statement reaches the connection that reads or the one that writes
   by its first word, and a `WITH` clause stands in front of a statement
   that writes as well, so the words after it say which.
-- 914 pass, 9 answer differently and 14 441 are refused or stopped.
+- 921 pass, 9 answer differently and 14 434 are refused or stopped.
   Document 16, section 16.23 groups the nine. Earlier runs answered
   14, then 27, then 17, then 13 differently; sixteen were defects,
   which D-181, D-184, D-189 and D-197 record and twenty-eight cases of
@@ -4530,6 +4530,19 @@ D-202, document 16 step Q8.
 - The refusals: a value the pragma does not name, in each shape.
 - A database being read answers what a connection told nothing
   answers.
+
+### 6.6.132 A table made from a statement (`db-sqlite`)
+
+D-203, document 16 step Q8.
+
+- Eight fixtures, `as-*.db`. Each is the file the shell wrote, byte
+  for byte, the statement the table is written as included.
+- `as-typed.db` reaches every affinity a column type is written from;
+  `as-quoted.db` reaches every reason a name is quoted, a name two
+  columns share and a name that is `true`; `as-wider.db` is the
+  layout of one column per line and a column place of two digits;
+  `as-none.db` holds no row; `as-vacuum.db` is a file that vacuums
+  itself.
 
 ## 6.7 CI pipeline
 

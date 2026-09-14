@@ -661,7 +661,8 @@ Size: L.
    `DELETE` and an `UPDATE` over a table an index is over write the
    entries of that index as well, which D-187 records.
 2. `CREATE`, `ALTER`, `DROP` for tables, indexes, views and triggers.
-   `CREATE TABLE` is built for a table of columns, `CREATE INDEX` for
+   `CREATE TABLE` is built for a table of columns and for one made
+   from a statement, which D-203 records, `CREATE INDEX` for
    an index over columns, which D-186 records, `CREATE VIEW` and
    `DROP VIEW`, which D-195 records, and `DROP TABLE` and `DROP INDEX`,
    which D-191 records. `ALTER TABLE ... ADD COLUMN` is built, which
@@ -681,7 +682,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 914 pass, 9 answer differently, and 14 441 name something the
+files, 921 pass, 9 answer differently, and 14 434 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.

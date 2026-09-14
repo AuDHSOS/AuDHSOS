@@ -653,6 +653,90 @@ impl Writer {
         Ok(alloc::vec![alloc::vec![self.held(at)]])
     }
 
+    /// `CREATE TABLE name AS <select>`: a table whose columns are the
+    /// ones the statement answers, holding the rows it answered.
+    ///
+    /// `sqlite3ColumnsFromExprList` names the columns and
+    /// `sqlite3SubqueryColumnTypes` gives each the type its affinity is
+    /// written as, so the statement of the table is built rather than
+    /// taken from the text, which is `createTableStmt`.
+    ///
+    /// Answering the statement costs what the statement costs and
+    /// writing `n` rows costs O(n log n).
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names whatever answering the statement refuses.
+    fn create_as(
+        &mut self,
+        arena: &Arena,
+        table: &crate::ast::CreateTable,
+        select: crate::ast::SelectId,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        let name = crate::schema::dequote(table.name.text(sql));
+        let (answer, affinities) = {
+            let bytes = self.image();
+            let database = Database::open(&bytes)?.seeded(self.random.word());
+            database.answered(arena, select, sql)?
+        };
+        let columns = crate::schema::columns_from(&answer.names);
+        let written = crate::schema::created(&name, &columns, &affinities);
+        let root = self.pages.add(Kind::LeafTable, 0)?;
+        self.pages.point(root, crate::tree::Point::Root, 0)?;
+        if self.header.largest_root != 0 {
+            self.header.largest_root = root;
+        }
+        let text = |bytes: &[u8]| Value::Text(crate::value::stored(bytes, self.header.encoding));
+        let row = crate::record::write(
+            &[
+                text(b"table"),
+                text(&name),
+                text(&name),
+                Value::Int(i64::from(root)),
+                text(&written),
+            ],
+            &SCHEMA,
+            4,
+        );
+        self.schema_row(&row)?;
+        let mut rowid = 0_i64;
+        for row in &answer.rows {
+            let values: Vec<Value> = row
+                .iter()
+                .map(|value| stored(value, self.header.encoding))
+                .collect();
+            let record = crate::record::write(&values, &affinities, 4);
+            rowid = rowid.saturating_add(1);
+            insert(&mut self.pages, root, rowid, &record)?;
+        }
+        Ok(())
+    }
+
+    /// One row written into `sqlite_schema`, over the record of five
+    /// noughts `sqlite3StartTable` writes first.
+    fn schema_row(&mut self, row: &[u8]) -> Result<(), Error> {
+        let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
+            .unwrap_or(0)
+            .saturating_add(1);
+        let blank = crate::record::write(
+            &[
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+            ],
+            &SCHEMA,
+            4,
+        );
+        insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &blank)?;
+        crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, row)?;
+        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+        self.header.schema_format = 4;
+        Ok(())
+    }
+
     /// `CREATE TABLE`: a page for the tree of the table and a row of
     /// `sqlite_schema` that names it.
     fn define(&mut self, arena: &Arena, definition: Definition, sql: &[u8]) -> Result<(), Error> {
@@ -660,8 +744,8 @@ impl Writer {
             Definition::Drop(asked) => return self.drop_object(&asked, sql),
             Definition::AddColumn(asked) => return self.add_column(arena, &asked, sql),
             Definition::Table(table) => {
-                if !matches!(table.body, TableBody::Columns { .. }) {
-                    return Err(Error::Unsupported);
+                if let TableBody::Select(select) = table.body {
+                    return self.create_as(arena, &table, select, sql);
                 }
                 let name = crate::schema::dequote(table.name.text(sql));
                 (Some(Kind::LeafTable), name.clone(), name)
@@ -710,32 +794,20 @@ impl Writer {
             &SCHEMA,
             4,
         );
-        let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
-            .unwrap_or(0)
-            .saturating_add(1);
         // `sqlite3StartTable` writes a record of five noughts and
         // `sqlite3EndTable` writes over it, so the page keeps the bytes
         // of the blank record where the row no longer stands.
         // `sqlite3CreateIndex` writes its row once and has no blank.
         if matches!(definition, Definition::Index(_)) {
+            let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
+                .unwrap_or(0)
+                .saturating_add(1);
             insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
+            self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
+            self.header.schema_format = 4;
         } else {
-            let blank = crate::record::write(
-                &[
-                    Value::Null,
-                    Value::Null,
-                    Value::Null,
-                    Value::Null,
-                    Value::Null,
-                ],
-                &SCHEMA,
-                4,
-            );
-            insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &blank)?;
-            crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
+            self.schema_row(&row)?;
         }
-        self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
-        self.header.schema_format = 4;
         if let Definition::Index(index) = definition {
             self.fill(arena, &index, sql, root, &over)?;
         }
