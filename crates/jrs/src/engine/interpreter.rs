@@ -3210,7 +3210,9 @@ impl RegisterVM {
                         .get(name_index as usize)
                         .ok_or(VMError::InvalidRegister)?;
                     let target = self.read_reg(obj)?;
-                    let oref = target.as_object().ok_or(VMError::TypeError)?;
+                    let Some(oref) = target.as_object() else {
+                        return Err(property_store_error(target, heap, realm));
+                    };
                     // 10.4.2: an Array keeps its indices in an element store,
                     // so a name that is one is written there and not as a
                     // property of its own.
@@ -3361,9 +3363,16 @@ impl RegisterVM {
                         }
                     }
                 }
-                Instruction::SetByValue { obj, key, slot } => {
+                Instruction::SetByValue {
+                    obj,
+                    key,
+                    slot,
+                    define,
+                } => {
                     let target = self.read_reg(obj)?;
-                    let oref = target.as_object().ok_or(VMError::TypeError)?;
+                    let Some(oref) = target.as_object() else {
+                        return Err(property_store_error(target, heap, realm));
+                    };
                     let js_obj = heap.get_object(oref).ok_or(VMError::TypeError)?;
                     let key_val = self.read_reg(key)?;
                     let val = self.acc;
@@ -3384,6 +3393,11 @@ impl RegisterVM {
                         heap.set_array_element(oref, index, val)?;
                     } else {
                         let name_units = property_name_units(key_val, heap)?;
+                        if !define && store_reaches_unbuilt_prototype(oref, &name_units, heap) {
+                            return Err(VMError::Unsupported(
+                                "a property write under a name an unbuilt Prototype owns",
+                            ));
+                        }
                         let name =
                             if let Some(name) = heap.strings.lookup_interned_units(&name_units) {
                                 PropertyKey::String(name)
@@ -3775,6 +3789,36 @@ fn property_base_error(base: Value, heap: &mut GenerationalHeap, realm: &Realm) 
     VMError::Unsupported("ToObject of a primitive for a property access")
 }
 
+/// Whether a `[[Set]]` of `name` would reach something this Realm has not
+/// built (10.1.9.2).
+///
+/// A store walks the Prototype Chain when the receiver owns no property of
+/// that name. `__proto__` is an accessor of %Object.prototype% on every
+/// object; `length` and `name` are own properties an Array or a function
+/// carries under rules of its own. None of the three is built, so a store
+/// that reaches one names the gap instead of shadowing it. A definition of a
+/// literal reaches no Prototype and asks this nothing.
+fn store_reaches_unbuilt_prototype(
+    object: ObjectRef,
+    name: &[u16],
+    heap: &GenerationalHeap,
+) -> bool {
+    let is = |candidate: &str| candidate.encode_utf16().eq(name.iter().copied());
+    if is("__proto__") {
+        return true;
+    }
+    let Some(kind) = heap.get_object(object).map(|entry| entry.kind.clone()) else {
+        return false;
+    };
+    match kind {
+        ObjectKind::Array { .. } => is("length"),
+        ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. } => {
+            is("length") || is("name")
+        }
+        _ => false,
+    }
+}
+
 /// The Reference half of 13.5.1.2: the base goes through `ToObject`, the name
 /// through `[[Delete]]`, and a strict Reference that was refused throws.
 fn delete_reference(
@@ -3852,6 +3896,18 @@ fn delete_property(
         heap.set_object_slot(object, slot, value)?;
     }
     Ok(true)
+}
+
+/// What a property assignment on a base that is no Object answers.
+///
+/// 6.2.5.5 sends the base of the Reference through `ToObject` before it
+/// writes, and 7.1.18 refuses undefined and null there. Every other primitive
+/// gets a wrapper Object this engine has not built.
+fn property_store_error(base: Value, heap: &mut GenerationalHeap, realm: &Realm) -> VMError {
+    if base.is_undefined() || base.is_null() {
+        return type_error(heap, realm, "property assignment on null or undefined");
+    }
+    VMError::Unsupported("ToObject of a primitive for a property assignment")
 }
 
 /// The Array index a property name denotes, if it is one (10.4.2.1).
@@ -4457,6 +4513,7 @@ mod tests {
             obj: Reg(0),
             key: Reg(1),
             slot: 0,
+            define: false,
         });
         code.emit(Instruction::LdaSmi(1));
         code.emit(Instruction::Star(Reg(1)));
@@ -4465,6 +4522,7 @@ mod tests {
             obj: Reg(0),
             key: Reg(1),
             slot: 1,
+            define: false,
         });
         code.emit(Instruction::Return);
 
@@ -4493,6 +4551,7 @@ mod tests {
             obj: Reg(0),
             key: Reg(1),
             slot: 0,
+            define: false,
         });
         code.emit(Instruction::LdaSmi(-2));
         code.emit(Instruction::Star(Reg(1)));
@@ -4501,6 +4560,7 @@ mod tests {
             obj: Reg(0),
             key: Reg(1),
             slot: 0,
+            define: false,
         });
         code.emit(Instruction::LdaSmi(-1));
         code.emit(Instruction::Star(Reg(1)));
@@ -4974,6 +5034,7 @@ mod tests {
             obj: array,
             key: method,
             slot: get,
+            define: false,
         });
         code.emit(Instruction::GetNamed {
             obj: array,

@@ -1755,6 +1755,7 @@ impl RegisterLowerer {
                         obj: object,
                         key: register,
                         slot,
+                        define: true,
                     });
                     self.release_register(register)?;
                     name
@@ -1841,6 +1842,7 @@ impl RegisterLowerer {
                 obj: array,
                 key,
                 slot,
+                define: true,
             });
             let RegisterObjectLayout::Array { elements, .. } =
                 self.object_layouts.get_mut(&object_id)?
@@ -3338,6 +3340,7 @@ impl RegisterLowerer {
                 obj: rest_array,
                 key,
                 slot,
+                define: true,
             });
             self.release_register(key)?;
             self.release_register(value)?;
@@ -3568,7 +3571,8 @@ impl RegisterLowerer {
                 let constant = self.string_constant(name)?;
                 Some(constant)
             }
-            None if self.key_reaches_prototype(key) => return None,
+            // A key only the run time knows can name one of those too, and the
+            // instruction names the gap there instead of here.
             None => None,
         };
         let key_register = if keyed.is_some() {
@@ -3598,6 +3602,7 @@ impl RegisterLowerer {
                 obj: object,
                 key: register,
                 slot,
+                define: false,
             });
             self.release_register(register)?;
         }
@@ -3685,6 +3690,7 @@ impl RegisterLowerer {
                     obj: prepared.object,
                     key: register,
                     slot,
+                    define: false,
                 });
                 self.release_register(register)?;
                 let RegisterType::Array(object_id) = prepared.base_type else {
@@ -3716,6 +3722,7 @@ impl RegisterLowerer {
                     obj: prepared.object,
                     key: register,
                     slot,
+                    define: false,
                 });
                 self.release_register(register)?;
                 let RegisterType::Object(object_id) = prepared.base_type else {

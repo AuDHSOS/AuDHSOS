@@ -381,6 +381,10 @@ pub enum Instruction {
         key: Reg,
         /// Feedback vector slot for inline caching.
         slot: u16,
+        /// Whether this defines an own property of a literal
+        /// (`CreateDataPropertyOrThrow`, 13.2.5.5) instead of assigning
+        /// through `[[Set]]` (13.15.2). A definition reaches no Prototype.
+        define: bool,
     },
     /// Loads an Array exotic object's `length` data property.
     GetArrayLength {

@@ -448,6 +448,56 @@ fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Erro
 }
 
 #[test]
+fn a_property_is_written_under_a_key_only_the_run_time_knows() -> Result<(), Error> {
+    // 13.15.2 writes through PutValue, which 10.1.9.2 sends along the
+    // Prototype Chain when the receiver has no own property of that name.
+    for source in [
+        "let f=function(o,k){o[k]=1;return o[k]};f({a:0},'a')",
+        "let f=function(o,k){o[k]=1;return o.b};f({a:0},'b')",
+        "let f=function(o,k){o[k]=1;return o[0]};f([7,8],0)",
+        "let f=function(o,k){o[k]='x';return typeof o[k]};f({},'a')",
+        "let f=function(o,k){o[k]=1;return o.length};f({},'length')",
+        "let f=function(o,k){o[k]=1;return o.name};f({},'name')",
+    ] {
+        differential(source)?;
+    }
+    // 6.2.5.5 sends the base of the Reference through ToObject before it
+    // writes, and 7.1.18 refuses undefined and null there.
+    for source in [
+        "let o={};o[o.t].r=1",
+        "let f=function(o,k){o[k]=1};f(null,'a')",
+        "let f=function(o){o.a=1};f(undefined)",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        let expected = Runtime::new(Limits::default()).run(&program.legacy_only(), &mut SilentHost);
+        let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
+            .run(&program, &mut SilentHost);
+        assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{source}");
+    }
+    // `__proto__`, `length` and `name` belong to a Prototype or an exotic
+    // object this Realm has not built, so a store that reaches one names that
+    // where it happens instead of shadowing it.
+    for source in [
+        "let f=function(o,k){o[k]=1};f({},'__proto__')",
+        "let f=function(o,k){o[k]=1};f([1,2],'length')",
+        "let f=function(o,k){o[k]=1};f(function(){},'name')",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn a_delete_takes_the_property_off_the_object() -> Result<(), Error> {
     // 13.5.1.2 sends the base through ToObject and the name through
     // [[Delete]], which 10.1.10.1 refuses for a property that is not
