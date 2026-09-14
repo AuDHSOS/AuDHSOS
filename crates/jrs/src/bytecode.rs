@@ -5825,7 +5825,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::StringPrototypeEndsWith
         | crate::engine::realm::Intrinsic::StringPrototypeIncludes
         | crate::engine::realm::Intrinsic::StringPrototypeStartsWith
-        | crate::engine::realm::Intrinsic::ArrayPrototypeIncludes => RegisterType::Boolean,
+        | crate::engine::realm::Intrinsic::ArrayPrototypeIncludes
+        | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,
         crate::engine::realm::Intrinsic::ObjectPrototypeToString
         | crate::engine::realm::Intrinsic::StringPrototypeCharAt
         | crate::engine::realm::Intrinsic::StringPrototypeConcat
@@ -5843,8 +5844,10 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // 23.1.3.38 answers an Array Iterator and 23.1.5.2.1 a result object,
         // neither of which has a tracked layout. 23.1.3.1 answers an element,
         // whose type only the receiver's layout carries, so the call site
-        // reads it there instead.
-        crate::engine::realm::Intrinsic::ArrayPrototypeValues
+        // reads it there instead. 23.1.1.1 answers an Array whose elements
+        // this lowering did not make and cannot name.
+        crate::engine::realm::Intrinsic::ArrayConstructor
+        | crate::engine::realm::Intrinsic::ArrayPrototypeValues
         | crate::engine::realm::Intrinsic::ArrayIteratorPrototypeNext
         | crate::engine::realm::Intrinsic::ArrayPrototypeAt
         | crate::engine::realm::Intrinsic::ArrayPrototypePop

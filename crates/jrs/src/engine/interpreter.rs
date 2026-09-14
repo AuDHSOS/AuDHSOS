@@ -1163,7 +1163,86 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeToString => {
                 self.call_array_intrinsic(intrinsic, call, heap, realm)
             }
+            // 23.1.2.3 answers IsArray, which 7.2.2 answers for an Array
+            // exotic object and, for a Proxy, for what it wraps.
+            Intrinsic::ArrayIsArray => {
+                let value = argument(self, 0)?;
+                let array = value
+                    .as_object()
+                    .and_then(|object| heap.get_object(object))
+                    .is_some_and(|object| matches!(object.kind, ObjectKind::Array { .. }));
+                Ok(Value::from_bool(array))
+            }
+            // 23.1.1.1, for the `%Array%` that is its own NewTarget: one
+            // argument that is a Number is the length, and every other list of
+            // them is the elements.
+            Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
         }
+    }
+
+    /// The intrinsic of a callee that constructs without 10.1.13.
+    ///
+    /// `%Array%` answers an Array of its own, so the object
+    /// `OrdinaryCreateFromConstructor` would make is never the value `new`
+    /// takes. Every other native of this Realm has no `[[Construct]]`, and
+    /// 7.3.15 refuses it where it is reached.
+    fn native_constructor(&self, func: Reg, heap: &GenerationalHeap) -> Option<Intrinsic> {
+        let object = self.read_reg(func).ok()?.as_object()?;
+        let ObjectKind::NativeFunction { id, .. } = heap.get_object(object)?.kind else {
+            return None;
+        };
+        Intrinsic::from_id(id).filter(|intrinsic| *intrinsic == Intrinsic::ArrayConstructor)
+    }
+
+    /// `Array ( ...values )` of 23.1.1.1.
+    ///
+    /// The prototype is `%Array.prototype%`, because this Realm builds no
+    /// constructor that could be a `NewTarget` of its own.
+    fn construct_array(
+        &self,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let argument = |vm: &Self, index: u16| -> Result<Value, VMError> {
+            if index >= call.arg_count {
+                return Ok(VALUE_UNDEFINED);
+            }
+            let slot = vm
+                .fp
+                .checked_add(call.arg_start.0 as usize)
+                .and_then(|start| start.checked_add(index as usize))
+                .ok_or(VMError::InvalidRegister)?;
+            vm.stack.get(slot).copied().ok_or(VMError::InvalidRegister)
+        };
+        if call.arg_count == 1 {
+            let length = argument(self, 0)?;
+            let Some(number) = length.as_f64() else {
+                let array = realm.array(heap, 1)?;
+                heap.set_array_element(array, 0, length)?;
+                return Ok(Value::from_object(array));
+            };
+            // ToUint32 and SameValueZero together: a Number that is not a
+            // length names no Array of that length.
+            let Some(length) = exact_array_length(number) else {
+                return Err(raise_message(
+                    heap,
+                    realm,
+                    super::realm::NativeErrorKind::RangeError,
+                    "invalid array length",
+                ));
+            };
+            let array = realm.array(heap, 0)?;
+            heap.set_array_length(array, length)?;
+            return Ok(Value::from_object(array));
+        }
+        let count = u32::from(call.arg_count);
+        let array = realm.array(heap, count)?;
+        for index in 0..call.arg_count {
+            let value = argument(self, index)?;
+            heap.set_array_element(array, u32::from(index), value)?;
+        }
+        Ok(Value::from_object(array))
     }
 
     /// Runs one of the `%Array.prototype%` search methods of 23.1.3.
@@ -1567,6 +1646,14 @@ impl RegisterVM {
             .map(|object| object.kind.clone());
         match kind {
             Some(ObjectKind::Array { .. }) if super::realm::array_prototype_owns(name) => Err(GAP),
+            // 23.1.2 gives `%Array%` more than 17 gives a built-in function,
+            // and this Realm builds only some of them.
+            Some(ObjectKind::NativeFunction { id, .. })
+                if id == Intrinsic::ArrayConstructor.id()
+                    && super::realm::array_constructor_owns(name) =>
+            {
+                Err(GAP)
+            }
             Some(ObjectKind::Function { .. } | ObjectKind::NativeFunction { .. })
                 if super::realm::function_prototype_owns(name) =>
             {
@@ -3550,6 +3637,29 @@ impl RegisterVM {
                     arg_count,
                     slot,
                 } => {
+                    // 23.1.1.1 answers an Array of its own whichever way it
+                    // was reached, so a native constructor takes the arguments
+                    // and none of 10.1.13, whose object it would not use.
+                    if let Some(intrinsic) = self.native_constructor(func, heap) {
+                        self.acc = self.call_intrinsic(
+                            intrinsic,
+                            Call {
+                                receiver: VALUE_UNDEFINED,
+                                func,
+                                arg_start,
+                                arg_count,
+                                slot,
+                                return_pc: pc,
+                                resume: None,
+                                caller_code_id: current_code_id,
+                                construct: Some(target),
+                            },
+                            heap,
+                            realm,
+                        )?;
+                        self.write_reg(target, self.acc)?;
+                        return Ok(None);
+                    }
                     // 7.3.15 refuses a callee without `[[Construct]]`, which here
                     // is a callee without the `prototype` 10.2.5 installs.
                     let object =
@@ -3919,6 +4029,22 @@ fn property_store_error(base: Value, heap: &mut GenerationalHeap, realm: &Realm)
         return type_error(heap, realm, "property assignment on null or undefined");
     }
     VMError::Unsupported("ToObject of a primitive for a property assignment")
+}
+
+/// The Array length a Number denotes, if it is one (23.1.1.1).
+///
+/// `ToUint32` and `SameValueZero` together take the Numbers that name a length
+/// and no others: a fraction, a negative, a NaN and anything past 2^32 - 1
+/// name none.
+fn exact_array_length(number: f64) -> Option<u32> {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the comparison answers for exactly the values this converts"
+    )]
+    let length = number as u32;
+    #[expect(clippy::float_cmp, reason = "SameValueZero of an integral Number")]
+    (f64::from(length) == number).then_some(length)
 }
 
 /// The Array index a property name denotes, if it is one (10.4.2.1).

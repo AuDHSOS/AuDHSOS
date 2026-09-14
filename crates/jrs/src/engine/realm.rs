@@ -331,6 +331,10 @@ pub enum Intrinsic {
     ArrayPrototypeSlice,
     /// `Array.prototype.toString` (23.1.3.37).
     ArrayPrototypeToString,
+    /// The `Array` constructor `%Array%` (23.1.1.1).
+    ArrayConstructor,
+    /// `Array.isArray` (23.1.2.3).
+    ArrayIsArray,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -344,11 +348,16 @@ pub enum IntrinsicHolder {
     ArrayPrototype,
     /// `%ArrayIteratorPrototype%`.
     ArrayIteratorPrototype,
+    /// The global object, which 19.1 gives the constructors of clause 20 and
+    /// after.
+    Global,
+    /// `%Array%`, which carries the functions 23.1.2 gives the constructor.
+    ArrayConstructor,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 36] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -383,6 +392,8 @@ impl Intrinsic {
         Self::ArrayPrototypeReverse,
         Self::ArrayPrototypeSlice,
         Self::ArrayPrototypeToString,
+        Self::ArrayConstructor,
+        Self::ArrayIsArray,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -423,6 +434,8 @@ impl Intrinsic {
             | Self::ArrayPrototypeSlice
             | Self::ArrayPrototypeToString => IntrinsicHolder::ArrayPrototype,
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
+            Self::ArrayConstructor => IntrinsicHolder::Global,
+            Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
         }
     }
 
@@ -464,6 +477,8 @@ impl Intrinsic {
             Self::ArrayPrototypeReverse => 31,
             Self::ArrayPrototypeSlice => 32,
             Self::ArrayPrototypeToString => 33,
+            Self::ArrayConstructor => 34,
+            Self::ArrayIsArray => 35,
         }
     }
 
@@ -504,6 +519,8 @@ impl Intrinsic {
             Self::ArrayPrototypeReverse => 31,
             Self::ArrayPrototypeSlice => 32,
             Self::ArrayPrototypeToString => 33,
+            Self::ArrayConstructor => 34,
+            Self::ArrayIsArray => 35,
         }
     }
 
@@ -545,6 +562,8 @@ impl Intrinsic {
             31 => Some(Self::ArrayPrototypeReverse),
             32 => Some(Self::ArrayPrototypeSlice),
             33 => Some(Self::ArrayPrototypeToString),
+            34 => Some(Self::ArrayConstructor),
+            35 => Some(Self::ArrayIsArray),
             _ => None,
         }
     }
@@ -557,6 +576,8 @@ impl Intrinsic {
             Self::ObjectPrototypeIsPrototypeOf => "isPrototypeOf",
             Self::ObjectPrototypePropertyIsEnumerable => "propertyIsEnumerable",
             Self::ObjectPrototypeToString | Self::ArrayPrototypeToString => "toString",
+            Self::ArrayConstructor => "Array",
+            Self::ArrayIsArray => "isArray",
             Self::StringPrototypeCharAt => "charAt",
             Self::StringPrototypeCharCodeAt => "charCodeAt",
             Self::StringPrototypeIndexOf | Self::ArrayPrototypeIndexOf => "indexOf",
@@ -602,7 +623,9 @@ impl Intrinsic {
             | Self::ArrayPrototypePop
             | Self::ArrayPrototypePush
             | Self::ArrayPrototypeReverse
-            | Self::ArrayPrototypeToString => false,
+            | Self::ArrayPrototypeToString
+            | Self::ArrayConstructor
+            | Self::ArrayIsArray => false,
             // 20.1.3.2 and 20.1.3.4 apply ToPropertyKey to the first argument.
             Self::ObjectPrototypeHasOwnProperty | Self::ObjectPrototypePropertyIsEnumerable => {
                 index == 0
@@ -651,7 +674,9 @@ impl Intrinsic {
             | Self::ArrayPrototypeIndexOf
             | Self::ArrayPrototypeLastIndexOf
             | Self::ArrayPrototypeJoin
-            | Self::ArrayPrototypePush => 1,
+            | Self::ArrayPrototypePush
+            | Self::ArrayConstructor
+            | Self::ArrayIsArray => 1,
             Self::StringPrototypeSlice
             | Self::StringPrototypeSubstring
             | Self::ArrayPrototypeSlice => 2,
@@ -822,6 +847,24 @@ pub const FUNCTION_PROPERTIES: [&str; 8] = [
     "toString",
 ];
 
+/// The property names 23.1.2 gives `%Array%`, beside the ones 17 gives every
+/// built-in function.
+///
+/// This Realm builds `isArray` and `prototype` of them; a read of one of the
+/// others is a gap, because answering undefined would say the constructor
+/// does not have it.
+pub const ARRAY_CONSTRUCTOR_PROPERTIES: [&str; 5] =
+    ["from", "fromAsync", "isArray", "of", "prototype"];
+
+/// Whether `%Array%` owns a property of this name.
+#[must_use]
+pub fn array_constructor_owns(name: &[u16]) -> bool {
+    function_prototype_owns(name)
+        || ARRAY_CONSTRUCTOR_PROPERTIES
+            .into_iter()
+            .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
+
 /// Whether a function object or `%Function.prototype%` owns a property of this
 /// name, which a function resolves on its Prototype Chain.
 #[must_use]
@@ -931,6 +974,16 @@ pub enum BindingOutcome {
     Missing(&'static str),
 }
 
+/// The objects the intrinsic functions of a new Realm are installed on.
+struct Holders {
+    object_prototype: Root,
+    function_prototype: Root,
+    string_prototype: Root,
+    array_prototype: Root,
+    array_iterator_prototype: Root,
+    global_object: Root,
+}
+
 /// Global Environment Record of 9.1.1.4.
 ///
 /// The `[[DeclarativeRecord]]` is an object of the heap rather than a map beside
@@ -1003,54 +1056,31 @@ impl Realm {
                 .ok_or(HeapError::InvalidReference)? = prototype;
         }
 
-        let mut intrinsics = [object_prototype; Intrinsic::ALL.len()];
-        let function_parent = Self::rooted(heap, function_prototype)?;
-        for intrinsic in Intrinsic::ALL {
-            let function =
-                heap.allocate_immortal_native(function_parent, intrinsic.id(), intrinsic.length())?;
-            let length_key = intern(heap, "length")?;
-            let length = Value::from_smi(i32::try_from(intrinsic.length()).unwrap_or(i32::MAX));
-            heap.define_own_named(function, length_key, length, builtin_metadata())?;
-            let name_key = intern(heap, "name")?;
-            let name = heap.strings.allocate_str(intrinsic.name())?;
-            heap.define_own_named(
-                function,
-                name_key,
-                Value::from_string(name),
-                builtin_metadata(),
-            )?;
-            *intrinsics
-                .get_mut(intrinsic.index())
-                .ok_or(HeapError::InvalidReference)? =
-                heap.push_root(Value::from_object(function))?;
-            let holder = match intrinsic.holder() {
-                IntrinsicHolder::ObjectPrototype => Self::rooted(heap, object_prototype)?,
-                IntrinsicHolder::StringPrototype => Self::rooted(heap, string_prototype)?,
-                IntrinsicHolder::ArrayPrototype => Self::rooted(heap, array_prototype)?,
-                IntrinsicHolder::ArrayIteratorPrototype => {
-                    Self::rooted(heap, array_iterator_prototype)?
-                }
-            }
-            .as_object()
-            .ok_or(HeapError::InvalidReference)?;
-            let key = PropertyKey::String(heap.strings.intern(intrinsic.name())?);
-            heap.define_own_named(holder, key, Value::from_object(function), builtin_data())?;
-            // 23.1.3.40: %Array.prototype%[@@iterator] is the same function
-            // object as `values`.
-            if intrinsic == Intrinsic::ArrayPrototypeValues {
-                heap.define_own_named(
-                    holder,
-                    WellKnownSymbol::Iterator.key(),
-                    Value::from_object(function),
-                    builtin_data(),
-                )?;
-            }
-        }
+        // 9.1.1.4 binds the global object, and 19.1 gives it the constructors
+        // of clause 20 and after, so it exists before the intrinsics that are
+        // installed on it.
+        let global_object = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let global_object = heap.push_root(Value::from_object(global_object))?;
+        let intrinsics = Self::install_intrinsics(
+            heap,
+            &Holders {
+                object_prototype,
+                function_prototype,
+                string_prototype,
+                array_prototype,
+                array_iterator_prototype,
+                global_object,
+            },
+        )?;
+
+        Self::pair_array_with_its_prototype(heap, &intrinsics, array_prototype)?;
 
         // 9.1.1.4: the Global Environment Record binds the global object and
         // the declarations of every Script of this Realm. 19.1.1: `globalThis`
         // is the [[GlobalThisValue]] with the attributes of 17.
-        let global_object = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let global_object = Self::rooted(heap, global_object)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
         let declarative = heap.allocate_immortal_object(root_shape, VALUE_NULL)?;
         let global_this = Value::from_object(global_object);
         let global_this_name = PropertyKey::String(heap.strings.intern("globalThis")?);
@@ -1392,6 +1422,127 @@ impl GlobalEnvironment {
 }
 
 impl Realm {
+    /// Allocates the native function of every intrinsic and installs it on
+    /// the object 17 gives it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn install_intrinsics(
+        heap: &mut GenerationalHeap,
+        holders: &Holders,
+    ) -> Result<[Root; Intrinsic::ALL.len()], HeapError> {
+        let mut intrinsics = [holders.object_prototype; Intrinsic::ALL.len()];
+        let function_parent = Self::rooted(heap, holders.function_prototype)?;
+        for intrinsic in Intrinsic::ALL {
+            let function =
+                heap.allocate_immortal_native(function_parent, intrinsic.id(), intrinsic.length())?;
+            let length_key = intern(heap, "length")?;
+            let length = Value::from_smi(i32::try_from(intrinsic.length()).unwrap_or(i32::MAX));
+            heap.define_own_named(function, length_key, length, builtin_metadata())?;
+            let name_key = intern(heap, "name")?;
+            let name = heap.strings.allocate_str(intrinsic.name())?;
+            heap.define_own_named(
+                function,
+                name_key,
+                Value::from_string(name),
+                builtin_metadata(),
+            )?;
+            *intrinsics
+                .get_mut(intrinsic.index())
+                .ok_or(HeapError::InvalidReference)? =
+                heap.push_root(Value::from_object(function))?;
+        }
+        // Installing is a pass of its own, so that an intrinsic whose holder
+        // is another intrinsic does not depend on where `Intrinsic::ALL` puts
+        // the two of them.
+        for intrinsic in Intrinsic::ALL {
+            let function = Self::rooted(
+                heap,
+                *intrinsics
+                    .get(intrinsic.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?;
+            let holder = match intrinsic.holder() {
+                IntrinsicHolder::ObjectPrototype => Self::rooted(heap, holders.object_prototype)?,
+                IntrinsicHolder::StringPrototype => Self::rooted(heap, holders.string_prototype)?,
+                IntrinsicHolder::ArrayPrototype => Self::rooted(heap, holders.array_prototype)?,
+                IntrinsicHolder::ArrayIteratorPrototype => {
+                    Self::rooted(heap, holders.array_iterator_prototype)?
+                }
+                IntrinsicHolder::Global => Self::rooted(heap, holders.global_object)?,
+                IntrinsicHolder::ArrayConstructor => Self::rooted(
+                    heap,
+                    *intrinsics
+                        .get(Intrinsic::ArrayConstructor.index())
+                        .ok_or(HeapError::InvalidReference)?,
+                )?,
+            }
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+            let key = PropertyKey::String(heap.strings.intern(intrinsic.name())?);
+            heap.define_own_named(holder, key, function, builtin_data())?;
+            // 23.1.3.40: %Array.prototype%[@@iterator] is the same function
+            // object as `values`.
+            if intrinsic == Intrinsic::ArrayPrototypeValues {
+                heap.define_own_named(
+                    holder,
+                    WellKnownSymbol::Iterator.key(),
+                    function,
+                    builtin_data(),
+                )?;
+            }
+        }
+
+        Ok(intrinsics)
+    }
+
+    /// Ties `%Array%` and `%Array.prototype%` to one another.
+    ///
+    /// 23.1.2.5 gives the constructor its prototype, which is the one property
+    /// of it 17 makes neither writable, enumerable nor configurable, and
+    /// 23.1.3.2 gives that prototype back the constructor it belongs to.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn pair_array_with_its_prototype(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        array_prototype: Root,
+    ) -> Result<(), HeapError> {
+        let constructor = Self::rooted(
+            heap,
+            *intrinsics
+                .get(Intrinsic::ArrayConstructor.index())
+                .ok_or(HeapError::InvalidReference)?,
+        )?;
+        let constructor_object = constructor.as_object().ok_or(HeapError::InvalidReference)?;
+        let prototype_key = intern(heap, "prototype")?;
+        heap.define_own_named(
+            constructor_object,
+            prototype_key,
+            Self::rooted(heap, array_prototype)?,
+            PropertyFlags {
+                writable: false,
+                enumerable: false,
+                configurable: false,
+                is_accessor: false,
+            },
+        )?;
+        let constructor_key = intern(heap, "constructor")?;
+        let prototype_object = Self::rooted(heap, array_prototype)?
+            .as_object()
+            .ok_or(HeapError::InvalidReference)?;
+        heap.define_own_named(
+            prototype_object,
+            constructor_key,
+            constructor,
+            builtin_data(),
+        )?;
+        Ok(())
+    }
+
     /// The function object of one native intrinsic.
     ///
     /// # Errors

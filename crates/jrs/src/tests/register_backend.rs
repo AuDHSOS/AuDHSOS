@@ -27,7 +27,7 @@ fn a_realm_on_the_engine_backend_refuses_what_it_cannot_lower() -> Result<(), Er
     // never an answer. It shows only once the Script has run, which is fatal
     // like every other unsupported feature.
     assert!(matches!(
-        realm.evaluate("typeof Array"),
+        realm.evaluate("typeof Math"),
         Err(Error::Unsupported { .. })
     ));
     assert!(realm.evaluate("1").is_err());
@@ -443,6 +443,40 @@ fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Erro
         let actual = Runtime::with_backend(Limits::default(), Backend::Engine)
             .run(&program, &mut SilentHost);
         assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{source}");
+    }
+    Ok(())
+}
+
+#[test]
+fn the_array_constructor_answers_what_its_realm_built() -> Result<(), Error> {
+    // 23.1.1.1 makes an Array of one length or of many elements, 23.1.2.3
+    // answers IsArray, and 23.1.2.5 and 23.1.3.2 tie the constructor and its
+    // prototype to one another.
+    for source in [
+        "typeof Array",
+        "Array.name",
+        "Array.length",
+        "''+Array.isArray([1])+Array.isArray({})+Array.isArray(1)+Array.isArray('a')",
+        "Array().length",
+        "Array(3).length",
+        "Array('a').length",
+        "''+Array(1,2,3).length+Array(1,2,3)[2]",
+    ] {
+        differential(source)?;
+    }
+    // 23.1.2 gives `%Array%` names this Realm has not built, and a read of one
+    // of them is a gap and not the undefined of a constructor without it.
+    for source in ["Array.from", "Array.of", "typeof Array.fromAsync"] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
     }
     Ok(())
 }
