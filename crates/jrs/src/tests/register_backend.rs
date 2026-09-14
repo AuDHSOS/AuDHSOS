@@ -448,6 +448,24 @@ fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Erro
 }
 
 #[test]
+fn the_constructor_path_survives_a_collection() -> Result<(), Error> {
+    // The Nursery fills after some hundreds of allocating iterations, so only
+    // a long loop reaches the scavenge. 10.2.5 allocates the `prototype` of a
+    // function and 10.1.13 allocates the object `new` creates; a reference
+    // read before either allocation does not survive it, and the collector
+    // follows the accumulator and the registers, not a local of the
+    // interpreter.
+    for source in [
+        "var n=0;for(var i=0;i<2000;i++){var f=function q(){};n+=typeof f==='function'?1:0}n",
+        "function F(){this.x=1}var n=0;for(var i=0;i<2000;i++){n+=new F().x}n",
+        "function F(){this.x=1}var n=0;for(var i=0;i<2000;i++){var a=[i];n+=new F().x+a[0]-i}n",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn an_object_only_one_branch_made_survives_the_join() -> Result<(), Error> {
     // 14.6.2 joins the two states of an `if`. An Object only one branch made
     // exists only where that branch ran, so what its layout says still holds;
@@ -459,6 +477,12 @@ fn an_object_only_one_branch_made_survives_the_join() -> Result<(), Error> {
         "let f=function(d){let o={w:0,x:0};if(d){o={w:1}}else{o={w:2,x:3}}return ''+o.w+o.x};''+f(1)+f(0)",
         "let f=function(d){let o={w:0};if(d){o={a:[1,2]}}return typeof o};''+f(1)+f(0)",
         "let f=function(d){let a=[1];if(d){a=[1,2,3]}return a.length};''+f(1)+f(0)",
+        // One branch gives the Object a property the other never gives it, so
+        // it has no single shape after the join and is read through the
+        // instruction on both paths.
+        "let f=function(d){let r={};if(d){r.e=1}return ''+r.e};''+f(1)+f(0)",
+        "let f=function(d){let r={a:7};if(d){r.e=1}return ''+r.a+r.e};''+f(1)+f(0)",
+        "let f=function(d){let r={a:7};if(d){r.a=1}return r.a};''+f(1)+f(0)",
         // A binding one branch makes an Object and the other a Number keeps
         // no single type, so the join names what the value is at run time.
         "let x=1;if(true){x={}}else{x=2}typeof x",

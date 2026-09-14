@@ -520,9 +520,9 @@ impl RegisterVM {
         code: &BytecodeFunction,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-        callee: Value,
+        func: Reg,
     ) -> Result<ObjectRef, VMError> {
-        let Some(function) = callee.as_object() else {
+        let Some(function) = self.read_reg(func)?.as_object() else {
             return Err(type_error(heap, realm, "value is not a constructor"));
         };
         if !matches!(
@@ -531,12 +531,16 @@ impl RegisterVM {
         ) {
             return Err(type_error(heap, realm, "value is not a constructor"));
         }
+        let shape = heap.shapes.root_shape();
+        let object = self.allocate_object(code, heap, realm, shape)?;
+        // A register is a root the collector forwards, so after an allocation
+        // that may scavenge this names the same function, and 10.1.13 reads
+        // the `prototype` it gives the object from there.
+        let function = self.read_reg(func)?.as_object().ok_or(VMError::TypeError)?;
         let name = PropertyKey::String(heap.strings.intern("prototype")?);
         let Some(property) = heap.lookup_named(function, name)? else {
             return Err(type_error(heap, realm, "value is not a constructor"));
         };
-        let shape = heap.shapes.root_shape();
-        let object = self.allocate_object(code, heap, realm, shape)?;
         if property.value.as_object().is_some() {
             heap.set_object_prototype(object, property.value)?;
         }
@@ -548,14 +552,20 @@ impl RegisterVM {
     ///
     /// The object is allocated first and installed after, so a collection
     /// between the two cannot leave the function holding a forwarded address.
+    /// 10.2.5: gives an ordinary function the `prototype` a constructor has.
+    ///
+    /// The function is the accumulator, not an argument: allocating the
+    /// prototype may scavenge, and a reference read before that allocation
+    /// does not survive it. The collector follows the accumulator, so the
+    /// function is read again on the other side.
     fn make_constructor(
         &mut self,
         code: &BytecodeFunction,
         heap: &mut GenerationalHeap,
         realm: &Realm,
-        function: ObjectRef,
     ) -> Result<(), VMError> {
         let prototype = self.allocate_object(code, heap, realm, heap.shapes.root_shape())?;
+        let function = self.acc.as_object().ok_or(VMError::TypeError)?;
         let constructor = PropertyKey::String(heap.strings.intern("constructor")?);
         heap.define_own_named(
             prototype,
@@ -3523,13 +3533,15 @@ impl RegisterVM {
                         code_id,
                         captures_context,
                     )?;
+                    self.acc = Value::from_object(function);
                     // 10.2.5 gives an ordinary function its `prototype`; a
                     // method and an arrow have none and no `[[Construct]]`.
+                    // The accumulator carries the function through it, because
+                    // the object that becomes its `prototype` is allocated and
+                    // the collector only follows what it can see.
                     if constructible {
-                        self.acc = Value::from_object(function);
-                        self.make_constructor(active_code, heap, realm, function)?;
+                        self.make_constructor(active_code, heap, realm)?;
                     }
-                    self.acc = Value::from_object(function);
                 }
                 Instruction::Construct {
                     func,
@@ -3540,9 +3552,8 @@ impl RegisterVM {
                 } => {
                     // 7.3.15 refuses a callee without `[[Construct]]`, which here
                     // is a callee without the `prototype` 10.2.5 installs.
-                    let callee = self.read_reg(func)?;
                     let object =
-                        self.ordinary_create_from_constructor(active_code, heap, realm, callee)?;
+                        self.ordinary_create_from_constructor(active_code, heap, realm, func)?;
                     self.write_reg(target, Value::from_object(object))?;
                     if let Some(code_id) = self.enter_call(
                         units,

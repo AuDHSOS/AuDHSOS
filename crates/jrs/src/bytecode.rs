@@ -5207,7 +5207,20 @@ impl RegisterLowerer {
             _ => {
                 self.object_layouts =
                     merge_register_layouts(&properties_after_yes, &self.object_layouts);
-                merge_register_bindings(&bindings_after_yes, &bindings_after_no)?
+                let mut merged = merge_register_bindings(&bindings_after_yes, &bindings_after_no)?;
+                // A value whose layout the join could not keep is one this
+                // lowering can no longer name, so every access to it goes to
+                // 10.1.8.1 and none to a shape that holds on one path only.
+                for binding in merged.values_mut() {
+                    if binding
+                        .value_type
+                        .and_then(RegisterType::object_id)
+                        .is_some_and(|id| !self.object_layouts.contains_key(&id))
+                    {
+                        binding.value_type = Some(RegisterType::Unknown);
+                    }
+                }
+                merged
             }
         };
         let value_type = match (yes_flow, no_flow) {
