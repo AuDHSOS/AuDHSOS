@@ -1178,6 +1178,14 @@ impl RegisterVM {
             // them is the elements.
             Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
             Intrinsic::ObjectConstructor => Self::construct_object(argument(self, 0)?, heap, realm),
+            Intrinsic::ObjectDefineProperty
+            | Intrinsic::ObjectGetOwnPropertyDescriptor
+            | Intrinsic::ObjectGetOwnPropertyNames => {
+                let target = argument(self, 0)?;
+                let key = argument(self, 1)?;
+                let attributes = argument(self, 2)?;
+                Self::call_object_intrinsic(intrinsic, target, key, attributes, heap, realm)
+            }
         }
     }
 
@@ -1198,6 +1206,150 @@ impl RegisterVM {
                 Intrinsic::ArrayConstructor | Intrinsic::ObjectConstructor
             )
         })
+    }
+
+    /// The functions 20.1.2 gives `%Object%` that this Realm builds.
+    ///
+    /// Each of them answers or takes a Property Descriptor, which 6.2.6.4 and
+    /// 6.2.6.5 turn into and out of an ordinary object. This engine has no
+    /// accessor properties, so a descriptor that names a `get` or a `set` is
+    /// a gap rather than a descriptor it would silently drop.
+    fn call_object_intrinsic(
+        intrinsic: Intrinsic,
+        target: Value,
+        key: Value,
+        attributes: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        match intrinsic {
+            // 20.1.2.10: the String keys of the object, in the order 10.1.11
+            // gives them. The names are interned, and interning moves no
+            // object, so the Array below may be allocated after them.
+            Intrinsic::ObjectGetOwnPropertyNames => {
+                let object = Self::coerce_object(target, heap, realm)?;
+                let names: Vec<Value> = heap
+                    .own_keys(object)?
+                    .into_iter()
+                    .filter_map(|(key, _)| key.as_string())
+                    .map(Value::from_string)
+                    .collect();
+                let count = u32::try_from(names.len()).map_err(|_| VMError::PropertyLimit)?;
+                let array = realm.array(heap, count)?;
+                for (index, name) in names.into_iter().enumerate() {
+                    let index = u32::try_from(index).map_err(|_| VMError::PropertyLimit)?;
+                    heap.set_array_element(array, index, name)?;
+                }
+                Ok(Value::from_object(array))
+            }
+            // 20.1.2.8: the own property, as the object 6.2.6.4 makes of it.
+            Intrinsic::ObjectGetOwnPropertyDescriptor => {
+                let object = Self::coerce_object(target, heap, realm)?;
+                let name = property_key(key, heap)?;
+                let Some(flags) = heap.own_named_flags(object, name)? else {
+                    return Ok(VALUE_UNDEFINED);
+                };
+                if flags.is_accessor {
+                    return Err(VMError::Unsupported(
+                        "the descriptor of an accessor property",
+                    ));
+                }
+                let value = heap
+                    .lookup_named(object, name)?
+                    .map_or(VALUE_UNDEFINED, |property| property.value);
+                Self::from_property_descriptor(value, flags, heap, realm)
+            }
+            // 20.1.2.4: the descriptor 6.2.6.5 reads, defined on the object.
+            _ => {
+                let Some(object) = target.as_object() else {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "Object.defineProperty called on a value that is not an object",
+                    ));
+                };
+                let name = property_key(key, heap)?;
+                let Some(source) = attributes.as_object() else {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "property descriptor must be an object",
+                    ));
+                };
+                let (value, flags) = Self::to_property_descriptor(source, heap, realm)?;
+                heap.define_own_named(object, name, value, flags)?;
+                Ok(target)
+            }
+        }
+    }
+
+    /// `FromPropertyDescriptor` of 6.2.6.4, for a data property.
+    fn from_property_descriptor(
+        value: Value,
+        flags: PropertyFlags,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        // The value travels in a root, because allocating the descriptor may
+        // scavenge and an Object it holds would not survive that otherwise.
+        heap.enter_scope();
+        let held = heap.push_root(value)?;
+        let descriptor = realm.ordinary_object(heap);
+        let value = heap.root_value(held).unwrap_or(VALUE_UNDEFINED);
+        heap.exit_scope();
+        let descriptor = descriptor?;
+        for (name, entry) in [
+            ("value", value),
+            ("writable", Value::from_bool(flags.writable)),
+            ("enumerable", Value::from_bool(flags.enumerable)),
+            ("configurable", Value::from_bool(flags.configurable)),
+        ] {
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            heap.define_own_named(descriptor, key, entry, PropertyFlags::ordinary_data())?;
+        }
+        Ok(Value::from_object(descriptor))
+    }
+
+    /// `ToPropertyDescriptor` of 6.2.6.5, for a data property.
+    ///
+    /// A field the descriptor does not have is what 6.2.6.6 fills in for a
+    /// property that is being made: absent, which is false for each attribute
+    /// and undefined for the value.
+    fn to_property_descriptor(
+        source: ObjectRef,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<(Value, PropertyFlags), VMError> {
+        for accessor in ["get", "set"] {
+            let key = PropertyKey::String(heap.strings.intern(accessor)?);
+            if heap.lookup_named(source, key)?.is_some() {
+                return Err(VMError::Unsupported("an accessor in a property descriptor"));
+            }
+        }
+        let field = |name: &str, heap: &mut GenerationalHeap| -> Result<Option<Value>, VMError> {
+            let key = PropertyKey::String(heap.strings.intern(name)?);
+            Ok(heap.lookup_named(source, key)?.map(|found| found.value))
+        };
+        let value = field("value", heap)?.unwrap_or(VALUE_UNDEFINED);
+        let writable = field("writable", heap)?;
+        let enumerable = field("enumerable", heap)?;
+        let configurable = field("configurable", heap)?;
+        let truth = |found: Option<Value>| -> Result<bool, VMError> {
+            found.map_or(Ok(false), |value| Self::to_boolean(value, heap))
+        };
+        let writable = truth(writable)?;
+        let enumerable = truth(enumerable)?;
+        let configurable = truth(configurable)?;
+        let _ = realm;
+        Ok((
+            value,
+            PropertyFlags {
+                writable,
+                enumerable,
+                configurable,
+                is_accessor: false,
+            },
+        ))
     }
 
     /// `Object ( value )` of 20.1.1.1.

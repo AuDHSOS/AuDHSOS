@@ -448,6 +448,46 @@ fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Erro
 }
 
 #[test]
+fn a_property_descriptor_crosses_between_the_object_and_the_engine() -> Result<(), Error> {
+    // 20.1.2.10 answers the own String keys in the order 10.1.11 gives them,
+    // 20.1.2.8 answers the descriptor 6.2.6.4 makes of an own property, and
+    // 20.1.2.4 defines the one 6.2.6.5 reads. A field a descriptor does not
+    // carry is absent, which is false for an attribute.
+    for source in [
+        "Object.getOwnPropertyNames({a:1,b:2}).join(',')",
+        "Object.getOwnPropertyNames({}).length",
+        "Object.getOwnPropertyNames([1,2]).join(',')",
+        "var d=Object.getOwnPropertyDescriptor({a:7},'a');''+d.value+d.writable+d.enumerable+d.configurable",
+        "typeof Object.getOwnPropertyDescriptor({},'zz')",
+        "var o={};Object.defineProperty(o,'x',{value:5});''+o.x",
+        "var o={};Object.defineProperty(o,'x',{value:5});var d=Object.getOwnPropertyDescriptor(o,'x');''+d.writable+d.enumerable+d.configurable",
+        "var o={};Object.defineProperty(o,'x',{value:5,enumerable:true});var s='';for(var k in o){s+=k}s",
+        "var o={};Object.defineProperty(o,'x',{value:5});var s='';for(var k in o){s+=k}'['+s+']'",
+        "var o={};''+(Object.defineProperty(o,'x',{value:1})===o)",
+    ] {
+        differential(source)?;
+    }
+    // This engine has no accessor property, so a descriptor that names one is
+    // a gap and not a descriptor with the accessor quietly dropped.
+    for source in [
+        "Object.defineProperty({},'x',{get:function(){return 1}})",
+        "Object.defineProperty({},'x',{set:function(v){}})",
+    ] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn the_object_constructor_answers_what_its_realm_built() -> Result<(), Error> {
     // 17 gives `%Object.prototype%` its `constructor`, so a read of that name
     // is no longer a gap but the constructor it belongs to.
@@ -470,7 +510,7 @@ fn the_object_constructor_answers_what_its_realm_built() -> Result<(), Error> {
     }
     // 20.1.2 gives `%Object%` names this Realm has not built, and `ToObject`
     // of a primitive needs a wrapper it has not built either.
-    for source in ["Object.keys", "Object.defineProperty", "typeof Object(1)"] {
+    for source in ["Object.keys", "Object.create", "typeof Object(1)"] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
         assert!(

@@ -337,6 +337,12 @@ pub enum Intrinsic {
     ArrayIsArray,
     /// The `Object` constructor `%Object%` (20.1.1.1).
     ObjectConstructor,
+    /// `Object.defineProperty` (20.1.2.4).
+    ObjectDefineProperty,
+    /// `Object.getOwnPropertyDescriptor` (20.1.2.8).
+    ObjectGetOwnPropertyDescriptor,
+    /// `Object.getOwnPropertyNames` (20.1.2.10).
+    ObjectGetOwnPropertyNames,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -355,11 +361,13 @@ pub enum IntrinsicHolder {
     Global,
     /// `%Array%`, which carries the functions 23.1.2 gives the constructor.
     ArrayConstructor,
+    /// `%Object%`, which carries the functions 20.1.2 gives the constructor.
+    ObjectConstructor,
 }
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 40] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -397,6 +405,9 @@ impl Intrinsic {
         Self::ArrayConstructor,
         Self::ArrayIsArray,
         Self::ObjectConstructor,
+        Self::ObjectDefineProperty,
+        Self::ObjectGetOwnPropertyDescriptor,
+        Self::ObjectGetOwnPropertyNames,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -439,6 +450,9 @@ impl Intrinsic {
             Self::ArrayIteratorPrototypeNext => IntrinsicHolder::ArrayIteratorPrototype,
             Self::ArrayConstructor | Self::ObjectConstructor => IntrinsicHolder::Global,
             Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
+            Self::ObjectDefineProperty
+            | Self::ObjectGetOwnPropertyDescriptor
+            | Self::ObjectGetOwnPropertyNames => IntrinsicHolder::ObjectConstructor,
         }
     }
 
@@ -483,6 +497,9 @@ impl Intrinsic {
             Self::ArrayConstructor => 34,
             Self::ArrayIsArray => 35,
             Self::ObjectConstructor => 36,
+            Self::ObjectDefineProperty => 37,
+            Self::ObjectGetOwnPropertyDescriptor => 38,
+            Self::ObjectGetOwnPropertyNames => 39,
         }
     }
 
@@ -526,6 +543,9 @@ impl Intrinsic {
             Self::ArrayConstructor => 34,
             Self::ArrayIsArray => 35,
             Self::ObjectConstructor => 36,
+            Self::ObjectDefineProperty => 37,
+            Self::ObjectGetOwnPropertyDescriptor => 38,
+            Self::ObjectGetOwnPropertyNames => 39,
         }
     }
 
@@ -570,6 +590,9 @@ impl Intrinsic {
             34 => Some(Self::ArrayConstructor),
             35 => Some(Self::ArrayIsArray),
             36 => Some(Self::ObjectConstructor),
+            37 => Some(Self::ObjectDefineProperty),
+            38 => Some(Self::ObjectGetOwnPropertyDescriptor),
+            39 => Some(Self::ObjectGetOwnPropertyNames),
             _ => None,
         }
     }
@@ -584,6 +607,9 @@ impl Intrinsic {
             Self::ObjectPrototypeToString | Self::ArrayPrototypeToString => "toString",
             Self::ArrayConstructor => "Array",
             Self::ObjectConstructor => "Object",
+            Self::ObjectDefineProperty => "defineProperty",
+            Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
+            Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
             Self::ArrayIsArray => "isArray",
             Self::StringPrototypeCharAt => "charAt",
             Self::StringPrototypeCharCodeAt => "charCodeAt",
@@ -633,7 +659,10 @@ impl Intrinsic {
             | Self::ArrayPrototypeToString
             | Self::ArrayConstructor
             | Self::ArrayIsArray
-            | Self::ObjectConstructor => false,
+            | Self::ObjectConstructor
+            | Self::ObjectGetOwnPropertyNames => false,
+            // 20.1.2.4 and 20.1.2.8 apply ToPropertyKey to the second argument.
+            Self::ObjectDefineProperty | Self::ObjectGetOwnPropertyDescriptor => index == 1,
             // 20.1.3.2 and 20.1.3.4 apply ToPropertyKey to the first argument.
             Self::ObjectPrototypeHasOwnProperty | Self::ObjectPrototypePropertyIsEnumerable => {
                 index == 0
@@ -685,8 +714,11 @@ impl Intrinsic {
             | Self::ArrayPrototypePush
             | Self::ArrayConstructor
             | Self::ArrayIsArray
-            | Self::ObjectConstructor => 1,
-            Self::StringPrototypeSlice
+            | Self::ObjectConstructor
+            | Self::ObjectGetOwnPropertyNames => 1,
+            Self::ObjectDefineProperty => 3,
+            Self::ObjectGetOwnPropertyDescriptor
+            | Self::StringPrototypeSlice
             | Self::StringPrototypeSubstring
             | Self::ArrayPrototypeSlice => 2,
         }
@@ -868,9 +900,10 @@ pub const ARRAY_CONSTRUCTOR_PROPERTIES: [&str; 5] =
 /// The property names 20.1.2 gives `%Object%`, beside the ones 17 gives every
 /// built-in function.
 ///
-/// This Realm builds `prototype` of them; a read of one of the others is a
-/// gap, because answering undefined would say the constructor does not have
-/// it.
+/// This Realm builds `prototype`, `defineProperty`,
+/// `getOwnPropertyDescriptor` and `getOwnPropertyNames` of them; a read of one
+/// of the others is a gap, because answering undefined would say the
+/// constructor does not have it.
 pub const OBJECT_CONSTRUCTOR_PROPERTIES: [&str; 24] = [
     "assign",
     "create",
@@ -1533,6 +1566,12 @@ impl Realm {
                     Self::rooted(heap, holders.array_iterator_prototype)?
                 }
                 IntrinsicHolder::Global => Self::rooted(heap, holders.global_object)?,
+                IntrinsicHolder::ObjectConstructor => Self::rooted(
+                    heap,
+                    *intrinsics
+                        .get(Intrinsic::ObjectConstructor.index())
+                        .ok_or(HeapError::InvalidReference)?,
+                )?,
                 IntrinsicHolder::ArrayConstructor => Self::rooted(
                     heap,
                     *intrinsics

@@ -5848,6 +5848,9 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         // this lowering did not make and cannot name.
         crate::engine::realm::Intrinsic::ArrayConstructor
         | crate::engine::realm::Intrinsic::ObjectConstructor
+        | crate::engine::realm::Intrinsic::ObjectDefineProperty
+        | crate::engine::realm::Intrinsic::ObjectGetOwnPropertyDescriptor
+        | crate::engine::realm::Intrinsic::ObjectGetOwnPropertyNames
         | crate::engine::realm::Intrinsic::ArrayPrototypeValues
         | crate::engine::realm::Intrinsic::ArrayIteratorPrototypeNext
         | crate::engine::realm::Intrinsic::ArrayPrototypeAt
