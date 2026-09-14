@@ -618,8 +618,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `new` and function declarations on the register engine (focused) | focused | `1ed956e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/new test/language/statements/function --summary` | 510 | 901 | 202 (22.42%) | 26 (2.89%) | 673 (74.69%) |
 | `%Array%` and its methods (focused) | focused | `877447f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,066 (82.82%) | 969 (15.84%) | 82 (1.34%) |
 | `%Array%` and its methods on the register engine (focused) | focused | `877447f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 338 (5.52%) | 642 (10.50%) | 5,137 (83.98%) |
-| Complete pinned suite, including staging and Intl | full | `877447f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `877447f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 5,122 (4.98%) | 19,254 (18.71%) | 78,549 (76.32%) |
+| `%Object%` and its methods (focused) | focused | `0768883` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 5,916 (86.98%) | 862 (12.67%) | 24 (0.35%) |
+| `%Object%` and its methods on the register engine (focused) | focused | `0768883` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 40 (0.59%) | 1,688 (24.82%) | 5,074 (74.60%) |
+| Complete pinned suite, including staging and Intl | full | `0768883` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `0768883` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 5,318 (5.17%) | 19,254 (18.71%) | 78,353 (76.13%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -666,15 +668,17 @@ both of them the same mistake — a reference read before an allocation that may
 scavenge (10.2.5 and 10.1.13).
 With that, `harness/propertyHelper.js` lowers completely, and what stops it is
 no longer the lowering but the constructors clause 19 gives the global object.
-`%Array%` is the first of them this Realm builds: 23.1.1.1 makes an Array of
-one length or of many elements, `new Array(...)` reaches the same function
-because a native constructor answers an object of its own, 23.1.2.3 answers
-`IsArray`, and 23.1.2.5 and 23.1.3.2 tie the constructor and
-`%Array.prototype%` together. A read of a name 23.1.2 gives `%Array%` and this
-Realm has not built, `from` and `of` among them, is a gap and not the undefined
-of a constructor without it. The harness now reaches `Object`, which is the
-next constructor it asks for; that gap still holds 946 variants which count as
-a failed harness today.
+`%Array%` and `%Object%` are the first two it builds: 23.1.1.1 makes an Array of
+one length or of many elements and 20.1.1.1 makes an ordinary object of
+undefined and of null, `new` reaches the same function in both because a native
+constructor answers an object of its own, 23.1.2.3 answers `IsArray`, and 17
+ties each constructor and its prototype together, which gives
+`%Object.prototype%` its own `constructor`. A read of a name 23.1.2 or 20.1.2
+gives a constructor and this Realm has not built, `Array.from` and
+`Object.defineProperty` among them, is a gap and not the undefined of a
+constructor without it, as is `ToObject` of a primitive. The harness asks for
+those next; that gap still holds 946 variants which count as a failed harness
+today.
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
@@ -712,9 +716,9 @@ same suite measured before it, variant for variant. The Array search run was mea
 `db32abdb924343cb345a45286c3df0a2b8f3eb9d`, and the assignment runs at tree
 `e2e3473e55f557f7f7a887963d18a60c857fb433`. The `new` runs and both full runs
 were measured at tree `d98662e20789888cb180d99642144c95e6596f04`. The
-`%Array%` runs and both full runs were measured at tree
-`4dcc52a89757181705ea5687778e857ae9d07408`, whose `crates/jrs` is that of
-`877447f`.
+`%Array%` runs at tree `4dcc52a89757181705ea5687778e857ae9d07408`. The
+`%Object%` runs and both full runs were measured at tree
+`03ef10cc7c6d056da15ef1b96c638e41d8a365b0`, which is the tree of `0768883`.
 
 ### Historical Test262 baseline
 
