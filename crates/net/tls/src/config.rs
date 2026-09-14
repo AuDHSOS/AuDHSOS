@@ -28,9 +28,9 @@ pub struct ClientConfig<'a> {
     pub suites: &'a [CipherSuite],
     /// The moment to check certificate windows against.
     ///
-    /// It is a parameter because this system has no clock yet; when
-    /// `audhsos-time` arrives it becomes an instant, and the field keeps
-    /// its place. Section 11.14 of document 11 carries the seam.
+    /// It is a parameter because no crate of this track reads a clock
+    /// (D-46). The caller fills it from `clock_wall`, whose microseconds
+    /// `UnixTime::to_civil` turns into this type.
     pub now: CivilTime,
 }
 

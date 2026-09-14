@@ -686,6 +686,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   it, and reports the bit it woke with when the image raises the vector.
   Catalog 6.6.59 and 6.6.60.
 
+### Changed
+
+- The documents record that the cryptography track waits on nothing: 11.14
+  strikes the entropy row, which Phase 12 filled with `random_bytes` over
+  `RDSEED`, and the transport row, which Phase 14 filled with `server-net`
+  and the socket protocol, leaving step T8 and the trust-anchor conversion
+  of D-42 as the unwritten parts. The `audhsos-der` rows of 11.3 and 11.12
+  name `audhsos-time` as the dependency it has, and `ClientConfig::now`
+  says where a caller gets the value rather than that this system has no
+  clock.
+
 ### Fixed
 
 - `audhsos-ssh`: a global request the peer makes of the connection

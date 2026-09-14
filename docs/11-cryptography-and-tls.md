@@ -96,7 +96,7 @@ server.
 | `crypto-ec` | `crates/crypto/ec` | c2 | `crypto-ct`, `crypto-hash`, `crypto-bignum` |
 | `crypto-rng` | `crates/crypto/rng` | c2 | `crypto-ct`, `crypto-aead` |
 | `crypto-rsa` | `crates/crypto/rsa` | c2 | `crypto-ct`, `crypto-hash`, `crypto-bignum` |
-| `audhsos-der` | `crates/net/der` | c0 | - (`audhsos-time` when it exists, D-46 and 11.14) |
+| `audhsos-der` | `crates/net/der` | c0 | `audhsos-time` (D-46) |
 | `audhsos-x509` | `crates/net/x509` | c3 | `audhsos-der`, `crypto-hash`, `crypto-ec`, `crypto-rsa` |
 | `audhsos-tls` | `crates/net/tls` | c4 | `crypto-ct`, `crypto-hash`, `crypto-aead`, `crypto-ec`, `crypto-rng`, `audhsos-der`, `audhsos-x509` |
 
@@ -562,10 +562,10 @@ checklist in 4.9.
 | T2 | `crypto-aead`: ChaCha20-Poly1305, then bitsliced AES-GCM | L | implemented |
 | T3 | `crypto-ec`: `fe25519` and X25519, then Ed25519, then P-256, then P-384 | L | implemented |
 | T4 | `crypto-rng` | S | implemented |
-| T5 | `audhsos-der` | M | implemented but for the time conversion (11.14) |
+| T5 | `audhsos-der` | M | implemented, the time conversion included: `read_time` yields a `CivilTime` the calendar validated |
 | T6 | `audhsos-x509` with the test certificate builder | L | implemented |
 | T7 | `audhsos-tls` | XL | implemented |
-| T8 | Integration, jointly with step D10 of [document 12](12-parallel-work.md): transport over `net-tcp`, the entropy system call, and the HTTP client of `net-http` | M | |
+| T8 | Integration, jointly with step D10 of [document 12](12-parallel-work.md): transport over a TCP connection of `server-net`, `random_bytes`, and the HTTP client of `net-http` | M | Phase 15, the one step left |
 | R1 | `crypto-bignum`: the limb core out of `crypto-ec`, a runtime `Modulus`, and exponentiation (11.15) | M-L | implemented |
 | R2 | `crypto-rsa`: the key with its bounds, and PKCS #1 v1.5 | M | implemented |
 | R3 | `crypto-rsa`: MGF1 and EMSA-PSS-VERIFY | M | implemented |
@@ -601,20 +601,21 @@ separate workspace and no part of the checks.
 | The track grows past its estimate | kernel phases slip | the track is independent; work on it happens between phases, never instead of one |
 | Zeroization is best effort without `unsafe` | key material may remain in freed memory | keys live in `Secret<N>` with the shortest possible lifetime; the limit is documented rather than hidden |
 
-## 11.14 What this track is waiting on
+## 11.14 What this track was waiting on
 
-Everything in this section is specified elsewhere and not yet built. It is
-listed here because a seam that lives only in a commit message is a seam
-nobody finds again.
+Every row of the table is built; the rows stay because a seam that lives
+only in a commit message is a seam nobody finds again. Two things above
+them are still unwritten: the trust-anchor conversion the PEM row names,
+and step T8, which joins the four to the client.
 
-| What is missing | Where it is felt | Who owns it |
+| What was missing | Where it was felt | Who owns it |
 |-----------------|------------------|-------------|
 | ~~A clock~~ | `audhsos-time` arrived, so `audhsos-der` yields a `CivilTime` that the calendar validated and `verify_chain` compares one as its `now`. The source for that value arrived with D-137: the loader reads the firmware clock through `GetTime` before it leaves the boot services, the moment travels in the boot information, and `clock_wall` answers it to userland as microseconds since the epoch. No crate of this track reads a clock, which is what D-46 asked; what changed is that there is now a caller that can fill the parameter | D-137, catalog 6.6.71; step T8 is what joins the two |
 | ~~A PEM decoder~~ | `audhsos-encoding` arrived with strict Base64, hex, and PEM. The trust-anchor conversion of D-42 has its decoder; what is still unwritten is the conversion itself, which is xtask work and not this track's | D-47, [document 12](12-parallel-work.md) |
-| A source of entropy | `crypto-rng` ships the generator and the `Entropy` trait; no product code can construct a generator without a source | `RDSEED` in the HAL behind a `random_bytes` system call, D-43 |
-| A transport | step T8: the client is sans-I/O and needs bytes moved for it | `net-tcp`, D-49, [document 12](12-parallel-work.md) |
+| ~~A source of entropy~~ | The source arrived in Phase 12: `RDSEED` in `kernel-hal-x86_64` behind the system call `random_bytes`, number 49, which answers the four words a `ChaChaRng` seed is and `Unavailable` where a word cannot be filled inside the retry bound. A process seeds one generator at startup, as `app-ssh` does at `crates/user/net-programs/src/bin/app_ssh.rs:621` | D-43, D-110, D-121; the reference machine carries `+rdrand,+rdseed` |
+| ~~A transport~~ | The transport arrived in Phase 14: `server-net` over `net-stack`, the socket protocol of `user-proto` with one ring per direction, and the client helper `Stream` at `crates/user/programs/src/socket.rs:217`, which `app-ssh` and `app-net` already move bytes through. What step T8 writes is the glue between that socket and `Connection`, not the socket | D-49, D-119, D-142, D-143; [document 13](13-the-network-on-the-machine.md) |
 
-None of these blocks the steps that remain. T6 and T7 were built against
+None of these blocked the steps that remain. T6 and T7 were built against
 the fields of a certificate time and needed no change when the calendar
 arrived: the type moved to `audhsos-time` and gained its checks, and the
 signatures that carry it stayed as they were.

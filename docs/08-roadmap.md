@@ -547,9 +547,9 @@ Status: specified in [document 11](11-cryptography-and-tls.md); steps T1
 to T7 and R1 to R6 are implemented and reviewed as a whole. T8 is the
 integration and is Phase 15: it needs a transport from track D, the
 `random_bytes` system call, and the driver and server that carry the
-bytes, and all three of those are Phases 12 to 14. What the track is
-still waiting on, and who owns each piece, is section 11.14; what has to
-exist under it is [document 13](13-the-network-on-the-machine.md).
+bytes, and all three arrived with Phases 12 to 14. What the track waited
+on, and who owns each piece, is section 11.14; what has to exist under it
+is [document 13](13-the-network-on-the-machine.md).
 
 R1 to R6 are RSA verification, specified in section 11.15 and
 implemented. They are the one thing on this track that changed what the
@@ -558,10 +558,10 @@ that is RSA to the root cannot be walked, which is most of the public web.
 They needed nothing from another track and were built between phases as T1
 to T7 were.
 
-The track prepares HTTPS for the day a network stack exists. Every crate
-in it is pure logic without I/O or allocation, host-tested, and depends on
-no kernel, loader, or userland crate. It therefore has no place in the
-phase order and is built between phases.
+The track prepared HTTPS for the network stack Phase 14 brought. Every
+crate in it is pure logic without I/O or allocation, host-tested, and
+depends on no kernel, loader, or userland crate. It therefore has no place
+in the phase order and is built between phases.
 
 | Step | Crates | Size | Ends with |
 |------|--------|------|-----------|
