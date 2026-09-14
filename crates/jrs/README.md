@@ -574,8 +574,11 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 
 ### Current Test262 result
 
-The latest measurements were run on 2026-09-14 against Test262 revision
-`419d3e0a2273ba01a3bfcbec423f2801425b8e93`. The checkout was obtained with
+The latest measurements were run on 2026-09-14 and 2026-09-15 against Test262
+revision
+`419d3e0a2273ba01a3bfcbec423f2801425b8e93`; the rows carry the implementation
+commit each one measured, and the compound-assignment rows and the full runs
+beside them are of the second day. The checkout was obtained with
 `sh tools/xtask.sh test-ext` and was clean at that pinned revision, which
 `sh tools/xtask.sh test-ext --status` reported back. Every run used the
 original Test262 harness, a fresh realm per test, no expected-failure masks
