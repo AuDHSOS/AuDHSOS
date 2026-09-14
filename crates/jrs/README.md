@@ -618,10 +618,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `new` and function declarations on the register engine (focused) | focused | `1ed956e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/new test/language/statements/function --summary` | 510 | 901 | 202 (22.42%) | 26 (2.89%) | 673 (74.69%) |
 | `%Array%` and its methods (focused) | focused | `877447f` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,066 (82.82%) | 969 (15.84%) | 82 (1.34%) |
 | `%Array%` and its methods on the register engine (focused) | focused | `877447f` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 338 (5.52%) | 642 (10.50%) | 5,137 (83.98%) |
-| `%Object%` and its methods (focused) | focused | `0768883` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 5,916 (86.98%) | 862 (12.67%) | 24 (0.35%) |
-| `%Object%` and its methods on the register engine (focused) | focused | `0768883` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 40 (0.59%) | 1,688 (24.82%) | 5,074 (74.60%) |
-| Complete pinned suite, including staging and Intl | full | `0768883` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `0768883` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 5,318 (5.17%) | 19,254 (18.71%) | 78,353 (76.13%) |
+| `%Object%` and its methods (focused) | focused | `399ba5a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 5,916 (86.98%) | 862 (12.67%) | 24 (0.35%) |
+| `%Object%` and its methods on the register engine (focused) | focused | `399ba5a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 286 (4.20%) | 1,838 (27.02%) | 4,678 (68.77%) |
+| Complete pinned suite, including staging and Intl | full | `399ba5a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `399ba5a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 5,599 (5.44%) | 19,434 (18.88%) | 77,892 (75.68%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -675,10 +675,18 @@ constructor answers an object of its own, 23.1.2.3 answers `IsArray`, and 17
 ties each constructor and its prototype together, which gives
 `%Object.prototype%` its own `constructor`. A read of a name 23.1.2 or 20.1.2
 gives a constructor and this Realm has not built, `Array.from` and
-`Object.defineProperty` among them, is a gap and not the undefined of a
-constructor without it, as is `ToObject` of a primitive. The harness asks for
-those next; that gap still holds 946 variants which count as a failed harness
-today.
+`Object.create` among them, is a gap and not the undefined of a constructor
+without it, as is `ToObject` of a primitive.
+`%Object%` carries the three functions of 20.1.2 a Script uses to ask what a
+property is and to say what it should be:
+`getOwnPropertyNames` answers the own String keys in the order 10.1.11 gives
+them, `getOwnPropertyDescriptor` answers the object 6.2.6.4 makes of an own
+property, and `defineProperty` defines the one 6.2.6.5 reads. A field a
+descriptor does not carry is absent, which 6.2.6.6 reads as false, so a
+property defined from `{value: 5}` is enumerated by no `for`-`in`. An accessor
+in a descriptor is a gap, because this engine has no accessor property. The
+harness now asks for `%Function%`; that gap still holds 946 variants which
+count as a failed harness today.
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
@@ -718,7 +726,7 @@ same suite measured before it, variant for variant. The Array search run was mea
 were measured at tree `d98662e20789888cb180d99642144c95e6596f04`. The
 `%Array%` runs at tree `4dcc52a89757181705ea5687778e857ae9d07408`. The
 `%Object%` runs and both full runs were measured at tree
-`03ef10cc7c6d056da15ef1b96c638e41d8a365b0`, which is the tree of `0768883`.
+`595f01d820090f035e3b992c1db9990181d2ae95`, which is the tree of `399ba5a`.
 
 ### Historical Test262 baseline
 
