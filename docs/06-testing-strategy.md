@@ -4287,7 +4287,13 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - The block of an `else` is read past and a case whose name repeats is
   dropped, because the interpreter runs one arm of a conditional, which
   D-192 and D-189 record.
-- 873 pass, 9 answer differently and 14 482 are refused or stopped.
+- The database of a file is written at a page size of 1024, which is
+  what `testfixture` is built with and what the answers the files write
+  were recorded under.
+- A statement reaches the connection that reads or the one that writes
+  by its first word, and a `WITH` clause stands in front of a statement
+  that writes as well, so the words after it say which.
+- 893 pass, 9 answer differently and 14 462 are refused or stopped.
   Document 16, section 16.23 groups the nine. Earlier runs answered
   14, then 27, then 17, then 13 differently; sixteen were defects,
   which D-181, D-184, D-189 and D-197 record and twenty-eight cases of
@@ -4483,6 +4489,29 @@ D-198, document 16 step Q8.
 - A term that does not stop is refused at `RECURSION_ROWS` rows, which
   is where this crate answers rows into memory rather than handing one
   row on as SQLite does.
+
+### 6.6.129 The bytes a seed draws (`db-sqlite`)
+
+D-199, document 16 step Q8.
+
+- A connection told a seed writes rows of `randomblob(400)`, and the
+  two rows hold four hundred bytes each and hold different bytes,
+  because each statement draws from where the connection stands.
+- Two databases told the same seed answer the same bytes.
+- `randomblob` answers one byte where the count is less than one, and
+  a count above `SQLITE_MAX_LENGTH` is refused.
+- An expression answered against no connection is refused with
+  `Error::NoRandom`, which is what a generated column reads as.
+
+### 6.6.130 The schema tree past one page (`db-sqlite`)
+
+D-200, document 16 step Q8.
+
+- `schema-deep.db` is eight tables at a page size of 512, whose schema
+  tree is a root over four leaves. What this crate writes is that file
+  byte for byte, the bytes of the blank record included.
+- Twenty schema rows written into page one leave page one an interior
+  page whose tree holds all twenty.
 
 ## 6.7 CI pipeline
 

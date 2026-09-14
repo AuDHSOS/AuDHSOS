@@ -61,6 +61,7 @@ fn quoted(value: &Value) -> String {
         core::slice::from_ref(value),
         Collation::Binary,
         crate::header::Encoding::Utf8,
+        None,
     )
     .expect("a function that always answers");
     String::from_utf8_lossy(&answer.text().unwrap_or_default()).into_owned()

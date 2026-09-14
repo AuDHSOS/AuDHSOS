@@ -76,6 +76,9 @@ pub struct Writer {
     /// The nonce every checksum of the journal begins at, which comes
     /// from SQLite's random source.
     nonce: u32,
+    /// Where `random` and `randomblob` take their bytes from, which
+    /// comes from SQLite's random source as well.
+    random: crate::random::Source,
     /// How many bytes the header of the journal takes, which is what
     /// the device says a write cannot damage beyond.
     sector: u32,
@@ -109,6 +112,7 @@ impl Writer {
             pages,
             mode: Mode::Delete,
             nonce: 0,
+            random: crate::random::Source::default(),
             sector: SECTOR,
             journal: None,
             log: None,
@@ -136,6 +140,16 @@ impl Writer {
                 library_version: LIBRARY_VERSION,
             },
         })
+    }
+
+    /// Where `random` and `randomblob` take their bytes from.
+    ///
+    /// SQLite seeds `sqlite3_randomness` from the operating system,
+    /// which this crate has none of, so the caller says where the bytes
+    /// come from and a connection that is not told answers the bytes
+    /// nought draws.
+    pub const fn randomness(&mut self, seed: u64) {
+        self.random = crate::random::Source::new(seed);
     }
 
     /// `PRAGMA journal_mode`, with the nonce every checksum of the
@@ -659,13 +673,30 @@ impl Writer {
             &SCHEMA,
             4,
         );
-        let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?.unwrap_or(0);
-        insert(
-            &mut self.pages,
-            crate::image::SCHEMA_ROOT,
-            rowid.saturating_add(1),
-            &row,
-        )?;
+        let rowid = largest(&self.pages, crate::image::SCHEMA_ROOT)?
+            .unwrap_or(0)
+            .saturating_add(1);
+        // `sqlite3StartTable` writes a record of five noughts and
+        // `sqlite3EndTable` writes over it, so the page keeps the bytes
+        // of the blank record where the row no longer stands.
+        // `sqlite3CreateIndex` writes its row once and has no blank.
+        if matches!(definition, Definition::Index(_)) {
+            insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
+        } else {
+            let blank = crate::record::write(
+                &[
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                ],
+                &SCHEMA,
+                4,
+            );
+            insert(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &blank)?;
+            crate::tree::update(&mut self.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
+        }
         self.header.schema_cookie = self.header.schema_cookie.saturating_add(1);
         self.header.schema_format = 4;
         if let Definition::Index(index) = definition {
@@ -726,7 +757,10 @@ impl Writer {
             .collect();
         let (root, alias, affinities, rows, kept) = {
             let bytes = self.image();
-            let database = Database::open(&bytes)?;
+            // Every statement draws from where the connection stands,
+            // so two statements of one connection answer `randomblob`
+            // differently.
+            let database = Database::open(&bytes)?.seeded(self.random.word());
             let (table, root) = database.table(&name).ok_or(Error::Unsupported)?;
             if table.without_rowid {
                 return Err(Error::Unsupported);
@@ -811,9 +845,15 @@ struct Held<'a> {
     rowid: i64,
     /// What encoding the file keeps its text in.
     encoding: Encoding,
+    /// Where `random` and `randomblob` take their bytes from.
+    random: &'a crate::random::Source,
 }
 
 impl crate::eval::Row for Held<'_> {
+    fn random(&self) -> Option<&crate::random::Source> {
+        Some(self.random)
+    }
+
     fn column(
         &self,
         schema: Option<&[u8]>,
@@ -910,6 +950,7 @@ impl Writer {
                     values,
                     rowid: *rowid,
                     encoding: self.header.encoding,
+                    random: &self.random,
                 };
                 let keep = match statement.filter {
                     None => true,
@@ -981,6 +1022,7 @@ impl Writer {
                     values: &values,
                     rowid,
                     encoding: self.header.encoding,
+                    random: &self.random,
                 };
                 let keep = match statement.filter {
                     None => true,

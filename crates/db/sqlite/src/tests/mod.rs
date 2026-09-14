@@ -621,6 +621,10 @@ pub(super) const ADDED_COLUMN: &[(&str, &str, &[u8])] = &[
     ),
 ];
 
+/// The schema tree grown past one page, which is `balance_deeper` over
+/// a root that begins a hundred bytes in.
+pub(super) const SCHEMA_DEEP: &[u8] = include_bytes!("fixtures/schema-deep.db");
+
 /// The auto-vacuum dimension of document 16, section 16.11, over the
 /// write path: the same four hundred rows under both settings, chains
 /// that cross the second pointer-map page, the free pages a file that

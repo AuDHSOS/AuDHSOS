@@ -359,6 +359,16 @@ for case in "index-empty.db:CREATE TABLE t(a,b); CREATE INDEX ta ON t(a);" \
     printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
 done
 
+# The schema tree grown past one page, which is `balance_deeper` over a
+# root that begins a hundred bytes in.
+rm -f "$out/schema-deep.db"
+schema_deep=""
+for i in 1 2 3 4 5 6 7 8; do
+    schema_deep="$schema_deep CREATE TABLE t$i(a TEXT NOT NULL, b INTEGER NOT NULL, c TEXT NOT NULL, d TEXT NOT NULL, e TEXT NOT NULL, f INTEGER NOT NULL DEFAULT 0, g TEXT NOT NULL, h TEXT NOT NULL);"
+done
+"$sqlite" "$out/schema-deep.db" "PRAGMA page_size=512;$schema_deep"
+printf '%s\t%s bytes\n' schema-deep.db "$(wc -c <"$out/schema-deep.db" | tr -d ' ')"
+
 rm -f "$out/unchained.db"
 "$sqlite" "$out/unchained.db" "PRAGMA page_size=512; CREATE TABLE t(n INTEGER, s TEXT); WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c WHERE i<40) INSERT INTO t(rowid,n,s) SELECT (i*17)%41, i, replace(hex(zeroblob(i*30)),'0','x') FROM c; DELETE FROM t WHERE rowid%3!=0;"
 printf '%s\t%s bytes\n' unchained.db "$(wc -c <"$out/unchained.db" | tr -d ' ')"

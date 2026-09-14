@@ -25,6 +25,7 @@ pub mod number;
 pub mod page;
 pub mod parse;
 pub mod pragma;
+pub mod random;
 pub mod record;
 pub mod schema;
 pub mod token;

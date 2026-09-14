@@ -33,6 +33,9 @@ pub enum Error {
     /// `COLLATE` naming one the C library would have been given
     /// through its API names.
     NoCollation,
+    /// `random` or `randomblob` where the caller gave the connection no
+    /// source of bytes to answer them from.
+    NoRandom,
     /// A shape of expression this engine does not answer yet.
     Unsupported,
     /// The tree names a node the arena does not hold.
@@ -147,6 +150,12 @@ pub trait Row {
     /// blob, each of which shows the bytes as they are stored.
     fn encoding(&self) -> Encoding {
         Encoding::Utf8
+    }
+
+    /// Where `random` and `randomblob` take their bytes from, or
+    /// nothing where the caller gave this row no source of them.
+    fn random(&self) -> Option<&crate::random::Source> {
+        None
     }
 
     /// What the aggregate call `id` answered for the group this row
@@ -424,6 +433,7 @@ fn called(
         &values,
         inside.unwrap_or(row.collation()),
         row.encoding(),
+        row.random(),
     )?;
     Ok(Answer {
         value,
@@ -953,7 +963,13 @@ fn like(
     if let Some(escape) = escape {
         args.push(answer(arena, escape, sql, row, depth)?.value);
     }
-    let answered = func::call(function, &args, row.collation(), row.encoding())?;
+    let answered = func::call(
+        function,
+        &args,
+        row.collation(),
+        row.encoding(),
+        row.random(),
+    )?;
     Ok(Answer::plain(match (negated, logic(&answered)) {
         (_, None) => Value::Null,
         (true, Some(truth)) => Value::Int(i64::from(!truth)),

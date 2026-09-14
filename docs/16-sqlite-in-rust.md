@@ -669,7 +669,8 @@ Size: L.
 3. Subqueries, `WITH`, and the window clauses the parser refuses. A
    `WITH` term that reads itself is built, which D-198 records; the
    window clauses are open.
-4. The functions that need a clock or a random source.
+4. The functions that need a clock or a random source. `random` and
+   `randomblob` are built, which D-199 records; the clock is open.
 
 ### Done when
 
@@ -680,7 +681,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 873 pass, 9 answer differently, and 14 482 name something the
+files, 893 pass, 9 answer differently, and 14 462 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.
@@ -706,8 +707,13 @@ Size: M.
 
 ### How a case is counted
 
-A file keeps one database. An `execsql` outside a case is the file
-setting itself up: it runs so that the cases after it read what it
+A file keeps one database, at the page size of 1024 `testfixture` is
+built with, because that is the size the answers the files write were
+recorded under. A statement is run through the connection that reads or
+the one that writes by its first word, and a `WITH` clause carries a
+statement that writes as well, so the words after it say which.
+
+An `execsql` outside a case is the file setting itself up: it runs so that the cases after it read what it
 wrote, and it is counted only by stopping the file where the engine
 refuses it. The cases run in the order they are written, because each
 builds on the ones before it. A case the engine refuses stops the file,

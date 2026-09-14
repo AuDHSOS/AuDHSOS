@@ -62,6 +62,10 @@ pub enum Function {
     Trunc,
     /// `zeroblob(N)`.
     Zeroblob,
+    /// `random()`.
+    Random,
+    /// `randomblob(N)`.
+    Randomblob,
     /// `changes()`, `total_changes()` and `last_insert_rowid()`, each
     /// of which is nought for a connection that has written nothing.
     Written,
@@ -435,6 +439,18 @@ const TABLE: &[Entry] = &[
         function: Function::Upper,
     },
     Entry {
+        name: b"random",
+        least: 0,
+        most: Some(0),
+        function: Function::Random,
+    },
+    Entry {
+        name: b"randomblob",
+        least: 1,
+        most: Some(1),
+        function: Function::Randomblob,
+    },
+    Entry {
         name: b"zeroblob",
         least: 1,
         most: Some(1),
@@ -481,6 +497,7 @@ pub fn call(
     args: &[Value],
     collation: Collation,
     encoding: Encoding,
+    random: Option<&crate::random::Source>,
 ) -> Result<Value, Error> {
     let arg = |at: usize| args.get(at).cloned().unwrap_or(Value::Null);
     let first = arg(0);
@@ -534,6 +551,21 @@ pub fn call(
                 }),
                 Value::Null | Value::Text(_) | Value::Blob(_) => Value::Null,
             }
+        }
+        Function::Random => {
+            let source = random.ok_or(Error::NoRandom)?;
+            Value::Int(i64::from_ne_bytes(source.word().to_ne_bytes()))
+        }
+        Function::Randomblob => {
+            let source = random.ok_or(Error::NoRandom)?;
+            // `randomBlob` answers one byte where the count is less
+            // than one, which `randomblob(NULL)` is.
+            let count = first.to_integer().max(1);
+            let count = usize::try_from(count).map_err(|_| Error::TooBig)?;
+            if count > MAX_LENGTH {
+                return Err(Error::TooBig);
+            }
+            Value::Blob(source.bytes(count))
         }
         Function::Zeroblob => {
             // `sqlite3_value_int64` of a `NULL` is nought, so a blob of

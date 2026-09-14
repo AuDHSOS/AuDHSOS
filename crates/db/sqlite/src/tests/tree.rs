@@ -406,22 +406,19 @@ fn tall_row(number: i64) -> Vec<u8> {
 }
 
 #[test]
-fn a_schema_larger_than_one_page_is_refused() {
-    use crate::error::Error;
+fn a_schema_larger_than_one_page_grows_a_tree_under_page_one() {
     // The schema table begins on page one, which carries the database
-    // header before its own, so growing it is the balance this crate
-    // does not write.
+    // header before its own header, so the root of its tree hands a
+    // child a hundred bytes more than any other root does.
     let mut pages = Pages::new(512, 0).unwrap();
-    let mut refused = 0;
     for number in 1..=20_i64 {
         let name = alloc::format!("t{number}");
         let sql = alloc::format!("CREATE TABLE {name}(a, b, c, d, e, f, g, h)");
         let row = schema_row(&name, number + 1, &sql, Encoding::Utf8);
-        if insert(&mut pages, 1, number, &row) == Err(Error::Balance) {
-            refused += 1;
-        }
+        insert(&mut pages, 1, number, &row).unwrap();
     }
-    assert!(refused > 0, "page one took every row it was given");
+    assert_eq!(pages.page(1).unwrap().kind(), Kind::InteriorTable);
+    assert_eq!(crate::tree::largest(&pages, 1).unwrap(), Some(20));
 }
 
 #[test]
@@ -436,9 +433,6 @@ fn what_the_two_halves_of_the_balance_refuse() {
     let child = deepen(&mut pages, deeper).unwrap();
     assert_eq!(pages.page(deeper).unwrap().kind(), Kind::InteriorIndex);
     assert_eq!(pages.page(child).unwrap().kind(), Kind::LeafIndex);
-    // The schema's own tree begins on the page the database header is
-    // on, so it cannot become the page above a child.
-    assert_eq!(deepen(&mut pages, 1), Err(Error::Balance));
     // A page with no cell has no largest key to divide on.
     let empty = pages.add(Kind::LeafTable, 0).unwrap();
     let parent = pages.add(Kind::InteriorTable, 0).unwrap();
@@ -3125,5 +3119,92 @@ fn what_a_with_term_that_reads_itself_refuses() {
             b"WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c) SELECT * FROM c LIMIT 3"
         ),
         Err(crate::db::Error::Recursion)
+    );
+}
+
+#[test]
+fn random_and_randomblob_answer_the_bytes_the_seed_draws() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.randomness(7);
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(1, randomblob(400))")
+        .unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(2, randomblob(400))")
+        .unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    let answer = database
+        .query(b"SELECT length(b), typeof(b) FROM t ORDER BY a")
+        .unwrap();
+    assert_eq!(
+        answer.rows,
+        [
+            alloc::vec![Value::Int(400), Value::Text(b"blob".to_vec())],
+            alloc::vec![Value::Int(400), Value::Text(b"blob".to_vec())],
+        ]
+    );
+    // Two statements of one connection draw from where the connection
+    // stands, so neither answers what the other did.
+    let bytes = database.query(b"SELECT b FROM t ORDER BY a").unwrap().rows;
+    assert_ne!(bytes.first(), bytes.get(1));
+    // A blob longer than a value holds is refused, which is
+    // `SQLITE_MAX_LENGTH`.
+    assert_eq!(
+        database.query(b"SELECT randomblob(1000000001)").err(),
+        Some(crate::db::Error::Eval(crate::eval::Error::TooBig))
+    );
+    // `randomblob` answers one byte where the count is less than one,
+    // and a database that is told no seed answers the bytes nought
+    // draws.
+    assert_eq!(
+        database
+            .query(b"SELECT length(randomblob(0)), length(randomblob(-5)), typeof(random())")
+            .unwrap()
+            .rows,
+        [alloc::vec![
+            Value::Int(1),
+            Value::Int(1),
+            Value::Text(b"integer".to_vec())
+        ]]
+    );
+    // A seed says what the bytes are, so a database told the same seed
+    // answers the same bytes.
+    let one = Database::open(&written).unwrap().seeded(11);
+    let other = Database::open(&written).unwrap().seeded(11);
+    let draw = |database: &Database<'_>| database.query(b"SELECT randomblob(8)").unwrap().rows;
+    assert_eq!(draw(&one), draw(&other));
+    // A generated column is answered against the row alone, which has
+    // no source under it, so the column is refused where it is read.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE u(a, b AS (randomblob(4)))")
+        .unwrap();
+    writer.run(b"INSERT INTO u(a) VALUES(1)").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert!(database.query(b"SELECT b FROM u").is_err());
+}
+
+#[test]
+fn the_schema_tree_grows_past_one_page_as_the_shell_grows_it() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for at in 1..=8u32 {
+        let sql = alloc::format!(
+            "CREATE TABLE t{at}(a TEXT NOT NULL, b INTEGER NOT NULL, c TEXT NOT NULL, \
+             d TEXT NOT NULL, e TEXT NOT NULL, f INTEGER NOT NULL DEFAULT 0, \
+             g TEXT NOT NULL, h TEXT NOT NULL)"
+        );
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    same(
+        "schema-deep.db",
+        &writer.written(),
+        crate::tests::SCHEMA_DEEP,
+        512,
     );
 }

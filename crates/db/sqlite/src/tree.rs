@@ -1585,27 +1585,31 @@ fn balance(
 /// becomes the interior page above it.
 pub(crate) fn deepen(pages: &mut Pages, root: u32) -> Result<u32, Error> {
     let kind = pages.page(root)?.kind();
-    // A root on page one begins a hundred bytes in, so its content does
-    // not fit a child that begins at nought.
-    if root == crate::image::SCHEMA_ROOT {
-        return Err(Error::Balance);
-    }
     let child = pages.add(kind, root)?;
-    // `copyNodeContent`: the child takes the header and the pointer
-    // array of the root, and the content area of the root, which it can
-    // because the two pages begin at the same byte. The bytes between
-    // the two stay the noughts a page added at the end of the file
-    // carries. A root on page one begins a hundred bytes in and is the
-    // balance this crate does not write.
+    // `copyNodeContent`: the child takes the content area of the root
+    // as it lies, which it can because a cell of a root on page one
+    // lies above the hundredth byte already, and then as many bytes
+    // from the root's own header as the root's cell pointer array ends
+    // at. That count is the array's own offset and not its length, so a
+    // root on page one hands the child a hundred bytes of what lies
+    // after its array as well.
     let usable = pages.usable();
     let page = pages.page(root)?;
-    let array_end = kind
-        .header_len()
+    let header =
+        usize::from(root == crate::image::SCHEMA_ROOT).saturating_mul(crate::header::HEADER_LEN);
+    let array_end = header
+        .saturating_add(kind.header_len())
         .saturating_add(page.cells().saturating_mul(2));
     let data = page.content_start();
     let bytes = pages.bytes(root)?.to_vec();
-    pages.put(child, 0, bytes.get(..array_end).ok_or(Error::Overrun)?);
     pages.put(child, data, bytes.get(data..usable).ok_or(Error::Overrun)?);
+    pages.put(
+        child,
+        0,
+        bytes
+            .get(header..header.saturating_add(array_end))
+            .ok_or(Error::Overrun)?,
+    );
     let mut above = pages.writer(root)?;
     above.zero(kind.interior());
     above.point(child)?;

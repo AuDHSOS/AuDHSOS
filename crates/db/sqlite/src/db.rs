@@ -397,6 +397,8 @@ pub struct Database<'a> {
     views: Vec<View>,
     /// What encoding its text is in.
     encoding: Encoding,
+    /// Where `random` and `randomblob` take their bytes from.
+    random: crate::random::Source,
 }
 
 /// One view of the schema: a name, the statement it answers, and the
@@ -514,10 +516,24 @@ impl<'a> Database<'a> {
             tables,
             views: Vec::new(),
             encoding,
+            random: crate::random::Source::default(),
         };
         database.read_indexes()?;
         database.read_views()?;
         Ok(database)
+    }
+
+    /// The same database, with `random` and `randomblob` answering the
+    /// bytes `seed` draws.
+    ///
+    /// SQLite seeds `sqlite3_randomness` from the operating system,
+    /// which this crate has none of, so the caller says where the bytes
+    /// come from and a database that is not told answers the bytes
+    /// nought draws.
+    #[must_use]
+    pub const fn seeded(mut self, seed: u64) -> Self {
+        self.random = crate::random::Source::new(seed);
+        self
     }
 
     /// Reads the views of the schema.
@@ -3375,6 +3391,10 @@ impl eval::Row for Cursor<'_> {
 
     fn encoding(&self) -> Encoding {
         self.encoding
+    }
+
+    fn random(&self) -> Option<&crate::random::Source> {
+        Some(&self.reach.database.random)
     }
 
     fn aggregate(&self, id: ExprId) -> Option<Value> {

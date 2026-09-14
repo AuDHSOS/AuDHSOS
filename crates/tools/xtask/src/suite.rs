@@ -414,7 +414,7 @@ pub(crate) fn braced(text: &str) -> Option<(&str, &str)> {
 /// each ended.
 fn score(file: &str, cases: &[Step]) -> Score {
     let mut score = Score::default();
-    let Ok(mut writer) = Writer::new(4096, 0, Encoding::Utf8) else {
+    let Ok(mut writer) = Writer::new(1024, 0, Encoding::Utf8) else {
         return score;
     };
     let show = SHOW.load(std::sync::atomic::Ordering::Relaxed);
@@ -580,10 +580,49 @@ const HELD: [&str; 2] = ["wal", "utf16"];
 /// answers one out of what it holds and a file with no table holds no
 /// encoding.
 fn reads(sql: &str) -> bool {
-    let word = sql.split_whitespace().next().unwrap_or("");
-    word.eq_ignore_ascii_case("select")
-        || word.eq_ignore_ascii_case("values")
-        || word.eq_ignore_ascii_case("with")
+    let words = words(sql);
+    let first = words.first().map_or("", String::as_str);
+    if first.eq_ignore_ascii_case("select") || first.eq_ignore_ascii_case("values") {
+        return true;
+    }
+    // A `WITH` clause stands in front of a statement that writes as
+    // well, and the statement after it is what says which connection
+    // runs the whole.
+    first.eq_ignore_ascii_case("with")
+        && !words.iter().any(|word| {
+            ["insert", "update", "delete", "replace"]
+                .iter()
+                .any(|written| word.eq_ignore_ascii_case(written))
+        })
+}
+
+/// The words of a statement that stand outside a string.
+fn words(sql: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut held = String::new();
+    let mut quote: Option<char> = None;
+    for character in sql.chars() {
+        match quote {
+            Some(mark) if character == mark => quote = None,
+            Some(_) => {}
+            None if matches!(character, '\'' | '"' | '`') => {
+                quote = Some(character);
+                if !held.is_empty() {
+                    out.push(std::mem::take(&mut held));
+                }
+            }
+            None if character.is_alphanumeric() || character == '_' => held.push(character),
+            None => {
+                if !held.is_empty() {
+                    out.push(std::mem::take(&mut held));
+                }
+            }
+        }
+    }
+    if !held.is_empty() {
+        out.push(held);
+    }
+    out
 }
 
 /// The statements of one case, split on the semicolons that stand
