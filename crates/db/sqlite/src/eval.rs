@@ -269,7 +269,7 @@ fn answer(
         } => listed(arena, value, list, negated, sql, row, deeper),
         Node::Cast { value, ty } => {
             let mut inner = answer(arena, value, sql, row, deeper)?;
-            let affinity = Affinity::of_type(ty.text(sql));
+            let affinity = Affinity::of_type(&crate::schema::dequote(ty.text(sql)));
             cast(&mut inner.value, affinity, row.encoding());
             inner.affinity = affinity;
             Ok(inner)
@@ -279,7 +279,8 @@ fn answer(
             // A name no collation of this crate answers is refused, as
             // `sqlite3GetCollSeq` refuses one the connection was never
             // given.
-            inner.collation = Some(Collation::of_name(name.text(sql)).ok_or(Error::NoCollation)?);
+            let named = crate::schema::dequote(name.text(sql));
+            inner.collation = Some(Collation::of_name(&named).ok_or(Error::NoCollation)?);
             inner.written = true;
             Ok(inner)
         }
@@ -405,7 +406,7 @@ fn called(
         }
         values.push(argument.value);
     }
-    let function = func::lookup(name.text(sql), values.len())?;
+    let function = func::lookup(&crate::schema::dequote(name.text(sql)), values.len())?;
     if function == Function::Unlikely && values.len() == 2 {
         // `likelihood(X,Y)` tells the planner how often X holds,
         // so Y has to be a fraction and has to be written out.
@@ -642,7 +643,7 @@ fn listed(
 fn written_collation(arena: &Arena, id: ExprId, sql: &[u8]) -> Option<Collation> {
     let node = arena.node(id)?;
     if let Node::Collate { name, .. } = node {
-        return Collation::of_name(name.text(sql));
+        return Collation::of_name(&crate::schema::dequote(name.text(sql)));
     }
     // A `CASE` is read in the order it was written, because the first
     // `COLLATE` written under it is the one it answers with, and

@@ -207,7 +207,7 @@ fn collated(arena: &Arena, id: ExprId, sql: &[u8]) -> (Option<Span>, Option<Coll
     match arena.node(id) {
         Some(Node::Collate { value, name }) => (
             collated(arena, value, sql).0,
-            Collation::of_name(name.text(sql)),
+            Collation::of_name(&dequote(name.text(sql))),
         ),
         Some(Node::Column { column, .. }) => (Some(column), None),
         _ => (None, None),

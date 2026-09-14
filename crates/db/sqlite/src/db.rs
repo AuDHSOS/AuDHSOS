@@ -2378,7 +2378,7 @@ fn collect(
     } = node
     {
         let count = if star { 0 } else { arena.children(args).len() };
-        if let Some(which) = agg::lookup(name.text(sql), count) {
+        if let Some(which) = agg::lookup(&dequote(name.text(sql)), count) {
             // `DISTINCT` puts the rows through one column, so there has
             // to be exactly one for them to go through.
             if inside || (distinct && count != 1) {
@@ -2551,7 +2551,7 @@ fn keys(
         // `ORDER BY m COLLATE binary` sorts by the column answered
         // under the name `m` and not by the column of that name.
         if let Some(name) = column_named(arena, uncollated(arena, term.expr)) {
-            let name = name.text(sql);
+            let name = &dequote(name.text(sql));
             if let Some(at) = names
                 .iter()
                 .position(|answered| answered.eq_ignore_ascii_case(name))
@@ -2736,12 +2736,12 @@ fn compared(
     match arena.node(id) {
         Some(Node::Collate { value, name }) => (
             compared(arena, value, sql, sides).0,
-            Collation::of_name(name.text(sql)),
+            Collation::of_name(&dequote(name.text(sql))),
         ),
         Some(Node::Column { column, .. }) => sides
             .iter()
             .flat_map(|side| &side.shape.columns)
-            .find(|held| held.name.eq_ignore_ascii_case(column.text(sql)))
+            .find(|held| held.name.eq_ignore_ascii_case(&dequote(column.text(sql))))
             .map_or((Affinity::None, None), |held| {
                 (held.affinity, held.collation)
             }),

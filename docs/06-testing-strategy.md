@@ -4287,7 +4287,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
 - The block of an `else` is read past and a case whose name repeats is
   dropped, because the interpreter runs one arm of a conditional, which
   D-192 and D-189 record.
-- 867 pass, 9 answer differently and 14 488 are refused or stopped.
+- 868 pass, 9 answer differently and 14 487 are refused or stopped.
   Document 16, section 16.23 groups the nine. Earlier runs answered
   14, then 27, then 17, then 13 differently; sixteen were defects,
   which D-181, D-184, D-189 and D-197 record and twenty-eight cases of
@@ -4449,6 +4449,9 @@ D-197, document 16 step Q9.
 
 - One column reached under all four quotes and bare: `a`, `"a"`,
   `[a]`, `` `a` ``, and `"t"."a"` over `FROM "t"`.
+- The same column reached through a quoted name of every other kind:
+  an `ORDER BY` term, an `ORDER BY` term that matches an alias, a
+  `GROUP BY` term, a `COLLATE`, a function call and a `CAST` type.
 - A quote doubled inside a name is one quote of the name, so the
   column `"""cb"""` is called `"cb"`: the star, the qualified star
   and the name itself each answer its value, and the answer names it

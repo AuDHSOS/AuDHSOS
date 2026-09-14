@@ -2457,6 +2457,13 @@ fn a_column_is_named_with_its_quotes_off() {
         b"SELECT [a] FROM t",
         b"SELECT `a` FROM t",
         b"SELECT \"t\".\"a\" FROM \"t\"",
+        b"SELECT a FROM t ORDER BY \"a\"",
+        b"SELECT a AS m FROM t ORDER BY \"m\"",
+        b"SELECT a FROM t GROUP BY \"a\"",
+        b"SELECT a COLLATE \"nocase\" FROM t",
+        b"SELECT \"count\"(*) FROM t",
+        b"SELECT CAST(a AS \"int\") FROM t",
+        b"SELECT \"abs\"(a) FROM t",
     ] {
         assert_eq!(database.query(sql).unwrap().rows, [[Value::Int(1)]]);
     }
