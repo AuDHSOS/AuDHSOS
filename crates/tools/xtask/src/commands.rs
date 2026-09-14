@@ -1907,10 +1907,17 @@ fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
 
 /// Builds selected regression binaries once, then replays their corpora
 /// concurrently. Targets without a corpus directory are reported and skipped.
+///
+/// The replay is the longest step of `check`, and one corpus is far larger
+/// than the rest: it is split over as many shards as there are jobs, so the
+/// machine replays it instead of one core of it. The binaries are built in
+/// release, because a replay has to reach the panics of a target, not the
+/// speed of a debug build.
 fn replay_corpora(root: &Path, targets: &[&FuzzTarget]) -> Result<(), Error> {
     let jobs = test_jobs()?;
+    let fuzz = root.join("fuzz");
     let mut selected = Vec::new();
-    let mut build = Cmd::cargo().cwd(&root.join("fuzz")).arg("build");
+    let mut build = Cmd::cargo().cwd(&fuzz).args(["build", "--release"]);
     for target in targets {
         let corpus = corpus_of(root, target.name);
         if corpus.is_dir() {
@@ -1930,14 +1937,32 @@ fn replay_corpora(root: &Path, targets: &[&FuzzTarget]) -> Result<(), Error> {
             .iter()
             .find(|exe| exe.name == name && !exe.test)
             .ok_or_else(|| Error::Parse(format!("Cargo reported no executable for `{name}`")))?;
-        commands.push(
-            executable
-                .command()
-                .cwd(&root.join("fuzz"))
-                .arg(corpus.display().to_string()),
-        );
+        for shard in corpus_shards(&fs::walk_files(&corpus)?, jobs) {
+            let paths = shard.iter().map(|path| {
+                path.strip_prefix(&fuzz)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string()
+            });
+            commands.push(executable.command().cwd(&fuzz).args(paths));
+        }
     }
     run_parallel(&commands, jobs)
+}
+
+/// Deals `files` round robin into at most `jobs` shards.
+///
+/// Round robin rather than in blocks, because the corpus is named by content
+/// hash and a slow neighbourhood of it is no more spread out than any other.
+/// A corpus with fewer files than jobs gets one shard per file, and an empty
+/// one gets no shard at all. The paths stay relative to the directory the
+/// replay runs in, which keeps a shard of some thousand of them far inside
+/// the argument limit of one command.
+fn corpus_shards(files: &[PathBuf], jobs: usize) -> Vec<Vec<PathBuf>> {
+    let count = jobs.max(1).min(files.len());
+    (0..count)
+        .map(|shard| files.iter().skip(shard).step_by(count).cloned().collect())
+        .collect()
 }
 
 /// The corpus directory of one target.
