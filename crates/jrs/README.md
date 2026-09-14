@@ -608,8 +608,8 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | Property reads, writes and `Function.prototype` on the register engine (focused) | focused | `30b9dc3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/property-accessors test/language/expressions/assignment test/built-ins/Function/prototype --summary` | 815 | 1,494 | 60 (4.02%) | 1,100 (73.63%) | 334 (22.36%) |
 | `instanceof`, `new` and `throw` (focused) | focused | `cae1518` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/instanceof test/language/expressions/new test/language/statements/throw --summary` | 116 | 231 | 187 (80.95%) | 0 (0.00%) | 44 (19.05%) |
 | `instanceof`, `new` and `throw` on the register engine (focused) | focused | `cae1518` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/instanceof test/language/expressions/new test/language/statements/throw --summary` | 116 | 231 | 0 (0.00%) | 189 (81.82%) | 42 (18.18%) |
-| Complete pinned suite, including staging and Intl | full | `cfd2cc5` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `cfd2cc5` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 4,875 (4.74%) | 19,251 (18.70%) | 78,799 (76.56%) |
+| Complete pinned suite, including staging and Intl | full | `f432ea4` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `f432ea4` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 4,912 (4.77%) | 19,259 (18.71%) | 78,754 (76.52%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -633,8 +633,13 @@ any value (10.2.11), so `harness/assert.js`, `harness/sta.js` and
 `for`-`in` takes any head and the binding its declaration made. A conversion
 that would have to call a `valueOf` of the Script names that as a gap instead of
 answering, which is most of what the engine now reports as unsupported.
-`harness/propertyHelper.js` stops at `arguments`, which 10.4.4 has yet to
-reach.
+A body reads its own `arguments`: 10.2.11 binds the name and 10.4.4 makes the
+unmapped object 10.4.4.7 describes, with its index properties, `length` and
+`callee`. A body that also writes a parameter could observe the mapping this
+engine does not build and is not lowered.
+`harness/propertyHelper.js` now reaches `isConfigurable` and stops at
+`delete`, which 13.5.1 has yet to reach. That one gap holds 946 variants which
+count as a failed harness today.
 
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
@@ -667,8 +672,9 @@ same suite measured before it, variant for variant. The Array search run was mea
 `e946d0f5655a3f90d2abe1986bcff7cdc9765072`. The function, call and `this` runs at tree
 `94023436def77fc0433c7d67f6bc9b70c2455b5d`, the property runs at tree
 `c1f2a4fab7808f3b5c8b0824f8a8ed3eaf11dc59`, the `instanceof` runs at tree
-`504da841ece9a2a58acc73ef0a5968b53daa252c`, and the `this` runs together with both full runs at tree
-`3d20693df017258270e78d197497481761dee88b`.
+`504da841ece9a2a58acc73ef0a5968b53daa252c`, and the `this` runs at tree
+`3d20693df017258270e78d197497481761dee88b`. Both full runs were measured at tree
+`c59555549869f85751a4491fde2ffc72e99c8813`, which is the tree of `f432ea4`.
 
 ### Historical Test262 baseline
 
