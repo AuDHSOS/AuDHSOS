@@ -23,6 +23,7 @@ mod header;
 mod image;
 mod index;
 mod journal;
+mod json;
 mod key_tree;
 mod matrix;
 mod number;

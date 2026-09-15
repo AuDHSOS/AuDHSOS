@@ -25,6 +25,44 @@ use crate::number;
 use crate::utf8;
 use crate::value::{Collation, Value, apply_numeric, compare, stored};
 
+/// Which of the JSON family a name calls, where `json_set` and
+/// `jsonb_set` are the same one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Json {
+    /// `json(X)` and `jsonb(X)`.
+    Json,
+    /// `json_array(...)`.
+    Array,
+    /// `json_array_insert(X,P,V,...)`.
+    ArrayInsert,
+    /// `json_array_length(X[,P])`.
+    ArrayLength,
+    /// `json_error_position(X)`.
+    ErrorPosition,
+    /// `json_extract(X,P,...)`.
+    Extract,
+    /// `json_insert(X,P,V,...)`.
+    Insert,
+    /// `json_object(...)`.
+    Object,
+    /// `json_patch(T,P)`.
+    Patch,
+    /// `json_pretty(X[,I])`.
+    Pretty,
+    /// `json_quote(X)`.
+    Quote,
+    /// `json_remove(X,P,...)`.
+    Remove,
+    /// `json_replace(X,P,V,...)`.
+    Replace,
+    /// `json_set(X,P,V,...)`.
+    Set,
+    /// `json_type(X[,P])`.
+    Type,
+    /// `json_valid(X[,F])`.
+    Valid,
+}
+
 /// A function this engine has.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Function {
@@ -44,6 +82,14 @@ pub enum Function {
     Strftime,
     /// `timediff(ONE, OTHER)`.
     Timediff,
+    /// One of the JSON family, and whether the name is the `jsonb`
+    /// one, which answers the binary form.
+    Json {
+        /// Which of the family.
+        which: Json,
+        /// Whether the name begins `jsonb`.
+        binary: bool,
+    },
     /// `ceil(X)` and `ceiling(X)`.
     Ceil,
     /// `char(...)`.
@@ -175,6 +221,240 @@ const TABLE: &[Entry] = &[
         least: 0,
         most: None,
         function: Function::Datetime,
+    },
+    Entry {
+        name: b"json",
+        least: 1,
+        most: Some(1),
+        function: Function::Json {
+            which: Json::Json,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_array",
+        least: 0,
+        most: None,
+        function: Function::Json {
+            which: Json::Array,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_array_insert",
+        least: 1,
+        most: None,
+        function: Function::Json {
+            which: Json::ArrayInsert,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_array_length",
+        least: 1,
+        most: Some(2),
+        function: Function::Json {
+            which: Json::ArrayLength,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_error_position",
+        least: 1,
+        most: Some(1),
+        function: Function::Json {
+            which: Json::ErrorPosition,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_extract",
+        least: 2,
+        most: None,
+        function: Function::Json {
+            which: Json::Extract,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_insert",
+        least: 1,
+        most: None,
+        function: Function::Json {
+            which: Json::Insert,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_object",
+        least: 0,
+        most: None,
+        function: Function::Json {
+            which: Json::Object,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_patch",
+        least: 2,
+        most: Some(2),
+        function: Function::Json {
+            which: Json::Patch,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_pretty",
+        least: 1,
+        most: Some(2),
+        function: Function::Json {
+            which: Json::Pretty,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_quote",
+        least: 1,
+        most: Some(1),
+        function: Function::Json {
+            which: Json::Quote,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_remove",
+        least: 1,
+        most: None,
+        function: Function::Json {
+            which: Json::Remove,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_replace",
+        least: 1,
+        most: None,
+        function: Function::Json {
+            which: Json::Replace,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_set",
+        least: 1,
+        most: None,
+        function: Function::Json {
+            which: Json::Set,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_type",
+        least: 1,
+        most: Some(2),
+        function: Function::Json {
+            which: Json::Type,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"json_valid",
+        least: 1,
+        most: Some(2),
+        function: Function::Json {
+            which: Json::Valid,
+            binary: false,
+        },
+    },
+    Entry {
+        name: b"jsonb",
+        least: 1,
+        most: Some(1),
+        function: Function::Json {
+            which: Json::Json,
+            binary: true,
+        },
+    },
+    Entry {
+        name: b"jsonb_array",
+        least: 0,
+        most: None,
+        function: Function::Json {
+            which: Json::Array,
+            binary: true,
+        },
+    },
+    Entry {
+        name: b"jsonb_array_insert",
+        least: 1,
+        most: None,
+        function: Function::Json {
+            which: Json::ArrayInsert,
+            binary: true,
+        },
+    },
+    Entry {
+        name: b"jsonb_extract",
+        least: 2,
+        most: None,
+        function: Function::Json {
+            which: Json::Extract,
+            binary: true,
+        },
+    },
+    Entry {
+        name: b"jsonb_insert",
+        least: 1,
+        most: None,
+        function: Function::Json {
+            which: Json::Insert,
+            binary: true,
+        },
+    },
+    Entry {
+        name: b"jsonb_object",
+        least: 0,
+        most: None,
+        function: Function::Json {
+            which: Json::Object,
+            binary: true,
+        },
+    },
+    Entry {
+        name: b"jsonb_patch",
+        least: 2,
+        most: Some(2),
+        function: Function::Json {
+            which: Json::Patch,
+            binary: true,
+        },
+    },
+    Entry {
+        name: b"jsonb_remove",
+        least: 1,
+        most: None,
+        function: Function::Json {
+            which: Json::Remove,
+            binary: true,
+        },
+    },
+    Entry {
+        name: b"jsonb_replace",
+        least: 1,
+        most: None,
+        function: Function::Json {
+            which: Json::Replace,
+            binary: true,
+        },
+    },
+    Entry {
+        name: b"jsonb_set",
+        least: 1,
+        most: None,
+        function: Function::Json {
+            which: Json::Set,
+            binary: true,
+        },
     },
     Entry {
         name: b"julianday",
@@ -551,271 +831,343 @@ pub fn lookup(name: &[u8], count: usize) -> Result<Function, Error> {
 pub fn call(
     function: Function,
     args: &[Value],
+    carried: &[bool],
     collation: Collation,
     encoding: Encoding,
     random: Option<&crate::random::Source>,
-) -> Result<Value, Error> {
+) -> Result<(Value, bool), Error> {
     let arg = |at: usize| args.get(at).cloned().unwrap_or(Value::Null);
     let first = arg(0);
-    Ok(match function {
-        Function::Date => crate::date::date(args),
-        Function::Time => crate::date::time(args),
-        Function::Datetime => crate::date::datetime(args),
-        Function::Julianday => crate::date::julianday(args),
-        Function::Unixepoch => crate::date::unixepoch(args),
-        Function::Strftime => crate::date::strftime(args),
-        Function::Timediff => crate::date::timediff(args),
-        Function::Typeof => Value::Text(type_name(&first).to_vec()),
-        Function::Length => match &first {
-            Value::Null => Value::Null,
-            Value::Text(bytes) => Value::Int(count_of(utf8::count(bytes))),
-            other => Value::Int(count_of(other.text().unwrap_or_default().len())),
-        },
-        Function::OctetLength => match &first {
-            Value::Null => Value::Null,
-            // Bytes as the database holds them, not as this engine does.
-            Value::Blob(bytes) => Value::Int(count_of(bytes.len())),
-            other => Value::Int(count_of(
-                stored(&other.text().unwrap_or_default(), encoding).len(),
-            )),
-        },
-        Function::Pi => Value::Real(core::f64::consts::PI),
-        Function::Format => crate::format::format(args)?,
-        // This engine reads and does not write, so no statement of it
-        // has ever changed a row or made a rowid. Q7 of document 16 is
-        // where these stop being nought.
-        Function::Written => Value::Int(0),
-        // `math2Func`: either value not a number after the numeric
-        // affinity answers nothing, and a remainder that is not a number
-        // answers nothing as well.
-        Function::Modulo => match (numeric(first), numeric(arg(1))) {
-            (Some(left), Some(right)) => real(remainder(left, right)),
-            _ => Value::Null,
-        },
-        // `math1Func`: a value that is not a number after the numeric
-        // affinity is one the function answers nothing for.
-        Function::Degrees => {
-            numeric(first).map_or(Value::Null, |number| Value::Real(number * DEGREES))
-        }
-        Function::Radians => {
-            numeric(first).map_or(Value::Null, |number| Value::Real(number * RADIANS))
-        }
-        // `ceilingFunc`: an integer is answered as it stands, because
-        // rounding it changes nothing and would lose its width.
-        Function::Ceil | Function::Floor | Function::Trunc => {
-            let mut value = first;
-            apply_numeric(&mut value, false);
-            match value {
-                Value::Int(number) => Value::Int(number),
-                Value::Real(number) => Value::Real(match function {
-                    Function::Ceil => ceiling(number),
-                    Function::Floor => flooring(number),
-                    _ => truncated(number),
-                }),
-                Value::Null | Value::Text(_) | Value::Blob(_) => Value::Null,
+    Ok((
+        match function {
+            Function::Date => crate::date::date(args),
+            Function::Time => crate::date::time(args),
+            Function::Datetime => crate::date::datetime(args),
+            Function::Julianday => crate::date::julianday(args),
+            Function::Unixepoch => crate::date::unixepoch(args),
+            Function::Strftime => crate::date::strftime(args),
+            Function::Timediff => crate::date::timediff(args),
+            Function::Typeof => Value::Text(type_name(&first).to_vec()),
+            Function::Length => match &first {
+                Value::Null => Value::Null,
+                Value::Text(bytes) => Value::Int(count_of(utf8::count(bytes))),
+                other => Value::Int(count_of(other.text().unwrap_or_default().len())),
+            },
+            Function::OctetLength => match &first {
+                Value::Null => Value::Null,
+                // Bytes as the database holds them, not as this engine does.
+                Value::Blob(bytes) => Value::Int(count_of(bytes.len())),
+                other => Value::Int(count_of(
+                    stored(&other.text().unwrap_or_default(), encoding).len(),
+                )),
+            },
+            Function::Pi => Value::Real(core::f64::consts::PI),
+            Function::Format => crate::format::format(args)?,
+            // This engine reads and does not write, so no statement of it
+            // has ever changed a row or made a rowid. Q7 of document 16 is
+            // where these stop being nought.
+            Function::Written => Value::Int(0),
+            // `math2Func`: either value not a number after the numeric
+            // affinity answers nothing, and a remainder that is not a number
+            // answers nothing as well.
+            Function::Modulo => match (numeric(first), numeric(arg(1))) {
+                (Some(left), Some(right)) => real(remainder(left, right)),
+                _ => Value::Null,
+            },
+            // `math1Func`: a value that is not a number after the numeric
+            // affinity is one the function answers nothing for.
+            Function::Degrees => {
+                numeric(first).map_or(Value::Null, |number| Value::Real(number * DEGREES))
             }
-        }
-        Function::Random => {
-            let source = random.ok_or(Error::NoRandom)?;
-            Value::Int(i64::from_ne_bytes(source.word().to_ne_bytes()))
-        }
-        Function::Randomblob => {
-            let source = random.ok_or(Error::NoRandom)?;
-            // `randomBlob` answers one byte where the count is less
-            // than one, which `randomblob(NULL)` is.
-            let count = first.to_integer().max(1);
-            let count = usize::try_from(count).map_err(|_| Error::TooBig)?;
-            if count > MAX_LENGTH {
-                return Err(Error::TooBig);
+            Function::Radians => {
+                numeric(first).map_or(Value::Null, |number| Value::Real(number * RADIANS))
             }
-            Value::Blob(source.bytes(count))
-        }
-        Function::Zeroblob => {
-            // `sqlite3_value_int64` of a `NULL` is nought, so a blob of
-            // no bytes is what `zeroblob(NULL)` answers.
-            let count = first.to_integer().max(0);
-            let count = usize::try_from(count).map_err(|_| Error::TooBig)?;
-            if count > MAX_LENGTH {
-                return Err(Error::TooBig);
+            // `ceilingFunc`: an integer is answered as it stands, because
+            // rounding it changes nothing and would lose its width.
+            Function::Ceil | Function::Floor | Function::Trunc => {
+                let mut value = first;
+                apply_numeric(&mut value, false);
+                match value {
+                    Value::Int(number) => Value::Int(number),
+                    Value::Real(number) => Value::Real(match function {
+                        Function::Ceil => ceiling(number),
+                        Function::Floor => flooring(number),
+                        _ => truncated(number),
+                    }),
+                    Value::Null | Value::Text(_) | Value::Blob(_) => Value::Null,
+                }
             }
-            Value::Blob(alloc::vec![0u8; count])
-        }
-        Function::Abs => match first {
-            Value::Null => Value::Null,
-            Value::Int(number) => Value::Int(number.checked_abs().ok_or(Error::Overflow)?),
-            other => Value::Real(other.to_real().abs()),
-        },
-        Function::Sign => {
-            let mut value = first;
-            apply_numeric(&mut value, false);
-            match value {
-                Value::Int(_) | Value::Real(_) => {
-                    let number = value.to_real();
-                    Value::Int(if number < 0.0 {
-                        -1
+            Function::Random => {
+                let source = random.ok_or(Error::NoRandom)?;
+                Value::Int(i64::from_ne_bytes(source.word().to_ne_bytes()))
+            }
+            Function::Randomblob => {
+                let source = random.ok_or(Error::NoRandom)?;
+                // `randomBlob` answers one byte where the count is less
+                // than one, which `randomblob(NULL)` is.
+                let count = first.to_integer().max(1);
+                let count = usize::try_from(count).map_err(|_| Error::TooBig)?;
+                if count > MAX_LENGTH {
+                    return Err(Error::TooBig);
+                }
+                Value::Blob(source.bytes(count))
+            }
+            Function::Zeroblob => {
+                // `sqlite3_value_int64` of a `NULL` is nought, so a blob of
+                // no bytes is what `zeroblob(NULL)` answers.
+                let count = first.to_integer().max(0);
+                let count = usize::try_from(count).map_err(|_| Error::TooBig)?;
+                if count > MAX_LENGTH {
+                    return Err(Error::TooBig);
+                }
+                Value::Blob(alloc::vec![0u8; count])
+            }
+            Function::Abs => match first {
+                Value::Null => Value::Null,
+                Value::Int(number) => Value::Int(number.checked_abs().ok_or(Error::Overflow)?),
+                other => Value::Real(other.to_real().abs()),
+            },
+            Function::Sign => {
+                let mut value = first;
+                apply_numeric(&mut value, false);
+                match value {
+                    Value::Int(_) | Value::Real(_) => {
+                        let number = value.to_real();
+                        Value::Int(if number < 0.0 {
+                            -1
+                        } else {
+                            i64::from(number > 0.0)
+                        })
+                    }
+                    _ => Value::Null,
+                }
+            }
+            Function::Coalesce => args
+                .iter()
+                .find(|value| **value != Value::Null)
+                .cloned()
+                .unwrap_or(Value::Null),
+            Function::Iif => {
+                // `iif(a,b,c,d,e)` is `CASE WHEN a THEN b WHEN c THEN d ELSE
+                // e END`, and with an even number of arguments there is no
+                // `ELSE`.
+                let mut at = 0;
+                loop {
+                    let Some(condition) = args.get(at) else {
+                        break Value::Null;
+                    };
+                    let Some(result) = args.get(at.saturating_add(1)) else {
+                        break condition.clone();
+                    };
+                    if condition.truth(false) {
+                        break result.clone();
+                    }
+                    at = at.saturating_add(2);
+                }
+            }
+            Function::Unlikely => first,
+            Function::Nullif => {
+                if compare(&first, &arg(1), collation) == core::cmp::Ordering::Equal {
+                    Value::Null
+                } else {
+                    first
+                }
+            }
+            Function::Min | Function::Max => {
+                let wants_greater = function == Function::Max;
+                let mut best = first;
+                for value in args.iter().skip(1) {
+                    if best == Value::Null || *value == Value::Null {
+                        return Ok((Value::Null, false));
+                    }
+                    // `min` takes the later of two that compare equal and
+                    // `max` keeps the earlier, which is what the mask in
+                    // `minmaxFunc` comes to.
+                    let order = compare(&best, value, collation);
+                    let take = if wants_greater {
+                        order == core::cmp::Ordering::Less
                     } else {
-                        i64::from(number > 0.0)
-                    })
+                        order != core::cmp::Ordering::Less
+                    };
+                    if take {
+                        best = value.clone();
+                    }
+                }
+                best
+            }
+            Function::Lower | Function::Upper => match first.text() {
+                None => Value::Null,
+                Some(bytes) => Value::Text(
+                    bytes
+                        .iter()
+                        .map(|byte| {
+                            if function == Function::Lower {
+                                byte.to_ascii_lowercase()
+                            } else {
+                                byte.to_ascii_uppercase()
+                            }
+                        })
+                        .collect(),
+                ),
+            },
+            Function::Trim | Function::Ltrim | Function::Rtrim => {
+                let left = function != Function::Rtrim;
+                let right = function != Function::Ltrim;
+                match (first.text(), args.len()) {
+                    (None, _) => Value::Null,
+                    (Some(bytes), 1) => Value::Text(trim(&bytes, b" ", left, right)),
+                    (Some(bytes), _) => match arg(1).text() {
+                        None => Value::Null,
+                        Some(set) => Value::Text(trim(&bytes, &set, left, right)),
+                    },
+                }
+            }
+            Function::Replace => replace(&first, &arg(1), &arg(2)),
+            Function::Instr => instr(&first, &arg(1)),
+            Function::Substr => substr(&first, &arg(1), args.get(2)),
+            Function::Hex => match first {
+                Value::Null => Value::Text(Vec::new()),
+                other => {
+                    let mut out = Vec::new();
+                    let bytes = match &other {
+                        Value::Blob(bytes) => bytes.clone(),
+                        _ => stored(&other.text().unwrap_or_default(), encoding),
+                    };
+                    for byte in bytes {
+                        out.push(hex_digit(byte >> 4));
+                        out.push(hex_digit(byte & 0x0f));
+                    }
+                    Value::Text(out)
+                }
+            },
+            Function::Unhex => unhex(&first, args.get(1)),
+            Function::Char => {
+                let mut out = Vec::new();
+                for value in args {
+                    let point = value.to_integer();
+                    let point = if (0..=0x10_ffff).contains(&point) {
+                        u32::try_from(point).unwrap_or(utf8::REPLACEMENT)
+                    } else {
+                        utf8::REPLACEMENT
+                    };
+                    utf8::write(&mut out, point & 0x1f_ffff);
+                }
+                Value::Text(out)
+            }
+            Function::Unicode => match first.text() {
+                Some(bytes) if bytes.first().is_some_and(|byte| *byte != 0) => {
+                    Value::Int(i64::from(utf8::read(&bytes, 0).0))
                 }
                 _ => Value::Null,
-            }
-        }
-        Function::Coalesce => args
-            .iter()
-            .find(|value| **value != Value::Null)
-            .cloned()
-            .unwrap_or(Value::Null),
-        Function::Iif => {
-            // `iif(a,b,c,d,e)` is `CASE WHEN a THEN b WHEN c THEN d ELSE
-            // e END`, and with an even number of arguments there is no
-            // `ELSE`.
-            let mut at = 0;
-            loop {
-                let Some(condition) = args.get(at) else {
-                    break Value::Null;
-                };
-                let Some(result) = args.get(at.saturating_add(1)) else {
-                    break condition.clone();
-                };
-                if condition.truth(false) {
-                    break result.clone();
+            },
+            Function::Quote => Value::Text(quote(&first, false)?),
+            Function::UnistrQuote => Value::Text(quote(&first, true)?),
+            // A value with no text answers nothing, and a `\` that names no
+            // character refuses.
+            Function::Unistr => match first.text() {
+                Some(text) => Value::Text(crate::format::unistr(&text)?),
+                None => Value::Null,
+            },
+            Function::Round => round(&first, args.get(1)),
+            Function::Concat => {
+                let mut out = Vec::new();
+                for value in args {
+                    out.extend(value.text().unwrap_or_default());
                 }
-                at = at.saturating_add(2);
+                Value::Text(out)
             }
-        }
-        Function::Unlikely => first,
-        Function::Nullif => {
-            if compare(&first, &arg(1), collation) == core::cmp::Ordering::Equal {
-                Value::Null
-            } else {
-                first
-            }
-        }
-        Function::Min | Function::Max => {
-            let wants_greater = function == Function::Max;
-            let mut best = first;
-            for value in args.iter().skip(1) {
-                if best == Value::Null || *value == Value::Null {
-                    return Ok(Value::Null);
-                }
-                // `min` takes the later of two that compare equal and
-                // `max` keeps the earlier, which is what the mask in
-                // `minmaxFunc` comes to.
-                let order = compare(&best, value, collation);
-                let take = if wants_greater {
-                    order == core::cmp::Ordering::Less
-                } else {
-                    order != core::cmp::Ordering::Less
-                };
-                if take {
-                    best = value.clone();
-                }
-            }
-            best
-        }
-        Function::Lower | Function::Upper => match first.text() {
-            None => Value::Null,
-            Some(bytes) => Value::Text(
-                bytes
-                    .iter()
-                    .map(|byte| {
-                        if function == Function::Lower {
-                            byte.to_ascii_lowercase()
-                        } else {
-                            byte.to_ascii_uppercase()
+            Function::ConcatWs => match first.text() {
+                None => Value::Null,
+                Some(separator) => {
+                    let mut out = Vec::new();
+                    let mut written = false;
+                    for value in args.iter().skip(1) {
+                        let Some(bytes) = value.text() else {
+                            continue;
+                        };
+                        if written {
+                            out.extend(separator.iter());
                         }
-                    })
-                    .collect(),
-            ),
-        },
-        Function::Trim | Function::Ltrim | Function::Rtrim => {
-            let left = function != Function::Rtrim;
-            let right = function != Function::Ltrim;
-            match (first.text(), args.len()) {
-                (None, _) => Value::Null,
-                (Some(bytes), 1) => Value::Text(trim(&bytes, b" ", left, right)),
-                (Some(bytes), _) => match arg(1).text() {
-                    None => Value::Null,
-                    Some(set) => Value::Text(trim(&bytes, &set, left, right)),
-                },
-            }
-        }
-        Function::Replace => replace(&first, &arg(1), &arg(2)),
-        Function::Instr => instr(&first, &arg(1)),
-        Function::Substr => substr(&first, &arg(1), args.get(2)),
-        Function::Hex => match first {
-            Value::Null => Value::Text(Vec::new()),
-            other => {
-                let mut out = Vec::new();
-                let bytes = match &other {
-                    Value::Blob(bytes) => bytes.clone(),
-                    _ => stored(&other.text().unwrap_or_default(), encoding),
-                };
-                for byte in bytes {
-                    out.push(hex_digit(byte >> 4));
-                    out.push(hex_digit(byte & 0x0f));
-                }
-                Value::Text(out)
-            }
-        },
-        Function::Unhex => unhex(&first, args.get(1)),
-        Function::Char => {
-            let mut out = Vec::new();
-            for value in args {
-                let point = value.to_integer();
-                let point = if (0..=0x10_ffff).contains(&point) {
-                    u32::try_from(point).unwrap_or(utf8::REPLACEMENT)
-                } else {
-                    utf8::REPLACEMENT
-                };
-                utf8::write(&mut out, point & 0x1f_ffff);
-            }
-            Value::Text(out)
-        }
-        Function::Unicode => match first.text() {
-            Some(bytes) if bytes.first().is_some_and(|byte| *byte != 0) => {
-                Value::Int(i64::from(utf8::read(&bytes, 0).0))
-            }
-            _ => Value::Null,
-        },
-        Function::Quote => Value::Text(quote(&first, false)?),
-        Function::UnistrQuote => Value::Text(quote(&first, true)?),
-        // A value with no text answers nothing, and a `\` that names no
-        // character refuses.
-        Function::Unistr => match first.text() {
-            Some(text) => Value::Text(crate::format::unistr(&text)?),
-            None => Value::Null,
-        },
-        Function::Round => round(&first, args.get(1)),
-        Function::Concat => {
-            let mut out = Vec::new();
-            for value in args {
-                out.extend(value.text().unwrap_or_default());
-            }
-            Value::Text(out)
-        }
-        Function::ConcatWs => match first.text() {
-            None => Value::Null,
-            Some(separator) => {
-                let mut out = Vec::new();
-                let mut written = false;
-                for value in args.iter().skip(1) {
-                    let Some(bytes) = value.text() else {
-                        continue;
-                    };
-                    if written {
-                        out.extend(separator.iter());
+                        out.extend(bytes);
+                        written = true;
                     }
-                    out.extend(bytes);
-                    written = true;
+                    Value::Text(out)
                 }
-                Value::Text(out)
+            },
+            Function::Like | Function::Glob => {
+                return pattern(function, args).map(|value| (value, false));
             }
+            Function::Json { which, binary } => return json_call(which, binary, args, carried),
         },
-        Function::Like | Function::Glob => {
-            return pattern(function, args);
+        false,
+    ))
+}
+
+/// One call of the JSON family, which answers whether what it
+/// answered is JSON of its own.
+///
+/// # Errors
+///
+/// [`Error::Json`] names what the call refused.
+fn json_call(
+    which: Json,
+    binary: bool,
+    args: &[Value],
+    carried: &[bool],
+) -> Result<(Value, bool), Error> {
+    use crate::json;
+    let first = args.first().unwrap_or(&Value::Null);
+    let held = carried.first().copied().unwrap_or(false);
+    // A call that reads a document answers nothing where the document is
+    // nothing, which is `jsonParseFuncArg` answering no parse for a `NULL`.
+    let reads_document = !matches!(
+        which,
+        Json::Array | Json::Object | Json::Quote | Json::Valid | Json::ErrorPosition
+    );
+    if reads_document
+        && (*first == Value::Null || (which == Json::Patch && args.get(1) == Some(&Value::Null)))
+    {
+        return Ok((Value::Null, false));
+    }
+    // Every edit answers the same way and differs in which edit it is.
+    let edited = |edit| -> Result<(Value, bool), Error> {
+        match json::changed(args, carried, edit)? {
+            Some(blob) => Ok((json::answered(blob, binary)?, !binary)),
+            None => Ok((Value::Null, false)),
         }
+    };
+    Ok(match which {
+        Json::Json if binary => (Value::Blob(json::document(first)?), false),
+        Json::Json => (json::minified(first)?, true),
+        Json::Array => (
+            json::answered(json::array(args, carried)?, binary)?,
+            !binary,
+        ),
+        Json::ArrayInsert => edited(json::Edit::ArrayInsert)?,
+        Json::ArrayLength => (json::array_length(args)?, false),
+        Json::ErrorPosition => (json::error_position(first), false),
+        Json::Extract if binary => (json::extracted_blob(args)?, false),
+        Json::Extract => json::extract(args)?,
+        Json::Insert => edited(json::Edit::Insert)?,
+        Json::Object => (
+            json::answered(json::object(args, carried)?, binary)?,
+            !binary,
+        ),
+        Json::Patch => (json::answered(json::patched(args)?, binary)?, !binary),
+        Json::Pretty => (json::pretty(args)?, false),
+        Json::Quote => (json::quoted(first, held)?, true),
+        Json::Remove => edited(json::Edit::Remove)?,
+        Json::Replace => edited(json::Edit::Replace)?,
+        Json::Set => edited(json::Edit::Set)?,
+        Json::Type => (json::type_of(args)?, false),
+        Json::Valid => (json::valid(args)?, false),
     })
+}
+
+impl From<crate::json::Refused> for Error {
+    fn from(refused: crate::json::Refused) -> Self {
+        Error::Json(refused)
+    }
 }
 
 /// The name `typeof` answers with.

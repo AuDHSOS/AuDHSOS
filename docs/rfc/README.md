@@ -56,12 +56,14 @@ same rule and for the same reason (D-100).
 | `rfc6668.txt` | RFC 6668, *SHA-2 Data Integrity Verification for the Secure Shell (SSH) Transport Layer Protocol*, D. Bider, M. Baushke, July 2012 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc6668.txt` | 8710 | `a7a05b87ea5dcb16c33f368de8776a194bc35d7fc9d0baea600f3083dbc857b9` |
 | `rfc6724.txt` | RFC 6724, *Default Address Selection for Internet Protocol Version 6 (IPv6)*, D. Thaler (ed.), R. Draves, A. Matsumoto, T. Chown, September 2012 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc6724.txt` | 74407 | `deab574626b2bc886748401617f29a33cf97927f3690dba2fb183d31315741f6` |
 | `rfc6979.txt` | RFC 6979, *Deterministic Usage of the Digital Signature Algorithm (DSA) and Elliptic Curve Digital Signature Algorithm (ECDSA)*, T. Pornin, August 2013 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc6979.txt` | 140386 | `456e8f17558fdbd206f968b96fc6f1b4a71ea331ab30ad17f711ab3adaa7d701` |
+| `rfc7396.txt` | RFC 7396, *JSON Merge Patch*, P. Hoffman, J. Snell, October 2014 | 2026-09-15 from `https://www.rfc-editor.org/rfc/rfc7396.txt` | 12791 | `545e1d61667c243ea14d6b1a56212370a26d46e1acd441803805fcdecd9164c6` |
 | `rfc7748.txt` | RFC 7748, *Elliptic Curves for Security*, A. Langley, M. Hamburg, S. Turner, January 2016 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc7748.txt` | 39298 | `279ca0ecc5e92e2962e27b846986aeb74729d9dd34bd4a04a362f80dcb596ad3` |
 | `rfc8017.txt` | RFC 8017, *PKCS #1: RSA Cryptography Specifications Version 2.2*, K. Moriarty (ed.), B. Kaliski, J. Jonsson, A. Rusch, November 2016 | 2026-09-06 from `https://www.rfc-editor.org/rfc/rfc8017.txt` | 154696 | `1e72dc473d18df3fc5598cdc12795a9f18f36f1aef15abc23a55eb0d58151d11` |
 | `rfc8032.txt` | RFC 8032, *Edwards-Curve Digital Signature Algorithm (EdDSA)*, S. Josefsson, I. Liusvaara, January 2017 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8032.txt` | 103210 | `ed63657ff389301282b169b0abde9b5dd2c7e4d524fdfa5da6ff3094fc93c4c3` |
 | `rfc8106.txt` | RFC 8106, *IPv6 Router Advertisement Options for DNS Configuration*, J. Jeong, S. Park, L. Beloeil, S. Madanapalli, March 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8106.txt` | 43092 | `9a44a5e06d36506da358fa0d62d02f484dd76b4e6ca75920ebda2cfed315ef2f` |
 | `rfc8200.txt` | RFC 8200, *Internet Protocol, Version 6 (IPv6) Specification*, S. Deering, R. Hinden, July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8200.txt` | 93162 | `371ae3f133d562db5d6385e6def4ca9914c4f831be228ea7779fd28799c2f490` |
 | `rfc8201.txt` | RFC 8201, *Path MTU Discovery for IP version 6*, J. McCann, S. Deering, J. Mogul, R. Hinden (ed.), July 2017 | 2026-09-05 from `https://www.rfc-editor.org/rfc/rfc8201.txt` | 42751 | `96c2ea7ac1bf5810f6b817d4ac372a35f68231d2bd0e2675740f1268eb9ac752` |
+| `rfc8259.txt` | RFC 8259, *The JavaScript Object Notation (JSON) Data Interchange Format*, T. Bray (ed.), December 2017 | 2026-09-15 from `https://www.rfc-editor.org/rfc/rfc8259.txt` | 28360 | `61a5378f4255c720beb2a4b4a63b29540147c140f36988bf086291989b4cd2d7` |
 | `rfc8268.txt` | RFC 8268, *More Modular Exponentiation (MODP) Diffie-Hellman (DH) Key Exchange (KEX) Groups for Secure Shell (SSH)*, M. Baushke, December 2017 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8268.txt` | 16318 | `1525b5f3e84f48381fc3be2e5353794f3d5ee2d354fa4e8b0349da25d5b8e208` |
 | `rfc8308.txt` | RFC 8308, *Extension Negotiation in the Secure Shell (SSH) Protocol*, D. Bider, March 2018 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8308.txt` | 29204 | `c7d36121bcd0f242af19d660a3bbafb3c829d78df6f32fbd3e5c71a408e0ce8c` |
 | `rfc8332.txt` | RFC 8332, *Use of RSA Keys with SHA-256 and SHA-512 in the Secure Shell (SSH) Protocol*, D. Bider, March 2018 | 2026-09-08 from `https://www.rfc-editor.org/rfc/rfc8332.txt` | 17873 | `b194d8da7a5b07cf6763954b687fb2380565c8277d52c105a8eacdf00ffc44d9` |
@@ -81,9 +83,9 @@ edited. Each is the text as the RFC Editor publishes it, byte for byte,
 including the page breaks: 2887, 1218, 470, 171, 3077, 1417, 6844, 619,
 955, 619, 2523, 1907, 1067, 395, 1515, 563, 451, 1403, 507, 1123, 1683,
 955, 1795, 1347, 1403, 1347, 5435, 1683, 1123, 1123, 339, 451, 787, 899,
-787, 283, 1795, 4427, 1235, 4371, 3363, 1067, 2355, 1067, 451, 787, 507,
-2579, 8963, 3811, 317, 287, 10785, 2461, 1028, and 5576 lines
-respectively, in the order of the table.
+787, 283, 1795, 4427, 507, 1235, 4371, 3363, 1067, 2355, 1067, 899, 451,
+787, 507, 2579, 8963, 3811, 317, 287, 10785, 2461, 1028, 5576, and 1567
+lines respectively, in the order of the table.
 Every one was fetched twice and the two fetches agreed.
 
 ## Terms
@@ -94,15 +96,15 @@ carries a notice of the form
 > Copyright (c) YEAR IETF Trust and the persons identified as the
 > document authors. All rights reserved.
 
-with the year 2009 for RFC 5480 and RFC 5656, 2010 for RFC 5756,
-RFC 5758, RFC 5869, RFC 5903, and RFC 5952, 2012 for RFC 6668 and
-RFC 6724, 2013 for RFC 6979, 2016 for RFC 7748 and RFC 8017, 2017 for
-RFC 8032, RFC 8106, RFC 8200, RFC 8201, and RFC 8268, 2018 for RFC 8308,
-RFC 8332, RFC 8439, and RFC 8446, 2019 for RFC 8448, 2020 for RFC 8709
-and RFC 8731, and 2022 for RFC 9110, RFC 9112, RFC 9142, and RFC 9293.
-Those twenty-eight are subject to BCP 78 and the IETF Trust's Legal
-Provisions relating to IETF Documents, which permit reproduction in
-full.
+with the year 2009 for RFC 5480 and RFC 5656, 2010 for RFC 5756, RFC
+5758, RFC 5869, RFC 5903, and RFC 5952, 2012 for RFC 6668 and RFC 6724,
+2013 for RFC 6979, 2014 for RFC 7396, 2016 for RFC 7748 and RFC 8017,
+2017 for RFC 8032, RFC 8106, RFC 8200, RFC 8201, RFC 8259, and RFC 8268,
+2018 for RFC 8308, RFC 8332, RFC 8439, and RFC 8446, 2019 for RFC 8448,
+2020 for RFC 8709 and RFC 8731, 2022 for RFC 9110, RFC 9112, RFC 9142,
+and RFC 9293, and 2026 for RFC 9987. Those thirty-one are subject to BCP
+78 and the IETF Trust's Legal Provisions relating to IETF Documents,
+which permit reproduction in full.
 
 RFC 4055 and RFC 4231 stand between the two forms. Each names the
 Internet Society and the year 2005, and then refers the reader to BCP 78
@@ -450,6 +452,23 @@ value it hands out text and not bytes; the case-insensitive comparison of
 field names in section 5.1; and the status classes of section 15, of which
 the five redirects a client may follow are 301, 302, 303, 307 and 308 and
 not the whole 3xx range.
+
+## The two documents of JSON
+
+**RFC 8259** is the grammar `db-sqlite` reads a JSON text against:
+section 2 names the six structural characters, section 3 the three
+literal names, section 6 the number as an optional minus with an integer
+part and an optional fraction and exponent, and section 7 the string as
+characters between double quotes with the two escape forms. A text this
+grammar accepts is what `json_valid(X)` answers 1 for; the forms JSON5
+adds beyond it are what flag 2 accepts instead, and the reader marks a
+value it read under one of them.
+
+**RFC 7396** is the algorithm `json_patch` runs. Section 2 states it as a
+recursive function over the patch: a patch that is no object replaces the
+target, a label whose value is null takes that pair out of the target,
+and every other label merges into it. Appendix A carries fifteen worked
+cases, which catalog 6.6.158 transcribes.
 
 ## The four documents of P-384
 

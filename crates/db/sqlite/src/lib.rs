@@ -23,6 +23,7 @@ pub mod func;
 pub mod header;
 pub mod image;
 pub mod journal;
+pub mod json;
 pub mod keyword;
 pub mod number;
 pub mod page;

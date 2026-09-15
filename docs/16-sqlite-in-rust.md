@@ -647,11 +647,11 @@ Status: `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW`, `CREATE
 TRIGGER`, the four `DROP`s, `ALTER TABLE ... ADD COLUMN`, `PRAGMA`,
 `ANALYZE`, `REINDEX`, `BEGIN`, `COMMIT`, `ROLLBACK`, `INSERT`, `DELETE`
 and `UPDATE` are run from their text and write the files the shell wrote,
-and a foreign key holds the rows of both tables it names; the rest is
-open.
+a foreign key holds the rows of both tables it names, and the JSON
+functions answer what the shell answers; the rest is open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
 D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218, D-219,
-D-224 to D-232 and D-234.
+D-224 to D-232, D-234 and D-235.
 Size: L.
 
 ### Does
@@ -705,6 +705,10 @@ Size: L.
 14. A table that keeps its rows in the key's own tree: the tree it is
     made as, and the statements that write it. Built, which D-234
     records.
+15. The JSON functions: the twenty-six scalar names, the four
+    aggregates and the two operators, over the binary form the header
+    comment of `src/json.c` states. Built, which D-235 records;
+    `json_each` and `json_tree` need a virtual table and are open.
 
 ### Done when
 
@@ -714,8 +718,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 71 405 cases in 698 files, 53 995
-pass, 4365 answer differently, and 13 045 name something the engine
+under the `tclsh` of the machine. Of 72 177 cases in 705 files, 55 581
+pass, 4600 answer differently, and 11 996 name something the engine
 refuses or a command that needs the C library's internals.
 Depends on: Q7, Q8. Recorded in D-201, D-212, D-213, D-220, D-222,
 D-223 and D-224.

@@ -334,6 +334,25 @@ fn compare_to_2pow63(digits: &[u8]) -> i32 {
     i32::from(byte(18)) - i32::from(b'8')
 }
 
+/// A number with no sign as the text SQLite writes it as, which is
+/// what `%llu` of the C library writes.
+#[must_use]
+pub fn unsigned_text(value: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    if value == 0 {
+        out.push(b'0');
+        return out;
+    }
+    let mut rest = value;
+    let mut digits = Vec::new();
+    while rest > 0 {
+        digits.push(b'0'.saturating_add(u8::try_from(rest % 10).unwrap_or(0)));
+        rest /= 10;
+    }
+    out.extend(digits.iter().rev());
+    out
+}
+
 /// An integer as the text SQLite writes it as, which is decimal with a
 /// sign and no separators.
 ///

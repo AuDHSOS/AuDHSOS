@@ -49,11 +49,13 @@ fn shown(value: &Value) -> (Vec<u8>, Vec<u8>) {
         call(
             function,
             core::slice::from_ref(value),
+            &[],
             Collation::Binary,
             crate::header::Encoding::Utf8,
             None,
         )
         .expect("a function that always answers")
+        .0
         .text()
         .unwrap_or_default()
     };
@@ -138,8 +140,6 @@ fn what_is_not_written_yet_refuses_rather_than_guessing() {
     assert_eq!(refusal("likelihood(1,0)"), Error::BadProbability);
     assert_eq!(refusal("count(*)"), Error::Unsupported);
     assert_eq!(refusal("count(DISTINCT 1)"), Error::Unsupported);
-    assert_eq!(refusal("'{}' -> 'a'"), Error::NoFunction(b"->".to_vec()));
-    assert_eq!(refusal("'{}' ->> 'a'"), Error::NoFunction(b"->>".to_vec()));
     assert_eq!(refusal("CURRENT_TIME"), Error::Unsupported);
     assert_eq!(refusal("?"), Error::Unsupported);
     assert_eq!(refusal("(1,2)"), Error::RowValue);

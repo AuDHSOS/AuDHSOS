@@ -4941,6 +4941,24 @@ D-234, document 16 step Q8.
 - The file this crate writes for such a table is the file the shell
   wrote for it, byte for byte.
 
+### 6.6.158 The JSON functions (`db-sqlite`)
+
+D-235, document 16 step Q8.
+
+- Every text the reader takes for JSON, and every form JSON5 adds to it,
+  is written out again as the C library writes it.
+- Every call of the twenty-six names and the four aggregates answers
+  what the shell answers for the same arguments, over some seven hundred
+  cases.
+- A blob in the binary form answers the value the text it stands for
+  answers, and a blob that holds no whole element is refused.
+- Every escape a label of a blob holds is read when a path names that
+  label.
+- The fifteen cases of appendix A of RFC 7396 are patched as the
+  document says.
+- A path, a document and a patch that nest a thousand deep are each
+  refused with their own message.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

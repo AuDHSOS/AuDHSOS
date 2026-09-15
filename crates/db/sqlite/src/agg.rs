@@ -54,6 +54,14 @@ pub enum Aggregate {
     Max,
     /// `group_concat(X)`, `group_concat(X,Y)` and `string_agg(X,Y)`.
     GroupConcat,
+    /// `json_group_array(X)`.
+    JsonGroupArray,
+    /// `json_group_object(L,X)`.
+    JsonGroupObject,
+    /// `jsonb_group_array(X)`.
+    JsonbGroupArray,
+    /// `jsonb_group_object(L,X)`.
+    JsonbGroupObject,
 }
 
 /// One row of the table: a name, how many arguments the aggregate takes
@@ -88,6 +96,30 @@ const TABLE: &[Entry] = &[
         least: 1,
         most: 2,
         aggregate: Aggregate::GroupConcat,
+    },
+    Entry {
+        name: b"json_group_array",
+        least: 1,
+        most: 1,
+        aggregate: Aggregate::JsonGroupArray,
+    },
+    Entry {
+        name: b"json_group_object",
+        least: 2,
+        most: 2,
+        aggregate: Aggregate::JsonGroupObject,
+    },
+    Entry {
+        name: b"jsonb_group_array",
+        least: 1,
+        most: 1,
+        aggregate: Aggregate::JsonbGroupArray,
+    },
+    Entry {
+        name: b"jsonb_group_object",
+        least: 2,
+        most: 2,
+        aggregate: Aggregate::JsonbGroupObject,
     },
     Entry {
         name: b"max",
@@ -158,6 +190,9 @@ pub struct Accumulator {
     best: Option<Value>,
     /// What `group_concat` has put together.
     text: Vec<u8>,
+    /// The elements `json_group_array` and `json_group_object` have
+    /// put together, in the binary form of JSON.
+    held: Vec<u8>,
     /// Whether it has put anything together, which is not the same as
     /// the text being empty.
     any: bool,
@@ -179,6 +214,7 @@ impl Accumulator {
             running: Running::Whole,
             best: None,
             text: Vec::new(),
+            held: Vec::new(),
             any: false,
             skipped: false,
         }
@@ -200,7 +236,17 @@ impl Accumulator {
 
     /// Adds one row, whose arguments are `args` and whose first argument
     /// compares under `collation`.
-    pub fn step(&mut self, args: &[Value], collation: Collation) {
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Json`] where a JSON aggregate was given a value JSON
+    /// cannot hold.
+    pub fn step(
+        &mut self,
+        args: &[Value],
+        carried: &[bool],
+        collation: Collation,
+    ) -> Result<(), Error> {
         let first = args.first().cloned().unwrap_or(Value::Null);
         if let Some(seen) = &mut self.seen {
             // A row a `DISTINCT` aggregate has already seen jumps over
@@ -210,7 +256,7 @@ impl Accumulator {
                 .iter()
                 .any(|kept| compare(kept, &first, collation) == core::cmp::Ordering::Equal)
             {
-                return;
+                return Ok(());
             }
             seen.push(first.clone());
         }
@@ -224,7 +270,12 @@ impl Accumulator {
             Aggregate::Sum | Aggregate::Total | Aggregate::Avg => self.add(&first),
             Aggregate::Min | Aggregate::Max => self.against(first, collation),
             Aggregate::GroupConcat => self.append(&first, args),
+            Aggregate::JsonGroupArray
+            | Aggregate::JsonGroupObject
+            | Aggregate::JsonbGroupArray
+            | Aggregate::JsonbGroupObject => self.collect(args, carried)?,
         }
+        Ok(())
     }
 
     /// One number of a sum, which is `sumStep`.
@@ -364,12 +415,60 @@ impl Accumulator {
         }
     }
 
+    /// One row of `json_group_array` or `json_group_object`, written
+    /// into what the group holds.
+    fn collect(&mut self, args: &[Value], carried: &[bool]) -> Result<(), Error> {
+        let object = matches!(
+            self.which,
+            Aggregate::JsonGroupObject | Aggregate::JsonbGroupObject
+        );
+        if !self.held.is_empty() {
+            self.held.push(b',');
+        }
+        if object {
+            let label = args.first().and_then(Value::text).unwrap_or_default();
+            crate::json::write_raw(&label, &mut self.held);
+            self.held.push(b':');
+        }
+        let at = usize::from(object);
+        let value = args.get(at).unwrap_or(&Value::Null);
+        let json = carried.get(at).copied().unwrap_or(false);
+        crate::json::write_value(value, json, &mut self.held).map_err(Error::Json)
+    }
+
+    /// The text of what `json_group_array` or `json_group_object` put
+    /// together.
+    fn collected(&self) -> Result<Value, Error> {
+        let object = matches!(
+            self.which,
+            Aggregate::JsonGroupObject | Aggregate::JsonbGroupObject
+        );
+        let mut text = Vec::new();
+        text.push(if object { b'{' } else { b'[' });
+        text.extend_from_slice(&self.held);
+        text.push(if object { b'}' } else { b']' });
+        if !matches!(
+            self.which,
+            Aggregate::JsonbGroupArray | Aggregate::JsonbGroupObject
+        ) {
+            return Ok(Value::Text(text));
+        }
+        // The binary form is what the text answers when it is read
+        // again, which is `jsonArrayCompute` under `JSON_BLOB`.
+        let (blob, _) = crate::json::read(&text)
+            .ok()
+            .ok_or(Error::Json(crate::json::Refused::Malformed))?;
+        Ok(Value::Blob(blob))
+    }
+
     /// What the group answers.
     ///
     /// # Errors
     ///
     /// [`Error::Overflow`] where an integer `sum` overflowed and no
-    /// double came after it to make the sum a double.
+    /// double came after it to make the sum a double, and
+    /// [`Error::Json`] where what a JSON aggregate put together is not
+    /// JSON.
     pub fn finish(&self) -> Result<Value, Error> {
         Ok(match self.which {
             Aggregate::Count => Value::Int(self.count),
@@ -395,6 +494,10 @@ impl Accumulator {
                     Value::Null
                 }
             }
+            Aggregate::JsonGroupArray
+            | Aggregate::JsonGroupObject
+            | Aggregate::JsonbGroupArray
+            | Aggregate::JsonbGroupObject => self.collected()?,
         })
     }
 }

@@ -56,9 +56,10 @@ fn fixture(name: &str) -> Option<&'static [u8]> {
 
 /// One value as `quote` writes it.
 fn quoted(value: &Value) -> String {
-    let answer = call(
+    let (answer, _) = call(
         Function::Quote,
         core::slice::from_ref(value),
+        &[],
         Collation::Binary,
         crate::header::Encoding::Utf8,
         None,

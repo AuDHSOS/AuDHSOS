@@ -80,6 +80,8 @@ pub enum Error {
     /// A blob or a string longer than `SQLITE_MAX_LENGTH`, which is what
     /// `zeroblob` of a large number asks for.
     TooBig,
+    /// What a JSON function refuses, which carries its own message.
+    Json(crate::json::Refused),
 }
 
 impl Error {
@@ -99,6 +101,7 @@ impl Error {
                 alloc::format!("wrong number of arguments to function {}()", shown(name))
             }
             Error::RowValue => "row value misused".to_string(),
+            Error::Json(refused) => refused.message(),
             other => alloc::format!("{other:?}"),
         }
     }
@@ -109,6 +112,10 @@ impl Error {
 struct Answer {
     /// The value.
     value: Value,
+    /// Whether the value is JSON of its own, which is what
+    /// `JSON_SUBTYPE` marks a value with: a JSON function reads such a
+    /// value as JSON and every other text as the text it is.
+    json: bool,
     /// The affinity of the expression that answered it.
     affinity: Affinity,
     /// The collation written on it, where one was.
@@ -142,6 +149,7 @@ impl Answer {
     const fn plain(value: Value) -> Self {
         Answer {
             value,
+            json: false,
             affinity: Affinity::None,
             collation: None,
             written: false,
@@ -263,6 +271,22 @@ pub fn evaluate(arena: &Arena, id: ExprId, sql: &[u8]) -> Result<Value, Error> {
 /// [`Error`] names what it could not answer and why.
 pub fn evaluate_row(arena: &Arena, id: ExprId, sql: &[u8], row: &dyn Row) -> Result<Value, Error> {
     Ok(answer(arena, id, sql, row, 0)?.value)
+}
+
+/// The same, with whether the answer is JSON of its own, which a JSON
+/// function reads as JSON and every other text as the text it is.
+///
+/// # Errors
+///
+/// [`Error`] names what it could not answer and why.
+pub fn evaluate_carried(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    row: &dyn Row,
+) -> Result<(Value, bool), Error> {
+    let answered = answer(arena, id, sql, row, 0)?;
+    Ok((answered.value, answered.json))
 }
 
 /// The same, with the collation a comparison against the answer would
@@ -428,6 +452,7 @@ fn answer(
             };
             Ok(Answer {
                 value,
+                json: false,
                 affinity,
                 collation: Some(collation),
                 written: false,
@@ -494,6 +519,7 @@ fn alone(row: &dyn Row, select: SelectId) -> Result<Answer, Error> {
     }
     Ok(Answer {
         value,
+        json: false,
         affinity,
         collation,
         written: false,
@@ -535,6 +561,9 @@ fn called(
     // `COLLATE` marked.
     let mut inside = None;
     let mut outward = None;
+    // Whether each argument carries JSON of its own, which is the
+    // subtype `JSON_SUBTYPE` marks a value with.
+    let mut carried = Vec::new();
     for id in arena.children(args) {
         let argument = answer(arena, *id, sql, row, deeper)?;
         if inside.is_none() {
@@ -543,6 +572,7 @@ fn called(
         if outward.is_none() && argument.written {
             outward = argument.collation;
         }
+        carried.push(argument.json);
         values.push(argument.value);
     }
     let function = func::lookup(&crate::schema::dequote(name.text(sql)), values.len())?;
@@ -558,15 +588,17 @@ fn called(
             return Err(Error::BadProbability);
         }
     }
-    let value = func::call(
+    let (value, json) = func::call(
         function,
         &values,
+        &carried,
         inside.unwrap_or(row.collation()),
         row.encoding(),
         row.random(),
     )?;
     Ok(Answer {
         value,
+        json,
         affinity: Affinity::None,
         collation: outward,
         written: outward.is_some(),
@@ -721,6 +753,7 @@ fn unary(
     // answers with, as it is under a binary operator.
     let carried = |value: Value| Answer {
         value,
+        json: false,
         affinity: Affinity::None,
         collation: inner.collation,
         written: inner.written,
@@ -906,8 +939,17 @@ fn binary(
         | BinaryOp::Ge
         | BinaryOp::Is
         | BinaryOp::IsNot => comparison(op, &left, &right, row.collation()),
-        BinaryOp::Extract => return Err(Error::NoFunction(b"->".to_vec())),
-        BinaryOp::ExtractText => return Err(Error::NoFunction(b"->>".to_vec())),
+        BinaryOp::Extract | BinaryOp::ExtractText => {
+            let text = op == BinaryOp::ExtractText;
+            let (value, json) = crate::json::arrow(&left.value, &right.value, text)?;
+            return Ok(Answer {
+                value,
+                json,
+                affinity: Affinity::None,
+                collation: None,
+                written: false,
+            });
+        }
     };
     // `sqlite3ExprCollSeq`: a `COLLATE` written under an operator is
     // the collation the operator answers with, the left operand before
@@ -915,6 +957,7 @@ fn binary(
     // case.
     Ok(Answer {
         value,
+        json: false,
         affinity: Affinity::None,
         collation: compared_under(&left, &right),
         written: left.written || right.written,
@@ -1244,6 +1287,7 @@ fn row_answers(
                 .into_iter()
                 .map(|(value, affinity, collation)| Answer {
                     value,
+                    json: false,
                     affinity,
                     collation,
                     written: false,
@@ -1402,9 +1446,10 @@ fn like(
     if let Some(escape) = escape {
         args.push(answer(arena, escape, sql, row, depth)?.value);
     }
-    let answered = func::call(
+    let (answered, _) = func::call(
         function,
         &args,
+        &[],
         row.collation(),
         row.encoding(),
         row.random(),
@@ -1478,6 +1523,7 @@ fn in_list(left: &Answer, list: &[Answer], negated: bool, default: Collation) ->
         // side's.
         let against = Answer {
             value: member.value.clone(),
+            json: false,
             affinity: Affinity::None,
             collation: member.collation,
             written: member.written,

@@ -3095,6 +3095,7 @@ impl<'a> Group<'a> {
                 continue;
             }
             let mut values = Vec::new();
+            let mut carried = Vec::new();
             let mut collation = cursor.collation;
             for (at, id) in arena.children(call.args).iter().enumerate() {
                 // The collation of the first argument is the one the
@@ -3104,11 +3105,14 @@ impl<'a> Group<'a> {
                     let (value, written) = evaluate_collated(arena, *id, sql, cursor)?;
                     collation = written;
                     values.push(value);
+                    carried.push(crate::eval::evaluate_carried(arena, *id, sql, cursor)?.1);
                 } else {
-                    values.push(evaluate_row(arena, *id, sql, cursor)?);
+                    let (value, json) = crate::eval::evaluate_carried(arena, *id, sql, cursor)?;
+                    values.push(value);
+                    carried.push(json);
                 }
             }
-            accumulator.step(&values, collation);
+            accumulator.step(&values, &carried, collation)?;
             if accumulator.magnet() {
                 magnet = Some(accumulator.kept());
             }
@@ -5186,17 +5190,21 @@ fn accumulated(
             continue;
         }
         let mut values = Vec::new();
+        let mut carried = Vec::new();
         let mut collation = read.collation;
         for (at, id) in arena.children(over.args).iter().enumerate() {
             if at == 0 {
                 let (value, written) = evaluate_collated(arena, *id, sql, read)?;
                 collation = written;
                 values.push(value);
+                carried.push(crate::eval::evaluate_carried(arena, *id, sql, read)?.1);
             } else {
-                values.push(evaluate_row(arena, *id, sql, read)?);
+                let (value, json) = crate::eval::evaluate_carried(arena, *id, sql, read)?;
+                values.push(value);
+                carried.push(json);
             }
         }
-        accumulator.step(&values, collation);
+        accumulator.step(&values, &carried, collation)?;
     }
     Ok(accumulator.finish()?)
 }
