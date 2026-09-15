@@ -1812,6 +1812,8 @@ impl RegisterVM {
             | Intrinsic::ObjectCreate
             | Intrinsic::ObjectDefineProperties
             | Intrinsic::ObjectGetPrototypeOf
+            | Intrinsic::ObjectSetPrototypeOf
+            | Intrinsic::ReflectSetPrototypeOf
             | Intrinsic::ObjectKeys
             | Intrinsic::ObjectIs
             | Intrinsic::ObjectHasOwn
@@ -2091,6 +2093,31 @@ impl RegisterVM {
             );
         }
         Ok(Value::from_string(text))
+    }
+
+    /// `OrdinarySetPrototypeOf` of 10.1.2: the same value is always taken, a
+    /// different one only while the object is extensible and the chain stays
+    /// acyclic.
+    fn set_object_prototype(
+        object: ObjectRef,
+        prototype: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<bool, VMError> {
+        let current = heap
+            .get_object(object)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .prototype;
+        if same_value(current, prototype, heap)? {
+            return Ok(true);
+        }
+        if !heap.is_extensible(object).unwrap_or(false) {
+            return Ok(false);
+        }
+        match heap.set_object_prototype(object, prototype) {
+            Ok(()) => Ok(true),
+            Err(HeapError::PrototypeCycle) => Ok(false),
+            Err(error) => Err(VMError::Heap(error)),
+        }
     }
 
     /// The `[[StringData]]` of a String exotic object of 10.4.3.
@@ -2449,6 +2476,45 @@ impl RegisterVM {
                 Ok(Value::from_bool(
                     heap.own_named_flags(object, name)?.is_some(),
                 ))
+            }
+            // 20.1.2.22 answers the object it was given, and throws where
+            // 10.1.2 refuses; 28.1.14 answers whether 10.1.2 took it.
+            Intrinsic::ObjectSetPrototypeOf | Intrinsic::ReflectSetPrototypeOf => {
+                let reflect = intrinsic == Intrinsic::ReflectSetPrototypeOf;
+                if !key.is_null() && !key.is_object() {
+                    return Err(type_error(
+                        heap,
+                        realm,
+                        "a prototype must be an object or null",
+                    ));
+                }
+                let Some(object) = target.as_object() else {
+                    if reflect {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "Reflect called on a value that is not an object",
+                        ));
+                    }
+                    // 20.1.2.22 step 1 refuses undefined and null and answers
+                    // every other primitive as it is.
+                    if target.is_undefined() || target.is_null() {
+                        return Err(type_error(
+                            heap,
+                            realm,
+                            "cannot set the prototype of null or undefined",
+                        ));
+                    }
+                    return Ok(target);
+                };
+                let took = Self::set_object_prototype(object, key, heap)?;
+                if reflect {
+                    return Ok(Value::from_bool(took));
+                }
+                if !took {
+                    return Err(type_error(heap, realm, "the prototype cannot be set"));
+                }
+                Ok(target)
             }
             // 20.1.2.12 answers the [[Prototype]] of the object ToObject made.
             Intrinsic::ObjectGetPrototypeOf => {

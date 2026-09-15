@@ -6329,3 +6329,37 @@ fn a_global_lexical_declaration_binds_a_pattern() -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// 20.1.2.22 and 28.1.14 both run `OrdinarySetPrototypeOf` of 10.1.2: the same
+/// value is always taken, a different one only while the object is extensible
+/// and the chain stays acyclic.
+#[test]
+fn a_prototype_can_be_set_after_the_object_is_made() -> Result<(), Error> {
+    for source in [
+        "var o={};var p={x:1};Object.setPrototypeOf(o,p);''+o.x",
+        "var o={};Object.setPrototypeOf(o,null);Object.getPrototypeOf(o)===null",
+        "var o={};var p={};Reflect.setPrototypeOf(o,p)",
+        "var o={};Object.preventExtensions(o);Reflect.setPrototypeOf(o,{})",
+        "var o={};Object.preventExtensions(o);Reflect.setPrototypeOf(o,Object.getPrototypeOf(o))",
+        "var a={};var b=Object.create(a);Reflect.setPrototypeOf(a,b)",
+        "var r=0;try{Object.setPrototypeOf(null,{})}catch(e){r=e instanceof TypeError}r",
+        "Object.setPrototypeOf(1,{})===1",
+        "var r=0;try{Object.setPrototypeOf({},1)}catch(e){r=e instanceof TypeError}r",
+        "var r=0;try{Reflect.setPrototypeOf(1,{})}catch(e){r=e instanceof TypeError}r",
+        "var o={};var p={};Object.setPrototypeOf(o,p)===o",
+        "var o={};Object.preventExtensions(o);var r=0;\
+         try{Object.setPrototypeOf(o,{})}catch(e){r=e instanceof TypeError}r",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 20.1.2.22 gives `setPrototypeOf` two formal parameters; the stack
+    // backend gives it none, and this checks the engine against the
+    // specification.
+    let mut host = SilentHost;
+    let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+    assert_eq!(
+        realm.evaluate("Object.setPrototypeOf.length")?,
+        Value::Number(2.0)
+    );
+    Ok(())
+}

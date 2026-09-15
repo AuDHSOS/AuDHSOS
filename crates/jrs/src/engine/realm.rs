@@ -362,6 +362,10 @@ pub enum Intrinsic {
     FunctionPrototypeApply,
     /// `Reflect.apply` (28.1.1).
     ReflectApply,
+    /// `Object.setPrototypeOf` (20.1.2.22).
+    ObjectSetPrototypeOf,
+    /// `Reflect.setPrototypeOf` (28.1.14).
+    ReflectSetPrototypeOf,
     /// `Array.prototype.values`, which is also `%Array.prototype%[@@iterator]`
     /// (23.1.3.38 and 23.1.3.40).
     ArrayPrototypeValues,
@@ -614,7 +618,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 142] = [
+    pub const ALL: [Self; 144] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -757,6 +761,8 @@ impl Intrinsic {
         Self::ArrayPrototypeEntries,
         Self::FunctionPrototypeApply,
         Self::ReflectApply,
+        Self::ObjectSetPrototypeOf,
+        Self::ReflectSetPrototypeOf,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -847,6 +853,7 @@ impl Intrinsic {
             | Self::MathFround
             | Self::MathSin => IntrinsicHolder::Math,
             Self::ReflectApply
+            | Self::ReflectSetPrototypeOf
             | Self::ReflectDefineProperty
             | Self::ReflectDeleteProperty
             | Self::ReflectGet
@@ -900,6 +907,7 @@ impl Intrinsic {
             | Self::ObjectCreate
             | Self::ObjectDefineProperties
             | Self::ObjectGetPrototypeOf
+            | Self::ObjectSetPrototypeOf
             | Self::ObjectKeys
             | Self::ObjectIs
             | Self::ObjectHasOwn
@@ -1068,6 +1076,8 @@ impl Intrinsic {
             Self::ArrayPrototypeEntries => 139,
             Self::FunctionPrototypeApply => 140,
             Self::ReflectApply => 141,
+            Self::ObjectSetPrototypeOf => 142,
+            Self::ReflectSetPrototypeOf => 143,
         }
     }
 
@@ -1220,6 +1230,8 @@ impl Intrinsic {
             Self::ArrayPrototypeEntries => 139,
             Self::FunctionPrototypeApply => 140,
             Self::ReflectApply => 141,
+            Self::ObjectSetPrototypeOf => 142,
+            Self::ReflectSetPrototypeOf => 143,
         }
     }
 
@@ -1373,6 +1385,8 @@ impl Intrinsic {
             139 => Some(Self::ArrayPrototypeEntries),
             140 => Some(Self::FunctionPrototypeApply),
             141 => Some(Self::ReflectApply),
+            142 => Some(Self::ObjectSetPrototypeOf),
+            143 => Some(Self::ReflectSetPrototypeOf),
             _ => None,
         }
     }
@@ -1424,6 +1438,7 @@ impl Intrinsic {
             Self::ObjectCreate => "create",
             Self::ObjectDefineProperties => "defineProperties",
             Self::ObjectGetPrototypeOf | Self::ReflectGetPrototypeOf => "getPrototypeOf",
+            Self::ObjectSetPrototypeOf | Self::ReflectSetPrototypeOf => "setPrototypeOf",
             Self::ObjectKeys | Self::ArrayPrototypeKeys => "keys",
             Self::ObjectIs => "is",
             Self::ObjectHasOwn => "hasOwn",
@@ -1661,6 +1676,8 @@ impl Intrinsic {
             | Self::ObjectCreate
             | Self::ObjectDefineProperties
             | Self::ObjectGetPrototypeOf
+            | Self::ObjectSetPrototypeOf
+            | Self::ReflectSetPrototypeOf
             | Self::ObjectKeys
             | Self::ObjectIs
             | Self::ArrayPrototypeShift
@@ -1903,6 +1920,8 @@ impl Intrinsic {
             | Self::MathImul
             | Self::ParseInt
             | Self::FunctionPrototypeApply
+            | Self::ObjectSetPrototypeOf
+            | Self::ReflectSetPrototypeOf
             | Self::StringPrototypeSplit => 2,
         }
     }

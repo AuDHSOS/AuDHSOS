@@ -7739,6 +7739,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::ObjectCreate
         | crate::engine::realm::Intrinsic::ObjectDefineProperties
         | crate::engine::realm::Intrinsic::ObjectGetPrototypeOf
+        | crate::engine::realm::Intrinsic::ObjectSetPrototypeOf
+        | crate::engine::realm::Intrinsic::ReflectSetPrototypeOf
         | crate::engine::realm::Intrinsic::ObjectKeys
         | crate::engine::realm::Intrinsic::ReflectGet
         | crate::engine::realm::Intrinsic::ReflectGetOwnPropertyDescriptor
