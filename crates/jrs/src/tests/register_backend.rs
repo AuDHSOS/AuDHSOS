@@ -6236,3 +6236,40 @@ fn a_walk_of_23_1_3_calls_the_getter_of_its_length() -> Result<(), Error> {
     }
     Ok(())
 }
+
+/// 23.1.3.16, 23.1.3.17 and 23.1.3.20 walk the indices the way every other
+/// clause of 23.1.3 does, so an element that is an accessor runs its getter.
+#[test]
+fn the_scan_clauses_walk_like_the_rest_of_23_1_3() -> Result<(), Error> {
+    for source in [
+        "''+[1,2,3].indexOf(2)",
+        "''+[1,2,3].indexOf(9)",
+        "''+[1,2,3].indexOf(2,2)",
+        "''+[1,2,3].indexOf(3,-1)",
+        "''+[1,2,3].indexOf(1,-99)",
+        "''+[1,2,3].lastIndexOf(2)",
+        "''+[1,2,1].lastIndexOf(1)",
+        "''+[1,2,1].lastIndexOf(1,1)",
+        "''+[1,2,3].lastIndexOf(9)",
+        "''+[1,2,1].lastIndexOf(1,-2)",
+        "''+[1,2,3].lastIndexOf(1,-99)",
+        "[1,2,3].includes(2)",
+        "[NaN].includes(NaN)",
+        "''+[NaN].indexOf(NaN)",
+        "[,1].includes(undefined)",
+        "''+[,1].indexOf(undefined)",
+        "''+[].indexOf(1)",
+        "''+[].lastIndexOf(1)",
+        "[].includes(1)",
+        "var a=[1,2];Object.defineProperty(a,0,{get:function(){return 9},enumerable:true});\
+         ''+a.indexOf(9)",
+        "var a=[1,2];Object.defineProperty(a,1,{get:function(){return 9},enumerable:true});\
+         ''+a.lastIndexOf(9)",
+        "var a=[1,2];Object.defineProperty(a,0,{get:function(){return 9},enumerable:true});\
+         a.includes(9)",
+        "var o={get length(){return 2},0:'a',1:'b'};''+Array.prototype.indexOf.call(o,'b')",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}

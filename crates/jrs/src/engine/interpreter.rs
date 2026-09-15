@@ -173,6 +173,7 @@ impl ArrayWalk {
             Intrinsic::ArrayPrototypeReduceRight
                 | Intrinsic::ArrayPrototypeFindLast
                 | Intrinsic::ArrayPrototypeFindLastIndex
+                | Intrinsic::ArrayPrototypeLastIndexOf
         )
     }
 
@@ -216,12 +217,16 @@ impl ArrayWalk {
             | Intrinsic::ArrayPrototypeFind
             | Intrinsic::ArrayPrototypeFindLast => VALUE_UNDEFINED,
             Intrinsic::ArrayPrototypeEvery => VALUE_TRUE,
-            Intrinsic::ArrayPrototypeSome => VALUE_FALSE,
+            // 23.1.3.16 answers false too.
+            Intrinsic::ArrayPrototypeSome | Intrinsic::ArrayPrototypeIncludes => VALUE_FALSE,
             // 23.1.3.10 answers minus one; 23.1.3.9 answers undefined, as
             // 23.1.3.15 does.
-            Intrinsic::ArrayPrototypeFindIndex | Intrinsic::ArrayPrototypeFindLastIndex => {
-                Value::from_smi(-1)
-            }
+            Intrinsic::ArrayPrototypeFindIndex
+            | Intrinsic::ArrayPrototypeFindLastIndex
+            // 23.1.3.17 and 23.1.3.20 answer minus one too, and 23.1.3.16
+            // answers false.
+            | Intrinsic::ArrayPrototypeIndexOf
+            | Intrinsic::ArrayPrototypeLastIndexOf => Value::from_smi(-1),
             // 23.1.3.21 and 23.1.3.8 answer the Array they filled, and
             // 23.1.3.24 the accumulator it carried.
             _ => self.output,
@@ -3643,7 +3648,11 @@ impl RegisterVM {
             intrinsic,
             Intrinsic::ArrayPrototypeReduce | Intrinsic::ArrayPrototypeReduceRight
         );
-        let (receiver, output, started) = if reduces {
+        // A scan keeps its search element where a callback would go and the
+        // index it was given where the accumulator would, because it has
+        // neither; `started` says whether it was given one, as it says for
+        // 23.1.3.24 whether it was given an initial value.
+        let (receiver, output, started) = if reduces || Self::scans_for_an_element(intrinsic) {
             (VALUE_UNDEFINED, second, call.arg_count > 1)
         } else {
             (second, VALUE_UNDEFINED, true)
@@ -3764,6 +3773,39 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
         let mut walk = Self::read_iteration(state, heap)?;
+        if Self::scans_for_an_element(walk.intrinsic) {
+            // 23.1.3.16, 23.1.3.17 and 23.1.3.20 take the index they start
+            // from out of the argument they were given, against the length
+            // they have just read.
+            let length = i64::from(walk.length);
+            let start = if walk.intrinsic == Intrinsic::ArrayPrototypeLastIndexOf {
+                let from = if walk.started {
+                    integer_argument(walk.output, heap)?
+                } else {
+                    length.saturating_sub(1)
+                };
+                if from >= 0 {
+                    from.min(length.saturating_sub(1)).saturating_add(1)
+                } else {
+                    length.saturating_add(from).saturating_add(1).max(0)
+                }
+            } else {
+                let from = integer_argument(walk.output, heap)?;
+                absolute_index(from, length).clamp(0, length)
+            };
+            walk.index = u32::try_from(start).unwrap_or(u32::MAX);
+            walk.output = VALUE_UNDEFINED;
+            Self::write_iteration(state, &walk, heap)?;
+            return self.step_array_iteration(
+                state,
+                None,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         if !Self::is_callable(walk.callback, heap) {
             heap.exit_scope();
             return Err(type_error(heap, realm, "callback is not callable"));
@@ -3927,6 +3969,27 @@ impl RegisterVM {
                     slot
                 }
             };
+            // 23.1.3.16, 23.1.3.17 and 23.1.3.20 compare the element
+            // themselves and never open a frame for one.
+            if Self::scans_for_an_element(walk.intrinsic) {
+                self.fuel = self.fuel.checked_sub(1).ok_or(VMError::OutOfFuel)?;
+                let found = if walk.intrinsic == Intrinsic::ArrayPrototypeIncludes {
+                    same_value_zero(walk.callback, element, heap)?
+                } else {
+                    Self::strictly_equals(walk.callback, element, heap)?
+                };
+                if found {
+                    heap.exit_scope();
+                    self.acc = if walk.intrinsic == Intrinsic::ArrayPrototypeIncludes {
+                        VALUE_TRUE
+                    } else {
+                        index_value(i64::from(walk.element_index))
+                    };
+                    return Ok(None);
+                }
+                Self::write_iteration(state, &walk, heap)?;
+                continue;
+            }
             // 23.1.3.24 takes the first element it finds as the accumulator and
             // calls the callback only from the next one on.
             if !walk.started {
@@ -4264,21 +4327,33 @@ impl RegisterVM {
 
     /// Whether this method of 23.1.3 asks the Script about each element, and
     /// so cannot answer without leaving the engine first.
-    const fn iterates_with_callback(intrinsic: Intrinsic) -> bool {
+    /// Whether the clause compares each element itself rather than asking the
+    /// Script about it (23.1.3.16, 23.1.3.17 and 23.1.3.20).
+    const fn scans_for_an_element(intrinsic: Intrinsic) -> bool {
         matches!(
             intrinsic,
-            Intrinsic::ArrayPrototypeForEach
-                | Intrinsic::ArrayPrototypeMap
-                | Intrinsic::ArrayPrototypeFilter
-                | Intrinsic::ArrayPrototypeEvery
-                | Intrinsic::ArrayPrototypeSome
-                | Intrinsic::ArrayPrototypeFind
-                | Intrinsic::ArrayPrototypeFindIndex
-                | Intrinsic::ArrayPrototypeFindLast
-                | Intrinsic::ArrayPrototypeFindLastIndex
-                | Intrinsic::ArrayPrototypeReduce
-                | Intrinsic::ArrayPrototypeReduceRight
+            Intrinsic::ArrayPrototypeIncludes
+                | Intrinsic::ArrayPrototypeIndexOf
+                | Intrinsic::ArrayPrototypeLastIndexOf
         )
+    }
+
+    const fn iterates_with_callback(intrinsic: Intrinsic) -> bool {
+        Self::scans_for_an_element(intrinsic)
+            || matches!(
+                intrinsic,
+                Intrinsic::ArrayPrototypeForEach
+                    | Intrinsic::ArrayPrototypeMap
+                    | Intrinsic::ArrayPrototypeFilter
+                    | Intrinsic::ArrayPrototypeEvery
+                    | Intrinsic::ArrayPrototypeSome
+                    | Intrinsic::ArrayPrototypeFind
+                    | Intrinsic::ArrayPrototypeFindIndex
+                    | Intrinsic::ArrayPrototypeFindLast
+                    | Intrinsic::ArrayPrototypeFindLastIndex
+                    | Intrinsic::ArrayPrototypeReduce
+                    | Intrinsic::ArrayPrototypeReduceRight
+            )
     }
 
     /// Whether the clause reads every index from zero to the length, which
@@ -4291,6 +4366,9 @@ impl RegisterVM {
                 | Intrinsic::ArrayPrototypeFindIndex
                 | Intrinsic::ArrayPrototypeFindLast
                 | Intrinsic::ArrayPrototypeFindLastIndex
+                // 23.1.3.16 reads a missing index as undefined, which
+                // 23.1.3.17 and 23.1.3.20 pass over.
+                | Intrinsic::ArrayPrototypeIncludes
         )
     }
 
