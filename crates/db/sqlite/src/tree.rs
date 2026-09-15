@@ -334,6 +334,21 @@ impl Pages {
         Ok(number)
     }
 
+    /// The page `number` written over as an empty page of `kind`, which
+    /// is what the root of a cleared tree is left as.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Page`] where the file does not hold the page.
+    pub fn blank(&mut self, number: u32, kind: Kind) -> Result<(), Error> {
+        self.keep(number);
+        let usable = u32::try_from(self.usable).unwrap_or(0);
+        let at = size(u64::from(number)).saturating_sub(1);
+        let bytes = self.held.get_mut(at).ok_or(Error::Page(number))?;
+        Writer::fresh(bytes, number, usable, kind).zero(kind);
+        Ok(())
+    }
+
     /// A page of no kind at all, which is what an overflow page is, and
     /// the number it has.
     ///
@@ -1507,6 +1522,19 @@ fn clear(pages: &mut Pages, first: Option<u32>) -> Result<(), Error> {
 pub fn destroy(pages: &mut Pages, root: u32) -> Result<(), Error> {
     clear_page(pages, root, false, 0)?;
     pages.release(root)
+}
+
+/// Every row of the tree at `root` taken out, with the root left as an
+/// empty page of `kind`, which is `sqlite3BtreeClearTable`.
+///
+/// Clearing costs O(n) in the pages of the tree.
+///
+/// # Errors
+///
+/// [`Error`] names a page the tree names and the file does not hold.
+pub fn clear_tree(pages: &mut Pages, root: u32, kind: Kind) -> Result<(), Error> {
+    clear_page(pages, root, false, 0)?;
+    pages.blank(root, kind)
 }
 
 /// One page of a tree cleared, and freed where `free` says so.

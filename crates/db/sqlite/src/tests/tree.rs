@@ -3941,3 +3941,66 @@ fn what_analyze_refuses_and_what_it_passes_over() {
         [[Value::Int(0)]]
     );
 }
+
+#[test]
+fn what_reindex_writes_again_is_the_file_the_shell_wrote() {
+    use crate::change::Writer;
+    for (name, statements, fixture) in crate::tests::REBUILT {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        for sql in *statements {
+            writer
+                .run(sql.as_bytes())
+                .unwrap_or_else(|error| panic!("{name}: {sql} is refused with {error:?}"));
+        }
+        same(name, &writer.written(), fixture, 512);
+    }
+}
+
+#[test]
+fn what_reindex_refuses_and_what_it_passes_over() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    // A name neither a collation, nor a table, nor an index is a
+    // refusal, and a word written after the name is one too.
+    assert_eq!(
+        writer.run(b"REINDEX nosuch").err(),
+        Some(crate::db::Error::NoTable)
+    );
+    assert!(crate::parse::reindex(b"REINDEX t junk").is_err());
+    // A table with no index of its own is written again as it stands,
+    // and so is a schema with no index at all.
+    let before = writer.written();
+    writer.run(b"REINDEX t").unwrap();
+    writer.run(b"REINDEX main.NOCASE").unwrap();
+    writer.run(b"REINDEX").unwrap();
+    assert_eq!(writer.written(), before);
+    let database = Database::open(&before).unwrap();
+    assert_eq!(
+        database.query(b"SELECT a FROM t").unwrap().rows,
+        [[Value::Int(1)]]
+    );
+}
+
+#[test]
+fn analyze_counts_no_table_of_the_system_and_refuses_no_name_of_one() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    // `sqlite_schema` is a table of the schema, so `ANALYZE` over it
+    // makes `sqlite_stat1` and counts nothing into it.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    writer.run(b"ANALYZE sqlite_master").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT count(*) FROM sqlite_stat1")
+            .unwrap()
+            .rows,
+        [[Value::Int(0)]]
+    );
+}

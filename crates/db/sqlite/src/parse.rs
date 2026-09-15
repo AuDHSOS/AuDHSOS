@@ -94,6 +94,8 @@ pub enum Expected {
     Pragma,
     /// The word `ANALYZE`.
     Analyze,
+    /// The word `REINDEX`.
+    Reindex,
     /// `SET`, after the table of an `UPDATE`.
     Set,
     /// `=`, after a column of a `SET`.
@@ -2563,6 +2565,29 @@ pub fn analyze(sql: &[u8]) -> Result<crate::ast::Analyze, Error> {
         return Err(parser.error(Some(token), Expected::Eof));
     }
     Ok(crate::ast::Analyze { schema, name })
+}
+
+/// Reads one `REINDEX` out of `sql`.
+///
+/// # Errors
+///
+/// Where the statement is not a `REINDEX`, or where more is written
+/// after it than a semicolon.
+pub fn reindex(sql: &[u8]) -> Result<crate::ast::Reindex, Error> {
+    let mut parser = Parser::new(sql);
+    parser.expect_keyword(Keyword::Reindex, Expected::Reindex)?;
+    let named = parser.peek().is_some_and(|token| token.kind != Kind::Semi);
+    let (schema, name) = if named {
+        let (schema, name) = parser.qualified_name()?;
+        (schema, Some(name))
+    } else {
+        (None, None)
+    };
+    parser.eat(Kind::Semi);
+    if let Some(token) = parser.peek() {
+        return Err(parser.error(Some(token), Expected::Eof));
+    }
+    Ok(crate::ast::Reindex { schema, name })
 }
 
 /// Reads one statement that changes a database out of `sql`.

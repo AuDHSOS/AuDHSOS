@@ -638,11 +638,11 @@ do for the page size, the encoding and the reserved tail.
 
 Status: `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW`, `CREATE
 TRIGGER`, the four `DROP`s, `ALTER TABLE ... ADD COLUMN`, `PRAGMA`,
-`ANALYZE`, `BEGIN`, `COMMIT`, `ROLLBACK`, `INSERT`, `DELETE` and
-`UPDATE` are run from their text and write the files the shell wrote;
+`ANALYZE`, `REINDEX`, `BEGIN`, `COMMIT`, `ROLLBACK`, `INSERT`, `DELETE`
+and `UPDATE` are run from their text and write the files the shell wrote;
 the rest is open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
-D-191, D-193, D-195, D-196 and D-205 to D-207.
+D-191, D-193, D-195, D-196 and D-205 to D-209.
 Size: L.
 
 ### Does
@@ -669,6 +669,8 @@ Size: L.
    `randomblob` are built, which D-199 records; the clock is open.
 5. `ANALYZE`, which counts the tables and their indexes into
    `sqlite_stat1`. Built, which D-207 records.
+6. `REINDEX`, which writes the entries of an index again out of the
+   rows they belong to. Built, which D-209 records.
 
 ### Done when
 
@@ -679,7 +681,7 @@ library accepts or refuses it, with no count of what is waiting.
 
 Status: `sh tools/xtask.sh sqlite-suite` runs the part of SQLite's own
 test files that needs no TCL interpreter. Of 15 364 cases in 1 171
-files, 2145 pass, 7 answer differently, and 13 212 name something the
+files, 2157 pass, 7 answer differently, and 13 200 name something the
 engine refuses or something the harness cannot run.
 Depends on: Q7, Q8.
 Size: M.

@@ -613,6 +613,17 @@ pub struct Analyze {
     pub name: Option<Span>,
 }
 
+/// `REINDEX [[schema.]name]`, which writes the entries of an index
+/// again out of the rows they belong to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Reindex {
+    /// The schema, where one was named.
+    pub schema: Option<Span>,
+    /// The collation, the table or the index it names, where it names
+    /// one; every index of the schema otherwise.
+    pub name: Option<Span>,
+}
+
 /// `PRAGMA [schema.]name [= value | (value)]`, which says how a
 /// connection is configured or answers how it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

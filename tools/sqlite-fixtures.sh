@@ -395,6 +395,20 @@ for case in \
     printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
 done
 
+# The entries `REINDEX` writes again.
+for case in \
+    "re-one.db:CREATE TABLE t(a,b); CREATE INDEX i ON t(a); INSERT INTO t VALUES(1,2),(3,4),(5,6); REINDEX;" \
+    "re-named.db:CREATE TABLE t(a,b); CREATE INDEX i ON t(a); CREATE INDEX j ON t(b); INSERT INTO t VALUES(1,2),(3,4); REINDEX i;" \
+    "re-table.db:CREATE TABLE t(a); CREATE TABLE u(x); CREATE INDEX i ON t(a); CREATE INDEX k ON u(x); INSERT INTO t VALUES(1),(2); INSERT INTO u VALUES(3); REINDEX t;" \
+    "re-collate.db:CREATE TABLE t(a TEXT COLLATE NOCASE, b); CREATE INDEX i ON t(a); CREATE INDEX j ON t(b); INSERT INTO t VALUES('x',1),('Y',2); REINDEX NOCASE;" \
+    "re-key.db:CREATE TABLE t(a PRIMARY KEY, b); INSERT INTO t VALUES(1,2),(3,4); REINDEX;"; do
+    name="${case%%:*}"
+    sql="${case#*:}"
+    rm -f "$out/$name"
+    "$sqlite" "$out/$name" "PRAGMA page_size=512; $sql"
+    printf '%s\t%s bytes\n' "$name" "$(wc -c <"$out/$name" | tr -d ' ')"
+done
+
 # A trigger: the row of `sqlite_schema` that names it, and the rows its
 # body writes when a statement on the table it is on runs.
 for case in \

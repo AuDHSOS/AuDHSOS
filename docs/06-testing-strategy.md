@@ -4294,7 +4294,7 @@ D-180, document 16 step Q9. `sh tools/xtask.sh sqlite-suite`.
   by its first word, read with the comments taken out, and a `WITH`
   clause stands in front of a statement that writes as well, so the
   words after it say which.
-- 2145 pass, 7 answer differently and 13 212 are refused or stopped.
+- 2157 pass, 7 answer differently and 13 200 are refused or stopped.
   Document 16, section 16.23 groups the seven. Earlier runs answered
   14, then 27, then 17, then 13, then 16 differently; twenty-five were
   defects, which D-181, D-184, D-189, D-197 and D-205 record and
@@ -4627,7 +4627,9 @@ D-207, document 16 step Q8.
 - A run takes out the rows a run before it wrote: every row for a
   whole database, the rows of the table for one table.
 - `ANALYZE` makes `sqlite_stat1` where the database holds none, and
-  counts no table whose name the word `sqlite_` begins.
+  counts no table whose name the word `sqlite_` begins; a name that
+  begins with that word is a table it counts nothing of rather than a
+  refusal.
 
 ### 6.6.137 Where a term is read and what names a key (`db-sqlite`)
 
@@ -4648,6 +4650,19 @@ D-208, document 16 step Q5.
   statement of its own, an `EXISTS`, an `IN` over a statement, a name
   no side answers, and a name two sides answer.
 - A term above a `RIGHT` join is read on the level of that join.
+
+### 6.6.138 The entries `REINDEX` writes again (`db-sqlite`)
+
+D-209, document 16 step Q8.
+
+- Five fixtures, `re-*.db`: every index of the schema, one index by
+  name, the indexes of one table, the indexes of one collation, and
+  the index a `PRIMARY KEY` carries. Each is the file the shell wrote,
+  byte for byte.
+- The refusals: a name neither a collation, nor a table, nor an index
+  carries, and a word written after the name.
+- A table with no index of its own, and a schema with no index at all,
+  are left as they stand.
 
 ## 6.7 CI pipeline
 

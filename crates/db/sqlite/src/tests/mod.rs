@@ -693,6 +693,65 @@ pub(crate) const OWN_KEYS: &[(&str, &[&str], &[u8])] = &[
     ),
 ];
 
+/// The entries `REINDEX` writes again. Each case is the statements the
+/// fixture was written with, in order.
+pub(crate) const REBUILT: &[(&str, &[&str], &[u8])] = &[
+    (
+        "re-one.db",
+        &[
+            "CREATE TABLE t(a,b)",
+            "CREATE INDEX i ON t(a)",
+            "INSERT INTO t VALUES(1,2),(3,4),(5,6)",
+            "REINDEX",
+        ],
+        include_bytes!("fixtures/re-one.db"),
+    ),
+    (
+        "re-named.db",
+        &[
+            "CREATE TABLE t(a,b)",
+            "CREATE INDEX i ON t(a)",
+            "CREATE INDEX j ON t(b)",
+            "INSERT INTO t VALUES(1,2),(3,4)",
+            "REINDEX i",
+        ],
+        include_bytes!("fixtures/re-named.db"),
+    ),
+    (
+        "re-table.db",
+        &[
+            "CREATE TABLE t(a)",
+            "CREATE TABLE u(x)",
+            "CREATE INDEX i ON t(a)",
+            "CREATE INDEX k ON u(x)",
+            "INSERT INTO t VALUES(1),(2)",
+            "INSERT INTO u VALUES(3)",
+            "REINDEX t",
+        ],
+        include_bytes!("fixtures/re-table.db"),
+    ),
+    (
+        "re-collate.db",
+        &[
+            "CREATE TABLE t(a TEXT COLLATE NOCASE, b)",
+            "CREATE INDEX i ON t(a)",
+            "CREATE INDEX j ON t(b)",
+            "INSERT INTO t VALUES('x',1),('Y',2)",
+            "REINDEX NOCASE",
+        ],
+        include_bytes!("fixtures/re-collate.db"),
+    ),
+    (
+        "re-key.db",
+        &[
+            "CREATE TABLE t(a PRIMARY KEY, b)",
+            "INSERT INTO t VALUES(1,2),(3,4)",
+            "REINDEX",
+        ],
+        include_bytes!("fixtures/re-key.db"),
+    ),
+];
+
 /// What `ANALYZE` counts into `sqlite_stat1`. Each case is the
 /// statements the fixture was written with, in order.
 pub(crate) const COUNTED: &[(&str, &[&str], &[u8])] = &[

@@ -58,6 +58,16 @@ const fn is_text(value: Option<crate::record::Value<'_>>, wanted: &[u8]) -> bool
 /// The table `ANALYZE` writes its counts into.
 const STAT: &[u8] = b"sqlite_stat1";
 
+/// One index a `REINDEX` writes again.
+struct Rebuilt {
+    /// The index, as the schema describes it.
+    index: crate::schema::Index,
+    /// The page its tree begins at.
+    root: u32,
+    /// The table whose rows it holds the entries of.
+    table: Vec<u8>,
+}
+
 /// What one `ANALYZE` counts.
 struct Analyzed {
     /// The tables, in the order the rows are written for them.
@@ -78,7 +88,10 @@ fn analyzed(database: &Database<'_>, named: Option<&[u8]>) -> Result<Analyzed, E
         tables.reverse();
         return Ok(Analyzed { tables, only: None });
     };
-    if database.table(named).is_some() {
+    // `sqlite_schema` is a table of the schema like any other, so a
+    // name that begins with `sqlite_` names a table whatever the
+    // database holds under it, and the counting passes it over.
+    if database.table(named).is_some() || of_the_system(named) {
         return Ok(Analyzed {
             tables: alloc::vec![named.to_vec()],
             only: None,
@@ -654,6 +667,10 @@ impl Writer {
         }
         if let Ok(asked) = crate::parse::analyze(sql) {
             self.analyze(&asked, sql)?;
+            return Ok(0);
+        }
+        if let Ok(asked) = crate::parse::reindex(sql) {
+            self.reindex(&asked, sql)?;
             return Ok(0);
         }
         let (arena, change) = crate::parse::change(sql)?;
@@ -1252,17 +1269,7 @@ impl Writer {
             }
             (entries, collations)
         };
-        // `sqlite3VdbeSorterInit`: the entries are sorted before any is
-        // written, so the pages fill in the order the entries run and
-        // not in the order the rows do.
-        let mut entries = entries;
-        entries.sort_by(|one, other| order_of_keys(one, other, &collations));
-        let affinities = alloc::vec![Affinity::None; collations.len().saturating_add(1)];
-        for key in entries {
-            let record = crate::record::write(&key, &affinities, 4);
-            crate::tree::insert_entry(&mut self.pages, root, &record, &key, &collations, true)?;
-        }
-        Ok(())
+        self.write_entries(entries, &collations, root)
     }
 
     /// What an `INSERT` writes: the rows the statement answered, each
@@ -1330,6 +1337,109 @@ impl Writer {
             kept,
             table: table.clone(),
         })
+    }
+
+    /// The entries of one index written into the tree at `root`, which
+    /// is what `sqlite3RefillIndex` writes.
+    ///
+    /// Sorting `n` entries costs O(n log n) and writing them O(n).
+    fn write_entries(
+        &mut self,
+        entries: Vec<Vec<Value>>,
+        collations: &[Collation],
+        root: u32,
+    ) -> Result<(), Error> {
+        // `sqlite3VdbeSorterInit`: the entries are sorted before any is
+        // written, so the pages fill in the order the entries run and
+        // not in the order the rows do.
+        let mut entries = entries;
+        entries.sort_by(|one, other| order_of_keys(one, other, collations));
+        let affinities = alloc::vec![Affinity::None; collations.len().saturating_add(1)];
+        for key in entries {
+            let record = crate::record::write(&key, &affinities, 4);
+            crate::tree::insert_entry(&mut self.pages, root, &record, &key, collations, true)?;
+        }
+        Ok(())
+    }
+
+    /// `REINDEX`: the entries of every index it names written again out
+    /// of the rows they belong to.
+    ///
+    /// `REINDEX` alone writes every index of the schema again. A name
+    /// is the collation whose indexes are written again, or the table
+    /// whose indexes are, or the one index, which is the order
+    /// `sqlite3Reindex` reads the name in.
+    ///
+    /// Writing one index again costs what its rows cost to read and
+    /// O(n log n) to order.
+    fn reindex(&mut self, asked: &crate::ast::Reindex, sql: &[u8]) -> Result<(), Error> {
+        let named = asked
+            .name
+            .map(|span| crate::schema::dequote(span.text(sql)));
+        let held = self.reindexed(named.as_deref())?;
+        for Rebuilt { index, root, table } in held {
+            crate::tree::clear_tree(&mut self.pages, root, Kind::LeafIndex)?;
+            let entries = {
+                let bytes = self.image();
+                let database = Database::open(&bytes)?;
+                let mut entries = Vec::new();
+                for (rowid, values) in database.rows_of(&table)? {
+                    entries.push(entry_of(&index, &values, rowid));
+                }
+                entries
+            };
+            let collations = collations_of(&index);
+            self.write_entries(entries, &collations, root)?;
+        }
+        Ok(())
+    }
+
+    /// The indexes one `REINDEX` writes again, with the one made last
+    /// first, which is the order `reindexDatabases` reads them in.
+    ///
+    /// Reading the schema costs O(n) in its rows.
+    fn reindexed(&self, named: Option<&[u8]>) -> Result<Vec<Rebuilt>, Error> {
+        let bytes = self.image();
+        let database = Database::open(&bytes)?;
+        let collation = named.and_then(Collation::of_name);
+        let over: Option<Vec<u8>> = match named {
+            None => None,
+            Some(_) if collation.is_some() => None,
+            Some(named) if database.table(named).is_some() => Some(named.to_vec()),
+            Some(named) => {
+                let (index, root) = database.index(named).ok_or(Error::NoTable)?;
+                return Ok(alloc::vec![Rebuilt {
+                    index: index.clone(),
+                    root,
+                    table: index.table.clone(),
+                }]);
+            }
+        };
+        let mut held = Vec::new();
+        for table in database.tables() {
+            if over.as_deref().is_some_and(|over| table.name != over) {
+                continue;
+            }
+            for (index, root) in database.indexes(&table.name).iter().rev() {
+                // `REINDEX <collation>` writes again every index one of
+                // whose columns is held in that collation.
+                if collation.is_some_and(|wanted| {
+                    !index
+                        .columns
+                        .iter()
+                        .any(|column| column.collation == wanted)
+                }) {
+                    continue;
+                }
+                held.push(Rebuilt {
+                    index: (*index).clone(),
+                    root: *root,
+                    table: table.name.clone(),
+                });
+            }
+        }
+        held.reverse();
+        Ok(held)
     }
 
     /// `INSERT`: the rows the statement answers, each put in the tree
