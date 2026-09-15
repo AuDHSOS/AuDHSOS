@@ -194,6 +194,23 @@ pub struct Writer {
     /// is `OE_Fail`: the rows it wrote before that stand, and the
     /// refusal carries the message of the constraint all the same.
     stopped: bool,
+    /// The savepoints open now, the outermost first, each holding the
+    /// file as it stood when the `SAVEPOINT` ran.
+    saved: Vec<Saved>,
+}
+
+/// One open savepoint: its name, and the file as it stood when the
+/// `SAVEPOINT` that opened it ran.
+struct Saved {
+    /// The name the statement wrote, with its quotes taken off.
+    name: Vec<u8>,
+    /// The pages as they stood.
+    pages: Pages,
+    /// The header as it stood.
+    header: Header,
+    /// Whether this savepoint opened the transaction, which is what
+    /// makes releasing it a commit.
+    opener: bool,
 }
 
 impl Writer {
@@ -219,6 +236,7 @@ impl Writer {
             counting: false,
             began: None,
             stopped: false,
+            saved: Vec::new(),
             header: Header {
                 page_size,
                 write_version: 1,
@@ -275,6 +293,7 @@ impl Writer {
             counting: false,
             began: None,
             stopped: false,
+            saved: Vec::new(),
         })
     }
 
@@ -601,6 +620,9 @@ impl Writer {
         if let Ok(asked) = crate::parse::transaction(sql) {
             return self.bound(asked);
         }
+        if let Ok(asked) = crate::parse::savepoint(sql) {
+            return self.savepoint(asked, sql);
+        }
         if let Ok(asked) = crate::parse::pragma(sql) {
             return self.pragma(&asked, sql);
         }
@@ -608,9 +630,15 @@ impl Writer {
         // statements before it wrote, so the pages keep what they held
         // when the `BEGIN` ran and not when this statement began.
         let was = self.began.unwrap_or(self.header);
+        // A statement of a transaction is one unit of its own as well:
+        // the pages it opens are kept as it found them, which is the
+        // statement journal.
         if self.began.is_none() {
             self.pages.begin();
+        } else {
+            self.pages.mark();
         }
+        let held = self.header;
         self.stopped = false;
         let ran = self.ran(sql);
         // A statement that refuses what it was given leaves the file
@@ -625,8 +653,13 @@ impl Writer {
                 // wrote, which is `OE_Fail`. `OE_Rollback` undoes the
                 // whole transaction, which this crate answers as
                 // `OE_Abort`.
-                if self.began.is_none() && !self.stopped {
-                    self.pages.rollback();
+                if !self.stopped {
+                    if self.began.is_none() {
+                        self.pages.rollback();
+                    } else {
+                        self.pages.undo();
+                    }
+                    self.header = held;
                 }
                 return Err(error);
             }
@@ -783,15 +816,77 @@ impl Writer {
             }
             crate::ast::Transaction::Commit => {
                 let was = self.began.take().ok_or(Error::NoTransaction)?;
+                self.saved.clear();
                 self.commit(&was)?;
             }
             crate::ast::Transaction::Rollback => {
                 let was = self.began.take().ok_or(Error::NoTransaction)?;
+                self.saved.clear();
                 // The pages go back to what they held and the header
                 // with them, so the transaction leaves no trace.
                 self.pages.rollback();
                 self.header = was;
             }
+        }
+        Ok(Vec::new())
+    }
+
+    /// `SAVEPOINT`, `RELEASE` and `ROLLBACK TO`, which is
+    /// `sqlite3Savepoint`.
+    ///
+    /// Opening one costs O(n) in the pages of the file, which is what
+    /// the file it stands over is kept as.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoSavepoint`] where the connection holds no savepoint of
+    /// that name open.
+    fn savepoint(
+        &mut self,
+        asked: crate::ast::Savepoint,
+        sql: &[u8],
+    ) -> Result<Vec<Vec<Value>>, Error> {
+        let (crate::ast::Savepoint::Open(span)
+        | crate::ast::Savepoint::Release(span)
+        | crate::ast::Savepoint::Back(span)) = asked;
+        let name = crate::schema::dequote(span.text(sql));
+        if let crate::ast::Savepoint::Open(_) = asked {
+            // A `SAVEPOINT` outside a transaction opens one, which the
+            // release of that savepoint commits.
+            let opener = self.began.is_none();
+            if opener {
+                self.pages.begin();
+                self.began = Some(self.header);
+            }
+            self.saved.push(Saved {
+                name,
+                pages: self.pages.clone(),
+                header: self.header,
+                opener,
+            });
+            return Ok(Vec::new());
+        }
+        // The innermost savepoint of that name is the one the statement
+        // names, which is what `sqlite3Savepoint` walks the list for.
+        let at = self
+            .saved
+            .iter()
+            .rposition(|held| held.name.eq_ignore_ascii_case(&name))
+            .ok_or_else(|| Error::NoSavepoint(name.clone()))?;
+        if let crate::ast::Savepoint::Back(_) = asked {
+            let held = self.saved.get(at).ok_or(Error::NoSavepoint(Vec::new()))?;
+            self.pages = held.pages.clone();
+            self.header = held.header;
+            // The savepoint the statement names stays open, and every
+            // one inside it is gone.
+            self.saved.truncate(at.saturating_add(1));
+            return Ok(Vec::new());
+        }
+        let opener = self.saved.get(at).is_some_and(|held| held.opener);
+        self.saved.truncate(at);
+        if opener {
+            let was = self.began.take().ok_or(Error::NoTransaction)?;
+            self.commit(&was)?;
         }
         Ok(Vec::new())
     }

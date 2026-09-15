@@ -651,7 +651,7 @@ a foreign key holds the rows of both tables it names, and the JSON
 functions answer what the shell answers; the rest is open.
 Depends on: Q6. Recorded in D-172 to D-174, D-182, D-186, D-187, D-189,
 D-191, D-193, D-195, D-196, D-205 to D-211, D-216 to D-218, D-219,
-D-224 to D-232, D-234 and D-235.
+D-224 to D-232 and D-234 to D-236.
 Size: L.
 
 ### Does
@@ -709,6 +709,9 @@ Size: L.
     aggregates and the two operators, over the binary form the header
     comment of `src/json.c` states. Built, which D-235 records;
     `json_each` and `json_tree` need a virtual table and are open.
+16. `SAVEPOINT`, `RELEASE` and `ROLLBACK TO`, and the statement
+    journal a statement of a transaction is put back from. Built, which
+    D-236 records.
 
 ### Done when
 
@@ -718,8 +721,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 72 177 cases in 705 files, 55 581
-pass, 4600 answer differently, and 11 996 name something the engine
+under the `tclsh` of the machine. Of 72 243 cases in 705 files, 56 154
+pass, 4579 answer differently, and 11 510 name something the engine
 refuses or a command that needs the C library's internals.
 Depends on: Q7, Q8. Recorded in D-201, D-212, D-213, D-220, D-222,
 D-223 and D-224.

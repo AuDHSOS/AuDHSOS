@@ -103,6 +103,9 @@ pub enum Error {
     /// A `COMMIT` or a `ROLLBACK` on a connection with no transaction
     /// open.
     NoTransaction,
+    /// A `RELEASE` or a `ROLLBACK TO` that names a savepoint the
+    /// connection does not hold open, with the name as it was written.
+    NoSavepoint(Vec<u8>),
     /// A row that shares a key with one the table already holds, where
     /// the statement said to refuse it and undo what it wrote, with
     /// the columns the key is over as `table.column`.
@@ -168,6 +171,10 @@ impl Error {
             ),
             Error::Nested => "cannot start a transaction within a transaction".to_string(),
             Error::NoTransaction => "cannot commit - no transaction is active".to_string(),
+            Error::NoSavepoint(name) => alloc::format!(
+                "no such savepoint: {}",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
             Error::Recursion => "recursive aggregate queries not supported".to_string(),
             Error::Eval(error) => error.message(),
             other => alloc::format!("{other:?}"),

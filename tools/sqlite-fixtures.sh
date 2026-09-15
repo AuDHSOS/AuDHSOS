@@ -90,6 +90,18 @@ CREATE TABLE o(a, t TEXT); CREATE INDEX ot ON o(t); INSERT INTO o VALUES (1, rep
 CREATE TABLE u(a TEXT, b, PRIMARY KEY(a)) WITHOUT ROWID; CREATE INDEX ub ON u(b); INSERT INTO u VALUES ('x',1),('y',2);
 CREATE TABLE f(v); CREATE INDEX fv ON f(v); INSERT INTO f VALUES (NULL),(7),(1.5),('t'),(x'0102');"
 
+# A file written under savepoints: the rows a `ROLLBACK TO` took out
+# are not in it, and the whole block commits once, at the `RELEASE`.
+rm -f "$out/savepoint.db"
+"$sqlite" "$out/savepoint.db" "PRAGMA page_size=512; CREATE TABLE t(a); SAVEPOINT one; INSERT INTO t VALUES(1); SAVEPOINT two; INSERT INTO t VALUES(2); ROLLBACK TO two; INSERT INTO t VALUES(3); RELEASE one;"
+printf '%s\t%s bytes\n' savepoint.db "$(wc -c <"$out/savepoint.db" | tr -d ' ')"
+
+# A file a statement that refused inside a transaction left: the rows
+# of that statement are not in it, the row before it is.
+rm -f "$out/refused.db"
+"$sqlite" "$out/refused.db" "PRAGMA page_size=512; CREATE TABLE t(a UNIQUE); BEGIN; INSERT INTO t VALUES(1); INSERT INTO t VALUES(2),(1); COMMIT;" 2>/dev/null || true
+printf '%s\t%s bytes\n' refused.db "$(wc -c <"$out/refused.db" | tr -d ' ')"
+
 # The matrix of document 16, section 16.11: the same rows written under
 # every configuration the shell can write them under.
 fixture m-utf8-512.db        "" "PRAGMA page_size=512;"

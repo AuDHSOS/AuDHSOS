@@ -814,6 +814,20 @@ pub enum Transaction {
     Rollback,
 }
 
+/// `SAVEPOINT`, `RELEASE` and `ROLLBACK TO`, which bound a part of a
+/// transaction under a name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Savepoint {
+    /// `SAVEPOINT name`, which opens one and opens a transaction where
+    /// the connection holds none.
+    Open(Span),
+    /// `RELEASE [SAVEPOINT] name`, which keeps what the savepoint wrote.
+    Release(Span),
+    /// `ROLLBACK [TRANSACTION] TO [SAVEPOINT] name`, which puts the file
+    /// back to what the savepoint stands over and leaves it open.
+    Back(Span),
+}
+
 /// `DROP TABLE [IF EXISTS] [schema.]name`, and the same for an index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Drop {

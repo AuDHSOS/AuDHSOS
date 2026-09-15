@@ -118,6 +118,11 @@ pub enum Expected {
     On,
     /// `BEGIN`, `COMMIT`, `END` or `ROLLBACK`.
     Transaction,
+    /// `SAVEPOINT`, `RELEASE` or `ROLLBACK`, which a savepoint is named
+    /// after.
+    Savepoint,
+    /// `TO`, after `ROLLBACK`.
+    To,
     /// `ADD`, after the table of an `ALTER TABLE`.
     Add,
     /// `WHERE`, in the `FILTER` of a window function.
@@ -978,6 +983,24 @@ impl<'a> Parser<'a> {
         };
         self.eat_keyword(Keyword::Transaction);
         Ok(read)
+    }
+
+    /// `SAVEPOINT name`, `RELEASE [SAVEPOINT] name` and `ROLLBACK
+    /// [TRANSACTION] TO [SAVEPOINT] name`, which is `sqlite3Savepoint`
+    /// under the three words `savepoint_opcode` answers.
+    fn savepoint(&mut self) -> Result<crate::ast::Savepoint, Error> {
+        if self.eat_keyword(Keyword::Savepoint) {
+            return Ok(crate::ast::Savepoint::Open(self.name()?));
+        }
+        if self.eat_keyword(Keyword::Release) {
+            self.eat_keyword(Keyword::Savepoint);
+            return Ok(crate::ast::Savepoint::Release(self.name()?));
+        }
+        self.expect_keyword(Keyword::Rollback, Expected::Savepoint)?;
+        self.eat_keyword(Keyword::Transaction);
+        self.expect_keyword(Keyword::To, Expected::To)?;
+        self.eat_keyword(Keyword::Savepoint);
+        Ok(crate::ast::Savepoint::Back(self.name()?))
     }
 
     /// What follows `ALTER TABLE`: the table, the word `ADD`, and the
@@ -2823,6 +2846,22 @@ pub fn pragma(sql: &[u8]) -> Result<crate::ast::Pragma, Error> {
 pub fn transaction(sql: &[u8]) -> Result<crate::ast::Transaction, Error> {
     let mut parser = Parser::new(sql);
     let read = parser.transaction()?;
+    parser.eat(Kind::Semi);
+    if let Some(token) = parser.peek() {
+        return Err(parser.error(Some(token), Expected::Eof));
+    }
+    Ok(read)
+}
+
+/// Reads one `SAVEPOINT`, `RELEASE` or `ROLLBACK TO` out of `sql`.
+///
+/// # Errors
+///
+/// Where the statement is none of the three, or where more is written
+/// after it than a semicolon.
+pub fn savepoint(sql: &[u8]) -> Result<crate::ast::Savepoint, Error> {
+    let mut parser = Parser::new(sql);
+    let read = parser.savepoint()?;
     parser.eat(Kind::Semi);
     if let Some(token) = parser.peek() {
         return Err(parser.error(Some(token), Expected::Eof));

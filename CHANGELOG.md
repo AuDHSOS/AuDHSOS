@@ -25,6 +25,23 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The JSON functions in `db-sqlite`: the twenty-six scalar names from
+  `json` to `jsonb_array_insert`, the four aggregates, and the operators
+  `->` and `->>`. A document is held in the binary form `src/json.c`
+  states, so a document read out of text and one read out of a `jsonb`
+  blob are the same bytes. Text is read as RFC 8259 states it and as
+  JSON5 adds to it, and a call answers whether what it answered is JSON
+  of its own, which `JSON_SUBTYPE` marks in the C library. `json_each`
+  and `json_tree` need a virtual table and are open. D-235 records it.
+
+- `SAVEPOINT`, `RELEASE` and `ROLLBACK TO` in `db-sqlite`. A `SAVEPOINT`
+  outside a transaction opens one, the release of that savepoint commits
+  it, and a `ROLLBACK TO` puts the file back to what the savepoint stands
+  over and leaves that savepoint open. A statement of a transaction is a
+  unit of its own as well: the pages it opens are kept as it found them,
+  so a statement that refuses leaves the transaction where it stood,
+  which is the statement journal of `OE_Abort`. D-236 records it.
+
 - `mod` in `db-sqlite`, whose answer is exact: the divisor is doubled up
   to the dividend and halved back down, and every subtraction is one the
   format rounds nothing in, so no math library is needed and the answer

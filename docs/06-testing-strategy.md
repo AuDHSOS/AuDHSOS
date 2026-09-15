@@ -4959,6 +4959,25 @@ D-235, document 16 step Q8.
 - A path, a document and a patch that nest a thousand deep are each
   refused with their own message.
 
+### 6.6.159 Savepoints (`db-sqlite`)
+
+D-236, document 16 step Q8.
+
+- A `SAVEPOINT` outside a transaction opens one, and the release of that
+  savepoint writes the file.
+- A `ROLLBACK TO` takes out what was written after the savepoint and
+  leaves the savepoint open.
+- A `COMMIT` and a `ROLLBACK` take every savepoint with them, so a
+  `RELEASE` after one is refused.
+- The innermost savepoint of a name is the one a `RELEASE` and a
+  `ROLLBACK TO` name, and a name in quotes is the name without them.
+- A name no open savepoint holds is refused.
+- A statement of a transaction that refuses leaves the transaction where
+  it stood, and one that stops where it stands keeps what it wrote.
+- The file a savepoint block writes, and the file a refused statement of
+  a transaction leaves, are the files the shell wrote for the same
+  statements, byte for byte.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

@@ -33,6 +33,7 @@ fn one<T: Clone>(list: &mut [T], at: usize, value: &T) {
 }
 
 /// The pages of a database being written, page one first.
+#[derive(Clone)]
 pub struct Pages {
     /// Bytes per page.
     page_size: usize,
@@ -46,6 +47,16 @@ pub struct Pages {
     /// What a page held when the transaction began, kept for the pages
     /// the transaction has opened to write.
     before: Vec<Option<Vec<u8>>>,
+    /// What a page held when the statement began, kept for the pages the
+    /// statement has opened to write, which is the statement journal
+    /// `sqlite3VdbeOpenStatement` opens. A statement outside a
+    /// transaction keeps none, because the transaction of that
+    /// statement is the unit that is put back.
+    started: Vec<Option<Start>>,
+    /// How many pages the database held when the statement began, the
+    /// trunk its free list begins at and how many pages lie on it,
+    /// which undoing the statement puts back.
+    statement: (u32, u32, u32),
     /// What the file holds for a page a commit left out, which is a page
     /// freed onto a trunk: `sqlite3PagerDontWrite` keeps it out of every
     /// commit until the page is written again, so the file and the cache
@@ -71,6 +82,19 @@ pub struct Pages {
     /// Whether the file keeps pointer maps, which is what a file that
     /// vacuums itself needs to say which page names each other page.
     vacuum: bool,
+}
+
+/// One page as the statement found it: what it held, what the commit
+/// was to write for it, and whether this transaction had freed it.
+#[derive(Clone)]
+struct Start {
+    /// The bytes of the page.
+    held: Vec<u8>,
+    /// What a commit was to write for it, where the commit was to leave
+    /// the page it holds out.
+    skipped: Option<Vec<u8>>,
+    /// Whether this transaction had freed it.
+    freed: bool,
 }
 
 /// What a pointer map says one page is, which is `PTRMAP_ROOTPAGE` and
@@ -147,6 +171,8 @@ impl Pages {
             held: alloc::vec![first],
             freelist: 0,
             before: alloc::vec![None],
+            started: alloc::vec![None],
+            statement: (1, 0, 0),
             skipped: alloc::vec![None],
             freed: alloc::vec![false],
             origin: 1,
@@ -202,6 +228,8 @@ impl Pages {
             held,
             freelist: header.freelist,
             before: alloc::vec![None; count],
+            started: alloc::vec![None; count],
+            statement: (origin, header.freelist, header.freelist_pages),
             skipped: alloc::vec![None; count],
             freed: alloc::vec![false; count],
             origin,
@@ -487,6 +515,7 @@ impl Pages {
         self.freelist_count = 0;
         self.held.truncate(size(u64::from(last)));
         self.before.truncate(size(u64::from(last)));
+        self.started.truncate(size(u64::from(last)));
         self.skipped.truncate(size(u64::from(last)));
         self.freed.truncate(size(u64::from(last)));
         Ok(())
@@ -583,6 +612,7 @@ impl Pages {
     fn grow(&mut self) -> u32 {
         self.held.push(alloc::vec![0u8; self.page_size]);
         self.before.push(None);
+        self.started.push(None);
         self.skipped.push(None);
         self.freed.push(false);
         self.count()
@@ -600,6 +630,7 @@ impl Pages {
     /// when the transaction began.
     pub fn begin(&mut self) {
         self.before.fill(None);
+        self.started.fill(None);
         self.freed.fill(false);
         self.journalled.clear();
         self.origin = self.count();
@@ -620,9 +651,46 @@ impl Pages {
         self.held.truncate(size(u64::from(self.origin)));
         (self.freelist, self.freelist_count) = self.list;
         self.before.fill(None);
+        self.started.fill(None);
         self.skipped.fill(None);
         self.freed.fill(false);
         self.journalled.clear();
+    }
+
+    /// Begins one statement of a transaction, which is the statement
+    /// journal `sqlite3VdbeOpenStatement` opens: the pages the
+    /// statement opens to write are kept as it found them, so that a
+    /// statement that refuses leaves the transaction where it stood.
+    pub fn mark(&mut self) {
+        self.started.fill(None);
+        self.statement = (self.count(), self.freelist, self.freelist_count);
+    }
+
+    /// Every page the statement opened put back as it was, the file
+    /// back to the length it had and the free list back to the pages it
+    /// named, which is what playing the statement journal back does.
+    ///
+    /// Undoing a statement costs O(n) in the pages it opened.
+    pub fn undo(&mut self) {
+        let started = core::mem::take(&mut self.started);
+        for (at, start) in started.iter().enumerate() {
+            if let Some(start) = start {
+                one(&mut self.held, at, &start.held);
+                one(&mut self.skipped, at, &start.skipped);
+                one(&mut self.freed, at, &start.freed);
+            }
+        }
+        self.started = started;
+        let (count, freelist, freelist_count) = self.statement;
+        self.freelist = freelist;
+        self.freelist_count = freelist_count;
+        let pages = size(u64::from(count));
+        self.held.truncate(pages);
+        self.before.truncate(pages);
+        self.started.truncate(pages);
+        self.skipped.truncate(pages);
+        self.freed.truncate(pages);
+        self.started.fill(None);
     }
 
     /// Opens page `number` to write, which is `sqlite3PagerWrite`: what
@@ -632,6 +700,7 @@ impl Pages {
     fn keep(&mut self, number: u32) {
         let at = size(u64::from(number)).saturating_sub(1);
         let held = self.held.get(at).cloned();
+        self.start(at);
         one(&mut self.skipped, at, &None);
         let mut first = false;
         for slot in self.before.iter_mut().skip(at).take(1) {
@@ -646,6 +715,20 @@ impl Pages {
         if first && number <= self.origin {
             self.journalled.push(number);
         }
+    }
+
+    /// The page at `at` as the statement found it, kept where the
+    /// statement has not opened it yet.
+    fn start(&mut self, at: usize) {
+        if self.started.get(at).is_some_and(Option::is_some) {
+            return;
+        }
+        let start = Start {
+            held: self.held.get(at).cloned().unwrap_or_default(),
+            skipped: self.skipped.get(at).and_then(Clone::clone),
+            freed: self.freed.get(at).copied().unwrap_or(false),
+        };
+        one(&mut self.started, at, &Some(start));
     }
 
     /// The page the free list gives up, or nothing where the list is
@@ -744,6 +827,7 @@ impl Pages {
     /// the transaction began.
     fn skip(&mut self, number: u32) {
         let at = size(u64::from(number)).saturating_sub(1);
+        self.start(at);
         let was = self
             .before
             .get(at)
