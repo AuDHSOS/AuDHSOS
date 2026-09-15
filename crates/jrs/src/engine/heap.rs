@@ -256,8 +256,11 @@ pub struct NamedProperty {
     pub holder_shape: ShapeId,
     /// Property slot in the holder.
     pub slot: u32,
-    /// Property value at lookup time.
+    /// Property value at lookup time, or the [`ObjectKind::Accessor`] pair
+    /// when `flags` says the property is an accessor.
     pub value: Value,
+    /// Attributes of the property on its holder.
+    pub flags: PropertyFlags,
     /// Prototype-validity epoch at lookup time.
     pub prototype_epoch: Option<u64>,
 }
@@ -819,6 +822,7 @@ impl GenerationalHeap {
                     value: object
                         .get_slot(location.slot_offset)
                         .unwrap_or(VALUE_UNDEFINED),
+                    flags: location.flags,
                     prototype_epoch: if depth == 0 {
                         None
                     } else {

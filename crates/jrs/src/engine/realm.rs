@@ -1976,6 +1976,9 @@ pub enum BindingOutcome {
     /// Clause 19 gives the global object this name and this Realm has not
     /// built it yet, so its absence is a gap and not an answer.
     Missing(&'static str),
+    /// The binding object holds the name as an accessor, which only an
+    /// instruction of a Script can read or write.
+    Accessor,
 }
 
 /// The objects the intrinsic functions of a new Realm are installed on.
@@ -2411,6 +2414,9 @@ impl GlobalEnvironment {
         if let Some(flags) = heap.own_named_flags(declarative, name)? {
             // 9.1.1.1.5: an uninitialized binding is a ReferenceError, and one
             // that is not writable is a TypeError under strict evaluation.
+            if flags.is_accessor {
+                return Ok(Err(BindingOutcome::Accessor));
+            }
             let current = heap
                 .lookup_named(declarative, name)?
                 .map_or(VALUE_UNDEFINED, |property| property.value);
@@ -2431,6 +2437,9 @@ impl GlobalEnvironment {
             return Ok(Err(BindingOutcome::Unresolvable));
         }
         let flags = existing.unwrap_or(PropertyFlags::ordinary_data());
+        if flags.is_accessor {
+            return Ok(Err(BindingOutcome::Accessor));
+        }
         if !flags.writable {
             return Ok(Err(BindingOutcome::Immutable));
         }
@@ -2464,6 +2473,9 @@ impl GlobalEnvironment {
             return Ok(Ok(property.value));
         }
         if let Some(property) = heap.lookup_named(self.global_object(heap)?, name)? {
+            if property.flags.is_accessor {
+                return Ok(Err(BindingOutcome::Accessor));
+            }
             return Ok(Ok(property.value));
         }
         // Clause 19 names a property this Realm has not built, so reporting it

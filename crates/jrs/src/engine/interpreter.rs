@@ -19,7 +19,7 @@ use super::{
     bytecode::{BinaryOp, BytecodeFunction, Instruction, Reg, VerificationError},
     context::ContextRef,
     feedback::{BinaryOpFeedback, FeedbackVector, NamedAccessCase},
-    heap::{GenerationalHeap, HeapError, Root},
+    heap::{GenerationalHeap, HeapError, NamedProperty, Root},
     object::ObjectKind,
     realm::{Intrinsic, Realm},
     shape::{PropertyFlags, ShapeId},
@@ -205,11 +205,39 @@ impl ArrayWalk {
 }
 
 /// A Property Descriptor as 6.2.6.5 read it: only the fields it named.
+///
+/// A field that is `None` is one the descriptor does not have, which 10.1.6.3
+/// treats differently from one that is present and undefined.
 struct PartialDescriptor {
     value: Option<Value>,
     writable: Option<bool>,
+    get: Option<Value>,
+    set: Option<Value>,
     enumerable: Option<bool>,
     configurable: Option<bool>,
+}
+
+impl PartialDescriptor {
+    /// `IsAccessorDescriptor` of 6.2.6.1.
+    const fn is_accessor(&self) -> bool {
+        self.get.is_some() || self.set.is_some()
+    }
+
+    /// `IsDataDescriptor` of 6.2.6.2.
+    const fn is_data(&self) -> bool {
+        self.value.is_some() || self.writable.is_some()
+    }
+
+    /// `IsGenericDescriptor` of 6.2.6.3.
+    const fn is_generic(&self) -> bool {
+        !self.is_accessor() && !self.is_data()
+    }
+
+    /// Whether the descriptor names no field at all, which 10.1.6.3 step 4
+    /// accepts without changing anything.
+    const fn is_empty(&self) -> bool {
+        self.is_generic() && self.enumerable.is_none() && self.configurable.is_none()
+    }
 }
 
 /// What a conversion of 7.1.1 reached.
@@ -316,6 +344,20 @@ pub enum Resume {
     Iteration {
         /// Root naming the [`ObjectKind::ArrayIteration`] state.
         state: Root,
+    },
+    /// `[[Get]]` of 10.1.8.1 called the getter of an accessor property.
+    ///
+    /// The getter answers into the accumulator, which is where every
+    /// instruction that reads a property leaves the value, so the read is
+    /// finished the moment the call returns.
+    Getter,
+    /// `[[Set]]` of 10.1.9.2 called the setter of an accessor property.
+    ///
+    /// A setter answers nothing, and 13.15.2 answers the value assigned, so
+    /// the value waits in a root of its own until the setter returns.
+    Setter {
+        /// Root holding the value written.
+        value: Root,
     },
 }
 
@@ -586,7 +628,9 @@ impl RegisterVM {
         let name = PropertyKey::String(heap.strings.intern("prototype")?);
         let prototype = heap
             .lookup_named(function, name)?
-            .map_or(VALUE_UNDEFINED, |property| property.value);
+            .map(Self::plain_value)
+            .transpose()?
+            .unwrap_or(VALUE_UNDEFINED);
         let Some(prototype) = prototype.as_object() else {
             return Err(type_error(
                 heap,
@@ -642,8 +686,9 @@ impl RegisterVM {
         let Some(property) = heap.lookup_named(function, name)? else {
             return Err(type_error(heap, realm, "value is not a constructor"));
         };
-        if property.value.as_object().is_some() {
-            heap.set_object_prototype(object, property.value)?;
+        let prototype = Self::plain_value(property)?;
+        if prototype.as_object().is_some() {
+            heap.set_object_prototype(object, prototype)?;
         }
         Ok(object)
     }
@@ -1156,7 +1201,18 @@ impl RegisterVM {
         // state the collector traces rather than from registers of the caller.
         // They are read here, after `bind_this` has run, because that may
         // allocate and a value taken before it would name a moved object.
-        if let Some(Resume::Iteration { state }) = call.resume {
+        if let Some(Resume::Setter { value }) = call.resume {
+            // A setter has no frame to take its argument from either, so the
+            // value written comes out of the root that held it across the
+            // allocation `bind_this` may have made.
+            if callee.parameter_count > 0 {
+                *self
+                    .stack
+                    .get_mut(next_frame)
+                    .ok_or(VMError::StackOverflow)? =
+                    heap.root_value(value).unwrap_or(VALUE_UNDEFINED);
+            }
+        } else if let Some(Resume::Iteration { state }) = call.resume {
             let arguments = Self::iteration_arguments(state, heap)?;
             for (index, argument) in arguments.into_iter().enumerate() {
                 if index >= usize::from(callee.parameter_count) {
@@ -1675,7 +1731,7 @@ impl RegisterVM {
             Intrinsic::ReflectGet => {
                 let name = property_key(key, heap)?;
                 if let Some(property) = heap.lookup_named(object, name)? {
-                    return Ok(property.value);
+                    return Self::plain_value(property);
                 }
                 let units = name
                     .as_string()
@@ -1716,8 +1772,12 @@ impl RegisterVM {
                 };
                 let name = property_key(key, heap)?;
                 let descriptor = Self::to_property_descriptor(source, heap, realm)?;
-                Self::define_property_from(object, name, &descriptor, heap)?;
-                Ok(VALUE_TRUE)
+                Ok(Value::from_bool(Self::define_property_from(
+                    object,
+                    name,
+                    &descriptor,
+                    heap,
+                )?))
             }
         }
     }
@@ -1825,7 +1885,9 @@ impl RegisterVM {
                 Intrinsic::ObjectValues | Intrinsic::ObjectEntries => {
                     let held = heap
                         .lookup_named(object, PropertyKey::String(name))?
-                        .map_or(VALUE_UNDEFINED, |property| property.value);
+                        .map(Self::plain_value)
+                        .transpose()?
+                        .unwrap_or(VALUE_UNDEFINED);
                     if intrinsic == Intrinsic::ObjectValues {
                         held
                     } else {
@@ -1881,7 +1943,9 @@ impl RegisterVM {
             }
             let value = heap
                 .lookup_named(source, key)?
-                .map_or(VALUE_UNDEFINED, |property| property.value);
+                .map(Self::plain_value)
+                .transpose()?
+                .unwrap_or(VALUE_UNDEFINED);
             let Some(descriptor) = value.as_object() else {
                 return Err(type_error(
                     heap,
@@ -1892,7 +1956,9 @@ impl RegisterVM {
             descriptors.push((key, Self::to_property_descriptor(descriptor, heap, realm)?));
         }
         for (key, descriptor) in descriptors {
-            Self::define_property_from(object, key, &descriptor, heap)?;
+            if !Self::define_property_from(object, key, &descriptor, heap)? {
+                return Err(type_error(heap, realm, "property definition rejected"));
+            }
         }
         Ok(Value::from_object(object))
     }
@@ -2024,11 +2090,6 @@ impl RegisterVM {
                     Self::absent_property(target, &units, heap, realm)?;
                     return Ok(VALUE_UNDEFINED);
                 };
-                if flags.is_accessor {
-                    return Err(VMError::Unsupported(
-                        "the descriptor of an accessor property",
-                    ));
-                }
                 let value = heap
                     .lookup_named(object, name)?
                     .map_or(VALUE_UNDEFINED, |property| property.value);
@@ -2052,108 +2113,404 @@ impl RegisterVM {
                     ));
                 };
                 let descriptor = Self::to_property_descriptor(source, heap, realm)?;
-                Self::define_property_from(object, name, &descriptor, heap)?;
+                if !Self::define_property_from(object, name, &descriptor, heap)? {
+                    return Err(type_error(heap, realm, "property definition rejected"));
+                }
                 Ok(target)
             }
         }
     }
 
-    /// `FromPropertyDescriptor` of 6.2.6.4, for a data property.
+    /// `FromPropertyDescriptor` of 6.2.6.4.
+    ///
+    /// `value` is the slot of the property, which holds the pair of 6.1.7.1
+    /// when `flags` says the property is an accessor.
     fn from_property_descriptor(
         value: Value,
         flags: PropertyFlags,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Value, VMError> {
-        // The value travels in a root, because allocating the descriptor may
-        // scavenge and an Object it holds would not survive that otherwise.
+        let (first, second) = if flags.is_accessor {
+            Self::accessor_parts(value, heap)?
+        } else {
+            (value, VALUE_UNDEFINED)
+        };
+        // Both travel in roots, because allocating the descriptor may scavenge
+        // and an Object they hold would not survive that otherwise.
         heap.enter_scope();
-        let held = heap.push_root(value)?;
+        let held_first = heap.push_root(first)?;
+        let held_second = heap.push_root(second)?;
         let descriptor = realm.ordinary_object(heap);
-        let value = heap.root_value(held).unwrap_or(VALUE_UNDEFINED);
+        let first = heap.root_value(held_first).unwrap_or(VALUE_UNDEFINED);
+        let second = heap.root_value(held_second).unwrap_or(VALUE_UNDEFINED);
         heap.exit_scope();
         let descriptor = descriptor?;
-        for (name, entry) in [
-            ("value", value),
-            ("writable", Value::from_bool(flags.writable)),
-            ("enumerable", Value::from_bool(flags.enumerable)),
-            ("configurable", Value::from_bool(flags.configurable)),
-        ] {
+        let named: [(&str, Value); 4] = if flags.is_accessor {
+            [
+                ("get", first),
+                ("set", second),
+                ("enumerable", Value::from_bool(flags.enumerable)),
+                ("configurable", Value::from_bool(flags.configurable)),
+            ]
+        } else {
+            [
+                ("value", first),
+                ("writable", Value::from_bool(flags.writable)),
+                ("enumerable", Value::from_bool(flags.enumerable)),
+                ("configurable", Value::from_bool(flags.configurable)),
+            ]
+        };
+        for (name, entry) in named {
             let key = PropertyKey::String(heap.strings.intern(name)?);
             heap.define_own_named(descriptor, key, entry, PropertyFlags::ordinary_data())?;
         }
         Ok(Value::from_object(descriptor))
     }
 
-    /// `ToPropertyDescriptor` of 6.2.6.5, for a data property.
+    /// Calls the getter or the setter of an accessor property, as 10.1.8.1
+    /// step 3 and 10.1.9.2 step 5 do.
     ///
-    /// A field the descriptor does not have is what 6.2.6.6 fills in for a
-    /// property that is being made: absent, which is false for each attribute
-    /// and undefined for the value.
+    /// The `this` value of the call is the object the read or the write named,
+    /// not the object the property was found on. `assigned` tells the two
+    /// apart: a read passes none.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "an accessor call runs where a call does, with what a call has"
+    )]
+    fn enter_accessor(
+        &mut self,
+        pair: Value,
+        receiver: Value,
+        assigned: Option<Value>,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
+        code: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<u32>, VMError> {
+        let (get, set) = Self::accessor_parts(pair, heap)?;
+        let call = Call {
+            receiver,
+            func: Reg(0),
+            arg_start: Reg(0),
+            arg_count: 0,
+            slot: 0,
+            resume: Some(Resume::Getter),
+            construct: None,
+            return_pc,
+            caller_code_id,
+        };
+        let Some(assigned) = assigned else {
+            // 10.1.8.1 step 3.b: a property with no getter reads undefined.
+            if get.is_undefined() {
+                self.acc = VALUE_UNDEFINED;
+                return Ok(None);
+            }
+            return self.enter_call_value(get, code, active_feedback, heap, realm, call);
+        };
+        // 10.1.9.2 step 5.b: a property with no setter takes no value.
+        if set.is_undefined() {
+            self.acc = assigned;
+            return Ok(None);
+        }
+        // A native takes its arguments from registers of the caller, and a
+        // setter reaches its frame from a root instead, so one written in Rust
+        // would be called with whatever those registers hold.
+        let script = set
+            .as_object()
+            .and_then(|reference| heap.get_object(reference))
+            .is_some_and(|object| matches!(object.kind, ObjectKind::Function { .. }));
+        if !script {
+            return Err(VMError::Unsupported(
+                "a setter that is not a Script function",
+            ));
+        }
+        // The value outlives the frame the setter opens, so it is a root of a
+        // scope of its own, which the return leaves.
+        heap.enter_scope();
+        let held = heap.push_root(assigned)?;
+        let call = Call {
+            arg_count: 1,
+            resume: Some(Resume::Setter { value: held }),
+            ..call
+        };
+        self.enter_call_value(set, code, active_feedback, heap, realm, call)
+    }
+
+    /// The value of a property a native operation found.
+    ///
+    /// Reading an accessor property is a call of its getter, and a native
+    /// operation has no frame to make one from, so it names the gap rather
+    /// than reading the pair as though it were the value.
+    const fn plain_value(found: NamedProperty) -> Result<Value, VMError> {
+        if found.flags.is_accessor {
+            return Err(VMError::Unsupported("a property that is an accessor"));
+        }
+        Ok(found.value)
+    }
+
+    /// The `[[Get]]` and `[[Set]]` an accessor property's slot holds.
+    fn accessor_parts(pair: Value, heap: &GenerationalHeap) -> Result<(Value, Value), VMError> {
+        let reference = pair
+            .as_object()
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?;
+        let ObjectKind::Accessor { get, set } = heap
+            .get_object(reference)
+            .ok_or(VMError::Heap(HeapError::InvalidReference))?
+            .kind
+        else {
+            return Err(VMError::Heap(HeapError::InvalidReference));
+        };
+        Ok((get, set))
+    }
+
+    /// The pair of 6.1.7.1 an accessor property's slot holds.
+    ///
+    /// It is an object of the heap so that the collector traces both halves,
+    /// and it has no Prototype because no Script can reach it.
+    fn make_accessor(
+        get: Value,
+        set: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        heap.enter_scope();
+        let held_get = heap.push_root(get)?;
+        let held_set = heap.push_root(set)?;
+        let shape = heap.shapes.root_shape();
+        let pair = heap.allocate_object(shape, VALUE_NULL);
+        let get = heap.root_value(held_get).unwrap_or(VALUE_UNDEFINED);
+        let set = heap.root_value(held_set).unwrap_or(VALUE_UNDEFINED);
+        heap.exit_scope();
+        let pair = pair?;
+        heap.set_object_kind(pair, ObjectKind::Accessor { get, set })?;
+        Ok(Value::from_object(pair))
+    }
+
+    /// `ToPropertyDescriptor` of 6.2.6.5.
+    ///
+    /// A field the descriptor does not have stays absent, which 10.1.6.3
+    /// leaves as it was on an existing property and 6.2.6.6 fills in with the
+    /// default on a new one: false for each attribute, undefined for the value
+    /// and for each half of an accessor.
     fn to_property_descriptor(
         source: ObjectRef,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<PartialDescriptor, VMError> {
-        for accessor in ["get", "set"] {
-            let key = PropertyKey::String(heap.strings.intern(accessor)?);
-            if heap.lookup_named(source, key)?.is_some() {
-                return Err(VMError::Unsupported("an accessor in a property descriptor"));
-            }
-        }
         let field = |name: &str, heap: &mut GenerationalHeap| -> Result<Option<Value>, VMError> {
             let key = PropertyKey::String(heap.strings.intern(name)?);
-            Ok(heap.lookup_named(source, key)?.map(|found| found.value))
+            let Some(found) = heap.lookup_named(source, key)? else {
+                return Ok(None);
+            };
+            if found.flags.is_accessor {
+                // Reading it would call the getter, which this engine can only
+                // do from an instruction of a Script.
+                return Err(VMError::Unsupported(
+                    "a descriptor whose own field is an accessor",
+                ));
+            }
+            Ok(Some(found.value))
         };
-        let value = field("value", heap)?;
-        let writable = field("writable", heap)?;
         let enumerable = field("enumerable", heap)?;
         let configurable = field("configurable", heap)?;
+        let value = field("value", heap)?;
+        let writable = field("writable", heap)?;
+        let get = field("get", heap)?;
+        let set = field("set", heap)?;
+        for half in [get, set] {
+            // 6.2.6.5 steps 7.b and 8.b: a half that is neither callable nor
+            // undefined is not a getter or a setter.
+            if let Some(half) = half
+                && !half.is_undefined()
+                && !Self::is_callable(half, heap)
+            {
+                return Err(type_error(
+                    heap,
+                    realm,
+                    "accessor must be callable or undefined",
+                ));
+            }
+        }
         let truth = |found: Option<Value>| -> Result<Option<bool>, VMError> {
             found.map(|value| Self::to_boolean(value, heap)).transpose()
         };
-        let _ = realm;
-        // 6.2.6.5 keeps a field the descriptor does not name absent, and
-        // 10.1.6.3 leaves an absent field of an existing property as it was.
-        Ok(PartialDescriptor {
+        let descriptor = PartialDescriptor {
             value,
             writable: truth(writable)?,
+            get,
+            set,
             enumerable: truth(enumerable)?,
             configurable: truth(configurable)?,
-        })
+        };
+        // 6.2.6.5 step 9: a descriptor is one kind or the other, never both.
+        if descriptor.is_accessor() && descriptor.is_data() {
+            return Err(type_error(
+                heap,
+                realm,
+                "descriptor mixes data and accessors",
+            ));
+        }
+        Ok(descriptor)
     }
 
-    /// Applies a Property Descriptor to an object, as 10.1.6.3 does.
+    /// `ValidateAndApplyPropertyDescriptor` of 10.1.6.3, which answers whether
+    /// the descriptor could be applied and applies it when it could.
     ///
     /// A field the descriptor does not name keeps what the property had, and
-    /// is false on a property that did not exist, which is what 6.2.6.6 fills
-    /// in for one.
+    /// is the default of 6.2.6.6 on a property that did not exist.
     fn define_property_from(
         object: ObjectRef,
         name: PropertyKey,
         descriptor: &PartialDescriptor,
         heap: &mut GenerationalHeap,
-    ) -> Result<(), VMError> {
-        let existing = heap.own_named_flags(object, name)?;
-        let held = match existing {
-            Some(_) => heap
-                .lookup_named(object, name)?
-                .map_or(VALUE_UNDEFINED, |property| property.value),
-            None => VALUE_UNDEFINED,
+    ) -> Result<bool, VMError> {
+        Self::refuse_exotic_definition(object, name, heap)?;
+        let Some(current) = heap.own_named_flags(object, name)? else {
+            // Step 2: the property does not exist, so the descriptor makes it.
+            if !heap.is_extensible(object).unwrap_or(false) {
+                return Ok(false);
+            }
+            let flags = PropertyFlags {
+                writable: descriptor.writable.unwrap_or(false),
+                enumerable: descriptor.enumerable.unwrap_or(false),
+                configurable: descriptor.configurable.unwrap_or(false),
+                is_accessor: descriptor.is_accessor(),
+            };
+            let stored = Self::descriptor_slot(descriptor, VALUE_UNDEFINED, VALUE_UNDEFINED, heap)?;
+            heap.define_own_named(object, name, stored, flags)?;
+            return Ok(true);
         };
-        let previous = existing.unwrap_or(PropertyFlags {
-            writable: false,
-            enumerable: false,
-            configurable: false,
-            is_accessor: false,
-        });
+        // Step 4: a descriptor with no field changes nothing.
+        if descriptor.is_empty() {
+            return Ok(true);
+        }
+        let held = heap
+            .lookup_named(object, name)?
+            .map_or(VALUE_UNDEFINED, |property| property.value);
+        let (current_get, current_set) = if current.is_accessor {
+            Self::accessor_parts(held, heap)?
+        } else {
+            (VALUE_UNDEFINED, VALUE_UNDEFINED)
+        };
+        // Step 5: what a non-configurable property does not allow.
+        if !current.configurable {
+            if descriptor.configurable == Some(true) {
+                return Ok(false);
+            }
+            if descriptor
+                .enumerable
+                .is_some_and(|wanted| wanted != current.enumerable)
+            {
+                return Ok(false);
+            }
+            if !descriptor.is_generic() && descriptor.is_accessor() != current.is_accessor {
+                return Ok(false);
+            }
+            if current.is_accessor {
+                for (wanted, existing) in
+                    [(descriptor.get, current_get), (descriptor.set, current_set)]
+                {
+                    if let Some(wanted) = wanted
+                        && !same_value(wanted, existing, heap)?
+                    {
+                        return Ok(false);
+                    }
+                }
+            } else if !current.writable {
+                if descriptor.writable == Some(true) {
+                    return Ok(false);
+                }
+                // Step 5.d.ii: the property keeps what it holds, so a
+                // descriptor naming the same value is applied by doing
+                // nothing at all.
+                if let Some(wanted) = descriptor.value {
+                    return same_value(wanted, held, heap);
+                }
+            }
+        }
+        // Step 6: a property changes kind, or keeps its kind and takes the
+        // fields the descriptor names.
+        let becomes_accessor = if descriptor.is_generic() {
+            current.is_accessor
+        } else {
+            descriptor.is_accessor()
+        };
+        let changes_kind = becomes_accessor != current.is_accessor;
         let flags = PropertyFlags {
-            writable: descriptor.writable.unwrap_or(previous.writable),
-            enumerable: descriptor.enumerable.unwrap_or(previous.enumerable),
-            configurable: descriptor.configurable.unwrap_or(previous.configurable),
-            is_accessor: false,
+            writable: if changes_kind {
+                descriptor.writable.unwrap_or(false)
+            } else {
+                descriptor.writable.unwrap_or(current.writable)
+            },
+            enumerable: descriptor.enumerable.unwrap_or(current.enumerable),
+            configurable: descriptor.configurable.unwrap_or(current.configurable),
+            is_accessor: becomes_accessor,
         };
-        heap.define_own_named(object, name, descriptor.value.unwrap_or(held), flags)?;
+        let (get, set) = if changes_kind {
+            (VALUE_UNDEFINED, VALUE_UNDEFINED)
+        } else {
+            (current_get, current_set)
+        };
+        let stored = if becomes_accessor {
+            Self::make_accessor(
+                descriptor.get.unwrap_or(get),
+                descriptor.set.unwrap_or(set),
+                heap,
+            )?
+        } else if changes_kind {
+            descriptor.value.unwrap_or(VALUE_UNDEFINED)
+        } else {
+            descriptor.value.unwrap_or(held)
+        };
+        heap.define_own_named(object, name, stored, flags)?;
+        Ok(true)
+    }
+
+    /// The slot a descriptor gives a property that is being made.
+    fn descriptor_slot(
+        descriptor: &PartialDescriptor,
+        get: Value,
+        set: Value,
+        heap: &mut GenerationalHeap,
+    ) -> Result<Value, VMError> {
+        if descriptor.is_accessor() {
+            return Self::make_accessor(
+                descriptor.get.unwrap_or(get),
+                descriptor.set.unwrap_or(set),
+                heap,
+            );
+        }
+        Ok(descriptor.value.unwrap_or(VALUE_UNDEFINED))
+    }
+
+    /// The names 10.4.2.1 and 10.4.3.1 define somewhere other than a slot.
+    ///
+    /// An index of an object that holds an element store, and the `length` of
+    /// an Array, are not properties of its Shape, so a Shape that took one
+    /// would hold a second answer beside the one a read finds.
+    fn refuse_exotic_definition(
+        object: ObjectRef,
+        name: PropertyKey,
+        heap: &GenerationalHeap,
+    ) -> Result<(), VMError> {
+        let units = name
+            .as_string()
+            .and_then(|name| heap.strings.to_utf16(Value::from_string(name)))
+            .unwrap_or_default();
+        let holds_indices = heap
+            .get_object(object)
+            .and_then(|object| object.elements)
+            .is_some();
+        if holds_indices && array_index_units(&units).is_some() {
+            return Err(VMError::Unsupported(
+                "a descriptor for an index of an object that holds elements",
+            ));
+        }
+        if units.as_slice() == LENGTH_NAME && heap.array_length(object).is_some() {
+            return Err(VMError::Unsupported("a descriptor for an Array length"));
+        }
         Ok(())
     }
 
@@ -3261,7 +3618,8 @@ impl RegisterVM {
                 let key = PropertyKey::String(heap.strings.intern("join")?);
                 let join = heap
                     .lookup_named(object, key)?
-                    .map(|property| property.value);
+                    .map(Self::plain_value)
+                    .transpose()?;
                 let native = join.and_then(Value::as_object).and_then(|reference| {
                     match heap.get_object(reference)?.kind {
                         ObjectKind::NativeFunction { id, .. } => Intrinsic::from_id(id),
@@ -3458,7 +3816,8 @@ impl RegisterVM {
             };
             let method = heap
                 .lookup_named(object, key)?
-                .map(|property| property.value)
+                .map(Self::plain_value)
+                .transpose()?
                 .filter(|method| Self::is_callable(*method, heap));
             if let Some(method) = method {
                 // 7.1.1 step 2 passes the hint; 7.1.1.1 passes nothing. The
@@ -3569,9 +3928,10 @@ impl RegisterVM {
             ObjectKind::Ordinary
             | ObjectKind::Array { .. }
             | ObjectKind::ArrayIterator { .. }
-            // The state of a walk of 23.1.3 is reachable from no Script, so
-            // no conversion of it is owed.
+            // The state of a walk of 23.1.3 and the pair of 6.1.7.1 are
+            // reachable from no Script, so no conversion of them is owed.
             | ObjectKind::ArrayIteration { .. }
+            | ObjectKind::Accessor { .. }
             | ObjectKind::Reflect => None,
         }
     }
@@ -3831,6 +4191,9 @@ impl RegisterVM {
                 NativeErrorKind::ReferenceError
             }
             BindingOutcome::Missing(feature) => return VMError::Unsupported(feature),
+            BindingOutcome::Accessor => {
+                return VMError::Unsupported("a binding the global object holds as an accessor");
+            }
             BindingOutcome::Immutable => {
                 message.push_str(" is not writable");
                 NativeErrorKind::TypeError
@@ -3899,7 +4262,7 @@ impl RegisterVM {
             Self::absent_property(Value::from_object(object), &LENGTH_NAME, heap, realm)?;
             return Ok(0);
         };
-        let value = property.value;
+        let value = Self::plain_value(property)?;
         // 7.1.20 ToLength clamps into 0..2^53-1; the scan is bounded again by
         // the index space, so the clamp loses no reachable index.
         Ok(integer_argument(value, heap)?.max(0))
@@ -3923,9 +4286,9 @@ impl RegisterVM {
             return Ok(Some(value));
         }
         let key = PropertyKey::String(heap.intern_index(index)?);
-        Ok(heap
-            .lookup_named(object, key)?
-            .map(|property| property.value))
+        heap.lookup_named(object, key)?
+            .map(Self::plain_value)
+            .transpose()
     }
 
     /// Runs one of the Array iterator intrinsics of 23.1.5.
@@ -4052,6 +4415,7 @@ impl RegisterVM {
                 ObjectKind::Ordinary
                 | ObjectKind::ArrayIterator { .. }
                 | ObjectKind::ArrayIteration { .. }
+                | ObjectKind::Accessor { .. }
                 | ObjectKind::Reflect
                 | ObjectKind::Math => "Object",
             }
@@ -4064,7 +4428,8 @@ impl RegisterVM {
             })
             .transpose()?
             .flatten()
-            .map(|property| property.value)
+            .map(Self::plain_value)
+            .transpose()?
             .filter(|value| value.is_string())
             .and_then(|value| heap.strings.to_utf16(value))
         {
@@ -4393,7 +4758,7 @@ impl RegisterVM {
                 .as_object()
                 .ok_or(VMError::Heap(HeapError::InvalidReference))?;
             return match heap.lookup_named(prototype, name)? {
-                Some(property) => Ok(property.value),
+                Some(property) => Self::plain_value(property),
                 None => Self::absent_property(value, &units, heap, realm),
             };
         };
@@ -4453,7 +4818,8 @@ impl RegisterVM {
         let next_key = PropertyKey::String(heap.strings.intern("next")?);
         let next = heap
             .lookup_named(reference, next_key)?
-            .map(|property| property.value)
+            .map(Self::plain_value)
+            .transpose()?
             .and_then(Value::as_object)
             .and_then(|next| heap.get_object(next))
             .map(|next| next.kind.clone());
@@ -4483,11 +4849,15 @@ impl RegisterVM {
         let done_key = PropertyKey::String(heap.strings.intern("done")?);
         let done = heap
             .lookup_named(result, done_key)?
-            .is_some_and(|property| property.value.to_boolean());
+            .map(Self::plain_value)
+            .transpose()?
+            .is_some_and(Value::to_boolean);
         let value_key = PropertyKey::String(heap.strings.intern("value")?);
         let value = heap
             .lookup_named(result, value_key)?
-            .map_or(VALUE_UNDEFINED, |property| property.value);
+            .map(Self::plain_value)
+            .transpose()?
+            .unwrap_or(VALUE_UNDEFINED);
         self.write_reg(value_slot, if done { VALUE_UNDEFINED } else { value })?;
         Ok(Value::from_bool(!done))
     }
@@ -5390,6 +5760,7 @@ impl RegisterVM {
                     symbol,
                     slot: _,
                 } => {
+                    let code_units = units;
                     // 7.4.2 reads @@iterator, which is a Symbol key and so
                     // reaches no Elements store and no String exotic object.
                     let symbol = super::realm::WellKnownSymbol::ALL
@@ -5397,7 +5768,27 @@ impl RegisterVM {
                         .ok_or(VMError::InvalidRegister)?;
                     let target = self.read_reg(obj)?;
                     let object = Self::coerce_object(target, heap, realm)?;
-                    self.acc = match heap.lookup_named(object, symbol.key())? {
+                    let found = heap.lookup_named(object, symbol.key())?;
+                    if let Some(property) = found
+                        && property.flags.is_accessor
+                    {
+                        if let Some(code_id) = self.enter_accessor(
+                            property.value,
+                            target,
+                            None,
+                            pc,
+                            current_code_id,
+                            code_units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            current_code_id = Some(code_id);
+                            pc = 0;
+                        }
+                        return Ok(None);
+                    }
+                    self.acc = match found {
                         Some(property) => property.value,
                         // A Prototype this Realm has not finished building
                         // owns the Symbol; answering undefined would say the
@@ -5410,6 +5801,7 @@ impl RegisterVM {
                     name: name_index,
                     slot,
                 } => {
+                    let code_units = units;
                     let name = active_code
                         .string_constants
                         .get(name_index as usize)
@@ -5471,6 +5863,26 @@ impl RegisterVM {
                     }
 
                     if let Some(property) = heap.lookup_named(oref, name)? {
+                        // 10.1.8.1 step 3: an accessor answers what its getter
+                        // answers, so the read is a call and the cache, which
+                        // holds a slot and not a call, records nothing.
+                        if property.flags.is_accessor {
+                            if let Some(code_id) = self.enter_accessor(
+                                property.value,
+                                target,
+                                None,
+                                pc,
+                                current_code_id,
+                                code_units,
+                                active_feedback,
+                                heap,
+                                realm,
+                            )? {
+                                current_code_id = Some(code_id);
+                                pc = 0;
+                            }
+                            return Ok(None);
+                        }
                         if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
                             ic.record(NamedAccessCase {
                                 name,
@@ -5495,6 +5907,7 @@ impl RegisterVM {
                     name: name_index,
                     slot,
                 } => {
+                    let code_units = units;
                     let units = active_code
                         .string_constants
                         .get(name_index as usize)
@@ -5536,6 +5949,29 @@ impl RegisterVM {
                         return Ok(None);
                     }
 
+                    // 10.1.9.2 step 5: a property of the object or of a
+                    // Prototype of it that is an accessor is written by
+                    // calling its setter.
+                    if let Some(found) = heap.lookup_named(oref, name)?
+                        && found.flags.is_accessor
+                    {
+                        let assigned = self.acc;
+                        if let Some(code_id) = self.enter_accessor(
+                            found.value,
+                            target,
+                            Some(assigned),
+                            pc,
+                            current_code_id,
+                            code_units,
+                            active_feedback,
+                            heap,
+                            realm,
+                        )? {
+                            current_code_id = Some(code_id);
+                            pc = 0;
+                        }
+                        return Ok(None);
+                    }
                     // Check if property exists in current shape
                     if let Some(loc) = heap.shapes.lookup(current_shape, name) {
                         let val = self.acc;
@@ -5578,6 +6014,7 @@ impl RegisterVM {
                     }
                 }
                 Instruction::GetByValue { obj, key, slot } => {
+                    let code_units = units;
                     let target = self.read_reg(obj)?;
                     if target.is_string() {
                         let key = self.read_reg(key)?;
@@ -5637,6 +6074,23 @@ impl RegisterVM {
                             return Ok(None);
                         }
                         if let Some(property) = heap.lookup_named(oref, name)? {
+                            if property.flags.is_accessor {
+                                if let Some(code_id) = self.enter_accessor(
+                                    property.value,
+                                    target,
+                                    None,
+                                    pc,
+                                    current_code_id,
+                                    code_units,
+                                    active_feedback,
+                                    heap,
+                                    realm,
+                                )? {
+                                    current_code_id = Some(code_id);
+                                    pc = 0;
+                                }
+                                return Ok(None);
+                            }
                             if let Some(ic) = active_feedback.get_named_ic_mut(slot) {
                                 ic.record(NamedAccessCase {
                                     name,
@@ -5659,6 +6113,7 @@ impl RegisterVM {
                     slot,
                     define,
                 } => {
+                    let code_units = units;
                     let target = self.read_reg(obj)?;
                     let Some(oref) = target.as_object() else {
                         return Err(property_store_error(target, heap, realm));
@@ -5710,6 +6165,28 @@ impl RegisterVM {
                             && case.holder_shape == current_shape
                         {
                             heap.set_object_slot(oref, case.slot, val)?;
+                            return Ok(None);
+                        }
+                        // 13.2.5.5 defines an own property of a literal and
+                        // reaches no setter; 13.15.2 assigns and does.
+                        if !define
+                            && let Some(found) = heap.lookup_named(oref, name)?
+                            && found.flags.is_accessor
+                        {
+                            if let Some(code_id) = self.enter_accessor(
+                                found.value,
+                                target,
+                                Some(val),
+                                pc,
+                                current_code_id,
+                                code_units,
+                                active_feedback,
+                                heap,
+                                realm,
+                            )? {
+                                current_code_id = Some(code_id);
+                                pc = 0;
+                            }
                             return Ok(None);
                         }
                         if let Some(location) = heap.shapes.lookup(current_shape, name) {
@@ -5987,7 +6464,9 @@ impl RegisterVM {
                             // no register of the caller to name here.
                             let register = match resume {
                                 Resume::Primitive { register, .. } => register,
-                                Resume::Iteration { .. } => Reg(0),
+                                Resume::Iteration { .. }
+                                | Resume::Getter
+                                | Resume::Setter { .. } => Reg(0),
                             };
                             let call = Call {
                                 receiver: VALUE_UNDEFINED,
@@ -6017,6 +6496,16 @@ impl RegisterVM {
                                     heap,
                                     realm,
                                 )?,
+                                // The getter answered the value of the
+                                // property, and the accumulator holds it.
+                                Resume::Getter => None,
+                                // 13.15.2 answers the value assigned, not what
+                                // the setter answered.
+                                Resume::Setter { value } => {
+                                    self.acc = heap.root_value(value).unwrap_or(VALUE_UNDEFINED);
+                                    heap.exit_scope();
+                                    None
+                                }
                             };
                             if let Some(code_id) = resumed {
                                 current_code_id = Some(code_id);

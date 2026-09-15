@@ -106,6 +106,17 @@ pub enum ObjectKind {
     /// but one: a name it should own and this Realm has not built is a gap
     /// rather than the undefined an ordinary object answers.
     Math,
+    /// The `[[Get]]` and `[[Set]]` of an accessor property, 6.1.7.1.
+    ///
+    /// A Shape says which of its properties are accessors; the slot of one
+    /// holds this pair rather than a value. Neither field is reachable from a
+    /// Script, so the pair is not an object a Script can name.
+    Accessor {
+        /// `[[Get]]`, undefined when the property has no getter.
+        get: Value,
+        /// `[[Set]]`, undefined when the property has no setter.
+        set: Value,
+    },
     /// Bound function exotic object, the slots of 10.4.1.
     BoundFunction {
         /// `[[BoundTargetFunction]]`.
@@ -127,9 +138,11 @@ impl ObjectKind {
             Self::StringWrapper(value) | Self::ArrayIterator { target: value, .. } => {
                 [Some(*value), None, None, None, None]
             }
-            Self::BoundFunction { target, receiver } => {
-                [Some(*target), Some(*receiver), None, None, None]
-            }
+            Self::BoundFunction { target, receiver }
+            | Self::Accessor {
+                get: target,
+                set: receiver,
+            } => [Some(*target), Some(*receiver), None, None, None],
             Self::ArrayIteration {
                 target,
                 callback,
@@ -154,9 +167,11 @@ impl ObjectKind {
             Self::StringWrapper(value) | Self::ArrayIterator { target: value, .. } => {
                 [Some(value), None, None, None, None]
             }
-            Self::BoundFunction { target, receiver } => {
-                [Some(target), Some(receiver), None, None, None]
-            }
+            Self::BoundFunction { target, receiver }
+            | Self::Accessor {
+                get: target,
+                set: receiver,
+            } => [Some(target), Some(receiver), None, None, None],
             Self::ArrayIteration {
                 target,
                 callback,

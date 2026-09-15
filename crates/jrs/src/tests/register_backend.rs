@@ -3428,6 +3428,11 @@ fn differential(source: &str) -> Result<(), Error> {
                 "{source}: {actual:?} != {expected:?}"
             );
         }
+        // An error the engine raised itself carries its message, and both
+        // backends must name the same one.
+        (Err(Error::Type { message: actual }), Err(Error::Type { message: expected })) => {
+            assert_eq!(actual, expected, "{source}");
+        }
         _ => panic!("{source}: {actual:?} != {expected:?}"),
     }
     Ok(())
@@ -4831,6 +4836,59 @@ fn the_reflect_namespace_does_what_20_1_2_does_without_coercing() -> Result<(), 
             ),
             "{source}"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn an_accessor_property_is_read_and_written_by_calling_it() -> Result<(), Error> {
+    // 6.1.7.1 gives a property a getter and a setter instead of a value, and
+    // 10.1.8.1 and 10.1.9.2 call them where a data property is read or
+    // written. 6.2.6.4 and 6.2.6.5 turn the pair into and out of a descriptor.
+    for source in [
+        "var o={};Object.defineProperty(o,'x',{get:function(){return 42}});o.x",
+        "var o={};Object.defineProperty(o,'x',{get:function(){return this.n},configurable:true});o.n=7;o.x",
+        // A property with no getter reads undefined, one with no setter takes
+        // nothing, and an assignment answers the value however it was taken.
+        "var o={};Object.defineProperty(o,'x',{set:function(v){}});typeof o.x",
+        "var o={};Object.defineProperty(o,'x',{set:function(v){this.n=v*2}});o.x=21;o.n",
+        "var o={};Object.defineProperty(o,'x',{set:function(v){}});o.x=5",
+        "var o={};Object.defineProperty(o,'x',{get:function(){return 1}});o.x=5",
+        // The getter of a Prototype answers for the object that was read.
+        "var p={};Object.defineProperty(p,'x',{get:function(){return this.n}});var o=Object.create(p);o.n=3;o.x",
+        "var p={};Object.defineProperty(p,'x',{set:function(v){this.n=v}});var o=Object.create(p);o.x=9;o.n",
+        // A computed name reaches the same property.
+        "var o={};var k='x';Object.defineProperty(o,'x',{get:function(){return 8}});o[k]",
+        "var o={};var k='x';Object.defineProperty(o,'x',{set:function(v){this.n=v}});o[k]=4;o.n",
+        // 6.2.6.4 answers get and set, and neither value nor writable.
+        "var o={};Object.defineProperty(o,'x',{get:function(){return 1}});typeof Object.getOwnPropertyDescriptor(o,'x').get",
+        "var o={};Object.defineProperty(o,'x',{get:function(){return 1}});Object.getOwnPropertyDescriptor(o,'x').set",
+        "var o={};Object.defineProperty(o,'x',{get:function(){return 1}});typeof Object.getOwnPropertyDescriptor(o,'x').value",
+        "var o={};Object.defineProperty(o,'x',{get:function(){return 1},enumerable:true});Object.getOwnPropertyDescriptor(o,'x').enumerable",
+        // 6.2.6.5 step 9: a descriptor is one kind or the other.
+        "var o={};Object.defineProperty(o,'x',{get:function(){return 1},value:2})",
+        // 6.2.6.5 steps 7.b and 8.b: a half is callable or undefined.
+        "var o={};Object.defineProperty(o,'x',{get:1})",
+        "var o={};Object.defineProperty(o,'x',{get:undefined});typeof o.x",
+        // 10.1.6.3 step 5: what a non-configurable property does not allow.
+        "var o={};Object.defineProperty(o,'x',{value:1});Reflect.defineProperty(o,'x',{value:2})",
+        "var o={};Object.defineProperty(o,'x',{value:1});Reflect.defineProperty(o,'x',{value:1})",
+        "var o={};Object.defineProperty(o,'x',{value:1});Reflect.defineProperty(o,'x',{configurable:true})",
+        "var o={};Object.defineProperty(o,'x',{value:1});Reflect.defineProperty(o,'x',{get:function(){return 1}})",
+        "var o={};Object.defineProperty(o,'x',{get:function(){return 1}});Reflect.defineProperty(o,'x',{get:function(){return 1}})",
+        "var o={};Object.defineProperty(o,'x',{value:1,configurable:true});Reflect.defineProperty(o,'x',{value:2})",
+        "var o={};Object.defineProperty(o,'x',{value:1});Object.defineProperty(o,'x',{value:2})",
+        // 10.1.6.3 step 6: a property changes from one kind to the other.
+        "var o={};Object.defineProperty(o,'x',{get:function(){return 1},configurable:true});Object.defineProperty(o,'x',{value:5});o.x",
+        "var o={};Object.defineProperty(o,'x',{value:5,configurable:true});Object.defineProperty(o,'x',{get:function(){return 6}});o.x",
+        // 10.1.6.3 step 2: a property is not made on an object that is not
+        // extensible.
+        "var o={};Object.preventExtensions(o);Reflect.defineProperty(o,'x',{get:function(){return 1}})",
+        // 20.1.2.3 and 20.1.2.2 take the same descriptors.
+        "var o=Object.create(null,{x:{get:function(){return 11}}});o.x",
+        "var o={};Object.defineProperties(o,{x:{get:function(){return 12}}});o.x",
+    ] {
+        differential(source)?;
     }
     Ok(())
 }
