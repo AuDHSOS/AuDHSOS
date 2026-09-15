@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| Declarations (focused) | focused | `502784d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/let test/language/statements/const test/language/statements/variable --summary` | 459 | 867 | 743 (85.70%) | 0 (0.00%) | 124 (14.30%) |
-| Declarations on the register engine (focused) | focused | `502784d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/let test/language/statements/const test/language/statements/variable --summary` | 459 | 867 | 231 (26.64%) | 8 (0.92%) | 628 (72.43%) |
-| Complete pinned suite, including staging and Intl | full | `502784d` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `502784d` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 14,104 (13.70%) | 18,107 (17.59%) | 70,714 (68.70%) |
+| Functions (focused) | focused | `eded9bc` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/function test/language/expressions/function --summary` | 715 | 1,267 | 1,083 (85.48%) | 12 (0.95%) | 172 (13.58%) |
+| Functions on the register engine (focused) | focused | `eded9bc` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/function test/language/expressions/function --summary` | 715 | 1,267 | 385 (30.39%) | 20 (1.58%) | 862 (68.03%) |
+| Complete pinned suite, including staging and Intl | full | `eded9bc` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `eded9bc` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 14,334 (13.93%) | 18,123 (17.61%) | 70,468 (68.47%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1104,6 +1104,14 @@ dropped before, which is a wrong answer and not a gap. A pattern that reads no
 property and a rest element stay named gaps. 60 variants move to passed and none
 away from it.
 
+10.2.11 binds the argument and 8.6.2 then binds the names a pattern names out of
+it. A parameter is a register the call fills and a pattern had no name for that
+register; it gets one no identifier of a Script can be, so the parameter prefix
+stays what the call window is, and the body starts by reading that register and
+running the same 14.3.3.3 an untracked source runs. An array pattern stays a
+named gap, because 8.6.2 takes its elements from the iterator of the argument.
+230 variants move to passed and none away from it.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1191,6 +1199,8 @@ The class runs and both full runs beside the class body were measured at tree
 `fc35d879c4d3183de699e2446724f8ad211d502b`, which is the tree of `d05f499`.
 The declaration runs and both full runs beside the object pattern were measured
 at tree `67426c2ce138305f53eba9d1beaac6082913a393`, which is the tree of `502784d`.
+The function runs and both full runs beside the pattern parameters were measured
+at tree `4c551f2b918796cf23f17d6665e79fc5f5ecd6a5`, which is the tree of `eded9bc`.
 
 ### Historical Test262 baseline
 
