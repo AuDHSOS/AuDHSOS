@@ -695,8 +695,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | The Array length descriptor on the register engine (focused) | focused | `ea2f97c` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/length test/built-ins/Object/defineProperty --summary` | 1,161 | 2,310 | 1,955 (84.63%) | 120 (5.19%) | 235 (10.17%) |
 | Global lexical declarations (focused) | focused | `dfe431b` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/const test/language/statements/let --summary` | 281 | 558 | 479 (85.84%) | 0 (0.00%) | 79 (14.16%) |
 | Global lexical declarations on the register engine (focused) | focused | `dfe431b` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/const test/language/statements/let --summary` | 281 | 558 | 379 (67.92%) | 12 (2.15%) | 167 (29.93%) |
-| Complete pinned suite, including staging and Intl | full | `dfe431b` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `dfe431b` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 24,886 (24.18%) | 18,918 (18.38%) | 59,121 (57.44%) |
+| `setPrototypeOf` and `%Reflect%` (focused) | focused | `cd6fe50` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Object/setPrototypeOf test/built-ins/Reflect --summary` | 165 | 330 | 276 (83.64%) | 52 (15.76%) | 2 (0.61%) |
+| `setPrototypeOf` and `%Reflect%` on the register engine (focused) | focused | `cd6fe50` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object/setPrototypeOf test/built-ins/Reflect --summary` | 165 | 330 | 196 (59.39%) | 6 (1.82%) | 128 (38.79%) |
+| Complete pinned suite, including staging and Intl | full | `cd6fe50` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `cd6fe50` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 24,938 (24.23%) | 18,920 (18.38%) | 59,067 (57.39%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1428,7 +1430,9 @@ the tree of `603d094`. The Array-length runs and both full runs beside the
 descriptor were measured at tree `6b1dffeaf42fedb8971eaaaaa017176e29637d48`,
 which is the tree of `ea2f97c`. The global lexical runs and both full runs
 beside the pattern were measured at tree `1786b9d12553359e89b328626aa3fc896f397a3b`,
-which is the tree of `dfe431b`. `RegExp.prototype[@@split]` landed in `fe5797c`
+which is the tree of `dfe431b`. The `setPrototypeOf` runs and both full runs
+beside them were measured at tree `845a30ea143711f1d72c489dd293ff61de9a2672`,
+which is the tree of `cd6fe50`. `RegExp.prototype[@@split]` landed in `fe5797c`
 between them and moved no variant of the suite.
 
 ### Historical Test262 baseline
