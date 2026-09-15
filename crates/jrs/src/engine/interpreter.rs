@@ -1594,6 +1594,11 @@ impl RegisterVM {
             }
             // 22.1.3.32 and 22.1.3.28 are `thisStringValue`, which answers a
             // String and the `[[StringData]]` of a wrapper.
+            // 20.4.1.1 makes a Symbol of its own, which needs a place for its
+            // description and a registry 20.4.2.2 shares between Realms.
+            Intrinsic::SymbolConstructor => Err(VMError::Unsupported(
+                "the Symbol constructor, which makes a Symbol of its own",
+            )),
             // 10.2.4.1 throws whenever it is called, however it is reached.
             Intrinsic::ThrowTypeError => Err(type_error(
                 heap,
@@ -4694,6 +4699,13 @@ impl RegisterVM {
             {
                 Err(VMError::Unsupported("a property of %String%"))
             }
+            // 20.4.2 gives `%Symbol%` more than the thirteen of table 1.
+            Some(ObjectKind::NativeFunction { id, .. })
+                if Intrinsic::from_id(id) == Some(Intrinsic::SymbolConstructor)
+                    && super::realm::symbol_constructor_owns(name) =>
+            {
+                Err(VMError::Unsupported("a property of %Symbol%"))
+            }
             // 28.1 gives `%Reflect%` more than this Realm builds.
             Some(ObjectKind::Reflect) if super::realm::reflect_owns(name) => {
                 Err(VMError::Unsupported("a property of %Reflect%"))
@@ -6844,6 +6856,34 @@ impl RegisterVM {
                             .get(index),
                         _ => None,
                     };
+                    // 7.1.19 keeps a Symbol as the key it is.
+                    if let Some(symbol) = key_val.as_symbol() {
+                        let name = PropertyKey::Symbol(symbol);
+                        self.acc = match heap.lookup_named(oref, name)? {
+                            Some(property) if property.flags.is_accessor => {
+                                if let Some(code_id) = self.enter_accessor(
+                                    property.value,
+                                    target,
+                                    None,
+                                    pc,
+                                    current_code_id,
+                                    code_units,
+                                    active_feedback,
+                                    heap,
+                                    realm,
+                                )? {
+                                    current_code_id = Some(code_id);
+                                    pc = 0;
+                                }
+                                return Ok(None);
+                            }
+                            Some(property) => property.value,
+                            // A Prototype this Realm has not finished building
+                            // may own the Symbol.
+                            None => Self::absent_well_known(target, oref, heap)?,
+                        };
+                        return Ok(None);
+                    }
                     // A hole is not an answer, so the read goes on.
                     if let Some(element) = element {
                         self.acc = element;
@@ -6941,6 +6981,19 @@ impl RegisterVM {
                     let key_val = self.read_reg(key)?;
                     let val = self.acc;
 
+                    // 7.1.19 keeps a Symbol as the key it is, and no Symbol
+                    // is an index or a name of the element store.
+                    if let Some(symbol) = key_val.as_symbol() {
+                        let name = PropertyKey::Symbol(symbol);
+                        if heap.own_named_flags(oref, name)?.is_none()
+                            && heap.own_property_count(oref).unwrap_or(usize::MAX)
+                                >= self.property_limit
+                        {
+                            return Err(VMError::PropertyLimit);
+                        }
+                        heap.define_own_named(oref, name, val, PropertyFlags::ordinary_data())?;
+                        return Ok(None);
+                    }
                     let indexed = match array_index(key_val, heap)? {
                         Some(index) => {
                             let units = property_name_units(key_val, heap)?;
@@ -7084,8 +7137,8 @@ impl RegisterVM {
                     let target = self.read_reg(obj)?;
                     let key = self.read_reg(key)?;
                     let index = array_index(key, heap)?;
-                    let units = property_name_units(key, heap)?;
-                    let name = PropertyKey::String(heap.strings.intern_units(&units)?);
+                    // 7.1.19 keeps a Symbol as the key it is.
+                    let name = property_key(key, heap)?;
                     self.acc = delete_reference(target, name, index, strict, heap, realm)?;
                 }
                 Instruction::Require(kind) => {

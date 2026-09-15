@@ -1199,20 +1199,11 @@ fn same_value(left: &Value, right: &Value) -> bool {
 
 #[test]
 fn iterator_and_dynamic_binding_patterns_stay_on_legacy_backend() -> Result<(), Error> {
-    // An iterator the Script wrote reaches 8.6.2 on the engine now, and stops
-    // where 20.4 does: this Realm has not built `%Symbol%`.
-    let source =
-        "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [x]=input;x";
-    let program = compile(source, Limits::default())?;
-    assert!(program.uses_register_backend(), "{source}");
-    assert!(
-        matches!(
-            Runtime::with_backend(Limits::default(), Backend::Engine)
-                .run(&program, &mut SilentHost),
-            Err(Error::Unsupported { .. })
-        ),
-        "{source}"
-    );
+    // An iterator the Script wrote reaches 8.6.2 on the engine now, with the
+    // Symbol of table 1 as the key it is.
+    differential(
+        "let input={next(){return {done:true}},[Symbol.iterator](){return this}};let [x]=input;typeof x",
+    )?;
     // A rest element and a computed key of a pattern are named gaps, and an
     // Array whose `@@iterator` the Script replaced is not a layout the
     // lowering keeps.
@@ -5467,6 +5458,40 @@ fn the_in_operator_asks_the_prototype_chain() -> Result<(), Error> {
         "var o={};var r=0;try{'a' in 1}catch(e){r=e instanceof TypeError};r",
     ] {
         differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+#[test]
+fn the_well_known_symbols_are_keys_of_their_own() -> Result<(), Error> {
+    // 20.4.2 gives `%Symbol%` the thirteen Symbols of table 1, and 7.1.19
+    // keeps a Symbol as the key it is.
+    for source in [
+        "typeof Symbol",
+        "typeof Symbol.iterator",
+        "typeof Symbol.toPrimitive",
+        "Symbol.iterator===Symbol.iterator",
+        "Symbol.iterator===Symbol.asyncIterator",
+        "var o={};o[Symbol.iterator]=1;o[Symbol.iterator]",
+        "var o={};typeof o[Symbol.iterator]",
+        "var o={[Symbol.iterator](){return this}};typeof o[Symbol.iterator]",
+        "var o={};o[Symbol.iterator]=1;Object.keys(o).length",
+        "var o={};o[Symbol.iterator]=1;delete o[Symbol.iterator];typeof o[Symbol.iterator]",
+        "var r='';var o={a:1};o[Symbol.iterator]=2;for(var k in o){r=r+k};r",
+        "'use strict';function f(){return typeof arguments[Symbol.iterator]}f(1)",
+        "var o={};o[Symbol.iterator]=1;Object.getOwnPropertyNames(o).length",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    // 20.4.1.1 makes a Symbol of its own, which needs a place for its
+    // description and the registry 20.4.2.2 shares between Realms.
+    for source in ["typeof Symbol()", "typeof Symbol.for"] {
+        let mut host = SilentHost;
+        let mut realm = Realm::with_backend(Limits::default(), &mut host, Backend::Engine)?;
+        assert!(
+            matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
+            "{source}"
+        );
     }
     Ok(())
 }

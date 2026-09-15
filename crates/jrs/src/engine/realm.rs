@@ -204,6 +204,27 @@ impl WellKnownSymbol {
         }
     }
 
+    /// The name 20.4.2 gives this Symbol on `%Symbol%`, which is the
+    /// description without the `Symbol.` its text carries.
+    #[must_use]
+    pub const fn property(self) -> &'static str {
+        match self {
+            Self::AsyncIterator => "asyncIterator",
+            Self::HasInstance => "hasInstance",
+            Self::IsConcatSpreadable => "isConcatSpreadable",
+            Self::Iterator => "iterator",
+            Self::Match => "match",
+            Self::MatchAll => "matchAll",
+            Self::Replace => "replace",
+            Self::Search => "search",
+            Self::Species => "species",
+            Self::Split => "split",
+            Self::ToPrimitive => "toPrimitive",
+            Self::ToStringTag => "toStringTag",
+            Self::Unscopables => "unscopables",
+        }
+    }
+
     /// The reference that identifies this Symbol.
     #[must_use]
     pub const fn reference(self) -> SymbolRef {
@@ -499,6 +520,8 @@ pub enum Intrinsic {
     StringPrototypeToString,
     /// `%ThrowTypeError%`, 10.2.4.1, which throws whenever it is called.
     ThrowTypeError,
+    /// `Symbol`, 20.4.1.1.
+    SymbolConstructor,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -536,7 +559,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 118] = [
+    pub const ALL: [Self; 119] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -655,6 +678,7 @@ impl Intrinsic {
         Self::StringPrototypeValueOf,
         Self::StringPrototypeToString,
         Self::ThrowTypeError,
+        Self::SymbolConstructor,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -758,7 +782,8 @@ impl Intrinsic {
             // 10.2.4.1 stands on no object: the `callee` of a strict
             // arguments object is the only way to reach it, and nothing
             // installs it on the holder this names.
-            Self::ThrowTypeError
+            Self::SymbolConstructor
+            | Self::ThrowTypeError
             | Self::ErrorConstructor
             | Self::EvalErrorConstructor
             | Self::RangeErrorConstructor
@@ -920,6 +945,7 @@ impl Intrinsic {
             Self::StringPrototypeValueOf => 115,
             Self::StringPrototypeToString => 116,
             Self::ThrowTypeError => 117,
+            Self::SymbolConstructor => 118,
         }
     }
 
@@ -1048,6 +1074,7 @@ impl Intrinsic {
             Self::StringPrototypeValueOf => 115,
             Self::StringPrototypeToString => 116,
             Self::ThrowTypeError => 117,
+            Self::SymbolConstructor => 118,
         }
     }
 
@@ -1177,6 +1204,7 @@ impl Intrinsic {
             115 => Some(Self::StringPrototypeValueOf),
             116 => Some(Self::StringPrototypeToString),
             117 => Some(Self::ThrowTypeError),
+            118 => Some(Self::SymbolConstructor),
             _ => None,
         }
     }
@@ -1201,6 +1229,7 @@ impl Intrinsic {
             | Self::BooleanPrototypeValueOf
             | Self::StringPrototypeValueOf => "valueOf",
             Self::ThrowTypeError => "",
+            Self::SymbolConstructor => "Symbol",
             Self::ArrayConstructor => "Array",
             Self::ObjectConstructor => "Object",
             Self::FunctionConstructor => "Function",
@@ -1307,6 +1336,10 @@ impl Intrinsic {
     /// lowered; a position that only compares or stores its argument takes any
     /// value.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table names every intrinsic beside the key it coerces"
+    )]
     pub const fn coerces_argument(self, index: u16) -> bool {
         match self {
             // 20.1.3.3 compares, 20.1.3.6 and 23.1.3.38 read no argument, and
@@ -1393,6 +1426,7 @@ impl Intrinsic {
             | Self::StringPrototypeValueOf
             | Self::StringPrototypeToString
             | Self::ThrowTypeError
+            | Self::SymbolConstructor
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -1427,6 +1461,7 @@ impl Intrinsic {
     pub const fn length(self) -> u32 {
         match self {
             Self::ThrowTypeError
+            | Self::SymbolConstructor
             | Self::ObjectPrototypeToString
             | Self::NumberPrototypeValueOf
             | Self::BooleanPrototypeValueOf
@@ -1815,6 +1850,19 @@ pub const MATH_PROPERTIES: [&str; 45] = [
 /// it.
 pub const STRING_CONSTRUCTOR_PROPERTIES: [&str; 4] =
     ["fromCharCode", "fromCodePoint", "prototype", "raw"];
+
+/// The property names 20.4.2 gives `%Symbol%`, beside the ones 17 gives every
+/// built-in function and the thirteen Symbols of table 1.
+pub const SYMBOL_CONSTRUCTOR_PROPERTIES: [&str; 3] = ["for", "keyFor", "prototype"];
+
+/// Whether `%Symbol%` owns a property of this name.
+#[must_use]
+pub fn symbol_constructor_owns(name: &[u16]) -> bool {
+    function_prototype_owns(name)
+        || SYMBOL_CONSTRUCTOR_PROPERTIES
+            .into_iter()
+            .any(|owned| owned.encode_utf16().eq(name.iter().copied()))
+}
 
 /// Whether `%String%` owns a property of this name.
 #[must_use]
@@ -2620,6 +2668,26 @@ impl Realm {
     ///
     /// Every one is the binary64 nearest the number the clause names, which is
     /// what a decimal literal of that many digits parses to.
+    /// The thirteen Symbols 20.4.2 gives `%Symbol%`, each of them not
+    /// writable, not enumerable and not configurable.
+    fn define_well_known_symbols(
+        heap: &mut GenerationalHeap,
+        symbol: ObjectRef,
+    ) -> Result<(), HeapError> {
+        let flags = PropertyFlags {
+            writable: false,
+            enumerable: false,
+            configurable: false,
+            is_accessor: false,
+        };
+        for well_known in WellKnownSymbol::ALL {
+            let key = intern(heap, well_known.property())?;
+            let value = Value::from_symbol(well_known.reference());
+            heap.define_own_named(symbol, key, value, flags)?;
+        }
+        Ok(())
+    }
+
     fn define_math_constants(
         heap: &mut GenerationalHeap,
         math: ObjectRef,
@@ -2719,6 +2787,15 @@ impl Realm {
             .ok_or(HeapError::InvalidReference)?;
             // 10.2.4.1 stands on no object at all, so nothing installs it.
             if intrinsic == Intrinsic::ThrowTypeError {
+                continue;
+            }
+            // 20.4.2 gives `%Symbol%` the thirteen Symbols of table 1 as soon
+            // as it exists.
+            if intrinsic == Intrinsic::SymbolConstructor {
+                let key = PropertyKey::String(heap.strings.intern(intrinsic.name())?);
+                heap.define_own_named(holder, key, function, builtin_data())?;
+                let constructor = function.as_object().ok_or(HeapError::InvalidReference)?;
+                Self::define_well_known_symbols(heap, constructor)?;
                 continue;
             }
             // 27.1.2.1 is a Symbol-keyed property, so it takes no String name
