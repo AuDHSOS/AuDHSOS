@@ -6317,6 +6317,8 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::NumberIsInteger
         | crate::engine::realm::Intrinsic::NumberIsNaN
         | crate::engine::realm::Intrinsic::NumberIsSafeInteger
+        // 20.3.1.1 answers the Boolean ToBoolean makes of its argument.
+        | crate::engine::realm::Intrinsic::BooleanConstructor
         | crate::engine::realm::Intrinsic::ArrayPrototypeEvery
         | crate::engine::realm::Intrinsic::ArrayPrototypeSome
         | crate::engine::realm::Intrinsic::ArrayIsArray => RegisterType::Boolean,

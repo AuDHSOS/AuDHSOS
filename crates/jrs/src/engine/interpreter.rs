@@ -1324,6 +1324,18 @@ impl RegisterVM {
                 }
                 Ok(Value::from_f64(primitive_number(argument, heap)?))
             }
+            // 20.3.1.1: ToBoolean of the argument, which is false for no
+            // argument at all. `new` makes the Boolean exotic object of
+            // 20.3.3, whose [[BooleanData]] this engine has not built.
+            Intrinsic::BooleanConstructor => {
+                if call.construct.is_some() {
+                    return Err(VMError::Unsupported("a Boolean exotic object"));
+                }
+                Ok(Value::from_bool(Self::to_boolean(
+                    self.call_argument(&call, 0)?,
+                    heap,
+                )?))
+            }
             Intrinsic::NumberIsFinite
             | Intrinsic::NumberIsInteger
             | Intrinsic::NumberIsNaN
@@ -1514,6 +1526,7 @@ impl RegisterVM {
                     | Intrinsic::UriErrorConstructor
                     | Intrinsic::StringConstructor
                     | Intrinsic::NumberConstructor
+                    | Intrinsic::BooleanConstructor
                     | Intrinsic::FunctionConstructor
             )
         })
@@ -3470,6 +3483,11 @@ impl RegisterVM {
                 realm.number_prototype(heap)?,
                 super::realm::number_prototype_owns,
                 "a property of %Number.prototype%",
+            ),
+            (
+                realm.boolean_prototype(heap)?,
+                super::realm::boolean_prototype_owns,
+                "a property of %Boolean.prototype%",
             ),
         ] {
             if prototype.as_object() == Some(object) && owns(name) {

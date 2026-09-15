@@ -465,6 +465,8 @@ pub enum Intrinsic {
     NumberIsNaN,
     /// `Number.isSafeInteger` (21.1.2.5).
     NumberIsSafeInteger,
+    /// The `Boolean` constructor `%Boolean%` (20.3.1.1).
+    BooleanConstructor,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -496,7 +498,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 101] = [
+    pub const ALL: [Self; 102] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -598,6 +600,7 @@ impl Intrinsic {
         Self::NumberIsInteger,
         Self::NumberIsNaN,
         Self::NumberIsSafeInteger,
+        Self::BooleanConstructor,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -688,7 +691,8 @@ impl Intrinsic {
             | Self::TypeErrorConstructor
             | Self::UriErrorConstructor
             | Self::StringConstructor
-            | Self::NumberConstructor => IntrinsicHolder::Global,
+            | Self::NumberConstructor
+            | Self::BooleanConstructor => IntrinsicHolder::Global,
             Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
             Self::ObjectDefineProperty
             | Self::ObjectGetOwnPropertyDescriptor
@@ -823,6 +827,7 @@ impl Intrinsic {
             Self::NumberIsInteger => 98,
             Self::NumberIsNaN => 99,
             Self::NumberIsSafeInteger => 100,
+            Self::BooleanConstructor => 101,
         }
     }
 
@@ -934,6 +939,7 @@ impl Intrinsic {
             Self::NumberIsInteger => 98,
             Self::NumberIsNaN => 99,
             Self::NumberIsSafeInteger => 100,
+            Self::BooleanConstructor => 101,
         }
     }
 
@@ -1046,6 +1052,7 @@ impl Intrinsic {
             98 => Some(Self::NumberIsInteger),
             99 => Some(Self::NumberIsNaN),
             100 => Some(Self::NumberIsSafeInteger),
+            101 => Some(Self::BooleanConstructor),
             _ => None,
         }
     }
@@ -1119,6 +1126,7 @@ impl Intrinsic {
             Self::NumberIsInteger => "isInteger",
             Self::NumberIsNaN => "isNaN",
             Self::NumberIsSafeInteger => "isSafeInteger",
+            Self::BooleanConstructor => "Boolean",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -1232,6 +1240,7 @@ impl Intrinsic {
             | Self::NumberIsInteger
             | Self::NumberIsNaN
             | Self::NumberIsSafeInteger
+            | Self::BooleanConstructor
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4, 20.1.2.8 and 20.1.2.13 apply ToPropertyKey to the
             // second argument.
@@ -1344,6 +1353,7 @@ impl Intrinsic {
             | Self::NumberIsInteger
             | Self::NumberIsNaN
             | Self::NumberIsSafeInteger
+            | Self::BooleanConstructor
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty => 3,
             Self::MathPow
@@ -1670,6 +1680,13 @@ pub fn number_prototype_owns(name: &[u16]) -> bool {
     wrapper_prototype_owns(&NUMBER_PROTOTYPE_PROPERTIES, name)
 }
 
+/// Whether `%Boolean.prototype%` or `%Object.prototype%` owns a property of
+/// this name, which a Boolean resolves on its Prototype Chain.
+#[must_use]
+pub fn boolean_prototype_owns(name: &[u16]) -> bool {
+    wrapper_prototype_owns(&BOOLEAN_PROTOTYPE_PROPERTIES, name)
+}
+
 /// Whether one of these names, or a name `%Object.prototype%` owns, is owned
 /// by the Prototype an instance of that kind resolves on.
 #[must_use]
@@ -1821,6 +1838,7 @@ pub struct Realm {
     array_prototype: Root,
     string_prototype: Root,
     number_prototype: Root,
+    boolean_prototype: Root,
     array_iterator_prototype: Root,
     error_prototype: Root,
     native_error_prototypes: [Root; NATIVE_ERROR_COUNT],
@@ -1904,6 +1922,11 @@ impl Realm {
         let number_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
         let number_prototype = heap.push_root(Value::from_object(number_prototype))?;
 
+        // 20.3.3: %Boolean.prototype% is a Boolean exotic object whose
+        // [[Prototype]] is %Object.prototype%.
+        let boolean_prototype = heap.allocate_immortal_object(root_shape, ordinary)?;
+        let boolean_prototype = heap.push_root(Value::from_object(boolean_prototype))?;
+
         // 23.1.5.2: %ArrayIteratorPrototype% inherits from %IteratorPrototype%,
         // which is an ordinary object of %Object.prototype% until the Iterator
         // intrinsics exist.
@@ -1961,6 +1984,7 @@ impl Realm {
             (Intrinsic::FunctionConstructor, function_prototype),
             (Intrinsic::StringConstructor, string_prototype),
             (Intrinsic::NumberConstructor, number_prototype),
+            (Intrinsic::BooleanConstructor, boolean_prototype),
         ] {
             Self::pair_constructor_with_prototype(heap, &intrinsics, constructor, prototype)?;
         }
@@ -2002,6 +2026,7 @@ impl Realm {
             array_prototype,
             string_prototype,
             number_prototype,
+            boolean_prototype,
             array_iterator_prototype,
             error_prototype,
             native_error_prototypes,
@@ -2637,6 +2662,15 @@ impl Realm {
     /// Returns [`HeapError::InvalidReference`] when the root was discarded.
     pub fn number_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
         Self::rooted(heap, self.number_prototype)
+    }
+
+    /// `%Boolean.prototype%` of 20.3.3.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when the root was discarded.
+    pub fn boolean_prototype(&self, heap: &GenerationalHeap) -> Result<Value, HeapError> {
+        Self::rooted(heap, self.boolean_prototype)
     }
 
     /// %`ArrayIteratorPrototype`%.

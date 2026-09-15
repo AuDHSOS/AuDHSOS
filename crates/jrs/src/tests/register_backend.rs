@@ -159,16 +159,18 @@ fn a_callee_the_lowering_cannot_type_is_dispatched_at_run_time() -> Result<(), E
     // 7.3.14 dispatches on the callee, so a name resolved on the Global
     // Environment Record is still callable. A name of clause 19 this Realm has
     // not built is a gap, and it is reported as one rather than answered.
-    let program = compile("Boolean(1)", Limits::default())?;
+    let program = compile("Symbol(1)", Limits::default())?;
     assert!(program.uses_register_backend());
     assert!(matches!(
         Runtime::with_backend(Limits::default(), Backend::Engine).run(&program, &mut SilentHost),
         Err(Error::Unsupported { .. })
     ));
-    assert_eq!(
-        Runtime::new(Limits::default()).run(&program.legacy_only(), &mut SilentHost)?,
-        Value::Boolean(true)
-    );
+    // The stack backend has the name, so the two paths differ in what they
+    // have and not in what they do with a callee.
+    assert!(matches!(
+        Runtime::new(Limits::default()).run(&program.legacy_only(), &mut SilentHost),
+        Ok(_) | Err(Error::Thrown { .. })
+    ));
     Ok(())
 }
 
@@ -4738,6 +4740,43 @@ fn the_number_constructor_and_what_21_1_2_gives_it() -> Result<(), Error> {
     // `new` makes the Number exotic object of 21.1.3, and 21.1.3 gives its
     // Prototype methods, neither of which this engine has built.
     for source in ["new Number(1)", "Number.prototype.toFixed"] {
+        let program = compile(source, Limits::default())?;
+        assert!(program.uses_register_backend(), "{source}");
+        assert!(
+            matches!(
+                Runtime::with_backend(Limits::default(), Backend::Engine)
+                    .run(&program, &mut SilentHost),
+                Err(Error::Unsupported { .. })
+            ),
+            "{source}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn the_boolean_constructor_answers_toboolean() -> Result<(), Error> {
+    // 20.3.1.1 is ToBoolean of the argument, which is false for no argument
+    // at all, and 17 ties %Boolean% to %Boolean.prototype%.
+    for source in [
+        "Boolean(1)",
+        "Boolean()",
+        "Boolean(0)",
+        "Boolean('')",
+        "Boolean('a')",
+        "Boolean(null)",
+        "Boolean(undefined)",
+        "Boolean(NaN)",
+        "Boolean(-0)",
+        "typeof Boolean",
+        "Boolean.length",
+        "Boolean.prototype.constructor===Boolean",
+    ] {
+        differential(source)?;
+    }
+    // `new` makes the Boolean exotic object of 20.3.3, and 20.3.3 gives its
+    // Prototype methods, neither of which this engine has built.
+    for source in ["new Boolean(1)", "Boolean.prototype.valueOf"] {
         let program = compile(source, Limits::default())?;
         assert!(program.uses_register_backend(), "{source}");
         assert!(
