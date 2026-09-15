@@ -490,14 +490,23 @@ The server the acceptance needs arrived ahead of it as well (D-149):
 connection, and `xtask::tls` starts it on a port of the loopback with a
 chain the certificate builder wrote.
 
-Deliverables: the transport glue that joins `audhsos-tls` to a TCP
-connection of `server-net` — the record layer's bytes in and out of the
-socket's ring, the handshake driven to completion against a deadline of
-the clock of Phase 12, and the close notify in both directions; the
-certificate path validated against the trust anchors the image carries,
-against the date `clock_wall` answers; `tools/tls-probe` keeps its host
-role, and `app-tls` gains the handshake that makes it the counterpart on
-the target.
+The root of that chain reaches the guest already (D-150): the run writes
+the port, the name and the root onto its scratch disk, `app-tls` reads
+them and holds that root behind the anchors of the image, and
+`sh tools/xtask.sh test --tls` is the run that checks it. The anchor
+table of the boot volume stays what an operator put in `anchors/`, which
+is what D-148 decided. What the glue adds to that run is the handshake.
+
+Deliverables: `audhsos-tls` as a dependency of `user-net-programs`, in
+the manifest and in the policy table, as `audhsos-ssh` is; the transport
+glue that joins `audhsos-tls` to a TCP connection of `server-net` — the
+record layer's bytes in and out of the socket's ring, the handshake
+driven to completion against a deadline of the clock of Phase 12, and the
+close notify in both directions; the certificate path validated against
+the trust set of the run, which is the anchors of the image and the root
+the scratch disk carries (D-150), against the date `clock_wall` answers;
+`tools/tls-probe` keeps its host role, and `app-tls` gains the handshake
+that makes it the counterpart on the target.
 
 Tests: catalog 6.6.65, with 6.6.71 already in.
 

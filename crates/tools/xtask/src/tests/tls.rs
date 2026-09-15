@@ -24,7 +24,7 @@ use audhsos_x509::{TrustAnchor, TrustAnchors};
 use crypto_rng::ChaChaRng;
 use crypto_rng::doubles::CountingEntropy;
 
-use crate::tls::{Material, NAME, RESPONSE, Server};
+use crate::tls::{Material, NAME, RESPONSE, Server, guest, scratch_files};
 
 /// What the client asks for.
 const REQUEST: &str = "GET / HTTP/1.1\r\nHost: audhsos.test\r\nConnection: close\r\n\r\n";
@@ -166,4 +166,45 @@ fn a_client_whose_clock_is_past_the_window_refuses_the_chain() {
     let outcome = request(server.port(), material.root.as_slice(), NAME, late);
 
     assert_eq!(outcome, Err(TlsError::CertificateExpired));
+}
+
+#[test]
+fn the_scratch_files_name_the_port_the_name_and_the_root() {
+    let material = Material::new().expect("the chain is built");
+
+    let files = scratch_files(4711, &material);
+
+    let config = files
+        .iter()
+        .find(|(path, _)| path == guest::CONFIG)
+        .map(|(_, bytes)| String::from_utf8(bytes.clone()).expect("text"))
+        .expect("the configuration is written");
+    assert_eq!(config, format!("port 4711\nname {NAME}\n"));
+
+    let root = files
+        .iter()
+        .find(|(path, _)| path == guest::ROOT)
+        .map(|(_, bytes)| bytes.clone())
+        .expect("the root is written");
+    // The bytes are the root itself, because the program of the image
+    // reads it with `TrustAnchor::from_certificate` and nothing else.
+    assert_eq!(root, material.root.as_slice());
+    assert_eq!(files.len(), 2);
+}
+
+#[test]
+fn the_root_of_the_run_is_an_anchor_the_image_can_use() {
+    let material = Material::new().expect("the chain is built");
+    let files = scratch_files(4711, &material);
+    let root = files
+        .iter()
+        .find(|(path, _)| path == guest::ROOT)
+        .map(|(_, bytes)| bytes.clone())
+        .expect("the root is written");
+
+    // What `app-tls` does with the file, and all it does with it (D-150).
+    let anchor = TrustAnchor::from_certificate(&root).expect("an anchor");
+
+    assert!(!anchor.subject.is_empty());
+    assert!(!anchor.spki.is_empty());
 }

@@ -2421,12 +2421,21 @@ what the kernel dispatches on, so the check is what the kernel saw.
   `AUDHSOS/ANCHORS.BIN` off the boot volume, reports as many anchors as
   the directory `anchors/` held when the image was written, and one line
   per anchor with the length of its subject and of its key. This is the
-  part of the item the anchors are, built under D-148; the three below it
+  part of the item the anchors are, built under D-148; the bullet below
+  it is the root of the run, built under D-150, and the five after that
   are the handshake and are Phase 15.
+- The root of the run reaches the same program over the scratch volume
+  (D-150), which `sh tools/xtask.sh test --tls` performs alone and
+  `--e2e` performs last: the host writes `TLSCONF.TXT` with the port the
+  server took and the name of its certificate, and `TLSROOT.DER` with the
+  root of its chain; the program reports the port and the name it read,
+  reports the subject and key lengths of that root, and reports a trust
+  set one larger than the table of the image. The host-side test states
+  what the two files hold.
 - The server of the run, on the development machine and reached over a
   socket (D-149): the client of this project completes the handshake
   against `audhsos-tls::server`, validates the chain against the root the
-  image carries, and reads the answer. A client that asks for another
+  run handed it, and reads the answer. A client that asks for another
   name is refused with `bad_certificate`, one that trusts another root
   with `unknown_ca`, and one whose clock is past the window with
   `certificate_expired` — the three refusals below, checked on the host
@@ -3221,8 +3230,9 @@ The key material, host-tested in `xtask`:
   fixtures are built from the document, because no key of this repository
   is tracked (D-146).
 
-The run, which `sh tools/xtask.sh test --e2e` performs last and
-`sh tools/xtask.sh test --ssh` performs alone:
+The run, which `sh tools/xtask.sh test --e2e` performs second to last,
+before the TLS run of 6.6.65, and `sh tools/xtask.sh test --ssh` performs
+alone:
 
 - `sshd` starts on a free port of the loopback with every algorithm of
   14.5 named, so the run cannot pass on a set the two sides happened to

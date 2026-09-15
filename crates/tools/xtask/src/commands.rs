@@ -19,6 +19,7 @@ use crate::qmp::{Button, Qmp};
 use crate::session::Session;
 use crate::ssh;
 use crate::symbolize;
+use crate::tls;
 use crate::{artifacts, coverage, deps, fs, layering, linker, spdx, unsafe_budget};
 
 /// `rustfmt --check`, `clippy -D warnings` per target group, SPDX headers.
@@ -105,6 +106,7 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut qemu = false;
     let mut e2e = false;
     let mut ssh = false;
+    let mut tls = false;
     let mut profile = Vec::new();
     for option in options {
         match option.as_str() {
@@ -112,11 +114,12 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
             "--qemu" => qemu = true,
             "--e2e" => e2e = true,
             "--ssh" => ssh = true,
+            "--tls" => tls = true,
             "--release" => profile.push("--release".to_owned()),
             other => return Err(Error::Usage(format!("unknown option `{other}` for test"))),
         }
     }
-    if !(host || qemu || e2e || ssh) {
+    if !(host || qemu || e2e || ssh || tls) {
         host = true;
     }
     if host {
@@ -154,6 +157,14 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
         let machine = Machine::locate()?;
         let path = root.join("target").join("audhsos.img");
         test_the_secure_shell_client(&machine, &path, root)?;
+    }
+    // The TLS run alone, for the same reason as the Secure Shell one.
+    if tls {
+        build(root, &profile)?;
+        image(root, &profile)?;
+        let machine = Machine::locate()?;
+        let path = root.join("target").join("audhsos.img");
+        test_the_tls_client(&machine, &path, root)?;
     }
     Ok(())
 }
@@ -527,7 +538,100 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     test_the_same_disk_again(&machine, &path, root)?;
     test_without_a_framebuffer(&machine, &path)?;
     test_without_a_network(&machine, &path)?;
-    test_the_secure_shell_client(&machine, &path, root)
+    test_the_secure_shell_client(&machine, &path, root)?;
+    test_the_tls_client(&machine, &path, root)
+}
+
+/// The half of catalog 6.6.65 that the run's anchor is: the root of the
+/// chain the server presents reaches the program of the image over the
+/// scratch volume, and the program holds it beside the anchors of the
+/// boot volume (D-150).
+///
+/// The handshake over that trust set is step T8 of document 11 and is
+/// Phase 15; this run is where its remaining lines go.
+fn test_the_tls_client(machine: &Machine, path: &Path, root: &Path) -> Result<(), Error> {
+    let material = tls::Material::new()?;
+    let server = tls::Server::start(&material)?;
+    note!(
+        "tls server: port {}, one root for {}",
+        server.port(),
+        tls::NAME
+    );
+    let files = tls::scratch_files(server.port(), &material);
+    let scratch = written_scratch_image(root, "tls", &files)?;
+    let mut session = Session::start(
+        machine,
+        path,
+        &qemu::Options {
+            scratch: Some(scratch),
+            ..qemu::Options::plain()
+        },
+    )?;
+
+    let mut violations = Vec::new();
+    for (needle, complaint) in tls_lines(server.port(), root)? {
+        if !session.wait_for(&needle, E2E_TIMEOUT) {
+            violations.push(complaint);
+            break;
+        }
+    }
+    let output = session.finish();
+    report("tls", &violations);
+    if !violations.is_empty() {
+        eprintln!("--- serial output of the TLS run ---");
+        eprintln!("{output}");
+        eprintln!("--- end ---");
+    }
+    Error::from_violations(violations)
+}
+
+/// What the TLS run has to see, in this order: three lines of the boot,
+/// then the anchors of the boot volume, where the run's server is, the
+/// root of its chain, and one trust set holding both.
+///
+/// The three boot lines are checkpoints and not assertions of their own.
+/// Each line of this list gets [`E2E_TIMEOUT`] to itself, and `app-tls`
+/// is the second to last program the root task starts: without them one
+/// timeout would have to cover the firmware, the kernel, and the loading
+/// of fifteen programs off the volume, one message of two kibibytes at a
+/// time (D-92). The run that failed in CI reached `app-ssh` and lost the
+/// budget there.
+///
+/// # Errors
+///
+/// Whatever reading the anchor directory answers.
+fn tls_lines(port: u16, root: &Path) -> Result<Vec<(String, String)>, Error> {
+    let carried = anchors::of(root)?.len();
+    Ok(vec![
+        (
+            "[init] started server-net".to_owned(),
+            "the machine did not get as far as the network server".to_owned(),
+        ),
+        (
+            "[init] started app-ssh".to_owned(),
+            "the machine did not get as far as the program before `app-tls`".to_owned(),
+        ),
+        (
+            "[init] started app-tls".to_owned(),
+            "the root task did not start the program that holds the anchors".to_owned(),
+        ),
+        (
+            format!("[tls-app] anchors={carried}"),
+            "the program did not read the anchor table of the boot volume".to_owned(),
+        ),
+        (
+            format!("[tls-app] run server=10.0.2.2:{port} name={}", tls::NAME),
+            "the run's port and name did not reach the program over the scratch volume".to_owned(),
+        ),
+        (
+            "[tls-app] run anchor subject=".to_owned(),
+            "the program refused the root of the run's chain".to_owned(),
+        ),
+        (
+            format!("[tls-app] trust anchors={}", carried.saturating_add(1)),
+            "the run's root did not join the anchors of the image".to_owned(),
+        ),
+    ])
 }
 
 /// The acceptance of track S: the client of the image reaches a command on

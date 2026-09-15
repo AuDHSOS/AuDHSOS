@@ -359,3 +359,32 @@ pub(crate) fn command(options: &[String]) -> Result<(), Error> {
         std::thread::sleep(TICK);
     }
 }
+
+/// What the acceptance run puts on the scratch volume for the program of
+/// the image (D-150).
+pub(crate) mod guest {
+    /// The file naming the port of the server and the name its
+    /// certificate carries.
+    ///
+    /// Both files lie in the root of the volume and carry 8.3 names, as
+    /// the files of the Secure Shell run do: a program that opened a
+    /// directory first would read a path for no gain.
+    pub(crate) const CONFIG: &str = "TLSCONF.TXT";
+    /// The file holding the root of the run's chain, as DER.
+    pub(crate) const ROOT: &str = "TLSROOT.DER";
+}
+
+/// The files of one run: where the server listens, what name it answers
+/// for, and the root its chain reaches.
+///
+/// The root travels here and not in the anchor table of the boot volume,
+/// which carries the public roots an operator dropped into `anchors/`
+/// (D-148, D-150). An image whose table held this root would trust the
+/// project's test authority on every machine it ever booted on.
+pub(crate) fn scratch_files(port: u16, material: &Material) -> Vec<(String, Vec<u8>)> {
+    let config = format!("port {port}\nname {NAME}\n");
+    vec![
+        (guest::CONFIG.to_owned(), config.into_bytes()),
+        (guest::ROOT.to_owned(), material.root.as_slice().to_vec()),
+    ]
+}
