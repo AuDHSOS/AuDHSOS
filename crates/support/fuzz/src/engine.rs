@@ -32,8 +32,8 @@ use std::io::Write as _;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use crate::corpus::files_under;
@@ -68,6 +68,13 @@ static RUN_BEGAN: AtomicU64 = AtomicU64::new(0);
 
 /// How long one input may take, in milliseconds.
 static RUN_LIMIT: AtomicU64 = AtomicU64::new(0);
+
+/// The input the run in progress is working on.
+///
+/// The watchdog ends the process without unwinding, so the input has to be
+/// somewhere it can read. Without it the message says that something took too
+/// long and never what, which is not a report anyone can act on.
+static RUN_INPUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 /// Milliseconds since the process started.
 pub(crate) fn now() -> u64 {
@@ -157,6 +164,10 @@ impl<'a> Runner<'a> {
     pub(crate) fn execute(&mut self, input: &[u8]) -> Outcome {
         if self.value_profile {
             sancov::with_trace(|trace| trace.values.clear());
+        }
+        if let Ok(mut held) = RUN_INPUT.lock() {
+            held.clear();
+            held.extend_from_slice(input);
         }
         RUN_BEGAN.store(now().max(1), Ordering::Relaxed);
         let body = &mut self.body;
@@ -636,8 +647,26 @@ pub(crate) const fn outran(began: u64, limit: u64, now: u64) -> bool {
 pub(crate) fn tick(began: u64, limit: u64, now: u64) {
     if outran(began, limit, now) {
         eprintln!("ERROR: an input took longer than {limit} ms");
+        report_slow_input();
         let _ = std::io::stderr().flush();
         std::process::abort();
+    }
+}
+
+/// Prints the input the run was working on, so that the one that did not
+/// finish can be run again by hand.
+fn report_slow_input() {
+    let Ok(held) = RUN_INPUT.lock() else {
+        eprintln!("ERROR: the input that did not finish could not be read");
+        return;
+    };
+    if held.is_empty() {
+        return;
+    }
+    eprintln!("ERROR: it was {} bytes:", held.len());
+    match core::str::from_utf8(&held) {
+        Ok(text) => eprintln!("{text}"),
+        Err(_) => eprintln!("{:02x?}", &held[..]),
     }
 }
 
