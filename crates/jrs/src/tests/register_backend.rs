@@ -3909,13 +3909,10 @@ fn a_compound_assignment_of_two_strings_only_concatenates_for_plus() -> Result<(
 #[test]
 fn register_lowering_rejects_intrinsic_arguments_it_cannot_coerce() -> Result<(), Error> {
     for source in [
-        // An intrinsic runs without a call frame, so a user valueOf in a
-        // coerced argument position keeps the call on the legacy backend.
-        "let n=0;'abc'.charAt({valueOf(){n++;return 1}})",
-        "let n=0;[1,2].at({valueOf(){n++;return 0}})",
-        "let n=0;[1,2].indexOf(1,{valueOf(){n++;return 0}})",
+        // An intrinsic runs without a call frame, so a user valueOf in an
+        // argument position whose conversion the native does not leave for
+        // keeps the call on the legacy backend.
         "let n=0;({}).hasOwnProperty({toString(){n++;return 'a'}})",
-        "let n=0;[1].join({toString(){n++;return '-'}})",
         // 23.1.3.18 applies ToString to every element, which needs a frame.
         "[{}].join('-')",
         "[[1]].join('-')",
@@ -5797,6 +5794,41 @@ fn a_string_matches_and_searches_a_regexp() -> Result<(), Error> {
             matches!(realm.evaluate(source), Err(Error::Unsupported { .. })),
             "{source}"
         );
+    }
+    Ok(())
+}
+
+/// A native leaves to run 7.1.1 on each argument its clause converts, with the
+/// hint that clause gives, and runs again from the beginning.
+#[test]
+fn a_native_converts_every_argument_its_clause_converts() -> Result<(), Error> {
+    for source in [
+        "'abcdef'.substring({valueOf:function(){return 1}},3)",
+        "'abcdef'.slice({valueOf:function(){return 1}},{valueOf:function(){return 3}})",
+        "'abc'.charAt({valueOf:function(){return 1}})",
+        "'abc'.indexOf({toString:function(){return 'b'}})",
+        "'abc'.indexOf('c',{valueOf:function(){return 0}})",
+        "'abc'.padStart({valueOf:function(){return 5}},{toString:function(){return '-'}})",
+        "[1,2,3].join({toString:function(){return '-'}})",
+        "[1,2,3].indexOf(2,{valueOf:function(){return 0}})",
+        "'ab'.repeat({valueOf:function(){return 2}})",
+        "''+Math.pow({valueOf:function(){return 2}},{valueOf:function(){return 3}})",
+        "'abc'.substring({},1)",
+        // 13.15.2: the conversions run in the order the clause names them.
+        "var n='';'abcd'.substring({valueOf:function(){n+='a';return 1}},\
+         {valueOf:function(){n+='b';return 3}})+','+n",
+        "var n='';'abcd'.indexOf({toString:function(){n+='s';return 'b'}},\
+         {valueOf:function(){n+='p';return 0}})+','+n",
+        // 7.1.4 passes the hint `number`, 7.1.17 the hint `string`.
+        "var o={};o[Symbol.toPrimitive]=function(h){return h==='number'?2:'x'};\
+         'abcdef'.slice(o,4)",
+        "var o={};o[Symbol.toPrimitive]=function(h){return h==='string'?'b':9};\
+         'abcdef'.indexOf(o)",
+        "var o={};o[Symbol.toPrimitive]=function(h){return h};'abcdef'.indexOf(o)",
+        "var o={};o[Symbol.toPrimitive]=function(h){return h};[1,2].join(o)",
+        "var o={};o[Symbol.toPrimitive]=function(h){return h};''+o",
+    ] {
+        differential_scripts(&[source])?;
     }
     Ok(())
 }

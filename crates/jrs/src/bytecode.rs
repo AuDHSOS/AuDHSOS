@@ -3410,8 +3410,12 @@ impl RegisterLowerer {
         let mut argument_types = Vec::new();
         for (index, argument) in arguments.iter().enumerate() {
             let argument_type = self.lower(argument)?;
+            // An Object in a position the native converts is taken as it is:
+            // the native leaves to run 7.1.1 and comes back.
+            let index = u16::try_from(index).ok()?;
             if !argument_type.converts_to_primitive()
-                && intrinsic.coerces_argument(u16::try_from(index).ok()?)
+                && intrinsic.coerces_argument(index)
+                && !intrinsic.converts_argument(index)
             {
                 return None;
             }

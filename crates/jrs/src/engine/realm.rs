@@ -11,6 +11,7 @@
 
 use super::{
     heap::{GenerationalHeap, HeapError, Root},
+    interpreter::PrimitiveHint,
     shape::PropertyFlags,
     value::{ObjectRef, VALUE_NULL, VALUE_UNDEFINED, VALUE_UNINITIALIZED, Value},
     value::{PropertyKey, SymbolRef},
@@ -1402,6 +1403,95 @@ impl Intrinsic {
             Self::ArrayPrototypeReverse => "reverse",
             Self::StringPrototypeSlice | Self::ArrayPrototypeSlice => "slice",
         }
+    }
+
+    /// The arguments this intrinsic sends through 7.1.1 before it does anything
+    /// else, in the order its clause converts them, each with the hint that
+    /// clause gives.
+    ///
+    /// Only an operation whose conversions come before every effect it has
+    /// belongs here: the native runs from the beginning once one more argument
+    /// is a primitive, so a conversion must not be able to observe a step the
+    /// native already took.
+    #[must_use]
+    pub const fn coerced_arguments(self) -> &'static [(u16, PrimitiveHint)] {
+        /// One position, converted by `ToIntegerOrInfinity` or `ToNumber`.
+        const NUMBER: &[(u16, PrimitiveHint)] = &[(0, PrimitiveHint::Number)];
+        /// Two of them.
+        const NUMBERS: &[(u16, PrimitiveHint)] =
+            &[(0, PrimitiveHint::Number), (1, PrimitiveHint::Number)];
+        /// One text, converted by `ToString`.
+        const TEXT: &[(u16, PrimitiveHint)] = &[(0, PrimitiveHint::String)];
+        /// A text to search for, then where to start.
+        const TEXT_THEN_NUMBER: &[(u16, PrimitiveHint)] =
+            &[(0, PrimitiveHint::String), (1, PrimitiveHint::Number)];
+        match self {
+            // 22.1.1.1 step 2, and 20.5.1.1 step 3 with 20.5.6.1.1 beside it.
+            Self::StringConstructor
+            | Self::ErrorConstructor
+            | Self::EvalErrorConstructor
+            | Self::RangeErrorConstructor
+            | Self::ReferenceErrorConstructor
+            | Self::SyntaxErrorConstructor
+            | Self::TypeErrorConstructor
+            | Self::UriErrorConstructor
+            // 23.1.3.18: the separator, which `ToString` converts.
+            | Self::ArrayPrototypeJoin => TEXT,
+            // 22.1.3: one position, which `ToIntegerOrInfinity` converts.
+            Self::StringPrototypeCharAt
+            | Self::StringPrototypeCharCodeAt
+            | Self::StringPrototypeCodePointAt
+            | Self::StringPrototypeAt
+            | Self::StringPrototypeRepeat
+            | Self::ArrayPrototypeAt
+            // 21.3.2: every argument goes through `ToNumber`.
+            | Self::MathAbs
+            | Self::MathCeil
+            | Self::MathFloor
+            | Self::MathTrunc
+            | Self::MathRound
+            | Self::MathSign
+            | Self::MathClz32
+            | Self::MathFround
+            | Self::MathSin => NUMBER,
+            // 22.1.3.9, 22.1.3.11, 22.1.3.7, 22.1.3.8 and 22.1.3.24: the text
+            // to search for, then where to start.
+            Self::StringPrototypeIndexOf
+            | Self::StringPrototypeLastIndexOf
+            | Self::StringPrototypeIncludes
+            | Self::StringPrototypeEndsWith
+            | Self::StringPrototypeStartsWith => TEXT_THEN_NUMBER,
+            // 22.1.3.21, 22.1.3.25 and 23.1.3.28: two positions.
+            Self::StringPrototypeSlice
+            | Self::StringPrototypeSubstring
+            | Self::ArrayPrototypeSlice
+            | Self::MathPow
+            | Self::MathImul => NUMBERS,
+            // 22.1.3.16 and 22.1.3.17: the length, then the text to pad with.
+            Self::StringPrototypePadStart | Self::StringPrototypePadEnd => {
+                &[(0, PrimitiveHint::Number), (1, PrimitiveHint::String)]
+            }
+            // 23.1.3.17, 23.1.3.20 and 23.1.3.14: the element is compared as
+            // it is, and only the index is converted.
+            Self::ArrayPrototypeIndexOf
+            | Self::ArrayPrototypeLastIndexOf
+            | Self::ArrayPrototypeIncludes => &[(1, PrimitiveHint::Number)],
+            _ => &[],
+        }
+    }
+
+    /// Whether the engine converts the argument at `index` itself, which is
+    /// what lets a lowering pass an Object there.
+    #[must_use]
+    pub const fn converts_argument(self, index: u16) -> bool {
+        let mut entries = self.coerced_arguments();
+        while let [(at, _), rest @ ..] = entries {
+            if *at == index {
+                return true;
+            }
+            entries = rest;
+        }
+        false
     }
 
     /// Whether this method coerces the argument at `index` to a primitive.

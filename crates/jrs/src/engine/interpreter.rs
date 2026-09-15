@@ -135,6 +135,9 @@ const DEFAULT_HINT: [u16; 7] = [0x64, 0x65, 0x66, 0x61, 0x75, 0x6C, 0x74];
 /// The `"string"` hint 7.1.17 passes to 7.1.1.
 const STRING_HINT: [u16; 6] = [0x73, 0x74, 0x72, 0x69, 0x6E, 0x67];
 
+/// The text `"number"`, which 7.1.4 passes `@@toPrimitive`.
+const NUMBER_HINT: [u16; 6] = [0x6E, 0x75, 0x6D, 0x62, 0x65, 0x72];
+
 /// The text 25.5.2.4 gives null and a Number that is not finite.
 const NULL_UNITS: [u16; 4] = [0x6E, 0x75, 0x6C, 0x6C];
 
@@ -453,6 +456,8 @@ impl Resume {
 pub enum PrimitiveHint {
     /// 7.1.1 with no hint, and 7.1.3: `valueOf` before `toString`.
     Default,
+    /// 7.1.4: the same order, under the hint `"number"`.
+    Number,
     /// 7.1.17: `toString` before `valueOf`.
     String,
 }
@@ -462,6 +467,7 @@ impl PrimitiveHint {
     const fn units(self) -> &'static [u16] {
         match self {
             Self::Default => &DEFAULT_HINT,
+            Self::Number => &NUMBER_HINT,
             Self::String => &STRING_HINT,
         }
     }
@@ -469,12 +475,10 @@ impl PrimitiveHint {
     /// The method 7.1.1 asks after this one, and none after the last.
     const fn after(self, step: PrimitiveStep) -> Option<PrimitiveStep> {
         match (self, step) {
-            (Self::Default, PrimitiveStep::Exotic) | (Self::String, PrimitiveStep::ToString) => {
-                Some(PrimitiveStep::ValueOf)
-            }
-            (Self::Default, PrimitiveStep::ValueOf) | (Self::String, PrimitiveStep::Exotic) => {
-                Some(PrimitiveStep::ToString)
-            }
+            (Self::Default | Self::Number, PrimitiveStep::Exotic)
+            | (Self::String, PrimitiveStep::ToString) => Some(PrimitiveStep::ValueOf),
+            (Self::Default | Self::Number, PrimitiveStep::ValueOf)
+            | (Self::String, PrimitiveStep::Exotic) => Some(PrimitiveStep::ToString),
             _ => None,
         }
     }
@@ -1254,12 +1258,11 @@ impl RegisterVM {
                 // 7.1.17 of an Object argument is a call of a method of the
                 // object, and the native has no frame to make it from: it
                 // leaves and runs again with the primitive in its place.
-                if let Some(index) = Self::coerces_argument(intrinsic)
-                    && self.call_argument(&call, index)?.as_object().is_some()
-                {
+                if let Some((index, hint)) = self.next_coercion(intrinsic, &call, heap, realm)? {
                     return self.begin_coercion(
                         intrinsic,
                         index,
+                        hint,
                         call,
                         units,
                         active_feedback,
@@ -2520,25 +2523,39 @@ impl RegisterVM {
         }
     }
 
-    /// The argument an intrinsic sends through 7.1.17 before it does anything
-    /// else, and which it therefore may be run again for.
+    /// The next argument of this call that 7.1.1 still has to convert.
     ///
-    /// Only an operation whose conversion comes before every effect it has
-    /// belongs here: the native runs from the beginning once the argument is a
-    /// primitive.
-    const fn coerces_argument(intrinsic: Intrinsic) -> Option<u16> {
-        match intrinsic {
-            // 22.1.1.1 step 2, and 20.5.1.1 step 3 with 20.5.6.1.1 beside it.
-            Intrinsic::StringConstructor
-            | Intrinsic::ErrorConstructor
-            | Intrinsic::EvalErrorConstructor
-            | Intrinsic::RangeErrorConstructor
-            | Intrinsic::ReferenceErrorConstructor
-            | Intrinsic::SyntaxErrorConstructor
-            | Intrinsic::TypeErrorConstructor
-            | Intrinsic::UriErrorConstructor => Some(0),
-            _ => None,
+    /// 22.1.3 and 23.1.3 each begin with the `this` value, so a receiver those
+    /// clauses refuse is refused here, before a conversion of an argument
+    /// could be observed.
+    fn next_coercion(
+        &self,
+        intrinsic: Intrinsic,
+        call: &Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Option<(u16, PrimitiveHint)>, VMError> {
+        for (index, hint) in intrinsic.coerced_arguments() {
+            if *index >= call.arg_count || self.call_argument(call, *index)?.as_object().is_none() {
+                continue;
+            }
+            if (call.receiver.is_undefined() || call.receiver.is_null())
+                && matches!(
+                    intrinsic.holder(),
+                    super::realm::IntrinsicHolder::StringPrototype
+                        | super::realm::IntrinsicHolder::ArrayPrototype
+                )
+            {
+                return Err(match intrinsic.holder() {
+                    super::realm::IntrinsicHolder::StringPrototype => {
+                        type_error(heap, realm, "String method called on null or undefined")
+                    }
+                    _ => type_error(heap, realm, "cannot box null or undefined"),
+                });
+            }
+            return Ok(Some((*index, *hint)));
         }
+        Ok(None)
     }
 
     /// Leaves a native operation to convert one of its arguments (7.1.17).
@@ -2554,6 +2571,7 @@ impl RegisterVM {
         &mut self,
         intrinsic: Intrinsic,
         index: u16,
+        hint: PrimitiveHint,
         call: Call,
         units: CodeUnits<'_>,
         active_feedback: &mut FeedbackVector,
@@ -2572,7 +2590,7 @@ impl RegisterVM {
             arg_count: call.arg_count,
             construct: call.construct,
             step: PrimitiveStep::Exotic,
-            hint: PrimitiveHint::String,
+            hint,
         };
         let conversion = Call {
             receiver: argument,
@@ -2583,7 +2601,15 @@ impl RegisterVM {
         match self.convert_to_primitive(conversion, units, active_feedback, heap, realm)? {
             Conversion::Done(value) => {
                 self.write_reg(register, value)?;
-                self.finish_coerced(resume, units, heap, realm)
+                self.finish_coerced(
+                    resume,
+                    call.return_pc,
+                    call.caller_code_id,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                )
             }
             Conversion::Suspended(code_id) => Ok(Some(code_id)),
         }
@@ -4507,6 +4533,7 @@ impl RegisterVM {
                 if step == PrimitiveStep::Exotic {
                     let text = self.allocate_string(heap, hint.units())?;
                     self.write_reg(register, text)?;
+                    call.arg_start = register;
                 }
                 call.resume = Some(resume.with_step(step));
                 if let Some(code_id) =
@@ -4551,7 +4578,15 @@ impl RegisterVM {
         };
         if let Some(value) = Self::primitive_answer(self.acc, step, heap, realm)? {
             self.write_reg(register, value)?;
-            return self.finish_coerced(resume, units, heap, realm);
+            return self.finish_coerced(
+                resume,
+                call.return_pc,
+                call.caller_code_id,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
         }
         // The method answered an Object, so 7.1.1.1 asks the next one. The
         // operand is still in its register, where the collector kept it.
@@ -4570,7 +4605,15 @@ impl RegisterVM {
         match self.convert_to_primitive(call, units, active_feedback, heap, realm)? {
             Conversion::Done(value) => {
                 self.write_reg(register, value)?;
-                self.finish_coerced(resume, units, heap, realm)
+                self.finish_coerced(
+                    resume,
+                    call.return_pc,
+                    call.caller_code_id,
+                    units,
+                    active_feedback,
+                    heap,
+                    realm,
+                )
             }
             Conversion::Suspended(code_id) => Ok(Some(code_id)),
         }
@@ -4580,10 +4623,17 @@ impl RegisterVM {
     ///
     /// A conversion an instruction asked for answers into the register the
     /// instruction reads, and there is nothing left to do.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a conversion runs where a call does, with what a call has"
+    )]
     fn finish_coerced(
         &mut self,
         resume: Resume,
+        return_pc: usize,
+        caller_code_id: Option<u32>,
         units: CodeUnits<'_>,
+        active_feedback: &mut FeedbackVector,
         heap: &mut GenerationalHeap,
         realm: &Realm,
     ) -> Result<Option<u32>, VMError> {
@@ -4607,10 +4657,24 @@ impl RegisterVM {
             slot: 0,
             resume: None,
             construct,
-            return_pc: 0,
-            caller_code_id: None,
+            return_pc,
+            caller_code_id,
         };
         heap.exit_scope();
+        // A clause that converts more than one argument converts the next one
+        // the same way, from the beginning of the native.
+        if let Some((index, hint)) = self.next_coercion(intrinsic, &call, heap, realm)? {
+            return self.begin_coercion(
+                intrinsic,
+                index,
+                hint,
+                call,
+                units,
+                active_feedback,
+                heap,
+                realm,
+            );
+        }
         self.acc = self.call_intrinsic(intrinsic, call, units, heap, realm)?;
         // 23.1.1.1 and 20.5.1.1 answer an object of their own, which the
         // instruction keeps where the collector sees it.
@@ -8185,12 +8249,13 @@ impl RegisterVM {
                             construct: Some(target),
                         };
                         // The same conversion a call of the native asks for.
-                        if let Some(index) = Self::coerces_argument(intrinsic)
-                            && self.call_argument(&call, index)?.as_object().is_some()
+                        if let Some((index, hint)) =
+                            self.next_coercion(intrinsic, &call, heap, realm)?
                         {
                             if let Some(code_id) = self.begin_coercion(
                                 intrinsic,
                                 index,
+                                hint,
                                 call,
                                 units,
                                 active_feedback,
