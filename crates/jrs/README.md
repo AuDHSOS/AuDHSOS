@@ -655,8 +655,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Array.prototype%` element accessors on the register engine (focused) | focused | `6948012` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array/prototype --summary` | 2,811 | 5,583 | 3,181 (56.98%) | 657 (11.77%) | 1,745 (31.26%) |
 | Destructuring declarations, after the rest element (focused) | focused | `9c9533a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/variable/dstr --summary` | 97 | 194 | 158 (81.44%) | 0 (0.00%) | 36 (18.56%) |
 | Destructuring declarations, after the rest element, on the register engine (focused) | focused | `9c9533a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/variable/dstr --summary` | 97 | 194 | 144 (74.23%) | 2 (1.03%) | 48 (24.74%) |
-| Complete pinned suite, including staging and Intl | full | `9c9533a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `9c9533a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 20,771 (20.18%) | 18,123 (17.61%) | 64,031 (62.21%) |
+| Destructuring assignment, after the value with no layout (focused) | focused | `2dd0728` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr --summary` | 368 | 640 | 446 (69.69%) | 0 (0.00%) | 194 (30.31%) |
+| Destructuring assignment, after the value with no layout, on the register engine (focused) | focused | `2dd0728` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/assignment/dstr --summary` | 368 | 640 | 287 (44.84%) | 10 (1.56%) | 343 (53.59%) |
+| Complete pinned suite, including staging and Intl | full | `2dd0728` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `2dd0728` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 21,022 (20.42%) | 18,141 (17.63%) | 63,762 (61.95%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1348,7 +1350,9 @@ which is the tree of `bd95535`. The `%Array.prototype%` runs and both full runs
 beside the element accessors were measured at tree `3255af6bc5f76844b50cb85379e442ff127fa5b8`,
 which is the tree of `6948012`. The destructuring runs and both full runs
 beside the rest element were measured at tree `5293484ca0ebc0c2c38ab39515215735e24eb0f6`,
-which is the tree of `9c9533a`.
+which is the tree of `9c9533a`. The destructuring runs and both full runs
+beside the value with no layout were measured at tree `365cada8e608b5c44c290628407ef7c96a2e845d`,
+which is the tree of `2dd0728`.
 
 ### Historical Test262 baseline
 
