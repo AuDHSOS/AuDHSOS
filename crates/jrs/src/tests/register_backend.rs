@@ -447,6 +447,36 @@ fn a_property_of_a_primitive_names_the_object_it_would_need() -> Result<(), Erro
 }
 
 #[test]
+fn an_error_constructor_makes_what_the_engine_throws() -> Result<(), Error> {
+    // 20.5.1.1 and 20.5.6.1.1 make an error under the Prototype of the
+    // constructor that was called, with an own `message` when one was passed,
+    // and 20.5.1.2 and 20.5.6.2 tie each constructor to its prototype.
+    for source in [
+        "typeof TypeError",
+        "typeof Error",
+        "TypeError('x').message",
+        "new TypeError('x').message",
+        "new TypeError('x') instanceof TypeError",
+        "new TypeError('x') instanceof Error",
+        "new RangeError().message",
+        "new Error('e').name",
+        "new SyntaxError('s').name",
+        "new ReferenceError('r').name",
+        "new EvalError('v').name",
+        "new URIError('u').name",
+        "new SyntaxError('s').constructor===SyntaxError",
+        // An error this engine throws is one of these, so a Script can tell
+        // which it is.
+        "var r=0;function f(o){return o.x}try{f(null)}catch(e){r=e instanceof TypeError}r",
+        "var r=0;try{undefinedName}catch(e){r=e instanceof ReferenceError}r",
+        "var r=0;try{throw new RangeError('z')}catch(e){r=e.message}r",
+    ] {
+        differential(source)?;
+    }
+    Ok(())
+}
+
+#[test]
 fn the_math_namespace_answers_what_its_realm_built() -> Result<(), Error> {
     // 21.3 is an ordinary object that 19.1 gives the global object, and
     // 21.3.2.26 is Number::exponentiate on two arguments 7.1.4 has made

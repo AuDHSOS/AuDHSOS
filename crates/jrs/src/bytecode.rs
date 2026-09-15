@@ -5983,6 +5983,13 @@ const fn intrinsic_result_type(intrinsic: crate::engine::realm::Intrinsic) -> Re
         | crate::engine::realm::Intrinsic::FunctionPrototypeCall
         | crate::engine::realm::Intrinsic::FunctionPrototypeBind
         | crate::engine::realm::Intrinsic::MathPow
+        | crate::engine::realm::Intrinsic::ErrorConstructor
+        | crate::engine::realm::Intrinsic::EvalErrorConstructor
+        | crate::engine::realm::Intrinsic::RangeErrorConstructor
+        | crate::engine::realm::Intrinsic::ReferenceErrorConstructor
+        | crate::engine::realm::Intrinsic::SyntaxErrorConstructor
+        | crate::engine::realm::Intrinsic::TypeErrorConstructor
+        | crate::engine::realm::Intrinsic::UriErrorConstructor
         | crate::engine::realm::Intrinsic::ArrayPrototypeValues
         | crate::engine::realm::Intrinsic::ArrayIteratorPrototypeNext
         | crate::engine::realm::Intrinsic::ArrayPrototypeAt

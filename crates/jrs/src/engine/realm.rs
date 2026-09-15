@@ -351,6 +351,20 @@ pub enum Intrinsic {
     FunctionPrototypeBind,
     /// `Math.pow` (21.3.2.26).
     MathPow,
+    /// The `Error` constructor `%Error%` (20.5.1.1).
+    ErrorConstructor,
+    /// The `EvalError` constructor (20.5.6.1.1).
+    EvalErrorConstructor,
+    /// The `RangeError` constructor (20.5.6.1.1).
+    RangeErrorConstructor,
+    /// The `ReferenceError` constructor (20.5.6.1.1).
+    ReferenceErrorConstructor,
+    /// The `SyntaxError` constructor (20.5.6.1.1).
+    SyntaxErrorConstructor,
+    /// The `TypeError` constructor (20.5.6.1.1).
+    TypeErrorConstructor,
+    /// The `URIError` constructor (20.5.6.1.1).
+    UriErrorConstructor,
 }
 
 /// The intrinsic object a native function is installed on.
@@ -380,7 +394,7 @@ pub enum IntrinsicHolder {
 
 impl Intrinsic {
     /// Every intrinsic, in the order the Realm allocates them.
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 51] = [
         Self::ObjectPrototypeHasOwnProperty,
         Self::ObjectPrototypeIsPrototypeOf,
         Self::ObjectPrototypePropertyIsEnumerable,
@@ -425,6 +439,13 @@ impl Intrinsic {
         Self::FunctionPrototypeCall,
         Self::FunctionPrototypeBind,
         Self::MathPow,
+        Self::ErrorConstructor,
+        Self::EvalErrorConstructor,
+        Self::RangeErrorConstructor,
+        Self::ReferenceErrorConstructor,
+        Self::SyntaxErrorConstructor,
+        Self::TypeErrorConstructor,
+        Self::UriErrorConstructor,
     ];
 
     /// The intrinsic object this function is installed on.
@@ -472,6 +493,13 @@ impl Intrinsic {
                 IntrinsicHolder::FunctionPrototype
             }
             Self::MathPow => IntrinsicHolder::Math,
+            Self::ErrorConstructor
+            | Self::EvalErrorConstructor
+            | Self::RangeErrorConstructor
+            | Self::ReferenceErrorConstructor
+            | Self::SyntaxErrorConstructor
+            | Self::TypeErrorConstructor
+            | Self::UriErrorConstructor => IntrinsicHolder::Global,
             Self::ArrayIsArray => IntrinsicHolder::ArrayConstructor,
             Self::ObjectDefineProperty
             | Self::ObjectGetOwnPropertyDescriptor
@@ -527,6 +555,13 @@ impl Intrinsic {
             Self::FunctionPrototypeCall => 41,
             Self::FunctionPrototypeBind => 42,
             Self::MathPow => 43,
+            Self::ErrorConstructor => 44,
+            Self::EvalErrorConstructor => 45,
+            Self::RangeErrorConstructor => 46,
+            Self::ReferenceErrorConstructor => 47,
+            Self::SyntaxErrorConstructor => 48,
+            Self::TypeErrorConstructor => 49,
+            Self::UriErrorConstructor => 50,
         }
     }
 
@@ -577,6 +612,13 @@ impl Intrinsic {
             Self::FunctionPrototypeCall => 41,
             Self::FunctionPrototypeBind => 42,
             Self::MathPow => 43,
+            Self::ErrorConstructor => 44,
+            Self::EvalErrorConstructor => 45,
+            Self::RangeErrorConstructor => 46,
+            Self::ReferenceErrorConstructor => 47,
+            Self::SyntaxErrorConstructor => 48,
+            Self::TypeErrorConstructor => 49,
+            Self::UriErrorConstructor => 50,
         }
     }
 
@@ -628,6 +670,13 @@ impl Intrinsic {
             41 => Some(Self::FunctionPrototypeCall),
             42 => Some(Self::FunctionPrototypeBind),
             43 => Some(Self::MathPow),
+            44 => Some(Self::ErrorConstructor),
+            45 => Some(Self::EvalErrorConstructor),
+            46 => Some(Self::RangeErrorConstructor),
+            47 => Some(Self::ReferenceErrorConstructor),
+            48 => Some(Self::SyntaxErrorConstructor),
+            49 => Some(Self::TypeErrorConstructor),
+            50 => Some(Self::UriErrorConstructor),
             _ => None,
         }
     }
@@ -646,6 +695,13 @@ impl Intrinsic {
             Self::FunctionPrototypeCall => "call",
             Self::FunctionPrototypeBind => "bind",
             Self::MathPow => "pow",
+            Self::ErrorConstructor => "Error",
+            Self::EvalErrorConstructor => "EvalError",
+            Self::RangeErrorConstructor => "RangeError",
+            Self::ReferenceErrorConstructor => "ReferenceError",
+            Self::SyntaxErrorConstructor => "SyntaxError",
+            Self::TypeErrorConstructor => "TypeError",
+            Self::UriErrorConstructor => "URIError",
             Self::ObjectDefineProperty => "defineProperty",
             Self::ObjectGetOwnPropertyDescriptor => "getOwnPropertyDescriptor",
             Self::ObjectGetOwnPropertyNames => "getOwnPropertyNames",
@@ -703,6 +759,13 @@ impl Intrinsic {
             | Self::FunctionPrototypeCall
             | Self::FunctionPrototypeBind
             | Self::MathPow
+            | Self::ErrorConstructor
+            | Self::EvalErrorConstructor
+            | Self::RangeErrorConstructor
+            | Self::ReferenceErrorConstructor
+            | Self::SyntaxErrorConstructor
+            | Self::TypeErrorConstructor
+            | Self::UriErrorConstructor
             | Self::ObjectGetOwnPropertyNames => false,
             // 20.1.2.4 and 20.1.2.8 apply ToPropertyKey to the second argument.
             Self::ObjectDefineProperty | Self::ObjectGetOwnPropertyDescriptor => index == 1,
@@ -761,6 +824,13 @@ impl Intrinsic {
             | Self::FunctionConstructor
             | Self::FunctionPrototypeCall
             | Self::FunctionPrototypeBind
+            | Self::ErrorConstructor
+            | Self::EvalErrorConstructor
+            | Self::RangeErrorConstructor
+            | Self::ReferenceErrorConstructor
+            | Self::SyntaxErrorConstructor
+            | Self::TypeErrorConstructor
+            | Self::UriErrorConstructor
             | Self::ObjectGetOwnPropertyNames => 1,
             Self::ObjectDefineProperty => 3,
             Self::MathPow
@@ -1047,6 +1117,33 @@ impl NativeErrorKind {
         Self::UriError,
     ];
 
+    /// The constructor 20.5.6.1 gives this kind.
+    #[must_use]
+    pub const fn constructor(self) -> Intrinsic {
+        match self {
+            Self::EvalError => Intrinsic::EvalErrorConstructor,
+            Self::RangeError => Intrinsic::RangeErrorConstructor,
+            Self::ReferenceError => Intrinsic::ReferenceErrorConstructor,
+            Self::SyntaxError => Intrinsic::SyntaxErrorConstructor,
+            Self::TypeError => Intrinsic::TypeErrorConstructor,
+            Self::UriError => Intrinsic::UriErrorConstructor,
+        }
+    }
+
+    /// The kind one constructor makes, if it is one.
+    #[must_use]
+    pub const fn of(intrinsic: Intrinsic) -> Option<Self> {
+        match intrinsic {
+            Intrinsic::EvalErrorConstructor => Some(Self::EvalError),
+            Intrinsic::RangeErrorConstructor => Some(Self::RangeError),
+            Intrinsic::ReferenceErrorConstructor => Some(Self::ReferenceError),
+            Intrinsic::SyntaxErrorConstructor => Some(Self::SyntaxError),
+            Intrinsic::TypeErrorConstructor => Some(Self::TypeError),
+            Intrinsic::UriErrorConstructor => Some(Self::UriError),
+            _ => None,
+        }
+    }
+
     /// The constructor name, which is also the prototype's `name` (20.5.6.3.3).
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -1248,6 +1345,13 @@ impl Realm {
             Intrinsic::FunctionConstructor,
             function_prototype,
         )?;
+        Self::pair_errors_with_their_prototypes(
+            heap,
+            &intrinsics,
+            error_prototype,
+            &native_error_prototypes,
+        )?;
+
         // 19.1 gives the global object `Math` with the attributes 17 gives
         // every value of clause 19 that is not a constant.
         let global = Self::rooted(heap, global_object)?
@@ -1689,6 +1793,39 @@ impl Realm {
         Ok(intrinsics)
     }
 
+    /// Ties every error constructor to its prototype.
+    ///
+    /// 20.5.1.2 and 20.5.6.2 give each constructor its prototype, and 20.5.3.1
+    /// and 20.5.6.3.1 give each prototype back the constructor it belongs to.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HeapError::InvalidReference`] when a root was discarded.
+    fn pair_errors_with_their_prototypes(
+        heap: &mut GenerationalHeap,
+        intrinsics: &[Root],
+        error_prototype: Root,
+        native_error_prototypes: &[Root; NATIVE_ERROR_COUNT],
+    ) -> Result<(), HeapError> {
+        Self::pair_constructor_with_prototype(
+            heap,
+            intrinsics,
+            Intrinsic::ErrorConstructor,
+            error_prototype,
+        )?;
+        for kind in NativeErrorKind::ALL {
+            Self::pair_constructor_with_prototype(
+                heap,
+                intrinsics,
+                kind.constructor(),
+                *native_error_prototypes
+                    .get(kind.index())
+                    .ok_or(HeapError::InvalidReference)?,
+            )?;
+        }
+        Ok(())
+    }
+
     /// Ties one constructor and its prototype to one another.
     ///
     /// 17 gives a constructor its `prototype` as the one property of it that
@@ -1877,13 +2014,57 @@ impl Realm {
         kind: NativeErrorKind,
         message: &str,
     ) -> Result<ObjectRef, HeapError> {
+        let units: alloc::vec::Vec<u16> = message.encode_utf16().collect();
+        let text = (!message.is_empty()).then_some(units.as_slice());
+        self.create_native_error_units(heap, kind, text)
+    }
+
+    /// The same, for a message a Script gave rather than this engine.
+    ///
+    /// An absent message is left out, which 20.5.6.1.1 does for undefined, so
+    /// the empty String of the Prototype answers a read of it. An empty
+    /// message that was passed is written, because a Script can tell the two
+    /// apart.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] when the error cannot be allocated.
+    pub fn create_native_error_units(
+        &self,
+        heap: &mut GenerationalHeap,
+        kind: NativeErrorKind,
+        message: Option<&[u16]>,
+    ) -> Result<ObjectRef, HeapError> {
         let prototype = self.native_error_prototype(heap, kind)?;
+        Self::create_error_with(heap, prototype, message)
+    }
+
+    /// `Error ( message )` of 20.5.1.1, whose Prototype is `%Error.prototype%`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HeapError`] when the error cannot be allocated.
+    pub fn create_error_units(
+        &self,
+        heap: &mut GenerationalHeap,
+        message: Option<&[u16]>,
+    ) -> Result<ObjectRef, HeapError> {
+        let prototype = self.error_prototype(heap)?;
+        Self::create_error_with(heap, prototype, message)
+    }
+
+    /// The object 20.5.1.1 makes, under the Prototype its constructor names.
+    fn create_error_with(
+        heap: &mut GenerationalHeap,
+        prototype: Value,
+        message: Option<&[u16]>,
+    ) -> Result<ObjectRef, HeapError> {
         let shape = heap.shapes.root_shape();
         let error = heap.allocate_object(shape, prototype)?;
         heap.set_object_kind(error, super::object::ObjectKind::Error)?;
-        if !message.is_empty() {
+        if let Some(message) = message {
             let name = intern(heap, "message")?;
-            let text = heap.strings.allocate_str(message)?;
+            let text = heap.strings.allocate_units(message)?;
             heap.define_own_named(error, name, Value::from_string(text), builtin_data())?;
         }
         Ok(error)

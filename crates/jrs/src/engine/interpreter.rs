@@ -1091,14 +1091,6 @@ impl RegisterVM {
             vm.stack.get(slot).copied().ok_or(VMError::InvalidRegister)
         };
         match intrinsic {
-            // 20.1.3.2: ToPropertyKey first, then ToObject, then HasOwnProperty.
-            Intrinsic::ObjectPrototypeHasOwnProperty => {
-                let key = argument(self, 0)?;
-                let key = property_key(key, heap)?;
-                let object = Self::coerce_object(call.receiver, heap, realm)?;
-                let own = heap.own_named_flags(object, key)?;
-                Ok(Value::from_bool(own.is_some()))
-            }
             // 20.1.3.3: a non-Object argument is false without coercing `this`.
             Intrinsic::ObjectPrototypeIsPrototypeOf => {
                 let Some(mut value) = argument(self, 0)?.as_object() else {
@@ -1119,13 +1111,9 @@ impl RegisterVM {
                     value = prototype;
                 }
             }
-            // 20.1.3.4: an own property that is absent answers false.
-            Intrinsic::ObjectPrototypePropertyIsEnumerable => {
-                let key = argument(self, 0)?;
-                let key = property_key(key, heap)?;
-                let object = Self::coerce_object(call.receiver, heap, realm)?;
-                let own = heap.own_named_flags(object, key)?;
-                Ok(Value::from_bool(own.is_some_and(|flags| flags.enumerable)))
+            Intrinsic::ObjectPrototypeHasOwnProperty
+            | Intrinsic::ObjectPrototypePropertyIsEnumerable => {
+                Self::own_property_test(intrinsic, argument(self, 0)?, call, heap, realm)
             }
             Intrinsic::ObjectPrototypeToString => self.object_to_string(call.receiver, heap, realm),
             Intrinsic::StringPrototypeCharAt
@@ -1163,10 +1151,6 @@ impl RegisterVM {
             | Intrinsic::ArrayPrototypeToString => {
                 self.call_array_intrinsic(intrinsic, call, heap, realm)
             }
-            // 23.1.1.1, for the `%Array%` that is its own NewTarget: one
-            // argument that is a Number is the length, and every other list of
-            // them is the elements.
-            Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
             Intrinsic::ArrayIsArray
             | Intrinsic::FunctionConstructor
             | Intrinsic::FunctionPrototypeCall
@@ -1174,15 +1158,25 @@ impl RegisterVM {
                 Self::call_plain_intrinsic(intrinsic, argument(self, 0)?, argument(self, 1)?, heap)
             }
             Intrinsic::FunctionPrototypeBind => self.bind_function(call, heap, realm),
-            Intrinsic::ObjectConstructor
+            Intrinsic::ArrayConstructor => self.construct_array(call, heap, realm),
+            Intrinsic::ErrorConstructor
+            | Intrinsic::EvalErrorConstructor
+            | Intrinsic::RangeErrorConstructor
+            | Intrinsic::ReferenceErrorConstructor
+            | Intrinsic::SyntaxErrorConstructor
+            | Intrinsic::TypeErrorConstructor
+            | Intrinsic::UriErrorConstructor
+            | Intrinsic::ObjectConstructor
             | Intrinsic::ObjectDefineProperty
             | Intrinsic::ObjectGetOwnPropertyDescriptor
-            | Intrinsic::ObjectGetOwnPropertyNames => {
-                let target = argument(self, 0)?;
-                let key = argument(self, 1)?;
-                let attributes = argument(self, 2)?;
-                Self::call_object_intrinsic(intrinsic, target, key, attributes, heap, realm)
-            }
+            | Intrinsic::ObjectGetOwnPropertyNames => Self::call_object_intrinsic(
+                intrinsic,
+                argument(self, 0)?,
+                argument(self, 1)?,
+                argument(self, 2)?,
+                heap,
+                realm,
+            ),
         }
     }
 
@@ -1305,7 +1299,15 @@ impl RegisterVM {
         Intrinsic::from_id(id).filter(|intrinsic| {
             matches!(
                 intrinsic,
-                Intrinsic::ArrayConstructor | Intrinsic::ObjectConstructor
+                Intrinsic::ArrayConstructor
+                    | Intrinsic::ObjectConstructor
+                    | Intrinsic::ErrorConstructor
+                    | Intrinsic::EvalErrorConstructor
+                    | Intrinsic::RangeErrorConstructor
+                    | Intrinsic::ReferenceErrorConstructor
+                    | Intrinsic::SyntaxErrorConstructor
+                    | Intrinsic::TypeErrorConstructor
+                    | Intrinsic::UriErrorConstructor
             )
         })
     }
@@ -1325,6 +1327,17 @@ impl RegisterVM {
         realm: &Realm,
     ) -> Result<Value, VMError> {
         match intrinsic {
+            // 20.5.1.1 and 20.5.6.1.1 make an error whose Prototype belongs to
+            // the constructor that was called.
+            Intrinsic::ErrorConstructor
+            | Intrinsic::EvalErrorConstructor
+            | Intrinsic::RangeErrorConstructor
+            | Intrinsic::ReferenceErrorConstructor
+            | Intrinsic::SyntaxErrorConstructor
+            | Intrinsic::TypeErrorConstructor
+            | Intrinsic::UriErrorConstructor => {
+                Self::construct_error(intrinsic, target, heap, realm)
+            }
             // 20.1.1.1: undefined and null make an ordinary object, and every
             // other value goes through ToObject.
             Intrinsic::ObjectConstructor => Self::construct_object(target, heap, realm),
@@ -1484,6 +1497,58 @@ impl RegisterVM {
             Intrinsic::ArrayIsArray => Ok(Value::from_bool(Self::is_array(first, heap))),
             _ => Err(VMError::TypeError),
         }
+    }
+
+    /// What 20.1.3.2 and 20.1.3.4 answer about an own property.
+    ///
+    /// Both apply `ToPropertyKey` to the argument and `ToObject` to the
+    /// receiver before they look, and both answer false for a property that is
+    /// not there; 20.1.3.4 answers false for one that is there and is not
+    /// enumerable.
+    fn own_property_test(
+        intrinsic: Intrinsic,
+        key: Value,
+        call: Call,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        let key = property_key(key, heap)?;
+        let object = Self::coerce_object(call.receiver, heap, realm)?;
+        let own = heap.own_named_flags(object, key)?;
+        Ok(Value::from_bool(match intrinsic {
+            Intrinsic::ObjectPrototypePropertyIsEnumerable => {
+                own.is_some_and(|flags| flags.enumerable)
+            }
+            _ => own.is_some(),
+        }))
+    }
+
+    /// `Error ( message )` of 20.5.1.1 and `NativeError ( message )` of
+    /// 20.5.6.1.1.
+    ///
+    /// Both make an ordinary object with an `[[ErrorData]]` slot whose
+    /// Prototype belongs to the constructor that was called, and give it an
+    /// own `message` when one was passed. `new` reaches the same function,
+    /// because a native constructor answers an object of its own.
+    fn construct_error(
+        intrinsic: Intrinsic,
+        message: Value,
+        heap: &mut GenerationalHeap,
+        realm: &Realm,
+    ) -> Result<Value, VMError> {
+        // 20.5.1.1 step 3 leaves an absent message out rather than writing
+        // "undefined", which the Prototype's empty String then answers. Every
+        // other value goes through ToString, which 7.1.17 gives it.
+        let text = if message.is_undefined() {
+            None
+        } else {
+            Some(property_name_units(message, heap)?)
+        };
+        let error = match super::realm::NativeErrorKind::of(intrinsic) {
+            Some(kind) => realm.create_native_error_units(heap, kind, text.as_deref())?,
+            None => realm.create_error_units(heap, text.as_deref())?,
+        };
+        Ok(Value::from_object(error))
     }
 
     /// `Object ( value )` of 20.1.1.1.
