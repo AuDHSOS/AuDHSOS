@@ -3548,11 +3548,18 @@ fn register_try_catch_rethrows_when_the_handler_throws() -> Result<(), Error> {
 
 #[test]
 fn register_lowering_rejects_exception_shapes_it_cannot_type() -> Result<(), Error> {
+    // 8.6.2 binds a destructuring catch parameter, and a binding the Block
+    // writes carries the top of the lattice in the handler.
     for source in [
-        // A destructuring catch parameter is not lowered.
         "try{throw [1]}catch([e]){e}",
-        // The Block must not change a tracked binding type.
-        "let x=1;try{x='a'}catch(e){e}x",
+        "var x=1;var r='';try{x='a';throw 0}catch(e){r=typeof x}r",
+        "var r='';try{throw {a:1,b:2}}catch({a,b}){r=a+','+b}r",
+    ] {
+        differential(source)?;
+    }
+    for source in [
+        // A Block beside a Finally Block must not change a tracked type.
+        "let x=1;try{x='a'}finally{}x",
         // A Finally Block cannot run before a control transfer leaves it.
         "let i=0;while(i<2){try{i++;break}finally{i+=10}}i",
         "let i=0;while(i<2){try{i++}finally{continue}}i",
@@ -4289,7 +4296,7 @@ fn a_script_the_lowering_refuses_says_what_it_holds() -> Result<(), Error> {
         ("var f=function(...r){return r}; f()", "a rest parameter"),
         (
             "var f=function(){try{return 1}finally{}}; f()",
-            "a try statement",
+            "a jump out of a try with a Finally Block",
         ),
     ] {
         let program = compile(source, Limits::default())?;
@@ -5827,6 +5834,32 @@ fn a_native_converts_every_argument_its_clause_converts() -> Result<(), Error> {
         "var o={};o[Symbol.toPrimitive]=function(h){return h};'abcdef'.indexOf(o)",
         "var o={};o[Symbol.toPrimitive]=function(h){return h};[1,2].join(o)",
         "var o={};o[Symbol.toPrimitive]=function(h){return h};''+o",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+/// 14.15: the Catch Parameter is bound by 8.6.2, and the handler is compiled
+/// against the top of the lattice for everything the Block could have written.
+#[test]
+fn a_catch_parameter_is_bound_by_a_pattern() -> Result<(), Error> {
+    for source in [
+        "var r='';try{throw {a:1,b:2}}catch({a,b}){r=a+','+b}r",
+        "var r='';try{throw [1,2]}catch([x,y]){r=x+','+y}r",
+        "var e=9;var r='';try{throw {e:1}}catch({e}){r=''+e}r+','+e",
+        "var r='';try{throw {a:1}}catch({a,c=5}){r=a+','+c}r",
+        "var r='';try{throw {a:{b:3}}}catch({a:{b}}){r=''+b}r",
+        "var r=0;try{throw {}}catch({}){r=1}r",
+        "var r='';try{throw [1,2,3]}catch([x,...y]){r=x+':'+y.length}r",
+        // The handler sees whatever the Block left behind.
+        "var x=1;try{x='a';x=2}catch(e){}typeof x",
+        "var x=1;var r='';try{x='a';throw 0}catch(e){r=typeof x}r",
+        "var a=[1,2];var r='';try{a.push(3);throw 0}catch(e){r=''+a.length}r",
+        "var o={p:1};var r='';try{o.p='x';throw 0}catch(e){r=typeof o.p}r",
+        // A Finally Block still runs on both paths.
+        "var r=0;try{r=1}finally{r=r+1}r",
+        "var r=0;try{throw 1}catch(e){r=e}finally{r=r+1}r",
     ] {
         differential_scripts(&[source])?;
     }

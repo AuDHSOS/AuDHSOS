@@ -4952,15 +4952,18 @@ impl RegisterLowerer {
         finally: Option<&[Stmt]>,
     ) -> Option<RegisterFlow> {
         use crate::engine::bytecode::{ExceptionHandler, Instruction};
-        let name = match catch.map(|(parameter, _)| parameter) {
-            Some(Some(pattern)) => Some(pattern.identifier()?),
-            Some(None) | None => None,
-        };
+        // 14.15.3: the Catch Parameter is a binding of a Declarative
+        // Environment Record of its own, which 8.6.2 fills from the thrown
+        // value. A single name takes the register the value is already in.
+        let parameter = catch.and_then(|(parameter, _)| parameter.as_ref());
+        let name = parameter.and_then(BindingPattern::identifier);
+        let destructured = parameter.is_some() && name.is_none();
         // A `break`, `continue` or `return` inside a protected Block has to run
         // the Finally Block before it leaves, which this lowering does not do.
         if finally.is_some()
             && try_statements(body, catch, finally).any(register_statement_transfers_control)
         {
+            self.refuse("a jump out of a try with a Finally Block");
             return None;
         }
         let result_register = self.allocate_register()?;
@@ -4990,9 +4993,57 @@ impl RegisterLowerer {
         let thrown = self.thrown.pop()?;
         let body_flow = body_flow?;
         let end = self.code.instructions.len();
-        if self.bindings != bindings_before || self.object_layouts != layouts_before {
-            return None;
+        let bindings_after_body = self.bindings.clone();
+        let layouts_after_body = self.object_layouts.clone();
+        // An exception can be thrown at any point of a protected range, so a
+        // binding the Block writes carries no single type at the handler: it
+        // takes the top of the lattice there, and so does one that names an
+        // Object whose layout the Block changed. A Finally Block runs on every
+        // path out of the statement, including the ones a widening would have
+        // to describe together, so a Block beside one is not lowered when it
+        // changes a type at all.
+        let mut lost: BTreeSet<u32> = BTreeSet::new();
+        for (id, layout) in &layouts_before {
+            if layouts_after_body.get(id) != Some(layout) {
+                lost.insert(*id);
+            }
         }
+        let mut handler_bindings = bindings_before.clone();
+        if finally.is_none() {
+            let names: Vec<String> = handler_bindings.keys().cloned().collect();
+            for name in names {
+                let one: BTreeSet<String> = core::iter::once(name.clone()).collect();
+                let mut writes = false;
+                for statement in body {
+                    writes = writes || register_statement_writes_names(statement, &one)?;
+                }
+                let binding = handler_bindings.get_mut(&name)?;
+                let escaped = binding
+                    .value_type
+                    .and_then(RegisterType::object_id)
+                    .is_some_and(|id| lost.contains(&id));
+                if (writes || escaped) && binding.value_type.is_some() {
+                    binding.value_type = Some(RegisterType::Unknown);
+                }
+            }
+        }
+        // A binding whose type the Block changed without this lowering seeing
+        // a write to it would leave the handler compiled against a type the
+        // Block may already have left.
+        for (name, binding) in &bindings_after_body {
+            if bindings_before.get(name) == Some(binding) {
+                continue;
+            }
+            if handler_bindings.get(name).map(|widened| widened.value_type)
+                != Some(Some(RegisterType::Unknown))
+            {
+                self.refuse("a try body that changes a tracked type");
+                return None;
+            }
+        }
+        self.object_layouts = layouts_before.clone();
+        self.object_layouts.retain(|id, _| !lost.contains(id));
+        self.bindings = handler_bindings;
         let opaque = self.range_throws_opaque(start, end)?;
         if body_flow != RegisterFlow::Abrupt {
             self.code.emit(Instruction::Star(result_register));
@@ -5011,7 +5062,8 @@ impl RegisterLowerer {
             .reduce(RegisterType::merge)
             .unwrap_or(RegisterType::Primitive);
         let mut handler_flow = RegisterFlow::Abrupt;
-        let mut bindings_after_handler = bindings_before.clone();
+        let mut bindings_after_handler = bindings_after_body.clone();
+        let mut layouts_after_handler = layouts_after_body.clone();
         if let Some((_, handler)) = catch {
             let catch_start = self.code.instructions.len();
             let previous = name.map(|name| {
@@ -5029,6 +5081,29 @@ impl RegisterLowerer {
                 self.active_binding_count = self.active_binding_count.checked_add(1)?;
                 self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
             }
+            let mut shadowed: Vec<(String, Option<RegisterBinding>)> = alloc::vec![];
+            if destructured {
+                let pattern = parameter?;
+                let mut names = alloc::vec![];
+                pattern.names(&mut names);
+                for bound in names {
+                    self.active_binding_count = self.active_binding_count.checked_add(1)?;
+                    self.max_binding_count = self.max_binding_count.max(self.active_binding_count);
+                    let register = self.allocate_register()?;
+                    let previous = self.bindings.insert(
+                        bound.clone(),
+                        RegisterBinding {
+                            storage: RegisterBindingStorage::Register(register),
+                            value_type: Some(RegisterType::Unknown),
+                            mutable: true,
+                            stable_function_identity: false,
+                        },
+                    );
+                    shadowed.push((bound, previous));
+                }
+                self.code.emit(Instruction::Ldar(exception_register));
+                self.bind_pattern(value_type, pattern)?;
+            }
             self.code.emit(Instruction::LdaUndefined);
             self.thrown.push(Vec::new());
             let flow = self.lower_block(handler);
@@ -5037,6 +5112,18 @@ impl RegisterLowerer {
                 // Without a Finally Block a value thrown by the Catch Block
                 // leaves this statement, so an enclosing range observes it.
                 outer.extend(handler_thrown);
+            }
+            // The registers were taken in the order the names came, so they
+            // are given back in the other one.
+            for (bound, previous) in shadowed.into_iter().rev() {
+                let binding = self.bindings.remove(&bound)?;
+                if let Some(previous) = previous {
+                    self.bindings.insert(bound, previous);
+                }
+                self.active_binding_count = self.active_binding_count.checked_sub(1)?;
+                if let RegisterBindingStorage::Register(register) = binding.storage {
+                    self.release_register(register)?;
+                }
             }
             if let (Some(name), Some(previous)) = (name, previous) {
                 self.bindings.remove(name)?;
@@ -5052,6 +5139,7 @@ impl RegisterLowerer {
                 exits.push(self.code.emit(Instruction::Jump(0)));
             }
             bindings_after_handler = self.bindings.clone();
+            layouts_after_handler = self.object_layouts.clone();
             if let Some(token_register) = token_register {
                 // 14.15.3: the Finally Block also runs when the Catch Block
                 // throws, and that value is rethrown after it.
@@ -5082,11 +5170,13 @@ impl RegisterLowerer {
         }
         if let Some(finally) = finally {
             self.bindings = bindings_before.clone();
+            self.object_layouts = layouts_before.clone();
             self.code.emit(Instruction::LdaUndefined);
             // 14.15.3: a normal Finally completion is discarded and the try or
             // Catch completion is kept.
             self.lower_block(finally)?;
             if self.bindings != bindings_before || self.object_layouts != layouts_before {
+                self.refuse("a Finally Block that changes a tracked type");
                 return None;
             }
             self.code.emit(Instruction::Ldar(token_register?));
@@ -5096,7 +5186,11 @@ impl RegisterLowerer {
             let after = self.code.instructions.len();
             self.patch_jump(normal, after)?;
         }
-        self.bindings = merge_register_bindings(&bindings_before, &bindings_after_handler)?;
+        self.object_layouts = layouts_after_body;
+        self.object_layouts.retain(|id, layout| {
+            !lost.contains(id) && layouts_after_handler.get(id) == Some(layout)
+        });
+        self.bindings = merge_register_bindings(&bindings_after_body, &bindings_after_handler)?;
         self.code.emit(Instruction::Ldar(result_register));
         if let Some(token_register) = token_register {
             self.release_register(token_register)?;
