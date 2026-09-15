@@ -527,7 +527,7 @@ refused as the C library does, but for the 36 the parser counts;
 ## 16.19 Q5. Values, and a statement answered by walking
 
 Status: built.
-Depends on: Q2, Q4.
+Depends on: Q2, Q4. Recorded in D-208.
 Size: L.
 
 ### Needs
@@ -549,6 +549,9 @@ Size: L.
 4. Group the rows and accumulate the seven aggregates.
 5. Put several cores together with the four compound operators.
 6. Nest the loops for a join, one level per side.
+7. Read a term of the `WHERE` on the level that answers it, and read
+   the side of an `ON` by an index that names its key, which D-208
+   records.
 
 ### Produces
 
@@ -771,4 +774,4 @@ the port.
 | 5 | The matrix is a `for` loop copied into each test. | A dimension added in one test and forgotten in ten. | 16.11 puts the matrix in the test support and has the test name its dimensions. |
 | 6 | The fuzz corpora grow until the regression replay is slow. | The check takes longer than three minutes and is skipped. | `sh tools/xtask.sh fuzz --merge` keeps one input per feature. Hash-named files are not committed; named regression entries are. |
 | 7 | MC/DC never becomes measurable on the pinned toolchain. | Goal 5 of 16.2 cannot be met by reading a report. | D4 derives MC/DC from condition coverage and checks both of its premises with `cargo xtask mcdc`, so the goal is met by argument and by check rather than by a report the pin does not emit. |
-| 8 | A join is answered by reading every row of every side against every row of the sides before it, because the plan of Q5 reads only a `WHERE` term whose other side is a constant. | `joinD.test`, a thousand cases over four tables of a hundred rows, takes longer than the rest of the suite together. | A `ON` term that compares a column of the side against a column of a side already read is the key of an index over that column, which Q6 builds the plan from. |
+| 8 | A `RIGHT` or a `FULL` join reads every row of every side against every row of the sides before it, because a row of such a join is marked matched where the levels under it are read, so no term of the `WHERE` may be read above it. | The cases of `joinD.test` that write such a join take ten of the sixteen minutes the suite takes. | D-208 reads every other term on the level that answers it, and reads the side of an `ON` by an index. What is left is marking a row by its key rather than by where it stands, which lets such a side be read by an index as well. |

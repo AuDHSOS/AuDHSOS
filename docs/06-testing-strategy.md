@@ -4629,6 +4629,26 @@ D-207, document 16 step Q8.
 - `ANALYZE` makes `sqlite_stat1` where the database holds none, and
   counts no table whose name the word `sqlite_` begins.
 
+### 6.6.137 Where a term is read and what names a key (`db-sqlite`)
+
+D-208, document 16 step Q5.
+
+- A join whose `ON` names the key of an index answers the rows a scan
+  of the whole table answers: the key the other way round, a second
+  term of the `AND` spine, a key of nothing under a `LEFT` join, and a
+  `RIGHT` join.
+- What names no key: an index held in another order, one held under
+  another collation than its column compares under, a term that is not
+  an equality, a term of two columns of the side itself, and a term
+  over a column no index of the side is over.
+- A term of every shape the walk answers, read on its own level: a
+  `BETWEEN`, an `IN` over a list, a `LIKE`, a `CAST`, a `COLLATE`, a
+  `CASE`, and an operator with one operand.
+- A term that stays where the statement is answered: a function, a
+  statement of its own, an `EXISTS`, an `IN` over a statement, a name
+  no side answers, and a name two sides answer.
+- A term above a `RIGHT` join is read on the level of that join.
+
 ## 6.7 CI pipeline
 
 Full jrs acceptance additionally requires all tests in `docs/test-ext/test262`

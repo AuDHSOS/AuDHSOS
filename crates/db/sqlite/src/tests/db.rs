@@ -443,3 +443,163 @@ fn a_text_of_comments_alone_holds_no_statement() {
         crate::db::Answer::default()
     );
 }
+
+/// A database of two tables and three indexes, which the tests of the
+/// plan and of the terms a level reads both ask.
+fn joined_database() -> Vec<u8> {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a, k)".as_slice(),
+        b"CREATE TABLE u(b, c, d TEXT COLLATE NOCASE)",
+        b"CREATE INDEX i ON u(b)",
+        b"CREATE INDEX j ON u(c DESC)",
+        b"CREATE INDEX n ON u(d COLLATE BINARY)",
+        b"INSERT INTO t VALUES(1,'p'),(2,'q'),(NULL,'r')",
+        b"INSERT INTO u VALUES(1,'x','X'),(1,'y','Y'),(2,'z','Z'),(NULL,'n','N')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    writer.written()
+}
+
+/// What `sql` answers over [`joined_database`], as one text per row.
+fn joined_answer(sql: &[u8]) -> Vec<String> {
+    let bytes = joined_database();
+    let database = Database::open(&bytes).expect("a database");
+    let answer = database.query(sql).unwrap_or_else(|error| {
+        panic!("{} is refused with {error:?}", String::from_utf8_lossy(sql))
+    });
+    answer
+        .rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|value| alloc::format!("{value:?}"))
+                .collect::<Vec<String>>()
+                .join(",")
+        })
+        .collect()
+}
+
+#[test]
+fn a_join_whose_condition_names_an_index_answers_the_rows_a_scan_answers() {
+    // `sqlite3WhereLoopAddBtree` reads the side of a join by an index
+    // its `ON` names the key of, and the `ON` is read again per row, so
+    // the rows are the rows a scan of the whole table answers.
+    assert_eq!(
+        joined_answer(b"SELECT t.a, u.c FROM t JOIN u ON t.a=u.b ORDER BY t.a, u.c"),
+        [
+            "Int(1),Text([120])",
+            "Int(1),Text([121])",
+            "Int(2),Text([122])"
+        ]
+    );
+    // The key the other way round, and a second term of the `AND`
+    // spine the index does not carry.
+    assert_eq!(
+        joined_answer(b"SELECT t.a FROM t JOIN u ON u.b=t.a AND u.c='y'"),
+        ["Int(1)"]
+    );
+    // A key of nothing reaches no entry, so the side is scanned and the
+    // `LEFT` join answers the row with nothing beside it.
+    assert_eq!(
+        joined_answer(b"SELECT count(*) FROM t LEFT JOIN u ON t.a=u.b"),
+        ["Int(4)"]
+    );
+    // A `RIGHT` join is walked twice and tells the rows it matched by
+    // where they stand, so it is read out of its own tree.
+    assert_eq!(
+        joined_answer(b"SELECT count(*) FROM t RIGHT JOIN u ON t.a=u.b"),
+        ["Int(4)"]
+    );
+    // An index held in another order, one held under another collation
+    // than its column compares under, a term that is not an equality,
+    // a term of two columns of the side itself, and a term over a
+    // column no index of the side is over: none names a key.
+    for sql in [
+        b"SELECT count(*) FROM t JOIN u ON t.a=u.c".as_slice(),
+        b"SELECT count(*) FROM t JOIN u ON t.k=u.d",
+        b"SELECT count(*) FROM t JOIN u ON t.a<u.b",
+        b"SELECT count(*) FROM t JOIN u ON u.b=u.c",
+        b"SELECT count(*) FROM t JOIN u ON t.a=u.b+0",
+        b"SELECT count(*) FROM t JOIN u ON u.b",
+        b"SELECT count(*) FROM t JOIN u ON u.b=1",
+        b"SELECT count(*) FROM t JOIN u ON t.rowid=u.b",
+    ] {
+        assert_eq!(
+            joined_answer(sql).len(),
+            1,
+            "{}",
+            String::from_utf8_lossy(sql)
+        );
+    }
+}
+
+#[test]
+fn a_term_of_a_where_is_read_on_the_level_that_answers_it() {
+    // `sqlite3WhereSplit` puts a term on the level where the sides it
+    // names are read, and the term is read again where the statement is
+    // answered, so the rows are the rows the whole `WHERE` leaves.
+    assert_eq!(
+        joined_answer(b"SELECT t.a, u.c FROM t, u WHERE t.a=u.b AND u.c='y'"),
+        ["Int(1),Text([121])"]
+    );
+    // A term of every shape the walk answers: a `BETWEEN`, an `IN` over
+    // a list, a `LIKE`, a `CAST`, a `COLLATE`, a `CASE` and a row.
+    for sql in [
+        b"SELECT t.a FROM t, u WHERE t.a BETWEEN 1 AND 1 AND u.b=1 AND u.c='x'".as_slice(),
+        b"SELECT t.a FROM t, u WHERE u.b IN (1,3) AND t.a=1 AND u.c='x'",
+        b"SELECT t.a FROM t, u WHERE u.c LIKE 'x%' AND t.a=1 AND u.b=1",
+        b"SELECT t.a FROM t, u WHERE CAST(t.a AS TEXT)='1' AND u.b=1 AND u.c='x'",
+        b"SELECT t.a FROM t, u WHERE u.d='x' COLLATE NOCASE AND t.a=1 AND u.b=1",
+        b"SELECT t.a FROM t, u WHERE CASE WHEN t.a=1 THEN 1 ELSE 0 END AND u.b=1 AND u.c='x'",
+        b"SELECT t.a FROM t, u WHERE -t.a=-1 AND u.b=1 AND u.c='x'",
+    ] {
+        assert_eq!(
+            joined_answer(sql),
+            ["Int(1)"],
+            "{}",
+            String::from_utf8_lossy(sql)
+        );
+    }
+    // A term this walk does not answer stays where the statement is
+    // answered: a function, a statement of its own, an `EXISTS`, an
+    // `IN` over a statement, an `IN` over a table, and a name no side
+    // answers.
+    for (sql, rows) in [
+        (b"SELECT count(*) FROM t, u WHERE abs(t.a)=1".as_slice(), 1),
+        (b"SELECT count(*) FROM t, u WHERE (SELECT 1)=1", 1),
+        (
+            b"SELECT count(*) FROM t, u WHERE EXISTS(SELECT 1 FROM u)",
+            1,
+        ),
+        (
+            b"SELECT count(*) FROM t, u WHERE t.a IN (SELECT b FROM u)",
+            1,
+        ),
+        (b"SELECT count(*) FROM t, u WHERE true", 1),
+    ] {
+        assert_eq!(
+            joined_answer(sql).len(),
+            rows,
+            "{}",
+            String::from_utf8_lossy(sql)
+        );
+    }
+    // A name two sides answer is ambiguous, so no level is given it.
+    assert!(
+        Database::open(&joined_database())
+            .unwrap()
+            .query(b"SELECT count(*) FROM u, u AS v WHERE b=1")
+            .is_err()
+    );
+    // A term above a `RIGHT` join is read on the level of that join,
+    // because a row is marked matched where the levels under it are
+    // read.
+    assert_eq!(
+        joined_answer(b"SELECT count(*) FROM t RIGHT JOIN u ON t.a=u.b WHERE t.a IS NULL"),
+        ["Int(1)"]
+    );
+}

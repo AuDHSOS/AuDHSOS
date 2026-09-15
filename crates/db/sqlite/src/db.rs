@@ -327,6 +327,10 @@ struct Side<'a> {
     using: Vec<Vec<u8>>,
     /// How the walk reads it.
     plan: Plan,
+    /// The terms of the `WHERE` every side up to this one answers, read
+    /// where this side's row is read rather than once per row of the
+    /// sides after it.
+    pushed: Vec<ExprId>,
 }
 
 /// How a side's rows are read.
@@ -347,6 +351,22 @@ enum Plan {
         /// column the index holds.
         rowid_at: usize,
     },
+    /// The rows an index names, which an `ON` holds to the key a side
+    /// already read answers, so the key is a value per row of that side
+    /// and not one value for the statement.
+    Joined {
+        /// The page the index's tree begins at.
+        root: u32,
+        /// What the key is read from, once per row of the sides before
+        /// this one.
+        key: ExprId,
+        /// What the key compares under.
+        collation: Collation,
+        /// What the column of the index converts a value under.
+        affinity: Affinity,
+        /// Where the rowid stands in an entry.
+        rowid_at: usize,
+    },
 }
 
 impl Side<'_> {
@@ -354,7 +374,7 @@ impl Side<'_> {
     const fn range(&self) -> (Option<i64>, Option<i64>) {
         match self.plan {
             Plan::Rows(first, last) => (first, last),
-            Plan::Keyed { .. } => (None, None),
+            Plan::Keyed { .. } | Plan::Joined { .. } => (None, None),
         }
     }
 
@@ -1287,6 +1307,7 @@ impl<'a> Database<'a> {
                 on: source.on,
                 using,
                 plan: Plan::Rows(None, None),
+                pushed: Vec::new(),
             });
         }
         Ok(out)
@@ -1356,10 +1377,11 @@ impl<'a> Database<'a> {
                     on: None,
                     using: Vec::new(),
                     plan: Plan::Rows(None, None),
+                    pushed: Vec::new(),
                 };
                 let column = one(&side.shape)?;
                 let mut rows = Vec::new();
-                for step in self.feed(&side) {
+                for step in self.scanned(&side, stored) {
                     rows.push(step?.1);
                 }
                 contained(arena, value, sql, row, &rows, column, negated)
@@ -1549,25 +1571,23 @@ impl<'a> Database<'a> {
 
     /// The rows of one side of a `FROM`, each with the rowid where the
     /// side is a table that keeps one.
-    fn feed<'f>(&self, side: &'f Side<'f>) -> Feed<'a, 'f> {
+    ///
+    /// `cursor` holds the rows of the sides read before this one, which
+    /// is what a plan reads its key from where an `ON` names one.
+    fn feed<'f>(&self, side: &'f Side<'f>, cursor: &Cursor<'_>) -> Feed<'a, 'f> {
         let stored = match &side.source {
             Source::Rows(rows) => return Feed::Rows(rows.iter()),
             Source::Table(stored) => stored,
         };
-        if let Plan::Keyed {
-            root,
-            key,
-            collations,
-            rowid_at,
-        } = &side.plan
+        if let Some((root, key, collations, rowid_at)) = sought(&side.plan, cursor)
             // An entry this walk cannot read whole is one it cannot
             // compare, so the descent gives up and the table is scanned:
             // the same rows, and only the cost is not the same.
             && let Ok(walk) = {
                 let mut scratch = Vec::new();
-                self.image.entries_from(*root, &mut |entry| {
+                self.image.entries_from(root, &mut |entry| {
                     let order =
-                        order_of_entry(&self.image, entry, key, collations, self.encoding, &mut scratch)
+                        order_of_entry(&self.image, entry, &key, &collations, self.encoding, &mut scratch)
                             .map_err(|_| crate::error::Error::Overrun)?;
                     Ok(order == core::cmp::Ordering::Less)
                 })
@@ -1579,7 +1599,7 @@ impl<'a> Database<'a> {
                 walk,
                 key,
                 collations,
-                rowid_at: *rowid_at,
+                rowid_at,
                 encoding: self.encoding,
                 collation: self.collation(),
                 payload: Vec::new(),
@@ -1587,11 +1607,17 @@ impl<'a> Database<'a> {
         }
         // A plan that names an index and could not be walked falls back
         // to the whole tree, which answers the same rows.
-        let range = side.range();
+        self.scanned(side, stored)
+    }
+
+    /// The rows of one table read out of its own tree, which is what a
+    /// side with no plan and a side whose plan could not be walked both
+    /// answer.
+    fn scanned<'f>(&self, side: &'f Side<'f>, stored: &'f Stored) -> Feed<'a, 'f> {
         Feed::Tree(Box::new(Tree {
             image: self.image,
             stored,
-            walk: self.walk(stored, range),
+            walk: self.walk(stored, side.range()),
             encoding: self.encoding,
             collation: self.collation(),
             payload: Vec::new(),
@@ -1637,7 +1663,7 @@ impl<'a> Database<'a> {
         let deeper = at.saturating_add(1);
         let mut any = false;
         let mut ordinal = 0i64;
-        for step in self.feed(side) {
+        for step in self.feed(side, cursor) {
             let (rowid, values) = step?;
             let at_row = ordinal;
             ordinal = ordinal.saturating_add(1);
@@ -1658,7 +1684,15 @@ impl<'a> Database<'a> {
             if attached {
                 any = true;
                 mark(kept, at, at_row);
-                self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
+                // A term of the `WHERE` this level answers holds for
+                // every row the levels after it read, so a row it
+                // passes over is one no row of the statement holds.
+                // The term is read again where the statement is
+                // answered, which is what makes this a cost and not an
+                // answer.
+                if all_hold(arena, &side.pushed, sql, cursor)? {
+                    self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
+                }
             }
             cursor.held.pop();
         }
@@ -1805,10 +1839,7 @@ fn listed(
 /// one of those terms refuses, so every plan answers what a scan
 /// answers.
 fn planned(arena: &Arena, filter: Option<ExprId>, sql: &[u8], sides: &mut [Side<'_>]) {
-    let Some(filter) = filter else {
-        return;
-    };
-    let terms = terms_of(arena, filter, sql, sides);
+    let terms = filter.map_or_else(Vec::new, |filter| terms_of(arena, filter, sql, sides));
     // A rowid range is what a table's own tree is walked by, and it
     // answers a row where an index answers only where the row is, so it
     // is taken first and never given up for an index.
@@ -1828,7 +1859,10 @@ fn planned(arena: &Arena, filter: Option<ExprId>, sql: &[u8], sides: &mut [Side<
         // a side already held to a rowid range is read by that range.
         let keyed = match &side.source {
             Source::Table(stored) if !stored.table.without_rowid && *range == (None, None) => {
-                plan_of(&terms, at, stored)
+                // A key the statement writes out is read once; a key a
+                // side already read answers is read per row of that
+                // side, so the first is taken where both are there.
+                plan_of(&terms, at, stored).or_else(|| joined(arena, sql, sides, at, stored))
             }
             Source::Table(_) | Source::Rows(_) => None,
         };
@@ -1837,6 +1871,84 @@ fn planned(arena: &Arena, filter: Option<ExprId>, sql: &[u8], sides: &mut [Side<
     for (side, plan) in sides.iter_mut().zip(plans) {
         side.plan = plan;
     }
+    let Some(filter) = filter else {
+        return;
+    };
+    // A `RIGHT` or a `FULL` join keeps the rows of its own side that
+    // the walk matched nothing to, and the walk marks a row as matched
+    // where it reads the levels under it, so a term read above such a
+    // level would leave rows unmatched that the join matched.
+    let outer = sides
+        .iter()
+        .rposition(|side| matches!(side.kind, JoinKind::Right | JoinKind::Full))
+        .unwrap_or(0);
+    // `sqlite3WhereSplit` puts every term of the `AND` spine on the
+    // level where the sides it names are all read, so a term is read
+    // once per row of that level and not once per row of the product.
+    let mut spine = alloc::vec![filter];
+    while let Some(id) = spine.pop() {
+        if let Some(Node::Binary {
+            op: BinaryOp::And,
+            left,
+            right,
+        }) = arena.node(id)
+        {
+            spine.push(left);
+            spine.push(right);
+            continue;
+        }
+        let Some(at) = answerable(arena, id, sql, sides) else {
+            continue;
+        };
+        // A term the levels above such a join answer is read on that
+        // level instead, where every row it marks is marked already.
+        let at = at.max(outer);
+        for side in sides.iter_mut().skip(at).take(1) {
+            side.pushed.push(id);
+        }
+    }
+}
+
+/// The last side a term names a column of, where every part of the
+/// term is one this walk answers from the sides alone.
+///
+/// A term that names a column no side answers, a column two sides
+/// answer, a statement of its own, a bound value or a function is
+/// answered where the whole statement is: a function may answer
+/// differently each time it is read, and the term is read again there.
+///
+/// Walking one term costs O(n) in its nodes.
+fn answerable(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<usize> {
+    let mut deepest = 0;
+    let mut stack = alloc::vec![id];
+    while let Some(id) = stack.pop() {
+        let node = arena.node(id)?;
+        match node {
+            Node::Column { .. } => {
+                let (at, _) = reached(arena, id, sql, sides)?;
+                deepest = deepest.max(at);
+            }
+            Node::Literal(_)
+            | Node::Unary { .. }
+            | Node::Binary { .. }
+            | Node::Between { .. }
+            | Node::InList { .. }
+            | Node::Like { .. }
+            | Node::Cast { .. }
+            | Node::Collate { .. }
+            | Node::Case { .. }
+            | Node::Row(_) => {}
+            Node::Variable(_)
+            | Node::Call { .. }
+            | Node::Subquery(_)
+            | Node::Exists(_)
+            | Node::InSelect { .. }
+            | Node::InTable { .. }
+            | Node::Raise { .. } => return None,
+        }
+        arena.under(node, |child| stack.push(child));
+    }
+    Some(deepest)
 }
 
 /// What one side's column is compared against, out of one term.
@@ -1971,6 +2083,142 @@ fn plan_of(terms: &[Bound], at: usize, stored: &Stored) -> Option<Plan> {
     None
 }
 
+/// What one plan holds a walk of an index to: the tree, the values
+/// every entry begins with, what each compares under, and where the
+/// rowid stands.
+///
+/// A plan that names no index answers nothing, and so does one whose
+/// key a row of the sides before it does not answer, which is what
+/// makes the walk fall back to the whole tree.
+///
+/// Reading one key costs what the expression it is read from costs.
+type Sought_ = (u32, Vec<Value>, Vec<Collation>, usize);
+
+fn sought(plan: &Plan, cursor: &Cursor<'_>) -> Option<Sought_> {
+    match plan {
+        Plan::Rows(_, _) => None,
+        Plan::Keyed {
+            root,
+            key,
+            collations,
+            rowid_at,
+        } => Some((*root, key.clone(), collations.clone(), *rowid_at)),
+        Plan::Joined {
+            root,
+            key,
+            collation,
+            affinity,
+            rowid_at,
+        } => {
+            let reach = cursor.reach;
+            let mut value = evaluate_row(reach.arena, *key, reach.sql, cursor).ok()?;
+            // An index holds no entry a `=` against `NULL` reaches, and
+            // it holds what the affinity of the column left of a value,
+            // which is what the key is compared as.
+            if value == Value::Null {
+                return None;
+            }
+            crate::value::apply(&mut value, *affinity);
+            Some((
+                *root,
+                alloc::vec![value],
+                alloc::vec![*collation],
+                *rowid_at,
+            ))
+        }
+    }
+}
+
+/// The index of side `at` whose first column an `ON` compares against a
+/// column of a side the walk reads before it, which is the key that
+/// side answers per row.
+///
+/// The `ON` is read again for every row the descent answers, so a plan
+/// that answers more rows than the key names is still the rows the
+/// statement answers; a plan that answers fewer would not be.
+///
+/// Reading the terms costs O(t) in them and O(i) in the indexes.
+fn joined(
+    arena: &Arena,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    at: usize,
+    stored: &Stored,
+) -> Option<Plan> {
+    let side = sides.get(at)?;
+    // A `RIGHT` or a `FULL` join is walked twice, and the second walk
+    // tells the rows it matched from the rows it did not by where they
+    // stand in the walk, so both walks must answer the rows in one
+    // order. A key read per row of another side answers another order,
+    // so such a side is read out of its own tree.
+    if matches!(side.kind, JoinKind::Right | JoinKind::Full) {
+        return None;
+    }
+    let on = side.on?;
+    for kept in &stored.indexes {
+        let first = kept.index.columns.first()?;
+        let column = stored.table.columns.get(first.column)?;
+        // An index held in another order, or under another collation
+        // than the column compares under, answers its entries in an
+        // order the terms do not ask about.
+        if first.order == crate::ast::Order::Descending || first.collation != column.collation {
+            continue;
+        }
+        let Some(key) = keyed_by(arena, on, sql, sides, at, first.column) else {
+            continue;
+        };
+        return Some(Plan::Joined {
+            root: kept.root,
+            key,
+            collation: first.collation,
+            affinity: column.affinity,
+            rowid_at: kept.index.columns.len(),
+        });
+    }
+    None
+}
+
+/// What the column `column` of side `at` is held equal to by the `AND`
+/// spine of `on`, where a side the walk reads before `at` answers it.
+fn keyed_by(
+    arena: &Arena,
+    on: ExprId,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    at: usize,
+    column: usize,
+) -> Option<ExprId> {
+    let mut spine = alloc::vec![on];
+    while let Some(id) = spine.pop() {
+        let Some(Node::Binary { op, left, right }) = arena.node(id) else {
+            continue;
+        };
+        if op == BinaryOp::And {
+            spine.push(left);
+            spine.push(right);
+            continue;
+        }
+        if op != BinaryOp::Eq {
+            continue;
+        }
+        for (mine, theirs) in [(left, right), (right, left)] {
+            if reached(arena, mine, sql, sides) != Some((at, Reached::Column(column))) {
+                continue;
+            }
+            // Only a column of a side the walk has already read is a
+            // key it can answer: a column of this side or of one after
+            // it is not read yet.
+            let Some((other, Reached::Column(_))) = reached(arena, theirs, sql, sides) else {
+                continue;
+            };
+            if other < at {
+                return Some(theirs);
+            }
+        }
+    }
+    None
+}
+
 /// The operator that says the same thing with its operands the other way
 /// round.
 const fn flipped(op: BinaryOp) -> BinaryOp {
@@ -2072,6 +2320,23 @@ fn attached(
     Ok(true)
 }
 
+/// Whether every term of `terms` holds for the row the walk stands on.
+///
+/// Reading `n` terms costs what the `n` terms cost.
+fn all_hold(
+    arena: &Arena,
+    terms: &[ExprId],
+    sql: &[u8],
+    cursor: &Cursor<'_>,
+) -> Result<bool, Error> {
+    for term in terms {
+        if !evaluate_row(arena, *term, sql, cursor)?.truth(false) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Whether the column `name` holds the same value on the side the walk
 /// just read as on the side before it, which is the `a.x = b.x` a
 /// `USING` stands for.
@@ -2136,10 +2401,12 @@ struct Sought<'i, 'f> {
     stored: &'f Stored,
     /// Where the walk of the index stands.
     walk: crate::image::Entries<'i>,
-    /// The values every entry the walk takes begins with.
-    key: &'f [Value],
+    /// The values every entry the walk takes begins with, which a
+    /// `ON` reads once per row of the sides before this one, so the
+    /// walk holds them rather than borrowing them from the side.
+    key: Vec<Value>,
     /// What each of them compares under.
-    collations: &'f [Collation],
+    collations: Vec<Collation>,
     /// Where the rowid stands in an entry.
     rowid_at: usize,
     /// What encoding the file keeps its text in.
@@ -2174,8 +2441,8 @@ impl<'i> Sought<'i, '_> {
         let order = order_of_entry(
             &self.image,
             &entry,
-            self.key,
-            self.collations,
+            &self.key,
+            &self.collations,
             self.encoding,
             &mut self.payload,
         )?;
