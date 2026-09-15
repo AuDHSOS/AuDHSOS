@@ -649,10 +649,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | `%Object%` and its methods, after the integrity levels, on the register engine (focused) | focused | `16f268e` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Object --summary` | 3,411 | 6,802 | 1,530 (22.49%) | 18 (0.26%) | 5,254 (77.24%) |
 | `%Number%` (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 572 (84.12%) | 102 (15.00%) | 6 (0.88%) |
 | `%Number%` on the register engine (focused) | focused | `a011601` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Number --summary` | 340 | 680 | 226 (33.24%) | 2 (0.29%) | 452 (66.47%) |
-| The update operators (focused) | focused | `0eec6d3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/postfix-increment test/language/expressions/postfix-decrement test/language/expressions/prefix-increment test/language/expressions/prefix-decrement --summary` | 142 | 246 | 182 (73.98%) | 16 (6.50%) | 48 (19.51%) |
-| The update operators on the register engine (focused) | focused | `0eec6d3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/postfix-increment test/language/expressions/postfix-decrement test/language/expressions/prefix-increment test/language/expressions/prefix-decrement --summary` | 142 | 246 | 74 (30.08%) | 0 (0.00%) | 172 (69.92%) |
-| Complete pinned suite, including staging and Intl | full | `0eec6d3` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
-| Complete pinned suite on the register engine | full | `0eec6d3` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 16,588 (16.12%) | 18,366 (17.84%) | 67,971 (66.04%) |
+| `for`-`in` and `for`-`of` (focused) | focused | `296962a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/statements/for-in test/language/statements/for-of --summary` | 870 | 1,648 | 1,230 (74.64%) | 86 (5.22%) | 332 (20.15%) |
+| `for`-`in` and `for`-`of` on the register engine (focused) | focused | `296962a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/statements/for-in test/language/statements/for-of --summary` | 870 | 1,648 | 219 (13.29%) | 32 (1.94%) | 1,397 (84.77%) |
+| Complete pinned suite, including staging and Intl | full | `296962a` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 35,574 (34.56%) | 30,711 (29.84%) | 36,640 (35.60%) |
+| Complete pinned suite on the register engine | full | `296962a` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 17,130 (16.64%) | 18,368 (17.85%) | 67,427 (65.51%) |
 
 The two full rows measure the two execution paths against the same suite, as do
 the two function-declaration rows. Every other row is the stack backend, which
@@ -1172,6 +1172,13 @@ refused, and so was every update of a property. Both are lowered now, the
 property Reference evaluated once so the read and the write reach the same
 property. 531 more variants move to passed.
 
+16.1.7 makes a `var` of a Realm Script a binding of the Global Environment
+Record, and the head of a `for`-`in` or a `for`-`of` looked for it in the frame:
+in a Realm that is every such loop a Script writes at the top level. The head
+knows that shape now — the loop keeps the key or the element in a register of
+its own and writes the binding where 14.7.5.6 says it lives. 542 more variants
+move to passed.
+
 The complete run also identified 294 `_FIXTURE` files which were correctly not
 executed as standalone tests. These numbers are a migration measurement, not a
 conformance claim. Failed and unsupported variants of both the focused and the
@@ -1273,7 +1280,9 @@ at tree `c426eda58af35211855c91d965cc318fd88778b1`, which is the tree of `9e4966
 The `%Array%` runs and both full runs beside the Array length were measured at
 tree `2967dd64190cdfd228e7aec38c932c7aefe40099`, which is the tree of `78ba3e1`.
 The update-operator runs and both full runs beside them were measured at tree
-`acd36f25f993be92bb6a73befb4917d1fae00a3f`, which is the tree of `0eec6d3`.
+`acd36f25f993be92bb6a73befb4917d1fae00a3f`, which is the tree of `0eec6d3`. The
+`for`-`in` and `for`-`of` runs and both full runs beside the var head were
+measured at tree `5171fcbc56893b889cbf004ecb90d08d50f25a2a`, which is the tree of `296962a`.
 
 ### Historical Test262 baseline
 
