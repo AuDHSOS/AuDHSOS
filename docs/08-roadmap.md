@@ -23,7 +23,7 @@ XL) and describe effort, not calendar time.
 | 12 | Time, randomness, and message interrupts | L | a userland thread reads a clock, waits until a deadline, draws entropy, and receives an MSI-X vector |
 | 13 | PCI and the bus | M | a userland program enumerates the PCI bus and reports the virtio-net device and its registers |
 | 14 | The network on the machine | XL | the system leases an address, resolves a name, and completes an HTTP request over a real device |
-| 15 | TLS over the network | M | an HTTPS request from a program of the archive, with the certificate path validated |
+| 15 | TLS over the network | M | an HTTPS request from a program of the image, with the certificate path validated |
 
 Every phase has the same definition of done: all catalog items for the
 components in the phase have tests, `sh tools/xtask-check.sh` is green, the
@@ -31,18 +31,24 @@ design documents reflect the code, the changelog is updated. The
 [implementation plan](10-implementation-plan.md) specifies the work of
 each phase down to crates, types, algorithms, and tests.
 
+Phases 0 to 14 are implemented; Phase 15 is what is left.
+
 Beside the phases run tracks that depend on none of them: the
 cryptography and TLS crates of section 8.21, specified in
 [document 11](11-cryptography-and-tls.md), the tracks of sections 8.22
 to 8.25, specified in [document 12](12-parallel-work.md), and the Secure
 Shell client of section 8.26, specified in
-[document 14](14-secure-shell-as-a-client.md). Section 8.27 states how
+[document 14](14-secure-shell-as-a-client.md). The disk and the file
+system server are off the phases as well, built and specified in
+[document 15](15-the-disk-on-the-machine.md). Section 8.27 states how
 many of them may be active at once and which phase work may be pulled
-forward. Of the tracks of documents 11 and 12 everything but the two
-integration steps is finished, and those two are Phases 14 and 15; what
-the four phases from 12 on need beyond them is specified in
-[document 13](13-the-network-on-the-machine.md). Track S is decided and
-not started (D-123).
+forward. Of the tracks of documents 11 and 12 everything but the
+integration of track C is finished, and that is Phase 15; track D's own
+integration is Phase 14 and is done. What the four phases from 12 on need
+beyond them is specified in
+[document 13](13-the-network-on-the-machine.md). Track S is finished:
+steps S1 to S8 are built, and the client of the image reaches a live
+OpenSSH through the socket of `server-net` (D-123, D-146).
 
 ## 8.2 Phase 0: Project foundation
 
@@ -307,6 +313,8 @@ matter of what happened rather than of which started last.
 
 ## 8.14 Phase 12: Time, randomness, and message interrupts
 
+Status: implemented.
+
 Three capabilities the kernel does not have and that everything above it
 wants — time, randomness, and message interrupts. None of them is about
 networking; all three are what
@@ -358,6 +366,8 @@ a vector without a gate arrives as a general protection fault.
 
 ## 8.15 Phase 13: PCI and the bus
 
+Status: implemented.
+
 Deliverables: `kernel-acpi` gains `mcfg.rs`, which reads the `MCFG` table
 the way `madt.rs` reads the MADT — signature, length and checksum first,
 then the allocation structures with their base address, segment group and
@@ -383,7 +393,7 @@ the bus works is finding the device the next phase will drive.
 
 Tests: catalog 6.6.61, and the fuzz targets `pci_config` and `mcfg`.
 
-Acceptance: a program of the archive enumerates the bus and reports the
+Acceptance: a program of the image enumerates the bus and reports the
 virtio-net device with its vendor and device id, the base address
 registers it decoded, the four virtio capabilities it found, and the size
 of its MSI-X table; on a machine started without the two network lines it
@@ -407,6 +417,8 @@ bytes.
 
 ## 8.16 Phase 14: The network on the machine
 
+Status: implemented.
+
 Deliverables: `driver-virtio-net` over a register trait with a scripted
 double, negotiating `VIRTIO_F_VERSION_1` and `VIRTIO_NET_F_MAC` and
 refusing every other offered bit by name — mergeable receive buffers, the
@@ -421,11 +433,12 @@ physical address `memory_info` answers; `server-net` around
 `net-stack`, driving `poll` with the frames the driver hands it and
 sleeping until `poll_at` on the notification that carries the MSI-X
 vector and its clients; the socket protocol in `user-proto` with one ring
-per socket in a shared memory object, as the input protocol of Phase 10
-has one; `server-init` creates the ECAM device object, the DMA object and
-the MSI vector and grants them; a client program that uses the protocol.
-The reference machine needs nothing further: Phase 13 already put the
-device on it.
+per direction per socket in a shared memory object, as the input protocol
+of Phase 10 has one; `server-init` creates the ECAM device object, the DMA
+object and the MSI vector and grants them; a client program that uses the
+protocol. The reference machine needs nothing further beyond the hardware
+address written onto the device line: Phase 13 already put the device on
+it.
 
 Tests: catalog 6.6.62, 6.6.63, 6.6.64, and the fuzz target
 `virtio_net_rx`.
@@ -438,6 +451,22 @@ forwarded port carries a payload both ways and closes cleanly, and that
 an HTTP `GET` over it returns a response the client parses; and then runs
 the same image without the two network lines, where the server reports no
 interface and the run ends by itself.
+
+Done: every call of the socket protocol is answered at once, and what is
+not ready yet is `WouldBlock` (D-142), because a server of this system
+holds one reply capability at a time and a held reply stalls every other
+client. A listener becomes the connection a peer opened and keeps its
+number (D-143), `net-tcp` opening one connection in `LISTEN` and turning
+that same connection into an open one. The receive path copies the frame
+into the caller's buffer before it puts the buffer back into the available
+ring: a slice of the buffer itself would be memory the device may write
+into from the moment the buffer is available again. The driver's tables
+are indexed by descriptor, one pair per queue, so which buffer a used
+element names is read out of the driver rather than out of the descriptor
+the device wrote nothing into. `server-net` runs the three threads 13.10
+names, and the deadline between the serving thread and the timer thread is
+one `static` word of the program rather than a memory object, the two
+being threads of one process.
 
 ## 8.17 Phase 15: TLS over the network
 
@@ -461,7 +490,7 @@ role and gains a counterpart that runs on the target.
 
 Tests: catalog 6.6.65, with 6.6.71 already in.
 
-Acceptance: an HTTPS `GET` from a program of the archive against a server
+Acceptance: an HTTPS `GET` from a program of the image against a server
 the test starts on the development machine, with a chain the test
 certificate builder of `audhsos-x509` wrote, returns a response the
 client parses; a chain with an expired certificate, one with a name that
@@ -470,16 +499,13 @@ each refused with the alert the standard names.
 
 ## 8.18 Later work, not scheduled
 
-a file system server on top of the FAT32, partition table and block
-device logic of 8.24, which Phase 13 brings within reach because the bus
-it needs is the one PCI gives it: what is left is the DMA region, the
-process around the driver, and the protocol its clients speak; certificate revocation checking; virtio-gpu;
-virtio-input or `usb-tablet` for absolute pointer coordinates; a
-compositor with several windows; the `aarch64` port under HVF without a
-loader; SMP with per-CPU run queues; hardware port permission bitmaps;
-kernel-object memory donation; an interface definition language for
-protocols; recursive capability revocation; a tickless timer; long file
-names in the disk image writer.
+certificate revocation checking; virtio-gpu; virtio-input or
+`usb-tablet` for absolute pointer coordinates; a compositor with several
+windows; the `aarch64` port under HVF without a loader; SMP with per-CPU
+run queues; hardware port permission bitmaps; kernel-object memory
+donation; an interface definition language for protocols; recursive
+capability revocation; a tickless timer; long file names in the disk
+image writer.
 
 ## 8.19 Risks
 
@@ -502,6 +528,7 @@ names in the disk image writer.
 | More than one side track is active at once | phases slip and no track finishes | at most one side track beside the cryptography track (D-45); document 12 fixes the order |
 | The shared foundations of 8.23 arrive after their consumers | the same containers and time arithmetic are written twice | track E is scheduled before the tracks and phases that need it, and is small |
 | Phase 14 is XL and the network stalls in it | the release slips while three crates are half-finished | the driver, the server, and the protocol are separate crates with separate catalog items; the driver and the crate `pci` are logic over a trait and can be finished before the phase that integrates them |
+| A receive buffer goes back into the available ring while a caller still reads the frame in it | the next frame lands on the one being read | the receive path copies the frame into the caller's buffer before the buffer goes back, which is what makes the two independent |
 | The kernel grows a deadline queue in the tick handler | every interrupt costs more | the list is ordered by instant, the walk stops at the first deadline that has not passed, and its length is bounded by the thread count |
 | MSI-X cannot be masked by the kernel | a device that raises interrupts faster than its driver services them keeps a core busy | the driver suppresses through the used ring flag `virtio-queue` implements; the limit is written down in 13.5 rather than discovered |
 | PCI-SIG specifications cannot be obtained and so are not kept beside the code | a layout constant is wrong and D-59's check does not exist for it | every constant names its document and revision; a configuration space captured from a real machine is a fixture of the crate's tests (D-124) |
@@ -560,9 +587,9 @@ changelog is updated.
 
 ## 8.22 Track D: the network stack
 
-Status: D1 to D9 implemented, which is every step but the integration.
-D10 is Phase 14, specified in
-[document 13](13-the-network-on-the-machine.md).
+Status: D1 to D10 implemented. D10 is Phase 14, specified in
+[document 13](13-the-network-on-the-machine.md); what is left of it is the
+TLS transport of Phase 15.
 
 Sans-I/O logic crates that consume and produce frames, take time and
 randomness as parameters, allocate nothing, and depend on no kernel,
@@ -580,7 +607,7 @@ bytes are Phase 14.
 | D7 | `net-dns`, `net-dhcp` | M | implemented: the RFC 1035 message format with name compression bounded three ways, a stub resolver that asks `A` and `AAAA` at once over `net-udp` with retry, server rotation and a deadline, alias chains followed across messages under one budget of eight; and the RFC 2131 client with the four-message exchange, the strict option walk of RFC 2132, and the lease timers with T1 renewal, T2 rebinding and expiry |
 | D8 | `net-http` | S | implemented: the request writer with every field checked before a byte of it goes down, and an incremental response decoder that takes one line of the head per call, decides its framing once under RFC 9112 section 6.3, and refuses every message that two parsers could read differently |
 | D9 | `net-stack` | L | implemented: one interface, one `poll`, one `poll_at`, generation-checked handles, an outgoing frame queue in the caller's memory, the demultiplexer down both families, DHCP and router advertisements wired to the address table and the routes, duplicate address detection, the resolver, and the address selection of RFC 6724 |
-| D10 | integration | XL | Phase 14 and Phase 15: the virtio-net driver, the network server, the socket protocol, and the `random_bytes` system call, and then the TLS transport jointly with T8 of 8.21; what has to exist under all of it is [document 13](13-the-network-on-the-machine.md) |
+| D10 | integration | XL | Phase 14 implemented: the virtio-net driver, the network server, the socket protocol and the client of the image; Phase 15 adds the TLS transport jointly with T8 of 8.21. What has to exist under all of it is [document 13](13-the-network-on-the-machine.md) |
 
 The stack carries IPv4 and IPv6 together (D-69), which supersedes the
 first clause of D-50. An address is an `IpAddr` above `net-wire`, so the
@@ -641,12 +668,19 @@ Tests: catalog 6.6.53 and 6.6.58.
 ## 8.26 Track S: Secure Shell as a client
 
 Status: decided in D-123, specified in
-[document 14](14-secure-shell-as-a-client.md), begun. Steps S1, S2 and S3
-are built: the wire types and the binary packet, the greeting and the
-negotiation, both key exchange methods over `crypto-dh` (D-122) and
-`crypto-ec::x25519` with the exchange hash and the six keys, and the
-cipher over the packet layer. What is left needs the two decisions of
-14.13: the host key of S4 and the authentication of S5.
+[document 14](14-secure-shell-as-a-client.md), implemented. Steps S1 to
+S7 are every layer of the protocol: the wire types and the binary packet,
+the greeting and the negotiation, both key exchange methods over
+`crypto-dh` (D-122) and `crypto-ec::x25519` with the exchange hash and
+the six keys, the cipher over the packet layer, the host key with the
+signature over the exchange hash, the authentication exchange with
+`publickey`, the session channel with its window, and the re-exchange
+with its thresholds. The client of S8 is built with them under D-141 and
+is driven end to end against a server written in the tests. Its
+integration needed Phase 14 and has it: `app-ssh` is a program of the
+image, it reaches an `sshd` through the socket of `server-net`, and that
+handshake is a step of `test --e2e`. The two questions 14.13 held open
+are answered by D-146.
 
 The track is a client for SSH-2 and not a server, for the reason D-123
 gives. It offers `curve25519-sha256` and `diffie-hellman-group14-sha256`
@@ -660,21 +694,24 @@ build. What it refuses, and why each name is refused, is section 14.5.
 | S1 | `audhsos-ssh`: `wire`, `packet` | M | implemented: the types of RFC 4251, section 5, against the vectors of that section, and the binary packet with its padding and its sequence numbers (catalog 6.6.68) |
 | S2 | `kex` | L | implemented: the greeting, the message numbers, `SSH_MSG_KEXINIT` and the negotiation rule (catalog 6.6.69); both methods, the exchange hash, the six keys of RFC 4253, section 7.2, `SSH_MSG_NEWKEYS` and the aborts (catalog 6.6.70) |
 | S3 | the cipher | M | implemented: `chacha20-poly1305@openssh.com` over the packet layer, against the worked example of the draft D-134 keeps in `docs/openssh/` (catalog 6.6.70) |
-| S4 | host keys | S-M | the `ssh-ed25519` blobs of RFC 8709, the signature over the exchange hash verified, and the trust rule as a parameter |
-| S5 | `auth` | M | `publickey` with the signature of RFC 4252, section 7, and `ext-info-c` with `server-sig-algs` |
-| S6 | `channel` | L | channels, the window, the session channel, `exec` and `shell`, extended data, and `exit-status` |
-| S7 | re-exchange | S-M | a re-exchange from either side, its two thresholds, and the disconnect reason codes of RFC 4250 |
-| S8 | integration | M | the client over a socket of `server-net`, a program in the boot archive, and a handshake against a live OpenSSH; needs Phase 14 |
+| S4 | host keys | S-M | implemented: the `ssh-ed25519` blobs of RFC 8709, the signature over the exchange hash verified, the fingerprint of a blob, and the trust rule as a parameter (catalog 6.6.75) |
+| S5 | `auth` | M | implemented: the service request, `publickey` with the signature of RFC 4252, section 7, the four answers a server sends, and `server-sig-algs` out of an `SSH_MSG_EXT_INFO` (catalog 6.6.76) |
+| S6 | `channel` | L | implemented: channels, the window in both directions, the session channel, `exec`, `shell` and `env`, extended data, and the exit status (catalog 6.6.77) |
+| S7 | re-exchange | S-M | implemented: a re-exchange from either side, its three thresholds, what may be sent while one runs, and the disconnect with the reason codes of RFC 4250 (catalog 6.6.78) |
+| S8 | the client, and its integration | M | implemented: the state machine over every layer below it, against a server written in the tests (catalog 6.6.79) and against a live OpenSSH from the program `app-ssh` of the image, on the key material of D-146 (catalog 6.6.80) |
 
-S1 to S7 depend on no phase and are built between them, as the whole of
-track C was. S8 needs the network on the machine.
+S1 to S7 depended on no phase and were built between them, as the whole
+of track C was, and so did the client, which D-141 admits under the
+admission test of 8.27. The integration needed the network on the
+machine, which is Phase 14.
 
-Tests: catalog 6.6.66, 6.6.68, 6.6.69 and 6.6.70 are written, for the
-arithmetic of S2 and the whole of S1, S2 and S3; the rest are written
-with the step that owns each. There is no RFC 8448 for this protocol — no document publishes a
-complete handshake with the keys that made it — so the check from outside
-is the interop test of S8 and not a replay, which is the one way this
-track differs in kind from track C.
+Tests: catalog 6.6.66, 6.6.68, 6.6.69, 6.6.70 and 6.6.75 to 6.6.80 are
+written, for the arithmetic of S2, the whole of S1 to S7, the client, and
+the key material of the interop run, with the fuzz targets `ssh_packet`
+and `ssh_handshake` beside them. There is no RFC 8448 for this
+protocol — no document publishes a complete handshake with the keys that
+made it — so the check from outside is the interop run of S8 and not a
+replay, which is the one way this track differs in kind from track C.
 
 ## 8.27 Capacity for parallel work
 
@@ -684,10 +721,9 @@ track differs in kind from track C.
 - Order: track E, then the cryptography track to T7, then track D, with
   step D6 not started beside an XL phase; track F when a driver becomes
   foreseeable; G2 before Phase 3.
-- Track S (8.26) is the one side track that is not finished. The first
-  rule covers it, and where it falls in the order above is not settled:
-  the order is the history of the tracks that are done, and no phase
-  requires track S of anything.
+- Track S (8.26) is finished. Where it fell in the order above was never
+  settled, because the order is the history of the tracks that are done
+  and no phase required track S of anything.
 - Phase work whose logic passes the admission test may be pulled
   forward without changing its phase, its catalog items, or its
   acceptance criteria: `gfx` (Phase 9), `driver-i8042` (Phase 10), the
@@ -696,6 +732,9 @@ track differs in kind from track C.
   Phases 12 to 15 add two more of that kind, and section 13.14 marks
   them: the crate `pci` of step N5 and the crate `driver-virtio-net` of
   step N7 are logic over a trait with a double and need no kernel, so
-  either may be written before the phase that integrates it. Every other
+  either may be written before the phase that integrates it. The client
+  of step S8 was pulled forward the same way and for the same reason
+  (D-141): it is a state machine with no I/O and is checked against a
+  server written in the tests. Every other
   step of those phases changes the kernel, the reference machine, or the
   root task and is therefore phase work throughout.

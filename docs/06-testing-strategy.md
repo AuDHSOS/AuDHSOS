@@ -1753,6 +1753,37 @@ done until every applicable item has a test. Items are added, never removed.
   function of three numbers and not the body of the watchdog thread, so its
   coverage does not depend on whether that thread woke before the process
   ended.
+- The coverage table (D-147): a feature nothing reached is claimed and is
+  then covered at that size and above; a larger input never takes one
+  over; a smaller one takes it over only where the run shrinks; a feature
+  past the table shares the slot it wraps onto; a table survives the wire,
+  and one cut short leaves the slots past it where they were.
+- The protocol (D-147): every message of either side survives the wire; a
+  kind neither side writes, a pipe that ended in the middle of a message
+  at every cut, and a length no message has are each refused rather than
+  allocated; a draw the worker holds already costs its place and not its
+  bytes.
+- The flags of a fleet (D-147): `-workers` is read as it was written, so
+  `-1` is as many as there can be; the fleet is never larger than the
+  machine has cores, and one asked for every core and one asked for more
+  than there are get the same; `-fuzz_worker` selects the worker mode and
+  only where it is on.
+- A worker (D-147): it runs the corpus files it was dealt and reports what
+  they reached, passing over a number no file has and a file that is gone;
+  it keeps nothing a full coverage table already holds; it mutates the
+  draws it is given; it reports a corpus file that panics and an input it
+  made that panics, and stops on either; it ends when the pipe ends, when
+  the pipe carries nonsense, and at the end of the time the run was given.
+- The orchestrator (D-147): the corpus is dealt round robin and read once;
+  every worker is handed the coverage table before it fuzzes; a find of a
+  worker is written into the corpus and drawn from again, one the pool
+  refuses is not written, and a smaller one takes the features over; a
+  crash reported while loading and one reported while fuzzing both end the
+  run and write the input out; a worker that ends early, a fleet that says
+  nothing at all, and a worker whose pipe will not take anything are each
+  survived; the length limit grows and the run pulses as the runs add up;
+  the run ends on the clock as well as on the count; a fleet of processes
+  is started from this program and ended with it.
 - Symbol table: an address inside a function, at its first byte, at its
   last byte, and one past it; an address in no function; a symbol that is
   not a function; the narrowest of two functions that enclose each other;
@@ -2297,24 +2328,28 @@ what the kernel dispatches on, so the check is what the kernel saw.
   a device without that queue and is refused; the MSI-X vector is
   configured per queue and the device's rejection of a vector is read back
   and reported.
-- Receive: every buffer is in the available ring after initialization; a
-  used element yields the frame behind its twelve-byte header; the buffer
-  is back in the available ring in the call that took it, so the device is
-  never left with fewer buffers than the driver believes; a used element
-  whose length is below the header, one whose length exceeds the buffer,
-  and one naming a descriptor that is free are each refused and the
-  element still consumed.
+- Receive: every buffer is in the available ring after the fill; a used
+  element yields the frame behind its twelve-byte header, copied into the
+  caller's buffer; the buffer is back in the available ring in the call
+  that took it, so the device is never left with fewer buffers than the
+  driver believes; a used element whose length is below the header and one
+  longer than the caller's buffer are refused with the buffer back in the
+  ring, and one whose length exceeds the buffer it names and one naming a
+  descriptor that is free are refused by the queue, which consumes the
+  element either way.
 - Transmit: a frame goes out behind a zeroed header as one chain; the
   notify write lands at the queue's own offset with the multiplier
   applied; completions are drained before the next send; a send with no
   free buffer is refused and changes nothing, so the caller may retry;
   a frame longer than a buffer is refused before anything is written.
 - The device configuration: the MAC address is the six bytes at the
-  offset the specification states; a device that did not offer
-  `VIRTIO_NET_F_MAC` yields none rather than six zeroes.
+  offset the specification states, read between two reads of the
+  configuration generation; a device that did not offer
+  `VIRTIO_NET_F_MAC` yields none rather than six zeroes; a configuration
+  that will not stand still is reported rather than spun on.
 - Fuzz target `virtio_net_rx`: a used element and a buffer of arbitrary
-  bytes; the driver yields a frame or refuses, and never reads outside the
-  buffer.
+  bytes; the driver yields a frame or refuses, never reads outside the
+  buffer, and never loses more than the one buffer it refused.
 
 ### 6.6.63 The network server and the socket protocol (`server-net`, `user-proto`)
 
@@ -2323,24 +2358,29 @@ what the kernel dispatches on, so the check is what the kernel saw.
   buffer, and one with a kind byte the protocol does not have are each
   refused; a socket handle of a generation that has passed is refused
   rather than answered for the socket that reused the slot.
-- The ring: a write and a read of one record; a ring exactly full; a
-  reader that stops and a writer that therefore stops; sequence numbers
-  that wrap; a capacity that is not a power of two is refused at creation.
-- The loop: a frame in produces the frames out that the stack produces; a
-  poll that yields nothing does not wake the server again before the
-  deadline `poll_at` gave; a client request and a device interrupt arrive
-  under different badges and are told apart by them; a device that reports
-  no link at startup makes the server report no interface and exit.
-- The deadline word: a deadline written while the timer thread sleeps on a
-  later one wakes it and is the one it then keeps; a deadline written
-  while it sleeps on an earlier one does not move that wake earlier and
-  the tick it sends is answered with a poll that finds nothing to do; a
-  deadline that has already passed makes the tick immediate; `poll_at`
-  answering `None` parks the timer thread with no deadline at all.
-- Against the network double of `net-stack` and a scripted device: a
-  lease is taken and renewed, a name is resolved, a connection is opened,
-  carries bytes both ways and closes, each with the clock advanced by the
-  test rather than by a machine.
+- The ring: a write and a read of one run of bytes; a ring exactly full,
+  which counts what it could not take rather than overwriting what is
+  waiting; a reader that stops and a writer that therefore stops; bytes
+  that come back in order across the wrap; a header that does not carry
+  the fixed capacity makes the ring take and answer nothing.
+- The loop: a frame in produces the frames out that the stack produces;
+  `poll_at` names no instant for a stack with nothing to do; a client
+  request and a device interrupt arrive under different badges and are
+  told apart by them; a machine with no device makes the server report no
+  interface and answer `Unavailable` to everything.
+- The deadline word, which is one `static` of the program and not a
+  memory object, the serving thread and the timer thread being threads of
+  one process: a deadline written while the timer thread sleeps on a later
+  one wakes it and is the one it then keeps; a deadline that has already
+  passed makes the tick immediate; `poll_at` answering `None` parks the
+  timer thread with no deadline at all. These are the loop of the binary
+  and are checked by the end-to-end run of 6.6.64.
+- Against a second server on the same link and a station that answers a
+  discover, a request and one name: a lease is taken and renewed at its
+  first timer, a name is resolved and a name with no address is not found,
+  a connection is opened, carries bytes both ways and closes, and a
+  connection to a port nobody listens on is refused — each with the clock
+  advanced by the test rather than by a machine.
 - Back pressure: a client that never reads fills its ring, the window
   stops advancing, and nothing in the server grows; the same client
   reading again lets the connection continue.
@@ -2354,8 +2394,10 @@ what the kernel dispatches on, so the check is what the kernel saw.
 - A DNS query the forwarder answers comes back with an address.
 - A TCP connection through the forwarded port carries a payload both ways
   and closes cleanly, with the close seen from both ends.
-- An HTTP `GET` over that connection returns a response the client parses
-  into a status line and a body.
+- An HTTP `GET` over that same connection returns a response the client
+  parses into a status line and a body: the machine has one port forwarded
+  into it, so the runner answers the request over the connection it
+  opened.
 - With the two network lines dropped, the server reports no interface and
   the run ends by itself, as the display server ends on a machine with no
   framebuffer.
@@ -2658,6 +2700,11 @@ example (D-134) over it.
 - A packet of the largest mandatory payload fits in a buffer of the
   mandatory size, and two packets in one buffer are read one after the
   other.
+- The fuzz target `ssh_packet` reads arbitrary bytes as a packet, with the
+  cipher in use and without it: a packet that is read lies inside what
+  arrived, its payload is shorter than the packet that carried it, and the
+  sequence number counts a packet that was read and nothing else. It frames
+  the same bytes as a payload and reads them back.
 - Every refusal renders a sentence of its own.
 
 ### 6.6.69 The greeting and the negotiation (`audhsos-ssh`)
@@ -2704,6 +2751,16 @@ documents state and against this crate's own writer.
   are the chosen ones — the right method under the wrong host key is
   still wrong — and a message that announces no guess is nothing to
   ignore whatever its first names are.
+
+#### The fuzz target
+
+`ssh_handshake` reads arbitrary bytes as the identification string, as a
+`SSH_MSG_KEXINIT` with its ten name-lists, as the reply of either key
+exchange method, and as a host key blob — the four places where a byte
+from the network chooses a length. What it holds: nothing is read as
+longer than what arrived, a name-list holds no name of no length, what
+the negotiation chooses is a name both sides offered, and no input is
+admitted as a host key by a rule that names another.
 
 ### 6.6.70 The key exchange and the cipher (`audhsos-ssh`)
 
@@ -2896,6 +2953,256 @@ offset and every bit is tested against the section it came from.
   request is taken exactly when every framing rule of 5.2.6.1 holds for
   it, which is checked against the rules said a second time rather than
   against the driver.
+
+### 6.6.74 The NoREC fuzzer (`norec`)
+
+D-140. The tool finds bugs in another program, so what its own tests hold
+is that a case says what it means and that a finding is real: the
+generator, the two queries, the reading of an answer, and the reduction.
+The engine is a fake in every test but one group, because a test that
+needs SQLite is a test that does not run where SQLite is not.
+
+- Values and literals: a quote in text is doubled and nothing else is
+  escaped; a double keeps a decimal point, so it reads back as a double;
+  a double that is not finite is written as `NULL`, which the generator
+  never produces.
+- Expressions: every node is parenthesized when it is written, so the
+  text means what the tree says; a column is qualified in a query and
+  bare in an index term; a name the case does not have renders as `NULL`
+  rather than as nothing; children are listed in the order they are
+  written and replaced by position, and a position that is not there
+  changes nothing.
+- Candidates: every candidate of a tree is strictly smaller than the tree,
+  and a tree of one node offers none. This is what makes reduction
+  terminate.
+- The database: a column without a declared type is created without one;
+  a collation follows the type; an empty table has no `INSERT`; an index
+  carries its terms unqualified and its filter, and a `UNIQUE` one says
+  so.
+- The queries: the `FROM` clause writes each join as the form it is and
+  copies it into both queries; the optimized query counts by rows or by
+  `COUNT(*)`; the unoptimized one sums `IS TRUE` over the same clause.
+- The generator, over hundreds of seeds: the same seed generates the same
+  case; every table has a column and rows as wide as it; the predicate
+  names only tables the `FROM` clause has; every index term names a
+  column, which is what SQLite requires of one; a `UNIQUE` index is built
+  only over a single plain column without a collation; and no case calls a
+  function of the clock or of a random source, or writes `DISTINCT` or a
+  subquery, which section 3.4 of the paper excludes.
+- Reading an answer: equal counts agree and different ones are a finding;
+  a sum over no rows is `NULL` and counts as zero; a message on the error
+  stream refuses the case; a case the engine did not finish is refused and
+  not read; output without the markers, and a count that is not a number,
+  are errors rather than verdicts.
+- Reduction: a case that always disagrees is reduced to its smallest form;
+  what the disagreement needs — a column of the predicate, one of two
+  indexes — survives; a case that stops disagreeing is left as it was; and
+  the budget stops the search.
+- The run loop: a campaign over an engine that agrees finds nothing; what
+  the engine refuses is counted by the message it refused with; a
+  disagreement is written out under the seed it came from; `--stop` leaves
+  the rest unrun; and `--help` and `--script` need no engine at all.
+- The process: the tests of the engine drive `sh` and `cat` rather than a
+  database, because what is tested there is the child and its three
+  streams — what it printed, what it complained about, a script larger
+  than a pipe buffer, a run that had to be killed, and a program that
+  cannot be started.
+
+What the tool found is not a test of this repository and is not run by
+`check`: SQLite 3.28.0, built by `sh tools/sqlite.sh --version 3.28.0`,
+answers three of twenty thousand cases two ways, each a `LEFT JOIN` whose
+unmatched row the `WHERE` clause drops and the sum keeps. The same cases
+agree on 3.53.4.
+
+### 6.6.75 The host key (`audhsos-ssh`)
+
+Step S4 of 8.26. RFC 8709 publishes no vector, so the blobs are built a
+second time in the tests and the signatures come from `crypto-ec`, whose
+own tests hold it to RFC 8032.
+
+- A key blob is the name and thirty-two octets (RFC 8709, section 4), and
+  a parsed key writes back the bytes it was read from; a buffer short by
+  one byte takes none of it.
+- A blob of another algorithm is refused, `ssh-rsa` and `ssh-ed448` among
+  them, and so is a key of another length, a byte after the key, and every
+  prefix of a whole blob.
+- The signature blob of section 6 verifies over the exchange hash; one
+  made under another host's key does not, and one bit of the hash decides
+  it.
+- A signature blob naming another algorithm, carrying other than
+  sixty-four octets, or holding a byte after them is refused before any
+  arithmetic runs, and an empty blob ends early.
+- The fingerprint is the SHA-256 of the blob, which is what OpenSSH prints
+  after `SHA256:`; a rule of one fingerprint admits the host it names and
+  no other.
+- What a client accepts is a key and a signature together: a key no rule
+  admits is refused before the signature is checked, a signature that is
+  not the peer's ends the exchange, and a blob that is no key ends it
+  before the rule is asked.
+
+### 6.6.76 The authentication exchange (`audhsos-ssh`)
+
+Step S5 of 8.26. RFC 4252 publishes no vector, so a request is read back
+field by field and its signature is checked the way a server checks it,
+with `crypto-ec`.
+
+- The service request names the service and an `SSH_MSG_SERVICE_ACCEPT`
+  answers with the name it accepted; another message number is no accept,
+  and a payload that ends early is refused.
+- The query carries the user name, the service, `publickey`, the boolean
+  false, the algorithm name and the key blob, in that order and with
+  nothing after them.
+- The request that authenticates is the query with the boolean true and a
+  signature blob after it. What a server verifies — the session
+  identifier as a string, then the fields of the request as they stand —
+  verifies under the key the request carries.
+- One bit of the session identifier changes the signature, which is what
+  makes a signature captured from one connection worthless on another.
+- The lengths are what the two requests need: a scratch buffer of
+  `signed_len` writes the request, one byte shorter writes none, and the
+  request is `request_len` bytes. A buffer too small for the query, for
+  the signed request, or for the service request writes nothing.
+- A failure carries the methods that may continue and the partial-success
+  flag; a success is the message alone; a banner carries its text and its
+  language tag, which may be empty.
+- Leave to sign is the algorithm and the key blob of the query, sent
+  back: another key's blob, another algorithm, and any other message are
+  not it.
+- A message of another layer is no answer of this one, and an answer that
+  ends early is refused.
+- An `SSH_MSG_EXT_INFO` gives up `server-sig-algs` and skips every other
+  extension whatever its value holds; a message without the extension
+  says nothing about algorithms; a count larger than the message, another
+  message number, and a list that is no name-list are each refused.
+
+### 6.6.77 The session channel (`audhsos-ssh`)
+
+Step S6 of 8.26. Every message is read back with a reader of this crate,
+and every rule of RFC 4254, sections 5.1 to 5.3, is checked against what
+the channel does with it.
+
+- The open names the type, this side's number, its window and its maximum
+  packet size; the confirmation gives the peer's number and the window to
+  send into; a second confirmation and a message for another channel are
+  each refused.
+- A refused open ends the channel without a close message, because there
+  is nothing to close.
+- Data spends the window and stops at it, and no data message is larger
+  than the maximum packet size the peer advertised. Extended data spends
+  the same window as ordinary data.
+- What arrives spends the window this side granted, and a byte past it is
+  refused.
+- A window adjust grants what it names, in both directions, and neither
+  window passes 2^32 - 1.
+- The requests that start a program carry what section 6.5 prints — the
+  command of `exec`, the bare `shell`, the name and value of `env` — and
+  a request spends no window.
+- The exit status and the exit signal read as what they are; another
+  request keeps its name and whether it wants an answer.
+- The close sequence is both directions: an end of file leaves the
+  channel open, a close may arrive with none before it, a close is sent
+  once, and the channel is closed for this side only when it has both
+  sent and received one.
+- Nothing is sent before the open is confirmed or after a close, and no
+  data after an end of file this side sent.
+- A buffer too small writes nothing and spends no window, in either
+  direction.
+- Every message of the layer reads; a number of another layer does not,
+  and a message that ends early is refused.
+
+### 6.6.78 The re-exchange and the disconnect (`audhsos-ssh`)
+
+Step S7 of 8.26.
+
+- A connection begins inside its first key exchange, so nothing above the
+  transport may be sent before the first `SSH_MSG_NEWKEYS`.
+- A gigabyte carried, an hour of connection time, or half the sequence
+  number space each ask for a re-exchange; a clock that went backwards
+  asks for nothing, and half the sequence number space is below where the
+  number of section 6.4 wraps.
+- This side asks once: a second `SSH_MSG_KEXINIT` while one is running is
+  refused, and the peer's answer ends the asking.
+- The peer may start one, in which case this side owes a
+  `SSH_MSG_KEXINIT` of its own; when this side started, the peer's
+  message is the reply and nothing is owed. A third one in one exchange
+  is refused.
+- The new keys end the exchange and start the counting again: the bytes
+  go back to zero, the packets do not, because the sequence number they
+  stand for is not reset. A `SSH_MSG_NEWKEYS` with no exchange running is
+  refused.
+- While an exchange runs, only messages below 50 may be sent: the
+  authentication requests of RFC 4252 and the channel messages of RFC
+  4254 wait for the new keys.
+- A disconnect carries the reason code, the description and the language
+  tag of RFC 4253, section 11.1, and reads back as what was written;
+  another message number is no disconnect, a payload that ends early is
+  refused, and a buffer too small writes nothing.
+
+### 6.6.79 The client end to end (`audhsos-ssh`)
+
+The state machine of step S8, host-tested. No document publishes a
+complete SSH handshake with the keys that made it, so what the client is
+driven against is a server written in the tests over the same layers: the
+greeting, both messages of the key exchange, the signature over the
+exchange hash, the six keys, the authentication and one session channel.
+The handshake against an OpenSSH is the acceptance of the step and is
+6.6.80.
+
+- The client reaches a command: it greets, negotiates, verifies the host
+  key, authenticates with `publickey`, opens the session channel, runs
+  `exec`, reads what the command wrote on both streams, takes the exit
+  status, and answers the server's close with one of its own.
+- What the client sends reaches the command, and the end of file after it
+  says this side will write no more.
+- A re-exchange the server starts changes the keys and not the session
+  identifier: the command's output arrives after it, under the new keys.
+- A host key no rule admits ends the connection, and so does a server
+  that refuses the key this client authenticates with.
+- The buffers are the ones RFC 4253, section 6.1, makes mandatory: one
+  byte short of either is refused before anything is written, and a user
+  name longer than the buffer the signature is taken over is refused with
+  it.
+- A global request the server makes of the connection is answered and not
+  read: one that wants no reply is ignored, one that wants a reply is
+  answered `SSH_MSG_REQUEST_FAILURE`, and the command runs either way.
+  OpenSSH sends `hostkeys-00@openssh.com` as such a request.
+
+### 6.6.80 The handshake against an OpenSSH (`app-ssh`, `xtask`, QEMU)
+
+The acceptance of track S, and the one check that the client agrees with
+an implementation this project did not write (14.12). Two parts: the key
+material on the host, and the run.
+
+The key material, host-tested in `xtask`:
+
+- The fingerprint of a public key line is the one `ssh-keygen -lf`
+  prints, which is a known answer taken from OpenSSH and not from this
+  side. The comment and the line terminator are not part of it.
+- A public key line naming another algorithm, carrying no blob, or
+  carrying one that is not Base64 is refused.
+- The seed read out of a private key of `docs/openssh/PROTOCOL.key` is
+  the first thirty-two octets of the private half.
+- A key under a passphrase, a file holding more than one key, a key of
+  another algorithm, a private half of another length, another envelope
+  and another label are each refused. No key is embedded in a test: the
+  fixtures are built from the document, because no key of this repository
+  is tracked (D-146).
+
+The run, which `sh tools/xtask.sh test --e2e` performs last and
+`sh tools/xtask.sh test --ssh` performs alone:
+
+- `sshd` starts on a free port of the loopback with every algorithm of
+  14.5 named, so the run cannot pass on a set the two sides happened to
+  prefer.
+- The scratch disk of the run carries the trust file, the client's seed
+  and the port, written by the host onto a FAT32 volume the file system
+  server mounts rather than formats.
+- The client of the image connects to the gateway, gets through the key
+  exchange, the host key, `publickey` and the session channel, and says
+  the command started.
+- It reads what the command wrote on standard output and on standard
+  error, and takes an exit status that is not zero, so a client that
+  reads one stream and one that reports no status both fail.
 
 ## 6.7 CI pipeline
 

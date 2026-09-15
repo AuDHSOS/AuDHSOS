@@ -55,13 +55,33 @@ pub(crate) unsafe fn region_at(address: usize, length: usize) -> &'static mut [u
     unsafe { core::slice::from_raw_parts_mut(pointer, length) }
 }
 
+/// Adds one to counter `slot` of the leaked range of `length` bytes at
+/// `address`, which is what a body under test does to be seen.
+///
+/// This is the one place a test body reaches the range, so the argument
+/// for it is made once: the test holds [`GLOBALS`], so the range is the
+/// one it registered and no other reference to it is alive, and a body
+/// runs between the calls the engine makes into `crate::counters` and not
+/// inside one.
+pub(crate) fn bump(address: usize, length: usize, slot: usize) {
+    // SAFETY: as the paragraph above says.
+    let region = unsafe { region_at(address, length) };
+    if let Some(counter) = region.get_mut(slot.checked_rem(length).unwrap_or(0)) {
+        *counter = counter.saturating_add(1);
+    }
+}
+
 mod corpus;
 mod counters;
+mod cover;
 mod dictionary;
 mod engine;
 mod feature;
 mod mutate;
 mod options;
+mod orchestrator;
 mod pool;
+mod proto;
 mod rng;
 mod sancov;
+mod worker;

@@ -56,6 +56,10 @@ pub enum Protocol {
     Display = 5,
     /// The input server.
     Input = 6,
+    /// The file system server.
+    File = 7,
+    /// The network server.
+    Socket = 8,
 }
 
 impl Protocol {
@@ -67,6 +71,8 @@ impl Protocol {
         Protocol::Parent,
         Protocol::Display,
         Protocol::Input,
+        Protocol::File,
+        Protocol::Socket,
     ];
 
     /// The stable code of the protocol.
@@ -89,6 +95,8 @@ impl Protocol {
             4 => Some(Protocol::Parent),
             5 => Some(Protocol::Display),
             6 => Some(Protocol::Input),
+            7 => Some(Protocol::File),
+            8 => Some(Protocol::Socket),
             _ => None,
         }
     }
@@ -103,6 +111,8 @@ impl Protocol {
             Protocol::Parent => "parent",
             Protocol::Display => "display",
             Protocol::Input => "input",
+            Protocol::File => "file",
+            Protocol::Socket => "socket",
         }
     }
 }

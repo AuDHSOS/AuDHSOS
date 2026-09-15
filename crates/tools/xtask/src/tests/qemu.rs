@@ -134,7 +134,8 @@ fn the_command_line_is_the_one_the_target_platform_document_prescribes() {
         line,
         "-machine q35 -accel tcg -cpu qemu64,+rdrand,+rdseed -smp 1 -m 256M \
          -drive if=pflash,format=raw,readonly=on,file=/fw/edk2-x86_64-code.fd \
-         -drive format=raw,file=/img/audhsos.img \
+         -drive if=none,id=boot,format=raw,file=/img/audhsos.img \
+         -device virtio-blk-pci,drive=boot,disable-legacy=on,num-queues=1,addr=0x4 \
          -serial stdio -display none \
          -vga none -device VGA,edid=on,xres=1920,yres=1200 \
          -fw_cfg name=opt/ovmf/PcdVideoHorizontalResolution,string=1920 \
@@ -333,7 +334,7 @@ fn the_network_of_the_reference_machine_is_one_netdev_and_one_device() {
     assert!(
         line.ends_with(
             "-netdev user,id=n0,hostfwd=tcp:127.0.0.1:52000-:7 \
-             -device virtio-net-pci,netdev=n0,disable-legacy=on,mq=off"
+             -device virtio-net-pci,netdev=n0,disable-legacy=on,mq=off,mac=52:54:00:12:34:56"
         ),
         "{line}"
     );
@@ -367,13 +368,16 @@ fn a_run_that_writes_carries_a_second_disk_as_a_block_device() {
     assert!(
         line.ends_with(
             "-drive if=none,id=s0,format=raw,file=/img/audhsos.scratch.img \
-             -device virtio-blk-pci,drive=s0,disable-legacy=on,num-queues=1"
+             -device virtio-blk-pci,drive=s0,disable-legacy=on,num-queues=1,addr=0x5"
         ),
         "{line}"
     );
+    // Both disks are block devices of the same kind, and the slot is what
+    // tells them apart: the boot disk the firmware reads is at `0x4` and
+    // the disk the system writes at `0x5`.
     assert!(
-        line.contains("-drive format=raw,file=/img"),
-        "the boot volume is still the one the firmware reads: {line}"
+        line.contains("drive=boot,disable-legacy=on,num-queues=1,addr=0x4"),
+        "the boot volume is a block device too: {line}"
     );
 }
 
@@ -386,7 +390,9 @@ fn a_run_that_writes_nothing_carries_neither_line() {
         &Options::plain(),
     )
     .join(" ");
-    assert!(!line.contains("virtio-blk-pci"), "{line}");
+    // The boot disk is a block device on every run; what a run without
+    // writes carries is no second one.
+    assert_eq!(line.matches("virtio-blk-pci").count(), 1, "{line}");
     assert!(!line.contains("id=s0"), "{line}");
 }
 

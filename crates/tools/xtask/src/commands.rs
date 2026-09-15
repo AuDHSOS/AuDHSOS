@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::Error;
-use crate::image::{archive, boot_image, disk};
+use crate::image::{archive, boot_image, disk, fat32};
 use crate::out::{self, note, note_raw};
 use crate::policy::{FUZZ_TARGETS, FuzzTarget, MIRI_TARGETS, Target, crates_for};
 use crate::ppm;
@@ -16,6 +16,7 @@ use crate::process::{Cmd, run_parallel, test_jobs};
 use crate::qemu::{self, Machine, Run};
 use crate::qmp::{Button, Qmp};
 use crate::session::Session;
+use crate::ssh;
 use crate::symbolize;
 use crate::{artifacts, coverage, deps, fs, layering, linker, spdx, unsafe_budget};
 
@@ -102,17 +103,19 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut host = false;
     let mut qemu = false;
     let mut e2e = false;
+    let mut ssh = false;
     let mut profile = Vec::new();
     for option in options {
         match option.as_str() {
             "--host" => host = true,
             "--qemu" => qemu = true,
             "--e2e" => e2e = true,
+            "--ssh" => ssh = true,
             "--release" => profile.push("--release".to_owned()),
             other => return Err(Error::Usage(format!("unknown option `{other}` for test"))),
         }
     }
-    if !(host || qemu || e2e) {
+    if !(host || qemu || e2e || ssh) {
         host = true;
     }
     if host {
@@ -140,11 +143,28 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
     if e2e {
         test_e2e(root, &profile)?;
     }
+    // The Secure Shell run alone, which `--e2e` runs last anyway. It is
+    // its own option because it is the one run that needs a server on the
+    // development machine, and a person who is changing the client repeats
+    // it without the four runs before it.
+    if ssh {
+        build(root, &profile)?;
+        image(root, &profile)?;
+        let machine = Machine::locate()?;
+        let path = root.join("target").join("audhsos.img");
+        test_the_secure_shell_client(&machine, &path, root)?;
+    }
     Ok(())
 }
 
 /// How long an end-to-end run waits for a line before it gives up.
-const E2E_TIMEOUT: Duration = Duration::from_secs(60);
+///
+/// Every program outside the boot set is read off the volume one message
+/// of two kibibytes at a time (D-92), so what a line waits on is often a
+/// program being read and not the work behind the line. Phase 14 put two
+/// more programs on the volume, and three minutes is what leaves room for
+/// that on a machine where the emulator translates every instruction.
+const E2E_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// What the run has to see, in this order, for the system to have worked.
 ///
@@ -153,7 +173,7 @@ const E2E_TIMEOUT: Duration = Duration::from_secs(60);
 /// archive, the memory server answered, the name server answered, the
 /// console driver took the port, and the application found it and said
 /// something through it.
-const E2E_LINES: [(&str, &str); 19] = [
+const E2E_LINES: [(&str, &str); 22] = [
     (
         "[init] started server-memory",
         "the memory server did not start",
@@ -220,6 +240,18 @@ const E2E_LINES: [(&str, &str); 19] = [
         "the bus walk did not find the virtio network device of the machine",
     ),
     (
+        "[init] started server-net",
+        "the network server did not start",
+    ),
+    (
+        "[net] device mac=",
+        "the network driver did not bring the device up",
+    ),
+    (
+        "[init] started app-net",
+        "the program that uses a socket did not start",
+    ),
+    (
         "[faulter] about to write to nowhere",
         "the program that faults on purpose never ran",
     ),
@@ -260,6 +292,72 @@ fn virtio_lines(output: &str) -> Vec<String> {
     violations
 }
 
+/// What the file system server has to report of the disk it was handed:
+/// the capacity the device answered, and the volume it mounted or wrote.
+fn block_lines(output: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    if output.contains("[files] no disk") {
+        violations.push(
+            "the root task handed over no block device, though the machine carries one".to_owned(),
+        );
+        return violations;
+    }
+    for line in output.lines().filter(|line| line.starts_with("[init] no ")) {
+        violations.push(format!("the root task refused the handover: {line}"));
+    }
+    // Both disks are driven and both volumes are mounted: the one the
+    // firmware wrote, and the one the system formatted.
+    for name in ["boot", "scratch"] {
+        if !output.contains(&format!("[files] {name} volume: clusters=")) {
+            violations.push(format!("the file system server mounted no {name} volume"));
+        }
+    }
+    // The scratch volume is 64 MiB of one-sector clusters less what the
+    // tables and the reserved sectors take; a volume of the other disk's
+    // size would be the boot one twice.
+    if !output.contains(&format!(
+        "[files] scratch volume: clusters={SCRATCH_CLUSTERS}"
+    )) {
+        violations.push(format!(
+            "the scratch volume is not the {SCRATCH_CLUSTERS} clusters of a 64 MiB disk"
+        ));
+    }
+    violations
+}
+
+/// Clusters of the scratch volume: [`SCRATCH_SIZE`] of 512-byte sectors,
+/// one sector to a cluster, less the reserved sectors and the two tables
+/// the format writes.
+const SCRATCH_CLUSTERS: u64 = 128_992;
+
+/// That the volume the server mounted is the boot one and that it was
+/// mounted rather than written over.
+///
+/// The boot volume carries the loader, the kernel and the boot image, so
+/// most of its clusters are taken. A disk this server had formatted would
+/// report all but one of them free, which is what this refuses.
+fn boot_volume_lines(output: &str) -> Vec<String> {
+    let Some(line) = output
+        .lines()
+        .find(|line| line.starts_with("[files] boot volume: clusters="))
+    else {
+        return vec!["the server said nothing of the volume it mounted".to_owned()];
+    };
+    let numbers: Vec<u32> = line
+        .split(|byte: char| !byte.is_ascii_digit())
+        .filter_map(|word| word.parse().ok())
+        .collect();
+    let (Some(clusters), Some(free)) = (numbers.first(), numbers.get(1)) else {
+        return vec![format!("the geometry names no cluster counts: {line}")];
+    };
+    if free.saturating_mul(2) >= *clusters {
+        return vec![format!(
+            "the boot volume was written over rather than mounted: {line}"
+        )];
+    }
+    Vec::new()
+}
+
 /// How many lines the second client writes while the first writes its own.
 ///
 /// It repeats the number of the run in the text, so a line that lost bytes
@@ -298,14 +396,17 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     let path = root.join("target").join("audhsos.img");
     let socket = qemu::socket_path("audhsos-qmp")?;
     let _ = std::fs::remove_file(&socket);
-    let mut session = Session::start(
-        &machine,
-        &path,
-        &qemu::Options {
-            qmp: Some(socket.clone()),
-            ..qemu::Options::plain()
-        },
-    )?;
+    let run = qemu::Options {
+        qmp: Some(socket.clone()),
+        // The end-to-end run carries a disk of its own, under its own
+        // name, so that what it writes survives into a second boot and
+        // meets no other run (D-136). It starts blank, so that what the
+        // second boot finds is what the first boot wrote.
+        scratch: Some(blank_scratch_image(root, "e2e")?),
+        ..qemu::Options::plain()
+    };
+    let forwarded = run.network;
+    let mut session = Session::start(&machine, &path, &run)?;
 
     let mut violations = Vec::new();
     for (needle, complaint) in E2E_LINES {
@@ -316,6 +417,21 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     }
     if violations.is_empty() {
         violations.extend(virtio_lines(&session.output()));
+    }
+    if violations.is_empty() {
+        violations.extend(block_lines(&session.output()));
+    }
+    // The network, before anything else this run drives: the program of
+    // the image takes the connection the forwarded port opens, sends back
+    // what it was sent, and then makes an HTTP request over the same
+    // connection, which this answers. It waits for the connection with a
+    // deadline of its own, so the runner opens it as soon as the program
+    // says it is listening.
+    if violations.is_empty() {
+        violations.extend(exchange_over_the_network(forwarded, &mut session));
+    }
+    if violations.is_empty() {
+        violations.extend(network_lines(&session.output()));
     }
     // The picture, while the machine still runs: `app-hello` is waiting to
     // be typed at, so nothing has ended yet. What is on the screen is
@@ -364,6 +480,15 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     if violations.is_empty() {
         violations.extend(torn_lines(&session.output()));
     }
+    // The file the first boot wrote, and a file whose length crosses a
+    // cluster, read back byte for byte.
+    if violations.is_empty() {
+        if session.wait_for(FILES_DONE, E2E_TIMEOUT) {
+            violations.extend(file_lines(&session.output(), true));
+        } else {
+            violations.push("the program that uses the volume did not finish".to_owned());
+        }
+    }
     // The run ends itself: the application reports to the root task, and
     // the root task writes to the exit device through its `SystemControl`.
     // A run this had to kill would say nothing about whether that works.
@@ -391,8 +516,381 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
         eprintln!("--- end ---");
     }
     Error::from_violations(violations)?;
+    test_the_same_disk_again(&machine, &path, root)?;
     test_without_a_framebuffer(&machine, &path)?;
-    test_without_a_network(&machine, &path)
+    test_without_a_network(&machine, &path)?;
+    test_the_secure_shell_client(&machine, &path, root)
+}
+
+/// The acceptance of track S: the client of the image reaches a command on
+/// an OpenSSH server and reads what it wrote.
+///
+/// This is the one check from outside that the exchange hash, the key
+/// derivation and the packet layer are what the documents mean
+/// (14.12). It is a run of its own, with a scratch disk of its own, so
+/// that the end-to-end run above keeps the blank disk its persistence
+/// test needs.
+fn test_the_secure_shell_client(machine: &Machine, path: &Path, root: &Path) -> Result<(), Error> {
+    let material = ssh::material(root)?;
+    let account = ssh::account()?;
+    let server = ssh::Server::start(root, &material)?;
+    note!(
+        "sshd: port {}, {} fingerprint(s) trusted",
+        server.port(),
+        material.fingerprints.len()
+    );
+    let files = ssh::scratch_files(server.port(), &account, &material);
+    let scratch = written_scratch_image(root, "ssh", &files)?;
+    let mut session = Session::start(
+        machine,
+        path,
+        &qemu::Options {
+            scratch: Some(scratch),
+            ..qemu::Options::plain()
+        },
+    )?;
+
+    let mut violations = Vec::new();
+    for (needle, complaint) in ssh_lines() {
+        if !session.wait_for(&needle, E2E_TIMEOUT) {
+            violations.push(complaint.to_owned());
+            break;
+        }
+    }
+    let output = session.finish();
+    report("secure shell", &violations);
+    if !violations.is_empty() {
+        eprintln!("--- serial output of the Secure Shell run ---");
+        eprintln!("{output}");
+        eprintln!("--- what the server said ---");
+        eprintln!("{}", server.log());
+        eprintln!("--- end ---");
+    }
+    Error::from_violations(violations)
+}
+
+/// What the client of the image has to reach, in this order.
+///
+/// The command writes on both streams and exits with a status that is not
+/// zero, so a client that reads only the first stream and one that
+/// reports no status both fail here. The three needles that quote the
+/// command are built from the constants the command itself is built from,
+/// so the check cannot drift away from what the guest is told to run.
+fn ssh_lines() -> [(String, &'static str); 6] {
+    [
+        (
+            "[init] started app-ssh".to_owned(),
+            "the Secure Shell client did not start",
+        ),
+        (
+            "[ssh-app] connected to 10.0.2.2:".to_owned(),
+            "the client reached no server: it read no configuration off the volume, or the connection was refused",
+        ),
+        (
+            "[ssh-app] command started".to_owned(),
+            "the client did not get through the key exchange, the host key, the authentication and the channel",
+        ),
+        (
+            format!("[ssh-app] stdout: {}", ssh::guest::SAID),
+            "the client did not read what the command wrote",
+        ),
+        (
+            format!("[ssh-app] stderr: {}", ssh::guest::COMPLAINED),
+            "the client did not read the extended data of the command",
+        ),
+        (
+            format!("[ssh-app] exit status {}", ssh::guest::STATUS),
+            "the client did not take the exit status of the command",
+        ),
+    ]
+}
+
+/// What the second boot has to reach before anything is typed at it, in
+/// this order. Every program outside the boot set is read off the volume,
+/// so the run passes these one at a time rather than waiting once for the
+/// last of them.
+const SECOND_BOOT_LINES: [(&str, &str); 7] = [
+    (
+        "[files] boot volume: clusters=",
+        "the second boot mounted no boot volume",
+    ),
+    (
+        "[init] started server-display",
+        "the second boot read no program off the volume",
+    ),
+    (
+        "[init] started app-canvas",
+        "the second boot stopped before the program that draws",
+    ),
+    (
+        "[init] started server-net",
+        "the second boot stopped before the network server",
+    ),
+    (
+        "[init] started app-net",
+        "the second boot stopped before the network client",
+    ),
+    (
+        "[init] started app-files",
+        "the second boot did not read every program off the volume",
+    ),
+    ("[hello] ready", "the second boot never said it was ready"),
+];
+
+/// The line the program that uses the volume writes last.
+const FILES_DONE: &str = "[files-app] entries=";
+
+/// What that program has to report.
+///
+/// `first` says whether this is the boot that finds a blank volume: the
+/// first writes the file, the second finds it and compares the bytes.
+fn file_lines(output: &str, first: bool) -> Vec<String> {
+    let mut violations = Vec::new();
+    let wanted = if first {
+        "[files-app] first boot: wrote 30 bytes"
+    } else {
+        "[files-app] second boot: 30 bytes, same=true"
+    };
+    if !output.contains(wanted) {
+        violations.push(format!("the volume did not carry the file: no `{wanted}`"));
+    }
+    // The length crosses a cluster, which on this volume is one sector.
+    if !output.contains("[files-app] long file: wrote 700 read 700 same=true") {
+        violations.push(
+            "a file whose length crosses a cluster did not come back byte for byte".to_owned(),
+        );
+    }
+    if !output.contains("[files-app] entry BOOT.TXT") {
+        violations.push("the listing of the volume names no BOOT.TXT".to_owned());
+    }
+    violations
+}
+
+/// What the runner sends through the forwarded port, which comes back
+/// byte for byte.
+const ECHO: &[u8] = b"a line from the development machine\n";
+
+/// What the runner answers the request with.
+const RESPONSE: &[u8] =
+    b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\nConnection: close\r\n\r\nhello, world\n";
+
+/// How many bytes of the body that response carries.
+const RESPONSE_BODY: usize = 13;
+
+/// How long the runner waits for one read of the connection.
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Opens the forwarded port, exchanges bytes both ways, and answers the
+/// request the program of the image makes over the same connection.
+///
+/// The connection carries two exchanges because the machine has one port
+/// forwarded into it: the echo first, then a request and its answer. What
+/// is checked here is what crossed the link; what the program made of it
+/// is checked in [`network_lines`].
+fn exchange_over_the_network(port: Option<u16>, session: &mut Session) -> Vec<String> {
+    let Some(port) = port else {
+        return vec!["the run forwarded no port".to_owned()];
+    };
+    if !session.wait_for("[net-app] listening on", E2E_TIMEOUT) {
+        return vec!["the program of the image never listened".to_owned()];
+    }
+    let mut violations = match speak(port) {
+        Ok(violations) => violations,
+        Err(error) => vec![format!("the forwarded port refused: {error}")],
+    };
+    // The bytes crossed the link; what the program made of them is a line
+    // it writes after the connection is closed, and the checks that read
+    // those lines run as soon as this returns.
+    if violations.is_empty() && !session.wait_for("[net-app] closed", E2E_TIMEOUT) {
+        violations.push("the program of the image never closed the connection".to_owned());
+    }
+    violations
+}
+
+/// The exchange itself, over one connection.
+fn speak(port: u16) -> std::io::Result<Vec<String>> {
+    use std::io::{Read, Write};
+    let mut violations = Vec::new();
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))?;
+    stream.set_read_timeout(Some(NETWORK_TIMEOUT))?;
+    stream.set_write_timeout(Some(NETWORK_TIMEOUT))?;
+    stream.write_all(ECHO)?;
+    let mut back = vec![0u8; ECHO.len()];
+    stream.read_exact(&mut back)?;
+    if back != ECHO {
+        violations.push(format!(
+            "what came back is not what went out: {:?}",
+            String::from_utf8_lossy(&back)
+        ));
+    }
+    // The request the program makes over the same connection, read up to
+    // the empty line that ends its head.
+    let mut request = Vec::new();
+    let mut byte = [0u8; 1];
+    while !request.ends_with(b"\r\n\r\n") {
+        let read = stream.read(&mut byte)?;
+        if read == 0 {
+            break;
+        }
+        request.extend_from_slice(&byte);
+        if request.len() > 4096 {
+            break;
+        }
+    }
+    let head = String::from_utf8_lossy(&request).into_owned();
+    if !head.starts_with("GET / HTTP/1.1\r\n") {
+        violations.push(format!("the request is not a GET: {head:?}"));
+    }
+    if !head.to_ascii_lowercase().contains("host:") {
+        violations.push(format!("the request names no host: {head:?}"));
+    }
+    stream.write_all(RESPONSE)?;
+    stream.flush()?;
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    Ok(violations)
+}
+
+/// What the network server and its client have to report.
+fn network_lines(output: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    if output.contains("[net] no interface") {
+        violations.push(
+            "the root task handed over no network device, though the machine carries one"
+                .to_owned(),
+        );
+        return violations;
+    }
+    for (needle, complaint) in [
+        (
+            format!("[net] device mac={}", qemu::GUEST_MAC),
+            "the driver did not report the address the command line gave the device".to_owned(),
+        ),
+        (
+            format!("[net] lease address={}", qemu::GUEST_ADDRESS),
+            "the address configuration client reached no lease".to_owned(),
+        ),
+        (
+            "[net-app] lease=yes".to_owned(),
+            "the client was told of no lease".to_owned(),
+        ),
+        (
+            "gateway=10.0.2.2".to_owned(),
+            "the gateway of the link never reached the client".to_owned(),
+        ),
+        (
+            "[net-app] resolved example.com:".to_owned(),
+            "the name was not resolved".to_owned(),
+        ),
+        (
+            format!("[net-app] echo {} bytes", ECHO.len()),
+            "the program did not echo what was sent to it".to_owned(),
+        ),
+        (
+            format!("[net-app] http status=200 body={RESPONSE_BODY}"),
+            "the answer to the request was not parsed".to_owned(),
+        ),
+        (
+            "[net-app] closed".to_owned(),
+            "the connection was not closed cleanly".to_owned(),
+        ),
+    ] {
+        if !output.contains(&needle) {
+            violations.push(format!("{complaint}: no `{needle}`"));
+        }
+    }
+    // A resolution that answered no address is a line with nothing after
+    // the colon, which the check above would take for a success.
+    if let Some(line) = output
+        .lines()
+        .find(|line| line.contains("[net-app] resolved example.com:"))
+        && line
+            .split(':')
+            .nth(1)
+            .is_none_or(|rest| rest.trim().is_empty())
+    {
+        violations.push(format!("the resolution named no address: {line}"));
+    }
+    violations
+}
+
+/// Boots the same disk a second time, which is the persistence test and
+/// the reason the scratch disk is kept across runs (D-136).
+///
+/// # Errors
+///
+/// [`Error::Violations`] when the second boot does not find what the first
+/// one wrote; the errors of the machine.
+fn test_the_same_disk_again(machine: &Machine, path: &Path, root: &Path) -> Result<(), Error> {
+    let socket = qemu::socket_path("audhsos-qmp-again")?;
+    let _ = std::fs::remove_file(&socket);
+    let mut session = Session::start(
+        machine,
+        path,
+        &qemu::Options {
+            qmp: Some(socket.clone()),
+            scratch: Some(scratch_image(root, "e2e")?),
+            ..qemu::Options::plain()
+        },
+    )?;
+    let mut violations = Vec::new();
+    // The programs outside the boot set are read off the volume one
+    // message at a time, so the boot takes minutes rather than seconds and
+    // each line is waited for on its own. What is typed goes first: the
+    // line the program that reads the volume writes last comes after
+    // `[hello] ready`, and a wait for a line that has already gone past
+    // never ends.
+    for (needle, complaint) in SECOND_BOOT_LINES {
+        if !session.wait_for(needle, E2E_TIMEOUT) {
+            violations.push((*complaint).to_owned());
+            break;
+        }
+    }
+    if violations.is_empty() {
+        session.send(b"typed\n")?;
+    }
+    if violations.is_empty() {
+        if session.wait_for(FILES_DONE, E2E_TIMEOUT) {
+            violations.extend(file_lines(&session.output(), false));
+        } else {
+            violations.push("the second boot did not reach the volume".to_owned());
+        }
+    }
+    // The programs that listen report only once something was typed or
+    // moved at them, and the machine ends when every program that reports
+    // has reported. So the same events go in here as in the first boot.
+    if violations.is_empty() {
+        match inject_input(&socket, &mut session) {
+            Ok(()) => {}
+            Err(error) => violations.push(format!("nothing could be injected: {error}")),
+        }
+    }
+    if violations.is_empty() {
+        violations.extend(inject_canvas(&socket, &mut session, root));
+    }
+    if violations.is_empty() {
+        match session.wait_for_end(E2E_TIMEOUT) {
+            None => violations.push("the second boot did not end by itself".to_owned()),
+            status => {
+                let outcome = qemu::outcome_of(status, false);
+                if outcome != qemu::Outcome::Success {
+                    violations.push(format!("the machine reported a {}", outcome.name()));
+                }
+            }
+        }
+    }
+    let output = session.finish();
+    let _ = std::fs::remove_file(&socket);
+    note!(
+        "qemu the same disk again: {} line(s)",
+        output.lines().count()
+    );
+    report("the same disk again", &violations);
+    if !violations.is_empty() {
+        eprintln!("--- serial output of the second boot ---");
+        eprintln!("{output}");
+        eprintln!("--- end ---");
+    }
+    Error::from_violations(violations)
 }
 
 /// Where `app-paint` fills its rectangle and what it fills it with. It says
@@ -1053,6 +1551,23 @@ fn test_without_a_framebuffer(machine: &Machine, path: &Path) -> Result<(), Erro
             break;
         }
     }
+    // This run carries no scratch disk, so the only block device is the
+    // one the firmware booted from. The server mounts its volume and does
+    // not format it: a volume carrying the loader, the kernel and the
+    // boot image has far fewer clusters free than it has clusters, where
+    // one just formatted would have all but one.
+    if violations.is_empty() {
+        if session.wait_for("[files] boot volume: clusters=", E2E_TIMEOUT) {
+            violations.extend(boot_volume_lines(&session.output()));
+        } else {
+            violations.push("the machine without a scratch disk mounted no volume".to_owned());
+        }
+    }
+    // And it has nothing to write to, which it says rather than writing
+    // to the volume it must not.
+    if violations.is_empty() && !session.wait_for("[files] no scratch disk", E2E_TIMEOUT) {
+        violations.push("a machine with nothing to write to did not say so".to_owned());
+    }
     if violations.is_empty() && session.wait_for("[hello] ready", E2E_TIMEOUT) {
         session.send(b"typed\n")?;
     }
@@ -1114,7 +1629,18 @@ const NO_VGA_LINES: [(&str, &str); 4] = [
 
 /// The lines the run without the two network lines has to carry: the bus is
 /// walked, the device is not there, and the machine ends by itself.
-const NO_NETWORK_LINES: [(&str, &str); 3] = [
+const NO_NETWORK_LINES: [(&str, &str); 7] = [
+    // The bus walk is read off the volume like every program outside the
+    // boot set, so the run reaches it one program at a time rather than
+    // waiting once for a line minutes away.
+    (
+        "[files] boot volume: clusters=",
+        "the run without a network mounted no boot volume",
+    ),
+    (
+        "[init] started app-lspci",
+        "the run without a network read no bus walk off the volume",
+    ),
     (
         "[lspci] window segment=",
         "the program that walks the bus was given no window",
@@ -1126,6 +1652,14 @@ const NO_NETWORK_LINES: [(&str, &str); 3] = [
     (
         "[lspci] no virtio device",
         "the bus walk did not report that there is no virtio device",
+    ),
+    (
+        "[net] no interface",
+        "the network server did not report that there is no interface",
+    ),
+    (
+        "[net-app] no interface",
+        "the program that uses a socket was not told there is none",
     ),
 ];
 
@@ -1331,6 +1865,31 @@ fn loader_bytes(root: &Path, profile: &str) -> Result<Vec<u8>, Error> {
     })
 }
 
+/// The programs that lie on the volume, each under the path
+/// `AUDHSOS/BIN/` gives it.
+///
+/// # Errors
+///
+/// The errors of reading what the build wrote, and [`Error::Usage`] for a
+/// program whose name is no 8.3 one.
+fn volume_programs(root: &Path, profile: &str) -> Result<Vec<(String, Vec<u8>)>, Error> {
+    let built = root.join("target/x86_64-unknown-none").join(profile);
+    let mut files = Vec::new();
+    for name in archive::ON_THE_VOLUME {
+        let (spelled, len) = user_loader::volume::file_name(name.as_bytes())
+            .ok_or_else(|| Error::Usage(format!("`{name}` is no name a volume holds")))?;
+        let spelled = std::str::from_utf8(spelled.get(..len).unwrap_or(&[]))
+            .map_err(|_| Error::Usage(format!("`{name}` spells no file name")))?;
+        let path = format!(
+            "{}/{}/{spelled}",
+            user_loader::volume::DIRECTORY[0],
+            user_loader::volume::DIRECTORY[1]
+        );
+        files.push((path, fs::read_bytes(&built.join(name))?));
+    }
+    Ok(files)
+}
+
 /// Where the loader lands.
 fn loader_binary(root: &Path, profile: &str) -> PathBuf {
     root.join("target")
@@ -1392,6 +1951,52 @@ pub(crate) fn scratch_path(root: &Path, name: &str) -> PathBuf {
     root.join("target")
         .join("qemu")
         .join(format!("{name}.scratch.img"))
+}
+
+/// The scratch disk of the run `name`, blank whatever was on it.
+///
+/// The end-to-end run boots twice and the second boot reads what the
+/// first wrote, so the pair says nothing unless it starts from a disk
+/// nothing wrote. A run a person starts keeps its disk instead
+/// ([`scratch_image`]).
+fn blank_scratch_image(root: &Path, name: &str) -> Result<PathBuf, Error> {
+    let path = scratch_path(root, name);
+    let _ = std::fs::remove_file(&path);
+    scratch_image(root, name)
+}
+
+/// The scratch disk of the run `name`, carrying `files` from the first
+/// boot on.
+///
+/// A disk nothing wrote is formatted by `server-fs` on its first boot,
+/// which is what [`blank_scratch_image`] leaves it. This one carries a
+/// volume the host wrote, so the server mounts it and finds the files
+/// there — which is how the key material of the interop run reaches the
+/// guest (D-146). There is no partition table on it: the scratch disk is
+/// the system's own and a table would make it a disk somebody else
+/// partitioned (document 15, 15.10).
+fn written_scratch_image(
+    root: &Path,
+    name: &str,
+    files: &[(String, Vec<u8>)],
+) -> Result<PathBuf, Error> {
+    let path = scratch_path(root, name);
+    let _ = std::fs::remove_file(&path);
+    let borrowed: Vec<(&str, Vec<u8>)> = files
+        .iter()
+        .map(|(path, bytes)| (path.as_str(), bytes.clone()))
+        .collect();
+    let size = usize::try_from(SCRATCH_SIZE).unwrap_or(0);
+    let mut image = vec![0u8; size];
+    let geometry = fat32::write(&mut image, &borrowed)?;
+    note!(
+        "scratch disk {}: {} files, {} clusters",
+        path.display(),
+        files.len(),
+        geometry.clusters
+    );
+    fs::write_bytes(&path, &image)?;
+    Ok(path)
 }
 
 /// The scratch disk of the run `name`, blank when it was not there and as
@@ -1528,6 +2133,39 @@ pub(crate) fn jrs(root: &Path, options: &[String]) -> Result<(), Error> {
     Cmd::cargo()
         .cwd(root)
         .args(["run", "--release", "-p", "jrs-cli", "--"])
+        .args(options.iter().map(String::as_str))
+        .run()
+}
+
+/// The memory benchmark of the development machine.
+///
+/// It is built with optimizations and never from the `dev` profile: a
+/// benchmark of unoptimized code measures the bounds checks, not the
+/// machine.
+///
+/// # Errors
+///
+/// The errors of the build and of the run.
+pub(crate) fn membench(root: &Path, options: &[String]) -> Result<(), Error> {
+    Cmd::cargo()
+        .cwd(root)
+        .args(["run", "--release", "-p", "membench", "--"])
+        .args(options.iter().map(String::as_str))
+        .run()
+}
+
+/// Runs the fuzzer of `norec` with the caller's options.
+///
+/// The engine it drives is not built here: `sh tools/sqlite.sh` clones and
+/// builds it, and the fuzzer refuses the run when it is missing.
+///
+/// # Errors
+///
+/// The errors of the build and of the run.
+pub(crate) fn norec(root: &Path, options: &[String]) -> Result<(), Error> {
+    Cmd::cargo()
+        .cwd(root)
+        .args(["run", "--release", "-p", "norec", "--"])
         .args(options.iter().map(String::as_str))
         .run()
 }
@@ -1950,14 +2588,12 @@ fn minimize_crash(root: &Path, name: &str, file: &str, seconds: u64) -> Result<(
 
 /// Runs the fuzzer of one target for `seconds` seconds, on every core.
 ///
-/// One fuzzer is one process, which is how libFuzzer fuzzes too: it spawns
-/// more of itself for `-jobs`, and this spawns them from here. The workers
-/// share the corpus directory, where an input is named by a hash of its
-/// bytes, so one worker's find is a seed of every worker's next run and two
-/// that find the same input write one file. Each gets a seed of its own, or
-/// they would all walk the same mutations. Each reads the whole corpus, so
-/// what one of them calls new is new against all of it, which is what keeps
-/// the corpus from growing by what another worker already covers.
+/// One process is started, and it starts one worker per core itself. That
+/// process is the orchestrator: it reads the corpus once, keeps the pool,
+/// and hands its workers seeds to change. Every worker reading the whole
+/// corpus was what this used to do, and on a corpus of some thousand inputs
+/// of a slow target it spent the greater part of the run computing the same
+/// answer on every core.
 fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
     let jobs = test_jobs()?;
     note!("fuzzing `{name}` for {seconds} seconds on {jobs} workers");
@@ -1973,22 +2609,17 @@ fn run_fuzzer(root: &Path, name: &str, seconds: u64) -> Result<(), Error> {
         .find(|exe| exe.name == name && !exe.test)
         .ok_or_else(|| Error::Parse(format!("Cargo reported no executable for `{name}`")))?;
     let corpus = corpus_of(root, name).display().to_string();
-    // The seed must differ between the workers and between two runs of the
-    // whole command, and it must not be zero, which the engine reads as none.
-    let mut seed = u64::from(std::process::id()).wrapping_mul(0x9E37_79B9) | 1;
-    let mut commands = Vec::with_capacity(jobs);
-    for _ in 0..jobs {
-        commands.push(
-            executable
-                .command()
-                .cwd(&fuzz)
-                .arg(&corpus)
-                .arg(format!("-max_total_time={seconds}"))
-                .arg(format!("-seed={seed}")),
-        );
-        seed = seed.wrapping_add(1) | 1;
-    }
-    run_parallel(&commands, jobs)
+    // The seed must differ between two runs of the whole command, and it
+    // must not be zero, which the engine reads as none.
+    let seed = u64::from(std::process::id()).wrapping_mul(0x9E37_79B9) | 1;
+    executable
+        .command()
+        .cwd(&fuzz)
+        .arg(&corpus)
+        .arg(format!("-max_total_time={seconds}"))
+        .arg(format!("-workers={jobs}"))
+        .arg(format!("-seed={seed}"))
+        .run()
 }
 
 /// Builds selected regression binaries once, then replays their corpora
@@ -2325,11 +2956,16 @@ pub(crate) fn image(root: &Path, options: &[String]) -> Result<(), Error> {
         .join("audhsos-kernel");
     check_userland(root)?;
     let boot = boot_image_of(root, profile)?;
-    let files = vec![
+    let mut files = vec![
         (disk::LOADER_PATH, fs::read_bytes(&loader)?),
         (disk::KERNEL_PATH, fs::read_bytes(&kernel)?),
         (disk::BOOT_IMAGE_PATH, boot.clone()),
     ];
+    let programs = volume_programs(root, profile)?;
+    for (path, bytes) in &programs {
+        files.push((path.as_str(), bytes.clone()));
+    }
+    note!("volume: {} programs under AUDHSOS/BIN/", programs.len());
     let image = disk::build(&files)?;
     let boot_path = target.join("boot.img");
     let disk_path = target.join("audhsos.img");

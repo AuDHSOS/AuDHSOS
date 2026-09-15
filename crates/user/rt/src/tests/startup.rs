@@ -6,10 +6,10 @@
 use audhsos_abi::FramebufferFormat;
 use audhsos_abi::Handle;
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE};
-use audhsos_abi::startup::{Role, Screen, StartupError, Writer};
+use audhsos_abi::startup::{Location, Role, Screen, StartupError, Writer};
 
 use crate::handle::Typed;
-use crate::startup::{MAX_RAM_OBJECTS, ReadError, Startup};
+use crate::startup::{MAX_BLOCK_DEVICES, MAX_RAM_OBJECTS, ReadError, Startup};
 
 /// A handle every table could hand out.
 fn handle(index: u32) -> Handle {
@@ -74,6 +74,13 @@ fn every_role_lands_in_the_field_it_names() {
         (Role::AuxInterrupt, handle(13)),
         (Role::InputServer, handle(14)),
         (Role::Ecam, handle(15)),
+        (Role::BlockRegisters, handle(16)),
+        (Role::BlockInterrupt, handle(17)),
+        (Role::BlockNotification, handle(18)),
+        (Role::NetRegisters, handle(19)),
+        (Role::NetInterrupt, handle(20)),
+        (Role::NetNotification, handle(21)),
+        (Role::NetServer, handle(22)),
     ])
     .unwrap();
     assert_eq!(startup.own_process.unwrap().handle(), handle(1));
@@ -91,15 +98,27 @@ fn every_role_lands_in_the_field_it_names() {
     assert_eq!(startup.aux_interrupt.unwrap().handle(), handle(13));
     assert_eq!(startup.input_server.unwrap().handle(), handle(14));
     assert_eq!(startup.ecam.unwrap().handle(), handle(15));
+    let device = startup.blocks.iter().next().unwrap();
+    assert_eq!(device.registers.handle(), handle(16));
+    assert_eq!(device.interrupt.unwrap().handle(), handle(17));
+    assert_eq!(device.notification.unwrap().handle(), handle(18));
+    let net = startup.net.unwrap();
+    assert_eq!(net.registers.handle(), handle(19));
+    assert_eq!(net.interrupt.unwrap().handle(), handle(20));
+    assert_eq!(net.notification.unwrap().handle(), handle(21));
+    assert_eq!(startup.net_server.unwrap().handle(), handle(22));
     // The name of this test is a promise, and a role added later would
     // break it silently otherwise: every role but `Ram`, which is a list
-    // and has a test of its own, and the three value roles, which carry no
-    // handle and are read in `the_mode_of_the_framebuffer_comes_as_two_words`
-    // and `the_bus_range_of_the_configuration_window_comes_as_one_word`,
-    // is one field above.
+    // and has a test of its own, and the fifteen value roles, which carry
+    // no handle and are read in
+    // `the_mode_of_the_framebuffer_comes_as_two_words`,
+    // `the_bus_range_of_the_configuration_window_comes_as_one_word`,
+    // `the_four_structures_of_the_block_device_come_as_four_words` and
+    // `the_four_structures_of_the_network_device_come_as_four_words`, is
+    // one field above.
     assert_eq!(
         Role::ALL.len(),
-        19,
+        38,
         "a role was added; give it a field and a line here"
     );
 }
@@ -252,4 +271,199 @@ fn a_value_role_may_not_appear_twice_either() {
         outcome.unwrap_err(),
         ReadError::Duplicate(Role::FramebufferLine)
     );
+}
+
+#[test]
+fn the_four_structures_of_the_block_device_come_as_four_words() {
+    let places = [
+        Location { offset: 0, len: 56 },
+        Location {
+            offset: 0x3000,
+            len: 0x1000,
+        },
+        Location {
+            offset: 0x1000,
+            len: 1,
+        },
+        Location {
+            offset: 0x2000,
+            len: 8,
+        },
+    ];
+    let startup = read_mixed(
+        &[
+            (Role::BlockRegisters, handle(3)),
+            (Role::BlockInterrupt, handle(4)),
+            (Role::BlockNotification, handle(5)),
+        ],
+        &[
+            (Role::BlockCommon, places[0].word()),
+            (Role::BlockNotify, places[1].word()),
+            (Role::BlockIsr, places[2].word()),
+            (Role::BlockConfig, places[3].word()),
+            (Role::BlockNotifyMultiplier, 4),
+            (Role::BlockVectorBit, 7),
+        ],
+    )
+    .unwrap();
+    let device = startup.blocks.iter().next().unwrap();
+    assert_eq!(device.structures(), Some(places));
+    assert_eq!(device.notify_multiplier, Some(4));
+    assert_eq!(device.vector_bit, Some(7));
+}
+
+#[test]
+fn the_four_structures_of_the_network_device_come_as_four_words() {
+    let places = [
+        Location { offset: 0, len: 56 },
+        Location {
+            offset: 0x3000,
+            len: 0x1000,
+        },
+        Location {
+            offset: 0x1000,
+            len: 1,
+        },
+        Location {
+            offset: 0x2000,
+            len: 8,
+        },
+    ];
+    let startup = read_mixed(
+        &[
+            (Role::NetRegisters, handle(3)),
+            (Role::NetInterrupt, handle(4)),
+            (Role::NetNotification, handle(5)),
+        ],
+        &[
+            (Role::NetCommon, places[0].word()),
+            (Role::NetNotify, places[1].word()),
+            (Role::NetIsr, places[2].word()),
+            (Role::NetConfig, places[3].word()),
+            (Role::NetNotifyMultiplier, 4),
+            (Role::NetVectorBit, 0),
+        ],
+    )
+    .unwrap();
+    let device = startup.net.unwrap();
+    assert_eq!(device.structures(), Some(places));
+    assert_eq!(device.notify_multiplier, Some(4));
+    assert_eq!(device.vector_bit, Some(0));
+}
+
+#[test]
+fn a_role_of_the_network_device_before_its_window_is_refused() {
+    let outcome = read(&[(Role::NetInterrupt, handle(2))]);
+    assert_eq!(
+        outcome.unwrap_err(),
+        ReadError::DeviceWithoutRegisters(Role::NetInterrupt)
+    );
+}
+
+#[test]
+fn a_second_network_device_is_refused() {
+    let outcome = read(&[
+        (Role::NetRegisters, handle(1)),
+        (Role::NetRegisters, handle(2)),
+    ]);
+    assert_eq!(
+        outcome.unwrap_err(),
+        ReadError::Duplicate(Role::NetRegisters)
+    );
+}
+
+#[test]
+fn a_block_device_described_in_part_names_no_structures() {
+    let startup = read_mixed(
+        &[(Role::BlockRegisters, handle(3))],
+        &[(Role::BlockCommon, Location { offset: 0, len: 56 }.word())],
+    )
+    .unwrap();
+    let device = startup.blocks.iter().next().unwrap();
+    assert_eq!(device.structures(), None);
+}
+
+#[test]
+fn every_role_of_one_block_device_is_refused_a_second_time() {
+    for role in [Role::BlockInterrupt, Role::BlockNotification] {
+        let outcome = read(&[
+            (Role::BlockRegisters, handle(1)),
+            (role, handle(2)),
+            (role, handle(3)),
+        ]);
+        assert_eq!(outcome.unwrap_err(), ReadError::Duplicate(role));
+    }
+    let values = [
+        Role::BlockCommon,
+        Role::BlockNotify,
+        Role::BlockIsr,
+        Role::BlockConfig,
+        Role::BlockNotifyMultiplier,
+        Role::BlockVectorBit,
+    ];
+    for role in values {
+        let outcome = read_mixed(
+            &[(Role::BlockRegisters, handle(1))],
+            &[(role, 1), (role, 2)],
+        );
+        assert_eq!(outcome.unwrap_err(), ReadError::Duplicate(role));
+    }
+}
+
+#[test]
+fn the_nine_roles_of_a_second_device_describe_a_second_device() {
+    let first = Location { offset: 0, len: 56 };
+    let second = Location {
+        offset: 0x1000,
+        len: 64,
+    };
+    let mut bytes = [0u8; SIZE];
+    let mut view = BufferMut::new(&mut bytes);
+    let mut writer = Writer::new();
+    for (index, place) in [(16u32, first), (26, second)] {
+        writer
+            .give(&mut view, Role::BlockRegisters, handle(index))
+            .unwrap();
+        writer
+            .tell(&mut view, Role::BlockCommon, place.word())
+            .unwrap();
+        writer
+            .give(&mut view, Role::BlockInterrupt, handle(index + 1))
+            .unwrap();
+    }
+    writer.finish(&mut view).unwrap();
+    let startup = Startup::read(Buffer::new(&bytes)).unwrap();
+    assert_eq!(startup.blocks.len(), 2);
+    let devices: Vec<Handle> = startup
+        .blocks
+        .iter()
+        .map(|device| device.registers.handle())
+        .collect();
+    assert_eq!(devices, vec![handle(16), handle(26)]);
+    let commons: Vec<Option<u64>> = startup.blocks.iter().map(|device| device.common).collect();
+    assert_eq!(commons, vec![Some(first.word()), Some(second.word())]);
+}
+
+#[test]
+fn a_block_role_before_the_one_that_opens_a_device_is_refused() {
+    let outcome = read(&[(Role::BlockInterrupt, handle(1))]);
+    assert_eq!(
+        outcome.unwrap_err(),
+        ReadError::BlockWithoutRegisters(Role::BlockInterrupt)
+    );
+    let outcome = read_mixed(&[], &[(Role::BlockCommon, 1)]);
+    assert_eq!(
+        outcome.unwrap_err(),
+        ReadError::BlockWithoutRegisters(Role::BlockCommon)
+    );
+}
+
+#[test]
+fn more_block_devices_than_the_list_holds_are_refused() {
+    let mut pairs = Vec::new();
+    for index in 0..=MAX_BLOCK_DEVICES {
+        let raw = u32::try_from(index).unwrap().wrapping_add(1);
+        pairs.push((Role::BlockRegisters, handle(raw)));
+    }
+    assert_eq!(read(&pairs).unwrap_err(), ReadError::TooManyBlocks);
 }

@@ -7,6 +7,258 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `user-programs`: `socket::Stream`, one end of a TCP connection over the
+  protocol of `server-net`, with `socket::Listener` for the other end and
+  `socket::Idle` for the wait every `WouldBlock` costs (D-142). It maps
+  the rings, moves bytes through them, and answers one ask with bytes,
+  `Waiting`, or `Ended`, so the ambiguity between "nothing yet" and "the
+  peer is done" is a variant and not a zero. `app-net` and `app-ssh` are
+  its callers; between them they lose about two hundred lines of near
+  duplicate, both of their `unsafe` blocks, and every mention of a ring.
+  A listener is consumed by its own `accept`, because under D-143 it
+  becomes the connection it took.
+
+- Track S, step S8 integrated: the Secure Shell client of the image
+  reaches a live OpenSSH. `app-ssh` reads the port, the account, the
+  command, the fingerprints it trusts and its own secret off the scratch
+  volume, opens one connection through the socket protocol of
+  `server-net`, gets through the key exchange, the host key, `publickey`
+  and one `session` channel, runs a command, reads both of its streams,
+  and takes its exit status. `sh tools/xtask.sh test --e2e` runs that
+  handshake last and `test --ssh` runs it alone: it generates an Ed25519
+  host key and client key into `keys/ssh/` where there are none, starts
+  an `sshd` on a free port of the loopback with every algorithm of 14.5
+  named, and writes the trust file, the seed and the port onto a scratch
+  disk of its own (D-146). No key of this repository is tracked.
+
+- `audhsos-ssh`: `hostkey::Fingerprints`, a trust rule over a slice of
+  SHA-256 digests that compares every one of them, so a program can be
+  given the several hosts a file names.
+
+- Phase 14: the network on the machine. A program of the image leases an
+  address, resolves a name, takes a connection on the port the reference
+  machine forwards, and makes an HTTP request over it that it parses.
+
+- `driver-virtio-net`: the virtio network device as logic, over a register
+  trait with a scripted double and a frame trait with a memory double.
+  `VIRTIO_F_VERSION_1` and `VIRTIO_NET_F_MAC` are taken and all
+  thirty-three other bits of virtio 5.1.3 are named and refused, mergeable
+  receive buffers among them, which is what makes one buffer hold one
+  whole frame and one used element one frame. The initialization is steps
+  2 to 8 of virtio 3.1.1 over the state machine of `virtio-queue`, with a
+  vector per queue read back as 4.1.5.1.3 asks. The receive path posts
+  every buffer before the first frame arrives, copies the frame out from
+  behind its twelve-byte header, and puts the buffer back in the call that
+  took it; the transmit path drains the completions before it writes, and
+  refuses rather than waits when every buffer is with the device.
+
+- `server-net`: the network server as logic, around `net-stack`. It keeps
+  one socket table per client, found by the badge of the endpoint the
+  message came through, and two rings per socket in one memory object. A
+  round moves what a connection holds into the inbound ring as far as the
+  ring has room and what the client wrote into the connection as far as
+  its window allows, which is the back pressure TCP already has. It is
+  tested against a second server on the same link and against a station
+  that answers a discover, a request and one name.
+
+- The socket protocol in `user-proto`, with the byte ring both directions
+  of a socket travel through, and `app-net`, the program of the image that
+  uses it. `server-net` and `app-net` join the start table of the root
+  task, which prepares the network device the way it prepares the block
+  devices: the register window, the message interrupt, and the
+  notification it is bound to.
+
+- D-142: every call of the socket protocol is answered at once, and what
+  is not ready yet is answered `WouldBlock`. A server of this system holds
+  one reply capability at a time, so a reply held back until a connection
+  opens stalls every other client behind the one that is waiting.
+
+- D-143: a listener of the socket protocol becomes the connection a peer
+  opened and keeps its number, `net-tcp` opening one connection in
+  `LISTEN` and turning that same connection into an open one.
+
+- D-144: the two programs of the network are a package of their own,
+  `user-net-programs`, and every other program stays in `user-programs`. A
+  binary of this workspace names every dependency of its package, so a
+  package is the unit that decides what a program carries; the stack under
+  these two is megabytes of an image every other program is read off the
+  volume one message at a time. The end-to-end run is what noticed.
+
+- The fuzz target `virtio_net_rx`: a used element and a receive buffer of
+  arbitrary bytes, which the driver yields a frame from or refuses, and
+  which never costs more than the one buffer it refused.
+
+- The end-to-end run opens the forwarded port, sends a line and reads it
+  back, answers the request the program makes over the same connection,
+  and checks that the driver reported the hardware address the command
+  line gave the device, that the lease is the address the built-in server
+  hands out first, that the gateway reached the client, and that the name
+  was resolved. The run without the two network lines checks that the
+  server reports no interface and that the program is told there is none.
+
+- D-141: the client of step S8 is built off the phases, and what is left
+  of that step is the integration alone. D-123 put the whole of S8 behind
+  Phase 14 because the step was written as the client over a socket; two
+  of the three things it names need no socket, since 14.6 makes the client
+  a state machine with no I/O and 14.12 checks most of it on the host. The
+  decision records what that changed and what it did not: the step keeps
+  its number and its size, and the socket of `server-net`, the program of
+  the image and the handshake against a live OpenSSH still wait on Phase
+  14. It also records the two smaller things the first end-to-end run
+  settled — that a connection begins in `Exchange::Asked`, because this
+  side sends its `SSH_MSG_KEXINIT` as soon as it has sent its
+  identification string, and that the client's buffers are the caller's at
+  the size RFC 4253, section 6.1, makes mandatory.
+
+- Two fuzz targets for the Secure Shell client, which 14.12 named and
+  which now exist. `ssh_packet` reads arbitrary bytes as a binary packet
+  with the cipher in use and without it — a packet that is read lies
+  inside what arrived, its payload is shorter than the packet that carried
+  it, and the sequence number counts a packet that was read and nothing
+  else — and frames the same bytes as a payload and reads them back.
+  `ssh_handshake` reads them as the identification string, as a
+  `SSH_MSG_KEXINIT` with its ten name-lists, as the reply of either key
+  exchange method, and as a host key blob, which are the places where a
+  byte from the network chooses a length; what it holds is that nothing is
+  read as longer than what arrived, that what the negotiation chooses is a
+  name both sides offered, and that no input is admitted as a host key by
+  a rule that names another.
+
+- Track S, the client of step S8: `audhsos-ssh` gains `client`, one state
+  machine over every layer below it with no I/O. It is given bytes that
+  arrived and a buffer to write into, and it answers with what it wants
+  sent, what it has to give its caller, and what it waits for; the
+  generator, the private key, the rule that admits a host key and the
+  moment are parameters (D-46, D-49). What it does, in order: the
+  identification string of RFC 4253, section 4.2, the negotiation and the
+  key exchange of sections 7 and 8, `publickey` authentication with the
+  query first and the signature after it, one `session` channel with
+  `exec` or `shell`, the window granted back as it is spent, and a
+  re-exchange whenever either side asks for one. Its buffers are the
+  caller's and their minimum is the packet size section 6.1 makes
+  mandatory, which is what one connection costs. No document publishes a
+  complete SSH handshake with the keys that made it, so the machine is
+  driven end to end against a server written in the tests over the same
+  layers: it reaches a command, reads both of its streams, takes its exit
+  status, and answers the close; a re-exchange the server starts changes
+  the keys and not the session identifier; a host key no rule admits and
+  a server that refuses the key each end the connection. Catalog 6.6.79.
+  What is left of S8 is the socket of `server-net`, the program of the
+  image, and the handshake against an OpenSSH, all of which need Phase 14.
+
+- Track S, step S7, the re-exchange: `audhsos-ssh` gains `rekey`, which
+  says when this client asks for a key re-exchange, what the peer's
+  `SSH_MSG_KEXINIT` asks of it, and what may be sent while one runs. One
+  is due after a gigabyte carried or an hour of connection time, which
+  RFC 4253, section 9, recommends, and at half the sequence number space,
+  which is this crate's: the number of section 6.4 wraps at 2^32 and a
+  re-exchange has to happen before it does. Time is a parameter and no
+  clock is read here (D-46). The roles do not change and the session
+  identifier does not change; what the new keys reset is the byte count
+  and not the packet count, because the sequence number they stand for is
+  not reset either. While an exchange runs only messages below 50 may be
+  sent, so the authentication of RFC 4252 and the channels of RFC 4254
+  wait for the new keys. Beside it `msg` gains `Disconnect`, the message
+  of section 11.1 with the reason codes RFC 4250, section 4.2.2, assigns.
+  Catalog 6.6.78. Every layer of the protocol is now built; what is left
+  of the track is the client over a socket, which needs Phase 14.
+
+- Track S, step S6, the session channel: `audhsos-ssh` gains `channel`,
+  which opens the one `session` channel of RFC 4254, section 6.1, carries
+  data and extended data under the window of section 5.2, sends the
+  `exec`, `shell` and `env` requests of sections 6.4 and 6.5, reads the
+  exit status and the exit signal of section 6.10, and runs the close
+  sequence of section 5.3. The window is a credit the sender spends and
+  the receiver grants back, in both directions and never past 2^32 - 1;
+  extended data spends the same window as ordinary data, which a second
+  window would have got wrong. Nothing is sent before the open is
+  confirmed, after a close, or — for data — after an end of file this
+  side sent; a write that does not fit its buffer spends no window. Two
+  refusals are new, one for a message this channel cannot take and one
+  for a window that cannot be what a message makes it. Catalog 6.6.77.
+
+- Track S, step S5, the authentication exchange: `audhsos-ssh` gains
+  `auth`, which writes the service request of RFC 4252, section 5, the
+  `publickey` query with the boolean false, and the request that
+  authenticates with the signature of section 7 over the session
+  identifier and the fields that follow it — which is what makes a
+  signature captured from one connection worthless on another. The signed
+  data is written once into a buffer the caller owns and the request is
+  that data without the session identifier, so no field is encoded twice;
+  `signed_len` and `request_len` say how long the two are, and the crate
+  still allocates nothing. `ClientKey` takes the private key as a
+  parameter and clears it when it is dropped: where that key comes from
+  is the program's, and 14.13 holds the question open against step S8.
+  `Response` is the four answers a server sends — the failure with its
+  method list and its partial-success flag, the success, the banner, and
+  the `SSH_MSG_USERAUTH_PK_OK` that is leave to sign — and `ExtInfo`
+  reads the `SSH_MSG_EXT_INFO` of RFC 8308, section 2.3, keeps
+  `server-sig-algs`, and skips every other extension whatever bytes its
+  value holds, which section 2.5 requires of every reader. Catalog
+  6.6.76.
+
+- Track S, step S4, the host key: `audhsos-ssh` gains `hostkey`, which
+  reads the `ssh-ed25519` blobs of RFC 8709, sections 4 and 6, checks the
+  signature over the exchange hash, and computes the SHA-256 fingerprint
+  of a blob that OpenSSH prints after `SHA256:`. SSH has no certificate
+  chain, so which key a client will talk to is a rule the crate is given
+  and never decides: `Trust` is a trait, `Fingerprint` is the one rule
+  this crate carries — the first of the two sources 14.10 names, a digest
+  the image holds — and `accept` reads the blob, asks the rule, and checks
+  the signature in that order, so a key from a host this client will not
+  reach costs no signature check. A blob of another algorithm, a key or a
+  signature of another length, and a byte after either are refused before
+  any arithmetic runs. Three refusals are new — a blob this client does
+  not read, a key no rule admits, and a signature that is not the peer's —
+  and `SSH_DISCONNECT_HOST_KEY_NOT_VERIFIABLE` of RFC 4250, section
+  4.2.2, is the reason code the last two carry. Catalog 6.6.75.
+
+- `norec`, a NoREC fuzzer: random SQL against a database engine, checked
+  against the same query in a form that engine cannot optimize. One case
+  is a random database, a random predicate, and two queries over it —
+  the predicate in a `WHERE` clause, where an optimizer works, and the
+  same predicate summed over every row of the same `FROM` clause, where
+  there is nothing to optimize. The two must count the same rows; when
+  they do not, the engine answered its own query two ways. The technique
+  needs no reference implementation and no model of SQL semantics, which
+  is what keeps the tool small. What it generates is what an optimizer
+  has something to do with: affinities and collations, indexes, partial
+  indexes, indexes over expressions, `ANALYZE`, and a second table joined
+  by a comma, a `JOIN` or a `LEFT JOIN`. What it never generates is what
+  section 3.4 of the paper excludes — a subquery, a function of the clock
+  or of a random source, `DISTINCT` and the aggregates — because each may
+  answer the two forms differently. A finding is shrunk to its smallest
+  form, every candidate strictly smaller than the last, and written as a
+  file the shell reproduces it from. It is not a step of `check`:
+  `sh tools/xtask.sh norec` runs it against the build
+  `sh tools/sqlite.sh` leaves under `research/`. SQLite 3.28.0, the
+  version the paper was evaluated against, answers three of twenty
+  thousand cases two ways, each a `LEFT JOIN` whose unmatched row the
+  `WHERE` clause drops and the sum keeps; 3.53.4 answers all twenty
+  thousand consistently. D-140, catalog 6.6.74, and the paper in
+  `docs/acm/`.
+
+- The NoREC paper in `docs/acm/`: Rigger and Su, *Detecting Optimization
+  Bugs in Database Engines via Non-Optimizing Reference Engine
+  Construction*, ESEC/FSE 2020, which `norec` implements and cites by
+  section. The authors' accepted version, because the ACM Digital Library
+  answers an automated request with `403` and the first author serves the
+  same paper; the second case of D-124, so the README records the terms
+  it is kept under. D-140.
+
+- `tools/sqlite.sh`, which clones SQLite, checks out one release tag, and
+  builds it below `research/`, where `.gitignore` already keeps the other
+  cloned operating systems out of this repository. The reason is reading:
+  a database engine that has been maintained for twenty-five years answers
+  questions about file formats, journaling and page caches that no
+  document does. The default is 3.53.4 and `--version X.Y.Z` picks another
+  tag; `--dir`, `--jobs` and `--clean` are the rest. The clone is shallow
+  and a different tag is fetched the same way, because one commit is all a
+  depth-1 clone carries. Which tag is checked out is read from the tags
+  that point at `HEAD`, not from `git describe`, which returns `release`
+  for these commits. No `tclsh` is needed: SQLite's autosetup builds its
+  own `jimsh`. 07 section 7.3 has it.
+
 - `driver-virtio-blk`, the virtio block device of virtio 5.2 as logic:
   what the registers of one mean, which features it asks for, how a
   request is framed, and the order the device is brought up in. Registers
@@ -436,6 +688,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `audhsos-ssh`: a global request the peer makes of the connection
+  (RFC 4254, section 4) no longer ends the connection. This client offers
+  nothing a peer can ask of it, so the answer is
+  `SSH_MSG_REQUEST_FAILURE` where a reply was asked for and nothing where
+  it was not. OpenSSH sends `hostkeys-00@openssh.com` as such a request
+  as soon as it has authenticated a client, which is what the handshake
+  against a live server found.
+
 - A switch out of a thread that holds one of the kernel's cells leaves that
   cell borrowed by a thread that is no longer running, and nothing gets it
   back. `task::run` refuses to switch from there now, as the test harness
@@ -451,7 +711,69 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   line, which from outside is indistinguishable from a machine that has
   stopped (D-133).
 
+### Fixed
+
+- The network server no longer loses a pool buffer when the stack refuses
+  the call it travelled into: the port is asked about first, through the
+  new `Stack::is_bound` and `Stack::listens_on`, and a destination this
+  host has no address for is refused before a window pair leaves the pool.
+  A `UdpBind` or `TcpListen` on a port that is held answers `AddressInUse`.
+
+- `push` leaves the outbound ring alone while a connection is not open, so
+  what a client writes between `TcpConnect` and the handshake goes when the
+  connection opens instead of being dropped; `TcpShutdown` moves what the
+  ring holds into the connection before the `FIN`.
+
+- A datagram is whole or it is not delivered: `UdpSendTo` refuses a `len`
+  above one datagram of the link rather than sending part of it and leaving
+  the rest to prefix the next one, and a datagram that arrives goes into
+  the ring at its whole length.
+
+- The rings of a socket slot stay with the client they were first given to
+  until the server learns that client is gone, and both rings are emptied
+  before they are handed out. A closed client could otherwise read and
+  write the socket of whoever took the slot next.
+
+- A second `Resolve` with another name while one runs answers `Busy`
+  instead of the running name's addresses.
+
+- The socket number of a slot handed out more than sixty-five thousand
+  times names that slot again: the count the slot holds is kept inside the
+  sixteen bits the number carries.
+
+- The network driver puts every receive buffer back when a used element
+  refuses, so eight refusals no longer leave the receive queue empty and
+  the server deaf.
+
 ### Changed
+
+- D-145: every thread of a program gets sixty-four pages of stack, not
+  thirty-two. `Server` of `server-net` is twenty-nine kibibytes, `main`
+  holds one and `Server::new` holds two more while it builds one, which
+  reached the last mapped page of the old stack: the network server
+  faulted between the line that reports the device and its first poll.
+
+- A fuzzing run of more than one worker is one orchestrator process and N
+  workers, where it was N independent engines over one corpus directory.
+  Loading a corpus means running every file in it to learn what it
+  reaches, so the old shape paid the whole corpus on every core before it
+  mutated anything. The orchestrator reads the corpus once, deals the
+  files round robin, keeps the pool, and draws the seeds; a worker
+  mutates, runs, and says what it reached. The draw stays with the pool
+  because it weights an input by the features it owns times its place,
+  which no process that sees a part of the corpus can compute. What a
+  worker needs to answer whether an input reached anything is the
+  coverage table alone, which it is handed once after the load; it keeps
+  only the features that table lets it claim, so the pipe carries nothing
+  for the inputs that reach nothing. Measured on four cores over 6,925
+  `jrs_backend` inputs with a budget of 120 seconds: loading went from
+  113-129 seconds of that budget to 34, and the run from 48,056
+  executions across four processes to 799,868, which is 394 executions a
+  second against 6,665. `-workers` is implemented rather than refused, and
+  the fleet it asks for is never larger than the machine has cores, which
+  the run says when it gives fewer than were asked for; `-fuzz_worker` is
+  this engine's own flag for a worker process. `-jobs` and `-fork` stay
+  refused (D-147).
 
 - `Interrupt::line` is an `Option<u8>`: a message interrupt has no line at
   any controller the kernel could mask. `interrupt_ack` on such an object

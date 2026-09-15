@@ -76,6 +76,17 @@ impl Mapping {
         Ok(Mapping { address, len })
     }
 
+    /// The window of `len` bytes at `address`, which a caller holds
+    /// already: a map that failed part way left what it made behind, and
+    /// this is what takes that back.
+    ///
+    /// It maps nothing. What it answers stands for a region of the
+    /// address space and not for a memory object.
+    #[must_use]
+    pub const fn adopt(address: u64, len: u64) -> Self {
+        Mapping { address, len }
+    }
+
     /// Where the object lies.
     #[must_use]
     pub const fn address(&self) -> u64 {
@@ -130,6 +141,31 @@ impl Mapping {
         let pointer = core::ptr::without_provenance::<RingPage>(address);
         // SAFETY: the caller guarantees the live mapping and exclusively
         // atomic shared access. Every bit pattern of the atomic fields is valid.
+        Some(unsafe { &*pointer })
+    }
+
+    /// A shared socket page, without manufacturing an exclusive byte
+    /// slice.
+    ///
+    /// # Safety
+    ///
+    /// This mapping must be live and backed by a socket page, or by a
+    /// private zeroed page about to be initialized. Every peer must reach
+    /// the two rings atomically, and the mapping may not be taken back
+    /// while the reference stands.
+    #[must_use]
+    pub unsafe fn socket_page(&self) -> Option<&user_proto::ring::SocketPage> {
+        use user_proto::ring::SocketPage;
+        let address = usize::try_from(self.address).ok()?;
+        if self.len < u64::try_from(core::mem::size_of::<SocketPage>()).ok()?
+            || !address.is_multiple_of(core::mem::align_of::<SocketPage>())
+        {
+            return None;
+        }
+        let pointer = core::ptr::without_provenance::<SocketPage>(address);
+        // SAFETY: the caller guarantees the live mapping and exclusively
+        // atomic shared access. Every bit pattern of the atomic fields is
+        // valid.
         Some(unsafe { &*pointer })
     }
 

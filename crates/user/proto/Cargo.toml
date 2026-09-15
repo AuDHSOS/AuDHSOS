@@ -14,6 +14,7 @@ rust-version.workspace = true
 audhsos-abi.workspace = true
 driver-i8042.workspace = true
 gfx.workspace = true
+net-wire.workspace = true
 user-rt.workspace = true
 
 [lints]

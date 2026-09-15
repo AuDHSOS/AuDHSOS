@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "virtio_net_rx"
+description = "Fuzz target: virtio_net_rx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "virtio_net_rx"
+path = "src/main.rs"
+test = false
+bench = false
+doc = false
+
+[dependencies]
+driver-virtio-net = { workspace = true, features = ["test-doubles"] }
+fuzz-support.workspace = true
+virtio-queue = { workspace = true, features = ["test-doubles"] }
+
+[lints]
+workspace = true

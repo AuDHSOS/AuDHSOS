@@ -49,6 +49,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "audhsos-ssh"
+version = "0.1.0"
+dependencies = [
+ "crypto-aead",
+ "crypto-ct",
+ "crypto-dh",
+ "crypto-ec",
+ "crypto-hash",
+ "crypto-rng",
+]
+
+[[package]]
 name = "audhsos-time"
 version = "0.1.0"
 
@@ -120,6 +132,14 @@ name = "crypto-ct"
 version = "0.1.0"
 
 [[package]]
+name = "crypto-dh"
+version = "0.1.0"
+dependencies = [
+ "crypto-bignum",
+ "crypto-ct",
+]
+
+[[package]]
 name = "crypto-ec"
 version = "0.1.0"
 dependencies = [
@@ -174,6 +194,13 @@ dependencies = [
 [[package]]
 name = "driver-i8042"
 version = "0.1.0"
+
+[[package]]
+name = "driver-virtio-net"
+version = "0.1.0"
+dependencies = [
+ "virtio-queue",
+]
 
 [[package]]
 name = "elf"
@@ -430,6 +457,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ssh_handshake"
+version = "0.1.0"
+dependencies = [
+ "audhsos-ssh",
+ "crypto-rng",
+ "fuzz-support",
+]
+
+[[package]]
+name = "ssh_packet"
+version = "0.1.0"
+dependencies = [
+ "audhsos-ssh",
+ "crypto-rng",
+ "fuzz-support",
+]
+
+[[package]]
 name = "tar"
 version = "0.1.0"
 dependencies = [
@@ -486,6 +531,22 @@ version = "0.1.0"
 dependencies = [
  "audhsos-utf16",
  "fuzz-support",
+]
+
+[[package]]
+name = "virtio-queue"
+version = "0.1.0"
+dependencies = [
+ "audhsos-collections",
+]
+
+[[package]]
+name = "virtio_net_rx"
+version = "0.1.0"
+dependencies = [
+ "driver-virtio-net",
+ "fuzz-support",
+ "virtio-queue",
 ]
 
 [[package]]

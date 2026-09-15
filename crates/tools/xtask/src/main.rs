@@ -23,6 +23,7 @@ mod qemu;
 mod qmp;
 mod session;
 mod spdx;
+mod ssh;
 mod symbolize;
 mod test_ext;
 mod toolchain;
@@ -41,7 +42,7 @@ subcommands:
   check-layering   dependency edges, forbid(unsafe_code), assembly files
   check-deps       no dependency outside the workspace
   unsafe-budget    unsafe blocks and asm! sites per adapter crate
-  test [--host] [--qemu] [--e2e] [--release]
+  test [--host] [--qemu] [--e2e] [--ssh] [--release]
                    run the selected test levels (default: host);
                    --release builds the end-to-end run from the release
                    profile
@@ -49,6 +50,8 @@ subcommands:
                    target/pdf/; options are passed to the tool, which
                    explains them with --help
   jrs [options]    build and run the jrs host CLI in release mode
+  norec [options]  the NoREC fuzzer against the SQLite build under
+                   research/; --help describes its options
   jrs-check [--fix-format]
                    focused jrs formatting, tests, clippy and no_std cross-check
   regex-check [--fix-format]
@@ -68,6 +71,10 @@ subcommands:
   qemu-runner <elf>
                    Cargo's runner for the kernel target: wrap a test kernel
                    into a disk image, run it, and read the serial protocol
+  membench [options]
+                   the bandwidth and the latency of the memory of this
+                   machine, measured in release mode; --help explains the
+                   options. Never a step of check
   symbolize <elf> <address>...
                    the function, file, and line of every address
   test-ext [--status] [<suite>...]
@@ -126,6 +133,7 @@ fn run() -> Result<(), Error> {
         "test" => commands::test(&root, options),
         "pdf" => commands::pdf(&root, options),
         "jrs" => commands::jrs(&root, options),
+        "norec" => commands::norec(&root, options),
         "jrs-check" => commands::jrs_check(&root, options),
         "regex-check" => commands::regex_check(&root, options),
         "coverage" => none(subcommand, options).and_then(|()| commands::coverage(&root)),
@@ -139,6 +147,7 @@ fn run() -> Result<(), Error> {
         "image" => commands::image(&root, options),
         "qemu-runner" => commands::qemu_runner(&root, options),
         "run" => commands::run(&root, options),
+        "membench" => commands::membench(&root, options),
         "symbolize" => symbolize::command(options),
         "test-ext" => test_ext::command(&root, options),
         "check" => commands::check(&root, &channel, options),

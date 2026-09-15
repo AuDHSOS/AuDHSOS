@@ -138,6 +138,25 @@ roles! {
     InputServer = 17, handle => "The endpoint of the input server, badged with what that server is to know this process by. A program that listens receives one, exactly as a program that draws receives `DisplayServer`, and for the same reason (D-109).",
     Ecam = 18, handle => "A device memory object over the configuration window of the PCI bus. Only the program that enumerates the bus receives it.",
     EcamBuses = 19, value => "The segment group of that window in the high half of the word, its first bus in bits 15 to 8, and its last bus in bits 7 to 0. It comes with `Ecam`.",
+    BlockRegisters = 20, handle => "A device memory object over the base address register that carries the four structures of one virtio block device. It opens the description of that device: the eight roles below belong to the device this names, and a machine with two disks sends the nine of them twice. Only the file system server receives them.",
+    BlockCommon = 21, value => "Where the common configuration structure lies in that window: its offset in the high half of the word, its length in the low half. It comes with `BlockRegisters`.",
+    BlockNotify = 22, value => "The same two numbers for the notification structure.",
+    BlockIsr = 23, value => "The same two numbers for the interrupt status structure.",
+    BlockConfig = 24, value => "The same two numbers for the device configuration structure.",
+    BlockNotifyMultiplier = 25, value => "The multiplier a queue index is scaled by inside the notification structure (virtio 4.1.4.4).",
+    BlockInterrupt = 26, handle => "The message interrupt of that device. The driver acknowledges an interrupt through it.",
+    BlockNotification = 27, handle => "The notification the message interrupt is bound to.",
+    BlockVectorBit = 28, value => "The bit of that notification the message interrupt sets. It closes the description `BlockRegisters` opened.",
+    NetRegisters = 29, handle => "A device memory object over the base address register that carries the four structures of the virtio network device. It opens the description of that device: the eight roles below belong to it. Only the network server receives them.",
+    NetCommon = 30, value => "Where the common configuration structure lies in that window: its offset in the high half of the word, its length in the low half. It comes with `NetRegisters`.",
+    NetNotify = 31, value => "The same two numbers for the notification structure.",
+    NetIsr = 32, value => "The same two numbers for the interrupt status structure.",
+    NetConfig = 33, value => "The same two numbers for the device configuration structure.",
+    NetNotifyMultiplier = 34, value => "The multiplier a queue index is scaled by inside the notification structure (virtio 4.1.4.4).",
+    NetInterrupt = 35, handle => "The message interrupt of that device. The driver acknowledges an interrupt through it.",
+    NetNotification = 36, handle => "The notification the message interrupt is bound to.",
+    NetVectorBit = 37, value => "The bit of that notification the message interrupt sets. It closes the description `NetRegisters` opened.",
+    NetServer = 38, handle => "The endpoint of the network server, badged with what that server is to know this process by. A program that uses a socket receives one, as a program that draws receives `DisplayServer`.",
 }
 
 /// Why a startup message could not be read.
@@ -343,6 +362,43 @@ impl BusRange {
             first_bus: ((buses >> 8) & 0xFF) as u8,
             last_bus: (buses & 0xFF) as u8,
         }
+    }
+}
+
+/// Where one structure of a device lies in the window its role names, as
+/// that structure's value role carries it.
+///
+/// It is here for the reason [`Screen`] and [`BusRange`] are: the root task
+/// packs the word out of what it read of the capability list, and the
+/// driver unpacks it. The four structures of the virtio block device are
+/// four of these, and the offsets count from the base address register and
+/// not from the frame the window starts at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Location {
+    /// How far into the window the structure starts.
+    pub offset: u32,
+    /// How many bytes it covers.
+    pub len: u32,
+}
+
+impl Location {
+    /// The word one of the four structure roles carries.
+    #[must_use]
+    pub const fn word(self) -> u64 {
+        pack(self.offset, self.len)
+    }
+
+    /// The place that word describes.
+    #[must_use]
+    pub const fn from_word(word: u64) -> Self {
+        let (offset, len) = unpack(word);
+        Location { offset, len }
+    }
+
+    /// `true` when the structure lies inside a window of `bytes`.
+    #[must_use]
+    pub fn fits(self, bytes: u64) -> bool {
+        u64::from(self.offset).wrapping_add(u64::from(self.len)) <= bytes
     }
 }
 

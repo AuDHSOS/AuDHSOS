@@ -23,12 +23,8 @@
 
 use std::path::PathBuf;
 
+use crate::cover::{Cover, FEATURE_SLOTS, slot_of};
 use crate::rng::Rng;
-
-/// How many features the ownership table tells apart. A feature beyond
-/// this many shares a slot with an older one, which costs coverage and
-/// never correctness.
-const FEATURE_SLOTS: usize = 1 << 21;
 
 /// One input the run keeps.
 #[derive(Clone, Debug)]
@@ -138,6 +134,19 @@ impl Pool {
     #[must_use]
     pub fn all(&self) -> &[Input] {
         &self.inputs
+    }
+
+    /// What the pool has reached, as one size per feature, for a worker
+    /// to filter its runs against.
+    #[must_use]
+    pub fn cover(&self) -> Cover {
+        let mut cover = Cover::new();
+        for (slot, held) in self.slots.iter().enumerate() {
+            if held.smallest != 0 {
+                cover.claim(u32::try_from(slot).unwrap_or(0), held.smallest, false);
+            }
+        }
+        cover
     }
 
     /// Whether `feature` is reached by an input no larger than `size`.
@@ -301,9 +310,4 @@ enum Claim {
     TakenOver,
     /// Something reaches it in no more bytes.
     Refused,
-}
-
-/// The slot of the ownership table that `feature` uses.
-fn slot_of(feature: u32) -> usize {
-    usize::try_from(feature).unwrap_or(0) % FEATURE_SLOTS
 }

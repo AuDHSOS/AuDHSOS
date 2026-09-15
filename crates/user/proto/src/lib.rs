@@ -8,12 +8,15 @@
 pub mod bytes;
 pub mod console;
 pub mod display;
+pub mod file;
 pub mod input;
 pub mod keyboard;
 pub mod label;
 pub mod memory;
 pub mod name;
 pub mod parent;
+pub mod ring;
+pub mod socket;
 
 pub use bytes::Bytes;
 pub use console::{Chunk, MAX_CHUNK};
@@ -22,6 +25,8 @@ pub use input::{Event, KeyCode, KeyEvent, PointerEvent, RingReader, RingWriter};
 pub use keyboard::{Keyboard, Layout, Modifiers};
 pub use label::{Label, ProtoError, Protocol, VERSION};
 pub use name::{MAX_NAME, Name};
+pub use ring::{RING_CAPACITY, Ring, RingHeader, SOCKET_PAGE_LEN, SocketPage};
+pub use socket::{Addresses, Direction, Endpoint, Interface, Opened, State};
 
 #[cfg(test)]
 mod tests;

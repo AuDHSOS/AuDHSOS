@@ -18,7 +18,8 @@ qemu-system-x86_64 \
   -smp 1 \
   -m 256M \
   -drive if=pflash,format=raw,readonly=on,file=<qemu share dir>/edk2-x86_64-code.fd \
-  -drive format=raw,file=<disk image> \
+  -drive if=none,id=boot,format=raw,file=<disk image> \
+  -device virtio-blk-pci,drive=boot,disable-legacy=on,num-queues=1,addr=0x4 \
   -serial stdio \
   -display none \
   -vga none \
@@ -71,7 +72,7 @@ From Phase 13 on the runner adds two more lines:
 
 ```
 -netdev user,id=n0,hostfwd=tcp:127.0.0.1:<free port>-:7 \
--device virtio-net-pci,netdev=n0,disable-legacy=on,mq=off
+-device virtio-net-pci,netdev=n0,disable-legacy=on,mq=off,mac=52:54:00:12:34:56
 ```
 
 The device arrives one phase before anything drives it, because what
@@ -87,7 +88,9 @@ a listener in the guest. The runner picks the host port free and records it in t
 device, which is the only kind `virtio-queue` and `driver-virtio-net`
 implement, so its PCI device id is `0x1041` and not the transitional
 `0x1000`; `mq=off` is the default and is written down because the driver
-depends on it. Dropping the two lines is the run Phases 13 and 14 are also
+depends on it; `mac=` is written down rather than left to QEMU's default
+because the address the driver reports is checked against the address the
+run asked for. Dropping the two lines is the run Phases 13 and 14 are also
 accepted on, as `-vga none` is the second run Phase 9 is accepted on.
 Before Phase 13 the machine has no network device at all: a device that
 neither a driver nor a bus walk looks at is one more thing for an
@@ -97,8 +100,15 @@ A run that writes adds two lines more, and no run has them unless it asks:
 
 ```
 -drive if=none,id=s0,format=raw,file=<scratch disk> \
--device virtio-blk-pci,drive=s0,disable-legacy=on,num-queues=1
+-device virtio-blk-pci,drive=s0,disable-legacy=on,num-queues=1,addr=0x5
 ```
+
+The boot disk is a block device of the same kind, at slot `0x4`, and the
+scratch disk at `0x5`. The slot is what tells them apart: the firmware
+reads the lower one, and the system writes the higher one. Both are
+virtio because the firmware's own drivers are gone after
+`ExitBootServices`, and a system that is to read the volume it booted
+from has to drive the controller itself.
 
 The boot volume is the firmware's and the loader's, and nothing in the
 system writes it. What the system writes, it writes to this second disk,
@@ -128,7 +138,7 @@ is, which is what a test that boots twice to see what survived needs.
 | PCI configuration space via ECAM (`MCFG`) | the kernel reads the `MCFG` table and reports the window through `system_info`; userland maps it as a `Device` memory object and walks the bus with the crate `pci` (D-112) | userland virtio drivers | 13 |
 | MSI-X on a PCI device | `interrupt_create_msi` allocates the vector; the driver writes the address and data into the device's own table (D-111) | userland virtio drivers | 12 |
 | virtio-net over PCI (`virtio-net-pci`, non-transitional) | MMIO through the volatile accessor, DMA through a `Ram` memory object with `INFO`, interrupts through MSI-X | on the machine from 13, so that the bus walk has a device to find; driven by `driver-virtio-net` and `server-net` from 14 | 13, 14 |
-| virtio-blk over PCI (`virtio-blk-pci`, non-transitional), on a second disk and only for a run that asks | the same three paths | the scratch disk of a run that writes; `driver-virtio-blk` is what will drive it | later |
+| virtio-blk over PCI (`virtio-blk-pci`, non-transitional), on both disks; the second only for a run that asks | the same three paths | the boot disk at slot `0x4` and the scratch disk at slot `0x5`; `driver-virtio-blk` drives them | built |
 | `RDSEED` | the `random_bytes` system call | `crypto-rng` seeding in every process that needs randomness | 12 |
 | Standard VGA device (`q35` default) with a linear framebuffer exposed by the UEFI Graphics Output Protocol | loader: mode query through `EFI_GRAPHICS_OUTPUT_PROTOCOL`; userland: MMIO via a `Device` memory object | boot information; userland display server | 2, 9 |
 | i8042 PS/2 controller (I/O ports `0x60` and `0x64`, IRQ 1 keyboard, IRQ 12 mouse) | port I/O via `IoPortRange`, `Interrupt` | userland input driver | 10 |

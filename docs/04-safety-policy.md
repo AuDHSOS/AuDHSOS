@@ -38,6 +38,7 @@ device register are operations the Rust language can only express as
 | `user-sys-x86_64` | the system call trap instruction, `_start`, the IPC buffer of the thread as a reference | one `asm!` statement: `int 0x80` |
 | `user-test-programs` | what each program does on purpose: a privileged instruction, a read of a kernel address, a write where nothing is mapped, the volatile reads and writes of the page a program shares with the test, and the calls of `user-sys-x86_64` | one `asm!` statement: `hlt`, in the program whose point it is |
 | `user-programs` | the binaries of the userland: the volatile reads and writes of the buffers a program shares with the kernel and with its children, and the calls of `user-sys-x86_64` (D-97) | none |
+| `user-net-programs` | the same, for the two programs of the network: the register window of the device, the region it reads and writes, the memory the stack writes into, the socket pages both sides reach atomically, and the entry point of each of the server's two threads with the gate it adopts (D-144) | none |
 | `fuzz-support` (host only) | the fuzzing engine's boundary to the coverage instrumentation: the callbacks the compiler emits calls to, and the blocks that turn the counter ranges the linker placed into slices (D-63) | none |
 
 No other crate may contain `unsafe`. Adding a crate to this list requires a

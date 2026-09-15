@@ -13,8 +13,10 @@ rust-version.workspace = true
 [dependencies]
 app-canvas.workspace = true
 audhsos-abi.workspace = true
+audhsos-encoding.workspace = true
 audhsos-symbols.workspace = true
 audhsos-time.workspace = true
+crypto-hash.workspace = true
 driver-i8042.workspace = true
 fs-fat.workspace = true
 fs-gpt.workspace = true

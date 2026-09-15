@@ -9,6 +9,7 @@ pub mod program;
 #[cfg(any(test, feature = "test-strategies"))]
 pub mod strategies;
 pub mod tar;
+pub mod volume;
 
 pub use program::{Plan, ProgramError, Region, STACK_PAGES, USER_CONSTRAINTS, plan};
 pub use tar::{

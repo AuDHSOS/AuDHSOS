@@ -4,14 +4,19 @@
 //! Unit tests, kept out of the product sources so that coverage measures
 //! product code only.
 
+mod auth;
+mod channel;
 mod cipher;
+mod client;
 mod error;
 mod exchange;
+mod hostkey;
 mod ident;
 mod kex;
 mod keys;
 mod msg;
 mod packet;
+mod rekey;
 mod wire;
 
 /// One `string` of RFC 4251, section 5, built a second time so that a

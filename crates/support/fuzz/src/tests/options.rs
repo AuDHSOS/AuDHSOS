@@ -64,6 +64,27 @@ fn every_flag_the_engine_has_is_read() {
 }
 
 #[test]
+fn the_number_of_workers_a_run_asked_for_is_read_as_it_was_written() {
+    assert_eq!(parse(line(&["-workers=1"])).unwrap().workers, 1);
+    assert_eq!(parse(line(&["-workers=8"])).unwrap().workers, 8);
+    // Every number flag reads `-1` as as many as there can be; what the
+    // run gets is what the machine has, which the fleet decides.
+    assert_eq!(parse(line(&["-workers=-1"])).unwrap().workers, usize::MAX);
+}
+
+#[test]
+fn a_worker_is_a_mode_of_its_own_and_is_asked_for_by_name() {
+    assert_eq!(
+        parse(line(&["-fuzz_worker=1", "corpus"])).unwrap().mode,
+        Mode::Worker
+    );
+    assert_eq!(
+        parse(line(&["-fuzz_worker=0", "corpus"])).unwrap().mode,
+        Mode::Fuzz
+    );
+}
+
+#[test]
 fn a_zero_time_or_seed_means_no_limit_and_no_seed() {
     let options = parse(line(&["-max_total_time=0", "-seed=0", "-runs=-1"])).unwrap();
     assert_eq!(options.max_total_time, None);

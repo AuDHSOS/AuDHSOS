@@ -41,7 +41,7 @@ AuDHSOS/
 │   │   ├── uart16550/         driver-uart16550: register logic over a port access trait
 │   │   ├── i8042/             driver-i8042: PS/2 controller and decoder logic over a port access trait
 │   │   ├── virtio-blk/        driver-virtio-blk: virtio 1.x block device logic over a register trait
-│   │   └── virtio-net/        driver-virtio-net: virtio 1.0 network device logic over a register trait (document 13, Phase 14)
+│   │   └── virtio-net/        driver-virtio-net: virtio 1.0 network device logic over a register trait (document 13)
 │   ├── support/
 │   │   ├── testing/           test-support: property-test engine, builders, strategies, model-test runner
 │   │   └── fuzz/              fuzz-support: fuzzer entry glue and corpus replay (unsafe allowed, host only)
@@ -75,17 +75,27 @@ AuDHSOS/
 │   │   │   ├── memory/        server-memory
 │   │   │   ├── display/       server-display: framebuffer owner, surfaces, cursor
 │   │   │   ├── input/         server-input: subscribers, the two decoders, event rings
-│   │   │   └── net/           server-net: the device, the stack, the sockets (document 13, Phase 14)
+│   │   │   ├── fs/            server-fs: open files per client, the file protocol over a FAT32 volume (document 15)
+│   │   │   └── net/           server-net: the socket table of every client, the two rings of every socket, the loop around net-stack (document 13)
 │   │   ├── programs/          user-programs: every program of the system as one
 │   │   │   │                  binary each of one crate, because a program is a
 │   │   │   │                  loop around a logic crate and seven crates of a
 │   │   │   │                  loop each are seven manifests saying the same
-│   │   │   │                  thing (D-97)
+│   │   │   │                  thing (D-97). The library beside them holds what
+│   │   │   │                  every program shares: the clients of the servers,
+│   │   │   │                  the mapping, the serving loop, and socket::Stream,
+│   │   │   │                  which is one end of a TCP connection
 │   │   │   └── src/bin/       server-init (the root task), server-memory,
 │   │   │                      server-name, server-console, server-display,
-│   │   │                      server-input, app-hello, app-checks,
-│   │   │                      app-paint, app-input, app-canvas,
-│   │   │                      app-faulter
+│   │   │                      server-input, server-fs, app-hello,
+│   │   │                      app-checks, app-paint, app-input,
+│   │   │                      app-canvas, app-faulter, app-lspci,
+│   │   │                      app-files
+│   │   ├── net-programs/      user-net-programs: server-net, app-net and app-ssh,
+│   │   │                      and what only they need — the region the device
+│   │   │                      reads and writes, and its registers. A package of
+│   │   │                      its own so that no other program carries the
+│   │   │                      network stack (D-144)
 │   │   └── apps/              the logic of the applications, as servers/ is
 │   │                          for the servers: host-tested, no system call
 │   │       └── canvas/        app-canvas: the drawing state of the graphical
@@ -121,7 +131,9 @@ AuDHSOS/
 │       ├── jrs/               jrs-cli: host executable for the JavaScript core
 │       ├── svg/               doc-svg: the SVG figures of those documents, as marks of a page
 │       ├── pdf/               doc-pdf: a PDF 1.7 writer, pages, fonts, outline
-│       └── docpdf/            the tool `xtask pdf` starts: every document as a PDF
+│       ├── docpdf/            the tool `xtask pdf` starts: every document as a PDF
+│       ├── membench/          the tool `xtask membench` starts: the bandwidth and the latency of the memory of the development machine
+│       └── norec/             the tool `xtask norec` starts: a NoREC fuzzer for SQLite
 ├── fuzz/                      fuzz target crates and corpora
 ├── research/                  source of other projects, kept to be read; the checks never descend into it
 ├── .claude/                   the coding agent: `settings.json` is tracked, `worktrees/` holds a checkout per worktree session; the checks never descend into it
@@ -150,7 +162,7 @@ AuDHSOS/
 | `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf`; `test-support` as a dev-dependency |
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
 | `pci` | 1 | all | no | yes, fuzz | - (feature `test-doubles`); `test-support` as a dev-dependency |
-| `driver-virtio-net` (Phase 14) | 2 | all | no | yes, fuzz | `pci`, `virtio-queue` (feature `test-doubles`) |
+| `driver-virtio-net` | 2 | all | no | yes, fuzz | `virtio-queue` (feature `test-doubles` as a dev-dependency); `test-support` as a dev-dependency; feature `test-doubles`. It parses no capability, so it needs `pci` no more than `driver-virtio-blk` does (D-139) |
 | `driver-virtio-blk` | 2 | all | no | yes | `virtio-queue` (feature `test-doubles` as a dev-dependency); `test-support` as a dev-dependency; feature `test-doubles` |
 | `fs-fat` | 1 | all | no | yes | `audhsos-time`; `test-support` as a dev-dependency; feature `test-doubles` |
 | `fs-gpt` | 1 | all | no | yes | `fs-fat`, for the block device trait it reads through; `test-support` and `fs-fat` with `test-doubles` as dev-dependencies |
@@ -167,15 +179,17 @@ AuDHSOS/
 | `user-rt` | u0 | all | no | yes | `audhsos-abi`, `audhsos-collections`; `test-support` as a dev-dependency |
 | `user-sys-x86_64` | u1 | `x86_64-unknown-none` | allowlisted | through the programs of `user-test-programs` in QEMU | `audhsos-abi`, `user-rt` |
 | `user-test-programs` | u1 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-rt`, `user-sys-x86_64` |
-| `user-proto` | u1 | all | no | yes | `audhsos-abi`, `driver-i8042`, `gfx`, `user-rt` |
+| `user-proto` | u1 | all | no | yes | `audhsos-abi`, `driver-i8042`, `gfx`, `net-wire`, `user-rt` |
 | `user-loader` | u2 | all | no | yes, fuzz | `audhsos-abi`, `audhsos-elf`; `test-support` behind the feature `test-strategies` |
 | `server-name` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `user-proto` |
 | `server-memory` | u2 | all | no | yes, against a recording `Pages` | `audhsos-abi`, `audhsos-collections`; feature `test-doubles` |
 | `server-console` | u2 | all | no | yes | `audhsos-collections`, `driver-uart16550` |
 | `server-display` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `gfx`, `user-proto` |
 | `server-input` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `driver-i8042`, `user-proto`; feature `test-doubles` |
-| `server-net` (Phase 14) | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `net-stack`, `pci`, `user-proto` |
-| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | the three server logic crates, `audhsos-abi`, `driver-uart16550`, `pci`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
+| `server-fs` | u2 | all | no | yes | `audhsos-abi`, `audhsos-time`, `fs-fat`, `fs-gpt`, `user-proto`; `test-support` as a dev-dependency |
+| `server-net` | u2 | all | no | yes | `audhsos-abi`, `audhsos-time`, `crypto-rng`, `net-dns`, `net-stack`, `net-tcp`, `net-wire`, `user-proto`; `net-dhcp`, `net-eth`, `net-ip`, `net-udp` and `crypto-rng` with `test-doubles` as dev-dependencies, for the station the tests answer with. The device is the binary's: this crate takes frames in and hands frames out |
+| `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | every server logic crate but `server-net`, `app-canvas`, `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `driver-i8042`, `driver-uart16550`, `driver-virtio-blk`, `fs-fat`, `gfx`, `pci`, `virtio-queue`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
+| `user-net-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | `audhsos-abi`, `audhsos-encoding`, `audhsos-ssh`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `net-http`, `net-stack`, `net-wire`, `server-net`, `user-programs`, `user-proto`, `user-rt`, `user-sys-x86_64`, `virtio-queue` |
 | `crypto-ct` | c0 | all | no | yes | - |
 | `audhsos-der` | c0 | all | no | yes, fuzz | `audhsos-time`; `test-support` as a dev-dependency |
 | `crypto-hash` | c1 | all | no | yes | `crypto-ct` |
@@ -200,12 +214,14 @@ AuDHSOS/
 | `net-stack` | n5 | all | no | yes | every `net-` crate, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
 | `fuzz-support` | dev | host | allowlisted | yes, and Miri over `counters` and `sancov`, which hold its `unsafe` | - |
-| `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `audhsos-symbols`, `audhsos-time`, `fs-fat`, `fs-gpt`, `user-loader` |
+| `xtask` | host | host | no | yes | `audhsos-abi`, `kernel-test-harness` (the boot image header, the layout constants, and the serial protocol grammar exist once), `audhsos-encoding` and `crypto-hash` (the key material of the Secure Shell interop run, D-146), `audhsos-symbols`, `audhsos-time`, `fs-fat`, `fs-gpt`, `user-loader` |
 | `doc-markdown` | host | host | no | yes | - |
 | `doc-html` | host | host | no | yes | `doc-markdown` |
 | `doc-pdf` | host | host | no | yes | `audhsos-deflate` |
 | `doc-svg` | host | host | no | yes | `doc-html`, `doc-pdf` |
 | `docpdf` | host | host | no | yes, without a coverage gate, as `xtask` | `doc-html`, `doc-markdown`, `doc-pdf`, `doc-svg` |
+| `membench` | host | host | no | yes, without a coverage gate, as `xtask`; the measurements themselves are not tested, only what they are built from | - |
+| `norec` | host | host | no | yes | - (drives the `sqlite3` shell as a child process) |
 | `jrs` | logic | all, with an allocator supplied by the embedding | no | yes, property and fuzz | `audhsos-regex`, `audhsos-event-target`, `audhsos-timer-queue`, `audhsos-json`, `audhsos-math`, `audhsos-utf16`; `test-support` as a dev-dependency |
 | `jrs-cli` | host | host | no | yes | `jrs`, `doc-html` (WPT script extraction) |
 | `audhsos-regex` | logic | all, with an allocator supplied by the embedding | no | yes, property and fuzz | none at run time; `test-support` as a dev-dependency |
@@ -274,19 +290,20 @@ remains separate. The independent fuzz target is `json_codec`.
     joins them lives in a userland process.
 11. `audhsos-symbols`, `virtio-queue`, `fs-fat`, `fs-gpt`, and `pci` are
     logic crates at layer 1. They depend on layer-0 crates only — `pci` on
-    nothing at all — and are used by the xtask and, when the phases reach
-    them, by driver and server processes. `fs-gpt` is the one exception to
-    the layer-0 rule: it depends on `fs-fat`, which is layer 1, because the
-    block device trait it reads through is defined there (D-138).
-12. `driver-virtio-blk` is a logic crate at layer 2, and
-    `driver-virtio-net` will be another, because a driver of a virtio
-    device stands above the queue logic it drives the device through.
-    `driver-virtio-blk` depends on `virtio-queue` and on nothing else: it
-    reaches registers through a trait of its own and parses no capability,
-    so it needs nothing of `pci` (D-139). `driver-virtio-net` needs both,
-    and neither depends on the network crates of rule 10: it hands frames
-    out and takes them in as byte slices, and what a frame means belongs
-    to `server-net` (D-114).
+    nothing at all — and are used by the xtask, by `server-fs` for the two
+    file system crates, and by driver and server processes as the phases
+    reach them. `fs-gpt` is the one exception to the layer-0 rule: it
+    depends on `fs-fat`, which is layer 1, because the block device trait
+    it reads through is defined there (D-138).
+12. `driver-virtio-blk` and `driver-virtio-net` are logic crates at layer
+    2, because a driver of a virtio device stands above the queue logic it
+    drives the device through. Each depends on `virtio-queue` and on
+    nothing else: each reaches registers through a trait of its own and
+    parses no capability, so neither needs anything of `pci` (D-139). The
+    capabilities are read by the root task, which hands a driver the four
+    places it found. Neither depends on the network crates of rule 10:
+    `driver-virtio-net` hands frames out and takes them in as byte slices,
+    and what a frame means belongs to `server-net` (D-114).
 
 ## 5.4 Workspace configuration
 
@@ -405,8 +422,8 @@ still has none.
 | Object types, their rights masks, and `TryFrom<u32>` conversions | one declarative table in `audhsos-abi` |
 | Error mapping | one `From` implementation per crate pair, tested by a table |
 | Test doubles | one implementation in `kernel-hal-api` behind `test-doubles` |
-| FAT32 structures in the image writer and in a later file system server | `fs-fat` over a block device trait; the image writer of the xtask is its first user and a file system server will be the second |
-| Partition table structures and the CRC-32 they are checked with, in the image writer and in a later file system server | `fs-gpt` over the same trait; the xtask keeps the image's own choices and no structure of the format (D-138) |
+| FAT32 structures in the image writer and in the file system server | `fs-fat` over a block device trait; the image writer of the xtask is its first user and `server-fs` its second (document 15) |
+| Partition table structures and the CRC-32 they are checked with, in the image writer and in the file system server | `fs-gpt` over the same trait; the xtask keeps the image's own choices and no structure of the format (D-138) |
 | Calendar arithmetic in certificate validity, file timestamps, and network timers | `audhsos-time`; every interface takes time as a parameter, no crate reads a clock |
 | Fixed-capacity containers in kernel queues, the network stack, and userland | `audhsos-collections`; one model-tested implementation per container |
 | Base64 and PEM in the trust-anchor tool and in generated test data | `audhsos-encoding` |
@@ -444,6 +461,7 @@ binaries (`cargo`, `rustc`, `rustfmt`, `cargo-clippy`, `cargo-miri`,
 | `doc` | build documentation with warnings as errors |
 | `pdf [options]` | every Markdown document of `docs/` and every standard beside them as a PDF under `target/pdf/`; the options go to the tool, which explains them with `--help` |
 | `jrs [options]` | build and run the release-mode `jrs-cli` host executable; `--help` describes source input, fuel and measurement options |
+| `norec [options]` | the NoREC fuzzer against the SQLite build under `research/`; `--help` describes the seed, the number of cases, reduction, and where a finding is written |
 | `jrs-check [--fix-format]` | package-scoped formatting, tests, strict Clippy and `jrs` cross-check for `x86_64-unknown-none` |
 | `regex-check [--fix-format]` | the isolated regex core's formatting, tests, strict Clippy and `x86_64-unknown-none` cross-check |
 | `symbolize <elf> <address>...` | the function, file, and line of every address, which a failing QEMU run is reported through |

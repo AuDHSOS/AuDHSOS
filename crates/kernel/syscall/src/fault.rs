@@ -49,7 +49,7 @@ pub fn deliver<
         .threads
         .with(thread, |held| held.fault = Some(fault));
     let Some((process, handler, badge)) = handler_of(machine, thread) else {
-        return stop(machine, thread);
+        return unreported(machine, thread, fault);
     };
     write_message(buffer, fault);
     let outcome = ipc::deliver(
@@ -65,7 +65,7 @@ pub fn deliver<
         // Nobody could take the message: no reply slot, no handle slot, or
         // an endpoint that went while the thread was faulting. The thread
         // stops where a fault nobody takes stops it.
-        Err(_) => stop(machine, thread),
+        Err(_) => unreported(machine, thread, fault),
     }
 }
 
@@ -87,6 +87,80 @@ fn handler_of<
         return None;
     }
     Some((process, handler, badge))
+}
+
+/// Stops `thread`, and says on the console that its fault reached nobody.
+///
+/// The root task is the fault handler of every process it starts and has
+/// none of its own, so a fault of the root task is exactly this case. It
+/// takes the machine with it — every server it started waits on a message
+/// it will never answer — and without this line the machine goes quiet and
+/// says nothing about why.
+fn unreported<
+    E: Environment,
+    const NP: usize,
+    const NT: usize,
+    const NM: usize,
+    const NH: usize,
+>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    thread: ThreadId,
+    fault: Fault,
+) -> Outcome {
+    let mut line = [0u8; UNREPORTED_LEN];
+    let len = say_unreported(&mut line, fault);
+    machine.environment.log(line.get(..len).unwrap_or(&[]));
+    stop(machine, thread)
+}
+
+/// Bytes the line of an unreported fault takes: thirty-seven of words,
+/// seventeen of the longest kind name, two addresses of eighteen bytes,
+/// the ten that join them, and the newline.
+const UNREPORTED_LEN: usize = 104;
+
+/// Writes that line into `into` and answers how many bytes it is.
+fn say_unreported(into: &mut [u8; UNREPORTED_LEN], fault: Fault) -> usize {
+    let mut len = 0usize;
+    let mut put = |bytes: &[u8], len: &mut usize| {
+        for byte in bytes {
+            if let Some(slot) = into.get_mut(*len) {
+                *slot = *byte;
+                *len = len.saturating_add(1);
+            }
+        }
+    };
+    put(b"[kernel] a fault reached no handler: ", &mut len);
+    put(fault.kind.name().as_bytes(), &mut len);
+    put(b" at ", &mut len);
+    let mut address = [0u8; 18];
+    let wrote = hexadecimal(&mut address, fault.address);
+    put(address.get(..wrote).unwrap_or(&[]), &mut len);
+    put(b" from ", &mut len);
+    let wrote = hexadecimal(&mut address, fault.instruction_pointer);
+    put(address.get(..wrote).unwrap_or(&[]), &mut len);
+    put(b"\n", &mut len);
+    len
+}
+
+/// Writes `value` as `0x…` into `into` and answers how many bytes it is.
+fn hexadecimal(into: &mut [u8; 18], value: u64) -> usize {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    if let Some(head) = into.get_mut(..2) {
+        head.copy_from_slice(b"0x");
+    }
+    let mut len = 2usize;
+    let mut seen = false;
+    for shift in (0u32..16).rev() {
+        let nibble = usize::try_from(value.wrapping_shr(shift.wrapping_mul(4)) & 0xF).unwrap_or(0);
+        if nibble != 0 || seen || shift == 0 {
+            seen = true;
+            if let (Some(slot), Some(digit)) = (into.get_mut(len), DIGITS.get(nibble)) {
+                *slot = *digit;
+                len = len.saturating_add(1);
+            }
+        }
+    }
+    len
 }
 
 /// Builds the fault message: the reserved label of its kind, three words,

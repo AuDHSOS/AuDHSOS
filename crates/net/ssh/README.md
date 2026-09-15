@@ -3,8 +3,10 @@
 The SSH-2 client of [document 14](../../../docs/14-secure-shell-as-a-client.md),
 sans-I/O: it is given bytes that arrived and a buffer to write into, and
 it never reads a socket, allocates, or asks what time it is. What exists
-today is step S1 of track S, the two layers everything else is written
-in.
+today is steps S1 to S7 of track S — every layer of the protocol — and
+the client that drives them, which is the logic half of step S8. What
+waits on the network on the machine is the socket under that client, the
+program around it, and the handshake against an OpenSSH.
 
 ## `wire`
 
@@ -115,8 +117,112 @@ With this cipher the length field is outside the region the padding
 aligns, which the worked example of its draft shows: a packet of 76
 bytes whose length field names 72.
 
+## `hostkey`
+
+The `ssh-ed25519` blobs of RFC 8709, sections 4 and 6, and the rule that
+says which host key this client will talk to. [`hostkey::accept`] reads
+`K_S`, asks the rule, and checks the signature over the exchange hash, in
+that order, so a key from a host this client will not reach costs no
+signature check.
+
+SSH has no certificate chain, so the rule is a parameter and this crate
+judges no key of its own (document 14, section 14.10). Two rules are
+here: [`hostkey::Fingerprint`], which admits one key by the SHA-256 of
+its blob, and [`hostkey::Fingerprints`], which admits any key of a slice
+of such digests and compares every one of them, because a loop that
+stopped at the first match would say which entry matched by how long it
+took. The slice is the caller's, so a program that read a file of
+fingerprints keeps them where it read them; an empty one admits no key.
+Where the digests come from — the image or a file of a volume — is the
+caller's and D-146 settles it for the program of the image.
+
+## `auth`
+
+RFC 4252: the service request, the `publickey` method with an Ed25519
+key, and what a server answers with. [`auth::write_query`] asks whether a
+key would be accepted, [`auth::write_publickey`] signs, and
+[`auth::Response`] is the failure with its method list, the success, the
+banner, and the `SSH_MSG_USERAUTH_PK_OK` that is leave to sign.
+
+The signature of section 7 is over the session identifier and then the
+fields of the request, so a signature captured from one connection is
+worthless on another. The signed data is written once into a scratch
+buffer the caller owns and the request is that data without the session
+identifier, so no field is encoded twice; [`auth::signed_len`] and
+[`auth::request_len`] are how long the two are.
+
+Where the private key comes from is the caller's — [`auth::ClientKey`]
+takes the secret and clears it when it is dropped — and section 14.13 of
+the document holds that question open.
+
+[`auth::ExtInfo`] reads the `SSH_MSG_EXT_INFO` of RFC 8308, section 2.3,
+keeps `server-sig-algs`, and skips every other extension whatever its
+value holds, which section 2.5 requires.
+
+## `channel`
+
+RFC 4254: one `session` channel, its window, and the requests that start
+a program. [`channel::Channel`] holds the two windows and what each side
+has said about the end of the channel; [`channel::Message`] is what
+arrived, and [`channel::Channel::apply`] is what that message changed.
+
+The window is a credit the sender spends and the receiver grants back
+with `SSH_MSG_CHANNEL_WINDOW_ADJUST`, never past 2^32 - 1. Extended data
+— stderr — spends the same window as ordinary data, which is why there is
+one window here and not two. A data message is refused above the window
+and above the maximum packet size the peer advertised, and a refused
+write spends nothing.
+
+The close sequence is section 5.3: a close may arrive with no end of file
+before it, a close is answered with a close unless one was sent already,
+and the channel is closed for this side only when it has both sent and
+received one.
+
+## `rekey`
+
+RFC 4253, section 9: when this client asks for a re-exchange, what the
+peer's `SSH_MSG_KEXINIT` asks of it, and what may be sent while one runs.
+[`rekey::Rekey`] counts the bytes since the last exchange and the packets
+since the connection began, and [`rekey::Rekey::due`] is given the moment
+it is asked about, because no logic crate here reads a clock (D-46).
+
+One is due after a gigabyte, after an hour, or at half the sequence
+number space — the third is this crate's, because the sequence number of
+section 6.4 wraps at 2^32 and a re-exchange must happen before it does.
+While an exchange runs only the transport layer may send, so the
+authentication and the channels wait for the new keys.
+
+[`msg::Disconnect`] is the message of section 11.1, with the reason codes
+of RFC 4250 beside it in [`msg::disconnect`].
+
+## `client`
+
+One state machine over every layer below it, with no I/O:
+[`client::Connection`] is given bytes that arrived and a buffer to write
+into, and it answers with what it wants sent, what it has to give its
+caller, and what it is waiting for. The generator, the private key, the
+rule that admits a host key and the moment are all parameters.
+
+What it does, in order: the identification string, the negotiation and
+the key exchange, `publickey` authentication, one `session` channel with
+`exec` or `shell`, and a re-exchange whenever either side asks for one.
+[`client::Event`] is what the caller acts on — bytes to send, bytes to
+read, the command started, data on either stream, the exit status, the
+end.
+
+A global request the peer makes of the connection (RFC 4254, section 4)
+is answered here and not acted on: this client offers no forwarding, no
+agent and no host key proof, so the answer is `SSH_MSG_REQUEST_FAILURE`
+where a reply was asked for and nothing where it was not. OpenSSH sends
+`hostkeys-00@openssh.com` as such a request.
+
+Its buffers are the caller's and their minimum is the packet size RFC
+4253, section 6.1, makes mandatory, which is what one connection costs.
+
 ## What is not here
 
-Everything above the transport: the host key blobs and the signature
-over the exchange hash (S4), the authentication (S5), the channels (S6),
-and the re-exchange (S7).
+The socket under the client and the program around it. Both are outside
+this crate by design (D-49): `server-net` answers the socket protocol and
+`app-ssh` of `user-net-programs` is the program, and the handshake
+between that program and a live OpenSSH is what measures this client
+against an implementation this project did not write.

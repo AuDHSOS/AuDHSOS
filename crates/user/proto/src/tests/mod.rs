@@ -7,9 +7,12 @@
 mod bytes;
 mod console;
 mod display;
+mod file;
 mod input;
 mod keyboard;
 mod label;
 mod memory;
 mod name;
 mod parent;
+mod ring;
+mod socket;

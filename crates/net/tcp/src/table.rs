@@ -229,7 +229,8 @@ impl<'a, const N: usize> Connections<'a, N> {
     }
 
     /// Whether a connection is listening on `port`.
-    fn listens_on(&self, port: Port) -> bool {
+    #[must_use]
+    pub fn listens_on(&self, port: Port) -> bool {
         self.entries.iter().flatten().any(|connection| {
             connection.state() == State::Listen && connection.local().port == port
         })

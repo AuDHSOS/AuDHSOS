@@ -5,23 +5,34 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+pub mod auth;
+pub mod channel;
 pub mod cipher;
+pub mod client;
 pub mod error;
 pub mod exchange;
+pub mod hostkey;
 pub mod ident;
 pub mod kex;
 pub mod keys;
 pub mod msg;
 pub mod packet;
+pub mod rekey;
 pub mod wire;
 
+pub use auth::{ClientKey, ExtInfo, Request, Response};
+pub use channel::{Channel, Message};
 pub use cipher::ChaChaPoly;
+pub use client::{Buffers, Config, Connection, Event};
 pub use error::SshError;
 pub use exchange::{Ephemeral, HashInput, Method, Reply, exchange_hash};
+pub use hostkey::{Fingerprint, Fingerprints, HostKey, Trust, accept};
 pub use ident::Greeting;
 pub use kex::{Choice, KexInit, Proposal, negotiate};
 pub use keys::{Key, derive};
+pub use msg::Disconnect;
 pub use packet::{Decoded, Decoder, Encoder, SequenceNumber};
+pub use rekey::{Answer, Exchange, Rekey};
 pub use wire::{Mpint, NameList, Names, Reader, Writer};
 
 #[cfg(test)]

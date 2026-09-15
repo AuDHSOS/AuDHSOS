@@ -57,6 +57,36 @@ pub enum SshError {
     /// this with a disconnect carrying
     /// [`crate::msg::disconnect::KEY_EXCHANGE_FAILED`].
     KeyExchangeFailed,
+    /// A host key or signature blob this client does not read: another
+    /// algorithm than the `ssh-ed25519` of RFC 8709, a value of another
+    /// length, or bytes after it.
+    HostKey,
+    /// A host key the trust rule of [`crate::hostkey::Trust`] refuses.
+    /// The key is well formed and belongs to another host, or to none
+    /// this client was given.
+    HostKeyRejected,
+    /// A signature that is not the peer's over the exchange hash, which
+    /// RFC 4250, section 4.2.2, answers with
+    /// [`crate::msg::disconnect::HOST_KEY_NOT_VERIFIABLE`].
+    Signature,
+    /// A channel message this channel cannot take: another channel's
+    /// number, a second open confirmation, or data before the channel
+    /// was open or after it was closed.
+    Channel,
+    /// A window that cannot be what it says: a credit that would take it
+    /// past 2^32 - 1 (RFC 4254, section 5.2), data beyond what was
+    /// granted, or a payload above the maximum packet size the peer
+    /// advertised.
+    Window,
+    /// A key exchange message the connection cannot take: a second
+    /// `SSH_MSG_KEXINIT` while an exchange runs, or a `SSH_MSG_NEWKEYS`
+    /// with none running (RFC 4253, section 9).
+    Exchange,
+    /// A server that refused the key this client authenticates with, or
+    /// that answered a query for another key (RFC 4252, section 7). This
+    /// client has one method and one key, so a refusal is the end of the
+    /// connection.
+    Authentication,
     /// A Poly1305 tag that is not the tag of what arrived. Nothing was
     /// decrypted, and RFC 4250, section 4.2.2, has a reason code of its
     /// own for it.
@@ -84,6 +114,13 @@ impl fmt::Display for SshError {
             }
             SshError::Negotiation(list) => write!(f, "no {list} both sides have"),
             SshError::KeyExchangeFailed => f.write_str("the key exchange cannot be finished"),
+            SshError::HostKey => f.write_str("the blob is no ssh-ed25519 key or signature"),
+            SshError::HostKeyRejected => f.write_str("no rule admits this host key"),
+            SshError::Signature => f.write_str("the signature is not the peer's over this hash"),
+            SshError::Channel => f.write_str("this channel cannot take that message"),
+            SshError::Window => f.write_str("the window cannot be what the message makes it"),
+            SshError::Exchange => f.write_str("no key exchange is at that point"),
+            SshError::Authentication => f.write_str("the server refused this key"),
             SshError::Tag => f.write_str("the tag is not the tag of this packet"),
             SshError::Rng(error) => write!(f, "the padding has no randomness: {error}"),
         }

@@ -868,3 +868,31 @@ fn an_interface_with_no_address_answers_no_broadcast_either() {
     );
     assert!(drain(&mut stack, Some(&frame), start(), &mut rng).is_empty());
 }
+
+#[test]
+fn the_stack_says_which_ports_are_taken_before_a_buffer_is_lent() {
+    let mut outgoing = [0u8; 4096];
+    let mut stack: Stack<'_, 4, 2> = configured(&mut outgoing);
+    let mut rng = rng();
+    assert!(!stack.is_bound(Port::new(9999)));
+    assert!(!stack.listens_on(Port::new(80)));
+    let mut datagrams = [0u8; 256];
+    let _socket = stack
+        .bind(None, Port::new(9999), &mut datagrams)
+        .expect("a socket");
+    let mut send = [0u8; 1024];
+    let mut receive = [0u8; 1024];
+    let _listener = stack
+        .listen(
+            IpAddr::V4(HERE),
+            Port::new(80),
+            &mut rng,
+            &mut send,
+            &mut receive,
+        )
+        .expect("a listener");
+    assert!(stack.is_bound(Port::new(9999)));
+    assert!(stack.listens_on(Port::new(80)));
+    assert!(!stack.is_bound(Port::new(9998)));
+    assert!(!stack.listens_on(Port::new(81)));
+}

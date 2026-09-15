@@ -300,7 +300,7 @@ pub fn exchange_hash(method: Method, input: &HashInput<'_>) -> [u8; HASH_LEN] {
 }
 
 /// Hashes one `string` of RFC 4251, section 5: its length and its bytes.
-fn hash_string(hash: &mut Sha256, value: &[u8]) {
+pub(crate) fn hash_string(hash: &mut Sha256, value: &[u8]) {
     let len = u32::try_from(value.len()).unwrap_or(u32::MAX);
     hash.update(&len.to_be_bytes());
     hash.update(value);

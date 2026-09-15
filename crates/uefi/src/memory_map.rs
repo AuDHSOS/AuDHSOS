@@ -286,15 +286,17 @@ pub fn descriptors(
 /// Turns the memory map into the region array of the boot information
 /// structure: empty descriptors dropped, the rest sorted by start and
 /// merged where they touch or overlap and agree on the kind. Regions of
-/// different kinds may touch; only shared bytes are an error. Returns the
-/// number of regions written.
+/// different kinds may touch; only shared bytes are an error. A map with
+/// more descriptors than the array holds is merged as it is read, so what
+/// the count bounds is the merged regions, not the descriptors. Returns
+/// the number of regions written.
 ///
 /// # Errors
 ///
 /// [`ConversionError::Overflow`] if a descriptor reaches beyond the
 /// address space; [`ConversionError::Overlap`] if two descriptors of
 /// different kinds share memory; [`ConversionError::TooManyRegions`] if
-/// more than [`MAX_BOOT_REGIONS`] regions remain.
+/// more than [`MAX_BOOT_REGIONS`] regions remain after merging.
 pub fn to_boot_regions<I: Iterator<Item = MemoryDescriptor>>(
     descriptors: I,
     out: &mut [BootRegion; MAX_BOOT_REGIONS],
@@ -306,6 +308,16 @@ pub fn to_boot_regions<I: Iterator<Item = MemoryDescriptor>>(
         }
         let len = descriptor.bytes().ok_or(ConversionError::Overflow)?;
         descriptor.end().ok_or(ConversionError::Overflow)?;
+        if count == MAX_BOOT_REGIONS {
+            // A firmware hands out more descriptors than the array holds
+            // and most of them touch: merge what is there and go on. Only
+            // a map that stays full once merged is refused.
+            sort_by_start(out, count);
+            count = merge(out, count)?;
+            if count == MAX_BOOT_REGIONS {
+                return Err(ConversionError::TooManyRegions);
+            }
+        }
         let slot = out.get_mut(count).ok_or(ConversionError::TooManyRegions)?;
         *slot = BootRegion {
             start: descriptor.physical_start,

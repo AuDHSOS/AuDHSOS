@@ -549,6 +549,14 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "driver-virtio-net",
+        path: "crates/drivers/virtio-net",
+        kind: Kind::Logic,
+        deps: &["virtio-queue", "test-support"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "fs-gpt",
         path: "crates/fs/gpt",
         kind: Kind::Logic,
@@ -724,7 +732,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-proto",
         path: "crates/user/proto",
         kind: Kind::Logic,
-        deps: &["audhsos-abi", "driver-i8042", "gfx", "user-rt"],
+        deps: &["audhsos-abi", "driver-i8042", "gfx", "net-wire", "user-rt"],
         coverage_gate: true,
         target: Target::Host,
     },
@@ -765,6 +773,42 @@ pub(crate) const CRATES: &[Crate] = &[
         path: "crates/user/servers/display",
         kind: Kind::Logic,
         deps: &["audhsos-abi", "audhsos-collections", "gfx", "user-proto"],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "server-fs",
+        path: "crates/user/servers/fs",
+        kind: Kind::Logic,
+        deps: &[
+            "audhsos-abi",
+            "audhsos-time",
+            "fs-fat",
+            "fs-gpt",
+            "user-proto",
+            "test-support",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
+        name: "server-net",
+        path: "crates/user/servers/net",
+        kind: Kind::Logic,
+        deps: &[
+            "audhsos-abi",
+            "audhsos-time",
+            "crypto-rng",
+            "net-dhcp",
+            "net-dns",
+            "net-eth",
+            "net-ip",
+            "net-stack",
+            "net-tcp",
+            "net-udp",
+            "net-wire",
+            "user-proto",
+        ],
         coverage_gate: true,
         target: Target::Host,
     },
@@ -820,20 +864,30 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-programs",
         path: "crates/user/programs",
         // The bytes of the mapping `app-lspci` walks the bus through raised
-        // this from 33 (Phase 13).
+        // this from 33 (Phase 13). The mappings of the disk track raised it
+        // from 34 to 40, named one by one in D2 of
+        // `docs/15-the-disk-on-the-machine.md`. Phase 14 added the socket
+        // page of `Mapping`, which is one site more, and `socket::Stream`
+        // one more again — the reference into the rings that the two
+        // programs of the network used to take each for itself.
         kind: Kind::Adapter {
-            unsafe_budget: 34,
+            unsafe_budget: 43,
             asm_budget: 0,
         },
         deps: &[
             "app-canvas",
             "audhsos-abi",
+            "audhsos-collections",
+            "audhsos-time",
             "driver-i8042",
             "driver-uart16550",
+            "driver-virtio-blk",
+            "fs-fat",
             "gfx",
             "pci",
             "server-console",
             "server-display",
+            "server-fs",
             "server-input",
             "server-memory",
             "server-name",
@@ -841,6 +895,45 @@ pub(crate) const CRATES: &[Crate] = &[
             "user-proto",
             "user-rt",
             "user-sys-x86_64",
+            "virtio-queue",
+        ],
+        coverage_gate: false,
+        target: Target::X86_64None,
+    },
+    // The two programs of the network are a package of their own, because
+    // a binary of this workspace names every dependency of its package and
+    // the stack under these two is megabytes of an image every other
+    // program is read out of one message at a time (D-144).
+    Crate {
+        name: "user-net-programs",
+        path: "crates/user/net-programs",
+        // Eight sites, all of `server-net`: the register window, the
+        // region the device reads and writes, the memory the stack writes
+        // into, the socket pages it hands out, and the entry point of each
+        // of its two threads with the gate that thread adopts. The two
+        // programs that use a connection have none left —
+        // `user_programs::socket::Stream` holds the mapping and the
+        // reference into the rings.
+        kind: Kind::Adapter {
+            unsafe_budget: 8,
+            asm_budget: 0,
+        },
+        deps: &[
+            "audhsos-abi",
+            "audhsos-encoding",
+            "audhsos-ssh",
+            "audhsos-time",
+            "crypto-rng",
+            "driver-virtio-net",
+            "net-http",
+            "net-stack",
+            "net-wire",
+            "server-net",
+            "user-programs",
+            "user-proto",
+            "user-rt",
+            "user-sys-x86_64",
+            "virtio-queue",
         ],
         coverage_gate: false,
         target: Target::X86_64None,
@@ -921,14 +1014,32 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "membench",
+        path: "crates/tools/membench",
+        kind: Kind::Host,
+        deps: &[],
+        coverage_gate: false,
+        target: Target::Host,
+    },
+    Crate {
+        name: "norec",
+        path: "crates/tools/norec",
+        kind: Kind::Host,
+        deps: &[],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "xtask",
         path: "crates/tools/xtask",
         kind: Kind::Host,
         deps: &[
             "app-canvas",
             "audhsos-abi",
+            "audhsos-encoding",
             "audhsos-symbols",
             "audhsos-time",
+            "crypto-hash",
             "driver-i8042",
             "fs-fat",
             "fs-gpt",
@@ -1106,6 +1217,10 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
     FuzzTarget { name: "pem" },
     FuzzTarget { name: "rsa" },
     FuzzTarget { name: "scancode" },
+    FuzzTarget {
+        name: "ssh_handshake",
+    },
+    FuzzTarget { name: "ssh_packet" },
     FuzzTarget { name: "tar" },
     FuzzTarget {
         name: "dns_message",
@@ -1117,6 +1232,9 @@ pub(crate) const FUZZ_TARGETS: &[FuzzTarget] = &[
         name: "tls_handshake",
     },
     FuzzTarget { name: "tls_record" },
+    FuzzTarget {
+        name: "virtio_net_rx",
+    },
     FuzzTarget { name: "x509" },
 ];
 
