@@ -1372,9 +1372,12 @@ fn static_object_binding_patterns_and_defaults_use_register_property_caches() ->
 
 #[test]
 fn observable_object_binding_defaults_stay_on_legacy_backend() -> Result<(), Error> {
+    // An Initializer the lowering runs on one path only answers a value it
+    // cannot name, and one it runs on every path keeps what it changed.
+    differential("let {x=({})}={};42")?;
+    differential("let o={};let {x=(o.y=1)}={};42")?;
+    differential("let o={};let {x=(o.y=1)}={x:0};o.y")?;
     for source in [
-        "let {x=({})}={};42",
-        "let o={};let {x=(o.y=1)}={};42",
         "let key={toString(){return 'x'}};let {[key]:x}={x:42};x",
         "let key='x';let {[key='y']:x}={x:42};x",
         "let {['x'+'']:x}={x:42};x",
@@ -5254,6 +5257,28 @@ fn a_captured_var_a_closure_writes_carries_no_type() -> Result<(), Error> {
         "var c=0;var f=function(){c=c+1;return c};f()+f()",
         // The same binding read and never written keeps the type it had.
         "var c=2;var f=function(){return c+1};f()",
+    ] {
+        differential_scripts(&[source])?;
+    }
+    Ok(())
+}
+
+#[test]
+fn an_initializer_that_makes_an_object_is_taken() -> Result<(), Error> {
+    // 8.6.2 and 14.3.3.3 run an Initializer only where the value is
+    // undefined, so a layout it made is there on one path only and what it
+    // answers is a value the lowering cannot name.
+    for source in [
+        "var o={method([{x,y}={x:1,y:2}]=[{x:3,y:4}]){return x+y}};o.method()",
+        "var o={method([{x,y}={x:1,y:2}]){return x+y}};o.method([])",
+        "function f(a={b:1}){return a.b}f()",
+        "function f(a={b:1}){return a.b}f({b:2})",
+        "function f(a=[1,2]){return a.length}f()",
+        "function f(a=[1,2]){return a.length}f([1])",
+        "function f({a={b:3}}){return a.b}f({})",
+        "function f({a={b:3}}){return a.b}f({a:{b:4}})",
+        "function f(v){let [a=[7]]=v;return a.length}f([])",
+        "function f(v){let {a={c:5}}=v;return a.c}f({})",
     ] {
         differential_scripts(&[source])?;
     }

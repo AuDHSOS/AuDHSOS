@@ -1240,14 +1240,13 @@ impl RegisterLowerer {
         initializer: &Expr,
     ) -> Option<RegisterType> {
         use crate::engine::bytecode::Instruction;
+        // A value that is undefined always takes the Initializer, so what the
+        // Initializer made is there on every path and keeps its layout.
         if value_type == RegisterType::Undefined {
             let bindings_without_default = self.bindings.clone();
-            let layouts_without_default = self.object_layouts.clone();
             let default_type = self.lower(initializer)?;
-            return (default_type.is_primitive()
-                && self.object_layouts == layouts_without_default
-                && register_context_bindings_unchanged(&bindings_without_default, &self.bindings))
-            .then_some(default_type);
+            return register_context_bindings_unchanged(&bindings_without_default, &self.bindings)
+                .then_some(default_type);
         }
         // A value the lowering cannot name may be undefined, so the check
         // 8.6.2 makes has to be made at run time.
@@ -1261,16 +1260,26 @@ impl RegisterLowerer {
         let bindings_without_default = self.bindings.clone();
         let layouts_without_default = self.object_layouts.clone();
         let default_type = self.lower(initializer)?;
-        if !default_type.is_primitive()
-            || self.object_layouts != layouts_without_default
+        // The Initializer runs on one path only, so a layout it changed would
+        // be wrong on the other.
+        if !layouts_without_default
+            .iter()
+            .all(|(id, layout)| self.object_layouts.get(id) == Some(layout))
             || !register_context_bindings_unchanged(&bindings_without_default, &self.bindings)
         {
             return None;
+        }
+        // A layout the Initializer made is there on one path only, so nothing
+        // may read it: what it answers is the type the lowering cannot name.
+        let makes_object = !default_type.is_primitive();
+        if makes_object {
+            self.object_layouts = layouts_without_default;
         }
         self.bindings = merge_register_bindings(&bindings_without_default, &self.bindings)?;
         let end = self.code.instructions.len();
         self.patch_jump(present, end)?;
         Some(match value_type {
+            _ if makes_object => RegisterType::Unknown,
             RegisterType::Primitive => RegisterType::Primitive,
             RegisterType::Unknown => RegisterType::Unknown,
             _ => RegisterType::Number.merge(default_type),
